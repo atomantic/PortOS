@@ -128,6 +128,17 @@ export const reopenSpriteWalk = (id, body, options = {}) => request(`/sprites/${
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
+// Every frame one run's source video produced (#2980): `{ available, reason,
+// frames, cycle, selectedSourceIndices, current, target, editable, lockReason }`.
+// `available: false` carries a reason ('no-source-video' | 'run-not-packaged')
+// rather than an empty list, so "nothing to show" never reads like "no frames".
+// Re-extracts server-side on demand when the clip is on disk but `raw/` was
+// cleaned, so a slow first call is expected for such a run.
+export const getSpriteWalkSourceFrames = (id, runId, options = {}) => request(
+  `/sprites/${encodeURIComponent(id)}/walk/runs/${encodeURIComponent(runId)}/source-frames`,
+  options,
+);
+
 // Save a non-destructive loop trim (strip + GIF + manifest, versioned).
 export const trimSpriteWalk = (id, body, options = {}) => request(`/sprites/${encodeURIComponent(id)}/walk/trim`, {
   method: 'POST', body: JSON.stringify(body), ...options,

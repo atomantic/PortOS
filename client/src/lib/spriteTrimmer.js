@@ -21,6 +21,39 @@ export const WALK_PHASES = [
 
 const DEFAULT_FPS = 12;
 
+// Walk-cycle authoring bounds (mirror server/services/sprites/walkBounds.js).
+// Frame count = how many frames the packed cycle holds (more = smoother); fps =
+// preview playback speed. Cycle duration = frameCount / fps seconds.
+//
+// Both are pinned at the SET level (#2985), never per render: a walk cycle is N
+// contiguous atlas columns × 8 direction rows, so every direction must agree or
+// the atlas cannot compile. These constants only seed the option lists — the
+// server resolves the target and refuses a disagreeing render. They live here
+// (not in a component) because two surfaces now offer the same control: the
+// walk workflow's set-level picker and the Loop Trimmer's re-derive (#2980).
+export const WALK_DEFAULT_FRAME_COUNT = 12;
+export const WALK_DEFAULT_FPS = 10;
+export const WALK_FRAME_COUNT_RANGE = { min: 6, max: 16 };
+export const WALK_FPS_RANGE = { min: 4, max: 24 };
+
+// Inclusive integer sequence [min..max] by step. Both option lists derive from
+// module constants, so build them once at load rather than on every render.
+const seq = (min, max, step) => {
+  const out = [];
+  for (let v = min; v <= max; v += step) out.push(v);
+  return out;
+};
+export const WALK_FRAME_COUNT_OPTIONS = seq(WALK_FRAME_COUNT_RANGE.min, WALK_FRAME_COUNT_RANGE.max, 1);
+// The speed picker offers even steps to keep the list short, but the server
+// accepts ANY integer in range — an imported set (or a direct API call) can pin
+// an odd fps like 15. A <select> whose value matches no <option> silently
+// displays the FIRST option, so the control would claim "4 fps" while the set is
+// really at 15. Splice the current value in so the control never lies.
+const WALK_FPS_OPTIONS = seq(WALK_FPS_RANGE.min, WALK_FPS_RANGE.max, 2);
+export const walkFpsOptionsFor = (fps) => (WALK_FPS_OPTIONS.includes(fps) || !Number.isFinite(fps)
+  ? WALK_FPS_OPTIONS
+  : [...WALK_FPS_OPTIONS, fps].sort((a, b) => a - b));
+
 /**
  * Frame geometry for a packed strip, defaulting to the native 8-phase packaging
  * when a run predates (or omits) the richer stripPreview fields. `cellWidth` /

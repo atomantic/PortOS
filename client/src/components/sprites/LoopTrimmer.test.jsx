@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import {
+  render, screen, fireEvent, waitFor, act,
+} from '@testing-library/react';
 
 // The trim endpoint is the whole point of Save — mock it so the test asserts
 // the exact payload the UI sends without hitting the network. Canvas painting
@@ -13,6 +15,28 @@ vi.mock('../../services/apiSprites.js', () => ({
     frameCount: 7,
     disabledFrameCount: 1,
   })),
+  // The source-frames panel (#2980) mounts for every run source. Its own
+  // behavior is covered in WalkSourceFrames.test.jsx; here it just has to
+  // resolve so the trimmer's frame math stays the subject.
+  getSpriteWalkSourceFrames: vi.fn(() => Promise.resolve({
+    available: true,
+    reason: null,
+    runId: 'walk-east-0a1b2c3d',
+    direction: 'east',
+    extractionFps: 12,
+    maxSourceSeconds: 8,
+    frames: [{ index: 1, path: 'runs/walk-east-0a1b2c3d/generated/raw/source-0001.png' }],
+    cycle: null,
+    selectedSourceIndices: [],
+    current: { frameCount: 8, fps: 12 },
+    target: { frameCount: 8, fps: 12, source: 'derived', sourceLabel: 'from the first approved direction' },
+    editable: true,
+    lockReason: null,
+  })),
+  postprocessSpriteWalk: vi.fn(() => Promise.resolve({})),
+  setSpriteWalkTarget: vi.fn(() => Promise.resolve({})),
+  unlockSpriteWalk: vi.fn(() => Promise.resolve({})),
+  reopenSpriteWalk: vi.fn(() => Promise.resolve({})),
 }));
 
 import LoopTrimmer from './LoopTrimmer';
@@ -81,24 +105,32 @@ const renderTrimmer = (props = {}) => render(
 
 const enabledToggles = () => screen.queryAllByRole('button', { pressed: true });
 
+// The source-frames panel (#2980) fetches on mount, so every render leaves a
+// pending promise behind. Settle it inside act() before asserting, or its state
+// update lands outside act — which this suite's setup turns into a failure.
+const settle = () => act(async () => {});
+
 describe('LoopTrimmer', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('seeds every frame enabled and gates Save at ≥2 frames', () => {
+  it('seeds every frame enabled and gates Save at ≥2 frames', async () => {
     renderTrimmer();
+    await settle();
     expect(enabledToggles()).toHaveLength(8);
     expect(screen.getByRole('button', { name: /Save trim \(8\/8\)/ })).not.toBeDisabled();
   });
 
-  it('toggles a frame off and reflects the count in Save', () => {
+  it('toggles a frame off and reflects the count in Save', async () => {
     renderTrimmer();
+    await settle();
     fireEvent.click(enabledToggles()[0]);
     expect(enabledToggles()).toHaveLength(7);
     expect(screen.getByRole('button', { name: /Save trim \(7\/8\)/ })).toBeTruthy();
   });
 
-  it('Enable all and Invert rewrite the whole selection', () => {
+  it('Enable all and Invert rewrite the whole selection', async () => {
     renderTrimmer();
+    await settle();
     fireEvent.click(screen.getByRole('button', { name: /Invert/ }));
     expect(enabledToggles()).toHaveLength(0); // all-on inverted → all-off
     expect(screen.getByRole('button', { name: /Save trim \(0\/8\)/ })).toBeDisabled();
@@ -129,10 +161,11 @@ describe('LoopTrimmer', () => {
     expect(trimSpriteWalk.mock.calls[0][1]).toMatchObject({ slug: 'east-loop-v2' });
   });
 
-  it('offers Save for an imported/redraw run (strip outside grok/ is trimmable now)', () => {
+  it('offers Save for an imported/redraw run (strip outside grok/ is trimmable now)', async () => {
     renderTrimmer({
       walk: { runs: [{ ...grokRun, stripPreview: { ...grokRun.stripPreview, stripPath: 'imagegen/v19/clean-alpha.png' } }] },
     });
+    await settle();
     expect(screen.getByRole('button', { name: /Save trim/ })).not.toBeDisabled();
   });
 

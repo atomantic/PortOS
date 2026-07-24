@@ -1115,6 +1115,18 @@ const spriteWalkDirectionSchema = z.enum(SPRITE_DIRECTIONS);
 
 const spriteWalkRunIdSchema = z.string().regex(/^walk-[a-z-]+-[0-9a-f]{8}$/);
 
+// Any run the walk state can resolve, not just native `walk-<dir>-<hex>`
+// generations: an imported run's id is its source-named directory slug, and a
+// redraw run's id is a record-relative manifest path. The services that accept
+// this resolve the id against server-owned walk state and only ever dereference
+// paths the state itself recorded (through resolveSpriteAssetPath), so this
+// bounds shape/length only — safe charset, no traversal. (Approve stays strict:
+// it only ever freezes a natively-generated run into the set.)
+const spriteResolvableRunIdSchema = z.string().min(1).max(1024)
+  .refine((v) => /^[A-Za-z0-9._/-]+$/.test(v) && !v.split('/').includes('..'), {
+    message: 'invalid run id',
+  });
+
 // Walk-cycle authoring bounds — imported from the sharp-free walkBounds leaf so
 // the request schema and the server-side clamp share ONE range definition (a
 // bounds change can't silently diverge). walkBounds pulls in no native deps.
@@ -1157,7 +1169,15 @@ export const spriteWalkReopenSchema = z.object({
 });
 
 export const spriteWalkPostprocessSchema = z.object({
-  runId: spriteWalkRunIdSchema,
+  // Any run the walk state can resolve, not just native `walk-<dir>-<hex>` ids:
+  // since #2993 the reprocess is layout-aware and re-derives an IMPORTED run
+  // (whose id is its source-named directory, e.g. `run-3`) in the directory it
+  // was imported into — which the strict native shape rejected at the door, so
+  // the one path back onto the set's target was unreachable for exactly the
+  // population that needs it. Bounds shape/charset only, same argument as the
+  // trim endpoint: the service resolves the id against server-owned walk state
+  // and dereferences only paths that state recorded.
+  runId: spriteResolvableRunIdSchema,
   // Reprocess the on-disk clip without regenerating. Omitted fields adopt the
   // set's pinned cycle target (#2985) — NOT the run's stored values, since a
   // reprocess is how a drifted direction is brought back onto the target. A
@@ -1167,23 +1187,19 @@ export const spriteWalkPostprocessSchema = z.object({
   fps: spriteWalkFpsSchema.optional(),
 });
 
-// The trimmer targets ANY resolvable run, not just native `walk-<dir>-<hex>`
-// generations: an imported run's id is its directory slug, and a redraw run's
-// id is a record-relative manifest path. The trim service resolves the id
-// against server-owned walk state and only ever dereferences paths the state
-// itself recorded (through resolveSpriteAssetPath), so this bounds shape/length
-// only — safe charset, no traversal. (Approve/postprocess stay strict because
-// they only ever act on native runs.)
-const spriteTrimRunIdSchema = z.string().min(1).max(1024)
-  .refine((v) => /^[A-Za-z0-9._/-]+$/.test(v) && !v.split('/').includes('..'), {
-    message: 'invalid run id',
-  });
+// The raw ffmpeg frames behind one run (#2980) — a read-only enumeration of the
+// directory `listSpriteAssets` deliberately skips. Path params, so the run id
+// arrives as a URL segment; the trimmer can select an imported or redraw run, so
+// it takes the resolvable shape rather than the native one.
+export const spriteWalkSourceFramesParamsSchema = z.object({
+  runId: spriteResolvableRunIdSchema,
+});
 
 // Trim geometry (strip path, cell size, frame labels) derives server-side
 // from the run's packaged manifest — the client only names the run and
 // which frames stay enabled.
 export const spriteWalkTrimSchema = z.object({
-  runId: spriteTrimRunIdSchema,
+  runId: spriteResolvableRunIdSchema,
   enabledColumns: z.array(z.number().int().min(0).max(63)).min(2).max(64)
     .refine((cols) => new Set(cols).size === cols.length, { message: 'columns must be unique' }),
   fps: z.number().int().min(1).max(60).optional(),

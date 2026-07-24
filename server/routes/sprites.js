@@ -25,6 +25,7 @@ import {
   spriteWalkReopenSchema,
   spriteWalkPostprocessSchema,
   spriteWalkTargetSchema,
+  spriteWalkSourceFramesParamsSchema,
   spriteWalkTrimSchema,
   spritePublishBindingSchema,
   spriteAtlasCompileSchema,
@@ -44,7 +45,7 @@ import {
 import { resolveSpriteAssetPrompt } from '../services/sprites/assetPrompt.js';
 import {
   getWalkState, startWalkGeneration, approveWalkDirection, rerunWalkPostprocess, unlockWalkSet,
-  reopenWalkDirection, setWalkTarget,
+  reopenWalkDirection, setWalkTarget, getWalkSourceFrames,
 } from '../services/sprites/walk.js';
 import { saveLoopTrim } from '../services/sprites/walkTrims.js';
 import { compileAtlas, getAtlasState } from '../services/sprites/atlas.js';
@@ -198,6 +199,16 @@ router.put('/:id/walk/target', asyncHandler(async (req, res) => {
 router.post('/:id/walk/postprocess', asyncHandler(async (req, res) => {
   const body = validateRequest(spriteWalkPostprocessSchema, req.body);
   res.json(await rerunWalkPostprocess(req.params.id, body));
+}));
+
+// Every frame the run's source video produced (#2980), the cycle window the
+// packer selected out of them, and which became packed columns — the Loop
+// Trimmer's window onto the raw intermediates `listSpriteAssets` excludes.
+// Read-only; re-extracts on demand when the clip is on disk but `raw/` was
+// cleaned. Multi-segment, so it can't be captured by the `/:id` GET.
+router.get('/:id/walk/runs/:runId/source-frames', asyncHandler(async (req, res) => {
+  const { runId } = validateRequest(spriteWalkSourceFramesParamsSchema, req.params);
+  res.json(await getWalkSourceFrames(req.params.id, runId));
 }));
 
 // Non-destructive loop trim: re-pack enabled frames from a packed strip into

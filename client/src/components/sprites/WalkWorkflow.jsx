@@ -11,7 +11,10 @@ import {
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import { spriteAssetUrl, checkerboardStyle, PIXELATED } from './spriteAssets.js';
-import { WALK_PHASES } from '../../lib/spriteTrimmer.js';
+import {
+  WALK_PHASES, WALK_DEFAULT_FRAME_COUNT, WALK_DEFAULT_FPS,
+  WALK_FRAME_COUNT_OPTIONS as FRAME_COUNT_OPTIONS, walkFpsOptionsFor as fpsOptionsFor,
+} from '../../lib/spriteTrimmer.js';
 
 // Walk workflow (issue #2897): one grok image_to_video clip per locked
 // directional anchor, deterministic server-side packaging into the 8-phase
@@ -34,39 +37,10 @@ const LOOP_KEYFRAMES = '@keyframes sprite-walk-loop { to { background-position-x
 export const WALK_DURATIONS = [6, 10];
 export const WALK_DEFAULT_DURATION = 6;
 
-// Deterministic-postprocess authoring knobs (mirror walkPostprocess.js
-// WALK_DEFAULT_*/WALK_MIN/MAX_*). Frame count = how many frames the packed cycle
-// holds (more = smoother); fps = preview playback speed (lower = slower, more
-// deliberate). Cycle duration = frameCount / fps seconds. Defaults pack a
-// fuller, slower cycle (12 frames @ 10fps = 1.2s) so a walk reads as a walk.
-//
-// Both are pinned at the SET level (#2985), not per render: a walk cycle is N
-// contiguous atlas columns × 8 direction rows, so every direction must agree or
-// the atlas cannot compile. The server resolves the target and refuses a
-// disagreeing render; these constants only seed the dropdown option lists.
-export const WALK_DEFAULT_FRAME_COUNT = 12;
-export const WALK_DEFAULT_FPS = 10;
-export const WALK_FRAME_COUNT_RANGE = { min: 6, max: 16 };
-export const WALK_FPS_RANGE = { min: 4, max: 24 };
-
-// Inclusive integer sequence [min..max] by step. Both dropdown option lists are
-// derived from module-level constants, so build them once at load rather than
-// on every render.
-const seq = (min, max, step) => {
-  const out = [];
-  for (let v = min; v <= max; v += step) out.push(v);
-  return out;
-};
-const FRAME_COUNT_OPTIONS = seq(WALK_FRAME_COUNT_RANGE.min, WALK_FRAME_COUNT_RANGE.max, 1);
-// The speed picker offers even steps to keep the list short, but the server
-// accepts ANY integer in range — an imported set (or a direct API call) can pin
-// an odd fps like 15. A <select> whose value matches no <option> silently
-// displays the FIRST option, so the control would claim "4 fps" while the set is
-// really at 15. Splice the current value in so the control never lies.
-const FPS_OPTIONS = seq(WALK_FPS_RANGE.min, WALK_FPS_RANGE.max, 2);
-const fpsOptionsFor = (fps) => (FPS_OPTIONS.includes(fps) || !Number.isFinite(fps)
-  ? FPS_OPTIONS
-  : [...FPS_OPTIONS, fps].sort((a, b) => a - b));
+// The deterministic-postprocess authoring knobs (frame count + preview fps) and
+// their option lists moved to lib/spriteTrimmer.js (#2980) — the Loop Trimmer's
+// re-derive control offers the same set-level target, and two copies of the
+// bounds would be exactly the drift #2985 exists to prevent.
 
 /**
  * Strip geometry for a preview/trim UI, defaulting to the native 8-phase

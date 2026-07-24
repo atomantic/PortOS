@@ -9,6 +9,7 @@ import { trimSpriteWalk } from '../../services/apiSprites.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import { spriteAssetUrl, checkerboardStyle, PIXELATED } from './spriteAssets.js';
 import SpritePreview from './SpritePreview.jsx';
+import WalkSourceFrames from './WalkSourceFrames.jsx';
 import {
   buildTrimmerSources, allColumns, invertColumns, phaseLabelFor, sanitizeTrimSlug,
 } from '../../lib/spriteTrimmer.js';
@@ -117,6 +118,11 @@ export default function LoopTrimmer({
   const [outputName, setOutputName] = useState('');
   const [result, setResult] = useState(null);
   const [img, setImg] = useState(null);
+  // Bumped when the run is re-derived (#2980): the repacked strip lands at the
+  // SAME path, so without a cache-buster the browser would keep painting the old
+  // geometry — the loaded <img> wouldn't even be re-requested, since its src
+  // never changed.
+  const [stripVersion, setStripVersion] = useState(0);
 
   // Re-seed everything the moment the source changes — a stale enabled set from
   // a previous strip could hold out-of-range indices and 400 the endpoint.
@@ -138,9 +144,10 @@ export default function LoopTrimmer({
     if (!source) return undefined;
     const image = new Image();
     image.onload = () => setImg(image);
-    image.src = spriteAssetUrl(recordId, source.stripPath);
+    const url = spriteAssetUrl(recordId, source.stripPath);
+    image.src = stripVersion ? `${url}?v=${stripVersion}` : url;
     return () => { image.onload = null; };
-  }, [source?.id, source?.stripPath, recordId]);
+  }, [source?.id, source?.stripPath, recordId, stripVersion]);
 
   const cellW = img && frameCount > 0 ? img.naturalWidth / frameCount : 0;
   const cellH = img ? img.naturalHeight : 0;
@@ -354,6 +361,17 @@ export default function LoopTrimmer({
           </div>
         </div>
       </div>
+
+      {/* Every frame the run's clip produced, plus the in-place re-derive
+          (#2980). Run sources only: a saved trim has no run (and no clip)
+          behind it, so there is nothing to enumerate or re-derive. */}
+      {source?.kind === 'run' && source.runId && (
+        <WalkSourceFrames
+          recordId={recordId}
+          runId={source.runId}
+          onSaved={() => { setStripVersion((v) => v + 1); onSaved(); }}
+        />
+      )}
 
       {/* Save + result */}
       <div className="flex flex-wrap items-center gap-3 border-t border-port-border pt-3">

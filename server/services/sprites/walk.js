@@ -36,7 +36,8 @@ import {
 import { requireCharacter, loadManifest } from './reference.js';
 import { SPRITE_DIRECTIONS, anchorIdForDirection, buildWalkVideoPrompt } from './prompts.js';
 import {
-  prepareWalkAnchorChromaInput, runWalkPostprocess, WALK_CELL_SIZE, WALK_FPS,
+  prepareWalkAnchorChromaInput, runWalkPostprocess, extractVideoFrames,
+  WALK_CELL_SIZE, WALK_FPS, MAX_SOURCE_SECONDS,
   WALK_DEFAULT_FRAME_COUNT, WALK_DEFAULT_FPS,
   WALK_MIN_FRAME_COUNT, WALK_MAX_FRAME_COUNT, WALK_MIN_FPS, WALK_MAX_FPS,
   clampFrameCount, clampFps,
@@ -1040,9 +1041,41 @@ async function packageRun(recordId, run, overrides = {}, location = {}) {
 }
 
 /**
+ * Why this run's cycle cannot be re-derived from its clip right now, or null
+ * when it can — stated ONCE, in the order the write path applies the refusals.
+ *
+ * Both sides read it: `rerunWalkPostprocessImpl` throws the matching error, and
+ * `getWalkSourceFrames` reports it as `lockReason` so the Loop Trimmer can offer
+ * the unlock/reopen that clears it instead of a re-derive that would 409. A read
+ * path with its own copy of this rule is precisely how the two would drift —
+ * #2993 already moved the underlying question from provenance ("is this an
+ * import?") to evidence ("is the clip actually on disk?"), and a second
+ * definition would strand one of them on the old answer.
+ *
+ * A frozen set outranks an approved direction because the set gate is the
+ * coarser one; a missing clip is last because it is the one state the user
+ * cannot unlock their way out of.
+ */
+function reDeriveLockReason({
+  walkSet, selection, run, runId, clipRel,
+}) {
+  if (walkSet) return 'finalized';
+  if (selection?.directions?.[run.direction]?.runId === runId) return 'approved';
+  if (!clipRel) return 'no-source-video';
+  return null;
+}
+
+const RE_DERIVE_REFUSALS = {
+  finalized: () => new ServerError('Walk set is finalized — revisions require a new character version', { status: 409, code: 'WALK_SET_FINAL' }),
+  approved: () => new ServerError('Run is approved — approved runs are immutable', { status: 409, code: 'RUN_APPROVED' }),
+  'no-source-video': () => new ServerError('Run has no source video yet', { status: 409, code: 'VIDEO_NOT_READY' }),
+};
+
+/**
  * Re-run the deterministic postprocess for a run whose source video already
- * landed (crash recovery, or determinism verification). Approved/finalized
- * runs are immutable.
+ * landed — crash recovery, determinism verification, or (the common case since
+ * #2985/#2980) bringing a direction onto the set's cycle target from the clip
+ * already on disk. Approved/finalized runs are immutable.
  */
 export function rerunWalkPostprocess(recordId, { runId, frameCount, fps }) {
   return walkWriteTail(recordId, () => rerunWalkPostprocessImpl(recordId, runId, { frameCount, fps }));
@@ -1050,21 +1083,18 @@ export function rerunWalkPostprocess(recordId, { runId, frameCount, fps }) {
 
 async function rerunWalkPostprocessImpl(recordId, runId, overrides) {
   await requireCharacter(recordId);
-  await requireUnfinalized(recordId);
   // Layout-aware (#2993): an imported run commonly lives under `grok/<run-id>/`,
   // and its regenerated frames + record must go back to that same directory.
   const found = await resolveRunById(recordId, runId);
   if (!found) throw new ServerError(`Unknown walk run: ${runId}`, { status: 404, code: 'RUN_NOT_FOUND' });
   const { run, runDirRel } = found;
-  // One state read serves both the immutability check and the target below.
-  const { walkTarget, selection } = await getWalkState(recordId);
-  if (selection?.directions?.[run.direction]?.runId === runId) {
-    throw new ServerError('Run is approved — approved runs are immutable', { status: 409, code: 'RUN_APPROVED' });
-  }
+  // One state read serves the re-derive gate and the target below.
+  const { walkTarget, selection, walkSet } = await getWalkState(recordId);
   const clipRel = await resolveRunClipRel(recordId, run, runDirRel);
-  if (!clipRel) {
-    throw new ServerError('Run has no source video yet', { status: 409, code: 'VIDEO_NOT_READY' });
-  }
+  const refusal = reDeriveLockReason({
+    walkSet, selection, run, runId, clipRel,
+  });
+  if (refusal) throw RE_DERIVE_REFUSALS[refusal]();
   // Same set-level gate as generation (#2985): a reprocess is exactly how a
   // drifted direction is brought INTO line with the target, so it must land on
   // the target — not somewhere new. An omitted override adopts the target.
@@ -1081,6 +1111,169 @@ async function rerunWalkPostprocessImpl(recordId, runId, overrides) {
     throw new ServerError(`Postprocess failed: ${run.postprocessError}`, { status: 422, code: 'POSTPROCESS_FAILED' });
   }
   return run;
+}
+
+// The ffmpeg intermediates a run's clip was extracted into (#2980). Named here
+// rather than rebuilt at each call site because `paths.js` excludes exactly this
+// directory from `listSpriteAssets` (RUN_RAW_INTERMEDIATE) — the reader below is
+// the sanctioned narrow window onto it, and the two must name the same place.
+const RAW_FRAME_NAME = /^source-(\d{4})\.png$/;
+const rawFramesRelOf = (runDirRel) => `${runDirRel}/generated/raw`;
+
+async function listRawFrameNames(recordId, rawRel) {
+  const names = await readdir(join(spriteDir(recordId), rawRel)).catch(() => []);
+  return names.filter((name) => RAW_FRAME_NAME.test(name)).sort();
+}
+
+/**
+ * Re-express the packer's chosen cycle window in the numbering the client
+ * renders frames in.
+ *
+ * `cycleSelection.windowStart` counts from the start of the longest USABLE span
+ * the packer kept (walkPostprocess.js slices the clip's fade-in frames off
+ * before selecting), while `frames[].sourceFrameIndex` counts raw `source-NNNN`
+ * files 1-based. The two are different coordinate spaces and differ by
+ * `span.start`, which the manifest never records — but it doesn't need to:
+ * `indices[0] === windowStart`, so the FIRST packed frame's source index IS the
+ * window's first raw frame. Without this translation the highlight would sit
+ * `span.start` frames to the left of the frames it claims to cover.
+ *
+ * Each field degrades to null independently rather than collapsing the whole
+ * block, so a manifest that records the window but no frames[] still reports the
+ * window length it selected.
+ */
+function cycleWindowOf(packaged) {
+  const cycle = packaged?.cycleSelection;
+  if (!cycle) return null;
+  const windowLength = Number.isInteger(cycle.windowLength) ? cycle.windowLength : null;
+  const first = packaged?.frames?.[0]?.sourceFrameIndex;
+  const windowStartFrame = Number.isInteger(first) ? first : null;
+  return {
+    windowStart: Number.isInteger(cycle.windowStart) ? cycle.windowStart : null,
+    windowLength,
+    windowStartFrame,
+    windowEndFrame: windowStartFrame !== null && windowLength !== null
+      ? windowStartFrame + windowLength : null,
+    endpointSeamScore: cycle.endpointSeamScore ?? null,
+    medianMotionScore: cycle.medianMotionScore ?? null,
+  };
+}
+
+/**
+ * The fields every source-frame response carries, whatever it found — so the
+ * "nothing to show" shape stays as informative as the populated one (the client
+ * still seeds its re-derive control from `target` and labels the run's current
+ * geometry) instead of degenerating into a bare flag.
+ */
+function sourceFrameHeader(runId, run, walkTarget) {
+  return {
+    runId,
+    direction: run?.direction || null,
+    extractionFps: WALK_FPS,
+    maxSourceSeconds: MAX_SOURCE_SECONDS,
+    // Older run records predate the persisted frameCount/fps fields, so the
+    // packed preview is the fallback — and null (rather than a default) when
+    // neither exists, so "unknown" can't masquerade as "packed at 12".
+    current: {
+      frameCount: run?.frameCount ?? run?.stripPreview?.frameCount ?? null,
+      fps: run?.fps ?? run?.stripPreview?.fps ?? null,
+    },
+    // The set-level cycle target (#2985) — the re-derive control's bounds come
+    // from here, not from a free authoring range: re-deriving ONE direction to a
+    // geometry the rest of the set doesn't share just recreates a ragged set from
+    // the other end (and the reprocess would 409 WALK_TARGET_MISMATCH anyway).
+    target: walkTarget,
+  };
+}
+
+/**
+ * Every frame the run's source video produced, plus the provenance that maps
+ * them onto the packed strip (#2980).
+ *
+ * The Loop Trimmer can only ever DROP columns from an already-packed strip, so
+ * the raw frames are the only path back to a HIGHER frame count — and they are
+ * invisible everywhere else by design (`listSpriteAssets` skips the directory so
+ * ~73 near-identical PNGs don't swamp the asset browser). This is the narrow
+ * read that surfaces them, and only them.
+ *
+ * Two absence sentinels, kept distinct per the repo's absent-vs-empty rule:
+ *   - `available: false, reason: 'no-source-video'`  no clip on disk to extract from
+ *   - `available: false, reason: 'run-not-packaged'`  a synthesized redraw cycle
+ *     (#2924), which never had an i2v clip or a run directory behind it
+ * …and neither is a 500, nor an empty-looking success.
+ *
+ * `editable`/`lockReason` answer a SEPARATE question from `available`: frames can
+ * be listed for a run whose clip has since been deleted (nothing to re-derive
+ * from), and a run with a clip can still be locked by approval or by a frozen
+ * set. Collapsing the two would make the UI claim a re-derive is possible whenever
+ * it had something to show.
+ *
+ * `raw/` absent but the clip present → re-extract on demand (`ffmpeg -y`, so
+ * idempotent), inside the per-record write tail like every other walk write.
+ */
+export async function getWalkSourceFrames(recordId, runId) {
+  await requireCharacter(recordId);
+  // The state read serves the target, the approval check and the redraw fallback
+  // below; it is independent of resolving the run, so overlap them.
+  const [found, state] = await Promise.all([
+    resolveRunById(recordId, runId),
+    getWalkState(recordId),
+  ]);
+  const { walkTarget, selection, walkSet } = state;
+  if (!found) {
+    // A run the walk state knows but that has no run DIRECTORY is a redraw cycle
+    // synthesized from an imagegen manifest — a legitimate trimmer source with no
+    // clip behind it, so it gets the soft sentinel rather than the 404 an
+    // unknown id earns.
+    const known = state.runs.find((r) => r.id === runId);
+    if (!known) throw new ServerError(`Unknown walk run: ${runId}`, { status: 404, code: 'RUN_NOT_FOUND' });
+    return {
+      ...sourceFrameHeader(runId, known, walkTarget),
+      available: false,
+      reason: 'run-not-packaged',
+      frames: [],
+      cycle: null,
+      selectedSourceIndices: [],
+      editable: false,
+      lockReason: 'no-source-video',
+    };
+  }
+  const { runDirRel } = found;
+  const run = normalizeRunRecord(recordId, found.run, runDirRel);
+  const clipRel = await resolveRunClipRel(recordId, run, runDirRel);
+  const rawRel = rawFramesRelOf(runDirRel);
+  let names = await listRawFrameNames(recordId, rawRel);
+  if (!names.length && clipRel) {
+    await walkWriteTail(recordId, () => extractVideoFrames(
+      resolveSpriteAssetPath(recordId, clipRel),
+      resolveSpriteAssetPath(recordId, rawRel),
+    ));
+    // Re-listed rather than taking the extractor's return, so what counts as a
+    // raw frame is defined in exactly one place.
+    names = await listRawFrameNames(recordId, rawRel);
+  }
+  const packaged = run.postprocessManifest
+    ? await readJSONFile(join(spriteDir(recordId), run.postprocessManifest), null)
+    : null;
+  const frames = names.map((name) => ({
+    index: Number(RAW_FRAME_NAME.exec(name)[1]),
+    path: `${rawRel}/${name}`,
+  }));
+  const lockReason = reDeriveLockReason({
+    walkSet, selection, run, runId, clipRel,
+  });
+  return {
+    ...sourceFrameHeader(runId, run, walkTarget),
+    available: frames.length > 0,
+    reason: frames.length > 0 ? null : 'no-source-video',
+    frames,
+    cycle: cycleWindowOf(packaged),
+    selectedSourceIndices: (Array.isArray(packaged?.frames) ? packaged.frames : [])
+      .map((frame) => frame?.sourceFrameIndex)
+      .filter((index) => Number.isInteger(index)),
+    editable: !lockReason,
+    lockReason,
+  };
 }
 
 /**
