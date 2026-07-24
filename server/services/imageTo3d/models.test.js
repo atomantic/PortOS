@@ -35,7 +35,7 @@ vi.mock('./db.js', () => ({
 import { resolveTarget } from './targets.js';
 import { isTrellis2Installed, runTrellis2Generate } from './trellis2.js';
 import * as store from './db.js';
-import { createModel, startGeneration, getModelAsset } from './models.js';
+import { createModel, startGeneration, getModelAsset, recoverInterruptedModels } from './models.js';
 
 const draftRecord = () => ({
   id: 'image3d-example',
@@ -131,6 +131,15 @@ describe('image-to-3D model orchestration', () => {
     await vi.waitFor(() => expect(current.status).toBe('failed'));
     expect(current.error).toMatch(/exited 1/);
     expect(current.runs.at(-1)).toMatchObject({ status: 'failed' });
+  });
+
+  it('recoverInterruptedModels never launches a render (no cold-bootstrap)', async () => {
+    store.recoverInterruptedModels.mockResolvedValue({ recovered: 2 });
+    const result = await recoverInterruptedModels();
+    expect(result).toEqual({ recovered: 2 });
+    // The whole point of boot recovery: mark interrupted renders failed-retryable
+    // WITHOUT relaunching any GPU work (CLAUDE.md no-cold-bootstrap policy).
+    expect(runTrellis2Generate).not.toHaveBeenCalled();
   });
 
   it('getModelAsset 409s until a mesh is rendered, then returns the download path', async () => {

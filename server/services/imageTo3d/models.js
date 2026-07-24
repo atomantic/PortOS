@@ -83,8 +83,11 @@ function updateRun(runs, operationId, patch) {
 
 async function failGeneration(id, operationId, error) {
   const message = cleanError(error);
+  // includeDeleted so a record the user deleted mid-render resolves (rather than
+  // throwing NOT_FOUND → a spurious "failure could not be persisted" log); the
+  // `deleted` guard then no-ops the write — the delete already recorded the intent.
   await store.mutateModel(id, (current) => {
-    if (current.generationOperationId !== operationId) return null;
+    if (current.deleted || current.generationOperationId !== operationId) return null;
     return {
       ...current,
       status: 'failed',
@@ -96,7 +99,7 @@ async function failGeneration(id, operationId, error) {
         completedAt: new Date().toISOString(),
       }),
     };
-  }).catch((persistError) => {
+  }, { includeDeleted: true }).catch((persistError) => {
     console.error(`❌ Image-to-3D model ${id} failure could not be persisted: ${persistError.message}`);
   });
 }
@@ -123,8 +126,11 @@ async function executeRender({ id, operationId, runner, sourcePath }) {
     });
 
     const completedAt = new Date().toISOString();
+    // includeDeleted + `deleted` guard: if the user deleted the record while the
+    // render ran, complete quietly as a no-op (the GLB on disk is orphaned — full
+    // kill-on-delete is tracked as a follow-up) instead of throwing NOT_FOUND.
     await store.mutateModel(id, (current) => {
-      if (current.generationOperationId !== operationId) return null;
+      if (current.deleted || current.generationOperationId !== operationId) return null;
       return {
         ...current,
         status: 'ready',
@@ -138,7 +144,7 @@ async function executeRender({ id, operationId, runner, sourcePath }) {
           completedAt,
         }),
       };
-    });
+    }, { includeDeleted: true });
     console.log(`🧊 Image-to-3D mesh ready: ${id}`);
   } catch (error) {
     console.error(`❌ Image-to-3D render failed for ${id}: ${cleanError(error)}`);

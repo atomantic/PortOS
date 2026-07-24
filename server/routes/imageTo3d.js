@@ -151,8 +151,14 @@ router.get('/models/:id/asset', asyncHandler(async (req, res) => {
     // Pre-stream (common: file removed after the readiness check) → shared 404
     // envelope. Mid-stream (headers already flushed) → tear the socket down, since
     // sendErrorResponse no-ops once headers are sent.
-    if (res.headersSent) res.destroy(err);
-    else sendErrorResponse(res, new ServerError('Mesh file not found', { status: 404, code: 'ASSET_MISSING' }));
+    if (res.headersSent) {
+      res.destroy(err);
+    } else {
+      // Drop the GLB download headers set above so the JSON error body isn't
+      // offered to the browser as a "<name>.glb" attachment.
+      res.removeHeader('Content-Disposition');
+      sendErrorResponse(res, new ServerError('Mesh file not found', { status: 404, code: 'ASSET_MISSING' }));
+    }
   });
   stream.pipe(res);
 }));
