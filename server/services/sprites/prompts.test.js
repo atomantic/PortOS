@@ -68,4 +68,21 @@ describe('buildAnchorPrompt', () => {
     expect(p).toContain('magenta (#FF00FF) background');
     expect(p).toContain('attached Scout character');
   });
+
+  it('appends a trimmed correction clause when provided', () => {
+    const p = buildAnchorPrompt({
+      name: 'Scout', direction: 'north-east', chromaKey: '#FF00FF',
+      correctionPrompt: '  no pocket on the right sleeve  ',
+    });
+    expect(p).toContain('Important correction — apply this over the attached reference: no pocket on the right sleeve');
+    // The correction rides at the end so it reads as an override, not a base clause.
+    expect(p.trimEnd().endsWith('no pocket on the right sleeve')).toBe(true);
+  });
+
+  it('omits the correction clause for blank/absent input', () => {
+    const base = buildAnchorPrompt({ name: 'Scout', direction: 'east', chromaKey: '#FF00FF' });
+    const blank = buildAnchorPrompt({ name: 'Scout', direction: 'east', chromaKey: '#FF00FF', correctionPrompt: '   ' });
+    expect(base).not.toContain('Important correction');
+    expect(blank).toBe(base);
+  });
 });

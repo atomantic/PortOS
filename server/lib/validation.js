@@ -1051,6 +1051,11 @@ export const spriteReferenceGenerateSchema = z.object({
   model: z.string().trim().max(64).optional(),
   effort: z.string().trim().max(32).optional(),
   designPrompt: z.string().max(4000).optional(),
+  // Extra free-text guidance appended to an anchor re-roll (e.g. "no pocket on
+  // the right sleeve") so regenerating diverges from the previous render
+  // instead of reproducing the same mistake. Anchor targets only — the main
+  // target iterates via `designPrompt`.
+  correctionPrompt: z.string().max(4000).optional(),
   initImageStrength: optionalUnitNumber,
   // Alternative i2i seed sources for the main target — resolved server-side and
   // mutually exclusive with an uploaded `referenceImage` file (which the route
