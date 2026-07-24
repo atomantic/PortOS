@@ -19,6 +19,10 @@ vi.mock('../services/imageTo3d/targets.js', () => ({
   ]),
 }));
 
+vi.mock('../services/imageTo3d/trellis2.js', () => ({
+  isTrellis2Installed: vi.fn(() => false),
+}));
+
 import routes from './imageTo3d.js';
 
 const makeApp = () => {
@@ -35,6 +39,6 @@ describe('image-to-3d routes', () => {
     expect(res.status).toBe(200);
     expect(res.body.capabilities).toMatchObject({ appleSilicon: true, unifiedMemoryGb: 128 });
     expect(Array.isArray(res.body.targets)).toBe(true);
-    expect(res.body.targets[0]).toMatchObject({ id: 'trellis2', available: true });
+    expect(res.body.targets[0]).toMatchObject({ id: 'trellis2', available: true, installed: false });
   });
 });
