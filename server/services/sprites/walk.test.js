@@ -81,6 +81,7 @@ const { listSpriteAssets } = await import('./paths.js');
 const { lockReference } = await import('./reference.js');
 const {
   getWalkState, startWalkGeneration, attachTuiWalkResult, approveWalkDirection, rerunWalkPostprocess, unlockWalkSet,
+  reopenWalkDirection,
 } = await import('./walk.js');
 const { SPRITE_DIRECTIONS, ANCHOR_DIRECTIONS } = await import('./prompts.js');
 
@@ -193,6 +194,21 @@ describe('startWalkGeneration', () => {
     const result = await startWalkGeneration(id, { direction: 'east', duration: 2 });
     expect(result.duration).toBe(2);
     expect(executeTuiRun.mock.calls[0][0].prompt).toContain('for 2 seconds');
+  });
+
+  it('stores the chosen frame count + fps on the run and passes them to the packer', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    executeTuiRun.mockImplementationOnce(async ({ workspacePath }) => {
+      await writeFile(join(workspacePath, 'source-video.mp4'), 'grok-clip-bytes');
+    });
+    const { runId } = await startWalkGeneration(id, { direction: 'east', frameCount: 14, fps: 8 });
+    await vi.waitFor(async () => {
+      const { runs } = await getWalkState(id);
+      expect(runs[0].status).toBe('candidate');
+    });
+    const { runs } = await getWalkState(id);
+    expect(runs[0]).toMatchObject({ id: runId, frameCount: 14, fps: 8 });
+    expect(runWalkPostprocess.mock.calls[0][0]).toMatchObject({ frameCount: 14, fps: 8 });
   });
 
   it('packages the candidate once grok writes the clip (full render→attach)', async () => {
@@ -329,6 +345,19 @@ describe('rerunWalkPostprocess', () => {
     await expect(rerunWalkPostprocess(id, { runId: approvedRun }))
       .rejects.toMatchObject({ code: 'RUN_APPROVED' });
   });
+
+  it('reprocesses the on-disk clip at a new frame count + fps (no regeneration)', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const { runId } = await startWalkGeneration(id, { direction: 'east', frameCount: 8, fps: 12 });
+    await writeFile(join(TEST_ROOT, 'sprites', id, 'runs', runId, 'generated', 'source-video.mp4'), 'landed');
+    runWalkPostprocess.mockClear();
+    const run = await rerunWalkPostprocess(id, { runId, frameCount: 16, fps: 6 });
+    // The override reaches the deterministic packer — same clip, new count/fps.
+    expect(runWalkPostprocess).toHaveBeenCalledOnce();
+    expect(runWalkPostprocess.mock.calls[0][0]).toMatchObject({ frameCount: 16, fps: 6 });
+    // …and is stamped back onto the run record so the card reflects the choice.
+    expect(run).toMatchObject({ frameCount: 16, fps: 6 });
+  });
 });
 
 describe('approveWalkDirection', () => {
@@ -448,6 +477,58 @@ describe('unlockWalkSet', () => {
     // and then 409'd.
     expect((await getWalkState(id)).walkSet.imported).toBe(true);
     await expect(unlockWalkSet(id)).rejects.toMatchObject({ code: 'LEGACY_IMPORTED_WALK_SET' });
+  });
+});
+
+describe('reopenWalkDirection', () => {
+  async function finalizedCharacter() {
+    const id = await characterWithLockedAnchors(newId(), ANCHOR_DIRECTIONS);
+    for (const direction of SPRITE_DIRECTIONS) {
+      const { runId } = await makeCandidateRun(id, direction);
+      await approveWalkDirection(id, { direction, runId });
+    }
+    return id;
+  }
+
+  it('reopens ONE approved direction, un-finalizes the set, and keeps the others', async () => {
+    const id = await finalizedCharacter();
+    expect((await records.getRecord(id)).status).toBe('walk-complete');
+
+    const state = await reopenWalkDirection(id, { direction: 'east' });
+    // The frozen set is gone (a set is final only when all 8 are approved)…
+    expect(state.walkSet).toBeNull();
+    expect((await records.getRecord(id)).status).toBe('reference-complete');
+    // …east is editable again while every other direction stays approved.
+    expect(state.selection.directions.east).toBeUndefined();
+    expect(state.selection.directions.north.status).toBe('approved');
+    expect(state.selection.status).toBe('in-progress');
+
+    // Re-approving just east re-freezes the set with a single click.
+    const { runId } = await makeCandidateRun(id, 'east');
+    const reapproved = await approveWalkDirection(id, { direction: 'east', runId });
+    expect(reapproved.walkSet).not.toBeNull();
+    expect((await records.getRecord(id)).status).toBe('walk-complete');
+  });
+
+  it('409s a direction that is not approved', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    await expect(reopenWalkDirection(id, { direction: 'east' }))
+      .rejects.toMatchObject({ code: 'DIRECTION_NOT_APPROVED' });
+  });
+
+  it('refuses to reopen a legacy source-pipeline import', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    await mkdir(join(TEST_ROOT, 'sprites', id, 'walk'), { recursive: true });
+    await writeFile(join(TEST_ROOT, 'sprites', id, 'walk', `${id}-walk-set-v1.json`), JSON.stringify({
+      schemaVersion: 1,
+      kind: 'finalized-eight-direction-walk-set',
+      characterId: id,
+      status: 'final',
+      selectionPath: `art-source/sprites/${id}/walk/${id}-walk-selection-v1.json`,
+      directions: { east: { status: 'approved' } },
+    }));
+    await expect(reopenWalkDirection(id, { direction: 'east' }))
+      .rejects.toMatchObject({ code: 'LEGACY_IMPORTED_WALK_SET' });
   });
 });
 

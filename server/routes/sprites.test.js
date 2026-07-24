@@ -32,6 +32,8 @@ vi.mock('../services/sprites/walk.js', () => ({
   startWalkGeneration: vi.fn(async () => ({ jobId: 'v1', runId: 'walk-east-0a1b2c3d', direction: 'east', duration: 6 })),
   approveWalkDirection: vi.fn(async () => ({ runs: [], selection: { status: 'in-progress' }, walkSet: null })),
   rerunWalkPostprocess: vi.fn(async () => ({ id: 'walk-east-0a1b2c3d', status: 'candidate' })),
+  unlockWalkSet: vi.fn(async () => ({ runs: [], selection: { status: 'in-progress' }, walkSet: null })),
+  reopenWalkDirection: vi.fn(async () => ({ runs: [], selection: { status: 'in-progress' }, walkSet: null })),
 }));
 
 vi.mock('../services/sprites/walkTrims.js', () => ({
@@ -370,6 +372,28 @@ describe('sprites routes', () => {
       .send({ direction: 'south' })).status).toBe(200);
   });
 
+  it('POST /:id/walk/generate forwards frame count + fps and bounds them', async () => {
+    walk.startWalkGeneration.mockClear();
+    const r = await request(app).post('/api/sprites/pioneer/walk/generate')
+      .send({ direction: 'east', frameCount: 14, fps: 8 });
+    expect(r.status).toBe(200);
+    expect(walk.startWalkGeneration).toHaveBeenCalledWith('pioneer', { direction: 'east', frameCount: 14, fps: 8 });
+    // Out-of-range count / fps are rejected by the schema.
+    expect((await request(app).post('/api/sprites/pioneer/walk/generate')
+      .send({ direction: 'east', frameCount: 32 })).status).toBe(400);
+    expect((await request(app).post('/api/sprites/pioneer/walk/generate')
+      .send({ direction: 'east', fps: 99 })).status).toBe(400);
+  });
+
+  it('POST /:id/walk/reopen validates the direction and delegates', async () => {
+    const r = await request(app).post('/api/sprites/pioneer/walk/reopen')
+      .send({ direction: 'east' });
+    expect(r.status).toBe(200);
+    expect(walk.reopenWalkDirection).toHaveBeenCalledWith('pioneer', { direction: 'east' });
+    expect((await request(app).post('/api/sprites/pioneer/walk/reopen')
+      .send({ direction: 'up' })).status).toBe(400);
+  });
+
   it('POST /:id/walk/approve validates the run id shape', async () => {
     const r = await request(app).post('/api/sprites/pioneer/walk/approve')
       .send({ direction: 'east', runId: 'walk-east-0a1b2c3d' });
@@ -381,11 +405,19 @@ describe('sprites routes', () => {
     expect(walk.approveWalkDirection).toHaveBeenCalledOnce();
   });
 
-  it('POST /:id/walk/postprocess delegates the rerun', async () => {
+  it('POST /:id/walk/postprocess delegates the rerun (with optional reprocess count/fps)', async () => {
     const r = await request(app).post('/api/sprites/pioneer/walk/postprocess')
       .send({ runId: 'walk-east-0a1b2c3d' });
     expect(r.status).toBe(200);
     expect(walk.rerunWalkPostprocess).toHaveBeenCalledWith('pioneer', { runId: 'walk-east-0a1b2c3d' });
+
+    walk.rerunWalkPostprocess.mockClear();
+    const r2 = await request(app).post('/api/sprites/pioneer/walk/postprocess')
+      .send({ runId: 'walk-east-0a1b2c3d', frameCount: 16, fps: 6 });
+    expect(r2.status).toBe(200);
+    expect(walk.rerunWalkPostprocess).toHaveBeenCalledWith('pioneer', { runId: 'walk-east-0a1b2c3d', frameCount: 16, fps: 6 });
+    expect((await request(app).post('/api/sprites/pioneer/walk/postprocess')
+      .send({ runId: 'walk-east-0a1b2c3d', frameCount: 3 })).status).toBe(400);
   });
 
   it('POST /:id/walk/trim validates and 201s', async () => {

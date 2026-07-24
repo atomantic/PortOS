@@ -22,6 +22,7 @@ import {
   spriteForkSchema,
   spriteWalkGenerateSchema,
   spriteWalkApproveSchema,
+  spriteWalkReopenSchema,
   spriteWalkPostprocessSchema,
   spriteWalkTrimSchema,
   spritePublishBindingSchema,
@@ -42,6 +43,7 @@ import {
 import { resolveSpriteAssetPrompt } from '../services/sprites/assetPrompt.js';
 import {
   getWalkState, startWalkGeneration, approveWalkDirection, rerunWalkPostprocess, unlockWalkSet,
+  reopenWalkDirection,
 } from '../services/sprites/walk.js';
 import { saveLoopTrim } from '../services/sprites/walkTrims.js';
 import { compileAtlas, getAtlasState } from '../services/sprites/atlas.js';
@@ -169,6 +171,14 @@ router.post('/:id/walk/approve', asyncHandler(async (req, res) => {
 // preserving the rendered clips. 409s a legacy source-pipeline import. No body.
 router.post('/:id/walk/unlock', asyncHandler(async (req, res) => {
   res.json(await unlockWalkSet(req.params.id));
+}));
+
+// Re-open ONE approved direction (finer-grained than unlock) so it can be
+// regenerated/reprocessed/re-approved — the user noticed one walk is too fast
+// or wrong. Un-finalizes a frozen set but keeps other directions' approvals.
+router.post('/:id/walk/reopen', asyncHandler(async (req, res) => {
+  const body = validateRequest(spriteWalkReopenSchema, req.body);
+  res.json(await reopenWalkDirection(req.params.id, body));
 }));
 
 // Re-run the deterministic postprocess for a run whose video already landed

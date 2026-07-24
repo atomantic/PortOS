@@ -23,7 +23,10 @@ import { join } from 'path';
 import sharp from 'sharp';
 import { mkdir, readFile } from 'fs/promises';
 import { findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
-import { runWalkPostprocess, WALK_PHASES, WALK_CELL_SIZE } from './walkPostprocess.js';
+import {
+  runWalkPostprocess, walkPhaseLabels, WALK_PHASES, WALK_CELL_SIZE,
+  WALK_DEFAULT_FRAME_COUNT, WALK_DEFAULT_FPS,
+} from './walkPostprocess.js';
 
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-walk-e2e-'));
 afterAll(() => rmSync(TEST_ROOT, { recursive: true, force: true }));
@@ -76,7 +79,7 @@ async function writeAnchor(dest) {
   await sharp(buf, { raw: { width: w, height: h, channels: 3 } }).png().toFile(dest);
 }
 
-async function runOnce(label, videoAbs, anchorAbs) {
+async function runOnce(label, videoAbs, anchorAbs, opts = {}) {
   const runRel = 'grok/walk-east-fixture0';
   const runAbs = join(TEST_ROOT, label, runRel);
   await mkdir(join(runAbs, 'generated'), { recursive: true });
@@ -91,48 +94,68 @@ async function runOnce(label, videoAbs, anchorAbs) {
       anchorRel: 'reference/fixture-hero-walk-east-v1.png',
       anchorAbs,
       videoAbs,
+      ...opts,
     }),
   };
 }
 
 describe.skipIf(!ffmpegBin)('runWalkPostprocess e2e (synthetic keyed walk video)', () => {
-  it('packages the canonical strip geometry deterministically', async () => {
+  it('packages the default variable-frame strip geometry deterministically', async () => {
     const videoAbs = join(TEST_ROOT, 'walk.mp4');
     const anchorAbs = join(TEST_ROOT, 'anchor.png');
     await synthesizeVideo(videoAbs);
     await writeAnchor(anchorAbs);
 
+    const n = WALK_DEFAULT_FRAME_COUNT;
     const { runAbs, result } = await runOnce('run-a', videoAbs, anchorAbs);
     const { manifest } = result;
 
-    // Geometry contract.
+    // Geometry contract — the new default packs N frames at the default fps,
+    // with positional frame-NN labels (named gait phases are the 8-frame case).
     expect(manifest.kind).toBe('deterministically-packaged-grok-walk-video');
-    expect(manifest.frameCount).toBe(8);
-    expect(manifest.frameRate).toBe(12);
-    expect(manifest.frames.map((f) => f.phase)).toEqual(WALK_PHASES);
+    expect(manifest.frameCount).toBe(n);
+    expect(manifest.frameRate).toBe(WALK_DEFAULT_FPS);
+    expect(manifest.frames.map((f) => f.phase)).toEqual(walkPhaseLabels(n));
     expect(manifest.alignment.cellSize).toBe(WALK_CELL_SIZE);
     expect(manifest.alignment.targetPivot).toEqual([192, 352]);
-    expect(manifest.alignment.translations).toHaveLength(8);
+    expect(manifest.alignment.translations).toHaveLength(n);
     expect(manifest.chromaKey).toBe(KEY);
-    expect(manifest.validation.keyDominantPixels).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
-    expect(manifest.cycleSelection.windowLength).toBeGreaterThanOrEqual(8);
+    expect(manifest.validation.keyDominantPixels).toEqual(Array(n).fill(0));
+    expect(manifest.cycleSelection.windowLength).toBeGreaterThanOrEqual(n);
 
     const stripMeta = await sharp(join(runAbs, 'generated', 'fixture-hero-walk-east-strip.png')).metadata();
-    expect(stripMeta.width).toBe(WALK_CELL_SIZE * 8);
+    expect(stripMeta.width).toBe(WALK_CELL_SIZE * n);
     expect(stripMeta.height).toBe(WALK_CELL_SIZE);
     const sheetMeta = await sharp(join(runAbs, 'generated', 'review', 'fixture-hero-walk-east-contrast-review.png')).metadata();
-    expect(sheetMeta.width).toBe(1024);
+    expect(sheetMeta.width).toBe(128 * n);
     expect(sheetMeta.height).toBe(384);
     const preview = JSON.parse(await readFile(join(runAbs, 'generated', 'review-preview.json'), 'utf8'));
     expect(preview).toEqual({
       stripPath: 'grok/walk-east-fixture0/generated/fixture-hero-walk-east-strip.png',
-      frameCount: 8, fps: 12, cellWidth: 384, cellHeight: 384, row: 0, startColumn: 0,
+      frameCount: n, fps: WALK_DEFAULT_FPS, cellWidth: 384, cellHeight: 384, row: 0, startColumn: 0,
     });
 
     // Determinism: same video, second run → byte-identical manifest & strip.
     const second = await runOnce('run-b', videoAbs, anchorAbs);
     expect(second.result.manifest).toEqual(manifest);
     expect(second.result.manifest.stripSha256).toBe(manifest.stripSha256);
+  }, 120000);
+
+  it('honors an explicit frame count + fps (back-compat 8-frame named-phase packing)', async () => {
+    const videoAbs = join(TEST_ROOT, 'walk8.mp4');
+    const anchorAbs = join(TEST_ROOT, 'anchor8.png');
+    await synthesizeVideo(videoAbs);
+    await writeAnchor(anchorAbs);
+
+    const { runAbs, result } = await runOnce('run-8', videoAbs, anchorAbs, { frameCount: 8, fps: 12 });
+    const { manifest } = result;
+    expect(manifest.frameCount).toBe(8);
+    expect(manifest.frameRate).toBe(12);
+    // The 8-frame packing keeps the named 2-beat gait phases for back-compat.
+    expect(manifest.frames.map((f) => f.phase)).toEqual(WALK_PHASES);
+    expect(manifest.alignment.translations).toHaveLength(8);
+    const stripMeta = await sharp(join(runAbs, 'generated', 'fixture-hero-walk-east-strip.png')).metadata();
+    expect(stripMeta.width).toBe(WALK_CELL_SIZE * 8);
   }, 120000);
 });
 

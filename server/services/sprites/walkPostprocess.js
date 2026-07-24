@@ -29,8 +29,26 @@ import { keyChannelSplit, keyness, keyShareFn, hexToRgb } from './chromaKey.js';
 
 // Source pipeline constants (animation_postprocess.py) — values are part of
 // the cross-install artifact contract (imported manifests carry them).
+// WALK_FPS is the source-EXTRACTION sampling rate (how densely we pull frames
+// out of grok's clip); it is ALSO the legacy playback-fps fallback for older
+// manifests that omit `frameRate`. Playback fps (how fast the packed cycle
+// animates) is now a separate, per-run value carried in the manifest.
 export const WALK_FPS = 12;
+// Legacy default / fallback frame count for manifests (or clients) that omit it.
 export const WALK_FRAME_COUNT = 8;
+// Configurable authoring range (#sprite-walk-variable-frames): native
+// generation now packs a fuller, slower cycle by default so a walk reads as a
+// walk, not a run. The packer resamples the detected gait window DOWN to
+// `frameCount` distinct source frames (it never upsamples — N is bounded by
+// the source frames available in one cycle), and playback fps is metadata
+// carried into the manifest/atlas. So a slower/smoother walk needs no
+// regeneration — only a reprocess of the on-disk clip at a new count/fps.
+export const WALK_DEFAULT_FRAME_COUNT = 12;
+export const WALK_DEFAULT_FPS = 10;
+export const WALK_MIN_FRAME_COUNT = 6;
+export const WALK_MAX_FRAME_COUNT = 16;
+export const WALK_MIN_FPS = 4;
+export const WALK_MAX_FPS = 24;
 export const MAX_SOURCE_SECONDS = 8;
 export const MAX_SOURCE_DIMENSION = 512;
 export const WALK_CELL_SIZE = 384;
@@ -39,6 +57,33 @@ export const WALK_PHASES = [
   'left-contact', 'left-down', 'left-passing', 'left-up',
   'right-contact', 'right-down', 'right-passing', 'right-up',
 ];
+
+/**
+ * Column/phase labels for an N-frame packed strip. The historical 8-frame
+ * packing keeps its named 2-beat gait phases (so existing atlases and imported
+ * manifests round-trip byte-identically); any other length uses positional
+ * `frame-NN` labels. Postprocess (which writes them) and atlas.js (which
+ * asserts them) MUST derive labels through this one helper so they can never
+ * disagree on a column's identity.
+ */
+export function walkPhaseLabels(n) {
+  if (n === WALK_PHASES.length) return [...WALK_PHASES];
+  return Array.from({ length: n }, (_, i) => `frame-${String(i).padStart(2, '0')}`);
+}
+
+/** Clamp a requested frame count into the supported authoring range. */
+export function clampFrameCount(n) {
+  const v = Math.round(Number(n));
+  if (!Number.isFinite(v)) return WALK_DEFAULT_FRAME_COUNT;
+  return Math.max(WALK_MIN_FRAME_COUNT, Math.min(WALK_MAX_FRAME_COUNT, v));
+}
+
+/** Clamp a requested playback fps into the supported authoring range. */
+export function clampFps(n) {
+  const v = Math.round(Number(n));
+  if (!Number.isFinite(v)) return WALK_DEFAULT_FPS;
+  return Math.max(WALK_MIN_FPS, Math.min(WALK_MAX_FPS, v));
+}
 
 // Border-key acceptance thresholds. The key channels must dominate the dark
 // channels by ≥ KEY_DOMINANCE_MIN, and each channel group must be balanced
@@ -320,14 +365,17 @@ export function imageDistance(a, b) {
  * resample it onto the 8 gait phases. `signatures` is one entry per recovered
  * source frame.
  */
-export function selectCycleIndices(signatures) {
+export function selectCycleIndices(signatures, frameCount = WALK_FRAME_COUNT) {
   const n = signatures.length;
-  if (n < WALK_FRAME_COUNT + 1) {
-    throw new Error(`Need at least ${WALK_FRAME_COUNT + 1} extracted frames, got ${n}`);
+  if (n < frameCount + 1) {
+    throw new Error(`Need at least ${frameCount + 1} extracted frames, got ${n}`);
   }
   let best = null; // [score, start, cycleLength, seam, motion]
-  const maxLen = Math.min(18, n - 1);
-  for (let cycleLength = WALK_FRAME_COUNT; cycleLength <= maxLen; cycleLength++) {
+  // The window must be at least `frameCount` long to yield that many distinct
+  // source frames (we never upsample). Widen the ceiling with frameCount so a
+  // larger requested count can still find a long-enough gait window.
+  const maxLen = Math.min(Math.max(18, frameCount + 6), n - 1);
+  for (let cycleLength = frameCount; cycleLength <= maxLen; cycleLength++) {
     for (let start = 0; start < n - cycleLength; start++) {
       const seam = imageDistance(signatures[start], signatures[start + cycleLength]);
       const motionSamples = [];
@@ -343,9 +391,9 @@ export function selectCycleIndices(signatures) {
   }
   if (!best) throw new Error('No detectable moving walk cycle in the source video');
   const [, start, cycleLength, seam, motion] = best;
-  const indices = Array.from({ length: WALK_FRAME_COUNT }, (_, i) => start + pyRound((i * cycleLength) / WALK_FRAME_COUNT));
-  if (new Set(indices).size !== WALK_FRAME_COUNT) {
-    throw new Error('Cycle window too short to resample 8 distinct phases');
+  const indices = Array.from({ length: frameCount }, (_, i) => start + pyRound((i * cycleLength) / frameCount));
+  if (new Set(indices).size !== frameCount) {
+    throw new Error(`Cycle window too short to resample ${frameCount} distinct phases`);
   }
   return {
     indices,
@@ -515,9 +563,9 @@ function keyDominantPixels(frame, split) {
  * Validate the packed candidate: 8 distinct frames, tolerable loop seam,
  * no visible key residue.
  */
-export async function validateFrames(frames, split) {
-  if (frames.length !== WALK_FRAME_COUNT) {
-    throw new Error(`Expected ${WALK_FRAME_COUNT} frames, got ${frames.length}`);
+export async function validateFrames(frames, split, frameCount = WALK_FRAME_COUNT) {
+  if (frames.length !== frameCount) {
+    throw new Error(`Expected ${frameCount} frames, got ${frames.length}`);
   }
   const hashes = frames.map((f) => sha256Buffer(f.data));
   if (new Set(hashes).size !== frames.length) throw new Error('Duplicate frames in the packed cycle');
@@ -635,7 +683,11 @@ export async function prepareWalkAnchorChromaInput(anchorAbs, destAbs, chromaKey
  */
 export async function runWalkPostprocess({
   recordId, direction, chromaKey, runAbs, runRel, anchorRel, anchorAbs, videoAbs,
+  frameCount = WALK_DEFAULT_FRAME_COUNT, fps = WALK_DEFAULT_FPS,
 }) {
+  const targetFrames = clampFrameCount(frameCount);
+  const playbackFps = clampFps(fps);
+  const phaseLabels = walkPhaseLabels(targetFrames);
   const split = keyChannelSplit(chromaKey);
   const generatedAbs = join(runAbs, 'generated');
   const generatedRel = `${runRel}/generated`;
@@ -655,11 +707,11 @@ export async function runWalkPostprocess({
     decoded.push({ frame, measured, usable: isUsableMeasuredKey(measured, split) });
   }
   const span = longestUsableSpan(decoded.map((d) => d.usable));
-  if (span.length < WALK_FRAME_COUNT + 1) {
+  if (span.length < targetFrames + 1) {
     const usableTotal = decoded.filter((d) => d.usable).length;
     throw new Error(usableTotal === 0
       ? `No frame has a usable ${chromaKey} matte (measured e.g. [${decoded[0]?.measured?.join(',')}] across ${decoded.length} frames)`
-      : `Only ${span.length} contiguous frames have a usable ${chromaKey} matte (need ${WALK_FRAME_COUNT + 1}); the ${chromaKey} background is unstable across the clip`);
+      : `Only ${span.length} contiguous frames have a usable ${chromaKey} matte (need ${targetFrames + 1}); the ${chromaKey} background is unstable across the clip`);
   }
   // span.start offsets every downstream lookup back into the raw source-%04d
   // numbering, so the manifest's sourceFrameIndex/sourcePath stay correct.
@@ -669,18 +721,18 @@ export async function runWalkPostprocess({
   const recovered = usable.map((d) => recoverAlphaFrame(d.frame, d.measured, split));
 
   const signatures = await Promise.all(recovered.map(signatureOf));
-  const { indices, cycle } = selectCycleIndices(signatures);
+  const { indices, cycle } = selectCycleIndices(signatures, targetFrames);
   const selected = indices.map((i) => recovered[i]);
 
   const { frames: aligned, alignment } = await alignFrames(selected);
   const despilled = aligned.map((f) => despillKeyFrame(f, split));
-  const validation = await validateFrames(despilled, split);
+  const validation = await validateFrames(despilled, split, targetFrames);
 
   const framesDir = join(generatedAbs, 'frames');
   await ensureDir(framesDir);
   const frameRecords = [];
   for (let i = 0; i < despilled.length; i++) {
-    const phase = WALK_PHASES[i];
+    const phase = phaseLabels[i];
     const name = `${String(i).padStart(2, '0')}-${phase}.png`;
     frameRecords.push({
       outputIndex: i,
@@ -718,8 +770,8 @@ export async function runWalkPostprocess({
     sourceVideoSha256: await sha256File(videoAbs),
     postprocessorPath: 'server/services/sprites/walkPostprocess.js',
     manifestPath: `${generatedRel}/${manifestName}`,
-    frameRate: WALK_FPS,
-    frameCount: WALK_FRAME_COUNT,
+    frameRate: playbackFps,
+    frameCount: targetFrames,
     cycleSelection: cycle,
     chromaCleanup: {
       method: 'measured-key-unmixing-plus-key-vector-despill',
@@ -739,8 +791,8 @@ export async function runWalkPostprocess({
 
   const stripPreview = {
     stripPath: `${generatedRel}/${stripName}`,
-    frameCount: WALK_FRAME_COUNT,
-    fps: WALK_FPS,
+    frameCount: targetFrames,
+    fps: playbackFps,
     cellWidth: WALK_CELL_SIZE,
     cellHeight: WALK_CELL_SIZE,
     row: 0,
