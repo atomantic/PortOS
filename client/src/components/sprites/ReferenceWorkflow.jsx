@@ -12,15 +12,20 @@ import SpriteReferencePicker from './SpriteReferencePicker.jsx';
 import ForkSpriteModal from './ForkSpriteModal.jsx';
 import CorrectionNote, { correctionPromptPayload } from './CorrectionNote.jsx';
 
-// Reference workflow (issue #2896): generate main-reference candidates from
-// text + optional uploaded design image, freeze the approved main, then
-// derive + lock the 8 directional anchors. The manifest (server-owned) is the
-// source of truth for status; this component only renders it and fires the
-// generate/lock/override actions.
+// Reference workflow (issues #2896, #2979): three ordered steps — generate a
+// turnaround sheet from text + an optional design image and freeze it, derive
+// and freeze the main (walk-south) from that sheet, then derive + lock the 8
+// directional anchors, each redrawn from the sheet's panel for that side. The
+// manifest (server-owned) is the source of truth for status; this component
+// only renders it and fires the generate/lock/override actions.
 
 // Mirrors server/services/sprites/chromaKey.js CHROMA_KEYS (client can't
 // import server modules).
 const CHROMA_KEYS = ['#FF00FF', '#00FF00', '#0000FF'];
+
+// Lock confirmations for the two directionless identity artifacts; every other
+// target is a named direction.
+const LOCK_TOAST = { turnaround: 'Turnaround sheet frozen', main: 'Main reference frozen' };
 
 // Thin alias so the existing call sites keep their `className` semantics
 // (sizing on the box) while the checkerboard + pixelation rules live in one
@@ -78,6 +83,14 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
   const manifest = reference?.manifest || null;
   const candidates = reference?.candidates || [];
   const mainLocked = manifest?.mainReference?.locked === true;
+  // Turnaround-first (#2979): the sheet is step 1 and the identity root — the
+  // main is its front view and every anchor is redrawn from the panel showing
+  // that side. A character created before this shows the same three steps with
+  // step 1 as a backfill from its already-locked main.
+  const turnaroundLocked = manifest?.turnaround?.locked === true;
+  const backfilling = mainLocked && !turnaroundLocked;
+  // Whichever lock froze the canonical key closes the pin control.
+  const keyFrozen = mainLocked || turnaroundLocked;
   // Once every anchor is locked this grid is just static previews of files the
   // "Reference set" file browser below already lists (and makes inspectable /
   // downloadable), so it reads as duplicate content. Collapse it by default
@@ -87,6 +100,11 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
   // grid as the user left it.
   const anchorList = manifest?.anchors || [];
   const allAnchorsLocked = anchorList.length > 0 && anchorList.every((a) => a.status === 'locked');
+  // A legacy character with every anchor already frozen has nothing left for a
+  // sheet to improve — main and anchors are immutable — so the backfill stops
+  // being a step it's missing and becomes an optional extra that only helps
+  // future forks. Present it that way instead of nagging forever.
+  const backfillOptional = backfilling && allAnchorsLocked;
   const [anchorsOpen, setAnchorsOpen] = useState(!allAnchorsLocked);
   // Reset the default on record switch only (deps: recordId), so it never
   // fights a user toggle within one character. The per-direction correction
@@ -152,16 +170,18 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
       const { jobId } = await generateSpriteReference(recordId, {
         target,
         ...(mode ? { mode } : {}),
-        ...(target === 'main' ? {
+        // The sheet owns the design inputs; the main derives from it with no
+        // inputs of its own; anchors carry only their correction note.
+        ...(target === 'turnaround' ? {
           designPrompt,
           ...(refSource?.type === 'upload' ? { referenceImageFile: refSource.file } : {}),
           ...(refSource?.type === 'gallery' ? { initImageGalleryFile: refSource.filename } : {}),
           ...(refSource?.type === 'sprite' ? { initImageSpriteId: refSource.id } : {}),
           ...(refSource ? { initImageStrength: strength } : {}),
-        } : correctionPromptPayload(corrections, target)),
+        } : target === 'main' ? {} : correctionPromptPayload(corrections, target)),
       }, { silent: true });
       resolveSubmit(target, jobId);
-      if (target === 'main') clearSource();
+      if (target === 'turnaround') clearSource();
     } catch (err) {
       cancelSubmit(target);
       toast.error(err?.message || `Failed to queue ${target} render`);
@@ -189,7 +209,7 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
       delete next[candidate.path];
       return next;
     });
-    toast.success(target === 'main' ? 'Main reference frozen' : `Anchor ${target} locked`);
+    toast.success(LOCK_TOAST[target] || `Anchor ${target} locked`);
     onChanged();
   }, { errorMessage: 'Lock failed' });
 
@@ -225,14 +245,14 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
         </h3>
         <div
           className="flex items-center gap-1.5"
-          title={mainLocked
+          title={keyFrozen
             ? 'Chroma key is frozen with the locked reference set'
-            : 'Chroma key — auto-selected at main lock; pin one of the three standard keys, or auto to let the lock decide'}
+            : 'Chroma key — auto-selected when the turnaround sheet locks; pin one of the three standard keys, or auto to let the lock decide'}
         >
           <span className="text-xs text-gray-500">key</span>
           <button
             onClick={() => setChromaKey(null)}
-            disabled={keySaving || mainLocked}
+            disabled={keySaving || keyFrozen}
             className={`px-1.5 h-5 rounded-sm border text-[10px] ${!record.chromaKey ? 'border-white ring-1 ring-port-accent text-white' : 'border-port-border text-gray-400 opacity-60 hover:opacity-100'} disabled:opacity-40`}
           >
             auto
@@ -241,7 +261,7 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
             <button
               key={hex}
               onClick={() => setChromaKey(hex)}
-              disabled={keySaving || mainLocked}
+              disabled={keySaving || keyFrozen}
               aria-label={`Set chroma key ${hex}`}
               className={`w-5 h-5 rounded-sm border ${record.chromaKey === hex ? 'border-white ring-1 ring-port-accent' : 'border-port-border opacity-60 hover:opacity-100'} disabled:opacity-40`}
               style={{ backgroundColor: hex }}
@@ -258,27 +278,31 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
         </p>
       )}
 
-      {/* Main reference — the immutable identity root */}
+      {/* Step 1 — the turnaround sheet, the identity root every later render
+          descends from. A character created before #2979 backfills one from its
+          already-locked main so its remaining anchors get all sides too. */}
       <div className="space-y-2">
-        <h4 className="text-xs uppercase tracking-wide text-gray-500">Main reference (walk-south)</h4>
-        {mainLocked ? (
+        <h4 className="text-xs uppercase tracking-wide text-gray-500">
+          1 · Turnaround sheet
+          {turnaroundLocked && <span className="ml-1 text-[10px] text-port-success normal-case tracking-normal">· locked</span>}
+          {backfillOptional && <span className="ml-1 text-[10px] text-gray-600 normal-case tracking-normal">· optional</span>}
+        </h4>
+        {turnaroundLocked ? (
           <div className="flex items-start gap-3">
-            <SpriteImg recordId={recordId} path={manifest.mainReference.path} className="w-32 h-32 object-contain bg-port-bg border border-port-border rounded" />
-            <div className="space-y-2">
-              <p className="text-xs text-gray-500 flex items-center gap-1"><Lock className="w-3 h-3" /> frozen · immutable root</p>
-              {/* A locked main can never be regenerated — to iterate on it, fork
-                  into a new character seeded from this reference (image+text→image). */}
-              <button
-                type="button"
-                onClick={() => setForkOpen(true)}
-                className="flex items-center gap-1.5 px-2.5 py-1 text-xs bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent"
-              >
-                <GitFork className="w-3.5 h-3.5" /> Fork from this reference
-              </button>
-            </div>
+            <SpriteImg recordId={recordId} path={manifest.turnaround.path} className="w-48 h-32 object-contain bg-port-bg border border-port-border rounded" />
+            <p className="text-xs text-gray-500 flex items-center gap-1">
+              <Lock className="w-3 h-3" /> frozen · identity root
+            </p>
           </div>
         ) : (
           <div className="space-y-2">
+            <p className="text-[11px] text-gray-500">
+              {backfillOptional
+                ? 'This character predates turnaround sheets and its reference set is already complete, so a sheet won’t change any locked artifact. Generating one is optional — it only gives future forks of this character all four sides to work from.'
+                : backfilling
+                  ? 'This character was built before turnaround sheets. Generate one from its locked main reference — the remaining directional anchors will be drawn from it, so accessories stay on the same side of the body.'
+                  : 'One image, four views (front · right · back · left). Every later render is redrawn from it, so a bag or pocket keeps the same anatomical side from every angle.'}
+            </p>
             <textarea
               value={designPrompt}
               onChange={(e) => setDesignPrompt(e.target.value)}
@@ -362,12 +386,62 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
             <div className="flex flex-wrap items-center gap-3">
               {modePicker}
               <button
+                onClick={() => generate('turnaround')}
+                disabled={!mode || !!pendingJobs.turnaround || (!designPrompt.trim() && !refSource && !backfilling)}
+                className="flex items-center gap-1.5 px-3 py-1 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white rounded text-sm"
+              >
+                {pendingJobs.turnaround ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                {pendingJobs.turnaround ? 'Rendering…'
+                  : backfilling ? 'Generate from locked main'
+                    : (candidatesByTarget.turnaround || []).length ? 'Regenerate' : 'Generate candidate'}
+              </button>
+            </div>
+            {(candidatesByTarget.turnaround || []).length > 0 && (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {candidatesByTarget.turnaround.map((c) => (
+                  <CandidateTile key={c.path} recordId={recordId} candidate={c} locking={locking} clipRisk={clipRisks[c.path]} onLock={(cand, accept) => lock('turnaround', cand, accept)} />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Step 2 — the main reference: the sheet's front view, and the sprite's
+          canonical face (thumbnails, fork seeds, the walk-south anchor). */}
+      <div className="space-y-2">
+        <h4 className="text-xs uppercase tracking-wide text-gray-500">
+          2 · Main reference (walk-south)
+          {mainLocked && <span className="ml-1 text-[10px] text-port-success normal-case tracking-normal">· locked</span>}
+        </h4>
+        {mainLocked ? (
+          <div className="flex items-start gap-3">
+            <SpriteImg recordId={recordId} path={manifest.mainReference.path} className="w-32 h-32 object-contain bg-port-bg border border-port-border rounded" />
+            <div className="space-y-2">
+              <p className="text-xs text-gray-500 flex items-center gap-1"><Lock className="w-3 h-3" /> frozen · immutable root</p>
+              {/* A locked main can never be regenerated — to iterate on it, fork
+                  into a new character seeded from this reference (image+text→image). */}
+              <button
+                type="button"
+                onClick={() => setForkOpen(true)}
+                className="flex items-center gap-1.5 px-2.5 py-1 text-xs bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent"
+              >
+                <GitFork className="w-3.5 h-3.5" /> Fork from this reference
+              </button>
+            </div>
+          </div>
+        ) : turnaroundLocked ? (
+          <div className="space-y-2">
+            <p className="text-[11px] text-gray-500">Redrawn from the sheet&rsquo;s front panel — no separate design input.</p>
+            <div className="flex flex-wrap items-center gap-3">
+              {modePicker}
+              <button
                 onClick={() => generate('main')}
-                disabled={!mode || !!pendingJobs.main || (!designPrompt.trim() && !refSource)}
+                disabled={!mode || !!pendingJobs.main}
                 className="flex items-center gap-1.5 px-3 py-1 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white rounded text-sm"
               >
                 {pendingJobs.main ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                {pendingJobs.main ? 'Rendering…' : 'Generate candidate'}
+                {pendingJobs.main ? 'Rendering…' : (candidatesByTarget.main || []).length ? 'Regenerate' : 'Generate candidate'}
               </button>
             </div>
             {(candidatesByTarget.main || []).length > 0 && (
@@ -378,10 +452,13 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
               </div>
             )}
           </div>
+        ) : (
+          <p className="text-[11px] text-gray-600">Lock the turnaround sheet first.</p>
         )}
       </div>
 
-      {/* Directional anchors — derive from the frozen main */}
+      {/* Step 3 — directional anchors, each redrawn from the sheet's panel for
+          that side (gated on the sheet even for pre-#2979 characters). */}
       {mainLocked && (
         <div className="space-y-2">
           <div className="flex items-center gap-3">
@@ -392,7 +469,7 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
               className="flex items-center gap-1 text-xs uppercase tracking-wide text-gray-500 hover:text-gray-300"
             >
               {anchorsOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-              Directional anchors
+              3 · Directional anchors
               {allAnchorsLocked && (
                 <span className="text-[10px] text-port-success normal-case tracking-normal flex items-center gap-0.5">
                   · <Lock className="w-2.5 h-2.5" /> all locked
@@ -403,6 +480,13 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
           </div>
           {!anchorsOpen && allAnchorsLocked && (
             <p className="text-[10px] text-gray-600">Locked anchors are listed under “Reference set” below.</p>
+          )}
+          {anchorsOpen && !allAnchorsLocked && (
+            <p className="text-[10px] text-gray-600">
+              {turnaroundLocked
+                ? 'Each anchor is redrawn from the turnaround sheet’s panel for that side.'
+                : 'Blocked: generate and lock the turnaround sheet above first — anchors are drawn from it.'}
+            </p>
           )}
           {anchorsOpen && (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -430,7 +514,10 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
                     />
                     <button
                       onClick={() => generate(anchor.direction)}
-                      disabled={!mode || !!pendingJobs[anchor.direction]}
+                      // Gated on the sheet, matching the server's
+                      // TURNAROUND_NOT_LOCKED 409 and the note above — a
+                      // pre-#2979 character must backfill one first.
+                      disabled={!mode || !turnaroundLocked || !!pendingJobs[anchor.direction]}
                       className="flex items-center gap-1 w-full justify-center px-2 py-1 text-xs bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent disabled:opacity-50"
                     >
                       {pendingJobs[anchor.direction]
@@ -472,7 +559,10 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
           open={forkOpen}
           onClose={() => setForkOpen(false)}
           source={{ id: recordId, name: record.name }}
-          referencePath={manifest.mainReference.path}
+          // Preview exactly what the fork will attach: the server's
+          // lockedSeedArtifact prefers the sheet over the main.
+          referencePath={turnaroundLocked ? manifest.turnaround.path : manifest.mainReference.path}
+          fromTurnaround={turnaroundLocked}
           backends={backends}
           mode={mode}
           onForked={(rec) => onForked?.(rec)}
