@@ -85,7 +85,22 @@ export function resolveSpriteAssetPath(recordId, relPath) {
  * (#2928) dispatches on it, and the raw-intermediate exclusion below extends
  * it, so the prefix set is stated exactly once.
  */
-export const RUN_DIR_MATCH = /^(grok|runs)\/[^/]+/;
+const RUN_DIR_PREFIXES = ['grok', 'runs'];
+export const RUN_DIR_MATCH = new RegExp(`^(${RUN_DIR_PREFIXES.join('|')})/[^/]+`);
+const RUN_DIR_SPLIT = new RegExp(`^(${RUN_DIR_PREFIXES.join('|')})(/.+)$`);
+
+/**
+ * The same run path under the OTHER run-dir prefix (the pair has exactly two
+ * members), or null for a path that isn't inside a run directory. Source trees
+ * drift — a run's files can sit under `grok/<run-id>/` while the manifests
+ * naming them say `runs/<run-id>/` — and both spellings denote the same run,
+ * which is why `getWalkState` scans both (walk.js `RUN_SCAN_DIRS`). The
+ * importer resolves source reads through this so a drifted tree still imports.
+ */
+export function altRunLayoutPath(rel) {
+  const match = RUN_DIR_SPLIT.exec(rel || '');
+  return match ? `${RUN_DIR_PREFIXES.find((p) => p !== match[1])}${match[2]}` : null;
+}
 
 // Raw ffmpeg-extracted frame intermediates inside an animation run (30–96
 // near-identical PNGs per run, `grok|runs/<run>/generated/raw/`). Kept on

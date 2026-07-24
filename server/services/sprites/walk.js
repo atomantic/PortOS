@@ -183,24 +183,31 @@ function normalizeStripPreview(recordId, run) {
   return { ...run, stripPreview: { ...run.stripPreview, stripPath } };
 }
 
-// Same fixup as normalizeStripPreview, for the OTHER repo-anchored field an
-// imported run record carries: `postprocessManifest` names the packaged
-// manifest as `art-source/sprites/<id>/runs/<run-id>/generated/…json`. Left
-// raw, `resolveSpriteAssetPath` appends it whole to the record dir — producing
-// `data/sprites/<id>/art-source/sprites/<id>/…`, which is still INSIDE the
-// record (so the traversal gate passes) but does not exist. That 409'd every
-// loop-trim save on an imported record (#2978) and would have failed
-// approveRun the same way. Normalizing here — the one choke point every run
-// reader passes through — fixes both consumers at once. In memory only.
+// Same fixup as normalizeStripPreview, for the OTHER repo-anchored path fields
+// an imported run record carries. `postprocessManifest` names the packaged
+// manifest as `art-source/sprites/<id>/runs/<run-id>/generated/…json`, and
+// `sourceVideoPath` names the run's i2v clip the same way. Left raw,
+// `resolveSpriteAssetPath` appends the value whole to the record dir —
+// producing `data/sprites/<id>/art-source/sprites/<id>/…`, which is still
+// INSIDE the record (so the traversal gate passes) but does not exist. That
+// 409'd every loop-trim save on an imported record (#2978), would have failed
+// approveRun the same way, and would leave an imported run's freshly-imported
+// clip (#2984) unfindable. Normalizing here — the one choke point every run
+// reader passes through — fixes every consumer at once. In memory only, never
+// written back to the hash-pinned record.
 // A path toRecordRelativeAssetPath can't re-anchor (it returns null for a
 // repo-anchored path belonging to some OTHER record, e.g. pipeline provenance)
 // is left untouched rather than blanked, so a genuinely foreign pointer stays
 // readable instead of being rewritten into a bogus record-relative one.
-function normalizePostprocessManifest(recordId, run) {
-  if (!run?.postprocessManifest) return run;
-  const rel = toRecordRelativeAssetPath(recordId, run.postprocessManifest);
-  if (!rel || rel === run.postprocessManifest) return run;
-  return { ...run, postprocessManifest: rel };
+const REPO_ANCHORED_RUN_FIELDS = ['postprocessManifest', 'sourceVideoPath'];
+
+function normalizeRunAssetPaths(recordId, run) {
+  let out = run;
+  for (const field of REPO_ANCHORED_RUN_FIELDS) {
+    const rel = out[field] && toRecordRelativeAssetPath(recordId, out[field]);
+    if (rel && rel !== out[field]) out = { ...out, [field]: rel };
+  }
+  return out;
 }
 
 // A candidate/approved run's stripPreview names a packed strip PNG on disk. If
@@ -244,7 +251,7 @@ async function normalizeMissingStrip(recordId, run) {
 // In-memory only, like normalizeStripPreview — never written back to disk.
 function normalizeRunRecord(recordId, run, runDirRel) {
   const withId = run.id ? run : { ...run, id: runDirRel.split('/')[1] };
-  return normalizePostprocessManifest(recordId, normalizeStripPreview(recordId, withId));
+  return normalizeRunAssetPaths(recordId, normalizeStripPreview(recordId, withId));
 }
 
 // Strip candidates on an imported redraw manifest, in preference order. The
