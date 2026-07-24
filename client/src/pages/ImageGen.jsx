@@ -1049,9 +1049,11 @@ export default function ImageGen() {
     setInitImageStrength(0.4);
   };
 
+  // "Send to 3D" opens the image-to-3D workspace (/media/3d) with this render as
+  // the source image — deep-linked via ?image= (URL is the source of truth).
   const handleSendToThreejs = (img) => {
     if (!img?.filename) return;
-    navigate(`/media/threejs?image=${encodeURIComponent(img.filename)}`);
+    navigate(`/media/3d?image=${encodeURIComponent(img.filename)}`);
   };
 
   const notConnected = status && status.connected === false;
