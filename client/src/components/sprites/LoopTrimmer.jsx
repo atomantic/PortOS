@@ -118,12 +118,6 @@ export default function LoopTrimmer({
   const [outputName, setOutputName] = useState('');
   const [result, setResult] = useState(null);
   const [img, setImg] = useState(null);
-  // Bumped when the run is re-derived (#2980). The repacked strip lands at the
-  // SAME path, so nothing in the load effect's other deps changes and the <img>
-  // would never be re-requested — it would keep painting the old geometry. The
-  // asset mount serves `max-age=0` with an ETag, so the re-request itself
-  // revalidates and picks up the new bytes; only the trigger was missing.
-  const [stripVersion, setStripVersion] = useState(0);
 
   // Re-seed everything the moment the source changes — a stale enabled set from
   // a previous strip could hold out-of-range indices and 400 the endpoint.
@@ -147,7 +141,16 @@ export default function LoopTrimmer({
     image.onload = () => setImg(image);
     image.src = spriteAssetUrl(recordId, source.stripPath);
     return () => { image.onload = null; };
-  }, [source?.id, source?.stripPath, recordId, stripVersion]);
+    // Geometry is in the deps, not just the path: a re-derive (#2980) repacks the
+    // strip at the SAME path, so nothing else here changes and the <img> would
+    // never be re-requested — it would keep painting the old column count. Keying
+    // on the refreshed frameCount/fps also sequences the reload correctly: it
+    // fires when the parent's new walk state lands, so `cellW` can never slice a
+    // freshly-loaded 12-column strip by the stale count of 8. (The asset mount
+    // serves max-age=0 with an ETag, so the re-request revalidates for free; a
+    // re-derive at unchanged geometry is deterministic and byte-identical, so
+    // skipping the reload there is correct rather than a missed refresh.)
+  }, [source?.id, source?.stripPath, recordId, frameCount, source?.fps]);
 
   const cellW = img && frameCount > 0 ? img.naturalWidth / frameCount : 0;
   const cellH = img ? img.naturalHeight : 0;
@@ -178,13 +181,6 @@ export default function LoopTrimmer({
     setPlaying(false);
     setFrameIndex((prev) => (prev + delta + frameCount) % frameCount);
   };
-
-  // Stable identity so the memoized source-frames panel doesn't re-render on
-  // every loop-preview tick (the playback interval fires 12–24×/second).
-  const onSourceFramesSaved = useCallback(() => {
-    setStripVersion((v) => v + 1);
-    onSaved();
-  }, [onSaved]);
 
   const slug = sanitizeTrimSlug(outputName);
   const [save, saving] = useAsyncAction(async () => {
@@ -372,8 +368,11 @@ export default function LoopTrimmer({
       {/* Every frame the run's clip produced, plus the in-place re-derive
           (#2980). Run sources only: a saved trim has no run (and no clip)
           behind it, so there is nothing to enumerate or re-derive. */}
+      {/* `onSaved` is passed straight through: the parent already hands down a
+          stable callback, and the panel is memoized so it doesn't re-render on
+          every loop-preview tick. */}
       {source?.kind === 'run' && source.runId && (
-        <WalkSourceFrames recordId={recordId} runId={source.runId} onSaved={onSourceFramesSaved} />
+        <WalkSourceFrames recordId={recordId} runId={source.runId} onSaved={onSaved} />
       )}
 
       {/* Save + result */}

@@ -204,11 +204,20 @@ router.post('/:id/walk/postprocess', asyncHandler(async (req, res) => {
 // Every frame the run's source video produced (#2980), the cycle window the
 // packer selected out of them, and which became packed columns — the Loop
 // Trimmer's window onto the raw intermediates `listSpriteAssets` excludes.
-// Read-only; re-extracts on demand when the clip is on disk but `raw/` was
-// cleaned. Multi-segment, so it can't be captured by the `/:id` GET.
+// Strictly read-only. Multi-segment, so it can't be captured by the `/:id` GET.
 router.get('/:id/walk/runs/:runId/source-frames', asyncHandler(async (req, res) => {
   const { runId } = validateRequest(spriteWalkSourceFramesParamsSchema, req.params);
   res.json(await getWalkSourceFrames(req.params.id, runId));
+}));
+
+// Re-extract a run's raw frames from the clip already on disk, then return the
+// same payload. Separate from the GET because the importer never copies `raw/`,
+// so every imported run would otherwise spawn an ffmpeg decode (~96 PNGs) just
+// from rendering the trimmer — this keeps the work behind an explicit click. No
+// AI call; deterministic ffmpeg only.
+router.post('/:id/walk/runs/:runId/source-frames/extract', asyncHandler(async (req, res) => {
+  const { runId } = validateRequest(spriteWalkSourceFramesParamsSchema, req.params);
+  res.json(await getWalkSourceFrames(req.params.id, runId, { extract: true }));
 }));
 
 // Non-destructive loop trim: re-pack enabled frames from a packed strip into

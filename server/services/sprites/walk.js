@@ -1166,6 +1166,48 @@ function cycleWindowOf(packaged) {
 }
 
 /**
+ * The packed-strip provenance to report against the raw frames actually on disk:
+ * the cycle window, the source indices that became columns, and whether the two
+ * can be trusted to address the same files.
+ *
+ * The check is not paranoia. `cycleSelection` and `frames[].sourceFrameIndex`
+ * were recorded when the run was PACKAGED — for an imported run, by the source
+ * pipeline's own extraction — while the frames listed here may have been
+ * re-extracted by this install's ffmpeg (`fps=12`, first 8s). If those two
+ * extractions disagree at all, the indices address different PNGs and the panel
+ * would confidently mark the wrong frames as "the gait cycle" and "packed into
+ * the strip" — a false claim about provenance is worse than no claim. The
+ * manifest already records each packed frame's `sourcePath`, so verify the
+ * basenames are among the files on disk and report:
+ *
+ *   'verified'  the manifest's source frames are all present → markers are real
+ *   'stale'     they are not → markers withheld, and the client says why
+ *   'none'      the run carries no packaged cycle to map (never packaged, or a
+ *               minimal manifest) → nothing to verify, nothing to withhold
+ */
+function manifestCycleProvenance(packaged, names) {
+  const packedFrames = Array.isArray(packaged?.frames) ? packaged.frames : [];
+  const indices = packedFrames
+    .map((frame) => frame?.sourceFrameIndex)
+    .filter((index) => Number.isInteger(index));
+  if (!indices.length) return { cycle: null, selectedSourceIndices: [], cycleProvenance: 'none' };
+  const onDisk = new Set(names);
+  const declared = packedFrames
+    .map((frame) => (typeof frame?.sourcePath === 'string' ? frame.sourcePath.split('/').pop() : null))
+    .filter(Boolean);
+  // A manifest that declares no sourcePath at all (older/minimal packaging) is
+  // taken at its word — there is nothing to compare, and withholding the markers
+  // would punish a record for being terse rather than wrong.
+  const matches = !declared.length || declared.every((name) => onDisk.has(name));
+  if (!matches) return { cycle: null, selectedSourceIndices: [], cycleProvenance: 'stale' };
+  return {
+    cycle: cycleWindowOf(packaged),
+    selectedSourceIndices: indices,
+    cycleProvenance: 'verified',
+  };
+}
+
+/**
  * One source-frame response, defaulted to the "nothing to show" shape and
  * overridden with whatever was actually found.
  *
@@ -1179,6 +1221,10 @@ function sourceFrameResponse(runId, run, walkTarget, found) {
   return {
     runId,
     direction: run?.direction || null,
+    // Whether the run is still packaged by the source pipeline — the client picks
+    // the right remedy from it (re-import vs "this was generated here"), rather
+    // than assuming every clipless run is an import.
+    imported: Boolean(run?.importedPackaging),
     extractionFps: WALK_FPS,
     maxSourceSeconds: MAX_SOURCE_SECONDS,
     current: runCycleOf(run),
@@ -1192,6 +1238,7 @@ function sourceFrameResponse(runId, run, walkTarget, found) {
     frames: [],
     cycle: null,
     selectedSourceIndices: [],
+    cycleProvenance: 'none',
     editable: false,
     lockReason: null,
     ...found,
@@ -1208,11 +1255,13 @@ function sourceFrameResponse(runId, run, walkTarget, found) {
  * ~73 near-identical PNGs don't swamp the asset browser). This is the narrow
  * read that surfaces them, and only them.
  *
- * Two absence sentinels, kept distinct per the repo's absent-vs-empty rule:
- *   - `available: false, reason: 'no-source-video'`  no clip on disk to extract from
+ * Three absence sentinels, kept distinct per the repo's absent-vs-empty rule:
+ *   - `available: false, reason: 'no-source-video'`   no clip on disk at all
+ *   - `available: false, reason: 'raw-frames-cleaned'` the clip IS here, but its
+ *     extracted frames were pruned — recoverable, see `extract` below
  *   - `available: false, reason: 'run-not-packaged'`  a synthesized redraw cycle
  *     (#2924), which never had an i2v clip or a run directory behind it
- * …and neither is a 500, nor an empty-looking success.
+ * …none of which is a 500, nor an empty-looking success.
  *
  * `editable`/`lockReason` answer a SEPARATE question from `available`: frames can
  * be listed for a run whose clip has since been deleted (nothing to re-derive
@@ -1220,10 +1269,20 @@ function sourceFrameResponse(runId, run, walkTarget, found) {
  * set. Collapsing the two would make the UI claim a re-derive is possible whenever
  * it had something to show.
  *
- * `raw/` absent but the clip present → re-extract on demand (`ffmpeg -y`, so
- * idempotent), inside the per-record write tail like every other walk write.
+ * **`extract` is opt-in, and this read is otherwise side-effect free.** The
+ * importer never copies `raw/` (its EXCLUDED_RUN_SEGMENTS skips it), so EVERY
+ * imported run reaches this with an empty raw directory — exactly the population
+ * the feature exists for. Extracting from the read would therefore mean opening
+ * the trimmer and clicking through eight directions silently spawns eight ffmpeg
+ * decodes (~96 PNGs each), each holding the per-record write tail while an
+ * approve or trim queues behind it, and lands >100MB of re-derivable
+ * intermediates that flow into backups — all for a panel the user may never
+ * expand. So the plain read reports `raw-frames-cleaned` and the caller asks for
+ * `extract: true` from an explicit user action (`POST …/source-frames/extract`).
+ * The extraction itself is idempotent (`ffmpeg -y`) and runs inside the
+ * per-record write tail like every other walk write.
  */
-export async function getWalkSourceFrames(recordId, runId) {
+export async function getWalkSourceFrames(recordId, runId, { extract = false } = {}) {
   // All three reads are independent — the character gate, the run lookup, and
   // the walk state (which serves the target, the lock gate, and the redraw
   // fallback below) — so pay for them once, concurrently.
@@ -1259,7 +1318,7 @@ export async function getWalkSourceFrames(recordId, runId) {
       : null,
   ]);
   let names = listed;
-  if (!names.length && clipRel) {
+  if (!names.length && clipRel && extract) {
     await walkWriteTail(recordId, () => extractVideoFrames(
       resolveSpriteAssetPath(recordId, clipRel),
       resolveSpriteAssetPath(recordId, rawRel),
@@ -1277,12 +1336,11 @@ export async function getWalkSourceFrames(recordId, runId) {
   });
   return sourceFrameResponse(runId, run, walkTarget, {
     available: frames.length > 0,
-    reason: frames.length > 0 ? null : 'no-source-video',
+    // "No clip at all" and "clip present, frames pruned" are different states
+    // with different remedies — the second is one click from recoverable.
+    reason: frames.length > 0 ? null : (clipRel ? 'raw-frames-cleaned' : 'no-source-video'),
     frames,
-    cycle: cycleWindowOf(packaged),
-    selectedSourceIndices: (Array.isArray(packaged?.frames) ? packaged.frames : [])
-      .map((frame) => frame?.sourceFrameIndex)
-      .filter((index) => Number.isInteger(index)),
+    ...manifestCycleProvenance(packaged, names),
     editable: !lockReason,
     lockReason,
   });

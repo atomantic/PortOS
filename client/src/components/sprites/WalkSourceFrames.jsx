@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
-  getSpriteWalkSourceFrames, postprocessSpriteWalk,
+  getSpriteWalkSourceFrames, extractSpriteWalkSourceFrames, postprocessSpriteWalk,
   unlockSpriteWalk, reopenSpriteWalk,
 } from '../../services/apiSprites.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
@@ -33,12 +33,18 @@ import { spriteAssetUrl, PIXELATED } from './spriteAssets.js';
 // makes, so a target this panel's fetch is one refetch behind on can't 409 a
 // value the user never chose.
 
-// Why a run has no frames to show. Both are real states on this install, and
-// neither is an error — the panel explains rather than rendering an empty grid.
-const UNAVAILABLE_COPY = {
-  'no-source-video': 'This run was imported without its source clip, so the packed strip is all that exists here — frames can be dropped but not added. Re-import this character to bring its clip across.',
+// Why a run has no frames to show. All three are real states on this install,
+// and none is an error — the panel explains rather than rendering an empty grid.
+// `no-source-video` takes the run's provenance because the remedy differs: an
+// import needs its clip brought across, while a run generated here had its clip
+// cleaned up locally and re-importing is not the answer.
+const unavailableCopy = ({ reason, imported }) => ({
+  'no-source-video': imported
+    ? 'This run was imported without its source clip, so the packed strip is all that exists here — frames can be dropped but not added. Re-import this character to bring its clip across.'
+    : 'This run\'s source clip is no longer on disk, so the packed strip is all that is left — frames can be dropped but not added. Regenerate the direction to get a new clip.',
+  'raw-frames-cleaned': 'The source clip is here, but the frames extracted from it were cleaned up. They can be re-extracted from the clip — no new render.',
   'run-not-packaged': 'This direction came from a redraw cycle rather than a rendered clip, so there are no source frames behind it.',
-};
+}[reason] || 'No source frames are available for this run.');
 
 // What the user has to do before the loop can be re-derived. Mirrors the server's
 // own guards (walk.js#reDeriveLockReason) so the panel never offers an action the
@@ -136,10 +142,23 @@ function WalkSourceFrames({ recordId, runId, onSaved = () => {} }) {
     // for an omitted count/fps, so the request can't 409 against a target this
     // panel's fetch is one refetch behind on (#2985) — same call WalkWorkflow's
     // Reprocess makes.
-    await postprocessSpriteWalk(recordId, { runId }, { silent: true });
-    toast.success(`Re-derived from the source clip · ${data.target?.frameCount}f @ ${data.target?.fps}fps`);
+    // Report the geometry the SERVER packed (it echoes the updated run record),
+    // not the target this panel last fetched — those differ exactly when another
+    // surface retargeted the set, which is when a wrong number would mislead.
+    const run = await postprocessSpriteWalk(recordId, { runId }, { silent: true });
+    toast.success(`Re-derived from the source clip · ${run?.frameCount}f @ ${run?.fps}fps`);
     await refresh();
   }, { errorMessage: 'Could not re-derive this loop' });
+
+  // The 'raw-frames-cleaned' remedy. Explicitly user-triggered: the read above is
+  // side-effect free precisely so opening the trimmer on an imported character
+  // doesn't spawn an ffmpeg decode per direction.
+  const [extractFrames, extracting] = useAsyncAction(async () => {
+    const next = await extractSpriteWalkSourceFrames(recordId, runId, { silent: true });
+    setData(next);
+    setOpen(true);
+    toast.success(`Extracted ${next.frames?.length ?? 0} source frames from the clip`);
+  }, { errorMessage: 'Could not extract frames from this clip' });
 
   const [unlock, unlocking] = useAsyncAction(async () => {
     if (data.lockReason === 'finalized') {
@@ -152,8 +171,13 @@ function WalkSourceFrames({ recordId, runId, onSaved = () => {} }) {
     await refresh();
   }, { errorMessage: 'Could not unlock this direction' });
 
-  const busy = redriving || unlocking || targetSaving;
-  const lock = data && !data.editable ? LOCK_COPY[data.lockReason] : null;
+  const busy = redriving || unlocking || targetSaving || extracting;
+  // Suppressed when the unavailable line above already said the same thing (a
+  // clipless run reports both `reason` and `lockReason` as the missing clip) —
+  // printing the explanation twice reads like two different problems.
+  const lock = data && !data.editable && !(!data.available && data.lockReason === 'no-source-video')
+    ? LOCK_COPY[data.lockReason]
+    : null;
   const frames = data?.frames || [];
 
   const sectionCls = 'bg-port-bg border border-port-border rounded p-3 space-y-3';
@@ -199,9 +223,21 @@ function WalkSourceFrames({ recordId, runId, onSaved = () => {} }) {
       </div>
 
       {!data.available && (
-        <p className="text-[11px] text-gray-500 leading-relaxed">
-          {UNAVAILABLE_COPY[data.reason] || 'No source frames are available for this run.'}
-        </p>
+        <div className="space-y-1.5">
+          <p className="text-[11px] text-gray-500 leading-relaxed">
+            {unavailableCopy(data)}
+          </p>
+          {data.reason === 'raw-frames-cleaned' && (
+            <button
+              onClick={extractFrames}
+              disabled={busy}
+              className="flex items-center gap-1 px-2 py-1 text-xs bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${extracting ? 'animate-spin' : ''}`} />
+              {extracting ? 'Extracting…' : 'Extract frames from clip'}
+            </button>
+          )}
+        </div>
       )}
 
       {data.available && open && (
@@ -211,11 +247,21 @@ function WalkSourceFrames({ recordId, runId, onSaved = () => {} }) {
             {data.maxSourceSeconds ? ` (first ${data.maxSourceSeconds}s)` : ''}.
             {data.cycle?.windowStartFrame != null && (
               <>
-                {' '}Frames {data.cycle.windowStartFrame}–{data.cycle.windowEndFrame} are the gait
-                cycle the packer selected (
+                {/* windowEndFrame is the exclusive seam frame — the last frame
+                    IN the cycle is the one before it, which is also what the
+                    grid's marking uses. */}
+                {' '}Frames {data.cycle.windowStartFrame}–{data.cycle.windowEndFrame - 1} are the
+                gait cycle the packer selected (
                 <span className="text-port-warning">amber</span>); the{' '}
                 <span className="text-port-accent">highlighted</span> ones became the packed
                 strip&apos;s columns.
+              </>
+            )}
+            {data.cycleProvenance === 'stale' && (
+              <>
+                {' '}These frames were re-extracted here and don&apos;t match the ones the packed
+                strip was built from, so the cycle window and packed columns aren&apos;t marked —
+                re-derive to rebuild the strip from these frames.
               </>
             )}
           </p>

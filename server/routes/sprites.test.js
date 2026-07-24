@@ -463,9 +463,17 @@ describe('sprites routes', () => {
     expect(r.status).toBe(200);
     expect(walk.approveWalkDirection).toHaveBeenCalledWith('pioneer', { direction: 'east', runId: 'walk-east-0a1b2c3d' });
 
+    // An imported run's id is its source-named directory — approve has been
+    // layout-aware since #2993, so the reopen → re-derive → re-approve flow
+    // must survive its last click.
+    const imported = await request(app).post('/api/sprites/pioneer/walk/approve')
+      .send({ direction: 'east', runId: 'run-3' });
+    expect(imported.status).toBe(200);
+    expect(walk.approveWalkDirection).toHaveBeenCalledWith('pioneer', { direction: 'east', runId: 'run-3' });
+
     expect((await request(app).post('/api/sprites/pioneer/walk/approve')
       .send({ direction: 'east', runId: '../escape' })).status).toBe(400);
-    expect(walk.approveWalkDirection).toHaveBeenCalledOnce();
+    expect(walk.approveWalkDirection).toHaveBeenCalledTimes(2);
   });
 
   it('POST /:id/walk/postprocess delegates the rerun (with optional reprocess count/fps)', async () => {
@@ -498,6 +506,22 @@ describe('sprites routes', () => {
     // Traversal is refused before the service is reached (%2E%2E%2F = `../`).
     walk.getWalkSourceFrames.mockClear();
     expect((await request(app).get('/api/sprites/pioneer/walk/runs/%2E%2E%2Fescape/source-frames')).status).toBe(400);
+    expect(walk.getWalkSourceFrames).not.toHaveBeenCalled();
+  });
+
+  // The GET must never extract — the importer leaves every imported run without
+  // `raw/`, so a side-effecting read would spawn ffmpeg per direction on render.
+  it('only asks the service to extract from the explicit extract endpoint', async () => {
+    await request(app).get('/api/sprites/pioneer/walk/runs/walk-east-0a1b2c3d/source-frames');
+    expect(walk.getWalkSourceFrames).toHaveBeenCalledWith('pioneer', 'walk-east-0a1b2c3d');
+
+    walk.getWalkSourceFrames.mockClear();
+    const r = await request(app).post('/api/sprites/pioneer/walk/runs/run-3/source-frames/extract');
+    expect(r.status).toBe(200);
+    expect(walk.getWalkSourceFrames).toHaveBeenCalledWith('pioneer', 'run-3', { extract: true });
+
+    walk.getWalkSourceFrames.mockClear();
+    expect((await request(app).post('/api/sprites/pioneer/walk/runs/%2E%2E%2Fescape/source-frames/extract')).status).toBe(400);
     expect(walk.getWalkSourceFrames).not.toHaveBeenCalled();
   });
 

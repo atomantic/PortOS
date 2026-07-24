@@ -1094,7 +1094,13 @@ describe('getWalkSourceFrames', () => {
 
   // The provenance the packer records: the window it chose out of the usable
   // span, plus which raw frames became packed columns.
-  async function stampCycleProvenance(id, runId, direction = 'east') {
+  //
+  // `windowStart: 2` with a first packed frame at raw index 5 encodes a usable
+  // span starting at raw frame 3 (span.start = 2) — deliberately NOT the
+  // degenerate span.start = 0 case, where `windowStart + 1` and
+  // `frames[0].sourceFrameIndex` coincide and a translation that ignored the
+  // packed frames entirely would still look correct.
+  async function stampCycleProvenance(id, runId, direction = 'east', { sourcePaths = true } = {}) {
     const manifestAbs = join(
       TEST_ROOT, 'sprites', id, 'runs', runId, 'generated', `${id}-walk-${direction}-manifest.json`,
     );
@@ -1102,7 +1108,12 @@ describe('getWalkSourceFrames', () => {
     manifest.cycleSelection = {
       windowStart: 2, windowLength: 4, endpointSeamScore: 1.25, medianMotionScore: 3.5,
     };
-    manifest.frames = [{ sourceFrameIndex: 3 }, { sourceFrameIndex: 5 }];
+    manifest.frames = [5, 7].map((index) => ({
+      sourceFrameIndex: index,
+      ...(sourcePaths
+        ? { sourcePath: `runs/${runId}/generated/raw/${rawName(index)}` }
+        : {}),
+    }));
     await writeFile(manifestAbs, JSON.stringify(manifest));
   }
 
@@ -1110,7 +1121,7 @@ describe('getWalkSourceFrames', () => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
     const { runId } = await makeCandidateRun(id, 'east');
     const runAbs = join(TEST_ROOT, 'sprites', id, 'runs', runId);
-    const rawAbs = await seedRawFrames(runAbs, 6);
+    const rawAbs = await seedRawFrames(runAbs, 8);
     // A non-frame file in the same directory must not be listed as a frame.
     await writeFile(join(rawAbs, 'notes.txt'), 'scratch');
     await writeFile(join(runAbs, 'generated', 'source-video.mp4'), 'CLIP');
@@ -1120,14 +1131,17 @@ describe('getWalkSourceFrames', () => {
     expect(out.available).toBe(true);
     expect(out.reason).toBeNull();
     expect(out.extractionFps).toBe(12);
-    expect(out.frames).toHaveLength(6);
+    expect(out.frames).toHaveLength(8);
     expect(out.frames[0]).toEqual({ index: 1, path: `runs/${runId}/generated/raw/source-0001.png` });
-    expect(out.selectedSourceIndices).toEqual([3, 5]);
-    // `windowStart` counts from the usable span; the client renders raw 1-based
-    // numbering, so the window is re-expressed there off the first packed frame.
+    expect(out.selectedSourceIndices).toEqual([5, 7]);
+    // `windowStart` counts from the usable span the packer kept (here starting at
+    // raw frame 3), while the client renders raw 1-based numbering — so the
+    // window is re-expressed off the FIRST PACKED frame, not off windowStart+1
+    // (which would be 3, four frames to the left of the frames it covers).
     expect(out.cycle).toMatchObject({
-      windowStart: 2, windowLength: 4, windowStartFrame: 3, windowEndFrame: 7,
+      windowStart: 2, windowLength: 4, windowStartFrame: 5, windowEndFrame: 9,
     });
+    expect(out.cycleProvenance).toBe('verified');
     // Older records predate run.frameCount/run.fps — the packed preview is the
     // fallback the re-derive control seeds from.
     expect(out.current).toEqual({ frameCount: 8, fps: 12 });
@@ -1138,13 +1152,31 @@ describe('getWalkSourceFrames', () => {
     expect(extractVideoFrames).not.toHaveBeenCalled();
   });
 
-  it('re-extracts on demand when raw/ was cleaned but the clip is on disk', async () => {
+  // The read must stay side-effect free: the importer never copies raw/, so
+  // every imported run lands here — extracting from the read would spawn an
+  // ffmpeg decode per direction just because the trimmer rendered.
+  it('reports raw-frames-cleaned WITHOUT extracting when the clip is on disk', async () => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
     const { runId } = await makeCandidateRun(id, 'east');
     const generatedAbs = join(TEST_ROOT, 'sprites', id, 'runs', runId, 'generated');
     await writeFile(join(generatedAbs, 'source-video.mp4'), 'CLIP');
 
     const out = await getWalkSourceFrames(id, runId);
+    expect(extractVideoFrames).not.toHaveBeenCalled();
+    expect(out.available).toBe(false);
+    expect(out.reason).toBe('raw-frames-cleaned');
+    expect(out.frames).toEqual([]);
+    // …and the run is still re-derivable: the clip is what that depends on.
+    expect(out.editable).toBe(true);
+  });
+
+  it('re-extracts from the clip only when the caller asks for it', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const { runId } = await makeCandidateRun(id, 'east');
+    const generatedAbs = join(TEST_ROOT, 'sprites', id, 'runs', runId, 'generated');
+    await writeFile(join(generatedAbs, 'source-video.mp4'), 'CLIP');
+
+    const out = await getWalkSourceFrames(id, runId, { extract: true });
     expect(extractVideoFrames).toHaveBeenCalledWith(
       join(generatedAbs, 'source-video.mp4'),
       join(generatedAbs, 'raw'),
@@ -1155,6 +1187,37 @@ describe('getWalkSourceFrames', () => {
     // columns report empty rather than inventing a selection.
     expect(out.cycle).toBeNull();
     expect(out.selectedSourceIndices).toEqual([]);
+    expect(out.cycleProvenance).toBe('none');
+  });
+
+  // A manifest's frame indices were recorded against the extraction that packed
+  // the strip; frames re-extracted here may not be the same files. Marking the
+  // wrong frames as "the gait cycle" is worse than marking none.
+  it('withholds the cycle markers when the manifest\'s source frames are not on disk', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const { runId } = await makeCandidateRun(id, 'east');
+    const runAbs = join(TEST_ROOT, 'sprites', id, 'runs', runId);
+    await seedRawFrames(runAbs, 4); // only 1–4 exist; the manifest names 5 and 7
+    await stampCycleProvenance(id, runId);
+
+    const out = await getWalkSourceFrames(id, runId);
+    expect(out.available).toBe(true);
+    expect(out.cycleProvenance).toBe('stale');
+    expect(out.cycle).toBeNull();
+    expect(out.selectedSourceIndices).toEqual([]);
+  });
+
+  // A minimal manifest that declares no sourcePath has nothing to verify — take
+  // it at its word rather than punishing it for being terse.
+  it('trusts a manifest that declares no source paths', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const { runId } = await makeCandidateRun(id, 'east');
+    await seedRawFrames(join(TEST_ROOT, 'sprites', id, 'runs', runId), 4);
+    await stampCycleProvenance(id, runId, 'east', { sourcePaths: false });
+
+    const out = await getWalkSourceFrames(id, runId);
+    expect(out.cycleProvenance).toBe('verified');
+    expect(out.selectedSourceIndices).toEqual([5, 7]);
   });
 
   it('reports no-source-video rather than an empty-looking success', async () => {
@@ -1177,12 +1240,13 @@ describe('getWalkSourceFrames', () => {
     await unlockWalkSet(id);
     const generatedAbs = join(TEST_ROOT, 'sprites', id, 'grok', runIds.east, 'generated');
 
-    const out = await getWalkSourceFrames(id, runIds.east);
+    const out = await getWalkSourceFrames(id, runIds.east, { extract: true });
     expect(extractVideoFrames).toHaveBeenCalledWith(
       join(generatedAbs, 'source-video.mp4'),
       join(generatedAbs, 'raw'),
     );
     expect(out.frames[0].path).toBe(`grok/${runIds.east}/generated/raw/source-0001.png`);
+    expect(out.imported).toBe(true);
     expect(out.editable).toBe(true);
     expect(out.lockReason).toBeNull();
   });

@@ -10,7 +10,9 @@ import {
 // the SET target (#2985), never a page-level form value.
 vi.mock('../../services/apiSprites.js', () => ({
   getSpriteWalkSourceFrames: vi.fn(),
-  postprocessSpriteWalk: vi.fn(() => Promise.resolve({})),
+  extractSpriteWalkSourceFrames: vi.fn(),
+  // Echoes the updated run record, which is what the success toast reports.
+  postprocessSpriteWalk: vi.fn(() => Promise.resolve({ id: 'walk-east-0a1b2c3d', frameCount: 12, fps: 12 })),
   setSpriteWalkTarget: vi.fn(() => Promise.resolve({})),
   unlockSpriteWalk: vi.fn(() => Promise.resolve({})),
   reopenSpriteWalk: vi.fn(() => Promise.resolve({})),
@@ -18,8 +20,8 @@ vi.mock('../../services/apiSprites.js', () => ({
 
 import WalkSourceFrames from './WalkSourceFrames';
 import {
-  getSpriteWalkSourceFrames, postprocessSpriteWalk, setSpriteWalkTarget,
-  unlockSpriteWalk, reopenSpriteWalk,
+  getSpriteWalkSourceFrames, extractSpriteWalkSourceFrames, postprocessSpriteWalk,
+  setSpriteWalkTarget, unlockSpriteWalk, reopenSpriteWalk,
 } from '../../services/apiSprites.js';
 
 const RUN_ID = 'walk-east-0a1b2c3d';
@@ -41,6 +43,8 @@ const payload = (overrides = {}) => ({
     windowStart: 1, windowLength: 4, windowStartFrame: 3, windowEndFrame: 7,
   },
   selectedSourceIndices: [3, 5],
+  cycleProvenance: 'verified',
+  imported: false,
   current: { frameCount: 8, fps: 12 },
   target: {
     frameCount: 8, fps: 12, source: 'derived', sourceLabel: 'from the first approved direction',
@@ -94,8 +98,10 @@ describe('WalkSourceFrames', () => {
     expect(cellFor(3).getAttribute('title'))
       .toBe('source frame 3 — in the selected cycle window, packed into the strip');
     expect(cellFor(5).className).toContain('ring-port-accent');
-    // 7 is the window's exclusive end.
+    // 7 is the window's exclusive end — so the prose must say 3–6, or the label
+    // would claim a frame the grid leaves unmarked.
     expect(cellFor(7).getAttribute('title')).toBe('source frame 7');
+    expect(screen.getByText(/Frames 3–6 are the/)).toBeTruthy();
   });
 
   // Geometry is deliberately omitted so the server adopts the pinned target: a
@@ -156,13 +162,58 @@ describe('WalkSourceFrames', () => {
 
   it('explains an imported run with no clip instead of showing an empty grid', async () => {
     await renderPanel(payload({
-      available: false, reason: 'no-source-video', frames: [], cycle: null, selectedSourceIndices: [], editable: false, lockReason: 'no-source-video',
+      available: false,
+      reason: 'no-source-video',
+      imported: true,
+      frames: [],
+      cycle: null,
+      selectedSourceIndices: [],
+      cycleProvenance: 'none',
+      editable: false,
+      lockReason: 'no-source-video',
     }));
     expect(screen.getByText(/imported without its source clip/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /source frames @/ })).toBeNull();
     expect(deriveButton()).toBeDisabled();
-    // Nothing to unlock — a missing clip has no action behind it.
-    expect(screen.queryByRole('button', { name: /Reopen|Unlock/ })).toBeNull();
+    // Nothing to unlock — a missing clip has no action behind it — and the
+    // explanation is printed once, not echoed by the lock block.
+    expect(screen.queryByRole('button', { name: /Reopen|Unlock|Extract/ })).toBeNull();
+    expect(screen.queryByText(/not on disk, so there is nothing to re-derive/)).toBeNull();
+  });
+
+  // The remedy differs by provenance: a run generated here can be regenerated,
+  // and telling that user to "re-import this character" would be wrong.
+  it('does not blame the importer for a natively-generated run whose clip is gone', async () => {
+    await renderPanel(payload({
+      available: false, reason: 'no-source-video', imported: false, frames: [], editable: false, lockReason: 'no-source-video',
+    }));
+    expect(screen.getByText(/Regenerate the direction to get a new clip/)).toBeTruthy();
+    expect(screen.queryByText(/Re-import this character/)).toBeNull();
+  });
+
+  // The read is side-effect free by design; extraction is one explicit click.
+  it('offers an explicit extract action when only the raw frames were cleaned', async () => {
+    extractSpriteWalkSourceFrames.mockResolvedValue(payload());
+    await renderPanel(payload({
+      available: false, reason: 'raw-frames-cleaned', frames: [], cycle: null, selectedSourceIndices: [], editable: true, lockReason: null,
+    }));
+    expect(screen.getByText(/frames extracted from it were cleaned up/)).toBeTruthy();
+    // The re-derive still works — that depends on the clip, not on the frames.
+    expect(deriveButton()).not.toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /Extract frames from clip/ }));
+    await act(async () => {});
+    expect(extractSpriteWalkSourceFrames).toHaveBeenCalledWith('example-walker', RUN_ID, { silent: true });
+    // The grid opens on the freshly extracted frames rather than staying closed.
+    expect(screen.getAllByRole('img').length).toBe(8);
+  });
+
+  // Marking the wrong frames as "the gait cycle" is worse than marking none.
+  it('withholds the markers and says why when the manifest frames are stale', async () => {
+    await renderPanel(payload({ cycle: null, selectedSourceIndices: [], cycleProvenance: 'stale' }));
+    expandGrid();
+    expect(screen.getByText(/don't match the ones the packed strip was built from/)).toBeTruthy();
+    expect(screen.getByTitle('source frame 3').className).not.toContain('ring-port-accent');
   });
 
   it('offers reopen for an approved direction and posts it on confirm', async () => {
