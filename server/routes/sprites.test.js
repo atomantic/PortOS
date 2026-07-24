@@ -244,7 +244,8 @@ describe('sprites routes', () => {
 
   it('POST /:id/reference/generate rejects an upload for main — the sheet is the only seedable target', async () => {
     // #2996: the main derives from the locked turnaround, so a seed sent with it
-    // has nowhere to go. Accepting one silently discarded it.
+    // has nowhere to go — reject at the route rather than let it reach a service
+    // that would have to discard it.
     const boundary = '----spritetest';
     const res = await request(app)
       .post('/api/sprites/pioneer/reference/generate')

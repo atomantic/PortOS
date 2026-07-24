@@ -269,6 +269,15 @@ describe('startReferenceGeneration', () => {
     expect(manifest.chromaKey).toBe('#FF00FF');
     // Locked evidence is never rewritten as a side effect of a read.
     expect(await readFile(abs, 'utf8')).toBe(before);
+
+    // …nor through a WRITE path: the backfill's generate saves the manifest, so
+    // this is where an over-eager upgrade would actually land on disk.
+    await startReferenceGeneration(id, { target: 'turnaround' });
+    const afterWrite = JSON.parse(await readFile(abs, 'utf8'));
+    expect(afterWrite.schemaVersion).toBe(1);
+    expect(afterWrite.turnaround).toBeUndefined();
+    expect(afterWrite.mainReference.locked).toBe(true);
+    expect(afterWrite.chromaKey).toBe('#FF00FF');
   });
 
   it('derives anchors from the locked turnaround via i2i with the selected key in the prompt', async () => {
