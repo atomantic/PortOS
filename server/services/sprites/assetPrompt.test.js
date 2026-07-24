@@ -111,6 +111,48 @@ describe('resolveSpriteAssetPrompt', () => {
     expect(res.prompt).toContain('walk-south identity reference');
   });
 
+  it('main manifest-fallback uses the generation-time default key, not the auto-selected lock key', async () => {
+    // Reproduces the reviewer finding: a non-pinned main is GENERATED against
+    // the default (magenta) key before auto-selection picks green/blue at lock.
+    // When the source candidate sidecar is gone, the fallback must rebuild with
+    // the default key — not the frozen auto-selected key — to match what was sent.
+    const id = newId();
+    await createCharacter(id);
+    const refDir = join(TEST_ROOT, 'sprites', id, 'reference');
+    await mkdir(refDir, { recursive: true });
+    await writeFile(join(refDir, `${id}-reference-set-v1.json`), JSON.stringify({
+      schemaVersion: 1,
+      designPrompt: 'a brave knight',
+      chromaKey: '#00FF00',
+      chromaKeyAutoSelected: true,
+      mainReference: { path: `reference/${id}-walk-south-v1.png`, locked: true, lockedFrom: 'reference/candidates/walk-south-candidate-99.png' },
+      anchors: [],
+    }));
+
+    const res = await resolveSpriteAssetPrompt(id, `reference/${id}-walk-south-v1.png`);
+    expect(res.source).toBe('reference-main');
+    expect(res.prompt).toContain('magenta (#FF00FF)');
+    expect(res.prompt).not.toContain('green (#00FF00)');
+  });
+
+  it('main manifest-fallback uses the pinned key when it was not auto-selected', async () => {
+    const id = newId();
+    await createCharacter(id);
+    const refDir = join(TEST_ROOT, 'sprites', id, 'reference');
+    await mkdir(refDir, { recursive: true });
+    await writeFile(join(refDir, `${id}-reference-set-v1.json`), JSON.stringify({
+      schemaVersion: 1,
+      designPrompt: 'a brave knight',
+      chromaKey: '#0000FF',
+      chromaKeyAutoSelected: false,
+      mainReference: { path: `reference/${id}-walk-south-v1.png`, locked: true, lockedFrom: 'reference/candidates/walk-south-candidate-99.png' },
+      anchors: [],
+    }));
+
+    const res = await resolveSpriteAssetPrompt(id, `reference/${id}-walk-south-v1.png`);
+    expect(res.prompt).toContain('blue (#0000FF)');
+  });
+
   it('resolves a locked directional anchor through the manifest', async () => {
     const id = newId();
     await createCharacter(id);

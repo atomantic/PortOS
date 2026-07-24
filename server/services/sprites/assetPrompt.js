@@ -30,6 +30,7 @@ import { spriteDir, resolveSpriteAssetPath, RUN_DIR_MATCH } from './paths.js';
 import { getRecord } from './records.js';
 import { loadManifest } from './reference.js';
 import { buildMainReferencePrompt, buildAnchorPrompt, buildWalkVideoPrompt } from './prompts.js';
+import { DEFAULT_CHROMA_KEY } from './chromaKey.js';
 
 const CANDIDATE_RE = /^reference\/candidates\/(.+)\.png$/i;
 
@@ -82,8 +83,18 @@ export async function resolveSpriteAssetPrompt(recordId, relPath) {
         // from the manifest's own recorded design prompt + key.
         const stem = candidateStem(main.lockedFrom);
         const fromCandidate = stem ? fromCandidateSidecar(await candidateSidecarFor(recordId, stem), name) : null;
+        // Fallback (source candidate sidecar gone): rebuild from the manifest.
+        // `manifest.chromaKey` is the key FROZEN at lock — which, when
+        // auto-selected (user didn't pin), differs from the key the main was
+        // actually GENERATED against. A non-pinned main is rendered before the
+        // key is chosen, so its prompt embedded the default key, not the
+        // auto-picked one — use the default here to match what was really sent.
         return fromCandidate || {
-          prompt: buildMainReferencePrompt({ name, designPrompt: manifest.designPrompt, chromaKey: manifest.chromaKey }),
+          prompt: buildMainReferencePrompt({
+            name,
+            designPrompt: manifest.designPrompt,
+            chromaKey: manifest.chromaKeyAutoSelected ? DEFAULT_CHROMA_KEY : manifest.chromaKey,
+          }),
           designPrompt: manifest.designPrompt || null,
           source: 'reference-main',
         };
