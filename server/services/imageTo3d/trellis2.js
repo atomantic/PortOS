@@ -60,17 +60,26 @@ export function isTrellis2Installed({ base, exists = existsSync } = {}) {
 /**
  * The install as an ordered list of `{stage, command, args, cwd?}` steps: shallow-
  * clone the port, then run its `setup.sh` (which builds the venv + fetches weights).
- * Pure — the SSE install route executes these; keeping them a data structure makes
- * the plan assertable without running it.
+ * Keeping the plan a data structure makes it assertable without running it.
+ *
+ * **The clone step is skipped when the repo is already present** (`<root>/.git`
+ * exists). This is load-bearing for resume: if a prior install cloned the top-level
+ * repo but failed inside `setup.sh` (the common #2952 case — a dep clone dropped),
+ * re-running with an unconditional `git clone … <root>` would abort ("destination
+ * path already exists and is not an empty directory") and never reach the idempotent
+ * `setup.sh`. `exists` is injectable so the skip is deterministic in tests.
  * @param {string} [base]
+ * @param {{exists?: (p: string) => boolean}} [opts]
  * @returns {Array<{stage: string, command: string, args: string[], cwd?: string}>}
  */
-export function buildInstallSteps(base) {
+export function buildInstallSteps(base, { exists = existsSync } = {}) {
   const root = trellis2Root(base);
-  return [
-    { stage: 'clone', command: 'git', args: ['clone', '--depth', '1', TRELLIS2_REPO, root] },
-    { stage: 'setup', command: 'bash', args: ['setup.sh'], cwd: root },
-  ];
+  const steps = [];
+  if (!exists(join(root, '.git'))) {
+    steps.push({ stage: 'clone', command: 'git', args: ['clone', '--depth', '1', TRELLIS2_REPO, root] });
+  }
+  steps.push({ stage: 'setup', command: 'bash', args: ['setup.sh'], cwd: root });
+  return steps;
 }
 
 /**
@@ -176,8 +185,11 @@ export function installTrellis2({
   spawnImpl = spawn,
   maxRetries = 3,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  exists = existsSync,
 } = {}) {
-  const steps = buildInstallSteps(base);
+  // `exists` lets the clone step be skipped when the repo is already on disk (resume
+  // after a setup-stage failure) — see buildInstallSteps.
+  const steps = buildInstallSteps(base, { exists });
   let currentChild = null;
   let canceled = false;
 
