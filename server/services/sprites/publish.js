@@ -18,6 +18,14 @@
  * drift. Engine sidecars (e.g. Godot .png.import) are the game repo's
  * concern and are never touched.
  *
+ * The optional runtimeContract (#2982) is the reverse direction: the app
+ * declares the grid it was built against ({ walkFrameCount, cellSize,
+ * columnCount }) and a publish whose compiled geometry disagrees is refused
+ * instead of silently shifting every column the game reads. Alongside the PNG,
+ * publish writes a `<atlas-stem>.layout.json` sidecar describing the grid
+ * PortOS actually produced, so the app can resolve columns by name rather than
+ * by memory. An absent contract publishes unchecked, exactly as before.
+ *
  * Publishes serialize on a per-app queue (the appDeployer per-app-lock
  * posture) nested inside the record's walk write tail.
  */
@@ -37,6 +45,10 @@ import { updateRecord } from './records.js';
 import { withWalkWriteTail } from './walk.js';
 import { compileAtlasInTail } from './atlas.js';
 import { sha256Buffer } from './walkPostprocess.js';
+import { walkPhaseLabels, WALK_MIN_FRAME_COUNT, WALK_MAX_FRAME_COUNT } from './walkBounds.js';
+import {
+  buildAtlasLayout, layoutSidecarPath, runtimeContractMismatch, resolveWalkFrameCount,
+} from './atlasLayout.js';
 
 // Per-repo serialization: keyed by the resolved repoPath (matching
 // appDeployer's `deployingApps` key), so two app records pointing at the
@@ -76,12 +88,53 @@ async function requireAppRepo(appId, status) {
   return { app, repoRoot: app.repoPath };
 }
 
+const isPositiveInt = (v) => Number.isInteger(v) && v > 0;
+
+/**
+ * Validate the optional runtimeContract — the grid the consuming app was built
+ * against (#2982). `walkFrameCount` is required when a contract is present (it
+ * is the whole point of declaring one); `cellSize` and `columnCount` are
+ * optional extra assertions. The fields are NOT cross-checked against each
+ * other here: what counts as a consistent column layout is the compiler's
+ * business and changes with the grid (#2986 drops the scanner column), so a
+ * stale count surfaces at publish with both numbers named rather than as an
+ * unexplained 400 at save.
+ */
+function validateRuntimeContract(runtimeContract) {
+  if (runtimeContract === undefined || runtimeContract === null) return null;
+  if (typeof runtimeContract !== 'object' || Array.isArray(runtimeContract)) {
+    throw bindingError('runtimeContract must be an object', 'INVALID_RUNTIME_CONTRACT');
+  }
+  const { walkFrameCount, cellSize, columnCount } = runtimeContract;
+  if (!Number.isInteger(walkFrameCount)
+    || walkFrameCount < WALK_MIN_FRAME_COUNT || walkFrameCount > WALK_MAX_FRAME_COUNT) {
+    throw bindingError(
+      `runtimeContract.walkFrameCount must be an integer between ${WALK_MIN_FRAME_COUNT} and ${WALK_MAX_FRAME_COUNT}`,
+      'INVALID_RUNTIME_CONTRACT',
+    );
+  }
+  if (cellSize !== undefined && cellSize !== null && !isPositiveInt(cellSize)) {
+    throw bindingError('runtimeContract.cellSize must be a positive integer', 'INVALID_RUNTIME_CONTRACT');
+  }
+  if (columnCount !== undefined && columnCount !== null && !isPositiveInt(columnCount)) {
+    throw bindingError('runtimeContract.columnCount must be a positive integer', 'INVALID_RUNTIME_CONTRACT');
+  }
+  return {
+    walkFrameCount,
+    cellSize: isPositiveInt(cellSize) ? cellSize : null,
+    columnCount: isPositiveInt(columnCount) ? columnCount : null,
+  };
+}
+
 /** Validate a publishBinding shape (null clears it). */
 export async function validatePublishBinding(binding) {
   if (binding === null) return null;
-  const { appId, atlasDestPath, codeBinding } = binding;
+  const { appId, atlasDestPath, codeBinding, runtimeContract } = binding;
   const { app } = await requireAppRepo(appId, 400);
   anchorRepoPath(app.repoPath, atlasDestPath, 'atlasDestPath');
+  // The sidecar lands beside the atlas, so its path must anchor too — catch a
+  // destination whose sidecar would escape the repo at SAVE time, not mid-publish.
+  anchorRepoPath(app.repoPath, layoutSidecarPath(atlasDestPath), 'atlas layout sidecar');
   if (codeBinding) {
     anchorRepoPath(app.repoPath, codeBinding.path, 'codeBinding.path');
     if (typeof codeBinding.resourcePath !== 'string' || !codeBinding.resourcePath.trim()) {
@@ -98,13 +151,26 @@ export async function validatePublishBinding(binding) {
         requiredOccurrenceCount: codeBinding.requiredOccurrenceCount ?? 1,
       }
       : null,
+    // `undefined` (key absent) is distinct from `null` (explicit clear) — see
+    // setPublishBinding, which carries an absent contract over from the stored
+    // binding so a client that predates the field can't silently wipe it.
+    runtimeContract: validateRuntimeContract(runtimeContract),
   };
 }
 
-/** Persist a validated binding on the record. */
+/**
+ * Persist a validated binding on the record. A binding that omits
+ * `runtimeContract` entirely INHERITS the stored one (absent ≠ empty): the
+ * publish form saves appId/dest/codeBinding only, and a form save must not
+ * silently drop the contract an app declared through the API. Pass
+ * `runtimeContract: null` to clear it, or `binding: null` to clear everything.
+ */
 export async function setPublishBinding(recordId, binding) {
-  await requireCharacter(recordId);
+  const record = await requireCharacter(recordId);
   const validated = await validatePublishBinding(binding);
+  if (validated && binding.runtimeContract === undefined) {
+    validated.runtimeContract = record.publishBinding?.runtimeContract ?? null;
+  }
   return updateRecord(recordId, { publishBinding: validated });
 }
 
@@ -175,6 +241,39 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
     : undefined;
   const compiled = await compileAtlasInTail(recordId, { geometry: geometryOverride });
 
+  // Export contract (#2982): refuse a publish the bound app cannot consume,
+  // BEFORE taking the repo write lock — the game tree stays untouched and the
+  // message names both the actual and expected counts. No declared contract ⇒
+  // unchanged, unchecked behavior.
+  const appLabel = app.name || binding.appId;
+  const mismatch = runtimeContractMismatch(compiled.geometry, binding.runtimeContract, appLabel);
+  if (mismatch) {
+    throw new ServerError(mismatch.message, { status: 409, code: mismatch.code });
+  }
+
+  // The sidecar describing the grid PortOS actually produced. Built here (pure,
+  // lock-free) so a geometry the compiler can't describe fails before any
+  // write, and so the same bytes are used by both the write and the up-to-date
+  // comparison below. It carries no timestamp: identical geometry ⇒ identical
+  // bytes ⇒ a republish is a genuine no-op.
+  if (!Array.isArray(compiled.geometry?.columns)) {
+    throw new ServerError(
+      'The compiled atlas reports no column layout, so its layout sidecar cannot be written — recompile the atlas before publishing.',
+      { status: 422, code: 'ATLAS_GEOMETRY_UNKNOWN' },
+    );
+  }
+  const layout = buildAtlasLayout({
+    characterId: recordId,
+    geometry: compiled.geometry,
+    atlasSha256: compiled.atlasSha256,
+    version: compiled.version,
+    atlasDestPath: binding.atlasDestPath,
+    walkLabels: walkPhaseLabels(resolveWalkFrameCount(compiled.geometry)),
+  });
+  const layoutBuffer = Buffer.from(`${JSON.stringify(layout, null, 2)}\n`);
+  const layoutSha256 = sha256Buffer(layoutBuffer);
+  const layoutDestPath = layoutSidecarPath(binding.atlasDestPath);
+
   return repoPublishTail(resolve(repoRoot), async () => {
     // Don't mutate a tree a deploy is currently building from — appDeployer
     // keys its lock by repoPath, so honor it here (the reverse direction —
@@ -183,6 +282,20 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
       throw new ServerError(`App ${app.name || binding.appId} is deploying — retry when the deploy finishes`, { status: 409, code: 'APP_DEPLOY_IN_PROGRESS' });
     }
     const destAbs = anchorRepoPath(repoRoot, binding.atlasDestPath, 'atlasDestPath');
+    // The sidecar is repo-anchored and written inside this same per-repo tail
+    // as the PNG, so the pair is never interleaved with another publish into
+    // the same checkout.
+    const layoutAbs = anchorRepoPath(repoRoot, layoutDestPath, 'atlas layout sidecar');
+    // Write it only when the content actually differs, so a republish that
+    // changes nothing stays a genuine no-op. Returns whether the repo was
+    // mutated — an atlas already at the destination but MISSING its sidecar
+    // still gets one, so the two can never be permanently out of step.
+    const writeLayoutSidecar = async () => {
+      const existingLayoutSha = (await pathExists(layoutAbs)) ? await sha256File(layoutAbs) : null;
+      if (existingLayoutSha === layoutSha256) return false;
+      await atomicWrite(layoutAbs, layoutBuffer);
+      return true;
+    };
     const atlasBuffer = await readFile(join(dir, compiled.atlasPath)).catch(() => null);
     if (!atlasBuffer) {
       throw new ServerError('Compiled atlas file is missing on disk — recompile before publishing', { status: 422, code: 'ATLAS_OUTPUT_MISSING' });
@@ -230,16 +343,25 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
       const codeBinding = binding.codeBinding
         ? await applyCodeBinding(repoRoot, binding.codeBinding, previousForCode?.codeBinding?.resourcePath)
         : null;
-      // The destination already holds the current bytes, but two sub-cases
+      // An up-to-date atlas can still be missing (or carrying a stale) layout
+      // sidecar — from a publish that predates it, or a hand-deleted file.
+      // Reconcile it here so the pair converges on the next publish.
+      const layoutWritten = await writeLayoutSidecar();
+      // The destination already holds the current bytes, but three sub-cases
       // still mutate durable state and must be recorded: a code-binding
-      // rewrite just changed the game's source, and a first-ever publish
-      // finding its own bytes needs a history baseline (otherwise the next
-      // changed-atlas publish reads the dest as foreign and 409s OCCUPIED).
+      // rewrite just changed the game's source, the sidecar was just written,
+      // and a first-ever publish finding its own bytes needs a history
+      // baseline (otherwise the next changed-atlas publish reads the dest as
+      // foreign and 409s OCCUPIED).
       let publication = null;
-      if ((codeBinding?.rewritten || !previous)) {
-        publication = await recordPublication({ destPreviousSha256: destSha256, codeBinding, upToDateBaseline: true });
+      if ((codeBinding?.rewritten || layoutWritten || !previous)) {
+        publication = await recordPublication({
+          destPreviousSha256: destSha256, codeBinding, layoutDestPath, layoutSha256, upToDateBaseline: true,
+        });
       }
-      return { published: false, upToDate: true, compiled, codeBinding, publication };
+      return {
+        published: false, upToDate: true, compiled, codeBinding, publication, layoutWritten, layoutDestPath,
+      };
     }
     if (previous && destSha256 !== null && destSha256 !== previous.atlasSha256) {
       throw new ServerError(
@@ -263,10 +385,18 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
       ? await applyCodeBinding(repoRoot, binding.codeBinding, previousForCode?.codeBinding?.resourcePath)
       : null;
 
+    // Sidecar BEFORE the atlas. Either order has a crash window, but only this
+    // one fails loudly: the layout carries `sourceAtlasSha256`, so a sidecar
+    // that landed without its atlas is DETECTABLE by the consumer, whereas a
+    // new atlas under a stale/absent layout is exactly the silent column shift
+    // this whole contract exists to prevent.
+    const layoutWritten = await writeLayoutSidecar();
     await atomicWrite(destAbs, atlasBuffer);
 
-    const publication = await recordPublication({ destPreviousSha256: destSha256, codeBinding });
+    const publication = await recordPublication({
+      destPreviousSha256: destSha256, codeBinding, layoutDestPath, layoutSha256,
+    });
     console.log(`🚚 sprite atlas v${compiled.version} published for ${recordId} → ${app.name || binding.appId}:${binding.atlasDestPath}`);
-    return { published: true, publication, compiled };
+    return { published: true, publication, compiled, layoutWritten, layoutDestPath };
   });
 }

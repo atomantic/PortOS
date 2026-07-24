@@ -996,6 +996,19 @@ const spriteRepoRelativePath = z.string().min(1).max(1024)
     message: 'must be a repo-relative path with no traversal',
   });
 
+// The grid the consuming app was built against (#2982). Optional: an absent
+// contract publishes unchecked, exactly as bindings did before it existed.
+// `walkFrameCount` is required once a contract is declared — it is the value
+// the app bakes in as a constant and the one a mismatched publish silently
+// breaks. Playback speed is deliberately absent: distance-driven consumers
+// have no animation-fps concept, so PortOS's fps is preview-only and never
+// part of the contract.
+export const spriteRuntimeContractSchema = z.object({
+  walkFrameCount: z.number().int().min(WALK_MIN_FRAME_COUNT).max(WALK_MAX_FRAME_COUNT),
+  cellSize: z.number().int().min(16).max(1024).nullable().optional(),
+  columnCount: z.number().int().min(1).max(256).nullable().optional(),
+});
+
 export const spritePublishBindingSchema = z.object({
   appId: z.string().min(1).max(200),
   atlasDestPath: spriteRepoRelativePath.refine((p) => p.toLowerCase().endsWith('.png'), {
@@ -1006,6 +1019,10 @@ export const spritePublishBindingSchema = z.object({
     resourcePath: z.string().min(1).max(1024),
     requiredOccurrenceCount: z.number().int().min(1).max(1000).optional(),
   }).nullable().optional(),
+  // Absent (key omitted) inherits the stored contract; explicit null clears it
+  // — see setPublishBinding. Keep the two distinguishable: `.optional()` must
+  // stay separate from `.nullable()` here.
+  runtimeContract: spriteRuntimeContractSchema.nullable().optional(),
 }).nullable();
 
 // acknowledgeOverwrite: explicit consent to replace a destination atlas
