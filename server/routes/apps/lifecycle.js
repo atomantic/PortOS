@@ -71,13 +71,13 @@ router.post('/:id/start', loadApp, asyncHandler(async (req, res) => {
     for (let i = 0; i < processNames.length; i++) {
       const name = processNames[i];
       const command = commands[i] || commands[0];
-      // Single instance: a desktop/GUI process that is already up — or in a
-      // transient coming-up state — must not be relaunched into a second window.
-      // Match every "already running or about to be" PM2 status, not just the
-      // steady `online`, so a click during a slow launch can't spawn a duplicate.
+      // Single instance: a desktop/GUI process that is already up — or in the
+      // transient `launching` state a slow game build sits in — must not be
+      // relaunched into a second window. Matching more than the steady `online`
+      // is what stops a click during a slow launch from spawning a duplicate.
       if (desktop) {
         const current = await pm2Service.getAppStatus(name, app.pm2Home).catch(() => null);
-        if (['online', 'launching', 'restarting', 'waiting_restart'].includes(current?.status)) {
+        if (['online', 'launching'].includes(current?.status)) {
           results[name] = { success: true, alreadyRunning: true };
           continue;
         }
