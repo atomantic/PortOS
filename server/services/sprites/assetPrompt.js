@@ -11,10 +11,12 @@
  *     sidecar (attach hook); older ones predate that capture, so the prompt is
  *     reconstructed deterministically from the sidecar's designPrompt/direction
  *     /chromaKey via the same builders that generated it.
+ *   - reference/<id>-turnaround-vN.png — the locked turnaround sheet (#2979),
+ *     the identity root every other render descends from.
  *   - reference/<id>-walk-<dir>-vN.png — the locked main + directional anchors.
- *     Resolved through the manifest: prefer the frozen candidate's literal
+ *     Both resolved through the manifest: prefer the frozen candidate's literal
  *     prompt (`lockedFrom`), else rebuild from the manifest's own designPrompt/
- *     chromaKey.
+ *     chromaKey — using the sheet-aware copy for anything derived from it.
  *   - grok|runs/<run>/… — walk-animation assets, rebuilt from the run record's
  *     direction + chromaKey (the i2v motion prompt is a pure function of those).
  *

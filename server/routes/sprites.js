@@ -2,11 +2,11 @@
  * Sprites Routes — REST surface for the Sprite Manager.
  *
  * Phase 1 (#2895): library list/get, source-tree importer, record patch.
- * Phase 2 (#2896): character create + the reference workflow — generate
- * main/anchor candidates through the shared image-gen queue, review, then
- * lock (normalize + dynamic chroma-key selection). Generation is strictly
- * user-triggered per the AI-provider policy; locked artifacts are immutable
- * (409 on regenerate/relock).
+ * Phase 2 (#2896, reordered turnaround-first in #2979): character create + the
+ * reference workflow — generate turnaround/main/anchor candidates through the
+ * shared image-gen queue, review, then lock (normalize + dynamic chroma-key
+ * selection). Generation is strictly user-triggered per the AI-provider policy;
+ * locked artifacts are immutable (409 on regenerate/relock).
  */
 
 import { Router } from 'express';

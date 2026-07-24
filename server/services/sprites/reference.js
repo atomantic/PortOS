@@ -1,10 +1,14 @@
 /**
  * Sprites — reference workflow orchestration (issue #2896, phase 2).
  *
- * Ports the source pipeline's stage 1–2: create a character, generate main-
- * reference candidates (text and/or an uploaded visual reference), freeze the
- * approved main as the immutable identity root, then derive and lock the 8
- * directional anchors from it. Generation rides the shared media-job queue
+ * Ports the source pipeline's stage 1–2, reordered turnaround-first (#2979):
+ * create a character, generate turnaround-sheet candidates (text and/or an
+ * uploaded visual reference), freeze the approved sheet as the immutable
+ * identity root, then derive the main (walk-south) from its front panel and
+ * each of the 7 remaining directional anchors from the panel showing that
+ * side. A character created before #2979 is main-first (manifest
+ * `schemaVersion` 1) and backfills a sheet from its locked main before it can
+ * derive further anchors. Generation rides the shared media-job queue
  * (`enqueueJob` kind:'image' with a `spriteRef` destination tag — the
  * completion hook in services/spriteReferenceImageHook.js files finished
  * renders into reference/candidates/); locking is deterministic sharp work
@@ -255,7 +259,8 @@ export async function getReferenceSet(recordId) {
  * User-triggered only (route-invoked); never called at boot.
  *
  * `upload` is an optional `{ tempPath, originalname }` from the route's
- * multipart parse (main target only) — copied into the record's
+ * multipart parse — a design image seeding the identity root (the turnaround
+ * sheet, or a legacy record's main), never an anchor. Copied into the record's
  * reference/uploads/ so provenance survives the temp-file sweep.
  */
 export function startReferenceGeneration(recordId, body, upload = null) {
@@ -266,9 +271,10 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
   const record = await requireCharacter(recordId);
   const manifest = (await loadManifest(recordId)) || seedManifest(recordId);
   const target = body.target;
-  // Once the main is locked, the manifest's key is canonical (set at lock —
-  // possibly auto-selected); a later record-level repin must not fork
-  // subsequent anchors onto a different background than the frozen set.
+  // Once either identity artifact is locked — the sheet on a turnaround-first
+  // record, the main on a legacy one — the manifest's key is canonical (set at
+  // that lock, possibly auto-selected); a later record-level repin must not
+  // fork subsequent renders onto a different background than the frozen set.
   const genKey = manifest.chromaKey || record.chromaKey || DEFAULT_CHROMA_KEY;
   const settings = await getSettings();
   const mode = resolveQueueImageMode(body.mode, settings);
