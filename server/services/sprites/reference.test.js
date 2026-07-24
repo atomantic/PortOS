@@ -53,6 +53,7 @@ vi.mock('../settings.js', () => ({ getSettings: async () => settings }));
 const records = await import('./records.js');
 const {
   getReferenceSet, startReferenceGeneration, attachReferenceCandidate, lockReference, patchSpriteRecord,
+  listReferenceSources, forkSprite,
 } = await import('./reference.js');
 
 let seq = 0;
@@ -444,5 +445,92 @@ describe('lockReference', () => {
     expect(manifest.anchors.every((a) => a.status === 'locked')).toBe(true);
     const record = await records.getRecord(id);
     expect(record.status).toBe('reference-complete');
+  });
+});
+
+describe('main-reference i2i seed sources', () => {
+  it('seeds the main from a gallery image (initImageGalleryFile)', async () => {
+    const id = newId();
+    await createCharacter(id);
+    // resolveGalleryImage resolves a basename under PATHS.images (the test root).
+    const galleryName = 'render-history-pick.png';
+    await writeCandidatePng(join(TEST_ROOT, 'images', galleryName));
+    await startReferenceGeneration(id, { target: 'main', designPrompt: 'red coat', initImageGalleryFile: galleryName });
+    const call = enqueueJob.mock.calls[0][0];
+    expect(call.params.initImagePath).toBe(join(TEST_ROOT, 'images', galleryName));
+    expect(call.params.initImageStrength).toBe(0.65);
+    expect(call.params.spriteRef.designReferencePath).toBe(`gallery:${galleryName}`);
+  });
+
+  it('400s a gallery pick that is not in the gallery', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await expect(startReferenceGeneration(id, { target: 'main', designPrompt: 'x', initImageGalleryFile: 'ghost.png' }))
+      .rejects.toMatchObject({ code: 'INIT_IMAGE_NOT_FOUND', status: 400 });
+  });
+
+  it('seeds the main from another sprite\'s locked reference (initImageSpriteId)', async () => {
+    const source = newId();
+    await createCharacter(source);
+    await lockMain(source);
+    const dest = newId();
+    await createCharacter(dest);
+    enqueueJob.mockClear();
+    await startReferenceGeneration(dest, { target: 'main', designPrompt: 'now with a hat', initImageSpriteId: source });
+    const call = enqueueJob.mock.calls[0][0];
+    expect(call.params.initImagePath).toBe(join(TEST_ROOT, 'sprites', source, `reference/${source}-walk-south-v1.png`));
+    expect(call.params.spriteRef.designReferencePath).toBe(`sprite:${source}/reference/${source}-walk-south-v1.png`);
+  });
+
+  it('400s seeding from a source with no locked main', async () => {
+    const source = newId();
+    await createCharacter(source); // never locked
+    const dest = newId();
+    await createCharacter(dest);
+    await expect(startReferenceGeneration(dest, { target: 'main', designPrompt: 'x', initImageSpriteId: source }))
+      .rejects.toMatchObject({ code: 'SOURCE_REFERENCE_MISSING', status: 400 });
+  });
+});
+
+describe('listReferenceSources', () => {
+  it('returns only characters whose main reference is locked', async () => {
+    const locked = newId();
+    await createCharacter(locked, { name: 'Locked One' });
+    await lockMain(locked);
+    const draft = newId();
+    await createCharacter(draft, { name: 'Draft One' }); // no main lock
+    const sources = await listReferenceSources();
+    const ids = sources.map((s) => s.id);
+    expect(ids).toContain(locked);
+    expect(ids).not.toContain(draft);
+    const entry = sources.find((s) => s.id === locked);
+    expect(entry).toMatchObject({ id: locked, name: 'Locked One', kind: 'character' });
+    expect(entry.path).toContain(`${locked}-walk-south-v1.png`);
+  });
+});
+
+describe('forkSprite', () => {
+  it('creates a new character and queues its main seeded from the source reference', async () => {
+    const source = newId();
+    await createCharacter(source, { name: 'Origin' });
+    await lockMain(source);
+    enqueueJob.mockClear();
+    const { record, jobId, target } = await forkSprite(source, { name: 'Origin Fork', designPrompt: 'wearing a red coat' });
+    expect(target).toBe('main');
+    expect(jobId).toBe('job-1234567890');
+    expect(record.kind).toBe('character');
+    expect(record.name).toBe('Origin Fork');
+    // The new record exists and the render was seeded from the source's ref.
+    expect(await records.getRecord(record.id)).toBeTruthy();
+    const call = enqueueJob.mock.calls[0][0];
+    expect(call.params.spriteRef.recordId).toBe(record.id);
+    expect(call.params.initImagePath).toBe(join(TEST_ROOT, 'sprites', source, `reference/${source}-walk-south-v1.png`));
+  });
+
+  it('400s forking a source with no locked main and creates no orphan record', async () => {
+    const source = newId();
+    await createCharacter(source);
+    await expect(forkSprite(source, { name: 'Bad Fork', designPrompt: 'x' }))
+      .rejects.toMatchObject({ code: 'SOURCE_REFERENCE_MISSING', status: 400 });
   });
 });

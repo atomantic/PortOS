@@ -19,7 +19,7 @@ import { join } from 'path';
 import { readdir, copyFile } from 'fs/promises';
 import {
   PATHS, ensureDir, sha256File, atomicWrite, pathExists, readJSONFile,
-  importFileToDir, listDirectoryByExtension,
+  importFileToDir, listDirectoryByExtension, resolveGalleryImage,
 } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
@@ -30,7 +30,7 @@ import {
 } from '../imageGen/modes.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
 import { getSettings } from '../settings.js';
-import { getRecord, updateRecord } from './records.js';
+import { getRecord, updateRecord, listRecords, createCharacter } from './records.js';
 import { spriteDir, resolveSpriteAssetPath } from './paths.js';
 import {
   SPRITE_DIRECTIONS, ANCHOR_DIRECTIONS, anchorIdForDirection,
@@ -239,23 +239,41 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
       throw new ServerError('Main reference is locked — corrections require a new character version, never regeneration', { status: 409, code: 'REFERENCE_LOCKED' });
     }
     const designPrompt = typeof body.designPrompt === 'string' ? body.designPrompt.trim() : '';
-    if (!designPrompt && !upload) {
+    // A main render needs SOME input: a prompt, an uploaded image, a gallery
+    // pick, or another sprite's reference to seed from.
+    const hasInitSource = !!upload || !!body.initImageGalleryFile || !!body.initImageSpriteId;
+    if (!designPrompt && !hasInitSource) {
       throw new ServerError('Provide a design prompt and/or a reference image', { status: 400, code: 'DESIGN_INPUT_REQUIRED' });
     }
     anchorId = anchorIdForDirection('south');
     direction = 'south';
     prompt = buildMainReferencePrompt({ name: record.name, designPrompt, chromaKey: genKey });
+    // Resolve the i2i seed image from exactly one source (upload wins, then a
+    // gallery pick, then another sprite's locked main). `designReferencePath`
+    // is the provenance marker that rides the tag into the candidate sidecar.
     if (upload) {
-      // Shared temp-import (uuid-prefixed name, EXDEV-safe copy+unlink) —
-      // the upload persists in the record dir as design provenance, and its
-      // record-relative path rides the tag into the candidate sidecar so a
-      // locked candidate stays traceable to the upload that guided it.
+      // Shared temp-import (uuid-prefixed name, EXDEV-safe copy+unlink) — the
+      // upload persists in the record dir as design provenance so a locked
+      // candidate stays traceable to the upload that guided it.
       const uploadsDir = join(spriteDir(recordId), 'reference', 'uploads');
       const { filename } = await importFileToDir(upload.tempPath, upload.originalname || 'design-reference.png', uploadsDir);
       initImagePath = join(uploadsDir, filename);
       designReferencePath = `reference/uploads/${filename}`;
-      initImageStrength ??= UPLOAD_DEFAULT_STRENGTH;
+    } else if (body.initImageGalleryFile) {
+      const resolved = resolveGalleryImage(body.initImageGalleryFile);
+      if (!resolved) {
+        throw new ServerError('Reference image not found in the render-history gallery', { status: 400, code: 'INIT_IMAGE_NOT_FOUND' });
+      }
+      initImagePath = resolved;
+      designReferencePath = `gallery:${body.initImageGalleryFile}`;
+    } else if (body.initImageSpriteId) {
+      const sourceMain = await resolveSourceReference(body.initImageSpriteId);
+      initImagePath = sourceMain.absPath;
+      designReferencePath = `sprite:${body.initImageSpriteId}/${sourceMain.relPath}`;
     }
+    // Every main seed source shares the same default fidelity (anchors use a
+    // higher one, set in their own branch).
+    if (initImagePath) initImageStrength ??= UPLOAD_DEFAULT_STRENGTH;
     if (designPrompt) manifest.designPrompt = designPrompt;
     // Only the main branch mutates (or may have just seeded) the manifest —
     // the anchor branch requires a locked main, so its manifest already
@@ -319,6 +337,69 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
   const { jobId } = enqueueJob({ kind: 'image', params, owner: 'sprites' });
   console.log(`🧍 sprite reference render queued ${recordId}/${anchorId} mode=${mode} jobId=${jobId.slice(0, 8)}`);
   return { jobId, mode, target, anchorId };
+}
+
+/**
+ * Resolve a source sprite's locked main reference to an on-disk init image.
+ * Throws (400/500) rather than silently degrading to text-to-image so the
+ * caller learns the fork/derive source is unusable up front.
+ */
+async function resolveSourceReference(sourceId) {
+  // loadManifest, not getReferenceSet — we only need mainReference, and the
+  // latter also enumerates + reads every candidate sidecar (wasted here).
+  const manifest = await loadManifest(sourceId);
+  const main = manifest?.mainReference;
+  if (!main?.locked || !main.path) {
+    throw new ServerError('The source sprite has no locked main reference to seed from', { status: 400, code: 'SOURCE_REFERENCE_MISSING' });
+  }
+  const absPath = resolveSpriteAssetPath(sourceId, main.path);
+  if (!await pathExists(absPath)) {
+    throw new ServerError('The source sprite reference file is missing on disk', { status: 500, code: 'SOURCE_REFERENCE_FILE_MISSING' });
+  }
+  return { absPath, relPath: main.path };
+}
+
+/**
+ * List every character whose main reference is locked — the pool that can seed
+ * a new main (the "select an existing reference sprite" picker) or be forked.
+ * Reads each character's manifest (loadManifest, not getReferenceSet — the
+ * candidate enumeration the latter does is wasted here), so it's a per-request
+ * O(characters) scan; fine for a user-triggered modal fetch, revisit if the
+ * library grows huge.
+ */
+export async function listReferenceSources() {
+  const records = await listRecords();
+  const out = [];
+  for (const r of records) {
+    if (r.kind !== 'character' || r.deleted) continue;
+    const manifest = await loadManifest(r.id);
+    const main = manifest?.mainReference;
+    if (main?.locked && main.path) out.push({ id: r.id, name: r.name, kind: r.kind, path: main.path });
+  }
+  return out;
+}
+
+/**
+ * Fork a new character from an existing sprite's locked main reference: create
+ * the record, then image+text→image its main from the source reference via the
+ * shared generate path (`initImageSpriteId`). Validates the source BEFORE
+ * creating the record so a bad fork never leaves an orphan character behind.
+ * User-triggered only.
+ */
+export async function forkSprite(sourceId, body) {
+  await resolveSourceReference(sourceId); // fail fast before creating a record
+  const record = await createCharacter({ name: body.name, id: body.id, kind: 'character' });
+  const gen = await startReferenceGeneration(record.id, {
+    target: 'main',
+    designPrompt: body.designPrompt,
+    initImageSpriteId: sourceId,
+    ...(body.mode ? { mode: body.mode } : {}),
+    ...(body.model ? { model: body.model } : {}),
+    ...(body.effort ? { effort: body.effort } : {}),
+    ...(Number.isFinite(body.initImageStrength) ? { initImageStrength: body.initImageStrength } : {}),
+  });
+  console.log(`🧬 sprite fork ${sourceId} → ${record.id} jobId=${gen.jobId.slice(0, 8)}`);
+  return { record, ...gen };
 }
 
 /**

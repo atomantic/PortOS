@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Lock, Sparkles, RefreshCw, Upload, ChevronDown, ChevronRight,
+  Images, PersonStanding, GitFork, X,
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import { generateSpriteReference, lockSpriteReference, updateSpriteRecord } from '../../services/apiSprites.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import SpritePreview from './SpritePreview.jsx';
+import GalleryImagePicker from '../imageGen/GalleryImagePicker.jsx';
+import SpriteReferencePicker from './SpriteReferencePicker.jsx';
+import ForkSpriteModal from './ForkSpriteModal.jsx';
 
 // Reference workflow (issue #2896): generate main-reference candidates from
 // text + optional uploaded design image, freeze the approved main, then
@@ -65,7 +69,7 @@ function CandidateTile({ recordId, candidate, locking, onLock, clipRisk }) {
   );
 }
 
-export default function ReferenceWorkflow({ record, reference, renders, backends, mode, onModeChange, onChanged }) {
+export default function ReferenceWorkflow({ record, reference, renders, backends, mode, onModeChange, onChanged, onForked }) {
   const recordId = record.id;
   const manifest = reference?.manifest || null;
   const candidates = reference?.candidates || [];
@@ -90,8 +94,35 @@ export default function ReferenceWorkflow({ record, reference, renders, backends
   // diverge). `backends`: null = settings not loaded yet; [] = loaded, no
   // backend configured.
   const [designPrompt, setDesignPrompt] = useState(manifest?.designPrompt || '');
-  const [uploadFile, setUploadFile] = useState(null);
+  // The main render can be seeded (image+text→image) from one of three sources:
+  // an uploaded file, a pick from the render-history gallery, or another sprite's
+  // locked main reference. One unified `refSource` holds whichever is active so
+  // the generate payload and the preview stay in sync.
+  //   null | { type:'upload', file, previewUrl }
+  //        | { type:'gallery', filename, previewUrl, label }
+  //        | { type:'sprite', id, name, path }
+  const [refSource, setRefSource] = useState(null);
+  const [strength, setStrength] = useState(0.65);
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [spritePickerOpen, setSpritePickerOpen] = useState(false);
+  const [forkOpen, setForkOpen] = useState(false);
   const fileInputRef = useRef(null);
+
+  // Revoke the previous upload's object URL whenever the source changes or the
+  // component unmounts (cleanup runs with the prior closure).
+  useEffect(() => {
+    const url = refSource?.type === 'upload' ? refSource.previewUrl : null;
+    return () => { if (url) URL.revokeObjectURL(url); };
+  }, [refSource]);
+
+  const clearSource = () => {
+    setRefSource(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+  const pickUpload = (file) => {
+    if (!file) return;
+    setRefSource({ type: 'upload', file, previewUrl: URL.createObjectURL(file) });
+  };
   // target → jobId for in-flight renders. Owned by the Sprites page and shared
   // with the asset collection's anchor Regenerate buttons (#2931) so both gate
   // on one map — see the matching note in WalkWorkflow.
@@ -109,11 +140,16 @@ export default function ReferenceWorkflow({ record, reference, renders, backends
       const { jobId } = await generateSpriteReference(recordId, {
         target,
         ...(mode ? { mode } : {}),
-        ...(target === 'main' ? { designPrompt, referenceImageFile: uploadFile || undefined } : {}),
+        ...(target === 'main' ? {
+          designPrompt,
+          ...(refSource?.type === 'upload' ? { referenceImageFile: refSource.file } : {}),
+          ...(refSource?.type === 'gallery' ? { initImageGalleryFile: refSource.filename } : {}),
+          ...(refSource?.type === 'sprite' ? { initImageSpriteId: refSource.id } : {}),
+          ...(refSource ? { initImageStrength: strength } : {}),
+        } : {}),
       }, { silent: true });
       resolveSubmit(target, jobId);
-      setUploadFile(null);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (target === 'main') clearSource();
     } catch (err) {
       cancelSubmit(target);
       toast.error(err?.message || `Failed to queue ${target} render`);
@@ -216,7 +252,18 @@ export default function ReferenceWorkflow({ record, reference, renders, backends
         {mainLocked ? (
           <div className="flex items-start gap-3">
             <SpriteImg recordId={recordId} path={manifest.mainReference.path} className="w-32 h-32 object-contain bg-port-bg border border-port-border rounded" />
-            <p className="text-xs text-gray-500 flex items-center gap-1"><Lock className="w-3 h-3" /> frozen · immutable root</p>
+            <div className="space-y-2">
+              <p className="text-xs text-gray-500 flex items-center gap-1"><Lock className="w-3 h-3" /> frozen · immutable root</p>
+              {/* A locked main can never be regenerated — to iterate on it, fork
+                  into a new character seeded from this reference (image+text→image). */}
+              <button
+                type="button"
+                onClick={() => setForkOpen(true)}
+                className="flex items-center gap-1.5 px-2.5 py-1 text-xs bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent"
+              >
+                <GitFork className="w-3.5 h-3.5" /> Fork from this reference
+              </button>
+            </div>
           </div>
         ) : (
           <div className="space-y-2">
@@ -227,22 +274,84 @@ export default function ReferenceWorkflow({ record, reference, renders, backends
               rows={2}
               className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white"
             />
+            {/* Reference image (optional, i2i seed) — pick ONE of three sources.
+                Hidden file input driven by the Upload button. */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              className="hidden"
+              onChange={(e) => pickUpload(e.target.files?.[0] || null)}
+            />
+            {refSource ? (
+              <div className="flex items-center gap-3 bg-port-bg border border-port-border rounded p-2">
+                {refSource.type === 'sprite' ? (
+                  <SpriteImg recordId={refSource.id} path={refSource.path} className="w-14 h-14 object-contain shrink-0" />
+                ) : (
+                  <img src={refSource.previewUrl} alt="reference" className="w-14 h-14 object-contain rounded shrink-0" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-gray-300 truncate">
+                    {refSource.type === 'upload' ? refSource.file.name
+                      : refSource.type === 'gallery' ? (refSource.label || 'gallery image')
+                        : refSource.name}
+                  </p>
+                  <p className="text-[10px] text-gray-500">
+                    {refSource.type === 'upload' ? 'uploaded image'
+                      : refSource.type === 'gallery' ? 'from render history'
+                        : 'from reference sprite'}
+                  </p>
+                  <label className="mt-1 flex items-center gap-2 text-[10px] text-gray-500">
+                    fidelity
+                    <input
+                      type="range" min="0" max="1" step="0.05" value={strength}
+                      onChange={(e) => setStrength(Number(e.target.value))}
+                      className="accent-port-accent"
+                      aria-label="Reference fidelity"
+                    />
+                    <span className="tabular-nums w-8">{strength.toFixed(2)}</span>
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  onClick={clearSource}
+                  aria-label="Remove reference image"
+                  className="p-1 text-gray-400 hover:text-white shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-gray-500">Reference image (optional):</span>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent"
+                >
+                  <Upload className="w-3.5 h-3.5" /> Upload
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGalleryOpen(true)}
+                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent"
+                >
+                  <Images className="w-3.5 h-3.5" /> From history
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSpritePickerOpen(true)}
+                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent"
+                >
+                  <PersonStanding className="w-3.5 h-3.5" /> From sprite
+                </button>
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-3">
-              <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
-                <Upload className="w-3.5 h-3.5" />
-                {uploadFile ? uploadFile.name : 'Design image (optional)'}
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  className="hidden"
-                  onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
-                />
-              </label>
               {modePicker}
               <button
                 onClick={() => generate('main')}
-                disabled={!mode || !!pendingJobs.main || (!designPrompt.trim() && !uploadFile)}
+                disabled={!mode || !!pendingJobs.main || (!designPrompt.trim() && !refSource)}
                 className="flex items-center gap-1.5 px-3 py-1 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white rounded text-sm"
               >
                 {pendingJobs.main ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
@@ -314,6 +423,33 @@ export default function ReferenceWorkflow({ record, reference, renders, backends
           </div>
           )}
         </div>
+      )}
+
+      {/* Reference-image source pickers + fork. Portal-based modals, so their
+          placement in the tree doesn't matter. */}
+      <GalleryImagePicker
+        open={galleryOpen}
+        onClose={() => setGalleryOpen(false)}
+        onSelect={(item) => setRefSource({
+          type: 'gallery', filename: item.filename, previewUrl: item.previewUrl, label: item.prompt || item.filename,
+        })}
+      />
+      <SpriteReferencePicker
+        open={spritePickerOpen}
+        onClose={() => setSpritePickerOpen(false)}
+        excludeId={recordId}
+        onSelect={(it) => setRefSource({ type: 'sprite', id: it.id, name: it.name, path: it.path })}
+      />
+      {mainLocked && (
+        <ForkSpriteModal
+          open={forkOpen}
+          onClose={() => setForkOpen(false)}
+          source={{ id: recordId, name: record.name }}
+          referencePath={manifest.mainReference.path}
+          backends={backends}
+          mode={mode}
+          onForked={(rec) => onForked?.(rec)}
+        />
       )}
     </div>
   );

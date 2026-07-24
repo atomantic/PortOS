@@ -9,6 +9,11 @@ import { request } from './apiCore.js';
 export const listSpriteRecords = (options = {}) => request('/sprites', options);
 export const getSpriteRecord = (id, options = {}) => request(`/sprites/${encodeURIComponent(id)}`, options);
 
+// Characters with a locked main reference — the pool to seed a new main from
+// (i2i) or fork. Returns [{ id, name, kind, path }] (path = record-relative
+// main reference image).
+export const listSpriteReferenceSources = (options = {}) => request('/sprites/reference-sources', options);
+
 export const createSpriteRecord = (body, options = {}) => request('/sprites', {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
@@ -52,6 +57,13 @@ export const generateSpriteReference = (id, { referenceImageFile, ...fields }, o
 // Freeze a reviewed candidate as the main reference or a directional anchor.
 // Returns the updated { manifest, candidates } reference set.
 export const lockSpriteReference = (id, body, options = {}) => request(`/sprites/${encodeURIComponent(id)}/reference/lock`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
+// Fork `id` into a new character seeded (image+text→image) from its locked main
+// reference. Body: { name, id?, designPrompt, mode?, model?, effort?,
+// initImageStrength? }. Returns { record, jobId, mode, target, anchorId }.
+export const forkSpriteRecord = (id, body, options = {}) => request(`/sprites/${encodeURIComponent(id)}/fork`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
