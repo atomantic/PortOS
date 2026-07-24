@@ -27,6 +27,31 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
 const HOME = homedir();
 const IS_WIN = platform() === 'win32';
 
+/**
+ * Build a case-insensitive predicate that tests text against an alternation of
+ * signature phrases — the shared shape both subprocess-error classifiers below use
+ * (each keeps its own domain-specific phrase list; only the plumbing is shared).
+ * @param {string[]} phrases
+ * @returns {(text: string) => boolean}
+ */
+function textMatcher(phrases) {
+  const re = new RegExp(phrases.join('|'), 'i');
+  return (text) => re.test(String(text ?? ''));
+}
+
+/**
+ * Append a chunk of subprocess output to a bounded tail (the last `max` chars), so a
+ * non-zero exit can be classified from the trailing output without retaining the
+ * whole stream. Used at both child-process boundaries (install + generate).
+ * @param {string} prev
+ * @param {*} buf
+ * @param {number} [max]
+ * @returns {string}
+ */
+function appendTail(prev, buf, max = 4000) {
+  return `${prev}${buf}`.slice(-max);
+}
+
 /** The Apple Silicon MPS port of Microsoft TRELLIS.2. */
 export const TRELLIS2_REPO = 'https://github.com/shivampkumar/trellis-mac';
 
@@ -121,6 +146,11 @@ export function buildGenerateArgs({ imagePath, outputPath, base } = {}) {
  * `Saved:` line. Order is roughly: load model → sample (the long phase) → decode
  * mesh → bake textures → export. Ordered most-specific first.
  */
+// The whole-render percent lives across three schemes that must stay mutually
+// ordered: these banner percents, the tqdm sampling band's [10,50] ceiling
+// (TQDM_BAND below), and the export percent (92). Invariant: sampling-ceiling (50)
+// < first post-sampling banner (55) < … < export (92). The monotonicity unit test
+// guards it — keep these ordered if you retune the curve.
 const GENERATE_STAGE_SIGNATURES = [
   { re: /loading pipeline/i, stage: 'loading', percent: 3 },
   { re: /^device:/i, stage: 'loading', percent: 5 },
@@ -130,6 +160,13 @@ const GENERATE_STAGE_SIGNATURES = [
   { re: /baking .*textures?/i, stage: 'texturing', percent: 65 },
   { re: /(uv unwrap|simplifying mesh)/i, stage: 'texturing', percent: 72 },
 ];
+
+/** A written `.glb` path — the terminal export signal (captures the asset path). */
+const GLB_PATH_RE = /(\S+\.glb)\b/i;
+/** A bare `tqdm` percentage (per-phase sampling bar). */
+const TQDM_PCT_RE = /(\d{1,3})\s*%/;
+/** Map a raw per-phase tqdm percent (0–100) into the sampling band [10,50]. */
+const TQDM_BAND = { base: 10, span: 40 };
 
 /**
  * Parse one line of `generate.py` output into a progress frame, or null when the
@@ -148,7 +185,7 @@ export function parseGenerateProgress(line) {
   if (!text) return null;
 
   // A written .glb is the terminal export signal — it carries the produced asset path.
-  const glb = text.match(/(\S+\.glb)\b/i);
+  const glb = text.match(GLB_PATH_RE);
   if (glb) return { stage: 'export', percent: 92, assetPath: glb[1], message: text };
 
   // Named stage banners drive the whole-render percent.
@@ -157,10 +194,11 @@ export function parseGenerateProgress(line) {
   }
 
   // A bare percentage is a per-phase tqdm sampling bar — scale into the sampling band.
-  const pct = text.match(/(\d{1,3})\s*%/);
+  const pct = text.match(TQDM_PCT_RE);
   if (pct) {
     const raw = Math.min(100, Number(pct[1]));
-    return { stage: 'generating', percent: 10 + Math.round(raw * 0.4), message: text };
+    const percent = TQDM_BAND.base + Math.round((raw / 100) * TQDM_BAND.span);
+    return { stage: 'generating', percent, message: text };
   }
   return null;
 }
@@ -175,29 +213,21 @@ export function parseGenerateProgress(line) {
  * every match only *earns a retry* of an idempotent step — a false positive costs
  * one extra attempt, never a wrong install.
  */
-const TRANSIENT_INSTALL_ERROR_RE = new RegExp(
-  [
-    'curl\\s+\\d+', 'RPC failed', 'early EOF', 'fetch-pack', 'index-pack',
-    'unexpected disconnect', 'Connection reset', 'Recv failure', 'Send failure',
-    'Could not resolve host', 'Failed to connect', 'Operation timed out',
-    'Connection timed out', 'timed out', 'TLS', 'SSL', 'gnutls', 'GnuTLS',
-    'Temporary failure in name resolution', 'Broken pipe', 'ECONNRESET', 'ETIMEDOUT',
-    'Read error', 'transfer closed', 'Network is unreachable',
-    'Retrieving .* failed', 'Connection aborted', 'IncompleteRead',
-  ].join('|'),
-  'i',
-);
-
 /**
- * Whether a captured chunk of install output looks like a transient network error
- * (see `TRANSIENT_INSTALL_ERROR_RE`). Exported so the route/UI and tests can share
- * the exact classification instead of re-implementing the pattern.
- * @param {string} text
- * @returns {boolean}
+ * Whether a captured chunk of install output looks like a transient network error.
+ * Exported so the route/UI and tests share the exact classification instead of
+ * re-implementing the pattern.
+ * @type {(text: string) => boolean}
  */
-export function isTransientInstallError(text) {
-  return TRANSIENT_INSTALL_ERROR_RE.test(String(text ?? ''));
-}
+export const isTransientInstallError = textMatcher([
+  'curl\\s+\\d+', 'RPC failed', 'early EOF', 'fetch-pack', 'index-pack',
+  'unexpected disconnect', 'Connection reset', 'Recv failure', 'Send failure',
+  'Could not resolve host', 'Failed to connect', 'Operation timed out',
+  'Connection timed out', 'timed out', 'TLS', 'SSL', 'gnutls', 'GnuTLS',
+  'Temporary failure in name resolution', 'Broken pipe', 'ECONNRESET', 'ETIMEDOUT',
+  'Read error', 'transfer closed', 'Network is unreachable',
+  'Retrieving .* failed', 'Connection aborted', 'IncompleteRead',
+]);
 
 /**
  * Run the install as a killable, event-emitting job: execute `buildInstallSteps()`
@@ -249,7 +279,7 @@ export function installTrellis2({
     const log = (buf) => {
       const message = String(buf).trim();
       if (message) onEvent({ type: 'log', stage: step.stage, message });
-      outputTail = `${outputTail}${buf}`.slice(-4000);
+      outputTail = appendTail(outputTail, buf);
     };
     child.stdout?.on('data', log);
     child.stderr?.on('data', log);
@@ -325,26 +355,18 @@ export function installTrellis2({
  * instead of a bare "exited 1". Confirmed against the real failure during #2952
  * on-device validation (gated `facebook/dinov3-vitl16-pretrain-lvd1689m`).
  */
-const HF_AUTH_ERROR_RE = new RegExp(
-  [
-    'GatedRepoError', 'gated repo', 'access to model .* is restricted',
-    'You must have access to it', 'must be authenticated to access',
-    'Please log in', 'Access to model .* is restricted', 'RepositoryNotFoundError',
-    '401 Client Error', 'Invalid user token', 'Repo .* is gated',
-  ].join('|'),
-  'i',
-);
-
 /**
  * Whether a captured chunk of render output looks like a Hugging Face auth/gated-repo
- * failure (see `HF_AUTH_ERROR_RE`). Exported so the runner and tests share one
+ * failure (see the signature list above). Exported so the runner and tests share one
  * classification.
- * @param {string} text
- * @returns {boolean}
+ * @type {(text: string) => boolean}
  */
-export function isHfAuthError(text) {
-  return HF_AUTH_ERROR_RE.test(String(text ?? ''));
-}
+export const isHfAuthError = textMatcher([
+  'GatedRepoError', 'gated repo', 'access to model .* is restricted',
+  'You must have access to it', 'must be authenticated to access',
+  'Please log in', 'RepositoryNotFoundError',
+  '401 Client Error', 'Invalid user token', 'Repo .* is gated',
+]);
 
 /** Human-actionable guidance for the gated-dependency failure above. */
 const HF_AUTH_HELP = 'TRELLIS.2 could not download a gated model dependency from '
@@ -392,7 +414,7 @@ export function runTrellis2Generate({
   let outputTail = '';
   const promise = new Promise((resolve, reject) => {
     const ingest = (buf) => {
-      outputTail = `${outputTail}${buf}`.slice(-4000);
+      outputTail = appendTail(outputTail, buf);
       for (const line of String(buf).split('\n')) {
         const frame = parseGenerateProgress(line);
         if (!frame) continue;
