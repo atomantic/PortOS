@@ -330,6 +330,24 @@ describe('WalkWorkflow authoring controls', () => {
     expect(screen.getByRole('combobox', { name: /Preview speed/ }).disabled).toBe(false);
   });
 
+  it('shows an odd target fps the even-step picker does not list', () => {
+    // The speed picker offers even steps, but the server accepts any integer in
+    // range — an imported set can be pinned at 15fps. A <select> whose value
+    // matches no <option> silently displays the FIRST one, so the control would
+    // have claimed "4 fps" while the set was really at 15.
+    renderRun(
+      { id: 'walk-east-deadbeef', direction: 'east', status: 'error', postprocessError: 'x' },
+      {
+        walkTarget: {
+          frameCount: 12, fps: 15, source: 'derived', sourceLabel: 'from the first approved direction', drift: [],
+        },
+      },
+    );
+    const speed = screen.getByRole('combobox', { name: /Preview speed/ });
+    expect(speed.value).toBe('15');
+    expect([...speed.options].map((o) => o.value)).toContain('15');
+  });
+
   it('saves a new target to the set and refreshes', async () => {
     const onChanged = vi.fn();
     renderRun(

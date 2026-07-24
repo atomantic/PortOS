@@ -58,7 +58,15 @@ const seq = (min, max, step) => {
   return out;
 };
 const FRAME_COUNT_OPTIONS = seq(WALK_FRAME_COUNT_RANGE.min, WALK_FRAME_COUNT_RANGE.max, 1);
+// The speed picker offers even steps to keep the list short, but the server
+// accepts ANY integer in range — an imported set (or a direct API call) can pin
+// an odd fps like 15. A <select> whose value matches no <option> silently
+// displays the FIRST option, so the control would claim "4 fps" while the set is
+// really at 15. Splice the current value in so the control never lies.
 const FPS_OPTIONS = seq(WALK_FPS_RANGE.min, WALK_FPS_RANGE.max, 2);
+const fpsOptionsFor = (fps) => (FPS_OPTIONS.includes(fps) || !Number.isFinite(fps)
+  ? FPS_OPTIONS
+  : [...FPS_OPTIONS, fps].sort((a, b) => a - b));
 
 /**
  * Strip geometry for a preview/trim UI, defaulting to the native 8-phase
@@ -195,7 +203,7 @@ function CycleTarget({
           title="Preview/authoring speed — the consuming app determines real in-game playback. Pinned per set because the atlas needs every direction to agree."
           className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white disabled:opacity-60"
         >
-          {FPS_OPTIONS.map((n) => <option key={n} value={n}>{n} fps</option>)}
+          {fpsOptionsFor(target.fps).map((n) => <option key={n} value={n}>{n} fps</option>)}
         </select>
       </label>
       <span
@@ -262,13 +270,6 @@ function DirectionCard({
         <StripLoop recordId={recordId} stripPreview={run.stripPreview} />
       )}
 
-      {/* The server dropped this run's stripPath because its packed strip is
-          gone on disk (stripMissing) — render an explicit indicator in place of
-          the blank loop, pointing at the recovery that actually works for this
-          direction's state: a finalized set must be unlocked first, an
-          unapproved candidate can just be regenerated (the Generate button
-          below). Deliberately not the status==='error' path, which offers a
-          "Retry postprocess" that 409s for a finalized/approved run. */}
       {/* This direction is packaged at a geometry the set is no longer targeting
           (#2985) — surfaced HERE rather than at atlas-compile time, which used to
           be the first and only place a ragged set showed up. The remedy depends
@@ -286,6 +287,13 @@ function DirectionCard({
         </p>
       )}
 
+      {/* The server dropped this run's stripPath because its packed strip is
+          gone on disk (stripMissing) — render an explicit indicator in place of
+          the blank loop, pointing at the recovery that actually works for this
+          direction's state: a finalized set must be unlocked first, an
+          unapproved candidate can just be regenerated (the Generate button
+          below). Deliberately not the status==='error' path, which offers a
+          "Retry postprocess" that 409s for a finalized/approved run. */}
       {(approved || candidate) && run?.stripMissing && (
         <p className="text-[10px] text-port-error border border-port-error/60 rounded px-1.5 py-1 leading-tight">
           Walk strip missing on disk — {finalized ? 'unlock the set to regenerate this direction' : 'regenerate to repack it'}.
