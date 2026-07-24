@@ -1,11 +1,11 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { PersonStanding, MapPin, Package, Download, X, RefreshCw, Plus, LayoutGrid, Search, Images, Scissors } from 'lucide-react';
+import { PersonStanding, Download, X, RefreshCw, Plus, LayoutGrid, Search, Images, Scissors } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal.jsx';
 import {
   listSpriteRecords, getSpriteRecord, importSprites, createSpriteRecord,
-  generateSpriteWalk, generateSpriteReference,
+  generateSpriteWalk, generateSpriteReference, listSpriteThumbnails,
 } from '../services/apiSprites.js';
 import { getApps } from '../services/apiApps.js';
 import { getSettings } from '../services/apiSystem.js';
@@ -16,35 +16,16 @@ import WalkWorkflow, { WALK_DURATIONS } from '../components/sprites/WalkWorkflow
 import LoopTrimmer from '../components/sprites/LoopTrimmer.jsx';
 import PublishWorkflow from '../components/sprites/PublishWorkflow.jsx';
 import AssetCollection from '../components/sprites/AssetCollection.jsx';
+import SpriteCatalog from '../components/sprites/SpriteCatalog.jsx';
+import SpriteDetailHeader from '../components/sprites/SpriteDetailHeader.jsx';
 import TabPills from '../components/ui/TabPills.jsx';
 import useDrawerTab from '../hooks/useDrawerTab.js';
 import useClickOutside from '../hooks/useClickOutside.js';
 import { useAsyncAction } from '../hooks/useAsyncAction.js';
 import { useSpritePendingRenders } from '../hooks/useSpritePendingRenders.js';
 import { buildCollectionActions } from '../lib/spriteCollectionActions.js';
-import {
-  groupSpriteRecords, filterSpriteRecords, groupKeyForKind, NEW_SPRITE_KINDS,
-} from '../lib/spriteRecordGroups.js';
-import { timeAgo } from '../utils/formatters.js';
-
-// Per-group sidebar icons — the pure grouping lib keys each group; the page
-// owns the lucide component mapping so the lib stays React-free.
-const GROUP_ICONS = { characters: PersonStanding, places: MapPin, objects: Package };
-
-// Landing on /sprites with no id auto-opens the most recently touched sprite so
-// the manager is never a cold empty pane (the user's ask). Prefer characters —
-// the reference/walk/publish workflows are character-only, so that's the sprite
-// someone most likely wants in front of them — and only fall back to the newest
-// record of any kind when the library holds no characters. `updatedAt` is bumped
-// on every create/patch/import; `createdAt` is the floor for a never-patched
-// record. A record missing both sorts to 0 rather than NaN-poisoning the reduce.
-function pickMostRecentSprite(records) {
-  if (!Array.isArray(records) || records.length === 0) return null;
-  const ts = (r) => Date.parse(r?.updatedAt || r?.createdAt || '') || 0;
-  const characters = records.filter((r) => r.kind === 'character');
-  const pool = characters.length ? characters : records;
-  return pool.reduce((best, r) => (ts(r) > ts(best) ? r : best), pool[0]);
-}
+import { filterSpriteRecords, NEW_SPRITE_KINDS } from '../lib/spriteRecordGroups.js';
+import { groupIconForKind } from '../components/sprites/spriteGroupIcons.js';
 
 // Sprite Manager: library over imported production sprites — characters
 // (reference sets, walk strips, runtime atlases) and props atlas families —
@@ -250,8 +231,8 @@ function NewSpritePanel({ onCreated }) {
 // Header autocomplete (#2932, reworked): a compact combobox that filters the
 // library by name/id/kind and navigates on Enter/click. It lives in the page
 // header rather than a sidebar, so it renders only the search field + its
-// suggestion popover — full browsing moved to the Catalog modal below, because
-// the library is expected to grow well past a scannable sidebar list.
+// suggestion popover — full browsing lives in the Library catalog (the bare
+// `/sprites` route), which scales past a scannable sidebar list.
 function SpriteSearch({ records, onSelect }) {
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -326,7 +307,7 @@ function SpriteSearch({ records, onSelect }) {
           {suggestions.length === 0 ? (
             <li className="px-3 py-2 text-xs text-gray-500">No matches</li>
           ) : suggestions.map((r, i) => {
-            const Icon = GROUP_ICONS[groupKeyForKind(r.kind)] || Package;
+            const Icon = groupIconForKind(r.kind);
             return (
               <li key={r.id} id={`sprite-opt-${r.id}`} role="option" aria-selected={i === activeIndex}>
                 <button
@@ -348,85 +329,6 @@ function SpriteSearch({ records, onSelect }) {
   );
 }
 
-// Full-library catalog viewer. Replaces the old "Browse all" sidebar disclosure
-// (which didn't scale) with a searchable, grouped grid of every sprite. Picking
-// a card navigates to it and closes — this is how the user swaps the active
-// sprite when they don't remember its name to type into the header search.
-function CatalogModal({ open, onClose, records, selectedId, onSelect }) {
-  const [query, setQuery] = useState('');
-  const filtered = useMemo(() => filterSpriteRecords(records, query), [records, query]);
-  const groups = useMemo(() => groupSpriteRecords(filtered), [filtered]);
-
-  // The caller mounts this only while open (`{catalogOpen && <CatalogModal/>}`),
-  // so a fresh mount already starts with an empty filter — no stale-query reset
-  // needed, and the filter/group memos never run while the catalog is closed.
-  return (
-    <Modal open={open} onClose={onClose} size="3xl" ariaLabel="Sprite catalog" align="top">
-      <div className="bg-port-card border border-port-border rounded-lg flex flex-col max-h-[85vh]">
-        <header className="flex items-center gap-3 px-4 py-3 border-b border-port-border shrink-0">
-          <LayoutGrid className="w-5 h-5 text-port-accent shrink-0" />
-          <h2 className="text-base font-semibold text-white">Sprite Catalog</h2>
-          <span className="text-xs text-gray-500">{records.length} total</span>
-          <div className="relative ml-auto w-40 sm:w-56">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
-            <label htmlFor="sprite-catalog-search" className="sr-only">Filter catalog</label>
-            <input
-              id="sprite-catalog-search"
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Filter…"
-              className="w-full bg-port-bg border border-port-border rounded pl-8 pr-3 py-1.5 text-sm text-white"
-            />
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close catalog"
-            className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-port-border/50 shrink-0"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </header>
-        <div className="flex-1 overflow-y-auto p-4 space-y-5">
-          {filtered.length === 0 ? (
-            <p className="text-sm text-gray-500">No sprites match “{query}”.</p>
-          ) : groups.map((g) => {
-            const Icon = GROUP_ICONS[g.key] || Package;
-            return (
-              <div key={g.key}>
-                <h3 className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-gray-500 mb-2">
-                  <Icon className="w-3.5 h-3.5" /> {g.label} ({g.records.length})
-                </h3>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-                  {g.records.map((r) => (
-                    <button
-                      key={r.id}
-                      type="button"
-                      onClick={() => { onSelect(r.id); onClose(); }}
-                      aria-current={selectedId === r.id}
-                      className={`text-left p-3 rounded-lg border transition-colors ${selectedId === r.id ? 'bg-port-accent/20 border-port-accent text-white' : 'bg-port-bg border-port-border text-gray-300 hover:border-gray-500'}`}
-                    >
-                      <span className="block font-medium truncate">{r.name}</span>
-                      <span className="block text-xs text-gray-500 truncate">
-                        {r.kind} · {r.status}
-                        {r.chromaKey ? ` · key ${r.chromaKey}` : ''}
-                      </span>
-                      <span className="block text-xs text-gray-600 mt-0.5">
-                        {r.updatedAt || r.createdAt ? `updated ${timeAgo(r.updatedAt || r.createdAt)}` : ''}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
 export default function Sprites() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -436,7 +338,10 @@ export default function Sprites() {
   // failure — the record may be fine, offer a retry instead of lying).
   const [detailState, setDetailState] = useState('idle');
   const [retryTick, setRetryTick] = useState(0);
-  const [catalogOpen, setCatalogOpen] = useState(false);
+  // Catalog card thumbnails: id → record-relative locked main-reference path.
+  // Only characters with a frozen main reference have one; everything else
+  // falls back to its group icon.
+  const [thumbs, setThumbs] = useState(() => new Map());
   const goto = useCallback((rid) => navigate(`/sprites/${rid}`), [navigate]);
 
   const refresh = useCallback(() => {
@@ -445,16 +350,42 @@ export default function Sprites() {
     listSpriteRecords().then(setRecords).catch(() => setRecords([]));
   }, []);
 
-  // Landing on the bare /sprites route auto-opens the most recent sprite so the
-  // manager never presents a cold empty pane (the user's ask). Only fires when
-  // there's no id AND the library is non-empty; `replace` keeps the redirect out
-  // of history so Back doesn't bounce between /sprites and the sprite. An
-  // invalid :id lands in the 'missing' state below, not here, so no loop.
+  // Catalog thumbnails are only shown on the Library view (`!id`), and
+  // listSpriteThumbnails is an O(records) disk scan — so fetch them when the
+  // catalog is on screen, NOT from refresh() (which rides walk/reference render
+  // polling on the detail page). Best-effort: a failed fetch just falls back to
+  // icon placeholders. Re-runs whenever we return to the catalog, so a main
+  // reference locked (or an asset added) on a detail page shows on the way back.
   useEffect(() => {
-    if (id || !Array.isArray(records) || records.length === 0) return;
-    const recent = pickMostRecentSprite(records);
-    if (recent) navigate(`/sprites/${recent.id}`, { replace: true });
-  }, [id, records, navigate]);
+    if (id) return undefined;
+    let stale = false;
+    listSpriteThumbnails({ silent: true })
+      .then((thumbList) => { if (!stale) setThumbs(new Map((thumbList || []).map((t) => [t.id, t.path]))); })
+      .catch(() => {});
+    return () => { stale = true; };
+  }, [id]);
+
+  // `/sprites` now lands on the Library catalog (the user's ask — no more
+  // auto-opening the most recent sprite). Records are reached by picking a card
+  // or the header search, both of which navigate to `/sprites/:id`.
+
+  // Reactive list updates for record CRUD from the catalog — rename patches the
+  // matching row (and the open detail, if it's the same record) in place;
+  // delete drops it. No full refetch (project convention). The stale thumbs
+  // entry needs no pruning — a deleted record is filtered out of `records`, so
+  // no card renders for it and its thumbnail is never read again.
+  const onRecordRenamed = useCallback((updated) => {
+    setRecords((prev) => (prev || []).map((r) => (r.id === updated.id ? { ...r, ...updated } : r)));
+    setDetail((prev) => (prev?.record?.id === updated.id
+      ? { ...prev, record: { ...prev.record, ...updated } }
+      : prev));
+  }, []);
+  const onRecordDeleted = useCallback((deletedId) => {
+    setRecords((prev) => (prev || []).filter((r) => r.id !== deletedId));
+    toast.success('Sprite deleted');
+    // Deleting the sprite you're viewing drops you back to the catalog.
+    if (id === deletedId) navigate('/sprites');
+  }, [id, navigate]);
 
   // Stable identity — ReferenceWorkflow's poll effect depends on it, and an
   // inline arrow would tear down/recreate the interval every parent render.
@@ -628,46 +559,33 @@ export default function Sprites() {
   return (
     <div className="space-y-4">
       {/* Header owns identity (left) plus every library-wide control (right):
-          search, the Catalog viewer, and the create/import actions — no left
-          sidebar, so the detail pane below runs full width. */}
+          a "Library" link back to the catalog (only while a sprite is open),
+          search, and the create/import actions — no left sidebar, so the
+          catalog/detail pane below runs full width. */}
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-3 mr-auto">
           <PersonStanding className="w-6 h-6 text-port-accent" />
           <h1 className="text-2xl font-bold text-white">Sprite Manager</h1>
         </div>
-        {records?.length > 0 && (
-          <>
-            <SpriteSearch records={records} onSelect={goto} />
-            <button
-              type="button"
-              onClick={() => setCatalogOpen(true)}
-              className="flex items-center gap-2 px-3 py-1.5 bg-port-card border border-port-border hover:border-port-accent text-gray-300 rounded text-sm"
-            >
-              <LayoutGrid className="w-4 h-4" /> Catalog
-            </button>
-          </>
+        {id && (
+          <button
+            type="button"
+            onClick={() => navigate('/sprites')}
+            className="flex items-center gap-2 px-3 py-1.5 bg-port-card border border-port-border hover:border-port-accent text-gray-300 rounded text-sm"
+          >
+            <LayoutGrid className="w-4 h-4" /> Library
+          </button>
         )}
+        {records?.length > 0 && <SpriteSearch records={records} onSelect={goto} />}
         <NewSpritePanel onCreated={(record) => { refresh(); navigate(`/sprites/${record.id}`); }} />
         {/* Re-import while a sprite is open must refresh the open detail too,
             not just the library list. */}
         <ImportPanel onImported={() => { refresh(); if (id) setRetryTick((t) => t + 1); }} />
       </div>
-      {/* Mounted only while open so its filter/group memos never run behind a
-          closed modal (and a fresh mount starts with an empty filter). */}
-      {catalogOpen && (
-        <CatalogModal
-          open
-          onClose={() => setCatalogOpen(false)}
-          records={records || []}
-          selectedId={id}
-          onSelect={goto}
-        />
-      )}
       <div>
         <section className="min-w-0">
           {!id ? (
-            // No id yet: loading the list, an empty library, or the one-frame
-            // gap before the auto-redirect effect opens the most recent sprite.
+            // The bare /sprites route IS the Library catalog now.
             records === null ? (
               <p className="text-sm text-gray-500">Loading…</p>
             ) : records.length === 0 ? (
@@ -675,12 +593,18 @@ export default function Sprites() {
                 No sprites yet. Import a production set from a sprite-pipeline checkout to get started.
               </p>
             ) : (
-              <p className="text-sm text-gray-500">Opening the most recent sprite…</p>
+              <SpriteCatalog
+                records={records}
+                thumbs={thumbs}
+                onOpen={goto}
+                onRenamed={onRecordRenamed}
+                onDeleted={onRecordDeleted}
+              />
             )
           ) : detailState === 'missing' ? (
             <div className="text-sm text-gray-400">
               Sprite not found.{' '}
-              <button onClick={() => setCatalogOpen(true)} className="text-port-accent hover:underline">Browse the catalog</button>
+              <button onClick={() => navigate('/sprites')} className="text-port-accent hover:underline">Back to the library</button>
             </div>
           ) : detailState === 'error' ? (
             <div className="text-sm text-gray-400">
@@ -691,32 +615,17 @@ export default function Sprites() {
             <p className="text-sm text-gray-500">Loading…</p>
           ) : (
             <div className="space-y-4">
-              <div>
-                <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                  {(() => {
-                    const Icon = GROUP_ICONS[groupKeyForKind(detail.record.kind)] || Package;
-                    return <Icon className="w-5 h-5" />;
-                  })()}
-                  {detail.record.name}
-                </h2>
-                <p className="text-xs text-gray-500">
-                  {detail.record.kind} · {detail.record.status}
-                  {detail.record.chromaKey && (
-                    <>
-                      {' · chroma key '}
-                      <span className="inline-block w-3 h-3 rounded-sm align-middle border border-port-border" style={{ backgroundColor: detail.record.chromaKey }} />{' '}
-                      {detail.record.chromaKey}
-                    </>
-                  )}
-                  {detail.record.importedFrom?.importedAt && ` · imported ${timeAgo(detail.record.importedFrom.importedAt)}`}
-                </p>
-                {detail.record.spec?.archetype && (
-                  <p className="text-xs text-gray-500">archetype: {detail.record.spec.archetype}</p>
-                )}
-              </div>
-              {/* Library / Loop Trimmer workspaces (#2933). The trimmer is
+              <SpriteDetailHeader
+                record={detail.record}
+                onRenamed={onRecordRenamed}
+                onDeleted={onRecordDeleted}
+              />
+              {/* Assets / Loop Trimmer workspaces (#2933). The trimmer is
                   character-only (it trims packaged walk runs), so non-character
-                  records skip the tab bar and always show their asset library. */}
+                  records skip the tab bar and always show their asset library.
+                  The tab id stays 'library' so existing `?spriteTab=library`
+                  deep links keep working; only its label reads "Assets" now
+                  that "Library" means the top-level catalog. */}
               {detail.record.kind === 'character' && (
                 <TabPills
                   variant="pills"
@@ -725,7 +634,7 @@ export default function Sprites() {
                   mobileSelectId="sprite-workspace-tab"
                   ariaLabel="Sprite workspace"
                   tabs={[
-                    { id: 'library', label: 'Library', icon: Images },
+                    { id: 'library', label: 'Assets', icon: Images },
                     { id: 'trimmer', label: 'Loop Trimmer', icon: Scissors },
                   ]}
                   activeTab={spriteTab}

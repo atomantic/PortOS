@@ -53,7 +53,7 @@ vi.mock('../settings.js', () => ({ getSettings: async () => settings }));
 const records = await import('./records.js');
 const {
   getReferenceSet, startReferenceGeneration, attachReferenceCandidate, lockReference, patchSpriteRecord,
-  listReferenceSources, forkSprite,
+  listReferenceSources, listSpriteThumbnails, forkSprite,
 } = await import('./reference.js');
 
 let seq = 0;
@@ -506,6 +506,40 @@ describe('listReferenceSources', () => {
     const entry = sources.find((s) => s.id === locked);
     expect(entry).toMatchObject({ id: locked, name: 'Locked One', kind: 'character' });
     expect(entry.path).toContain(`${locked}-walk-south-v1.png`);
+  });
+});
+
+describe('listSpriteThumbnails', () => {
+  it('uses a locked character main, an on-disk asset for other kinds, and omits imageless records', async () => {
+    // Character with a locked main → its canonical main-reference path (no
+    // asset scan needed).
+    const hero = newId();
+    await createCharacter(hero, { name: 'Hero One' });
+    await lockMain(hero);
+
+    // A place with an on-disk previewable image → that asset.
+    const place = 'saloon-thumb';
+    await records.createRecord({ kind: 'place', name: 'Saloon' }, place);
+    await mkdir(join(TEST_ROOT, 'sprites', place), { recursive: true });
+    await writeCandidatePng(join(TEST_ROOT, 'sprites', place, 'establishing.png'));
+
+    // A character with NO locked main but an asset → falls back to the asset.
+    const drafted = newId();
+    await createCharacter(drafted, { name: 'Draft Two' });
+    await mkdir(join(TEST_ROOT, 'sprites', drafted), { recursive: true });
+    await writeCandidatePng(join(TEST_ROOT, 'sprites', drafted, 'sketch.png'));
+
+    // An object with no image at all → omitted entirely.
+    const empty = 'crate-thumb';
+    await records.createRecord({ kind: 'object', name: 'Crate' }, empty);
+
+    const thumbs = await listSpriteThumbnails();
+    const byId = Object.fromEntries(thumbs.map((t) => [t.id, t.path]));
+
+    expect(byId[hero]).toContain(`${hero}-walk-south-v1.png`);
+    expect(byId[place]).toBe('establishing.png');
+    expect(byId[drafted]).toBe('sketch.png');
+    expect(byId).not.toHaveProperty(empty);
   });
 });
 

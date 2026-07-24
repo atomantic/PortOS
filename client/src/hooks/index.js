@@ -95,6 +95,7 @@ export * from './useModelDownloadStatus.js';
 // === Media (annotations, completion, attachments) ===
 export * from './useMediaAnnotations.js';
 export * from './useSpritePendingRenders.js';
+export { default as useSpriteRecordCrud } from './useSpriteRecordCrud.js';
 export * from './useMediaCompletionRefresh.js';
 export * from './useOpenClawAttachments.js';
 
