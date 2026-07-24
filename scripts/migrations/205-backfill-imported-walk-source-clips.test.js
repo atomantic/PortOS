@@ -23,14 +23,18 @@ const CLIP_BYTES = 'CLIP-BYTES';
 
 // One run record in the shape the importer leaves behind: no `id`, every
 // embedded path anchored at the SOURCE repo root.
-async function writeRun(base, runId, { sourceVideoPath, clipAt } = {}) {
+// `native: true` instead stamps the shape PortOS writes for its own runs — an
+// `id` and a record-relative clip path — which the migration must NOT count as
+// awaiting a re-import.
+async function writeRun(base, runId, { sourceVideoPath, clipAt, native = false } = {}) {
   const runDir = join(sprites(), ID, base, runId);
   await mkdir(join(runDir, 'generated'), { recursive: true });
   await writeFile(join(runDir, 'animation-run.json'), JSON.stringify({
     kind: 'grok-walk-animation-run',
-    status: 'approved',
+    status: native ? 'rendering' : 'approved',
     characterId: ID,
     direction: 'south',
+    ...(native ? { id: runId } : {}),
     ...(sourceVideoPath ? { sourceVideoPath } : {}),
   }));
   if (clipAt) {
@@ -70,8 +74,13 @@ describe('migration 205 — backfill imported walk source clips', () => {
       clipAt: 'runs/walk-north-dddd4444/generated/source-video.mp4',
     });
 
+    // Run E: a NATIVE run still rendering — no clip yet, and a re-import would
+    // not produce one, so it must stay out of the "needs a re-import" tally.
+    await writeRun('runs', 'walk-north-east-eeee5555', { native: true });
+
     const result = await migration.up({ rootDir: ROOT });
-    expect(result).toEqual({ ok: true, migrated: 1 });
+    // Only run C — the imported, clipless one — counts as missing.
+    expect(result).toEqual({ ok: true, migrated: 1, missing: 1 });
 
     const clipA = join(sprites(), ID, 'runs/walk-south-aaaa1111/generated/source-video.mp4');
     expect(await readFile(clipA, 'utf8')).toBe(CLIP_BYTES);
@@ -93,8 +102,8 @@ describe('migration 205 — backfill imported walk source clips', () => {
     await writeRun('runs', 'walk-south-aaaa1111', {
       clipAt: 'grok/walk-south-aaaa1111/generated/source-video.mp4',
     });
-    expect(await migration.up({ rootDir: ROOT })).toEqual({ ok: true, migrated: 1 });
-    expect(await migration.up({ rootDir: ROOT })).toEqual({ ok: true, migrated: 0 });
+    expect(await migration.up({ rootDir: ROOT })).toEqual({ ok: true, migrated: 1, missing: 0 });
+    expect(await migration.up({ rootDir: ROOT })).toEqual({ ok: true, migrated: 0, missing: 0 });
   });
 
   it('no-ops on an install with no sprites tree', async () => {

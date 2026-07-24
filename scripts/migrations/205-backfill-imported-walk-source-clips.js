@@ -140,6 +140,8 @@ export default {
     if (missing > 0) {
       console.log(`🎞️ migration 205: ${missing} walk run(s) still have no source clip on disk — their clips only exist in the source tree they were imported from. Re-run the sprite import against that tree to bring them across (the importer now copies clips); until then those directions cannot be re-derived at a new frame count.`);
     }
-    return { ok: true, migrated: copied };
+    // `missing` rides in the result (not just the log) so the imported-vs-native
+    // classification above is assertable rather than log-only.
+    return { ok: true, migrated: copied, missing };
   },
 };

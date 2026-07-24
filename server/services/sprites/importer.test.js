@@ -387,13 +387,13 @@ describe('walk-run source clips', () => {
     // the manifest value that names it resolves after import.
     expect(readFileSync(join(drifterDir(), 'runs/run-a/generated/source-video.mp4'), 'utf8')).toBe(CLIP_BYTES);
     expect(existsSync(join(drifterDir(), 'runs/run-a/animation-run.json'))).toBe(true);
-    expect(existsSync(join(drifterDir(), 'runs/run-a/animation-run.json'))).toBe(true);
     expect(existsSync(join(drifterDir(), 'runs/run-a/generated/south-strip.png'))).toBe(true);
     expect(existsSync(join(drifterDir(), 'grok/run-a'))).toBe(false);
     // ~5× the clip's bytes and re-extractable on demand — still excluded.
     expect(existsSync(join(drifterDir(), 'runs/run-a/generated/raw/frame-000.png'))).toBe(false);
-    // south + west run records, the south clip, and the west clip verify; the
-    // east clip doesn't (its bytes disagree with the hash its manifest pins).
+    // All three run records verify (each entry pins one) plus the south clip.
+    // The east clip does NOT — its bytes disagree with the hash its manifest
+    // pins — and the west manifest pins no clip hash at all.
     expect(drifter.verified).toBe(4);
   });
 
