@@ -90,6 +90,12 @@ describe('regenerateFor — reference anchors', () => {
     r.onClick();
   });
 
+  it('exposes the anchor direction so the card can bind a shared correction note (#2964)', () => {
+    const r = build({ reference: { manifest: { anchors: [{ direction: 'east', status: 'pending' }] } } })
+      .regenerateFor(CANDIDATE_EAST);
+    expect(r.direction).toBe('east');
+  });
+
   it('disables the re-roll once the anchor is locked — locks are irreversible', () => {
     expect(build().regenerateFor(CANDIDATE_EAST).disabled).toBe(true);
   });

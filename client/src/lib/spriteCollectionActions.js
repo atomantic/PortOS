@@ -39,7 +39,9 @@ const WALK_OUTPUT_ROLES = new Set(['strip', 'animation', 'frame']);
  * @param mode              the workflow-selected image backend id, threaded
  *                          into the anchor re-roll so it matches the workflow
  * @returns `{ regenerateFor(asset), trimFor(asset) }`, each returning null for
- *          an asset it can't act on.
+ *          an asset it can't act on. A reference regenerate also carries the
+ *          asset's `direction` so the caller can bind an inline correction note
+ *          to the shared per-direction corrections state (#2964).
  */
 export function buildCollectionActions({
   detail, walkPending = {}, referencePending = {},
@@ -95,6 +97,10 @@ export function buildCollectionActions({
       const pending = Boolean(referencePending[direction]);
       return {
         kind: 'reference',
+        // Surfaced so the asset card can bind an inline correction note to the
+        // shared per-direction corrections state (#2964) — the same note the
+        // ReferenceWorkflow anchor grid shows — before firing generateAnchor.
+        direction,
         pending,
         disabled: !hasBackend || locked || pending,
         title: !hasBackend
