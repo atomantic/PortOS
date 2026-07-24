@@ -155,9 +155,11 @@ export default function MediaHistory() {
     }
   };
 
+  // "Send to 3D" opens the image-to-3D workspace (/media/3d) with this render as
+  // the source image — deep-linked via ?image= (URL is the source of truth).
   const handleSendToThreejs = (item) => {
     if (item?.kind !== 'image' || !item.filename) return;
-    navigate(`/media/threejs?image=${encodeURIComponent(item.filename)}`);
+    navigate(`/media/3d?image=${encodeURIComponent(item.filename)}`);
   };
 
   return (
