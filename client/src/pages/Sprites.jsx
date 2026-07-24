@@ -18,6 +18,7 @@ import WalkWorkflow, {
 import LoopTrimmer from '../components/sprites/LoopTrimmer.jsx';
 import PublishWorkflow from '../components/sprites/PublishWorkflow.jsx';
 import AssetCollection from '../components/sprites/AssetCollection.jsx';
+import { correctionPromptPayload } from '../components/sprites/CorrectionNote.jsx';
 import SpriteCatalog from '../components/sprites/SpriteCatalog.jsx';
 import SpriteDetailHeader from '../components/sprites/SpriteDetailHeader.jsx';
 import TabPills from '../components/ui/TabPills.jsx';
@@ -557,20 +558,18 @@ export default function Sprites() {
   // buildCollectionActions (#2938) so a re-roll uses the same backend the
   // Reference workflow would, not the server default. Falls back to the
   // page-level selection when a caller omits it. The direction's shared
-  // correction (#2964) rides along as `correctionPrompt` so the asset-card
-  // re-roll sends the SAME guidance the ReferenceWorkflow anchor re-roll does.
-  const generateAnchor = useCallback((direction, mode) => {
-    const correction = corrections[direction]?.trim();
-    return submitRender(
-      refBegin, refResolve, refCancel, direction,
-      () => generateSpriteReference(id, {
-        target: direction,
-        ...((mode || imageMode) ? { mode: mode || imageMode } : {}),
-        ...(correction ? { correctionPrompt: correction } : {}),
-      }, { silent: true }),
-      `Failed to queue ${direction} render`,
-    );
-  }, [id, imageMode, corrections, refBegin, refResolve, refCancel, submitRender]);
+  // correction (#2964) rides along as `correctionPrompt` via the same
+  // `correctionPromptPayload` fragment the ReferenceWorkflow anchor re-roll
+  // uses, so the asset-card re-roll sends byte-identical guidance.
+  const generateAnchor = useCallback((direction, mode) => submitRender(
+    refBegin, refResolve, refCancel, direction,
+    () => generateSpriteReference(id, {
+      target: direction,
+      ...((mode || imageMode) ? { mode: mode || imageMode } : {}),
+      ...correctionPromptPayload(corrections, direction),
+    }, { silent: true }),
+    `Failed to queue ${direction} render`,
+  ), [id, imageMode, corrections, refBegin, refResolve, refCancel, submitRender]);
 
   const collectionActions = useMemo(() => {
     if (detail?.record?.kind !== 'character') return null;

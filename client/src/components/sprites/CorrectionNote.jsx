@@ -10,6 +10,20 @@
  * `onChange` receives a setState-style updater so it composes with the
  * page-owned `setCorrections` while preserving sibling directions' notes.
  */
+/**
+ * Build the anchor re-roll request fragment for a direction's shared correction
+ * (#2964). Returns `{ correctionPrompt }` only when the note is non-empty after
+ * trimming, else `{}` — so an absent or whitespace-only note is omitted from the
+ * request, matching the server's optional `correctionPrompt`. BOTH re-roll
+ * surfaces spread this (the ReferenceWorkflow anchor grid and the asset card via
+ * Sprites' `generateAnchor`), so they send byte-identical payloads — the single
+ * source guarantee at the request layer, not just the input layer.
+ */
+export function correctionPromptPayload(corrections, direction) {
+  const note = corrections?.[direction]?.trim();
+  return note ? { correctionPrompt: note } : {};
+}
+
 export default function CorrectionNote({ direction, value, onChange, className = '' }) {
   return (
     <textarea

@@ -10,7 +10,7 @@ import SpritePreview from './SpritePreview.jsx';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker.jsx';
 import SpriteReferencePicker from './SpriteReferencePicker.jsx';
 import ForkSpriteModal from './ForkSpriteModal.jsx';
-import CorrectionNote from './CorrectionNote.jsx';
+import CorrectionNote, { correctionPromptPayload } from './CorrectionNote.jsx';
 
 // Reference workflow (issue #2896): generate main-reference candidates from
 // text + optional uploaded design image, freeze the approved main, then
@@ -148,7 +148,6 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
 
   const generate = async (target) => {
     beginSubmit(target);
-    const correction = corrections[target]?.trim();
     try {
       const { jobId } = await generateSpriteReference(recordId, {
         target,
@@ -159,9 +158,7 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
           ...(refSource?.type === 'gallery' ? { initImageGalleryFile: refSource.filename } : {}),
           ...(refSource?.type === 'sprite' ? { initImageSpriteId: refSource.id } : {}),
           ...(refSource ? { initImageStrength: strength } : {}),
-        } : {
-          ...(correction ? { correctionPrompt: correction } : {}),
-        }),
+        } : correctionPromptPayload(corrections, target)),
       }, { silent: true });
       resolveSubmit(target, jobId);
       if (target === 'main') clearSource();
