@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import {
+  render, screen, act, fireEvent,
+} from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 // Coverage for the walk viewer's loop preview (#2924). The load-bearing behavior:
@@ -13,10 +15,11 @@ vi.mock('../../services/apiSprites.js', () => ({
   postprocessSpriteWalk: vi.fn(() => Promise.resolve({})),
   unlockSpriteWalk: vi.fn(() => Promise.resolve({})),
   reopenSpriteWalk: vi.fn(() => Promise.resolve({})),
+  setSpriteWalkTarget: vi.fn(() => Promise.resolve({})),
 }));
 
 import WalkWorkflow from './WalkWorkflow';
-import { postprocessSpriteWalk, reopenSpriteWalk } from '../../services/apiSprites.js';
+import { postprocessSpriteWalk, reopenSpriteWalk, setSpriteWalkTarget } from '../../services/apiSprites.js';
 
 const CELL_PX = 96;
 
@@ -210,17 +213,26 @@ describe('WalkWorkflow loop trimmer link', () => {
 
 // Render the workflow with a single run of the given shape. Router-wrapped so
 // the card's <Link> (shown while rendering) resolves in every case.
-const renderRun = (run) => render(
+// `walkTarget` is the server-resolved set-level cycle target (#2985); tests that
+// care about provenance/drift override it, the rest get the plain default.
+const renderRun = (run, { walkTarget, onChanged = vi.fn() } = {}) => render(
   <MemoryRouter>
     <WalkWorkflow
       record={{ id: 'example-walker' }}
       reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked' }] } }}
-      walk={{ runs: [run], selection: { directions: {} }, walkSet: null }}
+      walk={{
+        runs: [run],
+        selection: { directions: {} },
+        walkSet: null,
+        walkTarget: walkTarget || {
+          track: 'walk', frameCount: 12, fps: 10, source: 'default', drift: [],
+        },
+      }}
       renders={noRenders()}
       duration={2}
       onDurationChange={vi.fn()}
       onGenerate={vi.fn()}
-      onChanged={vi.fn()}
+      onChanged={onChanged}
     />
   </MemoryRouter>,
 );
@@ -269,16 +281,94 @@ describe('WalkWorkflow observable render', () => {
 });
 
 describe('WalkWorkflow authoring controls', () => {
-  it('offers Frames, Speed, and grok-real Clip options plus a cycle readout', () => {
+  it('offers a set-level Cycle target, Preview speed, and grok-real Clip options', () => {
     renderRun({ id: 'walk-east-deadbeef', direction: 'east', status: 'error', postprocessError: 'x' });
     // Clip length is now just grok's real 6s/10s options (shorter was a no-op).
     const clip = screen.getByRole('combobox', { name: /Clip/ });
     expect([...clip.options].map((o) => o.value)).toEqual(['6', '10']);
-    // Frame count + speed controls exist…
-    expect(screen.getByRole('combobox', { name: /Frames/ })).toBeTruthy();
-    expect(screen.getByRole('combobox', { name: /Speed/ })).toBeTruthy();
+    // Frame count + speed are ONE set-level target now (#2985), not per-render
+    // inputs that can drift between directions.
+    expect(screen.getByRole('combobox', { name: /Cycle target/ })).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: /Preview speed/ })).toBeTruthy();
     // …and the cycle-duration readout reflects the defaults (12f / 10fps = 1.20s).
     expect(screen.getByText(/1\.20s \/ cycle/)).toBeTruthy();
+  });
+
+  it('labels the target with where the value came from', () => {
+    renderRun(
+      { id: 'walk-east-deadbeef', direction: 'east', status: 'error', postprocessError: 'x' },
+      { walkTarget: { frameCount: 8, fps: 12, source: 'derived', drift: [] } },
+    );
+    expect(screen.getByText('from the first approved direction')).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: /Cycle target/ }).value).toBe('8');
+  });
+
+  it('renders the target read-only and names the app when the publish binding pins it', () => {
+    renderRun(
+      { id: 'walk-east-deadbeef', direction: 'east', status: 'error', postprocessError: 'x' },
+      {
+        walkTarget: {
+          frameCount: 16, fps: 10, source: 'app', frameCountLocked: true, appId: 'example-game', drift: [],
+        },
+      },
+    );
+    expect(screen.getByRole('combobox', { name: /Cycle target/ }).disabled).toBe(true);
+    expect(screen.getByText(/locked by the bound app \(example-game\)/)).toBeTruthy();
+    // fps is not in the contract, so it stays editable.
+    expect(screen.getByRole('combobox', { name: /Preview speed/ }).disabled).toBe(false);
+  });
+
+  it('saves a new target to the set and refreshes', async () => {
+    const onChanged = vi.fn();
+    renderRun(
+      { id: 'walk-east-deadbeef', direction: 'east', status: 'error', postprocessError: 'x' },
+      { onChanged },
+    );
+    const select = screen.getByRole('combobox', { name: /Cycle target/ });
+    await act(async () => {
+      fireEvent.change(select, { target: { value: '14' } });
+    });
+    expect(setSpriteWalkTarget).toHaveBeenCalledWith(
+      'example-walker', { frameCount: 14, fps: 10 }, { silent: true },
+    );
+    expect(onChanged).toHaveBeenCalled();
+  });
+});
+
+describe('WalkWorkflow cycle-target drift', () => {
+  const DRIFTED = {
+    walkTarget: {
+      frameCount: 12,
+      fps: 10,
+      source: 'set',
+      drift: [{
+        direction: 'east', frameCount: 8, fps: 10, frameCountDrifts: true, fpsDrifts: false,
+      }],
+    },
+  };
+
+  it('badges a packaged direction that no longer matches the target', () => {
+    renderRun({
+      id: 'walk-east-abc12345',
+      direction: 'east',
+      status: 'candidate',
+      sourceVideoPath: 'runs/walk-east-abc12345/generated/source-video.mp4',
+      stripPreview: { stripPath: 'runs/walk-east-abc12345/generated/strip.png', frameCount: 8, fps: 10, cellWidth: 384, cellHeight: 384 },
+    }, DRIFTED);
+    expect(screen.getByText(/8f · re-derive to 12f @ 10fps/)).toBeTruthy();
+    expect(screen.getByText('reprocess it from its clip')).toBeTruthy();
+    // …and a set-level summary so it is visible before eight renders are spent.
+    expect(screen.getByText(/1 of 8 packaged directions differs from the 12f @ 10fps target/)).toBeTruthy();
+  });
+
+  it('points a drifted direction with no source clip at an import instead', () => {
+    renderRun({
+      id: 'imported-east',
+      direction: 'east',
+      status: 'candidate',
+      stripPreview: { stripPath: 'runs/imported-east/generated/strip.png', frameCount: 8, fps: 10, cellWidth: 384, cellHeight: 384 },
+    }, DRIFTED);
+    expect(screen.getByText('import this direction\'s source clip to re-derive it')).toBeTruthy();
   });
 });
 

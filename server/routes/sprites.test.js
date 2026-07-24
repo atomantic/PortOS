@@ -34,6 +34,12 @@ vi.mock('../services/sprites/walk.js', () => ({
   rerunWalkPostprocess: vi.fn(async () => ({ id: 'walk-east-0a1b2c3d', status: 'candidate' })),
   unlockWalkSet: vi.fn(async () => ({ runs: [], selection: { status: 'in-progress' }, walkSet: null })),
   reopenWalkDirection: vi.fn(async () => ({ runs: [], selection: { status: 'in-progress' }, walkSet: null })),
+  setWalkTarget: vi.fn(async () => ({
+    runs: [],
+    selection: { status: 'in-progress' },
+    walkSet: null,
+    walkTarget: { track: 'walk', frameCount: 14, fps: 8, source: 'set' },
+  })),
 }));
 
 vi.mock('../services/sprites/walkTrims.js', () => ({
@@ -414,6 +420,22 @@ describe('sprites routes', () => {
       .send({ direction: 'east', frameCount: 32 })).status).toBe(400);
     expect((await request(app).post('/api/sprites/pioneer/walk/generate')
       .send({ direction: 'east', fps: 99 })).status).toBe(400);
+  });
+
+  it('PUT /:id/walk/target pins the set-level cycle target and bounds it', async () => {
+    const r = await request(app).put('/api/sprites/pioneer/walk/target')
+      .send({ frameCount: 14, fps: 8 });
+    expect(r.status).toBe(200);
+    expect(r.body.walkTarget).toMatchObject({ frameCount: 14, fps: 8, source: 'set' });
+    expect(walk.setWalkTarget).toHaveBeenCalledWith('pioneer', { frameCount: 14, fps: 8 });
+    // Both knobs are required — the target is one atomic set-level decision.
+    expect((await request(app).put('/api/sprites/pioneer/walk/target')
+      .send({ frameCount: 14 })).status).toBe(400);
+    // …and both are range-checked against walkBounds.
+    expect((await request(app).put('/api/sprites/pioneer/walk/target')
+      .send({ frameCount: 32, fps: 8 })).status).toBe(400);
+    expect((await request(app).put('/api/sprites/pioneer/walk/target')
+      .send({ frameCount: 14, fps: 99 })).status).toBe(400);
   });
 
   it('POST /:id/walk/reopen validates the direction and delegates', async () => {

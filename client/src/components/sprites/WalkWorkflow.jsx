@@ -6,6 +6,7 @@ import {
 import toast from '../ui/Toast';
 import {
   approveSpriteWalk, postprocessSpriteWalk, unlockSpriteWalk, reopenSpriteWalk,
+  setSpriteWalkTarget,
 } from '../../services/apiSprites.js';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
@@ -35,9 +36,14 @@ export const WALK_DEFAULT_DURATION = 6;
 
 // Deterministic-postprocess authoring knobs (mirror walkPostprocess.js
 // WALK_DEFAULT_*/WALK_MIN/MAX_*). Frame count = how many frames the packed cycle
-// holds (more = smoother); fps = playback speed (lower = slower, more
+// holds (more = smoother); fps = preview playback speed (lower = slower, more
 // deliberate). Cycle duration = frameCount / fps seconds. Defaults pack a
 // fuller, slower cycle (12 frames @ 10fps = 1.2s) so a walk reads as a walk.
+//
+// Both are pinned at the SET level (#2985), not per render: a walk cycle is N
+// contiguous atlas columns × 8 direction rows, so every direction must agree or
+// the atlas cannot compile. The server resolves the target and refuses a
+// disagreeing render; these constants only seed the dropdown option lists.
 export const WALK_DEFAULT_FRAME_COUNT = 12;
 export const WALK_DEFAULT_FPS = 10;
 export const WALK_FRAME_COUNT_RANGE = { min: 6, max: 16 };
@@ -127,10 +133,94 @@ function StripLoop({ recordId, stripPreview }) {
   );
 }
 
+// Where the resolved target came from, in the user's words. Mirrors the
+// server's describeTargetSource so the label and the 409 message agree.
+const TARGET_SOURCE_LABEL = {
+  app: 'locked by the bound app',
+  set: 'set target',
+  derived: 'from the first approved direction',
+  default: 'default',
+};
+
+/**
+ * The SET-level cycle target (#2985) — one control for the whole walk, not a
+ * per-render slider that can drift between directions. Saving PUTs the target
+ * and refreshes the walk state; while that write is in flight every render
+ * action is disabled by the parent, so a click can't queue against a value the
+ * server has not persisted yet.
+ */
+function CycleTarget({
+  recordId, target, disabled, onChanged, onSavingChange,
+}) {
+  const [save, saving] = useAsyncAction(async (next) => {
+    onSavingChange(true);
+    try {
+      await setSpriteWalkTarget(recordId, next, { silent: true });
+      toast.success(`Cycle target set · ${next.frameCount}f @ ${next.fps}fps`);
+      onChanged();
+    } finally {
+      onSavingChange(false);
+    }
+  }, { errorMessage: 'Could not set the cycle target' });
+
+  const cycleSeconds = (target.frameCount / target.fps).toFixed(2);
+  const provenance = TARGET_SOURCE_LABEL[target.source] || 'default';
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+      <label className="flex items-center gap-1.5 text-xs text-gray-400" htmlFor={`walk-target-frames-${recordId}`}>
+        Cycle target
+        <select
+          id={`walk-target-frames-${recordId}`}
+          value={target.frameCount}
+          disabled={disabled || saving || target.frameCountLocked}
+          onChange={(e) => save({ frameCount: Number(e.target.value), fps: target.fps })}
+          title="Frames in the walk cycle — shared by all 8 directions, because the atlas is a rectangular grid"
+          className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white disabled:opacity-60"
+        >
+          {FRAME_COUNT_OPTIONS.map((n) => <option key={n} value={n}>{n} frames</option>)}
+        </select>
+      </label>
+      <label className="flex items-center gap-1.5 text-xs text-gray-400" htmlFor={`walk-target-fps-${recordId}`}>
+        {/* fps is an AUTHORING/preview speed: it drives this page's loop preview
+            and is stamped on the manifest, but the consuming app decides how
+            fast the sprite actually walks in-game. It lives in the target
+            anyway because the atlas requires every direction to agree on it. */}
+        <span className="flex items-center gap-1"><Gauge className="w-3 h-3" /> Preview speed</span>
+        <select
+          id={`walk-target-fps-${recordId}`}
+          value={target.fps}
+          disabled={disabled || saving || target.fpsLocked}
+          onChange={(e) => save({ frameCount: target.frameCount, fps: Number(e.target.value) })}
+          title="Preview/authoring speed — the consuming app determines real in-game playback. Pinned per set because the atlas needs every direction to agree."
+          className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white disabled:opacity-60"
+        >
+          {FPS_OPTIONS.map((n) => <option key={n} value={n}>{n} fps</option>)}
+        </select>
+      </label>
+      <span
+        className="text-[11px] text-gray-500 tabular-nums"
+        title="cycle duration = frames ÷ preview speed"
+      >
+        {cycleSeconds}s / cycle
+      </span>
+      <span
+        className="text-[10px] text-gray-500"
+        title={target.source === 'app'
+          ? 'The bound app declares what its atlas may hold — retarget it in the Publish panel below.'
+          : undefined}
+      >
+        {saving ? 'saving…' : provenance}
+        {target.source === 'app' && ` (${target.appId || 'bound app'}) · change it in Publish below`}
+      </span>
+    </div>
+  );
+}
+
 function DirectionCard({
   recordId, direction, anchorLocked, run, approved, finalized, pending,
   onOpenTrimmer, onGenerate, onApprove, onRetry, onReprocess, onReopen,
-  reprocessing, cycleLabel,
+  reprocessing, cycleLabel, drift, targetSaving,
 }) {
   const [confirming, setConfirming] = useState(false);
   const [reopening, setReopening] = useState(false);
@@ -140,7 +230,11 @@ function DirectionCard({
   // Generate (server truth, since the client pending flag drops once the run is
   // persisted). Only 'rendering' has a live Shell session to link to.
   const rendering = run?.status === 'rendering';
-  const busy = pending || rendering || run?.status === 'postprocessing';
+  // `targetSaving` blocks the render actions without claiming the direction is
+  // rendering: the set's cycle target is mid-PATCH, so a queue now would be
+  // gated against a value the server hasn't persisted yet (409 target mismatch).
+  const inFlight = pending || rendering || run?.status === 'postprocessing';
+  const busy = inFlight || targetSaving;
   // Any run that carries a packed strip preview is trimmable — the trim service
   // resolves geometry from the run's own manifest/stripPreview regardless of
   // on-disk layout (native `runs/`, legacy `grok/`, imported `runs/`, or an
@@ -173,6 +267,25 @@ function DirectionCard({
           unapproved candidate can just be regenerated (the Generate button
           below). Deliberately not the status==='error' path, which offers a
           "Retry postprocess" that 409s for a finalized/approved run. */}
+      {/* This direction is packaged at a geometry the set is no longer targeting
+          (#2985) — surfaced HERE rather than at atlas-compile time, which used to
+          be the first and only place a ragged set showed up. The remedy depends
+          on what the direction still has behind it: an unapproved candidate can
+          be re-derived from its on-disk clip with the Reprocess button below, an
+          approved one has to be reopened first, and an import with no clip needs
+          the source clip imported before it can be re-derived at all. */}
+      {drift && (
+        <p className="text-[10px] text-port-warning border border-port-warning/60 rounded px-1.5 py-1 leading-tight">
+          {[drift.frameCountDrifts && `${drift.frameCount}f`, drift.fpsDrifts && `${drift.fps}fps`]
+            .filter(Boolean).join(' · ')} · re-derive to {cycleLabel}
+          <span className="block text-gray-400">
+            {approved ? 'reopen this direction to re-derive it'
+              : run?.sourceVideoPath ? 'reprocess it from its clip'
+                : 'import this direction\'s source clip to re-derive it'}
+          </span>
+        </p>
+      )}
+
       {(approved || candidate) && run?.stripMissing && (
         <p className="text-[10px] text-port-error border border-port-error/60 rounded px-1.5 py-1 leading-tight">
           Walk strip missing on disk — {finalized ? 'unlock the set to regenerate this direction' : 'regenerate to repack it'}.
@@ -229,7 +342,7 @@ function DirectionCard({
             title={anchorLocked ? undefined : 'Lock this direction\'s reference anchor first'}
             className="flex items-center gap-1 w-full justify-center px-2 py-1 text-xs bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent disabled:opacity-50"
           >
-            {busy
+            {inFlight
               ? <><RefreshCw className="w-3 h-3 animate-spin" /> {run?.status === 'postprocessing' ? 'Packaging…' : 'Rendering…'}</>
               : <><Film className="w-3 h-3" /> {candidate ? 'Regenerate' : 'Generate walk'}</>}
           </button>
@@ -310,11 +423,24 @@ function DirectionCard({
 
 export default function WalkWorkflow({
   record, reference, walk, renders, duration, onDurationChange, onGenerate,
-  frameCount = WALK_DEFAULT_FRAME_COUNT, fps = WALK_DEFAULT_FPS,
-  onFrameCountChange = () => {}, onFpsChange = () => {},
   onOpenTrimmer = () => {}, onChanged,
 }) {
   const recordId = record.id;
+  // The cycle target is server-resolved (app contract → set pin → first approved
+  // direction → default) so the client never re-derives the precedence chain.
+  // The fallback only covers a walk state fetched by an older client/peer.
+  const target = walk?.walkTarget || {
+    frameCount: WALK_DEFAULT_FRAME_COUNT, fps: WALK_DEFAULT_FPS, source: 'default', drift: [],
+  };
+  const { frameCount, fps } = target;
+  const driftByDirection = useMemo(
+    () => Object.fromEntries((target.drift || []).map((d) => [d.direction, d])),
+    [target.drift],
+  );
+  // Every render action is gated on the target PATCH settling — otherwise the
+  // user picks a new target and clicks Generate before the server has it, and
+  // the queue-time guard 409s on a value they already changed.
+  const [targetSaving, setTargetSaving] = useState(false);
   const manifest = reference?.manifest || null;
   const runs = walk?.runs || [];
   const selection = walk?.selection || null;
@@ -431,8 +557,8 @@ export default function WalkWorkflow({
   const approvedCount = Object.values(selection?.directions || {})
     .filter((d) => d?.status === 'approved').length;
 
-  const cycleSeconds = (frameCount / fps).toFixed(2);
   const cycleLabel = `${frameCount}f @ ${fps}fps`;
+  const driftCount = (target.drift || []).length;
 
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
@@ -477,29 +603,17 @@ export default function WalkWorkflow({
           </div>
         ) : (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-            <label className="flex items-center gap-1.5 text-xs text-gray-400">
-              Frames
-              <select
-                value={frameCount}
-                onChange={(e) => onFrameCountChange(Number(e.target.value))}
-                className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
-              >
-                {FRAME_COUNT_OPTIONS.map((n) => <option key={n} value={n}>{n}</option>)}
-              </select>
-            </label>
-            <label className="flex items-center gap-1.5 text-xs text-gray-400">
-              <span className="flex items-center gap-1"><Gauge className="w-3 h-3" /> Speed</span>
-              <select
-                value={fps}
-                onChange={(e) => onFpsChange(Number(e.target.value))}
-                className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
-              >
-                {FPS_OPTIONS.map((n) => <option key={n} value={n}>{n} fps</option>)}
-              </select>
-            </label>
-            <label className="flex items-center gap-1.5 text-xs text-gray-400" title="grok renders 6s or 10s clips; length only affects how much source footage the packer has to choose from">
+            <CycleTarget
+              recordId={recordId}
+              target={target}
+              disabled={finalized}
+              onChanged={onChanged}
+              onSavingChange={setTargetSaving}
+            />
+            <label className="flex items-center gap-1.5 text-xs text-gray-400" htmlFor={`walk-clip-${recordId}`} title="grok renders 6s or 10s clips; length only affects how much source footage the packer has to choose from">
               Clip
               <select
+                id={`walk-clip-${recordId}`}
                 value={duration}
                 onChange={(e) => onDurationChange(Number(e.target.value))}
                 className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
@@ -507,12 +621,20 @@ export default function WalkWorkflow({
                 {WALK_DURATIONS.map((d) => <option key={d} value={d}>{d}s</option>)}
               </select>
             </label>
-            <span className="text-[11px] text-gray-500 tabular-nums" title="cycle duration = frames ÷ speed">
-              {cycleSeconds}s / cycle
-            </span>
           </div>
         )}
       </div>
+
+      {/* Set-level drift summary: visible BEFORE eight renders are spent, rather
+          than as an atlas-compile wall afterwards. Legacy mixed sets (generated
+          back when the count/fps were per-render page state) land here on load. */}
+      {driftCount > 0 && (
+        <p className="text-xs text-port-warning border border-port-warning/60 rounded px-2 py-1.5">
+          {driftCount === 1
+            ? `1 of 8 packaged directions differs from the ${cycleLabel} target — re-derive it before compiling the atlas.`
+            : `${driftCount} of 8 packaged directions differ from the ${cycleLabel} target — re-derive them before compiling the atlas.`}
+        </p>
+      )}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {(manifest.anchors || []).map((anchor) => (
           <DirectionCard
@@ -524,6 +646,8 @@ export default function WalkWorkflow({
             approved={selection?.directions?.[anchor.direction]?.status === 'approved'}
             finalized={finalized}
             pending={Boolean(pendingJobs[anchor.direction])}
+            targetSaving={targetSaving}
+            drift={driftByDirection[anchor.direction] || null}
             onOpenTrimmer={onOpenTrimmer}
             onGenerate={onGenerate}
             onApprove={approve}

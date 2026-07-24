@@ -1113,9 +1113,21 @@ export const spriteWalkGenerateSchema = z.object({
   // by frameCount/fps below.
   duration: z.union([z.literal(6), z.literal(10)]).optional(),
   // Deterministic-postprocess knobs (not grok's): how many frames the packed
-  // cycle holds and how fast it plays back. Omitted → service defaults.
+  // cycle holds and how fast it plays back. Omitted → the set's pinned cycle
+  // target; a value that DISAGREES with that target is refused with 409
+  // WALK_TARGET_MISMATCH (#2985), since every direction in one atlas must share
+  // the geometry.
   frameCount: spriteWalkFrameCountSchema.optional(),
   fps: spriteWalkFpsSchema.optional(),
+});
+
+// Pin the walk track's cycle target at the SET level (#2985). Both knobs are
+// required: the target is one atomic set-level decision, and a partial write
+// would leave "which value did I actually pin?" ambiguous on a record every
+// later render is gated against.
+export const spriteWalkTargetSchema = z.object({
+  frameCount: spriteWalkFrameCountSchema,
+  fps: spriteWalkFpsSchema,
 });
 
 export const spriteWalkApproveSchema = z.object({

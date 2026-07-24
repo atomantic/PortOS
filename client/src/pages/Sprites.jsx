@@ -466,13 +466,16 @@ export default function Sprites() {
     }, replace ? { replace: true } : undefined);
   }, [setSearchParams]);
 
-  // Clip length + frame count + playback speed live here rather than inside
-  // WalkWorkflow so a Regenerate fired from an asset card honors what the user
-  // picked in the walk panel instead of silently falling back to server
-  // defaults. Frame count = cycle smoothness; fps = walk speed.
+  // Clip length is a per-render choice (how much source footage grok gives the
+  // packer) and stays page state so a Regenerate fired from an asset card honors
+  // what the user picked in the walk panel. Frame count + preview fps are NOT:
+  // they are pinned per walk SET on the server (#2985), because every direction
+  // in one atlas must share them, so both read from the resolved walk target.
   const [duration, setDuration] = useState(WALK_DEFAULT_DURATION);
-  const [walkFrameCount, setWalkFrameCount] = useState(WALK_DEFAULT_FRAME_COUNT);
-  const [walkFps, setWalkFps] = useState(WALK_DEFAULT_FPS);
+  // Scalars, not the target object — `detail` gets a fresh identity on every
+  // refetch, which would rebuild the memoized generate action each poll.
+  const walkFrameCount = detail?.walk?.walkTarget?.frameCount ?? WALK_DEFAULT_FRAME_COUNT;
+  const walkFps = detail?.walk?.walkTarget?.fps ?? WALK_DEFAULT_FPS;
 
   // Image-backend availability + the selected backend `mode` are page-owned
   // (#2938): both ReferenceWorkflow's picker and the asset collection's anchor
@@ -704,10 +707,6 @@ export default function Sprites() {
                         renders={walkRenders}
                         duration={duration}
                         onDurationChange={setDuration}
-                        frameCount={walkFrameCount}
-                        onFrameCountChange={setWalkFrameCount}
-                        fps={walkFps}
-                        onFpsChange={setWalkFps}
                         onGenerate={generateWalk}
                         onOpenTrimmer={openTrimmer}
                         onChanged={onWorkflowChanged}
