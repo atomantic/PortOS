@@ -1,7 +1,9 @@
-// Fork a character from its locked main reference (#sprite-i2i): creates a new
-// sprite whose main is generated image+text→image from THIS sprite's reference
-// plus a required prompt describing the change. Thin form over
-// forkSpriteRecord → the server creates the record and queues the main render;
+// Fork a character from its locked reference (#sprite-i2i): creates a new
+// sprite whose first render is generated image+text→image from THIS sprite's
+// reference plus a required prompt describing the change. The server picks the
+// seed (the turnaround sheet when the source has one, else its main) and the
+// fork enters the same turnaround-first workflow (#2979). Thin form over
+// forkSpriteRecord → the server creates the record and queues that render;
 // on success we hand the new record back so the page can navigate to it.
 
 import { useEffect, useState } from 'react';
@@ -12,7 +14,7 @@ import SpritePreview from './SpritePreview.jsx';
 import { forkSpriteRecord } from '../../services/apiSprites.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 
-export default function ForkSpriteModal({ open, onClose, source, referencePath, backends, mode, onForked }) {
+export default function ForkSpriteModal({ open, onClose, source, referencePath, fromTurnaround = false, backends, mode, onForked }) {
   const [name, setName] = useState(`${source?.name || ''} fork`);
   const [id, setId] = useState('');
   const [designPrompt, setDesignPrompt] = useState('');
@@ -36,7 +38,7 @@ export default function ForkSpriteModal({ open, onClose, source, referencePath, 
       ...(forkMode ? { mode: forkMode } : {}),
       initImageStrength: strength,
     }, { silent: true });
-    toast.success(`Forked ${source.name} → ${record.name} — main render queued`);
+    toast.success(`Forked ${source.name} → ${record.name} — ${fromTurnaround ? 'turnaround' : 'main'} render queued`);
     onForked(record);
     onClose();
   }, { errorMessage: 'Fork failed' });
@@ -72,8 +74,9 @@ export default function ForkSpriteModal({ open, onClose, source, referencePath, 
             />
           )}
           <p className="text-xs text-gray-400">
-            The new character&apos;s main reference is generated from this reference image plus your prompt
-            (image+text→image). Everything else — anchors, walk cycle, atlas — starts fresh.
+            The new character&apos;s {fromTurnaround ? 'turnaround sheet' : 'main reference'} is generated from this
+            reference image plus your prompt (image+text→image). Everything else — the rest of the
+            reference set, walk cycle, atlas — starts fresh.
           </p>
         </div>
 

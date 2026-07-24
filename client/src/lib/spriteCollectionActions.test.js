@@ -120,6 +120,13 @@ describe('regenerateFor — reference anchors', () => {
   it('never offers a re-roll for a LOCKED reference file (not a candidate)', () => {
     expect(build().regenerateFor(asset('reference/example-walk-east-v1.png'))).toBeNull();
   });
+
+  it('never offers a re-roll for a turnaround candidate — it has no direction (#2979)', () => {
+    // A directionless candidate would otherwise call generateAnchor(null) and
+    // 400 on an invalid target; the sheet's design inputs live in the workflow.
+    expect(build().regenerateFor(asset('reference/candidates/turnaround-candidate-1.png'))).toBeNull();
+    expect(build().regenerateFor(asset('reference/example-turnaround-v1.png'))).toBeNull();
+  });
 });
 
 describe('regenerateFor — backend gate (#2938)', () => {
