@@ -458,4 +458,33 @@ describe('WalkWorkflow reprocess + reopen', () => {
     await act(async () => { screen.getByRole('button', { name: /^Reopen$/ }).click(); });
     expect(reopenSpriteWalk).toHaveBeenCalledWith('example-walker', { direction: 'east' }, { silent: true });
   });
+
+  it('hides Reopen on a source-pipeline import, whose server refuses it', async () => {
+    // An imported set has no regenerable clips behind it, so reopen (like
+    // unlock) always 409s LEGACY_IMPORTED_WALK_SET — offering the button would
+    // guarantee an error on click. The remedy is a new character version.
+    render(
+      <MemoryRouter>
+        <WalkWorkflow
+          record={{ id: 'example-walker' }}
+          reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked' }] } }}
+          walk={{
+            runs: [{ id: 'run-east', direction: 'east', status: 'approved', stripPreview: { stripPath: 'runs/run-east/generated/strip.png', frameCount: 12, fps: 10, cellWidth: 384, cellHeight: 384 } }],
+            selection: { directions: { east: { status: 'approved', runId: 'run-east' } } },
+            walkSet: { imported: true, directions: { east: { status: 'approved' } } },
+            walkTarget: {
+              frameCount: 12, fps: 10, source: 'derived', sourceLabel: 'from the first approved direction', drift: [],
+            },
+          }}
+          renders={noRenders()}
+          duration={6}
+          onDurationChange={vi.fn()}
+          onGenerate={vi.fn()}
+          onChanged={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole('button', { name: /^Reopen$/ })).toBeNull();
+    expect(screen.getByText(/imported · new version to revise/)).toBeTruthy();
+  });
 });

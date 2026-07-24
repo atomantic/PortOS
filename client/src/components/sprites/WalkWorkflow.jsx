@@ -235,7 +235,7 @@ function CycleTarget({
 function DirectionCard({
   recordId, direction, anchorLocked, run, approved, finalized, pending,
   onOpenTrimmer, onGenerate, onApprove, onRetry, onReprocess, onReopen,
-  reprocessing, cycleLabel, drift, targetSaving, imported,
+  reprocessing, retrying, cycleLabel, drift, targetSaving, imported,
 }) {
   const [confirming, setConfirming] = useState(false);
   const [reopening, setReopening] = useState(false);
@@ -301,7 +301,11 @@ function DirectionCard({
           "Retry postprocess" that 409s for a finalized/approved run. */}
       {(approved || candidate) && run?.stripMissing && (
         <p className="text-[10px] text-port-error border border-port-error/60 rounded px-1.5 py-1 leading-tight">
-          Walk strip missing on disk — {finalized ? 'unlock the set to regenerate this direction' : 'regenerate to repack it'}.
+          {/* An import is always finalized AND refuses unlock, so naming unlock
+              here would advise the same guaranteed-409 the drift badge and the
+              hidden Reopen/Unlock buttons already avoid. */}
+          Walk strip missing on disk — {imported ? 'create a new character version to revise it'
+            : finalized ? 'unlock the set to regenerate this direction' : 'regenerate to repack it'}.
         </p>
       )}
 
@@ -350,8 +354,8 @@ function DirectionCard({
               it if the server dies mid-package). Disabling on `busy` would make
               the "Re-run postprocess" branch permanently unclickable and leave
               that direction with no enabled action at all. */}
-          <button onClick={() => onRetry(run)} disabled={pending || targetSaving} className="px-2 py-0.5 text-[10px] bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent disabled:opacity-50">
-            {run.status === 'postprocessing' ? 'Re-run postprocess' : 'Retry postprocess'}
+          <button onClick={() => onRetry(run)} disabled={pending || targetSaving || retrying} className="px-2 py-0.5 text-[10px] bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent disabled:opacity-50">
+            {retrying ? 'Repacking…' : run.status === 'postprocessing' ? 'Re-run postprocess' : 'Retry postprocess'}
           </button>
         </div>
       )}
@@ -551,7 +555,7 @@ export default function WalkWorkflow({
   const postprocessRun = (run) => postprocessSpriteWalk(recordId, { runId: run.id }, { silent: true });
 
   // Retry a wedged/errored run so a recovery also picks up the chosen cycle look.
-  const [retryPostprocess] = useAsyncAction(async (run) => {
+  const [retryPostprocess, retrying] = useAsyncAction(async (run) => {
     await postprocessRun(run);
     toast.success('Postprocess complete');
     onChanged();
@@ -691,6 +695,7 @@ export default function WalkWorkflow({
             onGenerate={onGenerate}
             onApprove={approve}
             onRetry={retryPostprocess}
+            retrying={retrying}
             onReprocess={reprocess}
             onReopen={reopen}
             reprocessing={reprocessingDir === anchor.direction}
