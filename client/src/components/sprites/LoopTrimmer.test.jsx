@@ -21,7 +21,23 @@ import { trimSpriteWalk } from '../../services/apiSprites.js';
 // jsdom has no 2D canvas; the component already guards a null context. Stub
 // getContext to return null explicitly so the suite doesn't spam jsdom's
 // "Not implemented: getContext" warning for every frame canvas it renders.
-HTMLCanvasElement.prototype.getContext = () => null;
+// The paint test below swaps in a recording context so the actual draw calls
+// can be asserted, then restores this default.
+const nullContext = () => null;
+HTMLCanvasElement.prototype.getContext = nullContext;
+
+// Records every 2D call a frame canvas makes, so the paint path (which is
+// otherwise invisible under the null-context stub) can be pinned.
+function recordingContext() {
+  const calls = [];
+  const ctx = {
+    imageSmoothingEnabled: true,
+    clearRect: (...args) => calls.push(['clearRect', ...args]),
+    drawImage: (...args) => calls.push(['drawImage', ...args]),
+  };
+  HTMLCanvasElement.prototype.getContext = () => ctx;
+  return { calls, ctx, restore: () => { HTMLCanvasElement.prototype.getContext = nullContext; } };
+}
 
 // jsdom never fetches, so a real `new Image()` would never fire onload and the
 // trimmer's cell geometry would stay 0×0 — the frame canvases would never
@@ -143,6 +159,31 @@ describe('LoopTrimmer', () => {
     });
   });
 
+  // Moving the checkerboard onto the box left the canvas transparent, which makes
+  // the clear-before-draw load-bearing: without it a frame swap composites the new
+  // cell over the previous one wherever the new cell is transparent (ghosting).
+  it('clears before each draw and copies the cell 1:1 with smoothing off', async () => {
+    const { calls, ctx, restore } = recordingContext();
+    try {
+      renderTrimmer();
+      await waitFor(() => expect(calls.some(([fn]) => fn === 'drawImage')).toBe(true));
+      const drawAt = calls.map(([fn], i) => (fn === 'drawImage' ? i : -1)).filter((i) => i >= 0);
+      drawAt.forEach((i) => {
+        // Every draw is immediately preceded by a full-surface clear.
+        expect(calls[i - 1]).toEqual(['clearRect', 0, 0, STRIP_CELL_PX, STRIP_CELL_PX]);
+        // 1:1 — source rect and destination rect are both the natural cell size,
+        // so drawImage never resamples. Source x lands on a cell boundary.
+        const [, , sx, sy, sw, sh, dx, dy, dw, dh] = calls[i];
+        expect([sy, sw, sh]).toEqual([0, STRIP_CELL_PX, STRIP_CELL_PX]);
+        expect([dx, dy, dw, dh]).toEqual([0, 0, STRIP_CELL_PX, STRIP_CELL_PX]);
+        expect(sx % STRIP_CELL_PX).toBe(0);
+      });
+      expect(ctx.imageSmoothingEnabled).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
   it('puts the checkerboard on the frame box, not inside the canvas', async () => {
     const { container } = renderTrimmer();
     await waitFor(() => expect(container.querySelectorAll('canvas').length).toBeGreaterThan(0));
@@ -151,11 +192,19 @@ describe('LoopTrimmer', () => {
     expect(canvas.parentElement.getAttribute('style')).toMatch(/linear-gradient/);
   });
 
-  it('holds the frame boxes with a checkerboard placeholder before the strip loads', () => {
+  it('reserves each frame box at the cell aspect before and after the strip loads', async () => {
     const { container } = renderTrimmer();
+    const boxes = () => [...container.querySelectorAll('[style*="linear-gradient"]')];
+    // Pre-load: no canvas yet, but every box (8 thumbnails + main preview) already
+    // reserves a square — it is `aspectRatio`, not the canvas, that holds the layout.
     expect(container.querySelectorAll('canvas')).toHaveLength(0);
-    // Every frame box (8 thumbnails + main preview) is already laid out.
-    expect(container.querySelectorAll('[style*="linear-gradient"]')).toHaveLength(STRIP_FRAMES + 1);
+    expect(boxes()).toHaveLength(STRIP_FRAMES + 1);
+    boxes().forEach((box) => expect(box.style.aspectRatio).toBe('1 / 1'));
+    // Post-load: the reserved aspect is unchanged, so nothing reflows.
+    await waitFor(() => expect(container.querySelectorAll('canvas').length).toBeGreaterThan(0));
+    boxes().forEach((box) => {
+      expect(box.style.aspectRatio).toBe(`${STRIP_CELL_PX} / ${STRIP_CELL_PX}`);
+    });
   });
 
   it('shows an empty state when there is nothing to trim', () => {
