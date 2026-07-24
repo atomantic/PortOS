@@ -98,7 +98,9 @@ export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
 
   const intInRange = (n, lo, hi) => Number.isInteger(n) && n >= lo && n <= hi;
   // Validate only what's populated; walkFrameCount is required whenever any
-  // contract field is set (the server rejects a contract without it).
+  // contract field is set (the server rejects a contract without it). A contract
+  // is also meaningless without an app + destination — the binding it would ride
+  // on is null, so the value would be silently discarded; block that instead.
   let contractError = null;
   if (!hasContract && (cellRaw !== '' || colsRaw !== '')) {
     contractError = 'Walk frame count is required for a runtime contract.';
@@ -108,11 +110,17 @@ export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
     contractError = 'Cell size must be a whole number 16–1024.';
   } else if (colsNum !== null && !intInRange(colsNum, 1, 256)) {
     contractError = 'Column count must be a whole number 1–256.';
+  } else if (hasContract && !(appId && destPath.trim())) {
+    contractError = 'Bind an app and destination before declaring a contract.';
   }
 
   // Dirty relative to the SAVED contract, comparing the seeded string forms so
-  // "opened but untouched" never counts as a change.
-  const contractDirty = seedFrames !== framesRaw || seedCell !== cellRaw || seedCols !== colsRaw;
+  // "opened but untouched" never counts as a change. A re-point (appId change)
+  // with a populated contract also counts as dirty so the displayed values are
+  // sent explicitly against the new app — otherwise the omitted-key path drops
+  // them (server inheritance is app-scoped) while the fields still show them.
+  const contractDirty = seedFrames !== framesRaw || seedCell !== cellRaw || seedCols !== colsRaw
+    || (hasContract && appId !== (saved?.appId || ''));
 
   const fillFromAtlas = () => {
     const geometry = current?.geometry;
@@ -242,10 +250,10 @@ export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
   const savedContractMismatch = (() => {
     if (!savedContract || !atlasGeom) return null;
     if (Number.isInteger(savedContract.walkFrameCount) && savedContract.walkFrameCount !== atlasFrames) {
-      return `contract expects ${savedContract.walkFrameCount} walk frames, atlas has ${atlasFrames}`;
+      return `contract expects ${savedContract.walkFrameCount} walk frames, atlas has ${atlasFrames ?? '?'}`;
     }
     if (Number.isInteger(savedContract.columnCount) && savedContract.columnCount !== atlasCols) {
-      return `contract expects ${savedContract.columnCount} cols, atlas has ${atlasCols}`;
+      return `contract expects ${savedContract.columnCount} cols, atlas has ${atlasCols ?? '?'}`;
     }
     if (Number.isInteger(savedContract.cellSize) && savedContract.cellSize !== atlasCell) {
       return `contract expects ${savedContract.cellSize}px cells, atlas has ${atlasCell ?? '?'}px`;

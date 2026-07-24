@@ -16,7 +16,7 @@ vi.mock('../../services/apiSprites.js', () => ({
 }));
 
 vi.mock('../../hooks/useSidebarApps.js', () => ({
-  useSidebarApps: () => [{ id: 'app-1', name: 'Example App' }],
+  useSidebarApps: () => [{ id: 'app-1', name: 'Example App' }, { id: 'app-2', name: 'Other App' }],
 }));
 
 import PublishWorkflow from './PublishWorkflow';
@@ -91,6 +91,29 @@ describe('PublishWorkflow runtime contract', () => {
 
     const binding = lastBindingArg();
     expect('runtimeContract' in binding).toBe(false);
+  });
+
+  it('SENDS the displayed contract explicitly when the bound app changes', async () => {
+    renderWorkflow(savedContractBinding);
+
+    // Re-pointing to a different app makes server inheritance (app-scoped) drop
+    // the contract; since the fields still show it, the form must send it
+    // explicitly rather than omit the key.
+    fireEvent.change(screen.getByLabelText('Managed app'), { target: { value: 'app-2' } });
+    await act(async () => { fireEvent.click(screen.getByText('Save binding')); });
+
+    const binding = lastBindingArg();
+    expect(binding.appId).toBe('app-2');
+    expect(binding.runtimeContract).toEqual({ walkFrameCount: 12, cellSize: 96, columnCount: 13 });
+  });
+
+  it('blocks a contract with no app/destination and explains why', () => {
+    renderWorkflow(null, atlasWith());
+
+    fireEvent.change(screen.getByLabelText(/Walk frames/), { target: { value: '12' } });
+
+    expect(screen.getByText(/Bind an app and destination/)).toBeInTheDocument();
+    expect(screen.getByText('Save binding')).toBeDisabled();
   });
 
   it('MATCHES the current atlas geometry into the fields', () => {
