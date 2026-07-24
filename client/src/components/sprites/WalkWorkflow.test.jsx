@@ -406,15 +406,18 @@ describe('WalkWorkflow cycle-target drift', () => {
 });
 
 describe('WalkWorkflow reprocess + reopen', () => {
-  it('reprocesses a candidate from its on-disk clip at the current count/fps', async () => {
+  it('reprocesses a candidate from its on-disk clip, letting the server apply the set target', async () => {
     renderRun({
       id: 'walk-east-abc12345', direction: 'east', status: 'candidate',
       stripPreview: { stripPath: 'runs/walk-east-abc12345/generated/strip.png', frameCount: 12, fps: 10, cellWidth: 384, cellHeight: 384 },
     });
     await act(async () => { screen.getByRole('button', { name: /Reprocess/ }).click(); });
+    // Geometry is deliberately omitted — the server adopts the set's pinned
+    // target, so the request can't 409 against a target this page is one
+    // refetch behind on (#2985).
     expect(postprocessSpriteWalk).toHaveBeenCalledWith(
       'example-walker',
-      { runId: 'walk-east-abc12345', frameCount: 12, fps: 10 },
+      { runId: 'walk-east-abc12345' },
       { silent: true },
     );
   });

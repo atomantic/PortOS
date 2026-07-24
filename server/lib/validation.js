@@ -1141,8 +1141,11 @@ export const spriteWalkReopenSchema = z.object({
 
 export const spriteWalkPostprocessSchema = z.object({
   runId: spriteWalkRunIdSchema,
-  // Reprocess the on-disk clip at a new count/fps without regenerating. Omitted
-  // fields keep the run's stored values.
+  // Reprocess the on-disk clip without regenerating. Omitted fields adopt the
+  // set's pinned cycle target (#2985) — NOT the run's stored values, since a
+  // reprocess is how a drifted direction is brought back onto the target. A
+  // supplied value that disagrees with the target is refused with 409
+  // WALK_TARGET_MISMATCH.
   frameCount: spriteWalkFrameCountSchema.optional(),
   fps: spriteWalkFpsSchema.optional(),
 });

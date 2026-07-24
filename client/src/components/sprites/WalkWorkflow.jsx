@@ -144,7 +144,12 @@ function StripLoop({ recordId, stripPreview }) {
 // How a drifted direction gets back onto the target, given what it still has
 // behind it. Named rather than inlined as a nested ternary so the three cases
 // read as the decision they are.
-const driftRemedy = ({ approved, hasSourceClip }) => {
+const driftRemedy = ({ approved, hasSourceClip, imported }) => {
+  // A source-pipeline import has no regenerable clips, so the server refuses
+  // BOTH reopen and unlock on it — pointing there would advise an action that
+  // always 409s, and imported sets are the population most likely to drift
+  // (they never passed the queue-time gate).
+  if (imported) return 'create a new character version to revise it';
   if (approved) return 'reopen this direction to re-derive it';
   return hasSourceClip
     ? 'reprocess it from its clip'
@@ -230,7 +235,7 @@ function CycleTarget({
 function DirectionCard({
   recordId, direction, anchorLocked, run, approved, finalized, pending,
   onOpenTrimmer, onGenerate, onApprove, onRetry, onReprocess, onReopen,
-  reprocessing, cycleLabel, drift, targetSaving,
+  reprocessing, cycleLabel, drift, targetSaving, imported,
 }) {
   const [confirming, setConfirming] = useState(false);
   const [reopening, setReopening] = useState(false);
@@ -282,7 +287,7 @@ function DirectionCard({
           {[drift.frameCountDrifts && `${drift.frameCount}f`, drift.fpsDrifts && `${drift.fps}fps`]
             .filter(Boolean).join(' · ')} · re-derive to {cycleLabel}
           <span className="block text-gray-400">
-            {driftRemedy({ approved, hasSourceClip: Boolean(run?.sourceVideoPath) })}
+            {driftRemedy({ approved, hasSourceClip: Boolean(run?.sourceVideoPath), imported })}
           </span>
         </p>
       )}
@@ -336,7 +341,10 @@ function DirectionCard({
           {run.status === 'error' && (
             <p className="text-[10px] text-port-error break-words">{run.postprocessError || 'postprocess failed'}</p>
           )}
-          <button onClick={() => onRetry(run)} className="px-2 py-0.5 text-[10px] bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent">
+          {/* Gated on the same in-flight target write as the other render
+              actions — it repacks against the set target, so firing it before
+              a target PATCH lands would use the value the server still holds. */}
+          <button onClick={() => onRetry(run)} disabled={busy} className="px-2 py-0.5 text-[10px] bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent disabled:opacity-50">
             {run.status === 'postprocessing' ? 'Re-run postprocess' : 'Retry postprocess'}
           </button>
         </div>
@@ -527,7 +535,10 @@ export default function WalkWorkflow({
   // Re-run the deterministic packer on a run's ON-DISK clip at the CURRENT
   // frame-count/speed — the one call shared by the errored-run "Retry" and the
   // candidate "Reprocess" buttons (no grok, no regeneration).
-  const postprocessRun = (run) => postprocessSpriteWalk(recordId, { runId: run.id, frameCount, fps }, { silent: true });
+  // Geometry is deliberately NOT sent: the server adopts the set's pinned target
+  // for an omitted count/fps, so the request can't 409 against a target this
+  // page's state is one refetch behind on (#2985).
+  const postprocessRun = (run) => postprocessSpriteWalk(recordId, { runId: run.id }, { silent: true });
 
   // Retry a wedged/errored run so a recovery also picks up the chosen cycle look.
   const [retryPostprocess] = useAsyncAction(async (run) => {
@@ -665,6 +676,7 @@ export default function WalkWorkflow({
             pending={Boolean(pendingJobs[anchor.direction])}
             targetSaving={targetSaving}
             drift={driftByDirection[anchor.direction] || null}
+            imported={importedWalkSet}
             onOpenTrimmer={onOpenTrimmer}
             onGenerate={onGenerate}
             onApprove={approve}

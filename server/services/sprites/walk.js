@@ -360,10 +360,16 @@ async function loadRunForEntry(recordId, direction, entry) {
  * Native runs stamp `frameCount`/`fps` on the run record; imported and redraw
  * runs only carry them inside `stripPreview`, so read through both or every
  * imported set would resolve as "no packaged geometry" and drift silently.
+ *
+ * A run the server flagged `stripMissing` is excluded: its packed strip is gone
+ * from disk, so it can never compile, and letting it win the first-packaged slot
+ * would derive the whole set's target from artwork that no longer exists —
+ * badging every healthy direction as drifted against a dead one. It keeps its
+ * `stripPreview` (only `stripPath` is dropped), so the filter has to name it.
  */
 function packagedCyclesFrom(runs, approvedDirections) {
   return SPRITE_DIRECTIONS.flatMap((direction) => {
-    const forDirection = runs.filter((r) => r.direction === direction && r.stripPreview);
+    const forDirection = runs.filter((r) => r.direction === direction && r.stripPreview && !r.stripMissing);
     const approvedRunId = approvedDirections?.[direction]?.runId;
     const run = forDirection.find((r) => r.id === approvedRunId)
       || forDirection.find((r) => r.status === 'approved')
@@ -1071,6 +1077,26 @@ async function approveWalkDirectionImpl(recordId, { direction, runId }) {
     approvedAt: new Date().toISOString(),
   };
   const allApproved = SPRITE_DIRECTIONS.every((d) => selection.directions[d]?.status === 'approved');
+  // Freezing is the LAST moment the set can still be fixed, so the per-direction
+  // gate above is not sufficient on its own: retargeting mid-set is sanctioned,
+  // so a direction approved under the OLD target stays drifted while every later
+  // approval matches the new one. Without this check the 8th approval would
+  // happily freeze that ragged set and hand the failure to atlas.js — the exact
+  // outcome this issue moves earlier. Reuse the drift the state read already
+  // computed, minus the direction being approved: its geometry was verified
+  // against the target above, and `packagedCyclesFrom` may have resolved a
+  // different (newer candidate) run for it, which would otherwise false-block.
+  if (allApproved) {
+    const drifted = walkTarget.drift.filter((d) => d.direction !== direction);
+    if (drifted.length) {
+      throw new ServerError(
+        `Cannot finalize: ${drifted.map((d) => d.direction).join(', ')} ${drifted.length === 1 ? 'is' : 'are'} `
+        + `packaged at a different cycle than the set's ${walkTarget.frameCount} frames @ ${walkTarget.fps}fps `
+        + `(${walkTarget.sourceLabel}) — reopen and reprocess ${drifted.length === 1 ? 'it' : 'them'} to the target first.`,
+        { status: 409, code: 'WALK_TARGET_MISMATCH' },
+      );
+    }
+  }
   selection.status = allApproved ? 'complete' : 'in-progress';
   const selectionAbs = join(spriteDir(recordId), selectionRelPath(recordId));
   await ensureDir(join(spriteDir(recordId), 'walk'));

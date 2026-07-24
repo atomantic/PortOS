@@ -503,6 +503,69 @@ describe('walk cycle target', () => {
     expect(selection.directions.east).toBeUndefined();
   });
 
+  it('refuses to FINALIZE a set whose earlier approvals drifted from a retarget', async () => {
+    // Retargeting mid-set is sanctioned, so the per-direction gate alone isn't
+    // enough: a direction approved under the OLD target stays drifted while
+    // every later approval matches the new one, and the 8th approval would
+    // otherwise freeze a ragged set for atlas.js to reject.
+    const id = await characterWithLockedAnchors(newId(), SPRITE_DIRECTIONS);
+    const { runId: southId } = await makeCandidateRun(id, 'south', { frameCount: 12, fps: 10 });
+    await approveWalkDirection(id, { direction: 'south', runId: southId });
+    await setWalkTarget(id, { frameCount: 8, fps: 10 });
+    const rest = SPRITE_DIRECTIONS.filter((d) => d !== 'south');
+    for (const direction of rest.slice(0, -1)) {
+      const { runId } = await makeCandidateRun(id, direction, { frameCount: 8, fps: 10 });
+      await approveWalkDirection(id, { direction, runId });
+    }
+    const last = rest[rest.length - 1];
+    const { runId: lastId } = await makeCandidateRun(id, last, { frameCount: 8, fps: 10 });
+    await expect(approveWalkDirection(id, { direction: last, runId: lastId }))
+      .rejects.toMatchObject({
+        code: 'WALK_TARGET_MISMATCH',
+        message: expect.stringContaining('south'),
+      });
+    // Nothing was frozen, and the drifted direction is still named.
+    const { walkSet, walkTarget } = await getWalkState(id);
+    expect(walkSet).toBeNull();
+    expect(walkTarget.drift.map((d) => d.direction)).toContain('south');
+  });
+
+  it('does not derive the target from a direction whose packed strip is gone', async () => {
+    // A stripMissing run keeps its stripPreview (only stripPath is dropped), so
+    // without an explicit exclusion it could win the first-packaged slot and
+    // derive the whole set's target from artwork that no longer exists.
+    const id = await characterWithLockedAnchors(newId(), SPRITE_DIRECTIONS);
+    const { runId } = await makeCandidateRun(id, 'south', { frameCount: 16, fps: 24 });
+    await rm(join(TEST_ROOT, 'sprites', id, 'runs', runId, 'generated', `${id}-walk-south-strip.png`));
+    await makeCandidateRun(id, 'east', { frameCount: 8, fps: 12 });
+    const { runs, walkTarget } = await getWalkState(id);
+    expect(runs.find((r) => r.direction === 'south').stripMissing).toBe(true);
+    // 'east' — the live direction — sets the target, not the dead 'south'.
+    expect(walkTarget).toMatchObject({ frameCount: 8, fps: 12, source: 'derived' });
+    expect(walkTarget.drift).toEqual([]);
+  });
+
+  it('preserves the pinned target across unlock and reopen', async () => {
+    // Both paths reseed the selection; dropping animationTargets there would
+    // silently re-derive the target from whichever direction is re-approved
+    // first, so this pins the preservation the reseeds depend on.
+    const id = await characterWithLockedAnchors(newId(), SPRITE_DIRECTIONS);
+    await setWalkTarget(id, { frameCount: 8, fps: 12 });
+    for (const direction of SPRITE_DIRECTIONS) {
+      const { runId } = await makeCandidateRun(id, direction);
+      await approveWalkDirection(id, { direction, runId });
+    }
+    await unlockWalkSet(id);
+    expect((await readSelection(id)).animationTargets.walk)
+      .toEqual({ frameCount: 8, fps: 12, source: 'set' });
+    // …and re-approving one direction then reopening it keeps the pin too.
+    const { runId } = await makeCandidateRun(id, 'south');
+    await approveWalkDirection(id, { direction: 'south', runId });
+    await reopenWalkDirection(id, { direction: 'south' });
+    expect((await readSelection(id)).animationTargets.walk)
+      .toEqual({ frameCount: 8, fps: 12, source: 'set' });
+  });
+
   it('409s a retarget on a finalized set', async () => {
     const id = await characterWithLockedAnchors(newId(), SPRITE_DIRECTIONS);
     for (const direction of SPRITE_DIRECTIONS) {
