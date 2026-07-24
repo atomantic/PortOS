@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { PersonStanding, MapPin, Package, Download, X, RefreshCw, Plus, ChevronRight, ChevronDown, Images, Scissors } from 'lucide-react';
+import { PersonStanding, MapPin, Package, Download, X, RefreshCw, Plus, LayoutGrid, Search, Images, Scissors } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import Modal from '../components/ui/Modal.jsx';
 import {
   listSpriteRecords, getSpriteRecord, importSprites, createSpriteRecord,
   generateSpriteWalk, generateSpriteReference,
@@ -17,6 +18,7 @@ import PublishWorkflow from '../components/sprites/PublishWorkflow.jsx';
 import AssetCollection from '../components/sprites/AssetCollection.jsx';
 import TabPills from '../components/ui/TabPills.jsx';
 import useDrawerTab from '../hooks/useDrawerTab.js';
+import useClickOutside from '../hooks/useClickOutside.js';
 import { useAsyncAction } from '../hooks/useAsyncAction.js';
 import { useSpritePendingRenders } from '../hooks/useSpritePendingRenders.js';
 import { buildCollectionActions } from '../lib/spriteCollectionActions.js';
@@ -28,6 +30,21 @@ import { timeAgo } from '../utils/formatters.js';
 // Per-group sidebar icons — the pure grouping lib keys each group; the page
 // owns the lucide component mapping so the lib stays React-free.
 const GROUP_ICONS = { characters: PersonStanding, places: MapPin, objects: Package };
+
+// Landing on /sprites with no id auto-opens the most recently touched sprite so
+// the manager is never a cold empty pane (the user's ask). Prefer characters —
+// the reference/walk/publish workflows are character-only, so that's the sprite
+// someone most likely wants in front of them — and only fall back to the newest
+// record of any kind when the library holds no characters. `updatedAt` is bumped
+// on every create/patch/import; `createdAt` is the floor for a never-patched
+// record. A record missing both sorts to 0 rather than NaN-poisoning the reduce.
+function pickMostRecentSprite(records) {
+  if (!Array.isArray(records) || records.length === 0) return null;
+  const ts = (r) => Date.parse(r?.updatedAt || r?.createdAt || '') || 0;
+  const characters = records.filter((r) => r.kind === 'character');
+  const pool = characters.length ? characters : records;
+  return pool.reduce((best, r) => (ts(r) > ts(best) ? r : best), pool[0]);
+}
 
 // Sprite Manager: library over imported production sprites — characters
 // (reference sets, walk strips, runtime atlases) and props atlas families —
@@ -79,19 +96,16 @@ function ImportPanel({ onImported }) {
     }
   };
 
-  if (!open) {
-    return (
+  return (
+    <>
       <button
         onClick={() => setOpen(true)}
         className="flex items-center gap-2 px-3 py-1.5 bg-port-accent hover:bg-blue-600 text-white rounded text-sm"
       >
         <Download className="w-4 h-4" /> Import
       </button>
-    );
-  }
-
-  return (
-    <div className="w-full bg-port-card border border-port-border rounded-lg p-4 space-y-3">
+      <Modal open={open} onClose={() => setOpen(false)} size="md" ariaLabel="Import production sprites" closeOnBackdrop={false}>
+        <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-white">Import production sprites</h3>
         <button onClick={() => setOpen(false)} aria-label="Close import panel" className="text-gray-400 hover:text-white">
@@ -135,7 +149,9 @@ function ImportPanel({ onImported }) {
           {importErrors.map((e) => <li key={e}>{e}</li>)}
         </ul>
       )}
-    </div>
+        </div>
+      </Modal>
+    </>
   );
 }
 
@@ -158,19 +174,16 @@ function NewSpritePanel({ onCreated }) {
     onCreated(record);
   }, { errorMessage: 'Failed to create sprite' });
 
-  if (!open) {
-    return (
+  return (
+    <>
       <button
         onClick={() => setOpen(true)}
         className="flex items-center gap-2 px-3 py-1.5 bg-port-card border border-port-border hover:border-port-accent text-gray-300 rounded text-sm"
       >
         <Plus className="w-4 h-4" /> New Sprite
       </button>
-    );
-  }
-
-  return (
-    <div className="w-full bg-port-card border border-port-border rounded-lg p-4 space-y-3">
+      <Modal open={open} onClose={() => setOpen(false)} size="sm" ariaLabel="New sprite" closeOnBackdrop={false}>
+        <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-white">New sprite</h3>
         <button onClick={() => setOpen(false)} aria-label="Close new sprite panel" className="text-gray-400 hover:text-white">
@@ -228,48 +241,31 @@ function NewSpritePanel({ onCreated }) {
         {creating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
         Create
       </button>
-    </div>
+        </div>
+      </Modal>
+    </>
   );
 }
 
-function RecordSection({ title, icon: Icon, items, selectedId, onSelect }) {
-  if (items.length === 0) return null;
-  return (
-    <div>
-      <h3 className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-gray-500 mb-1.5">
-        <Icon className="w-3.5 h-3.5" /> {title}
-      </h3>
-      <ul className="space-y-1">
-        {items.map((r) => (
-          <li key={r.id}>
-            <button
-              onClick={() => onSelect(r.id)}
-              className={`w-full text-left px-3 py-2 rounded text-sm ${selectedId === r.id ? 'bg-port-accent/20 text-white border border-port-accent' : 'bg-port-card text-gray-300 border border-port-border hover:border-gray-500'}`}
-            >
-              <span className="font-medium">{r.name}</span>
-              <span className="block text-xs text-gray-500">{r.status}{r.chromaKey ? ` · key ${r.chromaKey}` : ''}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-// Autocomplete record picker (#2932): a labelled combobox that filters the
-// library by name/id/kind and navigates on Enter/click, with the full grouped
-// list tucked behind a "Browse all" disclosure so the search replaces the
-// DEFAULT wall of names, not the ability to browse.
-function RecordPicker({ records, selectedId, onSelect }) {
+// Header autocomplete (#2932, reworked): a compact combobox that filters the
+// library by name/id/kind and navigates on Enter/click. It lives in the page
+// header rather than a sidebar, so it renders only the search field + its
+// suggestion popover — full browsing moved to the Catalog modal below, because
+// the library is expected to grow well past a scannable sidebar list.
+function SpriteSearch({ records, onSelect }) {
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(-1);
-  const [browseOpen, setBrowseOpen] = useState(false);
+  const wrapRef = useRef(null);
   const inputId = 'sprite-search';
   const listId = 'sprite-search-listbox';
 
   const suggestions = useMemo(() => filterSpriteRecords(records, query), [records, query]);
-  const groups = useMemo(() => groupSpriteRecords(records), [records]);
   const showSuggestions = query.trim().length > 0;
+
+  // Clicking outside dismisses the suggestion popover (clearing the query is the
+  // same close path as Escape) instead of leaving a stale list floating open.
+  const dismiss = useCallback(() => setQuery(''), []);
+  useClickOutside(wrapRef, showSuggestions, dismiss);
 
   // A changed query invalidates the highlighted row's index.
   useEffect(() => { setActiveIndex(-1); }, [query]);
@@ -303,81 +299,131 @@ function RecordPicker({ records, selectedId, onSelect }) {
     ? `sprite-opt-${suggestions[activeIndex].id}` : undefined;
 
   return (
-    <div className="space-y-3">
-      <div>
-        <label htmlFor={inputId} className="block text-xs text-gray-400 mb-1">Search sprites</label>
-        <div className="relative">
-          <input
-            id={inputId}
-            type="search"
-            role="combobox"
-            aria-expanded={showSuggestions}
-            aria-controls={listId}
-            aria-autocomplete="list"
-            aria-activedescendant={activeId}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder="Filter by name, id, or kind…"
-            className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white"
-          />
-          {showSuggestions && (
-            <ul
-              id={listId}
-              role="listbox"
-              aria-label="Matching sprites"
-              className="absolute z-10 mt-1 w-full max-h-72 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-lg"
-            >
-              {suggestions.length === 0 ? (
-                <li className="px-3 py-2 text-xs text-gray-500">No matches</li>
-              ) : suggestions.map((r, i) => {
-                const Icon = GROUP_ICONS[groupKeyForKind(r.kind)] || Package;
-                return (
-                  <li key={r.id} id={`sprite-opt-${r.id}`} role="option" aria-selected={i === activeIndex}>
+    <div ref={wrapRef} className="relative w-full sm:w-64">
+      <label htmlFor={inputId} className="sr-only">Search sprites</label>
+      <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+      <input
+        id={inputId}
+        type="search"
+        role="combobox"
+        aria-expanded={showSuggestions}
+        aria-controls={listId}
+        aria-autocomplete="list"
+        aria-activedescendant={activeId}
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={onKeyDown}
+        placeholder="Search sprites…"
+        className="w-full bg-port-bg border border-port-border rounded pl-8 pr-3 py-1.5 text-sm text-white"
+      />
+      {showSuggestions && (
+        <ul
+          id={listId}
+          role="listbox"
+          aria-label="Matching sprites"
+          className="absolute z-30 mt-1 w-full max-h-72 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-lg"
+        >
+          {suggestions.length === 0 ? (
+            <li className="px-3 py-2 text-xs text-gray-500">No matches</li>
+          ) : suggestions.map((r, i) => {
+            const Icon = GROUP_ICONS[groupKeyForKind(r.kind)] || Package;
+            return (
+              <li key={r.id} id={`sprite-opt-${r.id}`} role="option" aria-selected={i === activeIndex}>
+                <button
+                  type="button"
+                  onClick={() => commit(r)}
+                  onMouseEnter={() => setActiveIndex(i)}
+                  className={`w-full flex items-center gap-2 text-left px-3 py-2 text-sm ${i === activeIndex ? 'bg-port-accent/20 text-white' : 'text-gray-300 hover:bg-port-bg'}`}
+                >
+                  <Icon className="w-3.5 h-3.5 shrink-0 text-gray-500" />
+                  <span className="font-medium truncate">{r.name}</span>
+                  <span className="ml-auto text-xs text-gray-500 shrink-0">{r.kind}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// Full-library catalog viewer. Replaces the old "Browse all" sidebar disclosure
+// (which didn't scale) with a searchable, grouped grid of every sprite. Picking
+// a card navigates to it and closes — this is how the user swaps the active
+// sprite when they don't remember its name to type into the header search.
+function CatalogModal({ open, onClose, records, selectedId, onSelect }) {
+  const [query, setQuery] = useState('');
+  const filtered = useMemo(() => filterSpriteRecords(records, query), [records, query]);
+  const groups = useMemo(() => groupSpriteRecords(filtered), [filtered]);
+
+  // The caller mounts this only while open (`{catalogOpen && <CatalogModal/>}`),
+  // so a fresh mount already starts with an empty filter — no stale-query reset
+  // needed, and the filter/group memos never run while the catalog is closed.
+  return (
+    <Modal open={open} onClose={onClose} size="3xl" ariaLabel="Sprite catalog" align="top">
+      <div className="bg-port-card border border-port-border rounded-lg flex flex-col max-h-[85vh]">
+        <header className="flex items-center gap-3 px-4 py-3 border-b border-port-border shrink-0">
+          <LayoutGrid className="w-5 h-5 text-port-accent shrink-0" />
+          <h2 className="text-base font-semibold text-white">Sprite Catalog</h2>
+          <span className="text-xs text-gray-500">{records.length} total</span>
+          <div className="relative ml-auto w-40 sm:w-56">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+            <label htmlFor="sprite-catalog-search" className="sr-only">Filter catalog</label>
+            <input
+              id="sprite-catalog-search"
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Filter…"
+              className="w-full bg-port-bg border border-port-border rounded pl-8 pr-3 py-1.5 text-sm text-white"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close catalog"
+            className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-port-border/50 shrink-0"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </header>
+        <div className="flex-1 overflow-y-auto p-4 space-y-5">
+          {filtered.length === 0 ? (
+            <p className="text-sm text-gray-500">No sprites match “{query}”.</p>
+          ) : groups.map((g) => {
+            const Icon = GROUP_ICONS[g.key] || Package;
+            return (
+              <div key={g.key}>
+                <h3 className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-gray-500 mb-2">
+                  <Icon className="w-3.5 h-3.5" /> {g.label} ({g.records.length})
+                </h3>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                  {g.records.map((r) => (
                     <button
+                      key={r.id}
                       type="button"
-                      onClick={() => commit(r)}
-                      onMouseEnter={() => setActiveIndex(i)}
-                      className={`w-full flex items-center gap-2 text-left px-3 py-2 text-sm ${i === activeIndex ? 'bg-port-accent/20 text-white' : 'text-gray-300 hover:bg-port-bg'}`}
+                      onClick={() => { onSelect(r.id); onClose(); }}
+                      aria-current={selectedId === r.id}
+                      className={`text-left p-3 rounded-lg border transition-colors ${selectedId === r.id ? 'bg-port-accent/20 border-port-accent text-white' : 'bg-port-bg border-port-border text-gray-300 hover:border-gray-500'}`}
                     >
-                      <Icon className="w-3.5 h-3.5 shrink-0 text-gray-500" />
-                      <span className="font-medium truncate">{r.name}</span>
-                      <span className="ml-auto text-xs text-gray-500 shrink-0">{r.kind}</span>
+                      <span className="block font-medium truncate">{r.name}</span>
+                      <span className="block text-xs text-gray-500 truncate">
+                        {r.kind} · {r.status}
+                        {r.chromaKey ? ` · key ${r.chromaKey}` : ''}
+                      </span>
+                      <span className="block text-xs text-gray-600 mt-0.5">
+                        {r.updatedAt || r.createdAt ? `updated ${timeAgo(r.updatedAt || r.createdAt)}` : ''}
+                      </span>
                     </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
-
-      <div>
-        <button
-          type="button"
-          onClick={() => setBrowseOpen((o) => !o)}
-          aria-expanded={browseOpen}
-          className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white"
-        >
-          {browseOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-          Browse all ({records.length})
-        </button>
-        {browseOpen && (
-          <div className="mt-2 space-y-4">
-            {groups.map((g) => (
-              <RecordSection
-                key={g.key}
-                title={g.label}
-                icon={GROUP_ICONS[g.key]}
-                items={g.records}
-                selectedId={selectedId}
-                onSelect={onSelect}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -390,12 +436,25 @@ export default function Sprites() {
   // failure — the record may be fine, offer a retry instead of lying).
   const [detailState, setDetailState] = useState('idle');
   const [retryTick, setRetryTick] = useState(0);
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  const goto = useCallback((rid) => navigate(`/sprites/${rid}`), [navigate]);
 
   const refresh = useCallback(() => {
-    // request() already toasted; settle to an empty list so the sidebar
-    // doesn't spin forever.
+    // request() already toasted; settle to an empty list so the header/catalog
+    // don't spin forever.
     listSpriteRecords().then(setRecords).catch(() => setRecords([]));
   }, []);
+
+  // Landing on the bare /sprites route auto-opens the most recent sprite so the
+  // manager never presents a cold empty pane (the user's ask). Only fires when
+  // there's no id AND the library is non-empty; `replace` keeps the redirect out
+  // of history so Back doesn't bounce between /sprites and the sprite. An
+  // invalid :id lands in the 'missing' state below, not here, so no loop.
+  useEffect(() => {
+    if (id || !Array.isArray(records) || records.length === 0) return;
+    const recent = pickMostRecentSprite(records);
+    if (recent) navigate(`/sprites/${recent.id}`, { replace: true });
+  }, [id, records, navigate]);
 
   // Stable identity — ReferenceWorkflow's poll effect depends on it, and an
   // inline arrow would tear down/recreate the interval every parent render.
@@ -568,33 +627,60 @@ export default function Sprites() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <PersonStanding className="w-6 h-6 text-port-accent" />
-        <h1 className="text-2xl font-bold text-white">Sprite Manager</h1>
+      {/* Header owns identity (left) plus every library-wide control (right):
+          search, the Catalog viewer, and the create/import actions — no left
+          sidebar, so the detail pane below runs full width. */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-3 mr-auto">
+          <PersonStanding className="w-6 h-6 text-port-accent" />
+          <h1 className="text-2xl font-bold text-white">Sprite Manager</h1>
+        </div>
+        {records?.length > 0 && (
+          <>
+            <SpriteSearch records={records} onSelect={goto} />
+            <button
+              type="button"
+              onClick={() => setCatalogOpen(true)}
+              className="flex items-center gap-2 px-3 py-1.5 bg-port-card border border-port-border hover:border-port-accent text-gray-300 rounded text-sm"
+            >
+              <LayoutGrid className="w-4 h-4" /> Catalog
+            </button>
+          </>
+        )}
+        <NewSpritePanel onCreated={(record) => { refresh(); navigate(`/sprites/${record.id}`); }} />
+        {/* Re-import while a sprite is open must refresh the open detail too,
+            not just the library list. */}
+        <ImportPanel onImported={() => { refresh(); if (id) setRetryTick((t) => t + 1); }} />
       </div>
-      <div className="flex flex-col md:flex-row gap-4">
-        <aside className="md:w-64 shrink-0 space-y-3">
-          <NewSpritePanel onCreated={(record) => { refresh(); navigate(`/sprites/${record.id}`); }} />
-          {/* Re-import while a sprite is open must refresh the open detail too,
-              not just the sidebar list. */}
-          <ImportPanel onImported={() => { refresh(); if (id) setRetryTick((t) => t + 1); }} />
-          {records === null ? (
-            <p className="text-sm text-gray-500">Loading…</p>
-          ) : records.length === 0 ? (
-            <p className="text-sm text-gray-500">
-              No sprites yet. Import a production set from a sprite-pipeline checkout to get started.
-            </p>
-          ) : (
-            <RecordPicker records={records} selectedId={id} onSelect={(rid) => navigate(`/sprites/${rid}`)} />
-          )}
-        </aside>
-        <section className="flex-1 min-w-0">
+      {/* Mounted only while open so its filter/group memos never run behind a
+          closed modal (and a fresh mount starts with an empty filter). */}
+      {catalogOpen && (
+        <CatalogModal
+          open
+          onClose={() => setCatalogOpen(false)}
+          records={records || []}
+          selectedId={id}
+          onSelect={goto}
+        />
+      )}
+      <div>
+        <section className="min-w-0">
           {!id ? (
-            <p className="text-sm text-gray-500">Select a sprite to browse its reference set, animation strips, and atlases.</p>
+            // No id yet: loading the list, an empty library, or the one-frame
+            // gap before the auto-redirect effect opens the most recent sprite.
+            records === null ? (
+              <p className="text-sm text-gray-500">Loading…</p>
+            ) : records.length === 0 ? (
+              <p className="text-sm text-gray-500">
+                No sprites yet. Import a production set from a sprite-pipeline checkout to get started.
+              </p>
+            ) : (
+              <p className="text-sm text-gray-500">Opening the most recent sprite…</p>
+            )
           ) : detailState === 'missing' ? (
             <div className="text-sm text-gray-400">
               Sprite not found.{' '}
-              <button onClick={() => navigate('/sprites')} className="text-port-accent hover:underline">Back to library</button>
+              <button onClick={() => setCatalogOpen(true)} className="text-port-accent hover:underline">Browse the catalog</button>
             </div>
           ) : detailState === 'error' ? (
             <div className="text-sm text-gray-400">
