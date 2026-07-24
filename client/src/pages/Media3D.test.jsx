@@ -122,7 +122,7 @@ describe('Media3D — generation workspace', () => {
     expect(btn).toBeEnabled();
     fireEvent.click(btn);
     await waitFor(() => expect(createImageTo3dModel).toHaveBeenCalledWith(
-      expect.objectContaining({ filename: 'example-robot.png', target: 'trellis2', name: 'example-robot' }),
+      expect.objectContaining({ filename: 'example-robot.png', target: 'trellis2', name: 'Example Robot' }),
       expect.anything(),
     ));
     expect(await screen.findByTestId('glb-viewer')).toHaveTextContent('/data/image-to-3d/m1/model.glb');

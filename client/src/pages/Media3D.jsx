@@ -1,7 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Boxes, CheckCircle2, Download, AlertTriangle, Loader2, ExternalLink, ImagePlus, Sparkles, KeyRound } from 'lucide-react';
 import { getImageTo3dTargets, createImageTo3dModel, getImageTo3dModel } from '../services/api';
+import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import useMounted from '../hooks/useMounted';
+import { nameFromImageFilename } from '../utils/formatters';
 import RuntimeInstallModal from '../components/install/RuntimeInstallModal';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import GlbViewer from '../components/media/GlbViewer';
@@ -9,13 +12,6 @@ import MediaImage from '../components/MediaImage';
 
 // Poll cadence while a render is in flight (a real TRELLIS.2 render is multi-minute).
 const POLL_INTERVAL_MS = 2500;
-
-// A model record needs a name (1–120 chars); derive a sensible default from the
-// source image filename so the user isn't prompted for one mid-flow.
-function deriveModelName(filename) {
-  const base = String(filename || '').split('/').pop().replace(/\.[^.]+$/, '').trim();
-  return (base || 'Untitled 3D model').slice(0, 120);
-}
 
 // Targets that download gated Hugging Face models on first run. Keyed by target id
 // so the page can warn about the (free, one-time) HF sign-in + terms acceptance
@@ -162,19 +158,13 @@ export default function Media3D() {
   const [installTarget, setInstallTarget] = useState(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   // Render lifecycle: a create kicks off an on-device render, then we poll the
-  // record until it lands (ready → preview) or fails (error → surfaced inline,
-  // which is where the runner's actionable HF-auth message shows up).
+  // record (via useAutoRefetch below) until it lands (ready → preview) or fails
+  // (error → surfaced inline, where the runner's actionable HF-auth message shows).
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState(null);
   const [genPercent, setGenPercent] = useState(null);
-  const pollRef = useRef(null);
-  const mountedRef = useRef(true);
-  // Deferred-poll guards: stop firing into the void after unmount (never reset to
-  // true — handles dev-mode double-mount cleanly).
-  useEffect(() => () => {
-    mountedRef.current = false;
-    if (pollRef.current) clearTimeout(pollRef.current);
-  }, []);
+  const [modelId, setModelId] = useState(null);
+  const mountedRef = useMounted(); // gate setState after the create/poll awaits
 
   const load = useCallback(() => {
     setLoading(true);
@@ -225,46 +215,41 @@ export default function Media3D() {
 
   const handlePick = (item) => { setParam('image', item.filename); setPickerOpen(false); };
 
-  // Poll a record until the render settles. Guards on mountedRef so a navigation-away
-  // unmount stops the loop; a fresh generate cancels any prior timer before starting.
-  const pollModel = useCallback((id) => {
-    const tick = async () => {
-      const model = await getImageTo3dModel(id, { silent: true }).catch((err) => {
-        if (mountedRef.current) { setGenerating(false); setGenError(err?.message || 'Lost track of the render.'); }
-        return null;
-      });
-      if (!model || !mountedRef.current) return;
-      const latest = Array.isArray(model.runs) && model.runs.length ? model.runs[model.runs.length - 1] : null;
-      if (Number.isFinite(latest?.percent)) setGenPercent(latest.percent);
-      if (model.status === 'ready' && model.assetPath) {
-        setGenerating(false); setGenPercent(100); setParam('glb', model.assetPath);
-        return;
-      }
-      if (model.status === 'failed' || model.status === 'canceled') {
-        setGenerating(false);
-        // model.error carries the runner's actionable message (e.g. the HF-auth guidance).
-        setGenError(model.error || 'The render did not finish.');
-        return;
-      }
-      pollRef.current = setTimeout(tick, POLL_INTERVAL_MS); // still draft/generating
-    };
-    tick();
-  }, [setParam]);
+  // One poll tick against the in-flight record. Let a transient GET *throw* so
+  // useAutoRefetch logs and retries next tick — a multi-minute render must not be
+  // abandoned on a single network blip; a genuine render failure comes back as a
+  // `failed` record, handled below. Reaching a terminal state clears `generating`,
+  // which flips the hook's `enabled` off and stops the interval.
+  const pollTick = useCallback(async () => {
+    if (!modelId) return;
+    const model = await getImageTo3dModel(modelId, { silent: true });
+    if (!mountedRef.current) return;
+    const latest = Array.isArray(model.runs) && model.runs.length ? model.runs[model.runs.length - 1] : null;
+    if (Number.isFinite(latest?.percent)) setGenPercent(latest.percent);
+    if (model.status === 'ready' && model.assetPath) {
+      setGenPercent(100); setParam('glb', model.assetPath); setGenerating(false);
+    } else if (model.status === 'failed' || model.status === 'canceled') {
+      // model.error carries the runner's actionable message (e.g. the HF-auth guidance).
+      setGenError(model.error || 'The render did not finish.'); setGenerating(false);
+    }
+    // else still draft/generating → the hook re-polls after POLL_INTERVAL_MS.
+  }, [modelId, setParam, mountedRef]);
+
+  useAutoRefetch(pollTick, POLL_INTERVAL_MS, { pollOnly: true, enabled: generating && !!modelId });
 
   const handleGenerate = useCallback(async () => {
     if (!selectedImage || !selectedTarget) return;
-    if (pollRef.current) clearTimeout(pollRef.current);
-    setGenError(null); setGenPercent(0); setGenerating(true);
+    setGenError(null); setGenPercent(0); setModelId(null);
     setParam('glb', ''); // clear any previously-previewed mesh
     const created = await createImageTo3dModel(
-      { name: deriveModelName(selectedImage.filename), filename: selectedImage.filename, target: selectedTarget.id },
+      { name: nameFromImageFilename(selectedImage.filename), filename: selectedImage.filename, target: selectedTarget.id },
       { silent: true },
     ).catch((err) => {
-      if (mountedRef.current) { setGenerating(false); setGenError(err?.message || 'Could not start the render.'); }
+      if (mountedRef.current) setGenError(err?.message || 'Could not start the render.');
       return null;
     });
-    if (created && mountedRef.current) pollModel(created.id);
-  }, [selectedImage, selectedTarget, setParam, pollModel]);
+    if (created && mountedRef.current) { setModelId(created.id); setGenerating(true); }
+  }, [selectedImage, selectedTarget, setParam, mountedRef]);
 
   // Why the Generate action is blocked, or null when it's ready to run. The runner
   // (POST create → on-device render → landed .glb) is wired, so the terminal state
