@@ -77,10 +77,10 @@ Column layout is the one thing an app genuinely has to agree with PortOS about. 
 
 Two mechanisms guard that:
 
-- **`publishBinding.runtimeContract`** (optional): `{ walkFrameCount, cellSize?, columnCount? }` — the grid the app was built against. Set it via `PUT /api/sprites/:id/publish-binding`. Publishing an atlas whose compiled geometry disagrees fails with a **409** naming both the actual and expected numbers and both resolutions (change the app's constant, or reprocess the walk set). A binding with no contract publishes unchecked, exactly as before the field existed.
+- **`publishBinding.runtimeContract`** (optional): `{ walkFrameCount, cellSize?, columnCount? }` — the grid the app was built against. Set it from the **Runtime contract** group in the publish binding form (the sprite's Publish workflow) — a "Match current atlas" button fills it from the compiled atlas geometry, and a "Clear" affordance removes it — or via `PUT /api/sprites/:id/publish-binding` directly. Publishing an atlas whose compiled geometry disagrees fails with a **409** naming both the actual and expected numbers and both resolutions (change the app's constant, or reprocess the walk set). A binding with no contract publishes unchecked, exactly as before the field existed.
 - **The sidecar**, so an app that reads it can fail loudly on its own terms instead of relying on PortOS to have been asked.
 
-`runtimeContract` follows absent-vs-null semantics: a saved binding that omits the key inherits the stored contract (the publish form doesn't edit it), while an explicit `null` clears it. The inheritance is scoped to the same `appId` — re-pointing a character at a different app drops the old app's contract rather than holding the new one to it.
+`runtimeContract` follows absent-vs-null semantics: a saved binding that omits the key inherits the stored contract (saving the form with the contract group untouched omits it, so the stored contract survives an unrelated edit), while an explicit `null` — what the form's "Clear" sends — clears it. The inheritance is scoped to the same `appId` — re-pointing a character at a different app drops the old app's contract rather than holding the new one to it.
 
 **A frame-count change is therefore a two-repo change.** Reprocess the walk set to the new count, update the app's frame-count constant *and* the distance/timing math derived from it, and update the contract — in whichever order, but neither half ships alone.
 
