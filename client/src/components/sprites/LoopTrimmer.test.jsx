@@ -166,7 +166,16 @@ describe('LoopTrimmer', () => {
     const { calls, ctx, restore } = recordingContext();
     try {
       renderTrimmer();
-      await waitFor(() => expect(calls.some(([fn]) => fn === 'drawImage')).toBe(true));
+      // Wait until every thumbnail has painted, and pin the col → source-x
+      // mapping while doing it: each of the 8 thumbnails must read its OWN cell
+      // out of the strip. Asserting only that source-x lands on a cell boundary
+      // would still pass if `col` were dropped and every frame showed cell 0.
+      const drawnColumns = () => [
+        ...new Set(calls.filter(([fn]) => fn === 'drawImage').map((c) => c[2] / STRIP_CELL_PX)),
+      ].sort((a, b) => a - b);
+      await waitFor(() => {
+        expect(drawnColumns()).toEqual(Array.from({ length: STRIP_FRAMES }, (_, i) => i));
+      });
       const drawAt = calls.map(([fn], i) => (fn === 'drawImage' ? i : -1)).filter((i) => i >= 0);
       drawAt.forEach((i) => {
         // Every draw is immediately preceded by a full-surface clear.
