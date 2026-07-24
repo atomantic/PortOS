@@ -31,7 +31,7 @@ import {
 import { resolveImageCleaners } from '../imageGen/index.js';
 import { getSettings } from '../settings.js';
 import { getRecord, updateRecord, listRecords, createCharacter } from './records.js';
-import { spriteDir, resolveSpriteAssetPath } from './paths.js';
+import { spriteDir, resolveSpriteAssetPath, listSpriteAssets } from './paths.js';
 import {
   SPRITE_DIRECTIONS, ANCHOR_DIRECTIONS, anchorIdForDirection,
   buildMainReferencePrompt, buildAnchorPrompt,
@@ -377,6 +377,37 @@ export async function listReferenceSources() {
     if (main?.locked && main.path) out.push({ id: r.id, name: r.name, kind: r.kind, path: main.path });
   }
   return out;
+}
+
+// Browser-renderable image formats (mirrors the client's spriteAssets probe
+// list — sharp can read more than a browser can paint, so a TIFF is skipped).
+const THUMBNAIL_RENDERABLE = /^(png|gif|webp|jpeg|jpg|svg)$/;
+
+/**
+ * A representative Library-catalog thumbnail for EVERY record, not just
+ * reference-workflow characters. A character with a locked main uses that (its
+ * canonical face, one manifest read); every other kind — places, objects,
+ * imported prop atlases, and a character with no locked main yet — falls back
+ * to its first previewable on-disk image (listSpriteAssets already sorts by
+ * path, so it's deterministic). Returns `[{ id, path }]` (record-relative),
+ * omitting records with no usable image. O(records): a locked character costs
+ * one manifest read, everything else one asset-dir scan — a catalog-view fetch,
+ * not a hot path (the client only calls it on the `/sprites` Library view).
+ */
+export async function listSpriteThumbnails() {
+  const records = await listRecords();
+  const results = await Promise.all(records.map(async (r) => {
+    if (r.deleted) return null;
+    if (r.kind === 'character') {
+      const manifest = await loadManifest(r.id);
+      const main = manifest?.mainReference;
+      if (main?.locked && main.path) return { id: r.id, path: main.path };
+    }
+    const assets = await listSpriteAssets(r.id);
+    const preview = assets.find((a) => a.width && a.height && THUMBNAIL_RENDERABLE.test(a.format || ''));
+    return preview ? { id: r.id, path: preview.path } : null;
+  }));
+  return results.filter(Boolean);
 }
 
 /**

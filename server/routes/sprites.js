@@ -37,7 +37,7 @@ import {
 import { importFromSource } from '../services/sprites/importer.js';
 import {
   getReferenceSet, startReferenceGeneration, lockReference, patchSpriteRecord,
-  listReferenceSources, forkSprite,
+  listReferenceSources, listSpriteThumbnails, forkSprite,
 } from '../services/sprites/reference.js';
 import {
   getWalkState, startWalkGeneration, approveWalkDirection, rerunWalkPostprocess, unlockWalkSet,
@@ -68,6 +68,12 @@ router.get('/', asyncHandler(async (_req, res) => {
 // an id param.
 router.get('/reference-sources', asyncHandler(async (_req, res) => {
   res.json(await listReferenceSources());
+}));
+
+// A representative thumbnail per record for the Library catalog — every kind,
+// not just reference-workflow characters. MUST precede `/:id`.
+router.get('/thumbnails', asyncHandler(async (_req, res) => {
+  res.json(await listSpriteThumbnails());
 }));
 
 // Create a character record — the entry point of the reference workflow.

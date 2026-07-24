@@ -14,12 +14,26 @@ export const getSpriteRecord = (id, options = {}) => request(`/sprites/${encodeU
 // main reference image).
 export const listSpriteReferenceSources = (options = {}) => request('/sprites/reference-sources', options);
 
+// Representative Library-catalog thumbnails for EVERY record — `[{ id, path }]`
+// (record-relative image). Characters use their locked main reference; other
+// kinds (places, objects, imported prop atlases) use their first previewable
+// asset. Records with no usable image are omitted.
+export const listSpriteThumbnails = (options = {}) => request('/sprites/thumbnails', options);
+
 export const createSpriteRecord = (body, options = {}) => request('/sprites', {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
 export const updateSpriteRecord = (id, patch, options = {}) => request(`/sprites/${encodeURIComponent(id)}`, {
   method: 'PATCH', body: JSON.stringify(patch), ...options,
+});
+
+// Delete (tombstone) a whole sprite record — drops it from the library while
+// its on-disk assets and its id stay reserved (a re-create must use a new id).
+// Callers own their confirmation UI, so pass `{ silent: true }` to suppress the
+// auto-toast. Returns the delete result.
+export const deleteSpriteRecord = (id, options = {}) => request(`/sprites/${encodeURIComponent(id)}`, {
+  method: 'DELETE', ...options,
 });
 
 // Delete one on-disk asset by its record-relative path — an old runtime atlas
