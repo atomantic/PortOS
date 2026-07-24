@@ -108,6 +108,26 @@ function buildKeyDecontaminator(maskKeyHex, canvasKeyHex) {
 }
 
 /**
+ * Write one masked foreground pixel into the destination canvas, shifting it
+ * off the old key when the composite re-keys onto a different one. Shared by
+ * both compositors (the reframing `normalizeFromAnalysis` and the
+ * geometry-preserving `recompositeOnKey`) so the fringe math — the subtlest
+ * code in this module — has exactly one definition.
+ */
+function writeForegroundPixel(canvas, dstI, data, srcI, decon) {
+  if (!decon) {
+    canvas[dstI] = data[srcI];
+    canvas[dstI + 1] = data[srcI + 1];
+    canvas[dstI + 2] = data[srcI + 2];
+    return;
+  }
+  const share = decon.share(data, srcI);
+  canvas[dstI] = clampByte(data[srcI] + share * decon.delta[0]);
+  canvas[dstI + 1] = clampByte(data[srcI + 1] + share * decon.delta[1]);
+  canvas[dstI + 2] = clampByte(data[srcI + 2] + share * decon.delta[2]);
+}
+
+/**
  * Histogram the foreground (non-key) pixels of an analysis, quantized to 4
  * bits per channel so anti-aliased shades collapse into their parent color.
  * Returns `[{ r, g, b, count }]` sorted by count desc — pickChromaKey's input.
@@ -166,20 +186,46 @@ export async function normalizeFromAnalysis(analysis, src, dest, canvasKeyHex) {
       if (!mask[y * width + x]) continue;
       const srcI = (y * width + x) * 3;
       const dstI = ((offsetY + (y - bbox.top)) * side + offsetX + (x - bbox.left)) * 3;
-      if (decon) {
-        const share = decon.share(data, srcI);
-        canvas[dstI] = clampByte(data[srcI] + share * decon.delta[0]);
-        canvas[dstI + 1] = clampByte(data[srcI + 1] + share * decon.delta[1]);
-        canvas[dstI + 2] = clampByte(data[srcI + 2] + share * decon.delta[2]);
-      } else {
-        canvas[dstI] = data[srcI];
-        canvas[dstI + 1] = data[srcI + 1];
-        canvas[dstI + 2] = data[srcI + 2];
-      }
+      writeForegroundPixel(canvas, dstI, data, srcI, decon);
     }
   }
   await sharp(canvas, { raw: { width: side, height: side, channels: 3 } }).png().toFile(dest);
   return { side, charW, charH };
+}
+
+/**
+ * Re-key an analyzed image onto `canvasKeyHex` WITHOUT reframing it (issue
+ * #2979). Same canvas dimensions, every non-foreground pixel replaced by the
+ * canonical key, surviving fringe run through the same decontaminator
+ * normalizeFromAnalysis uses.
+ *
+ * This is the turnaround sheet's lock path: `normalizeFromAnalysis`'s
+ * single-figure geometry (character at 80% of a square, feet 7% up) is
+ * meaningless for a multi-figure model sheet, but the key swap still matters —
+ * the locked sheet is the i2i init image for the main and every anchor, whose
+ * prompts name the canonical key, so a sheet still wearing its generation key
+ * would contradict the instruction it is attached to.
+ *
+ * A no-op re-encode when the mask key already equals the canvas key (the
+ * decontaminator is null and the fill matches), which is the common case for a
+ * legacy record whose key was frozen before the sheet was ever generated.
+ */
+export async function recompositeOnKey(analysis, src, dest, canvasKeyHex) {
+  const { data, width, height, mask, bbox, maskKey } = analysis;
+  if (!bbox) {
+    await copyFile(src, dest);
+    return { copiedThrough: true };
+  }
+  const fill = hexToRgb(canvasKeyHex);
+  const canvas = Buffer.alloc(width * height * 3, Buffer.from([fill.r, fill.g, fill.b]));
+  const decon = buildKeyDecontaminator(maskKey, canvasKeyHex);
+  for (let p = 0; p < width * height; p++) {
+    if (!mask[p]) continue;
+    // Geometry is preserved, so source and destination indices coincide.
+    writeForegroundPixel(canvas, p * 3, data, p * 3, decon);
+  }
+  await sharp(canvas, { raw: { width, height, channels: 3 } }).png().toFile(dest);
+  return { width, height };
 }
 
 /**

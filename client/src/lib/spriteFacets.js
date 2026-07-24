@@ -10,8 +10,10 @@
  * round-trip buys nothing, and the path grammar is stable enough to mirror.
  *
  * Pure module — no I/O, no React. The path grammar it decodes is written by:
+ *   reference/<id>-turnaround-vN.png          locked turnaround sheet (#2979)
  *   reference/<id>-walk-<dir>-vN.png          locked reference / anchor
  *   reference/candidates/walk-<dir>-candidate-N.png
+ *   reference/candidates/turnaround-candidate-N.png
  *   reference/uploads/<file>                  user-supplied design image
  *   grok|runs/<runId>/generated/frames/NN-<phase>.png
  *   grok|runs/<runId>/generated/<id>-walk-<dir>-strip.png

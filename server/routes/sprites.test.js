@@ -256,7 +256,21 @@ describe('sprites routes', () => {
     );
   });
 
-  it('POST /:id/reference/generate rejects an upload for a non-main target', async () => {
+  it('POST /:id/reference/generate accepts a multipart design-image upload for the turnaround', async () => {
+    const boundary = '----spritetest3';
+    const res = await request(app)
+      .post('/api/sprites/pioneer/reference/generate')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`)
+      .send(buildMultipart(boundary, { fields: { target: 'turnaround', designPrompt: 'a ranger' } }));
+    expect(res.status).toBe(200);
+    expect(reference.startReferenceGeneration).toHaveBeenCalledWith(
+      'pioneer',
+      expect.objectContaining({ target: 'turnaround', designPrompt: 'a ranger' }),
+      expect.objectContaining({ originalname: 'design.png', tempPath: expect.any(String) }),
+    );
+  });
+
+  it('POST /:id/reference/generate rejects an upload for a directional-anchor target', async () => {
     const boundary = '----spritetest2';
     const res = await request(app)
       .post('/api/sprites/pioneer/reference/generate')
@@ -265,6 +279,23 @@ describe('sprites routes', () => {
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('UPLOAD_MAIN_ONLY');
     expect(reference.startReferenceGeneration).not.toHaveBeenCalled();
+  });
+
+  it('POST /:id/reference/generate + /lock accept the turnaround target', async () => {
+    const gen = await request(app)
+      .post('/api/sprites/pioneer/reference/generate')
+      .send({ target: 'turnaround', designPrompt: 'a ranger' });
+    expect(gen.status).toBe(200);
+    expect(reference.startReferenceGeneration).toHaveBeenCalledWith(
+      'pioneer', { target: 'turnaround', designPrompt: 'a ranger' }, null,
+    );
+    const lock = await request(app)
+      .post('/api/sprites/pioneer/reference/lock')
+      .send({ target: 'turnaround', candidate: 'reference/candidates/turnaround-candidate-01.png' });
+    expect(lock.status).toBe(200);
+    expect(reference.lockReference).toHaveBeenCalledWith(
+      'pioneer', { target: 'turnaround', candidate: 'reference/candidates/turnaround-candidate-01.png' },
+    );
   });
 
   it('POST /:id/reference/generate rejects a non-image mime upload', async () => {

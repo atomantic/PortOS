@@ -87,12 +87,14 @@ export function buildCollectionActions({
       };
     }
 
-    // A reference CANDIDATE can be re-rolled; an approved/superseded anchor
-    // file only exists after the lock, and locks are irreversible. `south` is
-    // excluded because the main reference needs a design prompt or an uploaded
-    // image, neither of which an asset card can supply — that stays in
-    // ReferenceWorkflow.
-    if (role === 'reference' && status === 'candidate' && direction !== 'south') {
+    // A directional reference CANDIDATE can be re-rolled; an approved/superseded
+    // anchor file only exists after the lock, and locks are irreversible.
+    // `south` is excluded because the main reference is derived from the
+    // turnaround sheet in ReferenceWorkflow's guided flow, and a DIRECTIONLESS
+    // candidate (the turnaround sheet itself, #2979) has no direction to
+    // re-roll — it carries the design prompt and seed sources, which an asset
+    // card can't supply. Both stay in ReferenceWorkflow.
+    if (role === 'reference' && status === 'candidate' && direction && direction !== 'south') {
       const locked = lockedDirections.has(direction);
       const pending = Boolean(referencePending[direction]);
       return {
