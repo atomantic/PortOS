@@ -401,7 +401,9 @@ describe('approveWalkDirection', () => {
     expect(state.selection.directions.east).toMatchObject({
       status: 'approved', runId, runPath: `runs/${runId}`, runManifest: manifestRel,
     });
-    expect(state.selection.directions.east.runManifestSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(state.selection.directions.east.runManifestSha256).toBe(
+      sha256(await readFile(join(TEST_ROOT, 'sprites', id, manifestRel))),
+    );
     expect(state.walkSet).toBeNull();
   });
 
@@ -418,7 +420,12 @@ describe('approveWalkDirection', () => {
       // unlike the hash-pinned imported manifest it points at.
       status: 'approved', runId, runManifest: manifestRel,
     });
-    expect(state.selection.directions.east.runManifestSha256).toMatch(/^[0-9a-f]{64}$/);
+    // Pin WHICH file was hashed, not merely that something was: the whole bug is
+    // that the anchored path resolved to a file that isn't there, so a shape-only
+    // assertion would pass over a hash of the wrong (or a missing) manifest.
+    expect(state.selection.directions.east.runManifestSha256).toBe(
+      sha256(await readFile(join(TEST_ROOT, 'sprites', id, manifestRel))),
+    );
   });
 
   it('finalizes the walk set on the 8th approval and freezes the record', async () => {

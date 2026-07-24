@@ -116,7 +116,11 @@ async function characterWithRedrawRun(id, { frameCount = 6 } = {}) {
 // re-anchor at read time; left raw they resolve to
 // `data/sprites/<id>/art-source/sprites/<id>/…`, which is inside the record dir
 // (so the traversal gate passes) but does not exist.
-async function characterWithImportedRun(id, { manifest = 'valid' } = {}) {
+// `anchorPaths: false` writes the same fixture with RECORD-relative paths, so a
+// test can exercise manifest handling (absent / malformed) in isolation from the
+// re-anchoring — otherwise a malformed-manifest assertion passes for the wrong
+// reason on a reverted fix (the anchored path 404s and throws the same code).
+async function characterWithImportedRun(id, { manifest = 'valid', anchorPaths = true } = {}) {
   await records.createRecord({ kind: 'character', name: 'Imported' }, id);
   const width = CELL * CELL_COLORS.length;
   const buf = Buffer.alloc(width * CELL * 4);
@@ -129,7 +133,7 @@ async function characterWithImportedRun(id, { manifest = 'valid' } = {}) {
   await mkdir(join(runDir, 'generated'), { recursive: true });
   await sharp(buf, { raw: { width, height: CELL, channels: 4 } }).png()
     .toFile(join(runDir, 'generated', 'strip.png'));
-  const anchored = (rel) => `art-source/sprites/${id}/${rel}`;
+  const anchored = (rel) => (anchorPaths ? `art-source/sprites/${id}/${rel}` : rel);
   const stripRel = `runs/${RUN_ID}/generated/strip.png`;
   const manifestRel = `runs/${RUN_ID}/generated/manifest.json`;
   if (manifest !== 'absent') {
@@ -291,10 +295,17 @@ describe('saveLoopTrim', () => {
     expect(manifest.selectedFrames.map((f) => f.sourceFrameLabel)).toEqual(['0', '1']);
   });
 
+  // Record-relative on purpose: the manifest is genuinely READ here (the path
+  // resolves), so the throw can only come from the malformed-content guard — not
+  // from a 404 the way an anchored path would on an unfixed reader. That isolates
+  // this assertion to the absent-vs-malformed split it names.
   it('still rejects a manifest that exists but is inconsistent', async () => {
-    const id = await characterWithImportedRun(newId(), { manifest: 'malformed' });
+    const id = await characterWithImportedRun(newId(), { manifest: 'malformed', anchorPaths: false });
     await expect(saveLoopTrim(id, { runId: RUN_ID, enabledColumns: [0, 1] }))
       .rejects.toMatchObject({ code: 'RUN_MANIFEST_INVALID' });
+    // The throw must be terminal — no half-written trim artifacts left behind.
+    await expect(readFile(join(TEST_ROOT, 'sprites', id, 'walk/trims/east-loop-v001.json'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('rejects unknown runs, unpackaged runs, and out-of-strip columns', async () => {
