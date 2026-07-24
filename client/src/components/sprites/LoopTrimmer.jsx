@@ -7,7 +7,7 @@ import {
 import toast from '../ui/Toast';
 import { trimSpriteWalk } from '../../services/apiSprites.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
-import { spriteAssetUrl, paintCheckerboard } from './spriteAssets.js';
+import { spriteAssetUrl, checkerboardStyle, PIXELATED } from './spriteAssets.js';
 import SpritePreview from './SpritePreview.jsx';
 import {
   buildTrimmerSources, allColumns, invertColumns, phaseLabelFor, sanitizeTrimSlug,
@@ -21,32 +21,67 @@ import {
 // `POST /api/sprites/:id/walk/trim`. Every packed-strip run is trimmable (any
 // layout); previously saved trims load read-only for review.
 
+// CSS display width of the main playback preview. There is deliberately no
+// thumbnail counterpart: thumbnails size themselves off the grid column
+// (`w-full`), and since #2977 no frame's canvas is sized in display px at all.
 const MAIN_PX = 192;
-const THUMB_PX = 64;
 
-// One frame of a packed strip on a checkerboarded canvas. Its own ref+effect so
-// each thumbnail repaints independently when the image loads or geometry shifts.
-function FrameCanvas({ img, col, cellW, cellH, size }) {
+// One frame of a packed strip, painted at SOURCE resolution (#2977).
+//
+// The backing store is the cell's own pixel size (384² for a native walk),
+// never the display size — `drawImage` copies the cell 1:1 so JS never
+// resamples, and CSS alone scales it down to the thumbnail/preview box. The
+// earlier version sized the canvas at THUMB_PX/MAIN_PX, which decimated 384→64
+// nearest-neighbor and then let the browser smooth-upscale that back to the
+// grid column: the "fuzzy / compressed" look this replaces.
+//
+// Following SpritePreview's rule, the checkerboard goes on the BOX (a CSS
+// background at a constant on-screen cell size) rather than into the canvas —
+// painted into a 384px backing store its squares would shrink with the scale
+// factor — and the canvas carries the shared PIXELATED style so the browser's
+// scale stays nearest-neighbor like every other sprite surface.
+//
+// `checkerCell` is the checkerboard square size in CSS px — larger for the main
+// preview, smaller so the pattern stays legible in a thumbnail.
+function FrameCanvas({ img, col, cellW, cellH, checkerCell = 5 }) {
   const ref = useRef(null);
+  // Natural cell geometry, rounded to whole pixels for the backing store. Zero
+  // until the strip <img> loads.
+  const w = cellW > 0 ? Math.max(1, Math.round(cellW)) : 0;
+  const h = cellH > 0 ? Math.max(1, Math.round(cellH)) : 0;
+  const ready = w > 0 && h > 0;
+
   useEffect(() => {
     const canvas = ref.current;
-    if (!canvas) return;
+    if (!canvas || !img || !ready) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return; // jsdom / context-less canvas
-    paintCheckerboard(ctx, canvas.width, canvas.height, size >= MAIN_PX ? 8 : 5);
-    if (img && cellW > 0 && cellH > 0) {
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(img, col * cellW, 0, cellW, cellH, 0, 0, canvas.width, canvas.height);
-    }
-  }, [img, col, cellW, cellH, size]);
-  const aspect = cellW > 0 && cellH > 0 ? cellH / cellW : 1;
+    // The canvas is transparent now that the checkerboard moved to the box, so
+    // a frame swap must clear before drawing or the previous cell shows
+    // through this one's alpha.
+    ctx.clearRect(0, 0, w, h);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, col * cellW, 0, cellW, cellH, 0, 0, w, h);
+  }, [img, col, cellW, cellH, w, h, ready]);
+
+  // The box holds the frame's aspect whether or not the strip has loaded, so
+  // the grid doesn't collapse to zero height and then reflow on load. The
+  // pre-load placeholder is square because square cells are this module's
+  // invariant, not a guess: a native walk cell is WALK_CELL_SIZE² and
+  // `buildTrimmerSources` derives a saved trim's frameCount as
+  // `round(width / height)`, which only holds for square cells.
   return (
-    <canvas
-      ref={ref}
-      width={size}
-      height={Math.round(size * aspect)}
-      className="w-full h-auto block"
-    />
+    <div
+      className="w-full block overflow-hidden"
+      style={{
+        ...checkerboardStyle(checkerCell),
+        aspectRatio: ready ? `${w} / ${h}` : '1 / 1',
+      }}
+    >
+      {ready && (
+        <canvas ref={ref} width={w} height={h} className="w-full h-auto block" style={PIXELATED} />
+      )}
+    </div>
   );
 }
 
@@ -235,7 +270,7 @@ export default function LoopTrimmer({
             className="border border-port-border rounded overflow-hidden mx-auto"
             style={{ width: MAIN_PX, maxWidth: '100%' }}
           >
-            <FrameCanvas img={img} col={frameIndex} cellW={cellW} cellH={cellH} size={MAIN_PX} />
+            <FrameCanvas img={img} col={frameIndex} cellW={cellW} cellH={cellH} checkerCell={8} />
           </div>
           <div className="flex items-center justify-center gap-2 mt-2">
             <button
@@ -311,7 +346,7 @@ export default function LoopTrimmer({
                     active ? 'border-port-accent ring-1 ring-port-accent' : 'border-port-border hover:border-gray-500'
                   } ${on ? '' : 'opacity-40 grayscale'}`}
                 >
-                  <FrameCanvas img={img} col={i} cellW={cellW} cellH={cellH} size={THUMB_PX} />
+                  <FrameCanvas img={img} col={i} cellW={cellW} cellH={cellH} />
                   <span className="block text-center text-[10px] text-gray-500 py-0.5">{i}</span>
                 </button>
               );
