@@ -132,6 +132,36 @@ export function keyness(pixel, split) {
   return minHigh - maxLow;
 }
 
+/**
+ * Build the per-pixel background-key "share" sampler for a key: the fraction of
+ * a pixel that is the key color, reversing anti-aliased source-over-key
+ * compositing. Measured as the min over the key's (high, low) channel pairs of
+ * (pixel[high] − pixel[low]) / (key[high] − key[low]), clamped to [0, 1] — a
+ * pure-key pixel scores 1, a pixel unlike the key scores 0, an anti-aliased
+ * blend lands in between (the exact weight of the key still contaminating it).
+ *
+ * `keyRgb` is the key as `[r, g, b]` (a nominal key OR a measured border key);
+ * `split` is its keyChannelSplit. The returned sampler reads channels from
+ * `arr` at `base + channelIndex`, so one factory serves both a 3-element pixel
+ * array (`base` 0) and a flat RGB/RGBA buffer (`base` = pixelIndex * channels).
+ * The (high, low) pairs and their spans are precomputed once per key so the
+ * hot per-pixel path only does the reads, subtracts, and min.
+ */
+export function keyShareFn(keyRgb, split) {
+  const pairs = [];
+  for (const h of split.highs) {
+    for (const l of split.lows) pairs.push([h, l, Math.max(1, keyRgb[h] - keyRgb[l])]);
+  }
+  return (arr, base = 0) => {
+    let s = Infinity;
+    for (const [h, l, span] of pairs) {
+      const v = (arr[base + h] - arr[base + l]) / span;
+      if (v < s) s = v;
+    }
+    return s < 0 ? 0 : s > 1 ? 1 : s;
+  };
+}
+
 export function pickChromaKey(palette, opts = {}) {
   const significant = significantHues(palette, opts);
 

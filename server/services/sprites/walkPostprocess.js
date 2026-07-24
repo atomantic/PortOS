@@ -25,7 +25,7 @@ import { readdir, writeFile } from 'fs/promises';
 import { createHash } from 'crypto';
 import { ensureDir, atomicWrite, sha256File } from '../../lib/fileUtils.js';
 import { findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
-import { keyChannelSplit, keyness } from './chromaKey.js';
+import { keyChannelSplit, keyness, keyShareFn } from './chromaKey.js';
 
 // Source pipeline constants (animation_postprocess.py) — values are part of
 // the cross-install artifact contract (imported manifests carry them).
@@ -70,7 +70,6 @@ export function pyRoundTo(x, dp) {
 }
 
 const clampChannel = (v) => Math.max(0, Math.min(255, pyRound(v)));
-const clamp01 = (v) => Math.max(0, Math.min(1, v));
 
 /** statistics.median: middle value, or mean of the two middles. */
 export function median(values) {
@@ -150,22 +149,12 @@ export function validateMeasuredKey(measured, split, keyHex) {
 export function recoverAlphaFrame(frame, measuredKey, split) {
   const { data, width, height } = frame;
   const out = Buffer.alloc(width * height * 4);
-  const pairs = [];
-  for (const h of split.highs) {
-    for (const l of split.lows) {
-      pairs.push([h, l, Math.max(1, measuredKey[h] - measuredKey[l])]);
-    }
-  }
+  const shareOf = keyShareFn(measuredKey, split);
   const px = [0, 0, 0];
   for (let p = 0; p < width * height; p++) {
     const i = p * 4;
     px[0] = data[i]; px[1] = data[i + 1]; px[2] = data[i + 2];
-    let share = Infinity;
-    for (const [h, l, span] of pairs) {
-      const s = (px[h] - px[l]) / span;
-      if (s < share) share = s;
-    }
-    share = clamp01(share);
+    const share = shareOf(px);
     if (share < KEY_NOISE_FLOOR) {
       out[i] = px[0]; out[i + 1] = px[1]; out[i + 2] = px[2]; out[i + 3] = 255;
       continue;

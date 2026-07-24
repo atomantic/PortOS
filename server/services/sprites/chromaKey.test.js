@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   CHROMA_KEYS, CHROMA_KEY_HEXES, MIN_HUE_SEPARATION,
   rgbToHsv, hueDistance, pickChromaKey, keyProximityWarning,
+  keyChannelSplit, keyShareFn,
 } from './chromaKey.js';
 
 describe('chroma key set', () => {
@@ -102,5 +103,28 @@ describe('keyProximityWarning', () => {
   it('stays quiet for achromatic/empty palettes', () => {
     expect(keyProximityWarning([solid(40, 40, 40)], '#FF00FF')).toBeNull();
     expect(keyProximityWarning([], '#FF00FF')).toBeNull();
+  });
+});
+
+describe('keyShareFn', () => {
+  const magenta = [255, 0, 255];
+  const split = keyChannelSplit('#FF00FF'); // highs r+b, low g
+
+  it('scores a pure key pixel 1 and a pixel unlike the key 0', () => {
+    const share = keyShareFn(magenta, split);
+    expect(share(magenta)).toBe(1);       // exact key
+    expect(share([0, 255, 0])).toBe(0);   // pure green — opposite of magenta
+  });
+
+  it('scores an anti-aliased blend by its key weight', () => {
+    const share = keyShareFn(magenta, split);
+    // 0.8·magenta + 0.2·green = (204,51,204): min((204-51)/255) = 0.6.
+    expect(share([204, 51, 204])).toBeCloseTo(0.6, 5);
+  });
+
+  it('reads from a flat buffer at an arbitrary base offset', () => {
+    const share = keyShareFn(magenta, split);
+    const buf = [0, 0, 0, 204, 51, 204]; // key blend at pixel index 1
+    expect(share(buf, 3)).toBeCloseTo(0.6, 5);
   });
 });
