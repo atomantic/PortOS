@@ -19,6 +19,8 @@ vi.mock('../services/sprites/reference.js', () => ({
   startReferenceGeneration: vi.fn(async () => ({ jobId: 'j1', mode: 'codex', target: 'main', anchorId: 'walk-south' })),
   lockReference: vi.fn(async () => ({ manifest: { status: 'in-progress' }, candidates: [] })),
   patchSpriteRecord: vi.fn(async (id, patch) => ({ id, ...patch })),
+  listReferenceSources: vi.fn(async () => [{ id: 'pioneer', name: 'Pioneer', kind: 'character', path: 'reference/pioneer-walk-south-v1.png' }]),
+  forkSprite: vi.fn(async (sourceId, body) => ({ record: { id: 'pioneer-fork', kind: 'character', name: body.name }, jobId: 'j1', mode: 'codex', target: 'main', anchorId: 'walk-south' })),
 }));
 
 vi.mock('../services/sprites/walk.js', () => ({
@@ -97,6 +99,38 @@ describe('sprites routes', () => {
     const bad = await request(app).post('/api/sprites').send({ name: 'Hero', kind: 'weapon' });
     expect(bad.status).toBe(400);
     expect(records.createCharacter).not.toHaveBeenCalled();
+  });
+
+  it('GET /reference-sources lists lockable reference sprites (before /:id)', async () => {
+    const r = await request(app).get('/api/sprites/reference-sources');
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual([{ id: 'pioneer', name: 'Pioneer', kind: 'character', path: 'reference/pioneer-walk-south-v1.png' }]);
+    expect(reference.listReferenceSources).toHaveBeenCalled();
+    // The literal path must not be swallowed by the /:id route.
+    expect(records.getRecordWithAssets).not.toHaveBeenCalled();
+  });
+
+  it('POST /:id/fork validates and delegates to forkSprite', async () => {
+    const r = await request(app).post('/api/sprites/pioneer/fork')
+      .send({ name: 'Pioneer Fork', designPrompt: 'now with a red coat' });
+    expect(r.status).toBe(201);
+    expect(r.body.record.id).toBe('pioneer-fork');
+    expect(reference.forkSprite).toHaveBeenCalledWith('pioneer', expect.objectContaining({ name: 'Pioneer Fork', designPrompt: 'now with a red coat' }));
+  });
+
+  it('POST /:id/fork rejects a missing design prompt at the schema', async () => {
+    const bad = await request(app).post('/api/sprites/pioneer/fork').send({ name: 'Pioneer Fork' });
+    expect(bad.status).toBe(400);
+    expect(reference.forkSprite).not.toHaveBeenCalled();
+  });
+
+  it('POST /:id/reference/generate accepts a gallery/sprite seed source in JSON', async () => {
+    const r = await request(app).post('/api/sprites/pioneer/reference/generate')
+      .send({ target: 'main', designPrompt: 'x', initImageSpriteId: 'trailhand' });
+    expect(r.status).toBe(200);
+    expect(reference.startReferenceGeneration).toHaveBeenCalledWith(
+      'pioneer', expect.objectContaining({ target: 'main', initImageSpriteId: 'trailhand' }), null,
+    );
   });
 
   it('GET /:id returns record + assets + reference set for characters', async () => {

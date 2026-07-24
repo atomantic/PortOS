@@ -19,6 +19,7 @@ import {
   spriteCreateSchema,
   spriteReferenceGenerateSchema,
   spriteReferenceLockSchema,
+  spriteForkSchema,
   spriteWalkGenerateSchema,
   spriteWalkApproveSchema,
   spriteWalkPostprocessSchema,
@@ -36,6 +37,7 @@ import {
 import { importFromSource } from '../services/sprites/importer.js';
 import {
   getReferenceSet, startReferenceGeneration, lockReference, patchSpriteRecord,
+  listReferenceSources, forkSprite,
 } from '../services/sprites/reference.js';
 import {
   getWalkState, startWalkGeneration, approveWalkDirection, rerunWalkPostprocess, unlockWalkSet,
@@ -59,6 +61,13 @@ const referenceUpload = optionalUploadFields(['referenceImage'], {
 
 router.get('/', asyncHandler(async (_req, res) => {
   res.json(await listRecords());
+}));
+
+// Characters with a locked main reference — the pool that can seed a new main
+// (i2i) or be forked. MUST precede `/:id` so the literal path isn't captured as
+// an id param.
+router.get('/reference-sources', asyncHandler(async (_req, res) => {
+  res.json(await listReferenceSources());
 }));
 
 // Create a character record — the entry point of the reference workflow.
@@ -113,6 +122,14 @@ router.post('/:id/reference/generate', referenceUpload, asyncHandler(async (req,
 router.post('/:id/reference/lock', asyncHandler(async (req, res) => {
   const body = validateRequest(spriteReferenceLockSchema, req.body);
   res.json(await lockReference(req.params.id, body));
+}));
+
+// Fork `:id` into a new character seeded (image+text→image) from its locked
+// main reference. Creates the record then queues the main render; returns the
+// new record + jobId. User-triggered per the AI-provider policy.
+router.post('/:id/fork', asyncHandler(async (req, res) => {
+  const body = validateRequest(spriteForkSchema, req.body);
+  res.status(201).json(await forkSprite(req.params.id, body));
 }));
 
 // Phase 3 (#2897): queue one grok walk video for a locked directional

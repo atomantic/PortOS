@@ -753,6 +753,7 @@ export default function Sprites() {
                         mode={imageMode}
                         onModeChange={setImageMode}
                         onChanged={onWorkflowChanged}
+                        onForked={(rec) => { refresh(); navigate(`/sprites/${rec.id}`); }}
                       />
                       <WalkWorkflow
                         record={detail.record}

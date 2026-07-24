@@ -1052,6 +1052,27 @@ export const spriteReferenceGenerateSchema = z.object({
   effort: z.string().trim().max(32).optional(),
   designPrompt: z.string().max(4000).optional(),
   initImageStrength: optionalUnitNumber,
+  // Alternative i2i seed sources for the main target — resolved server-side and
+  // mutually exclusive with an uploaded `referenceImage` file (which the route
+  // handles separately). `initImageGalleryFile` is a render-history gallery
+  // basename; `initImageSpriteId` is another sprite whose locked main reference
+  // seeds this one (the "fork"/derive-from case). Ignored for anchor targets.
+  initImageGalleryFile: z.string().trim().max(300).optional(),
+  initImageSpriteId: z.string().trim().max(200).optional(),
+});
+
+// Fork a new character from an existing sprite's locked main reference: create
+// the record, then image+text→image its main from the source reference. The
+// design prompt is REQUIRED here (unlike a from-scratch generate) — a fork with
+// no instructions is just a duplicate.
+export const spriteForkSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  id: z.string().trim().max(200).optional(),
+  designPrompt: z.string().trim().min(1).max(4000),
+  mode: z.enum(QUEUEABLE_IMAGE_MODES).optional(),
+  model: z.string().trim().max(64).optional(),
+  effort: z.string().trim().max(32).optional(),
+  initImageStrength: optionalUnitNumber,
 });
 
 export const spriteReferenceLockSchema = z.object({
