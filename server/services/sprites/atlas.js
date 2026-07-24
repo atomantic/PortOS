@@ -45,6 +45,7 @@ import {
   sampleBorderKey, validateMeasuredKey, recoverAlphaFrame, despillKeyFrame,
   alphaBbox, compositeOnto, sha256Buffer,
 } from './walkPostprocess.js';
+import { ATLAS_IDLE_COLUMN, ATLAS_SCANNER_COLUMN } from './walkBounds.js';
 import { withWalkWriteTail, walkSetRelPath, isImportedWalkSet } from './walk.js';
 
 // Player atlas contract (source pipeline runtime_publish.py): 96px cells,
@@ -57,7 +58,7 @@ import { withWalkWriteTail, walkSetRelPath, isImportedWalkSet } from './walk.js'
 // grows/shrinks with the chosen count. ATLAS_COLUMNS is the historical 8-frame
 // layout, kept as the default/fallback; atlasColumns(labels) builds the actual
 // column list a given compile uses.
-export const atlasColumns = (walkLabels) => ['idle', ...walkLabels, 'scanner'];
+export const atlasColumns = (walkLabels) => [ATLAS_IDLE_COLUMN, ...walkLabels, ATLAS_SCANNER_COLUMN];
 export const ATLAS_COLUMNS = atlasColumns(WALK_PHASES);
 export const DEFAULT_ATLAS_GEOMETRY = {
   cellSize: 96,
@@ -329,7 +330,7 @@ async function compileDirectionRow(recordId, direction, validated, geometry) {
     throw compileError(`${direction} idle height ${idle.meta.occupiedBounds.height} misses the walk median ${pyRoundTo(desiredIdleHeight, 2)}`);
   }
   cells.push({
-    column: 'idle',
+    column: ATLAS_IDLE_COLUMN,
     ...idle,
     sourcePath: anchor.path,
     sourceSha256: anchor.sha256,
@@ -345,7 +346,7 @@ async function compileDirectionRow(recordId, direction, validated, geometry) {
   // Cell frames are read-only after normalization, so the scanner placeholder
   // can share the idle cell's buffer outright.
   cells.push({
-    column: 'scanner',
+    column: ATLAS_SCANNER_COLUMN,
     cell: idle.cell,
     meta: idle.meta,
     sourcePath: anchor.path,

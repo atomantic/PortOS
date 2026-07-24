@@ -31,7 +31,7 @@ Identity & self: [digital-twin](./features/digital-twin.md) · [identity-system]
 
 Knowledge: [brain-system](./features/brain-system.md) · [messages-security](./features/messages-security.md)
 
-Create: [writers-room](./features/writers-room.md) · [cybercity-v2](./features/cybercity-v2.md)
+Create: [writers-room](./features/writers-room.md) · [cybercity-v2](./features/cybercity-v2.md) · [sprite-export-contract](./features/sprite-export-contract.md)
 
 Comms & voice: [openclaw-operator-chat](./features/openclaw-operator-chat.md) ([pre-build audit](./research/2026-03-31-openclaw-operator-chat-audit.md)) · [voice](./features/voice.md)
 
