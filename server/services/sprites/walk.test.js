@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { mkdir, writeFile, readFile } from 'fs/promises';
+import { mkdir, writeFile, readFile, rm } from 'fs/promises';
 import { createHash } from 'crypto';
 import { lockAllAnchors } from './spriteTestFixtures.js';
 
@@ -56,10 +56,17 @@ const prepareWalkAnchorChromaInput = vi.fn(async (_anchorAbs, destAbs) => {
   await writeFile(destAbs, 'stub-chroma-anchor');
   return { preparation: 'composited-over-solid-chroma-matte' };
 });
-const runWalkPostprocess = vi.fn(async ({ runRel }) => ({
-  manifestPath: `${runRel}/generated/manifest.json`,
-  stripPreview: { stripPath: `${runRel}/generated/strip.png`, frameCount: 8, fps: 12, cellWidth: 384, cellHeight: 384, row: 0, startColumn: 0 },
-}));
+const runWalkPostprocess = vi.fn(async ({ runRel, runAbs }) => {
+  // Faithfully land the packed strip on disk (the real postprocess writes it) —
+  // getWalkState's missing-strip guard now flips a candidate whose strip is
+  // absent to an error, so a mock that only returns the path would look broken.
+  await mkdir(join(runAbs, 'generated'), { recursive: true });
+  await writeFile(join(runAbs, 'generated', 'strip.png'), 'packaged-strip-bytes');
+  return {
+    manifestPath: `${runRel}/generated/manifest.json`,
+    stripPreview: { stripPath: `${runRel}/generated/strip.png`, frameCount: 8, fps: 12, cellWidth: 384, cellHeight: 384, row: 0, startColumn: 0 },
+  };
+});
 vi.mock('./walkPostprocess.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -115,6 +122,11 @@ async function makeCandidateRun(recordId, direction, { stripBytes = `strip-${dir
     chromaKey: '#FF00FF',
     createdAt: new Date().toISOString(),
     postprocessManifest: manifestRel,
+    // Real candidate records carry the packed-strip preview the UI renders.
+    stripPreview: {
+      stripPath: `runs/${runId}/generated/${stripName}`,
+      frameCount: 8, fps: 12, cellWidth: 384, cellHeight: 384, row: 0, startColumn: 0,
+    },
   }));
   return { runId, manifestRel };
 }
@@ -466,6 +478,43 @@ describe('getWalkState', () => {
     const { runs } = await getWalkState(id);
     expect(runs).toHaveLength(2);
     expect(runs[0].id).toBe(second.runId);
+  });
+
+  // A candidate/approved run whose packed strip PNG has gone missing on disk
+  // (a botched migration or manual cleanup dropped it — how pioneer's north/west
+  // strips silently vanished) must NOT surface as a healthy run: the native
+  // render path otherwise hands the client a stripPath that 404s into a blank
+  // StripLoop. getWalkState surfaces it as an error with stripMissing, drops the
+  // dangling stripPath, and never rewrites the record on disk.
+  it('surfaces a candidate run whose strip is missing on disk as an error', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const { runId } = await makeCandidateRun(id, 'east');
+    const runRecordPath = join(TEST_ROOT, 'sprites', id, 'runs', runId, 'animation-run.json');
+    const bytesBefore = await readFile(runRecordPath);
+    // Drop the packed strip the record advertises.
+    await rm(join(TEST_ROOT, 'sprites', id, 'runs', runId, 'generated', `${id}-walk-east-strip.png`));
+
+    const { runs } = await getWalkState(id);
+    const run = runs.find((r) => r.id === runId);
+    expect(run.status).toBe('error');
+    expect(run.stripMissing).toBe(true);
+    expect(run.postprocessError).toMatch(/strip is missing/i);
+    // Dangling stripPath is dropped so StripLoop / the trim button don't render it.
+    expect(run.stripPreview.stripPath).toBeUndefined();
+    // Read-time only — the record on disk is untouched.
+    expect(await readFile(runRecordPath)).toEqual(bytesBefore);
+  });
+
+  // A run whose strip IS on disk stays a healthy candidate — the guard only
+  // fires on an actually-missing file, not on every read.
+  it('leaves a candidate run with its strip present untouched', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const { runId } = await makeCandidateRun(id, 'east');
+    const { runs } = await getWalkState(id);
+    const run = runs.find((r) => r.id === runId);
+    expect(run.status).toBe('candidate');
+    expect(run.stripMissing).toBeUndefined();
+    expect(run.stripPreview.stripPath).toBe(`runs/${runId}/generated/${id}-walk-east-strip.png`);
   });
 
   // Imported run records (issue #2895 importer, ElsewhereAcres source

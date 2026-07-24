@@ -87,6 +87,43 @@ describe('WalkWorkflow loop preview', () => {
     expect(loop.style.backgroundSize).toBe(`${CELL_PX * 8}px ${CELL_PX}px`);
   });
 
+  // A strip painted as a CSS background-image fires no onError, so a missing/404
+  // file would otherwise render a silent blank box. The server drops the path
+  // for a known-missing strip, but a preload probe is the client-side backstop:
+  // a strip that fails to load shows an explicit placeholder instead of a gap.
+  it('shows a "strip missing" placeholder when the strip fails to load', async () => {
+    const OriginalImage = global.Image;
+    // Simulate the strip 404ing: fire onerror as soon as src is assigned.
+    global.Image = class {
+      set src(_v) { if (this.onerror) queueMicrotask(() => this.onerror()); }
+    };
+    try {
+      render(
+        <MemoryRouter>
+          <WalkWorkflow
+            record={{ id: 'example-walker' }}
+            reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked' }] } }}
+            walk={{
+              runs: [{ id: 'run-east', direction: 'east', status: 'approved', stripPreview: APPROVED_STRIP }],
+              selection: { directions: { east: { status: 'approved', runId: 'run-east' } } },
+              walkSet: null,
+            }}
+            renders={noRenders()}
+            duration={6}
+            onDurationChange={vi.fn()}
+            onGenerate={vi.fn()}
+            onChanged={vi.fn()}
+          />
+        </MemoryRouter>,
+      );
+      expect(await screen.findByText('strip missing')).toBeInTheDocument();
+      // The animated loop is NOT rendered in the failed state.
+      expect(screen.queryByRole('img', { name: 'walk loop preview' })).toBeNull();
+    } finally {
+      global.Image = OriginalImage;
+    }
+  });
+
   it('scales the preview box to a non-square cell', () => {
     const loop = renderWalk({
       stripPath: 'grok/walk-east-abc/generated/strip.png',
