@@ -557,6 +557,31 @@ describe('layout sidecar (#2982)', () => {
     expect(await readFile(join(APP_REPO, BINDING.atlasDestPath)).catch(() => null)).toBeNull();
   });
 
+  it('refuses an occupied sidecar before rewriting the game source on the up-to-date path too', async () => {
+    const { id, atlasBytes } = await characterWithAtlas();
+    const oldResource = 'res://assets/sprites/hero/old-name.png';
+    const newResource = 'res://assets/sprites/hero/hero-atlas.png';
+    await mkdir(join(APP_REPO, 'src'), { recursive: true });
+    const sourceBefore = `var atlas = load("${oldResource}");\n`;
+    await writeFile(join(APP_REPO, 'src/Hero.cs'), sourceBefore);
+    await setPublishBinding(id, {
+      appId: 'game-app',
+      atlasDestPath: 'assets/sprites/hero/old-name.png',
+      codeBinding: { path: 'src/Hero.cs', resourcePath: oldResource },
+    });
+    await publishAtlas(id);
+
+    // The NEW destination already holds the current atlas bytes, so the publish
+    // takes the up-to-date branch — which still rewrites the game source, and
+    // so must also refuse the foreign sidecar before doing it.
+    await setPublishBinding(id, { ...BINDING, codeBinding: { path: 'src/Hero.cs', resourcePath: newResource } });
+    await writeFile(join(APP_REPO, BINDING.atlasDestPath), atlasBytes);
+    await writeFile(join(APP_REPO, sidecarPath(BINDING.atlasDestPath)), '{"kind":"someone-elses-file"}');
+
+    await expect(publishAtlas(id)).rejects.toMatchObject({ status: 409, code: 'PUBLISH_LAYOUT_OCCUPIED' });
+    expect(await readFile(join(APP_REPO, 'src/Hero.cs'), 'utf8')).toBe(sourceBefore);
+  });
+
   it('refuses to publish an atlas whose geometry carries no column layout', async () => {
     const { id } = await characterWithAtlas('atlas-png-bytes-nogeo', undefined);
     compileAtlasInTail.mockResolvedValue({
