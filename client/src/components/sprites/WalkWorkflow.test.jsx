@@ -124,6 +124,43 @@ describe('WalkWorkflow loop preview', () => {
     }
   });
 
+  // When the server flags a run stripMissing (its packed strip is gone on disk)
+  // it drops the stripPath, so the loop can't render. The card must show an
+  // explicit indicator pointing at the recovery that works for the direction's
+  // state — regenerate an unapproved/unfinalized direction, unlock a finalized
+  // set — never the status==='error' "Retry postprocess" that would 409.
+  const renderMissing = ({ finalized }) => render(
+    <MemoryRouter>
+      <WalkWorkflow
+        record={{ id: 'example-walker' }}
+        reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked' }] } }}
+        walk={{
+          runs: [{ id: 'run-east', direction: 'east', status: 'candidate', stripMissing: true, stripPreview: { frameCount: 8, fps: 12, cellWidth: 384, cellHeight: 384 } }],
+          selection: { directions: { east: { status: 'approved', runId: 'run-east' } } },
+          walkSet: finalized ? { directions: { east: { status: 'approved' } } } : null,
+        }}
+        renders={noRenders()}
+        duration={6}
+        onDurationChange={vi.fn()}
+        onGenerate={vi.fn()}
+        onChanged={vi.fn()}
+      />
+    </MemoryRouter>,
+  );
+
+  it('shows a regenerate-oriented strip-missing indicator on an unfinalized direction', () => {
+    renderMissing({ finalized: false });
+    expect(screen.getByText(/Walk strip missing on disk — regenerate to repack it\./)).toBeInTheDocument();
+    // No dead "Retry postprocess" button (that path is gated on status==='error').
+    expect(screen.queryByRole('button', { name: /Retry postprocess|Re-run postprocess/ })).toBeNull();
+    expect(screen.queryByRole('img', { name: 'walk loop preview' })).toBeNull();
+  });
+
+  it('points a finalized direction at unlock instead of regenerate', () => {
+    renderMissing({ finalized: true });
+    expect(screen.getByText(/Walk strip missing on disk — unlock the set to regenerate this direction\./)).toBeInTheDocument();
+  });
+
   it('scales the preview box to a non-square cell', () => {
     const loop = renderWalk({
       stripPath: 'grok/walk-east-abc/generated/strip.png',

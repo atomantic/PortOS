@@ -139,6 +139,19 @@ function DirectionCard({
         <StripLoop recordId={recordId} stripPreview={run.stripPreview} />
       )}
 
+      {/* The server dropped this run's stripPath because its packed strip is
+          gone on disk (stripMissing) — render an explicit indicator in place of
+          the blank loop, pointing at the recovery that actually works for this
+          direction's state: a finalized set must be unlocked first, an
+          unapproved candidate can just be regenerated (the Generate button
+          below). Deliberately not the status==='error' path, which offers a
+          "Retry postprocess" that 409s for a finalized/approved run. */}
+      {(approved || candidate) && run?.stripMissing && (
+        <p className="text-[10px] text-port-error border border-port-error/60 rounded px-1.5 py-1 leading-tight">
+          Walk strip missing on disk — {finalized ? 'unlock the set to regenerate this direction' : 'regenerate to repack it'}.
+        </p>
+      )}
+
       {/* grok animates in an observable TUI session — link into the Shell page
           to watch it, and (if needed) type to course-correct or Stop it. The
           session exists only while the render is live ('rendering'). */}

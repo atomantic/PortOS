@@ -185,23 +185,26 @@ function normalizeStripPreview(recordId, run) {
 // render path (unlike loadRedrawRun, which returns null on a missing strip)
 // hands the client a healthy-looking run and StripLoop paints a blank
 // background-image with no signal that anything is wrong. That's exactly how the
-// pioneer north/west strips vanished silently. Surface it as an error at read
-// time — never persisted — so the card shows the missing-strip message + a
-// regenerate affordance instead of a mystery blank, and drop the dangling
-// stripPath so StripLoop and the trim button don't try to render it. A run with
-// no stripPreview (rendering/postprocessing/pre-package) is untouched.
+// pioneer north/west strips vanished silently. Flag it at read time — never
+// persisted — so the card renders an explicit "strip missing" indicator instead
+// of a mystery blank, and drop the dangling stripPath so StripLoop and the trim
+// button don't try to render it. A run with no stripPreview
+// (rendering/postprocessing/pre-package) is untouched.
+//
+// Deliberately does NOT flip status to 'error': the run's status is orthogonal
+// to whether its strip survived on disk. Overloading 'error' here mis-drives the
+// UI — DirectionCard's error block offers "Retry postprocess", which 409s
+// (WALK_SET_FINAL / RUN_APPROVED) for exactly the finalized/approved directions
+// this guard most often fires on (the pioneer north/west population), and pairs a
+// red error with the green "approved" badge. Keeping the status lets the client
+// route recovery correctly off `stripMissing` + the direction's approved/finalized
+// state (regenerate an unapproved candidate; unlock the set for a finalized one).
 async function normalizeMissingStrip(recordId, run) {
   const stripPath = run?.stripPreview?.stripPath;
   if (!stripPath) return run;
   if (await pathExists(join(spriteDir(recordId), stripPath))) return run;
   const { stripPath: _dropped, ...stripPreviewRest } = run.stripPreview;
-  return {
-    ...run,
-    status: 'error',
-    stripMissing: true,
-    postprocessError: 'Packed walk strip is missing on disk — regenerate this direction to repack it.',
-    stripPreview: stripPreviewRest,
-  };
+  return { ...run, stripMissing: true, stripPreview: stripPreviewRest };
 }
 
 // PortOS stamps `id` on every run record it writes; imported source-pipeline
