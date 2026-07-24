@@ -346,6 +346,12 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
       fromTurnaround: turnaroundLocked,
     });
     if (turnaroundLocked) {
+      // The sheet IS the seed here, so a caller-supplied one has nowhere to go.
+      // Reject rather than silently dropping it (the route accepts an upload for
+      // this target because a legacy record's main does take one).
+      if (upload || body.initImageGalleryFile || body.initImageSpriteId) {
+        throw new ServerError('The main reference derives from the locked turnaround sheet — seed a new design through the sheet, not the main', { status: 400, code: 'SEED_NOT_APPLICABLE' });
+      }
       initImagePath = await requireLockedTurnaroundPath(recordId, manifest);
       initImageStrength ??= ANCHOR_DEFAULT_STRENGTH;
     } else {

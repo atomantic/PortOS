@@ -100,6 +100,11 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
   // grid as the user left it.
   const anchorList = manifest?.anchors || [];
   const allAnchorsLocked = anchorList.length > 0 && anchorList.every((a) => a.status === 'locked');
+  // A legacy character with every anchor already frozen has nothing left for a
+  // sheet to improve — main and anchors are immutable — so the backfill stops
+  // being a step it's missing and becomes an optional extra that only helps
+  // future forks. Present it that way instead of nagging forever.
+  const backfillOptional = backfilling && allAnchorsLocked;
   const [anchorsOpen, setAnchorsOpen] = useState(!allAnchorsLocked);
   // Reset the default on record switch only (deps: recordId), so it never
   // fights a user toggle within one character. The per-direction correction
@@ -280,6 +285,7 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
         <h4 className="text-xs uppercase tracking-wide text-gray-500">
           1 · Turnaround sheet
           {turnaroundLocked && <span className="ml-1 text-[10px] text-port-success normal-case tracking-normal">· locked</span>}
+          {backfillOptional && <span className="ml-1 text-[10px] text-gray-600 normal-case tracking-normal">· optional</span>}
         </h4>
         {turnaroundLocked ? (
           <div className="flex items-start gap-3">
@@ -291,9 +297,11 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
         ) : (
           <div className="space-y-2">
             <p className="text-[11px] text-gray-500">
-              {backfilling
-                ? 'This character was built before turnaround sheets. Generate one from its locked main reference — the remaining directional anchors will be drawn from it, so accessories stay on the same side of the body.'
-                : 'One image, four views (front · right · back · left). Every later render is redrawn from it, so a bag or pocket keeps the same anatomical side from every angle.'}
+              {backfillOptional
+                ? 'This character predates turnaround sheets and its reference set is already complete, so a sheet won’t change any locked artifact. Generating one is optional — it only gives future forks of this character all four sides to work from.'
+                : backfilling
+                  ? 'This character was built before turnaround sheets. Generate one from its locked main reference — the remaining directional anchors will be drawn from it, so accessories stay on the same side of the body.'
+                  : 'One image, four views (front · right · back · left). Every later render is redrawn from it, so a bag or pocket keeps the same anatomical side from every angle.'}
             </p>
             <textarea
               value={designPrompt}
@@ -551,7 +559,10 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
           open={forkOpen}
           onClose={() => setForkOpen(false)}
           source={{ id: recordId, name: record.name }}
-          referencePath={manifest.mainReference.path}
+          // Preview exactly what the fork will attach: the server's
+          // lockedSeedArtifact prefers the sheet over the main.
+          referencePath={turnaroundLocked ? manifest.turnaround.path : manifest.mainReference.path}
+          fromTurnaround={turnaroundLocked}
           backends={backends}
           mode={mode}
           onForked={(rec) => onForked?.(rec)}

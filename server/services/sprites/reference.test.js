@@ -78,10 +78,10 @@ async function lockMain(recordId) {
   return lockReference(recordId, { target: 'main', candidate: rel });
 }
 
-// A pre-#2979 record: main-first manifest (schemaVersion 1, no turnaround
-// block), written straight to disk the way an install upgraded from phase 2
-// would have it, then locked through the legacy main path.
-async function legacyLockedMain(recordId) {
+// A pre-#2979 manifest: main-first (schemaVersion 1, no turnaround block),
+// nothing locked — written straight to disk the way an install upgraded from
+// phase 2 would have it mid-workflow.
+async function writeLegacyManifest(recordId) {
   const dir = join(TEST_ROOT, 'sprites', recordId, 'reference');
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, `${recordId}-reference-set-v1.json`), JSON.stringify({
@@ -94,6 +94,11 @@ async function legacyLockedMain(recordId) {
     anchors: ['south', 'south-east', 'east', 'north-east', 'north', 'north-west', 'west', 'south-west']
       .map((direction) => ({ id: `walk-${direction}`, kind: 'walk-anchor', direction, status: 'pending' })),
   }));
+}
+
+// …and the same record with its main locked through the legacy main-first path.
+async function legacyLockedMain(recordId) {
+  await writeLegacyManifest(recordId);
   const rel = await placeCandidate(recordId, 'main', 'walk-south-candidate-01.png');
   return lockReference(recordId, { target: 'main', candidate: rel });
 }
@@ -200,6 +205,30 @@ describe('startReferenceGeneration', () => {
     // The design prompt persists from the turnaround step — the main render
     // still describes the character even though the body carried no prompt.
     expect(call.params.prompt).toContain('a wiry ranger');
+  });
+
+  it('400s a seed image sent with the main target once the sheet is locked', async () => {
+    // The sheet IS the seed there, so a supplied one would be silently dropped
+    // (the route allows an upload for `main` because a legacy record takes one).
+    const id = newId();
+    await createCharacter(id);
+    await lockTurnaround(id);
+    const galleryName = 'fork-seed.png';
+    await writeCandidatePng(join(TEST_ROOT, 'images', galleryName));
+    await expect(startReferenceGeneration(id, { target: 'main', initImageGalleryFile: galleryName }))
+      .rejects.toMatchObject({ code: 'SEED_NOT_APPLICABLE', status: 400 });
+    const tmp = join(TEST_ROOT, 'main-seed-tmp.png');
+    await writeCandidatePng(tmp);
+    await expect(startReferenceGeneration(id, { target: 'main' }, { tempPath: tmp, originalname: 'concept.png' }))
+      .rejects.toMatchObject({ code: 'SEED_NOT_APPLICABLE', status: 400 });
+    // A legacy record's main still accepts one — the gate is sheet-conditional,
+    // not a blanket ban on seeding the main.
+    const legacy = newId();
+    await createCharacter(legacy);
+    await writeLegacyManifest(legacy);
+    enqueueJob.mockClear();
+    await startReferenceGeneration(legacy, { target: 'main', designPrompt: 'x', initImageGalleryFile: galleryName });
+    expect(enqueueJob.mock.calls[0][0].params.initImagePath).toBe(join(TEST_ROOT, 'images', galleryName));
   });
 
   it('derives anchors from the locked turnaround via i2i with the selected key in the prompt', async () => {
