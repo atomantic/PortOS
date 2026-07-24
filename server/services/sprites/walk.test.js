@@ -483,6 +483,26 @@ describe('walk cycle target', () => {
     expect((await getWalkState(id)).walkTarget).toMatchObject({ source: 'derived' });
   });
 
+  it('409s approving a direction that drifts from the target, so a ragged set can\'t finalize', async () => {
+    // Retargeting mid-set is a sanctioned action, so the queue-time gate alone
+    // leaves a hole: approve one direction at the old target, retarget, approve
+    // the rest, and the ragged set only fails at atlas-compile time — exactly
+    // the failure this issue moves earlier. Approval is where geometry is frozen
+    // into the compiled set, so the target has to hold there too.
+    const id = await characterWithLockedAnchors(newId(), SPRITE_DIRECTIONS);
+    const { runId } = await makeCandidateRun(id, 'south', { frameCount: 12, fps: 10 });
+    await approveWalkDirection(id, { direction: 'south', runId });
+    const { runId: eastId } = await makeCandidateRun(id, 'east', { frameCount: 8, fps: 10 });
+    await expect(approveWalkDirection(id, { direction: 'east', runId: eastId }))
+      .rejects.toMatchObject({
+        code: 'WALK_TARGET_MISMATCH',
+        message: expect.stringContaining('targets 12 frames @ 10fps'),
+      });
+    // The drifted direction stays unapproved rather than half-recorded.
+    const { selection } = await getWalkState(id);
+    expect(selection.directions.east).toBeUndefined();
+  });
+
   it('409s a retarget on a finalized set', async () => {
     const id = await characterWithLockedAnchors(newId(), SPRITE_DIRECTIONS);
     for (const direction of SPRITE_DIRECTIONS) {
@@ -720,6 +740,7 @@ describe('getWalkState', () => {
         frameCount: 12,
         fps: 10,
         source: 'default',
+        sourceLabel: 'default',
         frameCountLocked: false,
         fpsLocked: false,
         appId: null,

@@ -378,26 +378,29 @@ function packagedCyclesFrom(runs, approvedDirections) {
 }
 
 /**
- * Resolve the walk track's pinned cycle target for a record, plus the packaged
- * directions that disagree with it. Pure assembly over state the caller already
- * loaded — `getWalkState` stamps the result so the client never re-derives the
- * precedence chain, and the queue-time guards below compare against it.
+ * Resolve the walk track's pinned cycle target, plus the packaged directions
+ * that disagree with it. Pure assembly over state the caller already loaded —
+ * `getWalkState` stamps the result so the client never re-derives the precedence
+ * chain (nor the provenance wording), and the queue-time guards compare against
+ * it. `publishBinding.runtimeContract` is read defensively: it lands with #2982
+ * and may be absent on this install, on an older peer's record, or on any record
+ * with no binding at all.
  */
-async function resolveWalkTargetFor(recordId, { selection, runs, approvedDirections }) {
-  // Read the app contract defensively: `publishBinding.runtimeContract` lands
-  // with #2982 and may be absent on this install, on an older peer's record, or
-  // on any record with no binding at all.
-  const record = await getRecord(recordId);
-  const packagedCycles = packagedCyclesFrom(runs, approvedDirections);
+function resolveWalkTargetFor({ record, selection, packagedCycles }) {
   const target = resolveAnimationTarget({
     track: WALK_TRACK,
     runtimeContract: record?.publishBinding?.runtimeContract || null,
     animationTargets: selection?.animationTargets,
     packagedCycles,
   });
+  const appId = record?.publishBinding?.appId || null;
   return {
     ...target,
-    appId: record?.publishBinding?.appId || null,
+    appId,
+    // Stamped server-side rather than re-mapped in the client, so the label the
+    // user reads and the 409 message they hit can never describe the same
+    // target differently.
+    sourceLabel: describeTargetSource(target, appId),
     drift: targetDrift(target, packagedCycles),
   };
 }
@@ -424,6 +427,10 @@ export async function getWalkState(recordId) {
     .then((entries) => entries.filter((e) => e.isDirectory() && e.name.startsWith('walk-')).map((e) => ({ base, name: e.name })))
     .catch(() => []))) // dir absent → no runs there yet
     .then((lists) => lists.flat());
+  // The record read (for the publish binding's runtime contract) is independent
+  // of everything below — start it here so it overlaps the run resolution
+  // instead of tacking a serial round-trip onto the end of this hot read.
+  const recordPromise = getRecord(recordId);
   const [selection, walkSet] = await Promise.all([loadSelection(recordId), loadWalkSet(recordId)]);
 
   const approvedDirections = walkSet?.directions || selection?.directions || {};
@@ -467,8 +474,10 @@ export async function getWalkState(recordId) {
   // Stamp the imported flag so the client reads intent (`walkSet.imported`)
   // instead of re-deriving the source-pipeline path convention itself.
   const stampedWalkSet = walkSet ? { ...walkSet, imported: isImportedWalkSet(walkSet) } : null;
-  const walkTarget = await resolveWalkTargetFor(recordId, {
-    selection, runs: allRuns, approvedDirections,
+  const walkTarget = resolveWalkTargetFor({
+    record: await recordPromise,
+    selection,
+    packagedCycles: packagedCyclesFrom(allRuns, approvedDirections),
   });
   return {
     runs: allRuns, selection, walkSet: stampedWalkSet, walkTarget,
@@ -486,14 +495,29 @@ export async function getWalkState(recordId) {
  * invariant. atlas.js keeps its own compile-time checks as the backstop for
  * imported and legacy sets that never passed this gate.
  */
-function assertWalkTargetMatch(target, { frameCount, fps }) {
+function assertWalkTargetMatch(target, { frameCount, fps }, what = 'render') {
   if (frameCount === target.frameCount && fps === target.fps) return;
   throw new ServerError(
-    `This walk set targets ${target.frameCount} frames @ ${target.fps}fps (${describeTargetSource(target, target.appId)}). `
+    `This walk set targets ${target.frameCount} frames @ ${target.fps}fps (${target.sourceLabel}). `
     + `Requested ${frameCount} frames @ ${fps}fps — change the set's cycle target, `
-    + `or render at ${target.frameCount} frames @ ${target.fps}fps.`,
+    + `or ${what} at ${target.frameCount} frames @ ${target.fps}fps.`,
     { status: 409, code: 'WALK_TARGET_MISMATCH' },
   );
+}
+
+/**
+ * Resolve the geometry ONE render/reprocess will actually pack: an omitted knob
+ * adopts the set target, a supplied one must agree with it, and resolving a
+ * previously-implicit target records it. Shared by both queue paths so the
+ * adopt/enforce/pin contract cannot drift between them.
+ */
+async function resolveRenderGeometry(recordId, { walkTarget, selection }, overrides = {}) {
+  const frameCount = overrides.frameCount === undefined
+    ? walkTarget.frameCount : clampFrameCount(overrides.frameCount);
+  const fps = overrides.fps === undefined ? walkTarget.fps : clampFps(overrides.fps);
+  assertWalkTargetMatch(walkTarget, { frameCount, fps });
+  await pinDerivedWalkTarget(recordId, walkTarget, selection);
+  return { frameCount, fps };
 }
 
 /**
@@ -508,12 +532,14 @@ function assertWalkTargetMatch(target, { frameCount, fps }) {
  *
  * Callers must already hold the per-record write tail.
  */
-async function pinDerivedWalkTarget(recordId, target) {
+async function pinDerivedWalkTarget(recordId, target, loadedSelection) {
   if (target.source !== 'derived') return;
   // A 'derived' target means the set already HAS packaged geometry, so the walk
   // is underway even when no direction is approved yet — seed the selection
-  // rather than skipping the pin and letting the target stay implicit.
-  const selection = (await loadSelection(recordId)) || seedSelection(recordId);
+  // rather than skipping the pin and letting the target stay implicit. Callers
+  // resolving the target through `getWalkState` already hold the selection;
+  // reuse it rather than re-reading the same file inside the write tail.
+  const selection = loadedSelection || (await loadSelection(recordId)) || seedSelection(recordId);
   const pinned = selection.animationTargets?.[WALK_TRACK];
   if (pinned?.frameCount === target.frameCount && pinned?.fps === target.fps) return;
   selection.animationTargets = withTrackTarget(selection.animationTargets, WALK_TRACK, {
@@ -539,21 +565,27 @@ export function setWalkTarget(recordId, body) {
 }
 
 async function setWalkTargetImpl(recordId, { frameCount, fps }) {
-  await requireCharacter(recordId);
+  const record = await requireCharacter(recordId);
   await requireUnfinalized(recordId);
-  const state = await getWalkState(recordId);
-  const { walkTarget } = state;
-  if (walkTarget.frameCountLocked && walkTarget.frameCount !== frameCount) {
-    throw new ServerError(
-      `Frame count is locked to ${walkTarget.frameCount} by the publish binding (${walkTarget.appId || 'bound app'}) — change the binding's runtime contract to target ${frameCount}.`,
-      { status: 409, code: 'WALK_TARGET_LOCKED' },
-    );
-  }
-  if (walkTarget.fpsLocked && walkTarget.fps !== fps) {
-    throw new ServerError(
-      `Playback fps is locked to ${walkTarget.fps} by the publish binding (${walkTarget.appId || 'bound app'}) — change the binding's runtime contract to target ${fps}.`,
-      { status: 409, code: 'WALK_TARGET_LOCKED' },
-    );
+  // Only the app-contract rung can REFUSE a retarget, and that rung is derived
+  // from the record alone — so resolve it directly rather than paying for a full
+  // getWalkState (a two-tree run scan plus every approved direction's manifest)
+  // inside the write tail just to read two booleans.
+  const locked = resolveAnimationTarget({
+    track: WALK_TRACK,
+    runtimeContract: record?.publishBinding?.runtimeContract || null,
+  });
+  const appId = record?.publishBinding?.appId || 'bound app';
+  for (const [knob, label, requested] of [
+    ['frameCount', 'Frame count', frameCount],
+    ['fps', 'Playback fps', fps],
+  ]) {
+    if (locked[`${knob}Locked`] && locked[knob] !== requested) {
+      throw new ServerError(
+        `${label} is locked to ${locked[knob]} by the publish binding (${appId}) — change the binding's runtime contract to target ${requested}.`,
+        { status: 409, code: 'WALK_TARGET_LOCKED' },
+      );
+    }
   }
   const selection = (await loadSelection(recordId)) || seedSelection(recordId);
   // `withTrackTarget` merges rather than replaces so a sibling track key written
@@ -603,17 +635,14 @@ async function startWalkGenerationImpl(recordId, body) {
   // second paid grok render for the same direction. Serialized by the write tail,
   // so no TOCTOU. getWalkState normalizes a stale 'rendering' run (server died
   // mid-render) to 'error', so this blocks only a genuinely live render.
-  const { runs: inFlight, walkTarget } = await getWalkState(recordId);
+  const { runs: inFlight, walkTarget, selection } = await getWalkState(recordId);
   if (inFlight.some((r) => r.direction === direction && (r.status === 'rendering' || r.status === 'postprocessing'))) {
     throw new ServerError(`A walk render for ${direction} is already in progress`, { status: 409, code: 'WALK_RENDER_IN_PROGRESS' });
   }
   // Cycle geometry is pinned at the SET level (#2985) — every direction in one
   // atlas must share it. An omitted count/fps adopts the target; a disagreeing
   // one is refused here rather than at atlas-compile time, eight renders later.
-  const frameCount = body.frameCount === undefined ? walkTarget.frameCount : clampFrameCount(body.frameCount);
-  const fps = body.fps === undefined ? walkTarget.fps : clampFps(body.fps);
-  assertWalkTargetMatch(walkTarget, { frameCount, fps });
-  await pinDerivedWalkTarget(recordId, walkTarget);
+  const { frameCount, fps } = await resolveRenderGeometry(recordId, { walkTarget, selection }, body);
   const anchorAbs = resolveSpriteAssetPath(recordId, anchor.path);
   if (!await pathExists(anchorAbs)) {
     throw new ServerError('Locked anchor file is missing on disk', { status: 500, code: 'ANCHOR_MISSING' });
@@ -826,7 +855,8 @@ async function rerunWalkPostprocessImpl(recordId, runId, overrides) {
   await requireUnfinalized(recordId);
   const run = await loadRunRecord(recordId, runId);
   if (!run) throw new ServerError(`Unknown walk run: ${runId}`, { status: 404, code: 'RUN_NOT_FOUND' });
-  const selection = await loadSelection(recordId);
+  // One state read serves both the immutability check and the target below.
+  const { walkTarget, selection } = await getWalkState(recordId);
   if (selection?.directions?.[run.direction]?.runId === runId) {
     throw new ServerError('Run is approved — approved runs are immutable', { status: 409, code: 'RUN_APPROVED' });
   }
@@ -837,14 +867,10 @@ async function rerunWalkPostprocessImpl(recordId, runId, overrides) {
   // Same set-level gate as generation (#2985): a reprocess is exactly how a
   // drifted direction is brought INTO line with the target, so it must land on
   // the target — not somewhere new. An omitted override adopts the target.
-  const { walkTarget } = await getWalkState(recordId);
-  const frameCount = overrides.frameCount === undefined ? walkTarget.frameCount : clampFrameCount(overrides.frameCount);
-  const fps = overrides.fps === undefined ? walkTarget.fps : clampFps(overrides.fps);
-  assertWalkTargetMatch(walkTarget, { frameCount, fps });
-  await pinDerivedWalkTarget(recordId, walkTarget);
+  const geometry = await resolveRenderGeometry(recordId, { walkTarget, selection }, overrides);
   // Reprocess the SAME on-disk clip at the pinned frame count / playback speed —
   // no grok call, no regeneration.
-  await packageRun(recordId, run, { frameCount, fps });
+  await packageRun(recordId, run, geometry);
   await saveRunRecord(recordId, run);
   if (run.status === 'error') {
     throw new ServerError(`Postprocess failed: ${run.postprocessError}`, { status: 422, code: 'POSTPROCESS_FAILED' });
@@ -986,8 +1012,8 @@ async function approveWalkDirectionImpl(recordId, { direction, runId }) {
   // Frame count / fps are no longer pinned to a single value (variable-frame
   // walks) — instead they must fall inside the supported authoring range and the
   // declared frameCount must match the actual packed frames. Cross-direction
-  // consistency (all approved directions sharing one count/fps) is enforced at
-  // atlas-compile time, where the whole set is visible at once.
+  // consistency against the SET target is enforced below (#2985); atlas.js keeps
+  // its own compile-time check as the backstop for imported/legacy sets.
   // `loadRunRecord` deliberately returns the RAW record (its results flow into
   // saveRunRecord elsewhere, and an imported manifest's bytes are hash-pinned to
   // the source), so re-anchor the repo-anchored path here at the point of use
@@ -1018,6 +1044,20 @@ async function approveWalkDirectionImpl(recordId, { direction, runId }) {
   if (!await pathExists(stripAbs) || await sha256File(stripAbs) !== packaged.stripSha256) {
     throw new ServerError('Packed strip is missing or was modified after packaging', { status: 409, code: 'RUN_STRIP_INVALID' });
   }
+
+  // Approval — not generation — is the moment a direction's geometry gets frozen
+  // into the set the compiler will read, so the target has to hold HERE too. The
+  // queue-time gate alone leaves a real hole: retargeting the set mid-run is a
+  // sanctioned action, so a user could approve one direction at the old target,
+  // retarget, then approve the rest — and only find out at atlas-compile time,
+  // which is exactly the failure this issue exists to move earlier.
+  const { walkTarget, selection: currentSelection } = await getWalkState(recordId);
+  assertWalkTargetMatch(
+    walkTarget,
+    { frameCount: packaged.frameCount, fps: packaged.frameRate },
+    'reprocess this direction',
+  );
+  await pinDerivedWalkTarget(recordId, walkTarget, currentSelection);
 
   const selection = (await loadSelection(recordId)) || seedSelection(recordId);
   selection.directions[direction] = {

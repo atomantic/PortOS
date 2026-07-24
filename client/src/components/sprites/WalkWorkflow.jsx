@@ -133,13 +133,14 @@ function StripLoop({ recordId, stripPreview }) {
   );
 }
 
-// Where the resolved target came from, in the user's words. Mirrors the
-// server's describeTargetSource so the label and the 409 message agree.
-const TARGET_SOURCE_LABEL = {
-  app: 'locked by the bound app',
-  set: 'set target',
-  derived: 'from the first approved direction',
-  default: 'default',
+// How a drifted direction gets back onto the target, given what it still has
+// behind it. Named rather than inlined as a nested ternary so the three cases
+// read as the decision they are.
+const driftRemedy = ({ approved, hasSourceClip }) => {
+  if (approved) return 'reopen this direction to re-derive it';
+  return hasSourceClip
+    ? 'reprocess it from its clip'
+    : 'import this direction\'s source clip to re-derive it';
 };
 
 /**
@@ -164,7 +165,6 @@ function CycleTarget({
   }, { errorMessage: 'Could not set the cycle target' });
 
   const cycleSeconds = (target.frameCount / target.fps).toFixed(2);
-  const provenance = TARGET_SOURCE_LABEL[target.source] || 'default';
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
@@ -210,8 +210,10 @@ function CycleTarget({
           ? 'The bound app declares what its atlas may hold — retarget it in the Publish panel below.'
           : undefined}
       >
-        {saving ? 'saving…' : provenance}
-        {target.source === 'app' && ` (${target.appId || 'bound app'}) · change it in Publish below`}
+        {/* Provenance wording is stamped by the server (describeTargetSource), so
+            this label and the 409 the user may hit always agree. */}
+        {saving ? 'saving…' : target.sourceLabel || target.source}
+        {target.source === 'app' && ' · change it in Publish below'}
       </span>
     </div>
   );
@@ -279,9 +281,7 @@ function DirectionCard({
           {[drift.frameCountDrifts && `${drift.frameCount}f`, drift.fpsDrifts && `${drift.fps}fps`]
             .filter(Boolean).join(' · ')} · re-derive to {cycleLabel}
           <span className="block text-gray-400">
-            {approved ? 'reopen this direction to re-derive it'
-              : run?.sourceVideoPath ? 'reprocess it from its clip'
-                : 'import this direction\'s source clip to re-derive it'}
+            {driftRemedy({ approved, hasSourceClip: Boolean(run?.sourceVideoPath) })}
           </span>
         </p>
       )}
@@ -369,7 +369,16 @@ function DirectionCard({
                 <button onClick={() => setConfirming(false)} className="px-1.5 py-0.5 text-gray-400 hover:text-white">No</button>
               </div>
             ) : (
-              <button onClick={() => setConfirming(true)} className="w-full px-2 py-0.5 text-xs bg-port-success/20 border border-port-success rounded text-port-success">
+              // Approval is where a direction's geometry gets frozen into the
+              // set the atlas compiles, so a drifted candidate can't be approved
+              // — the server refuses it, and offering the button anyway would
+              // just hand back a 409 after the click.
+              <button
+                onClick={() => setConfirming(true)}
+                disabled={Boolean(drift)}
+                title={drift ? `Re-derive this direction to ${cycleLabel} before approving it` : undefined}
+                className="w-full px-2 py-0.5 text-xs bg-port-success/20 border border-port-success rounded text-port-success disabled:opacity-50"
+              >
                 Approve
               </button>
             )

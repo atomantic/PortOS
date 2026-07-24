@@ -297,8 +297,14 @@ describe('WalkWorkflow authoring controls', () => {
   it('labels the target with where the value came from', () => {
     renderRun(
       { id: 'walk-east-deadbeef', direction: 'east', status: 'error', postprocessError: 'x' },
-      { walkTarget: { frameCount: 8, fps: 12, source: 'derived', drift: [] } },
+      {
+        walkTarget: {
+          frameCount: 8, fps: 12, source: 'derived', sourceLabel: 'from the first approved direction', drift: [],
+        },
+      },
     );
+    // The provenance wording is stamped by the server, not re-mapped here, so
+    // the label and the 409 message can never describe the target differently.
     expect(screen.getByText('from the first approved direction')).toBeTruthy();
     expect(screen.getByRole('combobox', { name: /Cycle target/ }).value).toBe('8');
   });
@@ -308,12 +314,18 @@ describe('WalkWorkflow authoring controls', () => {
       { id: 'walk-east-deadbeef', direction: 'east', status: 'error', postprocessError: 'x' },
       {
         walkTarget: {
-          frameCount: 16, fps: 10, source: 'app', frameCountLocked: true, appId: 'example-game', drift: [],
+          frameCount: 16,
+          fps: 10,
+          source: 'app',
+          sourceLabel: 'locked by example-game',
+          frameCountLocked: true,
+          appId: 'example-game',
+          drift: [],
         },
       },
     );
     expect(screen.getByRole('combobox', { name: /Cycle target/ }).disabled).toBe(true);
-    expect(screen.getByText(/locked by the bound app \(example-game\)/)).toBeTruthy();
+    expect(screen.getByText(/locked by example-game · change it in Publish below/)).toBeTruthy();
     // fps is not in the contract, so it stays editable.
     expect(screen.getByRole('combobox', { name: /Preview speed/ }).disabled).toBe(false);
   });
@@ -359,6 +371,9 @@ describe('WalkWorkflow cycle-target drift', () => {
     expect(screen.getByText('reprocess it from its clip')).toBeTruthy();
     // …and a set-level summary so it is visible before eight renders are spent.
     expect(screen.getByText(/1 of 8 packaged directions differs from the 12f @ 10fps target/)).toBeTruthy();
+    // Approving a drifted candidate would freeze a ragged set the atlas can
+    // never compile — the server refuses it, so the button doesn't offer it.
+    expect(screen.getByRole('button', { name: 'Approve' }).disabled).toBe(true);
   });
 
   it('points a drifted direction with no source clip at an import instead', () => {

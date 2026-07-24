@@ -32,18 +32,6 @@ import {
 /** The only animation track that exists today. */
 export const WALK_TRACK = 'walk';
 
-/**
- * Which `publishBinding.runtimeContract` field pins which knob, per track. The
- * contract is the bound app's declared expectation for its own atlas (#2982) —
- * a stronger authority than any per-render pick — and lands independently of
- * this module, so every read is defensive: an absent contract simply falls
- * through to the next rung of the precedence chain. A future track adds its own
- * row here rather than reshaping the resolver.
- */
-const TRACK_CONTRACT_FIELDS = {
-  [WALK_TRACK]: { frameCount: 'walkFrameCount', fps: 'walkFps' },
-};
-
 const intInRange = (v, min, max) => (Number.isInteger(v) && v >= min && v <= max ? v : null);
 const readFrameCount = (v) => intInRange(v, WALK_MIN_FRAME_COUNT, WALK_MAX_FRAME_COUNT);
 const readFps = (v) => intInRange(v, WALK_MIN_FPS, WALK_MAX_FPS);
@@ -69,6 +57,12 @@ const readFps = (v) => intInRange(v, WALK_MIN_FPS, WALK_MAX_FPS);
  * `source` names the highest rung that supplied EITHER knob, and
  * `frameCountLocked` / `fpsLocked` say precisely which the app nailed down.
  *
+ * `track` selects which persisted entry to read. The CONTRACT fields and the
+ * range checks below are walk-specific (the contract declares `walkFrameCount`,
+ * and the bounds come from `walkBounds`) — a second track will need both
+ * generalized at the same time, so parameterizing only one of them today would
+ * be a false promise. The persisted shape is what has to be track-keyed now.
+ *
  * @param {object}   input
  * @param {string}   [input.track]            Track key (only 'walk' exists today).
  * @param {object}   [input.runtimeContract]  `publishBinding.runtimeContract`, if any.
@@ -84,9 +78,11 @@ export function resolveAnimationTarget({
   animationTargets = null,
   packagedCycles = [],
 } = {}) {
-  const fields = TRACK_CONTRACT_FIELDS[track] || {};
-  const appCount = fields.frameCount ? readFrameCount(runtimeContract?.[fields.frameCount]) : null;
-  const appFps = fields.fps ? readFps(runtimeContract?.[fields.fps]) : null;
+  // The bound app's declared expectation for its own atlas (#2982) — a stronger
+  // authority than any per-render pick. Read defensively: that field lands
+  // independently of this module, so an absent contract just falls through.
+  const appCount = readFrameCount(runtimeContract?.walkFrameCount);
+  const appFps = readFps(runtimeContract?.walkFps);
 
   const pinned = animationTargets?.[track] || null;
   const setCount = readFrameCount(pinned?.frameCount);
