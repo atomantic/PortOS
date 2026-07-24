@@ -151,12 +151,18 @@ export async function validatePublishBinding(binding) {
  * publish form saves appId/dest/codeBinding only, and a form save must not
  * silently drop the contract an app declared through the API. Pass
  * `runtimeContract: null` to clear it, or `binding: null` to clear everything.
+ *
+ * The inheritance is scoped to the SAME app — a contract describes the grid one
+ * particular app was built against, so carrying it across a re-point would make
+ * every publish to the new app 409 against an expectation that app never
+ * declared (and, with no UI for the field, leave no way out).
  */
 export async function setPublishBinding(recordId, binding) {
   const record = await requireCharacter(recordId);
   const validated = await validatePublishBinding(binding);
-  if (validated && binding.runtimeContract === undefined) {
-    validated.runtimeContract = record.publishBinding?.runtimeContract ?? null;
+  const stored = record.publishBinding;
+  if (validated && binding.runtimeContract === undefined && validated.appId === stored?.appId) {
+    validated.runtimeContract = stored.runtimeContract ?? null;
   }
   return updateRecord(recordId, { publishBinding: validated });
 }
@@ -269,28 +275,33 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
     // as the PNG, so the pair is never interleaved with another publish into
     // the same checkout.
     const layoutAbs = anchorRepoPath(repoRoot, layoutDestPath, 'atlas layout sidecar');
-    // Write it only when the content actually differs, so a republish that
-    // changes nothing stays a genuine no-op. Returns whether the repo was
-    // mutated — an atlas already at the destination but MISSING its sidecar
-    // still gets one, so the two can never be permanently out of step.
-    //
+    const existingLayout = await readFile(layoutAbs).catch(() => null);
+    const layoutUpToDate = Boolean(existingLayout?.equals(layoutBuffer));
     // Occupied-destination guard, mirroring the atlas's: PortOS owns files it
     // stamped with its own `kind`, and will regenerate one freely, but a JSON
     // file it never wrote sitting at that path is somebody else's — replacing
     // it needs the same explicit acknowledgment replacing a foreign atlas does.
-    const writeLayoutSidecar = async () => {
-      const existing = await readFile(layoutAbs).catch(() => null);
-      if (existing?.equals(layoutBuffer)) return false;
-      // A malformed/non-JSON file at that path counts as foreign too — parse
-      // failure must not become a 500, and must not license an overwrite.
-      if (existing
-        && safeJSONParse(existing.toString('utf8'))?.kind !== ATLAS_LAYOUT_KIND
-        && !acknowledgeOverwrite) {
+    // A malformed/non-JSON file counts as foreign too: a parse failure must
+    // not become a 500, and must not license an overwrite.
+    //
+    // Split from the write and asserted BEFORE applyCodeBinding, which mutates
+    // the game's source file — a refusal after that rewrite would leave the
+    // source pointing at an atlas this publish then declined to write.
+    const assertLayoutDestWritable = () => {
+      if (layoutUpToDate || acknowledgeOverwrite || !existingLayout) return;
+      if (safeJSONParse(existingLayout.toString('utf8'))?.kind !== ATLAS_LAYOUT_KIND) {
         throw new ServerError(
           `${layoutDestPath} already exists and was not written by PortOS — confirm the overwrite to replace it.`,
           { status: 409, code: 'PUBLISH_LAYOUT_OCCUPIED' },
         );
       }
+    };
+    // Write only when the content actually differs, so a republish that changes
+    // nothing stays a genuine no-op. Returns whether the repo was mutated — an
+    // atlas already at the destination but MISSING its sidecar still gets one,
+    // so the two can never be permanently out of step.
+    const writeLayoutSidecar = async () => {
+      if (layoutUpToDate) return false;
       await atomicWrite(layoutAbs, layoutBuffer);
       return true;
     };
@@ -337,6 +348,7 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
 
     const destSha256 = (await pathExists(destAbs)) ? await sha256File(destAbs) : null;
     if (destSha256 === compiled.atlasSha256) {
+      assertLayoutDestWritable();
       // Verify the code binding even on a no-op so drift never hides.
       const codeBinding = binding.codeBinding
         ? await applyCodeBinding(repoRoot, binding.codeBinding, previousForCode?.codeBinding?.resourcePath)
@@ -378,7 +390,9 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
     }
 
     // Verify/rewrite the code binding BEFORE replacing the atlas so a drifted
-    // binding aborts the publish with the game repo untouched.
+    // binding aborts the publish with the game repo untouched — and assert the
+    // sidecar destination first, since that rewrite is itself a mutation.
+    assertLayoutDestWritable();
     const codeBinding = binding.codeBinding
       ? await applyCodeBinding(repoRoot, binding.codeBinding, previousForCode?.codeBinding?.resourcePath)
       : null;

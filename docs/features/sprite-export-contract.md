@@ -12,7 +12,7 @@ The compiler (`server/services/sprites/atlas.js`) produces one PNG: a fixed-cell
 |---|---|
 | Cell size | 96 × 96 px (overridable per compile; the published geometry is whatever was compiled) |
 | Pivot | `(48, 88)` — silhouette centered on x, feet on the y ground line |
-| Rows | 8, in `directionOrder`: S, SE, E, NE, N, NW, W, SW |
+| Rows | 8, in `directionOrder`: `south`, `south-east`, `east`, `north-east`, `north`, `north-west`, `west`, `south-west` |
 | Columns | `idle` at 0, the N walk phases from 1, `scanner` last |
 | N (walk frame count) | authorable, 6–16 (`walkBounds.js`); historically always 8 |
 
@@ -41,7 +41,7 @@ Nothing else crosses. The compile manifest, the run provenance, the trims, and t
   "sourceAtlasSha256": "…",
   "cellSize": 96,
   "rows": 8,
-  "rowOrder": ["S", "SE", "E", "NE", "N", "NW", "W", "SW"],
+  "rowOrder": ["south", "south-east", "east", "north-east", "north", "north-west", "west", "south-west"],
   "columns": ["idle", "left-contact", "…", "right-up", "scanner"],
   "columnCount": 10,
   "tracks": {
@@ -60,7 +60,7 @@ Consumer guidance:
 - **Resolve columns by name, not by constant.** `tracks` gives each animation track a column span, so a walk of any length — and any future track (a four-frame scanner action, a three-frame ambient loop) — is additive rather than a breaking re-read. `columns` is the flat list for anything that wants raw names.
 - **Verify before you trust.** `sourceAtlasSha256` identifies the atlas the layout describes. The sidecar is written *before* the PNG on each publish, so a partially-completed publish is detectable (hash mismatch) rather than silent.
 - **The sidecar carries no timestamp** — identical geometry produces byte-identical content, so an unchanged republish rewrites nothing.
-- The sidecar shares the PNG's per-repo write serialization and destination guards; an atlas whose sidecar was deleted gets it back on the next publish, and a file at that path PortOS didn't write (no `kind: portos-sprite-atlas-layout`) is never replaced without an explicit overwrite acknowledgment.
+- The sidecar shares the PNG's per-repo write serialization and its occupied-destination guard: an atlas whose sidecar was deleted gets it back on the next publish, and a file at that path PortOS didn't write (no `kind: portos-sprite-atlas-layout`, or not valid JSON at all) is never replaced without an explicit overwrite acknowledgment. It has no *divergence* guard — unlike the PNG, a PortOS-written sidecar someone hand-edited is simply regenerated, since it is derived data.
 
 ## Playback speed belongs to the consuming app
 
@@ -79,7 +79,7 @@ Two mechanisms guard that:
 - **`publishBinding.runtimeContract`** (optional): `{ walkFrameCount, cellSize?, columnCount? }` — the grid the app was built against. Set it via `PUT /api/sprites/:id/publish-binding`. Publishing an atlas whose compiled geometry disagrees fails with a **409** naming both the actual and expected numbers and both resolutions (change the app's constant, or reprocess the walk set). A binding with no contract publishes unchecked, exactly as before the field existed.
 - **The sidecar**, so an app that reads it can fail loudly on its own terms instead of relying on PortOS to have been asked.
 
-`runtimeContract` follows absent-vs-null semantics: a saved binding that omits the key inherits the stored contract (the publish form doesn't edit it), while an explicit `null` clears it.
+`runtimeContract` follows absent-vs-null semantics: a saved binding that omits the key inherits the stored contract (the publish form doesn't edit it), while an explicit `null` clears it. The inheritance is scoped to the same `appId` — re-pointing a character at a different app drops the old app's contract rather than holding the new one to it.
 
 **A frame-count change is therefore a two-repo change.** Reprocess the walk set to the new count, update the app's frame-count constant *and* the distance/timing math derived from it, and update the contract — in whichever order, but neither half ships alone.
 

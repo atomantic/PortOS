@@ -29,9 +29,12 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   return actual;
 });
 
-const getAppById = vi.fn(async (id) => (id === 'game-app'
-  ? { id: 'game-app', name: 'Example Game', repoPath: APP_REPO }
-  : null));
+const OTHER_APP_REPO = join(TEST_ROOT, 'other-game-repo');
+const APPS = {
+  'game-app': { id: 'game-app', name: 'Example Game', repoPath: APP_REPO },
+  'other-app': { id: 'other-app', name: 'Other Example Game', repoPath: OTHER_APP_REPO },
+};
+const getAppById = vi.fn(async (id) => APPS[id] || null);
 vi.mock('../apps.js', () => ({ getAppById: (...args) => getAppById(...args) }));
 
 const isDeploying = vi.fn(() => false);
@@ -49,7 +52,7 @@ const { walkPhaseLabels } = await import('./walkBounds.js');
 let seq = 0;
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 
-const DIRECTIONS = ['S', 'SE', 'E', 'NE', 'N', 'NW', 'W', 'SW'];
+const { SPRITE_DIRECTIONS: DIRECTIONS } = await import('./prompts.js');
 
 // The geometry block a real compile writes into the runtime pointer — the
 // publish path reads it for the contract guard and the layout sidecar.
@@ -93,7 +96,9 @@ beforeEach(async () => {
   compileAtlasInTail.mockReset();
   rmSync(join(TEST_ROOT, 'sprite-records.json'), { force: true });
   rmSync(APP_REPO, { recursive: true, force: true });
+  rmSync(OTHER_APP_REPO, { recursive: true, force: true });
   await mkdir(APP_REPO, { recursive: true });
+  await mkdir(OTHER_APP_REPO, { recursive: true });
 });
 afterAll(() => rmSync(TEST_ROOT, { recursive: true, force: true }));
 
@@ -169,6 +174,16 @@ describe('validatePublishBinding / setPublishBinding', () => {
 
     const cleared = await setPublishBinding(id, { ...BINDING, runtimeContract: null });
     expect(cleared.publishBinding.runtimeContract).toBeNull();
+  });
+
+  it('does not carry a contract across a re-point to a different app', async () => {
+    const { id } = await characterWithAtlas();
+    await setPublishBinding(id, { ...BINDING, runtimeContract: { walkFrameCount: 8 } });
+    // The contract describes the grid ONE app was built against — holding a
+    // different app to it would 409 every publish against an expectation it
+    // never declared.
+    const repointed = await setPublishBinding(id, { ...BINDING, appId: 'other-app' });
+    expect(repointed.publishBinding.runtimeContract).toBeNull();
   });
 });
 
@@ -515,6 +530,31 @@ describe('layout sidecar (#2982)', () => {
     const acked = await publishAtlas(id, { acknowledgeOverwrite: true });
     expect(acked.published).toBe(true);
     expect((await readSidecar(BINDING.atlasDestPath)).kind).toBe('portos-sprite-atlas-layout');
+  });
+
+  it('refuses an occupied sidecar BEFORE rewriting the game source', async () => {
+    const { id } = await characterWithAtlas();
+    const oldResource = 'res://assets/sprites/hero/old-name.png';
+    const newResource = 'res://assets/sprites/hero/hero-atlas.png';
+    await mkdir(join(APP_REPO, 'src'), { recursive: true });
+    const sourceBefore = `var atlas = load("${oldResource}");\n`;
+    await writeFile(join(APP_REPO, 'src/Hero.cs'), sourceBefore);
+    // A pending code-binding REWRITE (the previous publish recorded the old
+    // resource path) plus a foreign sidecar at the destination.
+    await setPublishBinding(id, {
+      appId: 'game-app',
+      atlasDestPath: 'assets/sprites/hero/old-name.png',
+      codeBinding: { path: 'src/Hero.cs', resourcePath: oldResource },
+    });
+    await publishAtlas(id);
+    await setPublishBinding(id, { ...BINDING, codeBinding: { path: 'src/Hero.cs', resourcePath: newResource } });
+    await writeFile(join(APP_REPO, sidecarPath(BINDING.atlasDestPath)), 'not even json');
+
+    await expect(publishAtlas(id)).rejects.toMatchObject({ status: 409, code: 'PUBLISH_LAYOUT_OCCUPIED' });
+    // The refusal must land before applyCodeBinding mutates the game source —
+    // otherwise the source points at an atlas this publish declined to write.
+    expect(await readFile(join(APP_REPO, 'src/Hero.cs'), 'utf8')).toBe(sourceBefore);
+    expect(await readFile(join(APP_REPO, BINDING.atlasDestPath)).catch(() => null)).toBeNull();
   });
 
   it('refuses to publish an atlas whose geometry carries no column layout', async () => {
