@@ -62,11 +62,21 @@ const altRunLayoutRel = (rel) => {
   return match ? `${match[1] === 'grok' ? 'runs' : 'grok'}${match[2]}` : null;
 };
 
+// An IMPORTED run record, as distinct from one PortOS generated itself: the
+// importer copies source-pipeline records verbatim, and those carry no `id`
+// (that field is stamped by approveWalkDirection) and repo-anchored paths.
+// Only imported runs belong in the "re-import to get the clip" tally — a native
+// run still rendering, or one whose render errored before writing a clip, has
+// no clip for reasons a re-import would not fix.
+const looksImported = (record) => !record.id
+  || (typeof record.sourceVideoPath === 'string' && record.sourceVideoPath.includes('art-source/sprites/'));
+
 /**
  * Backfill one run. Returns 'copied' when the clip was placed, 'missing' when
- * it is not reachable inside the record, or null when there is nothing to do
- * (the clip is already in place, or the directory holds no run record at all —
- * neither should inflate the "needs a re-import" count).
+ * an imported run's clip is not reachable inside the record, or null when there
+ * is nothing to do (the clip is already in place, the directory holds no run
+ * record at all, or the run is a native one that simply has no clip yet) —
+ * none of which should inflate the "needs a re-import" count.
  */
 async function backfillRun(recDir, recordId, runDirRel) {
   const record = await readJson(join(recDir, runDirRel, RUN_RECORD_NAME));
@@ -90,7 +100,7 @@ async function backfillRun(recDir, recordId, runDirRel) {
     await copyFile(join(recDir, rel), join(recDir, destRel));
     return 'copied';
   }
-  return 'missing';
+  return looksImported(record) ? 'missing' : null;
 }
 
 async function migrateRecord(recDir, recordId) {

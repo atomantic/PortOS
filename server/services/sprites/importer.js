@@ -105,19 +105,24 @@ async function verifyHashes(destDir, expectations, errors, copiedThisRun) {
       // a clean re-import.
       if (SOURCE_CLIP_REF.test(relPath)) {
         await rm(join(destDir, relPath), { force: true });
-        return { dropped: true, error: `run ${relPath.split('/')[1]}: source clip failed sha256 verification — not imported` };
+        return { dropped: relPath };
       }
       return { error: `sha256 mismatch: ${relPath}` };
     }),
   );
   for (const o of outcomes) if (o.error) errors.push(o.error);
-  // `dropped` feeds back into the caller's file count: a clip removed here was
+  // Collapse drops by PATH, not by outcome: one clip pinned by two manifests
+  // that disagree on its hash yields two mismatching expectations for the same
+  // file, and counting both would decrement the caller's file total twice for a
+  // single deleted clip (and report the same run twice).
+  const dropped = [...new Set(outcomes.filter((o) => o.dropped).map((o) => o.dropped))];
+  for (const relPath of dropped) {
+    errors.push(`run ${relPath.split('/')[1]}: source clip failed sha256 verification — not imported`);
+  }
+  // The caller subtracts `dropped` from its file count: a clip removed here was
   // counted when it was copied, and an import summary must not claim a file it
   // deliberately deleted.
-  return {
-    verified: outcomes.filter((o) => o.verified).length,
-    dropped: outcomes.filter((o) => o.dropped).length,
-  };
+  return { verified: outcomes.filter((o) => o.verified).length, dropped: dropped.length };
 }
 
 // Manifest paths reference files repo-relative (art-source/sprites/<id>/…) or
@@ -267,22 +272,24 @@ async function importApprovedDirection({ srcCharDir, destDir, characterId, direc
   if (runRel && (await resolveSourceRel(srcCharDir, `${runRel}/generated/review-preview.json`))) {
     refs.add(`${runRel}/generated/review-preview.json`);
   }
-  // The source clip (#2984). Most packaged manifests name it (so the generic
-  // collector already has it, hash pin included), but an older imported
-  // manifest may not — and a direction with no clip can never be re-derived at
-  // a different frame count. The RUN_DIR_MATCH gate keeps this to real run
-  // entries (an imagegen redraw entry has no run dir and no clip), and the
-  // twin check keeps a manifest that named the clip under the OTHER layout
-  // from copying the same bytes to two destinations.
-  const clipRel = runRel && `${runRel}/generated/${SOURCE_CLIP_NAME}`;
-  if (clipRel && RUN_DIR_MATCH.test(runRel) && !refs.has(clipRel) && !refs.has(altRunLayoutPath(clipRel))
-      && (await resolveSourceRel(srcCharDir, clipRel))) {
-    refs.add(clipRel);
-  }
   // One extra expansion level: packaged manifests / previews the run record
   // names in turn declare the strip files (and their hash pins).
   for (const rel of [...refs]) {
     if (rel.endsWith('.json')) collectManifestRefs(await readCharJson(srcCharDir, rel), characterId, refs, hashExpectations);
+  }
+  // The source clip (#2984) — a fallback for a run whose manifests never name
+  // it, since a direction with no clip can never be re-derived at a different
+  // frame count. Deliberately AFTER the expansion above: the usual carrier of
+  // `sourceVideoPath` is the packaged manifest, one level down, so probing
+  // earlier would miss a clip already collected and copy the same bytes to two
+  // destinations (once per run layout). The RUN_DIR_MATCH gate keeps this to
+  // real run entries (an imagegen redraw entry has no run dir and no clip), and
+  // the twin check ignores a manifest that named the clip under the OTHER
+  // layout — that path is already in `refs` and denotes the same file.
+  const clipRel = runRel && `${runRel}/generated/${SOURCE_CLIP_NAME}`;
+  if (clipRel && RUN_DIR_MATCH.test(runRel) && !refs.has(clipRel) && !refs.has(altRunLayoutPath(clipRel))
+      && (await resolveSourceRel(srcCharDir, clipRel))) {
+    refs.add(clipRel);
   }
   refs.delete(manifestRel);
   for (const rel of [...refs].sort()) {
