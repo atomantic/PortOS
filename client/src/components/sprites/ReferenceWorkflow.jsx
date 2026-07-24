@@ -23,9 +23,12 @@ const CHROMA_KEYS = ['#FF00FF', '#00FF00', '#0000FF'];
 
 // Thin alias so the existing call sites keep their `className` semantics
 // (sizing on the box) while the checkerboard + pixelation rules live in one
-// place — see SpritePreview.
+// place — see SpritePreview. Every reference-set image is click-to-enlarge
+// (zoomable) — the main reference, locked anchors, and candidate tiles all open
+// a SpriteLightbox on click, since none of them live in the asset browser that
+// has its own inspector.
 function SpriteImg({ recordId, path, className }) {
-  return <SpritePreview recordId={recordId} path={path} className={className} />;
+  return <SpritePreview recordId={recordId} path={path} className={className} zoomable />;
 }
 
 // Candidate thumbnail with an inline lock confirm (locking is irreversible —

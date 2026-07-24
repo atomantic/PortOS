@@ -11,7 +11,9 @@
  * element is shared instead.
  */
 
+import { useState } from 'react';
 import { checkerboardStyle, spriteAssetUrl, PIXELATED } from './spriteAssets.js';
+import SpriteLightbox from './SpriteLightbox.jsx';
 
 export default function SpritePreview({
   recordId,
@@ -21,19 +23,45 @@ export default function SpritePreview({
   imgClassName = 'w-full h-full object-contain',
   cell = 6,
   loading = 'lazy',
+  // Opt in to click-to-enlarge: the checkerboard box becomes a button that
+  // opens a SpriteLightbox. Off by default so a preview nested inside another
+  // interactive element (e.g. a catalog card that's itself a button) stays a
+  // plain <span> and never nests buttons.
+  zoomable = false,
 }) {
+  const [zoomed, setZoomed] = useState(false);
+  const img = (
+    <img
+      src={spriteAssetUrl(recordId, path)}
+      alt={alt ?? path}
+      loading={loading}
+      className={imgClassName}
+      style={PIXELATED}
+    />
+  );
+
+  if (!zoomable) {
+    return (
+      <span className={`block overflow-hidden ${className}`} style={checkerboardStyle(cell)}>
+        {img}
+      </span>
+    );
+  }
+
   return (
-    <span
-      className={`block overflow-hidden ${className}`}
-      style={checkerboardStyle(cell)}
-    >
-      <img
-        src={spriteAssetUrl(recordId, path)}
-        alt={alt ?? path}
-        loading={loading}
-        className={imgClassName}
-        style={PIXELATED}
-      />
-    </span>
+    <>
+      <button
+        type="button"
+        onClick={() => setZoomed(true)}
+        aria-label={`Enlarge ${alt || path}`}
+        className={`block overflow-hidden cursor-zoom-in ${className}`}
+        style={checkerboardStyle(cell)}
+      >
+        {img}
+      </button>
+      {zoomed && (
+        <SpriteLightbox recordId={recordId} path={path} alt={alt} onClose={() => setZoomed(false)} />
+      )}
+    </>
   );
 }
