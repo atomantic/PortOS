@@ -1,5 +1,9 @@
 # Unreleased
 
+## Internal
+
+- **[issue-2951] Image-to-3D target registry (foundation)** — added a pluggable `server/services/imageTo3d/targets.js` registry (mirroring `imageGen/modes.js`) that models image→3D models as selectable targets with hardware-gated availability resolution, TRELLIS.2 registered as the first target, and a read-only `GET /api/image-to-3d/targets` endpoint. Backend groundwork for the forthcoming 3D page under Create (#2952 install/runner, #2953 page/viewer, #2954 CUDA lane); no user-visible surface yet.
+
 ## Music studio
 
 - **[issue-2912] Chiptune score edits on two synced machines now show up as a real conflict** — if you compose a chiptune score for the same track on two federated installs before they sync with each other, that divergence now surfaces in Sharing → Conflicts (so you can review and choose which version to keep) instead of one edit silently overwriting the other.
