@@ -40,6 +40,7 @@ const MAIN_PX = 192;
 // painted into a 384px backing store its squares would shrink with the scale
 // factor — and the canvas carries the shared PIXELATED style so the browser's
 // scale stays nearest-neighbor like every other sprite surface.
+//
 // `checkerCell` is the checkerboard square size in CSS px — larger for the main
 // preview, smaller so the pattern stays legible in a thumbnail.
 function FrameCanvas({ img, col, cellW, cellH, checkerCell = 5 }) {
@@ -64,7 +65,11 @@ function FrameCanvas({ img, col, cellW, cellH, checkerCell = 5 }) {
   }, [img, col, cellW, cellH, w, h, ready]);
 
   // The box holds the frame's aspect whether or not the strip has loaded, so
-  // the grid doesn't collapse to zero height and then reflow on load.
+  // the grid doesn't collapse to zero height and then reflow on load. The
+  // pre-load placeholder is square because square cells are this module's
+  // invariant, not a guess: a native walk cell is WALK_CELL_SIZE² and
+  // `buildTrimmerSources` derives a saved trim's frameCount as
+  // `round(width / height)`, which only holds for square cells.
   return (
     <div
       className="w-full block overflow-hidden"
