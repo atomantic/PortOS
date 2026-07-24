@@ -484,9 +484,10 @@ describe('getWalkState', () => {
   // (a botched migration or manual cleanup dropped it — how pioneer's north/west
   // strips silently vanished) must NOT surface as a healthy run: the native
   // render path otherwise hands the client a stripPath that 404s into a blank
-  // StripLoop. getWalkState surfaces it as an error with stripMissing, drops the
-  // dangling stripPath, and never rewrites the record on disk.
-  it('surfaces a candidate run whose strip is missing on disk as an error', async () => {
+  // StripLoop. getWalkState flags it with stripMissing and drops the dangling
+  // stripPath, WITHOUT flipping status to 'error' (which would mis-drive the
+  // client's postprocess-retry UI), and never rewrites the record on disk.
+  it('flags a candidate run whose strip is missing on disk with stripMissing', async () => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
     const { runId } = await makeCandidateRun(id, 'east');
     const runRecordPath = join(TEST_ROOT, 'sprites', id, 'runs', runId, 'animation-run.json');
@@ -496,13 +497,37 @@ describe('getWalkState', () => {
 
     const { runs } = await getWalkState(id);
     const run = runs.find((r) => r.id === runId);
-    expect(run.status).toBe('error');
     expect(run.stripMissing).toBe(true);
-    expect(run.postprocessError).toMatch(/strip is missing/i);
+    // Status is preserved — a missing strip is orthogonal to postprocess status,
+    // and flipping to 'error' would offer a Retry that 409s on finalized/approved.
+    expect(run.status).toBe('candidate');
     // Dangling stripPath is dropped so StripLoop / the trim button don't render it.
     expect(run.stripPreview.stripPath).toBeUndefined();
     // Read-time only — the record on disk is untouched.
     expect(await readFile(runRecordPath)).toEqual(bytesBefore);
+  });
+
+  // The population this guard exists for is an APPROVED direction whose strip
+  // vanished (pioneer's north/west — approved, then their strips dropped during a
+  // grok/->runs/ relocation). The approved entry resolves through loadRunForEntry,
+  // and the flag must ride through that path too — the run stays approved in the
+  // selection (recovery there is unlock-then-regenerate, driven client-side off
+  // stripMissing + finalized), never mutated to a broken 'error' run.
+  it('flags an approved direction whose strip is missing without disturbing its approval', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const { runId } = await makeCandidateRun(id, 'east');
+    await approveWalkDirection(id, { direction: 'east', runId });
+    // Approval froze the strip on disk; now it vanishes.
+    await rm(join(TEST_ROOT, 'sprites', id, 'runs', runId, 'generated', `${id}-walk-east-strip.png`));
+
+    const { runs, selection } = await getWalkState(id);
+    const run = runs.find((r) => r.id === runId);
+    expect(run.stripMissing).toBe(true);
+    expect(run.stripPreview.stripPath).toBeUndefined();
+    expect(run.status).not.toBe('error');
+    // The selection still records the direction as approved — the guard never
+    // touches approval state, only the strip preview.
+    expect(selection.directions.east.status).toBe('approved');
   });
 
   // A run whose strip IS on disk stays a healthy candidate — the guard only
