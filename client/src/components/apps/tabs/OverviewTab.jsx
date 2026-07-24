@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
-import { FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download, Tag, AlertTriangle, Rocket, Camera, Image } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download, Tag, AlertTriangle, Rocket, Camera, Image, Sparkles } from 'lucide-react';
 import toast from '../../ui/Toast';
 import { NON_PM2_TYPES } from '../constants';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -24,6 +25,8 @@ export default function OverviewTab({ app, onRefresh }) {
   const [loadingTickets, setLoadingTickets] = useState(false);
   const [installingScripts, setInstallingScripts] = useState(false);
   const [detectingIcon, setDetectingIcon] = useState(false);
+  // Reverse lookup (#2991): sprite records that publish assets into this app.
+  const [spriteBindings, setSpriteBindings] = useState([]);
 
   const onComplete = useMemo(() => () => onRefresh(), [onRefresh]);
   const { steps, isOperating, operationType, error, completed, startUpdate, startStandardize } = useAppOperation({ onComplete });
@@ -39,6 +42,16 @@ export default function OverviewTab({ app, onRefresh }) {
         .finally(() => setLoadingTickets(false));
     }
   }, [app?.jira?.enabled, app?.jira?.instanceId, app?.jira?.projectKey]);
+
+  // Load the sprite records bound to this app (empty for an app with none).
+  useEffect(() => {
+    if (!app?.id) return;
+    let cancelled = false;
+    api.getAppSpriteBindings(app.id)
+      .then((res) => { if (!cancelled) setSpriteBindings(res?.bindings || []); })
+      .catch(() => { if (!cancelled) setSpriteBindings([]); });
+    return () => { cancelled = true; };
+  }, [app?.id]);
 
   const handleUpdate = () => startUpdate(app.id);
 
@@ -223,6 +236,32 @@ export default function OverviewTab({ app, onRefresh }) {
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* Sprite assets PortOS publishes into this app (reverse lookup, #2991).
+          Shown only when at least one sprite record is bound — makes "PortOS is
+          the creative source for this app" visible from the app side. */}
+      {spriteBindings.length > 0 && (
+        <div>
+          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Published Sprite Assets</div>
+          <div className="bg-port-card border border-port-border rounded-lg divide-y divide-port-border">
+            {spriteBindings.map((b) => (
+              <div key={b.recordId} className="flex flex-wrap items-center gap-2 px-3 py-2">
+                <Sparkles size={14} className="text-port-accent shrink-0" />
+                <Link
+                  to={`/sprites/${b.recordId}`}
+                  className="text-sm text-port-accent hover:underline font-medium"
+                >
+                  {b.name}
+                </Link>
+                {b.kind && <span className="text-xs text-gray-500">{b.kind}</span>}
+                {b.atlasDestPath && (
+                  <code className="text-xs text-cyan-300 font-mono break-all">→ {b.atlasDestPath}</code>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       )}

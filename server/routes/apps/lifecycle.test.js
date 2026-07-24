@@ -28,7 +28,8 @@ vi.mock('../../services/history.js', () => ({
 vi.mock('../../services/streamingDetect.js', () => ({
   parseEcosystemFromPath: vi.fn(),
   usesPm2: vi.fn((type) => !new Set(['ios-native', 'macos-native', 'xcode', 'swift']).has(type)),
-  NON_PM2_TYPES: new Set(['ios-native', 'macos-native', 'xcode', 'swift'])
+  NON_PM2_TYPES: new Set(['ios-native', 'macos-native', 'xcode', 'swift']),
+  isDesktopType: vi.fn((type) => type === 'desktop')
 }));
 
 vi.mock('../../services/appUpdater.js', () => ({
@@ -81,6 +82,52 @@ describe('Apps Lifecycle Routes', () => {
       const response = await request(app).post('/api/apps/app-999/start');
 
       expect(response.status).toBe(404);
+    });
+
+    it('launches a desktop app from its startCommands with autorestart OFF (#2991)', async () => {
+      const mockApp = {
+        id: 'game-001',
+        name: 'The Game',
+        type: 'desktop',
+        repoPath: '/tmp', // real dir; no ecosystem config there, and desktop skips it anyway
+        pm2ProcessNames: ['the-game'],
+        startCommands: ['./scripts/game run']
+      };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      pm2Service.getAppStatus.mockResolvedValue({ status: 'stopped' }); // not running yet
+      pm2Service.startWithCommand.mockResolvedValue({ success: true });
+      history.logAction.mockResolvedValue();
+
+      const response = await request(app).post('/api/apps/game-001/start');
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      // Command-based launch, never the ecosystem web-server path.
+      expect(pm2Service.startFromEcosystem).not.toHaveBeenCalled();
+      expect(pm2Service.startWithCommand).toHaveBeenCalledWith(
+        'the-game', '/tmp', './scripts/game run', { autorestart: false }
+      );
+    });
+
+    it('does not spawn a second instance when the desktop app is already online (#2991)', async () => {
+      const mockApp = {
+        id: 'game-001',
+        name: 'The Game',
+        type: 'desktop',
+        repoPath: '/tmp',
+        pm2ProcessNames: ['the-game'],
+        startCommands: ['./scripts/game run']
+      };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      pm2Service.getAppStatus.mockResolvedValue({ status: 'online' }); // already running
+      history.logAction.mockResolvedValue();
+
+      const response = await request(app).post('/api/apps/game-001/start');
+
+      expect(response.status).toBe(200);
+      expect(response.body.results['the-game']).toEqual({ success: true, alreadyRunning: true });
+      // Single instance: no second launch.
+      expect(pm2Service.startWithCommand).not.toHaveBeenCalled();
     });
   });
 

@@ -41,7 +41,7 @@ import { getAppById } from '../apps.js';
 import { isDeploying } from '../appDeployer.js';
 import { spriteDir, RUNTIME_POINTER_REL, RUNTIME_PUBLICATIONS_REL } from './paths.js';
 import { requireCharacter } from './reference.js';
-import { updateRecord } from './records.js';
+import { listRecords, updateRecord } from './records.js';
 import { withWalkWriteTail } from './walk.js';
 import { compileAtlasInTail } from './atlas.js';
 import { sha256Buffer } from './walkPostprocess.js';
@@ -165,6 +165,29 @@ export async function setPublishBinding(recordId, binding) {
     validated.runtimeContract = stored.runtimeContract ?? null;
   }
   return updateRecord(recordId, { publishBinding: validated });
+}
+
+/**
+ * Reverse lookup (#2991): the sprite records whose `publishBinding.appId`
+ * targets the given app, with their repo-relative destination paths. This is
+ * the app-side view of the publish relationship — it makes "PortOS is the
+ * creative source for this app" legible from the app's own detail page, rather
+ * than a hidden per-record setting. Returns `[]` for an app nothing publishes
+ * into (and for a falsy appId). Publishing itself still resolves purely from
+ * the app's `repoPath`; this is display-only and never gates a publish.
+ */
+export async function listPublishBindingsForApp(appId) {
+  if (!appId) return [];
+  const records = await listRecords();
+  return records
+    .filter((r) => r?.publishBinding?.appId === appId)
+    .map((r) => ({
+      recordId: r.id,
+      name: r.name || r.id,
+      kind: r.kind || null,
+      atlasDestPath: r.publishBinding.atlasDestPath || null,
+      codeBindingPath: r.publishBinding.codeBinding?.path || null,
+    }));
 }
 
 const countOccurrences = (text, needle) => (needle ? text.split(needle).length - 1 : 0);

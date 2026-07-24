@@ -46,7 +46,7 @@ vi.mock('./atlas.js', () => ({
 }));
 
 const records = await import('./records.js');
-const { setPublishBinding, publishAtlas, validatePublishBinding } = await import('./publish.js');
+const { setPublishBinding, publishAtlas, validatePublishBinding, listPublishBindingsForApp } = await import('./publish.js');
 const { walkPhaseLabels } = await import('./walkBounds.js');
 
 let seq = 0;
@@ -194,6 +194,37 @@ describe('validatePublishBinding / setPublishBinding', () => {
   });
 });
 
+describe('listPublishBindingsForApp (reverse lookup, #2991)', () => {
+  it('lists exactly the records bound to the app, with destination paths', async () => {
+    const a = await characterWithAtlas();
+    const b = await characterWithAtlas();
+    const other = await characterWithAtlas();
+    await setPublishBinding(a.id, { appId: 'game-app', atlasDestPath: 'assets/sprites/a.png' });
+    await setPublishBinding(b.id, {
+      appId: 'game-app',
+      atlasDestPath: 'assets/sprites/b.png',
+      codeBinding: { path: 'src/B.cs', resourcePath: 'res://assets/sprites/b.png' },
+    });
+    // Bound to a DIFFERENT app — must not appear in game-app's lookup.
+    await setPublishBinding(other.id, { appId: 'other-app', atlasDestPath: 'assets/sprites/o.png' });
+
+    const bound = await listPublishBindingsForApp('game-app');
+    expect(bound.map(x => x.recordId).sort()).toEqual([a.id, b.id].sort());
+    const byId = Object.fromEntries(bound.map(x => [x.recordId, x]));
+    expect(byId[a.id].atlasDestPath).toBe('assets/sprites/a.png');
+    expect(byId[a.id].codeBindingPath).toBeNull();
+    expect(byId[b.id].atlasDestPath).toBe('assets/sprites/b.png');
+    expect(byId[b.id].codeBindingPath).toBe('src/B.cs');
+  });
+
+  it('is empty for an app nothing publishes into (and for a falsy id)', async () => {
+    const c = await characterWithAtlas();
+    await setPublishBinding(c.id, { appId: 'game-app', atlasDestPath: 'assets/sprites/c.png' });
+    expect(await listPublishBindingsForApp('other-app')).toEqual([]);
+    expect(await listPublishBindingsForApp(undefined)).toEqual([]);
+  });
+});
+
 describe('publishAtlas', () => {
   it('refuses without a binding', async () => {
     const { id } = await characterWithAtlas();
@@ -220,6 +251,19 @@ describe('publishAtlas', () => {
       await readFile(join(TEST_ROOT, 'sprites', id, 'runtime/publications.json'), 'utf8'),
     );
     expect(history).toHaveLength(1);
+  });
+
+  it('resolves purely from repoPath — no dependency on registered processes/ports (#2991)', async () => {
+    // The mocked app carries only { id, name, repoPath } — no processes, no
+    // ports, portless. Publishing must still succeed: it targets the repo tree,
+    // never a running/registered process.
+    expect(APPS['game-app'].processes).toBeUndefined();
+    expect(APPS['game-app'].uiPort).toBeUndefined();
+    const { id, atlasBytes } = await characterWithAtlas();
+    await setPublishBinding(id, BINDING);
+    const result = await publishAtlas(id);
+    expect(result.published).toBe(true);
+    expect((await readFile(join(APP_REPO, BINDING.atlasDestPath))).toString()).toBe(atlasBytes);
   });
 
   it('is idempotent when the destination already holds the current bytes', async () => {

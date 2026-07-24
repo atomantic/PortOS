@@ -34,7 +34,7 @@ vi.mock('./pm2.js', () => ({
 import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 import { listProcessesStrict } from './pm2.js';
 import { resetExecutionHistory } from './taskSchedule.js';
-import { getAppStatuses, getAppStatusSummary, getReservedPorts, invalidateCache, PORTOS_APP_ID, updateAppTaskTypeOverride } from './apps.js';
+import { createApp, getAppStatuses, getAppStatusSummary, getReservedPorts, invalidateCache, PORTOS_APP_ID, updateAppTaskTypeOverride } from './apps.js';
 
 describe('pr-watcher cooldown reset', () => {
   beforeEach(() => {
@@ -166,6 +166,107 @@ describe('getReservedPorts', () => {
     expect(reserved).not.toContain(70000);
     expect(reserved).not.toContain(-1);
     expect(reserved.every(p => Number.isInteger(p) && p >= 1 && p <= 65535)).toBe(true);
+  });
+});
+
+describe('portless / desktop apps (#2991)', () => {
+  beforeEach(() => {
+    invalidateCache();
+    vi.clearAllMocks();
+  });
+
+  it('never lets a portless desktop app contribute a port to the reserved set', async () => {
+    // A desktop/GUI app (a game binary) has no HTTP port at all: all top-level
+    // port fields are null and its supervised process carries no ports map.
+    readJSONFile.mockResolvedValue({
+      apps: {
+        [PORTOS_APP_ID]: { name: 'PortOS', uiPort: 5555, apiPort: 5555, devUiPort: 5554 },
+        'the-game': {
+          name: 'The Game',
+          type: 'desktop',
+          uiPort: null,
+          apiPort: null,
+          devUiPort: null,
+          tlsPort: null,
+          pm2ProcessNames: ['the-game'],
+          processes: [{ name: 'the-game' }], // no `port` / `ports` — portless
+        },
+      },
+    });
+
+    const reserved = await getReservedPorts();
+    // Only PortOS baseline ports — the desktop app added nothing.
+    expect(reserved).toContain(5555);
+    expect(reserved).toContain(5554);
+    expect(reserved).not.toContain(null);
+    expect(reserved.every(p => Number.isInteger(p) && p >= 1 && p <= 65535)).toBe(true);
+    expect(reserved).toEqual([5554, 5555]);
+  });
+
+  it('createApp stores a desktop app with null ports (no port ever synthesized)', async () => {
+    readJSONFile.mockResolvedValue({ apps: { [PORTOS_APP_ID]: { name: 'PortOS' } } });
+
+    const created = await createApp({
+      name: 'The Game',
+      repoPath: '/tmp/the-game',
+      type: 'desktop',
+      startCommands: ['./scripts/game run'],
+    });
+
+    expect(created.type).toBe('desktop');
+    expect(created.uiPort).toBeNull();
+    expect(created.apiPort).toBeNull();
+    expect(created.devUiPort).toBeNull();
+    expect(created.startCommands).toEqual(['./scripts/game run']);
+
+    // The persisted record carries no numeric port anywhere.
+    const persisted = atomicWrite.mock.calls.at(-1)?.[1];
+    const stored = persisted.apps[created.id];
+    expect(stored.uiPort).toBeNull();
+    expect(stored.apiPort).toBeNull();
+    expect(stored.devUiPort).toBeNull();
+  });
+
+  it('reports a portless desktop app from supervisor state alone (no HTTP probe)', async () => {
+    readJSONFile.mockResolvedValue({
+      apps: {
+        [PORTOS_APP_ID]: { name: 'PortOS', type: 'express', pm2ProcessNames: ['portos-server'] },
+        'the-game': {
+          name: 'The Game',
+          type: 'desktop',
+          uiPort: null,
+          pm2ProcessNames: ['the-game'],
+        },
+      },
+    });
+    // A clean quit exits 0 → PM2 reports the process 'stopped', not 'errored'.
+    listProcessesStrict.mockResolvedValue([
+      { name: 'portos-server', status: 'online' },
+      { name: 'the-game', status: 'stopped' },
+    ]);
+
+    const statuses = await getAppStatuses();
+    const game = statuses.find(s => s.name === 'The Game');
+    expect(game).toBeDefined();
+    expect(game.managed).toBe(true); // supervised, not 'n/a'
+    expect(game.overallStatus).toBe('stopped'); // reflects supervisor, never "unreachable"
+  });
+
+  it('renders a running desktop app as online purely from the supervisor', async () => {
+    readJSONFile.mockResolvedValue({
+      apps: {
+        [PORTOS_APP_ID]: { name: 'PortOS', type: 'express', pm2ProcessNames: ['portos-server'] },
+        'the-game': { name: 'The Game', type: 'desktop', uiPort: null, pm2ProcessNames: ['the-game'] },
+      },
+    });
+    listProcessesStrict.mockResolvedValue([
+      { name: 'portos-server', status: 'online' },
+      { name: 'the-game', status: 'online' },
+    ]);
+
+    const statuses = await getAppStatuses();
+    const game = statuses.find(s => s.name === 'The Game');
+    expect(game.overallStatus).toBe('online');
   });
 });
 
