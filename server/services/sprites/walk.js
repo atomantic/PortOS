@@ -219,10 +219,12 @@ const runDirRelOf = (run) => runDirOfPath(run?.sourceVideoPath)
  */
 async function resolveRunClipRel(recordId, run, runDirRel) {
   const dir = spriteDir(recordId);
-  const candidates = [
+  // Deduped: a native run's declared clip IS the conventional path, and probing
+  // it twice would double the stats on the healthy majority.
+  const candidates = [...new Set([
     toRecordRelativeAssetPath(recordId, run?.sourceVideoPath),
     runDirRel ? `${runDirRel}/generated/${SOURCE_CLIP_NAME}` : null,
-  ].filter(Boolean);
+  ].filter(Boolean))];
   const resolved = await Promise.all(candidates.map((rel) => resolveDriftTolerantRel(dir, rel)));
   return resolved.find(Boolean) || null;
 }
@@ -295,7 +297,14 @@ function normalizeRunAssetPaths(recordId, run) {
     const rel = out[field] && toRecordRelativeAssetPath(recordId, out[field]);
     if (rel && rel !== out[field]) out = { ...out, [field]: rel };
   }
-  return out;
+  // A run whose packaged manifest is STILL named against the source repo was
+  // packaged there, which means its per-frame images were never imported (the
+  // importer skips frames/). Stamped here because this is where that fact is
+  // still visible — one line up it has been re-anchored away — and it costs no
+  // I/O, unlike stat-ing every frame on a read the client polls. The client gates
+  // Approve on it: approving such a run 409s RUN_FRAMES_MISSING, and the flag
+  // clears by itself the moment a reprocess rewrites the manifest record-relative.
+  return isSourcePipelinePath(run.postprocessManifest) ? { ...out, importedPackaging: true } : out;
 }
 
 // A candidate/approved run's stripPreview names a packed strip PNG on disk. If
@@ -318,10 +327,19 @@ function normalizeRunAssetPaths(recordId, run) {
 // red error with the green "approved" badge. Keeping the status lets the client
 // route recovery correctly off `stripMissing` + the direction's approved/finalized
 // state (regenerate an unapproved candidate; unlock the set for a finalized one).
+//
+// Resolved drift-tolerantly, like the source clip below: an imported manifest can
+// name the strip under one run layout for a file stored under the other, and both
+// spellings denote the same PNG (paths.js#resolveDriftTolerantRel). Healing that
+// here — rather than only for the clip — is what keeps a drifted import from
+// badging "strip missing" over an intact strip, losing its loop preview, its trim
+// link, and its contribution to the set's packaged geometry.
 async function normalizeMissingStrip(recordId, run) {
   const stripPath = run?.stripPreview?.stripPath;
   if (!stripPath) return run;
-  if (await pathExists(join(spriteDir(recordId), stripPath))) return run;
+  const found = await resolveDriftTolerantRel(spriteDir(recordId), stripPath);
+  if (found === stripPath) return run;
+  if (found) return { ...run, stripPreview: { ...run.stripPreview, stripPath: found } };
   const { stripPath: _dropped, ...stripPreviewRest } = run.stripPreview;
   return { ...run, stripMissing: true, stripPreview: stripPreviewRest };
 }
@@ -979,8 +997,12 @@ async function packageRun(recordId, run, overrides = {}, location = {}) {
   // imported run that means persisting the record-relative form in place of the
   // source-repo anchor its manifest was copied with.
   run.sourceVideoPath = location.clipRel || `${runRel}/generated/${SOURCE_CLIP_NAME}`;
-  const videoAbs = resolveSpriteAssetPath(recordId, run.sourceVideoPath);
   try {
+    // Inside the try on purpose: unlike the old `join(runAbs, …)` this can throw
+    // (the confinement gate), and this function's contract is that a packaging
+    // failure is CAPTURED onto the run record — a throw escaping here would
+    // strand an attach at 'postprocessing' with no error text.
+    const videoAbs = resolveSpriteAssetPath(recordId, run.sourceVideoPath);
     const manifest = await loadManifest(recordId);
     const anchor = manifest?.anchors?.find((a) => a.direction === run.direction);
     if (!anchor?.path) throw new Error(`No locked ${run.direction} anchor in the reference manifest`);
@@ -1084,34 +1106,66 @@ export function unlockWalkSet(recordId) {
 }
 
 /**
- * Refuse un-finalizing an imported walk set that has no clip to re-derive from.
+ * The directions among `scope` that have no clip on disk to re-derive from.
+ * Bounded at eight, so fan out rather than walking them serially — the path that
+ * examines every direction is the refusal path.
+ */
+async function directionsWithoutClip(recordId, walkSet, scope) {
+  const clips = await Promise.all(scope
+    .map((direction) => directionClipRel(recordId, walkSet.directions?.[direction])));
+  return scope.filter((_, i) => !clips[i]);
+}
+
+const notReDerivable = (detail) => new ServerError(
+  `${detail} Re-import this character to bring its walk clips across, or create a new character version to revise it.`,
+  { status: 409, code: 'LEGACY_IMPORTED_WALK_SET' },
+);
+
+/**
+ * Refuse un-finalizing an imported walk set that has nothing to re-derive from.
  *
  * The original guard refused EVERY imported set, on the stated grounds that it
  * "has no regenerable clips behind it" — true when it was written, and false
  * since #2984 taught the importer to copy each run's `source-video.mp4`. So the
  * gate now keys on the evidence the justification always named: is a clip
- * actually on disk for the directions being re-opened? (#2993)
+ * actually on disk? (#2993)
  *
  * Provenance still selects WHO gets examined, and only that: a native set is
  * never gated, exactly as before — a user who cleaned up their own rendered
- * clips must not suddenly find Unlock refused. Among imported sets, `directions`
- * is the scope — one direction for `reopen`, all of them for `unlock` — and one
- * clip anywhere in scope is enough, because that is one direction the user can
- * genuinely bring onto a new target. A set with none is still a dead end, and
- * still says so.
+ * clips must not suddenly find Unlock refused.
+ *
+ * The scope is what separates the two callers, and it is not cosmetic. `reopen`
+ * un-approves ONE direction, so one direction's clip is the whole question.
+ * `unlock` drops EVERY approval and the frozen set with them — and a
+ * source-packaged direction with no clip can be neither reprocessed (nothing to
+ * re-derive from) nor re-approved (its frames were never imported, so
+ * RUN_FRAMES_MISSING), which would strand that direction permanently with no way
+ * back short of re-importing. So unlock requires that every still-imported
+ * direction be re-derivable, and names the ones that aren't — pointing at the
+ * per-direction reopen, which is safe precisely because it leaves the rest frozen.
  */
-async function assertReDerivable(recordId, walkSet, directions, verb) {
+async function assertSetReDerivable(recordId, walkSet) {
   if (!isImportedWalkSet(walkSet)) return;
-  // Bounded at eight directions, and the path that examines ALL of them is the
-  // refusal — so fan out rather than walking them serially to find nothing.
-  const clips = await Promise.all(directions
-    .map((direction) => directionClipRel(recordId, walkSet.directions?.[direction])));
-  if (clips.some(Boolean)) return;
-  const scope = directions.length === 1 ? `the ${directions[0]} direction has` : 'its directions have';
-  throw new ServerError(
-    `This walk set was imported from the source pipeline and ${scope} no source clip on disk — ${verb} is not supported, because there would be nothing to re-derive from. Re-import this character to bring its walk clips across, or create a new character version to revise it.`,
-    { status: 409, code: 'LEGACY_IMPORTED_WALK_SET' },
+  const stale = importedWalkDirections(walkSet);
+  // Marked imported at the SET level with no source-packaged direction to
+  // examine (an empty or already-re-anchored `directions` map behind a copied
+  // selectionPath): no evidence either way, so keep the blanket refusal.
+  if (!stale.length) {
+    throw notReDerivable('This walk set was imported from the source pipeline and carries no directions that can be re-derived here — unlocking is not supported.');
+  }
+  const stranded = await directionsWithoutClip(recordId, walkSet, stale);
+  if (!stranded.length) return;
+  throw notReDerivable(
+    `Unlocking re-opens every direction, and ${stranded.join(', ')} would be left with no source clip to re-derive from and no packaged frames to re-approve — so ${stranded.length === 1 ? 'it' : 'they'} could not be brought back. Reopen the directions that do have clips one at a time instead.`,
   );
+}
+
+/** Reopen's per-direction twin of the gate above. */
+async function assertDirectionReDerivable(recordId, walkSet, direction) {
+  if (!isImportedWalkSet(walkSet)) return;
+  const stranded = await directionsWithoutClip(recordId, walkSet, [direction]);
+  if (!stranded.length) return;
+  throw notReDerivable(`This walk set was imported from the source pipeline and the ${direction} direction has no source clip on disk — reopening is not supported, because there would be nothing to re-derive from.`);
 }
 
 // Un-finalize: drop the canonical "finalized" signal (the walk-set file) FIRST,
@@ -1130,7 +1184,7 @@ async function unlockWalkSetImpl(recordId) {
   if (!walkSet) {
     throw new ServerError('No finalized walk set to unlock', { status: 409, code: 'WALK_SET_NOT_FINAL' });
   }
-  await assertReDerivable(recordId, walkSet, Object.keys(walkSet.directions || {}), 'unlocking');
+  await assertSetReDerivable(recordId, walkSet);
   await dropFinalizedWalkSet(recordId);
   // Seed a fresh (empty) selection so EVERY direction re-opens: with the walk
   // set gone each direction would still read `approved` from the old selection
@@ -1170,7 +1224,7 @@ export function reopenWalkDirection(recordId, { direction }) {
 async function reopenWalkDirectionImpl(recordId, direction) {
   await requireCharacter(recordId);
   const walkSet = await loadWalkSet(recordId);
-  await assertReDerivable(recordId, walkSet, [direction], 'reopening');
+  await assertDirectionReDerivable(recordId, walkSet, direction);
   const selection = (await loadSelection(recordId)) || seedSelection(recordId);
   if (selection.directions?.[direction]?.status !== 'approved') {
     throw new ServerError(`Direction ${direction} is not approved`, { status: 409, code: 'DIRECTION_NOT_APPROVED' });

@@ -416,11 +416,17 @@ function DirectionCard({
               // Approval is where a direction's geometry gets frozen into the
               // set the atlas compiles, so a drifted candidate can't be approved
               // — the server refuses it, and offering the button anyway would
-              // just hand back a 409 after the click.
+              // just hand back a 409 after the click. Same for a run still
+              // packaged by the source pipeline: its per-frame images were never
+              // imported, so approving it 409s RUN_FRAMES_MISSING however well its
+              // geometry happens to match. Reprocessing from the clip is the way
+              // through, and it clears the flag.
               <button
                 onClick={() => setConfirming(true)}
-                disabled={Boolean(drift)}
-                title={drift ? `Re-derive this direction to ${cycleLabel} before approving it` : undefined}
+                disabled={Boolean(drift) || Boolean(run?.importedPackaging)}
+                title={run?.importedPackaging
+                  ? 'This run was packaged by the source pipeline, which kept its frames — reprocess it from its clip first'
+                  : drift ? `Re-derive this direction to ${cycleLabel} before approving it` : undefined}
                 className="w-full px-2 py-0.5 text-xs bg-port-success/20 border border-port-success rounded text-port-success disabled:opacity-50"
               >
                 Approve
@@ -514,13 +520,19 @@ export default function WalkWorkflow({
   const importedDirections = walk?.walkSet?.importedDirections || null;
   const isImportedDirection = (direction) => (importedDirections
     ? importedDirections.includes(direction) : importedWalkSet);
-  // Since #2984 imports each run's clip, such a set is only a dead end when
-  // NOTHING behind it can be re-derived — which is exactly when the server
-  // refuses to unlock it. Gate the affordance on that, not on the import label,
-  // so an import with its clips intact gets the real Unlock button instead of a
-  // "new version to revise" note that is no longer true. The server's own gate
-  // is authoritative (its 409 is the backstop); this only decides what to offer.
-  const unlockBlocked = importedWalkSet && !runs.some(hasClip);
+  // Since #2984 imports each run's clip, such a set is no longer a dead end —
+  // but unlock drops EVERY approval, so the server refuses it unless EVERY
+  // still-imported direction has a clip (a stranded one could be neither
+  // reprocessed nor re-approved). Mirror that scope exactly, per direction, so
+  // the button and the 409 are computed from the same facts; the server's gate is
+  // still authoritative, this only decides what to offer.
+  const clipByDirection = useMemo(() => {
+    const out = {};
+    for (const run of runs) if (hasClip(run)) out[run.direction] = true;
+    return out;
+  }, [runs]);
+  const unlockBlocked = importedWalkSet
+    && !(importedDirections?.length && importedDirections.every((d) => clipByDirection[d]));
 
   // direction → jobId for in-flight video renders. The hook instance is owned
   // by the Sprites page and shared with the asset collection (#2931) so both
@@ -650,7 +662,7 @@ export default function WalkWorkflow({
               <Lock className="w-3 h-3" /> walk set frozen · immutable
             </p>
             {unlockBlocked ? (
-              <span className="text-[10px] text-gray-500" title="Imported from the source pipeline with no source clips on disk — re-import the character to bring them across">
+              <span className="text-[10px] text-gray-500" title="Unlocking re-opens every direction, and at least one imported direction has no source clip on disk to re-derive from — re-import the character to bring its clips across, or reopen the directions that do have clips one at a time">
                 imported · no clips to re-derive
               </span>
             ) : unlockConfirm ? (

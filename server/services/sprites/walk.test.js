@@ -906,8 +906,25 @@ describe('imported walk sets — evidence-based re-derive', () => {
     await expect(unlockWalkSet(id)).rejects.toMatchObject({
       status: 409,
       code: 'LEGACY_IMPORTED_WALK_SET',
-      message: expect.stringContaining('no source clip on disk'),
+      message: expect.stringContaining('east'),
     });
+  });
+
+  // Unlock drops EVERY approval, and a source-packaged direction with no clip can
+  // be neither reprocessed nor re-approved (its frames were never imported) — so a
+  // partial unlock would strand it permanently. The whole-set action refuses; the
+  // per-direction one, which leaves the rest frozen, still works.
+  it('refuses to unlock a mixed set, naming the direction that would be stranded', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    await importedCharacter(id, { east: {}, north: { clip: false } });
+
+    await expect(unlockWalkSet(id)).rejects.toMatchObject({
+      status: 409,
+      code: 'LEGACY_IMPORTED_WALK_SET',
+      message: expect.stringContaining('north would be left with no source clip'),
+    });
+    // …and the frozen set is untouched by the refusal.
+    expect((await getWalkState(id)).walkSet).not.toBeNull();
   });
 
   it('reopens the imported direction that has a clip and refuses the one that does not', async () => {
@@ -961,7 +978,25 @@ describe('imported walk sets — evidence-based re-derive', () => {
     const { runs } = await getWalkState(id);
     expect(runs[0].sourceVideoPath).toBe(`grok/${runIds.east}/generated/source-video.mp4`);
     expect(runs[0].sourceClipMissing).toBeUndefined();
+    // Drift healing is one fact about imported trees, not one fact about clips:
+    // the strip is declared under the other layout too, and must resolve rather
+    // than badge "strip missing" over a PNG that is present and intact.
+    expect(runs[0].stripPreview.stripPath).toBe(`grok/${runIds.east}/generated/east-strip.png`);
+    expect(runs[0].stripMissing).toBeUndefined();
     await expect(reopenWalkDirection(id, { direction: 'east' })).resolves.toBeTruthy();
+  });
+
+  // Zero-I/O provenance: a run whose packaged manifest is still named against the
+  // source repo was packaged there, so its frames were never imported. The client
+  // gates Approve on this rather than offering a button that always 409s.
+  it('flags a run whose packaging is still the source pipeline\'s, and clears it on re-derive', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const runIds = await importedCharacter(id, { east: {} });
+    expect((await getWalkState(id)).runs[0].importedPackaging).toBe(true);
+
+    await unlockWalkSet(id);
+    await rerunWalkPostprocess(id, { runId: runIds.east });
+    expect((await getWalkState(id)).runs[0].importedPackaging).toBeUndefined();
   });
 
   // "Declares a clip" and "has a clip" must not read the same: the flag is what

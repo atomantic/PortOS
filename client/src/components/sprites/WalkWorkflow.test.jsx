@@ -509,7 +509,7 @@ describe('WalkWorkflow reprocess + reopen', () => {
               },
             }],
             selection: { directions: { east: { status: 'approved', runId: 'run-east' } } },
-            walkSet: { imported: true, directions: { east: { status: 'approved' } } },
+            walkSet: { imported: true, importedDirections: ['east'], directions: { east: { status: 'approved' } } },
             walkTarget: {
               frameCount: 12, fps: 10, source: 'derived', sourceLabel: 'from the first approved direction', drift: [],
             },
@@ -525,6 +525,48 @@ describe('WalkWorkflow reprocess + reopen', () => {
     expect(screen.getByRole('button', { name: /^Reopen$/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /^Unlock$/ })).toBeTruthy();
     expect(screen.queryByText(/no clips to re-derive/)).toBeNull();
+  });
+
+  // Unlock re-opens every direction, so the server refuses it unless EVERY
+  // still-imported direction has a clip — a stranded one could be neither
+  // reprocessed nor re-approved. The header must mirror that scope rather than
+  // "any run anywhere has a clip", or it offers a guaranteed 409.
+  it('hides Unlock when one imported direction has no clip, while Reopen stays on the one that does', async () => {
+    render(
+      <MemoryRouter>
+        <WalkWorkflow
+          record={{ id: 'example-walker' }}
+          reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked' }] } }}
+          walk={{
+            runs: [{
+              id: 'run-east',
+              direction: 'east',
+              status: 'approved',
+              sourceVideoPath: 'grok/run-east/generated/source-video.mp4',
+              stripPreview: {
+                stripPath: 'grok/run-east/generated/strip.png', frameCount: 12, fps: 10, cellWidth: 384, cellHeight: 384,
+              },
+            }],
+            selection: { directions: { east: { status: 'approved', runId: 'run-east' } } },
+            walkSet: {
+              imported: true,
+              importedDirections: ['east', 'north'],
+              directions: { east: { status: 'approved' }, north: { status: 'approved' } },
+            },
+            walkTarget: {
+              frameCount: 12, fps: 10, source: 'derived', sourceLabel: 'from the first approved direction', drift: [],
+            },
+          }}
+          renders={noRenders()}
+          duration={6}
+          onDurationChange={vi.fn()}
+          onGenerate={vi.fn()}
+          onChanged={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole('button', { name: /^Unlock$/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /^Reopen$/ })).toBeTruthy();
   });
 
   // The set-level flag stays true while ANY direction is still source-packaged,

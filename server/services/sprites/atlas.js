@@ -34,6 +34,7 @@ import {
 import { ServerError } from '../../lib/errorHandler.js';
 import {
   spriteDir, resolveSpriteAssetPath, RUNTIME_POINTER_REL, RUNTIME_PUBLICATIONS_REL,
+  isSourcePipelinePath,
 } from './paths.js';
 import { requireCharacter, loadManifest } from './reference.js';
 import { SPRITE_DIRECTIONS } from './prompts.js';
@@ -47,7 +48,7 @@ import {
 } from './walkPostprocess.js';
 import { ATLAS_IDLE_COLUMN } from './walkBounds.js';
 import {
-  withWalkWriteTail, walkSetRelPath, isImportedWalkSet, importedWalkDirections,
+  withWalkWriteTail, walkSetRelPath, importedWalkDirections,
 } from './walk.js';
 
 // Player atlas contract (source pipeline runtime_publish.py): 96px cells,
@@ -218,12 +219,16 @@ export async function validateForCompile(recordId) {
   // the directions still carrying source-pipeline provenance block the compile,
   // and the message names them so the remedy is per-direction too. Their
   // already-published runtime atlases were imported and remain browsable.
+  // `isImportedWalkSet` expanded so the direction list is built once. The
+  // selectionPath disjunct is the set-level marker on its own — a set that is
+  // imported but lists no source-packaged direction.
   const stale = importedWalkDirections(walkSet);
-  if (stale.length || isImportedWalkSet(walkSet)) {
+  if (stale.length || isSourcePipelinePath(walkSet.selectionPath)) {
     const which = stale.length ? `${stale.join(', ')} ${stale.length === 1 ? 'is' : 'are'}` : 'This walk set is';
     throw new ServerError(
       `${which} still packaged by the source pipeline, whose per-frame images were not imported — PortOS cannot compile from them. `
       + 'Reopen each such direction and reprocess it from its imported clip to re-derive the frames here, then compile. '
+      + 'A direction with no imported clip cannot be re-derived at all — re-import the character to bring its clips across. '
       + 'The imported runtime atlases remain available in the asset library.',
       { status: 409, code: 'LEGACY_IMPORTED_WALK_SET' },
     );
