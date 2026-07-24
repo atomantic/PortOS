@@ -42,10 +42,11 @@ import {
 } from './walkPostprocess.js';
 import { GROK_VIDEO_DURATIONS } from '../videoGen/grok.js';
 
-// Walk clips default SHORTER than general video gen: a looping walk cycle needs
-// only ~8 frames of one gait, so a 2s clip renders far faster than the 6s
-// general default while still giving the cycle selector plenty of frames.
-const WALK_DEFAULT_DURATION = 2;
+// grok's image_to_video honors only 6s/10s and clamps shorter requests to ~6s,
+// so 6 is both the floor and the sensible default: a 6s clip yields plenty of
+// source frames (~70) for the cycle selector, and the walk's look is tuned by
+// frame count + fps, not clip length.
+const WALK_DEFAULT_DURATION = 6;
 
 // grok's walk render runs as an OBSERVABLE TUI session (issue: user wants to
 // watch/course-correct grok in the Shell) rather than a headless mediaJobQueue
@@ -638,7 +639,7 @@ export function rerunWalkPostprocess(recordId, { runId, frameCount, fps }) {
   return walkWriteTail(recordId, () => rerunWalkPostprocessImpl(recordId, runId, { frameCount, fps }));
 }
 
-async function rerunWalkPostprocessImpl(recordId, runId, overrides = {}) {
+async function rerunWalkPostprocessImpl(recordId, runId, overrides) {
   await requireCharacter(recordId);
   await requireUnfinalized(recordId);
   const run = await loadRunRecord(recordId, runId);
@@ -652,12 +653,10 @@ async function rerunWalkPostprocessImpl(recordId, runId, overrides = {}) {
     throw new ServerError('Run has no source video yet', { status: 409, code: 'VIDEO_NOT_READY' });
   }
   // Reprocess the SAME on-disk clip at a (possibly) new frame count / playback
-  // speed — no grok call, no regeneration. Only fields present in the override
-  // change; omitted ones fall through to the run's stored values in packageRun.
-  await packageRun(recordId, run, {
-    ...(overrides.frameCount != null ? { frameCount: overrides.frameCount } : {}),
-    ...(overrides.fps != null ? { fps: overrides.fps } : {}),
-  });
+  // speed — no grok call, no regeneration. packageRun's `?? run.x ?? default`
+  // merge treats an absent override identically to `undefined`, so pass them
+  // straight through — no need to strip the undefined fields first.
+  await packageRun(recordId, run, overrides);
   await saveRunRecord(recordId, run);
   if (run.status === 'error') {
     throw new ServerError(`Postprocess failed: ${run.postprocessError}`, { status: 422, code: 'POSTPROCESS_FAILED' });
@@ -697,30 +696,42 @@ export function unlockWalkSet(recordId) {
   return walkWriteTail(recordId, () => unlockWalkSetImpl(recordId));
 }
 
+// Imported source-pipeline sets carry no regenerable clips, so unlocking or
+// reopening would strand the record with nothing to regenerate from — refuse
+// both through one shared message (the `verb` is the only difference). No-op for
+// a native set (or no set at all).
+function assertNotImportedWalkSet(walkSet, verb) {
+  if (walkSet && isImportedWalkSet(walkSet)) {
+    throw new ServerError(
+      `This walk set was imported from the source pipeline and has no regenerable clips — ${verb} is not supported. Create a new character version to revise it.`,
+      { status: 409, code: 'LEGACY_IMPORTED_WALK_SET' },
+    );
+  }
+}
+
+// Un-finalize: drop the canonical "finalized" signal (the walk-set file) FIRST,
+// then downgrade the record status — the exact inverse of finalize's order, so a
+// crash mid-unfinalize can only leave a cosmetic stale status, never a
+// walk-complete record with no frozen set behind it. Shared by unlock (re-opens
+// all directions) and reopen (re-opens one).
+async function dropFinalizedWalkSet(recordId) {
+  await rm(join(spriteDir(recordId), walkSetRelPath(recordId)), { force: true });
+  await updateRecord(recordId, { status: 'reference-complete' });
+}
+
 async function unlockWalkSetImpl(recordId) {
   await requireCharacter(recordId);
   const walkSet = await loadWalkSet(recordId);
   if (!walkSet) {
     throw new ServerError('No finalized walk set to unlock', { status: 409, code: 'WALK_SET_NOT_FINAL' });
   }
-  if (isImportedWalkSet(walkSet)) {
-    throw new ServerError(
-      'This walk set was imported from the source pipeline and has no regenerable clips — unlocking is not supported. Create a new character version to revise it.',
-      { status: 409, code: 'LEGACY_IMPORTED_WALK_SET' },
-    );
-  }
-  // Order mirrors finalize's inverse: drop the canonical "finalized" signal
-  // (the walk-set file) first so a crash mid-unlock can only leave a cosmetic
-  // stale record status, never a walk-complete record with no frozen set.
-  await rm(join(spriteDir(recordId), walkSetRelPath(recordId)), { force: true });
-  // Reset the selection to in-progress: with the walk set gone `finalized` is
-  // false, but each direction still reads `approved` from the selection, which
-  // keeps the generate/regenerate buttons gated off. Seeding a fresh selection
-  // re-opens every direction; the rendered runs remain, so re-approval is a
-  // single click per direction the user is happy with. (atomicWrite ensures the
-  // walk/ dir, which already exists since we just removed the walk-set file.)
+  assertNotImportedWalkSet(walkSet, 'unlocking');
+  await dropFinalizedWalkSet(recordId);
+  // Seed a fresh (empty) selection so EVERY direction re-opens: with the walk
+  // set gone each direction would still read `approved` from the old selection
+  // and keep the generate/regenerate buttons gated off, so reset it. The
+  // rendered runs remain on disk, so re-approval is a single click per direction.
   await atomicWrite(join(spriteDir(recordId), selectionRelPath(recordId)), seedSelection(recordId));
-  await updateRecord(recordId, { status: 'reference-complete' });
   console.log(`🔓 sprite walk set unlocked for ${recordId}`);
   return getWalkState(recordId);
 }
@@ -747,23 +758,15 @@ export function reopenWalkDirection(recordId, { direction }) {
 async function reopenWalkDirectionImpl(recordId, direction) {
   await requireCharacter(recordId);
   const walkSet = await loadWalkSet(recordId);
-  if (walkSet && isImportedWalkSet(walkSet)) {
-    throw new ServerError(
-      'This walk set was imported from the source pipeline and has no regenerable clips — reopening is not supported. Create a new character version to revise it.',
-      { status: 409, code: 'LEGACY_IMPORTED_WALK_SET' },
-    );
-  }
+  assertNotImportedWalkSet(walkSet, 'reopening');
   const selection = (await loadSelection(recordId)) || seedSelection(recordId);
   if (selection.directions?.[direction]?.status !== 'approved') {
     throw new ServerError(`Direction ${direction} is not approved`, { status: 409, code: 'DIRECTION_NOT_APPROVED' });
   }
-  // If the set was finalized, un-finalize it FIRST (drop the canonical signal)
-  // so a crash mid-reopen can only leave a cosmetic stale record status, never a
-  // walk-complete record with a hole in its set. Other approvals are untouched.
-  if (walkSet) {
-    await rm(join(spriteDir(recordId), walkSetRelPath(recordId)), { force: true });
-    await updateRecord(recordId, { status: 'reference-complete' });
-  }
+  // If the set was finalized, un-finalize it FIRST (a set is "final" only when
+  // all 8 are approved) — keeping every OTHER direction's approval intact, so
+  // re-freezing is a single re-approval rather than all eight.
+  if (walkSet) await dropFinalizedWalkSet(recordId);
   delete selection.directions[direction];
   selection.status = 'in-progress';
   await ensureDir(join(spriteDir(recordId), 'walk'));

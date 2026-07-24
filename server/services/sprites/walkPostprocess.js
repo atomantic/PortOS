@@ -27,6 +27,21 @@ import { ensureDir, atomicWrite, sha256File } from '../../lib/fileUtils.js';
 import { findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import { keyChannelSplit, keyness, keyShareFn, hexToRgb } from './chromaKey.js';
 
+// Authoring bounds + pure label/clamp helpers live in a sharp-free leaf module
+// so server/lib/validation.js can share the SAME frame-count/fps range without
+// pulling this module's native image graph in. Re-exported here so existing
+// consumers (walk.js, atlas.js) keep importing them from walkPostprocess.
+import {
+  WALK_FRAME_COUNT, WALK_DEFAULT_FRAME_COUNT, WALK_DEFAULT_FPS,
+  walkPhaseLabels, clampFrameCount, clampFps,
+} from './walkBounds.js';
+
+export {
+  WALK_PHASES, WALK_FRAME_COUNT, WALK_DEFAULT_FRAME_COUNT, WALK_DEFAULT_FPS,
+  WALK_MIN_FRAME_COUNT, WALK_MAX_FRAME_COUNT, WALK_MIN_FPS, WALK_MAX_FPS,
+  walkPhaseLabels, clampFrameCount, clampFps,
+} from './walkBounds.js';
+
 // Source pipeline constants (animation_postprocess.py) — values are part of
 // the cross-install artifact contract (imported manifests carry them).
 // WALK_FPS is the source-EXTRACTION sampling rate (how densely we pull frames
@@ -34,56 +49,10 @@ import { keyChannelSplit, keyness, keyShareFn, hexToRgb } from './chromaKey.js';
 // manifests that omit `frameRate`. Playback fps (how fast the packed cycle
 // animates) is now a separate, per-run value carried in the manifest.
 export const WALK_FPS = 12;
-// Legacy default / fallback frame count for manifests (or clients) that omit it.
-export const WALK_FRAME_COUNT = 8;
-// Configurable authoring range (#sprite-walk-variable-frames): native
-// generation now packs a fuller, slower cycle by default so a walk reads as a
-// walk, not a run. The packer resamples the detected gait window DOWN to
-// `frameCount` distinct source frames (it never upsamples — N is bounded by
-// the source frames available in one cycle), and playback fps is metadata
-// carried into the manifest/atlas. So a slower/smoother walk needs no
-// regeneration — only a reprocess of the on-disk clip at a new count/fps.
-export const WALK_DEFAULT_FRAME_COUNT = 12;
-export const WALK_DEFAULT_FPS = 10;
-export const WALK_MIN_FRAME_COUNT = 6;
-export const WALK_MAX_FRAME_COUNT = 16;
-export const WALK_MIN_FPS = 4;
-export const WALK_MAX_FPS = 24;
 export const MAX_SOURCE_SECONDS = 8;
 export const MAX_SOURCE_DIMENSION = 512;
 export const WALK_CELL_SIZE = 384;
 export const WALK_PIVOT = [WALK_CELL_SIZE / 2, 352]; // [192, 352]
-export const WALK_PHASES = [
-  'left-contact', 'left-down', 'left-passing', 'left-up',
-  'right-contact', 'right-down', 'right-passing', 'right-up',
-];
-
-/**
- * Column/phase labels for an N-frame packed strip. The historical 8-frame
- * packing keeps its named 2-beat gait phases (so existing atlases and imported
- * manifests round-trip byte-identically); any other length uses positional
- * `frame-NN` labels. Postprocess (which writes them) and atlas.js (which
- * asserts them) MUST derive labels through this one helper so they can never
- * disagree on a column's identity.
- */
-export function walkPhaseLabels(n) {
-  if (n === WALK_PHASES.length) return [...WALK_PHASES];
-  return Array.from({ length: n }, (_, i) => `frame-${String(i).padStart(2, '0')}`);
-}
-
-/** Clamp a requested frame count into the supported authoring range. */
-export function clampFrameCount(n) {
-  const v = Math.round(Number(n));
-  if (!Number.isFinite(v)) return WALK_DEFAULT_FRAME_COUNT;
-  return Math.max(WALK_MIN_FRAME_COUNT, Math.min(WALK_MAX_FRAME_COUNT, v));
-}
-
-/** Clamp a requested playback fps into the supported authoring range. */
-export function clampFps(n) {
-  const v = Math.round(Number(n));
-  if (!Number.isFinite(v)) return WALK_DEFAULT_FPS;
-  return Math.max(WALK_MIN_FPS, Math.min(WALK_MAX_FPS, v));
-}
 
 // Border-key acceptance thresholds. The key channels must dominate the dark
 // channels by ≥ KEY_DOMINANCE_MIN, and each channel group must be balanced

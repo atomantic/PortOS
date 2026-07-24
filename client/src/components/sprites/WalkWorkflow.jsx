@@ -43,6 +43,17 @@ export const WALK_DEFAULT_FPS = 10;
 export const WALK_FRAME_COUNT_RANGE = { min: 6, max: 16 };
 export const WALK_FPS_RANGE = { min: 4, max: 24 };
 
+// Inclusive integer sequence [min..max] by step. Both dropdown option lists are
+// derived from module-level constants, so build them once at load rather than
+// on every render.
+const seq = (min, max, step) => {
+  const out = [];
+  for (let v = min; v <= max; v += step) out.push(v);
+  return out;
+};
+const FRAME_COUNT_OPTIONS = seq(WALK_FRAME_COUNT_RANGE.min, WALK_FRAME_COUNT_RANGE.max, 1);
+const FPS_OPTIONS = seq(WALK_FPS_RANGE.min, WALK_FPS_RANGE.max, 2);
+
 /**
  * Strip geometry for a preview/trim UI, defaulting to the native 8-phase
  * packaging when a run predates (or omits) the richer stripPreview fields.
@@ -370,21 +381,24 @@ export default function WalkWorkflow({
     onChanged();
   }, { errorMessage: 'Approve failed' });
 
-  // Retry a wedged/errored run — re-runs the packer at the CURRENT frame-count
-  // and speed so a recovery also picks up the user's chosen cycle look.
+  // Re-run the deterministic packer on a run's ON-DISK clip at the CURRENT
+  // frame-count/speed — the one call shared by the errored-run "Retry" and the
+  // candidate "Reprocess" buttons (no grok, no regeneration).
+  const postprocessRun = (run) => postprocessSpriteWalk(recordId, { runId: run.id, frameCount, fps }, { silent: true });
+
+  // Retry a wedged/errored run so a recovery also picks up the chosen cycle look.
   const [retryPostprocess] = useAsyncAction(async (run) => {
-    await postprocessSpriteWalk(recordId, { runId: run.id, frameCount, fps }, { silent: true });
+    await postprocessRun(run);
     toast.success('Postprocess complete');
     onChanged();
   }, { errorMessage: 'Postprocess failed' });
 
-  // Reprocess a candidate from its ON-DISK clip at the current frame-count/speed
-  // (no grok call). Track the in-flight direction so only that card spins.
+  // Reprocess a candidate. Track the in-flight direction so only that card spins.
   const [reprocessingDir, setReprocessingDir] = useState(null);
   const [reprocess] = useAsyncAction(async (run) => {
     setReprocessingDir(run.direction);
     try {
-      await postprocessSpriteWalk(recordId, { runId: run.id, frameCount, fps }, { silent: true });
+      await postprocessRun(run);
       toast.success(`Walk ${run.direction} reprocessed · ${frameCount}f @ ${fps}fps`);
       onChanged();
     } finally {
@@ -417,14 +431,6 @@ export default function WalkWorkflow({
   const approvedCount = Object.values(selection?.directions || {})
     .filter((d) => d?.status === 'approved').length;
 
-  const range = (min, max, step = 2) => {
-    const out = [];
-    for (let v = min; v <= max; v += step) out.push(v);
-    if (out[out.length - 1] !== max) out.push(max);
-    return out;
-  };
-  const frameCountOptions = range(WALK_FRAME_COUNT_RANGE.min, WALK_FRAME_COUNT_RANGE.max, 1);
-  const fpsOptions = range(WALK_FPS_RANGE.min, WALK_FPS_RANGE.max, 2);
   const cycleSeconds = (frameCount / fps).toFixed(2);
   const cycleLabel = `${frameCount}f @ ${fps}fps`;
 
@@ -478,7 +484,7 @@ export default function WalkWorkflow({
                 onChange={(e) => onFrameCountChange(Number(e.target.value))}
                 className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
               >
-                {frameCountOptions.map((n) => <option key={n} value={n}>{n}</option>)}
+                {FRAME_COUNT_OPTIONS.map((n) => <option key={n} value={n}>{n}</option>)}
               </select>
             </label>
             <label className="flex items-center gap-1.5 text-xs text-gray-400">
@@ -488,7 +494,7 @@ export default function WalkWorkflow({
                 onChange={(e) => onFpsChange(Number(e.target.value))}
                 className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
               >
-                {fpsOptions.map((n) => <option key={n} value={n}>{n} fps</option>)}
+                {FPS_OPTIONS.map((n) => <option key={n} value={n}>{n} fps</option>)}
               </select>
             </label>
             <label className="flex items-center gap-1.5 text-xs text-gray-400" title="grok renders 6s or 10s clips; length only affects how much source footage the packer has to choose from">

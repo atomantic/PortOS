@@ -5,6 +5,9 @@ import { WORK_TRACKERS } from './workTracker.js';
 import { SPRITE_ID_PATTERN, SPRITE_RECORD_KINDS } from '../services/sprites/recordsLogic.js';
 import { ANCHOR_DIRECTIONS, SPRITE_DIRECTIONS } from '../services/sprites/prompts.js';
 import { CHROMA_KEY_HEXES } from '../services/sprites/chromaKey.js';
+import {
+  WALK_MIN_FRAME_COUNT, WALK_MAX_FRAME_COUNT, WALK_MIN_FPS, WALK_MAX_FPS,
+} from '../services/sprites/walkBounds.js';
 import { QUEUEABLE_IMAGE_MODES } from '../services/imageGen/modes.js';
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
@@ -1093,20 +1096,20 @@ const spriteWalkDirectionSchema = z.enum(SPRITE_DIRECTIONS);
 
 const spriteWalkRunIdSchema = z.string().regex(/^walk-[a-z-]+-[0-9a-f]{8}$/);
 
-// Walk-cycle authoring bounds. Mirror walkPostprocess.js WALK_MIN/MAX_* — kept
-// as literals here so the validation graph doesn't pull sharp/ffmpeg in via
-// walkPostprocess. The server re-clamps into the same range, so these are a
-// guard, not the source of truth: frame count 6–16, playback fps 4–24.
-const spriteWalkFrameCountSchema = z.number().int().min(6).max(16);
-const spriteWalkFpsSchema = z.number().int().min(4).max(24);
+// Walk-cycle authoring bounds — imported from the sharp-free walkBounds leaf so
+// the request schema and the server-side clamp share ONE range definition (a
+// bounds change can't silently diverge). walkBounds pulls in no native deps.
+const spriteWalkFrameCountSchema = z.number().int().min(WALK_MIN_FRAME_COUNT).max(WALK_MAX_FRAME_COUNT);
+const spriteWalkFpsSchema = z.number().int().min(WALK_MIN_FPS).max(WALK_MAX_FPS);
 
 export const spriteWalkGenerateSchema = z.object({
   direction: spriteWalkDirectionSchema,
-  // Clip length in seconds (see GROK_VIDEO_DURATIONS). Short clips are ample
-  // for a looping walk cycle; the walk service defaults to 2s when omitted.
-  duration: z.union([
-    z.literal(1), z.literal(2), z.literal(3), z.literal(6), z.literal(10),
-  ]).optional(),
+  // Clip length in seconds. grok's image_to_video only honors its documented
+  // 6s/10s options and clamps anything shorter to ~6s, so only those two are
+  // accepted; the service defaults to 6s when omitted. Clip length only affects
+  // how much source footage the packer can choose from — the cycle's look is set
+  // by frameCount/fps below.
+  duration: z.union([z.literal(6), z.literal(10)]).optional(),
   // Deterministic-postprocess knobs (not grok's): how many frames the packed
   // cycle holds and how fast it plays back. Omitted → service defaults.
   frameCount: spriteWalkFrameCountSchema.optional(),
