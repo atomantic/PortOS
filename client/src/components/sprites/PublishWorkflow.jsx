@@ -32,8 +32,11 @@ export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
   const [codePath, setCodePath] = useState(saved?.codeBinding?.path || '');
   const [resourcePath, setResourcePath] = useState(saved?.codeBinding?.resourcePath || '');
   // null → idle; 'publish' → normal confirm; 'overwrite' → the server
-  // refused with PUBLISH_DEST_OCCUPIED and needs explicit consent.
+  // refused with PUBLISH_DEST_OCCUPIED / PUBLISH_LAYOUT_OCCUPIED and needs
+  // explicit consent. occupiedFile names which file the consent is about, so
+  // the question doesn't say "atlas" when the blocker is the layout sidecar.
   const [confirmStage, setConfirmStage] = useState(null);
+  const [occupiedFile, setOccupiedFile] = useState('atlas');
 
   // Re-seed the form when the server-side binding changes (save round-trip)
   // — and drop any pending confirmation: consent given for one destination
@@ -72,9 +75,11 @@ export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
   const [publish, publishing] = useAsyncAction(async (acknowledgeOverwrite) => {
     const body = acknowledgeOverwrite ? { acknowledgeOverwrite: true } : {};
     const result = await publishSpriteAtlas(record.id, body, { silent: true }).catch((err) => {
-      // The destination holds an atlas PortOS never published — escalate to
-      // an explicit overwrite consent instead of toasting a dead end.
-      if (err?.code === 'PUBLISH_DEST_OCCUPIED') {
+      // The destination holds an atlas — or a layout sidecar — PortOS never
+      // published. Escalate to an explicit overwrite consent instead of
+      // toasting a dead end the UI offers no way to act on.
+      if (err?.code === 'PUBLISH_DEST_OCCUPIED' || err?.code === 'PUBLISH_LAYOUT_OCCUPIED') {
+        setOccupiedFile(err.code === 'PUBLISH_LAYOUT_OCCUPIED' ? 'layout' : 'atlas');
         setConfirmStage('overwrite');
         return null;
       }
@@ -211,7 +216,9 @@ export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
           )}
           {confirmStage === 'overwrite' && bindingSettled && (
             <InlineConfirmRow
-              question={`${destLabel} already contains an atlas PortOS did not publish. Overwrite it?`}
+              question={occupiedFile === 'layout'
+                ? `${destLabel} already has a layout sidecar PortOS did not write. Overwrite it?`
+                : `${destLabel} already contains an atlas PortOS did not publish. Overwrite it?`}
               confirmText={publishing ? 'Publishing…' : 'Overwrite'}
               tone="error"
               onConfirm={() => { if (!publishing) publish(true); }}

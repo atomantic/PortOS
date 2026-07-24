@@ -14,19 +14,20 @@
  *   art-pipeline/catalog/runtime-selection.json  current published-atlas pointer
  *   game/assets/sprites/<family>/                props atlas families (PNG + README)
  *
- * Only approved/final artifacts import: reference candidates, raw video, and
- * extracted frame intermediates stay behind. Where a source manifest carries a
+ * Only approved/final artifacts import: reference candidates and extracted
+ * frame intermediates stay behind, while a run's source clip does come across
+ * (#2984 — see SOURCE_CLIP_REF). Where a source manifest carries a
  * sha256 for a file, the copied bytes are verified against it — a mismatch is
  * recorded per-item (the import continues) so one corrupt file can't abort a
  * whole tree. Runs on demand only (a user action) — never at boot.
  */
 
 import { join, basename, dirname } from 'path';
-import { readdir, copyFile } from 'fs/promises';
+import { readdir, copyFile, rm } from 'fs/promises';
 import { PATHS, ensureDir, sha256File, atomicWrite, pathExists, readJSONFile, expandHome } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { upsertImportedRecord } from './records.js';
-import { spriteDir } from './paths.js';
+import { spriteDir, RUN_DIR_MATCH, altRunLayoutPath } from './paths.js';
 import { isValidSpriteId } from './recordsLogic.js';
 
 // The source pipeline keys everything on magenta; imported characters carry it
@@ -95,13 +96,33 @@ async function verifyHashes(destDir, expectations, errors, copiedThisRun) {
   const outcomes = await Promise.all(
     unique.map(async ({ relPath, sha256 }) => {
       if (!copiedThisRun.has(relPath)) return { error: `missing from source: ${relPath}` };
-      return (await sha256File(join(destDir, relPath))) === sha256
-        ? { verified: true }
-        : { error: `sha256 mismatch: ${relPath}` };
+      if ((await sha256File(join(destDir, relPath))) === sha256) return { verified: true };
+      // A still that fails its pin stays on disk with an error recorded — the
+      // record is still browsable and the mismatch is visible. A source CLIP
+      // is different: it is the INPUT to re-deriving a cycle (#2984), so bytes
+      // the manifest disowns would let a later re-derive silently emit frames
+      // nobody approved. Drop it — that run just stays non-re-derivable until
+      // a clean re-import.
+      if (SOURCE_CLIP_REF.test(relPath)) {
+        await rm(join(destDir, relPath), { force: true });
+        return { dropped: relPath };
+      }
+      return { error: `sha256 mismatch: ${relPath}` };
     }),
   );
   for (const o of outcomes) if (o.error) errors.push(o.error);
-  return outcomes.filter((o) => o.verified).length;
+  // Collapse drops by PATH, not by outcome: one clip pinned by two manifests
+  // that disagree on its hash yields two mismatching expectations for the same
+  // file, and counting both would decrement the caller's file total twice for a
+  // single deleted clip (and report the same run twice).
+  const dropped = [...new Set(outcomes.filter((o) => o.dropped).map((o) => o.dropped))];
+  for (const relPath of dropped) {
+    errors.push(`run ${relPath.split('/')[1]}: source clip failed sha256 verification — not imported`);
+  }
+  // The caller subtracts `dropped` from its file count: a clip removed here was
+  // counted when it was copied, and an import summary must not claim a file it
+  // deliberately deleted.
+  return { verified: outcomes.filter((o) => o.verified).length, dropped: dropped.length };
 }
 
 // Manifest paths reference files repo-relative (art-source/sprites/<id>/…) or
@@ -129,8 +150,18 @@ function relToCharacterDir(manifestPath, characterId) {
 }
 
 // Asset references worth importing from a run's manifests: images, previews,
-// and packaged manifests — never raw/extracted intermediates or source video.
+// and packaged manifests — never raw/extracted intermediates.
 const ASSET_REF = /\.(png|gif|json)$/i;
+// A run's i2v source clip — the ONE video that imports (#2984). Frame counts
+// became authorable in #2970 and the packer only ever resamples DOWN, so
+// without the clip an imported direction is permanently stuck at whatever
+// frame count it arrived with: re-deriving it needs the clip re-extracted.
+// Matched by exact shape rather than a blanket `.mp4` rule so unrelated videos
+// in the source tree still stay behind. `raw/` frames deliberately remain
+// excluded below — ~5× the bytes of the clip they were extracted from, and
+// re-derivation re-extracts them on demand.
+const SOURCE_CLIP_NAME = 'source-video.mp4';
+const SOURCE_CLIP_REF = new RegExp(`${RUN_DIR_MATCH.source}/generated/source-video\\.mp4$`);
 const EXCLUDED_RUN_SEGMENTS = /(^|\/)(raw|frames|review)\//;
 // Free-text log fields in run records can contain path-looking strings that
 // were never assets — don't traverse them.
@@ -138,7 +169,8 @@ const NOISE_KEYS = /tail$|^stdout|^stderr|^log$/i;
 
 function importableRel(value, characterId) {
   const rel = relToCharacterDir(value, characterId);
-  return rel && ASSET_REF.test(rel) && !EXCLUDED_RUN_SEGMENTS.test(rel) ? rel : null;
+  if (!rel || EXCLUDED_RUN_SEGMENTS.test(rel)) return null;
+  return ASSET_REF.test(rel) || SOURCE_CLIP_REF.test(rel) ? rel : null;
 }
 
 /**
@@ -173,19 +205,46 @@ function collectManifestRefs(node, characterId, refs, expectations) {
   }
 }
 
+// Resolve a declared path against the SOURCE tree, tolerating run-layout drift
+// (`altRunLayoutPath`): returns whichever path actually exists — the declared
+// one or its twin — or null when neither does.
+async function resolveSourceRel(srcCharDir, rel) {
+  if (await pathExists(join(srcCharDir, rel))) return rel;
+  const alt = altRunLayoutPath(rel);
+  return alt && (await pathExists(join(srcCharDir, alt))) ? alt : null;
+}
+
+// Read a character-dir JSON with the same drift tolerance, so a manifest
+// naming `runs/<run-id>/…` still expands when the source stores that run under
+// `grok/<run-id>/`. Read-then-fall-back rather than probe-then-read: readJson
+// already collapses a missing/corrupt file to null, so the twin costs a
+// syscall only when the declared path really isn't there.
+async function readCharJson(srcCharDir, rel) {
+  const direct = await readJson(join(srcCharDir, rel));
+  if (direct) return direct;
+  const alt = altRunLayoutPath(rel);
+  return alt ? readJson(join(srcCharDir, alt)) : null;
+}
+
+// Copy one character-dir file, always landing it at the DECLARED path: the
+// manifests that name it are copied byte-for-byte (their hashes are pinned),
+// so readers re-anchor those same declared paths — putting the bytes anywhere
+// else would import a file nothing can find. Only the source lookup tolerates
+// drift.
 async function copyCharFile(srcCharDir, destDir, rel) {
-  const src = join(srcCharDir, rel);
-  if (!(await pathExists(src))) return false;
+  const srcRel = await resolveSourceRel(srcCharDir, rel);
+  if (!srcRel) return false;
   const dest = join(destDir, rel);
   await ensureDir(dirname(dest));
-  await copyFile(src, dest);
+  await copyFile(join(srcCharDir, srcRel), dest);
   return true;
 }
 
 /**
  * Import one APPROVED direction of a finalized walk set: the run manifest
  * (hash-verified), then only the assets the run's manifests declare — packed
- * strips, packaged manifests, previews. Works for both grok runs (record at
+ * strips, packaged manifests, previews, and the run's source clip. Works for
+ * both grok runs (record at
  * run root, assets under generated/) and imagegen redraw runs (manifest +
  * strips at the version root, surrounded by unselected candidates that must
  * stay behind).
@@ -205,15 +264,32 @@ async function importApprovedDirection({ srcCharDir, destDir, characterId, direc
   if (dir.runManifestSha256) hashExpectations.push({ relPath: manifestRel, sha256: dir.runManifestSha256 });
 
   const refs = new Set();
-  collectManifestRefs(await readJson(join(srcCharDir, manifestRel)), characterId, refs, hashExpectations);
+  // Read the copy just made rather than the source: same bytes, one fewer
+  // resolution + read, and it matches how the reference/ and walk/ loops below
+  // expand their manifests.
+  collectManifestRefs(await readJson(join(destDir, manifestRel)), characterId, refs, hashExpectations);
   const runRel = relToCharacterDir(dir.runPath, characterId);
-  if (runRel && (await pathExists(join(srcCharDir, `${runRel}/generated/review-preview.json`)))) {
+  if (runRel && (await resolveSourceRel(srcCharDir, `${runRel}/generated/review-preview.json`))) {
     refs.add(`${runRel}/generated/review-preview.json`);
   }
   // One extra expansion level: packaged manifests / previews the run record
   // names in turn declare the strip files (and their hash pins).
   for (const rel of [...refs]) {
-    if (rel.endsWith('.json')) collectManifestRefs(await readJson(join(srcCharDir, rel)), characterId, refs, hashExpectations);
+    if (rel.endsWith('.json')) collectManifestRefs(await readCharJson(srcCharDir, rel), characterId, refs, hashExpectations);
+  }
+  // The source clip (#2984) — a fallback for a run whose manifests never name
+  // it, since a direction with no clip can never be re-derived at a different
+  // frame count. Deliberately AFTER the expansion above: the usual carrier of
+  // `sourceVideoPath` is the packaged manifest, one level down, so probing
+  // earlier would miss a clip already collected and copy the same bytes to two
+  // destinations (once per run layout). The RUN_DIR_MATCH gate keeps this to
+  // real run entries (an imagegen redraw entry has no run dir and no clip), and
+  // the twin check ignores a manifest that named the clip under the OTHER
+  // layout — that path is already in `refs` and denotes the same file.
+  const clipRel = runRel && `${runRel}/generated/${SOURCE_CLIP_NAME}`;
+  if (clipRel && RUN_DIR_MATCH.test(runRel) && !refs.has(clipRel) && !refs.has(altRunLayoutPath(clipRel))
+      && (await resolveSourceRel(srcCharDir, clipRel))) {
+    refs.add(clipRel);
   }
   refs.delete(manifestRel);
   for (const rel of [...refs].sort()) {
@@ -335,7 +411,9 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
     }
   }
 
-  result.verified = await verifyHashes(destDir, hashExpectations, result.errors, copiedThisRun);
+  const { verified, dropped } = await verifyHashes(destDir, hashExpectations, result.errors, copiedThisRun);
+  result.verified = verified;
+  result.files -= dropped;
 
   const record = await upsertImportedRecord(characterId, {
     kind: 'character',
