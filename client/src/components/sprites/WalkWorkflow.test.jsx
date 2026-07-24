@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 // Coverage for the walk viewer's loop preview (#2924). The load-bearing behavior:
@@ -9,11 +9,14 @@ import { MemoryRouter } from 'react-router-dom';
 
 vi.mock('../../services/apiSprites.js', () => ({
   generateSpriteWalk: vi.fn(),
-  approveSpriteWalk: vi.fn(),
-  postprocessSpriteWalk: vi.fn(),
+  approveSpriteWalk: vi.fn(() => Promise.resolve({})),
+  postprocessSpriteWalk: vi.fn(() => Promise.resolve({})),
+  unlockSpriteWalk: vi.fn(() => Promise.resolve({})),
+  reopenSpriteWalk: vi.fn(() => Promise.resolve({})),
 }));
 
 import WalkWorkflow from './WalkWorkflow';
+import { postprocessSpriteWalk, reopenSpriteWalk } from '../../services/apiSprites.js';
 
 const CELL_PX = 96;
 
@@ -265,11 +268,56 @@ describe('WalkWorkflow observable render', () => {
   });
 });
 
-describe('WalkWorkflow clip-length options', () => {
-  it('offers the short clip lengths for an unfinalized set', () => {
+describe('WalkWorkflow authoring controls', () => {
+  it('offers Frames, Speed, and grok-real Clip options plus a cycle readout', () => {
     renderRun({ id: 'walk-east-deadbeef', direction: 'east', status: 'error', postprocessError: 'x' });
-    const select = screen.getByRole('combobox');
-    const values = [...select.options].map((o) => o.value);
-    expect(values).toEqual(['1', '2', '3', '6', '10']);
+    // Clip length is now just grok's real 6s/10s options (shorter was a no-op).
+    const clip = screen.getByRole('combobox', { name: /Clip/ });
+    expect([...clip.options].map((o) => o.value)).toEqual(['6', '10']);
+    // Frame count + speed controls exist…
+    expect(screen.getByRole('combobox', { name: /Frames/ })).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: /Speed/ })).toBeTruthy();
+    // …and the cycle-duration readout reflects the defaults (12f / 10fps = 1.20s).
+    expect(screen.getByText(/1\.20s \/ cycle/)).toBeTruthy();
+  });
+});
+
+describe('WalkWorkflow reprocess + reopen', () => {
+  it('reprocesses a candidate from its on-disk clip at the current count/fps', async () => {
+    renderRun({
+      id: 'walk-east-abc12345', direction: 'east', status: 'candidate',
+      stripPreview: { stripPath: 'runs/walk-east-abc12345/generated/strip.png', frameCount: 12, fps: 10, cellWidth: 384, cellHeight: 384 },
+    });
+    await act(async () => { screen.getByRole('button', { name: /Reprocess/ }).click(); });
+    expect(postprocessSpriteWalk).toHaveBeenCalledWith(
+      'example-walker',
+      { runId: 'walk-east-abc12345', frameCount: 12, fps: 10 },
+      { silent: true },
+    );
+  });
+
+  it('reopens an approved direction after an inline confirm', async () => {
+    render(
+      <MemoryRouter>
+        <WalkWorkflow
+          record={{ id: 'example-walker' }}
+          reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked' }] } }}
+          walk={{
+            runs: [{ id: 'run-east', direction: 'east', status: 'approved', stripPreview: { stripPath: 'runs/run-east/generated/strip.png', frameCount: 12, fps: 10, cellWidth: 384, cellHeight: 384 } }],
+            selection: { directions: { east: { status: 'approved', runId: 'run-east' } } },
+            walkSet: null,
+          }}
+          renders={noRenders()}
+          duration={6}
+          onDurationChange={vi.fn()}
+          onGenerate={vi.fn()}
+          onChanged={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+    act(() => { screen.getByRole('button', { name: /^Reopen$/ }).click(); });
+    // Inline confirm surfaces, then the confirm fires the API.
+    await act(async () => { screen.getByRole('button', { name: /^Reopen$/ }).click(); });
+    expect(reopenSpriteWalk).toHaveBeenCalledWith('example-walker', { direction: 'east' }, { silent: true });
   });
 });

@@ -12,7 +12,9 @@ import { getSettings } from '../services/apiSystem.js';
 import { deriveAvailableBackends } from '../lib/imageGenBackends.js';
 import AppContextPicker from '../components/AppContextPicker.jsx';
 import ReferenceWorkflow from '../components/sprites/ReferenceWorkflow.jsx';
-import WalkWorkflow, { WALK_DEFAULT_DURATION } from '../components/sprites/WalkWorkflow.jsx';
+import WalkWorkflow, {
+  WALK_DEFAULT_DURATION, WALK_DEFAULT_FRAME_COUNT, WALK_DEFAULT_FPS,
+} from '../components/sprites/WalkWorkflow.jsx';
 import LoopTrimmer from '../components/sprites/LoopTrimmer.jsx';
 import PublishWorkflow from '../components/sprites/PublishWorkflow.jsx';
 import AssetCollection from '../components/sprites/AssetCollection.jsx';
@@ -453,10 +455,13 @@ export default function Sprites() {
     }, replace ? { replace: true } : undefined);
   }, [setSearchParams]);
 
-  // Clip length lives here rather than inside WalkWorkflow so a Regenerate
-  // fired from an asset card honors the length the user picked in the walk
-  // panel instead of silently falling back to the server default.
+  // Clip length + frame count + playback speed live here rather than inside
+  // WalkWorkflow so a Regenerate fired from an asset card honors what the user
+  // picked in the walk panel instead of silently falling back to server
+  // defaults. Frame count = cycle smoothness; fps = walk speed.
   const [duration, setDuration] = useState(WALK_DEFAULT_DURATION);
+  const [walkFrameCount, setWalkFrameCount] = useState(WALK_DEFAULT_FRAME_COUNT);
+  const [walkFps, setWalkFps] = useState(WALK_DEFAULT_FPS);
 
   // Image-backend availability + the selected backend `mode` are page-owned
   // (#2938): both ReferenceWorkflow's picker and the asset collection's anchor
@@ -527,14 +532,16 @@ export default function Sprites() {
 
   const generateWalk = useCallback((direction) => submitRender(
     walkBegin, walkResolve, walkCancel, direction,
-    () => generateSpriteWalk(id, { direction, duration }, { silent: true }),
+    () => generateSpriteWalk(id, {
+      direction, duration, frameCount: walkFrameCount, fps: walkFps,
+    }, { silent: true }),
     `Failed to queue ${direction} walk`,
     // Refetch immediately so the server's 'rendering' run lands before the
     // media-job poll evicts the optimistic key (~4s) — otherwise the Generate
     // button briefly re-enables and a second click would 409 the in-flight
     // render. The server guard is the real backstop; this closes the UI gap.
     onWorkflowChanged,
-  ), [id, duration, walkBegin, walkResolve, walkCancel, submitRender, onWorkflowChanged]);
+  ), [id, duration, walkFrameCount, walkFps, walkBegin, walkResolve, walkCancel, submitRender, onWorkflowChanged]);
 
   // `mode` is the workflow-selected backend, threaded from the asset card via
   // buildCollectionActions (#2938) so a re-roll uses the same backend the
@@ -679,6 +686,10 @@ export default function Sprites() {
                         renders={walkRenders}
                         duration={duration}
                         onDurationChange={setDuration}
+                        frameCount={walkFrameCount}
+                        onFrameCountChange={setWalkFrameCount}
+                        fps={walkFps}
+                        onFpsChange={setWalkFps}
                         onGenerate={generateWalk}
                         onOpenTrimmer={openTrimmer}
                         onChanged={onWorkflowChanged}

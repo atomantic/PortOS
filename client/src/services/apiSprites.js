@@ -115,6 +115,12 @@ export const unlockSpriteWalk = (id, options = {}) => request(`/sprites/${encode
   method: 'POST', ...options,
 });
 
+// Re-open ONE approved direction (finer-grained than unlock) so it can be
+// regenerated/reprocessed/re-approved. Body: { direction }.
+export const reopenSpriteWalk = (id, body, options = {}) => request(`/sprites/${encodeURIComponent(id)}/walk/reopen`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
 // Save a non-destructive loop trim (strip + GIF + manifest, versioned).
 export const trimSpriteWalk = (id, body, options = {}) => request(`/sprites/${encodeURIComponent(id)}/walk/trim`, {
   method: 'POST', body: JSON.stringify(body), ...options,
