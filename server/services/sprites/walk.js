@@ -183,6 +183,26 @@ function normalizeStripPreview(recordId, run) {
   return { ...run, stripPreview: { ...run.stripPreview, stripPath } };
 }
 
+// Same fixup as normalizeStripPreview, for the OTHER repo-anchored field an
+// imported run record carries: `postprocessManifest` names the packaged
+// manifest as `art-source/sprites/<id>/runs/<run-id>/generated/…json`. Left
+// raw, `resolveSpriteAssetPath` appends it whole to the record dir — producing
+// `data/sprites/<id>/art-source/sprites/<id>/…`, which is still INSIDE the
+// record (so the traversal gate passes) but does not exist. That 409'd every
+// loop-trim save on an imported record (#2978) and would have failed
+// approveRun the same way. Normalizing here — the one choke point every run
+// reader passes through — fixes both consumers at once. In memory only.
+// A path toRecordRelativeAssetPath can't re-anchor (it returns null for a
+// repo-anchored path belonging to some OTHER record, e.g. pipeline provenance)
+// is left untouched rather than blanked, so a genuinely foreign pointer stays
+// readable instead of being rewritten into a bogus record-relative one.
+function normalizePostprocessManifest(recordId, run) {
+  if (!run?.postprocessManifest) return run;
+  const rel = toRecordRelativeAssetPath(recordId, run.postprocessManifest);
+  if (!rel || rel === run.postprocessManifest) return run;
+  return { ...run, postprocessManifest: rel };
+}
+
 // A candidate/approved run's stripPreview names a packed strip PNG on disk. If
 // that file has since gone missing — a botched migration dropped it, a manual
 // cleanup nuked it — the run record still advertises the path, so the native
@@ -224,7 +244,7 @@ async function normalizeMissingStrip(recordId, run) {
 // In-memory only, like normalizeStripPreview — never written back to disk.
 function normalizeRunRecord(recordId, run, runDirRel) {
   const withId = run.id ? run : { ...run, id: runDirRel.split('/')[1] };
-  return normalizeStripPreview(recordId, withId);
+  return normalizePostprocessManifest(recordId, normalizeStripPreview(recordId, withId));
 }
 
 // Strip candidates on an imported redraw manifest, in preference order. The
@@ -793,7 +813,14 @@ async function approveWalkDirectionImpl(recordId, { direction, runId }) {
   // declared frameCount must match the actual packed frames. Cross-direction
   // consistency (all approved directions sharing one count/fps) is enforced at
   // atlas-compile time, where the whole set is visible at once.
-  const manifestAbs = resolveSpriteAssetPath(recordId, run.postprocessManifest);
+  // `loadRunRecord` deliberately returns the RAW record (its results flow into
+  // saveRunRecord elsewhere, and an imported manifest's bytes are hash-pinned to
+  // the source), so re-anchor the repo-anchored path here at the point of use
+  // rather than in the loader — same fixup normalizeRunRecord applies to the
+  // read-only view (#2978).
+  const manifestRel = toRecordRelativeAssetPath(recordId, run.postprocessManifest)
+    || run.postprocessManifest;
+  const manifestAbs = resolveSpriteAssetPath(recordId, manifestRel);
   const packaged = await readJSONFile(manifestAbs, null);
   const frameCountValid = Number.isInteger(packaged?.frameCount)
     && packaged.frameCount >= WALK_MIN_FRAME_COUNT && packaged.frameCount <= WALK_MAX_FRAME_COUNT
@@ -808,7 +835,11 @@ async function approveWalkDirectionImpl(recordId, { direction, runId }) {
     || packaged.direction !== direction || packaged.characterId !== recordId) {
     throw new ServerError('Packaged run manifest is missing or inconsistent', { status: 409, code: 'RUN_MANIFEST_INVALID' });
   }
-  const stripAbs = resolveSpriteAssetPath(recordId, packaged.stripPath);
+  // An imported manifest's OWN stripPath is repo-anchored too — re-anchor before
+  // resolving, or the tamper check 409s on a strip that is present and intact.
+  const packagedStripRel = toRecordRelativeAssetPath(recordId, packaged.stripPath)
+    || packaged.stripPath;
+  const stripAbs = resolveSpriteAssetPath(recordId, packagedStripRel);
   if (!await pathExists(stripAbs) || await sha256File(stripAbs) !== packaged.stripSha256) {
     throw new ServerError('Packed strip is missing or was modified after packaging', { status: 409, code: 'RUN_STRIP_INVALID' });
   }
@@ -818,7 +849,9 @@ async function approveWalkDirectionImpl(recordId, { direction, runId }) {
     status: 'approved',
     runId,
     runPath: runRelPath(runId),
-    runManifest: run.postprocessManifest,
+    // Store the re-anchored path: the selection is PortOS-owned state (unlike the
+    // hash-pinned imported manifest), and every reader already normalizes it.
+    runManifest: manifestRel,
     runManifestSha256: await sha256File(manifestAbs),
     approvedAt: new Date().toISOString(),
   };
