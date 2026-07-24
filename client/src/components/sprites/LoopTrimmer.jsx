@@ -21,8 +21,10 @@ import {
 // `POST /api/sprites/:id/walk/trim`. Every packed-strip run is trimmable (any
 // layout); previously saved trims load read-only for review.
 
+// CSS display width of the main playback preview. There is deliberately no
+// thumbnail counterpart: thumbnails size themselves off the grid column
+// (`w-full`), and since #2977 no frame's canvas is sized in display px at all.
 const MAIN_PX = 192;
-const THUMB_PX = 64;
 
 // One frame of a packed strip, painted at SOURCE resolution (#2977).
 //
@@ -38,7 +40,9 @@ const THUMB_PX = 64;
 // painted into a 384px backing store its squares would shrink with the scale
 // factor — and the canvas carries the shared PIXELATED style so the browser's
 // scale stays nearest-neighbor like every other sprite surface.
-function FrameCanvas({ img, col, cellW, cellH, size }) {
+// `checkerCell` is the checkerboard square size in CSS px — larger for the main
+// preview, smaller so the pattern stays legible in a thumbnail.
+function FrameCanvas({ img, col, cellW, cellH, checkerCell = 5 }) {
   const ref = useRef(null);
   // Natural cell geometry, rounded to whole pixels for the backing store. Zero
   // until the strip <img> loads.
@@ -65,7 +69,7 @@ function FrameCanvas({ img, col, cellW, cellH, size }) {
     <div
       className="w-full block overflow-hidden"
       style={{
-        ...checkerboardStyle(size >= MAIN_PX ? 8 : 5),
+        ...checkerboardStyle(checkerCell),
         aspectRatio: ready ? `${w} / ${h}` : '1 / 1',
       }}
     >
@@ -261,7 +265,7 @@ export default function LoopTrimmer({
             className="border border-port-border rounded overflow-hidden mx-auto"
             style={{ width: MAIN_PX, maxWidth: '100%' }}
           >
-            <FrameCanvas img={img} col={frameIndex} cellW={cellW} cellH={cellH} size={MAIN_PX} />
+            <FrameCanvas img={img} col={frameIndex} cellW={cellW} cellH={cellH} checkerCell={8} />
           </div>
           <div className="flex items-center justify-center gap-2 mt-2">
             <button
@@ -337,7 +341,7 @@ export default function LoopTrimmer({
                     active ? 'border-port-accent ring-1 ring-port-accent' : 'border-port-border hover:border-gray-500'
                   } ${on ? '' : 'opacity-40 grayscale'}`}
                 >
-                  <FrameCanvas img={img} col={i} cellW={cellW} cellH={cellH} size={THUMB_PX} />
+                  <FrameCanvas img={img} col={i} cellW={cellW} cellH={cellH} />
                   <span className="block text-center text-[10px] text-gray-500 py-0.5">{i}</span>
                 </button>
               );
