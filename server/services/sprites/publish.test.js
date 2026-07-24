@@ -502,6 +502,21 @@ describe('layout sidecar (#2982)', () => {
     });
   });
 
+  it('refuses to replace a sidecar PortOS did not write unless acknowledged', async () => {
+    const { id } = await characterWithAtlas();
+    await setPublishBinding(id, BINDING);
+    await mkdir(join(APP_REPO, 'assets/sprites/hero'), { recursive: true });
+    await writeFile(join(APP_REPO, sidecarPath(BINDING.atlasDestPath)), '{"kind":"someone-elses-file"}');
+
+    await expect(publishAtlas(id)).rejects.toMatchObject({ status: 409, code: 'PUBLISH_LAYOUT_OCCUPIED' });
+    // The refusal aborts before the atlas lands.
+    expect(await readFile(join(APP_REPO, BINDING.atlasDestPath)).catch(() => null)).toBeNull();
+
+    const acked = await publishAtlas(id, { acknowledgeOverwrite: true });
+    expect(acked.published).toBe(true);
+    expect((await readSidecar(BINDING.atlasDestPath)).kind).toBe('portos-sprite-atlas-layout');
+  });
+
   it('refuses to publish an atlas whose geometry carries no column layout', async () => {
     const { id } = await characterWithAtlas('atlas-png-bytes-nogeo', undefined);
     compileAtlasInTail.mockResolvedValue({

@@ -115,7 +115,7 @@ export function deriveTracks(columns, walkFrameCount) {
  * Deliberately carries NO publish timestamp: the payload is a pure function of
  * the atlas bytes and their geometry, so an unchanged republish produces
  * byte-identical content and the sidecar write stays idempotent (the publish
- * path compares hashes to decide whether anything actually changed).
+ * path compares the encoded bytes to decide whether anything actually changed).
  */
 export function buildAtlasLayout({
   characterId, geometry, atlasSha256, version, atlasDestPath,

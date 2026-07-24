@@ -60,7 +60,7 @@ Consumer guidance:
 - **Resolve columns by name, not by constant.** `tracks` gives each animation track a column span, so a walk of any length — and any future track (a four-frame scanner action, a three-frame ambient loop) — is additive rather than a breaking re-read. `columns` is the flat list for anything that wants raw names.
 - **Verify before you trust.** `sourceAtlasSha256` identifies the atlas the layout describes. The sidecar is written *before* the PNG on each publish, so a partially-completed publish is detectable (hash mismatch) rather than silent.
 - **The sidecar carries no timestamp** — identical geometry produces byte-identical content, so an unchanged republish rewrites nothing.
-- The sidecar shares the PNG's per-repo write serialization and destination guards; an atlas whose sidecar was deleted gets it back on the next publish.
+- The sidecar shares the PNG's per-repo write serialization and destination guards; an atlas whose sidecar was deleted gets it back on the next publish, and a file at that path PortOS didn't write (no `kind: portos-sprite-atlas-layout`) is never replaced without an explicit overwrite acknowledgment.
 
 ## Playback speed belongs to the consuming app
 

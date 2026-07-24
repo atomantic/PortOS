@@ -33,7 +33,7 @@
 import { join, resolve } from 'path';
 import { readFile, stat } from 'fs/promises';
 import {
-  atomicWrite, isPathInsideDir, readJSONFile, sha256File, pathExists,
+  atomicWrite, isPathInsideDir, readJSONFile, safeJSONParse, sha256File, pathExists,
 } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
@@ -46,7 +46,9 @@ import { withWalkWriteTail } from './walk.js';
 import { compileAtlasInTail } from './atlas.js';
 import { sha256Buffer } from './walkPostprocess.js';
 import { spriteRuntimeContractSchema } from '../../lib/validation.js';
-import { buildAtlasLayout, layoutSidecarPath, runtimeContractMismatch } from './atlasLayout.js';
+import {
+  ATLAS_LAYOUT_KIND, buildAtlasLayout, layoutSidecarPath, runtimeContractMismatch,
+} from './atlasLayout.js';
 
 // Per-repo serialization: keyed by the resolved repoPath (matching
 // appDeployer's `deployingApps` key), so two app records pointing at the
@@ -271,9 +273,24 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
     // changes nothing stays a genuine no-op. Returns whether the repo was
     // mutated — an atlas already at the destination but MISSING its sidecar
     // still gets one, so the two can never be permanently out of step.
+    //
+    // Occupied-destination guard, mirroring the atlas's: PortOS owns files it
+    // stamped with its own `kind`, and will regenerate one freely, but a JSON
+    // file it never wrote sitting at that path is somebody else's — replacing
+    // it needs the same explicit acknowledgment replacing a foreign atlas does.
     const writeLayoutSidecar = async () => {
       const existing = await readFile(layoutAbs).catch(() => null);
       if (existing?.equals(layoutBuffer)) return false;
+      // A malformed/non-JSON file at that path counts as foreign too — parse
+      // failure must not become a 500, and must not license an overwrite.
+      if (existing
+        && safeJSONParse(existing.toString('utf8'))?.kind !== ATLAS_LAYOUT_KIND
+        && !acknowledgeOverwrite) {
+        throw new ServerError(
+          `${layoutDestPath} already exists and was not written by PortOS — confirm the overwrite to replace it.`,
+          { status: 409, code: 'PUBLISH_LAYOUT_OCCUPIED' },
+        );
+      }
       await atomicWrite(layoutAbs, layoutBuffer);
       return true;
     };
