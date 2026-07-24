@@ -27,10 +27,14 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   return actual;
 });
 
-const enqueueJob = vi.fn(() => ({ jobId: 'vid-job-1234567890', position: 0, status: 'queued' }));
-vi.mock('../mediaJobQueue/index.js', () => ({
-  enqueueJob: (...args) => enqueueJob(...args),
-  mediaJobEvents: { on: () => {}, off: () => {} },
+// Walk generation now runs grok as an observable TUI session (executeTuiRun)
+// rather than a headless media-job. Default mock returns a promise that never
+// resolves, so the fire-and-forget render started by startWalkGeneration does
+// NOT race the test with a background attach; a happy-path test overrides it
+// with mockImplementationOnce to simulate grok writing the MP4.
+const executeTuiRun = vi.fn(() => new Promise(() => {}));
+vi.mock('../../lib/tuiPromptRunner.js', () => ({
+  executeTuiRun: (...args) => executeTuiRun(...args),
 }));
 
 vi.mock('../imageGen/index.js', () => ({
@@ -45,12 +49,12 @@ vi.mock('../settings.js', () => ({
 
 // Keep the videoGen graph out of this mocked suite — only the duration
 // contract is consumed.
-vi.mock('../videoGen/grok.js', () => ({ GROK_VIDEO_DURATIONS: [6, 10] }));
+vi.mock('../videoGen/grok.js', () => ({ GROK_VIDEO_DURATIONS: [1, 2, 3, 6, 10] }));
 
-const prepareWalkAnchorInput = vi.fn(async (_anchorAbs, destAbs) => {
+const prepareWalkAnchorChromaInput = vi.fn(async (_anchorAbs, destAbs) => {
   await mkdir(join(destAbs, '..'), { recursive: true });
-  await writeFile(destAbs, 'stub-transparent-anchor');
-  return { preparation: 'measured-key-alpha-recovery-plus-despill' };
+  await writeFile(destAbs, 'stub-chroma-anchor');
+  return { preparation: 'composited-over-solid-chroma-matte' };
 });
 const runWalkPostprocess = vi.fn(async ({ runRel }) => ({
   manifestPath: `${runRel}/generated/manifest.json`,
@@ -60,7 +64,7 @@ vi.mock('./walkPostprocess.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    prepareWalkAnchorInput: (...args) => prepareWalkAnchorInput(...args),
+    prepareWalkAnchorChromaInput: (...args) => prepareWalkAnchorChromaInput(...args),
     runWalkPostprocess: (...args) => runWalkPostprocess(...args),
   };
 });
@@ -69,7 +73,7 @@ const records = await import('./records.js');
 const { listSpriteAssets } = await import('./paths.js');
 const { lockReference } = await import('./reference.js');
 const {
-  getWalkState, startWalkGeneration, attachWalkVideo, approveWalkDirection, rerunWalkPostprocess, unlockWalkSet,
+  getWalkState, startWalkGeneration, attachTuiWalkResult, approveWalkDirection, rerunWalkPostprocess, unlockWalkSet,
 } = await import('./walk.js');
 const { SPRITE_DIRECTIONS, ANCHOR_DIRECTIONS } = await import('./prompts.js');
 
@@ -116,8 +120,9 @@ async function makeCandidateRun(recordId, direction, { stripBytes = `strip-${dir
 }
 
 beforeEach(() => {
-  enqueueJob.mockClear();
-  prepareWalkAnchorInput.mockClear();
+  executeTuiRun.mockClear();
+  executeTuiRun.mockImplementation(() => new Promise(() => {}));
+  prepareWalkAnchorChromaInput.mockClear();
   runWalkPostprocess.mockClear();
   rmSync(join(TEST_ROOT, 'sprite-records.json'), { force: true });
 });
@@ -131,125 +136,131 @@ describe('startWalkGeneration', () => {
       .rejects.toMatchObject({ code: 'ANCHOR_NOT_LOCKED' });
   });
 
-  it('queues a grok i2v job with the spriteWalk tag off a locked anchor', async () => {
+  it('starts an observable grok-tui render off a locked anchor', async () => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
     const result = await startWalkGeneration(id, { direction: 'east' });
-    expect(result.jobId).toBe('vid-job-1234567890');
     expect(result.runId).toMatch(/^walk-east-[0-9a-f]{8}$/);
-    expect(result.duration).toBe(6);
+    expect(result.duration).toBe(2); // walk default (WALK_DEFAULT_DURATION)
+    // The shell session id is the run id, so the card can deep-link to /shell/<id>.
+    expect(result.shellSession).toBe(result.runId);
 
-    const call = enqueueJob.mock.calls[0][0];
-    expect(call.kind).toBe('video');
-    expect(call.owner).toBe('sprites');
-    expect(call.params.mode).toBe('grok');
-    expect(call.params.videoMode).toBe('image');
-    expect(call.params.grokPath).toBe('/usr/local/bin/grok');
-    expect(call.params.sourceImagePath).toBe(
-      join(TEST_ROOT, 'sprites', id, 'runs', result.runId, 'generated', 'input-anchor-transparent.png'),
-    );
-    expect(call.params.prompt).toContain('walking east');
-    expect(call.params.prompt).toContain('magenta (#FF00FF)');
-    expect(call.params.spriteWalk).toEqual({ recordId: id, direction: 'east', runId: result.runId, chromaKey: '#FF00FF' });
+    // grok runs as a TUI session (not a media job) so the user can watch it.
+    expect(executeTuiRun).toHaveBeenCalledOnce();
+    const call = executeTuiRun.mock.calls[0][0];
+    expect(call.runId).toBe(result.runId);
+    expect(call.provider).toMatchObject({ id: 'grok-tui', type: 'tui', command: '/usr/local/bin/grok' });
+    expect(call.workspacePath).toBe(join(TEST_ROOT, 'sprites', id, 'runs', result.runId, 'generated'));
+    // The task points grok at the chroma-backed input and the exact MP4 path.
+    expect(call.prompt).toContain('walking east');
+    expect(call.prompt).toContain('magenta (#FF00FF)');
+    expect(call.prompt).toContain(join(TEST_ROOT, 'sprites', id, 'runs', result.runId, 'generated', 'input-anchor-chroma.png'));
+    expect(call.prompt).toContain(join(TEST_ROOT, 'sprites', id, 'runs', result.runId, 'generated', 'source-video.mp4'));
+    expect(call.idleMs).toBeGreaterThan(8000); // longer than the default one-shot idle
 
-    // Transparent input was prepared from the locked anchor, and the run
-    // record persisted with the queue job id.
-    expect(prepareWalkAnchorInput).toHaveBeenCalledOnce();
+    // Chroma-backed input prepared from the anchor; run persisted as 'rendering'
+    // with the shell session id.
+    expect(prepareWalkAnchorChromaInput).toHaveBeenCalledOnce();
     const { runs } = await getWalkState(id);
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({
-      id: result.runId, status: 'queued', jobId: 'vid-job-1234567890', direction: 'east', chromaKey: '#FF00FF',
+      id: result.runId, status: 'rendering', provider: 'grok-tui', shellSession: result.runId,
+      direction: 'east', chromaKey: '#FF00FF',
     });
-    expect(runs[0].animationInputPreparation).toBe('measured-key-alpha-recovery-plus-despill');
+    expect(runs[0].animationInputPreparation).toBe('composited-over-solid-chroma-matte');
   });
 
-  it('animates south straight off the frozen main and honors duration 10', async () => {
+  it('honors duration 10 (passed to the grok task)', async () => {
     const id = await characterWithLockedAnchors(newId(), []);
     const result = await startWalkGeneration(id, { direction: 'south', duration: 10 });
     expect(result.duration).toBe(10);
-    expect(enqueueJob.mock.calls[0][0].params.duration).toBe(10);
+    expect(executeTuiRun.mock.calls[0][0].prompt).toContain('for 10 seconds');
+  });
+
+  it('honors a short 2s clip length', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const result = await startWalkGeneration(id, { direction: 'east', duration: 2 });
+    expect(result.duration).toBe(2);
+    expect(executeTuiRun.mock.calls[0][0].prompt).toContain('for 2 seconds');
+  });
+
+  it('packages the candidate once grok writes the clip (full render→attach)', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    // Simulate grok saving the MP4 to the directed path, then finishing.
+    executeTuiRun.mockImplementationOnce(async ({ workspacePath }) => {
+      await writeFile(join(workspacePath, 'source-video.mp4'), 'grok-clip-bytes');
+    });
+    const { runId } = await startWalkGeneration(id, { direction: 'east' });
+    // The render + attach run fire-and-forget after generation returns.
+    await vi.waitFor(async () => {
+      const { runs } = await getWalkState(id);
+      expect(runs[0].status).toBe('candidate');
+    });
+    expect(runWalkPostprocess).toHaveBeenCalledOnce();
+    const { runs } = await getWalkState(id);
+    expect(runs[0]).toMatchObject({
+      id: runId, status: 'candidate', postprocessManifest: `runs/${runId}/generated/manifest.json`,
+    });
+    expect(runs[0].sourceVideoSha256).toBe(sha256(Buffer.from('grok-clip-bytes')));
+  });
+
+  it('marks the run errored when grok finishes without a clip', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    executeTuiRun.mockImplementationOnce(async () => {}); // resolves, writes no MP4
+    await startWalkGeneration(id, { direction: 'east' });
+    await vi.waitFor(async () => {
+      const { runs } = await getWalkState(id);
+      expect(runs[0].status).toBe('error');
+    });
+    const { runs } = await getWalkState(id);
+    expect(runs[0].postprocessError).toMatch(/without writing the walk video/);
+    expect(runWalkPostprocess).not.toHaveBeenCalled();
   });
 });
 
-describe('attachWalkVideo (completion hook)', () => {
-  async function queuedRun(id) {
-    const { runId } = await startWalkGeneration(id, { direction: 'east' });
-    await mkdir(join(TEST_ROOT, 'videos'), { recursive: true });
-    await writeFile(join(TEST_ROOT, 'videos', 'vid-job-1234567890.mp4'), 'fake-mp4-bytes');
-    return runId;
+describe('attachTuiWalkResult (grok-tui completion)', () => {
+  // Write a source video directly into a run's generated dir (grok's TUI run
+  // saves it there in production) and return its abs path.
+  async function landVideo(id, runId, bytes = 'grok-clip') {
+    const videoAbs = join(TEST_ROOT, 'sprites', id, 'runs', runId, 'generated', 'source-video.mp4');
+    await mkdir(join(videoAbs, '..'), { recursive: true });
+    await writeFile(videoAbs, bytes);
+    return videoAbs;
   }
 
-  it('copies the video into the run and records the packaged candidate', async () => {
-    const id = await characterWithLockedAnchors(newId(), ['east']);
-    const runId = await queuedRun(id);
-    const result = await attachWalkVideo({
-      recordId: id, direction: 'east', runId, filename: 'vid-job-1234567890.mp4', jobId: 'vid-job-1234567890',
-    });
-    expect(result).toEqual({ runId, status: 'candidate' });
-    expect(runWalkPostprocess).toHaveBeenCalledOnce();
-    const ppArgs = runWalkPostprocess.mock.calls[0][0];
-    expect(ppArgs).toMatchObject({ recordId: id, direction: 'east', chromaKey: '#FF00FF', runRel: `runs/${runId}` });
-    const video = await readFile(join(TEST_ROOT, 'sprites', id, 'runs', runId, 'generated', 'source-video.mp4'), 'utf8');
-    expect(video).toBe('fake-mp4-bytes');
-    const { runs } = await getWalkState(id);
-    expect(runs[0]).toMatchObject({
-      status: 'candidate',
-      postprocessManifest: `runs/${runId}/generated/manifest.json`,
-    });
-    expect(runs[0].stripPreview.frameCount).toBe(8);
-    expect(runs[0].sourceVideoSha256).toBe(sha256(Buffer.from('fake-mp4-bytes')));
-  });
-
-  it('captures a postprocess failure on the run record instead of throwing', async () => {
-    const id = await characterWithLockedAnchors(newId(), ['east']);
-    const runId = await queuedRun(id);
-    runWalkPostprocess.mockRejectedValueOnce(new Error('no detectable moving walk cycle'));
-    const result = await attachWalkVideo({
-      recordId: id, direction: 'east', runId, filename: 'vid-job-1234567890.mp4',
-    });
-    expect(result.status).toBe('error');
-    const { runs } = await getWalkState(id);
-    expect(runs[0].status).toBe('error');
-    expect(runs[0].postprocessError).toMatch(/walk cycle/);
-  });
-
-  it('refuses to attach onto an approved run (Render Queue retry can re-fire the tag)', async () => {
+  it('refuses to attach onto an approved run (a late render must not overwrite frozen evidence)', async () => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
     const { runId } = await makeCandidateRun(id, 'east');
     await approveWalkDirection(id, { direction: 'east', runId });
-    await mkdir(join(TEST_ROOT, 'videos'), { recursive: true });
-    await writeFile(join(TEST_ROOT, 'videos', 'retry-clip.mp4'), 'retried');
+    const videoAbs = await landVideo(id, runId, 'late');
     runWalkPostprocess.mockClear();
-    expect(await attachWalkVideo({ recordId: id, direction: 'east', runId, filename: 'retry-clip.mp4' })).toBeNull();
+    await attachTuiWalkResult(id, runId, videoAbs);
     expect(runWalkPostprocess).not.toHaveBeenCalled();
-    // The frozen artifacts were not touched.
     const { runs } = await getWalkState(id);
-    expect(runs.find((r) => r.id === runId).status).toBe('candidate');
+    expect(runs.find((r) => r.id === runId).status).toBe('candidate'); // untouched
   });
 
   it('refuses to attach after the walk set is finalized', async () => {
     const id = await characterWithLockedAnchors(newId(), ANCHOR_DIRECTIONS);
     for (const direction of SPRITE_DIRECTIONS) {
       const { runId } = await makeCandidateRun(id, direction);
-      await approveWalkDirection(id, { direction, runId });
+      await approveWalkDirection(id, { direction, runId }); // eslint-disable-line no-await-in-loop
     }
-    // A stale queued run whose clip lands after finalization must not attach.
     const staleRunId = 'walk-east-0badc0de';
-    await mkdir(join(TEST_ROOT, 'sprites', id, 'grok', staleRunId), { recursive: true });
-    await writeFile(join(TEST_ROOT, 'sprites', id, 'grok', staleRunId, 'animation-run.json'), JSON.stringify({
-      schemaVersion: 1, id: staleRunId, status: 'queued', characterId: id, direction: 'east', chromaKey: '#FF00FF',
+    await mkdir(join(TEST_ROOT, 'sprites', id, 'runs', staleRunId, 'generated'), { recursive: true });
+    await writeFile(join(TEST_ROOT, 'sprites', id, 'runs', staleRunId, 'animation-run.json'), JSON.stringify({
+      schemaVersion: 1, id: staleRunId, status: 'rendering', characterId: id, direction: 'east', chromaKey: '#FF00FF',
     }));
-    await mkdir(join(TEST_ROOT, 'videos'), { recursive: true });
-    await writeFile(join(TEST_ROOT, 'videos', 'late-clip.mp4'), 'late');
+    const videoAbs = await landVideo(id, staleRunId, 'late');
     runWalkPostprocess.mockClear();
-    expect(await attachWalkVideo({ recordId: id, direction: 'east', runId: staleRunId, filename: 'late-clip.mp4' })).toBeNull();
+    await attachTuiWalkResult(id, staleRunId, videoAbs);
     expect(runWalkPostprocess).not.toHaveBeenCalled();
   });
 
-  it('skips silently when the run record or video is missing', async () => {
+  it('skips silently when the run record is missing', async () => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
-    expect(await attachWalkVideo({ recordId: id, direction: 'east', runId: 'walk-east-deadbeef', filename: 'x.mp4' })).toBeNull();
-    const runId = await queuedRun(id);
-    expect(await attachWalkVideo({ recordId: id, direction: 'east', runId, filename: 'not-there.mp4' })).toBeNull();
+    const videoAbs = await landVideo(id, 'walk-east-deadbeef');
+    await attachTuiWalkResult(id, 'walk-east-deadbeef', videoAbs); // no throw
+    expect(runWalkPostprocess).not.toHaveBeenCalled();
   });
 });
 

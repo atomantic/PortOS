@@ -1095,9 +1095,11 @@ const spriteWalkRunIdSchema = z.string().regex(/^walk-[a-z-]+-[0-9a-f]{8}$/);
 
 export const spriteWalkGenerateSchema = z.object({
   direction: spriteWalkDirectionSchema,
-  // Grok image_to_video accepts exactly these lengths; the service defaults
-  // to the shorter clip when omitted.
-  duration: z.union([z.literal(6), z.literal(10)]).optional(),
+  // Clip length in seconds (see GROK_VIDEO_DURATIONS). Short clips are ample
+  // for a looping walk cycle; the walk service defaults to 2s when omitted.
+  duration: z.union([
+    z.literal(1), z.literal(2), z.literal(3), z.literal(6), z.literal(10),
+  ]).optional(),
 });
 
 export const spriteWalkApproveSchema = z.object({

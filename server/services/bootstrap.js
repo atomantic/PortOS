@@ -96,7 +96,6 @@ import { initMusicVideoSceneImageHook } from './musicVideoSceneImageHook.js';
 import { initMusicVideoSceneVideoHook } from './musicVideoSceneVideoHook.js';
 import { initCreativeDirectorMusicBedHook } from './creativeDirectorMusicBedHook.js';
 import { initSpriteReferenceImageHook } from './spriteReferenceImageHook.js';
-import { initSpriteWalkVideoHook } from './spriteWalkVideoHook.js';
 import { initCreativeDirectorSceneImageHook } from './creativeDirectorSceneImageHook.js';
 import { initComicPagesFilenameHook } from './pipeline/comicPagesFilenameHook.js';
 import { initStoryboardsFilenameHook } from './pipeline/storyboardsFilenameHook.js';
@@ -458,7 +457,6 @@ const initMediaJobDependentHooks = () => {
   // render into the sprite record's reference/candidates/ with a generation
   // sidecar (#2896).
   initSpriteReferenceImageHook();
-  initSpriteWalkVideoHook();
   // Creative Director scene-frame hook — durably files a queued first-pass
   // reference-frame render onto its project scene's `sourceImageFile` on
   // completion, even if no client is watching (#1867).

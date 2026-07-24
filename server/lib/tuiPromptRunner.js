@@ -99,12 +99,18 @@ const PTY_ROWS = 50;
  *   AFTER this fires.
  * @param {number} [options.timeout] — hard cap on a single run (ms). Falls back to
  *   `provider.timeout`, then `DEFAULT_TIMEOUT_MS`.
+ * @param {number} [options.idleMs] — response-complete idle threshold (ms) for
+ *   THIS call, overriding `provider.tuiOneShotIdleMs` and the 8s default. The
+ *   default suits a chatty text reply that goes quiet within seconds; a task
+ *   that streams sparse output during a long operation (e.g. a multi-minute
+ *   grok `image_to_video` render) needs a larger value so a mid-work lull isn't
+ *   mistaken for completion. Pair with a larger `timeout`.
  * @param {string} [options.label] — human label for the live Shell view (the
  *   run `source`, e.g. `'pipeline-manuscript-completeness'`). Surfaced in the
  *   Shell page's session tab; falls back to `command · model` when absent.
  * @returns {Promise<void>}
  */
-export async function executeTuiRun({ runId, provider, prompt, workspacePath, onData, onComplete, timeout, label }) {
+export async function executeTuiRun({ runId, provider, prompt, workspacePath, onData, onComplete, timeout, idleMs, label }) {
   if (!provider || typeof provider !== 'object') {
     throw new Error('executeTuiRun: provider is required');
   }
@@ -114,7 +120,7 @@ export async function executeTuiRun({ runId, provider, prompt, workspacePath, on
 
   const { command, args } = buildTuiInvocation(provider, provider.defaultModel);
   const promptDelayMs = provider.tuiPromptDelayMs ?? DEFAULT_TUI_PROMPT_DELAY_MS;
-  const idleThresholdMs = provider.tuiOneShotIdleMs ?? DEFAULT_ONE_SHOT_IDLE_MS;
+  const idleThresholdMs = idleMs ?? provider.tuiOneShotIdleMs ?? DEFAULT_ONE_SHOT_IDLE_MS;
   const totalTimeoutMs = timeout ?? provider.timeout ?? DEFAULT_TIMEOUT_MS;
   const workingDir = (typeof workspacePath === 'string' && workspacePath) ? workspacePath : PATHS.root;
 

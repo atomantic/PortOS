@@ -12,9 +12,10 @@ import { join } from 'path';
 import sharp from 'sharp';
 import {
   pyRound, pyRoundTo, median, sampleBorderKey, validateMeasuredKey,
+  isUsableMeasuredKey, longestUsableSpan,
   recoverAlphaFrame, despillKeyFrame, imageDistance, selectCycleIndices,
   alphaBbox, rootX, alignFrames, packStrip, validateFrames, buildContrastSheet,
-  prepareWalkAnchorInput, WALK_PHASES, WALK_CELL_SIZE, WALK_FRAME_COUNT,
+  prepareWalkAnchorChromaInput, WALK_PHASES, WALK_CELL_SIZE, WALK_FRAME_COUNT,
 } from './walkPostprocess.js';
 import { keyChannelSplit } from './chromaKey.js';
 
@@ -80,6 +81,29 @@ describe('sampleBorderKey / validateMeasuredKey', () => {
     expect(() => validateMeasuredKey([5, 250, 8], GREEN, '#00FF00')).not.toThrow();
     // A magenta screen is not a usable green matte.
     expect(() => validateMeasuredKey([250, 5, 252], GREEN, '#00FF00')).toThrow(/matte/);
+  });
+
+  it('accepts grok\'s real red-leaning magenta but still rejects a black frame', () => {
+    // grok image_to_video renders ~[250,56,152] (r-b spread ~98) — usable, and
+    // the regression this whole fix exists for. A faded-in black intro frame
+    // ([0,0,0]) is not, so the postprocess can drop it rather than fail on it.
+    expect(isUsableMeasuredKey([250, 56, 152], MAGENTA)).toBe(true);
+    expect(isUsableMeasuredKey([0, 0, 0], MAGENTA)).toBe(false);
+    // The lopsided "red with a little blue" case stays rejected (spread 155).
+    expect(isUsableMeasuredKey([255, 0, 100], MAGENTA)).toBe(false);
+  });
+});
+
+describe('longestUsableSpan', () => {
+  it('finds the longest contiguous run of usable frames', () => {
+    // A leading black intro frame + a trailing one, good frames between.
+    expect(longestUsableSpan([false, true, true, true, false])).toEqual({ start: 1, length: 3 });
+    // Prefers the longer of two runs.
+    expect(longestUsableSpan([true, false, true, true, true])).toEqual({ start: 2, length: 3 });
+    // All usable → the whole array.
+    expect(longestUsableSpan([true, true, true])).toEqual({ start: 0, length: 3 });
+    // None usable → zero-length.
+    expect(longestUsableSpan([false, false])).toEqual({ start: 0, length: 0 });
   });
 });
 
@@ -273,8 +297,8 @@ describe('buildContrastSheet', () => {
   });
 });
 
-describe('prepareWalkAnchorInput', () => {
-  it('recovers a transparent despilled input from an opaque keyed anchor', async () => {
+describe('prepareWalkAnchorChromaInput', () => {
+  it('passes an opaque chroma-backed anchor through unchanged (opaque, matte preserved)', async () => {
     const w = 64; const h = 64;
     const rgb = Buffer.alloc(w * h * 3);
     for (let p = 0; p < w * h; p++) rgb.set([255, 0, 255], p * 3);
@@ -284,14 +308,31 @@ describe('prepareWalkAnchorInput', () => {
     const anchorAbs = join(TEST_ROOT, 'anchor.png');
     const destAbs = join(TEST_ROOT, 'input.png');
     await sharp(rgb, { raw: { width: w, height: h, channels: 3 } }).png().toFile(anchorAbs);
-    const { preparation } = await prepareWalkAnchorInput(anchorAbs, destAbs, '#FF00FF');
-    expect(preparation).toBe('measured-key-alpha-recovery-plus-despill');
+    const { preparation } = await prepareWalkAnchorChromaInput(anchorAbs, destAbs, '#FF00FF');
+    expect(preparation).toBe('composited-over-solid-chroma-matte');
     const { data, info } = await sharp(destAbs).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
     expect(info.channels).toBe(4);
-    expect(data[3]).toBe(0); // key corner → transparent
+    // The whole frame is opaque — grok animates the character ON the matte.
+    expect(data[3]).toBe(255); // key corner stays the OPAQUE magenta matte
+    expect([data[0], data[1], data[2]]).toEqual([255, 0, 255]);
     const charI = ((25 * w) + 30) * 4;
     expect(data[charI + 3]).toBe(255); // character stays opaque
     expect([data[charI], data[charI + 1], data[charI + 2]]).toEqual([30, 110, 60]);
+  });
+
+  it('fills a transparent anchor\'s holes with the solid chroma matte', async () => {
+    const w = 16; const h = 16;
+    // Fully transparent except one opaque character pixel.
+    const rgba = Buffer.alloc(w * h * 4);
+    rgba.set([30, 110, 60, 255], ((8 * w) + 8) * 4);
+    const anchorAbs = join(TEST_ROOT, 'anchor-t.png');
+    const destAbs = join(TEST_ROOT, 'input-t.png');
+    await sharp(rgba, { raw: { width: w, height: h, channels: 4 } }).png().toFile(anchorAbs);
+    await prepareWalkAnchorChromaInput(anchorAbs, destAbs, '#FF00FF');
+    const { data } = await sharp(destAbs).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    expect([data[0], data[1], data[2], data[3]]).toEqual([255, 0, 255, 255]); // hole → opaque magenta
+    const charI = ((8 * w) + 8) * 4;
+    expect([data[charI], data[charI + 1], data[charI + 2], data[charI + 3]]).toEqual([30, 110, 60, 255]);
   });
 });
 

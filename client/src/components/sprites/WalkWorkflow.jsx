@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, Film, RefreshCw, Scissors, Lock, Unlock } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Check, Film, RefreshCw, Scissors, Lock, Unlock, Terminal } from 'lucide-react';
 import toast from '../ui/Toast';
 import { approveSpriteWalk, postprocessSpriteWalk, unlockSpriteWalk } from '../../services/apiSprites.js';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
@@ -23,7 +24,10 @@ const LOOP_KEYFRAMES = '@keyframes sprite-walk-loop { to { background-position-x
 // Exported so the Sprites page can seed the lifted `duration` state with the
 // same default — the asset collection's Regenerate must honor whatever the
 // user picked here rather than silently falling back to the server default.
-export const WALK_DURATIONS = [6, 10];
+// A looping walk cycle only needs one gait cycle (~8 frames), so short clips
+// render much faster; the default is deliberately short.
+export const WALK_DURATIONS = [1, 2, 3, 6, 10];
+export const WALK_DEFAULT_DURATION = 2;
 
 /**
  * Strip geometry for a preview/trim UI, defaulting to the native 8-phase
@@ -80,6 +84,12 @@ function DirectionCard({
 }) {
   const [confirming, setConfirming] = useState(false);
   const candidate = run?.status === 'candidate' ? run : null;
+  // grok renders as an observable TUI session while status is 'rendering'; the
+  // deterministic packaging follows as 'postprocessing'. Both block a second
+  // Generate (server truth, since the client pending flag drops once the run is
+  // persisted). Only 'rendering' has a live Shell session to link to.
+  const rendering = run?.status === 'rendering';
+  const busy = pending || rendering || run?.status === 'postprocessing';
   // Any run that carries a packed strip preview is trimmable — the trim service
   // resolves geometry from the run's own manifest/stripPreview regardless of
   // on-disk layout (native `runs/`, legacy `grok/`, imported `runs/`, or an
@@ -88,7 +98,7 @@ function DirectionCard({
   // non-destructive derived artifact under `walk/trims/`.
   const trimmable = Boolean(run?.stripPreview?.stripPath);
   const statusLabel = approved ? 'approved'
-    : pending ? 'rendering…'
+    : (pending || rendering) ? 'rendering…'
       : run?.status === 'postprocessing' ? 'packaging…'
         : run?.status || (anchorLocked ? 'ready' : 'anchor not locked');
 
@@ -105,11 +115,39 @@ function DirectionCard({
         <StripLoop recordId={recordId} stripPreview={run.stripPreview} />
       )}
 
+      {/* grok animates in an observable TUI session — link into the Shell page
+          to watch it, and (if needed) type to course-correct or Stop it. The
+          session exists only while the render is live ('rendering'). */}
+      {rendering && run?.shellSession && (
+        <Link
+          to={`/shell/${run.shellSession}`}
+          title="Watch grok render this walk in the Shell (observe / course-correct / stop)"
+          className="flex items-center gap-1 w-full justify-center px-2 py-0.5 text-xs bg-port-card border border-port-accent rounded text-port-accent hover:bg-port-accent hover:text-white"
+        >
+          <Terminal className="w-3 h-3" /> Watch in Shell
+        </Link>
+      )}
+
       {/* Retry also covers a run wedged at 'postprocessing' (crash between
           the video copy and the packaged save) — the endpoint is the
           documented recovery path and validates readiness server-side. */}
       {(run?.status === 'error' || run?.status === 'postprocessing') && (
         <div className="space-y-1">
+          {/* Even when packaging failed, grok still produced a clip — show it so
+              the render isn't a dead end. The raw clip carries its own magenta
+              matte (not transparent), so no checkerboard behind it. */}
+          {run.status === 'error' && run.sourceVideoPath && (
+            <video
+              src={spriteAssetUrl(recordId, run.sourceVideoPath)}
+              className="w-full rounded border border-port-border"
+              autoPlay
+              loop
+              muted
+              playsInline
+              controls
+              aria-label={`raw grok walk clip (${direction})`}
+            />
+          )}
           {run.status === 'error' && (
             <p className="text-[10px] text-port-error break-words">{run.postprocessError || 'postprocess failed'}</p>
           )}
@@ -123,12 +161,12 @@ function DirectionCard({
         <div className="space-y-1.5">
           <button
             onClick={() => onGenerate(direction)}
-            disabled={!anchorLocked || pending}
+            disabled={!anchorLocked || busy}
             title={anchorLocked ? undefined : 'Lock this direction\'s reference anchor first'}
             className="flex items-center gap-1 w-full justify-center px-2 py-1 text-xs bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent disabled:opacity-50"
           >
-            {pending
-              ? <><RefreshCw className="w-3 h-3 animate-spin" /> Rendering…</>
+            {busy
+              ? <><RefreshCw className="w-3 h-3 animate-spin" /> {run?.status === 'postprocessing' ? 'Packaging…' : 'Rendering…'}</>
               : <><Film className="w-3 h-3" /> {candidate ? 'Regenerate' : 'Generate walk'}</>}
           </button>
           {candidate && (
@@ -187,31 +225,34 @@ export default function WalkWorkflow({
   // there too, so both entry points submit through one code path.
   const { pendingJobs } = renders;
 
-  // The deterministic postprocess runs server-side AFTER the video job
-  // completes (frame extraction + per-pixel un-key can take many seconds on
-  // slower machines) — the job-completion sweeps alone can both land while a
-  // run is still 'postprocessing', which would strand the card on
-  // "packaging…" forever. Keep refreshing until no run is packaging. A run
-  // still 'queued' with no live job is an attach waiting behind the record's
-  // write tail (e.g. a long rerun ahead of it) — poll for that too, but give
-  // up after ~60s so a genuinely dead job doesn't poll indefinitely.
+  // Keep the card in sync with server-side run progress. Three long-ish states
+  // need polling: 'rendering' (the observable grok-tui clip render, up to
+  // ~10 min — the client pending flag drops as soon as the run persists, so
+  // this poll is what carries the card through the render), 'postprocessing'
+  // (the deterministic frame-extraction/un-key, seconds-to-minutes), and a
+  // stale 'queued' with no live job (an attach waiting behind the write tail —
+  // bounded to ~60s so a genuinely dead job doesn't poll forever). 'rendering'
+  // and 'postprocessing' are legitimately long, so they poll unbounded until
+  // they flip (executeTuiRun's 30-min hard cap guarantees 'rendering' resolves).
   // Booleans (not the runs array) as deps: refetches produce fresh array
   // identities every 4s, which would otherwise reset the bounded tick count.
-  const packaging = runs.some((r) => r.status === 'postprocessing');
+  // 'rendering' and 'postprocessing' are legitimately long — poll unbounded
+  // until they flip; only the stale-'queued' case is bounded (~60s).
+  const unbounded = runs.some((r) => r.status === 'rendering' || r.status === 'postprocessing');
   const awaitingAttach = runs.some((r) => r.status === 'queued' && !pendingJobs[r.direction]);
   useEffect(() => {
-    if (!packaging && !awaitingAttach) return undefined;
+    if (!unbounded && !awaitingAttach) return undefined;
     let ticks = 0;
     const timer = setInterval(() => {
       ticks += 1;
-      if (!packaging && ticks > 15) {
+      if (!unbounded && ticks > 15) {
         clearInterval(timer);
         return;
       }
       onChanged();
     }, 4000);
     return () => clearInterval(timer);
-  }, [packaging, awaitingAttach, onChanged]);
+  }, [unbounded, awaitingAttach, onChanged]);
 
   const latestRunByDirection = useMemo(() => {
     const byDir = {};
