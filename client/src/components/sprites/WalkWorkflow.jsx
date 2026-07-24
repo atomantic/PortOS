@@ -144,6 +144,17 @@ function StripLoop({ recordId, stripPreview }) {
 // How a drifted direction gets back onto the target, given what it still has
 // behind it. Named rather than inlined as a nested ternary so the three cases
 // read as the decision they are.
+// Whether a run can be re-derived without a new render. The server resolves
+// `sourceVideoPath` against disk and flags `sourceClipMissing` when the clip the
+// record names isn't there, so "declares a clip" and "has one" never read the
+// same. Named once because every affordance below gates on it — and the header's
+// Unlock and a card's Reopen disagreeing about the same run would be a bug.
+const hasClip = (run) => Boolean(run?.sourceVideoPath) && !run?.sourceClipMissing;
+
+// The one remedy for an imported direction with nothing behind it. The clip is
+// the importer's to bring across, so authoring a new version by hand isn't it.
+const REIMPORT_REMEDY = 're-import this character to bring its source clip across';
+
 const driftRemedy = ({ approved, hasSourceClip, imported }) => {
   // Evidence, not provenance: the server gates re-derivation on whether the
   // direction's clip is actually on disk, so an imported direction whose clip
@@ -151,9 +162,7 @@ const driftRemedy = ({ approved, hasSourceClip, imported }) => {
   // clip behind it is a dead end — and for an import the fix is re-importing the
   // character, not authoring a new version by hand.
   if (!hasSourceClip) {
-    return imported
-      ? 're-import this character to bring its source clip across'
-      : 'import this direction\'s source clip to re-derive it';
+    return imported ? REIMPORT_REMEDY : 'import this direction\'s source clip to re-derive it';
   }
   if (approved) return 'reopen this direction to re-derive it from its clip';
   return 'reprocess it from its clip';
@@ -260,11 +269,11 @@ function DirectionCard({
   // link stands for approved and finalized runs too, since a trim is a
   // non-destructive derived artifact under `walk/trims/`.
   const trimmable = Boolean(run?.stripPreview?.stripPath);
-  // Whether this direction can be re-derived without a new render: the server
-  // resolves `sourceVideoPath` against disk and flags `sourceClipMissing` when
-  // the clip the record names isn't there, so declaring a clip and having one
-  // never read the same. Every reopen/reprocess affordance below gates on this.
-  const hasSourceClip = Boolean(run?.sourceVideoPath) && !run?.sourceClipMissing;
+  const hasSourceClip = hasClip(run);
+  // The dead end: still packaged by the source pipeline AND no clip to re-derive
+  // from. Everything the server refuses for this direction refuses on exactly
+  // this, so every affordance below reads it rather than the import label alone.
+  const importedNoClip = imported && !hasSourceClip;
   const statusLabel = approved ? 'approved'
     : (pending || rendering) ? 'rendering…'
       : run?.status === 'postprocessing' ? 'packaging…'
@@ -313,8 +322,7 @@ function DirectionCard({
               naming them there would advise a guaranteed-409 the drift badge and
               the hidden Reopen/Unlock buttons already avoid. With a clip it
               recovers exactly like a native direction. */}
-          Walk strip missing on disk — {imported && !hasSourceClip
-            ? 're-import this character to bring its source clip across'
+          Walk strip missing on disk — {importedNoClip ? REIMPORT_REMEDY
             : finalized ? 'unlock the set to regenerate this direction' : 'regenerate to repack it'}.
         </p>
       )}
@@ -432,7 +440,7 @@ function DirectionCard({
           unlock, so offering the button would guarantee a 409 on click. An
           imported direction whose clip came across reopens like any other.
           Mirrors how the header gates Unlock. */}
-      {approved && (!imported || hasSourceClip) && (
+      {approved && !importedNoClip && (
         reopening ? (
           <ConfirmButtonPair
             prompt={finalized ? 'Reopen (un-freezes set)?' : 'Reopen this direction?'}
@@ -496,16 +504,23 @@ export default function WalkWorkflow({
   const selection = walk?.selection || null;
   const finalized = Boolean(walk?.walkSet);
   // A source-pipeline import (#2895) still carries directions PortOS cannot
-  // compile from. The server stamps this flag on the walk state so the client
-  // doesn't re-derive the path convention itself.
+  // compile from. The server stamps both the set-level flag and the precise
+  // per-direction list, so the client never re-derives the path convention — and
+  // a card reads the fact about ITS OWN direction rather than a set-wide
+  // approximation, since directions leave the list one at a time as they are
+  // re-derived. An older peer's walk state may carry only the boolean; fall back
+  // to it so every direction still reads as imported there.
   const importedWalkSet = Boolean(walk?.walkSet?.imported);
-  // …but since #2984 imports each run's clip, such a set is only a dead end when
+  const importedDirections = walk?.walkSet?.importedDirections || null;
+  const isImportedDirection = (direction) => (importedDirections
+    ? importedDirections.includes(direction) : importedWalkSet);
+  // Since #2984 imports each run's clip, such a set is only a dead end when
   // NOTHING behind it can be re-derived — which is exactly when the server
   // refuses to unlock it. Gate the affordance on that, not on the import label,
   // so an import with its clips intact gets the real Unlock button instead of a
-  // "new version to revise" note that is no longer true.
-  const unlockBlocked = importedWalkSet
-    && !(walk?.runs || []).some((run) => run.sourceVideoPath && !run.sourceClipMissing);
+  // "new version to revise" note that is no longer true. The server's own gate
+  // is authoritative (its 409 is the backstop); this only decides what to offer.
+  const unlockBlocked = importedWalkSet && !runs.some(hasClip);
 
   // direction → jobId for in-flight video renders. The hook instance is owned
   // by the Sprites page and shared with the asset collection (#2931) so both
@@ -707,7 +722,7 @@ export default function WalkWorkflow({
             pending={Boolean(pendingJobs[anchor.direction])}
             targetSaving={targetSaving}
             drift={driftByDirection[anchor.direction] || null}
-            imported={importedWalkSet}
+            imported={isImportedDirection(anchor.direction)}
             onOpenTrimmer={onOpenTrimmer}
             onGenerate={onGenerate}
             onApprove={approve}

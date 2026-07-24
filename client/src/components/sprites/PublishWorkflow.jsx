@@ -114,10 +114,12 @@ export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
           <Package size={16} className="text-port-accent" /> Runtime Atlas
         </h3>
         <p className="text-xs text-gray-500">
-          Some directions are still packaged by the source pipeline, which kept their per-frame
-          images — PortOS cannot compile from those. Reopen each one above and reprocess it from
-          its imported clip to re-derive the frames here, then compile. The imported runtime
-          atlases remain in the asset library below.
+          {walk.walkSet.importedDirections?.length
+            ? `${walk.walkSet.importedDirections.join(', ')} ${walk.walkSet.importedDirections.length === 1 ? 'is' : 'are'} still packaged`
+            : 'Some directions are still packaged'} by the source pipeline, which kept their
+          per-frame images — PortOS cannot compile from those. Reopen each one above and reprocess
+          it from its imported clip to re-derive the frames here, then compile. The imported
+          runtime atlases remain in the asset library below.
         </p>
       </div>
     );

@@ -526,4 +526,38 @@ describe('WalkWorkflow reprocess + reopen', () => {
     expect(screen.getByRole('button', { name: /^Unlock$/ })).toBeTruthy();
     expect(screen.queryByText(/no clips to re-derive/)).toBeNull();
   });
+
+  // The set-level flag stays true while ANY direction is still source-packaged,
+  // so a card must read the per-direction list the server stamps — otherwise a
+  // direction already re-derived here keeps being treated as un-reopenable.
+  it('reads the per-direction imported list, not the set-level flag', async () => {
+    render(
+      <MemoryRouter>
+        <WalkWorkflow
+          record={{ id: 'example-walker' }}
+          reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked' }] } }}
+          walk={{
+            // East carries no clip, but it is NOT in importedDirections — it was
+            // already re-derived here, so the server no longer refuses it.
+            runs: [{ id: 'run-east', direction: 'east', status: 'approved', stripPreview: { stripPath: 'runs/run-east/generated/strip.png', frameCount: 12, fps: 10, cellWidth: 384, cellHeight: 384 } }],
+            selection: { directions: { east: { status: 'approved', runId: 'run-east' } } },
+            walkSet: {
+              imported: true,
+              importedDirections: ['north'],
+              directions: { east: { status: 'approved' }, north: { status: 'approved' } },
+            },
+            walkTarget: {
+              frameCount: 12, fps: 10, source: 'derived', sourceLabel: 'from the first approved direction', drift: [],
+            },
+          }}
+          renders={noRenders()}
+          duration={6}
+          onDurationChange={vi.fn()}
+          onGenerate={vi.fn()}
+          onChanged={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole('button', { name: /^Reopen$/ })).toBeTruthy();
+  });
 });

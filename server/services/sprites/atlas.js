@@ -218,8 +218,8 @@ export async function validateForCompile(recordId) {
   // the directions still carrying source-pipeline provenance block the compile,
   // and the message names them so the remedy is per-direction too. Their
   // already-published runtime atlases were imported and remain browsable.
-  if (isImportedWalkSet(walkSet)) {
-    const stale = importedWalkDirections(walkSet);
+  const stale = importedWalkDirections(walkSet);
+  if (stale.length || isImportedWalkSet(walkSet)) {
     const which = stale.length ? `${stale.join(', ')} ${stale.length === 1 ? 'is' : 'are'}` : 'This walk set is';
     throw new ServerError(
       `${which} still packaged by the source pipeline, whose per-frame images were not imported — PortOS cannot compile from them. `

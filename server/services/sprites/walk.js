@@ -31,6 +31,7 @@ import { getSettings } from '../settings.js';
 import { getRecord, updateRecord } from './records.js';
 import {
   spriteDir, resolveSpriteAssetPath, toRecordRelativeAssetPath, RUN_DIR_MATCH, altRunLayoutPath,
+  runDirOfPath, resolveDriftTolerantRel, isSourcePipelinePath, SOURCE_CLIP_NAME,
 } from './paths.js';
 import { requireCharacter, loadManifest } from './reference.js';
 import { SPRITE_DIRECTIONS, anchorIdForDirection, buildWalkVideoPrompt } from './prompts.js';
@@ -93,13 +94,9 @@ async function loadWalkSet(recordId) {
 }
 
 // A phase-1 imported walk set (#2895) is copied verbatim from the source
-// pipeline: every embedded path is repo-root-anchored (`art-source/sprites/…`)
-// and its packaged per-frame PNGs were never imported. The marker can sit at
-// any index (absolute/repo-prefixed variants), matching the importer's own
-// relToCharacterDir recognition — hence `includes`, not a prefix test.
-const SOURCE_PIPELINE_MARKER = 'art-source/sprites/';
-const isSourcePipelinePath = (p) => typeof p === 'string' && p.includes(SOURCE_PIPELINE_MARKER);
-
+// pipeline: every embedded path stays anchored at the SOURCE repo root
+// (paths.js#isSourcePipelinePath) and its packaged per-frame PNGs were never
+// imported.
 /**
  * The directions of a walk set that are STILL packaged by the source pipeline —
  * their approved entry names the source tree, so their per-frame PNGs are not on
@@ -193,17 +190,12 @@ async function saveRunRecordAt(recordId, run, runDirRel) {
 
 const saveRunRecord = (recordId, run) => saveRunRecordAt(recordId, run, runRelPath(run.id));
 
-// The run directory a record-relative run path names, under either layout.
-const runDirOfPath = (rel) => (typeof rel === 'string' ? RUN_DIR_MATCH.exec(rel)?.[0] || null : null);
-
-// The run directory a selection / walk-set entry names — `runPath` first, then
-// the manifest it declares. Null for an imagegen redraw entry, which names a
-// version directory rather than a run (and so has no i2v clip behind it).
-function runDirRelForEntry(recordId, entry) {
-  const layoutPath = toRecordRelativeAssetPath(recordId, entry?.runPath)
-    || toRecordRelativeAssetPath(recordId, entry?.runManifest);
-  return runDirOfPath(layoutPath);
-}
+// The record-relative path a selection / walk-set entry names its run by —
+// `runPath` first, then the manifest it declares. An imagegen redraw entry
+// resolves to a version directory rather than a run directory, which is what
+// `runDirOfPath` returning null downstream distinguishes.
+const entryLayoutPath = (recordId, entry) => toRecordRelativeAssetPath(recordId, entry?.runPath)
+  || toRecordRelativeAssetPath(recordId, entry?.runManifest);
 
 // The run directory a loaded run record implies, for a caller that has the
 // record but not the directory it came from. Every candidate field is
@@ -213,34 +205,26 @@ const runDirRelOf = (run) => runDirOfPath(run?.sourceVideoPath)
   || runDirOfPath(run?.postprocessManifest)
   || runDirOfPath(run?.stripPreview?.stripPath);
 
-const SOURCE_CLIP_NAME = 'source-video.mp4';
-
 /**
  * The record-relative i2v clip a run can be re-derived from, or null when none
  * is on disk.
  *
- * Four candidates, in evidence order: the clip the record declares (re-anchored,
- * since an imported record declares it against the SOURCE repo root), that path
- * under the other run layout, then the conventional `<run-dir>/generated/` name
- * and ITS twin. The layout twins matter because source trees drift — a manifest
- * can name `runs/<id>/…` for a file stored under `grok/<id>/…` and both spellings
- * denote the same clip (paths.js#altRunLayoutPath); the importer resolves source
- * reads the same way, so a drifted tree that imported successfully must also be
- * re-derivable here.
+ * Two candidate names, each resolved drift-tolerantly (paths.js — the declared
+ * spelling or its run-layout twin): the clip the record declares, re-anchored
+ * since an imported record declares it against the SOURCE repo root, then the
+ * conventional `<run-dir>/generated/` name for a record that names none at all.
+ * Probed together rather than in sequence — a run whose clip is genuinely gone
+ * is re-checked on every poll, so the miss case must not cost a round trip per
+ * candidate.
  */
 async function resolveRunClipRel(recordId, run, runDirRel) {
-  const declared = toRecordRelativeAssetPath(recordId, run?.sourceVideoPath);
-  const conventional = runDirRel ? `${runDirRel}/generated/${SOURCE_CLIP_NAME}` : null;
-  const candidates = [];
-  for (const rel of [declared, conventional]) {
-    if (!rel) continue;
-    candidates.push(rel, altRunLayoutPath(rel));
-  }
-  for (const rel of [...new Set(candidates.filter(Boolean))]) {
-    // eslint-disable-next-line no-await-in-loop -- ordered preference: stop at the first clip that exists
-    if (await pathExists(join(spriteDir(recordId), rel))) return rel;
-  }
-  return null;
+  const dir = spriteDir(recordId);
+  const candidates = [
+    toRecordRelativeAssetPath(recordId, run?.sourceVideoPath),
+    runDirRel ? `${runDirRel}/generated/${SOURCE_CLIP_NAME}` : null,
+  ].filter(Boolean);
+  const resolved = await Promise.all(candidates.map((rel) => resolveDriftTolerantRel(dir, rel)));
+  return resolved.find(Boolean) || null;
 }
 
 async function requireUnfinalized(recordId) {
@@ -343,7 +327,7 @@ async function normalizeMissingStrip(recordId, run) {
 }
 
 /**
- * Resolve the run's i2v source clip against DISK, so "can this direction be
+ * Fold a resolved i2v source clip onto a run, so "can this direction be
  * re-derived?" is answered by evidence rather than by whether the record happens
  * to name a clip (#2993).
  *
@@ -359,9 +343,7 @@ async function normalizeMissingStrip(recordId, run) {
  * record's own provenance, and consumers gate on the flag. In memory only; the
  * hash-pinned record on disk is never rewritten here.
  */
-async function normalizeSourceClip(recordId, run) {
-  const runDirRel = runDirRelOf(run);
-  const clipRel = await resolveRunClipRel(recordId, run, runDirRel);
+function applySourceClip(run, clipRel, runDirRel) {
   if (clipRel) return clipRel === run.sourceVideoPath ? run : { ...run, sourceVideoPath: clipRel };
   if (!runDirRel && !run?.sourceVideoPath) return run;
   return { ...run, sourceClipMissing: true };
@@ -470,13 +452,13 @@ async function loadRunForEntry(recordId, direction, entry) {
   // for an entry that carries only a manifest. An entry that declares one layout
   // for a run stored under the other still resolves (`resolveRunAt`), and the
   // directory it really came from is what the record is normalized against.
-  const runDirRel = runDirRelForEntry(recordId, entry);
+  const layoutPath = entryLayoutPath(recordId, entry);
+  if (!layoutPath) return null;
+  const runDirRel = runDirOfPath(layoutPath);
   if (runDirRel) {
     const found = await resolveRunAt(recordId, runDirRel);
     return found ? normalizeRunRecord(recordId, found.run, found.runDirRel) : null;
   }
-  if (!toRecordRelativeAssetPath(recordId, entry.runPath)
-    && !toRecordRelativeAssetPath(recordId, entry.runManifest)) return null;
   return loadRedrawRun(recordId, direction, entry);
 }
 
@@ -485,7 +467,7 @@ async function loadRunForEntry(recordId, direction, entry) {
  * nothing to re-derive from — the evidence the un-finalize gate below keys on.
  */
 async function directionClipRel(recordId, entry) {
-  const runDirRel = runDirRelForEntry(recordId, entry);
+  const runDirRel = runDirOfPath(entryLayoutPath(recordId, entry));
   if (!runDirRel) return null;
   const found = await resolveRunAt(recordId, runDirRel);
   return resolveRunClipRel(recordId, found?.run, found?.runDirRel || runDirRel);
@@ -626,11 +608,32 @@ export async function getWalkState(recordId) {
   const allRuns = (await Promise.all(
     [...entryRuns, ...scannedRuns]
       .map(normalizeStaleRendering)
-      .map(async (run) => normalizeSourceClip(recordId, await normalizeMissingStrip(recordId, run))),
+      // The strip and the clip are different files, so probe them CONCURRENTLY
+      // and merge — chaining would add a serialized stat per run to a read the
+      // client polls every few seconds while a run packages.
+      .map(async (run) => {
+        // Resolved from the ORIGINAL run: normalizeMissingStrip may drop a
+        // dangling stripPath, which is one of the fields the run directory is
+        // inferred from.
+        const runDirRel = runDirRelOf(run);
+        const [stripped, clip] = await Promise.all([
+          normalizeMissingStrip(recordId, run),
+          resolveRunClipRel(recordId, run, runDirRel),
+        ]);
+        return applySourceClip(stripped, clip, runDirRel);
+      }),
   )).sort((a, b) => runCreatedAtMs(b.createdAt) - runCreatedAtMs(a.createdAt));
-  // Stamp the imported flag so the client reads intent (`walkSet.imported`)
-  // instead of re-deriving the source-pipeline path convention itself.
-  const stampedWalkSet = walkSet ? { ...walkSet, imported: isImportedWalkSet(walkSet) } : null;
+  // Stamp the imported provenance so the client reads intent instead of
+  // re-deriving the source-pipeline path convention itself — and stamp the
+  // per-direction LIST alongside the boolean, because that is the precise fact:
+  // a direction leaves the list the moment it is re-derived here, so the client
+  // can gate each card (and name the blocking directions) on the same evidence
+  // the compiler will apply, not on a set-wide approximation.
+  const stampedWalkSet = walkSet ? {
+    ...walkSet,
+    imported: isImportedWalkSet(walkSet),
+    importedDirections: importedWalkDirections(walkSet),
+  } : null;
   const walkTarget = resolveWalkTargetFor({
     record: await recordPromise,
     selection,
@@ -1099,10 +1102,11 @@ export function unlockWalkSet(recordId) {
  */
 async function assertReDerivable(recordId, walkSet, directions, verb) {
   if (!isImportedWalkSet(walkSet)) return;
-  for (const direction of directions) {
-    // eslint-disable-next-line no-await-in-loop -- stop at the first re-derivable direction
-    if (await directionClipRel(recordId, walkSet.directions?.[direction])) return;
-  }
+  // Bounded at eight directions, and the path that examines ALL of them is the
+  // refusal — so fan out rather than walking them serially to find nothing.
+  const clips = await Promise.all(directions
+    .map((direction) => directionClipRel(recordId, walkSet.directions?.[direction])));
+  if (clips.some(Boolean)) return;
   const scope = directions.length === 1 ? `the ${directions[0]} direction has` : 'its directions have';
   throw new ServerError(
     `This walk set was imported from the source pipeline and ${scope} no source clip on disk — ${verb} is not supported, because there would be nothing to re-derive from. Re-import this character to bring its walk clips across, or create a new character version to revise it.`,
@@ -1243,7 +1247,7 @@ async function approveWalkDirectionImpl(recordId, { direction, runId }) {
   // still legible, and name the remedy. A minimal manifest that declares no
   // frames[] is unchanged — the strip sha stays the primary tamper check. (#2993)
   const framePaths = (Array.isArray(packaged.frames) ? packaged.frames : [])
-    .map((frame) => toRecordRelativeAssetPath(recordId, typeof frame === 'string' ? frame : frame?.path))
+    .map((frame) => toRecordRelativeAssetPath(recordId, frame?.path))
     .filter(Boolean);
   const framesOnDisk = await Promise.all(framePaths
     .map((rel) => pathExists(join(spriteDir(recordId), rel))));
