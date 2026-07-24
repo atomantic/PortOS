@@ -11,7 +11,10 @@ import {
   parseGenerateProgress,
   runTrellis2Generate,
   installTrellis2,
+  isTransientInstallError,
 } from './trellis2.js';
+
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const BASE = '/tmp/portos-test-home';
 
@@ -165,6 +168,43 @@ describe('runTrellis2Generate', () => {
   });
 });
 
+describe('isTransientInstallError', () => {
+  it('matches the #2952 mid-clone network drop signatures', () => {
+    // The exact failure chain the user hit installing via the UI.
+    const log = [
+      "Cloning into 'deps/trellis2-apple'...",
+      'error: RPC failed; curl 56 Recv failure: Connection reset by peer',
+      'error: 6483 bytes of body are still expected',
+      'fetch-pack: unexpected disconnect while reading sideband packet',
+      'fatal: early EOF',
+      'fatal: fetch-pack: invalid index-pack output',
+    ].join('\n');
+    expect(isTransientInstallError(log)).toBe(true);
+  });
+
+  it.each([
+    'error: RPC failed; curl 18 transfer closed with outstanding read data remaining',
+    'fatal: unable to access ...: Could not resolve host: github.com',
+    'ssl_read: Connection reset by peer',
+    'pip: Read timed out.',
+    'urllib3 ... IncompleteRead',
+  ])('flags transient network error: %s', (line) => {
+    expect(isTransientInstallError(line)).toBe(true);
+  });
+
+  it.each([
+    "fatal: repository 'https://example.test/x.git/' not found",
+    'error: pathspec did not match any file(s) known to git',
+    "bash: setup.sh: Permission denied",
+    'ModuleNotFoundError: No module named torch',
+    '',
+    null,
+    undefined,
+  ])('does NOT flag a non-transient/real failure: %s', (line) => {
+    expect(isTransientInstallError(line)).toBe(false);
+  });
+});
+
 describe('installTrellis2', () => {
   const makeChild = () => {
     const child = new EventEmitter();
@@ -184,7 +224,7 @@ describe('installTrellis2', () => {
     // step 1 (clone) — first spawn call, then close it 0 to advance to step 2
     expect(spawnImpl).toHaveBeenNthCalledWith(1, 'git', expect.arrayContaining(['clone']), {});
     children[0].emit('close', 0);
-    await Promise.resolve(); // let the await in the loop advance
+    await flush(); // let the await in the loop (through the retry wrapper) advance
     expect(spawnImpl).toHaveBeenNthCalledWith(2, 'bash', ['setup.sh'], { cwd: trellis2Root(BASE) });
     children[1].emit('close', 0);
     await expect(promise).resolves.toEqual({ ok: true });
@@ -208,6 +248,58 @@ describe('installTrellis2', () => {
     const { promise } = installTrellis2({ base: BASE, spawnImpl: () => child });
     child.emit('close', 1);
     await expect(promise).rejects.toMatchObject({ code: 'TRELLIS2_INSTALL_FAILED', stage: 'clone' });
+  });
+
+  it('retries a transient network failure in place and succeeds on the retry', async () => {
+    // clone attempt 1 (transient fail) → clone attempt 2 (ok) → setup (ok)
+    const children = [makeChild(), makeChild(), makeChild()];
+    let i = 0;
+    const spawnImpl = vi.fn(() => children[i++]);
+    const events = [];
+    const { promise } = installTrellis2({
+      base: BASE, spawnImpl, onEvent: (e) => events.push(e), sleep: () => Promise.resolve(),
+    });
+
+    children[0].stderr.emit('data', 'error: RPC failed; curl 56 Recv failure: Connection reset by peer\n');
+    children[0].emit('close', 128);
+    await flush(); // drain the retry backoff + respawn
+
+    expect(spawnImpl).toHaveBeenCalledTimes(2); // clone was retried
+    expect(spawnImpl).toHaveBeenNthCalledWith(2, 'git', expect.arrayContaining(['clone']), {});
+    children[1].emit('close', 0);
+    await flush();
+    children[2].emit('close', 0); // setup
+    await expect(promise).resolves.toEqual({ ok: true });
+
+    expect(events.some((e) => e.type === 'log' && /retrying/i.test(e.message))).toBe(true);
+  });
+
+  it('fails fast (no retry) on a non-transient step failure', async () => {
+    const spawnImpl = vi.fn(() => makeChild());
+    const { promise } = installTrellis2({ base: BASE, spawnImpl, sleep: () => Promise.resolve() });
+    const child = spawnImpl.mock.results[0].value;
+    child.stderr.emit('data', 'fatal: repository not found\n');
+    child.emit('close', 128);
+    await expect(promise).rejects.toMatchObject({ code: 'TRELLIS2_INSTALL_FAILED', transient: false });
+    expect(spawnImpl).toHaveBeenCalledTimes(1); // never retried
+  });
+
+  it('gives up after maxRetries and surfaces a transient-flagged error', async () => {
+    const children = [makeChild(), makeChild()];
+    let i = 0;
+    const spawnImpl = vi.fn(() => children[i++]);
+    const { promise } = installTrellis2({
+      base: BASE, spawnImpl, maxRetries: 1, sleep: () => Promise.resolve(),
+    });
+
+    children[0].stderr.emit('data', 'fatal: early EOF\n');
+    children[0].emit('close', 128);
+    await flush();
+    children[1].stderr.emit('data', 'fatal: early EOF\n');
+    children[1].emit('close', 128);
+
+    await expect(promise).rejects.toMatchObject({ code: 'TRELLIS2_INSTALL_FAILED', transient: true, stage: 'clone' });
+    expect(spawnImpl).toHaveBeenCalledTimes(2); // initial + 1 retry, then gave up
   });
 
   it('kill() SIGTERMs the running child and cancels before the next step', async () => {
