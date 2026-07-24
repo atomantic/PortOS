@@ -205,6 +205,19 @@ describe('sprites routes', () => {
     );
   });
 
+  it('POST /:id/reference/generate forwards an anchor correction prompt through the schema', async () => {
+    const r = await request(app).post('/api/sprites/pioneer/reference/generate')
+      .send({ target: 'north-east', correctionPrompt: 'no pocket on the right sleeve', mode: 'codex' });
+    expect(r.status).toBe(200);
+    // The field must survive validation — Zod strips unknown keys, so a dropped
+    // schema field would silently break the feature at the wire.
+    expect(reference.startReferenceGeneration).toHaveBeenCalledWith(
+      'pioneer',
+      expect.objectContaining({ target: 'north-east', correctionPrompt: 'no pocket on the right sleeve' }),
+      null,
+    );
+  });
+
   it('POST /:id/reference/generate rejects south and unknown targets', async () => {
     for (const target of ['south', 'up', '']) {
       const r = await request(app).post('/api/sprites/pioneer/reference/generate').send({ target });
