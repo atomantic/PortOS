@@ -3,8 +3,8 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
-// Mock the service so the route test is deterministic regardless of the test
-// host's real arch/memory.
+// Mock the services so the route test is deterministic regardless of the test
+// host's real arch/memory and never touches a real subprocess.
 vi.mock('../services/imageTo3d/targets.js', () => ({
   detectHostCapabilities: vi.fn(() => ({ appleSilicon: true, unifiedMemoryGb: 128, cuda: false })),
   listTargets: vi.fn((caps) => [
@@ -17,12 +17,22 @@ vi.mock('../services/imageTo3d/targets.js', () => ({
       unavailableReason: null,
     },
   ]),
+  isTargetAvailable: vi.fn(() => true),
+  unavailableReason: vi.fn(() => 'requires-apple-silicon'),
 }));
 
 vi.mock('../services/imageTo3d/trellis2.js', () => ({
   isTrellis2Installed: vi.fn(() => false),
+  trellis2Root: vi.fn(() => '/tmp/trellis2'),
+  installTrellis2: vi.fn(({ onEvent }) => {
+    onEvent({ type: 'stage', stage: 'clone', message: 'git clone …' });
+    onEvent({ type: 'complete', message: 'TRELLIS.2 installed.' });
+    return { promise: Promise.resolve({ ok: true }), kill: vi.fn() };
+  }),
 }));
 
+import * as targets from '../services/imageTo3d/targets.js';
+import * as trellis2 from '../services/imageTo3d/trellis2.js';
 import routes from './imageTo3d.js';
 
 const makeApp = () => {
@@ -33,6 +43,12 @@ const makeApp = () => {
   return app;
 };
 
+// Parse `data: {json}\n\n` SSE frames out of a buffered response body.
+const sseFrames = (text) => text
+  .split('\n')
+  .filter((l) => l.startsWith('data: '))
+  .map((l) => JSON.parse(l.slice(6)));
+
 describe('image-to-3d routes', () => {
   it('GET /targets returns host capabilities and annotated targets', async () => {
     const res = await request(makeApp()).get('/api/image-to-3d/targets');
@@ -40,5 +56,37 @@ describe('image-to-3d routes', () => {
     expect(res.body.capabilities).toMatchObject({ appleSilicon: true, unifiedMemoryGb: 128 });
     expect(Array.isArray(res.body.targets)).toBe(true);
     expect(res.body.targets[0]).toMatchObject({ id: 'trellis2', available: true, installed: false });
+  });
+});
+
+describe('GET /trellis2/install (SSE)', () => {
+  it('streams stage → complete on the happy path', async () => {
+    trellis2.isTrellis2Installed.mockReturnValueOnce(false);
+    targets.isTargetAvailable.mockReturnValueOnce(true);
+    const res = await request(makeApp()).get('/api/image-to-3d/trellis2/install');
+    const frames = sseFrames(res.text);
+    expect(frames).toContainEqual({ type: 'stage', stage: 'clone', message: 'git clone …' });
+    expect(frames.at(-1)).toMatchObject({ type: 'complete' });
+    expect(trellis2.installTrellis2).toHaveBeenCalled();
+  });
+
+  it('short-circuits with complete when already installed (no install spawned)', async () => {
+    trellis2.installTrellis2.mockClear();
+    trellis2.isTrellis2Installed.mockReturnValueOnce(true);
+    const res = await request(makeApp()).get('/api/image-to-3d/trellis2/install');
+    const frames = sseFrames(res.text);
+    expect(frames.at(-1)).toMatchObject({ type: 'complete', message: expect.stringMatching(/already/i) });
+    expect(trellis2.installTrellis2).not.toHaveBeenCalled();
+  });
+
+  it('refuses on unsupported hardware', async () => {
+    trellis2.installTrellis2.mockClear();
+    trellis2.isTrellis2Installed.mockReturnValueOnce(false);
+    targets.isTargetAvailable.mockReturnValueOnce(false);
+    targets.unavailableReason.mockReturnValueOnce('requires-apple-silicon');
+    const res = await request(makeApp()).get('/api/image-to-3d/trellis2/install');
+    const frames = sseFrames(res.text);
+    expect(frames.at(-1)).toMatchObject({ type: 'error', message: expect.stringMatching(/requires-apple-silicon/) });
+    expect(trellis2.installTrellis2).not.toHaveBeenCalled();
   });
 });

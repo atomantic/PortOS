@@ -114,6 +114,69 @@ export function parseGenerateProgress(line) {
 }
 
 /**
+ * Run the install as a killable, event-emitting job: execute `buildInstallSteps()`
+ * sequentially (clone the MPS port → run its `setup.sh`, ~15 GB), emitting a
+ * `{ type:'stage' }` per step, `{ type:'log' }` for subprocess output, and a
+ * terminal `{ type:'complete' }` on success (it throws on a failed/canceled step so
+ * the SSE route can emit `{ type:'error' }`). Real subprocesses — user-triggered
+ * only. `spawnImpl` injectable so the step sequencing / cancel / failure paths are
+ * unit-testable without a real 15 GB install.
+ *
+ * @param {{base?: string, onEvent?: (ev: object) => void, spawnImpl?: Function}} [opts]
+ * @returns {{promise: Promise<{ok: true}>, kill: () => void}}
+ */
+export function installTrellis2({ base, onEvent = () => {}, spawnImpl = spawn } = {}) {
+  const steps = buildInstallSteps(base);
+  let currentChild = null;
+  let canceled = false;
+
+  const runStep = (step) => new Promise((resolve, reject) => {
+    onEvent({ type: 'stage', stage: step.stage, message: `${step.command} ${step.args.join(' ')}` });
+    // Child-process boundary — outcomes flow through events, not a throw into the
+    // request lifecycle (CLAUDE.md child-process exception).
+    const child = spawnImpl(step.command, step.args, step.cwd ? { cwd: step.cwd } : {});
+    currentChild = child;
+    const log = (buf) => {
+      const message = String(buf).trim();
+      if (message) onEvent({ type: 'log', stage: step.stage, message });
+    };
+    child.stdout?.on('data', log);
+    child.stderr?.on('data', log);
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      const err = new Error(`TRELLIS.2 install step '${step.stage}' exited ${code}`);
+      err.code = 'TRELLIS2_INSTALL_FAILED';
+      err.stage = step.stage;
+      reject(err);
+    });
+  });
+
+  const promise = (async () => {
+    for (const step of steps) {
+      if (canceled) {
+        const err = new Error('TRELLIS.2 install canceled');
+        err.code = 'TRELLIS2_INSTALL_CANCELED';
+        throw err;
+      }
+      await runStep(step);
+    }
+    onEvent({ type: 'complete', message: 'TRELLIS.2 installed.' });
+    return { ok: true };
+  })();
+
+  const kill = () => {
+    canceled = true;
+    if (currentChild && typeof currentChild.kill === 'function') currentChild.kill('SIGTERM');
+  };
+
+  return { promise, kill };
+}
+
+/**
  * Run a single image→GLB generation. The one real-subprocess boundary — GUARDED:
  * throws `TRELLIS2_NOT_INSTALLED` unless the model is present, so it can never run
  * from a cold boot. `spawnImpl`/`exists` are injectable so the wiring (right command,
