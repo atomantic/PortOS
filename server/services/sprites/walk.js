@@ -361,20 +361,24 @@ async function loadRunForEntry(recordId, direction, entry) {
  * runs only carry them inside `stripPreview`, so read through both or every
  * imported set would resolve as "no packaged geometry" and drift silently.
  *
- * A run the server flagged `stripMissing` is excluded: its packed strip is gone
- * from disk, so it can never compile, and letting it win the first-packaged slot
- * would derive the whole set's target from artwork that no longer exists —
- * badging every healthy direction as drifted against a dead one. It keeps its
- * `stripPreview` (only `stripPath` is dropped), so the filter has to name it.
+ * A run the server flagged `stripMissing` contributes nothing: its packed strip
+ * is gone from disk, so it can never compile, and letting it win the
+ * first-packaged slot would derive the whole set's target from artwork that no
+ * longer exists — badging every healthy direction as drifted against a dead one.
+ * It is dropped AFTER the per-direction pick, not filtered out before it, so a
+ * direction whose approved run lost its strip reports no geometry rather than
+ * silently falling back to a superseded older candidate that will never be
+ * frozen. (A stripMissing run keeps its `stripPreview`; only `stripPath` is
+ * dropped, so the check has to name the flag.)
  */
 function packagedCyclesFrom(runs, approvedDirections) {
   return SPRITE_DIRECTIONS.flatMap((direction) => {
-    const forDirection = runs.filter((r) => r.direction === direction && r.stripPreview && !r.stripMissing);
+    const forDirection = runs.filter((r) => r.direction === direction && r.stripPreview);
     const approvedRunId = approvedDirections?.[direction]?.runId;
     const run = forDirection.find((r) => r.id === approvedRunId)
       || forDirection.find((r) => r.status === 'approved')
       || forDirection.find((r) => r.status === 'candidate');
-    if (!run) return [];
+    if (!run || run.stripMissing) return [];
     return [{
       direction,
       frameCount: run.frameCount ?? run.stripPreview?.frameCount,

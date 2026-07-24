@@ -278,6 +278,18 @@ describe('WalkWorkflow observable render', () => {
     });
     expect(screen.queryByRole('link', { name: /Watch in Shell/ })).toBeNull();
   });
+
+  it('keeps "Re-run postprocess" clickable on a run wedged at packaging', () => {
+    // attachTuiWalkResult persists 'postprocessing' before packaging and nothing
+    // normalizes it, so a server death mid-package strands the run there — this
+    // button is the documented way out. Gating it on the generic `busy` (which
+    // includes status==='postprocessing') would make it permanently dead and
+    // leave the direction with no enabled action at all.
+    renderRun({
+      id: 'walk-east-abc12345', direction: 'east', status: 'postprocessing',
+    });
+    expect(screen.getByRole('button', { name: /Re-run postprocess/ })).not.toBeDisabled();
+  });
 });
 
 describe('WalkWorkflow authoring controls', () => {

@@ -341,10 +341,16 @@ function DirectionCard({
           {run.status === 'error' && (
             <p className="text-[10px] text-port-error break-words">{run.postprocessError || 'postprocess failed'}</p>
           )}
-          {/* Gated on the same in-flight target write as the other render
-              actions — it repacks against the set target, so firing it before
-              a target PATCH lands would use the value the server still holds. */}
-          <button onClick={() => onRetry(run)} disabled={busy} className="px-2 py-0.5 text-[10px] bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent disabled:opacity-50">
+          {/* Gated on the in-flight target write (it repacks against the set
+              target, so firing it before a target PATCH lands would use the
+              value the server still holds) — but deliberately NOT on `busy`:
+              that includes status==='postprocessing', which is precisely the
+              wedged state this button exists to recover (attachTuiWalkResult
+              persists 'postprocessing' before packaging, and nothing normalizes
+              it if the server dies mid-package). Disabling on `busy` would make
+              the "Re-run postprocess" branch permanently unclickable and leave
+              that direction with no enabled action at all. */}
+          <button onClick={() => onRetry(run)} disabled={pending || targetSaving} className="px-2 py-0.5 text-[10px] bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent disabled:opacity-50">
             {run.status === 'postprocessing' ? 'Re-run postprocess' : 'Retry postprocess'}
           </button>
         </div>
@@ -406,8 +412,12 @@ function DirectionCard({
           reprocessed / re-approved — for when one walk is too fast or wrong and
           the rest are fine. Un-freezes a finalized set but keeps the other seven
           approvals; the rendered clip is preserved, so re-approval is one click.
-          Inline confirm (not a hidden two-click arm) per the repo's UX. */}
-      {approved && (
+          Inline confirm (not a hidden two-click arm) per the repo's UX.
+          Hidden for a source-pipeline import, whose set has no regenerable clips
+          behind it — the server refuses reopen there (LEGACY_IMPORTED_WALK_SET)
+          exactly as it refuses unlock, so offering the button would guarantee a
+          409 on click. Mirrors how the header hides Unlock for imports. */}
+      {approved && !imported && (
         reopening ? (
           <ConfirmButtonPair
             prompt={finalized ? 'Reopen (un-freezes set)?' : 'Reopen this direction?'}
