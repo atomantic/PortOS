@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   SPRITE_DIRECTIONS, ANCHOR_DIRECTIONS, REFERENCE_FACING, anchorIdForDirection,
   keyColorPhrase, buildMainReferencePrompt, buildAnchorPrompt, buildTurnaroundPrompt,
-  TURNAROUND_VIEWS,
+  buildWalkVideoPrompt, viewGeometryClause, TURNAROUND_VIEWS,
 } from './prompts.js';
 
 describe('sprite direction contracts', () => {
@@ -107,11 +107,87 @@ describe('buildTurnaroundPrompt (#2979)', () => {
     expect(p).toContain('Use the attached visual reference as the character design.');
   });
 
+  it('forbids mirroring and gives every panel its own occlusion rule (#3004)', () => {
+    const p = buildTurnaroundPrompt({ name: 'Scout', designPrompt: 'a wiry ranger', chromaKey: '#FF00FF' });
+    // Rotation, not reflection — the instruction that kills the mirrored-front bug.
+    expect(p).toContain('rotated in place about a vertical axis');
+    expect(p).toContain('No panel is a horizontal flip, mirror, or copy of another panel');
+    // "Same anatomical side" is now paired with where that lands on screen, so
+    // the rule can't be satisfied by leaving the item in the same pixels.
+    expect(p).toContain('viewer\'s left in the front panel');
+    expect(p).toContain('viewer\'s right in the back panel');
+    // The reported failure: a front-worn hip bag surviving into the back panel.
+    expect(p).toContain('hip bag or pouch worn at the front');
+    expect(p).toContain('hidden by the body and must not be drawn');
+    TURNAROUND_VIEWS.forEach((view, i) => {
+      expect(p).toContain(`Panel ${i + 1} (${REFERENCE_FACING[view]}): ${viewGeometryClause(view)}`);
+    });
+  });
+
   it('panel order matches SPRITE_DIRECTIONS\' cardinal facings', () => {
     // The sheet's four panels are the cardinal directions; the three-quarter
     // facings interpolate between adjacent ones.
     expect(TURNAROUND_VIEWS).toEqual(['south', 'east', 'north', 'west']);
     for (const v of TURNAROUND_VIEWS) expect(SPRITE_DIRECTIONS).toContain(v);
+  });
+});
+
+describe('viewGeometryClause (#3004)', () => {
+  it('hides front-mounted gear from every rear-ish facing', () => {
+    for (const d of ['north', 'north-east', 'north-west']) {
+      const c = viewGeometryClause(d);
+      expect(c).toContain('behind the character');
+      expect(c).toContain('hip bag or pouch worn at the front');
+      expect(c).toContain('must not be drawn');
+      // A mirrored front view keeps the face — say so explicitly.
+      expect(c).toContain('no face');
+    }
+  });
+
+  it('hides back-mounted gear from every front-ish facing', () => {
+    for (const d of ['south', 'south-east', 'south-west']) {
+      const c = viewGeometryClause(d);
+      expect(c).toContain('in front of the character');
+      expect(c).toContain('backpack');
+      expect(c).not.toContain('no face');
+    }
+  });
+
+  it('names the near side correctly for each profile', () => {
+    // Facing due east the character looks screen-right, so the viewer stands
+    // off their right shoulder (face east and south is on your right).
+    for (const d of ['east', 'south-east', 'north-east']) {
+      expect(viewGeometryClause(d)).toContain('character\'s right side');
+    }
+    for (const d of ['west', 'south-west', 'north-west']) {
+      expect(viewGeometryClause(d)).toContain('character\'s left side');
+    }
+  });
+
+  it('covers every sprite direction and stays silent on unknown ones', () => {
+    for (const d of SPRITE_DIRECTIONS) expect(viewGeometryClause(d)).not.toBe('');
+    expect(viewGeometryClause('nowhere')).toBe('');
+  });
+});
+
+describe('derive prompts carry the geometry rule (#3004)', () => {
+  it('appends the facing\'s occlusion rule to every anchor prompt', () => {
+    for (const d of ANCHOR_DIRECTIONS) {
+      const p = buildAnchorPrompt({ name: 'Scout', direction: d, chromaKey: '#FF00FF' });
+      expect(p).toContain('not a mirrored copy of the reference');
+      expect(p).toContain(viewGeometryClause(d));
+    }
+  });
+
+  it('keeps the main reference free of back-mounted gear', () => {
+    const p = buildMainReferencePrompt({ name: 'Scout', designPrompt: 'x', chromaKey: '#FF00FF' });
+    expect(p).toContain(viewGeometryClause('south'));
+  });
+
+  it('stops the walk video from inventing gear the anchor hides', () => {
+    const p = buildWalkVideoPrompt({ name: 'Scout', direction: 'north', chromaKey: '#FF00FF' });
+    expect(p).toContain('do not add gear that the source image does not show');
+    expect(p).toContain('stays hidden for the whole loop');
   });
 });
 
