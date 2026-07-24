@@ -101,19 +101,25 @@ export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
 
   if (!finalized) return null;
 
-  // Phase-1 imported walk sets carry source-pipeline paths and no packaged
-  // frames — the server refuses to recompile them (LEGACY_IMPORTED_WALK_SET).
-  // Show why instead of offering a button that always fails.
-  if (walk.walkSet.selectionPath?.includes('art-source/sprites/')) {
+  // A direction still packaged by the source pipeline has no per-frame images
+  // here, so the server refuses to compile from it (LEGACY_IMPORTED_WALK_SET).
+  // Show why instead of offering a button that always fails. Read the
+  // server-stamped flag rather than re-deriving the path convention: it is
+  // per-direction, so it clears on its own as each direction is re-derived from
+  // its imported clip — which is what makes an imported set compilable at all.
+  if (walk.walkSet.imported) {
     return (
       <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-1">
         <h3 className="text-sm font-medium text-gray-200 flex items-center gap-2">
           <Package size={16} className="text-port-accent" /> Runtime Atlas
         </h3>
         <p className="text-xs text-gray-500">
-          This walk set was imported from the source pipeline, which kept its packaged frames —
-          PortOS cannot recompile it. The imported runtime atlases remain in the asset library
-          below; to compile and publish from PortOS, run the walk workflow on a new character.
+          {walk.walkSet.importedDirections?.length
+            ? `${walk.walkSet.importedDirections.join(', ')} ${walk.walkSet.importedDirections.length === 1 ? 'is' : 'are'} still packaged`
+            : 'Some directions are still packaged'} by the source pipeline, which kept their
+          per-frame images — PortOS cannot compile from those. Reopen each one above and reprocess
+          it from its imported clip to re-derive the frames here, then compile. The imported
+          runtime atlases remain in the asset library below.
         </p>
       </div>
     );

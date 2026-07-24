@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdir, writeFile, readFile, rm } from 'fs/promises';
@@ -56,15 +56,32 @@ const prepareWalkAnchorChromaInput = vi.fn(async (_anchorAbs, destAbs) => {
   await writeFile(destAbs, 'stub-chroma-anchor');
   return { preparation: 'composited-over-solid-chroma-matte' };
 });
-const runWalkPostprocess = vi.fn(async ({ runRel, runAbs }) => {
-  // Faithfully land the packed strip on disk (the real postprocess writes it) —
-  // getWalkState's missing-strip guard now flips a candidate whose strip is
-  // absent to an error, so a mock that only returns the path would look broken.
+const runWalkPostprocess = vi.fn(async ({
+  runRel, runAbs, recordId, direction, frameCount = 8, fps = 12,
+}) => {
+  // Faithfully land the packed strip AND the packaged manifest on disk (the real
+  // postprocess writes both) — getWalkState's missing-strip guard flips a
+  // candidate whose strip is absent to an error, and approveWalkDirection
+  // re-validates the manifest, so a mock that only returned paths would make a
+  // re-derived run look broken and un-approvable.
+  const stripBytes = 'packaged-strip-bytes';
   await mkdir(join(runAbs, 'generated'), { recursive: true });
-  await writeFile(join(runAbs, 'generated', 'strip.png'), 'packaged-strip-bytes');
+  await writeFile(join(runAbs, 'generated', 'strip.png'), stripBytes);
+  await writeFile(join(runAbs, 'generated', 'manifest.json'), JSON.stringify({
+    schemaVersion: 1,
+    kind: 'deterministically-packaged-grok-walk-video',
+    characterId: recordId,
+    direction,
+    frameCount,
+    frameRate: fps,
+    stripPath: `${runRel}/generated/strip.png`,
+    stripSha256: createHash('sha256').update(Buffer.from(stripBytes)).digest('hex'),
+  }));
   return {
     manifestPath: `${runRel}/generated/manifest.json`,
-    stripPreview: { stripPath: `${runRel}/generated/strip.png`, frameCount: 8, fps: 12, cellWidth: 384, cellHeight: 384, row: 0, startColumn: 0 },
+    stripPreview: {
+      stripPath: `${runRel}/generated/strip.png`, frameCount, fps, cellWidth: 384, cellHeight: 384, row: 0, startColumn: 0,
+    },
   };
 });
 vi.mock('./walkPostprocess.js', async (importOriginal) => {
@@ -81,7 +98,7 @@ const { listSpriteAssets } = await import('./paths.js');
 const { lockReference } = await import('./reference.js');
 const {
   getWalkState, startWalkGeneration, attachTuiWalkResult, approveWalkDirection, rerunWalkPostprocess, unlockWalkSet,
-  reopenWalkDirection, setWalkTarget,
+  reopenWalkDirection, setWalkTarget, importedWalkDirections,
 } = await import('./walk.js');
 const { SPRITE_DIRECTIONS, ANCHOR_DIRECTIONS } = await import('./prompts.js');
 
@@ -142,6 +159,90 @@ async function makeCandidateRun(recordId, direction, {
     },
   }));
   return { runId, manifestRel };
+}
+
+/**
+ * Build ONE approved direction the way the source-pipeline importer leaves it
+ * (#2895/#2984): the run under `<base>/<runId>/` with every embedded path
+ * anchored at the SOURCE repo root, no `id` field at all, and — unless
+ * `clip: false` — the `source-video.mp4` the importer now copies across.
+ *
+ * `declaredBase` differs from `base` to reproduce source-tree layout drift: the
+ * manifests say one run layout while the files sit under the other, and both
+ * spellings denote the same run.
+ */
+async function makeImportedDirection(recordId, direction, {
+  base = 'grok', declaredBase = base, clip = true, frameCount = 8, fps = 12,
+} = {}) {
+  const runId = `run-${(seq++).toString(16)}`;
+  const spriteRoot = join(TEST_ROOT, 'sprites', recordId);
+  const genAbs = join(spriteRoot, base, runId, 'generated');
+  await mkdir(genAbs, { recursive: true });
+  const anchor = (rel) => `art-source/sprites/${recordId}/${rel}`;
+  const declaredRun = `${declaredBase}/${runId}`;
+  const stripRel = `${declaredRun}/generated/${direction}-strip.png`;
+  const manifestRel = `${declaredRun}/generated/${direction}-manifest.json`;
+  const stripBytes = `imported-strip-${direction}`;
+  await writeFile(join(genAbs, `${direction}-strip.png`), stripBytes);
+  await writeFile(join(genAbs, `${direction}-manifest.json`), JSON.stringify({
+    schemaVersion: 1,
+    kind: 'deterministically-packaged-grok-walk-video',
+    characterId: recordId,
+    direction,
+    frameRate: fps,
+    frameCount,
+    stripPath: anchor(stripRel),
+    stripSha256: sha256(Buffer.from(stripBytes)),
+  }));
+  if (clip) await writeFile(join(genAbs, 'source-video.mp4'), 'IMPORTED-CLIP');
+  await writeFile(join(spriteRoot, base, runId, 'animation-run.json'), JSON.stringify({
+    kind: 'grok-walk-animation-run',
+    status: 'candidate',
+    characterId: recordId,
+    direction,
+    postprocessManifest: anchor(manifestRel),
+    sourceVideoPath: anchor(`${declaredRun}/generated/source-video.mp4`),
+    stripPreview: {
+      path: anchor(stripRel), frameCount, fps, cellWidth: 384, cellHeight: 384, row: 0, startColumn: 0,
+    },
+  }));
+  return {
+    runId,
+    entry: { status: 'approved', runPath: anchor(declaredRun), runManifest: anchor(manifestRel) },
+  };
+}
+
+// A finalized, imported character: `perDirection` maps each direction to its
+// makeImportedDirection options. Both the selection and the frozen walk set are
+// copied source-anchored, exactly as the importer leaves them.
+async function importedCharacter(id, perDirection) {
+  const walkDir = join(TEST_ROOT, 'sprites', id, 'walk');
+  await mkdir(walkDir, { recursive: true });
+  const directions = {};
+  const runIds = {};
+  for (const [direction, options] of Object.entries(perDirection)) {
+    const made = await makeImportedDirection(id, direction, options);
+    directions[direction] = made.entry;
+    runIds[direction] = made.runId;
+  }
+  await writeFile(join(walkDir, `${id}-walk-selection-v1.json`), JSON.stringify({
+    schemaVersion: 1,
+    kind: 'reviewed-directional-walk-selection',
+    characterId: id,
+    status: 'complete',
+    animationTargets: {},
+    directions,
+  }));
+  await writeFile(join(walkDir, `${id}-walk-set-v1.json`), JSON.stringify({
+    schemaVersion: 1,
+    kind: 'finalized-eight-direction-walk-set',
+    characterId: id,
+    status: 'final',
+    selectionPath: `art-source/sprites/${id}/walk/${id}-walk-selection-v1.json`,
+    directionOrder: SPRITE_DIRECTIONS,
+    directions,
+  }));
+  return runIds;
 }
 
 beforeEach(() => {
@@ -775,6 +876,191 @@ describe('reopenWalkDirection', () => {
   });
 });
 
+/**
+ * #2993 — the un-finalize gate keys on EVIDENCE (is a clip on disk?), not on the
+ * set's imported-looking provenance. #2984 made the importer copy each run's
+ * source-video.mp4, so an imported direction with its clip present is exactly as
+ * re-derivable as a native one; only a direction with nothing behind it is the
+ * dead end the original blanket refusal was written for.
+ */
+describe('imported walk sets — evidence-based re-derive', () => {
+  it('unlocks an imported set whose direction still has its clip on disk', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const runIds = await importedCharacter(id, { east: {} });
+
+    const state = await unlockWalkSet(id);
+    expect(state.walkSet).toBeNull();
+    expect((await records.getRecord(id)).status).toBe('reference-complete');
+    // The imported run must survive losing its index entry — it lives in a
+    // directory the source pipeline named freely (`run-…`, not `walk-…`), so a
+    // name-prefix scan would have made it vanish exactly when it is needed.
+    const run = state.runs.find((r) => r.id === runIds.east);
+    expect(run.direction).toBe('east');
+    expect(run.sourceVideoPath).toBe(`grok/${runIds.east}/generated/source-video.mp4`);
+    expect(run.sourceClipMissing).toBeUndefined();
+  });
+
+  it('still refuses to unlock an imported set with no clip behind any direction', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    await importedCharacter(id, { east: { clip: false } });
+    await expect(unlockWalkSet(id)).rejects.toMatchObject({
+      status: 409,
+      code: 'LEGACY_IMPORTED_WALK_SET',
+      message: expect.stringContaining('east'),
+    });
+  });
+
+  // Unlock drops EVERY approval, and a source-packaged direction with no clip can
+  // be neither reprocessed nor re-approved (its frames were never imported) — so a
+  // partial unlock would strand it permanently. The whole-set action refuses; the
+  // per-direction one, which leaves the rest frozen, still works.
+  it('refuses to unlock a mixed set, naming the direction that would be stranded', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    await importedCharacter(id, { east: {}, north: { clip: false } });
+
+    await expect(unlockWalkSet(id)).rejects.toMatchObject({
+      status: 409,
+      code: 'LEGACY_IMPORTED_WALK_SET',
+      message: expect.stringContaining('north would be left with no source clip'),
+    });
+    // …and the frozen set is untouched by the refusal.
+    expect((await getWalkState(id)).walkSet).not.toBeNull();
+  });
+
+  it('reopens the imported direction that has a clip and refuses the one that does not', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    await importedCharacter(id, { east: {}, north: { clip: false } });
+
+    await expect(reopenWalkDirection(id, { direction: 'north' }))
+      .rejects.toMatchObject({ code: 'LEGACY_IMPORTED_WALK_SET' });
+
+    const state = await reopenWalkDirection(id, { direction: 'east' });
+    expect(state.walkSet).toBeNull();
+    expect(state.selection.directions.east).toBeUndefined();
+    expect(state.selection.directions.north.status).toBe('approved');
+
+    // …and STILL refuses north now that the set is un-frozen. Reopen un-freezes,
+    // so a gate keyed only on the frozen walk set would be dead from here on and
+    // north could be stranded by simply clicking twice — which is what the unlock
+    // refusal's own "reopen them one at a time" advice would have walked into.
+    await expect(reopenWalkDirection(id, { direction: 'north' }))
+      .rejects.toMatchObject({ code: 'LEGACY_IMPORTED_WALK_SET' });
+    expect((await getWalkState(id)).selection.directions.north.status).toBe('approved');
+  });
+
+  // The acceptance case: an imported 8-frame direction brought up to 12 with no
+  // new render call — and, because the run lives under `grok/`, without the
+  // regenerated frames or the rewritten record landing in a phantom `runs/` twin.
+  it('re-derives a grok/-layout imported run in place at the new set target', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const runIds = await importedCharacter(id, { east: {} });
+    await unlockWalkSet(id);
+    await setWalkTarget(id, { frameCount: 12, fps: 12 });
+
+    runWalkPostprocess.mockClear();
+    const run = await rerunWalkPostprocess(id, { runId: runIds.east });
+
+    expect(executeTuiRun).not.toHaveBeenCalled();
+    expect(runWalkPostprocess).toHaveBeenCalledWith(expect.objectContaining({
+      frameCount: 12,
+      runRel: `grok/${runIds.east}`,
+      videoAbs: join(TEST_ROOT, 'sprites', id, 'grok', runIds.east, 'generated', 'source-video.mp4'),
+    }));
+    expect(run.status).toBe('candidate');
+    expect(run.frameCount).toBe(12);
+    // The source anchor is replaced by the record-relative form on the way back
+    // to disk, in the directory the run actually came from.
+    expect(run.sourceVideoPath).toBe(`grok/${runIds.east}/generated/source-video.mp4`);
+    const savedAbs = join(TEST_ROOT, 'sprites', id, 'grok', runIds.east, 'animation-run.json');
+    expect(JSON.parse(await readFile(savedAbs, 'utf8'))).toMatchObject({ status: 'candidate', frameCount: 12 });
+    expect(existsSync(join(TEST_ROOT, 'sprites', id, 'runs'))).toBe(false);
+  });
+
+  // Source trees drift: a manifest can name `runs/<id>/…` for a clip stored under
+  // `grok/<id>/…`. Both spellings denote the same file, so the reader heals the
+  // path and the re-derive finds it — the importer already tolerates the same drift.
+  it('resolves a clip whose declared run layout differs from where it is stored', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const runIds = await importedCharacter(id, { east: { base: 'grok', declaredBase: 'runs' } });
+
+    const { runs } = await getWalkState(id);
+    expect(runs[0].sourceVideoPath).toBe(`grok/${runIds.east}/generated/source-video.mp4`);
+    expect(runs[0].sourceClipMissing).toBeUndefined();
+    // Drift healing is one fact about imported trees, not one fact about clips:
+    // the strip is declared under the other layout too, and must resolve rather
+    // than badge "strip missing" over a PNG that is present and intact.
+    expect(runs[0].stripPreview.stripPath).toBe(`grok/${runIds.east}/generated/east-strip.png`);
+    expect(runs[0].stripMissing).toBeUndefined();
+    await expect(reopenWalkDirection(id, { direction: 'east' })).resolves.toBeTruthy();
+  });
+
+  // Zero-I/O provenance: a run whose packaged manifest is still named against the
+  // source repo was packaged there, so its frames were never imported. The client
+  // gates Approve on this rather than offering a button that always 409s.
+  it('flags a run whose packaging is still the source pipeline\'s, and clears it on re-derive', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const runIds = await importedCharacter(id, { east: {} });
+    expect((await getWalkState(id)).runs[0].importedPackaging).toBe(true);
+
+    await unlockWalkSet(id);
+    await rerunWalkPostprocess(id, { runId: runIds.east });
+    expect((await getWalkState(id)).runs[0].importedPackaging).toBeUndefined();
+  });
+
+  // "Declares a clip" and "has a clip" must not read the same: the flag is what
+  // lets the client offer reopen/reprocess only where they can actually work.
+  // The linkage to the atlas: re-deriving a direction and re-approving it
+  // rewrites its entry through PortOS's own approve path, which stores
+  // record-relative paths — so the direction stops being "still packaged by the
+  // source pipeline" and stops blocking the compile. That is what makes an
+  // imported set reachable at all: the refusal clears direction by direction as
+  // the user works through them, rather than only for a brand-new character.
+  it('drops a re-derived direction out of the set\'s imported provenance', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const runIds = await importedCharacter(id, { east: {} });
+    await unlockWalkSet(id);
+    await rerunWalkPostprocess(id, { runId: runIds.east });
+
+    const state = await approveWalkDirection(id, { direction: 'east', runId: runIds.east });
+    const entry = state.selection.directions.east;
+    expect(entry.runPath).toBe(`grok/${runIds.east}`);
+    expect(entry.runManifest).toBe(`grok/${runIds.east}/generated/manifest.json`);
+    expect(importedWalkDirections({ directions: state.selection.directions })).toEqual([]);
+  });
+
+  // The complement of the test above: re-approving an imported direction WITHOUT
+  // re-deriving it would launder the provenance (approve re-anchors the path it
+  // stores), leaving a set the atlas refuses with an unexplained sha mismatch.
+  // Approve refuses it up front instead, naming the reprocess as the remedy.
+  it('refuses to approve a run whose packaged frames were never written here', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const runIds = await importedCharacter(id, { east: {} });
+    const manifestAbs = join(
+      TEST_ROOT, 'sprites', id, 'grok', runIds.east, 'generated', 'east-manifest.json',
+    );
+    const manifest = JSON.parse(await readFile(manifestAbs, 'utf8'));
+    // The source pipeline's manifest lists its frames; the importer never copied
+    // the images themselves (it skips frames/ to minimize cross-machine copies).
+    manifest.frames = Array.from({ length: manifest.frameCount }, (_, i) => ({
+      path: `art-source/sprites/${id}/grok/${runIds.east}/generated/frames/f${i}.png`,
+    }));
+    await writeFile(manifestAbs, JSON.stringify(manifest));
+    await unlockWalkSet(id);
+
+    await expect(approveWalkDirection(id, { direction: 'east', runId: runIds.east }))
+      .rejects.toMatchObject({ status: 409, code: 'RUN_FRAMES_MISSING' });
+  });
+
+  it('flags a run whose declared clip is not on disk without dropping the path', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const runIds = await importedCharacter(id, { east: { clip: false } });
+
+    const { runs } = await getWalkState(id);
+    expect(runs[0].sourceClipMissing).toBe(true);
+    expect(runs[0].sourceVideoPath).toBe(`grok/${runIds.east}/generated/source-video.mp4`);
+  });
+});
+
 describe('listSpriteAssets run-intermediate exclusion', () => {
   it('omits raw extraction frames but keeps packaged frames and the review sheet', async () => {
     const id = await characterWithLockedAnchors(newId(), []);
@@ -1159,6 +1445,10 @@ describe('getWalkState', () => {
         status: 'approved',
         kind: 'imported-redraw-walk-cycle',
         redrawManifest: REDRAW_MANIFEST_REL,
+        // A redraw entry names no run directory, so it has no clip to re-derive
+        // from and the server refuses to reopen it. The flag is what still says
+        // so once the frozen walk set — the client's other signal — is gone.
+        importedPackaging: true,
         stripPreview: {
           stripPath: 'imagegen/v19/clean-alpha.png',
           frameCount: 12,

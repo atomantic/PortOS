@@ -14,7 +14,7 @@
 import { join, resolve } from 'path';
 import { readdir, stat } from 'fs/promises';
 import sharp from 'sharp';
-import { PATHS, isPathInsideDir } from '../../lib/fileUtils.js';
+import { PATHS, isPathInsideDir, pathExists } from '../../lib/fileUtils.js';
 import { createBoundedStateMap } from '../../lib/boundedStateMap.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isValidSpriteId } from './recordsLogic.js';
@@ -34,6 +34,22 @@ export const RUNTIME_POINTER_REL = 'runtime/current.json';
 export const RUNTIME_PUBLICATIONS_REL = 'runtime/publications.json';
 
 /**
+ * The path prefix the source art pipeline anchors every embedded reference at.
+ * A copied manifest names `art-source/sprites/<recordId>/…` for a file that, on
+ * this side, sits at the record root — so this marker is what distinguishes
+ * "still carries source-pipeline provenance" from "PortOS-owned and relative".
+ * It can sit at any index (absolute / repo-prefixed variants), matching the
+ * importer's own recognition — hence `includes`, not a prefix test.
+ */
+export const SOURCE_PIPELINE_ANCHOR = 'art-source/sprites/';
+export const isSourcePipelinePath = (p) => typeof p === 'string' && p.includes(SOURCE_PIPELINE_ANCHOR);
+
+// The i2v clip every animation run is derived from, inside its `generated/` dir.
+// Named here rather than in each consumer: the importer copies it, the
+// postprocess reads it, and the walk service re-derives from it.
+export const SOURCE_CLIP_NAME = 'source-video.mp4';
+
+/**
  * Normalize an asset-path field read out of an imported manifest to the
  * record-relative form `spriteAssetUrl`/`resolveSpriteAssetPath` expect. The
  * source pipeline embeds paths anchored at ITS repo root
@@ -50,7 +66,7 @@ export const RUNTIME_PUBLICATIONS_REL = 'runtime/publications.json';
  */
 export function toRecordRelativeAssetPath(recordId, rawPath) {
   if (typeof rawPath !== 'string' || !rawPath) return null;
-  const marker = `art-source/sprites/${recordId}/`;
+  const marker = `${SOURCE_PIPELINE_ANCHOR}${recordId}/`;
   const idx = rawPath.indexOf(marker);
   // Match importer.js's relToCharacterDir: an already-relative path may still
   // carry a leading slash (an absolute-style source value) — strip it before
@@ -100,6 +116,29 @@ const RUN_DIR_SPLIT = new RegExp(`^(${RUN_DIR_PREFIXES.join('|')})(/.+)$`);
 export function altRunLayoutPath(rel) {
   const match = RUN_DIR_SPLIT.exec(rel || '');
   return match ? `${RUN_DIR_PREFIXES.find((p) => p !== match[1])}${match[2]}` : null;
+}
+
+/** The run directory at the head of a record-relative path, under either layout. */
+export const runDirOfPath = (rel) => (typeof rel === 'string' ? RUN_DIR_MATCH.exec(rel)?.[0] || null : null);
+
+/**
+ * The spelling of `rel` that actually exists under `baseDir` — the declared one
+ * or its run-layout twin — or null when neither does.
+ *
+ * The drift this absorbs is one fact about the source trees, not one fact about
+ * clips: a manifest can name `runs/<id>/…` for a file stored under `grok/<id>/…`
+ * and both spellings denote the same artifact. Every reader that resolves a
+ * declared path against disk wants this, which is why it lives beside
+ * `altRunLayoutPath` rather than inside any one consumer (the importer resolves
+ * its source reads through it; the walk service resolves run clips through it).
+ * A path outside a run directory has no twin, so this degrades to a plain
+ * existence check.
+ */
+export async function resolveDriftTolerantRel(baseDir, rel) {
+  if (typeof rel !== 'string' || !rel) return null;
+  if (await pathExists(join(baseDir, rel))) return rel;
+  const alt = altRunLayoutPath(rel);
+  return alt && (await pathExists(join(baseDir, alt))) ? alt : null;
 }
 
 // Raw ffmpeg-extracted frame intermediates inside an animation run (30–96

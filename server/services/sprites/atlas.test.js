@@ -319,6 +319,24 @@ describe('compileAtlas', () => {
     await expect(compileAtlas(id)).rejects.toMatchObject({ status: 409, code: 'LEGACY_IMPORTED_WALK_SET' });
   });
 
+  // #2993: the refusal is per-direction, because a direction can now leave the
+  // imported state (reopen → reprocess from its imported clip → re-approve
+  // rewrites its entry record-relative). A set that is otherwise fully native
+  // must still be refused for the directions that have NOT been re-derived —
+  // and must name them, since the remedy is applied one direction at a time.
+  it('names the directions still packaged by the source pipeline', async () => {
+    const id = await finalizedCharacter();
+    const setAbs = join(TEST_ROOT, 'sprites', id, `walk/${id}-walk-set-v1.json`);
+    const walkSet = JSON.parse(await readFile(setAbs, 'utf8'));
+    walkSet.directions.north.runManifest = `art-source/sprites/${id}/${walkSet.directions.north.runManifest}`;
+    await writeFile(setAbs, JSON.stringify(walkSet));
+    await expect(compileAtlas(id)).rejects.toMatchObject({
+      status: 409,
+      code: 'LEGACY_IMPORTED_WALK_SET',
+      message: expect.stringContaining('north is still packaged by the source pipeline'),
+    });
+  });
+
   it('self-heals a deleted versioned atlas instead of returning a dangling pointer', async () => {
     const id = await finalizedCharacter();
     const first = await compileAtlas(id);

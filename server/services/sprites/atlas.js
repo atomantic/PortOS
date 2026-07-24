@@ -34,6 +34,7 @@ import {
 import { ServerError } from '../../lib/errorHandler.js';
 import {
   spriteDir, resolveSpriteAssetPath, RUNTIME_POINTER_REL, RUNTIME_PUBLICATIONS_REL,
+  isSourcePipelinePath,
 } from './paths.js';
 import { requireCharacter, loadManifest } from './reference.js';
 import { SPRITE_DIRECTIONS } from './prompts.js';
@@ -46,7 +47,9 @@ import {
   alphaBbox, compositeOnto, sha256Buffer,
 } from './walkPostprocess.js';
 import { ATLAS_IDLE_COLUMN } from './walkBounds.js';
-import { withWalkWriteTail, walkSetRelPath, isImportedWalkSet } from './walk.js';
+import {
+  withWalkWriteTail, walkSetRelPath, importedWalkDirections,
+} from './walk.js';
 
 // Player atlas contract (source pipeline runtime_publish.py): 96px cells,
 // pivot (48,88) — silhouette centered on x=48, feet on the y=88 ground line —
@@ -203,17 +206,30 @@ export async function validateForCompile(recordId) {
     throw compileError('Walk set manifest is not a finalized eight-direction walk set');
   }
   if (walkSet.characterId !== recordId) throw compileError('Walk set characterId mismatch');
-  // Phase-1 imported walk sets are copied verbatim from the source pipeline:
-  // their paths are repo-root (`art-source/sprites/<id>/…`) and — decisively —
-  // the packaged per-frame PNGs were never imported (the importer skips
-  // frames/ to minimize copies). Recompiling them here is structurally
-  // impossible; say so plainly instead of a misleading tamper error. Their
+  // A direction still packaged by the source pipeline is copied verbatim: its
+  // paths are repo-root (`art-source/sprites/<id>/…`) and — decisively — its
+  // per-frame PNGs were never imported (the importer skips frames/ to minimize
+  // copies). Compiling from it is structurally impossible; say so plainly
+  // instead of the misleading tamper error the sha check below would produce.
+  //
+  // Unlike the original guard this is per-direction (#2993), because a direction
+  // CAN now leave that state: re-deriving it from its imported clip regenerates
+  // the frames here and re-approving rewrites its entry record-relative, so a set
+  // whose directions have all been re-derived compiles like any native one. Only
+  // the directions still carrying source-pipeline provenance block the compile,
+  // and the message names them so the remedy is per-direction too. Their
   // already-published runtime atlases were imported and remain browsable.
-  // Shared predicate (walk.js) so this recompile guard and unlockWalkSet's
-  // stay in lockstep on what counts as a legacy import.
-  if (isImportedWalkSet(walkSet)) {
+  // `isImportedWalkSet` expanded so the direction list is built once. The
+  // selectionPath disjunct is the set-level marker on its own — a set that is
+  // imported but lists no source-packaged direction.
+  const stale = importedWalkDirections(walkSet);
+  if (stale.length || isSourcePipelinePath(walkSet.selectionPath)) {
+    const which = stale.length ? `${stale.join(', ')} ${stale.length === 1 ? 'is' : 'are'}` : 'This walk set is';
     throw new ServerError(
-      'This walk set was imported from the source pipeline — its packaged frames were not imported, so PortOS cannot recompile it. Imported runtime atlases remain available in the asset library; to compile here, run the walk workflow on a new character.',
+      `${which} still packaged by the source pipeline, whose per-frame images were not imported — PortOS cannot compile from them. `
+      + 'Reopen each such direction and reprocess it from its imported clip to re-derive the frames here, then compile. '
+      + 'A direction with no imported clip cannot be re-derived at all — re-import the character to bring its clips across. '
+      + 'The imported runtime atlases remain available in the asset library.',
       { status: 409, code: 'LEGACY_IMPORTED_WALK_SET' },
     );
   }

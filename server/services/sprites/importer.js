@@ -27,7 +27,9 @@ import { readdir, copyFile, rm } from 'fs/promises';
 import { PATHS, ensureDir, sha256File, atomicWrite, pathExists, readJSONFile, expandHome } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { upsertImportedRecord } from './records.js';
-import { spriteDir, RUN_DIR_MATCH, altRunLayoutPath } from './paths.js';
+import {
+  spriteDir, RUN_DIR_MATCH, altRunLayoutPath, resolveDriftTolerantRel, SOURCE_CLIP_NAME,
+} from './paths.js';
 import { isValidSpriteId } from './recordsLogic.js';
 
 // The source pipeline keys everything on magenta; imported characters carry it
@@ -159,9 +161,9 @@ const ASSET_REF = /\.(png|gif|json)$/i;
 // Matched by exact shape rather than a blanket `.mp4` rule so unrelated videos
 // in the source tree still stay behind. `raw/` frames deliberately remain
 // excluded below — ~5× the bytes of the clip they were extracted from, and
-// re-derivation re-extracts them on demand.
-const SOURCE_CLIP_NAME = 'source-video.mp4';
-const SOURCE_CLIP_REF = new RegExp(`${RUN_DIR_MATCH.source}/generated/source-video\\.mp4$`);
+// re-derivation re-extracts them on demand. (The name itself lives in paths.js —
+// the importer, the postprocess, and the walk service all key on it.)
+const SOURCE_CLIP_REF = new RegExp(`${RUN_DIR_MATCH.source}/generated/${SOURCE_CLIP_NAME.replace('.', '\\.')}$`);
 const EXCLUDED_RUN_SEGMENTS = /(^|\/)(raw|frames|review)\//;
 // Free-text log fields in run records can contain path-looking strings that
 // were never assets — don't traverse them.
@@ -205,15 +207,6 @@ function collectManifestRefs(node, characterId, refs, expectations) {
   }
 }
 
-// Resolve a declared path against the SOURCE tree, tolerating run-layout drift
-// (`altRunLayoutPath`): returns whichever path actually exists — the declared
-// one or its twin — or null when neither does.
-async function resolveSourceRel(srcCharDir, rel) {
-  if (await pathExists(join(srcCharDir, rel))) return rel;
-  const alt = altRunLayoutPath(rel);
-  return alt && (await pathExists(join(srcCharDir, alt))) ? alt : null;
-}
-
 // Read a character-dir JSON with the same drift tolerance, so a manifest
 // naming `runs/<run-id>/…` still expands when the source stores that run under
 // `grok/<run-id>/`. Read-then-fall-back rather than probe-then-read: readJson
@@ -232,7 +225,7 @@ async function readCharJson(srcCharDir, rel) {
 // else would import a file nothing can find. Only the source lookup tolerates
 // drift.
 async function copyCharFile(srcCharDir, destDir, rel) {
-  const srcRel = await resolveSourceRel(srcCharDir, rel);
+  const srcRel = await resolveDriftTolerantRel(srcCharDir, rel);
   if (!srcRel) return false;
   const dest = join(destDir, rel);
   await ensureDir(dirname(dest));
@@ -269,7 +262,7 @@ async function importApprovedDirection({ srcCharDir, destDir, characterId, direc
   // expand their manifests.
   collectManifestRefs(await readJson(join(destDir, manifestRel)), characterId, refs, hashExpectations);
   const runRel = relToCharacterDir(dir.runPath, characterId);
-  if (runRel && (await resolveSourceRel(srcCharDir, `${runRel}/generated/review-preview.json`))) {
+  if (runRel && (await resolveDriftTolerantRel(srcCharDir, `${runRel}/generated/review-preview.json`))) {
     refs.add(`${runRel}/generated/review-preview.json`);
   }
   // One extra expansion level: packaged manifests / previews the run record
@@ -288,7 +281,7 @@ async function importApprovedDirection({ srcCharDir, destDir, characterId, direc
   // layout — that path is already in `refs` and denotes the same file.
   const clipRel = runRel && `${runRel}/generated/${SOURCE_CLIP_NAME}`;
   if (clipRel && RUN_DIR_MATCH.test(runRel) && !refs.has(clipRel) && !refs.has(altRunLayoutPath(clipRel))
-      && (await resolveSourceRel(srcCharDir, clipRel))) {
+      && (await resolveDriftTolerantRel(srcCharDir, clipRel))) {
     refs.add(clipRel);
   }
   refs.delete(manifestRel);

@@ -30,7 +30,8 @@ import { GROK_TUI_ID } from '../../lib/grok.js';
 import { getSettings } from '../settings.js';
 import { getRecord, updateRecord } from './records.js';
 import {
-  spriteDir, resolveSpriteAssetPath, toRecordRelativeAssetPath, RUN_DIR_MATCH,
+  spriteDir, resolveSpriteAssetPath, toRecordRelativeAssetPath, altRunLayoutPath,
+  runDirOfPath, resolveDriftTolerantRel, isSourcePipelinePath, SOURCE_CLIP_NAME,
 } from './paths.js';
 import { requireCharacter, loadManifest } from './reference.js';
 import { SPRITE_DIRECTIONS, anchorIdForDirection, buildWalkVideoPrompt } from './prompts.js';
@@ -69,11 +70,13 @@ export const walkSetRelPath = (id) => `walk/${id}-walk-set-v1.json`;
 // `grok/` too (RUN_SCAN_DIRS) for pre-migration installs and forks, and
 // RUN_DIR_MATCH (paths.js) still accepts both prefixes.
 const runRelPath = (runId) => `runs/${runId}`;
-// The two on-disk homes a native candidate run can be found in: the neutral
-// `runs/` layout (all new generations, post-migration) and the legacy `grok/`
-// layout (a straggler on an un-migrated install/fork). Approved runs resolve
-// through their selection entry regardless, so this scan only has to cover
-// unapproved candidates.
+// The two on-disk homes a run can be found in: the neutral `runs/` layout (all
+// new generations, post-migration) and `grok/` — both a straggler on an
+// un-migrated install/fork AND where a source-pipeline import lands whenever its
+// own manifests declare that layout (migration 202 is one-shot per install, so it
+// never re-runs for an import that arrives afterwards). Approved runs resolve
+// through their selection entry, so the scan covers unapproved candidates plus
+// any run whose entry has been dropped by an unlock/reopen.
 const RUN_SCAN_DIRS = ['runs', 'grok'];
 const RUN_RECORD_NAME = 'animation-run.json';
 
@@ -91,16 +94,33 @@ async function loadWalkSet(recordId) {
 }
 
 // A phase-1 imported walk set (#2895) is copied verbatim from the source
-// pipeline: its selectionPath is repo-root-anchored (`art-source/sprites/…`)
-// and its packaged per-frame PNGs were never imported. Such a set has no
-// regenerable clips behind it, so it can neither be recompiled (atlas.js) nor
-// unlocked (unlockWalkSet) — both surface `LEGACY_IMPORTED_WALK_SET`. Single
-// source of truth for the marker so the three call sites (here, atlas.js, and
-// the client via the getWalkState flag) can't drift. The marker can sit at any
-// index (absolute/repo-prefixed variants), matching the importer's own
-// relToCharacterDir recognition — hence `includes`, not a prefix test.
+// pipeline: every embedded path stays anchored at the SOURCE repo root
+// (paths.js#isSourcePipelinePath) and its packaged per-frame PNGs were never
+// imported.
+/**
+ * The directions of a walk set that are STILL packaged by the source pipeline —
+ * their approved entry names the source tree, so their per-frame PNGs are not on
+ * disk here and only the source pipeline could have produced them.
+ *
+ * This is the precise, per-direction form of "imported" (#2993). Re-deriving a
+ * direction inside PortOS rewrites its entry through `approveWalkDirection`,
+ * which stores record-relative paths — so a re-derived direction drops out of
+ * this list and the set converges on compilable as the user works through it.
+ * A blanket set-level refusal could not express that partial state.
+ */
+export function importedWalkDirections(walkSet) {
+  return Object.entries(walkSet?.directions || {})
+    .filter(([, entry]) => isSourcePipelinePath(entry?.runPath) || isSourcePipelinePath(entry?.runManifest))
+    .map(([direction]) => direction);
+}
+
+// Whether a walk set carries ANY un-re-derived source-pipeline provenance:
+// either the set-level selection pointer or at least one direction entry. Single
+// source of truth for the marker so its call sites (atlas.js's recompile guard,
+// the un-finalize evidence gate below, and the client via the getWalkState flag)
+// can't drift.
 export const isImportedWalkSet = (walkSet) => (
-  typeof walkSet?.selectionPath === 'string' && walkSet.selectionPath.includes('art-source/sprites/')
+  isSourcePipelinePath(walkSet?.selectionPath) || importedWalkDirections(walkSet).length > 0
 );
 
 async function loadSelection(recordId) {
@@ -129,22 +149,84 @@ async function loadRunRecordAt(recordId, runDirRel) {
 }
 
 async function loadRunRecord(recordId, runId) {
-  // Runs the write-actions (generate/attach/rerun/approve) touch always live
-  // under the neutral runs/ layout: new generations write there, and migration
-  // 202 moves every legacy grok/ run there at boot before the first request.
-  // So resolve runs/ only — do NOT fall back to grok/ here. A grok/ straggler
-  // (un-migrated fork, or a record migration 202 skipped on a collision) is
-  // still DISPLAYED via getWalkState's dual-dir scan, but a mutation would need
-  // its files where the persisted runPath (runs/) and packageRun's output dir
-  // point, so acting on it before migration completes returns RUN_NOT_FOUND
-  // rather than silently splitting the run across two directories.
+  // Runs PortOS itself just wrote (generate → attach) always live under the
+  // neutral runs/ layout, so this straight lookup is exact for that path.
+  // Callers that may act on a run PortOS did not create (rerun, approve) go
+  // through `resolveRunById` instead — see there.
   return loadRunRecordAt(recordId, runRelPath(runId));
 }
 
-async function saveRunRecord(recordId, run) {
-  const dir = join(spriteDir(recordId), runRelPath(run.id));
+/**
+ * Locate a run under EITHER on-disk layout, returning the record together with
+ * the directory it ACTUALLY lives in.
+ *
+ * Migration 202 renamed pre-existing native `grok/<run-id>/` runs into the
+ * neutral `runs/` tree, but it is a one-shot per install: a source-pipeline
+ * import landing afterwards writes its runs wherever its own (hash-pinned)
+ * manifests declare — commonly `grok/<run-id>/` — so `runs/`-only resolution
+ * reports RUN_NOT_FOUND for a run that is right there on disk (#2993). Probing
+ * both layouts is only half the fix; the resolved directory has to be threaded
+ * into every subsequent write, which is why this returns it rather than just the
+ * record. That is what keeps a re-derive from splitting one run across two
+ * directories — the hazard the old `runs/`-only rule avoided by refusing outright.
+ */
+async function resolveRunAt(recordId, runDirRel) {
+  const candidates = [runDirRel, altRunLayoutPath(runDirRel)].filter(Boolean);
+  for (const rel of candidates) {
+    // eslint-disable-next-line no-await-in-loop -- ordered preference: stop at the layout that exists
+    const run = await loadRunRecordAt(recordId, rel);
+    if (run) return { run, runDirRel: rel };
+  }
+  return null;
+}
+
+const resolveRunById = (recordId, runId) => resolveRunAt(recordId, runRelPath(runId));
+
+async function saveRunRecordAt(recordId, run, runDirRel) {
+  const dir = join(spriteDir(recordId), runDirRel);
   await ensureDir(dir);
   await atomicWrite(join(dir, RUN_RECORD_NAME), run);
+}
+
+const saveRunRecord = (recordId, run) => saveRunRecordAt(recordId, run, runRelPath(run.id));
+
+// The record-relative path a selection / walk-set entry names its run by —
+// `runPath` first, then the manifest it declares. An imagegen redraw entry
+// resolves to a version directory rather than a run directory, which is what
+// `runDirOfPath` returning null downstream distinguishes.
+const entryLayoutPath = (recordId, entry) => toRecordRelativeAssetPath(recordId, entry?.runPath)
+  || toRecordRelativeAssetPath(recordId, entry?.runManifest);
+
+// The run directory a loaded run record implies, for a caller that has the
+// record but not the directory it came from. Every candidate field is
+// record-relative by the time a read-path consumer sees it (normalizeRunAssetPaths
+// / normalizeStripPreview), and any one of them pins the run dir.
+const runDirRelOf = (run) => runDirOfPath(run?.sourceVideoPath)
+  || runDirOfPath(run?.postprocessManifest)
+  || runDirOfPath(run?.stripPreview?.stripPath);
+
+/**
+ * The record-relative i2v clip a run can be re-derived from, or null when none
+ * is on disk.
+ *
+ * Two candidate names, each resolved drift-tolerantly (paths.js — the declared
+ * spelling or its run-layout twin): the clip the record declares, re-anchored
+ * since an imported record declares it against the SOURCE repo root, then the
+ * conventional `<run-dir>/generated/` name for a record that names none at all.
+ * Probed together rather than in sequence — a run whose clip is genuinely gone
+ * is re-checked on every poll, so the miss case must not cost a round trip per
+ * candidate.
+ */
+async function resolveRunClipRel(recordId, run, runDirRel) {
+  const dir = spriteDir(recordId);
+  // Deduped: a native run's declared clip IS the conventional path, and probing
+  // it twice would double the stats on the healthy majority.
+  const candidates = [...new Set([
+    toRecordRelativeAssetPath(recordId, run?.sourceVideoPath),
+    runDirRel ? `${runDirRel}/generated/${SOURCE_CLIP_NAME}` : null,
+  ].filter(Boolean))];
+  const resolved = await Promise.all(candidates.map((rel) => resolveDriftTolerantRel(dir, rel)));
+  return resolved.find(Boolean) || null;
 }
 
 async function requireUnfinalized(recordId) {
@@ -215,7 +297,14 @@ function normalizeRunAssetPaths(recordId, run) {
     const rel = out[field] && toRecordRelativeAssetPath(recordId, out[field]);
     if (rel && rel !== out[field]) out = { ...out, [field]: rel };
   }
-  return out;
+  // A run whose packaged manifest is STILL named against the source repo was
+  // packaged there, which means its per-frame images were never imported (the
+  // importer skips frames/). Stamped here because this is where that fact is
+  // still visible — one line up it has been re-anchored away — and it costs no
+  // I/O, unlike stat-ing every frame on a read the client polls. The client gates
+  // Approve on it: approving such a run 409s RUN_FRAMES_MISSING, and the flag
+  // clears by itself the moment a reprocess rewrites the manifest record-relative.
+  return isSourcePipelinePath(run.postprocessManifest) ? { ...out, importedPackaging: true } : out;
 }
 
 // A candidate/approved run's stripPreview names a packed strip PNG on disk. If
@@ -238,12 +327,44 @@ function normalizeRunAssetPaths(recordId, run) {
 // red error with the green "approved" badge. Keeping the status lets the client
 // route recovery correctly off `stripMissing` + the direction's approved/finalized
 // state (regenerate an unapproved candidate; unlock the set for a finalized one).
+//
+// Resolved drift-tolerantly, like the source clip below: an imported manifest can
+// name the strip under one run layout for a file stored under the other, and both
+// spellings denote the same PNG (paths.js#resolveDriftTolerantRel). Healing that
+// here — rather than only for the clip — is what keeps a drifted import from
+// badging "strip missing" over an intact strip, losing its loop preview, its trim
+// link, and its contribution to the set's packaged geometry.
 async function normalizeMissingStrip(recordId, run) {
   const stripPath = run?.stripPreview?.stripPath;
   if (!stripPath) return run;
-  if (await pathExists(join(spriteDir(recordId), stripPath))) return run;
+  const found = await resolveDriftTolerantRel(spriteDir(recordId), stripPath);
+  if (found === stripPath) return run;
+  if (found) return { ...run, stripPreview: { ...run.stripPreview, stripPath: found } };
   const { stripPath: _dropped, ...stripPreviewRest } = run.stripPreview;
   return { ...run, stripMissing: true, stripPreview: stripPreviewRest };
+}
+
+/**
+ * Fold a resolved i2v source clip onto a run, so "can this direction be
+ * re-derived?" is answered by evidence rather than by whether the record happens
+ * to name a clip (#2993).
+ *
+ * Three distinct outcomes, deliberately not collapsed: the clip is found (and
+ * `sourceVideoPath` is rewritten to where it actually is, healing a layout-drift
+ * mismatch for the player, the trimmer, and the re-derive); the record declares a
+ * clip that is NOT on disk, or names none while its run directory has none
+ * either (`sourceClipMissing: true`, the same read-time flag shape as
+ * `stripMissing`); or the run is an imagegen redraw cycle, which never had an
+ * i2v clip and is left untouched.
+ *
+ * The declared path is kept alongside the flag rather than dropped — it is the
+ * record's own provenance, and consumers gate on the flag. In memory only; the
+ * hash-pinned record on disk is never rewritten here.
+ */
+function applySourceClip(run, clipRel, runDirRel) {
+  if (clipRel) return clipRel === run.sourceVideoPath ? run : { ...run, sourceVideoPath: clipRel };
+  if (!runDirRel && !run?.sourceVideoPath) return run;
+  return { ...run, sourceClipMissing: true };
 }
 
 // PortOS stamps `id` on every run record it writes; imported source-pipeline
@@ -318,6 +439,14 @@ async function loadRedrawRun(recordId, direction, entry) {
     // manifest (frames[] + alignment), and approve/trim resolve it as one. A
     // redraw manifest is a different schema, so it gets a distinct field.
     redrawManifest: manifestRel,
+    // …which is also why the flag `normalizeRunAssetPaths` stamps off
+    // `postprocessManifest` has to be set explicitly here: a synthesized redraw
+    // run never passes through that normalizer, so without this it reads as
+    // PortOS-owned once the frozen walk set is gone, and the client would offer a
+    // Reopen the server refuses (a redraw entry names no run dir, so it has no
+    // clip to re-derive from — this is the pioneer `east` shape).
+    ...(isSourcePipelinePath(entry.runManifest) || isSourcePipelinePath(entry.runPath)
+      ? { importedPackaging: true } : {}),
     stripPreview: {
       stripPath,
       frameCount,
@@ -346,16 +475,28 @@ async function loadRedrawRun(recordId, direction, entry) {
  */
 async function loadRunForEntry(recordId, direction, entry) {
   // The run directory names the layout; fall back to the manifest's own path
-  // for an entry that carries only a manifest.
-  const layoutPath = toRecordRelativeAssetPath(recordId, entry.runPath)
-    || toRecordRelativeAssetPath(recordId, entry.runManifest);
+  // for an entry that carries only a manifest. An entry that declares one layout
+  // for a run stored under the other still resolves (`resolveRunAt`), and the
+  // directory it really came from is what the record is normalized against.
+  const layoutPath = entryLayoutPath(recordId, entry);
   if (!layoutPath) return null;
-  const runDirRel = RUN_DIR_MATCH.exec(layoutPath)?.[0];
+  const runDirRel = runDirOfPath(layoutPath);
   if (runDirRel) {
-    const run = await loadRunRecordAt(recordId, runDirRel);
-    return run ? normalizeRunRecord(recordId, run, runDirRel) : null;
+    const found = await resolveRunAt(recordId, runDirRel);
+    return found ? normalizeRunRecord(recordId, found.run, found.runDirRel) : null;
   }
   return loadRedrawRun(recordId, direction, entry);
+}
+
+/**
+ * The clip behind ONE approved direction, or null when that direction has
+ * nothing to re-derive from — the evidence the un-finalize gate below keys on.
+ */
+async function directionClipRel(recordId, entry) {
+  const runDirRel = runDirOfPath(entryLayoutPath(recordId, entry));
+  if (!runDirRel) return null;
+  const found = await resolveRunAt(recordId, runDirRel);
+  return resolveRunClipRel(recordId, found?.run, found?.runDirRel || runDirRel);
 }
 
 /**
@@ -440,8 +581,15 @@ export async function getWalkState(recordId) {
   // parent so the run loads from where it actually lives (a name could only
   // appear in one post-migration, but a fork/un-migrated install may still
   // have grok/).
+  // Any directory, not just PortOS's own `walk-<direction>-<id8>` naming: the
+  // source pipeline names its run directories freely (`run-1`, …), and those runs
+  // are reachable ONLY through a selection entry — so the moment unlock or reopen
+  // drops that entry (which is exactly when the user is about to re-derive them)
+  // a name-prefix scan made them vanish from the workflow. A directory with no
+  // `animation-run.json` loads as null and is filtered out below, so widening the
+  // scan costs one absent-file read per non-run directory and admits nothing new.
   const scanPromise = Promise.all(RUN_SCAN_DIRS.map((base) => readdir(join(spriteDir(recordId), base), { withFileTypes: true })
-    .then((entries) => entries.filter((e) => e.isDirectory() && e.name.startsWith('walk-')).map((e) => ({ base, name: e.name })))
+    .then((entries) => entries.filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => ({ base, name: e.name })))
     .catch(() => []))) // dir absent → no runs there yet
     .then((lists) => lists.flat());
   // The record read (for the publish binding's runtime contract) is independent
@@ -486,11 +634,32 @@ export async function getWalkState(recordId) {
   const allRuns = (await Promise.all(
     [...entryRuns, ...scannedRuns]
       .map(normalizeStaleRendering)
-      .map((run) => normalizeMissingStrip(recordId, run)),
+      // The strip and the clip are different files, so probe them CONCURRENTLY
+      // and merge — chaining would add a serialized stat per run to a read the
+      // client polls every few seconds while a run packages.
+      .map(async (run) => {
+        // Resolved from the ORIGINAL run: normalizeMissingStrip may drop a
+        // dangling stripPath, which is one of the fields the run directory is
+        // inferred from.
+        const runDirRel = runDirRelOf(run);
+        const [stripped, clip] = await Promise.all([
+          normalizeMissingStrip(recordId, run),
+          resolveRunClipRel(recordId, run, runDirRel),
+        ]);
+        return applySourceClip(stripped, clip, runDirRel);
+      }),
   )).sort((a, b) => runCreatedAtMs(b.createdAt) - runCreatedAtMs(a.createdAt));
-  // Stamp the imported flag so the client reads intent (`walkSet.imported`)
-  // instead of re-deriving the source-pipeline path convention itself.
-  const stampedWalkSet = walkSet ? { ...walkSet, imported: isImportedWalkSet(walkSet) } : null;
+  // Stamp the imported provenance so the client reads intent instead of
+  // re-deriving the source-pipeline path convention itself — and stamp the
+  // per-direction LIST alongside the boolean, because that is the precise fact:
+  // a direction leaves the list the moment it is re-derived here, so the client
+  // can gate each card (and name the blocking directions) on the same evidence
+  // the compiler will apply, not on a set-wide approximation.
+  const stampedWalkSet = walkSet ? {
+    ...walkSet,
+    imported: isImportedWalkSet(walkSet),
+    importedDirections: importedWalkDirections(walkSet),
+  } : null;
   const walkTarget = resolveWalkTargetFor({
     record: await recordPromise,
     selection,
@@ -812,9 +981,14 @@ export async function attachTuiWalkResult(recordId, runId, videoAbs) {
  * run record (candidate on success, captured error otherwise) — shared by
  * the completion-hook attach and the manual rerun so the two can't drift.
  * The caller persists the mutated record.
+ *
+ * `location` pins WHERE the run lives and which clip to read: the attach path
+ * omits it (PortOS just wrote the run under `runs/<id>/`), while a rerun that
+ * resolved the run under the other layout passes both, so the regenerated frames
+ * land beside the clip they came from instead of in a phantom twin directory.
  */
-async function packageRun(recordId, run, overrides = {}) {
-  const runRel = runRelPath(run.id);
+async function packageRun(recordId, run, overrides = {}, location = {}) {
+  const runRel = location.runDirRel || runRelPath(run.id);
   const runAbs = join(spriteDir(recordId), runRel);
   // Frame count + playback fps: an explicit reprocess override wins, else the
   // values stored at generate time, else the current defaults (older runs
@@ -824,12 +998,19 @@ async function packageRun(recordId, run, overrides = {}) {
   const fps = clampFps(overrides.fps ?? run.fps ?? WALK_DEFAULT_FPS);
   run.frameCount = frameCount;
   run.fps = fps;
-  // Record-relative path to grok's raw clip, stamped BEFORE the (possibly
-  // failing) postprocess so a run that errors in packaging still surfaces the
-  // video grok actually produced in the UI, not just the error text. Set here
-  // (shared by attach + rerun) so a retry backfills it onto an older run too.
-  run.sourceVideoPath = `${runRel}/generated/source-video.mp4`;
+  // Record-relative path to the raw clip, stamped BEFORE the (possibly failing)
+  // postprocess so a run that errors in packaging still surfaces the video grok
+  // actually produced in the UI, not just the error text. Set here (shared by
+  // attach + rerun) so a retry backfills it onto an older run too — and for an
+  // imported run that means persisting the record-relative form in place of the
+  // source-repo anchor its manifest was copied with.
+  run.sourceVideoPath = location.clipRel || `${runRel}/generated/${SOURCE_CLIP_NAME}`;
   try {
+    // Inside the try on purpose: unlike the old `join(runAbs, …)` this can throw
+    // (the confinement gate), and this function's contract is that a packaging
+    // failure is CAPTURED onto the run record — a throw escaping here would
+    // strand an attach at 'postprocessing' with no error text.
+    const videoAbs = resolveSpriteAssetPath(recordId, run.sourceVideoPath);
     const manifest = await loadManifest(recordId);
     const anchor = manifest?.anchors?.find((a) => a.direction === run.direction);
     if (!anchor?.path) throw new Error(`No locked ${run.direction} anchor in the reference manifest`);
@@ -841,7 +1022,7 @@ async function packageRun(recordId, run, overrides = {}) {
       runRel,
       anchorRel: anchor.path,
       anchorAbs: resolveSpriteAssetPath(recordId, anchor.path),
-      videoAbs: join(runAbs, 'generated', 'source-video.mp4'),
+      videoAbs,
       frameCount,
       fps,
     });
@@ -870,25 +1051,32 @@ export function rerunWalkPostprocess(recordId, { runId, frameCount, fps }) {
 async function rerunWalkPostprocessImpl(recordId, runId, overrides) {
   await requireCharacter(recordId);
   await requireUnfinalized(recordId);
-  const run = await loadRunRecord(recordId, runId);
-  if (!run) throw new ServerError(`Unknown walk run: ${runId}`, { status: 404, code: 'RUN_NOT_FOUND' });
+  // Layout-aware (#2993): an imported run commonly lives under `grok/<run-id>/`,
+  // and its regenerated frames + record must go back to that same directory.
+  const found = await resolveRunById(recordId, runId);
+  if (!found) throw new ServerError(`Unknown walk run: ${runId}`, { status: 404, code: 'RUN_NOT_FOUND' });
+  const { run, runDirRel } = found;
   // One state read serves both the immutability check and the target below.
   const { walkTarget, selection } = await getWalkState(recordId);
   if (selection?.directions?.[run.direction]?.runId === runId) {
     throw new ServerError('Run is approved — approved runs are immutable', { status: 409, code: 'RUN_APPROVED' });
   }
-  const videoAbs = join(spriteDir(recordId), runRelPath(runId), 'generated', 'source-video.mp4');
-  if (!await pathExists(videoAbs)) {
+  const clipRel = await resolveRunClipRel(recordId, run, runDirRel);
+  if (!clipRel) {
     throw new ServerError('Run has no source video yet', { status: 409, code: 'VIDEO_NOT_READY' });
   }
   // Same set-level gate as generation (#2985): a reprocess is exactly how a
   // drifted direction is brought INTO line with the target, so it must land on
   // the target — not somewhere new. An omitted override adopts the target.
   const geometry = await resolveRenderGeometry(recordId, { walkTarget, selection }, overrides);
+  // An imported record carries no `id` at all; stamp the run directory's name
+  // (what every reader already falls back to) so the re-derived record is
+  // self-describing from here on.
+  if (!run.id) run.id = runId;
   // Reprocess the SAME on-disk clip at the pinned frame count / playback speed —
   // no grok call, no regeneration.
-  await packageRun(recordId, run, geometry);
-  await saveRunRecord(recordId, run);
+  await packageRun(recordId, run, geometry, { runDirRel, clipRel });
+  await saveRunRecordAt(recordId, run, runDirRel);
   if (run.status === 'error') {
     throw new ServerError(`Postprocess failed: ${run.postprocessError}`, { status: 422, code: 'POSTPROCESS_FAILED' });
   }
@@ -918,26 +1106,87 @@ export function approveWalkDirection(recordId, args) {
  * the original finalize did. The record status drops back to
  * `reference-complete` (all anchors locked, walk in progress).
  *
- * Legacy source-pipeline imports (#2895) are refused: their walk set was copied
- * byte-for-byte from `art-source/sprites/` with no `grok/` candidate runs behind
- * it, so unlocking would strand the record with nothing to regenerate from —
- * the same reason atlas.js refuses to recompile them (#2918).
+ * A source-pipeline import (#2895) is refused only when it genuinely has nothing
+ * to re-derive from — see `assertReDerivable`.
  */
 export function unlockWalkSet(recordId) {
   return walkWriteTail(recordId, () => unlockWalkSetImpl(recordId));
 }
 
-// Imported source-pipeline sets carry no regenerable clips, so unlocking or
-// reopening would strand the record with nothing to regenerate from — refuse
-// both through one shared message (the `verb` is the only difference). No-op for
-// a native set (or no set at all).
-function assertNotImportedWalkSet(walkSet, verb) {
-  if (walkSet && isImportedWalkSet(walkSet)) {
-    throw new ServerError(
-      `This walk set was imported from the source pipeline and has no regenerable clips — ${verb} is not supported. Create a new character version to revise it.`,
-      { status: 409, code: 'LEGACY_IMPORTED_WALK_SET' },
-    );
+/**
+ * The directions among `scope` that have no clip on disk to re-derive from.
+ * Bounded at eight, so fan out rather than walking them serially — the path that
+ * examines every direction is the refusal path.
+ */
+async function directionsWithoutClip(recordId, walkSet, scope) {
+  const clips = await Promise.all(scope
+    .map((direction) => directionClipRel(recordId, walkSet.directions?.[direction])));
+  return scope.filter((_, i) => !clips[i]);
+}
+
+const notReDerivable = (detail) => new ServerError(
+  `${detail} Re-import this character to bring its walk clips across, or create a new character version to revise it.`,
+  { status: 409, code: 'LEGACY_IMPORTED_WALK_SET' },
+);
+
+/**
+ * Refuse un-finalizing an imported walk set that has nothing to re-derive from.
+ *
+ * The original guard refused EVERY imported set, on the stated grounds that it
+ * "has no regenerable clips behind it" — true when it was written, and false
+ * since #2984 taught the importer to copy each run's `source-video.mp4`. So the
+ * gate now keys on the evidence the justification always named: is a clip
+ * actually on disk? (#2993)
+ *
+ * Provenance still selects WHO gets examined, and only that: a native set is
+ * never gated, exactly as before — a user who cleaned up their own rendered
+ * clips must not suddenly find Unlock refused.
+ *
+ * The scope is what separates the two callers, and it is not cosmetic. `reopen`
+ * un-approves ONE direction, so one direction's clip is the whole question.
+ * `unlock` drops EVERY approval and the frozen set with them — and a
+ * source-packaged direction with no clip can be neither reprocessed (nothing to
+ * re-derive from) nor re-approved (its frames were never imported, so
+ * RUN_FRAMES_MISSING), which would strand that direction permanently with no way
+ * back short of re-importing. So unlock requires that every still-imported
+ * direction be re-derivable, and names the ones that aren't — pointing at the
+ * per-direction reopen, which is safe precisely because it leaves the rest frozen.
+ */
+async function assertSetReDerivable(recordId, walkSet) {
+  if (!isImportedWalkSet(walkSet)) return;
+  const stale = importedWalkDirections(walkSet);
+  // Marked imported at the SET level with no source-packaged direction to
+  // examine (an empty or already-re-anchored `directions` map behind a copied
+  // selectionPath): no evidence either way, so keep the blanket refusal.
+  if (!stale.length) {
+    throw notReDerivable('This walk set was imported from the source pipeline and carries no directions that can be re-derived here — unlocking is not supported.');
   }
+  const stranded = await directionsWithoutClip(recordId, walkSet, stale);
+  if (!stranded.length) return;
+  throw notReDerivable(
+    `Unlocking re-opens every direction, and ${stranded.join(', ')} would be left with no source clip to re-derive from and no packaged frames to re-approve — so ${stranded.length === 1 ? 'it' : 'they'} could not be brought back. Reopen the directions that do have clips one at a time instead.`,
+  );
+}
+
+/**
+ * Reopen's per-direction twin of the gate above.
+ *
+ * Keyed on the DIRECTION's own entry as well as the frozen set, because reopen
+ * un-freezes: after the first one `loadWalkSet` returns null, so a gate that
+ * consulted only the walk set would be dead for every reopen after it — and a
+ * clipless source-packaged direction could still be stranded, two clicks in,
+ * by following the advice the unlock refusal prints. The entry survives the
+ * un-freeze and carries the same provenance. The set-level marker stays in the
+ * OR so a copied `selectionPath` with entries that name no run at all is still
+ * refused, as it was before evidence entered the picture.
+ */
+async function assertDirectionReDerivable(recordId, walkSet, entry, direction) {
+  const imported = isSourcePipelinePath(entry?.runPath)
+    || isSourcePipelinePath(entry?.runManifest)
+    || isImportedWalkSet(walkSet);
+  if (!imported) return;
+  if (await directionClipRel(recordId, entry)) return;
+  throw notReDerivable(`The ${direction} direction is still packaged by the source pipeline and has no source clip on disk — reopening is not supported, because there would be nothing to re-derive from and its packaged frames were never imported.`);
 }
 
 // Un-finalize: drop the canonical "finalized" signal (the walk-set file) FIRST,
@@ -956,7 +1205,7 @@ async function unlockWalkSetImpl(recordId) {
   if (!walkSet) {
     throw new ServerError('No finalized walk set to unlock', { status: 409, code: 'WALK_SET_NOT_FINAL' });
   }
-  assertNotImportedWalkSet(walkSet, 'unlocking');
+  await assertSetReDerivable(recordId, walkSet);
   await dropFinalizedWalkSet(recordId);
   // Seed a fresh (empty) selection so EVERY direction re-opens: with the walk
   // set gone each direction would still read `approved` from the old selection
@@ -986,8 +1235,8 @@ async function unlockWalkSetImpl(recordId) {
  * every OTHER direction's selection entry intact, so re-freezing is a single
  * re-approval of the one direction rather than all eight. The rendered clip is
  * preserved on disk, so the reopened direction can be reprocessed at a new
- * speed/frame-count with no regeneration. Imported sets have no regenerable
- * clips and are refused (mirrors unlock).
+ * speed/frame-count with no regeneration. An imported direction is refused only
+ * when its clip is genuinely absent (mirrors unlock — see `assertReDerivable`).
  */
 export function reopenWalkDirection(recordId, { direction }) {
   return walkWriteTail(recordId, () => reopenWalkDirectionImpl(recordId, direction));
@@ -995,9 +1244,11 @@ export function reopenWalkDirection(recordId, { direction }) {
 
 async function reopenWalkDirectionImpl(recordId, direction) {
   await requireCharacter(recordId);
-  const walkSet = await loadWalkSet(recordId);
-  assertNotImportedWalkSet(walkSet, 'reopening');
-  const selection = (await loadSelection(recordId)) || seedSelection(recordId);
+  const [walkSet, loaded] = await Promise.all([loadWalkSet(recordId), loadSelection(recordId)]);
+  const selection = loaded || seedSelection(recordId);
+  // The selection entry is the gate's evidence, so it is read BEFORE the
+  // re-derivability check (which needs it) and before the approval check.
+  await assertDirectionReDerivable(recordId, walkSet, selection.directions?.[direction], direction);
   if (selection.directions?.[direction]?.status !== 'approved') {
     throw new ServerError(`Direction ${direction} is not approved`, { status: 409, code: 'DIRECTION_NOT_APPROVED' });
   }
@@ -1016,8 +1267,11 @@ async function reopenWalkDirectionImpl(recordId, direction) {
 async function approveWalkDirectionImpl(recordId, { direction, runId }) {
   await requireCharacter(recordId);
   await requireUnfinalized(recordId);
-  const run = await loadRunRecord(recordId, runId);
-  if (!run) throw new ServerError(`Unknown walk run: ${runId}`, { status: 404, code: 'RUN_NOT_FOUND' });
+  // Layout-aware, like the rerun above: a re-derived import stays in the run
+  // directory it was imported into, and its approval must record THAT path.
+  const found = await resolveRunById(recordId, runId);
+  if (!found) throw new ServerError(`Unknown walk run: ${runId}`, { status: 404, code: 'RUN_NOT_FOUND' });
+  const { run, runDirRel } = found;
   if (run.direction !== direction) {
     throw new ServerError(`Run ${runId} animates "${run.direction}", not "${direction}"`, { status: 400, code: 'RUN_DIRECTION_MISMATCH' });
   }
@@ -1031,9 +1285,9 @@ async function approveWalkDirectionImpl(recordId, { direction, runId }) {
   // declared frameCount must match the actual packed frames. Cross-direction
   // consistency against the SET target is enforced below (#2985); atlas.js keeps
   // its own compile-time check as the backstop for imported/legacy sets.
-  // `loadRunRecord` deliberately returns the RAW record (its results flow into
-  // saveRunRecord elsewhere, and an imported manifest's bytes are hash-pinned to
-  // the source), so re-anchor the repo-anchored path here at the point of use
+  // `resolveRunById` deliberately returns the RAW record (its results flow into
+  // saveRunRecordAt elsewhere, and an imported manifest's bytes are hash-pinned
+  // to the source), so re-anchor the repo-anchored path here at the point of use
   // rather than in the loader — same fixup normalizeRunRecord applies to the
   // read-only view (#2978).
   const manifestRel = toRecordRelativeAssetPath(recordId, run.postprocessManifest)
@@ -1061,6 +1315,26 @@ async function approveWalkDirectionImpl(recordId, { direction, runId }) {
   if (!await pathExists(stripAbs) || await sha256File(stripAbs) !== packaged.stripSha256) {
     throw new ServerError('Packed strip is missing or was modified after packaging', { status: 409, code: 'RUN_STRIP_INVALID' });
   }
+  // The per-frame images the manifest declares must be on disk too. Approval is
+  // what freezes this direction into the set the compiler reads, and the compiler
+  // verifies every frame's BYTES — so a manifest whose frames were never written
+  // here (exactly the shape a source-pipeline import has: its manifest was copied,
+  // its frames/ was not) would sail through the strip check above and surface at
+  // compile time as an unexplained sha mismatch. Refuse it where the cause is
+  // still legible, and name the remedy. A minimal manifest that declares no
+  // frames[] is unchanged — the strip sha stays the primary tamper check. (#2993)
+  const framePaths = (Array.isArray(packaged.frames) ? packaged.frames : [])
+    .map((frame) => toRecordRelativeAssetPath(recordId, frame?.path))
+    .filter(Boolean);
+  const framesOnDisk = await Promise.all(framePaths
+    .map((rel) => pathExists(join(spriteDir(recordId), rel))));
+  const missingFrames = framesOnDisk.filter((present) => !present).length;
+  if (missingFrames) {
+    throw new ServerError(
+      `${missingFrames} of this run's ${framePaths.length} packaged frames are missing on disk — reprocess the direction from its source clip to re-derive them before approving.`,
+      { status: 409, code: 'RUN_FRAMES_MISSING' },
+    );
+  }
 
   // Approval — not generation — is the moment a direction's geometry gets frozen
   // into the set the compiler will read, so the target has to hold HERE too. The
@@ -1080,7 +1354,7 @@ async function approveWalkDirectionImpl(recordId, { direction, runId }) {
   selection.directions[direction] = {
     status: 'approved',
     runId,
-    runPath: runRelPath(runId),
+    runPath: runDirRel,
     // Store the re-anchored path: the selection is PortOS-owned state (unlike the
     // hash-pinned imported manifest), and every reader already normalizes it.
     runManifest: manifestRel,

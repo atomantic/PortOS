@@ -459,10 +459,10 @@ describe('WalkWorkflow reprocess + reopen', () => {
     expect(reopenSpriteWalk).toHaveBeenCalledWith('example-walker', { direction: 'east' }, { silent: true });
   });
 
-  it('hides Reopen on a source-pipeline import, whose server refuses it', async () => {
-    // An imported set has no regenerable clips behind it, so reopen (like
-    // unlock) always 409s LEGACY_IMPORTED_WALK_SET — offering the button would
-    // guarantee an error on click. The remedy is a new character version.
+  it('hides Reopen on an import whose clip is not on disk, whose server refuses it', async () => {
+    // An imported direction with no clip behind it has nothing to re-derive
+    // from, so reopen (like unlock) 409s LEGACY_IMPORTED_WALK_SET — offering the
+    // button would guarantee an error on click. The remedy is re-importing.
     render(
       <MemoryRouter>
         <WalkWorkflow
@@ -485,6 +485,156 @@ describe('WalkWorkflow reprocess + reopen', () => {
       </MemoryRouter>,
     );
     expect(screen.queryByRole('button', { name: /^Reopen$/ })).toBeNull();
-    expect(screen.getByText(/imported · new version to revise/)).toBeTruthy();
+    expect(screen.getByText(/imported · no clips to re-derive/)).toBeTruthy();
+  });
+
+  // #2993: since the importer brings each run's clip across, an imported
+  // direction with its clip on disk is re-derivable exactly like a native one —
+  // the server allows reopen/unlock there, so the affordances must be offered.
+  // The gate is the clip, not the import label.
+  it('offers Reopen and Unlock on an import whose clip IS on disk', async () => {
+    render(
+      <MemoryRouter>
+        <WalkWorkflow
+          record={{ id: 'example-walker' }}
+          reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked' }] } }}
+          walk={{
+            runs: [{
+              id: 'run-east',
+              direction: 'east',
+              status: 'approved',
+              sourceVideoPath: 'grok/run-east/generated/source-video.mp4',
+              stripPreview: {
+                stripPath: 'grok/run-east/generated/strip.png', frameCount: 12, fps: 10, cellWidth: 384, cellHeight: 384,
+              },
+            }],
+            selection: { directions: { east: { status: 'approved', runId: 'run-east' } } },
+            walkSet: { imported: true, importedDirections: ['east'], directions: { east: { status: 'approved' } } },
+            walkTarget: {
+              frameCount: 12, fps: 10, source: 'derived', sourceLabel: 'from the first approved direction', drift: [],
+            },
+          }}
+          renders={noRenders()}
+          duration={6}
+          onDurationChange={vi.fn()}
+          onGenerate={vi.fn()}
+          onChanged={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole('button', { name: /^Reopen$/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Unlock$/ })).toBeTruthy();
+    expect(screen.queryByText(/no clips to re-derive/)).toBeNull();
+  });
+
+  // Unlock re-opens every direction, so the server refuses it unless EVERY
+  // still-imported direction has a clip — a stranded one could be neither
+  // reprocessed nor re-approved. The header must mirror that scope rather than
+  // "any run anywhere has a clip", or it offers a guaranteed 409.
+  it('hides Unlock when one imported direction has no clip, while Reopen stays on the one that does', async () => {
+    render(
+      <MemoryRouter>
+        <WalkWorkflow
+          record={{ id: 'example-walker' }}
+          reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked' }] } }}
+          walk={{
+            runs: [{
+              id: 'run-east',
+              direction: 'east',
+              status: 'approved',
+              sourceVideoPath: 'grok/run-east/generated/source-video.mp4',
+              stripPreview: {
+                stripPath: 'grok/run-east/generated/strip.png', frameCount: 12, fps: 10, cellWidth: 384, cellHeight: 384,
+              },
+            }],
+            selection: { directions: { east: { status: 'approved', runId: 'run-east' } } },
+            walkSet: {
+              imported: true,
+              importedDirections: ['east', 'north'],
+              directions: { east: { status: 'approved' }, north: { status: 'approved' } },
+            },
+            walkTarget: {
+              frameCount: 12, fps: 10, source: 'derived', sourceLabel: 'from the first approved direction', drift: [],
+            },
+          }}
+          renders={noRenders()}
+          duration={6}
+          onDurationChange={vi.fn()}
+          onGenerate={vi.fn()}
+          onChanged={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole('button', { name: /^Unlock$/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /^Reopen$/ })).toBeTruthy();
+  });
+
+  // Once a set is un-frozen (an unlock, or a reopen of some OTHER direction)
+  // there is no walkSet to carry the imported flag — but the still-approved
+  // directions behind it must stay gated, or a clipless one is strandable by
+  // clicking twice. The run's own `importedPackaging` is what survives.
+  it('keeps a clipless imported direction gated after the set is un-frozen', async () => {
+    render(
+      <MemoryRouter>
+        <WalkWorkflow
+          record={{ id: 'example-walker' }}
+          reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked' }] } }}
+          walk={{
+            runs: [{
+              id: 'run-east',
+              direction: 'east',
+              status: 'approved',
+              importedPackaging: true,
+              stripPreview: { stripPath: 'grok/run-east/generated/strip.png', frameCount: 12, fps: 10, cellWidth: 384, cellHeight: 384 },
+            }],
+            selection: { directions: { east: { status: 'approved', runId: 'run-east' } } },
+            walkSet: null,
+            walkTarget: {
+              frameCount: 12, fps: 10, source: 'derived', sourceLabel: 'from the first approved direction', drift: [],
+            },
+          }}
+          renders={noRenders()}
+          duration={6}
+          onDurationChange={vi.fn()}
+          onGenerate={vi.fn()}
+          onChanged={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole('button', { name: /^Reopen$/ })).toBeNull();
+  });
+
+  // The set-level flag stays true while ANY direction is still source-packaged,
+  // so a card must read the per-direction list the server stamps — otherwise a
+  // direction already re-derived here keeps being treated as un-reopenable.
+  it('reads the per-direction imported list, not the set-level flag', async () => {
+    render(
+      <MemoryRouter>
+        <WalkWorkflow
+          record={{ id: 'example-walker' }}
+          reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked' }] } }}
+          walk={{
+            // East carries no clip, but it is NOT in importedDirections — it was
+            // already re-derived here, so the server no longer refuses it.
+            runs: [{ id: 'run-east', direction: 'east', status: 'approved', stripPreview: { stripPath: 'runs/run-east/generated/strip.png', frameCount: 12, fps: 10, cellWidth: 384, cellHeight: 384 } }],
+            selection: { directions: { east: { status: 'approved', runId: 'run-east' } } },
+            walkSet: {
+              imported: true,
+              importedDirections: ['north'],
+              directions: { east: { status: 'approved' }, north: { status: 'approved' } },
+            },
+            walkTarget: {
+              frameCount: 12, fps: 10, source: 'derived', sourceLabel: 'from the first approved direction', drift: [],
+            },
+          }}
+          renders={noRenders()}
+          duration={6}
+          onDurationChange={vi.fn()}
+          onGenerate={vi.fn()}
+          onChanged={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole('button', { name: /^Reopen$/ })).toBeTruthy();
   });
 });
