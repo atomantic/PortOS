@@ -34,6 +34,25 @@ async function writeCandidate(path, { bg = MAGENTA, fg = GREEN } = {}) {
   await sharp(buf, { raw: { width: w, height: h, channels: 3 } }).png().toFile(path);
 }
 
+// 64×64 magenta bg + green rect, with one anti-aliased fringe column (0.8
+// magenta / 0.2 green = (204,51,204)) just left of the rect — a blend that
+// survives the hard mask but still carries the magenta key's tint.
+async function writeFringeCandidate(path) {
+  const w = 64; const h = 64;
+  const FRINGE = { r: 204, g: 51, b: 204 };
+  const buf = Buffer.alloc(w * h * 3);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let c = MAGENTA;
+      if (x >= 20 && x < 30 && y >= 10 && y < 30) c = GREEN;
+      else if (x === 19 && y >= 10 && y < 30) c = FRINGE;
+      const i = (y * w + x) * 3;
+      buf[i] = c.r; buf[i + 1] = c.g; buf[i + 2] = c.b;
+    }
+  }
+  await sharp(buf, { raw: { width: w, height: h, channels: 3 } }).png().toFile(path);
+}
+
 async function readRaw(path) {
   const { data, info } = await sharp(path).raw().toBuffer({ resolveWithObject: true });
   return { data, width: info.width, height: info.height };
@@ -87,6 +106,36 @@ describe('normalizeAnchorFrame', () => {
     const img = await readRaw(dest);
     expect(px(img, 7, 3)).toEqual(BLACK);
     expect(px(img, 0, 0)).toEqual(BLUE);
+  });
+
+  it('decontaminates anti-aliased key fringe when re-keying magenta → blue', async () => {
+    const src = join(dir, 'fringe.png');
+    const dest = join(dir, 'fringe-out.png');
+    await writeFringeCandidate(src);
+    await normalizeAnchorFrame(src, dest, { maskKeyHex: '#FF00FF', canvasKeyHex: '#0000FF' });
+    const img = await readRaw(dest);
+    let magentaHalo = 0; let greenKept = 0;
+    for (let p = 0; p < img.width * img.height; p++) {
+      const r = img.data[p * 3]; const g = img.data[p * 3 + 1]; const b = img.data[p * 3 + 2];
+      if (r > 150 && b > 150 && g < 120) magentaHalo++; // residual old-key ring
+      if (g > 200 && r < 80 && b < 80) greenKept++;      // character pixels
+    }
+    expect(magentaHalo).toBe(0);              // no magenta halo survives the re-key
+    expect(greenKept).toBeGreaterThan(0);     // the character itself is untouched
+  });
+
+  it('copies fringe through verbatim when the key is not swapped', async () => {
+    const src = join(dir, 'fringe2.png');
+    const dest = join(dir, 'fringe2-out.png');
+    await writeFringeCandidate(src);
+    await normalizeAnchorFrame(src, dest, { maskKeyHex: '#FF00FF', canvasKeyHex: '#FF00FF' });
+    const img = await readRaw(dest);
+    let fringe = 0;
+    for (let p = 0; p < img.width * img.height; p++) {
+      const r = img.data[p * 3]; const g = img.data[p * 3 + 1]; const b = img.data[p * 3 + 2];
+      if (r === 204 && g === 51 && b === 204) fringe++;
+    }
+    expect(fringe).toBeGreaterThan(0); // same-key composite leaves the blend as-is
   });
 
   it('copies through an image with no detectable foreground', async () => {

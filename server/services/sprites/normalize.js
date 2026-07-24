@@ -16,11 +16,20 @@
  * pixel is foreground when max-channel |pixel − key| > 40 — a DELIBERATE
  * deviation from the source's luma metric, which is blind to black-vs-blue
  * (see MASK_CHANNEL_THRESHOLD).
+ *
+ * Fringe decontamination: the hard mask keeps anti-aliased edge pixels
+ * that are a BLEND of the character and the generation key. When lock swaps the
+ * key (dynamic selection composites onto a key different from the one the
+ * candidate was masked against), those fringe pixels still carry the OLD key's
+ * tint — a magenta ring on a magenta→blue re-key. Each surviving foreground
+ * pixel is shifted by keyShare·(newKey − oldKey), the same straight-alpha
+ * recomposite `recoverAlphaFrame` performs, so the residual old key is replaced
+ * by the correct amount of the new key. A no-op when the keys match.
  */
 
 import sharp from 'sharp';
 import { copyFile } from 'fs/promises';
-import { hexToRgb } from './chromaKey.js';
+import { hexToRgb, keyChannelSplit, keyShareFn } from './chromaKey.js';
 
 const FRAME_HEIGHT_FRAC = 0.80;
 const FRAME_BOTTOM_FRAC = 0.07;
@@ -70,7 +79,32 @@ export async function analyzeForeground(src, maskKeyHex) {
     }
   }
   const bbox = right >= 0 ? { left, top, right: right + 1, bottom: bottom + 1 } : null;
-  return { data, width, height, mask, bbox };
+  // maskKeyHex rides along so the composite can decontaminate fringe pixels
+  // when it re-keys onto a DIFFERENT canvas key (see normalizeFromAnalysis).
+  return { data, width, height, mask, bbox, maskKey: maskKeyHex };
+}
+
+const clampByte = (v) => Math.max(0, Math.min(255, Math.round(v)));
+
+/**
+ * Build the per-pixel fringe decontaminator for a mask-key → canvas-key swap,
+ * or null when no swap happens (keys equal, or the mask key is unknown). Reuses
+ * the shared `keyShareFn` unmix (the same one recoverAlphaFrame runs) to measure
+ * how much old key each foreground pixel still carries, then shifts it by
+ * share·(newKey − oldKey) so the old key is replaced by the correct amount of
+ * the new one — the opaque source-over analogue of recoverAlphaFrame's straight-
+ * alpha recomposite.
+ */
+function buildKeyDecontaminator(maskKeyHex, canvasKeyHex) {
+  if (typeof maskKeyHex !== 'string' || maskKeyHex.toUpperCase() === canvasKeyHex.toUpperCase()) {
+    return null;
+  }
+  const oldKey = hexToRgb(maskKeyHex);
+  const newKey = hexToRgb(canvasKeyHex);
+  return {
+    delta: [newKey.r - oldKey.r, newKey.g - oldKey.g, newKey.b - oldKey.b],
+    share: keyShareFn([oldKey.r, oldKey.g, oldKey.b], keyChannelSplit(maskKeyHex)),
+  };
 }
 
 /**
@@ -107,7 +141,7 @@ export async function extractForegroundPalette(src, maskKeyHex) {
  * `src` is still needed for the no-foreground copy-through path.
  */
 export async function normalizeFromAnalysis(analysis, src, dest, canvasKeyHex) {
-  const { data, width, mask, bbox } = analysis;
+  const { data, width, mask, bbox, maskKey } = analysis;
   if (!bbox) {
     await copyFile(src, dest);
     return { copiedThrough: true };
@@ -123,14 +157,25 @@ export async function normalizeFromAnalysis(analysis, src, dest, canvasKeyHex) {
   const offsetX = Math.floor((side - charW) / 2);
   const feetY = side - Math.round(side * FRAME_BOTTOM_FRAC);
   const offsetY = feetY - charH;
+  // Non-null only when the composite re-keys onto a different canvas — then the
+  // anti-aliased fringe that survived the hard mask is decontaminated of the
+  // old key it still carries; otherwise foreground pixels copy through verbatim.
+  const decon = buildKeyDecontaminator(maskKey, canvasKeyHex);
   for (let y = bbox.top; y < bbox.bottom; y++) {
     for (let x = bbox.left; x < bbox.right; x++) {
       if (!mask[y * width + x]) continue;
       const srcI = (y * width + x) * 3;
       const dstI = ((offsetY + (y - bbox.top)) * side + offsetX + (x - bbox.left)) * 3;
-      canvas[dstI] = data[srcI];
-      canvas[dstI + 1] = data[srcI + 1];
-      canvas[dstI + 2] = data[srcI + 2];
+      if (decon) {
+        const share = decon.share(data, srcI);
+        canvas[dstI] = clampByte(data[srcI] + share * decon.delta[0]);
+        canvas[dstI + 1] = clampByte(data[srcI + 1] + share * decon.delta[1]);
+        canvas[dstI + 2] = clampByte(data[srcI + 2] + share * decon.delta[2]);
+      } else {
+        canvas[dstI] = data[srcI];
+        canvas[dstI + 1] = data[srcI + 1];
+        canvas[dstI + 2] = data[srcI + 2];
+      }
     }
   }
   await sharp(canvas, { raw: { width: side, height: side, channels: 3 } }).png().toFile(dest);
