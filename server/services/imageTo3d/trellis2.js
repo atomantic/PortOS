@@ -22,6 +22,7 @@ import { existsSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
+import { killWithEscalation } from '../../lib/killWithEscalation.js';
 
 const HOME = homedir();
 const IS_WIN = platform() === 'win32';
@@ -278,10 +279,16 @@ export function installTrellis2({
  * from a cold boot. `spawnImpl`/`exists` are injectable so the wiring (right command,
  * progress streaming, resolve-with-asset) is unit-testable without a real render.
  *
+ * Returns `{ promise, kill }` (mirroring `installTrellis2`) so a caller can
+ * terminate the render mid-flight — e.g. when the user deletes the record while
+ * its GLB is still rendering. `kill` routes through the shared
+ * `killWithEscalation` (SIGTERM, then SIGKILL after a grace window if the child
+ * ignored it), the same cancel convention every other spawn-based media job uses.
+ *
  * @param {{imagePath: string, outputPath?: string, base?: string,
  *          onProgress?: (frame: object) => void,
  *          spawnImpl?: Function, exists?: (p: string) => boolean}} opts
- * @returns {Promise<{assetPath: string}>}
+ * @returns {{promise: Promise<{assetPath: string}>, kill: () => void}}
  */
 export function runTrellis2Generate({
   imagePath,
@@ -294,14 +301,14 @@ export function runTrellis2Generate({
   if (!isTrellis2Installed({ base, exists })) {
     const err = new Error('TRELLIS.2 is not installed — install it before generating.');
     err.code = 'TRELLIS2_NOT_INSTALLED';
-    return Promise.reject(err);
+    return { promise: Promise.reject(err), kill: () => {} };
   }
   const { command, args } = buildGenerateArgs({ imagePath, outputPath, base });
-  return new Promise((resolve, reject) => {
-    // Child-process boundary — errors surface via the 'error'/'close' events, not a
-    // throw into the request lifecycle (CLAUDE.md child-process exception).
-    const child = spawnImpl(command, args, { cwd: trellis2Root(base) });
-    let assetPath = outputPath || null;
+  // Child-process boundary — errors surface via the 'error'/'close' events, not a
+  // throw into the request lifecycle (CLAUDE.md child-process exception).
+  const child = spawnImpl(command, args, { cwd: trellis2Root(base) });
+  let assetPath = outputPath || null;
+  const promise = new Promise((resolve, reject) => {
     const ingest = (buf) => {
       for (const line of String(buf).split('\n')) {
         const frame = parseGenerateProgress(line);
@@ -325,4 +332,8 @@ export function runTrellis2Generate({
       reject(err);
     });
   });
+  // Single captured child, never replaced — the helper's own exit check gates the
+  // SIGKILL escalation, so `stillRunning` is unconditionally true here.
+  const kill = () => killWithEscalation(child, { label: 'trellis2 generate', stillRunning: () => true });
+  return { promise, kill };
 }

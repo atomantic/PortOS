@@ -17,6 +17,7 @@
 
 import { randomUUID } from 'crypto';
 import { join } from 'node:path';
+import { rm } from 'node:fs/promises';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, resolveGalleryImage, ensureDir } from '../../lib/fileUtils.js';
 import { slugifyForFilename } from '../../lib/civitai.js';
@@ -26,12 +27,17 @@ import * as store from './db.js';
 
 const MAX_RUNS = 30;
 const activeOperations = new Set();
+// operationId → the runner's SIGTERM handle for an in-flight render, so deleting a
+// record mid-render can terminate its subprocess promptly. Populated when the render
+// spawns (executeRender) and drained in its `finally`.
+const activeRenders = new Map();
 
 /**
  * Per-target install-probe + runner. One dispatch point so registering a new
  * image→3D backend is an entry here, not new branches through create/generate.
- * A runner takes `{ imagePath, outputPath, onProgress }` and resolves
- * `{ assetPath }` (see `runTrellis2Generate`).
+ * A runner takes `{ imagePath, outputPath, onProgress }` and returns a
+ * `{ promise, kill }` pair — `promise` resolves `{ assetPath }`; `kill` SIGTERMs the
+ * render so a mid-flight delete can terminate it (see `runTrellis2Generate`).
  */
 const TARGET_RUNNERS = {
   trellis2: { isInstalled: isTrellis2Installed, run: runTrellis2Generate },
@@ -44,6 +50,17 @@ const cleanError = (error) => String(error?.message || error || 'Render failed')
 const assetUrl = (id) => `/data/image-to-3d/${id}/model.glb`;
 /** The on-disk destination the runner writes the GLB to. */
 const assetDiskPath = (id) => join(PATHS.imageTo3d, id, 'model.glb');
+
+/**
+ * Remove a record's render directory (the exported GLB + its folder). Used to
+ * clean the orphaned mesh a killed/deleted render may have left on disk. `force`
+ * makes an absent path a no-op ("if written"), so this is safe to call whether or
+ * not the render got far enough to emit a file.
+ */
+async function cleanupRenderDir(id) {
+  await rm(join(PATHS.imageTo3d, id), { recursive: true, force: true })
+    .catch((err) => console.error(`❌ Image-to-3D cleanup failed for ${id}: ${err.message}`));
+}
 
 /**
  * Verify a target can actually run on this host right now — unknown target →
@@ -109,7 +126,10 @@ async function executeRender({ id, operationId, runner, sourcePath }) {
   let lastPersistedPercent = -1;
   try {
     await ensureDir(join(PATHS.imageTo3d, id));
-    await runner.run({
+    // The runner returns a { promise, kill } pair (see runTrellis2Generate) — retain
+    // the kill handle so deleteModel can SIGTERM this render if the record is deleted
+    // mid-flight.
+    const { promise, kill } = runner.run({
       imagePath: sourcePath,
       outputPath,
       onProgress: (frame) => {
@@ -124,6 +144,8 @@ async function executeRender({ id, operationId, runner, sourcePath }) {
         }).catch(() => {}); // progress is best-effort; a lost frame is not fatal
       },
     });
+    activeRenders.set(operationId, kill);
+    await promise;
 
     const completedAt = new Date().toISOString();
     // includeDeleted + `deleted` guard: if the user deleted the record while the
@@ -150,13 +172,40 @@ async function executeRender({ id, operationId, runner, sourcePath }) {
     console.error(`❌ Image-to-3D render failed for ${id}: ${cleanError(error)}`);
     await failGeneration(id, operationId, error);
   } finally {
+    activeRenders.delete(operationId);
     activeOperations.delete(operationId);
+    // If the record was deleted while the render ran, the completion/failure writes
+    // no-op'd on the `deleted` guard and any GLB the render produced is orphaned —
+    // remove it now that the child has fully settled (no further writes can race us).
+    const record = await store.getModel(id, { includeDeleted: true }).catch(() => null);
+    if (record?.deleted) await cleanupRenderDir(id);
   }
 }
 
 export const listModels = store.listModels;
 export const getModel = store.getModel;
-export const deleteModel = store.deleteModel;
+
+/**
+ * Delete a record and, if a render is in flight, kill its subprocess so it stops
+ * burning GPU the moment the user walks away. The soft-delete write itself stays a
+ * clean no-op on the record. When a live render exists we SIGTERM it and let
+ * executeRender's `finally` remove the orphaned GLB once the child settles (avoids a
+ * delete-then-rewrite race); with no live render (e.g. a stale `generating` row that
+ * survived a restart) we clean any orphaned mesh directly.
+ */
+export async function deleteModel(id) {
+  const current = await store.getModel(id, { includeDeleted: true });
+  const result = await store.deleteModel(id);
+  if (current?.status === 'generating' && current.generationOperationId) {
+    const kill = activeRenders.get(current.generationOperationId);
+    if (kill) {
+      kill();
+    } else {
+      await cleanupRenderDir(id);
+    }
+  }
+  return result;
+}
 
 export async function createModel(input, { caps = detectHostCapabilities() } = {}) {
   const sourcePath = resolveGalleryImage(input.filename);
