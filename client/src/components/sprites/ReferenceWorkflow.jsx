@@ -44,7 +44,7 @@ function CandidateTile({ recordId, candidate, locking, onLock, clipRisk }) {
   const [confirming, setConfirming] = useState(false);
   return (
     <div className="bg-port-bg border border-port-border rounded p-1 space-y-1">
-      <SpriteImg recordId={recordId} path={candidate.path} className="w-full h-24 object-contain" />
+      <SpriteImg recordId={recordId} path={candidate.path} className="w-full aspect-square object-contain" />
       <p className="text-[10px] text-gray-500 truncate" title={candidate.path}>
         {candidate.path.split('/').pop()}{candidate.mode ? ` · ${candidate.mode}` : ''}
       </p>
@@ -288,8 +288,12 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
           {backfillOptional && <span className="ml-1 text-[10px] text-gray-600 normal-case tracking-normal">· optional</span>}
         </h4>
         {turnaroundLocked ? (
-          <div className="flex items-start gap-3">
-            <SpriteImg recordId={recordId} path={manifest.turnaround.path} className="w-48 h-32 object-contain bg-port-bg border border-port-border rounded" />
+          // The sheet is a square PNG (four figures in a 1:1 canvas), so render
+          // it as a large square — a fixed landscape box letterboxed it into a
+          // tiny center strip and wasted the sides. It's the identity root, so
+          // it gets more room than the single-figure anchors below.
+          <div className="flex flex-col sm:flex-row items-start gap-3">
+            <SpriteImg recordId={recordId} path={manifest.turnaround.path} className="w-full max-w-sm aspect-square object-contain bg-port-bg border border-port-border rounded" />
             <p className="text-xs text-gray-500 flex items-center gap-1">
               <Lock className="w-3 h-3" /> frozen · identity root
             </p>
@@ -499,7 +503,7 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
                   {anchor.status === 'locked' && <Lock className="w-3 h-3 text-port-success" />}
                 </p>
                 {anchor.status === 'locked' ? (
-                  <SpriteImg recordId={recordId} path={anchor.path} className="w-full h-24 object-contain" />
+                  <SpriteImg recordId={recordId} path={anchor.path} className="w-full aspect-square object-contain" />
                 ) : (
                   <div className="space-y-1.5">
                     {/* Optional correction guidance re-appended to the prompt on
