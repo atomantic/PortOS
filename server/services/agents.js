@@ -18,6 +18,30 @@ const AGENT_PATTERNS = [
 const spawnedAgentCommands = new Map();
 
 /**
+ * Decide whether a matched process line is a real AI-agent CLI or an OS/UI
+ * helper that only happens to share a substring with an agent name.
+ *
+ * The pattern grep is a coarse substring match, so `cursor` also matches macOS
+ * native helpers like the TextInputUI framework's `CursorUIViewService.xpc`
+ * (a text-caret UI service, NOT the Cursor AI editor). Those live under system
+ * framework / XPC-service / app-bundle paths that no agent CLI is ever invoked
+ * from, so we exclude the whole class rather than blacklisting one binary.
+ */
+export function isAgentProcessCommand(command) {
+  if (!command) return false;
+  // Our own scanner and the grep it pipes through.
+  if (command.includes('grep') || command.includes('ps -eo')) return false;
+  // macOS app bundles (e.g. Cursor.app) and their embedded helpers, plus the
+  // system framework / XPC-service helpers those bundles spawn — none of these
+  // is an agent CLI, they just share a name substring (e.g. CursorUIViewService).
+  if (command.includes('.app/Contents/')) return false;
+  if (command.includes('/System/Library/')) return false;
+  if (command.includes('.framework/')) return false;
+  if (command.includes('.xpc/')) return false;
+  return true;
+}
+
+/**
  * Register a spawned agent's full command (call when spawning)
  */
 export function registerSpawnedAgent(pid, data) {
@@ -139,9 +163,10 @@ async function findUnixProcesses(pattern) {
       const etime = parts[4];
       const command = parts.slice(5).join(' ');
 
-      // Skip grep, our own process, and macOS app bundles (e.g. Cursor.app)
-      if (command.includes('grep') || command.includes('ps -eo')) continue;
-      if (command.includes('.app/Contents/')) continue;
+      // Skip grep, our own scanner, macOS app bundles, and the system
+      // framework / XPC helpers that only match a name substring (e.g. the
+      // native CursorUIViewService, not the Cursor AI editor).
+      if (!isAgentProcessCommand(command)) continue;
 
       // Parse elapsed time to get start time
       const runtime = parseElapsedTime(etime);
