@@ -7,7 +7,7 @@ import {
 import toast from '../ui/Toast';
 import { trimSpriteWalk } from '../../services/apiSprites.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
-import { spriteAssetUrl, paintCheckerboard } from './spriteAssets.js';
+import { spriteAssetUrl, checkerboardStyle, PIXELATED } from './spriteAssets.js';
 import SpritePreview from './SpritePreview.jsx';
 import {
   buildTrimmerSources, allColumns, invertColumns, phaseLabelFor, sanitizeTrimSlug,
@@ -24,29 +24,55 @@ import {
 const MAIN_PX = 192;
 const THUMB_PX = 64;
 
-// One frame of a packed strip on a checkerboarded canvas. Its own ref+effect so
-// each thumbnail repaints independently when the image loads or geometry shifts.
+// One frame of a packed strip, painted at SOURCE resolution (#2977).
+//
+// The backing store is the cell's own pixel size (384² for a native walk),
+// never the display size — `drawImage` copies the cell 1:1 so JS never
+// resamples, and CSS alone scales it down to the thumbnail/preview box. The
+// earlier version sized the canvas at THUMB_PX/MAIN_PX, which decimated 384→64
+// nearest-neighbor and then let the browser smooth-upscale that back to the
+// grid column: the "fuzzy / compressed" look this replaces.
+//
+// Following SpritePreview's rule, the checkerboard goes on the BOX (a CSS
+// background at a constant on-screen cell size) rather than into the canvas —
+// painted into a 384px backing store its squares would shrink with the scale
+// factor — and the canvas carries the shared PIXELATED style so the browser's
+// scale stays nearest-neighbor like every other sprite surface.
 function FrameCanvas({ img, col, cellW, cellH, size }) {
   const ref = useRef(null);
+  // Natural cell geometry, rounded to whole pixels for the backing store. Zero
+  // until the strip <img> loads.
+  const w = cellW > 0 ? Math.max(1, Math.round(cellW)) : 0;
+  const h = cellH > 0 ? Math.max(1, Math.round(cellH)) : 0;
+  const ready = w > 0 && h > 0;
+
   useEffect(() => {
     const canvas = ref.current;
-    if (!canvas) return;
+    if (!canvas || !img || !ready) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return; // jsdom / context-less canvas
-    paintCheckerboard(ctx, canvas.width, canvas.height, size >= MAIN_PX ? 8 : 5);
-    if (img && cellW > 0 && cellH > 0) {
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(img, col * cellW, 0, cellW, cellH, 0, 0, canvas.width, canvas.height);
-    }
-  }, [img, col, cellW, cellH, size]);
-  const aspect = cellW > 0 && cellH > 0 ? cellH / cellW : 1;
+    // The canvas is transparent now that the checkerboard moved to the box, so
+    // a frame swap must clear before drawing or the previous cell shows
+    // through this one's alpha.
+    ctx.clearRect(0, 0, w, h);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, col * cellW, 0, cellW, cellH, 0, 0, w, h);
+  }, [img, col, cellW, cellH, w, h, ready]);
+
+  // The box holds the frame's aspect whether or not the strip has loaded, so
+  // the grid doesn't collapse to zero height and then reflow on load.
   return (
-    <canvas
-      ref={ref}
-      width={size}
-      height={Math.round(size * aspect)}
-      className="w-full h-auto block"
-    />
+    <div
+      className="w-full block overflow-hidden"
+      style={{
+        ...checkerboardStyle(size >= MAIN_PX ? 8 : 5),
+        aspectRatio: ready ? `${w} / ${h}` : '1 / 1',
+      }}
+    >
+      {ready && (
+        <canvas ref={ref} width={w} height={h} className="w-full h-auto block" style={PIXELATED} />
+      )}
+    </div>
   );
 }
 

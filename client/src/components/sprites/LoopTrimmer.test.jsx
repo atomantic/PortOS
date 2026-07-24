@@ -23,6 +23,30 @@ import { trimSpriteWalk } from '../../services/apiSprites.js';
 // "Not implemented: getContext" warning for every frame canvas it renders.
 HTMLCanvasElement.prototype.getContext = () => null;
 
+// jsdom never fetches, so a real `new Image()` would never fire onload and the
+// trimmer's cell geometry would stay 0×0 — the frame canvases would never
+// mount. This fake reports a known natural size (8 cells of 384², the native
+// walk strip) and fires onload on the next tick, which is what lets the
+// source-resolution assertions below see real dimensions.
+const STRIP_CELL_PX = 384;
+const STRIP_FRAMES = 8;
+class FakeImage {
+  constructor() {
+    this.naturalWidth = STRIP_CELL_PX * STRIP_FRAMES;
+    this.naturalHeight = STRIP_CELL_PX;
+    this.onload = null;
+  }
+
+  set src(value) {
+    this._src = value;
+    // Async, like a real decode — so a test can also observe the pre-load state.
+    setTimeout(() => { if (this.onload) this.onload(); }, 0);
+  }
+
+  get src() { return this._src; }
+}
+global.Image = FakeImage;
+
 const grokRun = {
   id: 'walk-east-1', direction: 'east', status: 'candidate',
   stripPreview: { stripPath: 'grok/walk-east-1/generated/strip.png', frameCount: 8, fps: 12 },
@@ -102,6 +126,36 @@ describe('LoopTrimmer', () => {
       assets: [{ path: 'walk/trims/east-loop-v001-strip.png', width: 96 * 7, height: 96 }],
     });
     expect(screen.getByRole('button', { name: /Save trim/ })).toBeDisabled();
+  });
+
+  // #2977: the trimmer used to size each canvas at its DISPLAY size (64/192px),
+  // decimating a 384px cell nearest-neighbor and then letting CSS smooth-upscale
+  // the result — the "fuzzy" render. These lock in source-resolution painting.
+  it('paints every frame at the source cell resolution, scaled by CSS with pixelated', async () => {
+    const { container } = renderTrimmer();
+    await waitFor(() => expect(container.querySelectorAll('canvas').length).toBeGreaterThan(0));
+    const canvases = [...container.querySelectorAll('canvas')];
+    expect(canvases).toHaveLength(STRIP_FRAMES + 1); // 8 thumbnails + the main preview
+    canvases.forEach((canvas) => {
+      expect(canvas.width).toBe(STRIP_CELL_PX);
+      expect(canvas.height).toBe(STRIP_CELL_PX);
+      expect(canvas).toHaveStyle({ imageRendering: 'pixelated' });
+    });
+  });
+
+  it('puts the checkerboard on the frame box, not inside the canvas', async () => {
+    const { container } = renderTrimmer();
+    await waitFor(() => expect(container.querySelectorAll('canvas').length).toBeGreaterThan(0));
+    const canvas = container.querySelector('canvas');
+    expect(canvas.getAttribute('style')).not.toMatch(/linear-gradient/);
+    expect(canvas.parentElement.getAttribute('style')).toMatch(/linear-gradient/);
+  });
+
+  it('holds the frame boxes with a checkerboard placeholder before the strip loads', () => {
+    const { container } = renderTrimmer();
+    expect(container.querySelectorAll('canvas')).toHaveLength(0);
+    // Every frame box (8 thumbnails + main preview) is already laid out.
+    expect(container.querySelectorAll('[style*="linear-gradient"]')).toHaveLength(STRIP_FRAMES + 1);
   });
 
   it('shows an empty state when there is nothing to trim', () => {
