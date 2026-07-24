@@ -84,31 +84,47 @@ const FRONT_FACING = new Set(['south', 'south-east', 'south-west']);
 // south is on your right); facing west it is the left side.
 const RIGHT_SIDE_TO_VIEWER = new Set(['east', 'south-east', 'north-east']);
 const LEFT_SIDE_TO_VIEWER = new Set(['west', 'south-west', 'north-west']);
+// The four 45-degree facings. Occlusion at 45 degrees is partial, not absolute —
+// a front hip bag on the near side still peeks past the hip in a three-quarter
+// rear view. Telling the model to erase it outright there makes gear pop in and
+// out as the sprite rotates through the 8 anchors, so these facings get hedged
+// wording while the cardinals keep the absolute form.
+const THREE_QUARTER = new Set(['south-east', 'north-east', 'north-west', 'south-west']);
 
 /**
- * One sentence describing what a given facing occludes — the concrete rule that
- * stops the model from mirroring the front view. Exported so the sheet prompt,
- * the derive-anchor prompt, and the tests all read from one vocabulary.
+ * One or two sentences describing what a given facing occludes — the concrete
+ * rule that stops the model from mirroring the front view. Exported so the sheet
+ * prompt, the derive-anchor prompt, and the tests all read from one vocabulary.
  */
 export function viewGeometryClause(direction) {
+  const partial = THREE_QUARTER.has(direction);
   const parts = [];
   if (REAR_FACING.has(direction)) {
+    const hidden = partial
+      ? 'almost entirely hidden by the body — at most a sliver shows past the near hip, along '
+        + 'with the parts that genuinely wrap around, such as a strap crossing the back or the '
+        + 'rear of a waist belt'
+      : 'hidden by the body and must not be drawn — only the parts that genuinely wrap around, '
+        + 'such as a strap crossing the back or the rear of a waist belt, stay visible';
     parts.push(
-      `This angle is behind the character: ${FRONT_GEAR} is hidden by the body and must not be `
-      + 'drawn — only the parts that genuinely wrap around, such as a strap crossing the back or '
-      + 'the rear of a waist belt, stay visible. Draw the back of the head, hair and garment: no '
-      + 'face, no eyes, no front closures, buttons, zippers or chest emblems.',
+      `This angle is behind the character: ${FRONT_GEAR} is ${hidden}. Draw the back of the head, `
+      + 'hair and garment: no face, no eyes, no front closures, buttons, zippers or chest emblems.',
     );
   } else if (FRONT_FACING.has(direction)) {
-    parts.push(`This angle is in front of the character: ${BACK_GEAR} is hidden by the body — at `
-      + 'most its shoulder straps show over the front.');
+    parts.push(`This angle is in front of the character: ${BACK_GEAR} is ${partial
+      ? 'mostly hidden by the body — at most its shoulder straps and a sliver past the far '
+        + 'shoulder show'
+      : 'hidden by the body — at most its shoulder straps show over the front'}.`);
   }
-  if (RIGHT_SIDE_TO_VIEWER.has(direction)) {
-    parts.push('The viewer sees the character\'s right side, so right-side gear reads fully and '
-      + 'left-side gear is occluded by the torso.');
-  } else if (LEFT_SIDE_TO_VIEWER.has(direction)) {
-    parts.push('The viewer sees the character\'s left side, so left-side gear reads fully and '
-      + 'right-side gear is occluded by the torso.');
+  const near = RIGHT_SIDE_TO_VIEWER.has(direction) ? 'right'
+    : (LEFT_SIDE_TO_VIEWER.has(direction) ? 'left' : null);
+  if (near) {
+    const far = near === 'right' ? 'left' : 'right';
+    parts.push(partial
+      ? `The viewer sees more of the character's ${near} side, so ${near}-side gear reads clearly `
+        + `and ${far}-side gear is mostly occluded by the torso.`
+      : `The viewer sees the character's ${near} side, so ${near}-side gear reads fully and `
+        + `${far}-side gear is occluded by the torso.`);
   }
   return parts.join(' ');
 }
@@ -157,15 +173,15 @@ export function buildTurnaroundPrompt({ name, designPrompt, chromaKey }) {
     + 'actually exposes, including the parts of the body and gear it hides. '
     // Left/right axis (unchanged rule) — now paired with the screen-position
     // consequence, so "same side" can't be satisfied by never moving the item.
-    // Deliberately phrased as "never moves to the other side" rather than
-    // "appears in every panel": the per-panel rules below hide far-side gear in
-    // the profiles, and a blanket "visible in both profiles" would contradict
-    // them and invite the model to draw a right-hip bag through the torso.
+    // This sentence governs WHICH SIDE and WHERE IN FRAME only; whether the item
+    // is visible at all is deferred to the per-panel rules. Stating visibility
+    // here too would contradict them (a front-worn bag is placed "toward the
+    // viewer's right in the back panel" by this rule but erased by Panel 3's).
     + 'Every accessory (bag, strap, pouch, pocket, weapon) stays on the SAME anatomical side of '
     + 'the body in every panel — an item worn on the character\'s right hip is never moved to '
-    + 'the left hip. Because the character turns, that item is drawn toward the viewer\'s left in '
-    + 'the front panel and toward the viewer\'s right in the back panel, and it is visible only '
-    + 'in the panels where that side of the body faces the viewer. '
+    + 'the left hip. Wherever it is visible, the turn shifts it across the frame: toward the '
+    + 'viewer\'s left in the front panel, toward the viewer\'s right in the back panel. Whether '
+    + 'it is visible at all in a given panel is decided by that panel\'s rule below. '
     + `${panelRules} `
     + 'Flat non-isometric pixel-art game sprite '
     + `reference on a plain exact ${keyColorPhrase(chromaKey)} background. No panel borders, `
@@ -177,11 +193,28 @@ export function buildTurnaroundPrompt({ name, designPrompt, chromaKey }) {
 // Shared preamble for a render seeded from the locked turnaround sheet: the
 // init image is a multi-figure sheet, so the model must be told to read ONE
 // panel and emit ONE figure — otherwise it happily returns another sheet.
+// The sheet only carries the four cardinal panels, so a three-quarter facing has
+// no panel of its own. Naming one anyway ("read the panel that shows a
+// three-quarter rear view…") points the model at a panel that isn't there and it
+// silently picks one — the invent-the-unseen-side failure the sheet exists to
+// prevent. Send those facings to the two cardinals they sit between instead.
+const INTERPOLATE_FROM = {
+  'south-east': ['south', 'east'],
+  'north-east': ['north', 'east'],
+  'north-west': ['north', 'west'],
+  'south-west': ['south', 'west'],
+};
+
 const fromTurnaroundClause = (direction) => {
-  const facing = REFERENCE_FACING[direction] || direction;
+  const pair = INTERPOLATE_FROM[direction];
+  const read = pair
+    ? 'The sheet has no panel at this exact angle: read the panels showing the character '
+      + `${REFERENCE_FACING[pair[0]]} and ${REFERENCE_FACING[pair[1]]}, and interpolate between `
+      + 'them rather than inventing a side the sheet never shows'
+    : `Read the panel that shows the character ${REFERENCE_FACING[direction] || direction}`;
   return (
     `The attached image is a turnaround model sheet showing the same character from `
-    + `${TURNAROUND_VIEWS.length} angles. Read the panel that shows the character ${facing}, and `
+    + `${TURNAROUND_VIEWS.length} angles. ${read}, and `
     + 'take accessory placement (which anatomical side each bag, strap, pouch, or pocket sits on) '
     + 'from the panels that show that side. Do not reproduce the sheet layout: return one single '
     + 'figure, not multiple figures and not panels. '
