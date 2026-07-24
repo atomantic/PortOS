@@ -10,6 +10,7 @@ vi.mock('../services/api', () => ({
   getImageTo3dModel: (...a) => getImageTo3dModel(...a),
   generateImageTo3dModel: (...a) => generateImageTo3dModel(...a),
   deleteImageTo3dModel: (...a) => deleteImageTo3dModel(...a),
+  imageTo3dAssetUrl: (id) => `/api/image-to-3d/models/${id}/asset`,
 }));
 
 // GlbViewer wraps a WebGL canvas jsdom can't render — stub to a marker echoing src.

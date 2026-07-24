@@ -9,6 +9,7 @@ import RuntimeInstallModal from '../components/install/RuntimeInstallModal';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import GlbViewer from '../components/media/GlbViewer';
 import MediaImage from '../components/MediaImage';
+import { imageTo3dStatusMeta } from '../components/media/imageTo3dStatus';
 
 // Poll cadence while a render is in flight (a real TRELLIS.2 render is multi-minute).
 const POLL_INTERVAL_MS = 2500;
@@ -58,15 +59,6 @@ const REASON_LABEL = {
   'insufficient-memory': 'Needs 24 GB+ of unified memory',
   'requires-cuda': 'Requires an NVIDIA CUDA GPU',
   'unknown-target': 'Unavailable',
-};
-
-// Per-record status pill for the "Your 3D models" library grid.
-const RECORD_STATUS = {
-  ready: { label: 'Ready', className: 'text-port-success' },
-  generating: { label: 'Rendering…', className: 'text-port-accent' },
-  draft: { label: 'Queued', className: 'text-gray-400' },
-  failed: { label: 'Failed', className: 'text-port-error' },
-  canceled: { label: 'Canceled', className: 'text-gray-500' },
 };
 
 const LANE_LABEL = {
@@ -192,6 +184,15 @@ export default function Media3D() {
       .catch(() => { /* the library section just stays empty on a transient failure */ });
   }, [mountedRef]);
 
+  // Reactively fold a created/updated record into the library instead of
+  // re-fetching the whole list (we already hold the fresh row).
+  const patchRecord = useCallback((record) => {
+    if (!record?.id || !mountedRef.current) return;
+    setRecords((prev) => (prev.some((r) => r.id === record.id)
+      ? prev.map((r) => (r.id === record.id ? { ...r, ...record } : r))
+      : [record, ...prev]));
+  }, [mountedRef]);
+
   useEffect(() => { load(); }, [load]);
   useEffect(() => { loadRecords(); }, [loadRecords]);
 
@@ -245,14 +246,17 @@ export default function Media3D() {
     if (!mountedRef.current) return;
     const latest = Array.isArray(model.runs) && model.runs.length ? model.runs[model.runs.length - 1] : null;
     if (Number.isFinite(latest?.percent)) setGenPercent(latest.percent);
+    // Patch the just-polled record into the library in place — we already hold
+    // the fresh row, so re-fetching the whole list would be wasted I/O (the
+    // repo's reactive-update convention).
     if (model.status === 'ready' && model.assetPath) {
-      setGenPercent(100); setParam('glb', model.assetPath); setGenerating(false); loadRecords();
+      setGenPercent(100); setParam('glb', model.assetPath); setGenerating(false); patchRecord(model);
     } else if (model.status === 'failed' || model.status === 'canceled') {
       // model.error carries the runner's actionable message (e.g. the HF-auth guidance).
-      setGenError(model.error || 'The render did not finish.'); setGenerating(false); loadRecords();
+      setGenError(model.error || 'The render did not finish.'); setGenerating(false); patchRecord(model);
     }
     // else still draft/generating → the hook re-polls after POLL_INTERVAL_MS.
-  }, [modelId, setParam, mountedRef, loadRecords]);
+  }, [modelId, setParam, mountedRef, patchRecord]);
 
   useAutoRefetch(pollTick, POLL_INTERVAL_MS, { pollOnly: true, enabled: generating && !!modelId });
 
@@ -267,8 +271,8 @@ export default function Media3D() {
       if (mountedRef.current) setGenError(err?.message || 'Could not start the render.');
       return null;
     });
-    if (created && mountedRef.current) { setModelId(created.id); setGenerating(true); loadRecords(); }
-  }, [selectedImage, selectedTarget, setParam, mountedRef, loadRecords]);
+    if (created && mountedRef.current) { setModelId(created.id); setGenerating(true); patchRecord(created); }
+  }, [selectedImage, selectedTarget, setParam, mountedRef, patchRecord]);
 
   // Why the Generate action is blocked, or null when it's ready to run. The runner
   // (POST create → on-device render → landed .glb) is wired, so the terminal state
@@ -394,7 +398,7 @@ export default function Media3D() {
           <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Your 3D models</h2>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
             {records.map((record) => {
-              const status = RECORD_STATUS[record.status] || RECORD_STATUS.draft;
+              const status = imageTo3dStatusMeta(record.status);
               return (
                 <Link
                   key={record.id}

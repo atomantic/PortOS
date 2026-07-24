@@ -1,29 +1,18 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Boxes, AlertTriangle, Loader2, RefreshCw, Trash2 } from 'lucide-react';
-import { getImageTo3dModel, generateImageTo3dModel, deleteImageTo3dModel } from '../services/api';
+import { getImageTo3dModel, generateImageTo3dModel, deleteImageTo3dModel, imageTo3dAssetUrl } from '../services/api';
 import useMounted from '../hooks/useMounted';
+import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { timeAgo } from '../utils/formatters';
 import GlbViewer from '../components/media/GlbViewer';
 import MediaImage from '../components/MediaImage';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
+import { imageTo3dStatusMeta } from '../components/media/imageTo3dStatus';
 import toast from '../components/ui/Toast';
-
-// Friendly `.glb` download filename from the record name (mirrors the server's
-// slugifyForFilename so the download matches the asset endpoint's attachment).
-const slugifyName = (s) =>
-  String(s || 'model').toLowerCase().trim().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) || 'model';
 
 // Poll cadence while a render is in flight (a real TRELLIS.2 render is multi-minute).
 const POLL_INTERVAL_MS = 2500;
-
-const STATUS_LABEL = {
-  ready: 'Ready',
-  generating: 'Rendering on-device…',
-  draft: 'Queued',
-  failed: 'Render failed',
-  canceled: 'Canceled',
-};
 
 // Per-record detail view for an image-to-3D model (`/media/3d/:id`). The record
 // id is the URL, so a finished mesh is a shareable, reload-safe deep link. Mounts
@@ -52,12 +41,13 @@ export default function Media3DDetail() {
 
   useEffect(() => { load({ initial: true }); }, [load]);
 
-  // Poll only while generating; a terminal state stops the interval.
-  useEffect(() => {
-    if (record?.status !== 'generating') return undefined;
-    const handle = setInterval(() => { void load(); }, POLL_INTERVAL_MS);
-    return () => clearInterval(handle);
-  }, [record?.status, load]);
+  // Poll only while generating (the initial fetch above owns the first load, so
+  // immediate:false); `load` owns its own state + error handling, so pollOnly.
+  useAutoRefetch(load, POLL_INTERVAL_MS, {
+    pollOnly: true,
+    immediate: false,
+    enabled: record?.status === 'generating',
+  });
 
   const handleRegenerate = useCallback(async () => {
     if (busy || record?.status === 'generating') return;
@@ -100,7 +90,6 @@ export default function Media3DDetail() {
   const isGenerating = record.status === 'generating';
   const latestRun = Array.isArray(record.runs) && record.runs.length ? record.runs[record.runs.length - 1] : null;
   const percent = Number.isFinite(latestRun?.percent) ? Math.round(latestRun.percent) : null;
-  const downloadName = `${slugifyName(record.name)}.glb`;
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -132,7 +121,7 @@ export default function Media3DDetail() {
           </div>
         </div>
         <p className="mt-1 text-xs text-gray-500">
-          {STATUS_LABEL[record.status] || record.status}
+          {imageTo3dStatusMeta(record.status).label}
           {isGenerating && percent !== null ? ` · ${percent}%` : ''} · updated {timeAgo(record.updatedAt)}
         </p>
       </header>
@@ -165,7 +154,7 @@ export default function Media3DDetail() {
         <div>
           <span className="mb-1 block text-xs text-gray-400">Mesh</span>
           {record.status === 'ready' && record.assetPath ? (
-            <GlbViewer src={record.assetPath} downloadName={downloadName} />
+            <GlbViewer src={record.assetPath} downloadHref={imageTo3dAssetUrl(record.id)} />
           ) : (
             <div className="flex aspect-square items-center justify-center rounded-xl border border-dashed border-port-border bg-port-bg text-center text-sm text-gray-500">
               {isGenerating ? (

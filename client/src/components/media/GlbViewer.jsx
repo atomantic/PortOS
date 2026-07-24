@@ -26,9 +26,16 @@ function GlbModel({ src }) {
   return <primitive object={scene} />;
 }
 
-export default function GlbViewer({ src, downloadName, className = '' }) {
+// `downloadHref` (optional) overrides where the Download button points — pass a
+// dedicated asset endpoint that sets its own `Content-Disposition` filename, so
+// the server owns the name instead of the client re-deriving it. Falls back to
+// `src` with a filename inferred from the URL.
+export default function GlbViewer({ src, downloadHref, downloadName, className = '' }) {
   if (!src) return null;
-  const download = downloadName || filenameFromSrc(src);
+  const href = downloadHref || src;
+  // With an explicit download endpoint the server's Content-Disposition wins, so
+  // a bare `download` attribute is enough; otherwise infer a name from the URL.
+  const download = downloadHref ? '' : (downloadName || filenameFromSrc(src));
   return (
     <div className={`overflow-hidden rounded-xl border border-port-border bg-port-bg ${className}`}>
       <div className="relative aspect-square w-full">
@@ -52,7 +59,7 @@ export default function GlbViewer({ src, downloadName, className = '' }) {
           <Rotate3d className="h-3.5 w-3.5" /> Drag to orbit · scroll to zoom
         </span>
         <a
-          href={src}
+          href={href}
           download={download}
           className="inline-flex items-center gap-1.5 rounded-md bg-port-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-600"
         >
