@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 
 // Coverage for the walk viewer's loop preview (#2924). The load-bearing behavior:
 // the stepped background animation is derived from the packaged strip's own
@@ -127,5 +128,74 @@ describe('WalkWorkflow loop trimmer link', () => {
     const link = screen.getByRole('button', { name: /Edit in Loop Trimmer/ });
     link.click();
     expect(onOpenTrimmer).toHaveBeenCalledWith('run-east');
+  });
+});
+
+// Render the workflow with a single run of the given shape. Router-wrapped so
+// the card's <Link> (shown while rendering) resolves in every case.
+const renderRun = (run) => render(
+  <MemoryRouter>
+    <WalkWorkflow
+      record={{ id: 'example-walker' }}
+      reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked' }] } }}
+      walk={{ runs: [run], selection: { directions: {} }, walkSet: null }}
+      renders={noRenders()}
+      duration={2}
+      onDurationChange={vi.fn()}
+      onGenerate={vi.fn()}
+      onChanged={vi.fn()}
+    />
+  </MemoryRouter>,
+);
+
+describe('WalkWorkflow failed-run clip', () => {
+  it('renders grok\'s raw clip and the error text when postprocess failed', () => {
+    renderRun({
+      id: 'walk-east-deadbeef', direction: 'east', status: 'error',
+      postprocessError: 'Measured background [0,0,0] is not a usable #FF00FF matte',
+      sourceVideoPath: 'runs/walk-east-deadbeef/generated/source-video.mp4',
+    });
+    const video = screen.getByLabelText('raw grok walk clip (east)');
+    expect(video.getAttribute('src')).toBe(
+      '/data/sprites/example-walker/runs/walk-east-deadbeef/generated/source-video.mp4',
+    );
+    expect(screen.getByText(/not a usable #FF00FF matte/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Retry postprocess/ })).toBeTruthy();
+  });
+
+  it('shows only the error text when no clip landed', () => {
+    renderRun({
+      id: 'walk-east-deadbeef', direction: 'east', status: 'error', postprocessError: 'boom',
+    });
+    expect(screen.queryByLabelText('raw grok walk clip (east)')).toBeNull();
+    expect(screen.getByText('boom')).toBeTruthy();
+  });
+});
+
+describe('WalkWorkflow observable render', () => {
+  it('links to the live Shell session while grok is rendering', () => {
+    renderRun({
+      id: 'walk-east-abc12345', direction: 'east', status: 'rendering', shellSession: 'walk-east-abc12345',
+    });
+    const link = screen.getByRole('link', { name: /Watch in Shell/ });
+    expect(link.getAttribute('href')).toBe('/shell/walk-east-abc12345');
+    // Generate is disabled while rendering (server truth), showing the spinner.
+    expect(screen.getByRole('button', { name: /Rendering/ })).toBeDisabled();
+  });
+
+  it('shows no shell link once the render has moved on to packaging', () => {
+    renderRun({
+      id: 'walk-east-abc12345', direction: 'east', status: 'postprocessing', shellSession: 'walk-east-abc12345',
+    });
+    expect(screen.queryByRole('link', { name: /Watch in Shell/ })).toBeNull();
+  });
+});
+
+describe('WalkWorkflow clip-length options', () => {
+  it('offers the short clip lengths for an unfinalized set', () => {
+    renderRun({ id: 'walk-east-deadbeef', direction: 'east', status: 'error', postprocessError: 'x' });
+    const select = screen.getByRole('combobox');
+    const values = [...select.options].map((o) => o.value);
+    expect(values).toEqual(['1', '2', '3', '6', '10']);
   });
 });

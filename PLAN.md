@@ -309,3 +309,4 @@ is not reliably announced.
   only the rules the repo already honors (`jsx-a11y/alt-text`,
   `jsx-a11y/aria-props`, `jsx-a11y/role-has-required-aria-props`,
   `jsx-a11y/label-has-associated-control`) rather than the full `recommended` set.
+

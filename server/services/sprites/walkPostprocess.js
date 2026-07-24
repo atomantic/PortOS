@@ -25,7 +25,7 @@ import { readdir, writeFile } from 'fs/promises';
 import { createHash } from 'crypto';
 import { ensureDir, atomicWrite, sha256File } from '../../lib/fileUtils.js';
 import { findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
-import { keyChannelSplit, keyness, keyShareFn } from './chromaKey.js';
+import { keyChannelSplit, keyness, keyShareFn, hexToRgb } from './chromaKey.js';
 
 // Source pipeline constants (animation_postprocess.py) — values are part of
 // the cross-install artifact contract (imported manifests carry them).
@@ -40,6 +40,19 @@ export const WALK_PHASES = [
   'right-contact', 'right-down', 'right-passing', 'right-up',
 ];
 
+// Border-key acceptance thresholds. The key channels must dominate the dark
+// channels by ≥ KEY_DOMINANCE_MIN, and each channel group must be balanced
+// within KEY_GROUP_SPREAD_MAX. The spread tolerance was 80 (tuned to the source
+// pipeline's near-ideal [255,0,255] magenta). Even when grok is handed the exact
+// magenta matte (see prepareWalkAnchorChromaInput), the H.264 4:2:0 chroma
+// subsampling in the delivered MP4 shifts saturated magenta at decode — a real
+// trailhand clip measured ~[250,56,152] (r-b spread ~98) at the border. That is
+// still a perfectly usable matte: the per-channel unmix keys off the MEASURED
+// background, so a consistent codec-shifted matte reverses correctly. 120 admits
+// it while still rejecting a single-channel-dominant color (e.g. [255,0,100]
+// spread 155 = "red with a little blue", not magenta).
+const KEY_DOMINANCE_MIN = 80;
+const KEY_GROUP_SPREAD_MAX = 120;
 const KEY_NOISE_FLOOR = 0.01;        // background share below this → fully opaque
 const BACKGROUND_ALPHA_FLOOR = 0.06; // source alpha at/below this → fully transparent
 const ALPHA_NOISE_FLOOR = 2;         // output alpha at/below this → zeroed
@@ -127,18 +140,54 @@ export function sampleBorderKey(frame) {
 }
 
 /**
- * Reject a measured border key that isn't a plausible sample of the expected
- * chroma key: its saturated channels must dominate its dark channels by ≥80,
- * and channels within each group must be balanced within 80 (the source's
- * "balanced magenta" check, generalized).
+ * Is a measured border key a plausible sample of the expected chroma key? Its
+ * saturated channels must dominate its dark channels by ≥80, and channels
+ * within each group must be balanced within 80 (the source's "balanced
+ * magenta" check, generalized). A grok clip that fades in from — or pads with
+ * — a black/near-black frame samples as [0,0,0] here and returns false, so the
+ * caller can drop that frame rather than fail the whole run on it.
  */
-export function validateMeasuredKey(measured, split, keyHex) {
+export function isUsableMeasuredKey(measured, split) {
   const minHigh = Math.min(...split.highs.map((i) => measured[i]));
   const maxLow = Math.max(...split.lows.map((i) => measured[i]));
   const groupSpread = (idx) => Math.max(...idx.map((i) => measured[i])) - Math.min(...idx.map((i) => measured[i]));
-  if (minHigh - maxLow < 80 || groupSpread(split.highs) > 80 || groupSpread(split.lows) > 80) {
+  return !(minHigh - maxLow < KEY_DOMINANCE_MIN
+    || groupSpread(split.highs) > KEY_GROUP_SPREAD_MAX
+    || groupSpread(split.lows) > KEY_GROUP_SPREAD_MAX);
+}
+
+/**
+ * Throwing variant for single-image callers (the anchor input prep), where a
+ * non-key measurement is a hard error rather than a droppable frame.
+ */
+export function validateMeasuredKey(measured, split, keyHex) {
+  if (!isUsableMeasuredKey(measured, split)) {
     throw new Error(`Measured background [${measured.join(',')}] is not a usable ${keyHex} matte`);
   }
+}
+
+/**
+ * The longest run of consecutive usable-matte frames in a decoded clip. Grok
+ * clips commonly fade in from (or pad with) a non-key intro/outro frame; the
+ * longest contiguous usable span drops that lead-in/lead-out WITHOUT breaking
+ * the temporal adjacency selectCycleIndices relies on (dropping an interior
+ * frame would make two non-adjacent frames look adjacent). Returns
+ * `{ start, length }` into the input array.
+ */
+export function longestUsableSpan(usableFlags) {
+  let best = { start: 0, length: 0 };
+  let runStart = 0;
+  let runLen = 0;
+  for (let i = 0; i < usableFlags.length; i++) {
+    if (usableFlags[i]) {
+      if (runLen === 0) runStart = i;
+      runLen += 1;
+      if (runLen > best.length) best = { start: runStart, length: runLen };
+    } else {
+      runLen = 0;
+    }
+  }
+  return best;
 }
 
 /**
@@ -554,26 +603,27 @@ export async function extractVideoFrames(videoPath, rawDir) {
 }
 
 /**
- * Prepare the transparent i2v motion input from a locked anchor (opaque on
- * its key): measured-key alpha recovery + despill, saved as a straight-alpha
- * PNG. An anchor that already carries transparency is passed through.
+ * Prepare the i2v motion input for grok as an OPAQUE, chroma-backed frame.
+ *
+ * grok's image_to_video must receive the character sitting ON the exact chroma
+ * matte we key against — NOT a transparent PNG. Handing grok transparency forces
+ * it to (a) composite over black (producing black intro/fade frames whose border
+ * measures [0,0,0]) and (b) reinvent the "magenta background" from the prompt
+ * text. Compositing the anchor over solid chroma hands grok the literal
+ * background to extend, so the rendered clip keeps a well-formed matte the
+ * postprocess can unkey deterministically (codec chroma subsampling still shifts
+ * it a little at decode — handled by the measured-key unmix, not here). An
+ * already-opaque, chroma-backed anchor (the common case) is unchanged; a
+ * transparent one has its holes filled with the matte color.
+ *
+ * `flatten` is libvips' native source-over-solid-color compositing (the same op
+ * signatureOf uses) — correct and fast over a ~1.7M-pixel anchor without a
+ * per-pixel JS loop. `hexToRgb` returns `{ r, g, b }`, exactly flatten's shape.
  */
-export async function prepareWalkAnchorInput(anchorAbs, destAbs, chromaKey) {
-  const split = keyChannelSplit(chromaKey);
-  const frame = await decodeRgbaFrame(anchorAbs);
-  let alreadyTransparent = false;
-  for (let i = 3; i < frame.data.length; i += 4) {
-    if (frame.data[i] < 255) { alreadyTransparent = true; break; }
-  }
-  let prepared = frame;
-  if (!alreadyTransparent) {
-    const measured = sampleBorderKey(frame);
-    validateMeasuredKey(measured, split, chromaKey);
-    prepared = recoverAlphaFrame(frame, measured, split);
-  }
-  prepared = despillKeyFrame(prepared, split);
-  const sha256 = await encodePngWithHash(prepared, destAbs);
-  return { preparation: 'measured-key-alpha-recovery-plus-despill', sha256 };
+export async function prepareWalkAnchorChromaInput(anchorAbs, destAbs, chromaKey) {
+  const buf = await sharp(anchorAbs).flatten({ background: hexToRgb(chromaKey) }).png().toBuffer();
+  await writeFile(destAbs, buf);
+  return { preparation: 'composited-over-solid-chroma-matte', sha256: sha256Buffer(buf) };
 }
 
 /**
@@ -592,15 +642,31 @@ export async function runWalkPostprocess({
   const rawDir = join(generatedAbs, 'raw');
 
   const rawNames = await extractVideoFrames(videoAbs, rawDir);
-  const recovered = [];
-  const measuredKeys = [];
+  // Decode + measure every frame, then keep only the longest contiguous run of
+  // frames whose border is a usable chroma matte. Grok clips routinely open on
+  // a black fade-in frame (border measures [0,0,0]) before the magenta-backed
+  // walk begins — the old "validate every frame, throw on the first bad one"
+  // failed the whole run on that intro frame even though 70+ good frames
+  // followed it. `frames`/`measured`/`usable` stay index-aligned with rawNames.
+  const decoded = [];
   for (const name of rawNames) {
     const frame = await decodeRgbaFrame(join(rawDir, name));
     const measured = sampleBorderKey(frame);
-    validateMeasuredKey(measured, split, chromaKey);
-    measuredKeys.push(measured);
-    recovered.push(recoverAlphaFrame(frame, measured, split));
+    decoded.push({ frame, measured, usable: isUsableMeasuredKey(measured, split) });
   }
+  const span = longestUsableSpan(decoded.map((d) => d.usable));
+  if (span.length < WALK_FRAME_COUNT + 1) {
+    const usableTotal = decoded.filter((d) => d.usable).length;
+    throw new Error(usableTotal === 0
+      ? `No frame has a usable ${chromaKey} matte (measured e.g. [${decoded[0]?.measured?.join(',')}] across ${decoded.length} frames)`
+      : `Only ${span.length} contiguous frames have a usable ${chromaKey} matte (need ${WALK_FRAME_COUNT + 1}); the ${chromaKey} background is unstable across the clip`);
+  }
+  // span.start offsets every downstream lookup back into the raw source-%04d
+  // numbering, so the manifest's sourceFrameIndex/sourcePath stay correct.
+  const usable = decoded.slice(span.start, span.start + span.length);
+  const usableRawNames = rawNames.slice(span.start, span.start + span.length);
+  const measuredKeys = usable.map((d) => d.measured);
+  const recovered = usable.map((d) => recoverAlphaFrame(d.frame, d.measured, split));
 
   const signatures = await Promise.all(recovered.map(signatureOf));
   const { indices, cycle } = selectCycleIndices(signatures);
@@ -619,9 +685,11 @@ export async function runWalkPostprocess({
     frameRecords.push({
       outputIndex: i,
       phase,
-      sourceFrameIndex: indices[i] + 1, // 1-based, matches raw source-%04d numbering
-      sourcePath: `${generatedRel}/raw/${rawNames[indices[i]]}`,
-      sourceSha256: await sha256File(join(rawDir, rawNames[indices[i]])),
+      // raw frames are 1-based sequential (source-%04d); indices[i] is relative
+      // to the usable span, so span.start offsets it back to the raw numbering.
+      sourceFrameIndex: span.start + indices[i] + 1,
+      sourcePath: `${generatedRel}/raw/${usableRawNames[indices[i]]}`,
+      sourceSha256: await sha256File(join(rawDir, usableRawNames[indices[i]])),
       measuredKeyRgb: measuredKeys[indices[i]],
       path: `${generatedRel}/frames/${name}`,
       sha256: await encodePngWithHash(despilled[i], join(framesDir, name)),

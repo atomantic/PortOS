@@ -50,8 +50,16 @@ const GROK_VIDEO_TIMEOUT_MS = (() => {
 
 const DEFAULT_BIN = 'grok';
 
-// Durations grok's image_to_video tool accepts, in seconds.
-export const GROK_VIDEO_DURATIONS = Object.freeze([6, 10]);
+// Clip lengths (seconds) offered for grok's image_to_video tool. grok's own
+// game-animation skill documents 6s/10s, but shorter clips animate fine and are
+// plenty for a looping walk cycle (the postprocess only harvests ~8 frames of
+// one gait cycle) — 6s took ~10.5 min to render and yielded 73 usable frames
+// where the cycle selector needs 9. The shorter options let the user trade
+// render time for material; GROK_VIDEO_DEFAULT_DURATION is the general-video
+// fallback when a caller omits duration (kept at 6 so non-walk video gen is
+// unchanged — the walk path picks its own shorter default).
+export const GROK_VIDEO_DURATIONS = Object.freeze([1, 2, 3, 6, 10]);
+export const GROK_VIDEO_DEFAULT_DURATION = 6;
 
 // Per-job state — keyed by jobId (cloud lane allows parallel renders). Same
 // client shape as videoGen/local.js so attachSseClient/broadcastSse work.
@@ -124,7 +132,7 @@ export async function generateVideo({
     throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const effectiveDuration = GROK_VIDEO_DURATIONS.includes(Number(duration)) ? Number(duration) : GROK_VIDEO_DURATIONS[0];
+  const effectiveDuration = GROK_VIDEO_DURATIONS.includes(Number(duration)) ? Number(duration) : GROK_VIDEO_DEFAULT_DURATION;
 
   const jobId = providedJobId || randomUUID();
   const filename = `${jobId}.mp4`;

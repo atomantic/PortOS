@@ -12,7 +12,7 @@ import { getSettings } from '../services/apiSystem.js';
 import { deriveAvailableBackends } from '../lib/imageGenBackends.js';
 import AppContextPicker from '../components/AppContextPicker.jsx';
 import ReferenceWorkflow from '../components/sprites/ReferenceWorkflow.jsx';
-import WalkWorkflow, { WALK_DURATIONS } from '../components/sprites/WalkWorkflow.jsx';
+import WalkWorkflow, { WALK_DEFAULT_DURATION } from '../components/sprites/WalkWorkflow.jsx';
 import LoopTrimmer from '../components/sprites/LoopTrimmer.jsx';
 import PublishWorkflow from '../components/sprites/PublishWorkflow.jsx';
 import AssetCollection from '../components/sprites/AssetCollection.jsx';
@@ -456,7 +456,7 @@ export default function Sprites() {
   // Clip length lives here rather than inside WalkWorkflow so a Regenerate
   // fired from an asset card honors the length the user picked in the walk
   // panel instead of silently falling back to the server default.
-  const [duration, setDuration] = useState(WALK_DURATIONS[0]);
+  const [duration, setDuration] = useState(WALK_DEFAULT_DURATION);
 
   // Image-backend availability + the selected backend `mode` are page-owned
   // (#2938): both ReferenceWorkflow's picker and the asset collection's anchor
@@ -514,8 +514,11 @@ export default function Sprites() {
     const startId = idRef.current;
     begin(key);
     try {
-      const { jobId } = await call();
-      if (idRef.current === startId) resolve(key, jobId);
+      // Anchor renders go through the media-job queue (jobId); the walk render
+      // is an observable grok-tui run (runId, no media job). Either reserves
+      // the key so a double-submit can't fire two paid renders.
+      const result = await call();
+      if (idRef.current === startId) resolve(key, result?.jobId || result?.runId);
     } catch (err) {
       if (idRef.current === startId) cancel(key);
       toast.error(err?.message || failMessage);

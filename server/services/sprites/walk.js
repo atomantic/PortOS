@@ -18,15 +18,15 @@
  */
 
 import { join } from 'path';
-import { copyFile, readdir, rm } from 'fs/promises';
+import { readdir, rm } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import {
-  PATHS, ensureDir, atomicWrite, readJSONFile, pathExists, sha256File,
+  ensureDir, atomicWrite, readJSONFile, pathExists, sha256File,
 } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
-import { enqueueJob } from '../mediaJobQueue/index.js';
-import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
+import { executeTuiRun } from '../../lib/tuiPromptRunner.js';
+import { GROK_TUI_ID } from '../../lib/grok.js';
 import { getSettings } from '../settings.js';
 import { updateRecord } from './records.js';
 import {
@@ -35,9 +35,22 @@ import {
 import { requireCharacter, loadManifest } from './reference.js';
 import { SPRITE_DIRECTIONS, anchorIdForDirection, buildWalkVideoPrompt } from './prompts.js';
 import {
-  prepareWalkAnchorInput, runWalkPostprocess, WALK_FPS, WALK_FRAME_COUNT, WALK_CELL_SIZE,
+  prepareWalkAnchorChromaInput, runWalkPostprocess, WALK_FPS, WALK_FRAME_COUNT, WALK_CELL_SIZE,
 } from './walkPostprocess.js';
 import { GROK_VIDEO_DURATIONS } from '../videoGen/grok.js';
+
+// Walk clips default SHORTER than general video gen: a looping walk cycle needs
+// only ~8 frames of one gait, so a 2s clip renders far faster than the 6s
+// general default while still giving the cycle selector plenty of frames.
+const WALK_DEFAULT_DURATION = 2;
+
+// grok's walk render runs as an OBSERVABLE TUI session (issue: user wants to
+// watch/course-correct grok in the Shell) rather than a headless mediaJobQueue
+// spawn. The idle threshold must be long enough that grok's narration lulls
+// during the multi-minute image_to_video render aren't mistaken for completion;
+// the hard cap mirrors the old headless GROK_VIDEO_TIMEOUT_MS.
+const WALK_TUI_IDLE_MS = 90_000;
+const WALK_TUI_TIMEOUT_MS = 30 * 60_000;
 
 const selectionRelPath = (id) => `walk/${id}-walk-selection-v1.json`;
 // Exported: atlas.js (phase 4) reads the finalized walk set as compile input.
@@ -329,9 +342,16 @@ export async function getWalkState(recordId) {
 }
 
 /**
- * Queue one grok walk video for a direction whose anchor is locked.
- * User-triggered only (route-invoked); exactly one image_to_video call per
- * run — all derivatives are deterministic local work.
+ * Start one observable grok walk-video render for a direction whose anchor is
+ * locked. User-triggered only (route-invoked); exactly one image_to_video call
+ * per run — all derivatives are deterministic local work.
+ *
+ * grok runs as an interactive TUI session (executeTuiRun) rather than a headless
+ * job so the user can pop into the Shell page to watch it, and — if needed —
+ * type to course-correct or Stop it. The session id IS the run id, so the walk
+ * card can deep-link to `/shell/<runId>` the moment the render starts. The
+ * render itself runs OUTSIDE the per-record write tail (a ~10-min PTY run must
+ * not block other walk ops); its completion re-enters the tail to attach.
  */
 export function startWalkGeneration(recordId, body) {
   return walkWriteTail(recordId, () => startWalkGenerationImpl(recordId, body));
@@ -361,58 +381,133 @@ async function startWalkGenerationImpl(recordId, body) {
   const generatedAbs = join(runAbs, 'generated');
   await ensureDir(generatedAbs);
 
-  // Transparent i2v motion input derived from the locked anchor without
-  // mutating it (measured-key alpha recovery + despill).
-  const inputAbs = join(generatedAbs, 'input-anchor-transparent.png');
-  const { preparation, sha256: inputSha256 } = await prepareWalkAnchorInput(anchorAbs, inputAbs, chromaKey);
-
-  const settings = await getSettings();
-  const duration = GROK_VIDEO_DURATIONS.includes(Number(body.duration)) ? Number(body.duration) : GROK_VIDEO_DURATIONS[0];
+  // i2v motion input: the anchor composited onto the SOLID chroma matte grok
+  // must animate over (NOT a transparent PNG — that made grok composite over
+  // black and reinvent an off-spec magenta from the prompt text; see
+  // prepareWalkAnchorChromaInput). Saved without mutating the locked anchor.
+  // Overlap the input prep with the (independent) settings read.
+  const inputAbs = join(generatedAbs, 'input-anchor-chroma.png');
+  const [{ preparation, sha256: inputSha256 }, settings] = await Promise.all([
+    prepareWalkAnchorChromaInput(anchorAbs, inputAbs, chromaKey),
+    getSettings(),
+  ]);
+  const duration = GROK_VIDEO_DURATIONS.includes(Number(body.duration)) ? Number(body.duration) : WALK_DEFAULT_DURATION;
   const prompt = buildWalkVideoPrompt({ name: record.name, direction, chromaKey });
+  const videoAbs = join(generatedAbs, 'source-video.mp4');
+  const grokPath = settings.imageGen?.grok?.grokPath;
 
-  // Run record BEFORE enqueue: a crash between the two leaves an inert
-  // 'queued' run (harmless, regenerable) rather than a completed job the
-  // hook can't file.
+  // Run record BEFORE the render starts: a crash between the two leaves an inert
+  // 'rendering' run (harmless, regenerable) rather than a session the attach
+  // can't file. `shellSession` is the id the walk card deep-links to.
   const now = new Date().toISOString();
   const run = {
     schemaVersion: 1,
     kind: 'grok-game-animation-frames-run',
     // Vendor recorded as metadata, not baked into the storage path — a future
     // non-grok source stamps its own provider and stores under the same runs/ tree.
-    provider: 'grok',
-    status: 'queued',
+    provider: GROK_TUI_ID,
+    status: 'rendering',
     id: runId,
-    jobId: null,
+    // The TUI run id doubles as the attachable Shell session id (executeTuiRun
+    // registers the PTY under this id), so the card can link to /shell/<id>.
+    shellSession: runId,
     characterId: recordId,
     direction,
     chromaKey,
+    duration,
     anchorPath: anchor.path,
     anchorSha256: anchor.sha256 || await sha256File(anchorAbs),
-    animationInputPath: `${runRel}/generated/input-anchor-transparent.png`,
+    animationInputPath: `${runRel}/generated/input-anchor-chroma.png`,
     animationInputSha256: inputSha256,
     animationInputPreparation: preparation,
     createdAt: now,
   };
   await saveRunRecord(recordId, run);
 
-  const { jobId } = enqueueJob({
-    kind: 'video',
-    params: {
-      mode: IMAGE_GEN_MODE.GROK,
-      videoMode: 'image',
-      grokPath: settings.imageGen?.grok?.grokPath,
-      prompt,
-      sourceImagePath: inputAbs,
-      duration,
-      // Destination tag the completion hook files the video by.
-      spriteWalk: { recordId, direction, runId, chromaKey },
-    },
-    owner: 'sprites',
+  // Fire the observable grok-tui render fire-and-forget (do NOT await — this
+  // impl holds the per-record write tail, which a ~10-min render must not).
+  // Completion re-enters the tail via attachTuiWalkResult; errors are captured
+  // onto the run record (no request lifecycle to bubble to).
+  runWalkTuiRender(recordId, {
+    runId, direction, grokPath, task: buildWalkTuiTask({ prompt, inputAbs, videoAbs, duration }),
+    generatedAbs, videoAbs,
+  }).catch((err) => console.error(`❌ sprite walk grok-tui render crashed ${recordId}/${runId}: ${err?.message || err}`));
+
+  console.log(`🚶 sprite walk grok-tui render started ${recordId}/${runId} (shell session ${runId})`);
+  return { runId, direction, duration, shellSession: runId };
+}
+
+// The single-turn TUI task: reuse the shared motion/matte prompt, then point
+// grok at the concrete input path and the exact MP4 output path. executeTuiRun
+// wraps this with its "write your final response to the response file when done"
+// instruction, so grok saves the MP4 first and its completion signal is the
+// response file (with the long idle threshold as a backstop).
+function buildWalkTuiTask({ prompt, inputAbs, videoAbs, duration }) {
+  return `${prompt}\n\n`
+    + `Use your built-in image_to_video tool to animate the image at this exact path for ${duration} seconds:\n${inputAbs}\n\n`
+    + `Save the resulting animation as an MP4 file at exactly this path:\n${videoAbs}\n\n`
+    + 'Do not create or modify any other files, and do not run any tools beyond what is needed to render and save that MP4.';
+}
+
+/**
+ * Drive the observable grok-tui render to completion, then attach its result.
+ * executeTuiRun spawns grok in a PTY and registers it as a Shell session under
+ * `runId`; its promise resolves on success OR failure, so the attach decides
+ * outcome from whether the directed MP4 actually landed on disk.
+ */
+async function runWalkTuiRender(recordId, { runId, direction, grokPath, task, generatedAbs, videoAbs }) {
+  // args:[] is intentional — buildTuiInvocation → applyCommandDefaults routes a
+  // grok command through ensureGrokTuiArgs (adds --permission-mode bypassPermissions).
+  const provider = { id: GROK_TUI_ID, type: 'tui', command: grokPath || 'grok', args: [] };
+  await executeTuiRun({
+    runId,
+    provider,
+    prompt: task,
+    workspacePath: generatedAbs,
+    idleMs: WALK_TUI_IDLE_MS,
+    timeout: WALK_TUI_TIMEOUT_MS,
+    label: `sprite walk ${recordId}/${direction}`,
+  }).catch((err) => {
+    console.error(`❌ sprite walk grok-tui run failed ${recordId}/${runId}: ${err?.message || err}`);
   });
-  run.jobId = jobId;
+  await walkWriteTail(recordId, () => attachTuiWalkResult(recordId, runId, videoAbs));
+}
+
+/**
+ * Attach the finished grok-tui clip and run the deterministic postprocess.
+ * Guards against overwriting frozen evidence (finalized set / already-approved
+ * run); the source video is already at its final path (grok wrote it there
+ * directly), so there's no copy — unlike a queued-job attach.
+ */
+export async function attachTuiWalkResult(recordId, runId, videoAbs) {
+  const run = await loadRunRecord(recordId, runId);
+  if (!run) {
+    console.error(`❌ sprite walk run record missing for ${recordId}/${runId} — skipping attach`);
+    return;
+  }
+  if (await loadWalkSet(recordId)) {
+    console.error(`❌ sprite walk attach skipped for ${recordId}/${runId} — walk set is finalized`);
+    return;
+  }
+  const selection = await loadSelection(recordId);
+  if (selection?.directions?.[run.direction]?.runId === runId) {
+    console.error(`❌ sprite walk attach skipped for ${recordId}/${runId} — run is approved (immutable)`);
+    return;
+  }
+  if (!await pathExists(videoAbs)) {
+    run.status = 'error';
+    run.postprocessError = 'Grok finished without writing the walk video — check the shell session output';
+    run.completedAt = new Date().toISOString();
+    await saveRunRecord(recordId, run);
+    console.error(`❌ sprite walk grok-tui produced no video ${recordId}/${runId}`);
+    return;
+  }
+  run.sourceVideoSha256 = await sha256File(videoAbs);
+  run.status = 'postprocessing';
   await saveRunRecord(recordId, run);
-  console.log(`🚶 sprite walk video queued ${recordId}/${runId} jobId=${jobId.slice(0, 8)}`);
-  return { jobId, runId, direction, duration };
+  await packageRun(recordId, run);
+  await saveRunRecord(recordId, run);
+  console.log(`🚶 sprite walk grok-tui run ${recordId}/${runId} → ${run.status}`);
 }
 
 /**
@@ -424,6 +519,11 @@ async function startWalkGenerationImpl(recordId, body) {
 async function packageRun(recordId, run) {
   const runRel = runRelPath(run.id);
   const runAbs = join(spriteDir(recordId), runRel);
+  // Record-relative path to grok's raw clip, stamped BEFORE the (possibly
+  // failing) postprocess so a run that errors in packaging still surfaces the
+  // video grok actually produced in the UI, not just the error text. Set here
+  // (shared by attach + rerun) so a retry backfills it onto an older run too.
+  run.sourceVideoPath = `${runRel}/generated/source-video.mp4`;
   try {
     const manifest = await loadManifest(recordId);
     const anchor = manifest?.anchors?.find((a) => a.direction === run.direction);
@@ -449,54 +549,6 @@ async function packageRun(recordId, run) {
     console.error(`❌ sprite walk postprocess failed ${recordId}/${run.id}: ${err.message}`);
   }
   run.completedAt = new Date().toISOString();
-}
-
-/**
- * Completion-hook attach: copy the finished grok video into the run root and
- * run the deterministic postprocess. Errors are captured onto the run record
- * (status 'error') so the UI can surface them — the hook context has no
- * request to bubble to.
- */
-export function attachWalkVideo(ctx) {
-  return walkWriteTail(ctx.recordId, () => attachWalkVideoImpl(ctx));
-}
-
-async function attachWalkVideoImpl({ recordId, runId, filename, jobId }) {
-  const run = await loadRunRecord(recordId, runId);
-  if (!run) {
-    console.error(`❌ sprite walk run record missing for ${recordId}/${runId} — skipping attach`);
-    return null;
-  }
-  // Immutability guard, mirroring the rerun path: a Render Queue retry of a
-  // terminal job re-carries the spriteWalk tag, so a clip can land AFTER the
-  // run was approved (or the set finalized) — attaching would silently
-  // replace frozen evidence and break the selection's recorded sha256s.
-  if (await loadWalkSet(recordId)) {
-    console.error(`❌ sprite walk attach skipped for ${recordId}/${runId} — walk set is finalized`);
-    return null;
-  }
-  const selection = await loadSelection(recordId);
-  if (selection?.directions?.[run.direction]?.runId === runId) {
-    console.error(`❌ sprite walk attach skipped for ${recordId}/${runId} — run is approved (immutable)`);
-    return null;
-  }
-  const src = join(PATHS.videos, filename);
-  if (!await pathExists(src)) {
-    console.error(`❌ sprite walk video missing for ${recordId}/${runId} (${filename}) — skipping attach`);
-    return null;
-  }
-  const runAbs = join(spriteDir(recordId), runRelPath(runId));
-  const videoAbs = join(runAbs, 'generated', 'source-video.mp4');
-  await ensureDir(join(runAbs, 'generated'));
-  await copyFile(src, videoAbs);
-  run.jobId = run.jobId || jobId || null;
-  run.sourceVideoSha256 = await sha256File(videoAbs);
-  run.status = 'postprocessing';
-  await saveRunRecord(recordId, run);
-
-  await packageRun(recordId, run);
-  await saveRunRecord(recordId, run);
-  return { runId, status: run.status };
 }
 
 /**
