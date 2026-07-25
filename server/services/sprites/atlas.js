@@ -55,9 +55,10 @@ import {
   buildAtlasGrid, resolveTrackUniformity, compiledGridUpToDate, trackDirections,
 } from './atlasGrid.js';
 import {
-  withWalkWriteTail, walkSetRelPath, importedWalkDirections,
+  withWalkWriteTail, walkSetRelPath, importedWalkDirections, resolveChromaKey,
 } from './walk.js';
 import { verifyPackagedFrames } from './walkFrames.js';
+import { getRecord } from './records.js';
 
 // Player atlas contract (source pipeline runtime_publish.py): 96px cells,
 // pivot (48,88) — silhouette centered on x=48, feet on the y=88 ground line —
@@ -320,11 +321,17 @@ export async function validateForCompile(recordId) {
   }
   await readVerified(walkSet.selectionPath, walkSet.selectionSha256, 'Walk selection file');
 
-  const referenceManifest = await loadManifest(recordId);
+  const [referenceManifest, record] = await Promise.all([loadManifest(recordId), getRecord(recordId)]);
   if (!referenceManifest || referenceManifest.status !== 'complete') {
     throw compileError('Reference set is not complete — all 8 anchors must be locked', 'REFERENCE_INCOMPLETE');
   }
-  const chromaKey = referenceManifest.chromaKey;
+  // manifest → record, the same rung order the generate and postprocess paths
+  // use. Reading the manifest alone made the atlas uncompilable for every
+  // source-pipeline import — the importer stamps the key on the RECORD and
+  // copies a manifest carrying none — so the recovery path #3043 opens (unlock →
+  // regenerate all 8 → approve → freeze) would have dead-ended here, at a 409,
+  // AFTER the user paid for eight renders.
+  const chromaKey = resolveChromaKey({ manifest: referenceManifest, record });
   if (!chromaKey) throw compileError('Reference manifest has no frozen chroma key');
 
   const anchors = {};

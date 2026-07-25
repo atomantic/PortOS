@@ -32,8 +32,17 @@ export function walkUnlockCopy(unlock) {
       toast: null,
     };
   }
+  // Scoped to the stranded list on purpose: the server verifies locked anchors
+  // for THOSE directions only (`resolveUnlockBlock` probes `stranded`), so a
+  // blanket "each of the 8 can be regenerated" would claim more than it checked
+  // — a non-stranded direction whose anchor happens to be unlocked is not
+  // covered by the gate, and telling the user otherwise is the same
+  // promise-more-than-you-proved mistake the gate itself avoids.
+  const regenerated = stranded.length
+    ? `${stranded.join(', ')} can be regenerated from ${one ? 'its' : 'their'} locked anchor — one new grok render ${one ? 'for it' : 'each'}`
+    : 'each direction can be regenerated from its locked anchor — one new grok render per direction';
   return {
-    text: `${who} Unlocking anyway re-opens all 8 directions so each can be regenerated from its locked anchor — one new grok render per direction. Nothing on disk is deleted, but every approval is dropped and the set stops compiling until all 8 are approved again.`,
+    text: `${who} Unlocking anyway re-opens all 8 directions and ${regenerated}. Nothing on disk is deleted, but every approval is dropped and the set stops compiling until all 8 are approved again.`,
     action: 'Unlock anyway',
     prompt: 'Re-open all 8 for regeneration?',
     acknowledgeNoClips: true,

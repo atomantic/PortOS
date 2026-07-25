@@ -849,13 +849,6 @@ async function setWalkTargetImpl(recordId, { frameCount, fps }) {
 }
 
 /**
- * The locked directional anchor for a direction, or null. Third copy of this
- * `.find` + locked/path pair when it was extracted (generate, approve, and the
- * regenerability probe below all ask the same question), and the definition of
- * "usable anchor" drifting between them is how a gate ends up promising a render
- * the render path then refuses.
- */
-/**
  * The chroma key a walk operation should key against, most specific first: the
  * run's own frozen key, then the reference manifest's, then the record's.
  *
@@ -870,10 +863,17 @@ async function setWalkTargetImpl(recordId, { frameCount, fps }) {
  * Returns null when no rung has one, so callers refuse explicitly rather than
  * handing `undefined` to a color parser.
  */
-const resolveChromaKey = ({ manifest, record, run } = {}) => (
+export const resolveChromaKey = ({ manifest, record, run } = {}) => (
   run?.chromaKey || manifest?.chromaKey || record?.chromaKey || null
 );
 
+/**
+ * The locked directional anchor for a direction, or null. Third copy of this
+ * `.find` + locked/path pair when it was extracted (generate, approve, and the
+ * regenerability probe below all ask the same question), and the definition of
+ * "usable anchor" drifting between them is how a gate ends up promising a render
+ * the render path then refuses.
+ */
 const lockedAnchorFor = (manifest, direction) => {
   const anchor = manifest?.anchors?.find((a) => a.direction === direction);
   return anchor?.status === 'locked' && anchor.path ? anchor : null;
@@ -1654,6 +1654,34 @@ async function assertSetReDerivable(recordId, walkSet, { acknowledgeNoClips = fa
  * response, so a hoisted shared constant would be one downstream mutation away
  * from poisoning every later response process-wide.
  */
+/**
+ * Which of `scope` has no clip to re-derive from, using a caller's pre-resolved
+ * clip map where it covers a direction and probing disk where it doesn't.
+ *
+ * The partition is the whole point. `getWalkState` builds its map from the runs
+ * it resolved, and it only resolves entries whose status is `approved` — while
+ * `importedWalkDirections` filters on provenance alone and so includes entries
+ * in any state. So a direction can be legitimately absent from the map, and
+ * reading absent as "proven to have no clip" is the repo's own absent-vs-empty
+ * conflation: a `pending` source-anchored entry whose clip is sitting on disk
+ * would be reported stranded, and the client would either quote the user eight
+ * needless renders or (with an unlocked anchor anywhere) hide the unlock
+ * entirely — re-creating, through a different door, the dead end #3043 removes.
+ * `in` distinguishes resolved-false from unresolved; the probe answers the rest.
+ */
+async function strandedDirections(recordId, walkSet, scope, clipByDirection) {
+  if (!clipByDirection) return directionsWithoutClip(recordId, walkSet, scope);
+  const unresolved = scope.filter((direction) => !(direction in clipByDirection));
+  const probed = new Set(unresolved.length
+    ? await directionsWithoutClip(recordId, walkSet, unresolved)
+    : []);
+  // Filtered over `scope` rather than concatenated, so the reported order stays
+  // the walk set's own — it is read aloud in the refusal message.
+  return scope.filter((direction) => (direction in clipByDirection
+    ? !clipByDirection[direction]
+    : probed.has(direction)));
+}
+
 async function resolveUnlockBlock(recordId, walkSet, clipByDirection = null) {
   const notBlocked = { blocked: false, stranded: [], acknowledgeable: false };
   if (!isImportedWalkSet(walkSet)) return notBlocked;
@@ -1667,9 +1695,7 @@ async function resolveUnlockBlock(recordId, walkSet, clipByDirection = null) {
   if (!stale.length) {
     return { blocked: true, stranded: [], acknowledgeable: await regenerable(SPRITE_DIRECTIONS) };
   }
-  const stranded = clipByDirection
-    ? stale.filter((direction) => !clipByDirection[direction])
-    : await directionsWithoutClip(recordId, walkSet, stale);
+  const stranded = await strandedDirections(recordId, walkSet, stale, clipByDirection);
   if (!stranded.length) return notBlocked;
   return { blocked: true, stranded, acknowledgeable: await regenerable(stranded) };
 }

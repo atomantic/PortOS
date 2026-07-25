@@ -200,6 +200,7 @@ async function makeCandidateRun(recordId, direction, {
  */
 async function makeImportedDirection(recordId, direction, {
   base = 'grok', declaredBase = base, clip = true, frameCount = 8, fps = 12,
+  status = 'approved',
 } = {}) {
   const runId = `run-${(seq++).toString(16)}`;
   const spriteRoot = join(TEST_ROOT, 'sprites', recordId);
@@ -235,7 +236,7 @@ async function makeImportedDirection(recordId, direction, {
   }));
   return {
     runId,
-    entry: { status: 'approved', runPath: anchor(declaredRun), runManifest: anchor(manifestRel) },
+    entry: { status, runPath: anchor(declaredRun), runManifest: anchor(manifestRel) },
   };
 }
 
@@ -1151,6 +1152,27 @@ describe('imported walk sets — evidence-based re-derive', () => {
       message: expect.stringContaining('No chroma key'),
     });
     expect(runWalkPostprocess).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The stamped read and the unlock gate must agree. `getWalkState` resolves runs
+   * only for entries whose status is `approved`, while `importedWalkDirections`
+   * filters on provenance alone and so includes entries in any state — so a
+   * source-anchored `pending` entry is absent from the clip map the read hands
+   * over. Reading absent as "proven clipless" made the read report `blocked` for
+   * a set the write path unlocks plainly and for free: the client would quote
+   * eight needless renders, or (with any anchor unlocked) render no unlock
+   * control at all — the dead end #3043 exists to remove, through another door.
+   */
+  it('agrees with the unlock gate when an imported entry is not approved', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    await importedCharacter(id, { east: {}, north: { status: 'pending' } });
+
+    // north is source-anchored (so `stale` includes it) and HAS its clip on disk,
+    // but is not approved — so the read never resolved a run for it.
+    expect((await getWalkState(id)).walkSet.unlock).toMatchObject({ blocked: false });
+    // …and the gate, which probes disk, agrees: a plain unlock succeeds.
+    await expect(unlockWalkSet(id)).resolves.toMatchObject({ walkSet: null });
   });
 
   // The acknowledgement is an override of the CLIP requirement only — it must

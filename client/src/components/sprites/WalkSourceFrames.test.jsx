@@ -248,7 +248,7 @@ describe('WalkSourceFrames', () => {
       lockReason: 'finalized',
       unlock: { blocked: true, stranded: ['east'], acknowledgeable: true },
     }));
-    expect(screen.getByText(/one new grok render per direction/)).toBeTruthy();
+    expect(screen.getByText(/one new grok render/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Unlock anyway/ }));
     fireEvent.click(screen.getByRole('button', { name: /^Unlock anyway$/ }));
     await act(async () => {});

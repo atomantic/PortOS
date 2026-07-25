@@ -18,8 +18,26 @@ describe('walkUnlockCopy', () => {
     expect(copy.action).toBe('Unlock anyway');
     expect(copy.toast).toBeTruthy();
     // The cost has to be in the TEXT, not a tooltip — a touch user never sees a title.
-    expect(copy.text).toMatch(/one new grok render per direction/);
+    expect(copy.text).toMatch(/one new grok render/);
     expect(copy.text).toMatch(/every approval is dropped/);
+  });
+
+  // The server only verifies locked anchors for the STRANDED directions, so the
+  // copy must not claim regeneration for all eight. Pinned as a property: the
+  // regeneration clause names the stranded list, and never asserts a blanket
+  // "each of the 8" when a specific subset is what was checked.
+  it('scopes the regeneration claim to the directions the server actually verified', () => {
+    const one = walkUnlockCopy({ blocked: true, stranded: ['east'], acknowledgeable: true });
+    expect(one.text).toMatch(/east can be regenerated from its locked anchor/);
+    expect(one.text).not.toMatch(/each can be regenerated/);
+
+    const many = walkUnlockCopy({ blocked: true, stranded: ['east', 'north'], acknowledgeable: true });
+    expect(many.text).toMatch(/east, north can be regenerated from their locked anchor/);
+
+    // The evidence-free case has no stranded list — there the server DID verify
+    // all eight, so the blanket wording is the accurate one.
+    const setLevel = walkUnlockCopy({ blocked: true, stranded: [], acknowledgeable: true });
+    expect(setLevel.text).toMatch(/each direction can be regenerated/);
   });
 
   it('offers no action, and never the consent flag, when regeneration is out too', () => {
