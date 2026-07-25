@@ -98,6 +98,12 @@ export default function Media3DDetail() {
   const isGenerating = record.status === 'generating';
   const latestRun = Array.isArray(record.runs) && record.runs.length ? record.runs[record.runs.length - 1] : null;
   const percent = Number.isFinite(latestRun?.percent) ? Math.round(latestRun.percent) : null;
+  // Re-renders overwrite the same model.glb path. Key the fetch to the completed
+  // generation so drei's URL cache loads the new bytes when this record is rendered
+  // again, while old records without generatedAt retain their historical URL.
+  const meshSrc = record.generatedAt
+    ? `${record.assetPath}?v=${encodeURIComponent(record.generatedAt)}`
+    : record.assetPath;
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -163,7 +169,7 @@ export default function Media3DDetail() {
           <span className="mb-1 block text-xs text-gray-400">Mesh</span>
           {record.status === 'ready' && record.assetPath ? (
             <GlbViewer
-              src={record.assetPath}
+              src={meshSrc}
               downloadHref={imageTo3dAssetUrl(record.id)}
               forceOpaque
             />

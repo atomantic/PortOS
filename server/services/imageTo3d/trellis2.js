@@ -720,7 +720,7 @@ const HF_AUTH_HELP = 'TRELLIS.2 could not download a gated model dependency from
  *          pipelineType?: string, unifiedMemoryGb?: number,
  *          onProgress?: (frame: object) => void,
  *          spawnImpl?: Function, exists?: (p: string) => boolean,
- *          env?: NodeJS.ProcessEnv, postprocessGlb?: (path: string) => Promise<void>}} opts
+ *          env?: NodeJS.ProcessEnv, postprocessGlb?: (path: string) => void|Promise<void>}} opts
  * @returns {{promise: Promise<{assetPath: string}>, kill: () => void}}
  */
 export function runTrellis2Generate({
@@ -741,7 +741,7 @@ export function runTrellis2Generate({
     err.code = 'TRELLIS2_NOT_INSTALLED';
     return { promise: Promise.reject(err), kill: () => {} };
   }
-  const resolvedPipelineType = pipelineType || selectTrellis2PipelineType(unifiedMemoryGb);
+  const resolvedPipelineType = pipelineType ?? selectTrellis2PipelineType(unifiedMemoryGb);
   const { command, args } = buildGenerateArgs({
     imagePath,
     outputPath,

@@ -49,10 +49,12 @@ describe('Media3DDetail', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('renders the mesh viewer and source image for a ready record', async () => {
-    getImageTo3dModel.mockResolvedValue(record());
+    getImageTo3dModel.mockResolvedValue(record({ generatedAt: '2026-07-25T12:34:56.000Z' }));
     renderAt();
     expect(await screen.findByText('Example Beacon')).toBeInTheDocument();
-    expect(screen.getByTestId('glb-viewer')).toHaveTextContent('/data/image-to-3d/image3d-1/model.glb');
+    expect(screen.getByTestId('glb-viewer')).toHaveTextContent(
+      '/data/image-to-3d/image3d-1/model.glb?v=2026-07-25T12%3A34%3A56.000Z',
+    );
     expect(screen.getByTestId('glb-viewer')).toHaveAttribute('data-force-opaque', 'true');
     expect(screen.getByAltText('Source image')).toBeInTheDocument();
   });
