@@ -30,6 +30,10 @@
 
 - **[issue-3014] See how many of the loop's approved proposals actually got delivered** — the Proposal outcomes panel showed only how many hand-offs succeeded *once attempted*, which read as a perfect score even when most approved proposals were sitting untouched. It now also shows an **approvals delivered** rate measured against every proposal you approved, so work that was approved and then quietly lost is visible instead of hidden behind the attempted-only number. The loop sees the same two rates (overall and per scope) when it reasons about what to propose next, so it can tell "you rejected my ideas" apart from "my ideas were accepted and never landed" and calibrate accordingly.
 
+## Managed apps
+
+- **[issue-2991] Starting a desktop app now shows what it's doing, and quitting it stays quit** — pressing **Start** on a managed desktop app (a game binary) opens a live panel showing the build output as it compiles and imports assets, so a launch that takes a minute before a window appears no longer looks like nothing happened. The panel switches from "Launching" to "Running" once the app is up, and you can dismiss it any time without stopping the app. Closing or force-quitting the app's window is now treated as the normal end of a session everywhere: PortOS will no longer silently relaunch the window you just closed, and quitting no longer shows up as an errored process or raises a failure alert. Apps that run in their own PM2 instance now stream their logs correctly instead of showing an empty panel.
+
 ## Music studio
 
 - **[issue-2912] Chiptune score edits on two synced machines now show up as a real conflict** — if you compose a chiptune score for the same track on two federated installs before they sync with each other, that divergence now surfaces in Sharing → Conflicts (so you can review and choose which version to keep) instead of one edit silently overwriting the other.

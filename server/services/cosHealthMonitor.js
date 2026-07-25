@@ -13,6 +13,7 @@ import { safeJSONParse } from '../lib/fileUtils.js';
 import { getMemoryStats } from '../lib/memoryStats.js';
 import { loadState, saveState, withStateLock, isDaemonRunning } from './cosState.js';
 import { cosEvents, emitLog } from './cosEvents.js';
+import { getDesktopProcessNames } from './apps.js';
 
 const _execFileAsync = promisify(execFile);
 const execFileAsync = (cmd, args, opts) => _execFileAsync(cmd, args, { ...opts, windowsHide: true });
@@ -47,12 +48,32 @@ export async function runHealthCheck() {
   const pm2Json = jsonStart >= 0 ? pm2Output.slice(jsonStart) : '[]';
   const pm2Processes = safeJSONParse(pm2Json, [], { logError: true, context: 'pm2 process list' });
 
-  const erroredProcesses = pm2Processes.filter(p => p.pm2_env?.status === 'errored');
+  // Desktop (GUI) processes are exempt from auto-restart: the user closing or
+  // force-quitting a game window can leave PM2 `errored`, and restarting it would
+  // reopen the window they just closed — the same relaunch loop `autorestart: false`
+  // prevents, arriving by another path. A registry read failure exempts nothing
+  // (empty set), so the pre-existing behavior stands rather than silently
+  // disabling auto-restart for every app. See issue #2991.
+  const desktopProcessNames = await getDesktopProcessNames().catch(err => {
+    console.error(`❌ Health monitor could not read the app registry: ${err.message}`);
+    return new Set();
+  });
+
+  const erroredProcesses = pm2Processes.filter(
+    p => p.pm2_env?.status === 'errored' && !desktopProcessNames.has(p.name)
+  );
+  // A quit game window counted toward `errored` would degrade the health metric
+  // for a normal user action, so desktop exits are reported separately instead of
+  // being folded into the error count (or silently dropped from the totals).
+  const desktopExited = pm2Processes.filter(
+    p => desktopProcessNames.has(p.name) && ['errored', 'stopped'].includes(p.pm2_env?.status)
+  ).length;
   metrics.pm2 = {
     total: pm2Processes.length,
     online: pm2Processes.filter(p => p.pm2_env?.status === 'online').length,
     errored: erroredProcesses.length,
-    stopped: pm2Processes.filter(p => p.pm2_env?.status === 'stopped').length
+    stopped: pm2Processes.filter(p => p.pm2_env?.status === 'stopped').length,
+    desktopExited
   };
 
   // Check for runaway processes (too many)

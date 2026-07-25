@@ -34,7 +34,7 @@ vi.mock('./pm2.js', () => ({
 import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 import { listProcessesStrict } from './pm2.js';
 import { resetExecutionHistory } from './taskSchedule.js';
-import { createApp, getAppStatuses, getAppStatusSummary, getReservedPorts, invalidateCache, PORTOS_APP_ID, updateAppTaskTypeOverride } from './apps.js';
+import { createApp, getAppStatuses, getAppStatusSummary, getDesktopProcessNames, getReservedPorts, invalidateCache, PORTOS_APP_ID, updateAppTaskTypeOverride } from './apps.js';
 
 describe('pr-watcher cooldown reset', () => {
   beforeEach(() => {
@@ -267,6 +267,57 @@ describe('portless / desktop apps (#2991)', () => {
     const statuses = await getAppStatuses();
     const game = statuses.find(s => s.name === 'The Game');
     expect(game.overallStatus).toBe('online');
+  });
+
+  // The set the CoS health monitor and proactive alerts consult so a quit game
+  // window is never auto-restarted or reported as a failure.
+  describe('getDesktopProcessNames', () => {
+    it('collects every PM2 name owned by a desktop app', async () => {
+      readJSONFile.mockResolvedValue({
+        apps: {
+          [PORTOS_APP_ID]: { name: 'PortOS', type: 'express', pm2ProcessNames: ['portos-server'] },
+          'the-game': { name: 'The Game', type: 'desktop', pm2ProcessNames: ['the-game', 'the-game-alt'] },
+        },
+      });
+
+      const names = await getDesktopProcessNames();
+
+      expect(names).toEqual(new Set(['the-game', 'the-game-alt']));
+      // Web processes stay auto-restartable.
+      expect(names.has('portos-server')).toBe(false);
+    });
+
+    it('is empty when no desktop app is registered', async () => {
+      readJSONFile.mockResolvedValue({
+        apps: { [PORTOS_APP_ID]: { name: 'PortOS', type: 'express', pm2ProcessNames: ['portos-server'] } },
+      });
+
+      expect(await getDesktopProcessNames()).toEqual(new Set());
+    });
+
+    it('tolerates a desktop app with no process names', async () => {
+      readJSONFile.mockResolvedValue({
+        apps: {
+          [PORTOS_APP_ID]: { name: 'PortOS', type: 'express' },
+          'the-game': { name: 'The Game', type: 'desktop' },
+        },
+      });
+
+      expect(await getDesktopProcessNames()).toEqual(new Set());
+    });
+
+    it('still exempts an archived desktop app whose PM2 entry outlived the archive', async () => {
+      // Archiving hides the app from the UI but does not delete its PM2 process;
+      // a leftover entry must not become auto-restartable as a side effect.
+      readJSONFile.mockResolvedValue({
+        apps: {
+          [PORTOS_APP_ID]: { name: 'PortOS', type: 'express' },
+          'the-game': { name: 'The Game', type: 'desktop', archived: true, pm2ProcessNames: ['the-game'] },
+        },
+      });
+
+      expect(await getDesktopProcessNames()).toEqual(new Set(['the-game']));
+    });
   });
 });
 

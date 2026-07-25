@@ -2,7 +2,7 @@ import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import EventEmitter from 'events';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
-import { NON_PM2_TYPES, usesPm2 } from './streamingDetect.js';
+import { NON_PM2_TYPES, usesPm2, isDesktopType } from './streamingDetect.js';
 import { listProcessesStrict } from './pm2.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from './taskSchedule.js';
 import { sanitizeTaskMetadata } from '../lib/validation.js';
@@ -174,6 +174,32 @@ export async function getAllApps({ includeArchived = true } = {}) {
  */
 export async function getActiveApps() {
   return getAllApps({ includeArchived: false });
+}
+
+/**
+ * PM2 process names belonging to desktop (portless GUI) apps.
+ *
+ * A desktop process is launched with `autorestart: false` because the user
+ * closing the window is a normal exit — but that alone does NOT stop every
+ * relaunch path. Anything that reacts to an `errored` PM2 status by restarting
+ * it (the CoS health monitor) would reopen the game window, and anything that
+ * alerts on `errored` (proactive alerts) would report a quit as a failure.
+ * A force-quit or a non-zero exit lands in exactly that state, so those
+ * supervisors consult this set and skip desktop processes. See issue #2991.
+ *
+ * Archived apps are included: their PM2 entries can outlive the archive, and a
+ * stale entry must not become auto-restartable just because the app was hidden.
+ *
+ * @returns {Promise<Set<string>>} Process names to exempt from auto-restart/alerts.
+ */
+export async function getDesktopProcessNames() {
+  const apps = await getAllApps();
+  const names = new Set();
+  for (const app of apps) {
+    if (!isDesktopType(app.type)) continue;
+    for (const name of app.pm2ProcessNames || []) names.add(name);
+  }
+  return names;
 }
 
 /**

@@ -6,7 +6,18 @@ const mock = vi.hoisted(() => ({
   savedState: null,
   pm2Stdout: '[]',
   restartImpl: null,
-  events: []
+  events: [],
+  // PM2 process names belonging to desktop (GUI) apps — exempt from auto-restart.
+  desktopProcessNames: new Set(),
+  desktopLookupError: null
+}));
+
+// Mocked so the health check never reads the real apps registry off disk.
+vi.mock('./apps.js', () => ({
+  getDesktopProcessNames: vi.fn(async () => {
+    if (mock.desktopLookupError) throw mock.desktopLookupError;
+    return mock.desktopProcessNames;
+  })
 }));
 
 vi.mock('./cosState.js', () => ({
@@ -47,6 +58,8 @@ describe('cosHealthMonitor.runHealthCheck', () => {
     mock.savedState = null;
     mock.pm2Stdout = '[]';
     mock.events = [];
+    mock.desktopProcessNames = new Set();
+    mock.desktopLookupError = null;
     // default execFile success
     mock.restartImpl = (cmd, args, opts, cb) => cb(null, { stdout: 'restarted', stderr: '' });
   });
@@ -61,7 +74,7 @@ describe('cosHealthMonitor.runHealthCheck', () => {
   it('extracts the JSON array from pm2 output prefixed with ANSI noise', async () => {
     mock.pm2Stdout = '[31mwarning[0m[{"name":"a","pm2_env":{"status":"online"},"monit":{"memory":1000}}]';
     const { metrics } = await runHealthCheck();
-    expect(metrics.pm2).toEqual({ total: 1, online: 1, errored: 0, stopped: 0 });
+    expect(metrics.pm2).toEqual({ total: 1, online: 1, errored: 0, stopped: 0, desktopExited: 0 });
   });
 
   it('flags a high process count over the configured limit', async () => {
@@ -84,6 +97,88 @@ describe('cosHealthMonitor.runHealthCheck', () => {
     const { issues } = await runHealthCheck();
     expect(issues.some(i => i.type === 'error' && /failed to auto-restart/.test(i.message))).toBe(true);
     expect(mock.events.some(e => e.name === 'health:critical')).toBe(true);
+  });
+
+  // Desktop (GUI) processes: closing or force-quitting the window can leave PM2
+  // `errored`, and restarting would reopen the window the user just closed —
+  // the relaunch loop `autorestart: false` prevents, by another path (#2991).
+  describe('desktop (GUI) process exemption', () => {
+    const erroredGame = () => JSON.stringify([
+      { name: 'game', pm2_env: { status: 'errored' }, monit: { memory: 0 } }
+    ]);
+
+    it('never auto-restarts an errored desktop process', async () => {
+      mock.desktopProcessNames = new Set(['game']);
+      mock.pm2Stdout = erroredGame();
+      const restarted = [];
+      mock.restartImpl = (cmd, args, opts, cb) => {
+        restarted.push(args);
+        cb(null, { stdout: 'restarted', stderr: '' });
+      };
+
+      const { issues } = await runHealthCheck();
+
+      expect(restarted).toEqual([]);
+      expect(issues.some(i => /Auto-restarted/.test(i.message))).toBe(false);
+    });
+
+    it('reports a quit game separately instead of as an error', async () => {
+      mock.desktopProcessNames = new Set(['game']);
+      mock.pm2Stdout = erroredGame();
+
+      const { metrics } = await runHealthCheck();
+
+      expect(metrics.pm2.errored).toBe(0);
+      expect(metrics.pm2.desktopExited).toBe(1);
+    });
+
+    it('counts a cleanly stopped desktop process as exited too', async () => {
+      mock.desktopProcessNames = new Set(['game']);
+      mock.pm2Stdout = JSON.stringify([
+        { name: 'game', pm2_env: { status: 'stopped' }, monit: { memory: 0 } }
+      ]);
+
+      const { metrics } = await runHealthCheck();
+
+      expect(metrics.pm2.errored).toBe(0);
+      expect(metrics.pm2.desktopExited).toBe(1);
+    });
+
+    it('still auto-restarts non-desktop processes alongside an exempt one', async () => {
+      mock.desktopProcessNames = new Set(['game']);
+      mock.pm2Stdout = JSON.stringify([
+        { name: 'game', pm2_env: { status: 'errored' }, monit: { memory: 0 } },
+        { name: 'web', pm2_env: { status: 'errored' }, monit: { memory: 0 } }
+      ]);
+      const restarted = [];
+      mock.restartImpl = (cmd, args, opts, cb) => {
+        restarted.push(args[1]);
+        cb(null, { stdout: 'restarted', stderr: '' });
+      };
+
+      const { metrics, issues } = await runHealthCheck();
+
+      expect(restarted).toEqual(['web']);
+      expect(metrics.pm2.errored).toBe(1);
+      expect(issues.some(i => /Auto-restarted 1/.test(i.message))).toBe(true);
+    });
+
+    it('exempts nothing when the registry read fails (pre-existing behavior stands)', async () => {
+      mock.desktopLookupError = new Error('registry unreadable');
+      mock.pm2Stdout = JSON.stringify([
+        { name: 'web', pm2_env: { status: 'errored' }, monit: { memory: 0 } }
+      ]);
+      const restarted = [];
+      mock.restartImpl = (cmd, args, opts, cb) => {
+        restarted.push(args[1]);
+        cb(null, { stdout: 'restarted', stderr: '' });
+      };
+
+      const { metrics } = await runHealthCheck();
+
+      expect(restarted).toEqual(['web']);
+      expect(metrics.pm2.errored).toBe(1);
+    });
   });
 
   it('flags processes over the memory limit', async () => {

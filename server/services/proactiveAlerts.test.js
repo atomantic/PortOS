@@ -1,0 +1,97 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const mock = vi.hoisted(() => ({
+  processes: [],
+  desktopProcessNames: new Set(),
+  desktopLookupError: null
+}));
+
+vi.mock('./identity.js', () => ({ getGoals: vi.fn(async () => []) }));
+vi.mock('./taskLearning.js', () => ({
+  getPerformanceSummary: vi.fn(async () => ({ byType: [] })),
+  getLearningSummary: vi.fn(async () => ({ byType: [] }))
+}));
+vi.mock('./pm2.js', () => ({ listProcesses: vi.fn(async () => mock.processes) }));
+vi.mock('./apps.js', () => ({
+  getDesktopProcessNames: vi.fn(async () => {
+    if (mock.desktopLookupError) throw mock.desktopLookupError;
+    return mock.desktopProcessNames;
+  })
+}));
+vi.mock('./usage.js', () => ({ getUsage: vi.fn(async () => ({ daily: [] })) }));
+vi.mock('./tribe.js', () => ({ getCareSummary: vi.fn(async () => ({ overdueCount: 0, overdue: [] })) }));
+vi.mock('./tribeOutreach.js', () => ({ findUnansweredTribeThreads: vi.fn(async () => []) }));
+// Keep memory/CPU below their warning thresholds so only process alerts surface.
+vi.mock('../lib/memoryStats.js', () => ({
+  getMemoryStats: vi.fn(async () => ({ used: 1, total: 100 }))
+}));
+
+import { generateAlerts } from './proactiveAlerts.js';
+
+const processAlerts = async () => {
+  const { alerts } = await generateAlerts();
+  return alerts.filter(a => a.type === 'process_error');
+};
+
+describe('proactiveAlerts — desktop (GUI) process exemption (#2991)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock.processes = [];
+    mock.desktopProcessNames = new Set();
+    mock.desktopLookupError = null;
+  });
+
+  it('does not alert when the only errored process is a quit game window', async () => {
+    // Force-quitting a game leaves PM2 `errored`; that is a normal end to a play
+    // session, not a failure to notify about.
+    mock.processes = [{ name: 'game', status: 'errored' }];
+    mock.desktopProcessNames = new Set(['game']);
+
+    expect(await processAlerts()).toEqual([]);
+  });
+
+  it('still alerts on a genuinely errored web process', async () => {
+    mock.processes = [{ name: 'web', status: 'errored' }];
+
+    const alerts = await processAlerts();
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].metadata.errored).toBe(1);
+  });
+
+  it('excludes the desktop process from both the count and the total', async () => {
+    mock.processes = [
+      { name: 'game', status: 'errored' },
+      { name: 'web', status: 'errored' },
+      { name: 'api', status: 'online' }
+    ];
+    mock.desktopProcessNames = new Set(['game']);
+
+    const alerts = await processAlerts();
+    expect(alerts).toHaveLength(1);
+    // 1 of 2 — the game is not part of the denominator either, so the ratio
+    // the user reads is not diluted by an exempt process.
+    expect(alerts[0].metadata).toEqual({ errored: 1, total: 2 });
+  });
+
+  it('does not report a desktop app restart loop as crashing', async () => {
+    mock.processes = [{ name: 'game', status: 'online', unstableRestarts: 3 }];
+    mock.desktopProcessNames = new Set(['game']);
+
+    expect(await processAlerts()).toEqual([]);
+  });
+
+  it('still reports unstable restarts for a non-desktop process', async () => {
+    mock.processes = [{ name: 'web', status: 'online', unstableRestarts: 3 }];
+
+    const alerts = await processAlerts();
+    expect(alerts).toHaveLength(1);
+  });
+
+  it('alerts normally when the registry read fails (exempts nothing)', async () => {
+    mock.processes = [{ name: 'web', status: 'errored' }];
+    mock.desktopLookupError = new Error('registry unreadable');
+
+    const alerts = await processAlerts();
+    expect(alerts).toHaveLength(1);
+  });
+});
