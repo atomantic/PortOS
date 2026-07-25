@@ -1025,6 +1025,8 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/POST the diff to PortOS's local reviewer endpoint/);
       expect(prompt).toMatch(/http:\/\/localhost:5555\/api\/code-review\/local/);
       expect(prompt).toMatch(/gh pr diff 9 \| jq/);
+      expect(prompt).toMatch(/jq -er '\.findings \| select\(type == "string" and length > 0\)'/);
+      expect(prompt).toMatch(/Never treat an absent or malformed response as clean/);
     });
 
     it('threads reviewer into the TUI Completion Workflow as `/do:pr --review-with <reviewer>`', () => {
@@ -1468,6 +1470,15 @@ describe('buildReviewLoopFollowUpSection — CLI reviewer procedure inlining', (
       expect(out).toMatch(/do NOT probe the CLI/i);
     });
   }
+
+  it('fails the local reviewer command when its JSON response has no findings', () => {
+    const out = buildReviewLoopFollowUpSection(
+      { ...baseMeta, reviewLoopReviewers: ['ollama'] },
+      { verbose: false, localAgentLoopBody: null }
+    );
+    expect(out).toMatch(/Local reviewer failed:/);
+    expect(out).toMatch(/STATUS=cli-error[^]*exit 1/);
+  });
 
   it('does NOT inline the procedure for a copilot-only loop', () => {
     const out = buildReviewLoopFollowUpSection(

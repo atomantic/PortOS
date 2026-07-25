@@ -423,7 +423,19 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   // `POST /api/code-review/local` which runs the configured local model against
   // the diff and returns findings text. The agent always reaches it via
   // `http://localhost:5555` (the canonical loopback API port).
-  const localLlmInvocation = `POST the diff to PortOS's local reviewer endpoint: \`gh pr diff ${prNumber || '<PR_NUMBER>'} | jq -Rs '{ backend: "<lmstudio|ollama>", diff: . }' | curl -sS -X POST http://localhost:5555/api/code-review/local -H 'Content-Type: application/json' -d @-\`. Substitute the active reviewer name for \`<lmstudio|ollama>\`. The response \`.findings\` field is the review text — treat it like any other reviewer's findings.`;
+  const localLlmInvocation = `POST the diff to PortOS's local reviewer endpoint and extract its review text before evaluating it. Substitute the active reviewer name for \`<lmstudio|ollama>\`:
+\`\`\`bash
+REVIEW_RESPONSE=$(mktemp)
+gh pr diff ${prNumber || '<PR_NUMBER>'} | jq -Rs '{ backend: "<lmstudio|ollama>", diff: . }' | curl -sS -X POST http://localhost:5555/api/code-review/local -H 'Content-Type: application/json' -d @- > "$REVIEW_RESPONSE"
+if ! jq -er '.findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "\${REVIEW_RESPONSE}.findings"; then
+  echo "Local reviewer failed: $(jq -r '.error // "missing .findings in reviewer response"' "$REVIEW_RESPONSE")" >&2
+  STATUS=cli-error # Never treat an absent or malformed response as clean.
+  exit 1
+else
+  cat "\${REVIEW_RESPONSE}.findings"
+fi
+\`\`\`
+Only a successfully extracted \`.findings\` value is the review text; treat it like any other reviewer's findings.`;
   // Instruct the agent to request each username reviewer as a PR reviewer and
   // gate the merge on their approval. `gh pr edit --add-reviewer` takes the bare
   // login, so strip the `@`.
