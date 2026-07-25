@@ -34,7 +34,7 @@ vi.mock('./pm2.js', () => ({
 import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 import { listProcessesStrict } from './pm2.js';
 import { resetExecutionHistory } from './taskSchedule.js';
-import { createApp, getAppStatuses, getAppStatusSummary, getDesktopProcessNames, getReservedPorts, invalidateCache, PORTOS_APP_ID, updateAppTaskTypeOverride } from './apps.js';
+import { annotateExpectedExit, createApp, getAppStatuses, getAppStatusSummary, getDesktopProcessNames, getReservedPorts, invalidateCache, PORTOS_APP_ID, updateAppTaskTypeOverride } from './apps.js';
 
 describe('pr-watcher cooldown reset', () => {
   beforeEach(() => {
@@ -304,6 +304,53 @@ describe('portless / desktop apps (#2991)', () => {
       });
 
       expect(await getDesktopProcessNames()).toEqual(new Set());
+    });
+
+    it('annotates processes with expectedExit so supervisors branch on the concept', async () => {
+      readJSONFile.mockResolvedValue({
+        apps: {
+          [PORTOS_APP_ID]: { name: 'PortOS', type: 'express', pm2ProcessNames: ['portos-server'] },
+          'the-game': { name: 'The Game', type: 'desktop', pm2ProcessNames: ['the-game'] },
+        },
+      });
+
+      const annotated = await annotateExpectedExit([
+        { name: 'the-game', status: 'errored' },
+        { name: 'portos-server', status: 'errored' },
+      ]);
+
+      expect(annotated).toEqual([
+        { name: 'the-game', status: 'errored', expectedExit: true },
+        { name: 'portos-server', status: 'errored', expectedExit: false },
+      ]);
+    });
+
+    it('annotates raw pm2 jlist entries too (both shapes carry a top-level name)', async () => {
+      readJSONFile.mockResolvedValue({
+        apps: {
+          [PORTOS_APP_ID]: { name: 'PortOS', type: 'express' },
+          'the-game': { name: 'The Game', type: 'desktop', pm2ProcessNames: ['the-game'] },
+        },
+      });
+
+      const annotated = await annotateExpectedExit([
+        { name: 'the-game', pm2_env: { status: 'errored' } },
+      ]);
+
+      expect(annotated[0].expectedExit).toBe(true);
+      expect(annotated[0].pm2_env).toEqual({ status: 'errored' });
+    });
+
+    it('fails open — a registry read error exempts nothing', async () => {
+      readJSONFile.mockRejectedValue(new Error('registry unreadable'));
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const annotated = await annotateExpectedExit([{ name: 'the-game', status: 'errored' }]);
+
+      // Nothing marked expected → the pre-existing auto-restart/alert behavior
+      // stands rather than silently exempting every process.
+      expect(annotated[0].expectedExit).toBe(false);
+      errorSpy.mockRestore();
     });
 
     it('still exempts an archived desktop app whose PM2 entry outlived the archive', async () => {

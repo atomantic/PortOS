@@ -12,10 +12,12 @@ vi.mock('./taskLearning.js', () => ({
   getLearningSummary: vi.fn(async () => ({ byType: [] }))
 }));
 vi.mock('./pm2.js', () => ({ listProcesses: vi.fn(async () => mock.processes) }));
+// Mirrors the real annotateExpectedExit, including its fail-open behavior: a
+// registry read failure marks nothing expected, so nothing is exempted.
 vi.mock('./apps.js', () => ({
-  getDesktopProcessNames: vi.fn(async () => {
-    if (mock.desktopLookupError) throw mock.desktopLookupError;
-    return mock.desktopProcessNames;
+  annotateExpectedExit: vi.fn(async (processes) => {
+    const names = mock.desktopLookupError ? new Set() : mock.desktopProcessNames;
+    return processes.map(p => ({ ...p, expectedExit: names.has(p?.name) }));
   })
 }));
 vi.mock('./usage.js', () => ({ getUsage: vi.fn(async () => ({ daily: [] })) }));

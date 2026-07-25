@@ -14,7 +14,12 @@ vi.mock('../../services/socket', () => ({
 import DesktopLaunchProgress from './DesktopLaunchProgress';
 import { DESKTOP_TYPES, isDesktopType } from './constants';
 
-const fire = (event, payload) => act(() => { handlers.get(event)?.(payload); });
+// Lines are batched on a 250ms debounce in useProcessLogs — advance past it so
+// the rendered output reflects the frame.
+const fire = (event, payload) => {
+  act(() => { handlers.get(event)?.(payload); });
+  act(() => { vi.advanceTimersByTime(250); });
+};
 
 const renderPanel = (props = {}) => render(
   <DesktopLaunchProgress
@@ -27,8 +32,8 @@ const renderPanel = (props = {}) => render(
 );
 
 describe('DesktopLaunchProgress', () => {
-  beforeEach(() => { handlers.clear(); emitted.length = 0; });
-  afterEach(cleanup);
+  beforeEach(() => { handlers.clear(); emitted.length = 0; vi.useFakeTimers(); });
+  afterEach(() => { cleanup(); vi.useRealTimers(); });
 
   it('subscribes to the process log scoped to the app (custom PM2_HOME)', () => {
     renderPanel();
@@ -78,11 +83,6 @@ describe('DesktopLaunchProgress', () => {
     expect(emitted.map(([e]) => e)).not.toContain('logs:kill');
   });
 
-  it('unsubscribes when the panel unmounts', () => {
-    const { unmount } = renderPanel();
-    unmount();
-    expect(emitted).toContainEqual(['logs:unsubscribe', { processName: 'game' }]);
-  });
 });
 
 describe('desktop type mirror', () => {

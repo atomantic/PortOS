@@ -32,7 +32,7 @@
 
 ## Managed apps
 
-- **[issue-2991] Starting a desktop app now shows what it's doing, and quitting it stays quit** — pressing **Start** on a managed desktop app (a game binary) opens a live panel showing the build output as it compiles and imports assets, so a launch that takes a minute before a window appears no longer looks like nothing happened. The panel switches from "Launching" to "Running" once the app is up, and you can dismiss it any time without stopping the app. Closing or force-quitting the app's window is now treated as the normal end of a session everywhere: PortOS will no longer silently relaunch the window you just closed, and quitting no longer shows up as an errored process or raises a failure alert. Apps that run in their own PM2 instance now stream their logs correctly instead of showing an empty panel.
+- **[issue-2991] Starting a desktop app now shows what it's doing, and quitting it stays quit** — pressing **Start** on a managed desktop app (a game binary) opens a live panel showing the build output as it compiles and imports assets, so a launch that takes a minute before a window appears no longer looks like nothing happened. The panel switches from "Launching" to "Running" once the app is up, and you can dismiss it any time without stopping the app. Closing or force-quitting the app's window is now treated as the normal end of a session everywhere: PortOS will no longer silently relaunch the window you just closed, and quitting no longer shows up as an errored process, flips your dashboard or CyberCity health to critical, or raises a failure alert. Apps that run in their own PM2 instance now stream their logs correctly instead of showing an empty panel.
 
 ## Music studio
 

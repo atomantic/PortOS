@@ -413,8 +413,9 @@ describe('socket.js — initSocket', () => {
       await socket.handlers['logs:subscribe']({ processName: 'portos-server', lines: 100 });
 
       expect(getAppById).not.toHaveBeenCalled();
+      // buildEnv(null) is the default-home env — no PM2_HOME override.
       const [, opts] = vi.mocked(spawnPm2).mock.calls[0];
-      expect(opts).toEqual({});
+      expect(opts.env.PM2_HOME).toBeUndefined();
     });
 
     it("streams from the app's custom PM2_HOME when it has one", async () => {
@@ -438,7 +439,7 @@ describe('socket.js — initSocket', () => {
       await socket.handlers['logs:subscribe']({ processName: 'game', lines: 200, appId: 'app-1' });
 
       const [, opts] = vi.mocked(spawnPm2).mock.calls[0];
-      expect(opts).toEqual({});
+      expect(opts.env.PM2_HOME).toBeUndefined();
     });
 
     it('still streams when the app lookup fails rather than throwing', async () => {

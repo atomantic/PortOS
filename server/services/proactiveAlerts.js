@@ -16,7 +16,7 @@ import os from 'os';
 import { getGoals } from './identity.js';
 import { getPerformanceSummary, getLearningSummary } from './taskLearning.js';
 import { listProcesses } from './pm2.js';
-import { getDesktopProcessNames } from './apps.js';
+import { annotateExpectedExit } from './apps.js';
 import { getUsage } from './usage.js';
 import { getCareSummary } from './tribe.js';
 import { findUnansweredTribeThreads } from './tribeOutreach.js';
@@ -124,13 +124,11 @@ async function checkSystemHealth() {
     });
   }
 
-  // PM2 process errors. Desktop (GUI) processes are excluded: quitting a game
-  // window is a normal user action that can land PM2 in `errored` (a force-quit
-  // or non-zero exit), and alerting on it would report every play session's end
-  // as a failure. See issue #2991.
+  // PM2 process errors. Processes whose exit is expected (a desktop app the user
+  // quit) are excluded: that is a normal end to a session, and alerting on it
+  // would report every play session as a failure. See issue #2991.
   const processes = await listProcesses().catch(() => []);
-  const desktopProcessNames = await getDesktopProcessNames().catch(() => new Set());
-  const alertable = processes.filter(p => !desktopProcessNames.has(p.name));
+  const alertable = (await annotateExpectedExit(processes)).filter(p => !p.expectedExit);
   const errored = alertable.filter(p => p.status === 'errored').length;
   if (errored > 0) {
     alerts.push({

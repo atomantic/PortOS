@@ -203,6 +203,37 @@ export async function getDesktopProcessNames() {
 }
 
 /**
+ * Stamp `expectedExit` onto each PM2 process so supervisors can branch on the
+ * concept rather than each re-deriving it from a name set.
+ *
+ * `expectedExit: true` means "this process stopping is a normal outcome, not a
+ * failure" — today that is exactly the desktop (GUI) apps, where the user
+ * closing the window ends the process (cleanly as `stopped`, or as `errored`
+ * on a force-quit / non-zero exit). Consumers that auto-restart or alert on
+ * `errored` must skip these. Current consumers:
+ *   - services/cosHealthMonitor.js — auto-restarts errored processes
+ *   - services/proactiveAlerts.js  — alerts on errored / crash-looping processes
+ *   - routes/systemHealth.js       — drives overallHealth + the dashboard/city HUD
+ * A fourth consumer that reacts to `errored` needs this too; naming the concept
+ * here is what makes that discoverable (see issue #2991).
+ *
+ * Fails open: if the registry can't be read, nothing is marked expected, so the
+ * pre-existing behavior stands rather than silently exempting every process.
+ * Accepts either shape of process object — raw `pm2 jlist` entries or `mapProcess`
+ * output — since both carry a top-level `name`.
+ *
+ * @param {Array<{name: string}>} processes
+ * @returns {Promise<Array<object>>} the same processes, each with `expectedExit`.
+ */
+export async function annotateExpectedExit(processes) {
+  const desktopNames = await getDesktopProcessNames().catch(err => {
+    console.error(`❌ Could not read the app registry for process supervision: ${err.message}`);
+    return new Set();
+  });
+  return processes.map(p => ({ ...p, expectedExit: desktopNames.has(p?.name) }));
+}
+
+/**
  * Summarize PM2-managed app status for dashboards.
  *
  * Only counts apps whose `type` is PM2-runnable (Express services, etc.).

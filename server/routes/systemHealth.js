@@ -113,16 +113,27 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     }
   }
 
-  // Process status summary from PM2
+  // Process status summary from PM2. Processes whose exit is expected (a desktop
+  // app the user closed) are excluded from the health-bearing counts: a quit game
+  // window would otherwise force overallHealth to 'critical' below and light up
+  // the dashboard widget and the CyberCity HUD until the PM2 entry is manually
+  // cleared. Resource totals still cover every process. See issue #2991.
+  const annotated = await apps.annotateExpectedExit(pm2Processes);
+  const supervised = annotated.filter(p => !p.expectedExit);
   const processStats = {
     total: pm2Processes.length,
-    online: pm2Processes.filter(p => p.status === 'online').length,
-    stopped: pm2Processes.filter(p => p.status === 'stopped').length,
-    errored: pm2Processes.filter(p => p.status === 'errored').length,
+    online: supervised.filter(p => p.status === 'online').length,
+    stopped: supervised.filter(p => p.status === 'stopped').length,
+    errored: supervised.filter(p => p.status === 'errored').length,
+    // A desktop app that exited (cleanly as `stopped`, or `errored` on a
+    // force-quit) — reported on its own rather than as a failure.
+    desktopExited: annotated.filter(
+      p => p.expectedExit && ['errored', 'stopped'].includes(p.status)
+    ).length,
     totalMemory: pm2Processes.reduce((sum, p) => sum + (p.memory || 0), 0),
     totalCpu: pm2Processes.reduce((sum, p) => sum + (p.cpu || 0), 0),
     totalRestarts: pm2Processes.reduce((sum, p) => sum + (p.restarts || 0), 0),
-    unstableRestarts: pm2Processes.reduce((sum, p) => sum + (p.unstableRestarts || 0), 0)
+    unstableRestarts: supervised.reduce((sum, p) => sum + (p.unstableRestarts || 0), 0)
   };
 
   // App status summary — PM2-managed apps only (Xcode/iOS-native projects
@@ -164,7 +175,7 @@ router.get('/health/details', asyncHandler(async (req, res) => {
 
   if (processStats.unstableRestarts > 0) {
     if (overallHealth !== 'critical') overallHealth = 'warning';
-    const crashing = pm2Processes.filter(p => (p.unstableRestarts || 0) > 0).map(p => p.name);
+    const crashing = supervised.filter(p => (p.unstableRestarts || 0) > 0).map(p => p.name);
     const plural = processStats.unstableRestarts === 1 ? '' : 's';
     warnings.push({
       type: 'restarts',

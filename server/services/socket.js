@@ -238,9 +238,11 @@ export function initSocket(io) {
       console.log(`📜 Log stream started: ${processName} (${lines} lines)`);
 
       // Spawn pm2 logs with --raw flag
+      // buildEnv(null) is the default-home case, so this is unconditional —
+      // matching every other buildEnv call site in pm2.js.
       const logProcess = spawnPm2(
         ['logs', processName, '--raw', '--lines', String(lines)],
-        pm2Home ? { env: buildEnv(pm2Home) } : {}
+        { env: buildEnv(pm2Home) }
       );
 
       activeStreams.set(socket.id, { process: logProcess, processName });

@@ -15,12 +15,23 @@ vi.mock('../services/socket', () => ({
 
 import { useProcessLogs } from './useProcessLogs.js';
 
-const fire = (event, payload) => act(() => { handlers.get(event)?.(payload); });
+// Log lines are buffered and flushed on a 250ms debounce, so every assertion
+// about `logs` must advance timers past the flush window first.
+const FLUSH_MS = 250;
+const flushLines = () => act(() => { vi.advanceTimersByTime(FLUSH_MS); });
+
+/** Fire a socket frame and let the batch flush, so `logs` reflects it. */
+const fire = (event, payload) => {
+  act(() => { handlers.get(event)?.(payload); });
+  flushLines();
+};
+/** Fire a frame WITHOUT flushing — for asserting the debounce itself. */
+const fireRaw = (event, payload) => act(() => { handlers.get(event)?.(payload); });
 const emitsOf = (event) => emitted.filter(([e]) => e === event).map(([, payload]) => payload);
 
 describe('useProcessLogs', () => {
-  beforeEach(() => { handlers.clear(); emitted.length = 0; });
-  afterEach(cleanup);
+  beforeEach(() => { handlers.clear(); emitted.length = 0; vi.useFakeTimers(); });
+  afterEach(() => { cleanup(); vi.useRealTimers(); });
 
   it('subscribes to the named process and reports lines', () => {
     const { result } = renderHook(() => useProcessLogs('game'));
@@ -112,11 +123,60 @@ describe('useProcessLogs', () => {
         handlers.get('logs:line')?.({ processName: 'game', line: `l${i}`, type: 'stdout', timestamp: i });
       }
     });
+    flushLines();
 
     expect(result.current.logs).toHaveLength(1000);
     // Oldest lines dropped, newest retained.
     expect(result.current.logs.at(-1).line).toBe('l1099');
     expect(result.current.logs[0].line).toBe('l100');
+  });
+
+  // The server emits one socket event PER LINE, which React does not auto-batch —
+  // so a compiling desktop app would otherwise re-render per line.
+  it('batches a burst of lines into a single state update', () => {
+    let renders = 0;
+    const { result } = renderHook(() => { renders++; return useProcessLogs('game'); });
+    const rendersAfterMount = renders;
+
+    act(() => {
+      for (let i = 0; i < 50; i++) {
+        handlers.get('logs:line')?.({ processName: 'game', line: `l${i}`, type: 'stdout', timestamp: i });
+      }
+    });
+    // Nothing applied yet — still inside the debounce window.
+    expect(result.current.logs).toEqual([]);
+    expect(renders).toBe(rendersAfterMount);
+
+    flushLines();
+
+    expect(result.current.logs).toHaveLength(50);
+    // 50 lines cost one render, not 50.
+    expect(renders - rendersAfterMount).toBe(1);
+  });
+
+  it('drops the pending batch when the process switches mid-window', () => {
+    const { result, rerender } = renderHook(({ name }) => useProcessLogs(name), {
+      initialProps: { name: 'game' },
+    });
+    // Buffered but not yet flushed when the switch happens.
+    fireRaw('logs:line', { processName: 'game', line: 'old', type: 'stdout', timestamp: 1 });
+
+    rerender({ name: 'server' });
+    flushLines();
+
+    // The old process's buffered tail must not land in the new one's buffer.
+    expect(result.current.logs).toEqual([]);
+  });
+
+  it('clear() also drops lines buffered but not yet flushed', () => {
+    const { result } = renderHook(() => useProcessLogs('game'));
+    fireRaw('logs:line', { processName: 'game', line: 'a', type: 'stdout', timestamp: 1 });
+
+    act(() => { result.current.clear(); });
+    flushLines();
+
+    // A pending timer must not repopulate the list the user just cleared.
+    expect(result.current.logs).toEqual([]);
   });
 
   it('tears down its listeners on unmount', () => {

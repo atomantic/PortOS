@@ -4,6 +4,7 @@ import * as api from '../../../services/api';
 import { executeCommand } from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import { FormField } from '../../ui/FormField';
+import ProcessLogLines from '../../ui/ProcessLogLines';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 import { useProcessLogs } from '../../../hooks/useProcessLogs';
 import { formatBytes, formatDurationMs } from '../../../utils/formatters';
@@ -175,10 +176,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
                               <FormField className="flex items-center gap-2" label="Tail lines:" labelClassName="text-xs text-gray-500">
                                 <select
                                   value={tailLines}
-                                  onChange={(e) => {
-                                    setTailLines(Number(e.target.value));
-                                    clearLogs();
-                                  }}
+                                  onChange={(e) => setTailLines(Number(e.target.value))}
                                   className="px-2 py-1 text-xs bg-port-card border border-port-border rounded text-white"
                                 >
                                   <option value={100}>100</option>
@@ -190,7 +188,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
                               </FormField>
                               <span className="text-xs text-gray-600">{logs.length} lines</span>
                               <button
-                                onClick={() => clearLogs()}
+                                onClick={clearLogs}
                                 className="text-xs text-gray-500 hover:text-white"
                               >
                                 Clear
@@ -209,23 +207,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
                             ref={logsRef}
                             className="h-[32rem] overflow-auto p-3 font-mono text-xs"
                           >
-                            {logs.length === 0 ? (
-                              <div className="text-gray-500">
-                                {subscribed ? 'No logs yet...' : 'Connecting to log stream...'}
-                              </div>
-                            ) : (
-                              logs.map((log, i) => (
-                                <div
-                                  key={i}
-                                  className={`py-0.5 ${log.type === 'stderr' ? 'text-port-error' : 'text-gray-300'}`}
-                                >
-                                  <span className="text-gray-600 mr-2">
-                                    {new Date(log.timestamp).toLocaleTimeString()}
-                                  </span>
-                                  {log.line}
-                                </div>
-                              ))
-                            )}
+                            <ProcessLogLines logs={logs} subscribed={subscribed} showTimestamps />
                           </div>
                         </div>
                       </td>
@@ -259,10 +241,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
               <FormField className="flex items-center gap-2" label="Tail lines:" labelClassName="text-sm text-gray-500">
                 <select
                   value={tailLines}
-                  onChange={(e) => {
-                    setTailLines(Number(e.target.value));
-                    clearLogs();
-                  }}
+                  onChange={(e) => setTailLines(Number(e.target.value))}
                   className="px-2 py-1 text-sm bg-port-bg border border-port-border rounded text-white"
                 >
                   <option value={100}>100</option>
@@ -274,7 +253,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
               </FormField>
               <span className="text-sm text-gray-600">{logs.length} lines</span>
               <button
-                onClick={() => clearLogs()}
+                onClick={clearLogs}
                 className="text-sm text-gray-500 hover:text-white"
               >
                 Clear
@@ -292,23 +271,7 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
             ref={fullscreenLogsRef}
             className="flex-1 overflow-auto p-4 font-mono text-sm"
           >
-            {logs.length === 0 ? (
-              <div className="text-gray-500">
-                {subscribed ? 'No logs yet...' : 'Connecting to log stream...'}
-              </div>
-            ) : (
-              logs.map((log, i) => (
-                <div
-                  key={i}
-                  className={`py-0.5 ${log.type === 'stderr' ? 'text-port-error' : 'text-gray-300'}`}
-                >
-                  <span className="text-gray-600 mr-3">
-                    {new Date(log.timestamp).toLocaleTimeString()}
-                  </span>
-                  {log.line}
-                </div>
-              ))
-            )}
+            <ProcessLogLines logs={logs} subscribed={subscribed} showTimestamps timestampGap="mr-3" />
           </div>
         </div>
       )}

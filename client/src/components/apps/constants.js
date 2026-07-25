@@ -1,9 +1,11 @@
 export const NON_PM2_TYPES = new Set(['ios-native', 'macos-native', 'xcode', 'swift']);
 
 // Mirrors DESKTOP_TYPES in server/services/streamingDetect.js — app types that run
-// a GUI/desktop process with no HTTP port (a game binary). Kept in sync by hand;
-// the server stays the source of truth for what the type MEANS (autorestart off,
-// command-launched), this mirror only drives client-side presentation.
+// a GUI/desktop process with no HTTP port (a game binary). Kept in sync by hand
+// (a parity test asserts the two Sets match); the server stays the source of truth
+// for what the type MEANS (autorestart off, command-launched, exempt from
+// auto-restart supervision). The client only needs it to decide whether Start
+// should open the build-output panel.
 export const DESKTOP_TYPES = new Set(['desktop']);
 
 /** Whether an app type is a portless GUI/desktop process. */

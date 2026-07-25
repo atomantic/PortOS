@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import os from 'os';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -23,6 +23,10 @@ vi.mock('../services/auth.js', () => ({
   isAuthEnabled: vi.fn().mockResolvedValue(false)
 }));
 
+// `desktopProcessNames` drives the annotateExpectedExit mock below; tests that
+// exercise the desktop exemption set it, everything else leaves it empty.
+const mock = vi.hoisted(() => ({ desktopProcessNames: new Set() }));
+
 vi.mock('../services/apps.js', () => ({
   getAllApps: vi.fn().mockResolvedValue([]),
   getAppStatusSummary: vi.fn().mockResolvedValue({
@@ -31,7 +35,11 @@ vi.mock('../services/apps.js', () => ({
     stopped: 0,
     notStarted: 0,
     unmanaged: 0
-  })
+  }),
+  // Mirrors the real helper: stamps expectedExit from the desktop-owned names.
+  annotateExpectedExit: vi.fn(async (processes) =>
+    processes.map(p => ({ ...p, expectedExit: mock.desktopProcessNames.has(p?.name) }))
+  )
 }));
 
 vi.mock('../services/cos.js', () => ({
@@ -162,6 +170,75 @@ describe('System Health Routes', () => {
         .send({ memoryWarn: 87, memoryCritical: 96, diskWarn: 92, diskCritical: 99 });
       expect(response.status).toBe(200);
       expect(response.body).toEqual({ memoryWarn: 87, memoryCritical: 96, diskWarn: 92, diskCritical: 99 });
+    });
+  });
+
+  // A quit desktop app must not drive overallHealth to 'critical' — that lights
+  // up the dashboard widget and the CyberCity HUD until the PM2 entry is cleared
+  // by hand. This is the widest-blast-radius consumer of `errored` (#2991).
+  describe('GET /health/details — desktop (GUI) process exemption', () => {
+    beforeEach(() => {
+      mock.desktopProcessNames = new Set();
+      vi.mocked(listProcesses).mockResolvedValue([]);
+    });
+
+    it('stays healthy when the only errored process is a quit game window', async () => {
+      mock.desktopProcessNames = new Set(['game']);
+      vi.mocked(listProcesses).mockResolvedValue([{ name: 'game', status: 'errored' }]);
+
+      const { body } = await request(app).get('/api/system/health/details');
+
+      expect(body.processes.errored).toBe(0);
+      expect(body.processes.desktopExited).toBe(1);
+      expect(body.overallHealth).not.toBe('critical');
+      expect(body.warnings.some(w => w.type === 'process')).toBe(false);
+    });
+
+    it('still goes critical for a genuinely errored web process', async () => {
+      vi.mocked(listProcesses).mockResolvedValue([{ name: 'web', status: 'errored' }]);
+
+      const { body } = await request(app).get('/api/system/health/details');
+
+      expect(body.processes.errored).toBe(1);
+      expect(body.overallHealth).toBe('critical');
+    });
+
+    it('does not report a quit game as a crash loop', async () => {
+      mock.desktopProcessNames = new Set(['game']);
+      vi.mocked(listProcesses).mockResolvedValue([
+        { name: 'game', status: 'errored', unstableRestarts: 5 }
+      ]);
+
+      const { body } = await request(app).get('/api/system/health/details');
+
+      expect(body.processes.unstableRestarts).toBe(0);
+      expect(body.warnings.some(w => w.type === 'restarts')).toBe(false);
+    });
+
+    it('counts a cleanly stopped desktop app as exited, not stopped', async () => {
+      mock.desktopProcessNames = new Set(['game']);
+      vi.mocked(listProcesses).mockResolvedValue([{ name: 'game', status: 'stopped' }]);
+
+      const { body } = await request(app).get('/api/system/health/details');
+
+      expect(body.processes.stopped).toBe(0);
+      expect(body.processes.desktopExited).toBe(1);
+      // `total` still counts every process, so nothing vanishes from the roster.
+      expect(body.processes.total).toBe(1);
+    });
+
+    it('keeps resource totals covering every process, exempt or not', async () => {
+      mock.desktopProcessNames = new Set(['game']);
+      vi.mocked(listProcesses).mockResolvedValue([
+        { name: 'game', status: 'errored', memory: 100, cpu: 5, restarts: 2 },
+        { name: 'web', status: 'online', memory: 50, cpu: 3, restarts: 1 }
+      ]);
+
+      const { body } = await request(app).get('/api/system/health/details');
+
+      expect(body.processes.totalMemory).toBe(150);
+      expect(body.processes.totalCpu).toBe(8);
+      expect(body.processes.totalRestarts).toBe(3);
     });
   });
 });

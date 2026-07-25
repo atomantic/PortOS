@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
+import ProcessLogLines from '../ui/ProcessLogLines';
 import { useProcessLogs } from '../../hooks/useProcessLogs';
 
 /**
@@ -59,20 +60,7 @@ export default function DesktopLaunchProgress({ appId, processName, online, onDi
         ref={scrollRef}
         className="m-4 mt-2 p-3 bg-port-bg border border-port-border rounded-lg font-mono text-xs h-48 overflow-y-auto"
       >
-        {logs.length === 0 ? (
-          <span className="text-gray-500">
-            {subscribed ? 'Waiting for output…' : 'Connecting to log stream…'}
-          </span>
-        ) : (
-          logs.map((entry, i) => (
-            <div
-              key={`${entry.timestamp}-${i}`}
-              className={`whitespace-pre-wrap break-all ${entry.type === 'stderr' ? 'text-port-error' : 'text-gray-300'}`}
-            >
-              {entry.line}
-            </div>
-          ))
-        )}
+        <ProcessLogLines logs={logs} subscribed={subscribed} />
       </div>
     </div>
   );

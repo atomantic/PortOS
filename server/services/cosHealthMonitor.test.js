@@ -13,10 +13,12 @@ const mock = vi.hoisted(() => ({
 }));
 
 // Mocked so the health check never reads the real apps registry off disk.
+// Mirrors the real annotateExpectedExit, including its fail-open behavior: a
+// registry read failure marks nothing expected, so nothing is exempted.
 vi.mock('./apps.js', () => ({
-  getDesktopProcessNames: vi.fn(async () => {
-    if (mock.desktopLookupError) throw mock.desktopLookupError;
-    return mock.desktopProcessNames;
+  annotateExpectedExit: vi.fn(async (processes) => {
+    const names = mock.desktopLookupError ? new Set() : mock.desktopProcessNames;
+    return processes.map(p => ({ ...p, expectedExit: names.has(p?.name) }));
   })
 }));
 
