@@ -8,6 +8,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { tryReadFile } from './fileUtils.js';
+import { safeChildProcessEnv } from './processEnv.js';
 import { getSettings } from '../services/settings.js';
 
 const HF_CLI_TOKEN_PATH = join(homedir(), '.cache', 'huggingface', 'token');
@@ -53,6 +54,13 @@ export async function hfTokenEnv() {
     HUGGINGFACE_HUB_TOKEN: token,
     HUGGINGFACEHUB_API_TOKEN: token,
   };
+}
+
+// Build a complete, Malloc-stripped child environment with the resolved HF
+// token vars. Passing hfTokenEnv() directly as spawn's `env` would otherwise
+// discard PATH and every other inherited process variable.
+export async function hfChildEnv(extra = {}) {
+  return safeChildProcessEnv({ ...(await hfTokenEnv()), ...extra });
 }
 
 // HF tokens are `hf_` + ~36 alphanumeric chars. Exported as a Zod-friendly

@@ -529,7 +529,7 @@ export const isTransientInstallError = textMatcher([
  * retried — it fails fast. `sleep` is injectable so tests don't wait on real backoff.
  *
  * **`env`** (optional) is the child environment to spawn under — the caller resolves
- * it (PortOS passes `safeChildProcessEnv(await hfTokenEnv())` so a token stored in
+ * it (PortOS passes `await hfChildEnv()` so a token stored in
  * settings reaches the child, not just one exported into the server's own env).
  * Omitted → the child inherits `process.env` as before.
  *
@@ -733,7 +733,7 @@ const HF_AUTH_HELP = 'TRELLIS.2 could not download a gated model dependency from
  *
  * **`env`** (optional) is the child environment to spawn under. The pipeline pulls
  * gated Hugging Face repos at load time, so the caller resolves the token env
- * (`safeChildProcessEnv(await hfTokenEnv())` in `models.js#executeRender`) and passes
+ * (`await hfChildEnv()` in `models.js#executeRender`) and passes
  * it in — this function stays synchronous so its `{ promise, kill }` contract holds.
  * Omitted → the child inherits `process.env` as before.
  *

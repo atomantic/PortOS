@@ -31,8 +31,7 @@ import { tmpdir } from 'os';
 import { PATHS, shortId, importFileToDir } from '../lib/fileUtils.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
-import { safeChildProcessEnv } from '../lib/processEnv.js';
-import { hfTokenEnv } from '../lib/hfToken.js';
+import { hfChildEnv } from '../lib/hfToken.js';
 import { isGatedRepoError, extractGatedRepo } from '../lib/hfErrors.js';
 import { resolveMuscriptorPython, isMuscriptorRuntimeReady, MUSCRIPTOR_VENV_DEFAULT } from '../lib/pythonSetup.js';
 import { runSidecarProcess, parseSidecarResult } from '../lib/sidecarProcess.js';
@@ -172,7 +171,7 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
       // so pass the user's HF token through for the first download to
       // authenticate. Without an accepted license the sidecar 403s and we
       // classify that into a typed gated_repo frame below.
-      const env = safeChildProcessEnv(await hfTokenEnv());
+      const env = await hfChildEnv();
       // A cancel can land while the env was resolving (no child to SIGTERM yet)
       // — honor the flag before spawning anything.
       if (job.cancelRequested) {

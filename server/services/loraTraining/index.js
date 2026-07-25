@@ -9,7 +9,7 @@
  * trained-LoRA registration into `data/loras/`.
  *
  * Spawn/cancel mirrors videoGen/local.js: SIGTERM → 8s SIGKILL escalation,
- * PYTHONUNBUFFERED, safeChildProcessEnv + hfTokenEnv, caffeinate on darwin.
+ * PYTHONUNBUFFERED, hfChildEnv, caffeinate on darwin.
  * The trainers checkpoint on SIGTERM, so a cancel keeps its progress.
  */
 
@@ -21,8 +21,7 @@ import { platform } from 'os';
 import { PATHS, ensureDir, atomicWrite, shortId } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { v4 as uuidv4 } from '../../lib/uuid.js';
-import { hfTokenEnv } from '../../lib/hfToken.js';
-import { safeChildProcessEnv } from '../../lib/processEnv.js';
+import { hfChildEnv } from '../../lib/hfToken.js';
 import { spawnDetached, reapDetached, reattachDetached, isReattachable } from '../../lib/detachedSpawn.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { getImageModels } from '../../lib/mediaModels.js';
@@ -619,9 +618,8 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
   await runsDb.updateRun(runId, { status: 'running', startedAt: new Date().toISOString() });
   trainingEvents.emit('status', { generationId: jobId, message: `Starting ${run.runtime} training (${run.params.steps} steps)` });
 
-  const childEnv = safeChildProcessEnv(await hfTokenEnv());
+  const childEnv = await hfChildEnv({ PYTHONUNBUFFERED: '1' });
   delete childEnv.PYTHONPATH;
-  childEnv.PYTHONUNBUFFERED = '1';
 
   console.log(`🏋️ training [${shortId(jobId)}] spawn ${basename(bin)} ${run.runtime} steps=${run.params.steps} rank=${run.params.rank} images=${manifest.images.length}${resumeCheckpoint ? ` resume=${basename(resumeCheckpoint)}` : ''}`);
   // `spawnDetached` double-forks the trainer so it reparents to init (PPID=1)
