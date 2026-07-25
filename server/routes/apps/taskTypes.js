@@ -21,7 +21,7 @@ import { sanitizeTaskMetadata } from '../../lib/validation.js';
 import { parseCronToNextRun } from '../../services/eventScheduler.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from '../../services/taskSchedule.js';
-import { summarizeOutcomeStats, computePostApprovalCompletion } from '../../services/layeredIntelligence.js';
+import { summarizeOutcomeStats, computePostApprovalCompletion, computeProposalOutcomeMetrics } from '../../services/layeredIntelligence.js';
 import { listOutcomesResult } from '../../services/layeredIntelligenceOutcomes.js';
 import { summarizeRejectionReasons } from '../../services/layeredIntelligenceRejections.js';
 import { loadApp } from './shared.js';
@@ -108,7 +108,7 @@ router.get('/:id/layered-intelligence/outcomes', loadApp, asyncHandler(async (re
   const tracked = !!config?.sources?.outcomes;
   const { read, outcomes } = await listOutcomesResult({ appId: app.id });
   if (!read) {
-    return res.json({ appId: app.id, appName: app.name, read: false, tracked, stats: null, execution: null, rejections: null, recent: [] });
+    return res.json({ appId: app.id, appName: app.name, read: false, tracked, stats: null, execution: null, metrics: null, rejections: null, recent: [] });
   }
   const { total, merged, rejected, abandoned, pending, resolved, rawMergeRate } = summarizeOutcomeStats(outcomes);
   const rejections = summarizeRejectionReasons(outcomes);
@@ -131,6 +131,13 @@ router.get('/:id/layered-intelligence/outcomes', loadApp, asyncHandler(async (re
     // none have resolved (still-pending ≠ 0% merged). The client rounds for display.
     stats: { total, merged, rejected, abandoned, pending, resolved, mergeRate: rawMergeRate },
     execution: computePostApprovalCompletion(outcomes),
+    // The composed `li-outcomes` effectiveness roll-up (#3014): filing-side approval /
+    // rejection counts and the execution-side approval → completion rate in ONE object,
+    // per-scope included. `stats` and `execution` above stay as the pre-existing
+    // per-facet views (the config tab still reads them); `metrics` is the single block
+    // that answers "do LI's approved proposals actually get delivered?" — all three are
+    // derived from the same records by the same shared aggregators, so they cannot drift.
+    metrics: computeProposalOutcomeMetrics(outcomes),
     rejections,
     recent
   });

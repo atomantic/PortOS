@@ -191,6 +191,19 @@ export function computeExecutionByDomain(outcomes = []) {
  * Duration is measured from filing to a successful hand-off completion. That is the
  * only timestamp pair available for every tracker and remains meaningful when the
  * coding hand-off finishes before the tracker issue is reconciled as merged.
+ *
+ * TWO completion rates, deliberately (#3014) — they answer different questions and
+ * conflating them hides the failure mode the metric exists to surface:
+ *   - `completionRate`           = completed / ATTEMPTED (completed + abandoned).
+ *     "Of the hand-offs that actually terminated, how many succeeded?" — the
+ *     execution-quality read, which excludes work still in flight.
+ *   - `approvalToCompletionRate` = completed / APPROVED (every merged proposal).
+ *     "Of everything the user approved, how much has actually landed?" — the
+ *     downstream-effectiveness read. It counts an approved proposal that was never
+ *     handed off, or is stuck awaiting execution, as NOT completed, which is exactly
+ *     the "approved but LOST" signal a rejection-only view cannot distinguish.
+ * Both are `null` (not 0) when their denominator is zero — the sentinel rule: "nothing
+ * has been approved / attempted yet" must not read as "everything failed".
  */
 export function computePostApprovalCompletion(outcomes = []) {
   const approved = (Array.isArray(outcomes) ? outcomes : []).filter(record =>
@@ -230,6 +243,10 @@ export function computePostApprovalCompletion(outcomes = []) {
       awaitingExecution: records.length - attempted,
       attempted,
       completionRate: attempted > 0 ? (completed / attempted) * 100 : null,
+      // Approval → completion (#3014): denominator is every APPROVED proposal, so a
+      // merged proposal that is stuck awaiting execution drags this down while leaving
+      // `completionRate` untouched. Division-by-zero yields null, never 0.
+      approvalToCompletionRate: records.length > 0 ? (completed / records.length) * 100 : null,
       duration
     };
   };

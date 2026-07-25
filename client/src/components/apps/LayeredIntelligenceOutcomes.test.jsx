@@ -14,10 +14,12 @@ const ready = (overrides = {}) => ({
   stats: { total: 4, merged: 1, rejected: 1, abandoned: 1, pending: 1, resolved: 3, mergeRate: 100 / 3 },
   execution: {
     approved: 1, completed: 1, abandoned: 0, awaitingExecution: 0, attempted: 1, completionRate: 100,
+    approvalToCompletionRate: 100,
     duration: { count: 1, averageMs: 3_600_000, medianMs: 3_600_000, p90Ms: 3_600_000, minMs: 3_600_000, maxMs: 3_600_000 },
     byScope: {
       'app-improvement': {
         approved: 1, completed: 1, abandoned: 0, awaitingExecution: 0, attempted: 1, completionRate: 100,
+        approvalToCompletionRate: 100,
         duration: { count: 1, averageMs: 3_600_000, medianMs: 3_600_000, p90Ms: 3_600_000, minMs: 3_600_000, maxMs: 3_600_000 }
       }
     }
@@ -52,9 +54,29 @@ describe('LayeredIntelligenceOutcomes', () => {
     expect(screen.getByText('add-metrics')).toBeInTheDocument();
     expect(screen.getByText('drop-feature')).toBeInTheDocument();
     expect(screen.getByText('post-approval hand-off completion')).toBeInTheDocument();
+    expect(screen.getByText(/of approvals delivered \(1\/1\)/)).toBeInTheDocument();
     expect(screen.getByText(/Filed → completed: median 1h 0m/)).toBeInTheDocument();
     expect(screen.getByText('app-improvement')).toBeInTheDocument();
     expect(getAppLayeredIntelligenceOutcomes).toHaveBeenCalledWith('app-001');
+  });
+
+  it('shows approval → completion separately from the attempted-only rate', async () => {
+    // 2 approved, 1 delivered, 1 still awaiting execution: the attempted-only rate is a
+    // perfect 100% while only half the approved work has landed. Both must be visible —
+    // showing only the first would hide that a proposal was approved and then lost.
+    getAppLayeredIntelligenceOutcomes.mockResolvedValue(ready({
+      execution: {
+        approved: 2, completed: 1, abandoned: 0, awaitingExecution: 1, attempted: 1,
+        completionRate: 100, approvalToCompletionRate: 50,
+        duration: { count: 0, averageMs: null, medianMs: null, p90Ms: null, minMs: null, maxMs: null },
+        byScope: {}
+      }
+    }));
+    render(<LayeredIntelligenceOutcomes appId="app-001" />);
+
+    expect(await screen.findByText('100%')).toBeInTheDocument();
+    expect(screen.getByText('50%')).toBeInTheDocument();
+    expect(screen.getByText(/of approvals delivered \(1\/2\)/)).toBeInTheDocument();
   });
 
   it('shows a dash for the merge rate when nothing has resolved yet', async () => {

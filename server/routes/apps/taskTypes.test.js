@@ -95,6 +95,20 @@ describe('Apps Task-Type Routes', () => {
         duration: { count: 1, medianMs: 3_600_000 }
       });
       expect(response.body.execution.byScope['app-improvement']).toMatchObject({ completed: 1, completionRate: 100 });
+      // The composed li-outcomes effectiveness roll-up (#3014): approval → completion
+      // alongside the filing-side verdicts, with a per-scope breakdown that keeps a
+      // scope whose only proposal was abandoned rather than dropping it.
+      expect(response.body.metrics).toMatchObject({
+        totalFiled: 4, totalApproved: 1, totalCompleted: 1, totalRejected: 1,
+        totalAbandoned: 1, totalPending: 1, totalAwaitingExecution: 0,
+        totalFailedExecution: 0, approvalToCompletionRate: 100
+      });
+      expect(response.body.metrics.byScope['app-improvement']).toMatchObject({
+        approved: 1, completed: 1, rejected: 1, pending: 1, approvalToCompletionRate: 100
+      });
+      expect(response.body.metrics.byScope['app-data-gap']).toMatchObject({
+        approved: 0, abandoned: 1, approvalToCompletionRate: null
+      });
       // Real diagnoses only in entries; the undiagnosed abandoned row is `unknown`.
       expect(response.body.rejections.entries).toEqual([{ reason: 'user-rejected', count: 1 }]);
       expect(response.body.rejections.unknown).toBe(1);
@@ -127,6 +141,9 @@ describe('Apps Task-Type Routes', () => {
       expect(response.body.read).toBe(false);
       expect(response.body.stats).toBeNull();
       expect(response.body.execution).toBeNull();
+      // Null, not a zeroed roll-up: an unreadable store must not read as "LI has
+      // approved nothing and delivered nothing" — the same sentinel rule as `stats`.
+      expect(response.body.metrics).toBeNull();
       expect(response.body.recent).toEqual([]);
     });
 

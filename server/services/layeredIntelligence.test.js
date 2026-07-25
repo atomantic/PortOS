@@ -46,6 +46,7 @@ import {
   computeScopeAwareness,
   computeExecutionByDomain,
   computePostApprovalCompletion,
+  computeProposalOutcomeMetrics,
   computeProposalExecutionAwareness,
   computeCrossReferenceAnalysis,
   computeHandoffRouting,
@@ -573,6 +574,106 @@ describe('computePostApprovalCompletion (#2944)', () => {
       minMs: 3_600_000,
       maxMs: 14_400_000
     });
+  });
+
+  it('divides approvalToCompletionRate by APPROVED, not attempted, and nulls it at zero approvals', () => {
+    // 2 approved, 1 completed, 1 still awaiting execution: the attempted-only rate
+    // reads a perfect 100% while only half the approved work has actually landed.
+    const out = computePostApprovalCompletion([
+      { scope: 'app-improvement', outcome: 'merged', executionOutcome: 'success', filedAt: '2026-07-01T00:00:00.000Z', executionAt: '2026-07-01T01:00:00.000Z' },
+      { scope: 'app-improvement', outcome: 'merged', executionOutcome: null, filedAt: '2026-07-01T00:00:00.000Z' }
+    ]);
+    expect(out.completionRate).toBe(100);
+    expect(out.approvalToCompletionRate).toBe(50);
+    expect(out.byScope['app-improvement'].approvalToCompletionRate).toBe(50);
+
+    // Nothing approved → null, never 0 (the division-by-zero sentinel).
+    const none = computePostApprovalCompletion([{ scope: 'loop-meta', outcome: 'rejected' }]);
+    expect(none.approved).toBe(0);
+    expect(none.approvalToCompletionRate).toBeNull();
+  });
+});
+
+describe('computeProposalOutcomeMetrics (#3014)', () => {
+  const RECORDS = [
+    // Approved and delivered.
+    { scope: 'app-improvement', outcome: 'merged', executionOutcome: 'success', filedAt: '2026-07-01T00:00:00.000Z', executionAt: '2026-07-01T01:00:00.000Z' },
+    // Approved, handed off, hand-off failed.
+    { scope: 'app-improvement', outcome: 'merged', executionOutcome: 'failure', filedAt: '2026-07-01T00:00:00.000Z', executionAt: '2026-07-01T02:00:00.000Z' },
+    // Approved but LOST — never executed. The bucket a rejection tally can't see.
+    { scope: 'app-data-gap', outcome: 'merged', executionOutcome: null, filedAt: '2026-07-01T00:00:00.000Z' },
+    // Rejected outright, in a scope that never had an approval at all.
+    { scope: 'loop-meta', outcome: 'rejected', filedAt: '2026-07-01T00:00:00.000Z' },
+    // Closed for some other reason (filing-side abandonment).
+    { scope: 'loop-meta', outcome: 'abandoned', filedAt: '2026-07-01T00:00:00.000Z' },
+    // Still open — awaiting triage, not a failure.
+    { scope: 'app-data-gap', outcome: null, filedAt: '2026-07-01T00:00:00.000Z' }
+  ];
+
+  it('rolls filing and execution outcomes into one metrics object', () => {
+    const out = computeProposalOutcomeMetrics(RECORDS);
+    expect(out).toMatchObject({
+      totalFiled: 6,
+      totalApproved: 3,
+      totalCompleted: 1,
+      totalRejected: 1,
+      totalAbandoned: 1,
+      totalPending: 1,
+      totalAwaitingExecution: 1,
+      totalFailedExecution: 1
+    });
+    // 1 of 3 approved actually delivered — while the attempted-only rate reads 50%.
+    expect(out.approvalToCompletionRate).toBeCloseTo(100 / 3, 10);
+    expect(out.completionRate).toBe(50);
+  });
+
+  it('breaks down by scope, keeping scopes that were only ever rejected', () => {
+    const { byScope } = computeProposalOutcomeMetrics(RECORDS);
+    expect(byScope['app-improvement']).toMatchObject({
+      approved: 2, completed: 1, rejected: 0, abandoned: 0, failedExecution: 1,
+      awaitingExecution: 0, attempted: 2, completionRate: 50, approvalToCompletionRate: 50
+    });
+    expect(byScope['app-data-gap']).toMatchObject({
+      approved: 1, completed: 0, awaitingExecution: 1, pending: 1,
+      completionRate: null, approvalToCompletionRate: 0
+    });
+    // A never-approved scope still appears, with null rates rather than a fake 0%.
+    expect(byScope['loop-meta']).toMatchObject({
+      approved: 0, completed: 0, rejected: 1, abandoned: 1,
+      completionRate: null, approvalToCompletionRate: null
+    });
+  });
+
+  it('never counts a non-approved proposal towards completion (rate stays <= 100%)', () => {
+    // A hand-off that succeeded for a REJECTED proposal is not evidence that approval
+    // leads to delivery — letting it into the numerator would exceed 100%.
+    const out = computeProposalOutcomeMetrics([
+      { scope: 'app-improvement', outcome: 'merged', executionOutcome: 'success', filedAt: '2026-07-01T00:00:00.000Z', executionAt: '2026-07-01T01:00:00.000Z' },
+      { scope: 'app-improvement', outcome: 'rejected', executionOutcome: 'success', filedAt: '2026-07-01T00:00:00.000Z', executionAt: '2026-07-01T01:00:00.000Z' }
+    ]);
+    expect(out.totalApproved).toBe(1);
+    expect(out.totalCompleted).toBe(1);
+    expect(out.approvalToCompletionRate).toBe(100);
+  });
+
+  it('returns zeroed totals with null rates for an empty or invalid history', () => {
+    for (const input of [[], null, undefined]) {
+      const out = computeProposalOutcomeMetrics(input);
+      expect(out).toMatchObject({
+        totalFiled: 0, totalApproved: 0, totalCompleted: 0, totalRejected: 0,
+        totalAbandoned: 0, totalPending: 0, approvalToCompletionRate: null, completionRate: null
+      });
+      expect(Object.keys(out.byScope)).toEqual([]);
+    }
+  });
+
+  it('buckets a "__proto__" scope as data rather than rewriting the prototype', () => {
+    const { byScope } = computeProposalOutcomeMetrics([
+      { scope: '__proto__', outcome: 'merged', executionOutcome: 'success', filedAt: '2026-07-01T00:00:00.000Z', executionAt: '2026-07-01T01:00:00.000Z' }
+    ]);
+    expect(Object.keys(byScope)).toContain('__proto__');
+    expect(byScope['__proto__'].approvalToCompletionRate).toBe(100);
+    expect({}.approvalToCompletionRate).toBeUndefined();
   });
 });
 

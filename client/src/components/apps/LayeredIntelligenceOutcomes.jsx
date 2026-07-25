@@ -165,6 +165,18 @@ export default function LayeredIntelligenceOutcomes({ appId }) {
           <p className="text-xs text-gray-500">
             {execution.completed} completed · {execution.abandoned} abandoned · {execution.awaitingExecution} awaiting execution
           </p>
+          {/*
+            Approval → completion (#3014). Distinct from the rate above: this divides by
+            every APPROVED proposal, so approved work still sitting unexecuted drags it
+            down. A wide gap between the two is the "approved but never delivered" signal
+            — proposals being lost rather than rejected — so both are shown, never one.
+          */}
+          <p className="text-xs text-gray-500">
+            <span className="text-gray-300">
+              {execution.approvalToCompletionRate == null ? '—' : `${Math.round(execution.approvalToCompletionRate)}%`}
+            </span>
+            {' '}of approvals delivered ({execution.completed}/{execution.approved})
+          </p>
           {execution.duration?.count > 0 && (
             <p className="text-xs text-gray-500">
               Filed → completed: median {formatDurationMs(execution.duration.medianMs)} · p90 {formatDurationMs(execution.duration.p90Ms)}
