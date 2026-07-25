@@ -46,11 +46,12 @@ import BrailleSpinner from '../components/BrailleSpinner';
 import { useImageGenProgress } from '../hooks/useImageGenProgress';
 import { useMediaJobSse } from '../hooks/useMediaJobSse';
 import { useModelDownloadStatus } from '../hooks/useModelDownloadStatus';
+import { useHfTokenStatus } from '../hooks/useHfTokenStatus';
 import {
   getImageGenStatus, generateImage, generateImageMultipart, listImageModels, listLorasFull, listImageGallery,
   cancelImageGen, deleteImage, setImageHidden, cleanGalleryImage, getActiveImageJob, getSettings,
   buildFormData, listMediaJobs, regenerateGalleryImage, getRegenAvailability, removeImageWatermark,
-  getFlux2Status, getHfTokenStatus,
+  getFlux2Status,
 } from '../services/api';
 
 // Multi-reference editing (FLUX.2 only) — 4 fixed slots, each carrying an
@@ -132,10 +133,6 @@ export default function ImageGen() {
   // user is only using mflux/external/codex.
   const [flux2Status, setFlux2Status] = useState(null);
   const [flux2InstallOpen, setFlux2InstallOpen] = useState(false);
-  // Generic HF-token presence for legacy mflux gated models (FLUX.1-dev).
-  // Lazy-fetched when a model with `requiresHfToken: true` is selected.
-  const [hfTokenPresent, setHfTokenPresent] = useState(null);
-
   const [selectedMode, setSelectedMode] = useState(null);
   // Mirror selectedMode in a ref so callbacks (reloadBackends) can read the
   // latest value without re-creating themselves on every mode flip.
@@ -625,12 +622,6 @@ export default function ImageGen() {
       .catch(() => {});
   }, [modelId]);
 
-  const refreshHfTokenStatus = useCallback((signal) => {
-    return getHfTokenStatus({ signal })
-      .then((s) => { if (s) setHfTokenPresent(!!s.hfTokenPresent); })
-      .catch(() => {});
-  }, []);
-
   // Memoized so Flux2InstallModal's EventSource effect doesn't re-fire on
   // every parent re-render (gallery / generating / progress state churn
   // would otherwise tear down the SSE connection mid-install).
@@ -657,12 +648,7 @@ export default function ImageGen() {
   // so a stale Flux modelId left in state from a prior local session must not
   // surface the HF banner under those backends.
   const needsHfTokenGate = isLocalMode && !!currentModel?.requiresHfToken && !isFlux2Model;
-  useEffect(() => {
-    if (!needsHfTokenGate) { setHfTokenPresent(null); return; }
-    const controller = new AbortController();
-    refreshHfTokenStatus(controller.signal);
-    return () => controller.abort();
-  }, [needsHfTokenGate, modelId, refreshHfTokenStatus]);
+  const { present: hfTokenPresent, refresh: refreshHfTokenStatus } = useHfTokenStatus({ enabled: needsHfTokenGate });
 
   // While the user has additional renders queued behind the active one, poll
   // `/api/media-jobs` to keep `pendingQueued` in sync with the server's

@@ -10,9 +10,11 @@ vi.mock('../../services/api', () => ({
   registerTool: vi.fn(),
   updateTool: vi.fn(),
   getToolsList: vi.fn(),
-  getHfTokenStatus: vi.fn(),
   saveHfToken: vi.fn(),
   clearHfToken: vi.fn(),
+}));
+vi.mock('../../hooks/useHfTokenStatus', () => ({
+  useHfTokenStatus: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({
   default: Object.assign(vi.fn(), {
@@ -29,8 +31,9 @@ vi.mock('../../hooks/useMediaJobSse', () => ({
 }));
 
 import {
-  getSettings, getToolsList, getHfTokenStatus, updateSettings,
+  getSettings, getToolsList, updateSettings,
 } from '../../services/api';
+import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
 import { ImageGenTab } from './ImageGenTab';
 
 const renderTab = async (initialEntries = ['/media/image']) => {
@@ -55,7 +58,7 @@ beforeEach(() => {
     },
   });
   getToolsList.mockResolvedValue([]);
-  getHfTokenStatus.mockResolvedValue({ hfTokenPresent: false, source: 'none' });
+  useHfTokenStatus.mockReturnValue({ present: false, source: 'none', refresh: vi.fn() });
   updateSettings.mockResolvedValue({});
 });
 
@@ -111,6 +114,13 @@ describe('ImageGenTab grouped tabs', () => {
     expect(screen.getByRole('heading', { name: 'HuggingFace Token' })).toBeTruthy();
     const tokensTab = screen.getByRole('tab', { name: /Tokens/i });
     expect(tokensTab.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('keeps the detailed managed-token source labels while reading shared status', async () => {
+    useHfTokenStatus.mockReturnValue({ present: true, source: 'cli', refresh: vi.fn() });
+    await renderTab(['/media/image?mediaTab=tokens']);
+
+    expect(screen.getByText(/~\/\.cache\/huggingface\/token — set via `hf auth login`/i)).toBeTruthy();
   });
 
   it('keeps the global Save + Test Connection bar visible on every tab', async () => {

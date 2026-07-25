@@ -19,8 +19,7 @@ import { randomUUID } from 'crypto';
 import { join } from 'node:path';
 import { rm } from 'node:fs/promises';
 import { ServerError } from '../../lib/errorHandler.js';
-import { hfTokenEnv } from '../../lib/hfToken.js';
-import { safeChildProcessEnv } from '../../lib/processEnv.js';
+import { hfChildEnv } from '../../lib/hfToken.js';
 import { PATHS, resolveGalleryImage, ensureDir } from '../../lib/fileUtils.js';
 import { slugifyForFilename } from '../../lib/civitai.js';
 import { detectHostCapabilities, resolveTarget, DEFAULT_IMAGE_TO_3D_TARGET } from './targets.js';
@@ -136,7 +135,7 @@ async function executeRender({ id, operationId, runner, sourcePath }) {
     // child our resolved token — settings.imageGen.hfToken first, then the env/CLI
     // fallbacks. Resolving HERE (an async caller) keeps the runner synchronous so its
     // { promise, kill } contract holds.
-    const env = safeChildProcessEnv(await hfTokenEnv());
+    const env = await hfChildEnv();
     // The runner returns a { promise, kill } pair (see runTrellis2Generate) — retain
     // the kill handle so deleteModel can SIGTERM this render if the record is deleted
     // mid-flight.

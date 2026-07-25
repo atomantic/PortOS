@@ -56,7 +56,7 @@ vi.mock('../../lib/ffmpeg.js', () => ({
 }));
 
 vi.mock('../../lib/hfToken.js', () => ({
-  hfTokenEnv: vi.fn(async () => ({})),
+  hfChildEnv: vi.fn(async () => ({})),
   getHfToken: vi.fn(async () => null),
 }));
 

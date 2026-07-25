@@ -49,11 +49,11 @@ vi.mock('../services/imageTo3d/trellis2.js', () => ({
   probeMetalToolchain: vi.fn(async () => ({ available: true })),
 }));
 
-// The install route resolves the central HF token into the child env (#3032).
+// The install route resolves the central HF child env (#3032).
 // Mock it so the suite never reads the host's real settings.json or
 // ~/.cache/huggingface/token, and so the resolution-failure branch is drivable.
 vi.mock('../lib/hfToken.js', () => ({
-  hfTokenEnv: vi.fn(async () => ({ HF_TOKEN: 'hf_test', HUGGINGFACE_HUB_TOKEN: 'hf_test' })),
+  hfChildEnv: vi.fn(async () => ({ HF_TOKEN: 'hf_test', HUGGINGFACE_HUB_TOKEN: 'hf_test' })),
 }));
 
 vi.mock('../services/imageTo3d/models.js', () => ({
@@ -68,7 +68,7 @@ vi.mock('../services/imageTo3d/models.js', () => ({
 import * as targets from '../services/imageTo3d/targets.js';
 import * as trellis2 from '../services/imageTo3d/trellis2.js';
 import * as models from '../services/imageTo3d/models.js';
-import { hfTokenEnv } from '../lib/hfToken.js';
+import { hfChildEnv } from '../lib/hfToken.js';
 import routes from './imageTo3d.js';
 
 const makeApp = () => {
@@ -256,7 +256,7 @@ describe('GET /trellis2/install (SSE)', () => {
     trellis2.installTrellis2.mockClear();
     trellis2.isTrellis2Installed.mockReturnValueOnce(false);
     targets.isTargetAvailable.mockReturnValueOnce(true);
-    hfTokenEnv.mockRejectedValueOnce(new Error('settings.json is not valid JSON'));
+    hfChildEnv.mockRejectedValueOnce(new Error('settings.json is not valid JSON'));
     const res = await request(makeApp()).get('/api/image-to-3d/trellis2/install');
     const frames = sseFrames(res.text);
     expect(frames.at(-1)).toMatchObject({
