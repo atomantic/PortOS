@@ -45,7 +45,7 @@ function SpriteImg({ recordId, path, className }) {
 // Candidate thumbnail with an inline lock confirm. Locking freezes this
 // version and its downstream workflow until the relevant explicit unlock, so
 // the consequential action stays visible in an inline confirm row.
-function CandidateTile({ recordId, candidate, locking, onLock, clipRisk, correction, onCorrectionChange, onReprocess, reprocessing }) {
+function CandidateTile({ recordId, candidate, locking, onLock, clipRisk, correction, onCorrectionChange, onReprocess, reprocessing, canReprocess = true }) {
   const [confirming, setConfirming] = useState(false);
   return (
     <div className="flex min-w-0 flex-col gap-2 rounded-lg border border-port-border bg-port-card p-2">
@@ -62,6 +62,7 @@ function CandidateTile({ recordId, candidate, locking, onLock, clipRisk, correct
           direction={candidate.path}
           value={correction}
           onValueChange={onCorrectionChange}
+          ariaLabel="Correction guidance for this turnaround attempt"
           placeholder="Correction for this attempt, e.g. add the missing sleeve pocket"
           className="text-[10px]"
         />
@@ -70,7 +71,7 @@ function CandidateTile({ recordId, candidate, locking, onLock, clipRisk, correct
         <button
           type="button"
           onClick={onReprocess}
-          disabled={reprocessing || !correction?.trim()}
+          disabled={!canReprocess || reprocessing || !correction?.trim()}
           title="Render this turnaround again with the correction note"
           className="flex min-h-8 w-full items-center justify-center gap-1 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs text-gray-300 hover:border-port-accent disabled:opacity-50"
         >
@@ -674,6 +675,7 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
                         onCorrectionChange={(value) => setTurnaroundCorrections((prev) => ({ ...prev, [candidate.path]: value }))}
                         onReprocess={() => reprocessTurnaround(candidate)}
                         reprocessing={Boolean(pendingJobs.turnaround)}
+                        canReprocess={Boolean(mode)}
                       />
                     ))}
                   </div>

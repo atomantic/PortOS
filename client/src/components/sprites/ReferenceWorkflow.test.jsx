@@ -57,7 +57,7 @@ const renderWorkflow = ({ turnaround } = {}) => render(
       },
       candidates: [{
         target: 'turnaround',
-        path: 'reference/example-pioneer-turnaround-candidate-01.png',
+        path: 'reference/candidates/example-pioneer-turnaround-candidate-01.png',
         mode: 'codex',
       }],
     }}
@@ -157,7 +157,7 @@ describe('ReferenceWorkflow workspace', () => {
     expect(generateSpriteReference).toHaveBeenCalledWith('example-pioneer', {
       target: 'turnaround',
       mode: 'codex',
-      initImageCandidate: 'reference/example-pioneer-turnaround-candidate-01.png',
+      initImageCandidate: 'reference/candidates/example-pioneer-turnaround-candidate-01.png',
       correctionPrompt: 'add the missing sleeve pocket',
     }, { silent: true });
   });

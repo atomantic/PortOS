@@ -1105,11 +1105,14 @@ export const spriteReferenceGenerateSchema = z.object({
   model: z.string().trim().max(64).optional(),
   effort: z.string().trim().max(32).optional(),
   designPrompt: z.string().max(4000).optional(),
-  // Extra free-text guidance appended to an anchor re-roll (e.g. "no pocket on
-  // the right sleeve") so regenerating diverges from the previous render
-  // instead of reproducing the same mistake. Anchor targets only — the main
-  // target iterates via `designPrompt`.
+  // Extra free-text guidance appended to a turnaround or anchor re-roll (e.g.
+  // "no pocket on the right sleeve") so regenerating diverges from the
+  // previous render instead of reproducing the same mistake.
   correctionPrompt: z.string().max(4000).optional(),
+  // Re-process one existing turnaround candidate with a correction note. The
+  // service validates that this is a real turnaround candidate owned by the
+  // record before using it as the i2i seed.
+  initImageCandidate: z.string().trim().max(500).optional(),
   initImageStrength: optionalUnitNumber,
   // Alternative i2i seed sources for the main target — resolved server-side and
   // mutually exclusive with an uploaded `referenceImage` file (which the route
@@ -1118,8 +1121,6 @@ export const spriteReferenceGenerateSchema = z.object({
   // seeds this one (the "fork"/derive-from case). Ignored for anchor targets.
   initImageGalleryFile: z.string().trim().max(300).optional(),
   initImageSpriteId: z.string().trim().max(200).optional(),
-  // Re-process one turnaround candidate as the i2i seed (turnaround target only).
-  initImageCandidate: z.string().trim().max(300).optional(),
 });
 
 // Fork a new character from an existing sprite's locked main reference: create

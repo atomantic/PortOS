@@ -24,7 +24,7 @@ export function correctionPromptPayload(corrections, direction) {
   return note ? { correctionPrompt: note } : {};
 }
 
-export default function CorrectionNote({ direction, value, onChange, onValueChange, placeholder, className = '' }) {
+export default function CorrectionNote({ direction, value, onChange, onValueChange, placeholder, ariaLabel, className = '' }) {
   return (
     <textarea
       value={value || ''}
@@ -32,7 +32,7 @@ export default function CorrectionNote({ direction, value, onChange, onValueChan
         ? onValueChange(e.target.value)
         : onChange((prev) => ({ ...prev, [direction]: e.target.value }))}
       rows={2}
-      aria-label={`Correction guidance for the ${direction} pose`}
+      aria-label={ariaLabel || `Correction guidance for the ${direction} pose`}
       placeholder={placeholder || 'Correction (optional), e.g. no pocket on the right sleeve'}
       className={`w-full px-1.5 py-1 bg-port-bg border border-port-border rounded text-gray-300 placeholder-gray-600 resize-y focus:border-port-accent focus:outline-none ${className}`}
     />
