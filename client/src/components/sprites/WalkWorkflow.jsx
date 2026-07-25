@@ -12,7 +12,7 @@ import CycleTarget from './CycleTarget.jsx';
 import SpritePreview from './SpritePreview.jsx';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import { spriteAssetUrl, checkerboardStyle, PIXELATED } from './spriteAssets.js';
-import { GROK_VIDEO_DURATIONS, GROK_VIDEO_DEFAULT_DURATION } from '../../lib/grokVideoClip.js';
+import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 import {
   WALK_PHASES, WALK_DEFAULT_FRAME_COUNT, WALK_DEFAULT_FPS,
 } from '../../lib/spriteTrimmer.js';
@@ -29,33 +29,25 @@ const CELL_PX = 96; // preview cell size — the strip animates at 96px/frame
 // 8, an imported redraw cycle can pack 12 — #2924), so the single keyframe
 // rule reads it from a per-preview custom property instead of hardcoding 8.
 const LOOP_KEYFRAMES = '@keyframes sprite-walk-loop { to { background-position-x: var(--sprite-walk-loop-end) } }';
-// Grok image_to_video clip lengths, from the client mirror of the server list
-// (`lib/grokVideoClip.js` — a server test fails if the two drift). grok's tool
-// offers ONLY 6s/10s and silently renders 6s for anything shorter: requesting
-// 2s or 3s returns the same 6.04s clip, at the same render cost — measured
-// three ways in #3022, and reported by grok's own agent. So the picker offers
-// exactly what it can deliver rather than advertising a saving that doesn't
-// exist. A 6s clip yields ~73 source frames where the packer consumes at most
-// 16; the CYCLE'S look (walk vs run) is set by the frame-count + speed controls
-// below, not the clip length. Re-exported under the walk-flavored names the
-// Sprites page already imports to seed its lifted `duration` state.
-export const WALK_DURATIONS = GROK_VIDEO_DURATIONS;
-export const WALK_DEFAULT_DURATION = GROK_VIDEO_DEFAULT_DURATION;
+// Clip length only decides how much source footage the packer can choose from;
+// the CYCLE'S look (walk vs run) comes from the frame-count + speed controls.
+// The offered lengths live in lib/grokVideoClip.js — see there for why 6s/10s
+// are the only two (#3022).
 
 // Delivered clip length for a run, when the server managed to probe it
 // (`sourceVideoSeconds` is absent on older runs and when ffprobe is missing —
 // absent means UNKNOWN, so render nothing rather than implying a 0s clip).
 // A mismatch against the requested `duration` is worth surfacing: it is the
-// visible evidence of grok's clamp, and the thing that would tell us the
-// clamp had changed.
-export function clipLengthLabel(run) {
+// visible evidence that grok rendered something other than what was asked for.
+function clipLengthLabel(run) {
   const delivered = Number(run?.sourceVideoSeconds);
   if (!(delivered > 0)) return null;
-  const shown = `${delivered.toFixed(1)}s clip`;
   const requested = Number(run?.duration);
-  return requested > 0 && Math.abs(requested - delivered) >= 0.5
-    ? { text: `${shown} (asked ${requested}s)`, mismatch: true }
-    : { text: shown, mismatch: false };
+  const mismatch = requested > 0 && Math.abs(requested - delivered) >= 0.5;
+  return {
+    text: `${delivered.toFixed(1)}s clip${mismatch ? ` (asked ${requested}s)` : ''}`,
+    mismatch,
+  };
 }
 
 // The deterministic-postprocess authoring knobs (frame count + preview fps) and
@@ -666,7 +658,7 @@ export default function WalkWorkflow({
                 onChange={(e) => onDurationChange(Number(e.target.value))}
                 className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
               >
-                {WALK_DURATIONS.map((d) => <option key={d} value={d}>{d}s</option>)}
+                {GROK_VIDEO_DURATIONS.map((d) => <option key={d} value={d}>{d}s</option>)}
               </select>
             </label>
           </div>

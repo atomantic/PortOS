@@ -12,7 +12,8 @@ import { getSettings } from '../services/apiSystem.js';
 import { deriveAvailableBackends } from '../lib/imageGenBackends.js';
 import AppContextPicker from '../components/AppContextPicker.jsx';
 import ReferenceWorkflow from '../components/sprites/ReferenceWorkflow.jsx';
-import WalkWorkflow, { WALK_DEFAULT_DURATION } from '../components/sprites/WalkWorkflow.jsx';
+import WalkWorkflow from '../components/sprites/WalkWorkflow.jsx';
+import { GROK_VIDEO_DEFAULT_DURATION } from '../lib/grokVideoClip.js';
 import LoopTrimmer from '../components/sprites/LoopTrimmer.jsx';
 import PublishWorkflow from '../components/sprites/PublishWorkflow.jsx';
 import AssetCollection from '../components/sprites/AssetCollection.jsx';
@@ -472,7 +473,7 @@ export default function Sprites() {
   // only add a staleness window — `detail` trails the server by one refetch, so
   // a render fired right after a target change would 409 against a value the UI
   // is no longer showing.
-  const [duration, setDuration] = useState(WALK_DEFAULT_DURATION);
+  const [duration, setDuration] = useState(GROK_VIDEO_DEFAULT_DURATION);
 
   // Image-backend availability + the selected backend `mode` are page-owned
   // (#2938): both ReferenceWorkflow's picker and the asset collection's anchor

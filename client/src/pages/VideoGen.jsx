@@ -74,6 +74,7 @@ import { videoLoraFamily, VIDEO_LORA_FAMILIES } from '../lib/runnerFamilies';
 import { randomSeed } from '../lib/genUtils';
 import { VIDEO_RESOLUTIONS, snapAspectToImage } from '../lib/videoGenResolutions';
 import { clampImageEdge } from '../lib/imageGenResolutions';
+import { GROK_VIDEO_DURATIONS, GROK_VIDEO_DEFAULT_DURATION } from '../lib/grokVideoClip.js';
 import ResolutionField from '../components/media/ResolutionField';
 import { VIDEO_TILING_OPTIONS, VIDEO_TILING_ENUM_SET } from '../lib/videoTilingOptions';
 import {
@@ -115,7 +116,7 @@ export default function VideoGen() {
   // threaded into cancelVideoGen so cancellation is job-scoped.
   const activeJobIdRef = useRef(null);
   const [backend, setBackend] = useState('local');
-  const [grokDuration, setGrokDuration] = useState(6);
+  const [grokDuration, setGrokDuration] = useState(GROK_VIDEO_DEFAULT_DURATION);
   const [models, setModels] = useState([]);
   const refreshGrokEnabled = useCallback(() => {
     getSettings({ silent: true })
@@ -1574,8 +1575,7 @@ export default function VideoGen() {
                   onChange={(e) => setGrokDuration(Number(e.target.value))}
                   className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
                 >
-                  <option value={6}>6 seconds</option>
-                  <option value={10}>10 seconds</option>
+                  {GROK_VIDEO_DURATIONS.map((d) => <option key={d} value={d}>{d} seconds</option>)}
                 </select>
               </FormField>
               <ResolutionField
@@ -1878,7 +1878,7 @@ export default function VideoGen() {
         summarize={(item) => (
           <>
             <span className="uppercase mr-2">{item.params.backend === 'grok' ? `grok ${item.params.mode}` : item.params.mode}</span>
-            {item.params.width}×{item.params.height} · {item.params.backend === 'grok' ? `${item.params.grokDuration || 6}s` : `${item.params.numFrames}f`}
+            {item.params.width}×{item.params.height} · {item.params.backend === 'grok' ? `${item.params.grokDuration || GROK_VIDEO_DEFAULT_DURATION}s` : `${item.params.numFrames}f`}
           </>
         )}
       />

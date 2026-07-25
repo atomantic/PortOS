@@ -36,9 +36,7 @@ import { videoGenEvents } from './events.js';
 import { finalizeGeneratedVideo } from './generateVideoHelpers.js';
 import { mutateVideoHistory } from './history.js';
 import { noImageReason, deriveAspectRatio, GROK_ASPECT_RATIOS } from '../imageGen/grok.js';
-import {
-  GROK_VIDEO_DURATIONS, GROK_VIDEO_DEFAULT_DURATION, resolveGrokDuration,
-} from '../../lib/grokVideoClip.js';
+import { resolveGrokDuration } from '../../lib/grokVideoClip.js';
 
 // 30 minutes — an image-first video turn is two sequential tool calls
 // (image_gen then image_to_video render + download), so it runs meaningfully
@@ -53,14 +51,8 @@ const GROK_VIDEO_TIMEOUT_MS = (() => {
 
 const DEFAULT_BIN = 'grok';
 
-// Clip lengths grok's image_to_video delivers. Re-exported from the
-// dependency-free lib leaf so the Zod schemas in lib/validation.js and
-// routes/videoGen.js derive from the same list this module gates on — see
-// lib/grokVideoClip.js for the measurement behind `[6, 10]` (#3022). This list
-// used to carry 1/2/3 on the theory that shorter clips "trade render time for
-// material"; they don't — grok returns a 6s clip for a 2s request, at the same
-// cost. Deep imports of these two names from this module keep working.
-export { GROK_VIDEO_DURATIONS, GROK_VIDEO_DEFAULT_DURATION };
+// The clip lengths this module gates on live in lib/grokVideoClip.js — the one
+// list the Zod schemas and the client picker also derive from (#3022).
 
 // Per-job state — keyed by jobId (cloud lane allows parallel renders). Same
 // client shape as videoGen/local.js so attachSseClient/broadcastSse work.

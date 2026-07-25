@@ -292,7 +292,7 @@ describe('startWalkGeneration', () => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
     const result = await startWalkGeneration(id, { direction: 'east' });
     expect(result.runId).toMatch(/^walk-east-[0-9a-f]{8}$/);
-    expect(result.duration).toBe(6); // walk default (WALK_DEFAULT_DURATION — grok's real floor)
+    expect(result.duration).toBe(6); // GROK_VIDEO_DEFAULT_DURATION — grok's shortest deliverable clip
     // The shell session id is the run id, so the card can deep-link to /shell/<id>.
     expect(result.shellSession).toBe(result.runId);
 
@@ -328,19 +328,11 @@ describe('startWalkGeneration', () => {
     expect(executeTuiRun.mock.calls[0][0].prompt).toContain('for 10 seconds');
   });
 
-  it('falls back to the default clip length for a duration grok does not offer', async () => {
-    // Values outside GROK_VIDEO_DURATIONS fall back to WALK_DEFAULT_DURATION (6).
-    const id = await characterWithLockedAnchors(newId(), ['east']);
-    const result = await startWalkGeneration(id, { direction: 'east', duration: 5 });
-    expect(result.duration).toBe(6);
-    expect(executeTuiRun.mock.calls[0][0].prompt).toContain('for 6 seconds');
-  });
-
-  // The specific values a user would reach for to "save render time" (#3022).
-  // grok renders 6s for these regardless, so asking for them must not put a
-  // number in the prompt that the tool will silently ignore — the prompt has to
-  // say 6, matching what actually comes back.
-  it.each([1, 2, 3])('refuses the undeliverable %ss clip and asks grok for 6s', async (duration) => {
+  // 2s is the length a user reaches for to "save render time"; grok renders 6s
+  // for it regardless (#3022), so the prompt must ask for 6 — putting a number
+  // in it that the tool silently ignores is what made the old picker a lie.
+  // (The full fallback table is unit-tested in lib/grokVideoClip.test.js.)
+  it.each([2, 5])('asks grok for 6s when %ss is requested, since %ss is not deliverable', async (duration) => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
     const result = await startWalkGeneration(id, { direction: 'east', duration });
     expect(result.duration).toBe(6);

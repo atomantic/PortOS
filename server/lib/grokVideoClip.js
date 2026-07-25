@@ -20,16 +20,17 @@
  * footage. Offering 1/2/3 in a picker would be advertising a saving that does
  * not exist, which is why this list is exactly what grok delivers.
  *
- * This module is deliberately **dependency-free** so `lib/validation.js` and
- * `routes/videoGen.js` can derive their Zod schemas from the same list the
- * services gate on, without pulling the videoGen graph (spawn, sseUtils,
- * imageGen) into every suite that imports validation.js. Same reasoning as
- * `walkBounds.js`: hand-copied literals in a schema are exactly how a schema
- * and its service drift apart.
+ * Its own module rather than `lib/grok.js` on cohesion grounds: that file is
+ * CLI-argv conventions (kept importable from the standalone autofixer), while
+ * this is capability data about the video tool. Being dependency-free is what
+ * lets `lib/validation.js` and `routes/videoGen.js` derive their Zod schemas
+ * from the same list the services gate on — the `walkBounds.js` reasoning, that
+ * hand-copied literals in a schema are how a schema and its service drift apart
+ * (as `[1,2,3,6,10]` here and `[6,10]` in the schema already had).
  *
  * If grok's tool ever gains shorter clips, change this list — the walk picker,
  * both Zod schemas, and the service gates all follow from it. Confirm with a
- * probe (`run.sourceVideoSeconds` is stamped on every walk run for exactly this
+ * probe (every packaged walk run stamps `sourceVideoSeconds` for exactly this
  * reason) rather than from a tool description.
  */
 

@@ -863,10 +863,8 @@ async function startWalkGenerationImpl(recordId, body) {
     getSettings(),
   ]);
   // Clip length grok will actually deliver — a request it doesn't offer falls
-  // back to its shortest (6s). There is no shorter option to expose: a 2s/3s
-  // request returns the same 6s clip at the same cost (measured, #3022 — see
-  // lib/grokVideoClip.js). The walk's look comes from frameCount/fps below,
-  // not from how much footage the packer had to choose from.
+  // back to its shortest (see lib/grokVideoClip.js). The walk's look comes from
+  // frameCount/fps below, not from how much footage the packer had to pick from.
   const duration = resolveGrokDuration(body.duration);
   // Frame count + playback fps are the deterministic-postprocess knobs, not the
   // grok clip's — grok animates the same clip regardless, and the packer
@@ -1028,21 +1026,20 @@ async function packageRun(recordId, run, overrides = {}, location = {}) {
     // failure is CAPTURED onto the run record — a throw escaping here would
     // strand an attach at 'postprocessing' with no error text.
     const videoAbs = resolveSpriteAssetPath(recordId, run.sourceVideoPath);
-    // What grok DELIVERED, as opposed to what `run.duration` asked for. Stamped
-    // here (shared by attach + rerun, so a reprocess backfills it onto an older
-    // run) because the requested length is not a promise: grok's image_to_video
-    // offers only 6s/10s and silently renders 6s for anything shorter (#3022).
-    // Recording the probe is what keeps that fact honest — a code comment
-    // asserting it drifted out of sync with a second comment asserting the
-    // opposite, which is precisely what this field replaces.
+    // What grok DELIVERED, as opposed to what `run.duration` asked for — the
+    // requested length is not a promise (see lib/grokVideoClip.js). Stamped
+    // here, shared by attach + rerun, so a reprocess backfills it onto an older
+    // run. Overlap the probe with the (independent) manifest read.
     //
     // probeVideoDuration returns null when ffprobe is missing or the file has no
     // parseable duration; leave the field ABSENT in that case rather than
     // stamping 0, so "unknown" never reads as "a zero-length clip". A previously
     // stamped value survives — a probe that can't run is not evidence of change.
-    const probedSeconds = await probeVideoDuration(videoAbs);
+    const [probedSeconds, manifest] = await Promise.all([
+      probeVideoDuration(videoAbs),
+      loadManifest(recordId),
+    ]);
     if (probedSeconds) run.sourceVideoSeconds = Math.round(probedSeconds * 100) / 100;
-    const manifest = await loadManifest(recordId);
     const anchor = manifest?.anchors?.find((a) => a.direction === run.direction);
     if (!anchor?.path) throw new Error(`No locked ${run.direction} anchor in the reference manifest`);
     const result = await runWalkPostprocess({

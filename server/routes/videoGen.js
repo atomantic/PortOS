@@ -18,7 +18,7 @@ import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.j
 import { uploadFields } from '../lib/multipart.js';
 import { PATHS, ensureDir, resolveGalleryImage } from '../lib/fileUtils.js';
 import { safeUnder } from '../lib/ffmpeg.js';
-import { GROK_VIDEO_DURATIONS } from '../lib/grokVideoClip.js';
+import { grokVideoDurationSchema } from '../lib/validation.js';
 import { IMAGE_GEN_MODE } from '../services/imageGen/modes.js';
 import { getSettings } from '../services/settings.js';
 import { checkPackages, isAllowedPython } from '../lib/pythonSetup.js';
@@ -115,13 +115,12 @@ const generateBodySchema = z.object({
   // (mapped to an aspect ratio), sourceImageFile/sourceImage, and
   // grokDuration.
   backend: z.enum(['local', 'grok']).optional(),
-  // Grok image_to_video clip length in seconds — the tool supports exactly
-  // 6 or 10 (measured, #3022: a shorter request renders 6s anyway). Derived
-  // from the shared list so this schema can't drift from the service gate.
-  // Multipart bodies arrive as strings, so coerce first.
+  // Grok image_to_video clip length in seconds — the shared schema (see
+  // lib/grokVideoClip.js for which lengths grok actually delivers). Multipart
+  // bodies arrive as strings, so coerce first.
   grokDuration: z.preprocess(
     (v) => (v == null || v === '' ? undefined : Number(v)),
-    z.union(GROK_VIDEO_DURATIONS.map((d) => z.literal(d))).optional(),
+    grokVideoDurationSchema.optional(),
   ),
   prompt: z.string().min(1).max(8000),
   negativePrompt: z.string().max(8000).optional(),
