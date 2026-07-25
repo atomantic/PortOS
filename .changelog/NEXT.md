@@ -2,6 +2,7 @@
 
 ## Layered Intelligence
 
+- **[issue-3061] Healthy agent-created pull requests now merge on the watcher tick instead of spending another agent lane** — when PortOS opens a GitHub PR with no review loop, the scheduled PR watcher now reads its CI and merge state: a clean PR whose checks are all green merges directly, while an actual validation failure or merge conflict still starts the same merge-only follow-up agent as before. PRs waiting on CI remain quiet for a bounded number of checks; if they never settle, PortOS stops polling them and posts a high-priority notice with a link to the PR.
 - **[issue-3019] Layered Intelligence now notices when approved work is not being delivered** — its self-check now tracks approval-to-completion separately from reasoning-run success, so a loop that completes its own runs but repeatedly leaves approved proposals unfinished stops filing self-improvement work until delivery recovers. A five-approval floor keeps a fresh loop from being gated on cold-start noise, and the reasoner-facing notice identifies whether run health, delivery health, or both caused the guardrail.
 
 ## 3D

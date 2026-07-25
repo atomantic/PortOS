@@ -180,24 +180,65 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, p
       } else if (leaveOpen && !runsReviewLoop) {
         emitLog('info', `🤝 Leaving ${prResult.url} open for a human — JIRA-tracked task, no reviewers configured`, { agentId, prUrl: prResult.url });
       } else {
-        await spawnReviewLoopFollowUp({
-          originalAgentId: agentId,
-          originalTask,
-          prUrl: prResult.url,
-          prBranch: worktreeBranch,
-          sourceWorkspace,
-          prCompletion: resolvedPrCompletion,
-          reviewers: runsReviewLoop ? reviewerList : [],
-          usernames: runsReviewLoop ? usernames : [],
-          optionalReviewers: runsReviewLoop ? optionalReviewers : [],
-          reviewStopMode,
-          reviewerApplies,
-          reviewerModels,
-          leaveOpen
-        }).catch(err => {
-          emitLog('warn', `🤖 Failed to spawn PR follow-up for ${prResult.url}: ${err.message}`, { agentId, prUrl: prResult.url });
-          warnings.push(`PR follow-up spawn failed for ${prResult.url}: ${err.message}`);
-        });
+        // A merge-only GitHub PR needs no model while CI is healthy. Hand it to
+        // pr-watcher's deterministic tick instead; that tick merges green PRs
+        // directly and recreates this exact follow-up only for a failed check or
+        // conflict. Non-GitHub forges and unscoped tasks retain the legacy agent
+        // path because pr-watcher intentionally speaks gh against managed apps.
+        const canQueueDeterministicMerge = resolvedPrCompletion === PR_COMPLETIONS.MERGE_ON_GREEN
+          && prResult.cli === 'gh'
+          && !!originalTask?.metadata?.app;
+        let queuedDeterministicMerge = false;
+        if (canQueueDeterministicMerge) {
+          const parsedPr = git.parsePullRequestUrl(prResult.url);
+          try {
+            const { queuePendingMerge } = await import('./prWatcher.js');
+            queuedDeterministicMerge = await queuePendingMerge(originalTask.metadata.app, {
+              prUrl: prResult.url,
+              prNumber: parsedPr?.number,
+              prBranch: worktreeBranch,
+              sourceAgentId: agentId,
+              sourceTask: {
+                id: originalTask?.id || null,
+                priority: originalTask?.priority || 'MEDIUM',
+                description: originalTask?.description || description || 'CoS automated task',
+                metadata: {
+                  app: originalTask.metadata.app,
+                  provider: originalTask.metadata.provider,
+                  providerId: originalTask.metadata.providerId,
+                  model: originalTask.metadata.model,
+                  effort: originalTask.metadata.effort,
+                }
+              }
+            });
+          } catch (err) {
+            emitLog('warn', `🤖 Failed to queue deterministic merge for ${prResult.url}: ${err.message}`, { agentId, prUrl: prResult.url });
+          }
+          if (queuedDeterministicMerge) {
+            emitLog('info', `🤖 Queued ${prResult.url} for deterministic merge on the next pr-watcher tick`, { agentId, prUrl: prResult.url });
+          }
+        }
+
+        if (!queuedDeterministicMerge) {
+          await spawnReviewLoopFollowUp({
+            originalAgentId: agentId,
+            originalTask,
+            prUrl: prResult.url,
+            prBranch: worktreeBranch,
+            sourceWorkspace,
+            prCompletion: resolvedPrCompletion,
+            reviewers: runsReviewLoop ? reviewerList : [],
+            usernames: runsReviewLoop ? usernames : [],
+            optionalReviewers: runsReviewLoop ? optionalReviewers : [],
+            reviewStopMode,
+            reviewerApplies,
+            reviewerModels,
+            leaveOpen
+          }).catch(err => {
+            emitLog('warn', `🤖 Failed to spawn PR follow-up for ${prResult.url}: ${err.message}`, { agentId, prUrl: prResult.url });
+            warnings.push(`PR follow-up spawn failed for ${prResult.url}: ${err.message}`);
+          });
+        }
       }
 
       const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false }).catch(err => {

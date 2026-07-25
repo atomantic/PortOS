@@ -452,6 +452,38 @@ export async function createPR(dir, { title, body, base, head }) {
 }
 
 /**
+ * Merge an already-open GitHub pull request with the same owner-pinned `gh`
+ * environment used to create it. Callers decide when CI is green; this helper
+ * only performs the deterministic merge and reports its outcome.
+ *
+ * @param {string} dir - Working directory for the target repository
+ * @param {number|string} prNumber - Pull request number
+ * @returns {Promise<{success: boolean, error?: string, cli?: string, account?: string|null, owner?: string|null, host?: string|null}>}
+ */
+export async function mergePR(dir, prNumber) {
+  const { cli, env, host, owner, account } = await resolveForgeForRepo(dir);
+  const meta = { cli, account, owner, host };
+  if (cli !== 'gh') {
+    return { success: false, error: `Merge-only PR automation requires gh, not ${cli}`, ...meta };
+  }
+
+  return new Promise((resolve) => {
+    const child = spawn('gh', ['pr', 'merge', String(prNumber), '--merge', '--delete-branch'], {
+      cwd: dir, env, shell: false, windowsHide: true
+    });
+    let stderr = '';
+    child.stderr.on('data', (data) => { stderr += data.toString(); });
+    child.on('close', (code) => {
+      if (code === 0) resolve({ success: true, ...meta });
+      else resolve({ success: false, error: stderr.trim() || `gh exited with code ${code}`, ...meta });
+    });
+    child.on('error', (err) => {
+      resolve({ success: false, error: `gh not available: ${err.message}`, ...meta });
+    });
+  });
+}
+
+/**
  * Request a Copilot code review on a GitHub PR. The reviewer login MUST include
  * the `[bot]` suffix or GitHub returns 422 "must be a collaborator". GitLab has
  * no equivalent — this is a GitHub-only no-op there, signaled with

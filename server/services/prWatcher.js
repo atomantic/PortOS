@@ -26,10 +26,14 @@
 
 import { execGh } from './github.js';
 import { getAppById, updateApp } from './apps.js';
+import * as git from './git.js';
+import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
+import { classifyPrFailure } from './layeredIntelligenceRejections.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { githubRepoSpec, githubApiHost } from '../lib/workTracker.js';
 import { PR_AUTHOR_FILTERS } from '../lib/validation.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
+import { PR_COMPLETIONS } from '../lib/prDisposition.js';
 
 // Bound the gh query. The high-water mark (computePrCheck) advances to the max
 // open PR number it saw, so it can only correctly drain a backlog it received
@@ -41,6 +45,17 @@ import { safeJSONParse } from '../lib/fileUtils.js';
 // ever does — at which point the operator should run the watcher again or raise
 // the cap. 200 matches the limit github.js#syncRepos already uses.
 const PR_LIST_LIMIT = 200;
+
+// A watcher tick normally runs every 30 minutes. Six hours is long enough for
+// an ordinary CI queue, while still surfacing a wedged provider or branch
+// protection rule before a merge-only PR silently leaks forever.
+export const MAX_PENDING_MERGE_TICKS = 12;
+
+const GREEN_CHECK_VERDICTS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
+// Every app lives in the same apps.json store, so this must be one global tail
+// rather than a per-app map: simultaneous writes for different app ids would
+// otherwise still load stale whole-file snapshots and clobber one another.
+let pendingMergeWriteTail = Promise.resolve();
 
 // Cache the gh-authenticated login PER HOST, for the process lifetime. Host-keyed
 // for two reasons: (1) `gh api` does NOT infer the host from the working
@@ -168,6 +183,192 @@ export function computePrCheck({ prs, prevLastSeen, authorFilter, selfLogin }) {
 export function readPrWatcherState(app) {
   const state = app?.prWatcherState;
   return state && typeof state === 'object' && !Array.isArray(state) ? state : {};
+}
+
+/**
+ * Read the merge-only PRs that a completed PortOS agent handed to this
+ * watcher's deterministic CI gate. This lives beside, rather than inside,
+ * `prWatcherState`: disabling the watcher clears its discovery high-water mark
+ * so the next enable baselines cleanly, but it must never forget a PR it owns.
+ */
+export function readPendingMergePrs(app) {
+  return Array.isArray(app?.pendingMergePrs) ? app.pendingMergePrs : [];
+}
+
+const pendingMergeKey = (pending) => `${pending?.prNumber ?? ''}:${pending?.prUrl ?? ''}`;
+
+function normalizePendingMerge(pending) {
+  if (!pending || typeof pending !== 'object') return null;
+  if (!Number.isInteger(pending.prNumber) || pending.prNumber < 1) return null;
+  if (typeof pending.prUrl !== 'string' || !pending.prUrl) return null;
+  if (typeof pending.prBranch !== 'string' || !pending.prBranch) return null;
+  if (!pending.sourceTask || typeof pending.sourceTask !== 'object') return null;
+  return {
+    ...pending,
+    ticks: Number.isInteger(pending.ticks) && pending.ticks >= 0 ? pending.ticks : 0,
+  };
+}
+
+function queuePendingMergeWrite(write) {
+  const next = pendingMergeWriteTail.catch(() => undefined).then(write);
+  pendingMergeWriteTail = next;
+  return next;
+}
+
+async function mutatePendingMergePrs(appId, mutate) {
+  return queuePendingMergeWrite(async () => {
+    const app = await getAppById(appId);
+    if (!app) return null;
+    const next = mutate(readPendingMergePrs(app).map(normalizePendingMerge).filter(Boolean));
+    return updateApp(appId, { pendingMergePrs: next });
+  });
+}
+
+/**
+ * Persist a merge-only PR for the next existing pr-watcher tick. The source
+ * task carries only the fields the escalation path needs to recreate today's
+ * merge follow-up, rather than retaining the whole completed task payload.
+ */
+export async function queuePendingMerge(appId, pending) {
+  const normalized = normalizePendingMerge(pending);
+  if (!appId || !normalized) return false;
+
+  const result = await mutatePendingMergePrs(appId, (existing) => {
+    const key = pendingMergeKey(normalized);
+    const index = existing.findIndex((entry) => pendingMergeKey(entry) === key);
+    if (index === -1) return [...existing, normalized];
+    const next = [...existing];
+    // Preserve the existing tick count so a duplicated completion callback
+    // cannot reset an already-wedged PR's bounded-watch budget.
+    next[index] = { ...normalized, ticks: existing[index].ticks };
+    return next;
+  });
+  return Boolean(result);
+}
+
+/**
+ * True only when an OPEN PR is cleanly mergeable and every reported check has
+ * reached a non-blocking green verdict. An empty rollup remains pending: a
+ * just-opened PR often reports no checks before CI attaches, and merging then
+ * would race the gate this watcher is meant to enforce.
+ */
+export function isPendingMergeReady(prView) {
+  if (String(prView?.state || '').toUpperCase() !== 'OPEN') return false;
+  if (String(prView?.mergeStateStatus || '').toUpperCase() !== 'CLEAN') return false;
+  const rollup = Array.isArray(prView?.statusCheckRollup) ? prView.statusCheckRollup : [];
+  return rollup.length > 0 && rollup.every((check) => {
+    const verdict = String(check?.conclusion || check?.state || '').toUpperCase();
+    return GREEN_CHECK_VERDICTS.has(verdict);
+  });
+}
+
+async function readPendingPullRequest(repoSpec, prNumber) {
+  const raw = await execGh([
+    'pr', 'view', String(prNumber), '--repo', repoSpec,
+    '--json', 'state,mergeStateStatus,statusCheckRollup'
+  ]).catch(() => null);
+  const parsed = raw === null ? null : safeJSONParse(raw, null);
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+}
+
+async function notifyPendingMergeTimeout(app, pending, reason) {
+  return addNotification({
+    type: NOTIFICATION_TYPES.AGENT_WARNING,
+    priority: PRIORITY_LEVELS.HIGH,
+    title: `Merge-only PR #${pending.prNumber} needs attention`,
+    description: `PortOS stopped polling this PR after ${MAX_PENDING_MERGE_TICKS} checks because ${reason}.`,
+    link: pending.prUrl,
+    metadata: { appId: app.id, pendingMergePrNumber: pending.prNumber }
+  }).catch((err) => {
+    console.error(`❌ Failed to notify about pending PR #${pending.prNumber}: ${err.message}`);
+    return null;
+  });
+}
+
+/**
+ * Drive merge-only PortOS PRs on the normal pr-watcher cadence. Green PRs are
+ * merged without consuming an agent lane; only a classified CI failure or
+ * merge conflict recreates the pre-existing merge-only follow-up agent.
+ */
+export async function processPendingMergePrs(app) {
+  const pending = readPendingMergePrs(app).map(normalizePendingMerge).filter(Boolean);
+  if (pending.length === 0) return { ok: true, checked: 0, merged: 0, escalated: 0, timedOut: 0 };
+
+  const origin = await getOriginInfo(app?.repoPath).catch(() => null);
+  const repoSpec = githubRepoSpec(origin);
+  if (!repoSpec) return { ok: false, reason: 'not-a-github-repo' };
+
+  const outcomes = new Map();
+  const result = { ok: true, checked: 0, merged: 0, escalated: 0, timedOut: 0, errors: 0 };
+
+  for (const entry of pending) {
+    const key = pendingMergeKey(entry);
+    const prView = await readPendingPullRequest(repoSpec, entry.prNumber);
+    if (!prView) {
+      outcomes.set(key, entry);
+      result.errors += 1;
+      continue;
+    }
+    result.checked += 1;
+
+    if (String(prView.state || '').toUpperCase() === 'MERGED') {
+      outcomes.set(key, null);
+      continue;
+    }
+
+    const failure = classifyPrFailure(prView);
+    if (failure) {
+      try {
+        const { spawnReviewLoopFollowUp } = await import('./agentWorktreeCleanup.js');
+        await spawnReviewLoopFollowUp({
+          originalAgentId: entry.sourceAgentId || null,
+          originalTask: entry.sourceTask,
+          prUrl: entry.prUrl,
+          prBranch: entry.prBranch,
+          sourceWorkspace: app.repoPath,
+          prCompletion: PR_COMPLETIONS.MERGE_ON_GREEN,
+          reviewers: [],
+          usernames: [],
+          optionalReviewers: []
+        });
+        outcomes.set(key, null);
+        result.escalated += 1;
+      } catch (err) {
+        console.error(`❌ Failed to escalate PR #${entry.prNumber}: ${err.message}`);
+        outcomes.set(key, entry);
+        result.errors += 1;
+      }
+      continue;
+    }
+
+    if (isPendingMergeReady(prView)) {
+      const merge = await git.mergePR(app.repoPath, entry.prNumber).catch((err) => ({ success: false, error: err.message }));
+      if (merge.success) {
+        outcomes.set(key, null);
+        result.merged += 1;
+        continue;
+      }
+      console.error(`❌ Deterministic merge failed for PR #${entry.prNumber}: ${merge.error || 'unknown error'}`);
+    }
+
+    const next = { ...entry, ticks: entry.ticks + 1 };
+    if (next.ticks >= MAX_PENDING_MERGE_TICKS) {
+      const reason = String(prView.state || '').toUpperCase() !== 'OPEN'
+        ? `it is ${String(prView.state).toLowerCase()} rather than open`
+        : 'CI or mergeability did not settle';
+      await notifyPendingMergeTimeout(app, entry, reason);
+      outcomes.set(key, null);
+      result.timedOut += 1;
+    } else {
+      outcomes.set(key, next);
+    }
+  }
+
+  await mutatePendingMergePrs(app.id, (current) => current.flatMap((entry) => {
+    const outcome = outcomes.get(pendingMergeKey(entry));
+    return outcome === undefined ? [entry] : outcome ? [outcome] : [];
+  }));
+  return result;
 }
 
 /**
