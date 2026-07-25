@@ -712,3 +712,52 @@ describe('WalkWorkflow reprocess + reopen', () => {
     expect(screen.getByRole('button', { name: /^Reopen$/ })).toBeTruthy();
   });
 });
+
+// The delivered-clip-length readout (#3022). grok's image_to_video offers only
+// 6s/10s and renders 6s for anything shorter, so the requested length is not a
+// promise — the card reports what the server probed off the file, and says so
+// loudly when the two disagree.
+describe('delivered clip length', () => {
+  const renderWithRun = (run) => render(
+    <MemoryRouter>
+      <WalkWorkflow
+        record={{ id: 'example-walker' }}
+        reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked' }] } }}
+        walk={{
+          runs: [{ id: 'run-east', direction: 'east', status: 'candidate', ...run }],
+          selection: { directions: {} },
+          walkSet: null,
+        }}
+        renders={noRenders()}
+        duration={6}
+        onDurationChange={vi.fn()}
+        onGenerate={vi.fn()}
+        onChanged={vi.fn()}
+      />
+    </MemoryRouter>,
+  );
+
+  it('reports the probed clip length', () => {
+    renderWithRun({ duration: 6, sourceVideoSeconds: 6.04 });
+    expect(screen.getByText('6.0s clip')).toBeTruthy();
+  });
+
+  it('flags a delivered length that differs from the request', () => {
+    // The exact case the field exists for: asked 2s, grok rendered 6s.
+    renderWithRun({ duration: 2, sourceVideoSeconds: 6.04 });
+    const badge = screen.getByText('6.0s clip (asked 2s)');
+    expect(badge.className).toContain('text-port-warning');
+  });
+
+  it('does not treat a rounding-level difference as a mismatch', () => {
+    renderWithRun({ duration: 6, sourceVideoSeconds: 6.041667 });
+    expect(screen.queryByText(/asked/)).toBeNull();
+  });
+
+  it('renders nothing when the clip length is unknown', () => {
+    // Absent (older run, or ffprobe unavailable) must NOT read as a 0s clip.
+    renderWithRun({ duration: 6 });
+    expect(screen.queryByText(/clip$/)).toBeNull();
+    expect(screen.queryByText(/0\.0s/)).toBeNull();
+  });
+});

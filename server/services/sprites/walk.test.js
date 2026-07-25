@@ -47,9 +47,19 @@ vi.mock('../settings.js', () => ({
   }),
 }));
 
-// Keep the videoGen graph out of this mocked suite — only the duration
-// contract is consumed.
-vi.mock('../videoGen/grok.js', () => ({ GROK_VIDEO_DURATIONS: [1, 2, 3, 6, 10] }));
+// The clip-length contract now comes from the dependency-free lib/grokVideoClip.js
+// leaf (#3022), so the videoGen graph is out of this suite by construction — no
+// mock needed, and the REAL `[6, 10]` list is what the assertions below exercise.
+
+// ffprobe isn't available to every test environment and the suite's stub clips
+// aren't decodable media anyway, so the delivered-clip-length probe is a spy:
+// unmocked it resolves null (the real "couldn't measure" path), and a test that
+// cares about a measured value primes it with mockResolvedValueOnce.
+const probeVideoDuration = vi.fn(async () => null);
+vi.mock('../../lib/ffmpeg.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  probeVideoDuration: (...args) => probeVideoDuration(...args),
+}));
 
 const prepareWalkAnchorChromaInput = vi.fn(async (_anchorAbs, destAbs) => {
   await mkdir(join(destAbs, '..'), { recursive: true });
@@ -326,6 +336,18 @@ describe('startWalkGeneration', () => {
     expect(executeTuiRun.mock.calls[0][0].prompt).toContain('for 6 seconds');
   });
 
+  // The specific values a user would reach for to "save render time" (#3022).
+  // grok renders 6s for these regardless, so asking for them must not put a
+  // number in the prompt that the tool will silently ignore — the prompt has to
+  // say 6, matching what actually comes back.
+  it.each([1, 2, 3])('refuses the undeliverable %ss clip and asks grok for 6s', async (duration) => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const result = await startWalkGeneration(id, { direction: 'east', duration });
+    expect(result.duration).toBe(6);
+    expect(executeTuiRun.mock.calls[0][0].prompt).toContain('for 6 seconds');
+    expect(executeTuiRun.mock.calls[0][0].prompt).not.toContain(`for ${duration} seconds`);
+  });
+
   it('stores the chosen frame count + fps on the run and passes them to the packer', async () => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
     // Frame count / fps are pinned at the SET level now (#2985) — a render must
@@ -362,6 +384,29 @@ describe('startWalkGeneration', () => {
       id: runId, status: 'candidate', postprocessManifest: `runs/${runId}/generated/manifest.json`,
     });
     expect(runs[0].sourceVideoSha256).toBe(sha256(Buffer.from('grok-clip-bytes')));
+    // The stub clip isn't real media, so ffprobe finds no duration — the field
+    // must be ABSENT rather than 0, so "we couldn't measure it" never renders as
+    // "grok returned a zero-length clip" (#3022).
+    expect(runs[0]).not.toHaveProperty('sourceVideoSeconds');
+  });
+
+  it('stamps the DELIVERED clip length, which need not match what was requested', async () => {
+    // grok's image_to_video renders 6s for anything shorter than 6s, so the
+    // requested length is not a promise — the probe is. Here the request is 10s
+    // and the file measures 6s, the exact divergence the field exists to expose.
+    probeVideoDuration.mockResolvedValueOnce(6.041667);
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    executeTuiRun.mockImplementationOnce(async ({ workspacePath }) => {
+      await writeFile(join(workspacePath, 'source-video.mp4'), 'grok-clip-bytes');
+    });
+    await startWalkGeneration(id, { direction: 'east', duration: 10 });
+    await vi.waitFor(async () => {
+      const { runs } = await getWalkState(id);
+      expect(runs[0].status).toBe('candidate');
+    });
+    const { runs } = await getWalkState(id);
+    expect(runs[0].duration).toBe(10);      // what we asked grok for
+    expect(runs[0].sourceVideoSeconds).toBe(6.04); // what grok actually delivered
   });
 
   it('marks the run errored when grok finishes without a clip', async () => {

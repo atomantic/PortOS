@@ -91,6 +91,7 @@ export * from './codexAssistantExtract.js';
 export * from './codexCliOutput.js';
 export * from './contextBudget.js';
 export * from './grok.js';
+export * from './grokVideoClip.js';
 export * from './hfToken.js';
 export * from './hfErrors.js';
 export * from './hfCache.js';

@@ -36,6 +36,9 @@ import { videoGenEvents } from './events.js';
 import { finalizeGeneratedVideo } from './generateVideoHelpers.js';
 import { mutateVideoHistory } from './history.js';
 import { noImageReason, deriveAspectRatio, GROK_ASPECT_RATIOS } from '../imageGen/grok.js';
+import {
+  GROK_VIDEO_DURATIONS, GROK_VIDEO_DEFAULT_DURATION, resolveGrokDuration,
+} from '../../lib/grokVideoClip.js';
 
 // 30 minutes — an image-first video turn is two sequential tool calls
 // (image_gen then image_to_video render + download), so it runs meaningfully
@@ -50,16 +53,14 @@ const GROK_VIDEO_TIMEOUT_MS = (() => {
 
 const DEFAULT_BIN = 'grok';
 
-// Clip lengths (seconds) offered for grok's image_to_video tool. grok's own
-// game-animation skill documents 6s/10s, but shorter clips animate fine and are
-// plenty for a looping walk cycle (the postprocess only harvests ~8 frames of
-// one gait cycle) — 6s took ~10.5 min to render and yielded 73 usable frames
-// where the cycle selector needs 9. The shorter options let the user trade
-// render time for material; GROK_VIDEO_DEFAULT_DURATION is the general-video
-// fallback when a caller omits duration (kept at 6 so non-walk video gen is
-// unchanged — the walk path picks its own shorter default).
-export const GROK_VIDEO_DURATIONS = Object.freeze([1, 2, 3, 6, 10]);
-export const GROK_VIDEO_DEFAULT_DURATION = 6;
+// Clip lengths grok's image_to_video delivers. Re-exported from the
+// dependency-free lib leaf so the Zod schemas in lib/validation.js and
+// routes/videoGen.js derive from the same list this module gates on — see
+// lib/grokVideoClip.js for the measurement behind `[6, 10]` (#3022). This list
+// used to carry 1/2/3 on the theory that shorter clips "trade render time for
+// material"; they don't — grok returns a 6s clip for a 2s request, at the same
+// cost. Deep imports of these two names from this module keep working.
+export { GROK_VIDEO_DURATIONS, GROK_VIDEO_DEFAULT_DURATION };
 
 // Per-job state — keyed by jobId (cloud lane allows parallel renders). Same
 // client shape as videoGen/local.js so attachSseClient/broadcastSse work.
@@ -132,7 +133,7 @@ export async function generateVideo({
     throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const effectiveDuration = GROK_VIDEO_DURATIONS.includes(Number(duration)) ? Number(duration) : GROK_VIDEO_DEFAULT_DURATION;
+  const effectiveDuration = resolveGrokDuration(duration);
 
   const jobId = providedJobId || randomUUID();
   const filename = `${jobId}.mp4`;
