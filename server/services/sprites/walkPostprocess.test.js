@@ -172,7 +172,7 @@ describe('selectCycleIndices', () => {
   const SIG_LEN = 48 * 48 * 3;
   const constSig = (v) => Buffer.alloc(SIG_LEN, v);
 
-  it('finds the periodic window and resamples with banker\'s rounding', () => {
+  it('finds the periodic window and spreads the phases evenly', () => {
     // Period-12 sawtooth: seam 0 at cycleLength 12, median motion 10.
     const pattern = [0, 10, 20, 30, 40, 50, 60, 50, 40, 30, 20, 10];
     const signatures = Array.from({ length: 25 }, (_, i) => constSig(pattern[i % 12]));
@@ -181,8 +181,36 @@ describe('selectCycleIndices', () => {
     expect(cycle.windowLength).toBe(12);
     expect(cycle.endpointSeamScore).toBe(0);
     expect(cycle.medianMotionScore).toBe(10);
-    // round(i*12/8) = round(i*1.5) — half-to-even: 1.5→2, 4.5→4, 7.5→8, 10.5→10.
-    expect(indices).toEqual([0, 2, 3, 4, 6, 8, 9, 10]);
+    // 12 source frames over 8 phases: strides must alternate 2,1,2,1… Banker's
+    // rounding used to give [0,2,3,4,6,8,9,10] — strides 2,1,1,2,2,1,1, i.e. two
+    // adjacent double-steps then two adjacent singles, which reads as a limp.
+    expect(indices).toEqual([0, 2, 3, 5, 6, 8, 9, 11]);
+  });
+
+  /**
+   * #3050 — the phases must be as evenly spaced as the ratio allows, for EVERY
+   * ratio. Banker's rounding resolves a .5 tie toward the even integer, so the
+   * tie direction flips with the parity of the integer part and consecutive ties
+   * disagree; 15 source frames over 12 phases came out with double-steps at 2, 5
+   * and 10 (spacings 3 and 5). Asserted as a property rather than a golden array
+   * so a future change to the resample has to keep it for all of them.
+   */
+  it('spreads the stretch evenly for any window/frameCount ratio', () => {
+    const pattern = (p, i) => Math.round(60 * Math.abs(((i % p) / p) * 2 - 1));
+    for (const [period, frameCount] of [[15, 12], [16, 12], [13, 12], [18, 12], [12, 8]]) {
+      const signatures = Array.from({ length: period * 2 + 2 }, (_, i) => constSig(pattern(period, i)));
+      const { indices } = selectCycleIndices(signatures, frameCount);
+      const strides = indices.slice(1).map((v, i) => v - indices[i]);
+      // Only two stride lengths may appear, and they must differ by 1 — no frame
+      // may be skipped twice as far as another beyond the unavoidable remainder.
+      const distinct = [...new Set(strides)].sort((a, b) => a - b);
+      expect(distinct.length).toBeLessThanOrEqual(2);
+      if (distinct.length === 2) expect(distinct[1] - distinct[0]).toBe(1);
+      // …and the longer strides are evenly spaced through the cycle.
+      const longAt = strides.map((s, i) => (s === distinct.at(-1) ? i : -1)).filter((i) => i >= 0);
+      const gaps = longAt.slice(1).map((v, i) => v - longAt[i]);
+      expect(new Set(gaps).size).toBeLessThanOrEqual(1);
+    }
   });
 
   it('rejects a static clip and too-few frames', () => {

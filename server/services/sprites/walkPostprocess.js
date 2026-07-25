@@ -364,7 +364,28 @@ export function selectCycleIndices(signatures, frameCount = WALK_FRAME_COUNT) {
   }
   if (!best) throw new Error('No detectable moving walk cycle in the source video');
   const [, start, cycleLength, seam, motion] = best;
-  const indices = Array.from({ length: frameCount }, (_, i) => start + pyRound((i * cycleLength) / frameCount));
+  // Even phase distribution, in integer arithmetic (#3050).
+  //
+  // This is the ONE place that deliberately does not use `pyRound`. Banker's
+  // rounding breaks a .5 tie toward the even integer, so the tie's DIRECTION
+  // depends on the parity of the integer part — and when `cycleLength /
+  // frameCount` puts ties at regular intervals, consecutive ties resolve
+  // opposite ways and the phases stop being evenly spaced. A 15-frame gait
+  // resampled to 12 landed ties at 2.5→2 (down), 7.5→8 (up), 12.5→12 (down),
+  // giving double-steps at positions 2, 5 and 10 — spacings of 3 and 5, an
+  // arrhythmic hitch that reads as a limp. Half-up resolves every tie the same
+  // way, so the double-steps land at 1, 5 and 9: still 15 source frames over 12
+  // phases, but the unavoidable stretch is spread evenly.
+  //
+  // `(i * cycleLength + frameCount/2) / frameCount` floored IS half-up, and in
+  // integers it cannot drift on a float representation. Pixel math keeps
+  // `pyRound` — that half is byte-compatibility with the source pipeline, this
+  // half is perceptual quality, and only the latter has a tie problem.
+  const half = Math.floor(frameCount / 2);
+  const indices = Array.from(
+    { length: frameCount },
+    (_, i) => start + Math.floor((i * cycleLength + half) / frameCount),
+  );
   if (new Set(indices).size !== frameCount) {
     throw new Error(`Cycle window too short to resample ${frameCount} distinct phases`);
   }
