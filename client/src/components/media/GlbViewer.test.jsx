@@ -4,16 +4,19 @@ import { BoxGeometry, Group, Mesh, MeshStandardMaterial } from 'three';
 
 // The three.js stack can't run in jsdom (no WebGL context) and none of it is
 // under test here — this file covers the chrome AROUND the canvas (the download
-// link + the empty-src guard). The Canvas stub deliberately drops `children`:
-// mounting <primitive>/<mesh> would surface unknown DOM elements and r3f hands
-// back HTMLElement refs without the three.js API.
-vi.mock('@react-three/fiber', () => ({ Canvas: () => <div data-testid="glb-canvas" /> }));
+// link + the empty-src guard). Bounds drops the model subtree: mounting
+// <primitive>/<mesh> would surface unknown DOM elements and r3f hands back
+// HTMLElement refs without the three.js API. Canvas retains the lighting and
+// environment elements so their interactive wiring stays covered.
+vi.mock('@react-three/fiber', () => ({ Canvas: ({ children }) => <div data-testid="glb-canvas">{children}</div> }));
 vi.mock('@react-three/drei', () => ({
   Canvas: () => null,
   OrbitControls: () => null,
-  Environment: ({ children }) => children,
+  Environment: ({ background, children }) => (
+    <div data-testid="glb-environment" data-background={background ? 'visible' : 'hidden'}>{children}</div>
+  ),
   Lightformer: () => null,
-  Bounds: ({ children }) => children,
+  Bounds: () => null,
   useGLTF: Object.assign(() => ({ scene: {} }), { clear: vi.fn() }),
 }));
 
@@ -43,6 +46,29 @@ describe('GlbViewer', () => {
     expect(picker).toHaveValue('#f5f5f5');
     expect(screen.getByTestId('glb-preview-surface'))
       .toHaveStyle({ backgroundColor: '#f5f5f5' });
+  });
+
+  it('offers basic lighting controls and can show the HDRI environment as the background', () => {
+    render(<GlbViewer src="/data/models3d/robot-a1b2.glb" />);
+
+    const ambient = screen.getByLabelText('Ambient light');
+    const key = screen.getByLabelText('Key light');
+    const fill = screen.getByLabelText('Fill light');
+    expect(ambient).toHaveValue('0.9');
+    expect(key).toHaveValue('1.1');
+    expect(fill).toHaveValue('0.4');
+    expect(screen.getByTestId('glb-environment')).toHaveAttribute('data-background', 'hidden');
+
+    fireEvent.change(ambient, { target: { value: '1.4' } });
+    fireEvent.change(key, { target: { value: '2.2' } });
+    fireEvent.change(fill, { target: { value: '0.8' } });
+    fireEvent.click(screen.getByLabelText('Show HDRI background'));
+
+    expect(ambient).toHaveValue('1.4');
+    expect(key).toHaveValue('2.2');
+    expect(fill).toHaveValue('0.8');
+    expect(screen.getByLabelText('Show HDRI background')).toBeChecked();
+    expect(screen.getByTestId('glb-environment')).toHaveAttribute('data-background', 'visible');
   });
 
   it('honors an explicit downloadName over the derived one', () => {
