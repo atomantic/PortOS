@@ -8,6 +8,7 @@ import {
   approveSpriteWalk, postprocessSpriteWalk, unlockSpriteWalk, reopenSpriteWalk,
 } from '../../services/apiSprites.js';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
+import Banner from '../ui/Banner.jsx';
 import CycleTarget from './CycleTarget.jsx';
 import SpritePreview from './SpritePreview.jsx';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
@@ -16,6 +17,7 @@ import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 import {
   WALK_PHASES, WALK_DEFAULT_FRAME_COUNT, WALK_DEFAULT_FPS,
 } from '../../lib/spriteTrimmer.js';
+import { walkUnlockCopy, WALK_UNLOCK_TOAST } from '../../lib/spriteWalkUnlock.js';
 
 // Walk workflow (issue #2897): one grok image_to_video clip per locked
 // directional anchor, deterministic server-side packaging into the 8-phase
@@ -145,6 +147,44 @@ function StripLoop({ recordId, stripPreview }) {
 // same. Named once because every affordance below gates on it — and the header's
 // Unlock and a card's Reopen disagreeing about the same run would be a bug.
 const hasClip = (run) => Boolean(run?.sourceVideoPath) && !run?.sourceClipMissing;
+
+/**
+ * The set-level Unlock, as a trigger that swaps to an inline confirm.
+ *
+ * Both frozen-set entry points render this: the header's plain Unlock and the
+ * blocked panel's "Unlock anyway". They differ only in copy and tone, and they
+ * are mutually exclusive on `unlockBlocked` — sharing the shape keeps a change to
+ * the confirm UX (busy text, tone, aria convention) from having to be made twice
+ * and landing in only one of the two frozen-set paths.
+ */
+function UnlockAffordance({
+  armed, onArm, onCancel, onConfirm, busy, label, prompt, ariaLabel, title, className,
+}) {
+  if (armed) {
+    return (
+      <ConfirmButtonPair
+        prompt={prompt}
+        confirmText={label}
+        confirmIcon={Unlock}
+        busy={busy}
+        busyText="Unlocking…"
+        tone="warning"
+        ariaLabel={ariaLabel}
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+      />
+    );
+  }
+  return (
+    <button
+      onClick={onArm}
+      title={title}
+      className={`flex items-center gap-1 px-1.5 py-0.5 text-xs border rounded ${className}`}
+    >
+      <Unlock className="w-3 h-3" /> {label}
+    </button>
+  );
+}
 
 // The one remedy for an imported direction with nothing behind it. The clip is
 // the importer's to bring across, so authoring a new version by hand isn't it.
@@ -482,19 +522,13 @@ export default function WalkWorkflow({
   const importedDirections = walk?.walkSet?.importedDirections || null;
   const isImportedDirection = (direction) => (importedDirections
     ? importedDirections.includes(direction) : importedWalkSet);
-  // Since #2984 imports each run's clip, such a set is no longer a dead end —
-  // but unlock drops EVERY approval, so the server refuses it unless EVERY
-  // still-imported direction has a clip (a stranded one could be neither
-  // reprocessed nor re-approved). Mirror that scope exactly, per direction, so
-  // the button and the 409 are computed from the same facts; the server's gate is
-  // still authoritative, this only decides what to offer.
-  const clipByDirection = useMemo(() => {
-    const out = {};
-    for (const run of runs) if (hasClip(run)) out[run.direction] = true;
-    return out;
-  }, [runs]);
-  const unlockBlocked = importedWalkSet
-    && !(importedDirections?.length && importedDirections.every((d) => clipByDirection[d]));
+  // Whether unlock is refused, and whether that refusal can be acknowledged past,
+  // is stamped by the server from the same resolver its own gate uses (#3043) —
+  // so the button offered here and the 409 it might hit can never be computed
+  // from two different readings of the same set. The copy is shared with the Loop
+  // Trimmer's lock block; null means "not blocked, offer the ordinary Unlock".
+  const unlockCopy = walkUnlockCopy(walk?.walkSet?.unlock);
+  const unlockBlocked = Boolean(unlockCopy);
 
   // direction → jobId for in-flight video renders. The hook instance is owned
   // by the Sprites page and shared with the asset collection (#2931) so both
@@ -590,11 +624,19 @@ export default function WalkWorkflow({
   // Unlock (un-freeze) the finalized walk set. Irreversible-ish (it re-opens
   // every direction), so it's gated behind an inline confirm per the repo's
   // confirmation UX — not a hidden two-click arm or a browser dialog.
+  // ONE flag for both entry points below (the header's plain Unlock and the
+  // blocked panel's "Unlock anyway"): they are mutually exclusive on
+  // `unlockBlocked`, so only one is ever mounted. A third entry point would need
+  // its own flag, or it would arm silently alongside whichever of these is live.
   const [unlockConfirm, setUnlockConfirm] = useState(false);
-  const [unlock, unlocking] = useAsyncAction(async () => {
-    await unlockSpriteWalk(recordId, { silent: true });
+  // `acknowledgeNoClips` is sent ONLY from the blocked-but-regenerable branch,
+  // whose panel names what it costs (a fresh render per direction). Every other
+  // unlock omits it and keeps the server's refusal — an override the user was
+  // never warned about is exactly what the guard exists to prevent.
+  const [unlock, unlocking] = useAsyncAction(async (acknowledgeNoClips = false) => {
+    await unlockSpriteWalk(recordId, { acknowledgeNoClips }, { silent: true });
     setUnlockConfirm(false);
-    toast.success('Walk set unlocked — directions are editable again');
+    toast.success((acknowledgeNoClips && unlockCopy?.toast) || WALK_UNLOCK_TOAST);
     onChanged();
   }, { errorMessage: 'Unlock failed' });
 
@@ -624,29 +666,23 @@ export default function WalkWorkflow({
               <Lock className="w-3 h-3" /> walk set frozen · immutable
             </p>
             {unlockBlocked ? (
-              <span className="text-[10px] text-gray-500" title="Unlocking re-opens every direction, and at least one imported direction has no source clip on disk to re-derive from — re-import the character to bring its clips across, or reopen the directions that do have clips one at a time">
-                imported · no clips to re-derive
-              </span>
-            ) : unlockConfirm ? (
-              <ConfirmButtonPair
-                prompt="Re-open all directions?"
-                confirmText="Unlock"
-                confirmIcon={Unlock}
-                busy={unlocking}
-                busyText="Unlocking…"
-                tone="warning"
-                ariaLabel="Confirm unlock walk set"
-                onConfirm={() => unlock()}
-                onCancel={() => setUnlockConfirm(false)}
-              />
+              // The block itself is explained (and acted on) in the panel below —
+              // it needs more room than this dense row, and a consequence this
+              // expensive must not live in a tooltip.
+              <span className="text-[10px] text-gray-500">imported · no clips to re-derive</span>
             ) : (
-              <button
-                onClick={() => setUnlockConfirm(true)}
+              <UnlockAffordance
+                armed={unlockConfirm}
+                onArm={() => setUnlockConfirm(true)}
+                onCancel={() => setUnlockConfirm(false)}
+                onConfirm={() => unlock()}
+                busy={unlocking}
+                label="Unlock"
+                prompt="Re-open all directions?"
+                ariaLabel="Confirm unlock walk set"
                 title="Un-freeze the walk set to regenerate or re-approve directions (rendered clips are kept)"
-                className="flex items-center gap-1 px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-gray-400 hover:border-port-accent hover:text-white"
-              >
-                <Unlock className="w-3 h-3" /> Unlock
-              </button>
+                className="bg-port-bg border-port-border text-gray-400 hover:border-port-accent hover:text-white"
+              />
             )}
           </div>
         ) : (
@@ -672,6 +708,32 @@ export default function WalkWorkflow({
           </div>
         )}
       </div>
+
+      {/* Why the frozen set refuses a plain Unlock, and the one action that gets
+          past it. Before #3043 this was a tooltip on a dead label, which left a
+          fully-imported set with no reachable way to revise anything — not the
+          cycle target, not one direction. The cost is stated as visible text
+          rather than a title, per the repo's "tooltip-only warnings are missed on
+          touch" rule; `copy.action` is null when even regeneration is out, and
+          then there is genuinely nothing to offer. */}
+      {unlockBlocked && (
+        <Banner tone="warning" size="sm" icon={Unlock} className="space-y-1.5">
+          <p className="leading-relaxed">{unlockCopy.text}</p>
+          {unlockCopy.action && (
+            <UnlockAffordance
+              armed={unlockConfirm}
+              onArm={() => setUnlockConfirm(true)}
+              onCancel={() => setUnlockConfirm(false)}
+              onConfirm={() => unlock(true)}
+              busy={unlocking}
+              label={unlockCopy.action}
+              prompt={unlockCopy.prompt}
+              ariaLabel="Confirm unlock walk set without source clips"
+              className="bg-port-bg border-port-warning/60 text-port-warning hover:bg-port-warning/10"
+            />
+          )}
+        </Banner>
+      )}
 
       {/* Set-level drift summary: visible BEFORE eight renders are spent, rather
           than as an atlas-compile wall afterwards. Legacy mixed sets (generated

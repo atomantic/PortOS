@@ -1045,14 +1045,101 @@ describe('imported walk sets — evidence-based re-derive', () => {
     expect(run.sourceClipMissing).toBeUndefined();
   });
 
-  it('still refuses to unlock an imported set with no clip behind any direction', async () => {
+  it('still refuses an unacknowledged unlock of an imported set with no clip behind any direction', async () => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
     await importedCharacter(id, { east: { clip: false } });
+    // Regenerable (east's anchor is locked), so the refusal NAMES the way past it
+    // — but a caller who did not ask for that still gets refused, under the same
+    // code as any other un-re-derivable import (the override rides in the message,
+    // per the FORK_SYNC_REQUIRED precedent).
     await expect(unlockWalkSet(id)).rejects.toMatchObject({
       status: 409,
       code: 'LEGACY_IMPORTED_WALK_SET',
-      message: expect.stringContaining('east'),
+      message: expect.stringContaining('acknowledgeNoClips'),
     });
+    // …and it does NOT advise reopening "the directions that do have clips", of
+    // which there are none.
+    await expect(unlockWalkSet(id)).rejects.toMatchObject({
+      message: expect.not.stringContaining('one at a time'),
+    });
+    expect((await getWalkState(id)).walkSet).not.toBeNull();
+  });
+
+  /**
+   * #3043 — re-deriving is not the only way back. A walk render is conditioned on
+   * the direction's LOCKED anchor, so a clipless imported set whose anchors are
+   * all locked can still be rebuilt from scratch; before this, such a set (the
+   * whole phase-1 import population) had no reachable way to revise anything —
+   * not one direction, and not the set's cycle target, which `requireUnfinalized`
+   * refuses while the set is frozen.
+   */
+  it('unlocks a clipless imported set when the caller acknowledges regeneration', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    await importedCharacter(id, { east: { clip: false } });
+
+    const state = await unlockWalkSet(id, { acknowledgeNoClips: true });
+    expect(state.walkSet).toBeNull();
+    expect((await records.getRecord(id)).status).toBe('reference-complete');
+    // …and the retarget the whole exercise exists for now succeeds.
+    const retargeted = await setWalkTarget(id, { frameCount: 12, fps: 12 });
+    expect(retargeted.walkTarget).toMatchObject({ frameCount: 12, fps: 12, source: 'set' });
+  });
+
+  /**
+   * The importer stamps the chroma key it used on the RECORD and copies a
+   * manifest that carries none, so a renderability probe reading only
+   * `manifest.chromaKey` reports every fully-locked import as un-regenerable —
+   * which made both the acknowledged unlock and Generate itself dead for exactly
+   * the population they exist for. The fallback mirrors reference.js's own
+   * manifest → record resolution order.
+   */
+  it('resolves the chroma key off the record when the imported manifest carries none', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    await importedCharacter(id, { east: { clip: false } });
+    // Drop the manifest key the native lock flow would have frozen, leaving only
+    // the record-level key the importer stamps.
+    const manifestPath = join(TEST_ROOT, 'sprites', id, 'reference', `${id}-reference-set-v1.json`);
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    delete manifest.chromaKey;
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    await records.updateRecord(id, { chromaKey: '#FF00FF' });
+
+    expect((await getWalkState(id)).walkSet.unlock).toMatchObject({ acknowledgeable: true });
+
+    // …and with NEITHER key the refusal stands: that is the real "main was never
+    // locked" state, where regeneration genuinely can't be promised.
+    await records.updateRecord(id, { chromaKey: null });
+    expect((await getWalkState(id)).walkSet.unlock).toMatchObject({ acknowledgeable: false });
+  });
+
+  // The acknowledgement is an override of the CLIP requirement only — it must
+  // never become a way to strand a direction that cannot be rebuilt at all.
+  it('refuses an acknowledged unlock when a stranded direction has no locked anchor', async () => {
+    // Only east's anchor is locked, so north can be neither re-derived (no clip)
+    // nor regenerated (no anchor to condition a render on).
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    await importedCharacter(id, { east: { clip: false }, north: { clip: false } });
+
+    await expect(unlockWalkSet(id, { acknowledgeNoClips: true })).rejects.toMatchObject({
+      status: 409,
+      code: 'LEGACY_IMPORTED_WALK_SET',
+    });
+    expect((await getWalkState(id)).walkSet).not.toBeNull();
+  });
+
+  // What the two clients render their Unlock affordance from (#3043) — stamped by
+  // the same resolver the gate uses, so the button offered and the 409 it might
+  // hit cannot be computed from two different readings of the set.
+  it('stamps the unlock block on the walk state', async () => {
+    const clipless = await characterWithLockedAnchors(newId(), ['east']);
+    await importedCharacter(clipless, { east: { clip: false } });
+    expect((await getWalkState(clipless)).walkSet.unlock).toEqual({
+      blocked: true, stranded: ['east'], acknowledgeable: true,
+    });
+
+    const withClip = await characterWithLockedAnchors(newId(), ['east']);
+    await importedCharacter(withClip, { east: {} });
+    expect((await getWalkState(withClip)).walkSet.unlock).toMatchObject({ blocked: false });
   });
 
   // Unlock drops EVERY approval, and a source-packaged direction with no clip can

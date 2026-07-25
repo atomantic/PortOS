@@ -109,6 +109,7 @@ export * from './spriteCollectionActions.js';
 export * from './spriteFacets.js';
 export * from './spriteRecordGroups.js';
 export * from './spriteTrimmer.js';
+export * from './spriteWalkUnlock.js';
 export * from './streakGlyph.js';
 export * from './syncCounts.js';
 export * from './tabNotation.js';

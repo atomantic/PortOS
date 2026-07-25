@@ -1209,6 +1209,14 @@ export const spriteWalkReopenSchema = z.object({
   direction: spriteWalkDirectionSchema,
 });
 
+// Unlock takes no required input; the one optional flag is the user's informed
+// override of the "imported set has no clips to re-derive from" refusal (#3043).
+// Defaulted rather than `.optional()` so the service's own default and the wire
+// shape agree, and an older client's empty body still means "do not override".
+export const spriteWalkUnlockSchema = z.object({
+  acknowledgeNoClips: z.boolean().default(false),
+});
+
 export const spriteWalkPostprocessSchema = z.object({
   // Resolvable, not native-only (#2980): since #2993 the reprocess is
   // layout-aware and re-derives an IMPORTED run in the directory it was imported

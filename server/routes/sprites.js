@@ -25,6 +25,7 @@ import {
   spriteWalkGenerateSchema,
   spriteWalkApproveSchema,
   spriteWalkReopenSchema,
+  spriteWalkUnlockSchema,
   spriteWalkPostprocessSchema,
   spriteWalkTargetSchema,
   spriteWalkSourceFramesParamsSchema,
@@ -198,9 +199,11 @@ router.post('/:id/walk/approve', asyncHandler(async (req, res) => {
 
 // Un-freeze a finalized walk set so it can be revised in place (#2933
 // follow-up): removes the frozen walk-set file and re-opens every direction,
-// preserving the rendered clips. 409s a legacy source-pipeline import. No body.
+// preserving the rendered clips. 409s a source-pipeline import that has no clips
+// to re-derive from, unless the body's `acknowledgeNoClips` overrides it.
 router.post('/:id/walk/unlock', asyncHandler(async (req, res) => {
-  res.json(await unlockWalkSet(req.params.id));
+  const body = validateRequest(spriteWalkUnlockSchema, req.body || {});
+  res.json(await unlockWalkSet(req.params.id, body));
 }));
 
 // Re-open ONE approved direction (finer-grained than unlock) so it can be

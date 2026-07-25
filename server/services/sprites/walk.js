@@ -706,10 +706,22 @@ export async function getWalkState(recordId) {
   // a direction leaves the list the moment it is re-derived here, so the client
   // can gate each card (and name the blocking directions) on the same evidence
   // the compiler will apply, not on a set-wide approximation.
+  // …and stamp WHY unlock is blocked (and whether it can be acknowledged past)
+  // from the same resolver the unlock gate uses, so the client can offer the
+  // escape rather than re-deriving the rule — or, as before #3043, render a dead
+  // "no clips to re-derive" label with no action behind it.
+  // The clip evidence is handed over rather than re-resolved: `allRuns` above
+  // already stat'd every approved direction's clip, and re-deriving it here would
+  // put ~16-32 redundant file ops on a read the client polls every 4s. What is
+  // left is a single manifest read, and only on the blocked path.
+  const clipByDirection = Object.fromEntries(allRuns
+    .filter((run) => resolvedRunIds.has(run.id))
+    .map((run) => [run.direction, Boolean(run.sourceVideoPath) && !run.sourceClipMissing]));
   const stampedWalkSet = walkSet ? {
     ...walkSet,
     imported: isImportedWalkSet(walkSet),
     importedDirections: importedWalkDirections(walkSet),
+    unlock: await resolveUnlockBlock(recordId, walkSet, clipByDirection),
   } : null;
   const walkTarget = resolveWalkTargetFor({
     record: await recordPromise,
@@ -837,6 +849,63 @@ async function setWalkTargetImpl(recordId, { frameCount, fps }) {
 }
 
 /**
+ * The locked directional anchor for a direction, or null. Third copy of this
+ * `.find` + locked/path pair when it was extracted (generate, approve, and the
+ * regenerability probe below all ask the same question), and the definition of
+ * "usable anchor" drifting between them is how a gate ends up promising a render
+ * the render path then refuses.
+ */
+const lockedAnchorFor = (manifest, direction) => {
+  const anchor = manifest?.anchors?.find((a) => a.direction === direction);
+  return anchor?.status === 'locked' && anchor.path ? anchor : null;
+};
+
+/**
+ * Whether a fresh walk render is possible for ONE direction: its anchor must be
+ * locked, and the set must carry the frozen chroma key the i2v input is
+ * composited onto.
+ *
+ * Shared by the render path (which throws `error` and then uses `anchor`/
+ * `chromaKey`) and the un-finalize gate's regenerability probe (which only reads
+ * whether there IS an error). That sharing is load-bearing, not tidiness: the
+ * gate tells the user "every direction can be regenerated" and then drops all
+ * eight approvals on the strength of it, so a predicate that checked less than
+ * the render actually requires would walk them into exactly the dead end the
+ * acknowledgement promises can't happen (#3043). `error` is a factory so the
+ * probe never builds a ServerError it discards.
+ *
+ * The chroma key falls back `manifest → record`, which is the resolution order
+ * the rest of the sprite code already uses (reference.js resolves it that way at
+ * eight sites). Reading `manifest.chromaKey` alone made every SOURCE-PIPELINE
+ * IMPORT unrenderable: the importer stamps the key it used on the record and the
+ * imported manifest carries none, so a fully-locked imported set reported "no
+ * frozen chroma key" and refused every Generate. Absent on BOTH is still the
+ * genuine "main was never locked" refusal.
+ *
+ * Deliberately I/O-free: the on-disk anchor probe (`ANCHOR_MISSING`) stays in the
+ * render path, since this runs per-direction from a read.
+ */
+function resolveWalkRenderability(manifest, record, direction) {
+  const anchor = lockedAnchorFor(manifest, direction);
+  if (!anchor) {
+    return {
+      anchor: null,
+      chromaKey: null,
+      error: () => new ServerError(`Lock the ${anchorIdForDirection(direction)} anchor before animating it`, { status: 409, code: 'ANCHOR_NOT_LOCKED' }),
+    };
+  }
+  const chromaKey = manifest.chromaKey || record?.chromaKey || null;
+  if (!chromaKey) {
+    return {
+      anchor,
+      chromaKey: null,
+      error: () => new ServerError('Reference set has no frozen chroma key', { status: 409, code: 'MAIN_NOT_LOCKED' }),
+    };
+  }
+  return { anchor, chromaKey, error: null };
+}
+
+/**
  * Start one observable grok walk-video render for a direction whose anchor is
  * locked. User-triggered only (route-invoked); exactly one image_to_video call
  * per run — all derivatives are deterministic local work.
@@ -857,14 +926,8 @@ async function startWalkGenerationImpl(recordId, body) {
   await requireUnfinalized(recordId);
   const direction = body.direction;
   const manifest = await loadManifest(recordId);
-  const anchor = manifest?.anchors?.find((a) => a.direction === direction);
-  if (!anchor || anchor.status !== 'locked' || !anchor.path) {
-    throw new ServerError(`Lock the ${anchorIdForDirection(direction)} anchor before animating it`, { status: 409, code: 'ANCHOR_NOT_LOCKED' });
-  }
-  const chromaKey = manifest.chromaKey;
-  if (!chromaKey) {
-    throw new ServerError('Reference set has no frozen chroma key', { status: 409, code: 'MAIN_NOT_LOCKED' });
-  }
+  const { anchor, chromaKey, error } = resolveWalkRenderability(manifest, record, direction);
+  if (error) throw error();
   // Refuse a second render for a direction already in flight. A fresh runId per
   // call is the only reservation, and the client's Generate button can briefly
   // re-enable between the media-poll eviction of its optimistic key and the next
@@ -1292,7 +1355,7 @@ async function manifestCycleProvenance(recordId, rawRel, packaged, names) {
  * labels the run's current geometry off `current`), and a shape that only two
  * thirds matched would defeat that quietly.
  */
-function sourceFrameResponse(runId, run, walkTarget, found) {
+function sourceFrameResponse(runId, run, walkTarget, walkSet, found) {
   return {
     runId,
     direction: run?.direction || null,
@@ -1316,6 +1379,12 @@ function sourceFrameResponse(runId, run, walkTarget, found) {
     cycleProvenance: 'none',
     editable: false,
     lockReason: null,
+    // Only meaningful alongside lockReason 'finalized': whether the set-level
+    // Unlock this panel offers is itself blocked, and whether that block can be
+    // acknowledged past (#3043). Passed through from the walk state the caller
+    // already loaded, so this panel and the walk workflow offer the same action
+    // for the same set.
+    unlock: walkSet?.unlock || null,
     ...found,
   };
 }
@@ -1374,7 +1443,7 @@ export async function getWalkSourceFrames(recordId, runId, { extract = false } =
     // unknown id earns.
     const known = state.runs.find((r) => r.id === runId);
     if (!known) throw new ServerError(`Unknown walk run: ${runId}`, { status: 404, code: 'RUN_NOT_FOUND' });
-    return sourceFrameResponse(runId, known, walkTarget, {
+    return sourceFrameResponse(runId, known, walkTarget, walkSet, {
       reason: 'run-not-packaged',
       lockReason: 'no-source-video',
     });
@@ -1409,7 +1478,7 @@ export async function getWalkSourceFrames(recordId, runId, { extract = false } =
   const lockReason = reDeriveLockReason({
     walkSet, selection, run, runId, clipRel,
   });
-  return sourceFrameResponse(runId, run, walkTarget, {
+  return sourceFrameResponse(runId, run, walkTarget, walkSet, {
     available: frames.length > 0,
     // "No clip at all" and "clip present, frames pruned" are different states
     // with different remedies — the second is one click from recoverable.
@@ -1445,10 +1514,13 @@ export function approveWalkDirection(recordId, args) {
  * `reference-complete` (all anchors locked, walk in progress).
  *
  * A source-pipeline import (#2895) is refused only when it genuinely has nothing
- * to re-derive from — see `assertReDerivable`.
+ * to re-derive from — see `assertReDerivable`. `acknowledgeNoClips` is the
+ * caller's informed override of exactly that refusal: re-deriving is not the only
+ * way back when the directional anchors are still locked, so a user who means to
+ * REGENERATE the set can say so.
  */
-export function unlockWalkSet(recordId) {
-  return walkWriteTail(recordId, () => unlockWalkSetImpl(recordId));
+export function unlockWalkSet(recordId, { acknowledgeNoClips = false } = {}) {
+  return walkWriteTail(recordId, () => unlockWalkSetImpl(recordId, { acknowledgeNoClips }));
 }
 
 /**
@@ -1462,8 +1534,23 @@ async function directionsWithoutClip(recordId, walkSet, scope) {
   return scope.filter((_, i) => !clips[i]);
 }
 
-const notReDerivable = (detail) => new ServerError(
-  `${detail} Re-import this character to bring its walk clips across, or create a new character version to revise it.`,
+/**
+ * One refusal for "this imported set has nothing on disk to re-derive from".
+ *
+ * `regenerable` only extends the message with the way past it — the CODE stays
+ * the same either way, following the `FORK_SYNC_REQUIRED`/`acknowledgeFork`
+ * precedent in the self-update path: a code names WHAT was refused, and the
+ * message names the acknowledgement that overrides it. Whether a given block is
+ * overridable is carried by the stamped `walkSet.unlock.acknowledgeable` that
+ * clients already read, so a second code would be an unread parallel channel for
+ * a fact they have — while forking a string three call sites match on (#3043).
+ */
+const notReDerivable = (detail, { regenerable = false } = {}) => new ServerError(
+  [
+    detail,
+    regenerable && 'Re-submit with acknowledgeNoClips to re-open the set and regenerate each direction from its locked anchor instead (one new render each).',
+    'Re-import this character to bring its walk clips across, or create a new character version to revise it.',
+  ].filter(Boolean).join(' '),
   { status: 409, code: 'LEGACY_IMPORTED_WALK_SET' },
 );
 
@@ -1490,20 +1577,74 @@ const notReDerivable = (detail) => new ServerError(
  * direction be re-derivable, and names the ones that aren't — pointing at the
  * per-direction reopen, which is safe precisely because it leaves the rest frozen.
  */
-async function assertSetReDerivable(recordId, walkSet) {
-  if (!isImportedWalkSet(walkSet)) return;
-  const stale = importedWalkDirections(walkSet);
-  // Marked imported at the SET level with no source-packaged direction to
-  // examine (an empty or already-re-anchored `directions` map behind a copied
-  // selectionPath): no evidence either way, so keep the blanket refusal.
-  if (!stale.length) {
-    throw notReDerivable('This walk set was imported from the source pipeline and carries no directions that can be re-derived here — unlocking is not supported.');
+async function assertSetReDerivable(recordId, walkSet, { acknowledgeNoClips = false } = {}) {
+  // No `isImportedWalkSet` pre-check: the resolver encodes that same answer as
+  // `blocked: false`, and enforcing "native sets are never gated" in two places
+  // is how the two would eventually disagree.
+  const { blocked, stranded, acknowledgeable } = await resolveUnlockBlock(recordId, walkSet);
+  if (!blocked) return;
+  // Acknowledged: the caller was shown what they lose (re-derivation) and what it
+  // costs them instead (a fresh render per stranded direction), and said yes.
+  // Honored ONLY where `resolveUnlockBlock` proved a way back exists, so an
+  // acknowledgement can never be the thing that strands a set (#3043).
+  if (acknowledgeNoClips && acknowledgeable) {
+    console.log(`🔓 sprite walk unlock acknowledged without re-derivable clips for ${recordId} · ${stranded.join(', ') || 'set-level import'}`);
+    return;
   }
-  const stranded = await directionsWithoutClip(recordId, walkSet, stale);
-  if (!stranded.length) return;
-  throw notReDerivable(
-    `Unlocking re-opens every direction, and ${stranded.join(', ')} would be left with no source clip to re-derive from and no packaged frames to re-approve — so ${stranded.length === 1 ? 'it' : 'they'} could not be brought back. Reopen the directions that do have clips one at a time instead.`,
-  );
+  // "no directions to examine" is the set-level-marker case: an empty or
+  // already-re-anchored `directions` map behind a copied selectionPath, where
+  // there is no per-direction evidence either way.
+  // The "reopen them one at a time" pointer is offered only when some direction
+  // actually HAS a clip — for a wholly clipless set that advice names an empty
+  // list, and (since the acknowledgement landed) would be strictly worse than the
+  // button beside it.
+  const partial = stranded.length && stranded.length < importedWalkDirections(walkSet).length;
+  const detail = stranded.length
+    ? `Unlocking re-opens every direction, and ${stranded.join(', ')} would be left with no source clip to re-derive from and no packaged frames to re-approve — so ${stranded.length === 1 ? 'it' : 'they'} could not be brought back by re-deriving.${partial ? ' Reopen the directions that do have clips one at a time instead.' : ''}`
+    : 'This walk set was imported from the source pipeline and carries no directions that can be re-derived here.';
+  throw notReDerivable(detail, { regenerable: acknowledgeable });
+}
+
+/**
+ * Why unlock is (or is not) blocked for a walk set, and whether the block can be
+ * acknowledged past. One resolver for both the gate above and the read the
+ * clients render, so the button they offer and the 409 they might hit are
+ * computed from the same evidence rather than two copies of the rule.
+ *
+ * `blocked` is its own field rather than something a reader infers from
+ * `stranded`: the evidence-free set-level-marker case IS blocked and strands an
+ * EMPTY list, so `stranded.length` would read that as "fine" — the exact
+ * empty-vs-absent conflation the repo's sentinel rule exists to prevent.
+ * `acknowledgeable` says whether regeneration is a real way back, resolved
+ * through the render path's own precondition (`resolveWalkRenderability`).
+ *
+ * `clipByDirection` lets a caller that has ALREADY resolved every approved
+ * direction's clip hand that evidence over instead of paying for it twice —
+ * `getWalkState` stamps this field and had just done exactly that work. Omit it
+ * and the clips are resolved here, which is what the write path does.
+ *
+ * Returns a fresh object per call: this value is stamped onto a walk-state
+ * response, so a hoisted shared constant would be one downstream mutation away
+ * from poisoning every later response process-wide.
+ */
+async function resolveUnlockBlock(recordId, walkSet, clipByDirection = null) {
+  const notBlocked = { blocked: false, stranded: [], acknowledgeable: false };
+  if (!isImportedWalkSet(walkSet)) return notBlocked;
+  const stale = importedWalkDirections(walkSet);
+  const regenerable = async (scope) => {
+    const [manifest, record] = await Promise.all([loadManifest(recordId), getRecord(recordId)]);
+    return scope.every((direction) => !resolveWalkRenderability(manifest, record, direction).error);
+  };
+  // No per-direction evidence to examine, and unlock re-opens the whole set — so
+  // the whole set has to be regenerable before the escape is honest.
+  if (!stale.length) {
+    return { blocked: true, stranded: [], acknowledgeable: await regenerable(SPRITE_DIRECTIONS) };
+  }
+  const stranded = clipByDirection
+    ? stale.filter((direction) => !clipByDirection[direction])
+    : await directionsWithoutClip(recordId, walkSet, stale);
+  if (!stranded.length) return notBlocked;
+  return { blocked: true, stranded, acknowledgeable: await regenerable(stranded) };
 }
 
 /**
@@ -1537,13 +1678,13 @@ async function dropFinalizedWalkSet(recordId, recordStatus = 'reference-complete
   await updateRecord(recordId, { status: recordStatus });
 }
 
-async function unlockWalkSetImpl(recordId) {
+async function unlockWalkSetImpl(recordId, { acknowledgeNoClips = false } = {}) {
   await requireCharacter(recordId);
   const walkSet = await loadWalkSet(recordId);
   if (!walkSet) {
     throw new ServerError('No finalized walk set to unlock', { status: 409, code: 'WALK_SET_NOT_FINAL' });
   }
-  await assertSetReDerivable(recordId, walkSet);
+  await assertSetReDerivable(recordId, walkSet, { acknowledgeNoClips });
   await dropFinalizedWalkSet(recordId);
   // Seed a fresh (empty) selection so EVERY direction re-opens: with the walk
   // set gone each direction would still read `approved` from the old selection
@@ -1711,8 +1852,8 @@ async function approveWalkDirectionImpl(recordId, { direction, runId }) {
   // locked anchor. This backstops the revision flow even if an old candidate
   // remains addressable outside the normal UI.
   const referenceManifest = await loadManifest(recordId);
-  const currentAnchor = referenceManifest?.anchors?.find((anchor) => anchor.direction === direction);
-  if (currentAnchor?.status !== 'locked' || !currentAnchor.path) {
+  const currentAnchor = lockedAnchorFor(referenceManifest, direction);
+  if (!currentAnchor) {
     throw new ServerError(`Lock the ${anchorIdForDirection(direction)} anchor before approving its walk`, { status: 409, code: 'ANCHOR_NOT_LOCKED' });
   }
   if (run.anchorSha256) {

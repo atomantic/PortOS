@@ -23,6 +23,7 @@ import { WALK_FRAME_COUNT_OPTIONS, walkFpsOptionsFor } from '../../lib/spriteTri
 export default function CycleTarget({
   recordId, target, disabled, onChanged, onSavingChange = () => {},
   surfaceClass = 'bg-port-bg', appRetargetHint = 'change it in Publish below',
+  disabledHint,
 }) {
   const [save, saving] = useAsyncAction(async (next) => {
     onSavingChange(true);
@@ -37,6 +38,10 @@ export default function CycleTarget({
 
   const cycleSeconds = (target.frameCount / target.fps).toFixed(2);
   const selectCls = `${surfaceClass} border border-port-border rounded px-2 py-1 text-sm text-white disabled:opacity-60`;
+  // A host that disables the control says WHY on the inputs themselves — a greyed
+  // <select> with the usual "what this knob does" tooltip explains everything
+  // except the one thing the user is asking (#3043).
+  const titleFor = (enabledTitle) => (disabled && disabledHint ? disabledHint : enabledTitle);
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
@@ -47,7 +52,7 @@ export default function CycleTarget({
           value={target.frameCount}
           disabled={disabled || saving || target.frameCountLocked}
           onChange={(e) => save({ frameCount: Number(e.target.value), fps: target.fps })}
-          title="Frames in the walk cycle — shared by all 8 directions, because the atlas is a rectangular grid"
+          title={titleFor('Frames in the walk cycle — shared by all 8 directions, because the atlas is a rectangular grid')}
           className={selectCls}
         >
           {WALK_FRAME_COUNT_OPTIONS.map((n) => <option key={n} value={n}>{n} frames</option>)}
@@ -64,7 +69,7 @@ export default function CycleTarget({
           value={target.fps}
           disabled={disabled || saving || target.fpsLocked}
           onChange={(e) => save({ frameCount: target.frameCount, fps: Number(e.target.value) })}
-          title="Preview/authoring speed — the consuming app determines real in-game playback. Pinned per set because the atlas needs every direction to agree."
+          title={titleFor('Preview/authoring speed — the consuming app determines real in-game playback. Pinned per set because the atlas needs every direction to agree.')}
           className={selectCls}
         >
           {walkFpsOptionsFor(target.fps).map((n) => <option key={n} value={n}>{n} fps</option>)}

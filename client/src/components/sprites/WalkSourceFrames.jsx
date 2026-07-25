@@ -12,6 +12,7 @@ import {
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import CycleTarget from './CycleTarget.jsx';
+import { walkUnlockCopy, WALK_UNLOCK_TOAST } from '../../lib/spriteWalkUnlock.js';
 import { spriteAssetUrl, PIXELATED } from './spriteAssets.js';
 
 // Source frames + re-derive (#2980), inside the Loop Trimmer.
@@ -49,13 +50,24 @@ const unavailableCopy = ({ reason, imported }) => ({
 // What the user has to do before the loop can be re-derived. Mirrors the server's
 // own guards (walk.js#reDeriveLockReason) so the panel never offers an action the
 // API will refuse.
-const LOCK_COPY = {
-  finalized: {
+//
+// `finalized` is a function of the server's unlock block (#3043) rather than a
+// constant: a frozen set imported WITHOUT its source clips refuses a plain
+// unlock, and the honest offer there is regeneration instead of re-derivation.
+// That wording comes from the shared `walkUnlockCopy`, so this panel and the Walk
+// Cycles header can never describe one set two different ways. The icon is added
+// here because the shared module stays pure copy (no React/lucide imports).
+const finalizedLockCopy = (unlock) => ({
+  icon: Unlock,
+  ...(walkUnlockCopy(unlock) || {
     text: 'The walk set is frozen. Unlocking re-opens every direction for revision; the rendered clips are kept, so re-approval is one click each.',
     action: 'Unlock set',
     prompt: 'Unlock the whole set?',
-    icon: Unlock,
-  },
+    acknowledgeNoClips: false,
+  }),
+});
+
+const LOCK_COPY = {
   approved: {
     text: 'This direction is approved, and approved runs are immutable. Reopening un-approves just this direction — the rendered clip is kept, so re-approval is one click.',
     action: 'Reopen direction',
@@ -160,10 +172,26 @@ function WalkSourceFrames({ recordId, runId, onSaved = () => {} }) {
     toast.success(`Extracted ${next.frames?.length ?? 0} source frames from the clip`);
   }, { errorMessage: 'Could not extract frames from this clip' });
 
+  // The set-level cycle target is a mutating walk op, so the server refuses it
+  // outright while the set is frozen (requireUnfinalized) — offering an enabled
+  // <select> there just hands back a 409 on change (#3043). The lock panel below
+  // carries the unlock that clears it.
+  const finalizedSet = data?.lockReason === 'finalized';
+  // Suppressed when the unavailable line above already said the same thing (a
+  // clipless run reports both `reason` and `lockReason` as the missing clip) —
+  // printing the explanation twice reads like two different problems.
+  const lock = data && !data.editable && !(!data.available && data.lockReason === 'no-source-video')
+    ? (finalizedSet ? finalizedLockCopy(data.unlock) : LOCK_COPY[data.lockReason])
+    : null;
+
+  // `useAsyncAction` re-closes over a fresh fn each render, so this reads the
+  // `lock` resolved above rather than rebuilding the copy to fish out one flag.
   const [unlock, unlocking] = useAsyncAction(async () => {
-    if (data.lockReason === 'finalized') {
-      await unlockSpriteWalk(recordId, { silent: true });
-      toast.success('Walk set unlocked — directions are editable again');
+    if (finalizedSet) {
+      // Only true on the branch whose text above named the cost, and the server
+      // honors it only where it proved regeneration is possible.
+      await unlockSpriteWalk(recordId, { acknowledgeNoClips: lock.acknowledgeNoClips }, { silent: true });
+      toast.success(lock.toast || WALK_UNLOCK_TOAST);
     } else {
       await reopenSpriteWalk(recordId, { direction: data.direction }, { silent: true });
       toast.success(`Walk ${data.direction} reopened`);
@@ -172,12 +200,6 @@ function WalkSourceFrames({ recordId, runId, onSaved = () => {} }) {
   }, { errorMessage: 'Could not unlock this direction' });
 
   const busy = redriving || unlocking || targetSaving || extracting;
-  // Suppressed when the unavailable line above already said the same thing (a
-  // clipless run reports both `reason` and `lockReason` as the missing clip) —
-  // printing the explanation twice reads like two different problems.
-  const lock = data && !data.editable && !(!data.available && data.lockReason === 'no-source-video')
-    ? LOCK_COPY[data.lockReason]
-    : null;
   const frames = data?.frames || [];
 
   const sectionCls = 'bg-port-bg border border-port-border rounded p-3 space-y-3';
@@ -292,7 +314,10 @@ function WalkSourceFrames({ recordId, runId, onSaved = () => {} }) {
             <CycleTarget
               recordId={recordId}
               target={data.target}
-              disabled={busy}
+              disabled={busy || finalizedSet}
+              disabledHint={finalizedSet
+                ? 'The walk set is frozen — unlock it below before changing the cycle target'
+                : undefined}
               onChanged={refresh}
               onSavingChange={setTargetSaving}
               surfaceClass="bg-port-card"

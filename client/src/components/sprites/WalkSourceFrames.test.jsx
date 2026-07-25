@@ -229,11 +229,30 @@ describe('WalkSourceFrames', () => {
 
   it('offers the set unlock for a finalized set', async () => {
     await renderPanel(payload({ editable: false, lockReason: 'finalized' }));
+    // A frozen set refuses the target PUT outright, so the knob must not invite
+    // a guaranteed 409 (#3043).
+    expect(screen.getByLabelText(/Cycle target/).disabled).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: /Unlock set/ }));
     fireEvent.click(screen.getByRole('button', { name: /^Unlock set$/ }));
     await act(async () => {});
-    expect(unlockSpriteWalk).toHaveBeenCalledWith('example-walker', { silent: true });
+    expect(unlockSpriteWalk).toHaveBeenCalledWith('example-walker', { acknowledgeNoClips: false }, { silent: true });
     expect(reopenSpriteWalk).not.toHaveBeenCalled();
+  });
+
+  // A frozen set the server also reports as un-re-derivable (imported without its
+  // clips) gets the different, costlier offer — and only THAT confirm carries the
+  // acknowledgement past the server's refusal (#3043).
+  it('offers regeneration, with the acknowledgement, for a clipless imported set', async () => {
+    await renderPanel(payload({
+      editable: false,
+      lockReason: 'finalized',
+      unlock: { blocked: true, stranded: ['east'], acknowledgeable: true },
+    }));
+    expect(screen.getByText(/one new grok render per direction/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Unlock anyway/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Unlock anyway$/ }));
+    await act(async () => {});
+    expect(unlockSpriteWalk).toHaveBeenCalledWith('example-walker', { acknowledgeNoClips: true }, { silent: true });
   });
 
   it('reports a failed read with a retry instead of a silent empty panel', async () => {

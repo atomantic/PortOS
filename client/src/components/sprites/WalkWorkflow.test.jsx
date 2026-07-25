@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-  render, screen, act, fireEvent, cleanup,
+  render, screen, act, fireEvent, cleanup, waitFor,
 } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -19,7 +19,9 @@ vi.mock('../../services/apiSprites.js', () => ({
 }));
 
 import WalkWorkflow from './WalkWorkflow';
-import { postprocessSpriteWalk, reopenSpriteWalk, setSpriteWalkTarget } from '../../services/apiSprites.js';
+import {
+  postprocessSpriteWalk, reopenSpriteWalk, setSpriteWalkTarget, unlockSpriteWalk,
+} from '../../services/apiSprites.js';
 
 const CELL_PX = 96;
 
@@ -572,7 +574,11 @@ describe('WalkWorkflow reprocess + reopen', () => {
           walk={{
             runs: [{ id: 'run-east', direction: 'east', status: 'approved', stripPreview: { stripPath: 'runs/run-east/generated/strip.png', frameCount: 12, fps: 10, cellWidth: 384, cellHeight: 384 } }],
             selection: { directions: { east: { status: 'approved', runId: 'run-east' } } },
-            walkSet: { imported: true, directions: { east: { status: 'approved' } } },
+            walkSet: {
+              imported: true,
+              directions: { east: { status: 'approved' } },
+              unlock: { blocked: true, stranded: ['east'], acknowledgeable: true },
+            },
             walkTarget: {
               frameCount: 12, fps: 10, source: 'derived', sourceLabel: 'from the first approved direction', drift: [],
             },
@@ -587,6 +593,77 @@ describe('WalkWorkflow reprocess + reopen', () => {
     );
     expect(screen.queryByRole('button', { name: /^Reopen$/ })).toBeNull();
     expect(screen.getByText(/imported · no clips to re-derive/)).toBeTruthy();
+    // …but re-deriving being impossible is NOT the same as the set being frozen
+    // forever (#3043): the anchor is locked, so regeneration is offered.
+    expect(screen.getByRole('button', { name: /Unlock anyway/ })).toBeTruthy();
+  });
+
+  // The acknowledged unlock is an override of the CLIP requirement only. When the
+  // server reports the set is not regenerable either (an unlocked anchor), there
+  // is genuinely nothing to offer and the panel must say so rather than hand back
+  // a guaranteed 409.
+  it('offers no unlock at all when the server says the set is not even regenerable', async () => {
+    render(
+      <MemoryRouter>
+        <WalkWorkflow
+          record={{ id: 'example-walker' }}
+          reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked' }] } }}
+          walk={{
+            runs: [{ id: 'run-east', direction: 'east', status: 'approved', stripPreview: { stripPath: 'runs/run-east/generated/strip.png', frameCount: 12, fps: 10, cellWidth: 384, cellHeight: 384 } }],
+            selection: { directions: { east: { status: 'approved', runId: 'run-east' } } },
+            walkSet: {
+              imported: true,
+              directions: { east: { status: 'approved' } },
+              unlock: { blocked: true, stranded: ['east'], acknowledgeable: false },
+            },
+            walkTarget: {
+              frameCount: 12, fps: 10, source: 'derived', sourceLabel: 'from the first approved direction', drift: [],
+            },
+          }}
+          renders={noRenders()}
+          duration={6}
+          onDurationChange={vi.fn()}
+          onGenerate={vi.fn()}
+          onChanged={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole('button', { name: /Unlock/ })).toBeNull();
+    expect(screen.getByText(/nothing to regenerate from either/)).toBeTruthy();
+  });
+
+  it('sends the acknowledgement only from the blocked-but-regenerable confirm', async () => {
+    const onChanged = vi.fn();
+    render(
+      <MemoryRouter>
+        <WalkWorkflow
+          record={{ id: 'example-walker' }}
+          reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked' }] } }}
+          walk={{
+            runs: [{ id: 'run-east', direction: 'east', status: 'approved', stripPreview: { stripPath: 'runs/run-east/generated/strip.png', frameCount: 12, fps: 10, cellWidth: 384, cellHeight: 384 } }],
+            selection: { directions: { east: { status: 'approved', runId: 'run-east' } } },
+            walkSet: {
+              imported: true,
+              directions: { east: { status: 'approved' } },
+              unlock: { blocked: true, stranded: ['east'], acknowledgeable: true },
+            },
+            walkTarget: {
+              frameCount: 12, fps: 10, source: 'derived', sourceLabel: 'from the first approved direction', drift: [],
+            },
+          }}
+          renders={noRenders()}
+          duration={6}
+          onDurationChange={vi.fn()}
+          onGenerate={vi.fn()}
+          onChanged={onChanged}
+        />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Unlock anyway/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Unlock anyway$/ }));
+    await waitFor(() => expect(unlockSpriteWalk).toHaveBeenCalledWith(
+      'example-walker', { acknowledgeNoClips: true }, { silent: true },
+    ));
   });
 
   // #2993: since the importer brings each run's clip across, an imported
@@ -653,6 +730,7 @@ describe('WalkWorkflow reprocess + reopen', () => {
               imported: true,
               importedDirections: ['east', 'north'],
               directions: { east: { status: 'approved' }, north: { status: 'approved' } },
+              unlock: { blocked: true, stranded: ['north'], acknowledgeable: true },
             },
             walkTarget: {
               frameCount: 12, fps: 10, source: 'derived', sourceLabel: 'from the first approved direction', drift: [],
