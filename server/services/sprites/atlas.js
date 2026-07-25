@@ -5,7 +5,7 @@
  * walk set: an (idle + N walk phases)-column × 8-row grid (× S/SE/E/
  * NE/N/NW/W/SW) of fixed-size cells, each frame scaled once per direction and
  * translated so it anchors on the pivot x and its sole lands exactly on the
- * pivot ground line. Placement is anchored on the HIP, not the silhouette
+ * pivot ground line. Placement is anchored on the TORSO, not the silhouette
  * centre, and shared across a direction's cells — a walk frame carries the
  * packer's pivot through the scale, the idle anchor measures its own (#3021) —
  * so a swinging limb cannot slide the character and idle→walk does not pop.
@@ -237,9 +237,9 @@ function placeCell(scaled, bounds, baseline, pasteX, label, geometry, scale) {
  * The shared x every cell of one direction is placed at, and the correction (if
  * any) needed to keep the whole row inside its cells.
  *
- * Anchoring on the packer's hip pivot rather than each cell's own silhouette
+ * Anchoring on the packer's torso pivot rather than each cell's own silhouette
  * centre is what preserves registration through compile (#3021) — but it also
- * moves content off-centre by however far the hip sits from the silhouette
+ * moves content off-centre by however far the torso sits from the silhouette
  * middle, which for a wide sprite can be enough to touch a cell edge and turn a
  * previously-successful compile into a hard 422. So the row is shifted back as a
  * WHOLE when that happens: relative registration between frames is preserved
@@ -445,16 +445,16 @@ async function compileDirectionRow(recordId, direction, validated, geometry) {
   const idleLabel = `${direction}-idle`;
   const idleScaled = await scaleForCell(idleSource, idleScale, idleLabel);
   // The idle anchor is a raw reference with no packer alignment behind it, so
-  // its hip is measured directly — the same `rootX` band the packer uses. It
-  // must be hip-anchored like the walk cells rather than silhouette-centred: the
-  // two rules differ by however far the hip sits off centre, and with idle on one
+  // its torso is measured directly — the same `rootX` band the packer uses. It
+  // must be torso-anchored like the walk cells rather than silhouette-centred: the
+  // two rules differ by however far the torso sits off centre, and with idle on one
   // rule and walk on the other the character visibly pops sideways the instant
   // the game starts or stops the gait (#3021). Measured at the silhouette
   // threshold, matching how this cell's scale was derived.
-  const idleHipX = rootX(idleScaled.scaled, alphaBbox(idleScaled.scaled, SILHOUETTE_ALPHA_THRESHOLD) || idleScaled.bounds);
+  const idleTorsoX = rootX(idleScaled.scaled, alphaBbox(idleScaled.scaled, SILHOUETTE_ALPHA_THRESHOLD) || idleScaled.bounds);
   const idle = placeCell(
     idleScaled.scaled, idleScaled.bounds, idleScaled.baseline,
-    sharedRowPasteX(pyRound(geometry.pivot[0] - idleHipX), [idleScaled.bounds], geometry),
+    sharedRowPasteX(pyRound(geometry.pivot[0] - idleTorsoX), [idleScaled.bounds], geometry),
     idleLabel, geometry, idleScale,
   );
   if (Math.abs(idle.meta.occupiedBounds.height - desiredIdleHeight) > IDLE_HEIGHT_TOLERANCE) {

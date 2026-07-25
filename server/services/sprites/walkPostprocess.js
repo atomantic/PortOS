@@ -572,7 +572,7 @@ const blankFrame = (width, height) => ({ data: Buffer.alloc(width * height * 4),
 
 /**
  * One fixed scale + per-frame integer translation: every frame shares the
- * scale that fits the largest bbox into the cell; the hip pivot lands on
+ * scale that fits the largest bbox into the cell; the TORSO pivot lands on
  * x=192 and the feet baseline on y=352.
  */
 export async function alignFrames(frames) {
