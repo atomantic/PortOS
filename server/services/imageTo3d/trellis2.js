@@ -19,10 +19,11 @@
  */
 
 import { existsSync } from 'node:fs';
-import { homedir, platform } from 'node:os';
+import { homedir, platform, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { rewriteGlbMaterialsOpaque } from './glbMaterials.js';
 
 const HOME = homedir();
 const IS_WIN = platform() === 'win32';
@@ -315,6 +316,36 @@ export function trellis2OutputStem(outputPath) {
 export const TRELLIS2_TEXTURE_SIZES = [512, 1024, 2048];
 
 /**
+ * `generate.py` supports a fast 512 pipeline and two higher-resolution variants.
+ * 1024-cascade keeps the proven 512 sparse-structure pass, then refines shape and
+ * surface attributes against 1024px image conditioning. That is the useful quality
+ * step for details landing on the right parts of a generated object.
+ */
+export const TRELLIS2_PIPELINE_TYPES = ['512', '1024', '1024_cascade'];
+export const TRELLIS2_BASELINE_PIPELINE_TYPE = '512';
+export const TRELLIS2_HIGH_QUALITY_PIPELINE_TYPE = '1024_cascade';
+
+/**
+ * The Apple port documents an ~18 GB peak for its benchmarked 512 lane and does
+ * not publish a 1024-cascade memory ceiling. Keep the supported 24 GB floor on the
+ * known lane, and opt into the higher-resolution texture model only with a
+ * conservative second 24 GB of headroom.
+ */
+export const TRELLIS2_HIGH_QUALITY_MIN_MEMORY_GB = 48;
+
+/**
+ * Pick the texture-generation lane from physical unified memory.
+ *
+ * @param {number} unifiedMemoryGb
+ * @returns {'512'|'1024_cascade'}
+ */
+export function selectTrellis2PipelineType(unifiedMemoryGb) {
+  return Number(unifiedMemoryGb) >= TRELLIS2_HIGH_QUALITY_MIN_MEMORY_GB
+    ? TRELLIS2_HIGH_QUALITY_PIPELINE_TYPE
+    : TRELLIS2_BASELINE_PIPELINE_TYPE;
+}
+
+/**
  * PortOS asks for the largest atlas the port offers, overriding `generate.py`'s
  * 1024 default. The bake UV-unwraps a 200k-triangle mesh into a single atlas, so
  * texel budget per triangle is the binding constraint on surface quality: at 1024²
@@ -334,7 +365,8 @@ export const TRELLIS2_DEFAULT_TEXTURE_SIZE = 2048;
  * `outputPath` is the desired `.glb` disk path; it is reduced to the stem the port
  * expects (see `trellis2OutputStem`).
  *
- * @param {{imagePath: string, outputPath?: string, base?: string, textureSize?: number}} opts
+ * @param {{imagePath: string, outputPath?: string, base?: string, textureSize?: number,
+ *          pipelineType?: string}} opts
  * @returns {{command: string, args: string[]}}
  */
 export function buildGenerateArgs({
@@ -342,6 +374,7 @@ export function buildGenerateArgs({
   outputPath,
   base,
   textureSize = TRELLIS2_DEFAULT_TEXTURE_SIZE,
+  pipelineType = TRELLIS2_BASELINE_PIPELINE_TYPE,
 } = {}) {
   if (!imagePath) throw new Error('buildGenerateArgs: imagePath is required');
   if (!TRELLIS2_TEXTURE_SIZES.includes(textureSize)) {
@@ -349,8 +382,14 @@ export function buildGenerateArgs({
       `buildGenerateArgs: textureSize must be one of ${TRELLIS2_TEXTURE_SIZES.join(', ')}`,
     );
   }
+  if (!TRELLIS2_PIPELINE_TYPES.includes(pipelineType)) {
+    throw new Error(
+      `buildGenerateArgs: pipelineType must be one of ${TRELLIS2_PIPELINE_TYPES.join(', ')}`,
+    );
+  }
   const args = [trellis2GenerateScript(base), imagePath];
   if (outputPath) args.push('--output', trellis2OutputStem(outputPath));
+  args.push('--pipeline-type', pipelineType);
   args.push('--texture-size', String(textureSize));
   return { command: trellis2VenvPython(base), args };
 }
@@ -672,10 +711,16 @@ const HF_AUTH_HELP = 'TRELLIS.2 could not download a gated model dependency from
  * it in — this function stays synchronous so its `{ promise, kill }` contract holds.
  * Omitted → the child inherits `process.env` as before.
  *
+ * A successful render is normalized to opaque before it resolves. The Apple port
+ * auto-enables BLEND from isolated low-alpha texels, while upstream TRELLIS
+ * documents OPAQUE as the default; leaving BLEND active turns prediction noise
+ * into visible holes in both PortOS and downloaded GLBs.
+ *
  * @param {{imagePath: string, outputPath?: string, base?: string, textureSize?: number,
+ *          pipelineType?: string, unifiedMemoryGb?: number,
  *          onProgress?: (frame: object) => void,
  *          spawnImpl?: Function, exists?: (p: string) => boolean,
- *          env?: NodeJS.ProcessEnv}} opts
+ *          env?: NodeJS.ProcessEnv, postprocessGlb?: (path: string) => Promise<void>}} opts
  * @returns {{promise: Promise<{assetPath: string}>, kill: () => void}}
  */
 export function runTrellis2Generate({
@@ -683,17 +728,27 @@ export function runTrellis2Generate({
   outputPath,
   base,
   textureSize,
+  pipelineType,
+  unifiedMemoryGb = Math.round(totalmem() / 1024 ** 3),
   onProgress,
   spawnImpl = spawn,
   exists = existsSync,
   env,
+  postprocessGlb = rewriteGlbMaterialsOpaque,
 } = {}) {
   if (!isTrellis2Installed({ base, exists })) {
     const err = new Error('TRELLIS.2 is not installed — install it before generating.');
     err.code = 'TRELLIS2_NOT_INSTALLED';
     return { promise: Promise.reject(err), kill: () => {} };
   }
-  const { command, args } = buildGenerateArgs({ imagePath, outputPath, base, textureSize });
+  const resolvedPipelineType = pipelineType || selectTrellis2PipelineType(unifiedMemoryGb);
+  const { command, args } = buildGenerateArgs({
+    imagePath,
+    outputPath,
+    base,
+    textureSize,
+    pipelineType: resolvedPipelineType,
+  });
   // Child-process boundary — errors surface via the 'error'/'close' events, not a
   // throw into the request lifecycle (CLAUDE.md child-process exception).
   const child = spawnImpl(command, args, { cwd: trellis2Root(base), ...(env ? { env } : {}) });
@@ -720,7 +775,14 @@ export function runTrellis2Generate({
     child.on('error', reject);
     child.on('close', (code) => {
       if (code === 0 && assetPath) {
-        resolve({ assetPath });
+        Promise.resolve()
+          .then(() => postprocessGlb(assetPath))
+          .then(() => resolve({ assetPath }))
+          .catch((cause) => {
+            const error = new Error(`TRELLIS.2 produced a GLB but material normalization failed: ${cause.message}`);
+            error.code = 'TRELLIS2_GLB_POSTPROCESS_FAILED';
+            reject(error);
+          });
         return;
       }
       // A gated-dependency / HF-auth failure is a user-fixable setup problem, not a

@@ -23,6 +23,11 @@ import {
   TRELLIS2_REQUIRES_XCODE_HINT,
   TRELLIS2_DEFAULT_TEXTURE_SIZE,
   TRELLIS2_TEXTURE_SIZES,
+  TRELLIS2_PIPELINE_TYPES,
+  TRELLIS2_BASELINE_PIPELINE_TYPE,
+  TRELLIS2_HIGH_QUALITY_PIPELINE_TYPE,
+  TRELLIS2_HIGH_QUALITY_MIN_MEMORY_GB,
+  selectTrellis2PipelineType,
 } from './trellis2.js';
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -127,6 +132,7 @@ describe('buildGenerateArgs', () => {
     expect(command).toBe(trellis2VenvPython(BASE));
     expect(args).toEqual([
       trellis2GenerateScript(BASE), '/data/images/x.png',
+      '--pipeline-type', TRELLIS2_BASELINE_PIPELINE_TYPE,
       '--texture-size', String(TRELLIS2_DEFAULT_TEXTURE_SIZE),
     ]);
   });
@@ -143,7 +149,11 @@ describe('buildGenerateArgs', () => {
 
   it('honors an explicit texture size', () => {
     const { args } = buildGenerateArgs({ imagePath: 'in.png', base: BASE, textureSize: 1024 });
-    expect(args).toEqual([trellis2GenerateScript(BASE), 'in.png', '--texture-size', '1024']);
+    expect(args).toEqual([
+      trellis2GenerateScript(BASE), 'in.png',
+      '--pipeline-type', TRELLIS2_BASELINE_PIPELINE_TYPE,
+      '--texture-size', '1024',
+    ]);
   });
 
   it('rejects a texture size outside the port\'s argparse choices instead of letting the render abort', () => {
@@ -151,8 +161,31 @@ describe('buildGenerateArgs', () => {
       .toThrow(/textureSize must be one of/);
   });
 
+  it('honors and validates the texture-generation pipeline type', () => {
+    const { args } = buildGenerateArgs({
+      imagePath: 'in.png',
+      base: BASE,
+      pipelineType: TRELLIS2_HIGH_QUALITY_PIPELINE_TYPE,
+    });
+    expect(args).toContain(TRELLIS2_HIGH_QUALITY_PIPELINE_TYPE);
+    expect(() => buildGenerateArgs({ imagePath: 'in.png', base: BASE, pipelineType: '4096' }))
+      .toThrow(/pipelineType must be one of/);
+  });
+
   it('throws when no source image is given', () => {
     expect(() => buildGenerateArgs({ base: BASE })).toThrow(/imagePath is required/);
+  });
+});
+
+describe('selectTrellis2PipelineType', () => {
+  it('keeps supported 24 GB hosts on the benchmarked 512 lane', () => {
+    expect(selectTrellis2PipelineType(24)).toBe(TRELLIS2_BASELINE_PIPELINE_TYPE);
+  });
+
+  it('uses 1024-cascade when the host has conservative memory headroom', () => {
+    expect(selectTrellis2PipelineType(TRELLIS2_HIGH_QUALITY_MIN_MEMORY_GB))
+      .toBe(TRELLIS2_HIGH_QUALITY_PIPELINE_TYPE);
+    expect(TRELLIS2_PIPELINE_TYPES).toContain(TRELLIS2_HIGH_QUALITY_PIPELINE_TYPE);
   });
 });
 
@@ -333,16 +366,23 @@ describe('runTrellis2Generate', () => {
     const child = makeChild();
     const spawnImpl = vi.fn(() => child);
     const frames = [];
+    const postprocessGlb = vi.fn(async () => {});
     const { promise } = runTrellis2Generate({
       imagePath: 'a.png',
       base: BASE,
+      unifiedMemoryGb: 24,
       exists: installed,
       spawnImpl,
+      postprocessGlb,
       onProgress: (f) => frames.push(f),
     });
     expect(spawnImpl).toHaveBeenCalledWith(
       trellis2VenvPython(BASE),
-      [trellis2GenerateScript(BASE), 'a.png', '--texture-size', String(TRELLIS2_DEFAULT_TEXTURE_SIZE)],
+      [
+        trellis2GenerateScript(BASE), 'a.png',
+        '--pipeline-type', TRELLIS2_BASELINE_PIPELINE_TYPE,
+        '--texture-size', String(TRELLIS2_DEFAULT_TEXTURE_SIZE),
+      ],
       { cwd: trellis2Root(BASE) },
     );
     child.stdout.emit('data', 'Generating 3D model (pipeline=512, seed=42)...\n');
@@ -350,6 +390,7 @@ describe('runTrellis2Generate', () => {
     child.stdout.emit('data', '  Saved: /out/a.glb\n');
     child.emit('close', 0);
     await expect(promise).resolves.toEqual({ assetPath: '/out/a.glb' });
+    expect(postprocessGlb).toHaveBeenCalledWith('/out/a.glb');
     expect(frames).toEqual([
       { stage: 'generating', percent: 10, message: 'Generating 3D model (pipeline=512, seed=42)...' },
       { stage: 'generating', percent: 30, message: 'Sampling:  50%|█████     | 6/12' },
@@ -363,12 +404,14 @@ describe('runTrellis2Generate', () => {
     // LAST (highest) frame, not the first — otherwise sampling under-reports.
     const child = makeChild();
     const frames = [];
+    const postprocessGlb = vi.fn(async () => {});
     const { promise } = runTrellis2Generate({
       imagePath: 'a.png',
       outputPath: '/out/a.glb',
       base: BASE,
       exists: installed,
       spawnImpl: () => child,
+      postprocessGlb,
       onProgress: (f) => frames.push(f),
     });
     child.stdout.emit('data', 'Sampling:   0%\rSampling:  50%\rSampling: 100%\r');
@@ -377,6 +420,39 @@ describe('runTrellis2Generate', () => {
     await expect(promise).resolves.toEqual({ assetPath: '/out/a.glb' });
     // 0/50/100 scale into the [10,50] band → 10/30/50; the last frame is 50.
     expect(frames.map((f) => f.percent)).toEqual([10, 30, 50, 92]);
+  });
+
+  it('selects the 1024-cascade texture model on a high-memory host', async () => {
+    const child = makeChild();
+    const spawnImpl = vi.fn(() => child);
+    const { promise } = runTrellis2Generate({
+      imagePath: 'a.png',
+      outputPath: '/out/a.glb',
+      base: BASE,
+      unifiedMemoryGb: 128,
+      exists: installed,
+      spawnImpl,
+      postprocessGlb: vi.fn(async () => {}),
+    });
+    expect(spawnImpl.mock.calls[0][1]).toContain(TRELLIS2_HIGH_QUALITY_PIPELINE_TYPE);
+    child.emit('close', 0);
+    await expect(promise).resolves.toEqual({ assetPath: '/out/a.glb' });
+  });
+
+  it('fails the run when the exported GLB cannot be normalized safely', async () => {
+    const child = makeChild();
+    const { promise } = runTrellis2Generate({
+      imagePath: 'a.png',
+      outputPath: '/out/a.glb',
+      base: BASE,
+      exists: installed,
+      spawnImpl: () => child,
+      postprocessGlb: vi.fn(() => {
+        throw new Error('bad GLB');
+      }),
+    });
+    child.emit('close', 0);
+    await expect(promise).rejects.toMatchObject({ code: 'TRELLIS2_GLB_POSTPROCESS_FAILED' });
   });
 
   it('rejects on a non-zero exit', async () => {
@@ -432,10 +508,21 @@ describe('runTrellis2Generate', () => {
     const child = makeChild();
     const spawnImpl = vi.fn(() => child);
     const env = { PATH: '/usr/bin', HF_TOKEN: 'hf_test', HUGGINGFACE_HUB_TOKEN: 'hf_test' };
-    const { promise } = runTrellis2Generate({ imagePath: 'a.png', base: BASE, exists: installed, spawnImpl, env });
+    const { promise } = runTrellis2Generate({
+      imagePath: 'a.png',
+      base: BASE,
+      unifiedMemoryGb: 24,
+      exists: installed,
+      spawnImpl,
+      env,
+    });
     expect(spawnImpl).toHaveBeenCalledWith(
       trellis2VenvPython(BASE),
-      [trellis2GenerateScript(BASE), 'a.png', '--texture-size', String(TRELLIS2_DEFAULT_TEXTURE_SIZE)],
+      [
+        trellis2GenerateScript(BASE), 'a.png',
+        '--pipeline-type', TRELLIS2_BASELINE_PIPELINE_TYPE,
+        '--texture-size', String(TRELLIS2_DEFAULT_TEXTURE_SIZE),
+      ],
       { cwd: trellis2Root(BASE), env },
     );
     child.emit('close', null); // settle the run so its rejection isn't left dangling

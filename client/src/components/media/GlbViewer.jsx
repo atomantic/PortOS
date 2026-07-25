@@ -1,4 +1,4 @@
-import { Suspense } from 'react';
+import { Suspense, useEffect, useMemo } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { Bounds, OrbitControls, useGLTF } from '@react-three/drei';
 import { Download, Rotate3d } from 'lucide-react';
@@ -17,20 +17,65 @@ function filenameFromSrc(src) {
   return tail && tail.toLowerCase().endsWith('.glb') ? tail : 'model.glb';
 }
 
-function GlbModel({ src }) {
+const opaqueMaterial = (material) => {
+  if (!material?.clone) return material;
+  const clone = material.clone();
+  clone.transparent = false;
+  clone.opacity = 1;
+  clone.alphaTest = 0;
+  clone.depthWrite = true;
+  clone.needsUpdate = true;
+  return clone;
+};
+
+// GLBs generated before the server-side opaque-export fix remain in users'
+// libraries. Clone before overriding their materials so drei's URL-keyed cache
+// stays pristine for any other consumer that intentionally wants alpha.
+export function cloneGlbSceneWithOpaqueMaterials(scene) {
+  const clone = scene.clone(true);
+  clone.traverse((object) => {
+    if (!object?.isMesh || !object.material) return;
+    object.material = Array.isArray(object.material)
+      ? object.material.map(opaqueMaterial)
+      : opaqueMaterial(object.material);
+  });
+  return clone;
+}
+
+function GlbModel({ src, forceOpaque }) {
   // `useGLTF` keys drei's global cache on the URL, so a new generation (a new
   // `src`) parses fresh while revisiting the same mesh reuses the cache — no
   // manual cache-clear needed (clearing on unmount would force a full multi-MB
   // re-fetch every time the viewer remounts for the same URL).
   const { scene } = useGLTF(src);
-  return <primitive object={scene} />;
+  const renderedScene = useMemo(
+    () => (forceOpaque ? cloneGlbSceneWithOpaqueMaterials(scene) : scene),
+    [forceOpaque, scene],
+  );
+  useEffect(() => {
+    if (!forceOpaque) return undefined;
+    return () => {
+      renderedScene.traverse((object) => {
+        if (!object?.isMesh || !object.material) return;
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        materials.forEach((material) => material.dispose?.());
+      });
+    };
+  }, [forceOpaque, renderedScene]);
+  return <primitive object={renderedScene} />;
 }
 
 // `downloadHref` (optional) overrides where the Download button points — pass a
 // dedicated asset endpoint that sets its own `Content-Disposition` filename, so
 // the server owns the name instead of the client re-deriving it. Falls back to
 // `src` with a filename inferred from the URL.
-export default function GlbViewer({ src, downloadHref, downloadName, className = '' }) {
+export default function GlbViewer({
+  src,
+  downloadHref,
+  downloadName,
+  className = '',
+  forceOpaque = false,
+}) {
   if (!src) return null;
   const href = downloadHref || src;
   // With an explicit download endpoint the server's Content-Disposition wins, so
@@ -48,7 +93,7 @@ export default function GlbViewer({ src, downloadHref, downloadName, className =
           <directionalLight position={[-4, -2, -5]} intensity={0.4} />
           <Suspense fallback={null}>
             <Bounds fit clip observe margin={1.2}>
-              <GlbModel src={src} />
+              <GlbModel src={src} forceOpaque={forceOpaque} />
             </Bounds>
           </Suspense>
           <OrbitControls makeDefault enablePan enableZoom enableRotate />

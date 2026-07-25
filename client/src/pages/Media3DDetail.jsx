@@ -162,7 +162,11 @@ export default function Media3DDetail() {
         <div>
           <span className="mb-1 block text-xs text-gray-400">Mesh</span>
           {record.status === 'ready' && record.assetPath ? (
-            <GlbViewer src={record.assetPath} downloadHref={imageTo3dAssetUrl(record.id)} />
+            <GlbViewer
+              src={record.assetPath}
+              downloadHref={imageTo3dAssetUrl(record.id)}
+              forceOpaque
+            />
           ) : (
             <div className="flex aspect-square items-center justify-center rounded-xl border border-dashed border-port-border bg-port-bg text-center text-sm text-gray-500">
               {isGenerating ? (

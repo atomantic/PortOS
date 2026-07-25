@@ -15,7 +15,9 @@ vi.mock('../services/api', () => ({
 
 // GlbViewer wraps a WebGL canvas jsdom can't render — stub to a marker echoing src.
 vi.mock('../components/media/GlbViewer', () => ({
-  default: ({ src }) => <div data-testid="glb-viewer">{src}</div>,
+  default: ({ src, forceOpaque }) => (
+    <div data-testid="glb-viewer" data-force-opaque={String(forceOpaque)}>{src}</div>
+  ),
 }));
 vi.mock('../components/MediaImage', () => ({ default: ({ alt, src }) => <img alt={alt} src={src} /> }));
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
@@ -51,6 +53,7 @@ describe('Media3DDetail', () => {
     renderAt();
     expect(await screen.findByText('Example Beacon')).toBeInTheDocument();
     expect(screen.getByTestId('glb-viewer')).toHaveTextContent('/data/image-to-3d/image3d-1/model.glb');
+    expect(screen.getByTestId('glb-viewer')).toHaveAttribute('data-force-opaque', 'true');
     expect(screen.getByAltText('Source image')).toBeInTheDocument();
   });
 
