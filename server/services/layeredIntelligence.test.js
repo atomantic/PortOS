@@ -617,7 +617,7 @@ describe('computeProposalOutcomeMetrics (#3014)', () => {
       totalApproved: 3,
       totalCompleted: 1,
       totalRejected: 1,
-      totalAbandoned: 1,
+      totalAbandonedAtFiling: 1,
       totalPending: 1,
       totalAwaitingExecution: 1,
       totalFailedExecution: 1
@@ -630,7 +630,7 @@ describe('computeProposalOutcomeMetrics (#3014)', () => {
   it('breaks down by scope, keeping scopes that were only ever rejected', () => {
     const { byScope } = computeProposalOutcomeMetrics(RECORDS);
     expect(byScope['app-improvement']).toMatchObject({
-      approved: 2, completed: 1, rejected: 0, abandoned: 0, failedExecution: 1,
+      approved: 2, completed: 1, rejected: 0, abandonedAtFiling: 0, failedExecution: 1,
       awaitingExecution: 0, attempted: 2, completionRate: 50, approvalToCompletionRate: 50
     });
     expect(byScope['app-data-gap']).toMatchObject({
@@ -639,7 +639,7 @@ describe('computeProposalOutcomeMetrics (#3014)', () => {
     });
     // A never-approved scope still appears, with null rates rather than a fake 0%.
     expect(byScope['loop-meta']).toMatchObject({
-      approved: 0, completed: 0, rejected: 1, abandoned: 1,
+      approved: 0, completed: 0, rejected: 1, abandonedAtFiling: 1,
       completionRate: null, approvalToCompletionRate: null
     });
   });
@@ -661,10 +661,20 @@ describe('computeProposalOutcomeMetrics (#3014)', () => {
       const out = computeProposalOutcomeMetrics(input);
       expect(out).toMatchObject({
         totalFiled: 0, totalApproved: 0, totalCompleted: 0, totalRejected: 0,
-        totalAbandoned: 0, totalPending: 0, approvalToCompletionRate: null, completionRate: null
+        totalAbandonedAtFiling: 0, totalPending: 0, approvalToCompletionRate: null, completionRate: null
       });
       expect(Object.keys(out.byScope)).toEqual([]);
     }
+  });
+
+  it('produces the same result whether or not the caller pre-computes the aggregates', () => {
+    // The route hands in the `stats`/`execution` it already computed to avoid a second
+    // pass. That shortcut must stay a pure optimization — if it ever diverges from
+    // recomputing, the API's three blocks silently disagree about the same records.
+    const stats = summarizeOutcomeStats(RECORDS);
+    const execution = computePostApprovalCompletion(stats.filed);
+    expect(computeProposalOutcomeMetrics(RECORDS, { stats, execution }))
+      .toEqual(computeProposalOutcomeMetrics(RECORDS));
   });
 
   it('buckets a "__proto__" scope as data rather than rewriting the prototype', () => {

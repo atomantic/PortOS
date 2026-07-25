@@ -100,14 +100,14 @@ describe('Apps Task-Type Routes', () => {
       // scope whose only proposal was abandoned rather than dropping it.
       expect(response.body.metrics).toMatchObject({
         totalFiled: 4, totalApproved: 1, totalCompleted: 1, totalRejected: 1,
-        totalAbandoned: 1, totalPending: 1, totalAwaitingExecution: 0,
+        totalAbandonedAtFiling: 1, totalPending: 1, totalAwaitingExecution: 0,
         totalFailedExecution: 0, approvalToCompletionRate: 100
       });
       expect(response.body.metrics.byScope['app-improvement']).toMatchObject({
         approved: 1, completed: 1, rejected: 1, pending: 1, approvalToCompletionRate: 100
       });
       expect(response.body.metrics.byScope['app-data-gap']).toMatchObject({
-        approved: 0, abandoned: 1, approvalToCompletionRate: null
+        approved: 0, abandonedAtFiling: 1, approvalToCompletionRate: null
       });
       // Real diagnoses only in entries; the undiagnosed abandoned row is `unknown`.
       expect(response.body.rejections.entries).toEqual([{ reason: 'user-rejected', count: 1 }]);

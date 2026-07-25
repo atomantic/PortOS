@@ -82,7 +82,7 @@ export default function LayeredIntelligenceOutcomes({ appId }) {
     );
   }
 
-  const { stats, execution, rejections, recent, tracked = true } = state.data;
+  const { stats, execution, metrics, rejections, recent, tracked = true } = state.data;
 
   if (!stats || stats.total === 0) {
     return (
@@ -117,7 +117,11 @@ export default function LayeredIntelligenceOutcomes({ appId }) {
   // the API caps `recent` at a limit above what we render, so `recent.length` would
   // undercount the real remainder for an app with a long proposal history.
   const hiddenCount = Math.max(0, stats.total - visible.length);
-  const executionScopes = Object.entries(execution?.byScope || {});
+  // Per-scope rows come from `metrics.byScope`, not `execution.byScope`: the latter is
+  // built from approved records only, so a scope whose every proposal was rejected is
+  // missing from it entirely — exactly the scope a reader most needs to see. Falls back
+  // to the execution view so an older server (no `metrics` block) still renders rows.
+  const executionScopes = Object.entries(metrics?.byScope || execution?.byScope || {});
 
   return (
     <div className="space-y-3 bg-port-bg border border-port-border rounded-lg px-3 py-3">
@@ -188,7 +192,16 @@ export default function LayeredIntelligenceOutcomes({ appId }) {
                 <li key={scope} className="text-xs text-gray-500 flex justify-between gap-2">
                   <span className="min-w-0 break-all">{scope}</span>
                   <span className="shrink-0">
-                    {summary.completionRate == null ? 'awaiting' : `${Math.round(summary.completionRate)}%`} · {summary.completed}/{summary.attempted || 0}
+                    {/*
+                      Delivery against APPROVALS, so a scope sitting on unexecuted
+                      approvals reads as partial rather than as a perfect attempted-only
+                      score. `null` means nothing was approved here at all — say so
+                      instead of printing a rate over a zero denominator.
+                    */}
+                    {summary.approvalToCompletionRate == null
+                      ? 'none approved'
+                      : `${Math.round(summary.approvalToCompletionRate)}% · ${summary.completed}/${summary.approved}`}
+                    {summary.rejected > 0 && ` · ${summary.rejected} rejected`}
                   </span>
                 </li>
               ))}

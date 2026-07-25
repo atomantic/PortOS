@@ -27,6 +27,22 @@ export function clampScopeLabel(label) {
 }
 
 /**
+ * Resolve an outcome record's grouping key: its trimmed `scope`, or `fallback` when the
+ * record carries none. Every per-scope aggregator here needs this, and the `fallback`
+ * is the one thing they legitimately disagree on — a report that must not invent a
+ * bucket passes `null` and skips the record (computeExecutionByDomain,
+ * computeCrossReferenceAnalysis), while a breakdown that must account for every record
+ * passes the default `'unknown'` (computePostApprovalCompletion,
+ * computeProposalOutcomeMetrics). Keeping the predicate in one place means the four
+ * groupings can't drift on what counts as a scope — which would silently split one
+ * scope's records across two buckets.
+ */
+export function scopeKeyOf(record, fallback = 'unknown') {
+  const scope = record?.scope;
+  return typeof scope === 'string' && scope.trim() ? scope.trim() : fallback;
+}
+
+/**
  * Render an avoid/prefer prompt block from pre-classified item lists — the presentation
  * both scope-awareness signals share (#2760 install-wide task-type rates, #2765
  * per-proposal-domain execution rates). Owns the sort (worst-first avoid, best-first
@@ -155,7 +171,7 @@ export function computeExecutionByDomain(outcomes = []) {
   for (const r of Array.isArray(outcomes) ? outcomes : []) {
     if (!r || typeof r !== 'object') continue;
     if (!PROPOSAL_EXECUTION_OUTCOMES.includes(r.executionOutcome)) continue;
-    const scope = typeof r.scope === 'string' && r.scope.trim() ? r.scope.trim() : null;
+    const scope = scopeKeyOf(r, null);
     if (!scope) continue;
     if (!recordsByScope.has(scope)) recordsByScope.set(scope, []);
     recordsByScope.get(scope).push(r);
@@ -253,7 +269,7 @@ export function computePostApprovalCompletion(outcomes = []) {
 
   const recordsByScope = new Map();
   for (const record of approved) {
-    const scope = typeof record.scope === 'string' && record.scope.trim() ? record.scope.trim() : 'unknown';
+    const scope = scopeKeyOf(record);
     const records = recordsByScope.get(scope) || [];
     records.push(record);
     recordsByScope.set(scope, records);
@@ -370,7 +386,7 @@ export function computeCrossReferenceAnalysis({ outcomes = [] } = {}) {
   const mergeByScope = new Map();
   for (const o of records) {
     if (!o || typeof o !== 'object') continue;
-    const scope = typeof o.scope === 'string' && o.scope.trim() ? o.scope.trim() : null;
+    const scope = scopeKeyOf(o, null);
     if (!scope) continue;
     if (!PROPOSAL_OUTCOMES.includes(o.outcome)) continue; // unresolved: no verdict yet
     const agg = mergeByScope.get(scope) || { merged: 0, resolved: 0 };

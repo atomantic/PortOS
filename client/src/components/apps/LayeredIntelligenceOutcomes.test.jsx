@@ -24,6 +24,17 @@ const ready = (overrides = {}) => ({
       }
     }
   },
+  metrics: {
+    totalFiled: 4, totalApproved: 1, totalCompleted: 1, totalRejected: 1,
+    totalAbandonedAtFiling: 1, totalPending: 1, totalAwaitingExecution: 0,
+    totalFailedExecution: 0, approvalToCompletionRate: 100, completionRate: 100,
+    byScope: {
+      'app-improvement': {
+        approved: 1, completed: 1, rejected: 0, abandonedAtFiling: 0, failedExecution: 0,
+        awaitingExecution: 0, pending: 0, attempted: 1, completionRate: 100, approvalToCompletionRate: 100
+      }
+    }
+  },
   rejections: { entries: [{ reason: 'user-rejected', count: 1 }], unknown: 1, unclassified: 0, diagnosed: 1, total: 2 },
   recent: [
     { slug: 'add-metrics', scope: 'app-improvement', outcome: 'merged', rejectionReason: null, filedAt: '2026-07-04T00:00:00.000Z', outcomeAt: '2026-07-05T00:00:00.000Z' },
@@ -77,6 +88,38 @@ describe('LayeredIntelligenceOutcomes', () => {
     expect(await screen.findByText('100%')).toBeInTheDocument();
     expect(screen.getByText('50%')).toBeInTheDocument();
     expect(screen.getByText(/of approvals delivered \(1\/2\)/)).toBeInTheDocument();
+  });
+
+  it('lists a scope whose proposals were only ever rejected', async () => {
+    // `execution.byScope` is built from approved records only, so this scope is absent
+    // from it — it appears solely because the per-scope list reads `metrics.byScope`.
+    // Showing it is the point: a scope that only ever gets rejected is the one a reader
+    // most needs to see, and dropping it silently overstates the app's record.
+    getAppLayeredIntelligenceOutcomes.mockResolvedValue(ready({
+      metrics: {
+        ...ready().metrics,
+        byScope: {
+          ...ready().metrics.byScope,
+          'loop-meta': {
+            approved: 0, completed: 0, rejected: 2, abandonedAtFiling: 0, failedExecution: 0,
+            awaitingExecution: 0, pending: 0, attempted: 0, completionRate: null, approvalToCompletionRate: null
+          }
+        }
+      }
+    }));
+    render(<LayeredIntelligenceOutcomes appId="app-001" />);
+
+    expect(await screen.findByText('loop-meta')).toBeInTheDocument();
+    expect(screen.getByText(/none approved · 2 rejected/)).toBeInTheDocument();
+  });
+
+  it('falls back to the execution breakdown when the server sends no metrics block', async () => {
+    // An older server predates the `metrics` roll-up; the per-scope rows must still
+    // render rather than silently emptying the list.
+    getAppLayeredIntelligenceOutcomes.mockResolvedValue(ready({ metrics: undefined }));
+    render(<LayeredIntelligenceOutcomes appId="app-001" />);
+
+    expect(await screen.findByText('app-improvement')).toBeInTheDocument();
   });
 
   it('shows a dash for the merge rate when nothing has resolved yet', async () => {

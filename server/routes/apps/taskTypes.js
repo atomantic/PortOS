@@ -110,7 +110,12 @@ router.get('/:id/layered-intelligence/outcomes', loadApp, asyncHandler(async (re
   if (!read) {
     return res.json({ appId: app.id, appName: app.name, read: false, tracked, stats: null, execution: null, metrics: null, rejections: null, recent: [] });
   }
-  const { total, merged, rejected, abandoned, pending, resolved, rawMergeRate } = summarizeOutcomeStats(outcomes);
+  // Computed once and threaded into the roll-up below — `computeProposalOutcomeMetrics`
+  // is built on these same two aggregators, so handing it the results keeps the whole
+  // response to a single pass over the records instead of re-deriving both.
+  const stats = summarizeOutcomeStats(outcomes);
+  const execution = computePostApprovalCompletion(stats.filed);
+  const { total, merged, rejected, abandoned, pending, resolved, rawMergeRate } = stats;
   const rejections = summarizeRejectionReasons(outcomes);
   const recent = outcomes.slice(0, OUTCOMES_DASHBOARD_LIMIT).map(o => ({
     slug: o.slug,
@@ -130,14 +135,15 @@ router.get('/:id/layered-intelligence/outcomes', loadApp, asyncHandler(async (re
     // `mergeRate` is the raw 0–100 percentage over RESOLVED proposals, or null when
     // none have resolved (still-pending ≠ 0% merged). The client rounds for display.
     stats: { total, merged, rejected, abandoned, pending, resolved, mergeRate: rawMergeRate },
-    execution: computePostApprovalCompletion(outcomes),
-    // The composed `li-outcomes` effectiveness roll-up (#3014): filing-side approval /
-    // rejection counts and the execution-side approval → completion rate in ONE object,
-    // per-scope included. `stats` and `execution` above stay as the pre-existing
-    // per-facet views (the config tab still reads them); `metrics` is the single block
-    // that answers "do LI's approved proposals actually get delivered?" — all three are
-    // derived from the same records by the same shared aggregators, so they cannot drift.
-    metrics: computeProposalOutcomeMetrics(outcomes),
+    execution,
+    // The composed `li-outcomes` effectiveness roll-up (#3014). `stats` and `execution`
+    // above stay as the pre-existing per-facet views (existing consumers read them);
+    // `metrics` is the union neither can express — a per-scope breakdown carrying a
+    // scope's rejection count AND its delivery rate side by side, including scopes that
+    // never had an approval (absent from `execution.byScope` entirely). That union is
+    // what distinguishes "rejected" from "approved then lost". Built from the same two
+    // aggregate objects returned above, so the three blocks cannot drift.
+    metrics: computeProposalOutcomeMetrics(outcomes, { stats, execution }),
     rejections,
     recent
   });
