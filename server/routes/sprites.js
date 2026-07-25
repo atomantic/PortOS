@@ -227,6 +227,7 @@ router.post('/:id/walk/unlock', asyncHandler(async (req, res) => {
 // Re-open ONE approved direction (finer-grained than unlock) so it can be
 // regenerated/reprocessed/re-approved — the user noticed one walk is too fast
 // or wrong. Un-finalizes a frozen set but keeps other directions' approvals.
+// A clipless source import accepts the same informed acknowledgement as unlock.
 router.post('/:id/walk/reopen', asyncHandler(async (req, res) => {
   const body = validateRequest(spriteWalkReopenSchema, req.body);
   res.json(await reopenWalkDirection(req.params.id, body));

@@ -1,22 +1,22 @@
-// The user-facing explanation of a BLOCKED walk-set unlock (#3043), in one
-// place because two surfaces render it: the Walk Cycles header panel and the
-// Loop Trimmer's lock block. Both describe the same server-stamped
-// `walkSet.unlock` — two hand-written copies drifted within the same change
-// ("one new grok render each" vs "…per direction"), which is exactly how a user
-// meets two different accounts of one irreversible-ish action depending on which
-// panel they happened to open.
+// The user-facing explanation of a BLOCKED walk re-open (#3043/#3044), in one
+// place because the set-wide Unlock, per-direction Reopen, and Loop Trimmer
+// describe the same server-stamped block. Two hand-written copies drifted within
+// the same change ("one new grok render each" vs "…per direction"), which is
+// exactly how a user meets two different accounts of one irreversible-ish action
+// depending on which panel they happened to open.
 //
 // Pure: takes the stamped block, returns strings. No React, no I/O.
 
-// The three facts a blocked unlock has to convey, assembled once.
+// The three facts a blocked walk re-open has to convey, assembled once.
 //
-// `blocked: false` returns null — the caller renders its ordinary Unlock. A
-// blocked-but-`acknowledgeable` set gets the regeneration offer and the
+// `blocked: false` returns null — the caller renders its ordinary action. A
+// blocked-but-`acknowledgeable` scope gets the regeneration offer and the
 // `acknowledgeNoClips` flag that carries the user's consent to the server; a
-// blocked and NON-acknowledgeable set gets the dead-end explanation and no
+// blocked and NON-acknowledgeable scope gets the dead-end explanation and no
 // action, because there is genuinely nothing to offer.
-export function walkUnlockCopy(unlock) {
+export function walkUnlockCopy(unlock, { mode = 'unlock', direction = null } = {}) {
   if (!unlock?.blocked) return null;
+  const reopening = mode === 'reopen';
   const stranded = unlock.stranded || [];
   const one = stranded.length === 1;
   const who = stranded.length
@@ -44,6 +44,16 @@ export function walkUnlockCopy(unlock) {
   // — a non-stranded direction whose anchor happens to be unlocked is not
   // covered by the gate, and telling the user otherwise is the same
   // promise-more-than-you-proved mistake the gate itself avoids.
+  if (reopening) {
+    const target = direction || stranded[0] || 'this direction';
+    return {
+      text: `${who} Reopening anyway lets ${target} be regenerated from its locked anchor — one new grok render. Nothing on disk is deleted, but this direction's approval is dropped and the set stops compiling until it is approved again.`,
+      action: 'Reopen anyway',
+      prompt: `Re-open ${target} for regeneration?`,
+      acknowledgeNoClips: true,
+      toast: `Walk ${target} reopened — regenerate it from its locked anchor`,
+    };
+  }
   const regenerated = stranded.length
     ? `${stranded.join(', ')} can be regenerated from ${one ? 'its' : 'their'} locked anchor — one new grok render ${one ? 'for it' : 'each'}`
     : 'each direction can be regenerated from its locked anchor — one new grok render per direction';

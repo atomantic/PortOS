@@ -22,6 +22,19 @@ describe('walkUnlockCopy', () => {
     expect(copy.text).toMatch(/every approval is dropped/);
   });
 
+  it('uses the same cost-bearing copy for a blocked per-direction reopen', () => {
+    const copy = walkUnlockCopy(
+      { blocked: true, stranded: ['east'], acknowledgeable: true },
+      { mode: 'reopen', direction: 'east' },
+    );
+    expect(copy.action).toBe('Reopen anyway');
+    expect(copy.prompt).toBe('Re-open east for regeneration?');
+    expect(copy.acknowledgeNoClips).toBe(true);
+    expect(copy.text).toMatch(/one new grok render/);
+    expect(copy.text).toMatch(/this direction's approval is dropped/);
+    expect(copy.toast).toMatch(/east reopened/);
+  });
+
   // The server only verifies locked anchors for the STRANDED directions, so the
   // copy must not claim regeneration for all eight. Pinned as a property: the
   // regeneration clause names the stranded list, and never asserts a blanket

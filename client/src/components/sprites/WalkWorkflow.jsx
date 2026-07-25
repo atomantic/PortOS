@@ -236,13 +236,15 @@ function DirectionCard({
   // approved strip replaces it as soon as there is an animation to inspect.
   const hasWalkPreview = Boolean((approved || candidate) && run?.stripPreview?.stripPath);
   const hasSourceClip = hasClip(run);
-  // The dead end: still packaged by the source pipeline AND no clip to re-derive
-  // from. Everything the server refuses for this direction refuses on exactly
-  // this, so every affordance below reads it rather than the import label alone.
-  // `run.importedPackaging` is the load-bearing half: the set-level `imported`
-  // prop comes off the frozen walk set, which is GONE after an unlock or the
-  // first reopen — exactly when the remaining directions still need gating.
+  // Used only by the drift explanation: a source-packaged run without a clip
+  // cannot be reprocessed. Reopen reads the server-stamped block below instead,
+  // including its fresh-render escape after the frozen set disappears.
   const importedNoClip = (imported || Boolean(run?.importedPackaging)) && !hasSourceClip;
+  // The server stamps the reopen block with the exact same resolver that will
+  // validate the POST. A missing block from an older peer remains an ordinary
+  // reopen; only a stamped block changes the affordance.
+  const reopenCopy = walkUnlockCopy(run?.reopen, { mode: 'reopen', direction });
+  const reopenBlocked = Boolean(reopenCopy);
   const statusLabel = approved ? 'approved'
     : (pending || rendering) ? 'rendering…'
       : run?.status === 'postprocessing' ? 'packaging…'
@@ -299,8 +301,8 @@ function DirectionCard({
           be the first and only place a ragged set showed up. The remedy depends
           on what the direction still has behind it: an unapproved candidate can
           be re-derived from its on-disk clip with the Reprocess button below, an
-          approved one has to be reopened first, and an import with no clip needs
-          the source clip imported before it can be re-derived at all. */}
+          approved one has to be reopened first, and a clipless import follows
+          the server-backed reopen recovery shown below. */}
       {drift && (
         <p className="text-[10px] text-port-warning border border-port-warning/60 rounded px-1.5 py-1 leading-tight">
           {[drift.frameCountDrifts && `${drift.frameCount}f`, drift.fpsDrifts && `${drift.fps}fps`]
@@ -314,18 +316,17 @@ function DirectionCard({
       {/* The server dropped this run's stripPath because its packed strip is
           gone on disk (stripMissing) — render an explicit indicator in place of
           the blank loop, pointing at the recovery that actually works for this
-          direction's state: a finalized set must be unlocked first, an
-          unapproved candidate can just be regenerated (the Generate button
-          below). Deliberately not the status==='error' path, which offers a
+          direction's state: a finalized direction uses its server-backed walk
+          action, while an unapproved candidate can just be regenerated (the
+          Generate button below). Deliberately not the status==='error' path, which offers a
           "Retry postprocess" that 409s for a finalized/approved run. */}
       {(approved || candidate) && run?.stripMissing && (
         <p className="text-[10px] text-port-error border border-port-error/60 rounded px-1.5 py-1 leading-tight">
-          {/* An import with no clip behind it still refuses unlock/reopen, so
-              naming them there would advise a guaranteed-409 the drift badge and
-              the hidden Reopen/Unlock buttons already avoid. With a clip it
-              recovers exactly like a native direction. */}
-          Walk strip missing on disk — {importedNoClip ? REIMPORT_REMEDY
-            : finalized ? 'unlock the set to regenerate this direction' : 'regenerate to repack it'}.
+          {/* A missing strip has its own recovery path. The action below carries
+              the server's exact reopen/unlock decision, including whether a
+              clipless import can be regenerated from its locked anchor. */}
+          Walk strip missing on disk — {finalized
+            ? 'use the walk action below to regenerate this direction' : 'regenerate to repack it'}.
         </p>
       )}
 
@@ -442,13 +443,34 @@ function DirectionCard({
           reprocessed / re-approved — for when one walk is too fast or wrong and
           the rest are fine. Un-freezes a finalized set but keeps the other seven
           approvals; the rendered clip is preserved, so re-approval is one click.
-          Inline confirm (not a hidden two-click arm) per the repo's UX.
-          Hidden only for an imported direction with NO clip on disk — there the
-          server refuses reopen (LEGACY_IMPORTED_WALK_SET) exactly as it refuses
-          unlock, so offering the button would guarantee a 409 on click. An
-          imported direction whose clip came across reopens like any other.
-          Mirrors how the header gates Unlock. */}
-      {approved && !importedNoClip && (
+          A stamped blocked branch names the fresh-render cost before sending the
+          acknowledgement; an ordinary branch stays the compact existing action. */}
+      {approved && (reopenBlocked ? (
+        <Banner tone="warning" size="sm" icon={RotateCcw} className="space-y-1.5">
+          <p className="leading-relaxed">{reopenCopy.text}</p>
+          {reopenCopy.action && (reopening ? (
+            <ConfirmButtonPair
+              prompt={reopenCopy.prompt}
+              confirmText={reopenCopy.action}
+              confirmIcon={RotateCcw}
+              tone="warning"
+              ariaLabel={`Confirm reopen ${direction} without source clips`}
+              onConfirm={() => {
+                setReopening(false);
+                onReopen(direction, reopenCopy.acknowledgeNoClips, reopenCopy.toast);
+              }}
+              onCancel={() => setReopening(false)}
+            />
+          ) : (
+            <button
+              onClick={() => setReopening(true)}
+              className="flex items-center gap-1 px-1.5 py-0.5 text-xs bg-port-bg border border-port-warning/60 rounded text-port-warning hover:bg-port-warning/10"
+            >
+              <RotateCcw className="w-3 h-3" /> {reopenCopy.action}
+            </button>
+          ))}
+        </Banner>
+      ) : (
         reopening ? (
           <ConfirmButtonPair
             prompt={finalized ? 'Reopen (un-freezes set)?' : 'Reopen this direction?'}
@@ -468,7 +490,7 @@ function DirectionCard({
             <RotateCcw className="w-3 h-3" /> Reopen
           </button>
         )
-      )}
+      ))}
 
       {/* The single trim UI now lives in the Loop Trimmer workspace (#2933);
           each card just links into it, deep-linked to this run. Shown for
@@ -615,9 +637,9 @@ export default function WalkWorkflow({
   }, { errorMessage: 'Reprocess failed' });
 
   // Re-open ONE approved direction (finer-grained than the set-wide Unlock).
-  const [reopen] = useAsyncAction(async (direction) => {
-    await reopenSpriteWalk(recordId, { direction }, { silent: true });
-    toast.success(`Walk ${direction} reopened — regenerate or reprocess it`);
+  const [reopen] = useAsyncAction(async (direction, acknowledgeNoClips = false, successMessage = null) => {
+    await reopenSpriteWalk(recordId, { direction, acknowledgeNoClips }, { silent: true });
+    toast.success(successMessage || `Walk ${direction} reopened — regenerate or reprocess it`);
     onChanged();
   }, { errorMessage: 'Reopen failed' });
 

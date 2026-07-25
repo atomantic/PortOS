@@ -1216,8 +1216,12 @@ describe('imported walk sets — evidence-based re-derive', () => {
   // hit cannot be computed from two different readings of the set.
   it('stamps the unlock block on the walk state', async () => {
     const clipless = await characterWithLockedAnchors(newId(), ['east']);
-    await importedCharacter(clipless, { east: { clip: false } });
-    expect((await getWalkState(clipless)).walkSet.unlock).toEqual({
+    const cliplessRunIds = await importedCharacter(clipless, { east: { clip: false } });
+    const cliplessState = await getWalkState(clipless);
+    expect(cliplessState.walkSet.unlock).toEqual({
+      blocked: true, stranded: ['east'], acknowledgeable: true,
+    });
+    expect(cliplessState.runs.find((run) => run.id === cliplessRunIds.east).reopen).toEqual({
       blocked: true, stranded: ['east'], acknowledgeable: true,
     });
 
@@ -1243,24 +1247,46 @@ describe('imported walk sets — evidence-based re-derive', () => {
     expect((await getWalkState(id)).walkSet).not.toBeNull();
   });
 
-  it('reopens the imported direction that has a clip and refuses the one that does not', async () => {
-    const id = await characterWithLockedAnchors(newId(), ['east']);
-    await importedCharacter(id, { east: {}, north: { clip: false } });
+  it('reopens a clipless imported direction only after acknowledging regeneration', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east', 'north']);
+    const runIds = await importedCharacter(id, { east: {}, north: { clip: false } });
 
     await expect(reopenWalkDirection(id, { direction: 'north' }))
-      .rejects.toMatchObject({ code: 'LEGACY_IMPORTED_WALK_SET' });
+      .rejects.toMatchObject({
+        code: 'LEGACY_IMPORTED_WALK_SET',
+        message: expect.stringContaining('acknowledgeNoClips'),
+      });
 
+    // Reopen is a narrower scope than unlock: reopening east leaves north
+    // frozen, then state supplies north's same per-direction recovery block.
     const state = await reopenWalkDirection(id, { direction: 'east' });
     expect(state.walkSet).toBeNull();
     expect(state.selection.directions.east).toBeUndefined();
     expect(state.selection.directions.north.status).toBe('approved');
 
-    // …and STILL refuses north now that the set is un-frozen. Reopen un-freezes,
-    // so a gate keyed only on the frozen walk set would be dead from here on and
-    // north could be stranded by simply clicking twice — which is what the unlock
-    // refusal's own "reopen them one at a time" advice would have walked into.
-    await expect(reopenWalkDirection(id, { direction: 'north' }))
-      .rejects.toMatchObject({ code: 'LEGACY_IMPORTED_WALK_SET' });
+    // The source-packaged entry for north survives the first reopen in the
+    // editable selection, so its per-direction block is still stamped from the
+    // same resolver after the frozen set has gone away.
+    const afterReopen = await getWalkState(id);
+    expect(afterReopen.runs.find((run) => run.id === runIds.north).reopen)
+      .toEqual({ blocked: true, stranded: ['north'], acknowledgeable: true });
+
+    const acknowledged = await reopenWalkDirection(id, {
+      direction: 'north', acknowledgeNoClips: true,
+    });
+    expect(acknowledged.selection.directions.north).toBeUndefined();
+  });
+
+  it('refuses an acknowledged reopen when its stranded direction cannot render', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    await importedCharacter(id, { east: {}, north: { clip: false } });
+
+    await expect(reopenWalkDirection(id, {
+      direction: 'north', acknowledgeNoClips: true,
+    })).rejects.toMatchObject({
+      status: 409,
+      code: 'LEGACY_IMPORTED_WALK_SET',
+    });
     expect((await getWalkState(id)).selection.directions.north.status).toBe('approved');
   });
 

@@ -150,7 +150,7 @@ export const unlockSpriteWalk = (id, body = {}, options = {}) => request(`/sprit
 });
 
 // Re-open ONE approved direction (finer-grained than unlock) so it can be
-// regenerated/reprocessed/re-approved. Body: { direction }.
+// regenerated/reprocessed/re-approved. Body: { direction, acknowledgeNoClips }.
 export const reopenSpriteWalk = (id, body, options = {}) => request(`/sprites/${encodeURIComponent(id)}/walk/reopen`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });

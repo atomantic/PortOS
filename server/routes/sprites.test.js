@@ -509,11 +509,19 @@ describe('sprites routes', () => {
       .send({ frameCount: 14, fps: 99 })).status).toBe(400);
   });
 
-  it('POST /:id/walk/reopen validates the direction and delegates', async () => {
+  it('POST /:id/walk/reopen validates the direction and delegates its acknowledgement', async () => {
     const r = await request(app).post('/api/sprites/pioneer/walk/reopen')
       .send({ direction: 'east' });
     expect(r.status).toBe(200);
-    expect(walk.reopenWalkDirection).toHaveBeenCalledWith('pioneer', { direction: 'east' });
+    expect(walk.reopenWalkDirection).toHaveBeenCalledWith('pioneer', {
+      direction: 'east', acknowledgeNoClips: false,
+    });
+    const acknowledged = await request(app).post('/api/sprites/pioneer/walk/reopen')
+      .send({ direction: 'east', acknowledgeNoClips: true });
+    expect(acknowledged.status).toBe(200);
+    expect(walk.reopenWalkDirection).toHaveBeenLastCalledWith('pioneer', {
+      direction: 'east', acknowledgeNoClips: true,
+    });
     expect((await request(app).post('/api/sprites/pioneer/walk/reopen')
       .send({ direction: 'up' })).status).toBe(400);
   });

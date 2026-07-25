@@ -162,8 +162,9 @@ describe('WalkWorkflow loop preview', () => {
   // When the server flags a run stripMissing (its packed strip is gone on disk)
   // it drops the stripPath, so the loop can't render. The card must show an
   // explicit indicator pointing at the recovery that works for the direction's
-  // state — regenerate an unapproved/unfinalized direction, unlock a finalized
-  // set — never the status==='error' "Retry postprocess" that would 409.
+  // state — regenerate an unapproved/unfinalized direction, use the server-backed
+  // walk action for a finalized set — never the status==='error' "Retry
+  // postprocess" that would 409.
   const renderMissing = ({ finalized }) => render(
     <MemoryRouter>
       <WalkWorkflow
@@ -191,9 +192,9 @@ describe('WalkWorkflow loop preview', () => {
     expect(screen.queryByRole('img', { name: 'walk loop preview' })).toBeNull();
   });
 
-  it('points a finalized direction at unlock instead of regenerate', () => {
+  it('points a finalized direction at its server-backed walk action', () => {
     renderMissing({ finalized: true });
-    expect(screen.getByText(/Walk strip missing on disk — unlock the set to regenerate this direction\./)).toBeInTheDocument();
+    expect(screen.getByText(/Walk strip missing on disk — use the walk action below to regenerate this direction\./)).toBeInTheDocument();
   });
 
   it('scales the preview box to a non-square cell', () => {
@@ -559,20 +560,24 @@ describe('WalkWorkflow reprocess + reopen', () => {
     act(() => { screen.getByRole('button', { name: /^Reopen$/ }).click(); });
     // Inline confirm surfaces, then the confirm fires the API.
     await act(async () => { screen.getByRole('button', { name: /^Reopen$/ }).click(); });
-    expect(reopenSpriteWalk).toHaveBeenCalledWith('example-walker', { direction: 'east' }, { silent: true });
+    expect(reopenSpriteWalk).toHaveBeenCalledWith(
+      'example-walker', { direction: 'east', acknowledgeNoClips: false }, { silent: true },
+    );
   });
 
-  it('hides Reopen on an import whose clip is not on disk, whose server refuses it', async () => {
-    // An imported direction with no clip behind it has nothing to re-derive
-    // from, so reopen (like unlock) 409s LEGACY_IMPORTED_WALK_SET — offering the
-    // button would guarantee an error on click. The remedy is re-importing.
+  it('uses the server-stamped block to offer acknowledged Reopen on a clipless import', async () => {
+    reopenSpriteWalk.mockClear();
     render(
       <MemoryRouter>
         <WalkWorkflow
           record={{ id: 'example-walker' }}
           reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked' }] } }}
           walk={{
-            runs: [{ id: 'run-east', direction: 'east', status: 'approved', stripPreview: { stripPath: 'runs/run-east/generated/strip.png', frameCount: 12, fps: 10, cellWidth: 384, cellHeight: 384 } }],
+            runs: [{
+              id: 'run-east', direction: 'east', status: 'approved',
+              reopen: { blocked: true, stranded: ['east'], acknowledgeable: true },
+              stripPreview: { stripPath: 'runs/run-east/generated/strip.png', frameCount: 12, fps: 10, cellWidth: 384, cellHeight: 384 },
+            }],
             selection: { directions: { east: { status: 'approved', runId: 'run-east' } } },
             walkSet: {
               imported: true,
@@ -592,10 +597,12 @@ describe('WalkWorkflow reprocess + reopen', () => {
       </MemoryRouter>,
     );
     expect(screen.queryByRole('button', { name: /^Reopen$/ })).toBeNull();
-    expect(screen.getByText(/imported · no clips to re-derive/)).toBeTruthy();
-    // …but re-deriving being impossible is NOT the same as the set being frozen
-    // forever (#3043): the anchor is locked, so regeneration is offered.
-    expect(screen.getByRole('button', { name: /Unlock anyway/ })).toBeTruthy();
+    expect(screen.getByText(/Reopening anyway lets east be regenerated/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /^Reopen anyway$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Reopen anyway$/ }));
+    await waitFor(() => expect(reopenSpriteWalk).toHaveBeenCalledWith(
+      'example-walker', { direction: 'east', acknowledgeNoClips: true }, { silent: true },
+    ));
   });
 
   // The acknowledged unlock is an override of the CLIP requirement only. When the
@@ -748,11 +755,11 @@ describe('WalkWorkflow reprocess + reopen', () => {
     expect(screen.getByRole('button', { name: /^Reopen$/ })).toBeTruthy();
   });
 
-  // Once a set is un-frozen (an unlock, or a reopen of some OTHER direction)
-  // there is no walkSet to carry the imported flag — but the still-approved
-  // directions behind it must stay gated, or a clipless one is strandable by
-  // clicking twice. The run's own `importedPackaging` is what survives.
-  it('keeps a clipless imported direction gated after the set is un-frozen', async () => {
+  // Once a set is un-frozen (an unlock, or a reopen of some OTHER direction),
+  // the remaining source-packaged direction has no walkSet to carry a block.
+  // Its stamped run block survives instead, so the client still names the fresh
+  // render cost before it sends the acknowledgement.
+  it('keeps the acknowledged reopen affordance after the set is un-frozen', async () => {
     render(
       <MemoryRouter>
         <WalkWorkflow
@@ -764,6 +771,7 @@ describe('WalkWorkflow reprocess + reopen', () => {
               direction: 'east',
               status: 'approved',
               importedPackaging: true,
+              reopen: { blocked: true, stranded: ['east'], acknowledgeable: true },
               stripPreview: { stripPath: 'grok/run-east/generated/strip.png', frameCount: 12, fps: 10, cellWidth: 384, cellHeight: 384 },
             }],
             selection: { directions: { east: { status: 'approved', runId: 'run-east' } } },
@@ -780,21 +788,22 @@ describe('WalkWorkflow reprocess + reopen', () => {
         />
       </MemoryRouter>,
     );
-    expect(screen.queryByRole('button', { name: /^Reopen$/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /^Reopen anyway$/ })).toBeTruthy();
   });
 
-  // The set-level flag stays true while ANY direction is still source-packaged,
-  // so a card must read the per-direction list the server stamps — otherwise a
-  // direction already re-derived here keeps being treated as un-reopenable.
-  it('reads the per-direction imported list, not the set-level flag', async () => {
+  // A card does not recreate the source-path/clip rule from legacy import
+  // metadata. An unblocked stamp (or a block absent from an older peer) keeps
+  // the ordinary Reopen affordance; current servers attach the authoritative
+  // block directly to the selected run.
+  it('does not derive the reopen block from imported metadata', async () => {
     render(
       <MemoryRouter>
         <WalkWorkflow
           record={{ id: 'example-walker' }}
           reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked' }] } }}
           walk={{
-            // East carries no clip, but it is NOT in importedDirections — it was
-            // already re-derived here, so the server no longer refuses it.
+            // East carries no clip, but has no server block; the card must not
+            // re-create one from the surrounding imported walk metadata.
             runs: [{ id: 'run-east', direction: 'east', status: 'approved', stripPreview: { stripPath: 'runs/run-east/generated/strip.png', frameCount: 12, fps: 10, cellWidth: 384, cellHeight: 384 } }],
             selection: { directions: { east: { status: 'approved', runId: 'run-east' } } },
             walkSet: {

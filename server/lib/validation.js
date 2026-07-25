@@ -1228,16 +1228,18 @@ export const spriteWalkApproveSchema = z.object({
   runId: spriteResolvableRunIdSchema,
 });
 
+// The optional acknowledgement is shared by both ways to re-open imported walk
+// work. Defaulted rather than `.optional()` so the service's own default and the
+// wire shape agree, and an older client's body still means "do not override".
+const spriteWalkAcknowledgeNoClipsSchema = z.boolean().default(false);
+
 export const spriteWalkReopenSchema = z.object({
   direction: spriteWalkDirectionSchema,
+  acknowledgeNoClips: spriteWalkAcknowledgeNoClipsSchema,
 });
 
-// Unlock takes no required input; the one optional flag is the user's informed
-// override of the "imported set has no clips to re-derive from" refusal (#3043).
-// Defaulted rather than `.optional()` so the service's own default and the wire
-// shape agree, and an older client's empty body still means "do not override".
 export const spriteWalkUnlockSchema = z.object({
-  acknowledgeNoClips: z.boolean().default(false),
+  acknowledgeNoClips: spriteWalkAcknowledgeNoClipsSchema,
 });
 
 export const spriteWalkPostprocessSchema = z.object({

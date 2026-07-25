@@ -729,11 +729,31 @@ export async function getWalkState(recordId) {
   const clipByDirection = Object.fromEntries(allRuns
     .filter((run) => resolvedRunIds.has(run.id))
     .map((run) => [run.direction, Boolean(run.sourceVideoPath) && !run.sourceClipMissing]));
+  // Reopen has the same informed escape as the set-wide unlock, but its scope is
+  // one approved direction. Stamp the resolver's result on that direction's run
+  // so the card never recreates the import/clip rule from a second reading. When
+  // the frozen set is gone, the selection retains the source-path provenance the
+  // resolver needs for the still-approved directions.
+  const reopenState = walkSet || selection;
+  const reopenByDirection = Object.fromEntries(await Promise.all(
+    Object.keys(approvedDirections).map(async (direction) => [
+      direction,
+      await resolveUnlockBlock(recordId, reopenState, clipByDirection, [direction]),
+    ]),
+  ));
+  const stampedRuns = allRuns.map((run) => (
+    run.direction in reopenByDirection ? { ...run, reopen: reopenByDirection[run.direction] } : run
+  ));
   const stampedWalkSet = walkSet ? {
     ...walkSet,
     imported: isImportedWalkSet(walkSet),
     importedDirections: importedWalkDirections(walkSet),
-    unlock: await resolveUnlockBlock(recordId, walkSet, clipByDirection),
+    unlock: await resolveUnlockBlock(
+      recordId,
+      walkSet,
+      clipByDirection,
+      importedWalkDirections(walkSet),
+    ),
   } : null;
   const walkTarget = resolveWalkTargetFor({
     record: await recordPromise,
@@ -741,7 +761,7 @@ export async function getWalkState(recordId) {
     packagedCycles: packagedCyclesFrom(allRuns, approvedDirections),
   });
   return {
-    runs: allRuns, selection, walkSet: stampedWalkSet, walkTarget,
+    runs: stampedRuns, selection, walkSet: stampedWalkSet, walkTarget,
   };
 }
 
@@ -1589,10 +1609,13 @@ async function directionsWithoutClip(recordId, walkSet, scope) {
  * clients already read, so a second code would be an unread parallel channel for
  * a fact they have — while forking a string three call sites match on (#3043).
  */
-const notReDerivable = (detail, { regenerable = false } = {}) => new ServerError(
+const notReDerivable = (detail, {
+  regenerable = false,
+  acknowledgement = 're-open the set and regenerate each direction from its locked anchor instead (one new render each)',
+} = {}) => new ServerError(
   [
     detail,
-    regenerable && 'Re-submit with acknowledgeNoClips to re-open the set and regenerate each direction from its locked anchor instead (one new render each).',
+    regenerable && `Re-submit with acknowledgeNoClips to ${acknowledgement}.`,
     'Re-import this character to bring its walk clips across, or create a new character version to revise it.',
   ].filter(Boolean).join(' '),
   { status: 409, code: 'LEGACY_IMPORTED_WALK_SET' },
@@ -1616,16 +1639,20 @@ const notReDerivable = (detail, { regenerable = false } = {}) => new ServerError
  * `unlock` drops EVERY approval and the frozen set with them — and a
  * source-packaged direction with no clip can be neither reprocessed (nothing to
  * re-derive from) nor re-approved (its frames were never imported, so
- * RUN_FRAMES_MISSING), which would strand that direction permanently with no way
- * back short of re-importing. So unlock requires that every still-imported
- * direction be re-derivable, and names the ones that aren't — pointing at the
- * per-direction reopen, which is safe precisely because it leaves the rest frozen.
+ * RUN_FRAMES_MISSING), which means unlock must name the dropped directions before
+ * it un-approves every run. A usable locked anchor permits the user to
+ * acknowledge a fresh-render recovery; otherwise the refusal remains.
  */
 async function assertSetReDerivable(recordId, walkSet, { acknowledgeNoClips = false } = {}) {
   // No `isImportedWalkSet` pre-check: the resolver encodes that same answer as
   // `blocked: false`, and enforcing "native sets are never gated" in two places
   // is how the two would eventually disagree.
-  const { blocked, stranded, acknowledgeable } = await resolveUnlockBlock(recordId, walkSet);
+  const { blocked, stranded, acknowledgeable } = await resolveUnlockBlock(
+    recordId,
+    walkSet,
+    null,
+    importedWalkDirections(walkSet),
+  );
   if (!blocked) return;
   // Acknowledged: the caller was shown what they lose (re-derivation) and what it
   // costs them instead (a fresh render per stranded direction), and said yes.
@@ -1650,10 +1677,12 @@ async function assertSetReDerivable(recordId, walkSet, { acknowledgeNoClips = fa
 }
 
 /**
- * Why unlock is (or is not) blocked for a walk set, and whether the block can be
- * acknowledged past. One resolver for both the gate above and the read the
- * clients render, so the button they offer and the 409 they might hit are
- * computed from the same evidence rather than two copies of the rule.
+ * Why a walk re-open action is (or is not) blocked for a scope, and whether that
+ * block can be acknowledged past. Set-wide unlock passes every imported
+ * direction; per-direction reopen passes one direction. One resolver for both
+ * gates and the reads clients render, so the button they offer and the 409 they
+ * might hit are computed from the same evidence rather than two copies of the
+ * rule.
  *
  * `blocked` is its own field rather than something a reader infers from
  * `stranded`: the evidence-free set-level-marker case IS blocked and strands an
@@ -1699,10 +1728,22 @@ async function strandedDirections(recordId, walkSet, scope, clipByDirection) {
     : probed.has(direction)));
 }
 
-async function resolveUnlockBlock(recordId, walkSet, clipByDirection = null) {
+async function resolveUnlockBlock(
+  recordId,
+  walkSet,
+  clipByDirection = null,
+  scope = importedWalkDirections(walkSet),
+) {
   const notBlocked = { blocked: false, stranded: [], acknowledgeable: false };
-  if (!isImportedWalkSet(walkSet)) return notBlocked;
-  const stale = importedWalkDirections(walkSet);
+  const imported = importedWalkDirections(walkSet);
+  // A source selection pointer with no source-packaged entry is the legacy
+  // evidence-free import shape. It is set-level for unlock (all eight directions
+  // must be renderable) and one-direction for reopen; once any explicit source
+  // entry exists, a native direction in the same mixed set is not blocked by a
+  // different direction's provenance.
+  const stale = scope.filter((direction) => imported.includes(direction));
+  const setLevelImport = isSourcePipelinePath(walkSet?.selectionPath);
+  if (!stale.length && (!setLevelImport || imported.length)) return notBlocked;
   // `resolveWalkRenderability` is deliberately I/O-free, so it checks the
   // manifest's CLAIM that an anchor is locked but not that the file is still
   // there — and the render path's own `ANCHOR_MISSING` probe does. A manifest
@@ -1719,10 +1760,12 @@ async function resolveUnlockBlock(recordId, walkSet, clipByDirection = null) {
       .map((r) => pathExists(resolveSpriteAssetPath(recordId, r.anchor.path))));
     return present.every(Boolean);
   };
-  // No per-direction evidence to examine, and unlock re-opens the whole set — so
-  // the whole set has to be regenerable before the escape is honest.
+  // No per-direction evidence to examine: unlock re-opens the whole set, while a
+  // reopen has already supplied its one-direction scope. Each action only promises
+  // regeneration for exactly what it will re-open.
   if (!stale.length) {
-    return { blocked: true, stranded: [], acknowledgeable: await regenerable(SPRITE_DIRECTIONS) };
+    const regenerationScope = scope.length ? scope : SPRITE_DIRECTIONS;
+    return { blocked: true, stranded: [], acknowledgeable: await regenerable(regenerationScope) };
   }
   const stranded = await strandedDirections(recordId, walkSet, stale, clipByDirection);
   if (!stranded.length) return notBlocked;
@@ -1730,24 +1773,30 @@ async function resolveUnlockBlock(recordId, walkSet, clipByDirection = null) {
 }
 
 /**
- * Reopen's per-direction twin of the gate above.
- *
- * Keyed on the DIRECTION's own entry as well as the frozen set, because reopen
- * un-freezes: after the first one `loadWalkSet` returns null, so a gate that
- * consulted only the walk set would be dead for every reopen after it — and a
- * clipless source-packaged direction could still be stranded, two clicks in,
- * by following the advice the unlock refusal prints. The entry survives the
- * un-freeze and carries the same provenance. The set-level marker stays in the
- * OR so a copied `selectionPath` with entries that name no run at all is still
- * refused, as it was before evidence entered the picture.
+ * Reopen's one-direction use of the shared scope resolver. `walkState` is the
+ * frozen set when present, otherwise the editable selection; that selection keeps
+ * source-packaged entries after an earlier reopen, so later directions are still
+ * protected and offered the same acknowledged regeneration escape.
  */
-async function assertDirectionReDerivable(recordId, walkSet, entry, direction) {
-  const imported = isSourcePipelinePath(entry?.runPath)
-    || isSourcePipelinePath(entry?.runManifest)
-    || isImportedWalkSet(walkSet);
-  if (!imported) return;
-  if (await directionClipRel(recordId, entry)) return;
-  throw notReDerivable(`The ${direction} direction is still packaged by the source pipeline and has no source clip on disk — reopening is not supported, because there would be nothing to re-derive from and its packaged frames were never imported.`);
+async function assertDirectionReDerivable(recordId, walkState, direction, { acknowledgeNoClips = false } = {}) {
+  const { blocked, acknowledgeable } = await resolveUnlockBlock(
+    recordId,
+    walkState,
+    null,
+    [direction],
+  );
+  if (!blocked) return;
+  if (acknowledgeNoClips && acknowledgeable) {
+    console.log(`🔓 sprite walk reopen acknowledged without a re-derivable clip for ${recordId}/${direction}`);
+    return;
+  }
+  throw notReDerivable(
+    `The ${direction} direction is still packaged by the source pipeline and has no source clip on disk — reopening would leave nothing to re-derive from and its packaged frames were never imported.`,
+    {
+      regenerable: acknowledgeable,
+      acknowledgement: `re-open ${direction} and regenerate it from its locked anchor instead (one new render)`,
+    },
+  );
 }
 
 // Un-finalize: drop the canonical "finalized" signal (the walk-set file) FIRST,
@@ -1796,11 +1845,12 @@ async function unlockWalkSetImpl(recordId, { acknowledgeNoClips = false } = {}) 
  * every OTHER direction's selection entry intact, so re-freezing is a single
  * re-approval of the one direction rather than all eight. The rendered clip is
  * preserved on disk, so the reopened direction can be reprocessed at a new
- * speed/frame-count with no regeneration. An imported direction is refused only
- * when its clip is genuinely absent (mirrors unlock — see `assertReDerivable`).
+ * speed/frame-count with no regeneration. A clipless source-packaged direction
+ * requires an acknowledgement only when the shared resolver proves a locked
+ * anchor can provide its fresh-render recovery.
  */
-export function reopenWalkDirection(recordId, { direction }) {
-  return walkWriteTail(recordId, () => reopenWalkDirectionImpl(recordId, direction));
+export function reopenWalkDirection(recordId, { direction, acknowledgeNoClips = false }) {
+  return walkWriteTail(recordId, () => reopenWalkDirectionImpl(recordId, direction, { acknowledgeNoClips }));
 }
 
 /**
@@ -1894,13 +1944,13 @@ async function invalidateWalkDirectionForAnchorRevisionImpl(recordId, direction)
   return true;
 }
 
-async function reopenWalkDirectionImpl(recordId, direction) {
+async function reopenWalkDirectionImpl(recordId, direction, { acknowledgeNoClips = false } = {}) {
   await requireCharacter(recordId);
   const [walkSet, loaded] = await Promise.all([loadWalkSet(recordId), loadSelection(recordId)]);
   const selection = loaded || seedSelection(recordId);
-  // The selection entry is the gate's evidence, so it is read BEFORE the
-  // re-derivability check (which needs it) and before the approval check.
-  await assertDirectionReDerivable(recordId, walkSet, selection.directions?.[direction], direction);
+  // The frozen set is canonical until the first reopen; afterwards its editable
+  // selection retains the source-path entry the scope resolver reads.
+  await assertDirectionReDerivable(recordId, walkSet || selection, direction, { acknowledgeNoClips });
   if (selection.directions?.[direction]?.status !== 'approved') {
     throw new ServerError(`Direction ${direction} is not approved`, { status: 409, code: 'DIRECTION_NOT_APPROVED' });
   }
