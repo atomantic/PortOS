@@ -216,7 +216,7 @@ describe('alignFrames / packStrip', () => {
     const { frames, alignment } = await alignFrames([frame]);
     expect(frames[0].width).toBe(WALK_CELL_SIZE);
     expect(alignment.fixedScale).toBe(1); // fits inside 299×314 unscaled
-    expect(alignment.operation).toBe('one-fixed-scale-shared-hip-x-plus-per-frame-baseline-y');
+    expect(alignment.operation).toBe('one-fixed-scale-per-frame-torso-x-and-baseline-y');
     const [dx, dy] = alignment.translations[0];
     expect(dy).toBe(352 - 200); // feet on the baseline
     expect(dx).toBe(192 - 50);  // hip median (col 99.5 abs → 49.5 rel) → pyRound(192-49.5)=142
@@ -239,23 +239,47 @@ describe('alignFrames / packStrip', () => {
   // observe it — which is why the per-frame drift in #3021 went untested for so
   // long. These build a synthetic direction whose frames differ only in ways a
   // real gait differs, and assert the character doesn't move because of it.
-  describe('inter-frame registration (#3021)', () => {
-    // Torso/hips identical in every frame; only an arm swings. A viewer should
-    // see the arm move and the body stay put.
+  describe('inter-frame registration (#3021, #3049)', () => {
+    // Torso/legs identical in every frame; only an arm swings. A viewer should
+    // see the arm move and the body stay put. The arm sits ABOVE the torso
+    // measuring band so the fixture isolates what it claims to: a silhouette
+    // change that must not move the body.
     const swingingArm = (armX) => {
       const frame = makeFrame(200, 300);
-      fillRect(frame, 80, 40, 120, 240, [80, 60, 40, 255]); // torso+legs, fixed
-      fillRect(frame, armX, 90, armX + 20, 130, [80, 60, 40, 255]); // arm, moves
+      fillRect(frame, 80, 40, 200, 280, [80, 60, 40, 255]); // torso+legs, fixed
+      fillRect(frame, armX, 60, armX + 20, 100, [80, 60, 40, 255]); // arm, moves
       return frame;
     };
 
-    it('gives every frame the same x, so a swinging arm cannot slide the body', async () => {
-      const { alignment } = await alignFrames([swingingArm(50), swingingArm(80), swingingArm(120)]);
-      const xs = alignment.translations.map(([dx]) => dx);
-      expect(new Set(xs).size).toBe(1);
-      // The per-frame measurements are kept for diagnostics and DO still vary —
-      // pin that, so this test can't pass by the anchor becoming constant.
+    // Asserted on the OUTPUT, not on `dx`. The original form of this test pinned
+    // `new Set(translations.map(([dx]) => dx)).size === 1` — the mechanism #3021
+    // introduced rather than the behavior it wanted, and the two are not the same
+    // claim. A shared dx positions the CROP, and each frame is cropped to its own
+    // bbox, so a frame whose arm extends the bbox 30px further left had its whole
+    // body composited 30px further right. This fixture passed that assertion
+    // while the body slid by exactly that much. Measuring where the torso LANDS
+    // cannot be satisfied that way.
+    it('keeps the body still while an arm swings', async () => {
+      const { frames, alignment } = await alignFrames(
+        [swingingArm(50), swingingArm(80), swingingArm(120)],
+      );
+      const torsoXs = frames.map((f) => rootX(f, alphaBbox(f)));
+      expect(Math.max(...torsoXs) - Math.min(...torsoXs)).toBeLessThanOrEqual(1);
+      // …and it is not passing because the anchor went constant: the per-frame
+      // measurements vary, and x compensates for them.
       expect(new Set(alignment.hipOffsets).size).toBeGreaterThan(1);
+      expect(new Set(alignment.translations.map(([dx]) => dx)).size).toBeGreaterThan(1);
+    });
+
+    // The regression that motivated #3049, in miniature: the leading limb defines
+    // bbox.left, so an anchor that positions the crop rather than the character
+    // moves the body by the limb's travel.
+    it('does not let the leading limb become the anchor', async () => {
+      const { frames } = await alignFrames([swingingArm(50), swingingArm(120)]);
+      const lefts = frames.map((f) => alphaBbox(f).left);
+      // bbox.left MUST differ between the two (the arm is out on one of them).
+      // A constant here is the #3021 shape: crop pinned, body free to slide.
+      expect(new Set(lefts).size).toBeGreaterThan(1);
     });
 
     it('keeps the baseline stable across frames of equal height', async () => {

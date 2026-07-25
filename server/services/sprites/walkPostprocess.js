@@ -423,14 +423,23 @@ export function alphaBbox(frame, threshold = BBOX_ALPHA_THRESHOLD) {
 }
 
 /**
- * x-center of the character at the hip/leg band (42%–76% of bbox height) —
- * the per-frame pivot the alignment pins to x=192.
+ * x-center of the character at the TORSO band (30%–58% of bbox height) — the
+ * per-frame pivot the alignment pins to x=192.
+ *
+ * The band is the chest/waist, deliberately ABOVE the knees. Measured in
+ * absolute source coordinates across a real 6s clip, the candidate landmarks
+ * rank (spread over the cycle, one direction): torso 14px · hip 17px · head 24px
+ * · bbox.left 44px · legs 52px. The old 42%–76% band reached into the scissoring
+ * legs, which is what made a per-frame anchor migrate — the symptom #3021
+ * described. The torso is the visual mass a viewer tracks and the part that is
+ * genuinely stationary in a walk-in-place, so pinning it is both the stablest
+ * measurement and the right physical model; arms and legs then swing around it.
  */
 export function rootX(frame, bbox) {
   const { data, width } = frame;
   const H = bbox.bottom - bbox.top;
-  const bandTop = bbox.top + pyRound(H * 0.42);
-  const bandBottom = bbox.top + pyRound(H * 0.76);
+  const bandTop = bbox.top + pyRound(H * 0.30);
+  const bandBottom = bbox.top + pyRound(H * 0.58);
   const xs = [];
   for (let y = bandTop; y < bandBottom; y++) {
     for (let x = bbox.left; x < bbox.right; x++) {
@@ -501,17 +510,24 @@ export async function alignFrames(frames) {
   const maxHeight = Math.max(...bboxes.map((b) => b.bottom - b.top));
   const scale = Math.min(1, (WALK_CELL_SIZE * 0.78) / maxWidth, (WALK_CELL_SIZE * 0.82) / maxHeight);
 
-  // ONE hip anchor for the whole direction (#3021). Anchoring x per frame made
-  // the body slide: `rootX` is the median of the hip/leg band, so it migrates as
-  // the legs scissor, and being a float median of an even-sized set it lands on
-  // .5 often enough that banker's rounding alternates the result by 1px on
-  // consecutive frames — a toggle locked to frame parity. A walk cycle rendered
-  // in place has a constant hip x by definition, so the median ACROSS frames is
-  // both the physically correct model and immune to per-frame silhouette noise.
-  // Per-frame values stay in the manifest (`hipOffsets`) for diagnostics.
+  // Anchor the TORSO of each frame on the pivot (#3049).
+  //
+  // #3021 replaced a per-frame x anchor with ONE shared offset, because the old
+  // hip/leg-band `rootX` migrated as the legs scissored. That treated the
+  // symptom: a shared dx positions the CROP, and each frame is cropped to its
+  // own alpha bbox, so freezing dx silently pins `bbox.left` — the leading
+  // arm/leg extremity, and empirically the second-WORST landmark on the body
+  // (44px of travel over a cycle, against 14px for the torso). The result was a
+  // 26px left-right lurch, measured on a packed 12-frame strip: bbox.left sat at
+  // exactly 122 in all twelve cells while the hip swung 179→205.
+  //
+  // With `rootX` now measuring the torso (see above), the per-frame anchor is
+  // both stable and correct: `dx` is computed from THIS frame's own crop offset
+  // so the shared landmark lands on the pivot every time, which cancels the crop
+  // variation AND any real drift left in the source clip (grok's "walk in place"
+  // still wanders ~14px). Residual is bounded by the torso measurement, not by
+  // the silhouette's widest limb.
   const sourceRootXs = frames.map((f, i) => (rootX(f, bboxes[i]) - bboxes[i].left) * scale);
-  const sharedRootX = median(sourceRootXs);
-  const dx = pyRound(WALK_PIVOT[0] - sharedRootX);
 
   const aligned = [];
   const translations = [];
@@ -520,6 +536,7 @@ export async function alignFrames(frames) {
     const cropped = cropFrame(frames[i], bbox);
     const size = [Math.max(1, pyRound(cropped.width * scale)), Math.max(1, pyRound(cropped.height * scale))];
     const resized = await premultipliedResize(cropped, size[0], size[1]);
+    const dx = pyRound(WALK_PIVOT[0] - sourceRootXs[i]);
     // Feet land on the baseline by the frame's ROBUST bottom, not its bbox
     // bottom. `alphaBbox` extends to a single surviving despill speck or a
     // dropped shadow, and pinning that to y=352 lifted the whole body by
@@ -536,13 +553,14 @@ export async function alignFrames(frames) {
       cellSize: WALK_CELL_SIZE,
       fixedScale: pyRoundTo(scale, 8),
       targetPivot: WALK_PIVOT,
-      // Renamed from 'one-fixed-scale-plus-per-frame-translation': x is now
-      // shared across the direction, so only y varies per frame. The shared x
-      // itself is not stored separately — it IS every entry of `translations`.
-      operation: 'one-fixed-scale-shared-hip-x-plus-per-frame-baseline-y',
-      // The per-frame hip measurements the shared anchor was taken from. Kept
-      // for diagnostics: their spread is the drift this alignment cancels, so a
-      // regression shows up as translations moving with them again.
+      // Both axes vary per frame again (#3049): x pins this frame's torso to the
+      // pivot, y its robust baseline. The distinguishing fact vs the pre-#3021
+      // shape is WHICH landmark x uses — the torso band, not the hip/leg band.
+      operation: 'one-fixed-scale-per-frame-torso-x-and-baseline-y',
+      // The per-frame torso measurements the anchor is taken from. Kept for
+      // diagnostics: their spread is the drift this alignment cancels, so a
+      // regression shows up as `translations[i][0]` going constant while these
+      // still move (that is exactly the #3021 shape this replaced).
       hipOffsets: sourceRootXs.map((v) => pyRoundTo(v, 4)),
       translations,
     },
