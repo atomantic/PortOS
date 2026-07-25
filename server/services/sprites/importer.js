@@ -28,7 +28,15 @@ import { PATHS, ensureDir, sha256File, atomicWrite, pathExists, readJSONFile, ex
 import { ServerError } from '../../lib/errorHandler.js';
 import { upsertImportedRecord } from './records.js';
 import {
-  spriteDir, RUN_DIR_MATCH, altRunLayoutPath, resolveDriftTolerantRel, SOURCE_CLIP_NAME,
+  spriteDir,
+  RUN_DIR_MATCH,
+  altRunLayoutPath,
+  canonicalizeImportedRunPath,
+  canonicalizeImportedRunPathValue,
+  deepCanonicalizeImportedRunPaths,
+  resolveDriftTolerantRel,
+  SOURCE_CLIP_NAME,
+  toRecordRelativeAssetPath,
 } from './paths.js';
 import { isValidSpriteId } from './recordsLogic.js';
 
@@ -172,7 +180,7 @@ const NOISE_KEYS = /tail$|^stdout|^stderr|^log$/i;
 function importableRel(value, characterId) {
   const rel = relToCharacterDir(value, characterId);
   if (!rel || EXCLUDED_RUN_SEGMENTS.test(rel)) return null;
-  return ASSET_REF.test(rel) || SOURCE_CLIP_REF.test(rel) ? rel : null;
+  return ASSET_REF.test(rel) || SOURCE_CLIP_REF.test(rel) ? canonicalizeImportedRunPath(rel) : null;
 }
 
 /**
@@ -219,18 +227,100 @@ async function readCharJson(srcCharDir, rel) {
   return alt ? readJson(join(srcCharDir, alt)) : null;
 }
 
-// Copy one character-dir file, always landing it at the DECLARED path: the
-// manifests that name it are copied byte-for-byte (their hashes are pinned),
-// so readers re-anchor those same declared paths — putting the bytes anywhere
-// else would import a file nothing can find. Only the source lookup tolerates
-// drift.
+// Copy one character-dir file into PortOS's neutral imported-run layout. The
+// source lookup remains drift-tolerant, while every local write maps a legacy
+// `grok/` run prefix to `runs/` so a re-import cannot recreate the residue
+// migration 203 healed on earlier installs.
 async function copyCharFile(srcCharDir, destDir, rel) {
   const srcRel = await resolveDriftTolerantRel(srcCharDir, rel);
-  if (!srcRel) return false;
-  const dest = join(destDir, rel);
+  if (!srcRel) return null;
+  const destRel = canonicalizeImportedRunPath(rel);
+  const dest = join(destDir, destRel);
   await ensureDir(dirname(dest));
   await copyFile(join(srcCharDir, srcRel), dest);
-  return true;
+  return destRel;
+}
+
+// Recursively collect JSON manifests in one imported tree. A missing optional
+// subtree is an empty list; the importer only calls this after copying an
+// approved direction, so a non-directory is not an error worth surfacing.
+async function listJsonFiles(dir) {
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+  const files = [];
+  for (const entry of entries) {
+    const abs = join(dir, entry.name);
+    if (entry.isDirectory()) files.push(...await listJsonFiles(abs));
+    else if (entry.isFile() && entry.name.endsWith('.json')) files.push(abs);
+  }
+  return files;
+}
+
+async function normalizeImportedJsonFile(characterId, abs) {
+  const current = await readJson(abs);
+  if (current === null) return null;
+  const normalized = deepCanonicalizeImportedRunPaths(characterId, current);
+  if (JSON.stringify(normalized) !== JSON.stringify(current)) await atomicWrite(abs, normalized);
+  return normalized;
+}
+
+// A rewritten run record gets new bytes, so the selection and walk-set must
+// repin it just as migration 203 does. The path helper accepts both imported
+// source provenance and PortOS-relative forms, keeping the write-side layout
+// rule in one place.
+async function repinDirectionRunManifests(destDir, characterId, directions) {
+  for (const entry of Object.values(directions || {})) {
+    if (!entry || typeof entry !== 'object') continue;
+    if (typeof entry.runPath === 'string') entry.runPath = canonicalizeImportedRunPathValue(characterId, entry.runPath);
+    if (typeof entry.runManifest !== 'string') continue;
+    entry.runManifest = canonicalizeImportedRunPathValue(characterId, entry.runManifest);
+    const rel = toRecordRelativeAssetPath(characterId, entry.runManifest);
+    // eslint-disable-next-line no-await-in-loop -- an imported set has at most eight directions.
+    if (rel && await pathExists(join(destDir, rel))) {
+      // eslint-disable-next-line no-await-in-loop -- each hash reads one small run record.
+      entry.runManifestSha256 = await sha256File(join(destDir, rel));
+    }
+  }
+}
+
+async function normalizeImportedDirections({ destDir, characterId, abs, repin = false }) {
+  const current = await readJson(abs);
+  if (current === null) return null;
+  const normalized = deepCanonicalizeImportedRunPaths(characterId, current);
+  if (repin && normalized?.directions) await repinDirectionRunManifests(destDir, characterId, normalized.directions);
+  if (JSON.stringify(normalized) !== JSON.stringify(current)) await atomicWrite(abs, normalized);
+  return normalized;
+}
+
+// Imported manifests initially retain source bytes so all source sha256 pins
+// can be verified. Normalize only after that verification completes, then
+// rebuild the local run-manifest → selection → walk-set checksum cascade.
+async function normalizeImportedRunLayout(destDir, characterId) {
+  const runsDir = join(destDir, 'runs');
+  for (const abs of await listJsonFiles(runsDir)) await normalizeImportedJsonFile(characterId, abs);
+
+  const walkDir = join(destDir, 'walk');
+  const selectionAbs = join(walkDir, `${characterId}-walk-selection-v1.json`);
+  const walkSetAbs = join(walkDir, `${characterId}-walk-set-v1.json`);
+  const selection = await normalizeImportedDirections({ destDir, characterId, abs: selectionAbs, repin: true });
+  const selectionSha256 = selection && await pathExists(selectionAbs) ? await sha256File(selectionAbs) : null;
+  const walkSet = await normalizeImportedDirections({ destDir, characterId, abs: walkSetAbs, repin: true });
+  if (walkSet && selectionSha256 && typeof walkSet.selectionSha256 === 'string') {
+    walkSet.selectionSha256 = selectionSha256;
+    await atomicWrite(walkSetAbs, walkSet);
+  }
+
+  for (const abs of await listJsonFiles(join(destDir, 'runtime'))) await normalizeImportedJsonFile(characterId, abs);
+  const walkSetSha256 = walkSet && await pathExists(walkSetAbs) ? await sha256File(walkSetAbs) : null;
+  const pointerAbs = join(destDir, 'runtime', 'current.json');
+  const pointer = await readJson(pointerAbs);
+  if (!pointer) return;
+  const normalizedPointer = deepCanonicalizeImportedRunPaths(characterId, pointer);
+  if (walkSetSha256 && typeof normalizedPointer.walkSetSha256 === 'string') normalizedPointer.walkSetSha256 = walkSetSha256;
+  const manifestRel = toRecordRelativeAssetPath(characterId, normalizedPointer.manifestPath) || normalizedPointer.manifestPath;
+  if (typeof manifestRel === 'string' && await pathExists(join(destDir, manifestRel))) {
+    normalizedPointer.manifestSha256 = await sha256File(join(destDir, manifestRel));
+  }
+  if (JSON.stringify(normalizedPointer) !== JSON.stringify(pointer)) await atomicWrite(pointerAbs, normalizedPointer);
 }
 
 /**
@@ -243,25 +333,26 @@ async function copyCharFile(srcCharDir, destDir, rel) {
  * stay behind).
  */
 async function importApprovedDirection({ srcCharDir, destDir, characterId, direction, dir, result, hashExpectations, copiedThisRun }) {
-  const manifestRel = relToCharacterDir(dir.runManifest, characterId);
+  const manifestRel = canonicalizeImportedRunPath(relToCharacterDir(dir.runManifest, characterId));
   if (!manifestRel) {
     result.errors.push(`walk set ${direction}: unsafe run path rejected: ${dir.runManifest || dir.runPath}`);
     return;
   }
-  if (!(await copyCharFile(srcCharDir, destDir, manifestRel))) {
+  const copiedManifestRel = await copyCharFile(srcCharDir, destDir, manifestRel);
+  if (!copiedManifestRel) {
     result.errors.push(`walk set ${direction}: run manifest missing: ${manifestRel}`);
     return;
   }
   result.files += 1;
-  copiedThisRun.add(manifestRel);
-  if (dir.runManifestSha256) hashExpectations.push({ relPath: manifestRel, sha256: dir.runManifestSha256 });
+  copiedThisRun.add(copiedManifestRel);
+  if (dir.runManifestSha256) hashExpectations.push({ relPath: copiedManifestRel, sha256: dir.runManifestSha256 });
 
   const refs = new Set();
   // Read the copy just made rather than the source: same bytes, one fewer
   // resolution + read, and it matches how the reference/ and walk/ loops below
   // expand their manifests.
-  collectManifestRefs(await readJson(join(destDir, manifestRel)), characterId, refs, hashExpectations);
-  const runRel = relToCharacterDir(dir.runPath, characterId);
+  collectManifestRefs(await readJson(join(destDir, copiedManifestRel)), characterId, refs, hashExpectations);
+  const runRel = canonicalizeImportedRunPath(relToCharacterDir(dir.runPath, characterId));
   if (runRel && (await resolveDriftTolerantRel(srcCharDir, `${runRel}/generated/review-preview.json`))) {
     refs.add(`${runRel}/generated/review-preview.json`);
   }
@@ -407,6 +498,7 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
   const { verified, dropped } = await verifyHashes(destDir, hashExpectations, result.errors, copiedThisRun);
   result.verified = verified;
   result.files -= dropped;
+  await normalizeImportedRunLayout(destDir, characterId);
 
   const record = await upsertImportedRecord(characterId, {
     kind: 'character',

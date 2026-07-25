@@ -7,7 +7,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { toRecordRelativeAssetPath } from './paths.js';
+import {
+  canonicalizeImportedRunPath,
+  canonicalizeImportedRunPathValue,
+  deepCanonicalizeImportedRunPaths,
+  toRecordRelativeAssetPath,
+} from './paths.js';
 
 describe('toRecordRelativeAssetPath', () => {
   it('strips the source-repo marker for this record', () => {
@@ -48,5 +53,30 @@ describe('toRecordRelativeAssetPath', () => {
     expect(toRecordRelativeAssetPath('pioneer', null)).toBeNull();
     expect(toRecordRelativeAssetPath('pioneer', undefined)).toBeNull();
     expect(toRecordRelativeAssetPath('pioneer', 42)).toBeNull();
+  });
+});
+
+describe('imported run-layout normalization', () => {
+  it('uses runs/ for record-relative imported run destinations', () => {
+    expect(canonicalizeImportedRunPath('grok/walk-east-abc/generated/source-video.mp4'))
+      .toBe('runs/walk-east-abc/generated/source-video.mp4');
+    expect(canonicalizeImportedRunPath('runs/walk-east-abc/generated/source-video.mp4'))
+      .toBe('runs/walk-east-abc/generated/source-video.mp4');
+    expect(canonicalizeImportedRunPath('imagegen/v19/strip.png')).toBe('imagegen/v19/strip.png');
+  });
+
+  it('rewrites only path-shaped values, including nested source-anchored paths', () => {
+    const id = 'pioneer';
+    expect(canonicalizeImportedRunPathValue(id, `art-source/sprites/${id}/grok/walk-east-abc/animation-run.json`))
+      .toBe(`art-source/sprites/${id}/runs/walk-east-abc/animation-run.json`);
+    expect(deepCanonicalizeImportedRunPaths(id, {
+      runPath: `art-source/sprites/${id}/grok/walk-east-abc`,
+      nested: ['grok/walk-south-def/generated/strip.png'],
+      kind: 'grok-game-animation-frames-run',
+    })).toEqual({
+      runPath: `art-source/sprites/${id}/runs/walk-east-abc`,
+      nested: ['runs/walk-south-def/generated/strip.png'],
+      kind: 'grok-game-animation-frames-run',
+    });
   });
 });

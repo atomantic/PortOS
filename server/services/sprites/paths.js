@@ -53,12 +53,10 @@ export const SOURCE_CLIP_NAME = 'source-video.mp4';
  * Normalize an asset-path field read out of an imported manifest to the
  * record-relative form `spriteAssetUrl`/`resolveSpriteAssetPath` expect. The
  * source pipeline embeds paths anchored at ITS repo root
- * (`art-source/sprites/<recordId>/...`) inside every manifest, and the
- * importer copies those manifests byte-for-byte — their hashes are pinned
- * and verified against the source, so importer.js never rewrites the copied
- * JSON content. Readers that treat an embedded path as record-relative (the
- * convention every PortOS-generated manifest already follows) must strip
- * that source-repo prefix at read time instead. Returns null for a path
+ * (`art-source/sprites/<recordId>/...`) inside every manifest. Readers that
+ * treat an embedded path as record-relative (the convention every
+ * PortOS-generated manifest already follows) must strip that source-repo
+ * prefix at read time instead. Returns null for a path
  * that isn't inside this record (repo-anchored provenance, e.g. a pipeline
  * script path) or for missing/empty/traversal-shaped input. A path with no
  * repo-anchor segment is assumed already record-relative and passed through
@@ -104,6 +102,47 @@ export function resolveSpriteAssetPath(recordId, relPath) {
 const RUN_DIR_PREFIXES = ['grok', 'runs'];
 export const RUN_DIR_MATCH = new RegExp(`^(${RUN_DIR_PREFIXES.join('|')})/[^/]+`);
 const RUN_DIR_SPLIT = new RegExp(`^(${RUN_DIR_PREFIXES.join('|')})(/.+)$`);
+
+/**
+ * The neutral run-layout spelling PortOS uses for imported source trees.
+ * PortOS-native render jobs may retain their `grok/` location; imports always
+ * land under `runs/` so a later source re-import cannot recreate migration
+ * 203's legacy path residue.
+ */
+export const CANONICAL_IMPORTED_RUN_DIR = 'runs';
+
+/** Normalize a record-relative imported run path to its local `runs/` spelling. */
+export function canonicalizeImportedRunPath(rel) {
+  return typeof rel === 'string' && rel.startsWith('grok/')
+    ? `${CANONICAL_IMPORTED_RUN_DIR}/${rel.slice('grok/'.length)}`
+    : rel;
+}
+
+/**
+ * Rewrite one embedded sprite-run path to its local imported spelling.
+ *
+ * Handles both record-relative `grok/<run-id>/…` values and source-anchored
+ * `…/sprites/<id>/grok/<run-id>/…` values, without touching free-text values
+ * that merely contain the word "grok".
+ */
+export function canonicalizeImportedRunPathValue(recordId, value) {
+  if (typeof value !== 'string') return value;
+  return canonicalizeImportedRunPath(
+    value.split(`sprites/${recordId}/grok/`).join(`sprites/${recordId}/${CANONICAL_IMPORTED_RUN_DIR}/`),
+  );
+}
+
+/** Recursively normalize embedded imported run paths while preserving all other values. */
+export function deepCanonicalizeImportedRunPaths(recordId, value) {
+  if (typeof value === 'string') return canonicalizeImportedRunPathValue(recordId, value);
+  if (Array.isArray(value)) return value.map((entry) => deepCanonicalizeImportedRunPaths(recordId, entry));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, deepCanonicalizeImportedRunPaths(recordId, entry)]),
+    );
+  }
+  return value;
+}
 
 /**
  * The same run path under the OTHER run-dir prefix (the pair has exactly two
