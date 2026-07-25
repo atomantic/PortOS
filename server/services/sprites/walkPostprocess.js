@@ -731,7 +731,13 @@ export async function validateFrames(frames, split, frameCount = WALK_FRAME_COUN
   if (dominant.some((c) => c > 0)) throw new Error('Visible key color remains after despill');
   if (masses.some((m) => m > MAX_KEY_MASS)) throw new Error('Excess alpha-weighted key mass after despill');
   return {
-    distinctFrames: true,
+    // The literal `true` was accurate while every pack was all-distinct. Since a
+    // gait shorter than the requested count may hold frames (#3052), a hardcoded
+    // true would stamp a claim the artifact disproves — record what was actually
+    // packed, and the hold count beside it so a reader can tell an intentional
+    // hold from a packer bug.
+    distinctFrames: distinct === frames.length,
+    heldFrames,
     adjacentDifferenceScores: adjacent,
     loopSeamScore: seam,
     medianAdjacentScore: pyRoundTo(typical, 4),

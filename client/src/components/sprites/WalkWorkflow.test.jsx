@@ -629,7 +629,7 @@ describe('WalkWorkflow reprocess + reopen', () => {
       </MemoryRouter>,
     );
     expect(screen.queryByRole('button', { name: /Unlock/ })).toBeNull();
-    expect(screen.getByText(/nothing to regenerate from either/)).toBeTruthy();
+    expect(screen.getByText(/cannot be regenerated here/)).toBeTruthy();
   });
 
   it('sends the acknowledgement only from the blocked-but-regenerable confirm', async () => {

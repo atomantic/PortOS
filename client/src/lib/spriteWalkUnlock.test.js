@@ -44,7 +44,10 @@ describe('walkUnlockCopy', () => {
     const copy = walkUnlockCopy({ blocked: true, stranded: ['east'], acknowledgeable: false });
     expect(copy.action).toBeNull();
     expect(copy.acknowledgeNoClips).toBe(false);
-    expect(copy.text).toMatch(/nothing to regenerate from either/);
+    expect(copy.text).toMatch(/cannot be regenerated here/);
+    // Cause-neutral: the server stamps a boolean, and three different blockers
+    // collapse into it, so the copy must not name just one of them as the cause.
+    expect(copy.text).not.toMatch(/anchor is (also )?unlocked/);
   });
 
   it('inflects the stranded list, and names the set when there is no per-direction evidence', () => {

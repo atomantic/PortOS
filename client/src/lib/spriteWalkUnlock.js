@@ -24,8 +24,14 @@ export function walkUnlockCopy(unlock) {
     : 'This walk set was imported from the source pipeline with no directions that can be re-derived here.';
 
   if (!unlock.acknowledgeable) {
+    // Cause-NEUTRAL on purpose. `acknowledgeable: false` collapses three
+    // distinct blockers — an unlocked anchor, a locked anchor whose file is
+    // gone, and a record with no chroma key on any rung — and naming only the
+    // first would hand the other two a confidently wrong diagnosis. The server
+    // stamps a boolean, not a reason, so the copy says exactly what the boolean
+    // means and no more.
     return {
-      text: `${who} At least one directional anchor is also unlocked, so there is nothing to regenerate from either — re-import this character, or create a new character version to revise it.`,
+      text: `${who} It also cannot be regenerated here — the reference set is missing something a fresh render needs (a locked anchor, its image on disk, or the frozen chroma key). Re-import this character, or create a new character version to revise it.`,
       action: null,
       prompt: null,
       acknowledgeNoClips: false,
