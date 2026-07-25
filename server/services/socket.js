@@ -1,7 +1,7 @@
-import { spawnPm2 } from './pm2.js';
+import { spawnPm2, buildEnv } from './pm2.js';
 import { streamDetection } from './streamingDetect.js';
 import { cosEvents } from './cosEvents.js';
-import { appsEvents } from './apps.js';
+import { appsEvents, getAppById } from './apps.js';
 import { errorEvents, sanitizeContext } from '../lib/errorHandler.js';
 import { handleErrorRecovery } from './autoFixer.js';
 import * as pm2Standardizer from './pm2Standardizer.js';
@@ -206,18 +206,42 @@ export function initSocket(io) {
     });
 
     // Handle log streaming requests
-    socket.on('logs:subscribe', (rawData) => {
+    socket.on('logs:subscribe', async (rawData) => {
       const data = validateSocketData(logsSubscribeSchema, rawData, socket, 'logs:subscribe');
       if (!data) return;
-      const { processName, lines } = data;
+      const { processName, lines, appId } = data;
 
       // Clean up any existing stream for this socket
       cleanupStream(socket.id);
 
+      // Resolve the app's custom PM2_HOME (if it has one) so the stream tails the
+      // home its processes actually run in. Runs outside the Express lifecycle, so
+      // a lookup failure must not throw — fall back to the default home.
+      let pm2Home = null;
+      if (appId) {
+        pm2Home = await getAppById(appId)
+          .then(app => app?.pm2Home || null)
+          .catch(err => {
+            console.error(`❌ logs:subscribe could not resolve app ${appId}: ${err.message}`);
+            return null;
+          });
+      }
+
+      // The await above yields, so a rapid resubscribe (or a disconnect) may have
+      // landed in the meantime. Bail if this socket is gone rather than spawning an
+      // orphan `pm2 logs` that nothing will ever clean up.
+      if (socket.disconnected) return;
+      // A newer logs:subscribe already claimed this socket's stream slot — its
+      // cleanupStream ran before ours resolved. Yield to it instead of clobbering.
+      if (activeStreams.has(socket.id)) return;
+
       console.log(`📜 Log stream started: ${processName} (${lines} lines)`);
 
       // Spawn pm2 logs with --raw flag
-      const logProcess = spawnPm2(['logs', processName, '--raw', '--lines', String(lines)]);
+      const logProcess = spawnPm2(
+        ['logs', processName, '--raw', '--lines', String(lines)],
+        pm2Home ? { env: buildEnv(pm2Home) } : {}
+      );
 
       activeStreams.set(socket.id, { process: logProcess, processName });
 

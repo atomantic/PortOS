@@ -9,7 +9,8 @@ import StatusBadge from '../StatusBadge';
 import * as api from '../../services/api';
 import { getLaunchUrls } from '../../services/appUrls';
 import socket from '../../services/socket';
-import { APP_DETAIL_TABS, NON_PM2_TYPES, getAppTypeLabel } from './constants';
+import { APP_DETAIL_TABS, NON_PM2_TYPES, getAppTypeLabel, isDesktopType } from './constants';
+import DesktopLaunchProgress from './DesktopLaunchProgress';
 import OverviewTab from './tabs/OverviewTab';
 import TasksTab from './tabs/TasksTab';
 import AutomationTab from './tabs/AutomationTab';
@@ -31,6 +32,8 @@ export default function AppDetailView() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [actionLoading, setActionLoading] = useState(null);
+  // PM2 process whose live output the desktop launch panel is tailing (null = hidden).
+  const [launchProcess, setLaunchProcess] = useState(null);
   const [buildLoading, setBuildLoading] = useState(false);
   const [editing, setEditing] = useState(false);
   // Vite Dev-UI host guard: when an online app exposes a Vite dev server, check
@@ -84,13 +87,23 @@ export default function AppDetailView() {
 
   const handleStart = async () => {
     setActionLoading('start');
-    await api.startApp(appId).catch(() => null);
+    const result = await api.startApp(appId).catch(() => null);
+    // A desktop app's start command builds and imports assets before a window
+    // appears, so the POST returning tells the user almost nothing. Open the live
+    // log panel so the slow launch is visibly progressing rather than hung.
+    // Only on success — a failed start has no process to tail.
+    if (result && isDesktopType(app?.type)) {
+      const processName = app?.pm2ProcessNames?.[0];
+      if (processName) setLaunchProcess(processName);
+    }
     setActionLoading(null);
   };
 
   const handleStop = async () => {
     setActionLoading('stop');
     await api.stopApp(appId).catch(() => null);
+    // The stream would keep tailing a dead process; drop the panel with the app.
+    setLaunchProcess(null);
     setActionLoading(null);
   };
 
@@ -433,7 +446,18 @@ export default function AppDetailView() {
       </div>
 
       {/* Tab Content */}
-      <div className="flex-1 overflow-auto p-4 sm:p-6">
+      <div className="flex-1 overflow-auto p-4 sm:p-6 space-y-4">
+        {/* Desktop launch output. Suppressed on the Processes tab: the server keeps
+            ONE log stream per socket, so two mounted tails would clobber each other
+            and the tab's own expanded-process view is the better surface there. */}
+        {launchProcess && effectiveTab !== 'processes' && (
+          <DesktopLaunchProgress
+            appId={appId}
+            processName={launchProcess}
+            online={app.overallStatus === 'online'}
+            onDismiss={() => setLaunchProcess(null)}
+          />
+        )}
         {renderTab()}
       </div>
 

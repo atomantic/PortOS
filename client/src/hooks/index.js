@@ -85,6 +85,7 @@ export * from './useArcCanvasSync.js';
 export * from './useImageGenProgress.js';
 export * from './useImporterProgress.js';
 export * from './useInstallStream.js';
+export * from './useProcessLogs.js';
 export * from './useOpenClawStream.js';
 export * from './usePipelineProgress.js';
 export * from './useReaderPanel.js';

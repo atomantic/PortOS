@@ -18,10 +18,15 @@ export const standardizeStartSchema = z.object({
   overwriteEcosystem: z.boolean().optional()
 });
 
-// logs:subscribe — process name and optional line count
+// logs:subscribe — process name and optional line count. `appId` is optional and
+// only used to resolve that app's custom PM2_HOME: an app running in its own PM2
+// instance keeps its logs in a separate home, so a stream spawned against the
+// default home would silently tail nothing. Absent = default PM2_HOME (the common
+// case), so existing subscribers are unaffected.
 export const logsSubscribeSchema = z.object({
   processName: z.string().min(1, 'processName is required'),
-  lines: z.number().int().positive().max(10000).default(100)
+  lines: z.number().int().positive().max(10000).default(100),
+  appId: z.string().min(1).optional()
 });
 
 // error:recover — error code and context

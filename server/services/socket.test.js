@@ -8,7 +8,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
  * subscription / broadcast / disconnect behavior through observable socket events.
  */
 
-vi.mock('./pm2.js', () => ({ spawnPm2: vi.fn(() => ({ stdout: { on: vi.fn() }, stderr: { on: vi.fn() }, on: vi.fn() })) }));
+vi.mock('./pm2.js', () => ({
+  spawnPm2: vi.fn(() => ({ stdout: { on: vi.fn() }, stderr: { on: vi.fn() }, on: vi.fn() })),
+  buildEnv: vi.fn((pm2Home) => ({ PATH: '/usr/bin', ...(pm2Home ? { PM2_HOME: pm2Home } : {}) }))
+}));
 vi.mock('./streamingDetect.js', () => ({ streamDetection: vi.fn() }));
 vi.mock('./cosEvents.js', () => ({ cosEvents: { on: vi.fn() }, emitLog: vi.fn() }));
 vi.mock('./apps.js', () => ({ appsEvents: { on: vi.fn() }, getAppById: vi.fn(), updateApp: vi.fn() }));
@@ -59,6 +62,8 @@ vi.mock('./appDeployer.js', () => ({ hasDeployScript: vi.fn(), deployApp: vi.fn(
 vi.mock('../sockets/voice.js', () => ({ registerVoiceHandlers: vi.fn() }));
 
 import { initSocket } from './socket.js';
+import { spawnPm2 } from './pm2.js';
+import { getAppById } from './apps.js';
 import { cosEvents } from './cosEvents.js';
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { audioGenEvents } from './audioGen/events.js';
@@ -385,5 +390,83 @@ describe('socket.js — initSocket', () => {
     const err = socket.emitted.find(([ev]) => ev === 'shell:error');
     expect(err).toBeTruthy();
     expect(err[1].sessionId).toBe('gone');
+  });
+
+  // ===========================================================================
+  // logs:subscribe — PM2_HOME resolution (issue #2991)
+  //
+  // An app running in its OWN PM2 instance keeps its logs in a separate home.
+  // Spawning `pm2 logs` against the default home would tail nothing at all, so
+  // the desktop launch-progress panel would sit empty while the game builds —
+  // exactly the "reads as hung" failure the panel exists to prevent.
+  // ===========================================================================
+  describe('logs:subscribe PM2_HOME resolution', () => {
+    beforeEach(() => {
+      vi.mocked(spawnPm2).mockClear();
+      vi.mocked(getAppById).mockReset();
+    });
+
+    it('streams from the default home when no appId is supplied', async () => {
+      const socket = makeSocket('logs-default');
+      io.connect(socket);
+
+      await socket.handlers['logs:subscribe']({ processName: 'portos-server', lines: 100 });
+
+      expect(getAppById).not.toHaveBeenCalled();
+      const [, opts] = vi.mocked(spawnPm2).mock.calls[0];
+      expect(opts).toEqual({});
+    });
+
+    it("streams from the app's custom PM2_HOME when it has one", async () => {
+      const socket = makeSocket('logs-custom-home');
+      io.connect(socket);
+      vi.mocked(getAppById).mockResolvedValue({ id: 'app-1', pm2Home: '/opt/example/.pm2' });
+
+      await socket.handlers['logs:subscribe']({ processName: 'game', lines: 200, appId: 'app-1' });
+
+      expect(getAppById).toHaveBeenCalledWith('app-1');
+      const [args, opts] = vi.mocked(spawnPm2).mock.calls[0];
+      expect(args).toEqual(['logs', 'game', '--raw', '--lines', '200']);
+      expect(opts.env.PM2_HOME).toBe('/opt/example/.pm2');
+    });
+
+    it('falls back to the default home for an app with no custom home', async () => {
+      const socket = makeSocket('logs-no-custom-home');
+      io.connect(socket);
+      vi.mocked(getAppById).mockResolvedValue({ id: 'app-1', pm2Home: null });
+
+      await socket.handlers['logs:subscribe']({ processName: 'game', lines: 200, appId: 'app-1' });
+
+      const [, opts] = vi.mocked(spawnPm2).mock.calls[0];
+      expect(opts).toEqual({});
+    });
+
+    it('still streams when the app lookup fails rather than throwing', async () => {
+      const socket = makeSocket('logs-lookup-fails');
+      io.connect(socket);
+      vi.mocked(getAppById).mockRejectedValue(new Error('registry unreadable'));
+
+      // Runs outside the Express lifecycle — an unhandled rejection here would
+      // take the process down, so the lookup degrades to the default home.
+      await expect(
+        socket.handlers['logs:subscribe']({ processName: 'game', lines: 200, appId: 'app-1' })
+      ).resolves.toBeUndefined();
+
+      expect(vi.mocked(spawnPm2)).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not spawn an orphan stream when the socket disconnected mid-lookup', async () => {
+      const socket = makeSocket('logs-disconnected');
+      io.connect(socket);
+      vi.mocked(getAppById).mockImplementation(async () => {
+        // The socket drops while the registry read is in flight.
+        socket.disconnected = true;
+        return { id: 'app-1', pm2Home: '/opt/example/.pm2' };
+      });
+
+      await socket.handlers['logs:subscribe']({ processName: 'game', lines: 200, appId: 'app-1' });
+
+      expect(vi.mocked(spawnPm2)).not.toHaveBeenCalled();
+    });
   });
 });

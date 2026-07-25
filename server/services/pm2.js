@@ -81,11 +81,16 @@ export function execPm2(pm2Args, opts = {}) {
 }
 
 /**
- * Build environment object with optional custom PM2_HOME
+ * Build environment object with optional custom PM2_HOME.
+ *
+ * Exported because the log-stream socket handler spawns `pm2 logs` directly
+ * (not through spawnPm2Cli) and must target the same home the app's processes
+ * live in — otherwise an app with its own PM2 instance streams an empty log.
+ *
  * @param {string} pm2Home Optional custom PM2_HOME path
  * @returns {object} Environment variables
  */
-function buildEnv(pm2Home) {
+export function buildEnv(pm2Home) {
   const env = { ...process.env };
   if (pm2Home) {
     env.PM2_HOME = pm2Home;
