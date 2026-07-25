@@ -213,6 +213,38 @@ describe('selectCycleIndices', () => {
     }
   });
 
+  /**
+   * #3052 — a gait SHORTER than the requested count must still win. The window
+   * floor used to be `frameCount`, which hid an 11-frame period behind a
+   * 15-frame window: 1.36 cycles, whose endpoints matched anyway (a front-facing
+   * walk is near-symmetric, so the mirrored pose reads as the same one) while the
+   * legs visibly jumped mid-loop.
+   */
+  it('prefers a true short period over a longer non-periodic window', () => {
+    // Period 11, sampled 30 frames long. 12 phases are requested, so the old
+    // floor could only offer >=12 — i.e. never the real cycle.
+    // A sawtooth, NOT a triangle: a symmetric wave repeats its values within the
+    // period, which makes several window lengths look equally seamless.
+    const signatures = Array.from({ length: 30 }, (_, i) => constSig((i % 11) * 5));
+    const { indices, cycle } = selectCycleIndices(signatures, 12);
+    expect(cycle.windowLength).toBe(11);
+    expect(cycle.heldFrames).toBe(1);
+    // Exactly one phase repeats, and no frame of the gait is skipped.
+    expect(new Set(indices).size).toBe(11);
+    const strides = indices.slice(1).map((v, i) => v - indices[i]);
+    expect(strides.filter((s) => s === 0)).toHaveLength(1);
+    expect(strides.every((s) => s === 0 || s === 1)).toBe(true);
+  });
+
+  it('does not upsample a period far below the requested count', () => {
+    // Period 6 against 12 phases would be half held frames — the ratio guard
+    // keeps the longer window instead.
+    const signatures = Array.from({ length: 30 }, (_, i) => constSig((i % 6) * 10));
+    const { cycle } = selectCycleIndices(signatures, 12);
+    expect(cycle.windowLength).toBeGreaterThanOrEqual(12);
+    expect(cycle.heldFrames).toBe(0);
+  });
+
   it('rejects a static clip and too-few frames', () => {
     expect(() => selectCycleIndices(Array.from({ length: 20 }, () => constSig(7))))
       .toThrow(/no detectable moving walk cycle/i);

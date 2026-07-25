@@ -334,21 +334,34 @@ export function imageDistance(a, b) {
 }
 
 /**
- * Find the best walk-cycle window by endpoint-seam continuity vs motion, and
- * resample it onto the 8 gait phases. `signatures` is one entry per recovered
- * source frame.
+ * The shortest gait period a probe will consider. Below this a "cycle" is more
+ * likely to be a half-stride or an artifact of AI frame boiling than a real one.
  */
-export function selectCycleIndices(signatures, frameCount = WALK_FRAME_COUNT) {
+export const GAIT_MIN_PERIOD = 6;
+
+/**
+ * How much shorter than the requested phase count a TRUE gait period may be and
+ * still be preferred over a longer, non-periodic window (#3052). At 0.8, an
+ * 11-frame gait can serve 12 phases by holding one frame; a 6-frame gait cannot,
+ * because half the loop would be held frames and a longer window is the better
+ * compromise there.
+ */
+const MIN_PERIOD_RATIO = 0.8;
+
+/**
+ * The best-scoring periodic window, by endpoint-seam continuity vs motion.
+ *
+ * `minLength` is what separates the two callers, and it is the whole point of
+ * splitting this out (#3052): the gait's real period is a property of the CLIP
+ * and has nothing to do with how many phases the user asked for.
+ */
+export function findCycleWindow(signatures, frameCount, minLength) {
   const n = signatures.length;
-  if (n < frameCount + 1) {
-    throw new Error(`Need at least ${frameCount + 1} extracted frames, got ${n}`);
-  }
   let best = null; // [score, start, cycleLength, seam, motion]
-  // The window must be at least `frameCount` long to yield that many distinct
-  // source frames (we never upsample). Widen the ceiling with frameCount so a
-  // larger requested count can still find a long-enough gait window.
+  // Widen the ceiling with frameCount so a larger requested count can still find
+  // a long-enough gait window.
   const maxLen = Math.min(Math.max(18, frameCount + 6), n - 1);
-  for (let cycleLength = frameCount; cycleLength <= maxLen; cycleLength++) {
+  for (let cycleLength = minLength; cycleLength <= maxLen; cycleLength++) {
     for (let start = 0; start < n - cycleLength; start++) {
       const seam = imageDistance(signatures[start], signatures[start + cycleLength]);
       const motionSamples = [];
@@ -364,6 +377,36 @@ export function selectCycleIndices(signatures, frameCount = WALK_FRAME_COUNT) {
   }
   if (!best) throw new Error('No detectable moving walk cycle in the source video');
   const [, start, cycleLength, seam, motion] = best;
+  return { start, cycleLength, seam, motion };
+}
+
+/**
+ * Find the best walk-cycle window and resample it onto `frameCount` gait phases.
+ * `signatures` is one entry per recovered source frame.
+ */
+export function selectCycleIndices(signatures, frameCount = WALK_FRAME_COUNT) {
+  const n = signatures.length;
+  if (n < frameCount + 1) {
+    throw new Error(`Need at least ${frameCount + 1} extracted frames, got ${n}`);
+  }
+  // A window of at least `frameCount` gives one distinct source frame per phase.
+  let chosen = findCycleWindow(signatures, frameCount, frameCount);
+  // …but that floor also HIDES any gait whose real period is shorter, and forces
+  // a longer window that is not a whole number of cycles (#3052). A real clip's
+  // gait ran 11 frames while 12 phases were requested, so the search could only
+  // offer a 15-frame window — 1.36 cycles. Its endpoints still matched (a
+  // front-facing walk is near-symmetric, so the mirrored pose reads as the same
+  // one), which is why the seam score looked fine while the legs visibly jumped
+  // mid-loop. Probing without the floor finds the true period; holding one frame
+  // to reach the requested count is a far smaller artifact than replaying a third
+  // of a stride. The ratio guard keeps this to MILD upsampling — a much shorter
+  // period would be mostly held frames, and a longer window wins there.
+  const shortFloor = Math.max(GAIT_MIN_PERIOD, Math.ceil(frameCount * MIN_PERIOD_RATIO));
+  if (shortFloor < frameCount) {
+    const probe = findCycleWindow(signatures, frameCount, shortFloor);
+    if (probe.cycleLength < frameCount) chosen = probe;
+  }
+  const { start, cycleLength, seam, motion } = chosen;
   // Even phase distribution, in integer arithmetic (#3050).
   //
   // This is the ONE place that deliberately does not use `pyRound`. Banker's
@@ -386,7 +429,14 @@ export function selectCycleIndices(signatures, frameCount = WALK_FRAME_COUNT) {
     { length: frameCount },
     (_, i) => start + Math.floor((i * cycleLength + half) / frameCount),
   );
-  if (new Set(indices).size !== frameCount) {
+  // Every source frame of the window must be used. When the window is at least
+  // `frameCount` long that means all-distinct as before; when it is shorter (the
+  // mild-upsample path above) the phases hold `frameCount - cycleLength` frames,
+  // and the check becomes "no frame of the gait was SKIPPED" — which is the
+  // property that actually matters, and which the old all-distinct rule enforced
+  // only incidentally.
+  const distinct = new Set(indices).size;
+  if (distinct !== Math.min(frameCount, cycleLength)) {
     throw new Error(`Cycle window too short to resample ${frameCount} distinct phases`);
   }
   return {
@@ -396,6 +446,10 @@ export function selectCycleIndices(signatures, frameCount = WALK_FRAME_COUNT) {
       windowLength: cycleLength,
       endpointSeamScore: pyRoundTo(seam, 4),
       medianMotionScore: pyRoundTo(motion, 4),
+      // How many phases repeat a source frame because the gait is shorter than
+      // the requested count. 0 for every window at or above `frameCount`, so an
+      // existing manifest's shape is unchanged in the common case.
+      heldFrames: Math.max(0, frameCount - cycleLength),
     },
   };
 }
@@ -619,15 +673,24 @@ function keyDominantPixels(frame, split) {
 }
 
 /**
- * Validate the packed candidate: 8 distinct frames, tolerable loop seam,
+ * Validate the packed candidate: enough distinct frames, tolerable loop seam,
  * no visible key residue.
+ *
+ * `heldFrames` is how many phases deliberately repeat a source frame because the
+ * clip's gait is shorter than the requested count (#3052) — an intentional hold,
+ * not the "packer picked the same frame twice" failure this guard exists for. It
+ * defaults to 0, so every caller that packs a full-length window keeps the strict
+ * all-distinct rule.
  */
-export async function validateFrames(frames, split, frameCount = WALK_FRAME_COUNT) {
+export async function validateFrames(frames, split, frameCount = WALK_FRAME_COUNT, heldFrames = 0) {
   if (frames.length !== frameCount) {
     throw new Error(`Expected ${frameCount} frames, got ${frames.length}`);
   }
   const hashes = frames.map((f) => sha256Buffer(f.data));
-  if (new Set(hashes).size !== frames.length) throw new Error('Duplicate frames in the packed cycle');
+  const distinct = new Set(hashes).size;
+  if (distinct !== frames.length - heldFrames) {
+    throw new Error(`Duplicate frames in the packed cycle (${distinct} distinct of ${frames.length}, expected ${frames.length - heldFrames})`);
+  }
   const signatures = await Promise.all(frames.map(signatureOf));
   const adjacent = signatures.map((sig, i) => pyRoundTo(imageDistance(sig, signatures[(i + 1) % frames.length]), 4));
   const seam = adjacent[adjacent.length - 1];
@@ -785,7 +848,7 @@ export async function runWalkPostprocess({
 
   const { frames: aligned, alignment } = await alignFrames(selected);
   const despilled = aligned.map((f) => despillKeyFrame(f, split));
-  const validation = await validateFrames(despilled, split, targetFrames);
+  const validation = await validateFrames(despilled, split, targetFrames, cycle.heldFrames || 0);
 
   const framesDir = join(generatedAbs, 'frames');
   await ensureDir(framesDir);
