@@ -352,10 +352,14 @@ export async function validateForCompile(recordId) {
   // one row rather than being held to eight. Only `walk` is registered today
   // (directional, so this is exactly SPRITE_DIRECTIONS); a second track adds a
   // sibling row list here and is resolved by the same loop.
-  const walkDirections = trackDirections(WALK_TRACK, SPRITE_DIRECTIONS);
+  //
+  // `trackDirections` is called ONCE per track and the result kept, so the
+  // facings a track was collected against and the count it is later held to are
+  // the same value rather than two derivations that could drift.
+  const trackDirs = { [WALK_TRACK]: trackDirections(WALK_TRACK, SPRITE_DIRECTIONS) };
   const manifests = {};
   const trackRows = { [WALK_TRACK]: [] };
-  for (const direction of walkDirections) {
+  for (const direction of trackDirs[WALK_TRACK]) {
     const entry = walkSet.directions?.[direction];
     if (!entry || entry.status !== 'approved') throw compileError(`Direction ${direction} is not approved`);
     const manifestBytes = await readVerified(entry.runManifest, entry.runManifestSha256, `Run manifest for ${direction}`);
@@ -384,13 +388,14 @@ export async function validateForCompile(recordId) {
     .map((id) => resolveTrackUniformity(id, trackRows[id], {
       error: compileError,
       defaultFps: LEGACY_MANIFEST_FPS[id],
-      // The count this loop actually collected against, not a re-derivation.
-      expectedRows: trackDirections(id, SPRITE_DIRECTIONS).length,
+      // The exact facing list this loop collected against — not a second
+      // derivation that could disagree with it.
+      expectedRows: trackDirs[id].length,
     }));
   const walk = tracks.find((t) => t.id === WALK_TRACK);
 
   const runs = {};
-  for (const direction of walkDirections) {
+  for (const direction of trackDirs[WALK_TRACK]) {
     const { entry, manifest } = manifests[direction];
     // Same frame-validity definition the approve gate uses (verifyPackagedFrames),
     // here in its byte-verifying mode: existence + per-frame sha256 + gait-phase/
