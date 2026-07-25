@@ -16,6 +16,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdir, writeFile, readFile } from 'fs/promises';
 import { createHash } from 'crypto';
+import { trackSpan as fullSpan } from './spriteTestFixtures.js';
 
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-publish-test-'));
 const APP_REPO = join(TEST_ROOT, 'game-repo');
@@ -53,6 +54,7 @@ let seq = 0;
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 
 const { SPRITE_DIRECTIONS: DIRECTIONS } = await import('./prompts.js');
+
 
 // The geometry block a real compile writes into the runtime pointer — the
 // publish path reads it for the contract guard and the layout sidecar.
@@ -513,8 +515,8 @@ describe('layout sidecar (#2982)', () => {
     expect(layout.columns).toHaveLength(13);
     // Per-track spans so a future multi-frame track is additive, not a rewrite.
     expect(layout.tracks).toEqual({
-      idle: { start: 0, count: 1 },
-      walk: { start: 1, count: 12 },
+      idle: fullSpan(0, 1),
+      walk: fullSpan(1, 12),
     });
     // previewFps travels labeled as authoring-only — the app must not animate from it.
     expect(layout.previewFpsNote).toMatch(/Authoring metadata only/);
@@ -533,7 +535,7 @@ describe('layout sidecar (#2982)', () => {
     const layout = await readSidecar(BINDING.atlasDestPath);
     expect(layout.columnCount).toBe(10);
     expect(layout.walkFrameCount).toBe(8);
-    expect(layout.tracks.scanner).toEqual({ start: 9, count: 1 });
+    expect(layout.tracks.scanner).toEqual(fullSpan(9, 1));
   });
 
   it('is a no-op on an unchanged republish but self-heals a deleted sidecar', async () => {

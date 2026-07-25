@@ -54,6 +54,7 @@ const records = await import('./records.js');
 const {
   getReferenceSet, startReferenceGeneration, attachReferenceCandidate, lockReference, patchSpriteRecord,
   unlockReferenceAnchor, listReferenceSources, listSpriteThumbnails, forkSprite,
+  requireCharacter, requireAnimatable,
 } = await import('./reference.js');
 
 let seq = 0;
@@ -126,6 +127,39 @@ beforeEach(() => {
   rmSync(join(TEST_ROOT, 'sprite-records.json'), { force: true });
 });
 afterAll(() => rmSync(TEST_ROOT, { recursive: true, force: true }));
+
+describe('the animation gates (#3017)', () => {
+  // The gates used to be one literal `kind !== 'character'` test. They are now
+  // two registry reads with different questions: "may this record carry the
+  // WALK track" (the gait-shaped reference/walk workflow) and "may it carry ANY
+  // track" (compiling and publishing an atlas). Walk is character-only, so both
+  // refuse exactly what they always did — what changed is that adding a row
+  // listing `place` unlocks the second gate with no edit to this file's target.
+  it('404s an unknown record from either gate', async () => {
+    await expect(requireCharacter('nope-1')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(requireAnimatable('nope-2')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('admits a character through both gates', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await expect(requireCharacter(id)).resolves.toMatchObject({ id, kind: 'character' });
+    await expect(requireAnimatable(id)).resolves.toMatchObject({ id, kind: 'character' });
+  });
+
+  it('refuses a place/object record, naming the tracks that DO exist', async () => {
+    await records.createRecord({ kind: 'place', name: 'Grove' }, 'grove');
+    // The walk gate keeps its historical code, so existing callers matching on
+    // NOT_A_CHARACTER are unaffected.
+    await expect(requireCharacter('grove')).rejects.toMatchObject({ code: 'NOT_A_CHARACTER' });
+    // The track-presence gate explains itself in terms of the registry, which
+    // is the thing a user (or a future track) can actually change.
+    await expect(requireAnimatable('grove')).rejects.toMatchObject({
+      code: 'NOT_ANIMATABLE',
+      message: /No animation track applies to place records.*walk/,
+    });
+  });
+});
 
 describe('startReferenceGeneration', () => {
   it('404s an unknown record and 400s a props record', async () => {

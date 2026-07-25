@@ -13,8 +13,10 @@ import { walkPhaseLabels } from './walkBounds.js';
 // consumer actually reads.
 import { buildAtlasGrid } from './atlasGrid.js';
 import { ANIMATION_TRACKS } from './animationTracks.js';
+import { trackSpan as span } from './spriteTestFixtures.js';
 
 const DIRECTIONS = ['S', 'SE', 'E', 'NE', 'N', 'NW', 'W', 'SW'];
+
 // The grid the compiler emits today: idle + N walk phases (#2986 dropped the
 // trailing scanner placeholder).
 const geometryFor = (walkFrameCount, overrides = {}) => ({
@@ -68,7 +70,7 @@ describe('buildAtlasLayout', () => {
     expect(layout.columns).toEqual(['idle', ...walkPhaseLabels(8)]);
     // The compiled grid has exactly two tracks — the scanner span is gone with
     // the column it described (#2986).
-    expect(layout.tracks).toEqual({ idle: { start: 0, count: 1 }, walk: { start: 1, count: 8 } });
+    expect(layout.tracks).toEqual({ idle: span(0, 1), walk: span(1, 8) });
     expect(layout.previewFpsNote).toMatch(/do not use this as a runtime frame rate/);
     // No timestamp: identical geometry must produce byte-identical content so
     // an unchanged republish stays a no-op.
@@ -85,7 +87,7 @@ describe('buildAtlasLayout', () => {
     });
     expect(layout.columnCount).toBe(10);
     expect(layout.walkFrameCount).toBe(8);
-    expect(layout.tracks.scanner).toEqual({ start: 9, count: 1 });
+    expect(layout.tracks.scanner).toEqual(span(9, 1));
   });
 
   it('describes a two-track grid whose tracks differ in length (#3016)', () => {
@@ -105,9 +107,9 @@ describe('buildAtlasLayout', () => {
       atlasDestPath: 'assets/sprites/hero/hero-atlas.png',
     });
     expect(layout.tracks).toEqual({
-      idle: { start: 0, count: 1 },
-      walk: { start: 1, count: 12 },
-      scanner: { start: 13, count: 4 },
+      idle: span(0, 1),
+      walk: span(1, 12),
+      scanner: span(13, 4),
     });
     // columns, tracks and the atlas width stay mutually consistent: the spans
     // tile the column list exactly, so a consumer sampling by span lands on the

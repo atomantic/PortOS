@@ -1,12 +1,20 @@
 /**
- * Shared reference-candidate fixture helpers for the sprite test suites
- * (reference.test.js, walk.test.js, atlas.test.js). Each export is
- * parameterized on the calling suite's TEST_ROOT rather than closing over a
- * module-level constant, so every suite keeps its own tmpdir and isolation.
+ * Shared fixture helpers for the sprite test suites (reference.test.js,
+ * walk.test.js, atlas.test.js, atlasGrid.test.js, atlasLayout.test.js,
+ * publish.test.js). The candidate-writing helpers are parameterized on the
+ * calling suite's TEST_ROOT rather than closing over a module-level constant,
+ * so every suite keeps its own tmpdir and isolation.
+ *
+ * The grid fixtures at the bottom are here because four suites were each
+ * spelling out the same track-span shape and two were spelling out the same
+ * synthetic registry row: a new span field (or a new required registry field)
+ * would otherwise be a six-file edit, and any file that missed it would go
+ * green on a stale shape.
  */
 import { join } from 'path';
 import sharp from 'sharp';
 import { mkdir, writeFile } from 'fs/promises';
+import { SPRITE_DIRECTIONS } from './prompts.js';
 
 // A green/teal character rectangle on a magenta background — the legacy
 // Pioneer shape, so auto chroma-key selection keeps magenta.
@@ -59,3 +67,39 @@ export async function lockAllAnchors(testRoot, recordId, { lockReference, direct
     });
   }
 }
+
+/**
+ * A track's column span as `buildAtlasGrid` and the layout sidecar emit it.
+ * `rows` defaults to the full grid height, which is what every shipped track
+ * (walk, idle) and every grid compiled before #3017 has — spelled out rather
+ * than omitted so a span that quietly lost its row count reads as a failure.
+ */
+export const trackSpan = (start, count, rows = SPRITE_DIRECTIONS.length) => ({ start, count, rows });
+
+/**
+ * A synthetic NON-directional registry row (#3017), shaped like an ambient
+ * loop: a tree moving in the wind, water, a flickering lamp. Three frames —
+ * below walk's floor of 6 — and no facing at all, so it occupies row 0 and
+ * leaves the other seven transparent. It lists `place`/`object`, the record
+ * kinds that had no animation path whatsoever before the gate became registry
+ * data.
+ *
+ * Synthetic on purpose: the shipped registry's only track is directional and
+ * character-only, so a test written against it alone could not tell "reads the
+ * row" from "hardcodes 8 / hardcodes 'character'". Same injected-table idiom
+ * `assertAnimationTrackRows(tracks)` uses. Shipping the real row is #3045.
+ */
+export const AMBIENT_TRACK_ROW = Object.freeze({
+  id: 'ambient',
+  label: 'Ambient loop',
+  directional: false,
+  kinds: Object.freeze(['place', 'object']),
+  minFrameCount: 2,
+  maxFrameCount: 6,
+  defaultFrameCount: 3,
+  minFps: 2,
+  maxFps: 12,
+  defaultFps: 4,
+  contractFrameCountField: 'ambientFrameCount',
+  contractFpsField: null,
+});

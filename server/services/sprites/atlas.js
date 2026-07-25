@@ -40,7 +40,7 @@ import {
   spriteDir, resolveSpriteAssetPath, RUNTIME_POINTER_REL, RUNTIME_PUBLICATIONS_REL,
   isSourcePipelinePath,
 } from './paths.js';
-import { requireCharacter, loadManifest } from './reference.js';
+import { requireAnimatable, loadManifest } from './reference.js';
 import { SPRITE_DIRECTIONS } from './prompts.js';
 import { keyChannelSplit } from './chromaKey.js';
 import {
@@ -51,7 +51,9 @@ import {
 } from './walkPostprocess.js';
 import { ATLAS_IDLE_COLUMN } from './walkBounds.js';
 import { WALK_TRACK, ANIMATION_TRACK_IDS } from './animationTracks.js';
-import { buildAtlasGrid, resolveTrackUniformity, compiledGridUpToDate } from './atlasGrid.js';
+import {
+  buildAtlasGrid, resolveTrackUniformity, compiledGridUpToDate, trackDirections,
+} from './atlasGrid.js';
 import {
   withWalkWriteTail, walkSetRelPath, importedWalkDirections,
 } from './walk.js';
@@ -343,13 +345,17 @@ export async function validateForCompile(recordId) {
   // already agreed across directions when it runs.
   //
   // Rows are keyed by TRACK because uniformity is a within-track rule (#3016):
-  // all 8 facings of one track must share a frame count and speed since the
-  // atlas is a rectangular grid, but a second track is free to differ. Only
-  // `walk` is registered today; a second track adds a sibling row list here and
-  // is resolved by the same loop, with no change to the shape.
+  // every facing of one track must share a frame count and speed since the
+  // atlas is a rectangular grid, but a second track is free to differ. HOW MANY
+  // facings a track has is per-track too (#3017) — `trackDirections` answers it
+  // from the registry, so a non-directional track is authored and approved as
+  // one row rather than being held to eight. Only `walk` is registered today
+  // (directional, so this is exactly SPRITE_DIRECTIONS); a second track adds a
+  // sibling row list here and is resolved by the same loop.
+  const walkDirections = trackDirections(WALK_TRACK, SPRITE_DIRECTIONS);
   const manifests = {};
   const trackRows = { [WALK_TRACK]: [] };
-  for (const direction of SPRITE_DIRECTIONS) {
+  for (const direction of walkDirections) {
     const entry = walkSet.directions?.[direction];
     if (!entry || entry.status !== 'approved') throw compileError(`Direction ${direction} is not approved`);
     const manifestBytes = await readVerified(entry.runManifest, entry.runManifestSha256, `Run manifest for ${direction}`);
@@ -378,11 +384,13 @@ export async function validateForCompile(recordId) {
     .map((id) => resolveTrackUniformity(id, trackRows[id], {
       error: compileError,
       defaultFps: LEGACY_MANIFEST_FPS[id],
+      // The count this loop actually collected against, not a re-derivation.
+      expectedRows: trackDirections(id, SPRITE_DIRECTIONS).length,
     }));
   const walk = tracks.find((t) => t.id === WALK_TRACK);
 
   const runs = {};
-  for (const direction of SPRITE_DIRECTIONS) {
+  for (const direction of walkDirections) {
     const { entry, manifest } = manifests[direction];
     // Same frame-validity definition the approve gate uses (verifyPackagedFrames),
     // here in its byte-verifying mode: existence + per-frame sha256 + gait-phase/
@@ -449,6 +457,12 @@ async function compileDirectionRow(recordId, direction, validated, geometry) {
   }
   cells.push({
     column: ATLAS_IDLE_COLUMN,
+    // `track` + `frameIndex` are what place this cell in the grid: the compiler
+    // looks the pair up in the track spans rather than trusting the order cells
+    // happen to be pushed in (#3017). The idle anchor is a one-column track of
+    // its own, exactly as the sidecar has always described it.
+    track: ATLAS_IDLE_COLUMN,
+    frameIndex: 0,
     ...idle,
     sourcePath: anchor.path,
     sourceSha256: anchor.sha256,
@@ -481,7 +495,14 @@ async function compileDirectionRow(recordId, direction, validated, geometry) {
     const frame = manifest.frames[i];
     const { scaled, bounds, baseline } = walkScaled[i];
     const normalized = placeCell(scaled, bounds, baseline, walkPasteX, `${direction}-${frame.phase}`, geometry, directionScale);
-    cells.push({ column: frame.phase, ...normalized, sourcePath: frame.path, sourceSha256: frame.sha256 });
+    cells.push({
+      column: frame.phase,
+      track: WALK_TRACK,
+      frameIndex: i,
+      ...normalized,
+      sourcePath: frame.path,
+      sourceSha256: frame.sha256,
+    });
   }
 
   return {
@@ -547,7 +568,12 @@ export function compileAtlas(recordId, options = {}) {
 }
 
 export async function compileAtlasInTail(recordId, { geometry: geometryOverride } = {}) {
-  await requireCharacter(recordId);
+  // The track-presence gate (#3017), not a literal kind check: a record may
+  // compile an atlas when its kind carries at least one registered animation
+  // track. Walk is character-only, so this refuses exactly what it always did —
+  // but registering a non-directional ambient track that lists `place`/`object`
+  // unlocks those records here with no edit to this line.
+  await requireAnimatable(recordId);
   const geometry = mergeGeometry(geometryOverride);
   const validated = await validateForCompile(recordId);
   const dir = spriteDir(recordId);
@@ -587,20 +613,52 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
 
   // compileDirectionRow still emits `idle` + this direction's walk frames, and
   // verifyPackagedFrames has already asserted each frame's phase against the
-  // walk labels — so row/column agreement remains structural for the one track
-  // that exists. Making the row compiler span-driven (so it stays structural for
-  // a second track) belongs with the track that needs it, #3018.
+  // walk labels. What #3017 changes is that placement no longer *assumes* that:
+  // every cell states its `track` and `frameIndex` and is placed through the
+  // grid's spans, so a track that occupies fewer columns or fewer rows lands
+  // where the sidecar says it does or the compile fails loudly. Producing the
+  // frames for a second track is still #3018's job; this is the grid contract
+  // that track will slot into.
   const rows = [];
   for (const direction of SPRITE_DIRECTIONS) {
     rows.push(await compileDirectionRow(recordId, direction, validated, geometry));
   }
+
+  // Resolve one cell's place in the grid from its track's span, once, and stamp
+  // the answer on the cell so the manifest below reports where the pixels
+  // actually went instead of re-deriving it. Deriving the index positionally
+  // (its order within the row) was correct only while every track was
+  // full-width and full-height; it would silently misplace a shorter or
+  // single-row track rather than reporting the mismatch.
+  const placeInGrid = (cell, r) => {
+    const span = tracks[cell.track];
+    if (!span) throw compileError(`Compiled cell references unknown atlas track '${cell.track}'`);
+    // A non-directional track owns row 0 only; the rest of its span stays as
+    // the zero-filled canvas left it — transparent, which PNG compresses to
+    // near nothing. A cell compiled outside its track's rows would overwrite
+    // pixels the sidecar promises are empty, so refuse rather than composite.
+    if (r >= span.rows) {
+      throw compileError(`Track '${cell.track}' occupies ${span.rows} atlas row(s) but a cell was compiled for ${SPRITE_DIRECTIONS[r]} (row ${r})`);
+    }
+    if (!Number.isInteger(cell.frameIndex) || cell.frameIndex < 0 || cell.frameIndex >= span.count) {
+      throw compileError(`Track '${cell.track}' frame ${cell.frameIndex} is outside its ${span.count}-column span`);
+    }
+    const index = span.start + cell.frameIndex;
+    if (columns[index] !== cell.column) {
+      throw compileError(`Track '${cell.track}' frame ${cell.frameIndex} is column "${columns[index]}" in the grid but the cell is labeled "${cell.column}"`);
+    }
+    cell.columnIndex = index;
+    return index;
+  };
 
   const { cellSize } = geometry;
   const atlasWidth = cellSize * columns.length;
   const atlasHeight = cellSize * SPRITE_DIRECTIONS.length;
   const atlas = { data: Buffer.alloc(atlasWidth * atlasHeight * 4), width: atlasWidth, height: atlasHeight };
   for (let r = 0; r < rows.length; r++) {
-    rows[r].cells.forEach((cell, c) => compositeOnto(atlas, cell.cell, c * cellSize, r * cellSize));
+    for (const cell of rows[r].cells) {
+      compositeOnto(atlas, cell.cell, placeInGrid(cell, r) * cellSize, r * cellSize);
+    }
   }
   const atlasBuffer = await sharp(atlas.data, { raw: { width: atlasWidth, height: atlasHeight, channels: 4 } })
     .png()
@@ -695,9 +753,11 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
       walkDirectionScale: row.walkDirectionScale,
       idleScale: row.idleScale,
       idlePolicy: row.idlePolicy,
-      cells: row.cells.map((cell, c) => ({
+      // The index the compositor stamped on, so the manifest cannot claim a
+      // cell sits somewhere other than where its pixels actually landed.
+      cells: row.cells.map((cell) => ({
         column: cell.column,
-        columnIndex: c,
+        columnIndex: cell.columnIndex,
         translation: cell.meta.translation,
         scale: cell.meta.scale,
         occupiedBounds: cell.meta.occupiedBounds,

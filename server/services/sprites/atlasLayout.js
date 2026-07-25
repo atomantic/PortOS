@@ -16,7 +16,10 @@
  *   verify the atlas it loaded is the one the layout describes
  *   (`sourceAtlasSha256`). Alongside the flat `columns` list it carries a
  *   per-track column span (`tracks`), so a future multi-frame scanner action or
- *   an ambient loop is an additive track rather than a v2 rewrite.
+ *   an ambient loop is an additive track rather than a v2 rewrite. Each span
+ *   also states how many `rows` its track occupies (#3017): a non-directional
+ *   track — a tree in the wind, water, a lamp — is single-row, and a consumer
+ *   reads row 0 for it regardless of which way the camera or the player faces.
  * - `runtimeContractMismatch` compares compiled geometry against the optional
  *   `publishBinding.runtimeContract` the app declared, so a publish the app
  *   cannot consume is refused with both numbers named instead of shipping.
@@ -42,7 +45,7 @@
  */
 
 import { basename } from 'path';
-import { deriveTracks, resolveWalkFrameCount } from './atlasGrid.js';
+import { deriveTracks, resolveWalkFrameCount, ATLAS_DEFAULT_ROWS } from './atlasGrid.js';
 
 // Bump only on a breaking shape change. Adding a field (or a new track) is
 // additive — consumers read `tracks`/`columns` by name, not by position.
@@ -81,6 +84,9 @@ export function buildAtlasLayout({
     throw new Error('Compiled atlas geometry has no column list');
   }
   const walkFrameCount = resolveWalkFrameCount(geometry);
+  // The grid's real height, so a span's `rows` is checked against (and defaulted
+  // to) the atlas actually being described rather than the canonical eight.
+  const rows = geometry.rows ?? (Array.isArray(geometry.directionOrder) ? geometry.directionOrder.length : null);
   return {
     schemaVersion: ATLAS_LAYOUT_SCHEMA_VERSION,
     kind: ATLAS_LAYOUT_KIND,
@@ -91,14 +97,19 @@ export function buildAtlasLayout({
     atlasVersion: version ?? null,
     sourceAtlasSha256: atlasSha256,
     cellSize: geometry.cellSize ?? null,
-    rows: geometry.rows ?? (Array.isArray(geometry.directionOrder) ? geometry.directionOrder.length : null),
+    rows,
     rowOrder: Array.isArray(geometry.directionOrder) ? [...geometry.directionOrder] : null,
     columns: [...columns],
     columnCount: columns.length,
     // Prefer the descriptor the compiler persisted (#3016) — the only thing
     // that can describe two tracks of differing length — and fall back to the
     // legacy column-name derivation for a grid compiled before it existed.
-    tracks: deriveTracks(columns, walkFrameCount, geometry.tracks ?? null),
+    // Each span carries `rows` (#3017), so a consumer knows a non-directional
+    // track lives on row 0 regardless of facing without inspecting pixels.
+    // A geometry with no usable row count falls back to the canonical eight —
+    // the shape every such atlas really has. Stated rather than laundered
+    // through `undefined` to re-trigger a default.
+    tracks: deriveTracks(columns, walkFrameCount, geometry.tracks ?? null, rows ?? ATLAS_DEFAULT_ROWS),
     walkFrameCount,
     previewFps: Number.isFinite(geometry.walkFps) ? geometry.walkFps : null,
     previewFpsNote: PREVIEW_FPS_NOTE,

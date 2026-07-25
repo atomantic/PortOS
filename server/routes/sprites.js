@@ -44,6 +44,7 @@ import {
   listReferenceSources, listSpriteThumbnails, forkSprite,
 } from '../services/sprites/reference.js';
 import { resolveSpriteAssetPrompt } from '../services/sprites/assetPrompt.js';
+import { WALK_TRACK, kindSupportsTrack, tracksForKind } from '../services/sprites/animationTracks.js';
 import {
   getWalkState, startWalkGeneration, approveWalkDirection, rerunWalkPostprocess, unlockWalkSet,
   reopenWalkDirection, setWalkTarget, getWalkSourceFrames, unlockDirectionalAnchor,
@@ -100,14 +101,20 @@ router.post('/import', asyncHandler(async (req, res) => {
 router.get('/:id', asyncHandler(async (req, res) => {
   const detail = await getRecordWithAssets(req.params.id);
   if (!detail) throw new ServerError('Sprite record not found', { status: 404, code: 'NOT_FOUND' });
-  const isCharacter = detail.record.kind === 'character';
-  const [reference, walk, atlas] = isCharacter
-    ? await Promise.all([
-      getReferenceSet(req.params.id),
-      getWalkState(req.params.id),
-      getAtlasState(req.params.id),
-    ])
-    : [null, null, null];
+  // Two questions, not one (#3017). `reference`/`walk` are the gait-shaped
+  // workflow, so they follow the WALK track's record kinds — the same thing
+  // requireCharacter asks. `atlas` follows the track-presence gate that
+  // compileAtlas/publishAtlas use, so a record kind unlocked by a future
+  // non-directional track gets its compiled atlas back here too; spelling this
+  // as `kind === 'character'` would have left the UI blank for exactly the
+  // records the registry had just admitted.
+  const { kind } = detail.record;
+  const runsWalk = kindSupportsTrack(kind, WALK_TRACK);
+  const [reference, walk, atlas] = await Promise.all([
+    runsWalk ? getReferenceSet(req.params.id) : null,
+    runsWalk ? getWalkState(req.params.id) : null,
+    tracksForKind(kind).length ? getAtlasState(req.params.id) : null,
+  ]);
   res.json({ ...detail, reference, walk, atlas });
 }));
 

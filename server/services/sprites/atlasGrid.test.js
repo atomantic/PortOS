@@ -12,15 +12,24 @@
  * builder could collapse back to `['idle', ...walkLabels]` and such a test would
  * stay green, which is exactly the regression it exists to prevent. Shipping a
  * real second track is #3018's job.
+ *
+ * #3017 adds the NON-directional case on the same terms: `AMBIENT_TRACK_ROW`
+ * (shared from spriteTestFixtures.js, since animationTracks.test.js needs the
+ * same row) is a synthetic three-frame, single-row, place/object track. Every
+ * row-span assertion below runs against it, because the shipped registry's only
+ * track is directional and a full-height-only registry cannot distinguish
+ * "reads the registry's `directional` flag" from "hardcodes eight rows".
  */
 
 import { describe, it, expect } from 'vitest';
 import {
   trackColumnLabels, buildAtlasGrid, deriveTracks,
   resolveWalkFrameCount, compiledGridUpToDate, resolveTrackUniformity,
+  trackDirections, ATLAS_DEFAULT_ROWS,
 } from './atlasGrid.js';
 import { walkPhaseLabels } from './walkBounds.js';
 import { getAnimationTrack, ANIMATION_TRACKS } from './animationTracks.js';
+import { trackSpan as span, AMBIENT_TRACK_ROW } from './spriteTestFixtures.js';
 
 // A second track that does NOT exist in the registry, shaped like a short
 // action animation: four frames, which sits BELOW walk's floor of 6 — the exact
@@ -29,6 +38,7 @@ const SCANNER_ROW = Object.freeze({
   id: 'scanner',
   label: 'Scanner sweep',
   directional: true,
+  kinds: Object.freeze(['character']),
   minFrameCount: 2,
   maxFrameCount: 8,
   defaultFrameCount: 4,
@@ -39,7 +49,11 @@ const SCANNER_ROW = Object.freeze({
   contractFpsField: null,
 });
 const TWO_TRACK_REGISTRY = Object.freeze({ walk: ANIMATION_TRACKS.walk, scanner: SCANNER_ROW });
+
+const MIXED_REGISTRY = Object.freeze({ walk: ANIMATION_TRACKS.walk, ambient: AMBIENT_TRACK_ROW });
+
 const DIRECTIONS = ['S', 'SE', 'E', 'NE', 'N', 'NW', 'W', 'SW'];
+
 
 const rowsFor = (frameCount, fps, overrides = {}) =>
   DIRECTIONS.map((direction) => ({
@@ -76,7 +90,7 @@ describe('buildAtlasGrid', () => {
   it('emits idle first, then one contiguous span per track', () => {
     const grid = buildAtlasGrid([{ id: 'walk', frameCount: 8 }]);
     expect(grid.columns).toEqual(['idle', ...walkPhaseLabels(8)]);
-    expect(grid.tracks).toEqual({ idle: { start: 0, count: 1 }, walk: { start: 1, count: 8 } });
+    expect(grid.tracks).toEqual({ idle: span(0, 1), walk: span(1, 8) });
   });
 
   it('packs two tracks of DIFFERENT lengths into one grid', () => {
@@ -90,9 +104,9 @@ describe('buildAtlasGrid', () => {
       'scanner-00', 'scanner-01', 'scanner-02', 'scanner-03',
     ]);
     expect(grid.tracks).toEqual({
-      idle: { start: 0, count: 1 },
-      walk: { start: 1, count: 12 },
-      scanner: { start: 13, count: 4 },
+      idle: span(0, 1),
+      walk: span(1, 12),
+      scanner: span(13, 4),
     });
     // columns and tracks stay mutually consistent — the spans tile the grid,
     // so the emitted PNG width (cellSize × columns.length) matches what the
@@ -100,6 +114,42 @@ describe('buildAtlasGrid', () => {
     const spanned = Object.values(grid.tracks).reduce((n, s) => n + s.count, 0);
     expect(spanned).toBe(grid.columns.length);
     expect(grid.columns.length).toBe(17);
+  });
+
+  it('gives a non-directional track a single row and its neighbours the full height (#3017)', () => {
+    const grid = buildAtlasGrid(
+      [{ id: 'walk', frameCount: 8 }, { id: 'ambient', frameCount: 3 }],
+      MIXED_REGISTRY,
+    );
+    // One rectangular atlas, not one per track: the ambient span is as WIDE as
+    // its frame count but only one row TALL, and the remaining rows of those
+    // columns are simply never written (transparent, which PNG compresses to
+    // near nothing).
+    expect(grid.tracks).toEqual({
+      idle: span(0, 1),
+      walk: span(1, 8),
+      ambient: span(9, 3, 1),
+    });
+    expect(grid.columns).toEqual(['idle', ...walkPhaseLabels(8), 'ambient-00', 'ambient-01', 'ambient-02']);
+    // Still tiled — a single-row track occupies real columns, so the width math
+    // and the sidecar's spans stay mutually consistent.
+    expect(Object.values(grid.tracks).reduce((n, s) => n + s.count, 0)).toBe(grid.columns.length);
+  });
+
+  it('sizes the idle anchor to the tallest track, not to an unconditional full height', () => {
+    // idle is the per-facing resting pose. A record whose ONLY track is
+    // non-directional has one facing worth of pose, so promising eight rows
+    // would advertise seven rows of pixels nothing ever writes.
+    const ambientOnly = buildAtlasGrid([{ id: 'ambient', frameCount: 3 }], MIXED_REGISTRY);
+    expect(ambientOnly.tracks).toEqual({ idle: span(0, 1, 1), ambient: span(1, 3, 1) });
+
+    // …and any directional track present pulls it back to the full height,
+    // which is every grid that exists today.
+    const withWalk = buildAtlasGrid(
+      [{ id: 'walk', frameCount: 8 }, { id: 'ambient', frameCount: 3 }],
+      MIXED_REGISTRY,
+    );
+    expect(withWalk.tracks.idle.rows).toBe(DIRECTIONS.length);
   });
 
   it('sorts specs into registration order rather than call order', () => {
@@ -145,19 +195,48 @@ describe('deriveTracks', () => {
     // four one-column singletons.
     const legacy = deriveTracks(grid.columns, 6, null);
     expect(legacy.scanner).toBeUndefined();
-    expect(legacy['scanner-00']).toEqual({ start: 7, count: 1 });
+    expect(legacy['scanner-00']).toEqual(span(7, 1));
   });
 
   it('treats an absent descriptor as legacy and a present-but-empty one as invalid', () => {
     // Absent ≠ present-but-empty: `{}` is a descriptor that fails to describe
     // the grid and must be refused, never silently re-derived.
     expect(deriveTracks(['idle', 'a', 'b'], 2, null)).toEqual({
-      idle: { start: 0, count: 1 }, walk: { start: 1, count: 2 },
+      idle: span(0, 1), walk: span(1, 2),
     });
     expect(deriveTracks(['idle', 'a', 'b'], 2, undefined)).toEqual({
-      idle: { start: 0, count: 1 }, walk: { start: 1, count: 2 },
+      idle: span(0, 1), walk: span(1, 2),
     });
     expect(() => deriveTracks(['idle', 'a', 'b'], 2, {})).toThrow(/descriptor is empty/);
+  });
+
+  it('round-trips a single-row span and defaults an absent one to full height (#3017)', () => {
+    const grid = buildAtlasGrid(
+      [{ id: 'walk', frameCount: 8 }, { id: 'ambient', frameCount: 3 }],
+      MIXED_REGISTRY,
+    );
+    expect(deriveTracks(grid.columns, 8, grid.tracks)).toEqual(grid.tracks);
+
+    // A descriptor persisted before #3017 has no `rows` at all. Every track in
+    // such a grid is directional, so normalizing to the grid's full height is
+    // what keeps those atlases describable AND idempotent — dropping the field
+    // through unchanged would instead emit a sidecar span with no row info.
+    const legacy = Object.fromEntries(
+      Object.entries(grid.tracks).map(([id, s]) => [id, { start: s.start, count: s.count }]),
+    );
+    expect(deriveTracks(grid.columns, 8, legacy).ambient).toEqual(span(9, 3));
+    expect(deriveTracks(grid.columns, 8, legacy).walk).toEqual(span(1, 8));
+  });
+
+  it('refuses a span claiming more rows than the grid has', () => {
+    const columns = ['idle', 'a', 'b'];
+    expect(() => deriveTracks(columns, 2, { idle: { start: 0, count: 1 }, walk: { start: 1, count: 2, rows: 9 } }))
+      .toThrow(/claims 9 rows, outside the 8-row grid/);
+    expect(() => deriveTracks(columns, 2, { idle: { start: 0, count: 1 }, walk: { start: 1, count: 2, rows: 0 } }))
+      .toThrow(/claims 0 rows, outside the 8-row grid/);
+    // …measured against the grid's REAL height, not the canonical eight.
+    expect(() => deriveTracks(columns, 2, { idle: { start: 0, count: 1 }, walk: { start: 1, count: 2, rows: 4 } }, 3))
+      .toThrow(/claims 4 rows, outside the 3-row grid/);
   });
 
   it('refuses a descriptor that does not tile its own column list', () => {
@@ -182,19 +261,19 @@ describe('deriveTracks', () => {
   it('spans the walk by position, so positional frame-NN labels group too', () => {
     // A grid whose columns are `frame-00…` rather than the named gait phases
     // must still describe ONE walk track, not ten singletons.
-    expect(deriveTracks(['idle', ...walkPhaseLabels(10)], 10).walk).toEqual({ start: 1, count: 10 });
+    expect(deriveTracks(['idle', ...walkPhaseLabels(10)], 10).walk).toEqual(span(1, 10));
     // …and a pre-#2986 grid still describes its scanner placeholder honestly
     // rather than folding it into the walk span.
     expect(deriveTracks(['idle', ...walkPhaseLabels(6), 'scanner'], 6)).toEqual({
-      idle: { start: 0, count: 1 },
-      walk: { start: 1, count: 6 },
-      scanner: { start: 7, count: 1 },
+      idle: span(0, 1),
+      walk: span(1, 6),
+      scanner: span(7, 1),
     });
     // Any repeated non-walk column groups into its own span too.
     expect(deriveTracks(['idle', 'w0', 'w1', 'scan-a', 'scan-a', 'scan-a'], 2)).toEqual({
-      idle: { start: 0, count: 1 },
-      walk: { start: 1, count: 2 },
-      'scan-a': { start: 3, count: 3 },
+      idle: span(0, 1),
+      walk: span(1, 2),
+      'scan-a': span(3, 3),
     });
   });
 
@@ -241,9 +320,9 @@ describe('compiledGridUpToDate', () => {
     // the column names identical. That is a different grid and must recompile.
     const repartitioned = persisted({
       tracks: {
-        idle: { start: 0, count: 1 },
-        walk: { start: 1, count: 4 },
-        scanner: { start: 5, count: 4 },
+        idle: span(0, 1),
+        walk: span(1, 4),
+        scanner: span(5, 4),
       },
     });
     expect(repartitioned.columns).toEqual(expected.columns);
@@ -270,10 +349,45 @@ describe('compiledGridUpToDate', () => {
   });
 });
 
+describe('trackDirections', () => {
+  it('gives a directional track every facing and a non-directional one just row 0', () => {
+    expect(trackDirections('walk', DIRECTIONS, MIXED_REGISTRY)).toEqual(DIRECTIONS);
+    // A tree in the wind has no facing — one row to author, one to approve, one
+    // to compile. This is what lets the approval and compile flows stop
+    // demanding eight directions per track.
+    expect(trackDirections('ambient', DIRECTIONS, MIXED_REGISTRY)).toEqual(['S']);
+  });
+
+  it('defaults to the canonical eight facings and refuses an empty list', () => {
+    expect(trackDirections('walk')).toHaveLength(ATLAS_DEFAULT_ROWS);
+    expect(ATLAS_DEFAULT_ROWS).toBe(8);
+    expect(() => trackDirections('walk', [])).toThrow(/non-empty direction list/);
+    // Unknown ids stay the registry's boundary rather than this helper's.
+    expect(() => trackDirections('nope', DIRECTIONS)).toThrow(/Unknown animation track 'nope'/);
+  });
+});
+
 describe('resolveTrackUniformity', () => {
   it('resolves a track from its per-direction rows', () => {
     // Labels are NOT returned — buildAtlasGrid derives them, so the two can't disagree.
     expect(resolveTrackUniformity('walk', rowsFor(12, 10))).toEqual({ id: 'walk', frameCount: 12, fps: 10 });
+  });
+
+  it('holds a non-directional track to ONE row, not to eight (#3017)', () => {
+    const oneRow = [{ direction: 'S', frameCount: 3, declaredFrameCount: 3, fps: 4 }];
+    expect(resolveTrackUniformity('ambient', oneRow, { tracks: MIXED_REGISTRY }))
+      .toEqual({ id: 'ambient', frameCount: 3, fps: 4 });
+
+    // The failure this prevents: an approval flow that demanded eight facings
+    // for a tree in the wind — there is only one to author, and seven of the
+    // eight rows are transparent by design.
+    expect(() => resolveTrackUniformity('ambient', rowsFor(3, 4), { tracks: MIXED_REGISTRY }))
+      .toThrow(/Track ambient occupies 1 atlas row but 8 were supplied/);
+
+    // …and the reverse is still enforced: a directional track that lost a
+    // facing would otherwise compile a half-empty atlas rather than failing.
+    expect(() => resolveTrackUniformity('walk', rowsFor(12, 10).slice(0, 7)))
+      .toThrow(/Track walk occupies 8 atlas rows but 7 were supplied/);
   });
 
   it('enforces uniformity WITHIN a track', () => {

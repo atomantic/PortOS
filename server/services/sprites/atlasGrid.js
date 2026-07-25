@@ -15,7 +15,7 @@
  *
  * - **`buildAtlasGrid`** — the span builder. `idle` is column 0, then each
  *   track's columns in stable registry-registration order, yielding both the
- *   flat `columns` list and the `{ start, count }` `tracks` descriptor the
+ *   flat `columns` list and the `{ start, count, rows }` `tracks` descriptor the
  *   published `layout.json` sidecar carries (#2982).
  * - **`resolveTrackUniformity`** — one track's frame count / fps resolved from
  *   its per-direction rows, asserting the 8 facings agree. It NEVER compares one
@@ -31,6 +31,26 @@
  * definition of a column span has to live below both. Nothing here touches fs,
  * state, or the image graph.
  *
+ * **Rows are per-track too, since #3017.** A directional track occupies one row
+ * per facing; a NON-directional one (a tree in the wind, water, a flickering
+ * lamp — animations with no facing at all) occupies row 0 and leaves the rest of
+ * its column span transparent. That is why every span carries `rows` alongside
+ * `{ start, count }`, and why `trackDirections` exists: the compiler asks which
+ * facings a track actually has instead of assuming eight. Still ONE rectangular
+ * atlas per record — transparent cells cost only file size, which PNG compresses
+ * to near nothing, and a second atlas would double the publish/binding surface.
+ *
+ * That generalization is the GRID and COMPILE layer only. The authoring side is
+ * still eight-shaped by design and by name — `walk.js`'s `allApproved` and its
+ * `finalized-eight-direction-walk-set`, and `reference.js`'s eight anchors — so
+ * a non-directional track is expressible and compilable here before it is
+ * authorable there. #3045 is the track that closes that half.
+ *
+ * A persisted span with NO `rows` is read as full-height rather than rejected:
+ * every grid compiled before #3017 is walk + idle, both directional, so
+ * defaulting to the grid's row count is what keeps existing atlases idempotent
+ * instead of condemning them to recompile their pixels forever.
+ *
  * **Only ONE track is registered today** (`walk`). The multi-track paths below
  * are proven in `atlasGrid.test.js` against a synthetic REGISTRY TABLE rather
  * than by shipping a second track's artwork. The registry table is the
@@ -41,9 +61,45 @@
  * change here.
  */
 
-import { ANIMATION_TRACKS, WALK_TRACK, getAnimationTrack } from './animationTracks.js';
+import {
+  ANIMATION_TRACKS, WALK_TRACK, getAnimationTrack, trackRowCount,
+} from './animationTracks.js';
 import { ATLAS_IDLE_COLUMN, ATLAS_SCANNER_COLUMN, walkPhaseLabels } from './walkBounds.js';
+import { SPRITE_DIRECTIONS } from './prompts.js';
 import { canonicalStringify } from '../../lib/objects.js';
+
+/**
+ * The height of every atlas this compiler emits: one row per canonical facing.
+ *
+ * Deliberately NOT a threaded parameter. Grid height is fixed by
+ * `SPRITE_DIRECTIONS`, and the only place a *different* number can legitimately
+ * appear is a PERSISTED geometry — a pointer or an imported manifest carrying
+ * its own `geometry.rows`. So the readers of persisted geometry (`deriveTracks`
+ * and, through it, `compiledGridUpToDate`) take a row count; the producers
+ * (`buildAtlasGrid`, `resolveTrackUniformity`) do not, because inventing a knob
+ * for them would only create a second, disagreeing source for one number.
+ */
+export const ATLAS_DEFAULT_ROWS = SPRITE_DIRECTIONS.length;
+
+/**
+ * The facings one track occupies, out of the grid's full direction list: all of
+ * them for a directional track, just the first (row 0) for a non-directional
+ * one.
+ *
+ * Scoped to the GRID and COMPILE layer, which is all #3017 generalized: it is
+ * what stops `validateForCompile` and the uniformity check from assuming eight
+ * facings per track. The *authoring* side is still eight-shaped on purpose —
+ * `walk.js`'s `allApproved` and its `finalized-eight-direction-walk-set`
+ * manifest, and `reference.js`'s eight anchors, all still hardcode the facing
+ * list, and generalizing them is the job of the track that needs it (#3045).
+ */
+export function trackDirections(trackId, directions = SPRITE_DIRECTIONS, tracks = ANIMATION_TRACKS) {
+  if (!Array.isArray(directions) || !directions.length) {
+    throw new Error(`Atlas track '${trackId}' needs a non-empty direction list`);
+  }
+  const rows = trackRowCount(trackId, directions.length, tracks);
+  return rows === directions.length ? [...directions] : directions.slice(0, rows);
+}
 
 /**
  * Column labels for one track's span.
@@ -75,12 +131,16 @@ export function trackColumnLabels(trackId, frameCount) {
  * Build the atlas grid from a set of track specs (`{ id, frameCount }`).
  *
  * Returns `{ columns, tracks }` where `tracks` maps each track id to its
- * contiguous `{ start, count }` column span — mutually consistent by
+ * contiguous `{ start, count, rows }` column span — mutually consistent by
  * construction, so the emitted PNG width (`cellSize × columns.length`) and the
- * sidecar's spans can never drift apart.
+ * sidecar's spans can never drift apart. `rows` is how many of the grid's
+ * facings that track occupies (#3017): every one for a directional track, just
+ * row 0 for a non-directional one, whose remaining cells stay transparent.
  *
  * `idle` is always column 0 and is described as a track of its own, matching
- * what the sidecar has always emitted. Specs are sorted into the registry's
+ * what the sidecar has always emitted. It is full-height by definition — the
+ * per-facing resting pose is the one cell every direction row is guaranteed to
+ * have. Specs are sorted into the registry's
  * registration order rather than trusted in call order, so two call sites that
  * list tracks differently still produce the same grid, and an id the registry
  * doesn't know is refused through `getAnimationTrack`'s own unknown-track
@@ -107,16 +167,26 @@ export function buildAtlasGrid(specs, tracks = ANIMATION_TRACKS) {
   }
 
   const ordered = [...specs].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+  const trackRows = ordered.map((spec) => trackRowCount(spec.id, ATLAS_DEFAULT_ROWS, tracks));
+
+  // The idle anchor is the per-facing resting pose, so it spans as many rows as
+  // the tallest track present — NOT an unconditional full height. A record whose
+  // only track is non-directional has exactly one facing worth of pose, and
+  // stamping eight here would promise a consumer seven rows of pixels nothing
+  // ever writes. With any directional track present this is the full height,
+  // which is every grid that exists today. Inserted FIRST so the descriptor's
+  // key order still matches the column order a published sidecar carries.
   const columns = [ATLAS_IDLE_COLUMN];
-  const spans = { [ATLAS_IDLE_COLUMN]: { start: 0, count: 1 } };
-  for (const spec of ordered) {
+  const spans = { [ATLAS_IDLE_COLUMN]: { start: 0, count: 1, rows: Math.max(...trackRows) } };
+  ordered.forEach((spec, i) => {
     // Labels are DERIVED, never supplied: trackColumnLabels is total and
     // deterministic, so accepting them from the caller would only create a
-    // mismatch the builder then has to reconcile against itself.
+    // mismatch the builder then has to reconcile against itself. Row height is
+    // derived the same way, from the registry's `directional` flag.
     const labels = trackColumnLabels(spec.id, spec.frameCount);
-    spans[spec.id] = { start: columns.length, count: labels.length };
+    spans[spec.id] = { start: columns.length, count: labels.length, rows: trackRows[i] };
     columns.push(...labels);
-  }
+  });
   return { columns, tracks: spans };
 }
 
@@ -169,8 +239,13 @@ export function resolveWalkFrameCount(geometry) {
  * non-overlapping, covering every column. A sidecar whose spans disagree with
  * its own `columns` would silently point a consumer at the wrong pixels, which
  * is the entire failure mode #2982 exists to prevent.
+ *
+ * `rows` is normalized, not merely copied: absent means full-height (every grid
+ * written before #3017 carries only directional tracks), and a present value is
+ * range-checked against the grid's real height so a descriptor can't promise
+ * rows the PNG doesn't have.
  */
-function validateCompiledTracks(compiled, columns) {
+function validateCompiledTracks(compiled, columns, directionCount) {
   const entries = Object.entries(compiled);
   if (!entries.length) {
     return { error: `Atlas track descriptor is empty but the grid has ${columns.length} columns` };
@@ -183,6 +258,11 @@ function validateCompiledTracks(compiled, columns) {
     if (span.start < 0 || span.start + span.count > columns.length) {
       return { error: `Atlas track "${id}" spans columns ${span.start}–${span.start + span.count - 1}, outside the ${columns.length}-column grid` };
     }
+    // Absent is legal (legacy = full height); present must be a real row count.
+    if (span.rows !== undefined && span.rows !== null
+      && (!Number.isInteger(span.rows) || span.rows < 1 || span.rows > directionCount)) {
+      return { error: `Atlas track "${id}" claims ${span.rows} rows, outside the ${directionCount}-row grid` };
+    }
   }
   const sorted = [...entries].sort((a, b) => a[1].start - b[1].start);
   let cursor = 0;
@@ -192,7 +272,11 @@ function validateCompiledTracks(compiled, columns) {
       return { error: `Atlas track "${id}" starts at column ${span.start} but the previous track ends at ${cursor} — the grid is not tiled by its tracks` };
     }
     cursor += span.count;
-    tracks[id] = { start: span.start, count: span.count };
+    tracks[id] = {
+      start: span.start,
+      count: span.count,
+      rows: Number.isInteger(span.rows) ? span.rows : directionCount,
+    };
   }
   if (cursor !== columns.length) {
     return { error: `Atlas tracks describe ${cursor} of ${columns.length} columns` };
@@ -202,7 +286,7 @@ function validateCompiledTracks(compiled, columns) {
 
 /**
  * Group a compiled grid into named tracks of contiguous column spans:
- * `{ idle: { start: 0, count: 1 }, walk: { start: 1, count: 8 } }`.
+ * `{ idle: { start: 0, count: 1, rows: 8 }, walk: { start: 1, count: 8, rows: 8 } }`.
  *
  * `compiledTracks` — the descriptor the compiler persisted into the manifest
  * geometry — is authoritative when **present**, which is what lets a grid carry
@@ -217,22 +301,25 @@ function validateCompiledTracks(compiled, columns) {
  * descriptor that fails to describe the grid, and it is rejected rather than
  * silently re-derived.
  */
-export function deriveTracks(columns, walkFrameCount, compiledTracks = null) {
-  const described = describeTracks(columns, walkFrameCount, compiledTracks);
+export function deriveTracks(columns, walkFrameCount, compiledTracks = null, directionCount = ATLAS_DEFAULT_ROWS) {
+  const described = describeTracks(columns, walkFrameCount, compiledTracks, directionCount);
   if (described.error) throw new Error(described.error);
   return described.tracks;
 }
 
 /** Non-throwing `deriveTracks` — `{ tracks }` or `{ error }`. */
-function describeTracks(columns, walkFrameCount, compiledTracks = null) {
+function describeTracks(columns, walkFrameCount, compiledTracks = null, directionCount = ATLAS_DEFAULT_ROWS) {
   if (!Array.isArray(columns) || !columns.length) {
     return { error: 'Compiled atlas geometry has no column list' };
+  }
+  if (!Number.isInteger(directionCount) || directionCount < 1) {
+    return { error: `Compiled atlas geometry has no usable row count (got ${directionCount})` };
   }
   if (compiledTracks !== null && compiledTracks !== undefined) {
     if (typeof compiledTracks !== 'object' || Array.isArray(compiledTracks)) {
       return { error: 'Atlas track descriptor must be an object of column spans' };
     }
-    return validateCompiledTracks(compiledTracks, columns);
+    return validateCompiledTracks(compiledTracks, columns, directionCount);
   }
 
   const walkStart = columns[0] === ATLAS_IDLE_COLUMN ? 1 : 0;
@@ -243,7 +330,10 @@ function describeTracks(columns, walkFrameCount, compiledTracks = null) {
     const name = index >= walkStart && index < walkEnd ? WALK_TRACK : column;
     const existing = tracks[name];
     if (!existing) {
-      tracks[name] = { start: index, count: 1 };
+      // Legacy grids predate non-directional tracks entirely — walk, idle, and
+      // the pre-#2986 scanner placeholder are all full-height — so every span
+      // derived this way is the grid's full height.
+      tracks[name] = { start: index, count: 1, rows: directionCount };
       continue;
     }
     if (existing.start + existing.count !== index) {
@@ -282,7 +372,20 @@ export function compiledGridUpToDate(current, expected) {
   if (current.targetMaxHeight !== expected.targetMaxHeight) return false;
   if (current.targetMaxWidth !== expected.targetMaxWidth) return false;
   if (JSON.stringify(current.columns) !== JSON.stringify(expected.columns)) return false;
-  const described = describeTracks(current.columns, resolveWalkFrameCount(current), current.tracks ?? null);
+  // Described, not compared raw, so a pointer predating `rows` (#3017) is
+  // normalized on the way in and stays idempotent — the same reason a pointer
+  // predating `tracks` (#3016) is described the legacy way.
+  //
+  // The height comes from the POINTER's own `geometry.rows`, which is what
+  // atlasLayout.js reads when it builds the sidecar from that same geometry.
+  // Normalizing to a constant here instead would let the two consumers of one
+  // persisted grid disagree about how tall it is.
+  const described = describeTracks(
+    current.columns,
+    resolveWalkFrameCount(current),
+    current.tracks ?? null,
+    Number.isInteger(current.rows) ? current.rows : ATLAS_DEFAULT_ROWS,
+  );
   if (described.error) return false;
   // canonicalStringify, NOT JSON.stringify: the two sides are built by three
   // different producers with three different key-insertion orders
@@ -305,6 +408,14 @@ export function compiledGridUpToDate(current, expected) {
  * check reads the named track's own registry row (#3015) instead of the global
  * walk-shaped 6–16 / 4–24 constants.
  *
+ * **How MANY directions is per-track too (#3017).** A directional track needs
+ * every facing; a non-directional one has exactly one row and must not be held
+ * to eight — so a row list that doesn't match the track's height is refused
+ * here rather than surfacing as a half-empty atlas. `expectedRows` is that
+ * height; callers that built `rows` from `trackDirections` already have it, so
+ * it is passed rather than re-derived (deriving it here from a grid height would
+ * be the third computation of one fact inside a single caller).
+ *
  * `rows` are `{ direction, frameCount, declaredFrameCount, fps }`. The registry
  * `tracks` table is the injection seam (as in `buildAtlasGrid`), and `error` is
  * injectable so this leaf stays free of the error-handler import — callers pass
@@ -318,9 +429,16 @@ export function resolveTrackUniformity(trackId, rows, {
   trackRow = getAnimationTrack(trackId, tracks),
   error = (message) => new Error(message),
   defaultFps = trackRow.defaultFps,
+  expectedRows = trackRowCount(trackId, ATLAS_DEFAULT_ROWS, tracks),
 } = {}) {
   if (!Array.isArray(rows) || !rows.length) {
     throw error(`Track ${trackId} has no directions to compile`);
+  }
+  if (rows.length !== expectedRows) {
+    throw error(
+      `Track ${trackId} occupies ${expectedRows} atlas ${expectedRows === 1 ? 'row' : 'rows'} `
+      + `but ${rows.length} ${rows.length === 1 ? 'was' : 'were'} supplied`,
+    );
   }
   let frameCount = null;
   let fps = null;

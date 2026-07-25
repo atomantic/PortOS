@@ -43,6 +43,9 @@ import {
 } from './prompts.js';
 import { pickChromaKey, keyProximityWarning, CHROMA_KEY_HEXES, DEFAULT_CHROMA_KEY } from './chromaKey.js';
 import {
+  WALK_TRACK, ANIMATION_TRACK_IDS, kindSupportsTrack, tracksForKind,
+} from './animationTracks.js';
+import {
   analyzeForeground, paletteFromAnalysis, normalizeFromAnalysis, recompositeOnKey,
 } from './normalize.js';
 
@@ -158,14 +161,60 @@ function seedManifest(recordId) {
   };
 }
 
-export async function requireCharacter(recordId) {
+/**
+ * THE animation gate (#3017) — one mechanism, two questions.
+ *
+ * Every sprite service used to ask the same literal question, `kind !==
+ * 'character'`, whether it cared about the walk cycle specifically or about
+ * animation in general. Those are different questions, and conflating them is
+ * why `place` and `object` records had no animation path at all: not because
+ * the atlas couldn't hold a tree moving in the wind, but because the gate
+ * refused the record before anything else ran.
+ *
+ * `trackId` names which question to ask — a specific track, or `null` for "any
+ * registered track at all". Both answers are registry DATA, so a row that
+ * admits another record kind unlocks it here with nothing to edit. Deliberately
+ * ONE function rather than a `requireX` per track: N tracks growing N gates is
+ * the special-case-on-shared-infrastructure shape the registry exists to end.
+ *
+ * The message names the kind and the tracks that DO exist, because "this record
+ * kind has no animation track" is a fact about the registry the user can act on,
+ * unlike the old blanket "character records only".
+ */
+export async function requireTrack(recordId, trackId = null) {
   const record = await getRecord(recordId);
   if (!record) throw new ServerError('Sprite record not found', { status: 404, code: 'NOT_FOUND' });
-  if (record.kind !== 'character') {
-    throw new ServerError('Reference workflow applies to character records only', { status: 400, code: 'NOT_A_CHARACTER' });
+  const supported = trackId
+    ? kindSupportsTrack(record.kind, trackId)
+    : tracksForKind(record.kind).length > 0;
+  if (!supported) {
+    // The walk gate keeps its historical message and code — callers (and
+    // reference.test.js) match on NOT_A_CHARACTER, and walk is character-only,
+    // so nothing that used to be refused is now admitted or vice versa.
+    if (trackId === WALK_TRACK) {
+      throw new ServerError('Reference workflow applies to character records only', { status: 400, code: 'NOT_A_CHARACTER' });
+    }
+    throw new ServerError(
+      `No animation track applies to ${record.kind} records — the registered tracks are: ${ANIMATION_TRACK_IDS.join(', ')}`,
+      { status: 400, code: 'NOT_ANIMATABLE' },
+    );
   }
   return record;
 }
+
+/**
+ * The walk/reference-workflow gate. Turnarounds, the eight directional anchors,
+ * walk runs and trims are all gait-shaped, so this stays exactly as strict as it
+ * ever was — it is `requireTrack(id, WALK_TRACK)` under a name its 13 call sites
+ * already use.
+ */
+export const requireCharacter = (recordId) => requireTrack(recordId, WALK_TRACK);
+
+/**
+ * The track-presence gate, for the paths that are about animation as such —
+ * compiling the runtime atlas, and the publish binding / publish that ship it.
+ */
+export const requireAnimatable = (recordId) => requireTrack(recordId);
 
 // First free `-vN` filename — locked artifacts are never overwritten; a
 // correction after a crash or an anchor unlock lands on the next version
@@ -548,7 +597,10 @@ export async function listReferenceSources() {
   const records = await listRecords();
   const out = [];
   for (const r of records) {
-    if (r.kind !== 'character' || r.deleted) continue;
+    // Same question requireCharacter asks — a reference set exists only for a
+    // kind that carries the walk track — so a row admitting another kind is
+    // picked up here too instead of this list silently staying character-only.
+    if (r.deleted || !kindSupportsTrack(r.kind, WALK_TRACK)) continue;
     const manifest = await loadManifest(r.id);
     // Same picker resolveSourceReference uses, so the advertised image is
     // exactly the one a seed will attach.
@@ -582,7 +634,10 @@ export async function listSpriteThumbnails() {
   const records = await listRecords();
   const results = await Promise.all(records.map(async (r) => {
     if (r.deleted) return null;
-    if (r.kind === 'character') {
+    // Registry-driven for the same reason as listReferenceSources: a locked
+    // main reference is a property of carrying the walk track, not of the
+    // literal kind name.
+    if (kindSupportsTrack(r.kind, WALK_TRACK)) {
       const manifest = await loadManifest(r.id);
       const main = manifest?.mainReference;
       if (main?.locked && main.path) return { id: r.id, path: main.path };

@@ -40,7 +40,7 @@ import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { getAppById } from '../apps.js';
 import { isDeploying } from '../appDeployer.js';
 import { spriteDir, RUNTIME_POINTER_REL, RUNTIME_PUBLICATIONS_REL } from './paths.js';
-import { requireCharacter } from './reference.js';
+import { requireAnimatable } from './reference.js';
 import { listRecords, updateRecord } from './records.js';
 import { withWalkWriteTail } from './walk.js';
 import { compileAtlasInTail } from './atlas.js';
@@ -156,9 +156,15 @@ export async function validatePublishBinding(binding) {
  * particular app was built against, so carrying it across a re-point would make
  * every publish to the new app 409 against an expectation that app never
  * declared (and, with no UI for the field, leave no way out).
+ *
+ * Gated on the record carrying an animation track (#3017), not on it being a
+ * character — publishing an atlas is about the atlas, and a record kind that
+ * gains a non-directional ambient track should be bindable and publishable
+ * without this gate being revisited. Walk is character-only today, so nothing
+ * that used to be accepted or refused here changes.
  */
 export async function setPublishBinding(recordId, binding) {
-  const record = await requireCharacter(recordId);
+  const record = await requireAnimatable(recordId);
   const validated = await validatePublishBinding(binding);
   const stored = record.publishBinding;
   if (validated && binding.runtimeContract === undefined && validated.appId === stored?.appId) {
@@ -235,7 +241,7 @@ export function publishAtlas(recordId, options = {}) {
 }
 
 async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {}) {
-  const record = await requireCharacter(recordId);
+  const record = await requireAnimatable(recordId);
   const binding = record.publishBinding;
   if (!binding?.appId || !binding?.atlasDestPath) {
     throw new ServerError('No publish binding configured — set the target app and atlas path first', { status: 409, code: 'PUBLISH_BINDING_REQUIRED' });

@@ -18,7 +18,9 @@ The compiler (`server/services/sprites/atlas.js`) produces one PNG: a fixed-cell
 
 `N` is read from the approved run manifests — every direction of a track must share it — so the atlas width tracks the authored count. **That makes the column layout a moving target for anything that hardcodes it.**
 
-Frame-count and fps uniformity is a **within-track** rule, never a between-track one: all 8 facings of a given track share a column span because the atlas is a rectangular grid, but two different tracks may legally differ in both length and speed (a four-frame action beside a twelve-frame walk). Each track's authoring range comes from its own row in `server/services/sprites/animationTracks.js`, and its column span is recorded in `geometry.tracks` and republished in the sidecar. Only `walk` is registered today.
+Frame-count and fps uniformity is a **within-track** rule, never a between-track one: every facing of a given track shares a column span because the atlas is a rectangular grid, but two different tracks may legally differ in both length and speed (a four-frame action beside a twelve-frame walk). Each track's authoring range comes from its own row in `server/services/sprites/animationTracks.js`, and its column span is recorded in `geometry.tracks` and republished in the sidecar. Only `walk` is registered today.
+
+**Not every track has eight rows.** A track is *directional* (one row per facing — a character walk) or *non-directional* (one row, period — a tree moving in the wind, water, a flickering lamp, which have no facing at all). A non-directional track occupies **row 0** across its whole column span and leaves the remaining rows transparent. Its span says so: `rows: 1`. There is still exactly **one atlas per record** — a second image would double the publish and binding surface for no gain, and the transparent cells cost only file size, which PNG compresses to near nothing.
 
 Non-walk tracks namespace their column labels with the track id (`scanner-00`, `scanner-01`, …). Walk keeps its historical labels — the named gait phases at 8 frames, positional `frame-NN` at any other length — so existing and imported atlases round-trip unchanged.
 
@@ -51,8 +53,8 @@ Nothing else crosses. The compile manifest, the run provenance, the trims, and t
   "columns": ["idle", "left-contact", "…", "right-up"],
   "columnCount": 9,
   "tracks": {
-    "idle": { "start": 0, "count": 1 },
-    "walk": { "start": 1, "count": 8 }
+    "idle": { "start": 0, "count": 1, "rows": 8 },
+    "walk": { "start": 1, "count": 8, "rows": 8 }
   },
   "walkFrameCount": 8,
   "previewFps": 12,
@@ -64,6 +66,7 @@ Consumer guidance:
 
 - **Resolve columns by name, not by constant.** `tracks` gives each animation track a column span, so a walk of any length — and any additional track (a four-frame scanner action, a three-frame ambient loop) — is additive rather than a breaking re-read. A track that isn't in the grid simply isn't in `tracks`; don't assume one is present. `columns` is the flat list for anything that wants raw names.
 - **`tracks` tiles `columns` exactly.** The spans are contiguous, non-overlapping, and sum to `columnCount` — so `cellSize × columnCount` is the PNG width and a span always addresses real pixels. A sidecar whose spans disagreed with its own column list is refused at publish rather than shipped.
+- **Read `rows` before you index by facing.** A span's `rows` is how many of the atlas's rows that track actually occupies. `rows === rowCount` is the familiar case (one row per facing, indexed through `rowOrder`); **`rows: 1` means the track lives on row 0 only** and you should sample row 0 no matter which way anything is facing — the other rows of those columns are transparent. Every span carries the field; a sidecar written before it existed describes only directional tracks, so treating a missing `rows` as full height is correct.
 - **Verify before you trust.** `sourceAtlasSha256` identifies the atlas the layout describes. The sidecar is written *before* the PNG on each publish, so a partially-completed publish is detectable (hash mismatch) rather than silent.
 - **The sidecar carries no timestamp** — identical geometry produces byte-identical content, so an unchanged republish rewrites nothing.
 - The sidecar shares the PNG's per-repo write serialization and its occupied-destination guard: an atlas whose sidecar was deleted gets it back on the next publish, and a file at that path PortOS didn't write (no `kind: portos-sprite-atlas-layout`, or not valid JSON at all) is never replaced without an explicit overwrite acknowledgment. It has no *divergence* guard — unlike the PNG, a PortOS-written sidecar someone hand-edited is simply regenerated, since it is derived data.
@@ -94,8 +97,9 @@ Two mechanisms guard that:
 | Path | Role |
 |---|---|
 | `server/services/sprites/atlas.js` | Compiles the atlas; owns the geometry block and the pre-pixel up-to-date check |
-| `server/services/sprites/atlasGrid.js` | The grid itself: column spans per track, within-track uniformity, reading a persisted (or legacy) grid back |
-| `server/services/sprites/animationTracks.js` | One row per animation track — its bounds, defaults, and directionality |
+| `server/services/sprites/atlasGrid.js` | The grid itself: column spans and row spans per track, within-track uniformity, reading a persisted (or legacy) grid back |
+| `server/services/sprites/animationTracks.js` | One row per animation track — its bounds, defaults, directionality, and which record kinds may carry it |
+| `server/services/sprites/reference.js` | The two animation gates: `requireCharacter` (walk workflow) and `requireAnimatable` (compile/publish) |
 | `server/services/sprites/atlasLayout.js` | Builds the sidecar payload; compares geometry against a runtime contract |
 | `server/services/sprites/publish.js` | Binding validation, the publish-time guard, the atomic PNG + sidecar write |
 | `server/services/sprites/walkBounds.js` | The authorable frame-count / fps ranges |

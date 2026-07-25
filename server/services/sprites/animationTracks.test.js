@@ -15,8 +15,10 @@ import { dirname, join } from 'path';
 import {
   WALK_TRACK, ANIMATION_TRACKS, ANIMATION_TRACK_IDS,
   isAnimationTrack, getAnimationTrack, clampTrackFrameCount, clampTrackFps,
-  assertAnimationTrackRows,
+  assertAnimationTrackRows, trackRowCount, tracksForKind, kindSupportsTrack,
 } from './animationTracks.js';
+import { SPRITE_RECORD_KINDS } from './recordsLogic.js';
+import { AMBIENT_TRACK_ROW } from './spriteTestFixtures.js';
 import {
   staticImportSpecifiers, staticImportClosure, specifierMatchesPackage,
 } from '../../lib/staticImportGraph.js';
@@ -36,6 +38,9 @@ describe('the registry rows', () => {
     expect(getAnimationTrack(WALK_TRACK)).toMatchObject({
       id: 'walk',
       directional: true,
+      // #3017 moved the gate into the registry without loosening it: a walk
+      // cycle is a character gait, so `place`/`object` are still refused.
+      kinds: ['character'],
       minFrameCount: 6,
       maxFrameCount: 16,
       defaultFrameCount: 12,
@@ -56,6 +61,7 @@ describe('the registry rows', () => {
       expect(row.id, `${id}.id must match its registry key`).toBe(id);
       expect(typeof row.label).toBe('string');
       expect(typeof row.directional).toBe('boolean');
+      expect(Array.isArray(row.kinds) && row.kinds.length > 0, `${id}.kinds must be non-empty`).toBe(true);
       expect(typeof row.contractFrameCountField).toBe('string');
       // `null` is legal here — a track whose speed an app has no say in — so
       // this must stay as permissive as the module-load guard, or the first row
@@ -110,6 +116,14 @@ describe('the module-load row guard', () => {
       .toThrow(/'scanner\.contractFrameCountField' and 'scanner\.contractFpsField'/);
   });
 
+  it('rejects a row no record kind can carry (#3017)', () => {
+    // A row with no kinds is unreachable work — nothing could ever carry it,
+    // and the gate would refuse every record with a message blaming the record.
+    expect(() => assertAnimationTrackRows(twoRows({ kinds: [] }))).toThrow(/needs a non-empty 'kinds' array/);
+    expect(() => assertAnimationTrackRows(twoRows({ kinds: 'character' }))).toThrow(/needs a non-empty 'kinds' array/);
+    expect(() => assertAnimationTrackRows(twoRows({ kinds: ['character', ''] }))).toThrow(/non-string entry in 'kinds'/);
+  });
+
   it('lets a row opt out of an fps contract field with null', () => {
     expect(() => assertAnimationTrackRows(twoRows({ contractFpsField: null }))).not.toThrow();
     // …and two such rows don't collide on "null".
@@ -155,6 +169,78 @@ describe('getAnimationTrack — absent vs unrecognized', () => {
     expect(isAnimationTrack('toString')).toBe(false);
     expect(isAnimationTrack(7)).toBe(false);
     expect(() => getAnimationTrack('toString')).toThrow(/Unknown animation track/);
+  });
+});
+
+describe('directionality and record-kind support (#3017)', () => {
+  // `AMBIENT_TRACK_ROW` is a synthetic NON-directional row admitting the two
+  // kinds that had no animation path at all. The shipped registry's only track
+  // is directional and character-only, so a test written against it alone could
+  // not tell "reads the row" from "hardcodes 8 / hardcodes 'character'" — the
+  // same injected-table idiom the guard tests above use.
+  const walk = getAnimationTrack(WALK_TRACK);
+  const MIXED = { walk, ambient: AMBIENT_TRACK_ROW };
+
+  it('accepts a well-formed non-directional row', () => {
+    expect(() => assertAnimationTrackRows(MIXED)).not.toThrow();
+  });
+
+  it('turns directionality into a row count, scaled to the grid it is asked about', () => {
+    expect(trackRowCount('walk', 8, MIXED)).toBe(8);
+    expect(trackRowCount('walk', 4, MIXED)).toBe(4);
+    // A track with no facing is ONE row whatever the grid height — that single
+    // row is row 0, and the rest of its column span stays transparent.
+    expect(trackRowCount('ambient', 8, MIXED)).toBe(1);
+    expect(trackRowCount('ambient', 4, MIXED)).toBe(1);
+  });
+
+  it('refuses an unusable direction count rather than returning NaN rows', () => {
+    expect(() => trackRowCount('walk', 0, MIXED)).toThrow(/positive direction count/);
+    expect(() => trackRowCount('walk', 2.5, MIXED)).toThrow(/positive direction count/);
+    // Unknown ids stay getAnimationTrack's boundary.
+    expect(() => trackRowCount('nope', 8, MIXED)).toThrow(/Unknown animation track 'nope'/);
+  });
+
+  it('answers which tracks a record kind may carry — the whole track-presence gate', () => {
+    expect(tracksForKind('character', MIXED).map((r) => r.id)).toEqual(['walk']);
+    expect(tracksForKind('place', MIXED).map((r) => r.id)).toEqual(['ambient']);
+    expect(tracksForKind('object', MIXED).map((r) => r.id)).toEqual(['ambient']);
+    // The gate's negative case: a kind no row lists has no animation path.
+    expect(tracksForKind('props', MIXED)).toEqual([]);
+    // A malformed record must not inherit character's permissions by default.
+    expect(tracksForKind('', MIXED)).toEqual([]);
+    expect(tracksForKind(undefined, MIXED)).toEqual([]);
+    expect(tracksForKind(null, MIXED)).toEqual([]);
+  });
+
+  it('reports per-track support, refusing an unknown track rather than throwing', () => {
+    expect(kindSupportsTrack('character', 'walk', MIXED)).toBe(true);
+    expect(kindSupportsTrack('place', 'walk', MIXED)).toBe(false);
+    expect(kindSupportsTrack('place', 'ambient', MIXED)).toBe(true);
+    // A predicate is the wrong place to throw — the gates use it to DECIDE.
+    expect(kindSupportsTrack('character', 'nope', MIXED)).toBe(false);
+  });
+
+  it('keeps the shipped registry character-only, so no gate loosened today', () => {
+    expect(tracksForKind('character').map((r) => r.id)).toEqual([WALK_TRACK]);
+    for (const kind of ['place', 'object', 'props']) {
+      expect(tracksForKind(kind), `${kind} has no track yet`).toEqual([]);
+    }
+  });
+
+  it('spells every `kinds` entry from the real record vocabulary', () => {
+    // The module-load guard can only check that `kinds` holds non-empty
+    // strings, because animationTracks.js imports nothing (asserted below) and
+    // the vocabulary lives in recordsLogic.js. So `kinds: ['charcter']` passes
+    // every guard, makes the track uncarryable by anything, and surfaces only
+    // as the baffling "No animation track applies to character records".
+    // Cross-checked here, where reaching another module is fine — the same
+    // place the client-mirror parity check lives.
+    for (const id of ANIMATION_TRACK_IDS) {
+      for (const kind of ANIMATION_TRACKS[id].kinds) {
+        expect(SPRITE_RECORD_KINDS, `${id}.kinds names an unknown record kind '${kind}'`).toContain(kind);
+      }
+    }
   });
 });
 

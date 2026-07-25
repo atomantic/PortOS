@@ -14,7 +14,7 @@ import { join } from 'path';
 import sharp from 'sharp';
 import { mkdir, writeFile, readFile } from 'fs/promises';
 import { createHash } from 'crypto';
-import { lockAllAnchors as lockAllAnchorsFixture } from './spriteTestFixtures.js';
+import { lockAllAnchors as lockAllAnchorsFixture, trackSpan as fullSpan } from './spriteTestFixtures.js';
 
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-atlas-test-'));
 
@@ -314,8 +314,8 @@ describe('compileAtlas', () => {
 
     const manifest = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, result.manifestPath), 'utf8'));
     expect(manifest.geometry.tracks).toEqual({
-      idle: { start: 0, count: 1 },
-      walk: { start: 1, count: 12 },
+      idle: fullSpan(0, 1),
+      walk: fullSpan(1, 12),
     });
     // The descriptor, the column list and the emitted PNG width all describe
     // the same grid — a consumer resolving a track by span lands on the pixels
@@ -325,6 +325,52 @@ describe('compileAtlas', () => {
     expect(manifest.geometry.widthPx).toBe(DEFAULT_ATLAS_GEOMETRY.cellSize * spanned);
     // The pointer carries the same geometry, so the publish path sees it too.
     expect(result.geometry.tracks).toEqual(manifest.geometry.tracks);
+  });
+
+  it('records how many atlas rows each track occupies (#3017)', async () => {
+    const id = await finalizedCharacter();
+    const result = await compileAtlas(id);
+
+    // Both shipped tracks are directional, so both are full-height — that is
+    // the point: nothing about an existing character's atlas changes. What the
+    // field buys is that a NON-directional track (a tree in the wind) can say
+    // it owns row 0 only, and a consumer knows to read row 0 regardless of
+    // facing instead of sampling seven transparent rows.
+    expect(result.geometry.tracks.idle.rows).toBe(SPRITE_DIRECTIONS.length);
+    expect(result.geometry.tracks.walk.rows).toBe(SPRITE_DIRECTIONS.length);
+    expect(result.geometry.rows).toBe(SPRITE_DIRECTIONS.length);
+
+    // Cells are placed through the spans, so every manifest columnIndex lands
+    // inside its own track's span and names the column the grid has there.
+    const manifest = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, result.manifestPath), 'utf8'));
+    for (const row of manifest.directions) {
+      for (const cell of row.cells) {
+        expect(manifest.geometry.columns[cell.columnIndex]).toBe(cell.column);
+      }
+    }
+  });
+
+  it('stays byte-identical to a pointer that predates the rows field', async () => {
+    // The idempotency regression #3017 could have caused: `rows` is new on every
+    // span, so a pointer written before it would compare unequal and re-run the
+    // entire pixel pipeline on every compile, forever, for every existing
+    // install. Absent must normalize to full height on the way in.
+    const id = await finalizedCharacter();
+    const first = await compileAtlas(id);
+
+    const pointerAbs = join(TEST_ROOT, 'sprites', id, 'runtime/current.json');
+    const pointer = JSON.parse(await readFile(pointerAbs, 'utf8'));
+    pointer.geometry = {
+      ...pointer.geometry,
+      tracks: Object.fromEntries(
+        Object.entries(pointer.geometry.tracks).map(([t, s]) => [t, { start: s.start, count: s.count }]),
+      ),
+    };
+    await writeFile(pointerAbs, JSON.stringify(pointer));
+
+    const again = await compileAtlas(id);
+    expect(again.created).toBe(false);
+    expect(again.version).toBe(first.version);
   });
 
   it('recompiles a set whose pointer describes a DIFFERENT track set over the same columns', async () => {
@@ -340,7 +386,7 @@ describe('compileAtlas', () => {
     // untouched instead of writing a new version.
     const pointerAbs = join(TEST_ROOT, 'sprites', id, 'runtime/current.json');
     const pointer = JSON.parse(await readFile(pointerAbs, 'utf8'));
-    expect(pointer.geometry.tracks).toEqual({ idle: { start: 0, count: 1 }, walk: { start: 1, count: 8 } });
+    expect(pointer.geometry.tracks).toEqual({ idle: fullSpan(0, 1), walk: fullSpan(1, 8) });
     pointer.atlasSha256 = 'f'.repeat(64);
     pointer.geometry = {
       ...pointer.geometry,
@@ -356,7 +402,7 @@ describe('compileAtlas', () => {
     expect(again.created).toBe(true);
     expect(again.version).toBe(first.version + 1);
     expect(again.geometry.columns).toEqual(['idle', ...WALK_PHASES]);
-    expect(again.geometry.tracks).toEqual({ idle: { start: 0, count: 1 }, walk: { start: 1, count: 8 } });
+    expect(again.geometry.tracks).toEqual({ idle: fullSpan(0, 1), walk: fullSpan(1, 8) });
   });
 
   it('stays idempotent for a legacy pointer written before the tracks descriptor existed', async () => {
