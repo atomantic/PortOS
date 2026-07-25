@@ -236,10 +236,6 @@ function DirectionCard({
   // approved strip replaces it as soon as there is an animation to inspect.
   const hasWalkPreview = Boolean((approved || candidate) && run?.stripPreview?.stripPath);
   const hasSourceClip = hasClip(run);
-  // Used only by the drift explanation: a source-packaged run without a clip
-  // cannot be reprocessed. Reopen reads the server-stamped block below instead,
-  // including its fresh-render escape after the frozen set disappears.
-  const importedNoClip = (imported || Boolean(run?.importedPackaging)) && !hasSourceClip;
   // The server stamps the reopen block with the exact same resolver that will
   // validate the POST. A missing block from an older peer remains an ordinary
   // reopen; only a stamped block changes the affordance.
