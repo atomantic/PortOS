@@ -119,9 +119,13 @@ export default function LayeredIntelligenceOutcomes({ appId }) {
   const hiddenCount = Math.max(0, stats.total - visible.length);
   // Per-scope rows come from `metrics.byScope`, not `execution.byScope`: the latter is
   // built from approved records only, so a scope whose every proposal was rejected is
-  // missing from it entirely — exactly the scope a reader most needs to see. Falls back
-  // to the execution view so an older server (no `metrics` block) still renders rows.
-  const executionScopes = Object.entries(metrics?.byScope || execution?.byScope || {});
+  // missing from it entirely — and among this app's approved scopes, that is the one a
+  // reader most needs to see. No fallback to `execution.byScope`: its buckets carry
+  // neither `approvalToCompletionRate` nor `rejected`, so every row would render as
+  // "none approved" — worse than not rendering. The route always sends `metrics`
+  // alongside `execution` when `read` is true, and a falsy `read` already short-circuits
+  // to the error banner above, so there is no shape where only one of them arrives.
+  const executionScopes = Object.entries(metrics?.byScope || {});
 
   return (
     <div className="space-y-3 bg-port-bg border border-port-border rounded-lg px-3 py-3">

@@ -113,13 +113,19 @@ describe('LayeredIntelligenceOutcomes', () => {
     expect(screen.getByText(/none approved · 2 rejected/)).toBeInTheDocument();
   });
 
-  it('falls back to the execution breakdown when the server sends no metrics block', async () => {
-    // An older server predates the `metrics` roll-up; the per-scope rows must still
-    // render rather than silently emptying the list.
+  it('omits per-scope rows rather than mislabelling them when no metrics block arrives', async () => {
+    // The route always sends `metrics` beside `execution`, so this shape is not
+    // reachable in practice — but if it ever were, `execution.byScope` carries no
+    // `approvalToCompletionRate`, and reading it would render a scope with 1/1 delivered
+    // as "none approved". Rendering nothing is the honest failure.
     getAppLayeredIntelligenceOutcomes.mockResolvedValue(ready({ metrics: undefined }));
     render(<LayeredIntelligenceOutcomes appId="app-001" />);
 
-    expect(await screen.findByText('app-improvement')).toBeInTheDocument();
+    // The surrounding post-approval block still renders...
+    expect(await screen.findByText('post-approval hand-off completion')).toBeInTheDocument();
+    // ...but no scope row claims this app approved nothing.
+    expect(screen.queryByText('app-improvement')).not.toBeInTheDocument();
+    expect(screen.queryByText(/none approved/)).not.toBeInTheDocument();
   });
 
   it('shows a dash for the merge rate when nothing has resolved yet', async () => {
