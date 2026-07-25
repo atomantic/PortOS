@@ -24,6 +24,8 @@ import {
   spriteForkSchema,
   spriteScannerGenerateSchema,
   spriteScannerApproveSchema,
+  spriteAmbientGenerateSchema,
+  spriteAmbientApproveSchema,
   spriteWalkGenerateSchema,
   spriteWalkApproveSchema,
   spriteWalkReopenSchema,
@@ -48,13 +50,14 @@ import {
   listReferenceSources, listSpriteThumbnails, forkSprite,
 } from '../services/sprites/reference.js';
 import { resolveSpriteAssetPrompt } from '../services/sprites/assetPrompt.js';
-import { WALK_TRACK, SCANNER_TRACK, kindSupportsTrack, tracksForKind } from '../services/sprites/animationTracks.js';
+import { WALK_TRACK, SCANNER_TRACK, AMBIENT_TRACK, kindSupportsTrack, tracksForKind } from '../services/sprites/animationTracks.js';
 import {
   getWalkState, startWalkGeneration, approveWalkDirection, rerunWalkPostprocess, unlockWalkSet,
   reopenWalkDirection, setWalkTarget, getWalkSourceFrames,
   unlockDirectionalAnchor, unlockTurnaroundReference,
 } from '../services/sprites/walk.js';
 import { getScannerState, startScannerGeneration, approveScannerDirection } from '../services/sprites/scanner.js';
+import { getAmbientState, startAmbientGeneration, approveAmbientLoop } from '../services/sprites/ambient.js';
 import { saveLoopTrim } from '../services/sprites/walkTrims.js';
 import { compileAtlas, getAtlasState } from '../services/sprites/atlas.js';
 import { setPublishBinding, publishAtlas } from '../services/sprites/publish.js';
@@ -117,13 +120,15 @@ router.get('/:id', asyncHandler(async (req, res) => {
   const { kind } = detail.record;
   const runsWalk = kindSupportsTrack(kind, WALK_TRACK);
   const runsScanner = kindSupportsTrack(kind, SCANNER_TRACK);
-  const [reference, walk, scanner, atlas] = await Promise.all([
-    runsWalk ? getReferenceSet(req.params.id) : null,
+  const runsAmbient = kindSupportsTrack(kind, AMBIENT_TRACK);
+  const [reference, walk, scanner, ambient, atlas] = await Promise.all([
+    tracksForKind(kind).length ? getReferenceSet(req.params.id) : null,
     runsWalk ? getWalkState(req.params.id) : null,
     runsScanner ? getScannerState(req.params.id) : null,
+    runsAmbient ? getAmbientState(req.params.id) : null,
     tracksForKind(kind).length ? getAtlasState(req.params.id) : null,
   ]);
-  res.json({ ...detail, reference, walk, scanner, atlas });
+  res.json({ ...detail, reference, walk, scanner, ambient, atlas });
 }));
 
 // The generation prompt behind one on-disk asset (record-relative `path`) —
@@ -206,6 +211,17 @@ router.post('/:id/scanner/generate', asyncHandler(async (req, res) => {
 router.post('/:id/scanner/approve', asyncHandler(async (req, res) => {
   const body = validateRequest(spriteScannerApproveSchema, req.body);
   res.json(await approveScannerDirection(req.params.id, body));
+}));
+
+// One user-requested image-to-video clip for the non-directional ambient row.
+router.post('/:id/ambient/generate', asyncHandler(async (req, res) => {
+  const body = validateRequest(spriteAmbientGenerateSchema, req.body);
+  res.json(await startAmbientGeneration(req.params.id, body));
+}));
+
+router.post('/:id/ambient/approve', asyncHandler(async (req, res) => {
+  const body = validateRequest(spriteAmbientApproveSchema, req.body);
+  res.json(await approveAmbientLoop(req.params.id, body));
 }));
 
 // Approve one direction's packaged candidate; the 8th approval freezes the

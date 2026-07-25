@@ -355,6 +355,19 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/gh pr checks/);
     });
 
+    it('leaves an explicitly leave-open TUI task without review or merge instructions', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { simplify: true, openPR: true, prCompletion: 'leave-open', reviewLoop: true } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true });
+      expect(prompt).toMatch(/Leave the PR open — do NOT merge it/);
+      expect(prompt).toMatch(/`\/do:pr --review-with none --no-merge`/);
+      expect(prompt).not.toMatch(/gh pr merge/);
+      expect(prompt).not.toMatch(/review loop/i);
+    });
+
     it('a JIRA-ticketed Claude Code CLI task leaves its PR open instead of merging', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { openPR: true, jiraTicketId: 'PROJ-9' } }),

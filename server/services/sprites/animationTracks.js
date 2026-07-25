@@ -44,6 +44,8 @@
 export const WALK_TRACK = 'walk';
 /** The first short, directional character action (#3018). */
 export const SCANNER_TRACK = 'scanner';
+/** The first non-directional environment loop (#3045). */
+export const AMBIENT_TRACK = 'ambient';
 
 /**
  * Every known animation track.
@@ -103,6 +105,24 @@ export const ANIMATION_TRACKS = Object.freeze({
     defaultFps: 6,
     contractFrameCountField: 'scannerFrameCount',
     // The game owns action timing; PortOS carries fps as preview provenance.
+    contractFpsField: null,
+  }),
+  [AMBIENT_TRACK]: Object.freeze({
+    id: AMBIENT_TRACK,
+    label: 'Ambient loop',
+    directional: false,
+    // `props` is the legacy import-only spelling of `object`; keeping it here
+    // makes an imported prop atlas and a newly-authored object behave alike.
+    kinds: Object.freeze(['place', 'object', 'props']),
+    minFrameCount: 2,
+    maxFrameCount: 6,
+    defaultFrameCount: 3,
+    minFps: 2,
+    maxFps: 12,
+    defaultFps: 4,
+    contractFrameCountField: 'ambientFrameCount',
+    // Ambient cadence belongs to the consuming app. PortOS keeps fps only as
+    // authoring-preview provenance, like scanner.
     contractFpsField: null,
   }),
 });

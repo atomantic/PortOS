@@ -26,7 +26,7 @@ import { videoGenEvents } from './events.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { getVideoModels, getDefaultVideoModelId, getTextEncoderRepo } from '../../lib/mediaModels.js';
 import { findFfmpeg, safeUnder, generateThumbnail, optimizeForStreaming, upscaleVideo2x, extractEvaluationFrames } from '../../lib/ffmpeg.js';
-import { hfTokenEnv } from '../../lib/hfToken.js';
+import { hfChildEnv } from '../../lib/hfToken.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { makeVideoGenLineHandler, finalizeGeneratedVideo, isWatchdogSuccess } from './generateVideoHelpers.js';
 import { assertSafeLoraFilename } from '../loras.js';
@@ -850,11 +850,11 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // of the parent shell's PYTHONPATH. Setting to `undefined` in a spread does
   // NOT unset the var — Node coerces it to the literal string "undefined" —
   // so build the env explicitly and `delete`.
-  // Merge HF_TOKEN/HF_HOME via hfTokenEnv() so the Wan 2.2 / HunyuanVideo
+  // Build the complete HF child env so the Wan 2.2 / HunyuanVideo
   // python helpers can authenticate snapshot_download() against gated repos
   // (mirrors the imageGen child-spawn pattern). LTX-2 doesn't currently use
   // a gated repo, but the merge is harmless when no token is configured.
-  const childEnv = safeChildProcessEnv(await hfTokenEnv());
+  const childEnv = await hfChildEnv();
   delete childEnv.PYTHONPATH;
   // Force unbuffered Python I/O so tqdm + loguru + our own STAGE: prints flush
   // immediately. Without this, child stdio is line-buffered against a pipe and

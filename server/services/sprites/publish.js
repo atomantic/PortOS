@@ -19,8 +19,8 @@
  * concern and are never touched.
  *
  * The optional runtimeContract (#2982) is the reverse direction: the app
- * declares the grid it was built against ({ walkFrameCount, cellSize,
- * columnCount }) and a publish whose compiled geometry disagrees is refused
+ * declares the grid it was built against ({ walkFrameCount?, ambientFrameCount?,
+ * cellSize, columnCount }) and a publish whose compiled geometry disagrees is refused
  * instead of silently shifting every column the game reads. Alongside the PNG,
  * publish writes a `<atlas-stem>.layout.json` sidecar describing the grid
  * PortOS actually produced, so the app can resolve columns by name rather than
@@ -94,8 +94,8 @@ async function requireAppRepo(appId, status) {
  * parses, so a non-route caller (importer, peer sync, a test) can't persist a
  * contract the route would have rejected.
  *
- * `walkFrameCount` is required once a contract is present (it is the whole
- * point of declaring one); `cellSize` and `columnCount` are optional extra
+ * A walk or ambient frame count is required once a contract is present;
+ * `cellSize` and `columnCount` are optional extra
  * assertions. The fields are NOT cross-checked against each other: what counts
  * as a consistent column layout is the compiler's business and changes with the
  * grid (#2986 drops the scanner column), so a stale count surfaces at publish
@@ -109,10 +109,13 @@ function validateRuntimeContract(runtimeContract) {
     const field = issue?.path?.length ? `runtimeContract.${issue.path.join('.')}` : 'runtimeContract';
     throw bindingError(`${field}: ${issue?.message || 'invalid'}`, 'INVALID_RUNTIME_CONTRACT');
   }
-  const { walkFrameCount, scannerFrameCount, cellSize, columnCount } = parsed.data;
+  const {
+    walkFrameCount, scannerFrameCount, ambientFrameCount, cellSize, columnCount,
+  } = parsed.data;
   return {
-    walkFrameCount,
+    ...(walkFrameCount === undefined ? {} : { walkFrameCount }),
     ...(scannerFrameCount === undefined ? {} : { scannerFrameCount }),
+    ...(ambientFrameCount === undefined ? {} : { ambientFrameCount }),
     cellSize: cellSize ?? null,
     columnCount: columnCount ?? null,
   };

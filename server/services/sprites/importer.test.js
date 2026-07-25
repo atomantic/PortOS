@@ -205,23 +205,24 @@ describe('importFromSource', () => {
     // walk manifests copy as provenance
     expect(existsSync(join(heroDir, 'walk/hero-walk-set-v1.json'))).toBe(true);
     expect(existsSync(join(heroDir, 'walk/hero-walk-selection-v1.json'))).toBe(true);
-    // approved grok run: record + manifest-declared assets, never intermediates
-    expect(existsSync(join(heroDir, 'grok/run-1/animation-run.json'))).toBe(true);
-    expect(existsSync(join(heroDir, 'grok/run-1/generated/south-manifest.json'))).toBe(true);
-    expect(existsSync(join(heroDir, 'grok/run-1/generated/south-strip.png'))).toBe(true);
-    expect(existsSync(join(heroDir, 'grok/run-1/generated/review-preview.json'))).toBe(true);
+    // approved source-grok run: record + manifest-declared assets land under
+    // PortOS's neutral runs/ layout, never intermediates
+    expect(existsSync(join(heroDir, 'runs/run-1/animation-run.json'))).toBe(true);
+    expect(existsSync(join(heroDir, 'runs/run-1/generated/south-manifest.json'))).toBe(true);
+    expect(existsSync(join(heroDir, 'runs/run-1/generated/south-strip.png'))).toBe(true);
+    expect(existsSync(join(heroDir, 'runs/run-1/generated/review-preview.json'))).toBe(true);
     // the source clip imports (#2984 — the input to re-deriving the cycle at a
     // new frame count); its raw extracted frames still don't
-    expect(existsSync(join(heroDir, 'grok/run-1/generated/source-video.mp4'))).toBe(true);
-    expect(existsSync(join(heroDir, 'grok/run-1/generated/raw/frame-000.png'))).toBe(false);
-    expect(existsSync(join(heroDir, 'grok/run-1/generated/frames/f0.png'))).toBe(false);
+    expect(existsSync(join(heroDir, 'runs/run-1/generated/source-video.mp4'))).toBe(true);
+    expect(existsSync(join(heroDir, 'runs/run-1/generated/raw/frame-000.png'))).toBe(false);
+    expect(existsSync(join(heroDir, 'runs/run-1/generated/frames/f0.png'))).toBe(false);
     // approved imagegen run: manifest + selected strip only
     expect(existsSync(join(heroDir, 'imagegen/v2/east-manifest.json'))).toBe(true);
     expect(existsSync(join(heroDir, 'imagegen/v2/east-strip.png'))).toBe(true);
     expect(existsSync(join(heroDir, 'imagegen/v2/east-candidate-02.png'))).toBe(false);
     // pending direction and non-final manifest contribute nothing
-    expect(existsSync(join(heroDir, 'grok/run-3/animation-run.json'))).toBe(false);
-    expect(existsSync(join(heroDir, 'grok/run-decoy'))).toBe(false);
+    expect(existsSync(join(heroDir, 'runs/run-3/animation-run.json'))).toBe(false);
+    expect(existsSync(join(heroDir, 'runs/run-decoy'))).toBe(false);
     // published artifacts: immutable archive + keyed source + selection copy
     expect(existsSync(join(heroDir, 'runtime/v1/hero-animation-atlas-v1.png'))).toBe(true);
     expect(existsSync(join(heroDir, 'hero-atlas-keyed.png'))).toBe(true);
@@ -258,6 +259,24 @@ describe('importFromSource', () => {
     const record = await getRecord('hero');
     expect(record.notes).toBe('reviewed');
     expect(record.chromaKey).toBe('#00FF00');
+  });
+
+  it('re-imports source-grok runs into the neutral layout and repins the walk set', async () => {
+    await importFromSource({ sourceRoot: SOURCE_ROOT, characters: ['hero'], includeProps: false });
+    const heroDir = join(SPRITES_ROOT, 'hero');
+    const runRecord = join(heroDir, 'runs/run-1/animation-run.json');
+    const selection = JSON.parse(readFileSync(join(heroDir, 'walk/hero-walk-selection-v1.json'), 'utf8'));
+    const walkSet = JSON.parse(readFileSync(join(heroDir, 'walk/hero-walk-set-v1.json'), 'utf8'));
+    const packaged = JSON.parse(readFileSync(join(heroDir, 'runs/run-1/generated/south-manifest.json'), 'utf8'));
+
+    expect(existsSync(join(heroDir, 'grok/run-1'))).toBe(false);
+    expect(selection.directions.south.runPath).toBe('art-source/sprites/hero/runs/run-decoy');
+    expect(selection.directions.south.runManifest).toBe('art-source/sprites/hero/runs/run-decoy/animation-run.json');
+    expect(walkSet.directions.south.runPath).toBe('art-source/sprites/hero/runs/run-1');
+    expect(walkSet.directions.south.runManifest).toBe('art-source/sprites/hero/runs/run-1/animation-run.json');
+    expect(walkSet.directions.south.runManifestSha256).toBe(sha256(readFileSync(runRecord)));
+    expect(walkSet.selectionSha256).toBe(sha256(readFileSync(join(heroDir, 'walk/hero-walk-selection-v1.json'))));
+    expect(packaged.sourceVideoPath).toBe('art-source/sprites/hero/runs/run-1/generated/source-video.mp4');
   });
 
   it('re-import errors when a hash-pinned file disappears from the source (stale dest copy must not vouch)', async () => {
@@ -399,11 +418,10 @@ describe('walk-run source clips', () => {
 
   it('imports a manifest-declared clip exactly once when the manifest and the walk-set entry disagree on layout', () => {
     // run-c's manifest declares the clip under grok/ while its entry says
-    // runs/. The bytes land at the DECLARED (manifest) path — the value the
-    // read layer re-anchors — and the run-dir probe must not add a second copy
-    // under the entry's layout.
-    expect(readFileSync(join(drifterDir(), 'grok/run-c/generated/source-video.mp4'), 'utf8')).toBe(CLIP_BYTES);
-    expect(existsSync(join(drifterDir(), 'runs/run-c/generated/source-video.mp4'))).toBe(false);
+    // runs/. The bytes land once in the local neutral layout rather than
+    // recreating the source's grok/ spelling.
+    expect(readFileSync(join(drifterDir(), 'runs/run-c/generated/source-video.mp4'), 'utf8')).toBe(CLIP_BYTES);
+    expect(existsSync(join(drifterDir(), 'grok/run-c/generated/source-video.mp4'))).toBe(false);
   });
 
   it('refuses a clip whose bytes disagree with the manifest\'s sourceVideoSha256, naming the run', () => {
@@ -429,7 +447,7 @@ describe('paths confinement', () => {
     expect(abs.startsWith(join(SPRITES_ROOT, 'hero'))).toBe(true);
     const assets = await listSpriteAssets('hero');
     expect(assets.some((a) => a.path === 'reference/hero-main.png')).toBe(true);
-    expect(assets.some((a) => a.path === 'grok/run-1/generated/south-strip.png')).toBe(true);
+    expect(assets.some((a) => a.path === 'runs/run-1/generated/south-strip.png')).toBe(true);
   });
 
   it('getRecordWithAssets pairs the record with its disk listing', async () => {

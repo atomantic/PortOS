@@ -136,6 +136,19 @@ describe('EditAppDrawer work tracker selector', () => {
     expect(id).toBe('app-1');
     expect(payload.workTracker).toBe('gitlab');
   });
+
+  it('saves the selected default PR completion policy', async () => {
+    renderDrawer({ app: { ...APP, defaultUseWorktree: true, defaultOpenPR: true } });
+    await openTab('Workflow');
+
+    const select = await screen.findByLabelText('Default PR completion');
+    expect(select).toHaveValue('review-then-merge');
+    fireEvent.change(select, { target: { value: 'leave-open' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
+    expect(api.updateApp.mock.calls[0][1].defaultPrCompletion).toBe('leave-open');
+  });
 });
 
 describe('EditAppDrawer required-field validation across tabs', () => {

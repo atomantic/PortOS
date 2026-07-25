@@ -170,4 +170,24 @@ describe('runtimeContractMismatch', () => {
       + "Recompile this atlas at 96px cells, or update the app's cell-size constant before publishing.",
     );
   });
+
+  it('describes and validates an ambient-only grid without inventing walk frames', () => {
+    const geometry = {
+      columns: ['idle', 'ambient-00', 'ambient-01', 'ambient-02'],
+      tracks: { idle: span(0, 1, 1), ambient: span(1, 3, 1) },
+      directionOrder: DIRECTIONS,
+      rows: DIRECTIONS.length,
+      cellSize: 96,
+      walkFrameCount: null,
+      ambientFrameCount: 3,
+    };
+    const layout = buildAtlasLayout({
+      characterId: 'example-place', geometry, atlasSha256: 'abc123', atlasDestPath: 'assets/tree.png',
+    });
+    expect(layout.walkFrameCount).toBeNull();
+    expect(layout.ambientFrameCount).toBe(3);
+    expect(layout.tracks.ambient).toEqual(span(1, 3, 1));
+    expect(runtimeContractMismatch(geometry, { ambientFrameCount: 3 })).toBeNull();
+    expect(runtimeContractMismatch(geometry, { ambientFrameCount: 4 })).toMatch(/3 ambient frames.*expects 4/);
+  });
 });

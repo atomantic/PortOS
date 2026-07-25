@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Plus, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark, Ticket, GitBranch, GitPullRequest, Wand2, RefreshCw } from 'lucide-react';
+import { Plus, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark, Ticket, GitBranch, GitPullRequest, Wand2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import AppContextPicker from '../AppContextPicker';
 import * as api from '../../services/api';
@@ -7,7 +7,7 @@ import { processScreenshotUploads, processAttachmentUploads, ATTACHMENT_ACCEPT }
 import FilePickerButton from '../ui/FilePickerButton';
 import { formatBytes } from '../../utils/formatters';
 import { filterSelectableModels, isTuiProvider, isCliProvider, isProcessProvider, isCodexProvider, effortLevelsForProvider } from '../../utils/providers';
-import { DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE } from './constants';
+import { DEFAULT_PR_COMPLETION, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, PR_COMPLETION_OPTIONS } from './constants';
 import { clickableProps } from '../../lib/a11yKeyboard';
 import ReviewerPicker from './ReviewerPicker';
 
@@ -19,7 +19,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   const [useWorktree, setUseWorktree] = useState(false);
   const [openPR, setOpenPR] = useState(false);
   const [simplify, setSimplify] = useState(true);
-  const [reviewLoop, setReviewLoop] = useState(false);
+  const [prCompletion, setPrCompletion] = useState(DEFAULT_PR_COMPLETION);
   const [reviewers, setReviewers] = useState(DEFAULT_REVIEWERS);
   const [reviewUsernames, setReviewUsernames] = useState([]);
   const [optionalReviewers, setOptionalReviewers] = useState([]);
@@ -104,7 +104,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   // `apps` array reference) so periodic re-fetches in the parent don't
   // stomp manual checkbox toggles between renders.
   const appDefaultsSig = useMemo(() => selectedApp
-    ? `${selectedApp.id}|${!!selectedApp.defaultOpenPR}|${!!selectedApp.defaultUseWorktree}|${!!selectedApp.jira?.enabled}`
+    ? `${selectedApp.id}|${!!selectedApp.defaultOpenPR}|${selectedApp.defaultPrCompletion || DEFAULT_PR_COMPLETION}|${!!selectedApp.defaultUseWorktree}|${!!selectedApp.jira?.enabled}`
     : `none:${newTask.app || ''}`,
     [selectedApp, newTask.app]
   );
@@ -114,6 +114,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
     setCreateJiraTicket(!!selectedApp?.jira?.enabled);
     setUseWorktree(defaultUseWorktree);
     setOpenPR(defaultOpenPR);
+    setPrCompletion(selectedApp?.defaultPrCompletion || DEFAULT_PR_COMPLETION);
   }, [appDefaultsSig]);
 
   // Get models for selected provider
@@ -260,12 +261,12 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       useWorktree,
       openPR: useWorktree && openPR,
       simplify,
-      reviewLoop,
-      reviewers: reviewLoop ? reviewers : undefined,
-      usernames: reviewLoop ? reviewUsernames : undefined,
-      optionalReviewers: reviewLoop ? optionalReviewers : undefined,
-      reviewStopMode: reviewLoop ? reviewStopMode : undefined,
-      reviewerApplies: reviewLoop ? reviewerApplies : undefined,
+      prCompletion: useWorktree && openPR ? prCompletion : undefined,
+      reviewers: openPR && prCompletion === 'review-then-merge' ? reviewers : undefined,
+      usernames: openPR && prCompletion === 'review-then-merge' ? reviewUsernames : undefined,
+      optionalReviewers: openPR && prCompletion === 'review-then-merge' ? optionalReviewers : undefined,
+      reviewStopMode: openPR && prCompletion === 'review-then-merge' ? reviewStopMode : undefined,
+      reviewerApplies: openPR && prCompletion === 'review-then-merge' ? reviewerApplies : undefined,
       screenshots: screenshots.length > 0 ? screenshots.map(s => s.path) : undefined,
       attachments: attachments.length > 0 ? attachments.map(a => ({
         filename: a.filename,
@@ -487,19 +488,23 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               Simplify
             </span>
           </label>
-          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
-            <input
-              type="checkbox"
-              checked={reviewLoop}
-              onChange={(e) => setReviewLoop(e.target.checked)}
-              className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
-            />
-            <span className="flex items-center gap-1.5 text-sm text-gray-400" title="After the agent opens a PR during its run, keep iterating on review feedback until checks pass.">
-              <RefreshCw size={14} className="text-amber-400" />
-              Review Loop
-            </span>
-          </label>
-          {reviewLoop && (
+          {openPR && (
+            <label htmlFor="task-pr-completion" className="flex items-center gap-2 py-1 basis-full sm:basis-auto">
+              <span className="text-sm text-gray-400">After opening PR</span>
+              <select
+                id="task-pr-completion"
+                value={prCompletion}
+                title={PR_COMPLETION_OPTIONS.find(option => option.value === prCompletion)?.description}
+                onChange={(e) => setPrCompletion(e.target.value)}
+                className="min-w-44 rounded border border-port-border bg-port-bg px-2 py-1 text-sm text-white focus:border-port-accent focus:outline-hidden"
+              >
+                {PR_COMPLETION_OPTIONS.map(option => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          {openPR && prCompletion === 'review-then-merge' && (
             <div className="basis-full mt-1">
               <ReviewerPicker
                 reviewers={reviewers}

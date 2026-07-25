@@ -157,6 +157,14 @@ describe('validatePublishBinding / setPublishBinding', () => {
       walkFrameCount: 8, cellSize: 96, columnCount: 9,
     });
 
+    const ambient = await setPublishBinding(id, {
+      ...BINDING,
+      runtimeContract: { ambientFrameCount: 3, cellSize: 96, columnCount: 4 },
+    });
+    expect(ambient.publishBinding.runtimeContract).toEqual({
+      ambientFrameCount: 3, cellSize: 96, columnCount: 4,
+    });
+
     for (const bad of [
       { walkFrameCount: 0 },
       { walkFrameCount: 99 },

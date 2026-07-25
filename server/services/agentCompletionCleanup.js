@@ -28,6 +28,7 @@ import * as git from './git.js';
 import { isTruthyMeta } from './agentState.js';
 import { resolveReviewLoopOptions } from './codeReview.js';
 import { cleanupAgentWorktree, spawnMergeRecoveryTask } from './agentWorktreeCleanup.js';
+import { resolvePrCompletion } from '../lib/prDisposition.js';
 
 const ROOT_DIR = PATHS.root;
 
@@ -296,7 +297,7 @@ export async function runAgentCompletionCleanup({ agentId, task, agent, effectiv
   // Clean up worktree if agent was using one (skip merge when JIRA branch — PR handles merge)
   if (!jiraBranch) {
     const taskOpenPR = isTruthyMeta(task?.metadata?.openPR);
-    const taskReviewLoop = isTruthyMeta(task?.metadata?.reviewLoop);
+    const taskPrCompletion = resolvePrCompletion(task?.metadata);
     // Review-loop follow-up agents already merged via `gh pr merge` in the agent
     // body — re-merging the worktree branch into the source workspace would
     // duplicate the squashed commits, so suppress the auto-merge fallback.
@@ -314,7 +315,7 @@ export async function runAgentCompletionCleanup({ agentId, task, agent, effectiv
     const reviewOptions = await resolveReviewLoopOptions(task?.metadata, { normalize: normalizeReviewers, isTruthyMeta });
     const cleanupWarnings = await cleanupAgentWorktree(agentId, effectiveSuccess, {
       openPR: agentOwnsPR ? false : taskOpenPR,
-      requestCopilotReview: !agentOwnsPR && taskOpenPR && taskReviewLoop,
+      prCompletion: taskPrCompletion,
       ...reviewOptions,
       skipMerge: taskReviewLoopFollowUp || agentOwnsPR,
       description: task?.description,

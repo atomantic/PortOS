@@ -129,6 +129,14 @@ export const approveSpriteScanner = (id, body, options = {}) => request(`/sprite
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
+export const generateSpriteAmbient = (id, body = {}, options = {}) => request(`/sprites/${encodeURIComponent(id)}/ambient/generate`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
+export const approveSpriteAmbient = (id, body, options = {}) => request(`/sprites/${encodeURIComponent(id)}/ambient/approve`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
 // Re-run the deterministic postprocess on a run whose video already landed.
 export const postprocessSpriteWalk = (id, body, options = {}) => request(`/sprites/${encodeURIComponent(id)}/walk/postprocess`, {
   method: 'POST', body: JSON.stringify(body), ...options,

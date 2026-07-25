@@ -81,8 +81,7 @@ export default function HfTokenBanner({ modelLabel, licenseUrl, models, onSaved 
     onSaved?.();
   };
 
-  const licenseLinkText = licenseUrl?.replace(/^https?:\/\//, '');
-  const multi = Array.isArray(models) && models.length > 0;
+  const list = models?.length ? models : (modelLabel ? [{ label: modelLabel, url: licenseUrl }] : []);
 
   const tokenLink = (
     <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer" className="underline text-white">
@@ -92,23 +91,11 @@ export default function HfTokenBanner({ modelLabel, licenseUrl, models, onSaved 
 
   return (
     <div className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-3 text-xs text-port-warning space-y-2">
-      {multi ? (
-        <div>
-          <div>
-            This needs a free Hugging Face account. Accept the terms for each gated model below (signed in to
-            Hugging Face), then create a read token at {tokenLink} and paste it here.
-          </div>
-          <GatedModelList models={models} />
-        </div>
-      ) : (
-        <div>
-          {modelLabel} is a gated model. Accept the license at{' '}
-          <a href={licenseUrl} target="_blank" rel="noreferrer" className="underline text-white">
-            {licenseLinkText}
-          </a>
-          , then create a read token at {tokenLink} and paste it below.
-        </div>
-      )}
+      <div>
+        This needs a free Hugging Face account. Accept the terms for each gated model below (signed in to
+        Hugging Face), then create a read token at {tokenLink} and paste it here.
+        <GatedModelList models={list} />
+      </div>
       <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
         <div className="flex items-center gap-1.5 flex-1 bg-port-bg border border-port-border rounded-lg px-2 py-1.5 focus-within:border-port-accent">
           <Key size={14} className="text-gray-400 flex-shrink-0" />

@@ -5,7 +5,7 @@ import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal.jsx';
 import {
   listSpriteRecords, getSpriteRecord, importSprites, createSpriteRecord,
-  generateSpriteWalk, generateSpriteScanner, generateSpriteReference, listSpriteThumbnails,
+  generateSpriteWalk, generateSpriteScanner, generateSpriteAmbient, generateSpriteReference, listSpriteThumbnails,
 } from '../services/apiSprites.js';
 import { getApps } from '../services/apiApps.js';
 import { getSettings } from '../services/apiSystem.js';
@@ -14,6 +14,7 @@ import AppContextPicker from '../components/AppContextPicker.jsx';
 import ReferenceWorkflow from '../components/sprites/ReferenceWorkflow.jsx';
 import WalkWorkflow from '../components/sprites/WalkWorkflow.jsx';
 import ScannerWorkflow from '../components/sprites/ScannerWorkflow.jsx';
+import AmbientWorkflow from '../components/sprites/AmbientWorkflow.jsx';
 import { GROK_VIDEO_DEFAULT_DURATION } from '../lib/grokVideoClip.js';
 import LoopTrimmer from '../components/sprites/LoopTrimmer.jsx';
 import PublishWorkflow from '../components/sprites/PublishWorkflow.jsx';
@@ -571,6 +572,25 @@ export default function Sprites() {
     }
   }, [id, onWorkflowChanged]);
 
+  const generateAmbientReference = useCallback((designPrompt) => submitRender(
+    refBegin, refResolve, refCancel, 'main',
+    () => generateSpriteReference(id, {
+      target: 'main', designPrompt,
+      ...(imageMode ? { mode: imageMode } : {}),
+    }, { silent: true }),
+    'Failed to queue ambient reference',
+    onWorkflowChanged,
+  ), [id, imageMode, refBegin, refResolve, refCancel, submitRender, onWorkflowChanged]);
+
+  const generateAmbient = useCallback(async () => {
+    try {
+      await generateSpriteAmbient(id, {}, { silent: true });
+      onWorkflowChanged();
+    } catch (err) {
+      toast.error(err?.message || 'Failed to queue ambient loop');
+    }
+  }, [id, onWorkflowChanged]);
+
   // `mode` is the workflow-selected backend, threaded from the asset card via
   // buildCollectionActions (#2938) so a re-roll uses the same backend the
   // Reference workflow would, not the server default. Falls back to the
@@ -738,6 +758,29 @@ export default function Sprites() {
                         key={detail.record.id}
                         record={detail.record}
                         walk={detail.walk}
+                        atlas={detail.atlas}
+                        onChanged={onWorkflowChanged}
+                      />
+                    </>
+                  )}
+                  {detail.record.kind !== 'character' && detail.ambient && (
+                    <>
+                      <AmbientWorkflow
+                        record={detail.record}
+                        reference={detail.reference}
+                        ambient={detail.ambient}
+                        renders={referenceRenders}
+                        hasBackend={hasImageBackend}
+                        mode={imageMode}
+                        onGenerateReference={generateAmbientReference}
+                        onGenerateAmbient={generateAmbient}
+                        onChanged={onWorkflowChanged}
+                      />
+                      <PublishWorkflow
+                        key={detail.record.id}
+                        record={detail.record}
+                        walk={detail.walk}
+                        ambient={detail.ambient}
                         atlas={detail.atlas}
                         onChanged={onWorkflowChanged}
                       />

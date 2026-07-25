@@ -13,7 +13,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import {
-  WALK_TRACK, SCANNER_TRACK, ANIMATION_TRACKS, ANIMATION_TRACK_IDS,
+  WALK_TRACK, SCANNER_TRACK, AMBIENT_TRACK, ANIMATION_TRACKS, ANIMATION_TRACK_IDS,
   isAnimationTrack, getAnimationTrack, clampTrackFrameCount, clampTrackFps,
   assertAnimationTrackRows, trackRowCount, tracksForKind, kindSupportsTrack,
 } from './animationTracks.js';
@@ -64,6 +64,23 @@ describe('the registry rows', () => {
       maxFps: 12,
       defaultFps: 6,
       contractFrameCountField: 'scannerFrameCount',
+      contractFpsField: null,
+    });
+  });
+
+  it('registers the single-row ambient loop for places and objects', () => {
+    expect(getAnimationTrack(AMBIENT_TRACK)).toMatchObject({
+      id: AMBIENT_TRACK,
+      label: 'Ambient loop',
+      directional: false,
+      kinds: ['place', 'object', 'props'],
+      minFrameCount: 2,
+      maxFrameCount: 6,
+      defaultFrameCount: 3,
+      minFps: 2,
+      maxFps: 12,
+      defaultFps: 4,
+      contractFrameCountField: 'ambientFrameCount',
       contractFpsField: null,
     });
   });
@@ -237,10 +254,10 @@ describe('directionality and record-kind support (#3017)', () => {
     expect(kindSupportsTrack('character', 'nope', MIXED)).toBe(false);
   });
 
-  it('keeps the shipped registry character-only while admitting walk and scanner', () => {
+  it('admits ambient loops for non-character sprite kinds', () => {
     expect(tracksForKind('character').map((r) => r.id)).toEqual([WALK_TRACK, SCANNER_TRACK]);
     for (const kind of ['place', 'object', 'props']) {
-      expect(tracksForKind(kind), `${kind} has no track yet`).toEqual([]);
+      expect(tracksForKind(kind).map((r) => r.id), `${kind} carries the ambient loop`).toEqual([AMBIENT_TRACK]);
     }
   });
 
@@ -284,6 +301,13 @@ describe('per-track clamps', () => {
     expect(clampTrackFrameCount(-1, SCANNER_TRACK)).toBe(2);
     expect(clampTrackFps(99, SCANNER_TRACK)).toBe(12);
     expect(clampTrackFps(-1, SCANNER_TRACK)).toBe(2);
+  });
+
+  it('clamps ambient values against the ambient range', () => {
+    expect(clampTrackFrameCount(99, AMBIENT_TRACK)).toBe(6);
+    expect(clampTrackFrameCount(-1, AMBIENT_TRACK)).toBe(2);
+    expect(clampTrackFps(99, AMBIENT_TRACK)).toBe(12);
+    expect(clampTrackFps(-1, AMBIENT_TRACK)).toBe(2);
   });
 });
 

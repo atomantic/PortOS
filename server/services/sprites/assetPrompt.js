@@ -32,8 +32,10 @@ import { spriteDir, resolveSpriteAssetPath, RUN_DIR_MATCH } from './paths.js';
 import { getRecord } from './records.js';
 import { loadManifest } from './reference.js';
 import {
-  buildMainReferencePrompt, buildAnchorPrompt, buildWalkVideoPrompt, buildTurnaroundPrompt, TURNAROUND_ID,
+  buildMainReferencePrompt, buildAmbientReferencePrompt, buildAnchorPrompt,
+  buildWalkVideoPrompt, buildAmbientVideoPrompt, buildTurnaroundPrompt, TURNAROUND_ID,
 } from './prompts.js';
+import { AMBIENT_TRACK } from './animationTracks.js';
 import { DEFAULT_CHROMA_KEY } from './chromaKey.js';
 
 const CANDIDATE_RE = /^reference\/candidates\/(.+)\.png$/i;
@@ -43,7 +45,7 @@ const CANDIDATE_RE = /^reference\/candidates\/(.+)\.png$/i;
  * source }` result — the stored literal prompt when captured, otherwise a
  * faithful rebuild from the parameters the sidecar did record.
  */
-function fromCandidateSidecar(sidecar, name, fromTurnaround = false) {
+function fromCandidateSidecar(sidecar, name, fromTurnaround = false, kind = 'character') {
   if (!sidecar) return null;
   if (typeof sidecar.prompt === 'string' && sidecar.prompt) {
     return { prompt: sidecar.prompt, designPrompt: sidecar.designPrompt || null, source: 'candidate' };
@@ -54,7 +56,9 @@ function fromCandidateSidecar(sidecar, name, fromTurnaround = false) {
   if (sidecar.target === TURNAROUND_ID) {
     prompt = buildTurnaroundPrompt({ name, designPrompt, chromaKey });
   } else if (sidecar.target === 'main') {
-    prompt = buildMainReferencePrompt({ name, designPrompt, chromaKey, fromTurnaround });
+    prompt = kind === 'character'
+      ? buildMainReferencePrompt({ name, designPrompt, chromaKey, fromTurnaround })
+      : buildAmbientReferencePrompt({ name, kind, designPrompt, chromaKey });
   } else {
     prompt = buildAnchorPrompt({ name, direction: sidecar.direction || sidecar.target, chromaKey, fromTurnaround });
   }
@@ -80,7 +84,7 @@ export async function resolveSpriteAssetPrompt(recordId, relPath) {
   // 1. Reviewable candidate — its own generation sidecar.
   const cand = CANDIDATE_RE.exec(relPath);
   if (cand) {
-    return fromCandidateSidecar(await candidateSidecarFor(recordId, cand[1]), name);
+    return fromCandidateSidecar(await candidateSidecarFor(recordId, cand[1]), name, false, record.kind);
   }
 
   // 2. Locked main / directional anchor — resolved through the manifest.
@@ -127,15 +131,19 @@ export async function resolveSpriteAssetPrompt(recordId, relPath) {
         // Prefer the frozen candidate's literal prompt; fall back to a rebuild
         // from the manifest's own recorded design prompt + key.
         const stem = candidateStem(main.lockedFrom);
-        const fromCandidate = stem ? fromCandidateSidecar(await candidateSidecarFor(recordId, stem), name, fromTurnaround(main)) : null;
+        const fromCandidate = stem ? fromCandidateSidecar(await candidateSidecarFor(recordId, stem), name, fromTurnaround(main), record.kind) : null;
         // Fallback (source candidate sidecar gone): rebuild from the manifest.
         return fromCandidate || {
-          prompt: buildMainReferencePrompt({
-            name,
-            designPrompt: manifest.designPrompt,
-            chromaKey: renderKey(main, turnaround),
-            fromTurnaround: fromTurnaround(main),
-          }),
+          prompt: record.kind === 'character'
+            ? buildMainReferencePrompt({
+              name,
+              designPrompt: manifest.designPrompt,
+              chromaKey: renderKey(main, turnaround),
+              fromTurnaround: fromTurnaround(main),
+            })
+            : buildAmbientReferencePrompt({
+              name, kind: record.kind, designPrompt: manifest.designPrompt, chromaKey: renderKey(main, turnaround),
+            }),
           designPrompt: manifest.designPrompt || null,
           source: 'reference-main',
         };
@@ -163,9 +171,11 @@ export async function resolveSpriteAssetPrompt(recordId, relPath) {
       return {
         prompt: typeof runRecord.prompt === 'string' && runRecord.prompt
           ? runRecord.prompt
-          : buildWalkVideoPrompt({ name, direction: runRecord.direction, chromaKey: runRecord.chromaKey }),
+          : runRecord.track === AMBIENT_TRACK
+            ? buildAmbientVideoPrompt({ name, kind: record.kind, chromaKey: runRecord.chromaKey })
+            : buildWalkVideoPrompt({ name, direction: runRecord.direction, chromaKey: runRecord.chromaKey }),
         designPrompt: null,
-        source: 'walk',
+        source: runRecord.track === AMBIENT_TRACK ? 'ambient' : 'walk',
       };
     }
   }

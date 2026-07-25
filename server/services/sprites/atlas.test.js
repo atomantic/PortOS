@@ -14,7 +14,7 @@ import { join } from 'path';
 import sharp from 'sharp';
 import { mkdir, writeFile, readFile } from 'fs/promises';
 import { createHash } from 'crypto';
-import { lockAllAnchors as lockAllAnchorsFixture, trackSpan as fullSpan } from './spriteTestFixtures.js';
+import { lockAllAnchors as lockAllAnchorsFixture, placeCandidate, trackSpan as fullSpan } from './spriteTestFixtures.js';
 
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-atlas-test-'));
 
@@ -45,7 +45,7 @@ const { compileAtlas, getAtlasState, ATLAS_COLUMNS, DEFAULT_ATLAS_GEOMETRY } = a
 const { SPRITE_DIRECTIONS } = await import('./prompts.js');
 const { WALK_PHASES, walkPhaseLabels, WALK_FPS } = await import('./walkPostprocess.js');
 const { buildAtlasGrid, compiledGridUpToDate } = await import('./atlasGrid.js');
-const { getAnimationTrack, SCANNER_TRACK } = await import('./animationTracks.js');
+const { getAnimationTrack, SCANNER_TRACK, AMBIENT_TRACK } = await import('./animationTracks.js');
 
 let seq = 0;
 const newId = () => `atlas-char-${++seq}`;
@@ -213,6 +213,68 @@ async function buildFinalizedScannerSet(recordId, { frameCount = 4, fps = 6 } = 
   }));
 }
 
+async function finalizedAmbientPlace() {
+  const id = `atlas-ambient-${++seq}`;
+  await records.createRecord({ kind: 'place', name: 'Willow' }, id);
+  const candidate = await placeCandidate(TEST_ROOT, id, 'main', 'main-candidate-01.png');
+  await lockReference(id, { target: 'main', candidate });
+  const manifest = await loadManifest(id);
+  const dir = join(TEST_ROOT, 'sprites', id);
+  const runId = `${AMBIENT_TRACK}-${(seq++).toString(16).padStart(8, '0')}`;
+  const frameCount = 3;
+  const frames = [];
+  for (let i = 0; i < frameCount; i++) {
+    const phase = `${AMBIENT_TRACK}-${String(i).padStart(2, '0')}`;
+    const rel = `runs/${runId}/generated/frames/${String(i).padStart(2, '0')}-${phase}.png`;
+    await walkFramePng(join(dir, rel), 30 + i * 20, 2 + i * 3);
+    frames.push({ outputIndex: i, phase, path: rel, sha256: sha256(await readFile(join(dir, rel))) });
+  }
+  const runManifest = {
+    schemaVersion: 1,
+    kind: 'deterministically-packaged-grok-ambient-video',
+    track: AMBIENT_TRACK,
+    characterId: id,
+    direction: 'south',
+    chromaKey: manifest.chromaKey,
+    frameCount,
+    frameRate: 4,
+    frames,
+  };
+  const runManifestRel = `runs/${runId}/generated/${id}-${AMBIENT_TRACK}-manifest.json`;
+  const runManifestBytes = JSON.stringify(runManifest);
+  await writeFile(join(dir, runManifestRel), runManifestBytes);
+  const selection = {
+    schemaVersion: 1,
+    kind: 'reviewed-single-row-ambient-selection',
+    track: AMBIENT_TRACK,
+    characterId: id,
+    status: 'complete',
+    directions: {
+      south: {
+        status: 'approved', runId, runPath: `runs/${runId}`, runManifest: runManifestRel,
+        runManifestSha256: sha256(Buffer.from(runManifestBytes)), approvedAt: new Date().toISOString(),
+      },
+    },
+  };
+  await mkdir(join(dir, AMBIENT_TRACK), { recursive: true });
+  const selectionRel = `${AMBIENT_TRACK}/${id}-ambient-selection-v1.json`;
+  const selectionBytes = JSON.stringify(selection);
+  await writeFile(join(dir, selectionRel), selectionBytes);
+  await writeFile(join(dir, `${AMBIENT_TRACK}/${id}-ambient-set-v1.json`), JSON.stringify({
+    schemaVersion: 1,
+    kind: 'finalized-single-row-ambient-set',
+    track: AMBIENT_TRACK,
+    characterId: id,
+    status: 'final',
+    directionOrder: ['south'],
+    selectionPath: selectionRel,
+    selectionSha256: sha256(Buffer.from(selectionBytes)),
+    directions: selection.directions,
+    finalizedAt: new Date().toISOString(),
+  }));
+  return id;
+}
+
 async function finalizedCharacter() {
   const id = newId();
   await lockAllAnchors(id);
@@ -226,6 +288,25 @@ beforeEach(() => {
 afterAll(() => rmSync(TEST_ROOT, { recursive: true, force: true }));
 
 describe('compileAtlas', () => {
+  it('compiles an ambient-only atlas with one occupied row and transparent unused rows', async () => {
+    const id = await finalizedAmbientPlace();
+    const result = await compileAtlas(id);
+    const manifest = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, result.manifestPath), 'utf8'));
+    expect(manifest.kind).toBe('reviewed-ambient-set-runtime-atlas');
+    expect(manifest.geometry).toMatchObject({
+      columns: ['idle', 'ambient-00', 'ambient-01', 'ambient-02'],
+      tracks: { idle: { start: 0, count: 1, rows: 1 }, ambient: { start: 1, count: 3, rows: 1 } },
+      walkFrameCount: null,
+      ambientFrameCount: 3,
+    });
+    expect(manifest.directions).toHaveLength(1);
+    expect(manifest.directions[0].cells).toHaveLength(4);
+    const pixels = await sharp(join(TEST_ROOT, 'sprites', id, result.atlasPath)).raw().toBuffer();
+    const width = DEFAULT_ATLAS_GEOMETRY.cellSize * 4;
+    const rowOneAlpha = pixels[(DEFAULT_ATLAS_GEOMETRY.cellSize * width * 4) + 3];
+    expect(rowOneAlpha).toBe(0);
+  });
+
   it('compiles an approved four-frame scanner span beside the walk span', async () => {
     const id = newId();
     await lockAllAnchors(id);

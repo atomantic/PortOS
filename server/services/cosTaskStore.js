@@ -17,6 +17,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { parseTasksMarkdown, groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, generateTasksMarkdown, hasKnownPrefix } from '../lib/taskParser.js';
 import { REVIEW_STOP_MODES, normalizeReviewers, normalizeReviewUsernames } from '../lib/validation.js';
+import { PR_COMPLETIONS, PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
 import { loadState, withStateLock, ROOT_DIR } from './cosState.js';
 import { cosEvents } from './cosEvents.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
@@ -278,6 +279,13 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     // their existing auto-merge behavior so automation isn't silently gated on a
     // human merging a PR.
     else if (taskData.useWorktree === true && taskType === 'user') metadata.openPR = true;
+    if (PR_COMPLETION_VALUES.includes(taskData.prCompletion)) {
+      metadata.prCompletion = taskData.prCompletion;
+    } else if (metadata.openPR === true && taskType === 'user') {
+      // New user tasks should persist their explicit default; legacy records
+      // remain untouched and resolve from reviewLoop at read time.
+      metadata.prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE;
+    }
     if (taskData.simplify === true) metadata.simplify = true;
     else if (taskData.simplify === false) metadata.simplify = false;
     if (taskData.reviewLoop === true) metadata.reviewLoop = true;

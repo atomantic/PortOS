@@ -11,6 +11,7 @@ import useDrawerTab from '../../hooks/useDrawerTab';
 import { copyToClipboard } from '../../lib/clipboard';
 import LayeredIntelligenceTab, { buildLayeredIntelligenceUpdate, buildLayeredIntelligenceScheduleUpdate } from './LayeredIntelligenceTab';
 import { PROVIDER_TYPES } from '../../utils/providers';
+import { DEFAULT_PR_COMPLETION, PR_COMPLETION_OPTIONS } from '../cos/constants';
 
 const WORK_TRACKER_OPTIONS = [
   { value: 'auto', label: 'Auto (detect from git origin)' },
@@ -63,6 +64,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     editorCommand: app.editorCommand || 'code .',
     workTracker: app.workTracker || 'auto',
     defaultOpenPR: app.defaultOpenPR || false,
+    defaultPrCompletion: app.defaultPrCompletion || DEFAULT_PR_COMPLETION,
     defaultUseWorktree: app.defaultUseWorktree || app.defaultOpenPR || false,
     jiraEnabled: app.jira?.enabled || false,
     jiraInstanceId: app.jira?.instanceId || '',
@@ -368,6 +370,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       workTracker: formData.workTracker || 'auto',
       defaultUseWorktree: formData.defaultUseWorktree || formData.defaultOpenPR,
       defaultOpenPR: formData.defaultOpenPR,
+      defaultPrCompletion: formData.defaultPrCompletion,
       jira: formData.jiraEnabled ? {
         enabled: true,
         instanceId: formData.jiraInstanceId || undefined,
@@ -684,8 +687,25 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                   className="rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent disabled:opacity-40"
                 />
                 <GitPullRequest size={14} className="text-blue-400" />
-                <span className={`text-sm ${formData.defaultUseWorktree ? 'text-white' : 'text-gray-600'}`} title="When checked, agents open a PR to the default branch and merge it once it passes — the review loop if one is configured, CI alone if not. When unchecked with worktree enabled, agents merge the branch directly on completion.">Default to Open PR for new tasks</span>
+                <span className={`text-sm ${formData.defaultUseWorktree ? 'text-white' : 'text-gray-600'}`} title="When checked, agents open a PR to the default branch. Choose below whether new PRs are reviewed and merged, merged on green CI, or left open. When unchecked with worktree enabled, agents merge the branch directly on completion.">Default to Open PR for new tasks</span>
               </label>
+              <div className="ml-6 mt-2 max-w-sm">
+                <label htmlFor="edit-app-default-pr-completion" className={`block text-sm mb-1 ${formData.defaultOpenPR ? 'text-gray-400' : 'text-gray-600'}`}>Default PR completion</label>
+                <select
+                  id="edit-app-default-pr-completion"
+                  value={formData.defaultPrCompletion}
+                  disabled={!formData.defaultOpenPR}
+                  onChange={e => setFormData(prev => ({ ...prev, defaultPrCompletion: e.target.value }))}
+                  className="w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white focus:border-port-accent focus:outline-hidden disabled:opacity-40"
+                >
+                  {PR_COMPLETION_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-gray-500">
+                  {PR_COMPLETION_OPTIONS.find(option => option.value === formData.defaultPrCompletion)?.description}
+                </p>
+              </div>
             </div>
           )}
 

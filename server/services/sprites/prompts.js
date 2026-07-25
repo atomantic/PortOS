@@ -257,6 +257,34 @@ export function buildMainReferencePrompt({ name, designPrompt, chromaKey, fromTu
 }
 
 /**
+ * The identity root for a place/object ambient loop. Unlike a character it has
+ * no facing or turnaround: this one locked still is both the idle cell and the
+ * image-to-video source, so it must be legible on its own.
+ */
+export function buildAmbientReferencePrompt({ name, kind, designPrompt, chromaKey }) {
+  const description = (typeof designPrompt === 'string' && designPrompt.trim())
+    ? designPrompt.trim()
+    : 'Use the attached visual reference as the design.';
+  return (
+    `Create one centered game-sprite ${kind} named ${name}. Design: ${description} `
+    + 'Show its at-rest state with a clear readable silhouette. Match the attached visual reference when provided. '
+    + `Use a plain exact ${keyColorPhrase(chromaKey)} background. No people, scenery, text, labels, grid, `
+    + 'camera angle, shadows, wireframe, or extra objects. Return exactly one PNG.'
+  );
+}
+
+/** Ambient image-to-video instruction: preserve the still while moving only its natural loop detail. */
+export function buildAmbientVideoPrompt({ name, kind, chromaKey }) {
+  return (
+    `The source image is the locked at-rest ${kind} sprite ${name}. Animate one subtle seamless ambient loop `
+    + '(for example wind, water, flame, or a gentle flicker appropriate to the source), then return to the exact starting pose. '
+    + 'Preserve its identity, silhouette, palette, scale, and centered ground position. Use a locked camera and an exactly '
+    + `uniform non-emissive ${keyColorPhrase(chromaKey)} background only as a compositing matte: no scenery, text, labels, `
+    + 'camera movement, cuts, added objects, or people.'
+  );
+}
+
+/**
  * Stage-3 motion prompt (issue #2897): the walk-video instruction handed to
  * the grok i2v lane along with the prepared transparent anchor. PortOS's
  * grok video wrapper (videoGen/grok.js buildGrokVideoPrompt) owns the tool

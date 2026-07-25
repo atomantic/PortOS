@@ -459,6 +459,48 @@ export function selectCycleIndices(signatures, frameCount = WALK_FRAME_COUNT) {
 }
 
 /**
+ * Pick a non-directional ambient-loop window and resample it evenly.
+ *
+ * A walk needs gait-period detection because a half stride is not a loop. An
+ * ambient clip has no gait phases; it needs the two ends to look alike. Search
+ * every usable window that can supply the requested frames, rank it first by
+ * first/last-frame similarity, then prefer the longer candidate (more temporal
+ * coverage), and sample the selected window at even intervals. This preserves
+ * image-to-video temporal coherence without pretending wind or water has a
+ * two-beat walk cycle.
+ */
+export function selectAmbientLoopIndices(signatures, frameCount) {
+  const n = signatures.length;
+  if (n < frameCount + 1) {
+    throw new Error(`Need at least ${frameCount + 1} extracted frames, got ${n}`);
+  }
+  let best = null;
+  for (let start = 0; start <= n - frameCount - 1; start++) {
+    for (let end = start + frameCount; end < n; end++) {
+      const seam = imageDistance(signatures[start], signatures[end]);
+      const candidate = [seam, -(end - start), start, end];
+      if (!best || candLess(candidate, best)) best = candidate;
+    }
+  }
+  const [seam, , start, end] = best;
+  const windowLength = end - start;
+  const indices = Array.from(
+    { length: frameCount },
+    (_, index) => start + Math.floor((index * windowLength + Math.floor(frameCount / 2)) / frameCount),
+  );
+  return {
+    indices,
+    cycle: {
+      selection: 'ambient-even-resample',
+      windowStart: start,
+      windowLength,
+      endpointSeamScore: pyRoundTo(seam, 4),
+      heldFrames: 0,
+    },
+  };
+}
+
+/**
  * The frame's baseline: the lowest row carrying at least `minRun` opaque pixels,
  * returned as a height (exclusive bottom) so it drops into the same arithmetic
  * as `resized.height`.
@@ -879,7 +921,9 @@ export async function runWalkPostprocess({
   const recovered = usable.map((d) => recoverAlphaFrame(d.frame, d.measured, split));
 
   const signatures = await Promise.all(recovered.map(signatureOf));
-  const { indices, cycle } = selectCycleIndices(signatures, targetFrames);
+  const { indices, cycle } = trackRow.directional
+    ? selectCycleIndices(signatures, targetFrames)
+    : selectAmbientLoopIndices(signatures, targetFrames);
   const selected = indices.map((i) => recovered[i]);
 
   const { frames: aligned, alignment } = await alignFrames(selected);

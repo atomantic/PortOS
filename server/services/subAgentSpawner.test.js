@@ -354,6 +354,18 @@ describe('Worktree & metadata flag helpers', () => {
       expect(metadata.openPR).toBe(true);
     });
 
+    it('copies an explicit app PR completion default onto new PR tasks', () => {
+      const metadata = {};
+      applyAppWorktreeDefault(metadata, { defaultOpenPR: true, defaultPrCompletion: 'leave-open' });
+      expect(metadata).toMatchObject({ useWorktree: true, openPR: true, prCompletion: 'leave-open' });
+    });
+
+    it('does not invent a disposition for a legacy app default', () => {
+      const metadata = {};
+      applyAppWorktreeDefault(metadata, { defaultOpenPR: true });
+      expect(metadata.prCompletion).toBeUndefined();
+    });
+
     it('should not let defaultUseWorktree:false override explicit openPR:true', () => {
       const metadata = { openPR: true };
       applyAppWorktreeDefault(metadata, { defaultUseWorktree: false });

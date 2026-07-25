@@ -26,8 +26,7 @@ import {
   getModelAsset,
 } from '../services/imageTo3d/models.js';
 import { createInstallLogger } from '../lib/installLogger.js';
-import { hfTokenEnv } from '../lib/hfToken.js';
-import { safeChildProcessEnv } from '../lib/processEnv.js';
+import { hfChildEnv } from '../lib/hfToken.js';
 import { openSseStream } from '../lib/sseDownload.js';
 
 const router = Router();
@@ -179,7 +178,7 @@ router.get('/trellis2/install', asyncHandler(async (req, res) => {
   // a half-open stream.
   let installEnv;
   try {
-    installEnv = safeChildProcessEnv(await hfTokenEnv());
+    installEnv = await hfChildEnv();
   } catch (err) {
     console.error(`❌ TRELLIS.2 install could not resolve the Hugging Face token env: ${err.message}`);
     emit({ type: 'error', message: `Could not read settings to resolve the Hugging Face token: ${err.message}` });

@@ -201,14 +201,14 @@ describe('sprites routes', () => {
     expect(reference.getReferenceSet).toHaveBeenCalledWith('pioneer');
   });
 
-  it('GET /:id skips the reference set for props records', async () => {
+  it('GET /:id returns the reference set for props records (ambient-loop identity root)', async () => {
     records.getRecordWithAssets.mockResolvedValueOnce({
       record: { id: 'crates', kind: 'props' }, assets: [],
     });
     const r = await request(app).get('/api/sprites/crates');
     expect(r.status).toBe(200);
-    expect(r.body.reference).toBeNull();
-    expect(reference.getReferenceSet).not.toHaveBeenCalled();
+    expect(r.body.reference).toEqual({ manifest: null, candidates: [] });
+    expect(reference.getReferenceSet).toHaveBeenCalledWith('crates');
   });
 
   it('GET /:id 404s on an unknown record', async () => {

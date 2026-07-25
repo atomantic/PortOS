@@ -148,27 +148,23 @@ describe('the animation gates (#3017)', () => {
     await expect(requireAnimatable(id)).resolves.toMatchObject({ id, kind: 'character' });
   });
 
-  it('refuses a place/object record, naming the tracks that DO exist', async () => {
+  it('admits a place record for ambient work while retaining the character-only walk gate', async () => {
     await records.createRecord({ kind: 'place', name: 'Grove' }, 'grove');
     // The walk gate keeps its historical code, so existing callers matching on
     // NOT_A_CHARACTER are unaffected.
     await expect(requireCharacter('grove')).rejects.toMatchObject({ code: 'NOT_A_CHARACTER' });
-    // The track-presence gate explains itself in terms of the registry, which
-    // is the thing a user (or a future track) can actually change.
-    await expect(requireAnimatable('grove')).rejects.toMatchObject({
-      code: 'NOT_ANIMATABLE',
-      message: /No animation track applies to place records.*walk/,
-    });
+    await expect(requireAnimatable('grove')).resolves.toMatchObject({ id: 'grove', kind: 'place' });
   });
 });
 
 describe('startReferenceGeneration', () => {
-  it('404s an unknown record and 400s a props record', async () => {
+  it('404s an unknown record and queues a props main reference for the ambient workflow', async () => {
     await expect(startReferenceGeneration('nope', { target: 'main', designPrompt: 'x' }))
       .rejects.toMatchObject({ code: 'NOT_FOUND' });
     await records.createRecord({ kind: 'props', name: 'Crates' }, 'crates');
     await expect(startReferenceGeneration('crates', { target: 'main', designPrompt: 'x' }))
-      .rejects.toMatchObject({ code: 'NOT_A_CHARACTER' });
+      .resolves.toMatchObject({ jobId: 'job-1234567890', target: 'main', anchorId: 'main' });
+    expect(enqueueJob.mock.calls[0][0].params.prompt).toContain('at-rest state');
   });
 
   it('requires a design prompt or upload for the turnaround target', async () => {

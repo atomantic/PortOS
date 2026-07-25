@@ -33,8 +33,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { PATHS, ensureDir } from '../../lib/fileUtils.js';
-import { safeChildProcessEnv } from '../../lib/processEnv.js';
-import { hfTokenEnv } from '../../lib/hfToken.js';
+import { hfChildEnv } from '../../lib/hfToken.js';
 import { runSidecarProcess, parseSidecarResult } from '../../lib/sidecarProcess.js';
 import {
   resolveMusicgenPython, MUSICGEN_RUNTIME_DIR, MUSICGEN_VENV_DEFAULT,
@@ -289,7 +288,7 @@ export async function generateMusic({ prompt, lyrics, engine: engineId = DEFAULT
   // The default backends use ungated HF weights (facebook/* and cvssp/*), so a
   // token isn't required — but pass it through when the user has one set so the
   // first download doesn't hit anonymous HF rate limits.
-  const env = safeChildProcessEnv(await hfTokenEnv());
+  const env = await hfChildEnv();
   // STAGE: lines are echoed to pm2 logs so a stuck first-run model download is
   // visible, and fire onActivity so the media-job queue's idle watchdog resets
   // (see the doc block above).
@@ -322,4 +321,3 @@ export async function generateMusic({ prompt, lyrics, engine: engineId = DEFAULT
     engine: engine.id,
   };
 }
-

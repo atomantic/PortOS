@@ -1,5 +1,5 @@
 /**
- * PR disposition for CoS agent tasks — who lands the pull request a task opens.
+ * PR disposition for CoS agent tasks — how a pull request completes.
  *
  * The default is that *something* lands it: the review-loop follow-up when a
  * Review Loop is configured, a merge follow-up (or the agent's own completion
@@ -18,6 +18,33 @@
  * that only one half consults produces exactly the split-brain it's meant to
  * prevent.
  */
+
+export const PR_COMPLETIONS = Object.freeze({
+  REVIEW_THEN_MERGE: 'review-then-merge',
+  MERGE_ON_GREEN: 'merge-on-green',
+  LEAVE_OPEN: 'leave-open',
+});
+
+export const PR_COMPLETION_VALUES = Object.freeze(Object.values(PR_COMPLETIONS));
+
+const PR_COMPLETION_SET = new Set(PR_COMPLETION_VALUES);
+
+/**
+ * Resolve a task's PR completion policy without migrating stored task data.
+ *
+ * New tasks persist `prCompletion`; legacy records retain their `reviewLoop`
+ * bit and resolve to the same behavior they had before this field existed.
+ * `openPR` remains the separate decision of whether to create a PR at all.
+ *
+ * @param {Object|null|undefined} metadata
+ * @returns {'review-then-merge'|'merge-on-green'|'leave-open'}
+ */
+export function resolvePrCompletion(metadata = {}) {
+  if (PR_COMPLETION_SET.has(metadata?.prCompletion)) return metadata.prCompletion;
+  return metadata?.reviewLoop === true || metadata?.reviewLoop === 'true'
+    ? PR_COMPLETIONS.REVIEW_THEN_MERGE
+    : PR_COMPLETIONS.MERGE_ON_GREEN;
+}
 
 /**
  * Scheduled task types whose prompt hands the PR to a human. Keep this tiny —

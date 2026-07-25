@@ -40,7 +40,7 @@ import { getRecord, updateRecord, listRecords, createCharacter } from './records
 import { spriteDir, resolveSpriteAssetPath, listSpriteAssets } from './paths.js';
 import {
   SPRITE_DIRECTIONS, ANCHOR_DIRECTIONS, anchorIdForDirection, TURNAROUND_VIEWS, TURNAROUND_ID,
-  buildMainReferencePrompt, buildAnchorPrompt, buildTurnaroundPrompt,
+  buildMainReferencePrompt, buildAmbientReferencePrompt, buildAnchorPrompt, buildTurnaroundPrompt,
 } from './prompts.js';
 import { pickChromaKey, keyProximityWarning, CHROMA_KEY_HEXES, DEFAULT_CHROMA_KEY } from './chromaKey.js';
 import {
@@ -138,7 +138,7 @@ async function saveManifest(recordId, manifest) {
   await atomicWrite(abs, manifest);
 }
 
-function seedManifest(recordId) {
+function seedManifest(recordId, { directional = true } = {}) {
   return {
     schemaVersion: TURNAROUND_FIRST_SCHEMA,
     manifestId: `${recordId}-reference-set-v1`,
@@ -151,14 +151,16 @@ function seedManifest(recordId) {
       path: null, role: 'identity-root', background: 'chroma-key', locked: false, views: TURNAROUND_VIEWS,
     },
     mainReference: { path: null, role: 'immutable-root', background: 'chroma-key', locked: false },
-    anchors: SPRITE_DIRECTIONS.map((direction) => ({
+    anchors: (directional ? SPRITE_DIRECTIONS : []).map((direction) => ({
       id: anchorIdForDirection(direction),
       kind: 'walk-anchor',
       direction,
       status: 'pending',
       source: direction === 'south' ? 'main-reference' : 'derive-from-turnaround',
     })),
-    note: 'walk-south and walk-north double as the front/back idle stills, so no separate idle anchors are kept.',
+    note: directional
+      ? 'walk-south and walk-north double as the front/back idle stills, so no separate idle anchors are kept.'
+      : 'The locked main reference is the at-rest idle cell and the sole ambient-loop identity root.',
   };
 }
 
@@ -361,9 +363,13 @@ export function startReferenceGeneration(recordId, body, upload = null) {
 }
 
 async function startReferenceGenerationImpl(recordId, body, upload = null) {
-  const record = await requireCharacter(recordId);
-  const manifest = (await loadManifest(recordId)) || seedManifest(recordId);
+  const record = await requireTrack(recordId);
+  const directional = kindSupportsTrack(record.kind, WALK_TRACK);
+  const manifest = (await loadManifest(recordId)) || seedManifest(recordId, { directional });
   const target = body.target;
+  if (!directional && target !== 'main') {
+    throw new ServerError('Ambient references use one main identity root; they have no turnaround or directional anchors', { status: 400, code: 'INVALID_TARGET' });
+  }
   // Once either identity artifact is locked — the sheet on a turnaround-first
   // record, the main on a legacy one — the manifest's key is canonical (set at
   // that lock, possibly auto-selected); a later record-level repin must not
@@ -429,33 +435,49 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
     if (manifest.mainReference.locked) {
       throw new ServerError('Main reference is locked — unlock the turnaround to rebuild its dependent reference chain', { status: 409, code: 'REFERENCE_LOCKED' });
     }
-    // The main is always the sheet's front view: a manifest that reaches here
-    // with no locked sheet was either seeded turnaround-first or upgraded to it
-    // on read (upgradeManifestShape), and the only manifests that skip that
-    // upgrade have a locked main — which threw REFERENCE_LOCKED just above.
-    if (!turnaroundLocked) {
-      throw new ServerError('Lock the turnaround sheet before deriving the main reference', { status: 409, code: 'TURNAROUND_NOT_LOCKED' });
-    }
-    anchorId = anchorIdForDirection('south');
-    direction = 'south';
-    prompt = buildMainReferencePrompt({
-      name: record.name,
-      designPrompt: designPrompt || manifest.designPrompt,
-      chromaKey: genKey,
-      fromTurnaround: true,
-    });
-    // The sheet IS the seed here, so a caller-supplied one has nowhere to go.
-    // Reject rather than silently dropping it.
-    if (upload || body.initImageGalleryFile || body.initImageSpriteId) {
-      throw new ServerError('The main reference derives from the locked turnaround sheet — seed a new design through the sheet, not the main', { status: 400, code: 'SEED_NOT_APPLICABLE' });
-    }
-    initImagePath = await requireLockedTurnaroundPath(recordId, manifest);
-    initImageStrength ??= ANCHOR_DEFAULT_STRENGTH;
-    // Nothing else in this branch mutates the manifest, so skip the write —
-    // and its per-record serialization — on the common no-prompt re-roll.
-    if (designPrompt) {
-      manifest.designPrompt = designPrompt;
+    // A place/object ambient loop has one identity root, not a turnaround or
+    // directional anchors. Its main is generated directly and later becomes
+    // both its idle cell and image-to-video source.
+    if (!directional) {
+      if (!designPrompt && !upload && !body.initImageGalleryFile && !body.initImageSpriteId) {
+        throw new ServerError('Provide a design prompt and/or a reference image', { status: 400, code: 'DESIGN_INPUT_REQUIRED' });
+      }
+      anchorId = 'main';
+      direction = 'south';
+      prompt = buildAmbientReferencePrompt({ name: record.name, kind: record.kind, designPrompt, chromaKey: genKey });
+      ({ initImagePath, designReferencePath } = await resolveSeedSource(recordId, body, upload));
+      if (initImagePath) initImageStrength ??= UPLOAD_DEFAULT_STRENGTH;
+      if (designPrompt) manifest.designPrompt = designPrompt;
       await saveManifest(recordId, manifest);
+    } else {
+      // The main is always the sheet's front view: a manifest that reaches here
+      // with no locked sheet was either seeded turnaround-first or upgraded to it
+      // on read (upgradeManifestShape), and the only manifests that skip that
+      // upgrade have a locked main — which threw REFERENCE_LOCKED just above.
+      if (!turnaroundLocked) {
+        throw new ServerError('Lock the turnaround sheet before deriving the main reference', { status: 409, code: 'TURNAROUND_NOT_LOCKED' });
+      }
+      anchorId = anchorIdForDirection('south');
+      direction = 'south';
+      prompt = buildMainReferencePrompt({
+        name: record.name,
+        designPrompt: designPrompt || manifest.designPrompt,
+        chromaKey: genKey,
+        fromTurnaround: true,
+      });
+      // The sheet IS the seed here, so a caller-supplied one has nowhere to go.
+      // Reject rather than silently dropping it.
+      if (upload || body.initImageGalleryFile || body.initImageSpriteId) {
+        throw new ServerError('The main reference derives from the locked turnaround sheet — seed a new design through the sheet, not the main', { status: 400, code: 'SEED_NOT_APPLICABLE' });
+      }
+      initImagePath = await requireLockedTurnaroundPath(recordId, manifest);
+      initImageStrength ??= ANCHOR_DEFAULT_STRENGTH;
+      // Nothing else in this branch mutates the manifest, so skip the write —
+      // and its per-record serialization — on the common no-prompt re-roll.
+      if (designPrompt) {
+        manifest.designPrompt = designPrompt;
+        await saveManifest(recordId, manifest);
+      }
     }
   } else {
     if (!ANCHOR_DIRECTIONS.includes(target)) {
@@ -661,7 +683,7 @@ export async function listSpriteThumbnails() {
     // Registry-driven for the same reason as listReferenceSources: a locked
     // main reference is a property of carrying the walk track, not of the
     // literal kind name.
-    if (kindSupportsTrack(r.kind, WALK_TRACK)) {
+    if (tracksForKind(r.kind).length) {
       const manifest = await loadManifest(r.id);
       const main = manifest?.mainReference;
       if (main?.locked && main.path) return { id: r.id, path: main.path };
@@ -885,10 +907,14 @@ async function unlockReferenceTurnaroundImpl(recordId) {
 }
 
 async function lockReferenceImpl(recordId, { target, candidate, acceptClipRisk = false }) {
-  const record = await requireCharacter(recordId);
+  const record = await requireTrack(recordId);
+  const directional = kindSupportsTrack(record.kind, WALK_TRACK);
   // Seed on demand — a candidate may predate the manifest (e.g. files placed
   // by an import or a crash-recovered tree); the lock is what makes it real.
-  const manifest = (await loadManifest(recordId)) || seedManifest(recordId);
+  const manifest = (await loadManifest(recordId)) || seedManifest(recordId, { directional });
+  if (!directional && target !== 'main') {
+    throw new ServerError('Ambient references use one main identity root; they have no turnaround or directional anchors', { status: 400, code: 'INVALID_TARGET' });
+  }
   if (typeof candidate !== 'string' || !candidate.startsWith('reference/candidates/')) {
     throw new ServerError('Candidate must be a reference/candidates/ path', { status: 400, code: 'INVALID_CANDIDATE' });
   }
@@ -908,7 +934,9 @@ async function lockReferenceImpl(recordId, { target, candidate, acceptClipRisk =
   }
   const expectedPrefix = target === TURNAROUND_ID
     ? `${TURNAROUND_ID}-candidate-`
-    : `${anchorIdForDirection(target === 'main' ? 'south' : target)}-candidate-`;
+    : target === 'main' && !directional
+      ? 'main-candidate-'
+      : `${anchorIdForDirection(target === 'main' ? 'south' : target)}-candidate-`;
   if (!candidate.slice('reference/candidates/'.length).startsWith(expectedPrefix)) {
     throw new ServerError(`Candidate filename does not match target "${target}" (expected ${expectedPrefix}*)`, { status: 400, code: 'CANDIDATE_TARGET_MISMATCH' });
   }
@@ -987,7 +1015,8 @@ async function lockReferenceImpl(recordId, { target, candidate, acceptClipRisk =
     if (clipWarning && !acceptClipRisk) {
       throw new ServerError(`${clipWarning}. Re-send with acceptClipRisk to lock anyway.`, { status: 409, code: 'CHROMA_CLIP_RISK' });
     }
-    const rel = `reference/${await nextVersionPath(refDir, `${recordId}-walk-south`)}`;
+    const stem = `${recordId}-${directional ? 'walk-south' : 'ambient-main'}`;
+    const rel = `reference/${await nextVersionPath(refDir, stem)}`;
     const destAbs = join(spriteDir(recordId), rel);
     await normalizeFromAnalysis(analysis, candAbs, destAbs, selectedKey);
     const sha256 = await sha256File(destAbs);
@@ -1008,13 +1037,16 @@ async function lockReferenceImpl(recordId, { target, candidate, acceptClipRisk =
     };
     const south = findAnchor(manifest, anchorIdForDirection('south'));
     if (south) Object.assign(south, { status: 'locked', path: rel, lockedFrom: candidate, sha256 });
-    manifest.status = 'in-progress';
+    manifest.status = directional ? 'in-progress' : 'complete';
     // Record BEFORE manifest: a crash between the two leaves the record
     // updated but the manifest unlocked — recoverable by re-locking. The
     // reverse order would wedge (locked manifest + stale record, with both
     // relock and key PATCH returning 409 forever). Skipped entirely when the
     // turnaround lock already froze the key and set the status.
-    if (!frozenKey) await updateRecord(recordId, { chromaKey: selectedKey, status: 'reference' });
+    if (!frozenKey) await updateRecord(recordId, {
+      chromaKey: selectedKey, status: directional ? 'reference' : 'reference-complete',
+    });
+    else if (!directional) await updateRecord(recordId, { status: 'reference-complete' });
     await saveManifest(recordId, manifest);
   } else {
     if (!ANCHOR_DIRECTIONS.includes(target)) {

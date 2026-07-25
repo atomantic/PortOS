@@ -7,6 +7,23 @@ vi.mock('./github.js', () => ({
   execGh: (...args) => execGhMock(...args),
 }));
 
+const mergePrMock = vi.fn();
+vi.mock('./git.js', () => ({
+  mergePR: (...args) => mergePrMock(...args),
+}));
+
+const addNotificationMock = vi.fn();
+vi.mock('./notifications.js', () => ({
+  addNotification: (...args) => addNotificationMock(...args),
+  NOTIFICATION_TYPES: { AGENT_WARNING: 'agent_warning' },
+  PRIORITY_LEVELS: { HIGH: 'high' },
+}));
+
+const spawnReviewLoopFollowUpMock = vi.fn();
+vi.mock('./agentWorktreeCleanup.js', () => ({
+  spawnReviewLoopFollowUp: (...args) => spawnReviewLoopFollowUpMock(...args),
+}));
+
 const mockApps = new Map();
 vi.mock('./apps.js', () => ({
   getAppById: vi.fn(async (id) => mockApps.get(id) || null),
@@ -28,6 +45,11 @@ import {
   computePrCheck,
   formatPullRequestsForPrompt,
   readPrWatcherState,
+  readPendingMergePrs,
+  queuePendingMerge,
+  isPendingMergeReady,
+  processPendingMergePrs,
+  MAX_PENDING_MERGE_TICKS,
   checkPullRequests,
   getSelfLogin,
   __resetSelfLoginCache,
@@ -46,6 +68,11 @@ const pr = (number, login, extra = {}) => ({
 
 beforeEach(() => {
   execGhMock.mockReset();
+  mergePrMock.mockReset();
+  addNotificationMock.mockReset();
+  spawnReviewLoopFollowUpMock.mockReset();
+  addNotificationMock.mockResolvedValue({ id: 'notification-1' });
+  spawnReviewLoopFollowUpMock.mockResolvedValue({ id: 'follow-up-1' });
   getOriginInfoMock.mockReset();
   mockApps.clear();
   __resetSelfLoginCache();
@@ -115,6 +142,115 @@ describe('readPrWatcherState', () => {
     expect(readPrWatcherState({ prWatcherState: null })).toEqual({});
     expect(readPrWatcherState({ prWatcherState: [1, 2] })).toEqual({});
     expect(readPrWatcherState({ prWatcherState: { lastSeenPrNumber: 7 } })).toEqual({ lastSeenPrNumber: 7 });
+  });
+});
+
+const pendingMerge = (overrides = {}) => ({
+  prUrl: 'https://github.com/o/r/pull/88',
+  prNumber: 88,
+  prBranch: 'cos/task-88',
+  sourceAgentId: 'agent-88',
+  sourceTask: {
+    id: 'task-88',
+    priority: 'MEDIUM',
+    description: 'Automated task',
+    metadata: { app: 'app1' }
+  },
+  ticks: 0,
+  ...overrides,
+});
+
+const pendingApp = (entries = [pendingMerge()]) => ({
+  id: 'app1',
+  repoPath: '/repos/app1',
+  pendingMergePrs: entries
+});
+
+describe('merge-only PR watcher', () => {
+  beforeEach(() => {
+    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'o/r' });
+  });
+
+  it('queues a valid pending merge once without resetting its elapsed tick budget', async () => {
+    mockApps.set('app1', pendingApp([pendingMerge({ ticks: 4 })]));
+
+    const queued = await queuePendingMerge('app1', pendingMerge());
+
+    expect(queued).toBe(true);
+    expect(readPendingMergePrs(mockApps.get('app1'))).toHaveLength(1);
+    expect(readPendingMergePrs(mockApps.get('app1'))[0].ticks).toBe(4);
+  });
+
+  it('recognizes only a clean OPEN PR with completed green checks as merge-ready', () => {
+    expect(isPendingMergeReady({
+      state: 'OPEN', mergeStateStatus: 'CLEAN', statusCheckRollup: [{ conclusion: 'SUCCESS' }]
+    })).toBe(true);
+    expect(isPendingMergeReady({
+      state: 'OPEN', mergeStateStatus: 'CLEAN', statusCheckRollup: []
+    })).toBe(false);
+    expect(isPendingMergeReady({
+      state: 'OPEN', mergeStateStatus: 'CLEAN', statusCheckRollup: [{ status: 'IN_PROGRESS' }]
+    })).toBe(false);
+  });
+
+  it('merges a green pending PR without spawning a follow-up agent', async () => {
+    const app = pendingApp();
+    mockApps.set(app.id, app);
+    execGhMock.mockResolvedValueOnce(JSON.stringify({
+      state: 'OPEN', mergeStateStatus: 'CLEAN', statusCheckRollup: [{ conclusion: 'SUCCESS' }]
+    }));
+    mergePrMock.mockResolvedValue({ success: true });
+
+    const result = await processPendingMergePrs(app);
+
+    expect(result).toMatchObject({ ok: true, checked: 1, merged: 1, escalated: 0 });
+    expect(mergePrMock).toHaveBeenCalledWith('/repos/app1', 88);
+    expect(spawnReviewLoopFollowUpMock).not.toHaveBeenCalled();
+    expect(readPendingMergePrs(mockApps.get('app1'))).toEqual([]);
+    expect(execGhMock).toHaveBeenCalledWith([
+      'pr', 'view', '88', '--repo', 'github.com/o/r',
+      '--json', 'state,mergeStateStatus,statusCheckRollup'
+    ]);
+  });
+
+  it.each([
+    ['validation-failed', { state: 'OPEN', mergeStateStatus: 'CLEAN', statusCheckRollup: [{ conclusion: 'FAILURE' }] }],
+    ['merge-conflict', { state: 'OPEN', mergeStateStatus: 'DIRTY', statusCheckRollup: [{ conclusion: 'SUCCESS' }] }],
+  ])('escalates %s to the existing merge-only follow-up', async (_reason, prView) => {
+    const app = pendingApp();
+    mockApps.set(app.id, app);
+    execGhMock.mockResolvedValueOnce(JSON.stringify(prView));
+
+    const result = await processPendingMergePrs(app);
+
+    expect(result).toMatchObject({ ok: true, escalated: 1, merged: 0 });
+    expect(spawnReviewLoopFollowUpMock).toHaveBeenCalledWith(expect.objectContaining({
+      prUrl: 'https://github.com/o/r/pull/88',
+      prBranch: 'cos/task-88',
+      sourceWorkspace: '/repos/app1',
+      prCompletion: 'merge-on-green',
+      reviewers: []
+    }));
+    expect(mergePrMock).not.toHaveBeenCalled();
+    expect(readPendingMergePrs(mockApps.get('app1'))).toEqual([]);
+  });
+
+  it('stops polling and notifies after the bounded pending-merge budget', async () => {
+    const app = pendingApp([pendingMerge({ ticks: MAX_PENDING_MERGE_TICKS - 1 })]);
+    mockApps.set(app.id, app);
+    execGhMock.mockResolvedValueOnce(JSON.stringify({
+      state: 'OPEN', mergeStateStatus: 'BLOCKED', statusCheckRollup: [{ status: 'IN_PROGRESS' }]
+    }));
+
+    const result = await processPendingMergePrs(app);
+
+    expect(result).toMatchObject({ ok: true, timedOut: 1 });
+    expect(addNotificationMock).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'agent_warning',
+      priority: 'high',
+      link: 'https://github.com/o/r/pull/88'
+    }));
+    expect(readPendingMergePrs(mockApps.get('app1'))).toEqual([]);
   });
 });
 

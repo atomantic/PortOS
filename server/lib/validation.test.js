@@ -43,6 +43,7 @@ import {
   spriteRuntimeContractSchema,
   spriteWalkGenerateSchema,
   spriteScannerGenerateSchema,
+  spriteAmbientGenerateSchema,
 } from './validation.js';
 import {
   telegramForwardTypesSchema,
@@ -369,6 +370,12 @@ describe('validation.js', () => {
       expect(result.data).not.toHaveProperty('archived');
       expect(result.data).not.toHaveProperty('defaultUseWorktree');
       expect(result.data).not.toHaveProperty('defaultOpenPR');
+      expect(result.data).not.toHaveProperty('defaultPrCompletion');
+    });
+
+    it('accepts only known app PR completion defaults', () => {
+      expect(appUpdateSchema.safeParse({ defaultPrCompletion: 'leave-open' }).success).toBe(true);
+      expect(appUpdateSchema.safeParse({ defaultPrCompletion: 'later' }).success).toBe(false);
     });
 
     it('preserves per-app taskTypeOverrides scheduling fields (intervalMs/providerId/model/taskMetadata)', () => {
@@ -685,6 +692,14 @@ describe('validation.js', () => {
         .toEqual({ useWorktree: true, openPR: true, simplify: true, reviewLoop: false });
     });
 
+    it('should accept only known PR completion metadata', () => {
+      expect(sanitizeTaskMetadata({ prCompletion: 'review-then-merge' }))
+        .toEqual({ prCompletion: 'review-then-merge' });
+      expect(sanitizeTaskMetadata({ prCompletion: 'leave-open' }))
+        .toEqual({ prCompletion: 'leave-open' });
+      expect(sanitizeTaskMetadata({ prCompletion: 'later' })).toBeNull();
+    });
+
     it('should drop non-boolean values for allowed keys', () => {
       expect(sanitizeTaskMetadata({ useWorktree: 'yes' })).toBeNull();
       expect(sanitizeTaskMetadata({ simplify: 1 })).toBeNull();
@@ -982,6 +997,11 @@ describe('validation.js', () => {
   });
 
   describe('createCosTaskSchema reviewers fields', () => {
+    it('accepts an explicit PR completion policy and rejects unknown values', () => {
+      expect(createCosTaskSchema.safeParse({ description: 'inspect', prCompletion: 'leave-open' }).success).toBe(true);
+      expect(createCosTaskSchema.safeParse({ description: 'inspect', prCompletion: 'later' }).success).toBe(false);
+    });
+
     it('accepts reviewers/reviewStopMode/reviewerApplies', () => {
       const parsed = createCosTaskSchema.safeParse({
         description: 'do a thing',
@@ -1462,11 +1482,14 @@ describe('ad-hoc route schemas (#2521)', () => {
       expect(() => spriteTrackFpsSchema('unknown')).toThrow(/Unknown animation track/);
     });
 
-    it('leaves the walk request/contract schemas behaving exactly as before', () => {
+    it('keeps the walk schemas stable and admits the ambient contract shape', () => {
       expect(spriteRuntimeContractSchema.safeParse({ walkFrameCount: 12 }).success).toBe(true);
       expect(spriteRuntimeContractSchema.safeParse({ walkFrameCount: 12, scannerFrameCount: 4 }).success).toBe(true);
       expect(spriteRuntimeContractSchema.safeParse({ walkFrameCount: 12, scannerFrameCount: 9 }).success).toBe(false);
       expect(spriteRuntimeContractSchema.safeParse({ walkFrameCount: 5 }).success).toBe(false);
+      expect(spriteRuntimeContractSchema.safeParse({ ambientFrameCount: 3 }).success).toBe(true);
+      expect(spriteRuntimeContractSchema.safeParse({ ambientFrameCount: 7 }).success).toBe(false);
+      expect(spriteRuntimeContractSchema.safeParse({ scannerFrameCount: 4 }).success).toBe(false);
       expect(spriteWalkGenerateSchema.safeParse({
         direction: 'south', frameCount: 12, fps: 10,
       }).success).toBe(true);
@@ -1475,6 +1498,8 @@ describe('ad-hoc route schemas (#2521)', () => {
       }).success).toBe(false);
       expect(spriteScannerGenerateSchema.safeParse({ direction: 'south', frameCount: 4, fps: 6 }).success).toBe(true);
       expect(spriteScannerGenerateSchema.safeParse({ direction: 'south', frameCount: 9 }).success).toBe(false);
+      expect(spriteAmbientGenerateSchema.safeParse({ frameCount: 3, fps: 4 }).success).toBe(true);
+      expect(spriteAmbientGenerateSchema.safeParse({ frameCount: 7 }).success).toBe(false);
     });
   });
 

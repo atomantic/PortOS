@@ -34,6 +34,7 @@ import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { resolveForgeTokenEnv } from './git.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
+import { resolvePrCompletion } from '../lib/prDisposition.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
 
@@ -844,12 +845,13 @@ export async function spawnDirectly({
       // agentPromptBuilder.js) — mirror the TUI cleanup contract so PortOS
       // doesn't double-fire push+PR creation.
       const directOpenPR = isTruthyMetaFn(task.metadata?.openPR);
+      const directPrCompletion = resolvePrCompletion(task.metadata);
       const directReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
       const directAgentOwnsPR = directOpenPR && (provider?.id === 'claude-code' || provider?.id === 'claude-code-bedrock');
       const reviewOptions = await resolveReviewLoopOptions(task.metadata, { normalize: normalizeReviewers, isTruthyMeta: isTruthyMetaFn });
       await cleanupWorktreeFn(agentId, finalSuccess, {
         openPR: directAgentOwnsPR ? false : directOpenPR,
-        requestCopilotReview: !directAgentOwnsPR && directOpenPR && isTruthyMetaFn(task.metadata?.reviewLoop),
+        prCompletion: directPrCompletion,
         ...reviewOptions,
         skipMerge: directReviewLoopFollowUp || directAgentOwnsPR,
         description: task.description,

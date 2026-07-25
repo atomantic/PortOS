@@ -5,9 +5,10 @@ import { WORK_TRACKERS } from './workTracker.js';
 import { SPRITE_ID_PATTERN, SPRITE_RECORD_KINDS } from '../services/sprites/recordsLogic.js';
 import { ANCHOR_DIRECTIONS, SPRITE_DIRECTIONS, TURNAROUND_ID } from '../services/sprites/prompts.js';
 import { CHROMA_KEY_HEXES } from '../services/sprites/chromaKey.js';
-import { WALK_TRACK, SCANNER_TRACK, getAnimationTrack } from '../services/sprites/animationTracks.js';
+import { WALK_TRACK, SCANNER_TRACK, AMBIENT_TRACK, getAnimationTrack } from '../services/sprites/animationTracks.js';
 import { QUEUEABLE_IMAGE_MODES } from '../services/imageGen/modes.js';
 import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
+import { PR_COMPLETION_VALUES } from './prDisposition.js';
 
 // Clip lengths grok's image_to_video delivers, as a Zod union built from the
 // single shared list (see grokVideoClip.js). `z.literal` per value rather than
@@ -242,6 +243,7 @@ export const appSchema = z.object({
   })).optional(), // Per-task overrides: { [taskType]: { enabled, interval, intervalMs, providerId, model, taskMetadata } }
   defaultUseWorktree: z.boolean().optional(),
   defaultOpenPR: z.boolean().optional(),
+  defaultPrCompletion: z.enum(PR_COMPLETION_VALUES).optional(),
   jira: jiraConfigSchema.optional().nullable(),
   datadog: datadogConfigSchema.optional().nullable(),
   // Where this app's autonomous work items live (single source per app).
@@ -1027,21 +1029,28 @@ const spriteRepoRelativePath = z.string().min(1).max(1024)
 
 // The grid the consuming app was built against (#2982). Optional: an absent
 // contract publishes unchecked, exactly as bindings did before it existed.
-// `walkFrameCount` is required once a contract is declared — it is the value
-// the app bakes in as a constant and the one a mismatched publish silently
-// breaks. Playback speed is deliberately absent: distance-driven consumers
-// have no animation-fps concept, so PortOS's fps is preview-only and never
-// part of the contract.
+// A directional consumer names `walkFrameCount`; an ambient-only consumer names
+// `ambientFrameCount`. Playback speed is deliberately absent: consumers own
+// timing, so PortOS's fps is preview-only and never part of the contract.
 export const spriteRuntimeContractSchema = z.object({
   // Range from the walk registry row (#3015). The KEY stays a literal so
   // `grep walkFrameCount` still finds the schema that validates it — the row's
   // `contractFrameCountField` is asserted to agree in animationTargets.test.js.
-  walkFrameCount: spriteTrackFrameCountSchema(WALK_TRACK),
+  walkFrameCount: spriteTrackFrameCountSchema(WALK_TRACK).optional(),
   // Optional because older consumers only know walk. A scanner-aware consumer
   // can pin the named action span without relaxing its independent 2–8 range.
   scannerFrameCount: spriteTrackFrameCountSchema(SCANNER_TRACK).optional(),
+  ambientFrameCount: spriteTrackFrameCountSchema(AMBIENT_TRACK).optional(),
   cellSize: z.number().int().min(16).max(1024).nullable().optional(),
   columnCount: z.number().int().min(1).max(256).nullable().optional(),
+}).superRefine((value, ctx) => {
+  if (value.walkFrameCount === undefined && value.ambientFrameCount === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['walkFrameCount'],
+      message: 'walkFrameCount or ambientFrameCount is required for a runtime contract',
+    });
+  }
 });
 
 export const spritePublishBindingSchema = z.object({
@@ -1176,6 +1185,8 @@ const spriteWalkFrameCountSchema = spriteTrackFrameCountSchema(WALK_TRACK);
 const spriteWalkFpsSchema = spriteTrackFpsSchema(WALK_TRACK);
 const spriteScannerFrameCountSchema = spriteTrackFrameCountSchema(SCANNER_TRACK);
 const spriteScannerFpsSchema = spriteTrackFpsSchema(SCANNER_TRACK);
+const spriteAmbientFrameCountSchema = spriteTrackFrameCountSchema(AMBIENT_TRACK);
+const spriteAmbientFpsSchema = spriteTrackFpsSchema(AMBIENT_TRACK);
 
 export const spriteWalkGenerateSchema = z.object({
   direction: spriteWalkDirectionSchema,
@@ -1204,6 +1215,18 @@ export const spriteScannerGenerateSchema = z.object({
 
 export const spriteScannerApproveSchema = z.object({
   direction: spriteWalkDirectionSchema,
+  runId: spriteResolvableRunIdSchema,
+});
+
+// One non-directional row lives at the first atlas row, so no user-supplied
+// direction can drift from the registry's `trackDirections()` result.
+export const spriteAmbientGenerateSchema = z.object({
+  duration: grokVideoDurationSchema.optional(),
+  frameCount: spriteAmbientFrameCountSchema.optional(),
+  fps: spriteAmbientFpsSchema.optional(),
+});
+
+export const spriteAmbientApproveSchema = z.object({
   runId: spriteResolvableRunIdSchema,
 });
 

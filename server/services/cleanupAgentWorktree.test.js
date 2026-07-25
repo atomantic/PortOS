@@ -181,6 +181,11 @@ vi.mock('./git.js', () => ({
   })
 }));
 
+const queuePendingMergeMock = vi.fn();
+vi.mock('./prWatcher.js', () => ({
+  queuePendingMerge: (...args) => queuePendingMergeMock(...args)
+}));
+
 vi.mock('./runner.js', () => ({
   executeApiRun: vi.fn(),
   executeCliRun: vi.fn(),
@@ -211,6 +216,7 @@ function mockWorktreeAgent(overrides = {}) {
 describe('cleanupAgentWorktree - openPR path', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    queuePendingMergeMock.mockResolvedValue(false);
     // Default: agent is a worktree agent with valid metadata
     getAgent.mockResolvedValue(mockWorktreeAgent());
     git.getRepoBranches.mockResolvedValue({ baseBranch: 'main', devBranch: null });
@@ -606,6 +612,23 @@ describe('cleanupAgentWorktree - openPR path', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
+  it('leaves an explicitly leave-open PR without spawning a follow-up', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/79' });
+
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true,
+      prCompletion: 'leave-open',
+      reviewers: ['copilot'],
+      description: 'X',
+      originalTask: { id: 'task-orig', metadata: {}, description: 'X' }
+    });
+
+    expect(git.requestCopilotReview).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+    expect(removeWorktree).toHaveBeenCalled();
+  });
+
   it('spawns a merge-only follow-up on non-GitHub forges when copilot was the only reviewer', async () => {
     // Copilot can't review a GitLab MR, so the review loop has nothing to run — but
     // the MR still has to land, so the follow-up degrades to merge-only rather than
@@ -650,6 +673,33 @@ describe('cleanupAgentWorktree - openPR path', () => {
     // Still attaches to the PR branch so it can fix a failing check before merging.
     expect(followUp.metadata.existingBranch).toBe('cos/task-abc123');
     expect(removeWorktree).toHaveBeenCalled();
+  });
+
+  it('queues a managed GitHub merge-only PR for the watcher instead of consuming an agent lane', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/61', cli: 'gh' });
+    queuePendingMergeMock.mockResolvedValue(true);
+
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true,
+      requestCopilotReview: false,
+      description: 'Build with deterministic merge',
+      originalTask: {
+        id: 'task-orig',
+        priority: 'HIGH',
+        metadata: { app: 'managed-app', provider: 'codex', providerId: 'codex', model: 'gpt-5.6', effort: 'high' },
+        description: 'Build with deterministic merge'
+      }
+    });
+
+    expect(queuePendingMergeMock).toHaveBeenCalledWith('managed-app', expect.objectContaining({
+      prNumber: 61,
+      prBranch: 'cos/task-abc123',
+      sourceAgentId: 'agent-1',
+      sourceTask: expect.objectContaining({ id: 'task-orig', priority: 'HIGH' })
+    }));
+    expect(addTask).not.toHaveBeenCalled();
+    expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false });
   });
 
   // --- non-Copilot reviewer (--review-with claude/antigravity/codex) ---

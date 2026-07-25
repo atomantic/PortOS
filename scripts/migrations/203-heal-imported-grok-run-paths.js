@@ -10,9 +10,9 @@
  *   runs, whose embedded paths are record-relative (`grok/<runId>/…`).
  *
  *   But source-pipeline IMPORTS (#2895) embed their paths anchored at the
- *   source repo root — `art-source/sprites/<id>/grok/<runId>/…` — and the
- *   importer copies those manifests byte-for-byte. When 202 ran on an install
- *   that had already imported such a record, it PHYSICALLY moved the run
+ *   source repo root — `art-source/sprites/<id>/grok/<runId>/…`. Before the
+ *   importer learned to normalize this layout on write, 202 ran on installs
+ *   that had already imported such a record and PHYSICALLY moved the run
  *   directories (`grok/` → `runs/`, gated on the `grok/` dir existing) but its
  *   `startsWith('grok/')` neutralizer never matched the repo-anchored strings,
  *   so every `art-source/sprites/<id>/grok/…` reference was left dangling.
@@ -59,6 +59,7 @@
 import { readdir, readFile, writeFile, rename, stat } from 'fs/promises';
 import { join } from 'path';
 import { createHash } from 'crypto';
+import { canonicalizeImportedRunPathValue, deepCanonicalizeImportedRunPaths } from '../../server/services/sprites/paths.js';
 
 const LEGACY_DIR = 'grok';
 const NEUTRAL_DIR = 'runs';
@@ -72,30 +73,6 @@ const writeJson = async (abs, obj) => {
   const tmp = `${abs}.203.tmp`;
   await writeFile(tmp, `${JSON.stringify(obj, null, 2)}\n`);
   await rename(tmp, abs);
-};
-
-// Rewrite the leftover run-directory segment in one path VALUE. Two forms:
-//   - repo-anchored:  …/sprites/<id>/grok/…  → …/sprites/<id>/runs/…
-//   - record-relative bare prefix: grok/…    → runs/…  (belt-and-suspenders;
-//     202 already handled this form, but a crash-recovered record could retain
-//     a stray one).
-// Both are path-shaped: they can only appear in a real asset/run path, never in
-// the `grok-…` / `…-grok-…` provenance/kind/skill strings the record also holds.
-const neutralize = (id, s) => {
-  if (typeof s !== 'string') return s;
-  let out = s.split(`sprites/${id}/${LEGACY_DIR}/`).join(`sprites/${id}/${NEUTRAL_DIR}/`);
-  if (out.startsWith(`${LEGACY_DIR}/`)) out = `${NEUTRAL_DIR}/${out.slice(LEGACY_DIR.length + 1)}`;
-  return out;
-};
-const deepNeutralize = (id, v) => {
-  if (typeof v === 'string') return neutralize(id, v);
-  if (Array.isArray(v)) return v.map((x) => deepNeutralize(id, x));
-  if (v && typeof v === 'object') {
-    const out = {};
-    for (const k of Object.keys(v)) out[k] = deepNeutralize(id, v[k]);
-    return out;
-  }
-  return v;
 };
 
 // Resolve a possibly repo-anchored path VALUE to the record-relative form used
@@ -131,7 +108,7 @@ async function listJsonFiles(dir) {
 async function neutralizeJsonFile(id, abs) {
   const obj = await readJson(abs);
   if (!obj) return;
-  const neu = deepNeutralize(id, obj);
+  const neu = deepCanonicalizeImportedRunPaths(id, obj);
   if (JSON.stringify(neu) !== JSON.stringify(obj)) await writeJson(abs, neu);
 }
 
@@ -145,9 +122,9 @@ async function neutralizeJsonFile(id, abs) {
 async function neutralizeDirectionEntries(recDir, id, directions) {
   for (const entry of Object.values(directions || {})) {
     if (!entry || typeof entry !== 'object') continue;
-    if (typeof entry.runPath === 'string') entry.runPath = neutralize(id, entry.runPath);
+    if (typeof entry.runPath === 'string') entry.runPath = canonicalizeImportedRunPathValue(id, entry.runPath);
     if (typeof entry.runManifest === 'string') {
-      entry.runManifest = neutralize(id, entry.runManifest);
+      entry.runManifest = canonicalizeImportedRunPathValue(id, entry.runManifest);
       const rel = recordRelative(id, entry.runManifest);
       // eslint-disable-next-line no-await-in-loop -- sequential per-direction is fine (≤8 entries)
       if (rel && await exists(join(recDir, rel))) entry.runManifestSha256 = await sha256File(join(recDir, rel));

@@ -13,7 +13,7 @@ The compiler (`server/services/sprites/atlas.js`) produces one PNG: a fixed-cell
 | Cell size | 96 × 96 px (overridable per compile; the published geometry is whatever was compiled) |
 | Pivot | `(48, 88)` — silhouette centered on x, feet on the y ground line |
 | Rows | 8, in `directionOrder`: `south`, `south-east`, `east`, `north-east`, `north`, `north-west`, `west`, `south-west` |
-| Columns | `idle` at 0, then one contiguous span per approved animation track in registration order — walk begins at 1 and scanner follows it when approved |
+| Columns | `idle` at 0, then one contiguous span per approved animation track in registration order — walk begins at 1, scanner follows it when approved, and an ambient-only record has `idle` + its ambient span |
 | N (walk frame count) | authorable, 6–16 (`animationTracks.js`); historically always 8 |
 
 `N` is read from the approved run manifests — every direction of a track must share it — so the atlas width tracks the authored count. **That makes the column layout a moving target for anything that hardcodes it.**
@@ -23,6 +23,23 @@ Frame-count and fps uniformity is a **within-track** rule, never a between-track
 **Not every track has eight rows.** A track is *directional* (one row per facing — a character walk) or *non-directional* (one row, period — a tree moving in the wind, water, a flickering lamp, which have no facing at all). A non-directional track occupies **row 0** across its whole column span and leaves the remaining rows transparent. Its span says so: `rows: 1`. There is still exactly **one atlas per record** — a second image would double the publish and binding surface for no gain, and the transparent cells cost only file size, which PNG compresses to near nothing.
 
 Non-walk tracks namespace their column labels with the track id (`scanner-00`, `scanner-01`, …). Walk keeps its historical labels — the named gait phases at 8 frames, positional `frame-NN` at any other length — so existing and imported atlases round-trip unchanged.
+
+### Ambient worked example
+
+A `place`, `object`, or legacy `props` record can carry the `ambient` track: 2–6 coherent frames from one explicitly requested image-to-video clip, defaulting to 3 at 4fps for PortOS preview. Its locked main reference supplies the `idle` cell; the approved loop occupies row 0 and leaves rows 1–7 transparent:
+
+```json
+{
+  "columns": ["idle", "ambient-00", "ambient-01", "ambient-02"],
+  "tracks": {
+    "idle": { "start": 0, "count": 1, "rows": 1 },
+    "ambient": { "start": 1, "count": 3, "rows": 1 }
+  },
+  "ambientFrameCount": 3
+}
+```
+
+`previewFps` remains authoring metadata. A consuming app picks the ambient playback rate and always samples row 0; it must not infer a facing from the unused transparent rows.
 
 > **Atlases compiled before #2986 carry one extra trailing `scanner` column** — a verbatim copy of the idle cell, from an early render, that no consumer ever sampled. The compiler no longer emits it (an action animation is its own named track, not a column appended to the walk cycle), so an 8-frame grid is 9 columns wide rather than 10. Reading side is unchanged: an imported or previously published atlas that still has the column keeps loading, and its sidecar still describes the `scanner` span it really has. Recompiling a set drops the column and produces a new atlas version; existing published atlases are untouched until republished.
 
@@ -87,7 +104,7 @@ Column layout is the one thing an app genuinely has to agree with PortOS about. 
 
 Two mechanisms guard that:
 
-- **`publishBinding.runtimeContract`** (optional): `{ walkFrameCount, scannerFrameCount?, cellSize?, columnCount? }` — the grid the app was built against. Set it from the **Runtime contract** group in the publish binding form (the sprite's Publish workflow) — a "Match current atlas" button fills it from the compiled atlas geometry, and a "Clear" affordance removes it — or via `PUT /api/sprites/:id/publish-binding` directly. Publishing an atlas whose compiled geometry disagrees fails with a **409** naming both the actual and expected numbers and both resolutions (change the app's constant, or reprocess the relevant set). A binding with no contract publishes unchecked, exactly as before the field existed.
+- **`publishBinding.runtimeContract`** (optional): `{ walkFrameCount?, scannerFrameCount?, ambientFrameCount?, cellSize?, columnCount? }` — the grid the app was built against. A contract names either `walkFrameCount` or `ambientFrameCount` (and may include the other spans); set it from the **Runtime contract** group in the publish binding form or via `PUT /api/sprites/:id/publish-binding` directly. Publishing an atlas whose compiled geometry disagrees fails with a **409** naming both the actual and expected numbers and both resolutions (change the app's constant, or reprocess the relevant set). A binding with no contract publishes unchecked, exactly as before the field existed.
 - **The sidecar**, so an app that reads it can fail loudly on its own terms instead of relying on PortOS to have been asked.
 
 `runtimeContract` follows absent-vs-null semantics: a saved binding that omits the key inherits the stored contract (saving the form with the contract group untouched omits it, so the stored contract survives an unrelated edit), while an explicit `null` — what the form's "Clear" sends — clears it. The inheritance is scoped to the same `appId` — re-pointing a character at a different app drops the old app's contract rather than holding the new one to it.

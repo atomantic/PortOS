@@ -386,6 +386,12 @@ describe('cosTaskStore.addTask', () => {
     const task = await addTask({ description: 'flagged', useWorktree: false, openPR: true }, 'user');
     expect(task.metadata.useWorktree).toBe(false);
     expect(task.metadata.openPR).toBe(true);
+    expect(task.metadata.prCompletion).toBe('review-then-merge');
+  });
+
+  it('persists an explicit PR completion policy on new user tasks', async () => {
+    const task = await addTask({ description: 'inspect first', useWorktree: true, openPR: true, prCompletion: 'leave-open' }, 'user');
+    expect(task.metadata.prCompletion).toBe('leave-open');
   });
 
   it('defaults a worktree USER task to openPR:true when openPR is unspecified', async () => {

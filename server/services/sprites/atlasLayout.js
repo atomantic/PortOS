@@ -112,6 +112,7 @@ export function buildAtlasLayout({
     tracks: deriveTracks(columns, walkFrameCount, geometry.tracks ?? null, rows ?? ATLAS_DEFAULT_ROWS),
     walkFrameCount,
     ...(Number.isInteger(geometry.scannerFrameCount) ? { scannerFrameCount: geometry.scannerFrameCount } : {}),
+    ...(Number.isInteger(geometry.ambientFrameCount) ? { ambientFrameCount: geometry.ambientFrameCount } : {}),
     previewFps: Number.isFinite(geometry.walkFps) ? geometry.walkFps : null,
     previewFpsNote: PREVIEW_FPS_NOTE,
   };
@@ -133,7 +134,7 @@ export function runtimeContractMismatch(geometry, contract, appLabel = 'the boun
   const actualColumns = geometry.columns.length;
   const actualFrames = resolveWalkFrameCount(geometry);
   const {
-    walkFrameCount: expectedFrames, scannerFrameCount: expectedScannerFrames,
+    walkFrameCount: expectedFrames, scannerFrameCount: expectedScannerFrames, ambientFrameCount: expectedAmbientFrames,
     columnCount: expectedColumns, cellSize: expectedCellSize,
   } = contract;
   const actualDesc = `Atlas has ${actualColumns} columns (${actualFrames} walk frames)`;
@@ -159,6 +160,14 @@ export function runtimeContractMismatch(geometry, contract, appLabel = 'the boun
     const actual = Number.isInteger(actualScannerFrames) ? actualScannerFrames : 'no';
     return `Atlas has ${actual} scanner frame${actual === 1 ? '' : 's'} but ${appLabel} expects ${expectedScannerFrames}. `
       + 'Approve a scanner set at that frame count, or update the app runtime contract before publishing.';
+  }
+  const actualAmbientFrames = Number.isInteger(geometry.ambientFrameCount)
+    ? geometry.ambientFrameCount
+    : geometry.tracks?.ambient?.count ?? null;
+  if (Number.isInteger(expectedAmbientFrames) && expectedAmbientFrames !== actualAmbientFrames) {
+    const actual = Number.isInteger(actualAmbientFrames) ? actualAmbientFrames : 'no';
+    return `Atlas has ${actual} ambient frame${actual === 1 ? '' : 's'} but ${appLabel} expects ${expectedAmbientFrames}. `
+      + 'Approve an ambient loop at that frame count, or update the app runtime contract before publishing.';
   }
   if (Number.isInteger(expectedCellSize) && expectedCellSize !== geometry.cellSize) {
     return `Atlas cells are ${geometry.cellSize}px but ${appLabel} expects ${expectedCellSize}px. `

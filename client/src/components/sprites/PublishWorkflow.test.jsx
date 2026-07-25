@@ -128,12 +128,12 @@ describe('PublishWorkflow runtime contract', () => {
     expect(screen.getByText('Save binding')).toBeDisabled();
   });
 
-  it('requires walk frames when a scanner contract is entered on its own', () => {
+  it('requires a track frame count when a scanner contract is entered on its own', () => {
     renderWorkflow({ appId: 'app-1', atlasDestPath: 'assets/hero.png', codeBinding: null });
 
     fireEvent.change(screen.getByLabelText(/Scanner frames/), { target: { value: '4' } });
 
-    expect(screen.getByText(/Walk frame count is required/)).toBeInTheDocument();
+    expect(screen.getByText(/Walk or ambient frame count is required/)).toBeInTheDocument();
     expect(screen.getByText('Save binding')).toBeDisabled();
   });
 
@@ -169,6 +169,39 @@ describe('PublishWorkflow runtime contract', () => {
     expect(lastBindingArg().runtimeContract).toEqual({
       walkFrameCount: 12, scannerFrameCount: 4, cellSize: 96, columnCount: 13,
     });
+  });
+
+  it('uses ambientFrameCount for an ambient-only atlas instead of inventing walk frames', async () => {
+    const ambientAtlas = atlasWith({
+      current: {
+        version: 3,
+        compiledAt: '2026-07-01T00:00:00.000Z',
+        atlasPath: 'runtime/v3/a.png',
+        geometry: {
+          columns: ['idle', 'ambient-00', 'ambient-01', 'ambient-02'],
+          tracks: { idle: { start: 0, count: 1, rows: 1 }, ambient: { start: 1, count: 3, rows: 1 } },
+          cellSize: 96,
+          walkFrameCount: null,
+          ambientFrameCount: 3,
+        },
+      },
+    });
+    render(
+      <MemoryRouter>
+        <PublishWorkflow
+          record={{ id: 'example-tree', publishBinding: { appId: 'app-1', atlasDestPath: 'assets/tree.png', codeBinding: null } }}
+          ambient={{ ambientSet: {} }}
+          atlas={ambientAtlas}
+          onChanged={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByText('Match current atlas'));
+    expect(screen.getByLabelText(/Walk frames/).value).toBe('');
+    expect(screen.getByLabelText(/Ambient frames/).value).toBe('3');
+    await act(async () => { fireEvent.click(screen.getByText('Save binding')); });
+    expect(lastBindingArg().runtimeContract).toEqual({ ambientFrameCount: 3, cellSize: 96, columnCount: 4 });
   });
 
   it('rejects an out-of-range walk frame count and blocks the save', () => {

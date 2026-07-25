@@ -11,6 +11,7 @@
 import { z } from 'zod';
 import { emptyToUndefined, emptyToNull } from './zodCompat.js';
 import { EFFORT_LEVELS } from './providerModels.js';
+import { PR_COMPLETION_VALUES } from './prDisposition.js';
 
 // =============================================================================
 // COS TASK SCHEMAS
@@ -321,6 +322,7 @@ export const createCosTaskSchema = z.object({
     v => v === 'true' ? true : v === 'false' ? false : v,
     z.boolean().optional()
   ),
+  prCompletion: z.enum(PR_COMPLETION_VALUES).optional(),
   simplify: z.preprocess(
     v => v === 'true' ? true : v === 'false' ? false : v,
     z.boolean().optional()
@@ -469,6 +471,7 @@ export const createCosJobSchema = z.object({
   taskMetadata: z.object({
     useWorktree: z.boolean().optional(),
     openPR: z.boolean().optional(),
+    prCompletion: z.enum(PR_COMPLETION_VALUES).optional(),
     simplify: z.boolean().optional(),
   }).optional(),
 });
@@ -545,7 +548,7 @@ export const codeReviewSettingsSchema = z.object({
 // =============================================================================
 
 // Agent behavior flags that can be overridden per-pipeline-stage
-export const PIPELINE_BEHAVIOR_FLAGS = ['useWorktree', 'openPR', 'simplify', 'reviewLoop'];
+export const PIPELINE_BEHAVIOR_FLAGS = ['useWorktree', 'openPR', 'prCompletion', 'simplify', 'reviewLoop'];
 
 // Absolute cap on total agent spawns per task (across all retry types)
 export const MAX_TOTAL_SPAWNS = 5;
@@ -595,11 +598,9 @@ export const SWARM_COUNT_MAX = 6;
 /**
  * Sanitize taskMetadata to an allow-list of agent-option keys. Boolean flags
  * (`useWorktree`/`openPR`/`simplify`/`reviewLoop`/`readOnly`/`reviewerApplies`)
- * are kept only when actually boolean; the review-loop keys are constrained by
- * value — `reviewer` to a known reviewer, `reviewers` to a filtered/deduped list
- * of known reviewers, `usernames` to shell-safe GitHub reviewer usernames,
- * `reviewStopMode` to a known stop-mode — plus a validated `pipeline` object.
- * Prevents prototype pollution and reserved-field overrides.
+ * are kept only when actually boolean; constrained values include `prCompletion`,
+ * reviewers, reviewer usernames, and `reviewStopMode` — plus a validated pipeline
+ * object. Prevents prototype pollution and reserved-field overrides.
  * Returns a clean plain object or null if input is empty/invalid.
  */
 export function sanitizeTaskMetadata(raw) {
@@ -611,6 +612,10 @@ export function sanitizeTaskMetadata(raw) {
       clean[key] = raw[key];
       hasKeys = true;
     }
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, 'prCompletion') && PR_COMPLETION_VALUES.includes(raw.prCompletion)) {
+    clean.prCompletion = raw.prCompletion;
+    hasKeys = true;
   }
   // `reviewer` is a legacy single constrained string.
   const normalizedReviewer = REVIEWER_ALIASES[raw.reviewer] || raw.reviewer;

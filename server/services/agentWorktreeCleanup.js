@@ -23,16 +23,16 @@ import { isTruthyMeta } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { detectForgeCli } from '../lib/gitForge.js';
-import { leavesPrForHuman } from '../lib/prDisposition.js';
+import { PR_COMPLETIONS, PR_COMPLETION_VALUES, leavesPrForHuman } from '../lib/prDisposition.js';
 import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers } from '../lib/validation.js';
 
 /**
  * Clean up a worktree for a completed agent.
  * Reads worktree metadata from the agent's registered state and removes the worktree.
  * When openPR is true, pushes the branch and creates a PR instead of auto-merging.
- * When requestCopilotReview is also true, spawns a follow-up internal task that drives
- * the multi-reviewer loop and merges once the review chain is clean — that follow-up is
- * the part the user expects to "keep looping until ready to merge."
+ * `prCompletion` decides whether the PR is reviewed then merged, merged after
+ * green CI, or intentionally left open. The explicit leave-open policy does
+ * not spawn a post-PR agent.
  * `reviewers` is the ordered reviewer list (e.g. `[codex, antigravity, copilot]`); the native
  * GitHub Copilot review is pre-requested here only when copilot LEADS the list (otherwise
  * the follow-up requests it at its turn so Copilot sees the post-fix diff). `reviewStopMode`
@@ -43,7 +43,7 @@ import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_CA
  * the worktree branch into the source workspace because `gh pr merge` already handled it.
  * Otherwise, merges the worktree branch back to the source branch on success.
  */
-export async function cleanupAgentWorktree(agentId, success, { openPR = false, requestCopilotReview: shouldRequestCopilot = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, skipMerge = false, description = null, agentOutput = null, originalTask = null } = {}) {
+export async function cleanupAgentWorktree(agentId, success, { openPR = false, prCompletion = null, requestCopilotReview: legacyRequestCopilotReview = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, skipMerge = false, description = null, agentOutput = null, originalTask = null } = {}) {
   const { getAgent: getAgentState } = await import('./cos.js');
   const agentState = await getAgentState(agentId).catch(() => null);
   if (!agentState?.metadata?.isWorktree) return [];
@@ -140,6 +140,12 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
       const cliName = prResult.cli || 'gh';
       emitLog('success', `🌳 Created PR: ${prResult.url} (${cliName}${prResult.account ? ` authed as ${prResult.account}` : ''})`, { agentId, branchName: worktreeBranch, cli: prResult.cli, account: prResult.account, owner: prResult.owner, host: prResult.host });
 
+      // Production completion paths pass a resolver-backed policy. Keep the
+      // former option as a narrow compatibility fallback for direct callers.
+      const resolvedPrCompletion = PR_COMPLETION_VALUES.includes(prCompletion)
+        ? prCompletion
+        : (legacyRequestCopilotReview ? PR_COMPLETIONS.REVIEW_THEN_MERGE : PR_COMPLETIONS.MERGE_ON_GREEN);
+      const runsReviewLoop = resolvedPrCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE;
       const reviewerList = normalizeReviewers({ reviewers });
       const copilotIsFirst = reviewerList[0] === DEFAULT_REVIEWER;
       const nonCopilotReviewers = reviewerList.filter(r => r !== DEFAULT_REVIEWER);
@@ -150,7 +156,7 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
       // turn, after the earlier reviewer's fixes are pushed. This pre-request is a
       // latency optimization only — the follow-up requests Copilot at its turn
       // regardless, so a failed/absent pre-request is recoverable (no reviewer dropped).
-      if (shouldRequestCopilot && copilotIsFirst) {
+      if (runsReviewLoop && copilotIsFirst) {
         const reviewResult = await git.requestCopilotReview(worktreePath, prResult.url).catch(err => ({ success: false, error: err.message }));
         if (reviewResult.success && reviewResult.skipped) {
           emitLog('info', `🤖 Skipping Copilot pre-request for ${prResult.url} (non-GitHub forge)`, { agentId, prUrl: prResult.url });
@@ -161,49 +167,78 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
           warnings.push(`Copilot review request failed for ${prResult.url}: ${reviewResult.error}`);
         }
       }
-      if (shouldRequestCopilot && nonCopilotReviewers.length > 0) {
+      if (runsReviewLoop && nonCopilotReviewers.length > 0) {
         emitLog('info', `🤖 Follow-up will run CLI reviewers: ${nonCopilotReviewers.join(', ')}`, { agentId, prUrl: prResult.url });
       }
 
-      // Spawn the review-loop follow-up agent that runs the multi-reviewer loop until
-      // clean and merges. Hand it the FULL ordered list — the follow-up requests Copilot
-      // at copilot's turn (so a failed pre-request or copilot-only config still gets a
-      // review pass) and invokes the CLI reviewers itself. The only reviewer dropped is
-      // copilot on a non-GitHub forge, handled centrally in spawnReviewLoopFollowUp.
-      //
-      // A follow-up is spawned for a PR PortOS opened, because something has to
-      // land it. `spawnReviewLoopFollowUp` picks the mode from what actually
-      // survives reviewer resolution: reviewers left → review-then-merge; none left
-      // (Review Loop off, or copilot-only on a GitLab forge) → merge on green CI.
-      // Deciding it there rather than here is what keeps a stripped reviewer list
-      // from silently producing an orphaned PR.
-      //
-      // A JIRA-tracked task (see lib/prDisposition.js) hands its PR to a human —
-      // its ticket is already "In Review" and nothing here can transition it — so
-      // the follow-up must NOT merge. It still RUNS the configured reviewers when
-      // there are any (leaving the PR open is about the merge, not the review);
-      // with no reviewers there is nothing for a follow-up to do at all.
+      // JIRA remains a legacy human hand-off: configured reviewers can still
+      // run, but the follow-up must not merge. An explicit leave-open policy is
+      // different — opening the PR is the entire requested outcome.
       const leaveOpen = leavesPrForHuman(originalTask);
-      if (leaveOpen && !shouldRequestCopilot) {
+      if (resolvedPrCompletion === PR_COMPLETIONS.LEAVE_OPEN) {
+        emitLog('info', `🤝 Leaving ${prResult.url} open by task completion policy`, { agentId, prUrl: prResult.url });
+      } else if (leaveOpen && !runsReviewLoop) {
         emitLog('info', `🤝 Leaving ${prResult.url} open for a human — JIRA-tracked task, no reviewers configured`, { agentId, prUrl: prResult.url });
       } else {
-        await spawnReviewLoopFollowUp({
-          originalAgentId: agentId,
-          originalTask,
-          prUrl: prResult.url,
-          prBranch: worktreeBranch,
-          sourceWorkspace,
-          reviewers: shouldRequestCopilot ? reviewerList : [],
-          usernames: shouldRequestCopilot ? usernames : [],
-          optionalReviewers: shouldRequestCopilot ? optionalReviewers : [],
-          reviewStopMode,
-          reviewerApplies,
-          reviewerModels,
-          leaveOpen
-        }).catch(err => {
-          emitLog('warn', `🤖 Failed to spawn PR follow-up for ${prResult.url}: ${err.message}`, { agentId, prUrl: prResult.url });
-          warnings.push(`PR follow-up spawn failed for ${prResult.url}: ${err.message}`);
-        });
+        // A merge-only GitHub PR needs no model while CI is healthy. Hand it to
+        // pr-watcher's deterministic tick instead; that tick merges green PRs
+        // directly and recreates this exact follow-up only for a failed check or
+        // conflict. Non-GitHub forges and unscoped tasks retain the legacy agent
+        // path because pr-watcher intentionally speaks gh against managed apps.
+        const canQueueDeterministicMerge = resolvedPrCompletion === PR_COMPLETIONS.MERGE_ON_GREEN
+          && prResult.cli === 'gh'
+          && !!originalTask?.metadata?.app;
+        let queuedDeterministicMerge = false;
+        if (canQueueDeterministicMerge) {
+          const parsedPr = git.parsePullRequestUrl(prResult.url);
+          try {
+            const { queuePendingMerge } = await import('./prWatcher.js');
+            queuedDeterministicMerge = await queuePendingMerge(originalTask.metadata.app, {
+              prUrl: prResult.url,
+              prNumber: parsedPr?.number,
+              prBranch: worktreeBranch,
+              sourceAgentId: agentId,
+              sourceTask: {
+                id: originalTask?.id || null,
+                priority: originalTask?.priority || 'MEDIUM',
+                description: originalTask?.description || description || 'CoS automated task',
+                metadata: {
+                  app: originalTask.metadata.app,
+                  provider: originalTask.metadata.provider,
+                  providerId: originalTask.metadata.providerId,
+                  model: originalTask.metadata.model,
+                  effort: originalTask.metadata.effort,
+                }
+              }
+            });
+          } catch (err) {
+            emitLog('warn', `🤖 Failed to queue deterministic merge for ${prResult.url}: ${err.message}`, { agentId, prUrl: prResult.url });
+          }
+          if (queuedDeterministicMerge) {
+            emitLog('info', `🤖 Queued ${prResult.url} for deterministic merge on the next pr-watcher tick`, { agentId, prUrl: prResult.url });
+          }
+        }
+
+        if (!queuedDeterministicMerge) {
+          await spawnReviewLoopFollowUp({
+            originalAgentId: agentId,
+            originalTask,
+            prUrl: prResult.url,
+            prBranch: worktreeBranch,
+            sourceWorkspace,
+            prCompletion: resolvedPrCompletion,
+            reviewers: runsReviewLoop ? reviewerList : [],
+            usernames: runsReviewLoop ? usernames : [],
+            optionalReviewers: runsReviewLoop ? optionalReviewers : [],
+            reviewStopMode,
+            reviewerApplies,
+            reviewerModels,
+            leaveOpen
+          }).catch(err => {
+            emitLog('warn', `🤖 Failed to spawn PR follow-up for ${prResult.url}: ${err.message}`, { agentId, prUrl: prResult.url });
+            warnings.push(`PR follow-up spawn failed for ${prResult.url}: ${err.message}`);
+          });
+        }
       }
 
       const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false }).catch(err => {
@@ -252,20 +287,17 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
  * forges. `usernames` are arbitrary GitHub reviewer usernames the follow-up
  * requests as PR reviewers to gate the merge — forge-agnostic, so never stripped.
  *
- * **Mode is derived, not passed.** When nothing survives reviewer resolution —
- * the task's Review Loop was off (caller passes an explicitly empty list), or
- * copilot was the only reviewer and this is a GitLab MR — the follow-up runs in
- * **merge-only** mode: no review, just land the PR (wait for CI, fix a failing
- * check or a conflict, merge). Deriving it here means there is no combination
- * that spawns nothing and leaves the PR open forever, which is what used to
- * happen both with the Review Loop off and with copilot-only on GitLab.
+ * `prCompletion` is resolved before this function is called. It selects review
+ * then merge versus merge on green directly; `leave-open` is intentional and
+ * returns without creating a follow-up.
  *
  * The follow-up task uses an isolated worktree attached to the existing PR
  * branch (via createWorktree's `existingBranch` option) so it can fix-and-push
  * without trampling concurrent agents.
  */
-export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, sourceWorkspace, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, leaveOpen = false }) {
+export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, sourceWorkspace, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, leaveOpen = false }) {
   if (!prUrl || !prBranch) return null;
+  if (prCompletion === PR_COMPLETIONS.LEAVE_OPEN) return null;
 
   const parsedPr = git.parsePullRequestUrl(prUrl);
   // Copilot is GitHub-only; CLI-based reviewers (claude/antigravity/codex/grok) work on any
@@ -286,8 +318,12 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   // Non-blocking (`~opt`) marker set — forge-agnostic, threaded verbatim so the
   // follow-up's `--review-with` marks the same reviewers optional.
   const effectiveOptionalReviewers = normalizeOptionalReviewers(optionalReviewers) || [];
-  // Nothing left to review → this follow-up's only job is to land the PR.
-  const mergeOnly = effectiveReviewers.length === 0 && effectiveUsernames.length === 0;
+  // Merge-on-green deliberately skips every reviewer. A legacy review loop
+  // whose GitHub-only reviewer vanishes on another forge retains its prior
+  // merge-only fallback instead of leaving an orphaned PR.
+  const mergeOnly = prCompletion === PR_COMPLETIONS.MERGE_ON_GREEN
+    || (prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE
+      && effectiveReviewers.length === 0 && effectiveUsernames.length === 0);
   // ...and with nothing to review AND nothing to merge there is no follow-up at
   // all (a JIRA-tracked task whose reviewers were all stripped). The caller
   // normally catches this; the guard keeps the invariant local to this function.

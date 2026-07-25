@@ -50,7 +50,9 @@ import {
   alphaBbox, robustBottomRow, rootX, rootBandForManifest, ROBUST_BASELINE_MIN_PIXELS, compositeOnto, sha256Buffer,
 } from './walkPostprocess.js';
 import { ATLAS_IDLE_COLUMN } from './walkBounds.js';
-import { WALK_TRACK, SCANNER_TRACK, ANIMATION_TRACK_IDS } from './animationTracks.js';
+import {
+  WALK_TRACK, SCANNER_TRACK, AMBIENT_TRACK, ANIMATION_TRACK_IDS, kindSupportsTrack,
+} from './animationTracks.js';
 import {
   buildAtlasGrid, resolveTrackUniformity, compiledGridUpToDate, trackDirections,
 } from './atlasGrid.js';
@@ -58,6 +60,7 @@ import {
   withWalkWriteTail, walkSetRelPath, importedWalkDirections, resolveChromaKey,
 } from './walk.js';
 import { scannerSetRelPath } from './scanner.js';
+import { ambientSetRelPath } from './ambient.js';
 import { verifyPackagedFrames } from './walkFrames.js';
 import { getRecord } from './records.js';
 
@@ -263,6 +266,11 @@ function sharedRowPasteX(anchoredX, boundsList, geometry) {
  * reference set's anchors. Returns everything the compiler consumes.
  */
 export async function validateForCompile(recordId) {
+  const recordForTrack = await getRecord(recordId);
+  if (recordForTrack && kindSupportsTrack(recordForTrack.kind, AMBIENT_TRACK)
+    && !kindSupportsTrack(recordForTrack.kind, WALK_TRACK)) {
+    return validateAmbientForCompile(recordId, recordForTrack);
+  }
   // Every hashed input is read exactly once: verify the bytes in memory and
   // hand those same bytes to the compiler, so the pixels compiled are
   // provably the pixels verified (no re-read between check and use). Paths
@@ -488,6 +496,152 @@ export async function validateForCompile(recordId) {
     walkFrameCount: walk?.frameCount ?? null,
     walkFps: walk?.fps ?? null,
     scannerFrameCount: scanner?.frameCount ?? null,
+  };
+}
+
+/** Validate the one-main-reference / one-row evidence chain for ambient-only records. */
+async function validateAmbientForCompile(recordId, record) {
+  const readVerified = async (relPath, expectedSha, label) => {
+    const bytes = await readFile(resolveSpriteAssetPath(recordId, relPath)).catch(() => null);
+    if (!bytes || sha256Buffer(bytes) !== expectedSha) {
+      throw compileError(`${label} no longer matches its recorded sha256`);
+    }
+    return bytes;
+  };
+  const dir = spriteDir(recordId);
+  const setRel = ambientSetRelPath(recordId);
+  const setBytes = await readFile(join(dir, setRel)).catch(() => null);
+  if (!setBytes) throw compileError('No finalized ambient loop — approve its single row first', 'AMBIENT_SET_REQUIRED');
+  let ambientSet;
+  try {
+    ambientSet = JSON.parse(setBytes);
+  } catch {
+    throw compileError('Ambient set manifest is unreadable');
+  }
+  if (ambientSet.kind !== 'finalized-single-row-ambient-set' || ambientSet.track !== AMBIENT_TRACK
+    || ambientSet.status !== 'final' || ambientSet.characterId !== recordId
+    || JSON.stringify(ambientSet.directionOrder) !== JSON.stringify(['south'])) {
+    throw compileError('Ambient set manifest is not a finalized single-row ambient set');
+  }
+  await readVerified(ambientSet.selectionPath, ambientSet.selectionSha256, 'Ambient selection file');
+  const referenceManifest = await loadManifest(recordId);
+  const main = referenceManifest?.mainReference;
+  if (!main?.locked || !main.path || !main.sha256) {
+    throw compileError('Main reference is not locked', 'REFERENCE_INCOMPLETE');
+  }
+  const chromaKey = resolveChromaKey({ manifest: referenceManifest, record });
+  if (!chromaKey) throw compileError('Reference manifest has no frozen chroma key');
+  const mainBytes = await readVerified(main.path, main.sha256, 'Locked main reference');
+  const entry = ambientSet.directions?.south;
+  if (!entry || entry.status !== 'approved') throw compileError('Ambient row is not approved');
+  const manifestBytes = await readVerified(entry.runManifest, entry.runManifestSha256, 'Ambient run manifest');
+  let manifest;
+  try {
+    manifest = JSON.parse(manifestBytes);
+  } catch {
+    manifest = null;
+  }
+  if (!manifest || manifest.track !== AMBIENT_TRACK || manifest.direction !== 'south') {
+    throw compileError('Ambient run manifest is unreadable or mislabeled');
+  }
+  const ambient = resolveTrackUniformity(AMBIENT_TRACK, [{
+    direction: 'south',
+    frameCount: (manifest.frames || []).length,
+    declaredFrameCount: manifest.frameCount,
+    fps: manifest.frameRate,
+  }], { error: compileError, expectedRows: 1 });
+  const { frameBytes } = await verifyPackagedFrames(recordId, manifest, { bytes: true, track: AMBIENT_TRACK });
+  return {
+    ambientOnly: true,
+    scannerSet: null,
+    scannerSetSha256: null,
+    ambientSet,
+    ambientSetPath: setRel,
+    ambientSetSha256: sha256Buffer(setBytes),
+    referenceManifest,
+    chromaKey,
+    mainReference: { ...main, bytes: mainBytes },
+    ambientRun: { runId: entry.runId, manifestPath: entry.runManifest, manifest, frameBytes },
+    tracks: [ambient],
+    walkFrameCount: null,
+    walkFps: null,
+    scannerFrameCount: null,
+    ambientFrameCount: ambient.frameCount,
+  };
+}
+
+async function compileAmbientRow(validated, geometry) {
+  const split = keyChannelSplit(validated.chromaKey);
+  const { manifest, runId, manifestPath, frameBytes } = validated.ambientRun;
+  const ambientSources = [];
+  for (const bytes of frameBytes) ambientSources.push(await transparentSource(bytes, split, validated.chromaKey));
+  const dims = ambientSources.map((source, index) => occupiedDimensions(
+    source, ALPHA_THRESHOLD, `ambient-${manifest.frames[index].phase}`, true,
+  ));
+  const ambientScale = Math.min(
+    geometry.targetMaxHeight / Math.max(...dims.map((dim) => dim.height)),
+    geometry.targetMaxWidth / Math.max(...dims.map((dim) => dim.width)),
+  );
+  const cells = [];
+  const idleSource = await transparentSource(validated.mainReference.bytes, split, validated.chromaKey);
+  const idleDims = occupiedDimensions(idleSource, SILHOUETTE_ALPHA_THRESHOLD, 'ambient-idle');
+  const desiredIdleHeight = median(dims.map((dim) => dim.height)) * ambientScale;
+  const idleScale = Math.min(desiredIdleHeight / idleDims.height, geometry.targetMaxWidth / idleDims.width);
+  const idleScaled = await scaleForCell(idleSource, idleScale, 'ambient-idle');
+  const idle = placeCell(
+    idleScaled.scaled,
+    idleScaled.bounds,
+    idleScaled.baseline,
+    sharedRowPasteX(pyRound((geometry.cellSize - idleScaled.scaled.width) / 2), [idleScaled.bounds], geometry),
+    'ambient-idle',
+    geometry,
+    idleScale,
+  );
+  cells.push({
+    column: ATLAS_IDLE_COLUMN,
+    track: ATLAS_IDLE_COLUMN,
+    frameIndex: 0,
+    ...idle,
+    sourcePath: validated.mainReference.path,
+    sourceSha256: validated.mainReference.sha256,
+    policy: 'locked-main-reference',
+  });
+  const pivotX = Number(manifest.alignment?.targetPivot?.[0]);
+  const sourcePivotX = Number.isFinite(pivotX)
+    ? pivotX
+    : (Number(manifest.alignment?.cellSize) || ambientSources[0].width) / 2;
+  const scaled = [];
+  for (let index = 0; index < ambientSources.length; index++) {
+    scaled.push(await scaleForCell(ambientSources[index], ambientScale, `ambient-${manifest.frames[index].phase}`));
+  }
+  const pasteX = sharedRowPasteX(
+    pyRound(geometry.pivot[0] - sourcePivotX * ambientScale),
+    scaled.map((item) => item.bounds),
+    geometry,
+  );
+  for (let index = 0; index < scaled.length; index++) {
+    const frame = manifest.frames[index];
+    const normalized = placeCell(
+      scaled[index].scaled, scaled[index].bounds, scaled[index].baseline,
+      pasteX, `ambient-${frame.phase}`, geometry, ambientScale,
+    );
+    cells.push({
+      column: frame.phase,
+      track: AMBIENT_TRACK,
+      frameIndex: index,
+      ...normalized,
+      sourcePath: frame.path,
+      sourceSha256: frame.sha256,
+    });
+  }
+  return {
+    direction: 'south',
+    runId,
+    runManifestPath: manifestPath,
+    ambientScale: pyRoundTo(ambientScale, 8),
+    idleScale: pyRoundTo(idleScale, 8),
+    idlePolicy: 'locked-main-reference',
+    cells,
   };
 }
 
@@ -734,6 +888,7 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
     && currentAtlasOnDisk
     && current.walkSetSha256 === validated.walkSetSha256
     && (current.scannerSetSha256 ?? null) === validated.scannerSetSha256
+    && (current.ambientSetSha256 ?? null) === (validated.ambientSetSha256 ?? null)
     && compiledGridUpToDate(current.geometry, { ...geometry, columns, tracks })
   ) {
     return { ...current, created: false };
@@ -747,10 +902,9 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
   // where the sidecar says it does or the compile fails loudly. Producing the
   // frames for a second track is still #3018's job; this is the grid contract
   // that track will slot into.
-  const rows = [];
-  for (const direction of SPRITE_DIRECTIONS) {
-    rows.push(await compileDirectionRow(recordId, direction, validated, geometry));
-  }
+  const rows = validated.ambientOnly
+    ? [await compileAmbientRow(validated, geometry)]
+    : await Promise.all(SPRITE_DIRECTIONS.map((direction) => compileDirectionRow(recordId, direction, validated, geometry)));
 
   // Resolve one cell's place in the grid from its track's span, once, and stamp
   // the answer on the cell so the manifest below reports where the pixels
@@ -794,7 +948,9 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
   const atlasSha256 = sha256Buffer(atlasBuffer);
 
   if (current && currentAtlasOnDisk && current.walkSetSha256 === validated.walkSetSha256
-    && (current.scannerSetSha256 ?? null) === validated.scannerSetSha256 && current.atlasSha256 === atlasSha256) {
+    && (current.scannerSetSha256 ?? null) === validated.scannerSetSha256
+    && (current.ambientSetSha256 ?? null) === (validated.ambientSetSha256 ?? null)
+    && current.atlasSha256 === atlasSha256) {
     return { ...current, created: false };
   }
 
@@ -834,8 +990,9 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
       atlasSha256,
       manifestPath: manifestRel,
       manifestSha256: sha256Buffer(survivingBuffer),
-      walkSetSha256: validated.walkSetSha256,
+      ...(validated.walkSet ? { walkSetSha256: validated.walkSetSha256 } : {}),
       ...(survivingManifest.scannerSetSha256 ? { scannerSetSha256: survivingManifest.scannerSetSha256 } : {}),
+      ...(survivingManifest.ambientSetSha256 ? { ambientSetSha256: survivingManifest.ambientSetSha256 } : {}),
       geometry: survivingManifest.geometry,
       compiledAt: survivingManifest.createdAt,
     };
@@ -846,17 +1003,23 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
 
   const manifest = {
     schemaVersion: 1,
-    kind: 'reviewed-walk-set-runtime-atlas',
+    kind: validated.ambientOnly ? 'reviewed-ambient-set-runtime-atlas' : 'reviewed-walk-set-runtime-atlas',
     characterId: recordId,
     version,
     createdAt: new Date().toISOString(),
     chromaKey: validated.chromaKey,
     compilerPath: 'server/services/sprites/atlas.js',
-    walkSetPath: validated.walkSetPath,
-    walkSetSha256: validated.walkSetSha256,
+    ...(validated.walkSet ? {
+      walkSetPath: validated.walkSetPath,
+      walkSetSha256: validated.walkSetSha256,
+    } : {}),
     ...(validated.scannerSet ? {
       scannerSetPath: validated.scannerSetPath,
       scannerSetSha256: validated.scannerSetSha256,
+    } : {}),
+    ...(validated.ambientSet ? {
+      ambientSetPath: validated.ambientSetPath,
+      ambientSetSha256: validated.ambientSetSha256,
     } : {}),
     atlasPath: atlasRel,
     atlasSha256,
@@ -880,6 +1043,7 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
       walkFrameCount: validated.walkFrameCount,
       walkFps: validated.walkFps,
       ...(validated.scannerSet ? { scannerFrameCount: validated.scannerFrameCount } : {}),
+      ...(validated.ambientSet ? { ambientFrameCount: validated.ambientFrameCount } : {}),
     },
     directions: rows.map((row) => ({
       direction: row.direction,
@@ -914,8 +1078,9 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
     atlasSha256,
     manifestPath: manifestRel,
     manifestSha256: sha256Buffer(manifestBuffer),
-    walkSetSha256: validated.walkSetSha256,
+    ...(validated.walkSet ? { walkSetSha256: validated.walkSetSha256 } : {}),
     ...(validated.scannerSet ? { scannerSetSha256: validated.scannerSetSha256 } : {}),
+    ...(validated.ambientSet ? { ambientSetSha256: validated.ambientSetSha256 } : {}),
     geometry: manifest.geometry,
     compiledAt: manifest.createdAt,
   };

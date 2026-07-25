@@ -13,7 +13,7 @@ import sharp from 'sharp';
 import {
   pyRound, pyRoundTo, median, sampleBorderKey, validateMeasuredKey,
   isUsableMeasuredKey, longestUsableSpan,
-  recoverAlphaFrame, despillKeyFrame, imageDistance, selectCycleIndices,
+  recoverAlphaFrame, despillKeyFrame, imageDistance, selectCycleIndices, selectAmbientLoopIndices,
   alphaBbox, rootX, robustBottomRow, alignFrames, packStrip, validateFrames, buildContrastSheet,
   rootBandForManifest, ROOT_BAND_TORSO, ROOT_BAND_HIP, ALIGN_OP_TORSO_X,
   prepareWalkAnchorChromaInput, WALK_PHASES, WALK_CELL_SIZE, WALK_FRAME_COUNT,
@@ -256,6 +256,26 @@ describe('selectCycleIndices', () => {
   it('imageDistance is the mean absolute channel difference', () => {
     expect(imageDistance(constSig(10), constSig(10))).toBe(0);
     expect(imageDistance(constSig(0), constSig(30))).toBe(30);
+  });
+});
+
+describe('selectAmbientLoopIndices', () => {
+  const SIG_LEN = 48 * 48 * 3;
+  const constSig = (v) => Buffer.alloc(SIG_LEN, v);
+
+  it('chooses the cleanest endpoint seam and resamples that window evenly', () => {
+    // The loop closes only from source frame 2 back to source frame 6. This is
+    // deliberately not gait-shaped: ambient uses endpoint similarity rather
+    // than walk-period/motion detection.
+    const signatures = [50, 40, 0, 10, 20, 10, 0, 80, 90].map(constSig);
+    const { indices, cycle } = selectAmbientLoopIndices(signatures, 3);
+    expect(cycle).toMatchObject({ selection: 'ambient-even-resample', windowStart: 2, windowLength: 4, endpointSeamScore: 0 });
+    expect(indices).toEqual([2, 3, 5]);
+  });
+
+  it('needs a closing frame in addition to every authored frame', () => {
+    expect(() => selectAmbientLoopIndices([constSig(0), constSig(1), constSig(2)], 3))
+      .toThrow(/at least 4/);
   });
 });
 

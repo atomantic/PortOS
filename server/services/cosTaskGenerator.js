@@ -40,6 +40,7 @@ import { isRecoveryTask } from './recoveryTasks.js';
 import { getCodeReviewDefaults } from './codeReview.js';
 import { isHeldByOther, getClaimOwner } from './cosTaskClaim.js';
 import { ensureInstanceId } from './instances.js';
+import { PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
 
 /**
  * Block a task that has exceeded the max spawn limit. Returns true if blocked.
@@ -1612,6 +1613,13 @@ export function applyAppWorktreeDefault(metadata, app) {
   } else if (finalWorktreeOff) {
     metadata.openPR = false;
   }
+
+  // Legacy apps without this field keep resolving their persisted reviewLoop
+  // metadata. Once an app explicitly configures a default, stamp it onto new
+  // PR tasks so the policy survives later app-default changes.
+  if (finalOpenPR && metadata.prCompletion === undefined && PR_COMPLETION_VALUES.includes(app.defaultPrCompletion)) {
+    metadata.prCompletion = app.defaultPrCompletion;
+  }
 }
 
 async function generateManagedAppImprovementTask(app, state) {
@@ -2022,6 +2030,15 @@ async function resolveReferenceWatchBlock(app, taskType) {
 async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedule) {
   if (taskType !== 'pr-watcher') return { skip: false, block: '', repoFullName: '', defaultBranch: '' };
   const prWatcher = await import('./prWatcher.js');
+  // Merge-only PRs created by PortOS share this existing cadence. A green PR
+  // lands deterministically here without claiming an agent lane; only a failed
+  // check or conflict recreates the merge-only follow-up agent.
+  const pendingMerges = await prWatcher.processPendingMergePrs(app);
+  if (!pendingMerges.ok) {
+    emitLog('warn', `pr-watcher pending merge sweep failed for ${app.name}: ${pendingMerges.reason}`, { appId: app.id });
+  } else if (pendingMerges.merged || pendingMerges.escalated || pendingMerges.timedOut) {
+    emitLog('info', `pr-watcher pending merges for ${app.name}: ${pendingMerges.merged} merged, ${pendingMerges.escalated} escalated, ${pendingMerges.timedOut} timed out`, { appId: app.id });
+  }
   // prAuthorFilter was already merged + value-constrained into `metadata`.
   const authorFilter = metadata.prAuthorFilter || 'any';
   const check = await prWatcher.checkPullRequests(app, { authorFilter });
