@@ -1472,7 +1472,14 @@ export async function getWalkSourceFrames(recordId, runId, { extract = false } =
     if (!known) throw new ServerError(`Unknown walk run: ${runId}`, { status: 404, code: 'RUN_NOT_FOUND' });
     return sourceFrameResponse(runId, known, walkTarget, walkSet, {
       reason: 'run-not-packaged',
-      lockReason: 'no-source-video',
+      // A frozen set outranks the missing clip, matching `reDeriveLockReason`'s
+      // own ordering. Hardcoding 'no-source-video' here made the Loop Trimmer
+      // treat a FINALIZED set as merely clipless for a redraw-only direction
+      // (an imagegen cycle has no run directory) — so it left `CycleTarget`
+      // enabled, which 409s on change, and suppressed the lock panel that
+      // carries the unlock. That is the pair of defects #3043 set out to fix,
+      // still reachable through the one direction that has no run behind it.
+      lockReason: walkSet ? 'finalized' : 'no-source-video',
     });
   }
   const { runDirRel } = found;
@@ -1686,9 +1693,21 @@ async function resolveUnlockBlock(recordId, walkSet, clipByDirection = null) {
   const notBlocked = { blocked: false, stranded: [], acknowledgeable: false };
   if (!isImportedWalkSet(walkSet)) return notBlocked;
   const stale = importedWalkDirections(walkSet);
+  // `resolveWalkRenderability` is deliberately I/O-free, so it checks the
+  // manifest's CLAIM that an anchor is locked but not that the file is still
+  // there — and the render path's own `ANCHOR_MISSING` probe does. A manifest
+  // that still marks a since-deleted anchor locked would therefore pass the
+  // gate, drop all eight approvals on the acknowledged unlock, and then fail
+  // every Generate — precisely the stranding the acknowledgement promises can't
+  // happen. So the promise is only made after probing the files too. Bounded at
+  // eight stats, and only on the blocked path.
   const regenerable = async (scope) => {
     const [manifest, record] = await Promise.all([loadManifest(recordId), getRecord(recordId)]);
-    return scope.every((direction) => !resolveWalkRenderability(manifest, record, direction).error);
+    const resolved = scope.map((direction) => resolveWalkRenderability(manifest, record, direction));
+    if (resolved.some((r) => r.error)) return false;
+    const present = await Promise.all(resolved
+      .map((r) => pathExists(resolveSpriteAssetPath(recordId, r.anchor.path))));
+    return present.every(Boolean);
   };
   // No per-direction evidence to examine, and unlock re-opens the whole set — so
   // the whole set has to be regenerable before the escape is honest.

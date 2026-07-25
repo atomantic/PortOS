@@ -1641,6 +1641,34 @@ describe('getWalkSourceFrames', () => {
     expect(out.reason).toBe('run-not-packaged');
     expect(out.editable).toBe(false);
     expect(out.current).toEqual({ frameCount: 12, fps: 12 });
+    // Not finalized here (no walk-set file), so the clipless reason stands.
+    expect(out.lockReason).toBe('no-source-video');
+
+    /**
+     * …but a FROZEN set outranks it. This branch hardcoded 'no-source-video',
+     * so for a redraw-only direction — the one shape with no run directory —
+     * the Loop Trimmer treated a finalized set as merely clipless: it left
+     * `CycleTarget` enabled (which 409s on change) and suppressed the lock
+     * panel carrying the unlock. Both are the defects #3043 exists to fix,
+     * reachable through the single direction that has no run behind it.
+     */
+    await writeFile(join(TEST_ROOT, 'sprites', id, 'walk', `${id}-walk-set-v1.json`), JSON.stringify({
+      schemaVersion: 1,
+      kind: 'finalized-eight-direction-walk-set',
+      characterId: id,
+      status: 'final',
+      directionOrder: SPRITE_DIRECTIONS,
+      directions: {
+        east: {
+          status: 'approved',
+          runId: `${id}-v19-east`,
+          runPath: 'imagegen/v19',
+          runManifest: 'imagegen/v19/walk-east-v19-manifest.json',
+        },
+      },
+    }));
+    const frozen = await getWalkSourceFrames(id, `${id}-v19-east`);
+    expect(frozen.lockReason).toBe('finalized');
   });
 
   it('404s an unknown run', async () => {

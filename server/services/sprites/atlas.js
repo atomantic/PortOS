@@ -47,7 +47,7 @@ import {
   WALK_PHASES, WALK_FPS,
   pyRound, pyRoundTo, median, decodeRgbaFrame, premultipliedResize,
   sampleBorderKey, validateMeasuredKey, recoverAlphaFrame, despillKeyFrame,
-  alphaBbox, robustBottomRow, rootX, ROBUST_BASELINE_MIN_PIXELS, compositeOnto, sha256Buffer,
+  alphaBbox, robustBottomRow, rootX, rootBandForManifest, ROBUST_BASELINE_MIN_PIXELS, compositeOnto, sha256Buffer,
 } from './walkPostprocess.js';
 import { ATLAS_IDLE_COLUMN } from './walkBounds.js';
 import { WALK_TRACK, ANIMATION_TRACK_IDS } from './animationTracks.js';
@@ -458,7 +458,13 @@ async function compileDirectionRow(recordId, direction, validated, geometry) {
   // rule and walk on the other the character visibly pops sideways the instant
   // the game starts or stops the gait (#3021). Measured at the silhouette
   // threshold, matching how this cell's scale was derived.
-  const idleTorsoX = rootX(idleScaled.scaled, alphaBbox(idleScaled.scaled, SILHOUETTE_ALPHA_THRESHOLD) || idleScaled.bounds);
+  // …with the band THIS manifest's frames were packed on. #3049 moved the
+  // packer from the hip band to the torso band, but a set compiled WITHOUT
+  // reprocessing its runs still has hip-packed frames; measuring their idle as
+  // torso would anchor the two columns on different landmarks and reintroduce
+  // exactly the idle-to-walk pop this rule exists to prevent.
+  const idleBand = rootBandForManifest(manifest);
+  const idleTorsoX = rootX(idleScaled.scaled, alphaBbox(idleScaled.scaled, SILHOUETTE_ALPHA_THRESHOLD) || idleScaled.bounds, idleBand);
   const idle = placeCell(
     idleScaled.scaled, idleScaled.bounds, idleScaled.baseline,
     sharedRowPasteX(pyRound(geometry.pivot[0] - idleTorsoX), [idleScaled.bounds], geometry),

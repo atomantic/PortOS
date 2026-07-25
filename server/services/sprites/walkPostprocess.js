@@ -389,9 +389,16 @@ export function selectCycleIndices(signatures, frameCount = WALK_FRAME_COUNT) {
   if (n < frameCount + 1) {
     throw new Error(`Need at least ${frameCount + 1} extracted frames, got ${n}`);
   }
-  // A window of at least `frameCount` gives one distinct source frame per phase.
-  let chosen = findCycleWindow(signatures, frameCount, frameCount);
-  // …but that floor also HIDES any gait whose real period is shorter, and forces
+  // ONE search, floored at the shortest period worth accepting — not a
+  // `frameCount`-floored search with a shorter probe after it. The two-call shape
+  // had a hole: the first call THROWS `No detectable moving walk cycle` when no
+  // window at/above `frameCount` clears `MIN_CYCLE_MOTION`, so the shorter probe
+  // never ran and the short-cycle path rejected exactly the clips it was added to
+  // support. Searching `[shortFloor, maxLen]` once is also strictly equivalent
+  // for the long case: that range contains `[frameCount, maxLen]`, so when the
+  // global best is a long window it IS the long search's best.
+  //
+  // The floor HIDES any gait whose real period is shorter, and forces
   // a longer window that is not a whole number of cycles (#3052). A real clip's
   // gait ran 11 frames while 12 phases were requested, so the search could only
   // offer a 15-frame window — 1.36 cycles. Its endpoints still matched (a
@@ -401,12 +408,8 @@ export function selectCycleIndices(signatures, frameCount = WALK_FRAME_COUNT) {
   // to reach the requested count is a far smaller artifact than replaying a third
   // of a stride. The ratio guard keeps this to MILD upsampling — a much shorter
   // period would be mostly held frames, and a longer window wins there.
-  const shortFloor = Math.max(GAIT_MIN_PERIOD, Math.ceil(frameCount * MIN_PERIOD_RATIO));
-  if (shortFloor < frameCount) {
-    const probe = findCycleWindow(signatures, frameCount, shortFloor);
-    if (probe.cycleLength < frameCount) chosen = probe;
-  }
-  const { start, cycleLength, seam, motion } = chosen;
+  const shortFloor = Math.min(frameCount, Math.max(GAIT_MIN_PERIOD, Math.ceil(frameCount * MIN_PERIOD_RATIO)));
+  const { start, cycleLength, seam, motion } = findCycleWindow(signatures, frameCount, shortFloor);
   // Even phase distribution, in integer arithmetic (#3050).
   //
   // This is the ONE place that deliberately does not use `pyRound`. Banker's
@@ -498,6 +501,31 @@ export function alphaBbox(frame, threshold = BBOX_ALPHA_THRESHOLD) {
 }
 
 /**
+ * The measuring band `rootX` uses, as `[topFraction, bottomFraction]` of bbox
+ * height. TORSO is current (#3049); HIP is what every manifest packed before it
+ * used, and must stay reachable — the atlas measures the idle anchor live with
+ * `rootX` while the walk cells carry the pivot their packer baked in, so a set
+ * compiled without reprocessing needs the band its frames were packed with or
+ * the idle and walk columns anchor on different landmarks and the character pops
+ * sideways entering the gait. `alignment.operation` in the run manifest is what
+ * distinguishes them; see `ALIGN_OP_TORSO_X`.
+ */
+export const ROOT_BAND_TORSO = [0.30, 0.58];
+export const ROOT_BAND_HIP = [0.42, 0.76];
+
+/** The `alignment.operation` stamp written by the torso-pivot packer (#3049). */
+export const ALIGN_OP_TORSO_X = 'one-fixed-scale-per-frame-torso-x-and-baseline-y';
+
+/**
+ * The band a packed manifest's frames were aligned with. A manifest that
+ * predates #3049 — or carries no `alignment.operation` at all — was packed on
+ * the hip band, and re-measuring it as torso would misregister it.
+ */
+export const rootBandForManifest = (manifest) => (
+  manifest?.alignment?.operation === ALIGN_OP_TORSO_X ? ROOT_BAND_TORSO : ROOT_BAND_HIP
+);
+
+/**
  * x-center of the character at the TORSO band (30%–58% of bbox height) — the
  * per-frame pivot the alignment pins to x=192.
  *
@@ -510,11 +538,11 @@ export function alphaBbox(frame, threshold = BBOX_ALPHA_THRESHOLD) {
  * genuinely stationary in a walk-in-place, so pinning it is both the stablest
  * measurement and the right physical model; arms and legs then swing around it.
  */
-export function rootX(frame, bbox) {
+export function rootX(frame, bbox, band = ROOT_BAND_TORSO) {
   const { data, width } = frame;
   const H = bbox.bottom - bbox.top;
-  const bandTop = bbox.top + pyRound(H * 0.30);
-  const bandBottom = bbox.top + pyRound(H * 0.58);
+  const bandTop = bbox.top + pyRound(H * band[0]);
+  const bandBottom = bbox.top + pyRound(H * band[1]);
   const xs = [];
   for (let y = bandTop; y < bandBottom; y++) {
     for (let x = bbox.left; x < bbox.right; x++) {
@@ -631,7 +659,7 @@ export async function alignFrames(frames) {
       // Both axes vary per frame again (#3049): x pins this frame's torso to the
       // pivot, y its robust baseline. The distinguishing fact vs the pre-#3021
       // shape is WHICH landmark x uses — the torso band, not the hip/leg band.
-      operation: 'one-fixed-scale-per-frame-torso-x-and-baseline-y',
+      operation: ALIGN_OP_TORSO_X,
       // The per-frame torso measurements the anchor is taken from. Kept for
       // diagnostics: their spread is the drift this alignment cancels, so a
       // regression shows up as `translations[i][0]` going constant while these

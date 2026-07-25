@@ -15,6 +15,7 @@ import {
   isUsableMeasuredKey, longestUsableSpan,
   recoverAlphaFrame, despillKeyFrame, imageDistance, selectCycleIndices,
   alphaBbox, rootX, robustBottomRow, alignFrames, packStrip, validateFrames, buildContrastSheet,
+  rootBandForManifest, ROOT_BAND_TORSO, ROOT_BAND_HIP, ALIGN_OP_TORSO_X,
   prepareWalkAnchorChromaInput, WALK_PHASES, WALK_CELL_SIZE, WALK_FRAME_COUNT,
 } from './walkPostprocess.js';
 import { keyChannelSplit } from './chromaKey.js';
@@ -266,6 +267,34 @@ describe('alphaBbox / rootX', () => {
     expect(bbox).toEqual({ left: 10, top: 5, right: 30, bottom: 55 });
     expect(rootX(frame, bbox)).toBe(19.5); // symmetric rect → center column median
     expect(alphaBbox(makeFrame(8, 8))).toBeNull();
+  });
+
+  /**
+   * #3049 moved the packer's landmark from the hip band to the torso band, but
+   * the atlas measures the IDLE anchor live with `rootX` while the walk cells
+   * carry whichever pivot their packer baked in. A set compiled without
+   * reprocessing its runs therefore has hip-packed frames, and measuring their
+   * idle as torso anchors the two columns on different landmarks — the
+   * idle→walk pop this rule exists to prevent. The band must follow the
+   * manifest, and an absent `alignment.operation` means "packed before #3049".
+   */
+  it('selects the measuring band from the manifest that packed the frames', () => {
+    expect(rootBandForManifest({ alignment: { operation: ALIGN_OP_TORSO_X } })).toBe(ROOT_BAND_TORSO);
+    // Legacy / imported / absent — all predate the torso pivot.
+    expect(rootBandForManifest({ alignment: { operation: 'one-fixed-scale-shared-hip-x-plus-per-frame-baseline-y' } })).toBe(ROOT_BAND_HIP);
+    expect(rootBandForManifest({ alignment: {} })).toBe(ROOT_BAND_HIP);
+    expect(rootBandForManifest({})).toBe(ROOT_BAND_HIP);
+    expect(rootBandForManifest(null)).toBe(ROOT_BAND_HIP);
+  });
+
+  // The two bands must actually measure different things, or the branch above is
+  // decorative: a torso-heavy silhouette whose legs sit off to one side.
+  it('measures a different landmark per band', () => {
+    const frame = makeFrame(60, 100);
+    fillRect(frame, 30, 5, 50, 55, [50, 50, 50, 255]);  // torso, right side
+    fillRect(frame, 5, 55, 25, 95, [50, 50, 50, 255]);  // legs, left side
+    const bbox = alphaBbox(frame);
+    expect(rootX(frame, bbox, ROOT_BAND_TORSO)).not.toBe(rootX(frame, bbox, ROOT_BAND_HIP));
   });
 });
 
