@@ -11,6 +11,29 @@ export const DESKTOP_TYPES = new Set(['desktop']);
 /** Whether an app type is a portless GUI/desktop process. */
 export const isDesktopType = (type) => DESKTOP_TYPES.has(type);
 
+/**
+ * The process whose live output the launch panel should tail after a Start —
+ * or `null` when no panel should open.
+ *
+ * The gate is on the PROCESS's own result, not on the response being truthy:
+ * `POST /api/apps/:id/start` answers 200 `{ success: true, results }` even when
+ * every entry in `results` reports `{ success: false }`, so truthiness would open
+ * a panel that spins on "Building and importing assets" forever for a process
+ * that never launched — the exact "reads as hung" failure the panel exists to
+ * remove. A rejected request (`result` null) opens nothing either. A 200 that
+ * carries no per-process detail is trusted, so an older server still gets a panel.
+ *
+ * @param {object|null} app The app record (needs `type` + `pm2ProcessNames`).
+ * @param {object|null} result The start endpoint's parsed response, or null if it threw.
+ * @returns {string|null} PM2 process name to tail, or null.
+ */
+export function resolveLaunchPanelProcess(app, result) {
+  if (!isDesktopType(app?.type)) return null;
+  const processName = app?.pm2ProcessNames?.[0];
+  if (!processName || !result) return null;
+  return result?.results?.[processName]?.success === false ? null : processName;
+}
+
 export const getAppTypeLabel = (type) =>
   type === 'ios-native' ? '📱 iOS' :
   type === 'macos-native' ? '🖥️ macOS' :

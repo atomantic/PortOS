@@ -227,6 +227,23 @@ describe('System Health Routes', () => {
       expect(body.processes.total).toBe(1);
     });
 
+    it('still counts a RUNNING desktop app as online', async () => {
+      // Only the FAILURE-bearing counts filter on `expectedExit`. Filtering
+      // `online` too would render "1 of 2 running · all healthy" with both up,
+      // and read identically whether the game is running or quit.
+      mock.desktopProcessNames = new Set(['game']);
+      vi.mocked(listProcesses).mockResolvedValue([
+        { name: 'game', status: 'online' },
+        { name: 'web', status: 'online' }
+      ]);
+
+      const { body } = await request(app).get('/api/system/health/details');
+
+      expect(body.processes.online).toBe(2);
+      expect(body.processes.total).toBe(2);
+      expect(body.processes.desktopExited).toBe(0);
+    });
+
     it('keeps resource totals covering every process, exempt or not', async () => {
       mock.desktopProcessNames = new Set(['game']);
       vi.mocked(listProcesses).mockResolvedValue([

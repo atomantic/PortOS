@@ -211,11 +211,17 @@ export async function getDesktopProcessNames() {
  * closing the window ends the process (cleanly as `stopped`, or as `errored`
  * on a force-quit / non-zero exit). Consumers that auto-restart or alert on
  * `errored` must skip these. Current consumers:
- *   - services/cosHealthMonitor.js — auto-restarts errored processes
- *   - services/proactiveAlerts.js  — alerts on errored / crash-looping processes
- *   - routes/systemHealth.js       — drives overallHealth + the dashboard/city HUD
- * A fourth consumer that reacts to `errored` needs this too; naming the concept
+ *   - services/cosHealthMonitor.js   — auto-restarts errored processes
+ *   - services/proactiveAlerts.js    — alerts on errored / crash-looping processes
+ *   - routes/systemHealth.js         — drives overallHealth + the dashboard/city HUD
+ *   - services/voice/tools/system.js — `pm2_status` reads "issues" back aloud
+ * A further consumer that reacts to `errored` needs this too; naming the concept
  * here is what makes that discoverable (see issue #2991).
+ *
+ * What NONE of them exempt is *liveness*. `expectedExit` says a process
+ * STOPPING is a normal outcome, so only the failure-bearing counts filter on
+ * it — an `online` count must still include an exempt process, or a *running*
+ * desktop app lands in `total` and in no status bucket at all.
  *
  * Fails open: if the registry can't be read, nothing is marked expected, so the
  * pre-existing behavior stands rather than silently exempting every process.

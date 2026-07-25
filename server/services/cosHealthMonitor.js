@@ -63,9 +63,13 @@ export async function runHealthCheck() {
   const desktopExited = annotated.filter(
     p => p.expectedExit && ['errored', 'stopped'].includes(p.pm2_env?.status)
   ).length;
+  // `online` counts EVERY process, exempt or not: the exemption is about exit
+  // semantics, not liveness, so a running desktop app must still report as online
+  // (otherwise it lands in `total` and in no bucket, and the metric reads the same
+  // whether the game is running or quit).
   metrics.pm2 = {
     total: pm2Processes.length,
-    online: supervised.filter(p => p.pm2_env?.status === 'online').length,
+    online: annotated.filter(p => p.pm2_env?.status === 'online').length,
     errored: erroredProcesses.length,
     stopped: supervised.filter(p => p.pm2_env?.status === 'stopped').length,
     desktopExited

@@ -3,6 +3,7 @@
 // the "ops / things running" mental model but gate on separate regexes.
 
 import { listProcesses, restartApp } from '../../pm2.js';
+import { annotateExpectedExit } from '../../apps.js';
 import { getItems, getFeeds, markItemRead, markAllRead } from '../../feeds.js';
 import { clampLimit } from './shared.js';
 
@@ -20,20 +21,28 @@ export const SYSTEM_TOOLS = [
       'Report the status of PortOS PM2 processes. Use when the user asks "is anything crashed?", "is everything running?", "any errors?". Reports total, healthy, and any processes in errored/stopped states.',
     parameters: { type: 'object', properties: {} },
     execute: async () => {
-      const procs = await listProcesses();
-      const unhealthy = procs.filter((p) => p.status !== 'online');
-      const online = procs.length - unhealthy.length;
+      // A desktop app the user closed is NOT an issue to read back — annotate
+      // before classifying so "is anything crashed?" doesn't answer "the game
+      // (errored)" when the user simply quit its window. See issue #2991.
+      const procs = await annotateExpectedExit(await listProcesses());
+      const unhealthy = procs.filter((p) => !p.expectedExit && p.status !== 'online');
+      const exited = procs.filter((p) => p.expectedExit && p.status !== 'online');
+      const online = procs.filter((p) => p.status === 'online').length;
       const parts = [`${online} of ${procs.length} processes online`];
       if (unhealthy.length) {
         parts.push(
           `issues: ${unhealthy.map((p) => `${p.name} (${p.status})`).join(', ')}`,
         );
       }
+      if (exited.length) {
+        parts.push(`closed by you: ${exited.map((p) => p.name).join(', ')}`);
+      }
       return {
         ok: true,
         total: procs.length,
         online,
         unhealthy: unhealthy.map((p) => ({ name: p.name, status: p.status, restarts: p.restarts })),
+        desktopExited: exited.map((p) => ({ name: p.name, status: p.status })),
         summary: parts.join('. ') + '.',
       };
     },

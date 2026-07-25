@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import ProcessLogLines from '../ui/ProcessLogLines';
@@ -20,13 +20,23 @@ import { useProcessLogs } from '../../hooks/useProcessLogs';
  * @param {object} props
  * @param {string} props.appId App whose PM2_HOME holds the process.
  * @param {string} props.processName PM2 process to tail.
- * @param {boolean} props.online Whether the process is up — flips the header
- *   copy from "Launching" to "Running" so a finished launch reads as done.
+ * @param {boolean} props.online Whether the process is up — drives the header
+ *   copy through launching → running → exited so a finished launch reads as done
+ *   and a closed window reads as a normal end rather than a launch still running.
  * @param {() => void} props.onDismiss Close the panel (does not stop the app).
  */
 export default function DesktopLaunchProgress({ appId, processName, online, onDismiss }) {
   const { logs, subscribed } = useProcessLogs(processName, { lines: 200, appId });
   const scrollRef = useRef(null);
+  // `online` is two-state, but the panel has three phases. Without remembering
+  // that the process was ever up, a panel still open when the user closes the game
+  // window would revert to the spinner and claim the build is in progress for a
+  // process that already ended.
+  const [wasOnline, setWasOnline] = useState(false);
+  useEffect(() => {
+    if (online) setWasOnline(true);
+  }, [online]);
+  const phase = online ? 'running' : wasOnline ? 'exited' : 'launching';
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -36,9 +46,9 @@ export default function DesktopLaunchProgress({ appId, processName, online, onDi
     <div className="bg-port-card border border-port-border rounded-xl overflow-hidden">
       <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-port-border">
         <div className="flex items-center gap-2 min-w-0">
-          {!online && <BrailleSpinner />}
+          {phase === 'launching' && <BrailleSpinner />}
           <span className="text-sm text-white truncate">
-            {online ? 'Running' : 'Launching'} — {processName}
+            {phase === 'running' ? 'Running' : phase === 'exited' ? 'Exited' : 'Launching'} — {processName}
           </span>
         </div>
         <button
@@ -51,9 +61,11 @@ export default function DesktopLaunchProgress({ appId, processName, online, onDi
       </div>
 
       <p className="px-4 pt-2 text-xs text-gray-500">
-        {online
+        {phase === 'running'
           ? 'The app is running. Closing its window stops it — that is a normal exit, not a crash.'
-          : 'Building and importing assets. The window opens when this finishes — this can take a while on a cold build.'}
+          : phase === 'exited'
+            ? 'The app has exited. Closing its window is a normal end to a session — press Start to launch it again.'
+            : 'Building and importing assets. The window opens when this finishes — this can take a while on a cold build.'}
       </p>
 
       <div

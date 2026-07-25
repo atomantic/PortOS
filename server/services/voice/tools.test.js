@@ -164,8 +164,14 @@ const activeAppsRef = { value: [
   { id: 'bookloom-abc', name: 'BookLoom' },
   { id: 'portos-default', name: 'PortOS' },
 ] };
+// `desktopNamesRef` drives pm2_status's expected-exit exemption (#2991): a
+// desktop app the user closed must not be read back as an "issue".
+const desktopNamesRef = { value: new Set() };
 vi.mock('../apps.js', () => ({
   getActiveApps: vi.fn(async () => activeAppsRef.value),
+  annotateExpectedExit: vi.fn(async (procs) =>
+    procs.map(p => ({ ...p, expectedExit: desktopNamesRef.value.has(p?.name) }))
+  ),
 }));
 const catalogItemsRef = { value: [] };
 const catalogRefsRef = { value: [] };
@@ -558,6 +564,53 @@ describe('pm2_restart type guard', () => {
   });
   it('rejects empty string name', async () => {
     await expect(dispatchTool('pm2_restart', { name: '  ' })).rejects.toThrow(/name is required/);
+  });
+});
+
+// "Is anything crashed?" must not answer "the game (errored)" when the user
+// simply closed its window. pm2_status is the fourth consumer of `errored` the
+// expected-exit exemption has to cover (#2991).
+describe('pm2_status — desktop (GUI) exit exemption', () => {
+  const setProcesses = async (procs) => {
+    const { listProcesses } = await import('../pm2.js');
+    vi.mocked(listProcesses).mockResolvedValue(procs);
+  };
+
+  it('reports a quit game as closed-by-you, not as an issue', async () => {
+    desktopNamesRef.value = new Set(['game']);
+    await setProcesses([
+      { name: 'game', status: 'errored', restarts: 0 },
+      { name: 'web', status: 'online', restarts: 0 },
+    ]);
+
+    const res = await dispatchTool('pm2_status', {});
+
+    expect(res.unhealthy).toEqual([]);
+    expect(res.desktopExited).toEqual([{ name: 'game', status: 'errored' }]);
+    expect(res.summary).toMatch(/closed by you: game/);
+    expect(res.summary).not.toMatch(/issues/);
+  });
+
+  it('still reports a genuinely errored web process as an issue', async () => {
+    desktopNamesRef.value = new Set();
+    await setProcesses([{ name: 'web', status: 'errored', restarts: 3 }]);
+
+    const res = await dispatchTool('pm2_status', {});
+
+    expect(res.unhealthy).toEqual([{ name: 'web', status: 'errored', restarts: 3 }]);
+    expect(res.summary).toMatch(/issues: web \(errored\)/);
+  });
+
+  it('counts a running desktop app as online — the exemption is about exits', async () => {
+    desktopNamesRef.value = new Set(['game']);
+    await setProcesses([{ name: 'game', status: 'online', restarts: 0 }]);
+
+    const res = await dispatchTool('pm2_status', {});
+
+    expect(res.online).toBe(1);
+    expect(res.total).toBe(1);
+    expect(res.desktopExited).toEqual([]);
+    expect(res.summary).toBe('1 of 1 processes online.');
   });
 });
 

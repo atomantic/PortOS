@@ -12,7 +12,7 @@ vi.mock('../../services/socket', () => ({
 }));
 
 import DesktopLaunchProgress from './DesktopLaunchProgress';
-import { DESKTOP_TYPES, isDesktopType } from './constants';
+import { DESKTOP_TYPES, isDesktopType, resolveLaunchPanelProcess } from './constants';
 
 // Lines are batched on a 250ms debounce in useProcessLogs — advance past it so
 // the rendered output reflects the frame.
@@ -72,6 +72,22 @@ describe('DesktopLaunchProgress', () => {
     expect(screen.getByText(/normal exit, not a crash/)).toBeInTheDocument();
   });
 
+  it('reads as exited once a running app goes away, not back to "building"', () => {
+    // `online` is two-state but the panel has three phases. Reverting to the
+    // spinner and "the window opens when this finishes" for a process that
+    // already ended tells the user a launch is still in flight (issue #2991).
+    const { rerender } = renderPanel({ online: true });
+    expect(screen.getByText(/Running — game/)).toBeInTheDocument();
+
+    rerender(
+      <DesktopLaunchProgress appId="app-1" processName="game" online={false} onDismiss={() => {}} />
+    );
+
+    expect(screen.getByText(/Exited — game/)).toBeInTheDocument();
+    expect(screen.getByText(/normal end to a session/)).toBeInTheDocument();
+    expect(screen.queryByText(/Building and importing assets/)).not.toBeInTheDocument();
+  });
+
   it('dismisses without stopping the app', () => {
     const onDismiss = vi.fn();
     renderPanel({ onDismiss });
@@ -98,5 +114,47 @@ describe('desktop type mirror', () => {
     expect(isDesktopType('desktop')).toBe(true);
     expect(isDesktopType('express')).toBe(false);
     expect(isDesktopType(undefined)).toBe(false);
+  });
+});
+
+// The start endpoint answers 200 `{ success: true, results }` even when every
+// entry in `results` failed, so "did it start?" can only be read per-process.
+describe('resolveLaunchPanelProcess', () => {
+  const desktopApp = { type: 'desktop', pm2ProcessNames: ['game'] };
+
+  it('tails the process on a successful start', () => {
+    expect(resolveLaunchPanelProcess(desktopApp, { success: true, results: { game: { success: true } } }))
+      .toBe('game');
+  });
+
+  it('opens nothing when the process itself failed to start', () => {
+    // The whole point: an overall-200 with a failed process must NOT leave a
+    // panel spinning "the window opens when this finishes" for a dead launch.
+    expect(resolveLaunchPanelProcess(desktopApp, {
+      success: true,
+      results: { game: { success: false, error: 'spawn ENOENT' } },
+    })).toBeNull();
+  });
+
+  it('opens nothing when the request itself rejected', () => {
+    expect(resolveLaunchPanelProcess(desktopApp, null)).toBeNull();
+  });
+
+  it('trusts a 200 that carries no per-process detail', () => {
+    expect(resolveLaunchPanelProcess(desktopApp, { success: true })).toBe('game');
+  });
+
+  it('treats an already-running desktop app as tailable', () => {
+    expect(resolveLaunchPanelProcess(desktopApp, {
+      success: true,
+      results: { game: { success: true, alreadyRunning: true } },
+    })).toBe('game');
+  });
+
+  it('never opens for a web app or an app with no process names', () => {
+    const ok = { success: true, results: { game: { success: true } } };
+    expect(resolveLaunchPanelProcess({ type: 'express', pm2ProcessNames: ['game'] }, ok)).toBeNull();
+    expect(resolveLaunchPanelProcess({ type: 'desktop', pm2ProcessNames: [] }, ok)).toBeNull();
+    expect(resolveLaunchPanelProcess(null, ok)).toBeNull();
   });
 });

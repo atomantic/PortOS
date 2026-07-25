@@ -469,5 +469,48 @@ describe('socket.js — initSocket', () => {
 
       expect(vi.mocked(spawnPm2)).not.toHaveBeenCalled();
     });
+
+    it('does not spawn an orphan stream when unsubscribe lands mid-lookup', async () => {
+      // The cancellation case an `activeStreams.has()` check gets exactly wrong:
+      // the unsubscribe's cleanupStream leaves the slot EMPTY, so an occupancy
+      // check reads "free" and the stale handler spawns a `pm2 logs` that no
+      // later cleanup will ever find to kill.
+      const socket = makeSocket('logs-unsub-midlookup');
+      io.connect(socket);
+      vi.mocked(getAppById).mockImplementation(async () => {
+        socket.handlers['logs:unsubscribe']();
+        return { id: 'app-1', pm2Home: '/opt/example/.pm2' };
+      });
+
+      await socket.handlers['logs:subscribe']({ processName: 'game', lines: 200, appId: 'app-1' });
+
+      expect(vi.mocked(spawnPm2)).not.toHaveBeenCalled();
+    });
+
+    it('lets the NEWER of two overlapping subscribes win', async () => {
+      // The opposite failure of the same check: with two subscribes in flight the
+      // older one can fill the slot first, so an occupancy check makes the NEWER
+      // one bail — and its client never gets `logs:subscribed`, leaving the panel
+      // stuck on "Connecting to log stream…" forever.
+      const socket = makeSocket('logs-overlapping');
+      io.connect(socket);
+      const gates = [];
+      vi.mocked(getAppById).mockImplementation(
+        () => new Promise(resolve => gates.push(() => resolve({ id: 'app-1', pm2Home: null })))
+      );
+
+      const first = socket.handlers['logs:subscribe']({ processName: 'old', lines: 100, appId: 'app-1' });
+      const second = socket.handlers['logs:subscribe']({ processName: 'new', lines: 100, appId: 'app-1' });
+      // Resolve them out of order: the older lookup finishes last.
+      gates[1]();
+      gates[0]();
+      await Promise.all([first, second]);
+
+      expect(vi.mocked(spawnPm2)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(spawnPm2).mock.calls[0][0]).toEqual(['logs', 'new', '--raw', '--lines', '100']);
+      const subscribed = socket.emitted.filter(([ev]) => ev === 'logs:subscribed');
+      expect(subscribed).toHaveLength(1);
+      expect(subscribed[0][1].processName).toBe('new');
+    });
   });
 });

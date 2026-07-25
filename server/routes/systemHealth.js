@@ -114,15 +114,19 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   }
 
   // Process status summary from PM2. Processes whose exit is expected (a desktop
-  // app the user closed) are excluded from the health-bearing counts: a quit game
+  // app the user closed) are excluded from the FAILURE-bearing counts: a quit game
   // window would otherwise force overallHealth to 'critical' below and light up
   // the dashboard widget and the CyberCity HUD until the PM2 entry is manually
-  // cleared. Resource totals still cover every process. See issue #2991.
+  // cleared. `expectedExit` describes a process's exit *semantics*, not its
+  // liveness — so `online` counts every process, exempt or not, or a *running*
+  // desktop app would sit in `total` and in no status bucket at all and the
+  // dashboard would read "5/6 · all running" with all six up. Resource totals
+  // likewise cover every process. See issue #2991.
   const annotated = await apps.annotateExpectedExit(pm2Processes);
   const supervised = annotated.filter(p => !p.expectedExit);
   const processStats = {
     total: pm2Processes.length,
-    online: supervised.filter(p => p.status === 'online').length,
+    online: annotated.filter(p => p.status === 'online').length,
     stopped: supervised.filter(p => p.status === 'stopped').length,
     errored: supervised.filter(p => p.status === 'errored').length,
     // A desktop app that exited (cleanly as `stopped`, or `errored` on a

@@ -9,7 +9,7 @@ import StatusBadge from '../StatusBadge';
 import * as api from '../../services/api';
 import { getLaunchUrls } from '../../services/appUrls';
 import socket from '../../services/socket';
-import { APP_DETAIL_TABS, NON_PM2_TYPES, getAppTypeLabel, isDesktopType } from './constants';
+import { APP_DETAIL_TABS, NON_PM2_TYPES, getAppTypeLabel, resolveLaunchPanelProcess } from './constants';
 import DesktopLaunchProgress from './DesktopLaunchProgress';
 import OverviewTab from './tabs/OverviewTab';
 import TasksTab from './tabs/TasksTab';
@@ -90,12 +90,10 @@ export default function AppDetailView() {
     const result = await api.startApp(appId).catch(() => null);
     // A desktop app's start command builds and imports assets before a window
     // appears, so the POST returning tells the user almost nothing. Open the live
-    // log panel so the slow launch is visibly progressing rather than hung.
-    // Only on success — a failed start has no process to tail.
-    if (result && isDesktopType(app?.type)) {
-      const processName = app?.pm2ProcessNames?.[0];
-      if (processName) setLaunchProcess(processName);
-    }
+    // log panel so the slow launch is visibly progressing rather than hung — but
+    // only for a process that actually started (see resolveLaunchPanelProcess).
+    const launchTarget = resolveLaunchPanelProcess(app, result);
+    if (launchTarget) setLaunchProcess(launchTarget);
     setActionLoading(null);
   };
 

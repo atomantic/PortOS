@@ -146,6 +146,21 @@ describe('cosHealthMonitor.runHealthCheck', () => {
       expect(metrics.pm2.desktopExited).toBe(1);
     });
 
+    it('still counts a RUNNING desktop process as online', async () => {
+      // The exemption is about exit semantics, not liveness. Filtering `online`
+      // on it too would leave a live game in `total` and in no bucket at all —
+      // and make the metric read identically whether it is running or quit.
+      mock.desktopProcessNames = new Set(['game']);
+      mock.pm2Stdout = JSON.stringify([
+        { name: 'game', pm2_env: { status: 'online' }, monit: { memory: 0 } },
+        { name: 'web', pm2_env: { status: 'online' }, monit: { memory: 0 } }
+      ]);
+
+      const { metrics } = await runHealthCheck();
+
+      expect(metrics.pm2).toEqual({ total: 2, online: 2, errored: 0, stopped: 0, desktopExited: 0 });
+    });
+
     it('still auto-restarts non-desktop processes alongside an exempt one', async () => {
       mock.desktopProcessNames = new Set(['game']);
       mock.pm2Stdout = JSON.stringify([
