@@ -1,10 +1,29 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { Bounds, OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 
 const radians = (degrees = 0) => THREE.MathUtils.degToRad(degrees);
 const rotation = (degrees = [0, 0, 0]) => degrees.map(radians);
+
+const BACKGROUND_PRESETS = [
+  { id: 'black', label: 'Black', value: '#000000' },
+  { id: 'white', label: 'White', value: '#ffffff' },
+  { id: 'transparent', label: 'Transparent', value: null },
+  { id: 'green', label: 'Green screen', value: '#00ff00' },
+];
+
+const checkerboardStyle = {
+  backgroundColor: '#191919',
+  backgroundImage: [
+    'linear-gradient(45deg, #2e2e2e 25%, transparent 25%)',
+    'linear-gradient(-45deg, #2e2e2e 25%, transparent 25%)',
+    'linear-gradient(45deg, transparent 75%, #2e2e2e 75%)',
+    'linear-gradient(-45deg, transparent 75%, #2e2e2e 75%)',
+  ].join(', '),
+  backgroundSize: '16px 16px',
+  backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0',
+};
 
 function CustomGeometry({ definition }) {
   const geometry = useMemo(() => {
@@ -121,10 +140,10 @@ function SceneLight({ light }) {
   return <directionalLight color={light.color} intensity={light.intensity} position={light.position} castShadow />;
 }
 
-function ProceduralScene({ spec }) {
+function ProceduralScene({ spec, background }) {
   return (
     <>
-      <color attach="background" args={[spec.background]} />
+      {background && <color attach="background" args={[background]} />}
       {spec.lights.map((light, index) => <SceneLight key={`${light.type}-${index}`} light={light} />)}
       <Bounds fit clip observe margin={1.25}>
         <group name={spec.name}>
@@ -145,6 +164,12 @@ function ProceduralScene({ spec }) {
 }
 
 export default function ThreejsModelPreview({ spec, className = '' }) {
+  const [background, setBackground] = useState(() => spec?.background || '#000000');
+
+  useEffect(() => {
+    setBackground(spec?.background || '#000000');
+  }, [spec]);
+
   if (!spec) {
     return (
       <div className={`flex items-center justify-center bg-port-bg text-gray-500 ${className}`}>
@@ -152,16 +177,49 @@ export default function ThreejsModelPreview({ spec, className = '' }) {
       </div>
     );
   }
+  const transparent = background === null;
+  const selectedPreset = BACKGROUND_PRESETS.find((preset) => preset.value === background)?.id || 'custom';
   return (
-    <div className={`relative overflow-hidden bg-port-bg ${className}`}>
+    <div
+      className={`relative overflow-hidden bg-port-bg ${className}`}
+      style={transparent ? checkerboardStyle : undefined}
+    >
       <Canvas
-        key={`${spec.name}-${spec.schemaVersion}`}
+        key={`${spec.name}-${spec.schemaVersion}-${transparent ? 'transparent' : background}`}
         shadows
         camera={{ position: spec.camera.position, fov: spec.camera.fov, near: 0.01, far: 10_000 }}
         dpr={[1, 2]}
+        gl={{ alpha: transparent }}
       >
-        <ProceduralScene spec={spec} />
+        <ProceduralScene spec={spec} background={background} />
       </Canvas>
+      <div className="absolute left-2 top-2 flex max-w-[calc(100%-1rem)] flex-wrap items-center gap-1.5 rounded-lg bg-black/70 px-2 py-1.5 text-[10px] text-gray-300 backdrop-blur-sm">
+        <span className="mr-1 whitespace-nowrap text-gray-400">Background</span>
+        <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Preview background">
+          {BACKGROUND_PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              aria-label={preset.label}
+              aria-pressed={selectedPreset === preset.id}
+              onClick={() => setBackground(preset.value)}
+              className="rounded px-1.5 py-1 hover:bg-white/15 aria-pressed:bg-white/25 aria-pressed:text-white"
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+        <label className="flex items-center gap-1 rounded px-1.5 py-1 hover:bg-white/15">
+          Custom
+          <input
+            type="color"
+            aria-label="Custom preview background color"
+            value={background || '#000000'}
+            onChange={(event) => setBackground(event.target.value)}
+            className="h-4 w-5 rounded border-0 bg-transparent p-0"
+          />
+        </label>
+      </div>
       <div className="pointer-events-none absolute bottom-2 left-2 rounded bg-black/60 px-2 py-1 text-[10px] text-gray-300">
         Drag to orbit · scroll to zoom
       </div>
