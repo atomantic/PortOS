@@ -102,12 +102,14 @@ describe('DesktopLaunchProgress', () => {
 });
 
 describe('desktop type mirror', () => {
-  // The client mirrors DESKTOP_TYPES from server/services/streamingDetect.js.
-  // A server-side addition that never reaches this set silently regresses the
-  // portless UI branches (Open UI hidden, launch panel) back to the web-app path.
-  it('matches the server set', async () => {
-    const server = await import('../../../../server/services/streamingDetect.js');
-    expect([...DESKTOP_TYPES].sort()).toEqual([...server.DESKTOP_TYPES].sort());
+  // The set/server parity assertion lives in
+  // server/services/streamingDetect.test.js, NOT here: streamingDetect.js reaches
+  // `pm2.js` → the `pm2` package, which resolves from the client workspace only
+  // via root hoisting on a dev machine and NOT in CI (`npm ci --prefix client`).
+  // A client-side import of it therefore passes locally and fails in CI. The
+  // client module is dependency-free, so the server test imports this direction.
+  it('exposes the mirrored set', () => {
+    expect([...DESKTOP_TYPES]).toEqual(['desktop']);
   });
 
   it('classifies desktop apps and not web apps', () => {

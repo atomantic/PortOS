@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { parseEcosystemConfig, rewriteEcosystemPorts, rewriteEcosystemPortsByProcess, writeEcosystemPorts, writeEcosystemPortsByProcess, writeEcosystemPortEdits } from './streamingDetect.js';
+import { parseEcosystemConfig, rewriteEcosystemPorts, rewriteEcosystemPortsByProcess, writeEcosystemPorts, writeEcosystemPortsByProcess, writeEcosystemPortEdits, DESKTOP_TYPES, NON_PM2_TYPES } from './streamingDetect.js';
 
 describe('parseEcosystemConfig', () => {
   it('captures arbitrary *_PORT env vars and labels them by camelCased stem', () => {
@@ -915,5 +915,29 @@ module.exports = { apps: [
     const result = await writeEcosystemPortEdits(dir, [], []);
     expect(result.changed).toBe(false);
     expect(readFileSync(join(dir, 'ecosystem.config.cjs'), 'utf-8')).toBe(original);
+  });
+});
+
+// The client mirrors these two Sets by hand in
+// client/src/components/apps/constants.js, and drives its portless UI branches
+// (Open UI hidden, the desktop launch panel) off the copy. A server-side
+// addition that never reaches the mirror silently regresses those branches back
+// to the web-app path.
+//
+// The assertion lives HERE, not in a client test, and the direction matters: the
+// client module is dependency-free so a server test can import it, whereas
+// streamingDetect.js reaches `pm2.js` → the `pm2` package, which does not
+// resolve from the client workspace in CI (only via root hoisting locally). A
+// client-side version of this test therefore passes on a dev machine and fails
+// in CI. Keep the import one-way.
+describe('client mirror of the app-type sets', () => {
+  it('matches DESKTOP_TYPES', async () => {
+    const client = await import('../../client/src/components/apps/constants.js');
+    expect([...client.DESKTOP_TYPES].sort()).toEqual([...DESKTOP_TYPES].sort());
+  });
+
+  it('matches NON_PM2_TYPES', async () => {
+    const client = await import('../../client/src/components/apps/constants.js');
+    expect([...client.NON_PM2_TYPES].sort()).toEqual([...NON_PM2_TYPES].sort());
   });
 });
