@@ -20,11 +20,12 @@ import { isLoopbackHost } from '../../lib/loopbackHost.js';
 import {
   getSettings, updateSettings, getImageGenStatus, generateImage,
   registerTool, updateTool, getToolsList,
-  getHfTokenStatus, saveHfToken, clearHfToken,
+  saveHfToken, clearHfToken,
 } from '../../services/api';
 import { isCloudCliMode, IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_EFFORT, GROK_ASPECT_RATIOS } from '../../lib/imageGenBackends';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
 import { useMediaJobSse } from '../../hooks/useMediaJobSse';
+import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
 import { CODEX_EFFORT_LEVELS } from '../../utils/providers';
 
 const SDAPI_TOOL_ID = 'sdapi';
@@ -161,18 +162,12 @@ export function ImageGenTab() {
   // applies to local Flux models regardless of which backend is active.
   // `source` is 'stored' | 'env' | 'cli' | 'none'; only 'stored' tokens can be
   // cleared from the UI (env/CLI come from outside settings.json).
-  const [hfTokenInfo, setHfTokenInfo] = useState({ hfTokenPresent: null, source: null });
+  const { present: hfTokenPresent, source: hfTokenSource, refresh: refreshHfTokenStatus } = useHfTokenStatus();
   const [hfTokenInput, setHfTokenInput] = useState('');
   // One busy flag covers both save and clear since they're mutually exclusive
   // (both disable the form + buttons). `busy` is the in-flight verb so the
   // Clear button can still show a Trash icon while the spinner is on Save.
   const [hfTokenBusy, setHfTokenBusy] = useState(null); // null | 'saving' | 'clearing'
-
-  useEffect(() => {
-    getHfTokenStatus()
-      .then((s) => { if (s) setHfTokenInfo({ hfTokenPresent: !!s.hfTokenPresent, source: s.source || null }); })
-      .catch((err) => { console.warn(`⚠️ Failed to load HF token status: ${err?.message || err}`); });
-  }, []);
 
   const handleSaveHfToken = async () => {
     const trimmed = hfTokenInput.trim();
@@ -182,7 +177,7 @@ export function ImageGenTab() {
     setHfTokenBusy(null);
     if (!result?.ok) return;
     setHfTokenInput('');
-    setHfTokenInfo({ hfTokenPresent: true, source: result.source || 'stored' });
+    refreshHfTokenStatus();
     toast.success('HuggingFace token saved');
   };
 
@@ -191,7 +186,7 @@ export function ImageGenTab() {
     const result = await clearHfToken().catch(() => null);
     setHfTokenBusy(null);
     if (!result?.ok) return;
-    setHfTokenInfo({ hfTokenPresent: !!result.hfTokenPresent, source: result.source || 'none' });
+    refreshHfTokenStatus();
     toast.success(result.hfTokenPresent ? 'Stored token cleared (env / CLI token still active)' : 'HuggingFace token cleared');
   };
 
@@ -803,16 +798,16 @@ export function ImageGenTab() {
           <code className="text-gray-400">HF_TOKEN</code> env var or <code className="text-gray-400">~/.cache/huggingface/token</code>.
         </p>
 
-        {hfTokenInfo.hfTokenPresent === null ? (
+        {hfTokenPresent === null ? (
           <div className="text-xs text-gray-500"><BrailleSpinner text="Checking token status" /></div>
-        ) : hfTokenInfo.hfTokenPresent ? (
+        ) : hfTokenPresent ? (
           <div className="flex items-center gap-2 text-xs text-port-success">
             <Check size={14} />
             <span>
               Token configured
-              {hfTokenInfo.source === 'env' && ' (from HF_TOKEN environment variable)'}
-              {hfTokenInfo.source === 'cli' && ' (from ~/.cache/huggingface/token — set via `hf auth login`)'}
-              {hfTokenInfo.source === 'stored' && ' (stored in settings.json)'}
+              {hfTokenSource === 'env' && ' (from HF_TOKEN environment variable)'}
+              {hfTokenSource === 'cli' && ' (from ~/.cache/huggingface/token — set via `hf auth login`)'}
+              {hfTokenSource === 'stored' && ' (stored in settings.json)'}
             </span>
           </div>
         ) : (
@@ -824,7 +819,7 @@ export function ImageGenTab() {
 
         <div>
           <label htmlFor="hf-token-input" className="block text-xs font-medium text-gray-400 mb-1">
-            {hfTokenInfo.source === 'stored' ? 'Replace stored token' : 'Paste a token'}
+            {hfTokenSource === 'stored' ? 'Replace stored token' : 'Paste a token'}
           </label>
           <div className="flex flex-col sm:flex-row gap-2">
             <input
@@ -851,7 +846,7 @@ export function ImageGenTab() {
           </div>
         </div>
 
-        {hfTokenInfo.source === 'stored' && (
+        {hfTokenSource === 'stored' && (
           <button
             type="button"
             onClick={handleClearHfToken}
