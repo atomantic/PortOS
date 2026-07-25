@@ -1112,6 +1112,47 @@ describe('imported walk sets — evidence-based re-derive', () => {
     expect((await getWalkState(id)).walkSet.unlock).toMatchObject({ acknowledgeable: false });
   });
 
+  /**
+   * The same missing rung, in the OTHER path that keys a matte. `packageRun` read
+   * `run.chromaKey || manifest.chromaKey` — both absent on an imported run — and
+   * handed `undefined` to the un-key step, which surfaced as the parser's own
+   * `Invalid hex color: undefined`: a complaint about an argument, naming neither
+   * the field nor the record behind it. This is the reprocess a user reaches for
+   * the moment their clips ARE on disk, so it has to resolve the record rung too.
+   */
+  it('reprocesses an imported run using the record-level chroma key', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const runIds = await importedCharacter(id, { east: {} });
+    const manifestPath = join(TEST_ROOT, 'sprites', id, 'reference', `${id}-reference-set-v1.json`);
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    delete manifest.chromaKey;
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    await records.updateRecord(id, { chromaKey: '#FF00FF' });
+    // Reopen so the frozen set stops refusing the re-derive.
+    await reopenWalkDirection(id, { direction: 'east' });
+
+    const run = await rerunWalkPostprocess(id, { runId: runIds.east });
+    expect(run.status).toBe('candidate');
+    expect(run.postprocessError).toBeUndefined();
+    expect(runWalkPostprocess.mock.calls.at(-1)[0]).toMatchObject({ chromaKey: '#FF00FF' });
+  });
+
+  it('names the record when NO rung carries a chroma key, instead of failing inside the color parser', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const runIds = await importedCharacter(id, { east: {} });
+    const manifestPath = join(TEST_ROOT, 'sprites', id, 'reference', `${id}-reference-set-v1.json`);
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    delete manifest.chromaKey;
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    await records.updateRecord(id, { chromaKey: null });
+    await reopenWalkDirection(id, { direction: 'east' });
+
+    await expect(rerunWalkPostprocess(id, { runId: runIds.east })).rejects.toMatchObject({
+      message: expect.stringContaining('No chroma key'),
+    });
+    expect(runWalkPostprocess).not.toHaveBeenCalled();
+  });
+
   // The acknowledgement is an override of the CLIP requirement only — it must
   // never become a way to strand a direction that cannot be rebuilt at all.
   it('refuses an acknowledged unlock when a stranded direction has no locked anchor', async () => {

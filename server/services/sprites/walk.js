@@ -855,6 +855,25 @@ async function setWalkTargetImpl(recordId, { frameCount, fps }) {
  * "usable anchor" drifting between them is how a gate ends up promising a render
  * the render path then refuses.
  */
+/**
+ * The chroma key a walk operation should key against, most specific first: the
+ * run's own frozen key, then the reference manifest's, then the record's.
+ *
+ * The record rung is not optional garnish — it is the ONLY rung a source-pipeline
+ * import populates (the importer stamps the key it used on the record and copies
+ * a manifest carrying none), and the rest of the sprite code has always resolved
+ * it this way (reference.js does, at eight sites). Reading only the first two
+ * rungs is what made an imported run un-generatable (`MAIN_NOT_LOCKED`) and its
+ * reprocess die inside sharp with `Invalid hex color: undefined` — the same
+ * missing rung surfacing as two unrelated-looking failures.
+ *
+ * Returns null when no rung has one, so callers refuse explicitly rather than
+ * handing `undefined` to a color parser.
+ */
+const resolveChromaKey = ({ manifest, record, run } = {}) => (
+  run?.chromaKey || manifest?.chromaKey || record?.chromaKey || null
+);
+
 const lockedAnchorFor = (manifest, direction) => {
   const anchor = manifest?.anchors?.find((a) => a.direction === direction);
   return anchor?.status === 'locked' && anchor.path ? anchor : null;
@@ -894,7 +913,7 @@ function resolveWalkRenderability(manifest, record, direction) {
       error: () => new ServerError(`Lock the ${anchorIdForDirection(direction)} anchor before animating it`, { status: 409, code: 'ANCHOR_NOT_LOCKED' }),
     };
   }
-  const chromaKey = manifest.chromaKey || record?.chromaKey || null;
+  const chromaKey = resolveChromaKey({ manifest, record });
   if (!chromaKey) {
     return {
       anchor,
@@ -1137,17 +1156,25 @@ async function packageRun(recordId, run, overrides = {}, location = {}) {
     // parseable duration; leave the field ABSENT in that case rather than
     // stamping 0, so "unknown" never reads as "a zero-length clip". A previously
     // stamped value survives — a probe that can't run is not evidence of change.
-    const [probedSeconds, manifest] = await Promise.all([
+    const [probedSeconds, manifest, record] = await Promise.all([
       probeVideoDuration(videoAbs),
       loadManifest(recordId),
+      getRecord(recordId),
     ]);
     if (probedSeconds) run.sourceVideoSeconds = Math.round(probedSeconds * 100) / 100;
     const anchor = manifest?.anchors?.find((a) => a.direction === run.direction);
     if (!anchor?.path) throw new Error(`No locked ${run.direction} anchor in the reference manifest`);
+    // Refuse HERE rather than letting an absent key reach the un-key step, which
+    // reported it as `Invalid hex color: undefined` — a parser's complaint about
+    // its argument, naming neither the field nor the record that lacks it.
+    const chromaKey = resolveChromaKey({ manifest, record, run });
+    if (!chromaKey) {
+      throw new Error(`No chroma key for ${recordId} — the run, the reference manifest, and the record all lack one, so the matte cannot be keyed out`);
+    }
     const result = await runWalkPostprocess({
       recordId,
       direction: run.direction,
-      chromaKey: run.chromaKey || manifest.chromaKey,
+      chromaKey,
       runAbs,
       runRel,
       anchorRel: anchor.path,
