@@ -20,7 +20,7 @@ import { FolderOpen, RefreshCw, Scissors, Sparkles, Film, FileJson, NotebookPen 
 import AssetInspector from './AssetInspector.jsx';
 import CorrectionNote from './CorrectionNote.jsx';
 import SpritePreview from './SpritePreview.jsx';
-import { hasSpritePreview, assetVersionToken } from './spriteAssets.js';
+import { hasSpritePreview, isVideoAsset, assetVersionToken, spriteAssetUrl } from './spriteAssets.js';
 import { groupSpriteAssetsByRole } from '../../lib/spriteFacets.js';
 import { formatBytes } from '../../utils/formatters.js';
 
@@ -71,8 +71,20 @@ function AssetCard({ recordId, asset, actions, corrections, onCorrectionChange, 
         className="block w-full text-left rounded hover:opacity-80"
         title={asset.path}
       >
-        {hasSpritePreview(asset) && (
+        {hasSpritePreview(asset) ? (
           <SpritePreview recordId={recordId} path={asset.path} version={assetVersionToken(asset)} className="h-20 rounded" />
+        ) : isVideoAsset(asset) && (
+          // A raw grok clip carries its own magenta matte (not transparent),
+          // so no checkerboard behind it, matching WalkWorkflow's inline clip.
+          <video
+            src={spriteAssetUrl(recordId, asset.path, assetVersionToken(asset))}
+            className="w-full h-20 object-cover rounded bg-port-bg"
+            autoPlay
+            loop
+            muted
+            playsInline
+            aria-label={`preview of ${name}`}
+          />
         )}
         <span className="block text-[10px] text-gray-500 truncate">{name}</span>
         <span className="flex items-center gap-1 text-[10px] text-gray-600">

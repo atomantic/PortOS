@@ -82,6 +82,19 @@ describe('AssetCollection grouping', () => {
     expect(screen.queryAllByRole('heading', { level: 4 })).toHaveLength(0);
   });
 
+  it('plays an mp4 animation asset inline as an autoplay/loop/muted video', () => {
+    const CLIP = 'grok/walk-east-abc12345/generated/source-video.mp4';
+    render(<AssetCollection recordId="example-walker" assets={[asset(CLIP)]} />);
+    expect(groupHeadings()).toEqual(['Animations(1)']);
+    const video = screen.getByTitle(CLIP).querySelector('video');
+    expect(video).toBeTruthy();
+    expect(video).toHaveAttribute('src', expect.stringContaining(encodeURIComponent(CLIP.split('/').pop())));
+    expect(video).toHaveAttribute('autoplay');
+    expect(video).toHaveAttribute('loop');
+    // React reflects `muted` as a DOM property, not an HTML attribute.
+    expect(video.muted).toBe(true);
+  });
+
   it('keeps an unapproved run\'s strip badged `candidate` (#2938)', () => {
     render(<AssetCollection recordId="example-walker" assets={ASSETS} />);
     const stripGroup = screen.getByRole('heading', { name: /Strips/ }).parentElement;
