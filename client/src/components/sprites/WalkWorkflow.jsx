@@ -44,8 +44,12 @@ function clipLengthLabel(run) {
   if (!(delivered > 0)) return null;
   const requested = Number(run?.duration);
   const mismatch = requested > 0 && Math.abs(requested - delivered) >= 0.5;
+  // A truncated clip (a real but near-zero-length file) must not round to the
+  // "0.0s" that would read as the absent case handled above — give sub-0.05s
+  // lengths the extra digit so a broken clip looks broken, not unknown.
+  const shown = delivered.toFixed(delivered < 0.05 ? 2 : 1);
   return {
-    text: `${delivered.toFixed(1)}s clip${mismatch ? ` (asked ${requested}s)` : ''}`,
+    text: `${shown}s clip${mismatch ? ` (asked ${requested}s)` : ''}`,
     mismatch,
   };
 }

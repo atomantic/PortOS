@@ -754,6 +754,13 @@ describe('delivered clip length', () => {
     expect(screen.queryByText(/asked/)).toBeNull();
   });
 
+  it('keeps a truncated clip distinguishable from an unknown one', () => {
+    // 0.02s is a real (broken) clip; rounding it to "0.0s clip" would read as
+    // the absent/unknown case, which renders nothing at all.
+    renderWithRun({ duration: 6, sourceVideoSeconds: 0.02 });
+    expect(screen.getByText(/0\.02s clip/)).toBeTruthy();
+  });
+
   it('renders nothing when the clip length is unknown', () => {
     // Absent (older run, or ffprobe unavailable) must NOT read as a 0s clip.
     renderWithRun({ duration: 6 });

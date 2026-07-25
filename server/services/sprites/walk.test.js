@@ -276,6 +276,11 @@ beforeEach(() => {
   executeTuiRun.mockImplementation(() => new Promise(() => {}));
   prepareWalkAnchorChromaInput.mockClear();
   runWalkPostprocess.mockClear();
+  // Reset the probe too (not just mockClear): a `mockResolvedValueOnce` primed
+  // by a test whose run errors before packageRun would otherwise stay queued
+  // and leak its value into the next test's first probe.
+  probeVideoDuration.mockReset();
+  probeVideoDuration.mockResolvedValue(null);
   rmSync(join(TEST_ROOT, 'sprite-records.json'), { force: true });
 });
 afterAll(() => rmSync(TEST_ROOT, { recursive: true, force: true }));
