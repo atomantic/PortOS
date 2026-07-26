@@ -49,6 +49,7 @@ vi.mock('./adapters.js', () => ({
   getTargetAdapter: vi.fn((id) => (id === 'second-target' ? { isInstalled: fakeIsInstalled, run: fakeRun } : null)),
 }));
 
+import { hfChildEnv } from '../../lib/hfToken.js';
 import * as store from './db.js';
 import { createModel } from './models.js';
 
@@ -77,6 +78,11 @@ describe('models.js target dispatch is adapter-registry-driven (#3080)', () => {
 
     await vi.waitFor(() => expect(fakeRun).toHaveBeenCalled());
     expect(fakeIsInstalled).toHaveBeenCalled();
+    // #3080: env/credential resolution is adapter-owned (`resolveEnv`) — a
+    // target that declares no `resolveEnv` must never trigger the Hugging Face
+    // token lookup or receive an env it never asked for.
+    expect(hfChildEnv).not.toHaveBeenCalled();
+    expect(fakeRun).toHaveBeenCalledWith(expect.objectContaining({ env: undefined }));
   });
 
   it('501s a target the adapter registry has no adapter for', async () => {

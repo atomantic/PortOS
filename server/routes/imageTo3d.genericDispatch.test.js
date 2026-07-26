@@ -54,6 +54,7 @@ vi.mock('../services/imageTo3d/models.js', () => ({
   getModelAsset: vi.fn(),
 }));
 
+import { hfChildEnv } from '../lib/hfToken.js';
 import routes from './imageTo3d.js';
 
 const makeApp = () => {
@@ -89,6 +90,15 @@ describe('image-to-3d generic target dispatch (#3080)', () => {
     expect(frames).toContainEqual({ type: 'stage', stage: 'fake-step', message: 'installing FakeGen…' });
     expect(frames.at(-1)).toMatchObject({ type: 'complete' });
     expect(fakeInstall).toHaveBeenCalled();
+  });
+
+  // #3080: env/credential resolution is adapter-owned (`resolveEnv`), not a
+  // dispatch-layer assumption that every target wants a Hugging Face token —
+  // a target that declares no `resolveEnv` must never trigger one.
+  it('never resolves the Hugging Face token env for a target with no resolveEnv hook', async () => {
+    await request(makeApp()).get('/api/image-to-3d/targets/fakegen/install');
+    expect(hfChildEnv).not.toHaveBeenCalled();
+    expect(fakeInstall).toHaveBeenCalledWith(expect.objectContaining({ env: undefined }));
   });
 
   it('errors on install for a target id with no registered adapter', async () => {

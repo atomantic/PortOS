@@ -15,6 +15,12 @@
  *    with no local-install concept (a future hosted-API target) would return true.
  *    The caller (the install route) uses this to short-circuit an "already
  *    installed" request before ever calling `install()`.
+ *  - `resolveEnv?()` — optional async credential/env resolver, called by the
+ *    install route and the render dispatcher before `install()`/`run()`. Each
+ *    target declares its own needs here (TRELLIS.2 resolves the stored Hugging
+ *    Face token) instead of the dispatch layer assuming every target wants one.
+ *    Omit for a target with nothing to resolve — its `env` argument is then
+ *    `undefined` and the child process just inherits `process.env`.
  *  - `install({ onEvent, env })` — installs (or repairs, when the caller decides
  *    an already-installed target should re-run setup — see the route). Returns
  *    `{ promise, kill }`. Omit for a target with no install step.
@@ -28,6 +34,7 @@
  *    quality). Omit when a target has nothing extra to report.
  */
 
+import { hfChildEnv } from '../../lib/hfToken.js';
 import {
   isTrellis2Installed,
   installTrellis2,
@@ -39,6 +46,10 @@ import {
 export const TARGET_ADAPTERS = Object.freeze({
   trellis2: Object.freeze({
     isInstalled: isTrellis2Installed,
+    // The pipeline pulls gated HF repos (DINOv3, RMBG-2.0) at load time, so both
+    // install and render need the resolved token — settings.imageGen.hfToken
+    // first, then the env/CLI fallbacks.
+    resolveEnv: hfChildEnv,
     async install({ onEvent = () => {}, env } = {}) {
       // `setup.sh` compiles its texture-baking backends from `.metal` sources but
       // swallows each failure and still exits 0, so a host missing the toolchain

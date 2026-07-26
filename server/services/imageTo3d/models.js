@@ -19,7 +19,6 @@ import { randomUUID } from 'crypto';
 import { join } from 'node:path';
 import { rm } from 'node:fs/promises';
 import { ServerError } from '../../lib/errorHandler.js';
-import { hfChildEnv } from '../../lib/hfToken.js';
 import { PATHS, resolveGalleryImage, ensureDir } from '../../lib/fileUtils.js';
 import { slugifyForFilename } from '../../lib/civitai.js';
 import { detectHostCapabilities, resolveTarget, DEFAULT_IMAGE_TO_3D_TARGET } from './targets.js';
@@ -55,8 +54,8 @@ async function cleanupRenderDir(id) {
 /**
  * Verify a target can actually run on this host right now — unknown target →
  * 400, hardware-unsupported → 409 (reason surfaced), not-installed → 409 so the
- * UI can open the install flow. Returns the resolved runner entry. Pure w.r.t.
- * the DB; `caps` is injected so the check is deterministic.
+ * UI can open the install flow. Returns the resolved adapter. Pure w.r.t. the DB;
+ * `caps` is injected so the check is deterministic.
  */
 function assertTargetReady(targetId, caps) {
   const { target, available, reason } = resolveTarget(targetId, caps);
@@ -69,17 +68,17 @@ function assertTargetReady(targetId, caps) {
       { status: 409, code: 'TARGET_UNAVAILABLE', context: { reason } },
     );
   }
-  const runner = getTargetAdapter(targetId);
-  if (!runner) {
+  const adapter = getTargetAdapter(targetId);
+  if (!adapter) {
     throw new ServerError(`Target ${target.label} has no runner wired`, { status: 501, code: 'TARGET_NO_RUNNER' });
   }
-  if (!runner.isInstalled()) {
+  if (!adapter.isInstalled()) {
     throw new ServerError(
       `${target.label} is not installed. Install it before generating.`,
       { status: 409, code: 'TARGET_NOT_INSTALLED' },
     );
   }
-  return runner;
+  return adapter;
 }
 
 function updateRun(runs, operationId, patch) {
@@ -111,20 +110,20 @@ async function failGeneration(id, operationId, error) {
   });
 }
 
-async function executeRender({ id, operationId, runner, sourcePath }) {
+async function executeRender({ id, operationId, adapter, sourcePath }) {
   const outputPath = assetDiskPath(id);
   let lastPersistedPercent = -1;
   try {
     await ensureDir(join(PATHS.imageTo3d, id));
-    // The pipeline pulls gated HF repos (DINOv3, RMBG-2.0) at load time, so hand the
-    // child our resolved token — settings.imageGen.hfToken first, then the env/CLI
-    // fallbacks. Resolving HERE (an async caller) keeps the runner synchronous so its
-    // { promise, kill } contract holds.
-    const env = await hfChildEnv();
+    // Resolve this target's own credential/env needs via its adapter (e.g.
+    // TRELLIS.2 resolves the stored Hugging Face token) — omitted for a target
+    // with nothing to resolve. Resolving HERE (an async caller) keeps `run`
+    // synchronous so its { promise, kill } contract holds.
+    const env = adapter.resolveEnv ? await adapter.resolveEnv() : undefined;
     // The runner returns a { promise, kill } pair (see runTrellis2Generate) — retain
     // the kill handle so deleteModel can SIGTERM this render if the record is deleted
     // mid-flight.
-    const { promise, kill } = runner.run({
+    const { promise, kill } = adapter.run({
       imagePath: sourcePath,
       outputPath,
       env,
@@ -219,13 +218,13 @@ export async function createModel(input, { caps = detectHostCapabilities() } = {
   const targetId = input.target || DEFAULT_IMAGE_TO_3D_TARGET;
   // Validate the target is runnable BEFORE persisting a record so we never leave
   // a dangling draft when the host can't render / the model isn't installed.
-  const runner = assertTargetReady(targetId, caps);
+  const adapter = assertTargetReady(targetId, caps);
   const created = await store.createModel({ ...input, target: targetId });
-  // Thread the already-validated runner + resolved source straight into the
+  // Thread the already-validated adapter + resolved source straight into the
   // render — createModel and startGeneration share `beginRender`, so the create
   // path does NOT re-resolve the gallery image, re-assert readiness, or re-fetch
   // the row it just wrote.
-  return beginRender(created, runner, sourcePath);
+  return beginRender(created, adapter, sourcePath);
 }
 
 export async function startGeneration(id, { caps = detectHostCapabilities() } = {}) {
@@ -236,22 +235,22 @@ export async function startGeneration(id, { caps = detectHostCapabilities() } = 
     throw new ServerError('This model is already generating', { status: 409, code: 'MODEL_BUSY' });
   }
 
-  const runner = assertTargetReady(current.target, caps);
+  const adapter = assertTargetReady(current.target, caps);
   const sourcePath = resolveGalleryImage(current.sourceImage?.filename);
   if (!sourcePath) {
     throw new ServerError('The source gallery image is no longer available', { status: 409, code: 'GALLERY_IMAGE_NOT_FOUND' });
   }
-  return beginRender(current, runner, sourcePath);
+  return beginRender(current, adapter, sourcePath);
 }
 
 /**
  * Flip a validated record to `generating`, append a run, and dispatch the async
  * render. The single write path shared by create + regenerate — callers do the
  * validation (target readiness, gallery-image resolution) and pass the resolved
- * runner + source through. The transactional `status==='generating'` guard here
+ * adapter + source through. The transactional `status==='generating'` guard here
  * is the authoritative race check (the callers' pre-check is just a fast 409).
  */
-async function beginRender(record, runner, sourcePath) {
+async function beginRender(record, adapter, sourcePath) {
   const { id } = record;
   const operationId = randomUUID();
   const startedAt = new Date().toISOString();
@@ -281,7 +280,7 @@ async function beginRender(record, runner, sourcePath) {
 
   activeOperations.add(operationId);
   setImmediate(() => {
-    void executeRender({ id, operationId, runner, sourcePath });
+    void executeRender({ id, operationId, adapter, sourcePath });
   });
   return next;
 }

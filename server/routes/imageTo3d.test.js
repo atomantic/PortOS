@@ -256,7 +256,7 @@ describe('GET /trellis2/install (SSE)', () => {
     }));
   });
 
-  it('emits a terminal error frame — not a half-open stream — when the token env cannot be resolved', async () => {
+  it('emits a terminal error frame — not a half-open stream — when the env cannot be resolved', async () => {
     // The SSE headers are already flushed by this point, so a throw here can't
     // reach the error middleware as JSON; it has to surface as an error frame.
     trellis2.installTrellis2.mockClear();
@@ -267,7 +267,7 @@ describe('GET /trellis2/install (SSE)', () => {
     const frames = sseFrames(res.text);
     expect(frames.at(-1)).toMatchObject({
       type: 'error',
-      message: expect.stringMatching(/Hugging Face token/i),
+      message: expect.stringMatching(/could not prepare.*install environment.*settings\.json is not valid JSON/i),
     });
     // And no multi-GB install is started on a failed resolve.
     expect(trellis2.installTrellis2).not.toHaveBeenCalled();

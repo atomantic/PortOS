@@ -21,7 +21,6 @@ import {
   getModelAsset,
 } from '../services/imageTo3d/models.js';
 import { createInstallLogger } from '../lib/installLogger.js';
-import { hfChildEnv } from '../lib/hfToken.js';
 import { openSseStream } from '../lib/sseDownload.js';
 
 const router = Router();
@@ -35,11 +34,12 @@ const createModelSchema = z.object({
   target: z.enum([...IMAGE_TO_3D_TARGET_IDS]).optional(),
 });
 
-// In-flight installs, keyed by target id — a rapid double-click would otherwise
-// race two clone/setup processes against the same install dir. isInstalled() can't
-// gate the second click (the first install hasn't produced the venv yet). Mirrors
-// imageGenSetup.js's flux2InstallInFlight, generalized per-target.
-const installsInFlight = new Map();
+// Target ids with an install currently running — a rapid double-click would
+// otherwise race two clone/setup processes against the same install dir.
+// isInstalled() can't gate the second click (the first install hasn't produced
+// the venv yet). Mirrors imageGenSetup.js's flux2InstallInFlight, generalized
+// per-target.
+const installsInFlight = new Set();
 
 /**
  * The selectable image→3D targets, each annotated with whether it can run on
@@ -117,19 +117,19 @@ async function handleTargetInstall(targetId, req, res) {
   }
   // Claim the in-flight slot synchronously, before any await, so two
   // near-simultaneous requests for the same target can't both pass the check above.
-  installsInFlight.set(targetId, true);
+  installsInFlight.add(targetId);
 
   // Server-console visibility for the multi-GB install (start / stages / outcome).
   const installLog = createInstallLogger({ installer: target.label, target: targetId });
   const emit = (event) => { installLog.onEvent(event); send(event); };
   installLog.start();
 
-  // Disconnect bookkeeping wired BEFORE the token-resolution await below (the
-  // same hazard `lib/sseDownload.js` documents): that await does a settings read
-  // plus a token-file read, and a client closing during it would otherwise land
-  // with no listener — the handler would go on to spawn a multi-GB clone with no
-  // kill path, leaving the in-flight slot pinned until it finished on its own and
-  // blocking every later Install click.
+  // Disconnect bookkeeping wired BEFORE the env-resolution await below (the same
+  // hazard `lib/sseDownload.js` documents): that await can do a settings read plus
+  // a token-file read (e.g. TRELLIS.2's `resolveEnv`), and a client closing during
+  // it would otherwise land with no listener — the handler would go on to spawn a
+  // multi-GB clone with no kill path, leaving the in-flight slot pinned until it
+  // finished on its own and blocking every later Install click.
   let currentKill = null;
   let aborted = false;
   req.on('close', () => {
@@ -142,18 +142,17 @@ async function handleTargetInstall(targetId, req, res) {
     safeEnd();
   });
 
-  // Carry the stored HF token into the install too: not every target needs it,
-  // but a target that pulls gated weights does, and one env source beats two per
-  // adapter. Guarded because the SSE headers are already flushed by this point —
-  // a throw here (e.g. an unparseable settings.json) can't reach the error
-  // middleware as JSON, so it has to surface as a terminal `error` frame or the
-  // client hangs on a half-open stream.
+  // Each target declares its own credential/env needs via `resolveEnv` — omit it
+  // for a target with nothing to resolve. Guarded because the SSE headers are
+  // already flushed by this point — a throw here (e.g. an unparseable
+  // settings.json) can't reach the error middleware as JSON, so it has to surface
+  // as a terminal `error` frame or the client hangs on a half-open stream.
   let installEnv;
   try {
-    installEnv = await hfChildEnv();
+    installEnv = adapter.resolveEnv ? await adapter.resolveEnv() : undefined;
   } catch (err) {
-    console.error(`❌ ${target.label} install could not resolve the Hugging Face token env: ${err.message}`);
-    emit({ type: 'error', message: `Could not read settings to resolve the Hugging Face token: ${err.message}` });
+    console.error(`❌ ${target.label} install could not resolve its environment: ${err.message}`);
+    emit({ type: 'error', message: `Could not prepare the ${target.label} install environment: ${err.message}` });
     installsInFlight.delete(targetId);
     return safeEnd();
   }
