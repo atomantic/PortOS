@@ -79,6 +79,36 @@ export function isCodexProvider(provider) {
 }
 
 /**
+ * True when a provider is Claude-Code-flavored — a `claude-code*` provider id or
+ * any provider whose launch command basename is `claude` (path/exe tolerant).
+ *
+ * Unlike `isClaudeCommand`, a BLANK command does not count: this identifies a
+ * provider positively, and callers that gate a Claude-only capability on it must
+ * not treat "unknown" as Claude. Same posture as `effortLevelsForProvider`, which
+ * this replaces the inline copy of.
+ * @param {{id?:string, command?:string}|null|undefined} provider
+ * @returns {boolean}
+ */
+export function isClaudeProvider(provider) {
+  if (!provider) return false;
+  return String(provider.id || '').toLowerCase().startsWith('claude-code')
+    || commandBasename(provider.command) === 'claude';
+}
+
+/**
+ * True when a provider is OpenCode-flavored — the shipped `opencode`/`opencode-tui`
+ * ids or any provider whose launch command basename is `opencode`. The
+ * provider-shaped companion to `isOpencodeCommand`, same posture as
+ * `isCodexProvider`.
+ * @param {{id?:string, command?:string}|null|undefined} provider
+ * @returns {boolean}
+ */
+export function isOpencodeProvider(provider) {
+  const id = String(provider?.id || '').toLowerCase();
+  return id === 'opencode' || id === 'opencode-tui' || isOpencodeCommand(provider?.command);
+}
+
+/**
  * True when a provider is Kimi-Code-flavored — the shipped `kimi-cli`/`kimi-tui`
  * ids or any provider whose launch command basename is `kimi` (path/exe tolerant).
  * The single home for the kimi signature, same posture as `isCodexProvider`.
@@ -105,8 +135,7 @@ export function isKimiProvider(provider) {
 export function effortLevelsForProvider(provider) {
   if (!provider) return null;
   if (isCodexProvider(provider)) return CODEX_EFFORT_LEVELS;
-  const id = String(provider.id || '').toLowerCase();
-  if (id.startsWith('claude-code') || commandBasename(provider.command) === 'claude') return CLAUDE_EFFORT_LEVELS;
+  if (isClaudeProvider(provider)) return CLAUDE_EFFORT_LEVELS;
   return null;
 }
 

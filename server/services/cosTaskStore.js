@@ -304,6 +304,11 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     if (REVIEW_STOP_MODES.includes(taskData.reviewStopMode)) metadata.reviewStopMode = taskData.reviewStopMode;
     if (taskData.reviewerApplies === true) metadata.reviewerApplies = true;
     else if (taskData.reviewerApplies === false) metadata.reviewerApplies = false;
+    // Bundled slashdo workflow this task runs (#3089), as the BARE command name
+    // — the prompt builder renders the invocation shape once the provider is
+    // known (see server/lib/slashdoInvocation.js).
+    if (taskData.slashdoCommand) metadata.slashdoCommand = taskData.slashdoCommand;
+    if (taskData.slashdoArgs) metadata.slashdoArgs = taskData.slashdoArgs;
     if (taskData.jiraTicketId) metadata.jiraTicketId = taskData.jiraTicketId;
     if (taskData.jiraTicketUrl) metadata.jiraTicketUrl = taskData.jiraTicketUrl;
     if (taskData.screenshots?.length > 0) metadata.screenshots = taskData.screenshots;

@@ -13,7 +13,7 @@
  * autonomous agent…" preamble are gone from BOTH paths.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 
@@ -67,6 +67,7 @@ import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBull
 import { getCodeReviewDefaults } from './codeReview.js'; // mocked above — control the configured default
 import { isTruthyMeta } from './agentState.js';
 import { buildPrompt } from './promptService.js'; // mocked above — inspect call args
+import { loadSlashdoFile } from '../lib/fileUtils.js'; // mocked above — control the inlined body
 
 function makeTask(overrides = {}) {
   return {
@@ -1497,5 +1498,97 @@ describe('buildReviewLoopFollowUpSection — CLI reviewer procedure inlining', (
     expect(out).not.toContain('CLI Reviewer Procedure');
     // Still emits the base invocation step so the loop is not broken.
     expect(out).toMatch(/codex/);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Slashdo-backed tasks (#3089)
+// -----------------------------------------------------------------------------
+// A quick-template task persists only the BARE command name; the invocation is
+// resolved here, where the provider is finally known. Assertions are on SHAPE
+// (invocation line present, body non-empty) — never on the vendored submodule's
+// exact text, which is upstream's to change.
+describe('buildAgentPrompt — slashdo-backed tasks', () => {
+  const slashdoTask = (metadata = {}) => makeTask({
+    description: 'Add rate limiting to the widget API',
+    metadata: { slashdoCommand: 'plan-task', ...metadata },
+  });
+
+  beforeEach(() => {
+    vi.mocked(loadSlashdoFile).mockResolvedValue(null);
+  });
+
+  it('renders the Claude Code invocation for a claude-code provider', async () => {
+    const prompt = await buildAgentPrompt(
+      slashdoTask(), {}, '/r', null, isTruthyMeta,
+      { providerType: 'cli', providerId: 'claude-code' });
+    expect(prompt).toContain('/do:plan-task');
+    expect(prompt).toContain('Add rate limiting to the widget API');
+  });
+
+  it('renders the flat invocation for OpenCode', async () => {
+    const prompt = await buildAgentPrompt(
+      slashdoTask(), {}, '/r', null, isTruthyMeta,
+      { providerType: 'tui', providerId: 'opencode-tui', providerCommand: 'opencode' });
+    expect(prompt).toContain('/do-plan-task');
+    expect(prompt).not.toContain('/do:plan-task');
+  });
+
+  it('names the skill instead of a slash command for a skill-style CLI', async () => {
+    const prompt = await buildAgentPrompt(
+      slashdoTask(), {}, '/r', null, isTruthyMeta,
+      { providerType: 'cli', providerId: 'codex' });
+    expect(prompt).toContain('do-plan-task');
+    expect(prompt).not.toContain('/do:plan-task');
+  });
+
+  // PortOS surfaces slashdo as slash commands only via the repo-local
+  // `.claude/commands/do/` symlinks, which a managed app's workspace doesn't
+  // have — so the procedure ships with the prompt for every provider, and the
+  // typed invocation is a shortcut, not the thing the prompt relies on.
+  it.each(['claude-code', 'opencode', 'codex'])('inlines the command body for %s', async (providerId) => {
+    vi.mocked(loadSlashdoFile).mockResolvedValue('# Plan Task\n\nInvestigate, then file the issue.');
+    const prompt = await buildAgentPrompt(
+      slashdoTask(), {}, '/r', null, isTruthyMeta,
+      { providerType: 'cli', providerId });
+    expect(prompt).toContain('Investigate, then file the issue.');
+    expect(vi.mocked(loadSlashdoFile)).toHaveBeenCalledWith('plan-task', { stripFrontmatter: true });
+  });
+
+  it('still emits the invocation when the body cannot be loaded', async () => {
+    vi.mocked(loadSlashdoFile).mockResolvedValue(null);
+    const prompt = await buildAgentPrompt(
+      slashdoTask(), {}, '/r', null, isTruthyMeta,
+      { providerType: 'cli', providerId: 'claude-code' });
+    expect(prompt).toContain('/do:plan-task');
+  });
+
+  it('uses explicit slashdoArgs when present', async () => {
+    const prompt = await buildAgentPrompt(
+      slashdoTask({ slashdoArgs: '--issues 42' }), {}, '/r', null, isTruthyMeta,
+      { providerType: 'cli', providerId: 'claude-code' });
+    expect(prompt).toContain('/do:plan-task --issues 42');
+  });
+
+  it('reaches the api-path briefing template through task.description', async () => {
+    vi.mocked(buildPrompt).mockClear();
+    await buildAgentPrompt(slashdoTask(), {}, '/r', null, isTruthyMeta, { providerType: 'api', providerId: 'claude-code' });
+    const [, context] = vi.mocked(buildPrompt).mock.calls.at(-1);
+    expect(context.task.description).toContain('/do:plan-task');
+  });
+
+  it('leaves a task with no slashdoCommand untouched', async () => {
+    const prompt = await buildAgentPrompt(
+      makeTask(), {}, '/r', null, isTruthyMeta,
+      { providerType: 'cli', providerId: 'claude-code' });
+    expect(prompt).not.toContain('Slashdo Workflow');
+  });
+
+  it('ignores an invalid command rather than joining it into a path', async () => {
+    const prompt = await buildAgentPrompt(
+      slashdoTask({ slashdoCommand: '../../etc/passwd' }), {}, '/r', null, isTruthyMeta,
+      { providerType: 'cli', providerId: 'codex' });
+    expect(prompt).not.toContain('Slashdo Workflow');
+    expect(vi.mocked(loadSlashdoFile)).not.toHaveBeenCalledWith('../../etc/passwd', expect.anything());
   });
 });

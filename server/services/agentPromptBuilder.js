@@ -19,6 +19,7 @@ import { readJSONFile, loadSlashdoFile, loadSlashdoLib, PATHS, tryReadFile } fro
 import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, resolveReviewUsernames, resolveOptionalReviewers, resolveKeyedReviewers, buildReviewWithArgs } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { isOpencodeCommand } from '../lib/providerModels.js';
+import { resolveSlashdoInvocation, buildSlashdoSection } from '../lib/slashdoInvocation.js';
 import { shellQuote } from '../lib/shellQuote.js';
 import { detectForgeCli } from '../lib/gitForge.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
@@ -293,6 +294,42 @@ export function reconcileSplitContext(task) {
   if (firstNonEmpty !== task.description.trim()) return task;
   const { context: _dropped, ...restMeta } = task.metadata;
   return { ...task, description: context, metadata: restMeta };
+}
+
+/**
+ * Fold a slashdo-backed task's invocation + procedure into its description (#3089).
+ *
+ * A task that names a bundled workflow persists only the BARE command
+ * (`metadata.slashdoCommand`) because the form's provider select defaults to
+ * "Auto" — the concrete shape (`/do:x`, `/do-x`, or an Agent Skill selected by
+ * name) is only knowable here, once the scheduler has picked a provider.
+ *
+ * The command body is inlined for every provider, not just the skill-style ones:
+ * PortOS ships slashdo as a submodule and only surfaces it as slash commands via
+ * the repo-local `.claude/commands/do/` symlinks, which don't exist in the
+ * managed-app workspaces most CoS tasks run in. See `buildSlashdoSection`.
+ *
+ * Applied to the description (on a COPY — the stored task is untouched) rather
+ * than emitted as its own template slot, because the briefing template renders
+ * `{{task.description}}`: a new `{{slashdoSection}}` placeholder would be
+ * silently dropped by every install whose customized template predates it.
+ *
+ * @returns {Promise<Object>} the task, or a copy carrying the invocation
+ */
+async function applySlashdoInvocation(task, { providerId = null, providerCommand = null, leanMode = false } = {}) {
+  const command = task.metadata?.slashdoCommand;
+  const resolved = resolveSlashdoInvocation({
+    command,
+    args: task.metadata?.slashdoArgs || '',
+    providerId,
+    providerCommand,
+    leanMode,
+  });
+  if (!resolved) return task;
+
+  const body = await loadSlashdoFile(command, { stripFrontmatter: true }).catch(() => null);
+  if (!body) console.log(`⚠️ Slashdo command body unavailable, sending invocation only: ${command}`);
+  return { ...task, description: `${task.description}\n\n${buildSlashdoSection(resolved, body)}` };
 }
 
 /**
@@ -883,6 +920,11 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   const providerId = options.providerId || null;
   const providerCommand = options.providerCommand || null;
   const isTui = providerType === PROVIDER_TYPES.TUI;
+  const leanMode = options.leanMode === true;
+
+  // Render a slashdo-backed task's invocation now that the provider is known —
+  // before the light-path branch below, so both paths carry it.
+  task = await applySlashdoInvocation(task, { providerId, providerCommand, leanMode });
 
   // Install-wide default reviewer list (Code Review Defaults panel →
   // `settings.codeReview.reviewers`). Threaded as the `normalizeReviewers`
@@ -909,7 +951,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
     : null;
 
   if (LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType)) {
-    const lightOptions = { isTui, providerId, providerCommand, leanMode: options.leanMode === true, defaultReviewers, codeReviewDefaults, localAgentLoopBody };
+    const lightOptions = { isTui, providerId, providerCommand, leanMode, defaultReviewers, codeReviewDefaults, localAgentLoopBody };
     return options.split === true
       ? buildLightContextPromptParts(task, workspaceDir, worktreeInfo, isTruthyMetaFn, lightOptions)
       : buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, lightOptions);
@@ -1316,6 +1358,13 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // (the slashdo submodule mounts those as project-level slash commands).
   // Other CLI providers (codex, antigravity) can't — they get the legacy
   // commit-only block where PortOS handles push+PR on exit.
+  //
+  // Deliberately NOT `resolveSlashdoStyle` (slashdoInvocation.js): that resolver
+  // refuses to read a blank command as Claude, while these two gates depend on
+  // the opposite posture — the TUI spawner's `inferTuiCommand` resolves a blank
+  // command to `claude`, so an unidentified TUI is slashdo-capable here. The two
+  // questions ("can this host TYPE /do:pr" vs "how do I PHRASE a workflow
+  // invocation") only look alike. Converging them is issue #3114.
   const hasSlashdo = !isTui && (providerId === 'claude-code' || providerId === 'claude-code-bedrock');
   // A TUI that does NOT load Claude Code slash commands can't run `/do:pr` /
   // `/do:push`, so its completion workflow uses plain git/gh instead. Two ways

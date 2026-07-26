@@ -238,6 +238,25 @@ describe('cosTaskStore.addTask', () => {
     expect(reloaded.metadata.affectedTasks).toEqual(['task-abc']);
   });
 
+  it('persists a slashdo workflow as the BARE command name, never a rendered invocation (#3089)', async () => {
+    const created = await addTask({ description: 'Plan the widget API', slashdoCommand: 'plan-task' }, 'user');
+    expect(created.metadata.slashdoCommand).toBe('plan-task');
+    // A literal `/do:plan-task` frozen in at form time would be Claude-only —
+    // the provider select defaults to Auto, so the invocation shape must stay
+    // unresolved until the scheduler picks one.
+    expect(created.description).not.toContain('/do:');
+    expect(JSON.stringify(created.metadata)).not.toContain('/do:');
+
+    const { tasks } = await getUserTasks();
+    expect(tasks.find(t => t.id === created.id).metadata.slashdoCommand).toBe('plan-task');
+  });
+
+  it('omits slashdo metadata when no workflow is pinned', async () => {
+    const created = await addTask({ description: 'ordinary prose task' }, 'user');
+    expect(created.metadata.slashdoCommand).toBeUndefined();
+    expect(created.metadata.slashdoArgs).toBeUndefined();
+  });
+
   it('omits investigation guard metadata when not supplied', async () => {
     const created = await addTask({ description: 'ordinary task' }, 'user');
     expect(created.metadata.isInvestigation).toBeUndefined();

@@ -5,6 +5,12 @@
 import { Router } from 'express';
 import * as taskTemplates from '../services/taskTemplates.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validation.js';
+import {
+  createTaskTemplateSchema,
+  updateTaskTemplateSchema,
+  taskTemplateFromTaskSchema
+} from '../lib/cosValidation.js';
 
 const router = Router();
 
@@ -29,26 +35,13 @@ router.get('/templates/categories', asyncHandler(async (req, res) => {
 
 // POST /api/cos/templates - Create a new template
 router.post('/templates', asyncHandler(async (req, res) => {
-  const { name, icon, description, context, category, provider, model, effort, app } = req.body;
-
-  if (!name || !description) {
-    throw new ServerError('name and description are required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-
-  const template = await taskTemplates.createTemplate({
-    name, icon, description, context, category, provider, model, effort, app
-  });
+  const template = await taskTemplates.createTemplate(validateRequest(createTaskTemplateSchema, req.body));
   res.json({ success: true, template });
 }));
 
 // POST /api/cos/templates/from-task - Create template from task
 router.post('/templates/from-task', asyncHandler(async (req, res) => {
-  const { task, templateName } = req.body;
-
-  if (!task || !task.description) {
-    throw new ServerError('task with description is required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-
+  const { task, templateName } = validateRequest(taskTemplateFromTaskSchema, req.body);
   const template = await taskTemplates.createTemplateFromTask(task, templateName);
   res.json({ success: true, template });
 }));
@@ -61,17 +54,10 @@ router.post('/templates/:id/use', asyncHandler(async (req, res) => {
 
 // PUT /api/cos/templates/:id - Update a template
 router.put('/templates/:id', asyncHandler(async (req, res) => {
-  const { name, icon, description, context, category, provider, model, effort, app } = req.body;
-  const updates = {};
-  if (name !== undefined) updates.name = name;
-  if (icon !== undefined) updates.icon = icon;
-  if (description !== undefined) updates.description = description;
-  if (context !== undefined) updates.context = context;
-  if (category !== undefined) updates.category = category;
-  if (provider !== undefined) updates.provider = provider;
-  if (model !== undefined) updates.model = model;
-  if (effort !== undefined) updates.effort = effort;
-  if (app !== undefined) updates.app = app;
+  // Only forward keys the caller actually sent — an absent field must leave the
+  // stored value alone rather than overwrite it with undefined.
+  const parsed = validateRequest(updateTaskTemplateSchema, req.body);
+  const updates = Object.fromEntries(Object.entries(parsed).filter(([, v]) => v !== undefined));
   const result = await taskTemplates.updateTemplate(req.params.id, updates);
   if (result.error) {
     throw new ServerError(result.error, { status: 400, code: 'BAD_REQUEST' });

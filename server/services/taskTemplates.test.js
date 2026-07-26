@@ -91,7 +91,7 @@ describe('taskTemplates service', () => {
         ],
         usage: {
           'user-abc123': 5,
-          'builtin-mobile-fix': 3
+          'builtin-do-plan-task': 3
         },
         lastUpdated: '2025-01-01T00:00:00.000Z'
       });
@@ -99,7 +99,7 @@ describe('taskTemplates service', () => {
       const templates = await getAllTemplates();
 
       const userTemplate = templates.find(t => t.id === 'user-abc123');
-      const builtinTemplate = templates.find(t => t.id === 'builtin-mobile-fix');
+      const builtinTemplate = templates.find(t => t.id === 'builtin-do-plan-task');
 
       expect(userTemplate.useCount).toBe(5);
       expect(builtinTemplate.useCount).toBe(3);
@@ -151,7 +151,7 @@ describe('taskTemplates service', () => {
         lastUpdated: null
       });
 
-      const result = await deleteTemplate('builtin-mobile-fix');
+      const result = await deleteTemplate('builtin-do-plan-task');
 
       expect(result.error).toBe('Cannot delete built-in templates');
       expect(writeFile).not.toHaveBeenCalled();
@@ -192,18 +192,18 @@ describe('taskTemplates service', () => {
       readJSONFile.mockResolvedValue({
         userTemplates: [],
         usage: {
-          'builtin-mobile-fix': 3
+          'builtin-do-plan-task': 3
         },
         lastUpdated: '2025-01-01T00:00:00.000Z'
       });
 
-      const count = await recordTemplateUsage('builtin-mobile-fix');
+      const count = await recordTemplateUsage('builtin-do-plan-task');
 
       expect(count).toBe(4);
       expect(writeFile).toHaveBeenCalled();
 
       const savedState = JSON.parse(writeFile.mock.calls[0][1]);
-      expect(savedState.usage['builtin-mobile-fix']).toBe(4);
+      expect(savedState.usage['builtin-do-plan-task']).toBe(4);
     });
   });
 
@@ -222,8 +222,8 @@ describe('taskTemplates service', () => {
         ],
         usage: {
           'user-abc123': 10,
-          'builtin-mobile-fix': 3,
-          'builtin-add-feature': 7
+          'builtin-do-plan-task': 3,
+          'builtin-do-next': 7
         },
         lastUpdated: '2025-01-01T00:00:00.000Z'
       });
@@ -233,10 +233,64 @@ describe('taskTemplates service', () => {
       expect(popular.length).toBe(3);
       expect(popular[0].id).toBe('user-abc123');
       expect(popular[0].useCount).toBe(10);
-      expect(popular[1].id).toBe('builtin-add-feature');
+      expect(popular[1].id).toBe('builtin-do-next');
       expect(popular[1].useCount).toBe(7);
-      expect(popular[2].id).toBe('builtin-mobile-fix');
+      expect(popular[2].id).toBe('builtin-do-plan-task');
       expect(popular[2].useCount).toBe(3);
+    });
+  });
+
+  describe('slashdo built-ins (#3089)', () => {
+    it('ships one template per bundled slashdo workflow, with implied settings', async () => {
+      readJSONFile.mockResolvedValue(null);
+
+      const templates = await getAllTemplates();
+      const slashdo = templates.filter(t => t.slashdoCommand);
+
+      expect(slashdo.map(t => t.slashdoCommand).sort()).toEqual(
+        ['better', 'depfree', 'next', 'plan-task', 'release', 'replan', 'review', 'scan']
+      );
+      // Every one of these either writes no code at all or manages its own
+      // worktree/PR, so none of them want PortOS to wrap another one around it.
+      for (const t of slashdo) {
+        expect(t.settings).toEqual({ useWorktree: false, openPR: false, simplify: false });
+      }
+      // The BARE command name is what is stored — a rendered `/do:x` string
+      // would be Claude-only, and the provider is unknown at pick time.
+      expect(slashdo.every(t => !t.slashdoCommand.includes('/'))).toBe(true);
+    });
+
+    it('drops the generic phrase stubs the slashdo set replaced', async () => {
+      readJSONFile.mockResolvedValue(null);
+
+      const templates = await getAllTemplates();
+      expect(templates.find(t => t.description === 'Fix the bug where')).toBeUndefined();
+      expect(templates.find(t => t.description === 'Refactor')).toBeUndefined();
+    });
+  });
+
+  describe('orphaned built-in usage counters', () => {
+    it('drops usage entries for builtin-* ids that no longer exist', async () => {
+      readJSONFile.mockResolvedValue({
+        userTemplates: [{ id: 'user-abc123', name: 'Mine', description: 'Custom', isBuiltin: false }],
+        usage: {
+          'builtin-fix-bug': 12,        // removed in #3089
+          'builtin-improve-ux': 4,      // removed in #3089
+          'builtin-do-plan-task': 2,    // still shipped
+          'user-abc123': 9              // user counters are never pruned here
+        },
+        lastUpdated: '2025-01-01T00:00:00.000Z'
+      });
+
+      const count = await recordTemplateUsage('builtin-do-plan-task');
+      expect(count).toBe(3);
+
+      const savedState = JSON.parse(writeFile.mock.calls[0][1]);
+      expect(savedState.usage['builtin-fix-bug']).toBeUndefined();
+      expect(savedState.usage['builtin-improve-ux']).toBeUndefined();
+      expect(savedState.usage['builtin-do-plan-task']).toBe(3);
+      expect(savedState.usage['user-abc123']).toBe(9);
+      expect(savedState.userTemplates.length).toBe(1);
     });
   });
 });

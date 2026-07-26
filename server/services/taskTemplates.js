@@ -11,81 +11,117 @@ import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js
 const DATA_DIR = PATHS.cos;
 const TEMPLATES_FILE = join(DATA_DIR, 'task-templates.json');
 
-// Built-in templates based on common task patterns
+// Built-in templates: one per bundled slashdo workflow worth launching
+// unattended (`lib/slashdo/commands/do/*.md`). These replaced eight generic
+// phrase stubs ("Fix the bug where", "Refactor", …) which only seeded a
+// sentence fragment the user had to finish typing anyway (#3089).
+//
+// `slashdoCommand` is the BARE command name — never a rendered `/do:x` string
+// (see `server/lib/slashdoInvocation.js` for why).
+//
+// `settings` are the run-shape defaults a workflow implies. Every entry sets
+// `useWorktree`/`openPR`/`simplify` to false, for two distinct reasons:
+//   - plan-task / replan / review / scan write no code at all, so there is
+//     nothing to isolate, PR, or simplify.
+//   - next / better / depfree / release MANAGE THEIR OWN worktrees and PRs — a
+//     PortOS-level worktree would nest one inside another, and `release` must
+//     run from `main` in the primary checkout.
+// A key absent from `settings` means "leave the current toggle alone" (the
+// absent-vs-empty rule) — it does NOT mean false.
+const WORKFLOW_OWNS_ITS_OWN_GIT = { useWorktree: false, openPR: false, simplify: false };
+
 const BUILT_IN_TEMPLATES = [
   {
-    id: 'builtin-mobile-fix',
-    name: 'Fix Mobile Responsiveness',
-    icon: '📱',
-    description: 'Make this page mobile-friendly',
-    context: 'Check viewport sizes 375px, 768px, and 1024px. Fix Tailwind responsive classes.',
-    category: 'ui',
+    id: 'builtin-do-plan-task',
+    name: 'Plan a Task',
+    icon: '📋',
+    slashdoCommand: 'plan-task',
+    description: 'Investigate and file a decision-complete issue for: ',
+    context: 'Runs the slashdo plan-task workflow: investigate the codebase, then file a ready-to-work issue.',
+    category: 'slashdo',
+    settings: WORKFLOW_OWNS_ITS_OWN_GIT,
     isBuiltin: true
   },
   {
-    id: 'builtin-add-feature',
-    name: 'Add New Feature',
-    icon: '✨',
-    description: 'Add a new feature to',
-    context: 'Follow existing patterns in the codebase. Write tests for new functionality.',
-    category: 'feature',
+    id: 'builtin-do-next',
+    name: 'Ship Next Issue',
+    icon: '🎯',
+    slashdoCommand: 'next',
+    description: 'Claim and ship the next open issue',
+    context: 'Runs the slashdo next workflow: claim an unclaimed item, do the work in its own worktree, ship a PR.',
+    category: 'slashdo',
+    settings: WORKFLOW_OWNS_ITS_OWN_GIT,
     isBuiltin: true
   },
   {
-    id: 'builtin-fix-bug',
-    name: 'Fix Bug',
-    icon: '🐛',
-    description: 'Fix the bug where',
-    context: 'Investigate root cause, implement fix, add test to prevent regression.',
-    category: 'bugfix',
+    id: 'builtin-do-replan',
+    name: 'Replan Backlog',
+    icon: '🗺️',
+    slashdoCommand: 'replan',
+    description: 'Audit and triage the backlog',
+    context: 'Runs the slashdo replan workflow: prune completed items, suggest new work, keep the plan lean.',
+    category: 'slashdo',
+    settings: WORKFLOW_OWNS_ITS_OWN_GIT,
     isBuiltin: true
   },
   {
-    id: 'builtin-refactor',
-    name: 'Refactor Code',
-    icon: '🔧',
-    description: 'Refactor',
-    context: 'Improve code quality while maintaining existing behavior. Ensure tests pass.',
-    category: 'refactor',
+    id: 'builtin-do-review',
+    name: 'Review Changes',
+    icon: '🔍',
+    slashdoCommand: 'review',
+    description: 'Deep code review of the changed files',
+    context: 'Runs the slashdo review workflow: review changed files against software engineering best practices.',
+    category: 'slashdo',
+    settings: WORKFLOW_OWNS_ITS_OWN_GIT,
     isBuiltin: true
   },
   {
-    id: 'builtin-add-test',
-    name: 'Add Tests',
-    icon: '🧪',
-    description: 'Add tests for',
-    context: 'Write unit tests with good coverage. Follow existing test patterns.',
-    category: 'testing',
+    id: 'builtin-do-release',
+    name: 'Cut a Release',
+    icon: '🚀',
+    slashdoCommand: 'release',
+    description: 'Create a release PR',
+    context: "Runs the slashdo release workflow using the project's documented release process.",
+    category: 'slashdo',
+    settings: WORKFLOW_OWNS_ITS_OWN_GIT,
     isBuiltin: true
   },
   {
-    id: 'builtin-improve-ux',
-    name: 'Improve UX',
-    icon: '🎨',
-    description: 'Improve the user experience of',
-    context: 'Focus on usability, accessibility, and visual polish.',
-    category: 'ui',
+    id: 'builtin-do-better',
+    name: 'DevSecOps Audit',
+    icon: '🛡️',
+    slashdoCommand: 'better',
+    description: 'Run a DevSecOps audit and remediation pass',
+    context: 'Runs the slashdo better workflow: audit, remediate, enhance tests, open per-category PRs.',
+    category: 'slashdo',
+    settings: WORKFLOW_OWNS_ITS_OWN_GIT,
     isBuiltin: true
   },
   {
-    id: 'builtin-add-api',
-    name: 'Add API Endpoint',
-    icon: '🔌',
-    description: 'Add API endpoint for',
-    context: 'Add route with Zod validation, service function, and API tests.',
-    category: 'feature',
+    id: 'builtin-do-depfree',
+    name: 'Prune Dependencies',
+    icon: '📦',
+    slashdoCommand: 'depfree',
+    description: 'Audit dependencies and remove unnecessary ones',
+    context: 'Runs the slashdo depfree workflow: audit third-party deps and replace the removable ones with code.',
+    category: 'slashdo',
+    settings: WORKFLOW_OWNS_ITS_OWN_GIT,
     isBuiltin: true
   },
   {
-    id: 'builtin-security-fix',
-    name: 'Security Fix',
+    id: 'builtin-do-scan',
+    name: 'Safety Scan',
     icon: '🔒',
-    description: 'Fix security issue in',
-    context: 'Address vulnerability with proper input validation and sanitization.',
-    category: 'security',
+    slashdoCommand: 'scan',
+    description: 'Read-only safety audit of: ',
+    context: 'Runs the slashdo scan workflow: flag malware patterns, network calls, and vulnerable deps.',
+    category: 'slashdo',
+    settings: WORKFLOW_OWNS_ITS_OWN_GIT,
     isBuiltin: true
   }
 ];
+
+const BUILT_IN_IDS = new Set(BUILT_IN_TEMPLATES.map(t => t.id));
 
 // Default empty state
 const DEFAULT_STATE = {
@@ -101,7 +137,29 @@ const DEFAULT_STATE = {
 async function loadState() {
   const data = await readJSONFile(TEMPLATES_FILE);
   if (!data) return { ...DEFAULT_STATE };
-  return { ...DEFAULT_STATE, ...data, userTemplates: data.userTemplates || [], usage: data.usage || {} };
+  return {
+    ...DEFAULT_STATE,
+    ...data,
+    userTemplates: data.userTemplates || [],
+    usage: pruneOrphanBuiltinUsage(data.usage || {})
+  };
+}
+
+/**
+ * Drop `usage` counters for `builtin-*` ids that no longer exist. Built-in
+ * templates are code, not data — when the shipped set changes (#3089 swapped the
+ * eight generic stubs for slashdo workflows) their counters would otherwise
+ * linger in `data/cos/task-templates.json` forever, inflating nothing and
+ * confusing anyone reading the file. User-template counters (`user-*`) are
+ * untouched — those ids are only removed by deleteTemplate.
+ */
+function pruneOrphanBuiltinUsage(usage) {
+  const kept = {};
+  for (const [id, count] of Object.entries(usage)) {
+    if (id.startsWith('builtin-') && !BUILT_IN_IDS.has(id)) continue;
+    kept[id] = count;
+  }
+  return kept;
 }
 
 /**
@@ -180,6 +238,11 @@ export async function createTemplate(templateData) {
     isBuiltin: false,
     createdAt: new Date().toISOString()
   };
+
+  // Optional slashdo binding. Omitted (not blanked) when absent so applyTemplate's
+  // "key absent = leave the toggle alone" contract holds for user templates too.
+  if (templateData.slashdoCommand) newTemplate.slashdoCommand = templateData.slashdoCommand;
+  if (templateData.settings && typeof templateData.settings === 'object') newTemplate.settings = templateData.settings;
 
   state.userTemplates.push(newTemplate);
   await saveState(state);

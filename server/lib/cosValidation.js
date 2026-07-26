@@ -11,6 +11,7 @@
 import { z } from 'zod';
 import { emptyToUndefined, emptyToNull } from './zodCompat.js';
 import { EFFORT_LEVELS } from './providerModels.js';
+import { isValidSlashdoCommand } from './slashdoInvocation.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 
 // =============================================================================
@@ -294,6 +295,13 @@ const cosTaskDiagnosticsSchema = z.object({
 const effortInputSchema = z.preprocess(emptyToUndefined, z.enum(EFFORT_LEVELS).optional());
 const effortUpdateSchema = z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable().optional());
 
+// A bare slashdo command name (`plan-task`, `pr-better`). Shared by the task
+// schema and the quick-template schemas. `isValidSlashdoCommand` is the single
+// definition of the shape — it also gates `loadSlashdoFile`'s path join.
+const slashdoCommandSchema = z.string().refine(isValidSlashdoCommand, {
+  message: 'must be a bare slashdo command name (lowercase, digits, hyphens)',
+});
+
 export const createCosTaskSchema = z.object({
   description: z.string().min(1),
   diagnostics: cosTaskDiagnosticsSchema.optional(),
@@ -359,6 +367,12 @@ export const createCosTaskSchema = z.object({
     v => Array.isArray(v) ? normalizeOptionalReviewers(v) : undefined,
     z.array(z.string()).optional()
   ),
+  // Bundled slashdo workflow this task runs (#3089) — the BARE command name,
+  // never a rendered `/do:x` string (see slashdoInvocation.js).
+  slashdoCommand: z.preprocess(emptyToUndefined, slashdoCommandSchema.optional()),
+  // Explicit arguments for the workflow. Absent → the prompt builder falls back
+  // to the task description, which is what the task form sends.
+  slashdoArgs: z.preprocess(emptyToUndefined, z.string().max(4000).optional()),
 });
 
 export const updateCosTaskSchema = z.object({
@@ -502,6 +516,51 @@ export const restoreRecommendationSchema = z.object({
 
 export const generateWeeklyDigestSchema = z.object({
   weekId: z.string().optional(),
+});
+
+// =============================================================================
+// QUICK TASK TEMPLATE SCHEMAS (#3089)
+// =============================================================================
+
+// Run-shape defaults a template implies. Every key is optional and each one is
+// a tri-state: ABSENT means "leave the form's current toggle alone", `false`
+// means "turn it off". Collapsing absent to false would make every template
+// silently clear toggles it never intended to touch.
+export const taskTemplateSettingsSchema = z.object({
+  useWorktree: z.boolean().optional(),
+  openPR: z.boolean().optional(),
+  simplify: z.boolean().optional(),
+}).strict();
+
+export const createTaskTemplateSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  description: z.string().min(1).max(4000),
+  icon: z.string().max(16).optional(),
+  context: z.string().max(4000).optional(),
+  category: z.string().max(60).optional(),
+  provider: z.string().max(120).optional(),
+  model: z.string().max(200).optional(),
+  effort: z.preprocess(emptyToUndefined, z.enum(EFFORT_LEVELS).optional()),
+  app: z.string().max(200).optional(),
+  slashdoCommand: z.preprocess(emptyToUndefined, slashdoCommandSchema.optional()),
+  settings: taskTemplateSettingsSchema.optional(),
+}).strict();
+
+// PUT accepts any subset — the route only forwards the keys actually present.
+export const updateTaskTemplateSchema = createTaskTemplateSchema.partial();
+
+// POST /templates/from-task snapshots a live task into a user template. Only the
+// fields createTemplateFromTask actually reads are accepted.
+export const taskTemplateFromTaskSchema = z.object({
+  task: z.object({
+    description: z.string().min(1).max(4000),
+    context: z.string().max(4000).optional(),
+    provider: z.string().max(120).optional(),
+    model: z.string().max(200).optional(),
+    effort: z.preprocess(emptyToUndefined, z.enum(EFFORT_LEVELS).optional()),
+    app: z.string().max(200).optional(),
+  }),
+  templateName: z.string().trim().min(1).max(120).optional(),
 });
 
 // Global Code Review Loop defaults (settings.codeReview). Surfaced on the AI

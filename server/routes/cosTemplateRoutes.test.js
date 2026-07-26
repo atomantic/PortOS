@@ -97,6 +97,45 @@ describe('CoS Template Routes', () => {
 
       expect(response.status).toBe(400);
     });
+
+    // The bare command name is joined into a `commands/do/<name>.md` path by
+    // loadSlashdoFile, so the schema is the boundary that keeps it inert (#3089).
+    it('rejects a slashdoCommand that is not a bare command name', async () => {
+      const response = await request(app)
+        .post('/api/cos/templates')
+        .send({ name: 'Escape', description: 'nope', slashdoCommand: '../../etc/passwd' });
+
+      expect(response.status).toBe(400);
+      expect(taskTemplates.createTemplate).not.toHaveBeenCalled();
+    });
+
+    it('rejects a settings block with an unknown toggle', async () => {
+      const response = await request(app)
+        .post('/api/cos/templates')
+        .send({ name: 'Odd', description: 'nope', settings: { autoMerge: true } });
+
+      expect(response.status).toBe(400);
+      expect(taskTemplates.createTemplate).not.toHaveBeenCalled();
+    });
+
+    it('accepts a valid slashdo binding and forwards it to the service', async () => {
+      taskTemplates.createTemplate.mockResolvedValue({ id: 't3' });
+
+      const response = await request(app)
+        .post('/api/cos/templates')
+        .send({
+          name: 'Plan',
+          description: 'Plan a task',
+          slashdoCommand: 'plan-task',
+          settings: { useWorktree: false, openPR: false, simplify: false }
+        });
+
+      expect(response.status).toBe(200);
+      expect(taskTemplates.createTemplate).toHaveBeenCalledWith(expect.objectContaining({
+        slashdoCommand: 'plan-task',
+        settings: { useWorktree: false, openPR: false, simplify: false }
+      }));
+    });
   });
 
   describe('POST /api/cos/templates/from-task', () => {

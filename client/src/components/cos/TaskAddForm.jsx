@@ -37,7 +37,15 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   const [templateNameInput, setTemplateNameInput] = useState('');
   const [showTemplateSave, setShowTemplateSave] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Bare slashdo command a quick-template pinned (`plan-task`), never a rendered
+  // `/do:x` string — see server/lib/slashdoInvocation.js for why.
+  const [slashdoCommand, setSlashdoCommand] = useState('');
   const submittingRef = useRef(false);
+  const descriptionRef = useRef(null);
+  // Set by applyTemplate only when a template changes BOTH the app and the
+  // run-shape toggles, so the app-defaults effect skips the single run that
+  // change triggers. See that effect for why.
+  const templateAppChangeRef = useRef(false);
 
   // Fetch templates
   useEffect(() => {
@@ -109,6 +117,15 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
     [selectedApp, newTask.app]
   );
   useEffect(() => {
+    // A template that pins BOTH an app and a `settings` block would otherwise
+    // lose: applyTemplate sets the toggles synchronously, then the app change it
+    // also made re-fires this effect and stomps them with the app's defaults.
+    // The template's explicit choice is the more specific one, so skip exactly
+    // the one run its own app change triggered.
+    if (templateAppChangeRef.current) {
+      templateAppChangeRef.current = false;
+      return;
+    }
     const defaultOpenPR = !!selectedApp?.defaultOpenPR;
     const defaultUseWorktree = !!selectedApp?.defaultUseWorktree || defaultOpenPR;
     setCreateJiraTicket(!!selectedApp?.jira?.enabled);
@@ -129,18 +146,40 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
     return 'No models are configured. PortOS will use the provider default.';
   })();
 
-  // Apply template to form
+  // Apply template to form. A slashdo-backed template also pins the workflow
+  // (`slashdoCommand`) and applies its implied run-shape `settings`.
+  //
+  // `settings` keys are tri-state: a key ABSENT leaves the current toggle
+  // untouched, `false` turns it off. Collapsing absent to false would make a
+  // plain user template silently clear toggles it never meant to touch.
   const applyTemplate = useCallback(async (template) => {
-    setNewTask({
+    setNewTask(t => ({
+      ...t,
       description: template.description,
-      model: template.model || '',
-      provider: template.provider || '',
-      effort: template.effort || '',
-      app: template.app || ''
-    });
+      // A template that pins no app must not clear the one the user already
+      // chose — and the built-ins pin none. Same absent-vs-empty rule as
+      // `settings` below. Provider/model/effort move as a unit: pinning a
+      // provider without a model would otherwise strand a model from a
+      // different provider in the form.
+      ...(template.app ? { app: template.app } : {}),
+      ...(template.provider
+        ? { provider: template.provider, model: template.model || '', effort: template.effort || '' }
+        : {})
+    }));
+    setSlashdoCommand(template.slashdoCommand || '');
+    const settings = template.settings;
+    if (settings && typeof settings === 'object') {
+      // Only when the template also moves the app — otherwise the effect never
+      // fires and a stale flag would swallow the user's next app change.
+      if (template.app && template.app !== newTask.app) templateAppChangeRef.current = true;
+      if (settings.useWorktree !== undefined) setUseWorktree(settings.useWorktree);
+      if (settings.openPR !== undefined) setOpenPR(settings.openPR);
+      if (settings.simplify !== undefined) setSimplify(settings.simplify);
+    }
+    descriptionRef.current?.focus();
     await api.useCosTaskTemplate(template.id).catch(() => {});
     toast.success(`Template applied: ${template.name}`);
-  }, []);
+  }, [newTask.app]);
 
   // Save current form as template (inline input instead of window.prompt)
   const saveAsTemplate = useCallback(async () => {
@@ -257,6 +296,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       provider: newTask.provider || undefined,
       effort: newTask.effort || undefined,
       app: newTask.app || undefined,
+      slashdoCommand: slashdoCommand || undefined,
       createJiraTicket,
       useWorktree,
       openPR: useWorktree && openPR,
@@ -289,6 +329,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
 
     // Only clear form inputs after successful submission
     setNewTask(t => ({ ...t, description: '' }));
+    setSlashdoCommand('');
     setScreenshots([]);
     setAttachments([]);
 
@@ -376,10 +417,15 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
                   onClick={() => applyTemplate(template)}
                   {...clickableProps(() => applyTemplate(template))}
                   className="group relative flex items-center gap-1.5 px-3 py-1.5 bg-port-card border border-port-border rounded-lg text-sm text-gray-300 hover:text-white hover:border-port-accent/50 transition-colors cursor-pointer"
-                  title={template.description}
+                  title={template.slashdoCommand ? `/do:${template.slashdoCommand} \u2014 ${template.context || template.description}` : template.description}
                 >
                   <span>{template.icon || '\ud83d\udcdd'}</span>
                   <span className="max-w-[120px] truncate">{template.name}</span>
+                  {/* The Claude-Code form of the command, as a recognizable label.
+                      The actual invocation is resolved server-side per provider. */}
+                  {template.slashdoCommand && (
+                    <span className="hidden sm:inline text-xs text-port-accent/80 font-mono">/do:{template.slashdoCommand}</span>
+                  )}
                   {template.useCount > 0 && (
                     <span className="text-xs text-gray-600">({template.useCount})</span>
                   )}
@@ -404,6 +450,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
           <label htmlFor="task-description" className="sr-only">Task description (required)</label>
           <input
             id="task-description"
+            ref={descriptionRef}
             type="text"
             placeholder="Task description *"
             value={newTask.description}
