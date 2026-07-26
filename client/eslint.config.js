@@ -1,5 +1,5 @@
 import js from '@eslint/js';
-import reactPlugin from 'eslint-plugin-react';
+import eslintReact from '@eslint-react/eslint-plugin';
 import reactHooksPlugin from 'eslint-plugin-react-hooks';
 
 const browserGlobals = {
@@ -78,22 +78,22 @@ export default [
       },
     },
     plugins: {
-      react: reactPlugin,
+      '@eslint-react': eslintReact,
       'react-hooks': reactHooksPlugin,
     },
-    settings: {
-      react: {
-        version: 'detect',
-      },
-    },
     rules: {
-      ...reactPlugin.configs.recommended.rules,
       ...reactHooksPlugin.configs.recommended.rules,
-      'react/react-in-jsx-scope': 'off',
-      'react/prop-types': 'off',
-      'react/no-unknown-property': 'off',
-      'react/no-unescaped-entities': 'off',
-      'react/jsx-no-comment-textnodes': 'off',
+      // Modern React equivalents for the useful rules formerly supplied by
+      // eslint-plugin-react. The JSX runtime and ESLint core now cover the
+      // old import/undefined-variable rules, so we keep only semantic checks.
+      '@eslint-react/no-missing-component-display-name': 'error',
+      '@eslint-react/no-missing-key': 'error',
+      '@eslint-react/dom-no-unsafe-target-blank': 'error',
+      '@eslint-react/jsx-no-children-prop': 'error',
+      '@eslint-react/dom-no-dangerously-set-innerhtml-with-children': 'error',
+      '@eslint-react/no-direct-mutation-state': 'error',
+      '@eslint-react/dom-no-find-dom-node': 'error',
+      '@eslint-react/dom-no-render-return-value': 'error',
       // Lint policy: every rule is either 'error' (enforced) or 'off' (gone). We do
       // not use 'warn' — a warning is a rule nobody acts on, i.e. noise that hides
       // real errors. If we don't want to enforce a rule, we disable it outright.

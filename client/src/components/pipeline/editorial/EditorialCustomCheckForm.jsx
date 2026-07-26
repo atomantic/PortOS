@@ -70,7 +70,7 @@ export default function EditorialCustomCheckForm({ check = null, saving = false,
   };
   // The form stays mounted across a series switch (only new↔edit remounts via the
   // key), so reset the preview when the target series changes too.
-  useEffect(() => { invalidatePreview(); }, [previewTarget]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { invalidatePreview(); }, [previewTarget]);
 
   const hasRequiredFields = draft.label.trim().length > 0 && draft.prompt.trim().length > 0;
   const canSave = hasRequiredFields && !saving;

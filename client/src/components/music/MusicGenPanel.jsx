@@ -66,7 +66,6 @@ export default function MusicGenPanel({ track, prompt, lyrics, onGenerated, remi
     if (remix.engineId) setEngineId(remix.engineId);
     if (remix.modelId) setModelId(remix.modelId);
     if (remix.durationSec != null) setDurationSec(remix.durationSec);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [remix?.nonce]);
 
   // Keep the model selection valid for the current engine: reset to the engine

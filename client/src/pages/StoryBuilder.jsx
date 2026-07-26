@@ -184,7 +184,6 @@ function StoryBuilderIndex() {
       .catch(() => {});
     // Clear the handoff state so a refresh doesn't re-seed (ids already captured).
     navigate('.', { replace: true, state: {} });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Compose the seed prefill once the ingredients are hydrated AND the catalog

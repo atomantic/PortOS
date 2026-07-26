@@ -108,7 +108,6 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
   // mints fresh every tick and would otherwise wipe in-progress edits.
   useEffect(() => {
     if (open && !isGlobal) seed(draftsFromProject(project));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, isGlobal, project?.id]);
 
   const entryById = useMemo(
