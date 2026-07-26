@@ -19,6 +19,7 @@ import {
 import toast from '../ui/Toast';
 import IngredientPicker from '../IngredientPicker';
 import VisionDescribeModal from './VisionDescribeModal';
+import CorrectiveReferenceModal from './CorrectiveReferenceModal';
 import { linkCatalogIngredient } from '../../services/apiCatalog';
 import {
   extractUniverseCanon,
@@ -134,6 +135,8 @@ export default function UniverseCanonSection({
   const [catalogPickerKind, setCatalogPickerKind] = useState(null);
   // `{ kind, entry }` when the vision "Describe from image(s)" modal is open.
   const [describeTarget, setDescribeTarget] = useState(null);
+  // `{ kind, entry }` when the corrective-reference modal is open.
+  const [correctTarget, setCorrectTarget] = useState(null);
   const [catalogLinking, setCatalogLinking] = useState(false);
   // Ingredient ids already embedded in the open kind's canon list — passed to
   // the picker so it hides already-linked rows. Only recomputed when the open
@@ -402,11 +405,18 @@ export default function UniverseCanonSection({
       baseNegative: baseOpts.negativePrompt,
     });
     const universeRun = buildUniverseSectionRenderTag(universe, kind.key, entry);
+    // A pinned primaryImageRef (set manually, or via the corrective-reference
+    // flow) seeds the render as an i2i init image so the result stays
+    // anchored to that reference instead of a fresh text-to-image roll every
+    // time. 0.4 mirrors ImageGen's own init-image-strength default — enough
+    // influence to anchor likeness while leaving room for prompt-driven pose/
+    // expression variety.
     const queued = await generateImage({
       ...baseOpts,
       prompt: styled.prompt,
       negativePrompt: styled.negativePrompt || undefined,
       ...(universeRun ? { universeRun } : {}),
+      ...(entry.primaryImageRef ? { initImageFile: entry.primaryImageRef, initImageStrength: 0.4 } : {}),
     }, { silent: true }).catch((err) => { toast.error(err.message || 'Render failed'); return null; });
     if (!queued?.jobId || !mountedRef.current) return;
     setRenderingJobs((prev) => ({ ...prev, [entry.id]: queued.jobId }));
@@ -806,6 +816,7 @@ export default function UniverseCanonSection({
           onPatchEntry={(entryId, patch) => handlePatchEntry(kind, entryId, patch)}
           onRenderCleanPlate={(entry) => handleRenderCleanPlate(kind, entry)}
           onDescribeImages={(entry) => setDescribeTarget({ kind, entry })}
+          onCorrectFromImage={(entry) => setCorrectTarget({ kind, entry })}
           seriesNameMap={usage?.seriesNameMap || null}
           onBulkLock={(nextLocked) => handleBulkLockKind(kind, nextLocked)}
           bulkLocking={bulkLockingKindKey === kind.key}
@@ -867,11 +878,27 @@ export default function UniverseCanonSection({
           onClose={() => setDescribeTarget(null)}
         />
       ) : null}
+
+      {/* Corrective reference image — analyzes an uploaded image against the
+          entry's current description, then on Apply overwrites the
+          description AND pins the image as the entry's primaryImageRef so
+          future renders (handleRenderRef) i2i-seed from it. */}
+      {correctTarget ? (
+        <CorrectiveReferenceModal
+          open
+          kind={correctTarget.kind.apiKind}
+          entryName={correctTarget.entry.name}
+          universeId={universeId}
+          entryId={correctTarget.entry.id}
+          onApplied={(result) => { if (result?.universe) onUniverseChange(result.universe); }}
+          onClose={() => setCorrectTarget(null)}
+        />
+      ) : null}
     </section>
   );
 }
 
-function KindSection({ kind, universeId, all, totalCount, filtered, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onExpandCharacter, expandingId, onSheetCompleted, onSheetDeleted, onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate, onDescribeImages = null, seriesNameMap, onBulkLock, bulkLocking, fullList, castList = [], externalPendingByEntryId = null, compact = false, onRenderAll = null, renderingAll = false, onPickFromCatalog = null, catalogLinking = false, onAddEntry = null, creating = false }) {
+function KindSection({ kind, universeId, all, totalCount, filtered, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onExpandCharacter, expandingId, onSheetCompleted, onSheetDeleted, onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate, onDescribeImages = null, onCorrectFromImage = null, seriesNameMap, onBulkLock, bulkLocking, fullList, castList = [], externalPendingByEntryId = null, compact = false, onRenderAll = null, renderingAll = false, onPickFromCatalog = null, catalogLinking = false, onAddEntry = null, creating = false }) {
   // Universe-only character wiring — `null` for non-character kinds so
   // CanonCard's gate stays `kind === 'characters' && characterExtensions`.
   // Memoized so the BASE object is stable across re-renders that aren't
@@ -1083,6 +1110,7 @@ function KindSection({ kind, universeId, all, totalCount, filtered, usage, rende
           onPatchEntry={onPatchEntry}
           onRenderCleanPlate={onRenderCleanPlate}
           onDescribeImages={onDescribeImages}
+          onCorrectFromImage={onCorrectFromImage}
           seriesNameMap={seriesNameMap}
           characterExtensions={characterExtensions
             ? { ...characterExtensions, expanding: expandingId === entry.id }

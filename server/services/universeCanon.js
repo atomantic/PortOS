@@ -205,12 +205,12 @@ export function summarizeCanonExtraction({ results, failures, provider, model, e
 // Which field holds a kind's renderable description. Characters carry
 // `physicalDescription` (legacy `description` is the read-fallback);
 // places/objects use `description`. Mirrors NounsStage's `descFor` source.
-const DESC_FIELD = Object.freeze({
+export const DESC_FIELD = Object.freeze({
   [BIBLE_KIND.CHARACTER]: 'physicalDescription',
   [BIBLE_KIND.PLACE]: 'description',
   [BIBLE_KIND.OBJECT]: 'description',
 });
-const DESC_LIMIT = Object.freeze({
+export const DESC_LIMIT = Object.freeze({
   [BIBLE_KIND.CHARACTER]: BIBLE_LIMITS.PHYSICAL_DESCRIPTION_MAX,
   [BIBLE_KIND.PLACE]: BIBLE_LIMITS.PLACE_DESCRIPTION_MAX,
   [BIBLE_KIND.OBJECT]: BIBLE_LIMITS.OBJECT_DESCRIPTION_MAX,
@@ -546,6 +546,62 @@ export async function setCanonEntryLock(universeId, kind, entryId, locked) {
       `Canon ${kind} ${entryId} not found in universe`,
       { status: 404, code: 'UNIVERSE_CANON_NOT_FOUND' },
     );
+  }
+  const entry = (updated[field] || []).find((e) => e.id === entryId) || null;
+  return { universe: updated, entry };
+}
+
+/**
+ * Apply a reviewed corrective-image analysis (`universeVisionDescribe.correctEntityFromImage`)
+ * to one canon entry: overwrite its descriptor field with the reviewed
+ * correction AND pin the analyzed image as the entry's `primaryImageRef` —
+ * assigning it as that noun's style/reference image so subsequent renders
+ * seed from it. Both writes land atomically via the mutator form, so a
+ * concurrent render-completion `imageRefs[]` append (landing between analyze
+ * and apply) can't be clobbered by a stale read.
+ */
+export async function applyCanonImageCorrection(universeId, kind, entryId, { description, imageFilename } = {}) {
+  if (!BIBLE_KINDS.includes(kind)) {
+    throw new ServerError(
+      `Invalid canon kind "${kind}" — expected one of: ${BIBLE_KINDS.join(', ')}`,
+      { status: 400, code: 'UNIVERSE_CANON_INVALID_KIND' },
+    );
+  }
+  const trimmedDescription = typeof description === 'string' ? description.trim().slice(0, DESC_LIMIT[kind]) : '';
+  if (!trimmedDescription) {
+    throw new ServerError('A corrected description is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (typeof imageFilename !== 'string' || !imageFilename.trim()) {
+    throw new ServerError('An image filename is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const field = BIBLE_FIELD[kind];
+  const descField = DESC_FIELD[kind];
+  let found = false;
+  let wasLocked = false;
+  const updated = await updateUniverse(universeId, (cur) => {
+    const list = Array.isArray(cur[field]) ? cur[field] : [];
+    const idx = list.findIndex((e) => e.id === entryId);
+    if (idx < 0) return null;
+    found = true;
+    const target = list[idx];
+    if (target.locked === true) { wasLocked = true; return null; }
+    const imageRefs = Array.isArray(target.imageRefs) ? target.imageRefs : [];
+    const nextImageRefs = imageRefs.includes(imageFilename) ? imageRefs : [...imageRefs, imageFilename];
+    const nextList = list.map((e, i) => (i === idx
+      ? { ...e, [descField]: trimmedDescription, imageRefs: nextImageRefs, primaryImageRef: imageFilename }
+      : e));
+    return { [field]: nextList };
+  });
+  if (!found) {
+    throw new ServerError(`Canon ${kind} ${entryId} not found in universe`, {
+      status: 404, code: 'UNIVERSE_CANON_NOT_FOUND',
+    });
+  }
+  if (wasLocked) {
+    throw new ServerError(`This ${kind} is locked — unlock it before applying a correction`, {
+      status: 409, code: 'UNIVERSE_CANON_LOCKED',
+    });
   }
   const entry = (updated[field] || []).find((e) => e.id === entryId) || null;
   return { universe: updated, entry };

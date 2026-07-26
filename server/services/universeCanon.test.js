@@ -123,6 +123,76 @@ describe('universeCanon — setCanonEntryLock', () => {
   });
 });
 
+describe('universeCanon — applyCanonImageCorrection', () => {
+  it('overwrites the descriptor field and pins the image as primaryImageRef', async () => {
+    const w = await seedUniverseWithCharacters([
+      { name: 'Alex', physicalDescription: 'stale description', imageRefs: ['old.png'], locked: false },
+    ]);
+    const entryId = w.characters[0].id;
+    const { entry } = await canonSvc.applyCanonImageCorrection(w.id, 'character', entryId, {
+      description: 'a corrected description', imageFilename: 'new.png',
+    });
+    expect(entry.physicalDescription).toBe('a corrected description');
+    expect(entry.imageRefs).toEqual(['old.png', 'new.png']);
+    expect(entry.primaryImageRef).toBe('new.png');
+    // Persisted: a fresh read reflects the same correction.
+    const reread = (await svc.listUniverses())[0];
+    const rereadEntry = reread.characters.find((c) => c.id === entryId);
+    expect(rereadEntry.physicalDescription).toBe('a corrected description');
+    expect(rereadEntry.primaryImageRef).toBe('new.png');
+  });
+
+  it('does not duplicate the image if it is already in imageRefs', async () => {
+    const w = await seedUniverseWithCharacters([
+      { name: 'Alex', physicalDescription: 'stale', imageRefs: ['already-there.png'], locked: false },
+    ]);
+    const entryId = w.characters[0].id;
+    const { entry } = await canonSvc.applyCanonImageCorrection(w.id, 'character', entryId, {
+      description: 'corrected', imageFilename: 'already-there.png',
+    });
+    expect(entry.imageRefs).toEqual(['already-there.png']);
+    expect(entry.primaryImageRef).toBe('already-there.png');
+  });
+
+  it('rejects a locked entry with a 409-coded ServerError', async () => {
+    const w = await seedUniverseWithCharacters([
+      { name: 'Alex', physicalDescription: 'stale', locked: true },
+    ]);
+    await expect(
+      canonSvc.applyCanonImageCorrection(w.id, 'character', w.characters[0].id, {
+        description: 'corrected', imageFilename: 'new.png',
+      }),
+    ).rejects.toMatchObject({ status: 409, code: 'UNIVERSE_CANON_LOCKED' });
+  });
+
+  it('rejects unknown kind with a 400-coded ServerError', async () => {
+    const w = await seedUniverseWithCharacters([{ name: 'Alex', physicalDescription: 'stale' }]);
+    await expect(
+      canonSvc.applyCanonImageCorrection(w.id, 'monster', w.characters[0].id, {
+        description: 'corrected', imageFilename: 'new.png',
+      }),
+    ).rejects.toMatchObject({ status: 400, code: 'UNIVERSE_CANON_INVALID_KIND' });
+  });
+
+  it('rejects unknown entry with a 404-coded ServerError', async () => {
+    const w = await seedUniverseWithCharacters([{ name: 'Alex', physicalDescription: 'stale' }]);
+    await expect(
+      canonSvc.applyCanonImageCorrection(w.id, 'character', 'chr-not-real', {
+        description: 'corrected', imageFilename: 'new.png',
+      }),
+    ).rejects.toMatchObject({ status: 404, code: 'UNIVERSE_CANON_NOT_FOUND' });
+  });
+
+  it('rejects a blank description', async () => {
+    const w = await seedUniverseWithCharacters([{ name: 'Alex', physicalDescription: 'stale' }]);
+    await expect(
+      canonSvc.applyCanonImageCorrection(w.id, 'character', w.characters[0].id, {
+        description: '   ', imageFilename: 'new.png',
+      }),
+    ).rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+  });
+});
+
 describe('universeCanon — setCanonKindLockAll', () => {
   it('locks every entry of the kind, counts only entries whose state changed', async () => {
     // Two already-locked + one explicitly-unlocked: only the unlocked entry

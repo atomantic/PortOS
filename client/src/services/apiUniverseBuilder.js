@@ -107,6 +107,37 @@ export const expandEntityFromImages = (universeId, entryId, {
   },
 );
 
+// Corrective vision analysis for ONE canon entry: given the entry's current
+// descriptor text as context, a vision model proposes a CORRECTED
+// replacement (unlike expandEntityFromImages, which only fills still-blank
+// fields). Review-only — resolves to `{ descField, currentDescription,
+// proposedDescription, llm, imageFilename }` (or `{ locked: true, entryName }`);
+// `applyCanonImageCorrection` persists the reviewed text and pins the image.
+export const correctEntityFromImage = (universeId, kind, entryId, {
+  image, name, context, providerId, model,
+} = {}, options = {}) => request(
+  `/universe-builder/${encodeURIComponent(universeId)}/canon/${encodeURIComponent(kind)}/${encodeURIComponent(entryId)}/correct-from-image`,
+  {
+    method: 'POST',
+    body: JSON.stringify({ image, name, context, providerId, model }),
+    ...options,
+  },
+);
+
+// Persist a reviewed corrective-image analysis: overwrites the entry's
+// descriptor field with `description` AND pins `imageFilename` as the
+// entry's `primaryImageRef` in one atomic write.
+export const applyCanonImageCorrection = (universeId, kind, entryId, {
+  description, imageFilename,
+} = {}, options = {}) => request(
+  `/universe-builder/${encodeURIComponent(universeId)}/canon/${encodeURIComponent(kind)}/${encodeURIComponent(entryId)}/apply-image-correction`,
+  {
+    method: 'POST',
+    body: JSON.stringify({ description, imageFilename }),
+    ...options,
+  },
+);
+
 // Caller should dedupe the returned variations against its local list before
 // appending — the local list may have changed during the request.
 export const generateCategoryVariations = ({

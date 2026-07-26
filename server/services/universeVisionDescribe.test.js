@@ -14,15 +14,31 @@ vi.mock('../lib/promptRunner.js', async (importActual) => {
   return { ...actual, runPromptThroughProvider: vi.fn() };
 });
 
+// getUniverse is the only universeBuilder surface correctEntityFromImage
+// touches (review-only — it never writes).
+vi.mock('./universeBuilder.js', async (importActual) => {
+  const actual = await importActual();
+  return { ...actual, getUniverse: vi.fn() };
+});
+
 const aiProvider = await import('../lib/aiProvider.js');
 const promptRunner = await import('../lib/promptRunner.js');
-const { describeEntityFromImages, VISION_KINDS, VISION_MAX_IMAGES, __testing } = await import('./universeVisionDescribe.js');
+const universeBuilder = await import('./universeBuilder.js');
+const {
+  describeEntityFromImages, correctEntityFromImage, VISION_KINDS, VISION_MAX_IMAGES, __testing,
+} = await import('./universeVisionDescribe.js');
 
 const apiProvider = { id: 'ollama', type: 'api', defaultModel: 'llava' };
+
+const makeUniverse = (overrides = {}) => ({
+  id: 'uni-1',
+  characters: [{ id: 'chr-1', name: 'Vex', physicalDescription: 'a tall scavenger in patched leathers', ...overrides }],
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
   aiProvider.resolveAPIProvider.mockResolvedValue(apiProvider);
+  universeBuilder.getUniverse.mockResolvedValue(makeUniverse());
   promptRunner.runPromptThroughProvider.mockResolvedValue({ text: 'a weathered scavenger', runId: 'r1', model: 'llava' });
 });
 
@@ -132,5 +148,75 @@ describe('describeEntityFromImages', () => {
 
   it('exports the three canon kinds', () => {
     expect(VISION_KINDS).toEqual(['character', 'place', 'object']);
+  });
+});
+
+describe('buildVisionCorrectPrompt', () => {
+  it('hands the model the current description and asks it to correct contradictions', () => {
+    const p = __testing.buildVisionCorrectPrompt({
+      kind: 'character', name: 'Vex', currentDescription: 'a short, stocky trader',
+    });
+    expect(p).toMatch(/corrective reference image/);
+    expect(p).toMatch(/current description on file for the character "Vex" is:\n"a short, stocky trader"/);
+    expect(p).toMatch(/CONTRADICTS the current description, correct it/);
+  });
+
+  it('writes from the image alone when there is no current description', () => {
+    const p = __testing.buildVisionCorrectPrompt({ kind: 'place', name: 'The Foundry', currentDescription: '' });
+    expect(p).toMatch(/has no description on file yet — write one from the image/);
+  });
+
+  it('folds known context into the prompt', () => {
+    const p = __testing.buildVisionCorrectPrompt({
+      kind: 'object', currentDescription: 'a rusted blade', context: 'family heirloom',
+    });
+    expect(p).toMatch(/Known context.*family heirloom/s);
+  });
+});
+
+describe('correctEntityFromImage', () => {
+  it('returns the current + proposed description and the provider/model that ran', async () => {
+    const out = await correctEntityFromImage({
+      universeId: 'uni-1', entryId: 'chr-1', kind: 'character', screenshot: 'a.png', providerId: 'ollama', model: 'llava',
+    });
+    expect(out).toEqual({
+      descField: 'physicalDescription',
+      currentDescription: 'a tall scavenger in patched leathers',
+      proposedDescription: 'a weathered scavenger',
+      llm: { provider: 'ollama', model: 'llava' },
+    });
+    expect(promptRunner.runPromptThroughProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ screenshots: ['a.png'], source: 'universe-vision-correct' }),
+    );
+  });
+
+  it('returns { locked: true } without calling the vision model when the entry is locked', async () => {
+    universeBuilder.getUniverse.mockResolvedValue(makeUniverse({ locked: true }));
+    const out = await correctEntityFromImage({
+      universeId: 'uni-1', entryId: 'chr-1', kind: 'character', screenshot: 'a.png',
+    });
+    expect(out).toEqual({ locked: true, entryName: 'Vex' });
+    expect(promptRunner.runPromptThroughProvider).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unsupported kind', async () => {
+    await expect(correctEntityFromImage({ universeId: 'uni-1', entryId: 'chr-1', kind: 'vehicle', screenshot: 'a.png' }))
+      .rejects.toMatchObject({ code: 'VALIDATION_ERROR', status: 400 });
+  });
+
+  it('rejects when no image is supplied', async () => {
+    await expect(correctEntityFromImage({ universeId: 'uni-1', entryId: 'chr-1', kind: 'character' }))
+      .rejects.toMatchObject({ code: 'VALIDATION_ERROR', status: 400 });
+  });
+
+  it('404s when the entry is not found in the universe', async () => {
+    await expect(correctEntityFromImage({ universeId: 'uni-1', entryId: 'missing', kind: 'character', screenshot: 'a.png' }))
+      .rejects.toMatchObject({ code: 'UNIVERSE_CANON_NOT_FOUND', status: 404 });
+  });
+
+  it('throws VISION_EMPTY (502) when the model returns a blank correction', async () => {
+    promptRunner.runPromptThroughProvider.mockResolvedValue({ text: '   ', model: 'llava' });
+    await expect(correctEntityFromImage({ universeId: 'uni-1', entryId: 'chr-1', kind: 'character', screenshot: 'a.png' }))
+      .rejects.toMatchObject({ code: 'VISION_EMPTY', status: 502 });
   });
 });

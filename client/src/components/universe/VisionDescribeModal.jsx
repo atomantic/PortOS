@@ -32,7 +32,9 @@ import { describeEntityFromImages, expandEntityFromImages } from '../../services
 // 400s.
 const MAX_IMAGES = 8;
 
-const KIND_NOUN = { character: 'character', place: 'place', object: 'object' };
+// Shared with CorrectiveReferenceModal, which offers the same vision actions
+// against a different (corrective, not blank-fill) analysis.
+export const KIND_NOUN = { character: 'character', place: 'place', object: 'object' };
 
 // camelCase field name → human label for the attribute review list.
 const humanizeField = (f) => f

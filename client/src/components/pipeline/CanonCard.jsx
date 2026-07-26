@@ -11,7 +11,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Loader2, ImagePlus, WandSparkles, Lock, Unlock, Shirt, Plus, Trash2, ChevronDown, ChevronRight, Star, Square, BookOpen, ScanText } from 'lucide-react';
+import { Loader2, ImagePlus, ImageUp, WandSparkles, Lock, Unlock, Shirt, Plus, Trash2, ChevronDown, ChevronRight, Star, Square, BookOpen, ScanText } from 'lucide-react';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import useRowDraft from '../../hooks/useRowDraft';
 import useFieldDraft from '../../hooks/useFieldDraft';
@@ -377,6 +377,7 @@ export default function CanonCard({
   // the parent can open the vision-describe modal seeded with this entry. When
   // omitted (e.g. the pipeline series view) the button is hidden.
   onDescribeImages = null,
+  onCorrectFromImage = null,
   // Optional `{ [seriesId]: name }` lookup so the "from series" chip can
   // render the actual series name. Null/empty falls back to the id-tooltip
   // form for callers that don't have the map handy.
@@ -604,6 +605,20 @@ export default function CanonCard({
           aria-label={`Describe ${entry.name} from images`}
         >
           <ScanText size={14} />
+        </button>
+      ) : null}
+      {onCorrectFromImage ? (
+        <button
+          type="button"
+          onClick={() => onCorrectFromImage(entry)}
+          disabled={blockedByLock}
+          className="p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
+          title={blockedByLock
+            ? `Unlock ${entry.name} to apply a corrective reference`
+            : `Correct ${entry.name}'s description from a reference image and pin it for future renders`}
+          aria-label={`Correct ${entry.name} from a reference image`}
+        >
+          <ImageUp size={14} />
         </button>
       ) : null}
       {kind.key === 'characters' && onRefine ? (

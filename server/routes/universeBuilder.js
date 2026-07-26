@@ -10,6 +10,8 @@
  *   POST   /api/universe-builder/describe-from-images   → { description, llm }
  *   POST   /api/universe-builder/analyze-style-reference → { reference, proposed, diff, rationale, llm }
  *   POST   /api/universe-builder/:id/characters/:entryId/expand-from-images → { fields, updatedFields, llm }
+ *   POST   /api/universe-builder/:id/canon/:kind/:entryId/correct-from-image → { descField, currentDescription, proposedDescription, llm } | { locked, entryName }
+ *   POST   /api/universe-builder/:id/canon/:kind/:entryId/apply-image-correction → { universe, entry }
  *   POST   /api/universe-builder/:id/render             → { runId, collectionId, jobIds, promptCount }
  *   GET    /api/universe-builder/:id/runs               → Run[]
  */
@@ -29,7 +31,7 @@ import {
 import { BIBLE_KINDS, BIBLE_LIMITS, pruneStaleReferenceSheets } from '../lib/storyBible.js';
 import { getUniverseCanonUsage, listLinkedSeriesNames } from '../services/canonUsage.js';
 import { expandWorldTemplate, generateCategoryVariations } from '../services/universeBuilderExpand.js';
-import { describeEntityFromImages, VISION_KINDS, VISION_MAX_IMAGES } from '../services/universeVisionDescribe.js';
+import { describeEntityFromImages, correctEntityFromImage, VISION_KINDS, VISION_MAX_IMAGES } from '../services/universeVisionDescribe.js';
 import { expandEntityFromImages, VISION_EXPAND_MAX_IMAGES } from '../services/universeVisionExpand.js';
 import { analyzeUniverseStyleReference } from '../services/universeStyleReference.js';
 import { sanitizeFilename, PATHS, resolveGalleryImage } from '../lib/fileUtils.js';
@@ -460,6 +462,29 @@ function resolveImageSources(images) {
   });
 }
 
+// Resolve a SINGLE gallery filename to an absolute path, rejecting a
+// traversal attempt or an unknown file up front. Shared by the two
+// single-gallery-image vision routes (`analyze-style-reference`,
+// `correct-from-image`) that resolve one reference image rather than the
+// mixed upload/gallery list `resolveImageSources` handles.
+function resolveGalleryImageOrThrow(filename) {
+  const imageFilename = sanitizeFilename(filename);
+  if (imageFilename !== filename) {
+    throw new ServerError(`Invalid gallery image filename: ${filename}`, {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+    });
+  }
+  const imagePath = resolveGalleryImage(imageFilename);
+  if (!imagePath) {
+    throw new ServerError(`Gallery image not found: ${imageFilename} — upload it again and retry.`, {
+      status: 400,
+      code: 'GALLERY_IMAGE_NOT_FOUND',
+    });
+  }
+  return { imageFilename, imagePath };
+}
+
 // Vision-to-prose: turn one or more reference images of a character/place/
 // object into an image-gen-ready prose description (multiple images → the
 // shared/common description). Stateless — the client decides which entry
@@ -497,20 +522,7 @@ const analyzeStyleReferenceSchema = z.object({
 // reference-and-adopt in the client.
 router.post('/analyze-style-reference', asyncHandler(async (req, res) => {
   const body = validateRequest(analyzeStyleReferenceSchema, req.body ?? {});
-  const imageFilename = sanitizeFilename(body.image);
-  if (imageFilename !== body.image) {
-    throw new ServerError(`Invalid gallery image filename: ${body.image}`, {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-    });
-  }
-  const imagePath = resolveGalleryImage(imageFilename);
-  if (!imagePath) {
-    throw new ServerError(`Gallery image not found: ${imageFilename} — upload it again and retry.`, {
-      status: 400,
-      code: 'GALLERY_IMAGE_NOT_FOUND',
-    });
-  }
+  const { imageFilename, imagePath } = resolveGalleryImageOrThrow(body.image);
   res.json(await analyzeUniverseStyleReference({
     ...body,
     imagePath,
@@ -760,6 +772,53 @@ router.post('/:id/characters/:entryId/expand-from-images', asyncHandler(async (r
     providerId: body.providerId,
     model: body.model,
   }).catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Corrective vision analysis for ONE canon entry (character/place/object):
+// given the entry's CURRENT descriptor text as context, a vision model
+// proposes a CORRECTED replacement — unlike expand-from-images (fills only
+// still-blank fields) or describe-from-images (describes blind), this
+// overwrites existing text where the image contradicts it. Review-only:
+// returns the proposed text for the client to show alongside the current
+// value; `apply-image-correction` (below) persists it.
+const correctFromImageSchema = z.object({
+  image: z.string().trim().min(1).max(300),
+  name: z.string().trim().max(BIBLE_LIMITS.NAME_MAX).optional(),
+  context: z.string().trim().max(2000).optional(),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+});
+router.post('/:id/canon/:kind/:entryId/correct-from-image', asyncHandler(async (req, res) => {
+  const { kind } = validateRequest(lockParamsSchema, req.params);
+  const body = validateRequest(correctFromImageSchema, req.body ?? {});
+  const { imageFilename, imagePath } = resolveGalleryImageOrThrow(body.image);
+  const result = await correctEntityFromImage({
+    universeId: req.params.id,
+    entryId: req.params.entryId,
+    kind,
+    name: body.name,
+    context: body.context,
+    screenshot: imagePath,
+    providerId: body.providerId,
+    model: body.model,
+  }).catch((err) => { throw mapServiceError(err); });
+  res.json({ ...result, imageFilename });
+}));
+
+// Persist a reviewed corrective-image analysis: overwrites the entry's
+// descriptor field with the reviewed text AND pins the analyzed image as the
+// entry's `primaryImageRef` — assigning it as that noun's style/reference
+// image so subsequent renders (client-side i2i seeding) use it.
+const applyImageCorrectionSchema = z.object({
+  description: z.string().trim().min(1).max(BIBLE_LIMITS.NOTES_MAX),
+  imageFilename: z.string().trim().min(1).max(300),
+});
+router.post('/:id/canon/:kind/:entryId/apply-image-correction', asyncHandler(async (req, res) => {
+  const { kind } = validateRequest(lockParamsSchema, req.params);
+  const body = validateRequest(applyImageCorrectionSchema, req.body ?? {});
+  const result = await canonSvc.applyCanonImageCorrection(req.params.id, kind, req.params.entryId, body)
+    .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));
 
