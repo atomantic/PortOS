@@ -516,7 +516,7 @@ export default function Media3D() {
         open={!!installTarget}
         runtime={installTarget?.id}
         label={installTarget?.label}
-        installUrlBase="/api/image-to-3d/trellis2/install"
+        installUrlBase={installTarget ? `/api/image-to-3d/targets/${installTarget.id}/install` : undefined}
         // Repairing an already-installed target must re-run setup.sh rather than
         // short-circuit on "already installed" — that re-run is what rebuilds the
         // Metal texture-baking backends once the Metal Toolchain is present (#2952).

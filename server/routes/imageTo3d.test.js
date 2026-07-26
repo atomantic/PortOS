@@ -8,24 +8,26 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 
 // Mock the services so the route test is deterministic regardless of the test
 // host's real arch/memory and never touches a real subprocess.
+const TRELLIS2_TARGET = {
+  id: 'trellis2',
+  label: 'TRELLIS.2',
+  executionLane: 'local-mps',
+  outputKind: 'glb-mesh',
+  unavailableReason: null,
+  gatedRepos: [
+    {
+      label: 'facebook/dinov3-vitl16-pretrain-lvd1689m',
+      url: 'https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m',
+    },
+    { label: 'briaai/RMBG-2.0', url: 'https://huggingface.co/briaai/RMBG-2.0' },
+  ],
+};
+
 vi.mock('../services/imageTo3d/targets.js', () => ({
   detectHostCapabilities: vi.fn(() => ({ appleSilicon: true, unifiedMemoryGb: 128, cuda: false })),
+  getTarget: vi.fn((id) => (id === 'trellis2' ? TRELLIS2_TARGET : null)),
   listTargets: vi.fn((caps) => [
-    {
-      id: 'trellis2',
-      label: 'TRELLIS.2',
-      executionLane: 'local-mps',
-      outputKind: 'glb-mesh',
-      available: caps.appleSilicon && caps.unifiedMemoryGb >= 24,
-      unavailableReason: null,
-      gatedRepos: [
-        {
-          label: 'facebook/dinov3-vitl16-pretrain-lvd1689m',
-          url: 'https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m',
-        },
-        { label: 'briaai/RMBG-2.0', url: 'https://huggingface.co/briaai/RMBG-2.0' },
-      ],
-    },
+    { ...TRELLIS2_TARGET, available: caps.appleSilicon && caps.unifiedMemoryGb >= 24 },
   ]),
   isTargetAvailable: vi.fn(() => true),
   unavailableReason: vi.fn(() => 'requires-apple-silicon'),
@@ -40,6 +42,10 @@ vi.mock('../services/imageTo3d/trellis2.js', () => ({
     onEvent({ type: 'complete', message: 'TRELLIS.2 installed.' });
     return { promise: Promise.resolve({ ok: true }), kill: vi.fn() };
   }),
+  // Not exercised by these route-level tests (render dispatch is covered in
+  // models.test.js), but the adapter registry imports it — an incomplete mock
+  // here would 'no export defined' at import time.
+  runTrellis2Generate: vi.fn(),
   // Both probes shell out (venv python / `xcrun metal`). Mocked to the healthy
   // result so the suite never touches the host toolchain; individual tests below
   // override them to drive the degraded-install branches (#2952).

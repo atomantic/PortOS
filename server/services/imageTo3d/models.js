@@ -11,7 +11,7 @@
  * The render NEVER auto-runs: it is only reached from an explicit user create /
  * generate request, and it is gated on the target being installed + runnable on
  * this host (CLAUDE.md no-cold-bootstrap AI policy + the host's sensitivity to
- * sustained GPU load). Adding a second target is a registration in `TARGET_RUNNERS`,
+ * sustained GPU load). Adding a second target is a registration in `adapters.js`,
  * not a rewrite here.
  */
 
@@ -23,7 +23,7 @@ import { hfChildEnv } from '../../lib/hfToken.js';
 import { PATHS, resolveGalleryImage, ensureDir } from '../../lib/fileUtils.js';
 import { slugifyForFilename } from '../../lib/civitai.js';
 import { detectHostCapabilities, resolveTarget, DEFAULT_IMAGE_TO_3D_TARGET } from './targets.js';
-import { isTrellis2Installed, runTrellis2Generate } from './trellis2.js';
+import { getTargetAdapter } from './adapters.js';
 import * as store from './db.js';
 
 const MAX_RUNS = 30;
@@ -32,21 +32,6 @@ const activeOperations = new Set();
 // record mid-render can terminate its subprocess promptly. Populated when the render
 // spawns (executeRender) and drained in its `finally`.
 const activeRenders = new Map();
-
-/**
- * Per-target install-probe + runner. One dispatch point so registering a new
- * image→3D backend is an entry here, not new branches through create/generate.
- * A runner takes `{ imagePath, outputPath, onProgress, env }` and returns a
- * `{ promise, kill }` pair — `promise` resolves `{ assetPath }`; `kill` SIGTERMs the
- * render so a mid-flight delete can terminate it (see `runTrellis2Generate`).
- * `env` is a LOCAL-lane concern (the child-process environment, carrying the HF
- * token); a future hosted-API runner should ignore it, and when one lands this is
- * the seam to generalize into a per-runner credential declaration rather than a
- * spawn-shaped bag every target receives.
- */
-const TARGET_RUNNERS = {
-  trellis2: { isInstalled: isTrellis2Installed, run: runTrellis2Generate },
-};
 
 const trimRuns = (runs) => runs.slice(-MAX_RUNS);
 const cleanError = (error) => String(error?.message || error || 'Render failed').slice(0, 2_000);
@@ -84,7 +69,7 @@ function assertTargetReady(targetId, caps) {
       { status: 409, code: 'TARGET_UNAVAILABLE', context: { reason } },
     );
   }
-  const runner = TARGET_RUNNERS[targetId];
+  const runner = getTargetAdapter(targetId);
   if (!runner) {
     throw new ServerError(`Target ${target.label} has no runner wired`, { status: 501, code: 'TARGET_NO_RUNNER' });
   }

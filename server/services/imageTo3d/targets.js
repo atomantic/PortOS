@@ -11,10 +11,10 @@
  * capabilities as an injected argument rather than probing hardware themselves.
  * Only `detectHostCapabilities()` touches the real machine, so it's the one
  * impure boundary (mirroring `platform.js`'s "detect at the route boundary and
- * pass into pure services" contract). Runner/installer wiring for a target is
- * referenced by module path and lands in later phases (see issue #2951); keeping
- * those out of the import graph is what lets this stay a pure, no-side-effect
- * registry that boot and tests can import for free.
+ * pass into pure services" contract). A target's actual installer/runner is
+ * wired separately, in `adapters.js` — keeping runner imports out of this file
+ * is what lets it stay a pure, no-side-effect registry that boot and tests can
+ * import for free (#3080).
  */
 
 import os from 'os';
@@ -45,8 +45,8 @@ export const OUTPUT_KINDS = Object.freeze(Object.values(OUTPUT_KIND));
  * no side effects — so a new model is one object added here.
  *
  * `requires` states the hardware floor for the target's declared lane; the pure
- * resolvers below read it. `installerModule`/`runnerModule` are the module paths
- * later phases wire up (they are not imported here — see the file header).
+ * resolvers below read it. A target's installer/runner is wired in `adapters.js`,
+ * keyed by this registry's `id` (not imported here — see the file header).
  */
 export const IMAGE_TO_3D_TARGETS = Object.freeze({
   trellis2: Object.freeze({
@@ -82,9 +82,6 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
         url: 'https://huggingface.co/briaai/RMBG-2.0',
       }),
     ]),
-    // Wired in later phases (issue #2951); referenced by path, never imported here.
-    installerModule: 'server/services/imageTo3d/trellis2Install.js',
-    runnerModule: 'server/services/imageTo3d/trellis2.js',
   }),
 });
 
