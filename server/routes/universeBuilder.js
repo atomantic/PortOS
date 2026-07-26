@@ -810,8 +810,12 @@ router.post('/:id/canon/:kind/:entryId/correct-from-image', asyncHandler(async (
 // descriptor field with the reviewed text AND pins the analyzed image as the
 // entry's `primaryImageRef` — assigning it as that noun's style/reference
 // image so subsequent renders (client-side i2i seeding) use it.
+// Cap at the largest per-kind descriptor limit (canonSvc.DESC_LIMIT) rather
+// than the unrelated NOTES_MAX — applyCanonImageCorrection silently trims to
+// the per-kind limit before persisting, so a looser schema cap here would let
+// a request pass validation only to have its tail silently dropped on write.
 const applyImageCorrectionSchema = z.object({
-  description: z.string().trim().min(1).max(BIBLE_LIMITS.NOTES_MAX),
+  description: z.string().trim().min(1).max(Math.max(...Object.values(canonSvc.DESC_LIMIT))),
   imageFilename: z.string().trim().min(1).max(300),
 });
 router.post('/:id/canon/:kind/:entryId/apply-image-correction', asyncHandler(async (req, res) => {

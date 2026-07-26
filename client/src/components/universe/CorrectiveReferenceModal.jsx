@@ -161,6 +161,7 @@ export default function CorrectiveReferenceModal({
                     value={proposedText}
                     onChange={(e) => setProposedText(e.target.value)}
                     rows={6}
+                    maxLength={2000}
                     className="w-full rounded border border-port-accent/30 p-2 text-xs text-gray-200 whitespace-pre-wrap bg-port-bg"
                   />
                 </div>

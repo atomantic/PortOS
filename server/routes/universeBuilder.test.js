@@ -4,6 +4,7 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { enqueueJob } from '../services/mediaJobQueue/index.js';
 import { mockNoPeers, mockNoPeerSync } from '../lib/mockPathsDataRoot.js';
+import * as canonSvc from '../services/universeCanon.js';
 
 const fileStore = new Map();
 
@@ -1298,6 +1299,16 @@ describe('universe-builder routes', () => {
       const res = await request(buildApp())
         .post('/api/universe-builder/uni-1/canon/character/chr-1/apply-image-correction')
         .send({ description: '   ', imageFilename: 'g.png' });
+      expect(res.status).toBe(400);
+      expect(applyCanonImageCorrectionMock).not.toHaveBeenCalled();
+    });
+
+    it('rejects a description over the largest per-kind descriptor limit, so it 400s instead of silently truncating on write', async () => {
+      applyCanonImageCorrectionMock.mockClear();
+      const tooLong = 'x'.repeat(Math.max(...Object.values(canonSvc.DESC_LIMIT)) + 1);
+      const res = await request(buildApp())
+        .post('/api/universe-builder/uni-1/canon/character/chr-1/apply-image-correction')
+        .send({ description: tooLong, imageFilename: 'g.png' });
       expect(res.status).toBe(400);
       expect(applyCanonImageCorrectionMock).not.toHaveBeenCalled();
     });
