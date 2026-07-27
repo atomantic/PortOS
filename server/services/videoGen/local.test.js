@@ -1633,6 +1633,111 @@ describe('generateVideo — chunk-boundary marker parsing (#2463)', () => {
   });
 });
 
+describe('generateVideo — signal-death diagnosis (#3101)', () => {
+  // The dominant real-world Apple-Silicon render abort is the macOS Metal
+  // command-buffer watchdog, which arrives as SIGABRT. Before #3101 every signal
+  // except SIGKILL fell through to a bare `Killed by signal SIGABRT` with no
+  // cause and no next step. These assert the close handler's signal→message map
+  // AND that the precedence above it (missingPyModule → idleStallFired → signal)
+  // is preserved.
+  function makeSignalProc() {
+    const listeners = {};
+    let stdoutData = null;
+    let stderrData = null;
+    const proc = {
+      pid: 3101,
+      exitCode: null,
+      signalCode: null,
+      killed: false,
+      stdout: { on: vi.fn((event, fn) => { if (event === 'data') stdoutData = fn; }) },
+      stderr: { on: vi.fn((event, fn) => { if (event === 'data') stderrData = fn; }) },
+      on(event, fn) { listeners[event] = fn; return proc; },
+      kill: vi.fn((signal) => { proc.killed = true; proc.signalCode = signal; }),
+    };
+    return {
+      proc,
+      emitStdout: (text) => stdoutData?.(Buffer.from(text)),
+      emitStderr: (text) => stderrData?.(Buffer.from(text)),
+      fireClose: (code, signal) => listeners.close?.(code, signal),
+    };
+  }
+
+  // Start a render, kill it with `signal`, and return the terminal 'failed' event.
+  async function failWithSignal(jobId, signal, { onStarted } = {}) {
+    vi.resetModules();
+    const { generateVideo: gv } = await import('./local.js');
+    const { videoGenEvents: events } = await import('./events.js');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+
+    // No output on disk, so isWatchdogSuccess can never treat the kill as success.
+    const { existsSync, statSync } = await import('fs');
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(statSync).mockReturnValue({ size: 0 });
+
+    const ctrl = makeSignalProc();
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => ctrl.proc);
+
+    const failed = new Promise((resolve) => events.once('failed', resolve));
+    await gv({
+      jobId,
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'crash on a signal',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+    });
+    onStarted?.(ctrl);
+    ctrl.fireClose(null, signal);
+    return failed;
+  }
+
+  it('SIGABRT names the macOS Metal command-buffer watchdog with a resolution/frame-count next step', async () => {
+    const evt = await failWithSignal('signal-sigabrt', 'SIGABRT');
+    expect(evt.error).toMatch(/Metal command-buffer watchdog/i);
+    expect(evt.error).toMatch(/kIOGPUCommandBufferCallbackErrorImpactingInteractivity/);
+    expect(evt.error).toMatch(/resolution/i);
+    expect(evt.error).toMatch(/frame count/i);
+    // The old bare wording must be gone.
+    expect(evt.error).not.toMatch(/Killed by signal SIGABRT/);
+  });
+
+  it('SIGBUS and SIGSEGV name a native MLX/Metal crash', async () => {
+    for (const [i, sig] of ['SIGBUS', 'SIGSEGV'].entries()) {
+      // eslint-disable-next-line no-await-in-loop
+      const evt = await failWithSignal(`signal-native-${i}`, sig);
+      expect(evt.error).toMatch(new RegExp(sig));
+      expect(evt.error).toMatch(/MLX\/Metal/);
+      expect(evt.error).not.toMatch(new RegExp(`Killed by signal ${sig}`));
+    }
+  });
+
+  it('SIGKILL keeps the out-of-memory wording', async () => {
+    const evt = await failWithSignal('signal-sigkill', 'SIGKILL');
+    expect(evt.error).toMatch(/out of memory/i);
+  });
+
+  it('an unmapped signal still reports verbatim (never mis-attributed)', async () => {
+    const evt = await failWithSignal('signal-unmapped', 'SIGTERM');
+    expect(evt.error).toMatch(/Killed by signal SIGTERM/);
+  });
+
+  it('stamps the runtime fingerprint the child emitted into the signal-death message', async () => {
+    const fp = { runtime: 'ltx2', versions: { mlx: '0.22.0', mlx_metal: '0.22.0' }, chip: 'Apple M4 Max', os: 'macOS-15.4-arm64' };
+    const evt = await failWithSignal('signal-fingerprint', 'SIGABRT', {
+      onStarted: (ctrl) => ctrl.emitStderr(`RUNTIME:${JSON.stringify(fp)}\n`),
+    });
+    expect(evt.error).toMatch(/\[runtime: ltx2 \| mlx 0\.22\.0, mlx_metal 0\.22\.0 \| Apple M4 Max \| macOS-15\.4-arm64\]/);
+  });
+
+  it('a missing python module still wins over the signal map (precedence preserved)', async () => {
+    const evt = await failWithSignal('signal-module-precedence', 'SIGABRT', {
+      onStarted: (ctrl) => ctrl.emitStderr("ModuleNotFoundError: No module named 'ltx_pipelines_mlx'\n"),
+    });
+    expect(evt.error).toMatch(/ltx_pipelines_mlx/);
+    expect(evt.error).not.toMatch(/Metal command-buffer watchdog/i);
+  });
+});
+
 describe('generateVideo — IC-LoRA remix arg threading (#3100)', () => {
   // 704×448 is divisible by the Control weight's referenceDownscaleFactor of 2,
   // so these renders clear the resolution gate. Frames stay small so the FFLF

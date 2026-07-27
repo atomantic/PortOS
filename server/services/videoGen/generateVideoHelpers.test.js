@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { makeVideoGenLineHandler, isWatchdogSuccess, finalizeGeneratedVideo, parseByteProgress, formatBytes, formatDownloadMessage } from './generateVideoHelpers.js';
+import { makeVideoGenLineHandler, isWatchdogSuccess, finalizeGeneratedVideo, parseByteProgress, formatBytes, formatDownloadMessage, describeSignalDeath, formatRuntimeFingerprint } from './generateVideoHelpers.js';
 
 describe('parseByteProgress', () => {
   it('parses single byte value (e.g., "2.5G")', () => {
@@ -243,6 +243,79 @@ describe('finalizeGeneratedVideo runtime persistence', () => {
     });
     expect(saved).toHaveLength(1);
     expect('runtime' in saved[0]).toBe(false);
+  });
+});
+
+describe('formatRuntimeFingerprint', () => {
+  it('renders runtime | versions | chip | os', () => {
+    expect(formatRuntimeFingerprint({
+      runtime: 'ltx2',
+      versions: { mlx: '0.22.0', mlx_metal: '0.22.0' },
+      chip: 'Apple M4 Max',
+      os: 'macOS-15.4-arm64',
+    })).toBe('ltx2 | mlx 0.22.0, mlx_metal 0.22.0 | Apple M4 Max | macOS-15.4-arm64');
+  });
+
+  it('omits missing segments rather than leaving empty separators', () => {
+    expect(formatRuntimeFingerprint({ chip: 'Apple M4 Max', os: 'macOS-15.4-arm64' }))
+      .toBe('Apple M4 Max | macOS-15.4-arm64');
+  });
+
+  it('returns empty string for a missing/non-object payload', () => {
+    expect(formatRuntimeFingerprint(null)).toBe('');
+    expect(formatRuntimeFingerprint(undefined)).toBe('');
+    expect(formatRuntimeFingerprint('ltx2')).toBe('');
+    expect(formatRuntimeFingerprint({})).toBe('');
+  });
+});
+
+describe('describeSignalDeath (#3101 signal → actionable cause)', () => {
+  it('returns null when the child did not die on a signal', () => {
+    expect(describeSignalDeath(null)).toBeNull();
+    expect(describeSignalDeath(undefined)).toBeNull();
+    expect(describeSignalDeath('')).toBeNull();
+  });
+
+  it('names the macOS Metal command-buffer watchdog for SIGABRT and points at resolution/frame count', () => {
+    const reason = describeSignalDeath('SIGABRT');
+    expect(reason).toMatch(/SIGABRT/);
+    expect(reason).toMatch(/Metal command-buffer watchdog/i);
+    expect(reason).toMatch(/kIOGPUCommandBufferCallbackErrorImpactingInteractivity/);
+    expect(reason).toMatch(/resolution/i);
+    expect(reason).toMatch(/frame count/i);
+    // Must NOT send the user hunting a model/PortOS bug (the upstream mistake).
+    expect(reason).toMatch(/not a bug in the model or PortOS/i);
+    expect(reason).not.toMatch(/assertion/i);
+  });
+
+  it('names a native MLX/Metal crash for SIGBUS and SIGSEGV', () => {
+    for (const sig of ['SIGBUS', 'SIGSEGV']) {
+      const reason = describeSignalDeath(sig);
+      expect(reason).toMatch(new RegExp(sig));
+      expect(reason).toMatch(/MLX\/Metal/);
+      expect(reason).toMatch(/native fault/i);
+    }
+  });
+
+  it('keeps the existing OOM wording for SIGKILL', () => {
+    expect(describeSignalDeath('SIGKILL')).toBe('Process killed (likely out of memory — try a smaller model or resolution)');
+  });
+
+  it('falls back to the verbatim signal name for an unmapped signal', () => {
+    expect(describeSignalDeath('SIGTERM')).toBe('Killed by signal SIGTERM');
+    expect(describeSignalDeath('SIGPIPE')).toBe('Killed by signal SIGPIPE');
+  });
+
+  it('appends the runtime fingerprint when one is known', () => {
+    const reason = describeSignalDeath('SIGABRT', {
+      fingerprint: { runtime: 'ltx2', versions: { mlx: '0.22.0', mlx_metal: '0.22.0' }, chip: 'Apple M4 Max', os: 'macOS-15.4-arm64' },
+    });
+    expect(reason).toMatch(/\[runtime: ltx2 \| mlx 0\.22\.0, mlx_metal 0\.22\.0 \| Apple M4 Max \| macOS-15\.4-arm64\]$/);
+  });
+
+  it('omits the fingerprint suffix entirely when nothing is known (no empty brackets)', () => {
+    expect(describeSignalDeath('SIGSEGV', { fingerprint: null })).not.toMatch(/runtime:/);
+    expect(describeSignalDeath('SIGSEGV', { fingerprint: {} })).not.toMatch(/runtime:/);
   });
 });
 

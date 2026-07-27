@@ -28,7 +28,7 @@ import { getVideoModels, getDefaultVideoModelId, getTextEncoderRepo } from '../.
 import { findFfmpeg, safeUnder, generateThumbnail, optimizeForStreaming, upscaleVideo2x, extractEvaluationFrames } from '../../lib/ffmpeg.js';
 import { hfChildEnv } from '../../lib/hfToken.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
-import { makeVideoGenLineHandler, finalizeGeneratedVideo, isWatchdogSuccess } from './generateVideoHelpers.js';
+import { makeVideoGenLineHandler, finalizeGeneratedVideo, isWatchdogSuccess, describeSignalDeath } from './generateVideoHelpers.js';
 import { assertSafeLoraFilename } from '../loras.js';
 import { isMlxVideoLtxLoraCapable } from '../../lib/runners.js';
 import {
@@ -48,6 +48,7 @@ import {
   BYOV_VIDEO_RUNTIMES,
   assertByovRuntimeInstalled,
   invalidateByovReadyCache,
+  pickDeathFingerprint,
 } from './runtimes.js';
 import { loadHistory, saveHistory, mutateVideoHistory } from './history.js';
 // Re-export the extracted runtime + history surface so existing deep imports
@@ -1236,10 +1237,14 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
           // SIGKILL, but this one means the render produced NO output for the
           // whole idle window and we terminated it to free the GPU lane.
           reason = `Render stalled — no output for ${Math.round(IDLE_STALL_DEADLINE_MS / 1000)}s; terminated to free the GPU queue (raise VIDEOGEN_IDLE_STALL_MS if this was a legitimately slow render)`;
-        } else if (signal === 'SIGKILL') {
-          reason = 'Process killed (likely out of memory — try a smaller model or resolution)';
         } else if (signal) {
-          reason = `Killed by signal ${signal}`;
+          // Signal → actionable cause (SIGABRT = the macOS Metal command-buffer
+          // watchdog, SIGBUS/SIGSEGV = a native MLX/Metal crash, SIGKILL = OOM),
+          // stamped with the runtime fingerprint that died so the report is
+          // self-documenting. See describeSignalDeath in generateVideoHelpers.js.
+          reason = describeSignalDeath(signal, {
+            fingerprint: await pickDeathFingerprint({ emitted: job.runtime, runtimeId: model.runtime }),
+          });
         } else {
           reason = `Exit code ${code}`;
         }

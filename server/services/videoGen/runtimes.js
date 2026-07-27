@@ -253,3 +253,27 @@ export async function resolveRuntimeFingerprint() {
   }
   return { host: hostRuntimeFingerprint(), runtimes };
 }
+
+/**
+ * Single runtime fingerprint to quote in a crash/failure report. Prefers the
+ * fingerprint the dead child itself emitted (`RUNTIME:` line → `job.runtime`) —
+ * that's the exact venv that just crashed. Falls back to the /status probe's
+ * already-resolved entry for this render's runtime, then to host-only info, so
+ * even the bare `mlx_video.generate_av` path (which emits no `RUNTIME:` line)
+ * still names the chip + OS build.
+ *
+ * Non-blocking and non-throwing by construction: resolveRuntimeFingerprint()
+ * returns only cached runtime entries (warming the rest in the background), so a
+ * cold or wedged venv can never stall a failure message.
+ *
+ * @param {object} [ctx]
+ * @param {object|null} [ctx.emitted] - fingerprint the child emitted (job.runtime)
+ * @param {string|null} [ctx.runtimeId] - BYOV runtime id of the model being rendered
+ * @returns {Promise<object|null>}
+ */
+export async function pickDeathFingerprint({ emitted = null, runtimeId = null } = {}) {
+  if (emitted && typeof emitted === 'object') return emitted;
+  const block = await resolveRuntimeFingerprint().catch(() => null);
+  if (!block) return null;
+  return (runtimeId && block.runtimes?.[runtimeId]) || block.host || null;
+}

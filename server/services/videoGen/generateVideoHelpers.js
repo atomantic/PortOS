@@ -112,10 +112,7 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
       try {
         const fp = JSON.parse(line.slice('RUNTIME:'.length));
         job.runtime = fp;
-        const vers = fp.versions && typeof fp.versions === 'object'
-          ? Object.entries(fp.versions).map(([k, v]) => `${k} ${v}`).join(', ')
-          : '';
-        console.log(`🏷️ runtime [${jobId.slice(0, 8)}] ${fp.runtime || '?'}${vers ? ` | ${vers}` : ''}${fp.chip ? ` | ${fp.chip}` : ''}${fp.os ? ` | ${fp.os}` : ''}`);
+        console.log(`🏷️ runtime [${jobId.slice(0, 8)}] ${formatRuntimeFingerprint(fp) || '?'}`);
         return true;
       } catch {
         // Malformed fingerprint line — fall through to raw-logging so the
@@ -219,6 +216,68 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
     }
     return false;
   };
+}
+
+/**
+ * Render a runtime fingerprint (either the `RUNTIME:` payload a helper script
+ * emits — `{ runtime, versions, chip, os, python }` — or the Node-side
+ * `hostRuntimeFingerprint()` block) as one human-readable line:
+ * `ltx2 | mlx 0.22.0, torch 2.5.1 | Apple M4 Max | macOS-15.4-arm64`.
+ * Shared by the startup log line and by signal-death failure messages so a
+ * crash report self-documents the exact stack it crashed on. Pure; tolerates a
+ * missing/partial payload (returns '' when nothing is known).
+ * @param {object|null|undefined} fp
+ * @returns {string}
+ */
+export function formatRuntimeFingerprint(fp) {
+  if (!fp || typeof fp !== 'object') return '';
+  const versions = fp.versions && typeof fp.versions === 'object' ? fp.versions : {};
+  const vers = Object.entries(versions).map(([k, v]) => `${k} ${v}`).join(', ');
+  return [fp.runtime, vers, fp.chip, fp.os].filter(Boolean).join(' | ');
+}
+
+// Signal → actionable cause for a render child that died on a signal.
+//
+// Apple Silicon reality drives this map. The dominant real-world render abort is
+// the macOS Metal command-buffer watchdog killing an over-long GPU command
+// buffer (`kIOGPUCommandBufferCallbackErrorImpactingInteractivity`), which the
+// MLX/Metal layer surfaces as SIGABRT (exit -6) — NOT as a Python-level
+// assertion. Reporting that as a bare `Killed by signal SIGABRT` (or as a
+// "C-level assertion failed" hint, the mistake upstream made) sends users
+// hunting a model/PortOS bug when the fix is to shrink the work per command
+// buffer. SIGBUS/SIGSEGV are the other native-crash arrivals from the same
+// layer. SIGKILL stays the OOM message it has always been.
+//
+// Keys are the signal NAMES Node reports on `close` (spawnDetached decodes the
+// supervisor's 128+signum status back into the same names).
+const nativeCrashCause = (signal) => `Render crashed (${signal}) — a native fault inside the MLX/Metal layer, not a PortOS-level error. Retry with a lower resolution/frame count; if it repeats on the same model, reinstall that runtime from Settings → Video (a mismatched mlx / mlx-metal pair in the venv is the usual cause).`;
+
+const SIGNAL_DEATH_CAUSES = Object.freeze({
+  SIGKILL: 'Process killed (likely out of memory — try a smaller model or resolution)',
+  SIGABRT: 'Render aborted (SIGABRT) — on Apple Silicon this is almost always the macOS Metal command-buffer watchdog killing an over-long GPU command buffer (kIOGPUCommandBufferCallbackErrorImpactingInteractivity), not a bug in the model or PortOS. Lower the resolution and/or frame count so each command buffer does less work, and keep the display asleep (or drive the machine headless) so the render is not competing with WindowServer compositing.',
+  SIGBUS: nativeCrashCause('SIGBUS'),
+  SIGSEGV: nativeCrashCause('SIGSEGV'),
+});
+
+/**
+ * Failure reason for a render child that exited on a signal. Pure.
+ *
+ * Unmapped signals keep the historical `Killed by signal <SIG>` wording so a
+ * novel signal is still reported verbatim rather than mis-attributed. The
+ * resolved runtime fingerprint is appended when known, so the report names the
+ * mlx / mlx-metal / chip / macOS stack that died without the user having to go
+ * look it up (matching what RuntimeFingerprint.jsx surfaces on the page).
+ *
+ * @param {string|null} signal - signal name from `proc.on('close', (code, signal))`
+ * @param {object} [opts]
+ * @param {object|null} [opts.fingerprint] - runtime fingerprint (see `pickDeathFingerprint` in runtimes.js)
+ * @returns {string|null} reason, or null when the child did not die on a signal
+ */
+export function describeSignalDeath(signal, { fingerprint = null } = {}) {
+  if (!signal) return null;
+  const cause = SIGNAL_DEATH_CAUSES[signal] || `Killed by signal ${signal}`;
+  const fp = formatRuntimeFingerprint(fingerprint);
+  return fp ? `${cause} [runtime: ${fp}]` : cause;
 }
 
 /**
