@@ -241,6 +241,26 @@ export const MAX_REVIEWER_MODEL_LENGTH = 200;
 // not.
 const REVIEWER_MODEL_FORBIDDEN_RE = /[[\],\r\n\t]/;
 
+/**
+ * Validate ONE reviewer model id — the single definition shared by the
+ * token-keyed map normalizer, the `<reviewer>Model` settings scalars, and the
+ * defaults→map adapter, so a pin can't be accepted by one path and dropped by
+ * another (which would show the user a stored pin that never reaches a reviewer).
+ *
+ * Returns the trimmed id, or `undefined` when it isn't usable: a non-string, a
+ * blank/whitespace-only value (absent ≠ `''` — a `--model ` with no id would break
+ * the invocation), an over-long one, one carrying a structural delimiter, or one
+ * naming a reviewer that takes no model. Pass `reviewer` to apply that last check.
+ */
+function normalizeReviewerModel(raw, reviewer = null) {
+  if (reviewer !== null && !MODEL_SELECTABLE_REVIEWERS.includes(reviewer)) return undefined;
+  if (typeof raw !== 'string') return undefined;
+  const model = raw.trim();
+  if (!model || model.length > MAX_REVIEWER_MODEL_LENGTH) return undefined;
+  if (REVIEWER_MODEL_FORBIDDEN_RE.test(model)) return undefined;
+  return model;
+}
+
 // Reviewers whose slashdo `--review-with` entry accepts a `[<model>]` bracket
 // (`lib/multi-reviewer-loop.md`: codex/claude/agy/grok/ollama). PortOS's
 // `lmstudio` reviewer has NO slashdo counterpart — it's served by
@@ -279,11 +299,9 @@ export function normalizeReviewerModels(map) {
   const out = Object.create(null);
   for (const [rawKey, rawValue] of Object.entries(map)) {
     const token = normalizeReviewerToken(rawKey);
-    if (!token || !MODEL_SELECTABLE_REVIEWERS.includes(token)) continue;
-    if (typeof rawValue !== 'string') continue;
-    const model = rawValue.trim();
-    if (!model || model.length > MAX_REVIEWER_MODEL_LENGTH) continue;
-    if (REVIEWER_MODEL_FORBIDDEN_RE.test(model)) continue;
+    if (!token) continue;
+    const model = normalizeReviewerModel(rawValue, token);
+    if (!model) continue;
     // First occurrence wins for two spellings of one reviewer — mirrors the
     // sibling normalizers' dedupe.
     if (Object.prototype.hasOwnProperty.call(out, token)) continue;
@@ -318,8 +336,11 @@ export function resolveReviewerModels(metadataMap, defaultMap) {
 export function reviewerModelsFromDefaults(defaults) {
   const out = {};
   for (const r of MODEL_SELECTABLE_REVIEWERS) {
-    const model = defaults?.[`${r}Model`];
-    if (typeof model === 'string' && model.trim()) out[r] = model.trim();
+    // Re-checked here, not trusted: settings.json is hand-editable, and a value
+    // stored before the scalars were validated must not surface as a pin the token
+    // builders would then drop.
+    const model = normalizeReviewerModel(defaults?.[`${r}Model`], r);
+    if (model) out[r] = model;
   }
   return out;
 }
@@ -850,10 +871,15 @@ export const codeReviewSettingsSchema = z.object({
   ),
   stopMode: z.enum(REVIEW_STOP_MODES).optional(),
   reviewerApplies: z.boolean().optional(),
-  lmstudioModel: z.preprocess(emptyToUndefined, z.string().optional()),
-  ollamaModel: z.preprocess(emptyToUndefined, z.string().optional()),
-  codexModel: z.preprocess(emptyToUndefined, z.string().optional()),
-  claudeModel: z.preprocess(emptyToUndefined, z.string().optional()),
+  // Each scalar runs through the same shape check as a task-level pin
+  // (`normalizeReviewerModel`), so a stored default can't carry an id the token
+  // builders would silently drop — the picker would otherwise DISPLAY a pin that
+  // never reaches a reviewer. An unusable value clears the field (undefined)
+  // rather than persisting: same "absent = that reviewer's own default" contract.
+  lmstudioModel: z.preprocess(v => normalizeReviewerModel(v, 'lmstudio'), z.string().optional()),
+  ollamaModel: z.preprocess(v => normalizeReviewerModel(v, 'ollama'), z.string().optional()),
+  codexModel: z.preprocess(v => normalizeReviewerModel(v, 'codex'), z.string().optional()),
+  claudeModel: z.preprocess(v => normalizeReviewerModel(v, 'claude'), z.string().optional()),
 }).strict();
 
 // =============================================================================

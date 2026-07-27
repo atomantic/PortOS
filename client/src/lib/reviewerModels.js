@@ -1,4 +1,4 @@
-import { MODEL_SELECTABLE_REVIEWERS } from '../components/cos/constants';
+import { MODEL_SELECTABLE_REVIEWERS, MAX_REVIEWER_MODEL_LENGTH, sanitizeReviewerModelInput } from '../components/cos/constants';
 
 /**
  * Adapters between the two shapes a per-reviewer model pin takes.
@@ -14,12 +14,20 @@ import { MODEL_SELECTABLE_REVIEWERS } from '../components/cos/constants';
  * Server mirror: `reviewerModelsFromDefaults` in `server/lib/cosValidation.js`.
  */
 
-/** Scalars → `{ codex: 'gpt-…', ollama: 'qwen…' }`. Blank/absent scalars are omitted. */
+/**
+ * Scalars → `{ codex: 'gpt-…', ollama: 'qwen…' }`. Blank/absent scalars are omitted,
+ * as is a value the server's token builders would drop — an over-long id or one
+ * carrying a structural delimiter. settings.json is hand-editable, so a stored
+ * value that predates the schema's validation must not surface as a pin the picker
+ * DISPLAYS but no reviewer ever receives.
+ */
 export function reviewerModelsFromDefaults(defaults) {
   const out = {};
   for (const reviewer of MODEL_SELECTABLE_REVIEWERS) {
-    const model = defaults?.[`${reviewer}Model`];
-    if (typeof model === 'string' && model.trim()) out[reviewer] = model.trim();
+    const raw = defaults?.[`${reviewer}Model`];
+    if (typeof raw !== 'string') continue;
+    const model = sanitizeReviewerModelInput(raw).trim();
+    if (model && model.length <= MAX_REVIEWER_MODEL_LENGTH && model === raw.trim()) out[reviewer] = model;
   }
   return out;
 }

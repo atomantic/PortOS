@@ -217,6 +217,25 @@ describe('validation.js', () => {
       // A token-keyed map is NOT part of this slice — the scalars are.
       expect(codeReviewSettingsSchema.safeParse({ reviewerModels: { codex: 'a' } }).success).toBe(false)
     })
+
+    it('clears a scalar carrying a character the emitted token cannot escape', () => {
+      // Otherwise the picker would DISPLAY a stored pin that the token builders
+      // silently drop — the user sets a model and no reviewer ever gets it.
+      const r = codeReviewSettingsSchema.safeParse({ codexModel: 'foo]~opt', claudeModel: 'a,b' })
+      expect(r.success).toBe(true)
+      expect(r.data.codexModel).toBeUndefined()
+      expect(r.data.claudeModel).toBeUndefined()
+    })
+
+    it('trims a scalar and clears an over-long one', () => {
+      const r = codeReviewSettingsSchema.safeParse({
+        codexModel: '  gpt-tier-a  ',
+        claudeModel: 'm'.repeat(MAX_REVIEWER_MODEL_LENGTH + 1),
+      })
+      expect(r.success).toBe(true)
+      expect(r.data.codexModel).toBe('gpt-tier-a')
+      expect(r.data.claudeModel).toBeUndefined()
+    })
   })
 
   describe('processSchema', () => {
@@ -1293,6 +1312,16 @@ describe('validation.js', () => {
 
     it('tolerates absent defaults', () => {
       expect(reviewerModelsFromDefaults(null)).toEqual({});
+    });
+
+    it('re-checks the stored scalars rather than trusting them', () => {
+      // settings.json is hand-editable, and a value stored before the schema
+      // validated these scalars must not surface as a pin the builders then drop.
+      expect(reviewerModelsFromDefaults({
+        codexModel: 'foo]~opt',
+        claudeModel: 'm'.repeat(MAX_REVIEWER_MODEL_LENGTH + 1),
+        ollamaModel: 'ok',
+      })).toEqual({ ollama: 'ok' });
     });
   });
 

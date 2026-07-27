@@ -78,6 +78,12 @@ export function pickCodeReviewDefaults(settings) {
     reviewerMaxRounds: normalizeReviewerMaxRounds(raw?.reviewerMaxRounds) || {},
     stopMode: REVIEW_STOP_MODES.includes(raw?.stopMode) ? raw.stopMode : DEFAULT_REVIEW_STOP_MODE,
     reviewerApplies: raw?.reviewerApplies === true,
+    // Faithful mirror of the stored scalars, deliberately NOT shape-checked here:
+    // `/api/code-review/local` passes these as a JSON request-body field where a
+    // delimiter is harmless, so narrowing them at this layer would reject an id
+    // that path can legitimately use. Every consumer that turns a scalar into a
+    // slashdo TOKEN re-validates first (`reviewerModelsFromDefaults`), and the
+    // settings schema rejects an unusable id at write time.
     lmstudioModel: typeof raw?.lmstudioModel === 'string' && raw.lmstudioModel ? raw.lmstudioModel : null,
     ollamaModel: typeof raw?.ollamaModel === 'string' && raw.ollamaModel ? raw.ollamaModel : null,
     codexModel: typeof raw?.codexModel === 'string' && raw.codexModel ? raw.codexModel : null,
