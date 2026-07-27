@@ -215,8 +215,8 @@ const COS_METRICS_DELIVERY_KEYS = ['delivery', 'deliveryByScope'];
  * @returns {string} the JSON document capped at COS_METRICS_MAX_CHARS, or ''.
  */
 export function renderCosMetricsSource({ metricsByType = {}, delivery = null } = {}) {
-  const payload = {};
   if (!delivery && Object.keys(metricsByType || {}).length === 0) return '';
+  const payload = {};
   // Reserved keys are INSERTED first (JSON.stringify follows insertion order, so the
   // cap above can't cut them) but ASSIGNED last, so a task type that happens to share
   // one of their names can't shadow the delivery block.
