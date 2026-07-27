@@ -85,13 +85,22 @@ describe('render-backend pin — image (#3135)', () => {
     expect(enqueued().params.pythonPath).toBe('/py');
   });
 
-  it('applies a local pin with its model id, but the planner model wins if it named one', async () => {
+  it('the pinned local model beats a planner-authored one', async () => {
     getSettings.mockResolvedValue({ imageGen: { local: { pythonPath: '/py' } } });
     getProject.mockResolvedValue(projectWithPin({ image: { mode: 'local', modelId: 'pinned-model' } }));
 
     await run('media_enqueueImageJob', { prompt: 'p' }, { projectId: 'cd-1' });
     expect(enqueued().params.modelId).toBe('pinned-model');
 
+    // The asymmetry IS the pin: a user who named a model must get that model,
+    // not whatever the planner guessed.
+    await run('media_enqueueImageJob', { prompt: 'p', modelId: 'planner-model' }, { projectId: 'cd-1' });
+    expect(enqueued().params.modelId).toBe('pinned-model');
+  });
+
+  it('leaves the planner model alone when the pin names none', async () => {
+    getSettings.mockResolvedValue({ imageGen: { local: { pythonPath: '/py' } } });
+    getProject.mockResolvedValue(projectWithPin({ image: { mode: 'local' } }));
     await run('media_enqueueImageJob', { prompt: 'p', modelId: 'planner-model' }, { projectId: 'cd-1' });
     expect(enqueued().params.modelId).toBe('planner-model');
   });
@@ -134,11 +143,33 @@ describe('render-backend pin — video (#3135)', () => {
     expect(enqueued().params.modelId).toBe('pinned-video-model');
   });
 
-  it('degrades a grok video pin to local when the grok toggle is off', async () => {
+  it('STRIPS a planner-authored grok discriminator when the pin says local', async () => {
+    // The discriminator and the t2v/i2v semantic share `params.mode`, so leaving
+    // a planner-written 'grok' in place would dispatch to grok in defiance of the
+    // pin. Dropping it lets local.js infer the semantic (= what an unset mode means).
+    getSettings.mockResolvedValue({ imageGen: {} });
+    getProject.mockResolvedValue(projectWithPin({ video: { mode: 'local' } }));
+    await run('media_enqueueVideoJob', { prompt: 'p', mode: 'grok' }, { projectId: 'cd-1' });
+    expect(enqueued().params).toEqual({ prompt: 'p' });
+  });
+
+  it('degrades a grok video pin to local when the grok toggle is off — and strips the discriminator', async () => {
     getSettings.mockResolvedValue({ imageGen: { grok: { enabled: false } } });
     getProject.mockResolvedValue(projectWithPin({ video: { mode: 'grok' } }));
     await run('media_enqueueVideoJob', { prompt: 'p' }, { projectId: 'cd-1' });
     expect(enqueued().params).toEqual({ prompt: 'p' });
+
+    // The fallback must also survive a planner that already wrote 'grok', or the
+    // disabled-backend degrade would be silently defeated.
+    await run('media_enqueueVideoJob', { prompt: 'p', mode: 'grok' }, { projectId: 'cd-1' });
+    expect(enqueued().params).toEqual({ prompt: 'p' });
+  });
+
+  it('the pinned local video model beats a planner-authored one', async () => {
+    getSettings.mockResolvedValue({ imageGen: {} });
+    getProject.mockResolvedValue(projectWithPin({ video: { mode: 'local', modelId: 'pinned-video-model' } }));
+    await run('media_enqueueVideoJob', { prompt: 'p', modelId: 'planner-model' }, { projectId: 'cd-1' });
+    expect(enqueued().params.modelId).toBe('pinned-video-model');
   });
 
   it('applies the video pin alongside the locked geometry preset', async () => {

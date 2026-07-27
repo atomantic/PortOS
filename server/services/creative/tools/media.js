@@ -127,10 +127,19 @@ async function enforceRenderBackendPin(kind, params, project) {
     const mode = resolveVideoMode(pin.mode, settings);
     if (mode !== VIDEO_GEN_MODE.GROK) {
       // Local video: `params.mode` is the t2v/i2v SEMANTIC for this lane (see
-      // videoGen/modes.js), so it must not be stamped with the backend name —
-      // absence of the 'grok' discriminator IS "render locally". Only the model
-      // pin travels, and only when the planner didn't name one itself.
-      return pin.modelId && !params?.modelId ? { ...params, modelId: pin.modelId } : params;
+      // videoGen/modes.js), so it must NOT be stamped with the backend name —
+      // the absence of the 'grok' discriminator IS "render locally", and
+      // overwriting a real semantic ('fflf', 'a2v', 'extend', an IC-LoRA id)
+      // would silently drop the caller's keyframes/audio. But the discriminator
+      // and the semantic share this one key, so a planner-authored `mode: 'grok'`
+      // must be STRIPPED or the queue would dispatch to grok in defiance of the
+      // pin (and of the grok-disabled fallback). Dropping it lets local.js infer
+      // the semantic from `sourceImagePath`, which is what an unset mode means.
+      const { mode: authored, ...rest } = params || {};
+      const base = authored === VIDEO_GEN_MODE.GROK ? rest : (params || {});
+      // The user's pinned model wins over the planner's freehand guess — that
+      // asymmetry is the whole point of a pin.
+      return pin.modelId ? { ...base, modelId: pin.modelId } : base;
     }
     const grok = settings.imageGen?.grok || {};
     // videoGen/grok.js reads the same `imageGen.grok` slice the image path does
@@ -152,8 +161,8 @@ async function enforceRenderBackendPin(kind, params, project) {
     ...params,
     mode: IMAGE_GEN_MODE.LOCAL,
     pythonPath: settings.imageGen?.local?.pythonPath || null,
-    // The planner's own modelId wins if it named one; otherwise the pin's.
-    ...(pin.modelId && !params?.modelId ? { modelId: pin.modelId } : {}),
+    // The user's pinned model wins over the planner's freehand guess.
+    ...(pin.modelId ? { modelId: pin.modelId } : {}),
   };
 }
 
