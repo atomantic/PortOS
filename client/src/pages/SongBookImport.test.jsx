@@ -142,6 +142,30 @@ describe('SongBookImport', () => {
       expect(await screen.findByText('drum')).toBeTruthy();
     });
 
+    it('a recognized grid and the Drums instrument both outrank the URL extractor\'s format', async () => {
+      // The URL extractor returns generic text with no drum awareness, so its
+      // tab/plain guess must not override an unmistakable chart — nor the user
+      // explicitly saying "this is a kit chart".
+      api.importSongFromUrl.mockResolvedValue({
+        draft: { title: 'Fetched Groove', artist: '', content: { format: 'tab', text: DRUM_CHART }, sourceUrl: 'https://example.com/g' },
+      });
+      renderPage();
+      fireEvent.click(screen.getByRole('tab', { name: 'From URL' }));
+      fireEvent.change(screen.getByLabelText('Tab / chord-sheet URL'), { target: { value: 'https://example.com/g' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Fetch' }));
+      await waitFor(() => expect(screen.getByLabelText('Drum bar 1')).toBeTruthy());
+
+      // And for content the sniff can't read, the instrument still wins.
+      api.importSongFromUrl.mockResolvedValue({
+        draft: { title: 'Ambiguous', artist: '', content: { format: 'tab', text: 'K: o\nnot yet a grid' }, sourceUrl: 'https://example.com/a' },
+      });
+      fireEvent.change(screen.getByLabelText('Tab / chord-sheet URL'), { target: { value: 'https://example.com/a' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Fetch' }));
+      await waitFor(() => expect(screen.getByText('tab')).toBeTruthy());
+      fireEvent.change(screen.getByLabelText('Instrument'), { target: { value: 'drums' } });
+      await waitFor(() => expect(screen.getByText('drum')).toBeTruthy());
+    });
+
     it('leaves a chord sheet on its detected format with the tab preview', async () => {
       renderPage();
       fireEvent.change(screen.getByLabelText('Pasted tab content'), { target: { value: '[Verse]\nC  G  Am  F\nInvented lyric line' } });

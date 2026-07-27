@@ -143,14 +143,21 @@ export default function SongBookImport() {
     applyMetaDefaults(activeMetaRef.current);
   }, [tab, applyMetaDefaults]);
   // Memoized on its real inputs so the classifier passes don't re-run on every
-  // unrelated keystroke (title/artist/tags). `isDrumNotation` runs BEFORE
-  // detectFormat: a grid row would otherwise classify as plain text (#3115). A
-  // chosen Drums instrument also implies the kit grid, so the format follows the
-  // instrument even for a chart the sniff can't recognize yet (e.g. mid-typing).
+  // unrelated keystroke (title/artist/tags). Precedence, highest first:
+  //
+  // 1. A recognized drum grid (`isDrumNotation`) — this runs BEFORE `detectFormat`
+  //    because a grid row would otherwise classify as plain text (#3115). It also
+  //    beats the server's `fetchedFormat`: the URL extractor returns generic text
+  //    and has no drum awareness, so its `tab`/`plain` guess must not override an
+  //    unmistakable chart.
+  // 2. The chosen Drums instrument — the user saying "this is a kit chart"
+  //    outranks any guess, and covers a chart the sniff can't read yet
+  //    (mid-typing) as well as one the URL extractor already labelled `tab`.
+  // 3. The server's format for a URL import, then `detectFormat` for a paste.
   const contentFormat = useMemo(() => {
-    if (tab === 'url' && fetchedFormat) return fetchedFormat;
     if (isDrumNotation(contentText)) return DRUM_FORMAT;
     if (instrument === DRUM_INSTRUMENT) return DRUM_FORMAT;
+    if (tab === 'url' && fetchedFormat) return fetchedFormat;
     return detectFormat(contentText);
   }, [tab, fetchedFormat, contentText, instrument]);
   const previewIsDrum = contentFormat === DRUM_FORMAT;
