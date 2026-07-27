@@ -191,6 +191,22 @@ export const REVIEWER_OPTIONS = [
 ];
 export const LOCAL_LLM_REVIEWERS = ['lmstudio', 'ollama'];
 
+// CLI reviewers whose binary takes a `--model <id>` tier. Client mirror of
+// MODEL_CAPABLE_CLI_REVIEWERS in server/lib/cosValidation.js.
+export const MODEL_CAPABLE_CLI_REVIEWERS = ['codex', 'claude'];
+
+// Every reviewer whose model the user can pick per row in ReviewerPicker — the
+// model-capable CLIs plus the local-LLM backends. Client mirror of
+// MODEL_SELECTABLE_REVIEWERS in server/lib/cosValidation.js; keep in sync so the
+// picker only offers a Model cell where the server would keep the pin.
+// `copilot` and `@username` reviewers take no model.
+export const MODEL_SELECTABLE_REVIEWERS = [...MODEL_CAPABLE_CLI_REVIEWERS, ...LOCAL_LLM_REVIEWERS];
+
+// Upper bound on a pinned reviewer model id. Client mirror of
+// MAX_REVIEWER_MODEL_LENGTH in server/lib/cosValidation.js — a longer id is
+// dropped server-side, so the input must not accept one.
+export const MAX_REVIEWER_MODEL_LENGTH = 200;
+
 // pr-watcher author gate (taskMetadata.prAuthorFilter). Mirrors
 // PR_AUTHOR_FILTERS in server/lib/validation.js. 'self' = PRs opened by the
 // gh-authenticated operator (or their automation); 'others' = external

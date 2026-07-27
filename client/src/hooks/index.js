@@ -45,6 +45,7 @@ export { default as useLocalModels } from './useLocalModels.js';
 export { default as useVisionModelIds } from './useVisionModelIds.js';
 export { default as usePreviewRoute } from './usePreviewRoute.js';
 export { default as useProviderModels } from './useProviderModels.js';
+export { default as useReviewerModelOptions } from './useReviewerModelOptions.js';
 export { default as useRowDraft } from './useRowDraft.js';
 export { default as useTheme } from './useTheme.js';
 export { default as useUniverse } from './useUniverse.js';

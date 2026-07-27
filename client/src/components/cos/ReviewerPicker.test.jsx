@@ -234,4 +234,142 @@ describe('ReviewerPicker', () => {
       }));
     });
   });
+
+  describe('per-reviewer Model column', () => {
+    // Shape mirrors useReviewerModelOptions()' return — the caller owns the fetch.
+    const modelOptions = {
+      optionsByReviewer: {
+        ollama: ['qwen2.5-coder:32b', 'codellama'],
+        lmstudio: ['local-model-a'],
+        codex: ['gpt-tier-a', 'gpt-tier-b'],
+        claude: ['claude-tier-a', 'qwen2.5-coder:32b'],
+      },
+      freeText: { codex: true, claude: true, lmstudio: false, ollama: false },
+      unavailable: { lmstudio: false, ollama: false },
+      loaded: true,
+    };
+
+    it('renders a Model control for each model-taking reviewer', () => {
+      render(<ReviewerPicker reviewers={['ollama', 'codex', 'copilot']} modelOptions={modelOptions} onChange={() => {}} />);
+      expect(screen.getByLabelText('Model for Ollama')).toBeInTheDocument();
+      expect(screen.getByLabelText('Model for Codex')).toBeInTheDocument();
+      // Copilot has no CLI and takes no model — no control, just the em dash.
+      expect(screen.queryByLabelText('Model for Copilot')).not.toBeInTheDocument();
+    });
+
+    it('does not render a Model control for a @username reviewer', () => {
+      render(<ReviewerPicker reviewers={['copilot']} usernames={['flaky-bot']} modelOptions={modelOptions} onChange={() => {}} />);
+      expect(screen.queryByLabelText('Model for @flaky-bot')).not.toBeInTheDocument();
+    });
+
+    it('renders a local backend as a closed select of its installed ids', () => {
+      render(<ReviewerPicker reviewers={['ollama']} modelOptions={modelOptions} onChange={() => {}} />);
+      const select = screen.getByLabelText('Model for Ollama');
+      expect(select.tagName).toBe('SELECT');
+      expect(screen.getByRole('option', { name: 'qwen2.5-coder:32b' })).toBeInTheDocument();
+    });
+
+    it('renders a CLI reviewer as a free-text input so an env-specific id can be typed', () => {
+      render(<ReviewerPicker reviewers={['claude']} modelOptions={modelOptions} onChange={() => {}} />);
+      // An Ollama-backed / Bedrock-form claude id can't be enumerated, so the
+      // control must accept a typed value rather than only a pick.
+      expect(screen.getByLabelText('Model for Claude').tagName).toBe('INPUT');
+    });
+
+    it('falls back to free-text when no options resolved (a closed empty select would be dead)', () => {
+      render(<ReviewerPicker reviewers={['ollama']} onChange={() => {}} />);
+      expect(screen.getByLabelText('Model for Ollama').tagName).toBe('INPUT');
+    });
+
+    it('shows an existing pin', () => {
+      render(<ReviewerPicker reviewers={['ollama']} reviewerModels={{ ollama: 'codellama' }} modelOptions={modelOptions} onChange={() => {}} />);
+      expect(screen.getByLabelText('Model for Ollama')).toHaveValue('codellama');
+    });
+
+    it('keeps an option for a pin the probe no longer lists', () => {
+      render(<ReviewerPicker reviewers={['ollama']} reviewerModels={{ ollama: 'uninstalled-model' }} modelOptions={modelOptions} onChange={() => {}} />);
+      // Without the synthesized option the select would render blank and read as
+      // "unset" while the value is in fact stored.
+      expect(screen.getByLabelText('Model for Ollama')).toHaveValue('uninstalled-model');
+      expect(screen.getByRole('option', { name: /uninstalled-model \(not installed\)/ })).toBeInTheDocument();
+    });
+
+    it('pins a model for a local reviewer', () => {
+      const onChange = vi.fn();
+      render(<ReviewerPicker reviewers={['ollama']} modelOptions={modelOptions} onChange={onChange} />);
+      fireEvent.change(screen.getByLabelText('Model for Ollama'), { target: { value: 'codellama' } });
+      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewerModels: { ollama: 'codellama' } }));
+    });
+
+    it('pins a typed model for a CLI reviewer', () => {
+      const onChange = vi.fn();
+      render(<ReviewerPicker reviewers={['codex']} modelOptions={modelOptions} onChange={onChange} />);
+      fireEvent.change(screen.getByLabelText('Model for Codex'), { target: { value: 'gpt-tier-b' } });
+      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewerModels: { codex: 'gpt-tier-b' } }));
+    });
+
+    it('clearing the field DELETES the pin rather than writing an empty id', () => {
+      const onChange = vi.fn();
+      render(<ReviewerPicker reviewers={['codex']} reviewerModels={{ codex: 'gpt-tier-a' }} modelOptions={modelOptions} onChange={onChange} />);
+      fireEvent.change(screen.getByLabelText('Model for Codex'), { target: { value: '' } });
+      // `''` would emit a `--model ` with no id; absent means "its own default".
+      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewerModels: {} }));
+    });
+
+    it('treats a whitespace-only entry as a clear, not a pin', () => {
+      const onChange = vi.fn();
+      render(<ReviewerPicker reviewers={['codex']} reviewerModels={{ codex: 'gpt-tier-a' }} modelOptions={modelOptions} onChange={onChange} />);
+      fireEvent.change(screen.getByLabelText('Model for Codex'), { target: { value: '   ' } });
+      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewerModels: {} }));
+    });
+
+    it('prunes the pin when its reviewer is removed', async () => {
+      const onChange = vi.fn();
+      const user = userEvent.setup();
+      render(<ReviewerPicker reviewers={['codex', 'ollama']} reviewerModels={{ ollama: 'codellama' }} modelOptions={modelOptions} onChange={onChange} />);
+      await user.click(screen.getByLabelText('Remove Ollama'));
+      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewers: ['codex'], reviewerModels: {} }));
+    });
+
+    it('keeps the model pin, the ~opt toggle, and the cap independent', async () => {
+      const onChange = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <ReviewerPicker
+          reviewers={['ollama']}
+          reviewerModels={{ ollama: 'codellama' }}
+          reviewerMaxRounds={{ ollama: 1 }}
+          modelOptions={modelOptions}
+          onChange={onChange}
+        />
+      );
+      await user.click(screen.getByLabelText('Make Ollama non-blocking'));
+      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+        optionalReviewers: ['ollama'],
+        reviewerMaxRounds: { ollama: 1 },
+        reviewerModels: { ollama: 'codellama' }
+      }));
+    });
+
+    it('preserves an untouched pin when another row changes', () => {
+      const onChange = vi.fn();
+      render(
+        <ReviewerPicker
+          reviewers={['codex', 'ollama']}
+          reviewerModels={{ codex: 'gpt-tier-a' }}
+          modelOptions={modelOptions}
+          onChange={onChange}
+        />
+      );
+      fireEvent.change(screen.getByLabelText('Model for Ollama'), { target: { value: 'codellama' } });
+      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+        reviewerModels: { codex: 'gpt-tier-a', ollama: 'codellama' }
+      }));
+    });
+
+    it('reads a pin case-insensitively (legacy/hand-edited key casing)', () => {
+      render(<ReviewerPicker reviewers={['codex']} reviewerModels={{ Codex: 'gpt-tier-a' }} modelOptions={modelOptions} onChange={() => {}} />);
+      expect(screen.getByLabelText('Model for Codex')).toHaveValue('gpt-tier-a');
+    });
+  });
 });

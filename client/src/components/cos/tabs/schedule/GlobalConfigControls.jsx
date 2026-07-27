@@ -8,6 +8,8 @@ import InfoTooltip from '../../../ui/InfoTooltip';
 import { FormField } from '../../../ui/FormField';
 import { formatDateTime } from '../../../../utils/formatters';
 import { useCodeReviewDefaults } from '../../../../hooks/useCodeReviewDefaults';
+import useReviewerModelOptions from '../../../../hooks/useReviewerModelOptions';
+import { reviewerModelsFromDefaults } from '../../../../lib/reviewerModels';
 import ToggleSwitch from '../../../ToggleSwitch';
 import { filterSelectableModels } from '../../../../utils/providers';
 import EffortSelect from '../../EffortSelect';
@@ -17,6 +19,9 @@ import { INTERVAL_DESCRIPTIONS, toggleMetadataField } from './scheduleConstants'
 
 export default function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, category: _category, providers, apps, updating, setUpdating, allTaskTypes, improvementDisabled }) {
   const reviewDefaults = useCodeReviewDefaults();
+  // Resolved model lists for the reviewer table's Model column (the picker itself
+  // never fetches — see its `modelOptions` prop).
+  const reviewerModelOptions = useReviewerModelOptions();
   const [selectedType, setSelectedType] = useState(config.type);
   const [selectedProviderId, setSelectedProviderId] = useState(config.providerId || '');
   const [selectedModel, setSelectedModel] = useState(config.model || '');
@@ -435,16 +440,20 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
               usernames={config.taskMetadata?.usernames ?? reviewDefaults.usernames}
               optionalReviewers={config.taskMetadata?.optionalReviewers ?? reviewDefaults.optionalReviewers}
               reviewerMaxRounds={config.taskMetadata?.reviewerMaxRounds ?? reviewDefaults.reviewerMaxRounds}
+              // The task type's own pins when it has them, else the install's Code
+              // Review Defaults (persisted as `<reviewer>Model` scalars).
+              reviewerModels={config.taskMetadata?.reviewerModels ?? reviewerModelsFromDefaults(reviewDefaults)}
+              modelOptions={reviewerModelOptions}
               stopMode={config.taskMetadata?.reviewStopMode || reviewDefaults.stopMode || DEFAULT_REVIEW_STOP_MODE}
               reviewerApplies={config.taskMetadata?.reviewerApplies !== undefined
                 ? (config.taskMetadata?.reviewerApplies === true || config.taskMetadata?.reviewerApplies === 'true')
                 : reviewDefaults.reviewerApplies}
               disabled={updating}
-              onChange={({ reviewers, usernames, optionalReviewers, reviewerMaxRounds, stopMode, reviewerApplies }) => {
+              onChange={({ reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, stopMode, reviewerApplies }) => {
                 // Drop the legacy single `reviewer` key so storage converges on `reviewers`.
                 const { reviewer: _reviewer, ...rest } = config.taskMetadata || {};
                 onUpdate(taskType, {
-                  taskMetadata: { ...rest, reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewStopMode: stopMode, reviewerApplies }
+                  taskMetadata: { ...rest, reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewStopMode: stopMode, reviewerApplies }
                 });
               }}
             />

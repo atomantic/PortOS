@@ -36,6 +36,7 @@ export * from './issueLength.js';
 export * from './muscriptorModels.js';
 export * from './pipelineImageDefaults.js';
 export * from './reverseOutlineGrid.js';
+export * from './reviewerModels.js';
 export * from './runnerFamilies.js';
 export * from './slashdoCatalog.js';
 export * from './videoGenParams.js';

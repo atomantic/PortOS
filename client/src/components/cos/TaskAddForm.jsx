@@ -12,6 +12,8 @@ import { clickableProps } from '../../lib/a11yKeyboard';
 import { slashdoLabel } from '../../lib/slashdoCatalog';
 import ReviewerPicker from './ReviewerPicker';
 import EffortSelect from './EffortSelect';
+import useReviewerModelOptions from '../../hooks/useReviewerModelOptions';
+import { reviewerModelsFromDefaults } from '../../lib/reviewerModels';
 
 export default function TaskAddForm({ providers, apps, onTaskAdded, compact = false, defaultExpanded = false, defaultApp = '' }) {
   const [newTask, setNewTask] = useState({ description: '', model: '', provider: '', effort: '', app: defaultApp });
@@ -26,6 +28,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   const [reviewUsernames, setReviewUsernames] = useState([]);
   const [optionalReviewers, setOptionalReviewers] = useState([]);
   const [reviewerMaxRounds, setReviewerMaxRounds] = useState({});
+  const [reviewerModels, setReviewerModels] = useState({});
   const [reviewStopMode, setReviewStopMode] = useState(DEFAULT_REVIEW_STOP_MODE);
   const [reviewerApplies, setReviewerApplies] = useState(false);
   const [createJiraTicket, setCreateJiraTicket] = useState(false);
@@ -43,6 +46,9 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   // Bare slashdo command a quick-template pinned (`plan-task`), never a rendered
   // `/do:x` string — see server/lib/slashdoInvocation.js for why.
   const [slashdoCommand, setSlashdoCommand] = useState('');
+  // Resolved model lists for the reviewer table's Model column. Owned here (not by
+  // ReviewerPicker) so the picker stays fetch-free — see its `modelOptions` prop.
+  const reviewerModelOptions = useReviewerModelOptions();
   const submittingRef = useRef(false);
   const descriptionRef = useRef(null);
   // Set by applyTemplate only when a template changes BOTH the app and the
@@ -70,6 +76,9 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
         if (Array.isArray(d.usernames)) setReviewUsernames(d.usernames);
         if (Array.isArray(d.optionalReviewers)) setOptionalReviewers(d.optionalReviewers);
         if (d.reviewerMaxRounds && typeof d.reviewerMaxRounds === 'object' && !Array.isArray(d.reviewerMaxRounds)) setReviewerMaxRounds(d.reviewerMaxRounds);
+        // The defaults persist per-reviewer models as scalars; the picker takes the
+        // token-keyed map (see client/src/lib/reviewerModels.js).
+        setReviewerModels(reviewerModelsFromDefaults(d));
         if (d.stopMode) setReviewStopMode(d.stopMode);
         if (d.reviewerApplies === true) setReviewerApplies(true);
       })
@@ -309,6 +318,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       usernames: openPR && prCompletion === 'review-then-merge' ? reviewUsernames : undefined,
       optionalReviewers: openPR && prCompletion === 'review-then-merge' ? optionalReviewers : undefined,
       reviewerMaxRounds: openPR && prCompletion === 'review-then-merge' ? reviewerMaxRounds : undefined,
+      reviewerModels: openPR && prCompletion === 'review-then-merge' ? reviewerModels : undefined,
       reviewStopMode: openPR && prCompletion === 'review-then-merge' ? reviewStopMode : undefined,
       reviewerApplies: openPR && prCompletion === 'review-then-merge' ? reviewerApplies : undefined,
       screenshots: screenshots.length > 0 ? screenshots.map(s => s.path) : undefined,
@@ -562,13 +572,16 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
                 usernames={reviewUsernames}
                 optionalReviewers={optionalReviewers}
                 reviewerMaxRounds={reviewerMaxRounds}
+                reviewerModels={reviewerModels}
+                modelOptions={reviewerModelOptions}
                 stopMode={reviewStopMode}
                 reviewerApplies={reviewerApplies}
-                onChange={({ reviewers: r, usernames: u, optionalReviewers: o, reviewerMaxRounds: m, stopMode, reviewerApplies: ra }) => {
+                onChange={({ reviewers: r, usernames: u, optionalReviewers: o, reviewerMaxRounds: m, reviewerModels: rm, stopMode, reviewerApplies: ra }) => {
                   setReviewers(r);
                   setReviewUsernames(u);
                   setOptionalReviewers(o);
                   setReviewerMaxRounds(m);
+                  setReviewerModels(rm);
                   setReviewStopMode(stopMode);
                   setReviewerApplies(ra);
                 }}

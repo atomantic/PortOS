@@ -24,7 +24,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { detectForgeCli } from '../lib/gitForge.js';
 import { PR_COMPLETIONS, PR_COMPLETION_VALUES, leavesPrForHuman } from '../lib/prDisposition.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_SELECTABLE_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds } from '../lib/validation.js';
 
 /**
  * Clean up a worktree for a completed agent.
@@ -335,13 +335,15 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   // normally catches this; the guard keeps the invariant local to this function.
   if (mergeOnly && leaveOpen) return null;
 
-  // Reviewer-keyed CLI model map, narrowed to the model-capable reviewers actually
-  // in this loop's list (e.g. `{ codex: 'gpt-5.6-sol', claude: 'qwen2.5:7b' }`); the
-  // prompt threads each as `<reviewer> --model <id>`. `reviewerModels` is already
-  // coerced to string values upstream (resolveReviewLoopOptions).
+  // Reviewer-keyed model map, narrowed to the model-selectable reviewers actually
+  // in this loop's list (e.g. `{ codex: 'gpt-5.6-sol', ollama: 'qwen2.5:7b' }`).
+  // The prompt threads a CLI reviewer's model as `<reviewer> --model <id>` and a
+  // local-LLM reviewer's as the `model` field of its `/api/code-review/local` body.
+  // `reviewerModels` is already coerced to string values upstream
+  // (resolveReviewLoopOptions).
   const narrowedReviewerModels = {};
   for (const r of effectiveReviewers) {
-    if (MODEL_CAPABLE_CLI_REVIEWERS.includes(r) && reviewerModels?.[r]) narrowedReviewerModels[r] = reviewerModels[r];
+    if (MODEL_SELECTABLE_REVIEWERS.includes(r) && reviewerModels?.[r]) narrowedReviewerModels[r] = reviewerModels[r];
   }
 
   // One place that names the mode, so the title, the log line, and the warning

@@ -6,6 +6,8 @@ import SlashDoRunDrawer from './SlashDoRunDrawer';
 const api = vi.hoisted(() => ({
   getCodeReviewDefaults: vi.fn(),
   getProviders: vi.fn(),
+  // Backs the reviewer table's Model column (useReviewerModelOptions).
+  getLocalLlmStatus: vi.fn(),
   getAppWorkItems: vi.fn(),
   createSlashdoTask: vi.fn()
 }));
@@ -30,6 +32,7 @@ describe('SlashDoRunDrawer', () => {
     vi.clearAllMocks();
     api.getCodeReviewDefaults.mockResolvedValue({ reviewers: ['copilot'], usernames: [], optionalReviewers: [] });
     api.getProviders.mockResolvedValue({ providers: [] });
+    api.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
     api.getAppWorkItems.mockResolvedValue({
       tracker: 'github',
       issueAuthorFilter: 'self',

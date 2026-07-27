@@ -166,7 +166,7 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
     // into buildReviewersCsv, which owns the fallback to the hardcoded copilot
     // default when the filter empties the list (unit-tested in validation.test.js).
     expect(GEN_SRC).toContain('.filter((r) => !LOCAL_LLM_REVIEWERS.includes(r))');
-    expect(GEN_SRC).toContain('buildReviewersCsv(promptReviewers, promptUsernames, promptOptionalReviewers, promptReviewerMaxRounds)');
+    expect(GEN_SRC).toContain('buildReviewersCsv(promptReviewers, promptUsernames, promptOptionalReviewers, promptReviewerMaxRounds, promptReviewerModels)');
   });
 
   it('threads per-reviewer ~max round caps into the prompt CSV on both claim paths', () => {
@@ -176,7 +176,18 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
     // precedence (unit-tested in validation.test.js).
     expect(GEN_SRC).toContain('resolveReviewerMaxRounds(metadata.reviewerMaxRounds, codeReviewDefaults?.reviewerMaxRounds)');
     expect(GEN_SRC).toContain('resolveReviewerMaxRounds(reviewerMaxRounds ?? metadata.reviewerMaxRounds, codeReviewDefaults?.reviewerMaxRounds)');
-    expect(GEN_SRC).toContain('buildReviewersCsv(reviewersList, promptUsernames, promptOptionalReviewers, promptReviewerMaxRounds)');
+    expect(GEN_SRC).toContain('buildReviewersCsv(reviewersList, promptUsernames, promptOptionalReviewers, promptReviewerMaxRounds, promptReviewerModels)');
+  });
+
+  it('threads per-reviewer model pins into the prompt CSV on both claim paths (#3133)', () => {
+    // Same argument as the caps above: `{reviewers}` IS the flag string for the
+    // claim flows, so a pinned model only reaches slashdo (as its `[<model>]`
+    // bracket) if the CSV carries it. Both paths resolve with task-over-default
+    // precedence off the Code Review Defaults' `<reviewer>Model` scalars.
+    expect(GEN_SRC).toContain('resolveReviewerModels(metadata.reviewerModels, reviewerModelsFromDefaults(codeReviewDefaults))');
+    expect(GEN_SRC).toContain('resolveReviewerModels(reviewerModels ?? metadata.reviewerModels, reviewerModelsFromDefaults(codeReviewDefaults))');
+    // The play-button path reads the defaults directly (no task metadata to layer).
+    expect(GEN_SRC).toContain('codeReviewDefaults?.reviewerMaxRounds, reviewerModelsFromDefaults(codeReviewDefaults)');
   });
 });
 

@@ -16,7 +16,6 @@ import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import { readResponseJson } from '../lib/readResponseJson.js'
 import {
   LOCAL_LLM_REVIEWERS,
-  MODEL_CAPABLE_CLI_REVIEWERS,
   DEFAULT_REVIEWERS,
   DEFAULT_REVIEW_STOP_MODE,
   REVIEWER_ALIASES,
@@ -28,6 +27,8 @@ import {
   resolveOptionalReviewers,
   normalizeReviewerMaxRounds,
   resolveReviewerMaxRounds,
+  resolveReviewerModels,
+  reviewerModelsFromDefaults,
 } from '../lib/validation.js'
 import { getSettings, settingsEvents } from './settings.js'
 import { getBaseUrl as getLmStudioBaseUrl } from './lmStudioManager.js'
@@ -117,13 +118,17 @@ export async function getCodeReviewDefaults() {
  * single source of truth for the reviewer enum & fallback rules.
  *
  * `reviewerModels` is a reviewer-keyed model map (e.g. `{ codex: 'gpt-5.6-sol',
- * claude: 'qwen2.5:7b' }`) built from the per-CLI-reviewer model scalars on the
- * Code Review Defaults panel (see MODEL_CAPABLE_CLI_REVIEWERS). Unlike the
- * local-LLM models — which the `/api/code-review/local` endpoint injects
- * server-side — these CLIs are invoked directly by the follow-up agent, so each
- * configured model has to ride along into the follow-up's prompt as
- * `<reviewer> --model <id>`. Only reviewers with a non-empty configured model
- * appear in the map (absent = let that CLI pick its own default).
+ * ollama: 'qwen2.5:7b' }`) resolved with task-over-default precedence: the task's
+ * own `reviewerModels` map when it pinned one, else the `<reviewer>Model` scalars
+ * from the Code Review Defaults panel (MODEL_SELECTABLE_REVIEWERS). Only reviewers
+ * with a non-empty model appear (absent = let that reviewer pick its own default).
+ *
+ * Both reviewer kinds ride in the one map because both need it downstream: a CLI
+ * reviewer is invoked directly by the follow-up agent, so its model rides into the
+ * prompt as `<reviewer> --model <id>`; a local-LLM reviewer's model normally comes
+ * from the global settings scalar that `/api/code-review/local` reads, which can't
+ * see a per-task pin — so that pin has to travel here and land in the prompt's
+ * request body instead.
  *
  * Errors in settings I/O fall back to the hardcoded defaults — settings read
  * failures shouldn't block agent completion.
@@ -143,14 +148,18 @@ export async function resolveReviewLoopOptions(metadata, { normalize, isTruthyMe
   const reviewerApplies = metadata?.reviewerApplies !== undefined
     ? isTruthyMeta(metadata?.reviewerApplies)
     : (defaults?.reviewerApplies === true)
-  // Reviewer-keyed model map from the `<reviewer>Model` scalars. spawnReviewLoopFollowUp
-  // further narrows it to the reviewers actually in the list; here we surface every
-  // configured one so the caller doesn't need to know the list yet.
-  const reviewerModels = {}
-  for (const r of MODEL_CAPABLE_CLI_REVIEWERS) {
-    const model = defaults?.[`${r}Model`]
-    if (model) reviewerModels[r] = model
-  }
+  // Reviewer-keyed model map: a task-level `reviewerModels` map (even explicitly
+  // empty) wins, else the `<reviewer>Model` scalars from the Code Review Defaults
+  // — the same task-over-default precedence as the caps above, now that the shared
+  // ReviewerPicker can pin a model per task (#3133).
+  //
+  // Every model-selectable reviewer rides along, CLI *and* local-LLM: a task-level
+  // local pin can't be dropped here, because the endpoint that would otherwise
+  // inject it (`POST /api/code-review/local`) reads the global settings scalar and
+  // has never seen the task. The prompt builder routes each kind to its own
+  // mechanism (`--model <id>` for a CLI, the request body's `model` for a local
+  // backend); spawnReviewLoopFollowUp narrows to the reviewers actually in the list.
+  const reviewerModels = resolveReviewerModels(metadata?.reviewerModels, reviewerModelsFromDefaults(defaults))
   return { reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewStopMode, reviewerApplies, reviewerModels }
 }
 

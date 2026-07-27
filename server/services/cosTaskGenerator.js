@@ -22,7 +22,7 @@
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, normalizeReviewers, resolveReviewUsernames, resolveOptionalReviewers, resolveReviewerMaxRounds, buildReviewersCsv, LOCAL_LLM_REVIEWERS, SWARM_COUNT_MIN } from '../lib/validation.js';
+import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, normalizeReviewers, resolveReviewUsernames, resolveOptionalReviewers, resolveReviewerMaxRounds, resolveReviewerModels, reviewerModelsFromDefaults, buildReviewersCsv, LOCAL_LLM_REVIEWERS, SWARM_COUNT_MIN } from '../lib/validation.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
 import { loadState, saveState, withStateLock, isImprovementEnabled, isDaemonRunning } from './cosState.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
@@ -329,7 +329,7 @@ export function resolveClaimAuthorFilter(explicit, metadata) {
  *
  * @returns {Promise<{ tracker, source, promptTaskType, prompt, taskMetadata, target }>}
  */
-export async function buildClaimWorkTask(app, { issueAuthorFilter, reviewers, usernames, optionalReviewers, reviewerMaxRounds, target } = {}) {
+export async function buildClaimWorkTask(app, { issueAuthorFilter, reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, target } = {}) {
   const { resolveAppWorkTracker, trackerToClaimTaskType } = await import('../lib/workTracker.js');
   const { getTaskPrompt } = await import('./taskPromptService.js');
   const taskSchedule = await import('./taskSchedule.js');
@@ -370,7 +370,10 @@ export async function buildClaimWorkTask(app, { issueAuthorFilter, reviewers, us
   // Per-reviewer `~max=<n>` round caps ride the same explicit-option → task
   // metadata → Code Review Defaults precedence.
   const promptReviewerMaxRounds = resolveReviewerMaxRounds(reviewerMaxRounds ?? metadata.reviewerMaxRounds, codeReviewDefaults?.reviewerMaxRounds);
-  const reviewersCsv = buildReviewersCsv(reviewersList, promptUsernames, promptOptionalReviewers, promptReviewerMaxRounds);
+  // Per-reviewer model pins (slashdo's `[<model>]` bracket) ride the same
+  // explicit-option → task metadata → Code Review Defaults precedence.
+  const promptReviewerModels = resolveReviewerModels(reviewerModels ?? metadata.reviewerModels, reviewerModelsFromDefaults(codeReviewDefaults));
+  const reviewersCsv = buildReviewersCsv(reviewersList, promptUsernames, promptOptionalReviewers, promptReviewerMaxRounds, promptReviewerModels);
   const issueAuthorFilterBlock = resolveIssueAuthorFilterBlock(promptTaskType, resolvedAuthorFilter);
   // Swarm mode (`/do:next --swarm`) is prepended (not an in-template
   // placeholder) so it stays an opt-in orchestration wrapper that needs no
@@ -415,7 +418,7 @@ async function resolveClaimReviewersCsv() {
   // as `@user` tokens so the play button's claim gates the merge on them too.
   // Optional-reviewer set rides along so a `~opt` reviewer stays non-blocking,
   // as do the per-reviewer `~max=<n>` round caps.
-  return buildReviewersCsv(list, codeReviewDefaults?.usernames, codeReviewDefaults?.optionalReviewers, codeReviewDefaults?.reviewerMaxRounds);
+  return buildReviewersCsv(list, codeReviewDefaults?.usernames, codeReviewDefaults?.optionalReviewers, codeReviewDefaults?.reviewerMaxRounds, reviewerModelsFromDefaults(codeReviewDefaults));
 }
 
 /**
@@ -2227,7 +2230,11 @@ async function buildImprovementTaskDescription({ promptTemplate, app, promptTask
   const promptUsernames = resolveReviewUsernames(metadata.usernames, codeReviewDefaults?.usernames);
   const promptOptionalReviewers = resolveOptionalReviewers(metadata.optionalReviewers, codeReviewDefaults?.optionalReviewers);
   const promptReviewerMaxRounds = resolveReviewerMaxRounds(metadata.reviewerMaxRounds, codeReviewDefaults?.reviewerMaxRounds);
-  const reviewersCsv = buildReviewersCsv(promptReviewers, promptUsernames, promptOptionalReviewers, promptReviewerMaxRounds);
+  // Per-reviewer model pins ride the same precedence, emitted as slashdo's
+  // `[<model>]` bracket. Entries for the local-LLM reviewers filtered out above
+  // are inert — the emitter only brackets tokens it actually emits.
+  const promptReviewerModels = resolveReviewerModels(metadata.reviewerModels, reviewerModelsFromDefaults(codeReviewDefaults));
+  const reviewersCsv = buildReviewersCsv(promptReviewers, promptUsernames, promptOptionalReviewers, promptReviewerMaxRounds, promptReviewerModels);
   // {issueAuthorFilter} directive — the filter was already merged (global →
   // per-app override) and value-constrained by sanitizeTaskMetadata, so read it
   // from `metadata` (default 'self', the slashdo `/do:next --self` security

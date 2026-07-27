@@ -18,6 +18,10 @@ import {
   normalizeReviewerMaxRounds,
   resolveReviewerMaxRounds,
   MAX_REVIEWER_MAX_ROUNDS,
+  normalizeReviewerModels,
+  resolveReviewerModels,
+  reviewerModelsFromDefaults,
+  MAX_REVIEWER_MODEL_LENGTH,
   resolveKeyedReviewers,
   buildReviewersCsv,
   buildReviewWithArgs,
@@ -197,6 +201,21 @@ describe('validation.js', () => {
       const r = codeReviewSettingsSchema.safeParse({ reviewers: ['copilot'] })
       expect(r.success).toBe(true)
       expect(r.data.reviewerMaxRounds).toBeUndefined()
+    })
+
+    it('keeps the per-reviewer model SCALARS as the persisted encoding (#3133)', () => {
+      // The picker speaks a token-keyed map, but settings.codeReview stays on the
+      // `<reviewer>Model` scalars — the encoding crosses installs, and the client
+      // adapts via reviewerModelsFromDefaults/ToDefaults. An empty string clears.
+      const r = codeReviewSettingsSchema.safeParse({
+        codexModel: 'gpt-tier-a', claudeModel: 'qwen2.5:7b', ollamaModel: '',
+      })
+      expect(r.success).toBe(true)
+      expect(r.data.codexModel).toBe('gpt-tier-a')
+      expect(r.data.claudeModel).toBe('qwen2.5:7b')
+      expect(r.data.ollamaModel).toBeUndefined()
+      // A token-keyed map is NOT part of this slice — the scalars are.
+      expect(codeReviewSettingsSchema.safeParse({ reviewerModels: { codex: 'a' } }).success).toBe(false)
     })
   })
 
@@ -793,6 +812,20 @@ describe('validation.js', () => {
       expect(sanitizeTaskMetadata({ reviewerMaxRounds: 'ollama=1' })).toBeNull();
     });
 
+    it('should keep a reviewerModels map (including an explicitly empty one) and drop bad entries', () => {
+      expect(sanitizeTaskMetadata({ reviewerModels: { codex: 'gpt-tier-a' } }))
+        .toEqual({ reviewerModels: { codex: 'gpt-tier-a' } });
+      // An explicit `{}` is a real "use each reviewer's own default" override of
+      // the Code Review Defaults' pins, not an absent field.
+      expect(sanitizeTaskMetadata({ reviewerModels: {} }))
+        .toEqual({ reviewerModels: {} });
+      // copilot takes no model; a blank id would emit `--model ` with no id.
+      expect(sanitizeTaskMetadata({ reviewerModels: { copilot: 'x', ollama: '  ', codex: 'ok' } }))
+        .toEqual({ reviewerModels: { codex: 'ok' } });
+      expect(sanitizeTaskMetadata({ reviewerModels: ['codex'] })).toBeNull();
+      expect(sanitizeTaskMetadata({ reviewerModels: 'codex=a' })).toBeNull();
+    });
+
     it('should keep an optionalReviewers list (including an explicitly empty one)', () => {
       expect(sanitizeTaskMetadata({ optionalReviewers: ['ollama', 'nope'] }))
         .toEqual({ optionalReviewers: ['ollama'] });
@@ -1170,6 +1203,124 @@ describe('validation.js', () => {
     });
   });
 
+  describe('normalizeReviewerModels', () => {
+    it('keeps a trimmed model id for each model-taking reviewer', () => {
+      expect(normalizeReviewerModels({ codex: 'gpt-tier-a', ollama: '  qwen2.5:7b  ' }))
+        .toEqual({ codex: 'gpt-tier-a', ollama: 'qwen2.5:7b' });
+    });
+
+    it('drops a pin on a reviewer that takes no model', () => {
+      // copilot has no CLI; a @login reviewer is a human/bot. slashdo rejects
+      // `copilot[…]` / `@login[…]` for the same reason.
+      expect(normalizeReviewerModels({ copilot: 'x', '@bot': 'y', codex: 'ok' }))
+        .toEqual({ codex: 'ok' });
+    });
+
+    it('drops a blank id rather than persisting it (absent ≠ empty string)', () => {
+      // `''` would emit a `--model ` with no id, breaking the invocation.
+      expect(normalizeReviewerModels({ codex: '', claude: '   ', ollama: 'ok' }))
+        .toEqual({ ollama: 'ok' });
+    });
+
+    it('drops non-strings, unknown tokens, and an over-long id', () => {
+      expect(normalizeReviewerModels({
+        codex: 'ok',
+        claude: 42,
+        ollama: null,
+        nope: 'x',
+        lmstudio: 'm'.repeat(MAX_REVIEWER_MODEL_LENGTH + 1),
+      })).toEqual({ codex: 'ok' });
+    });
+
+    it('accepts an id exactly at the length ceiling', () => {
+      const id = 'm'.repeat(MAX_REVIEWER_MODEL_LENGTH);
+      expect(normalizeReviewerModels({ codex: id })).toEqual({ codex: id });
+    });
+
+    it('returns undefined for non-object input (an omitted field is not an empty override)', () => {
+      expect(normalizeReviewerModels(undefined)).toBeUndefined();
+      expect(normalizeReviewerModels(null)).toBeUndefined();
+      expect(normalizeReviewerModels([['codex', 'a']])).toBeUndefined();
+      expect(normalizeReviewerModels('codex=a')).toBeUndefined();
+    });
+
+    it('returns a prototype-free plain object (no prototype pollution via a __proto__ key)', () => {
+      const out = normalizeReviewerModels({ __proto__: { polluted: true }, codex: 'ok' });
+      expect(out).toEqual({ codex: 'ok' });
+      expect({}.polluted).toBeUndefined();
+    });
+  });
+
+  describe('resolveReviewerModels', () => {
+    it('lets a task-level map (even empty) override the defaults', () => {
+      expect(resolveReviewerModels({ codex: 'a' }, { codex: 'b' })).toEqual({ codex: 'a' });
+      expect(resolveReviewerModels({}, { codex: 'b' })).toEqual({});
+    });
+
+    it('falls back to the defaults when the task did not pin its own', () => {
+      expect(resolveReviewerModels(undefined, { codex: 'b', nope: 'x' })).toEqual({ codex: 'b' });
+      expect(resolveReviewerModels(undefined, undefined)).toEqual({});
+    });
+  });
+
+  describe('reviewerModelsFromDefaults', () => {
+    it('folds the per-reviewer settings scalars into the token-keyed map', () => {
+      expect(reviewerModelsFromDefaults({
+        codexModel: 'gpt-tier-a',
+        claudeModel: ' qwen2.5:7b ',
+        ollamaModel: null,
+        lmstudioModel: '',
+        stopMode: 'all',
+      })).toEqual({ codex: 'gpt-tier-a', claude: 'qwen2.5:7b' });
+    });
+
+    it('tolerates absent defaults', () => {
+      expect(reviewerModelsFromDefaults(null)).toEqual({});
+    });
+  });
+
+  describe('buildReviewWithArgs — per-reviewer [model] selector', () => {
+    it('emits <token>[<model>] for exactly the tokens carrying a pin', () => {
+      expect(buildReviewWithArgs(['claude', 'ollama', 'codex'], 'all', false, [], [], {}, { ollama: 'qwen2.5:7b' }))
+        .toBe('--review-with claude,ollama[qwen2.5:7b],codex');
+    });
+
+    it('places the bracket between the slug and the ~ suffixes (slashdo strips suffixes first)', () => {
+      expect(buildReviewWithArgs(['ollama'], 'all', false, [], ['ollama'], { ollama: 1 }, { ollama: 'qwen2.5:7b' }))
+        .toBe('--review-with ollama[qwen2.5:7b]~opt~max=1');
+    });
+
+    it('never brackets copilot, a @username, or lmstudio (no slashdo slug takes one)', () => {
+      // lmstudio's model rides in the /api/code-review/local request body instead.
+      expect(buildReviewWithArgs(['copilot', 'lmstudio'], 'all', false, ['Bot'], [], {}, {
+        copilot: 'x', lmstudio: 'local-a', '@Bot': 'y',
+      })).toBe('--review-with copilot,lmstudio,@Bot');
+    });
+
+    it('does not let a stray copilot pin force the suppressed lone-default flag on', () => {
+      // Unlike ~opt / ~max, a model pin is not an explicit naming of copilot —
+      // `copilot[…]` isn't even legal slashdo, so nothing would be emitted.
+      expect(buildReviewWithArgs(['copilot'], 'all', false, [], [], {}, { copilot: 'x' })).toBe('');
+    });
+
+    it('ignores pins for tokens not in the emitted list, and invalid entries', () => {
+      expect(buildReviewWithArgs(['codex'], 'all', false, [], [], {}, { ollama: 'a', nope: 'b', codex: '  ' }))
+        .toBe('--review-with codex');
+    });
+  });
+
+  describe('buildReviewersCsv — per-reviewer [model] selector', () => {
+    it('carries the bracket into the claim prompts\' {reviewers} token', () => {
+      expect(buildReviewersCsv(['codex', 'claude'], [], [], {}, { claude: 'qwen2.5:7b' }))
+        .toBe('codex,claude[qwen2.5:7b]');
+    });
+
+    it('combines the bracket with both ~ suffixes in slashdo\'s canonical order', () => {
+      expect(buildReviewersCsv(['ollama'], [], ['ollama'], { ollama: 0 }, { ollama: 'codellama' }))
+        .toBe('ollama[codellama]~opt~max=0');
+    });
+  });
+
   describe('createCosTaskSchema reviewers fields', () => {
     it('accepts an explicit PR completion policy and rejects unknown values', () => {
       expect(createCosTaskSchema.safeParse({ description: 'inspect', prCompletion: 'leave-open' }).success).toBe(true);
@@ -1223,6 +1374,24 @@ describe('validation.js', () => {
       const cleared = createCosTaskSchema.safeParse({ description: 'x', reviewerMaxRounds: {} });
       expect(cleared.success).toBe(true);
       expect(cleared.data.reviewerMaxRounds).toEqual({});
+    });
+
+    it('normalizes reviewerModels and leaves the field undefined when absent', () => {
+      const withModels = createCosTaskSchema.safeParse({
+        description: 'x',
+        reviewerModels: { codex: 'gpt-tier-a', copilot: 'x', ollama: '  ' },
+      });
+      expect(withModels.success).toBe(true);
+      // copilot takes no model; a blank id is dropped, not persisted as ''.
+      expect(withModels.data.reviewerModels).toEqual({ codex: 'gpt-tier-a' });
+      // Absent → undefined (not coerced to {}), so it isn't persisted as an override.
+      const withoutModels = createCosTaskSchema.safeParse({ description: 'x' });
+      expect(withoutModels.success).toBe(true);
+      expect(withoutModels.data.reviewerModels).toBeUndefined();
+      // An explicitly empty map IS kept — a real "each reviewer's own default" override.
+      const cleared = createCosTaskSchema.safeParse({ description: 'x', reviewerModels: {} });
+      expect(cleared.success).toBe(true);
+      expect(cleared.data.reviewerModels).toEqual({});
     });
 
     it('accepts multiple image screenshots and attachment objects', () => {

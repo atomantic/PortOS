@@ -192,10 +192,34 @@ describe('codeReview helpers', () => {
       expect(out.reviewerModels).toEqual({ codex: 'gpt-5.6-sol' })
     })
 
-    it('returns an empty map when no CLI-reviewer model is configured', async () => {
+    it('returns an empty map when no reviewer has a configured model', async () => {
+      mockedSettings.current = { codeReview: { reviewers: ['copilot', 'codex'] } }
+      const out = await resolveReviewLoopOptions({}, testDeps)
+      expect(out.reviewerModels).toEqual({})
+    })
+
+    it('carries a local-LLM model pin too, so a per-task one can reach the endpoint (#3133)', async () => {
       mockedSettings.current = { codeReview: { reviewers: ['copilot', 'ollama'], ollamaModel: 'codellama' } }
       const out = await resolveReviewLoopOptions({}, testDeps)
-      // ollama's model is injected server-side by /api/code-review/local, never threaded here.
+      // /api/code-review/local's own default reads the GLOBAL settings scalar and
+      // can't see a task-level pin, so the pin has to travel in this map instead
+      // of being dropped as a CLI-only concern.
+      expect(out.reviewerModels).toEqual({ ollama: 'codellama' })
+    })
+
+    it('lets a task-level model map (including an explicitly empty one) override the defaults', async () => {
+      mockedSettings.current = { codeReview: { reviewers: ['codex'], codexModel: 'gpt-5.6-sol' } }
+      const pinned = await resolveReviewLoopOptions({ reviewerModels: { codex: 'gpt-tier-b' } }, testDeps)
+      expect(pinned.reviewerModels).toEqual({ codex: 'gpt-tier-b' })
+      // An explicit `{}` is a real "use each reviewer's own default for this task"
+      // choice, not an absent field — it must not fall back to the scalars.
+      const cleared = await resolveReviewLoopOptions({ reviewerModels: {} }, testDeps)
+      expect(cleared.reviewerModels).toEqual({})
+    })
+
+    it('drops a pin on a reviewer that takes no model', async () => {
+      mockedSettings.current = { codeReview: { reviewers: ['copilot'] } }
+      const out = await resolveReviewLoopOptions({ reviewerModels: { copilot: 'nope', '@bot': 'nope' } }, testDeps)
       expect(out.reviewerModels).toEqual({})
     })
 

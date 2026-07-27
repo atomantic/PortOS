@@ -6,6 +6,9 @@ import TaskAddForm from './TaskAddForm';
 const api = vi.hoisted(() => ({
   getCosPopularTemplates: vi.fn(),
   getCodeReviewDefaults: vi.fn(),
+  // Back the reviewer table's Model column (useReviewerModelOptions).
+  getLocalLlmStatus: vi.fn(),
+  getProviders: vi.fn(),
   useCosTaskTemplate: vi.fn()
 }));
 
@@ -16,6 +19,8 @@ describe('TaskAddForm responsive layout', () => {
     vi.clearAllMocks();
     api.getCosPopularTemplates.mockResolvedValue({ templates: [] });
     api.getCodeReviewDefaults.mockResolvedValue(null);
+    api.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
+    api.getProviders.mockResolvedValue({ providers: [] });
     api.useCosTaskTemplate.mockResolvedValue({ success: true });
   });
 
@@ -65,6 +70,8 @@ describe('TaskAddForm quick templates', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.getCodeReviewDefaults.mockResolvedValue(null);
+    api.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
+    api.getProviders.mockResolvedValue({ providers: [] });
     api.useCosTaskTemplate.mockResolvedValue({ success: true });
   });
 

@@ -16,7 +16,7 @@ import { getToolsSummaryForPrompt } from './tools.js';
 import { getActiveProvider } from './providers.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { readJSONFile, loadSlashdoFile, loadSlashdoLib, writeResolvedSlashdoBody, PATHS, tryReadFile } from '../lib/fileUtils.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, resolveReviewUsernames, resolveOptionalReviewers, resolveReviewerMaxRounds, resolveKeyedReviewers, buildReviewWithArgs, buildReviewersCsv } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, resolveReviewUsernames, resolveOptionalReviewers, resolveReviewerMaxRounds, resolveReviewerModels, reviewerModelsFromDefaults, resolveKeyedReviewers, buildReviewWithArgs, buildReviewersCsv } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { canTypeSlashCommands, resolveSlashdoInvocation, buildSlashdoSection, unreachableReviewerIncludes, SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
 import { shellQuote } from '../lib/shellQuote.js';
@@ -374,6 +374,7 @@ async function applySlashdoInvocation(task, {
   const resolvedUsernames = resolveReviewUsernames(task.metadata?.usernames, codeReviewDefaults?.usernames);
   const resolvedOptional = resolveOptionalReviewers(task.metadata?.optionalReviewers, codeReviewDefaults?.optionalReviewers);
   const resolvedMaxRounds = resolveReviewerMaxRounds(task.metadata?.reviewerMaxRounds, codeReviewDefaults?.reviewerMaxRounds);
+  const resolvedModels = resolveReviewerModels(task.metadata?.reviewerModels, reviewerModelsFromDefaults(codeReviewDefaults));
 
   // A resolved lone `copilot` with no usernames is ambiguous: it's what an
   // unconfigured install produces (`pickCodeReviewDefaults` and
@@ -419,7 +420,7 @@ async function applySlashdoInvocation(task, {
     : null;
 
   const reviewWith = skipIncludes.length
-    ? buildReviewersCsv(resolvedReviewers, resolvedUsernames, resolvedOptional, resolvedMaxRounds)
+    ? buildReviewersCsv(resolvedReviewers, resolvedUsernames, resolvedOptional, resolvedMaxRounds, resolvedModels)
     : '';
   const section = buildSlashdoSection(resolved, body, { bodyPath, reviewWith });
   return { ...task, description: `${task.description}\n\n${section}` };
@@ -500,12 +501,14 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const hasLocalLlm = reviewers.some(r => LOCAL_LLM_REVIEWERS.includes(r));
   const hasCli = reviewers.some(r => r !== DEFAULT_REVIEWER && !LOCAL_LLM_REVIEWERS.includes(r));
   const hasGithubUser = usernames.length > 0;
-  // Optional per-CLI-reviewer model tiers chosen on the Code Review Defaults panel,
-  // threaded as a reviewer-keyed map. Each configured, model-capable reviewer that
-  // is actually in this loop's list gets a `<reviewer> --model <id>` note (empty =
-  // let that CLI use its own default). For an Ollama-backed `claude` reviewer the id
-  // is the local Ollama model. Falls back to the legacy codex-scalar metadata key so
-  // a follow-up task persisted by an older install still threads its codex model.
+  // Optional per-reviewer model pins (Code Review Defaults panel, or the task's own
+  // ReviewerPicker row), threaded as a reviewer-keyed map. A model-capable CLI
+  // reviewer in this loop's list gets a `<reviewer> --model <id>` note; a local-LLM
+  // reviewer's pin goes into its `/api/code-review/local` request body instead
+  // (below). Absent = let that reviewer use its own default. For an Ollama-backed
+  // `claude` reviewer the id is the local Ollama model. Falls back to the legacy
+  // codex-scalar metadata key so a follow-up task persisted by an older install
+  // still threads its codex model.
   const reviewerModelMap = (metadata.reviewLoopReviewerModels && typeof metadata.reviewLoopReviewerModels === 'object')
     ? metadata.reviewLoopReviewerModels
     : (typeof metadata.reviewLoopCodexModel === 'string' && metadata.reviewLoopCodexModel
@@ -546,7 +549,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
     ...reviewers.map(r => `\`${r}\``),
     ...usernames.map(u => `\`@${u}\``),
   ].join(' → ');
-  const equivArgs = buildReviewWithArgs(reviewers, stopMode, reviewerApplies, usernames, optionalReviewers, reviewerMaxRounds);
+  const equivArgs = buildReviewWithArgs(reviewers, stopMode, reviewerApplies, usernames, optionalReviewers, reviewerMaxRounds, reviewerModelMap);
   const equiv = equivArgs ? ` (equivalent to \`/do:pr ${equivArgs}\`)` : '';
 
   // First step: how to obtain a review. For a single copilot/CLI reviewer keep the
@@ -556,6 +559,15 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   // `POST /api/code-review/local` which runs the configured local model against
   // the diff and returns findings text. The agent always reaches it via
   // `http://localhost:5555` (the canonical loopback API port).
+  // A pinned local-LLM model can't ride the endpoint's server-side default: that
+  // reads the GLOBAL settings scalar and has never seen this task. So when the
+  // user pinned one on the reviewer's row, name it in the request body — `model`
+  // in the POST body overrides the configured default (see routes/codeReview.js).
+  // Absent pin ⇒ omit the key entirely rather than sending `""`, which would be a
+  // model id the backend can't resolve.
+  const localLlmModelNote = LOCAL_LLM_REVIEWERS
+    .filter(r => reviewers.includes(r) && typeof reviewerModelMap[r] === 'string' && reviewerModelMap[r])
+    .map(r => `\`${r}\` → \`"model": "${reviewerModelMap[r]}"\``);
   const localLlmInvocation = `POST the diff to PortOS's local reviewer endpoint and extract its review text before evaluating it. Substitute the active reviewer name for \`<lmstudio|ollama>\`:
 \`\`\`bash
 REVIEW_RESPONSE=$(mktemp)
@@ -568,7 +580,9 @@ else
   cat "\${REVIEW_RESPONSE}.findings"
 fi
 \`\`\`
-Only a successfully extracted \`.findings\` value is the review text; treat it like any other reviewer's findings.`;
+Only a successfully extracted \`.findings\` value is the review text; treat it like any other reviewer's findings.${localLlmModelNote.length
+  ? ` This run pins a model for ${localLlmModelNote.join(', ')} — add that key to the JSON body (\`jq -Rs '{ backend: "…", model: "…", diff: . }'\`) so the review runs on the pinned model instead of the install default.`
+  : ''}`;
   // Instruct the agent to request each username reviewer as a PR reviewer and
   // gate the merge on their approval. `gh pr edit --add-reviewer` takes the bare
   // login, so strip the `@`.
@@ -1182,6 +1196,7 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
   const taskReviewerUsernames = resolveReviewUsernames(task.metadata?.usernames, codeReviewDefaults?.usernames);
   const taskOptionalReviewers = resolveOptionalReviewers(task.metadata?.optionalReviewers, codeReviewDefaults?.optionalReviewers);
   const taskReviewerMaxRounds = resolveReviewerMaxRounds(task.metadata?.reviewerMaxRounds, codeReviewDefaults?.reviewerMaxRounds);
+  const taskReviewerModels = resolveReviewerModels(task.metadata?.reviewerModels, reviewerModelsFromDefaults(codeReviewDefaults));
   const taskReviewStopMode = task.metadata?.reviewStopMode || codeReviewDefaults?.stopMode || DEFAULT_REVIEW_STOP_MODE;
   const taskReviewerApplies = task.metadata?.reviewerApplies !== undefined
     ? isTruthyMetaFn(task.metadata?.reviewerApplies)
@@ -1222,6 +1237,7 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
             usernames: taskReviewerUsernames,
             optionalReviewers: taskOptionalReviewers,
             reviewerMaxRounds: taskReviewerMaxRounds,
+            reviewerModels: taskReviewerModels,
             reviewStopMode: taskReviewStopMode,
             reviewerApplies: taskReviewerApplies
           })
@@ -1493,6 +1509,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   const lightReviewerUsernames = resolveReviewUsernames(task.metadata?.usernames, codeReviewDefaults?.usernames);
   const lightOptionalReviewers = resolveOptionalReviewers(task.metadata?.optionalReviewers, codeReviewDefaults?.optionalReviewers);
   const lightReviewerMaxRounds = resolveReviewerMaxRounds(task.metadata?.reviewerMaxRounds, codeReviewDefaults?.reviewerMaxRounds);
+  const lightReviewerModels = resolveReviewerModels(task.metadata?.reviewerModels, reviewerModelsFromDefaults(codeReviewDefaults));
   const lightReviewStopMode = task.metadata?.reviewStopMode || codeReviewDefaults?.stopMode || DEFAULT_REVIEW_STOP_MODE;
   const lightReviewerApplies = task.metadata?.reviewerApplies !== undefined
     ? isTruthyMetaFn(task.metadata?.reviewerApplies)
@@ -1611,10 +1628,10 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
       branchName: worktreeInfo?.branchName || null,
       baseBranch: worktreeInfo?.baseBranch || null,
       leavePrOpen: leavesPrForHuman(task),
-      reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies
+      reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewerModels: lightReviewerModels, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies
     }));
   } else {
-    sections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, hasSlashdo, simplifyEnabled, leavePrOpen: leavesPrForHuman(task), reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies }));
+    sections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, hasSlashdo, simplifyEnabled, leavePrOpen: leavesPrForHuman(task), reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewerModels: lightReviewerModels, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies }));
   }
 
   return { taskSections, contractSections };
@@ -1708,7 +1725,7 @@ function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW
  * return this IS a Claude session, so `/simplify` and `/do:pr` are both safe to
  * emit without a second provider check.
  */
-function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, simplifyEnabled, sentinelPath, slashdoFree = false, branchName = null, baseBranch = null, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
+function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, simplifyEnabled, sentinelPath, slashdoFree = false, branchName = null, baseBranch = null, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
   const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
   const runsReviewLoop = prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE;
   if (slashdoFree) {
@@ -1723,7 +1740,7 @@ function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.M
   // when the task's Review Loop control is off so that default cannot start a
   // Copilot (or other external) review unexpectedly.
   const reviewArgs = willOpenPR
-    ? (runsReviewLoop ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies, reviewUsernames, optionalReviewers, reviewerMaxRounds) : '--review-with none')
+    ? (runsReviewLoop ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies, reviewUsernames, optionalReviewers, reviewerMaxRounds, reviewerModels) : '--review-with none')
     : '';
   // A saved slashdo `merge: true` default would otherwise merge a PR that must
   // stay open — dropping our own merge steps isn't enough, `/do:pr` has to be
@@ -1878,7 +1895,7 @@ function buildManualTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLET
  * CLI providers fall through to the legacy commit-only block where PortOS
  * handles push+PR on exit.
  */
-function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, hasSlashdo = false, simplifyEnabled = false, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
+function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, hasSlashdo = false, simplifyEnabled = false, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
   const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
   const runsReviewLoop = prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE;
   const reviewUsernames = normalizeReviewUsernames(usernames);
@@ -1889,7 +1906,7 @@ function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR
       lines.push(`${step++}. \`/simplify\` — review the changed code for reuse, quality, and efficiency, and fix any findings.`);
     }
     const reviewArgs = runsReviewLoop
-      ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies, reviewUsernames, optionalReviewers, reviewerMaxRounds)
+      ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies, reviewUsernames, optionalReviewers, reviewerMaxRounds, reviewerModels)
       : '--review-with none';
     // `--no-merge` overrides a saved slashdo `merge: true` default, which would
     // otherwise merge a PR this task must leave open (see lib/prDisposition.js).

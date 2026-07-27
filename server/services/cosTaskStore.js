@@ -16,7 +16,7 @@ import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { parseTasksMarkdown, groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, generateTasksMarkdown, hasKnownPrefix } from '../lib/taskParser.js';
-import { REVIEW_STOP_MODES, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds } from '../lib/validation.js';
+import { REVIEW_STOP_MODES, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, normalizeReviewerModels } from '../lib/validation.js';
 import { PR_COMPLETIONS, PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
 import { loadState, withStateLock, ROOT_DIR } from './cosState.js';
 import { cosEvents } from './cosEvents.js';
@@ -315,6 +315,14 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     // slashdo reads as "loop until clean" (absent ≠ 0).
     if (taskData.reviewerMaxRounds && typeof taskData.reviewerMaxRounds === 'object' && !Array.isArray(taskData.reviewerMaxRounds)) {
       metadata.reviewerMaxRounds = normalizeReviewerMaxRounds(taskData.reviewerMaxRounds) || {};
+    }
+    // Per-reviewer model pins, keyed by the same emitted token. Same
+    // explicit-empty semantics as the caps above: an empty MAP is a real "use each
+    // reviewer's own default for this task" choice that overrides the Code Review
+    // Defaults' pins. An entry naming a reviewer that takes no model, or a blank
+    // id, is dropped by the normalizer.
+    if (taskData.reviewerModels && typeof taskData.reviewerModels === 'object' && !Array.isArray(taskData.reviewerModels)) {
+      metadata.reviewerModels = normalizeReviewerModels(taskData.reviewerModels) || {};
     }
     if (REVIEW_STOP_MODES.includes(taskData.reviewStopMode)) metadata.reviewStopMode = taskData.reviewStopMode;
     if (taskData.reviewerApplies === true) metadata.reviewerApplies = true;
