@@ -1032,6 +1032,7 @@ describe('CoS Routes', () => {
         .send({
           command: 'next', app: 'my-app', target: '#412', issueAuthorFilter: 'any',
           reviewers: ['claude', 'codex'], usernames: ['alice'], optionalReviewers: ['codex'],
+          reviewerMaxRounds: { codex: 2, ollama: 1 },
           provider: 'claude-cli', model: 'claude-opus-5', effort: 'high', simplify: true
         });
 
@@ -1043,7 +1044,10 @@ describe('CoS Routes', () => {
           issueAuthorFilter: 'any',
           reviewers: ['claude', 'codex'],
           usernames: ['alice'],
-          optionalReviewers: ['codex']
+          optionalReviewers: ['codex'],
+          // Per-reviewer `~max=<n>` caps ride along; `ollama` isn't in the list
+          // but stays in the map (the emitter only marks tokens it emits).
+          reviewerMaxRounds: { codex: 2, ollama: 1 }
         }
       );
       const [taskData] = cos.addTask.mock.calls.at(-1);

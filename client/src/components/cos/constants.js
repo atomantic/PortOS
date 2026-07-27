@@ -270,6 +270,13 @@ export function normalizeReviewUsernames(list) {
   return out;
 }
 
+// Upper bound on a per-reviewer `~max=<n>` round cap. Client mirror of
+// MAX_REVIEWER_MAX_ROUNDS in `server/lib/cosValidation.js` — a value above it is
+// dropped server-side, so the input must not offer one. `0` is valid and means
+// "loop until clean" (slashdo's unlimited mode, bounded by its own guardrail);
+// blank/absent means "no cap requested" and keeps slashdo's built-in default.
+export const MAX_REVIEWER_MAX_ROUNDS = 10;
+
 // Stop-mode for the multi-reviewer loop (slashdo `--review-stop-on-*`).
 // Keep in sync with REVIEW_STOP_MODES in `server/lib/validation.js`.
 export const REVIEW_STOP_MODES = [

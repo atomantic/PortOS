@@ -11,6 +11,7 @@ const FALLBACK = Object.freeze({
   reviewers: DEFAULT_REVIEWERS,
   usernames: [],
   optionalReviewers: [],
+  reviewerMaxRounds: {},
   stopMode: DEFAULT_REVIEW_STOP_MODE,
   reviewerApplies: false,
   lmstudioModel: null,
@@ -35,6 +36,9 @@ export function CodeReviewDefaultsProvider({ children }) {
           reviewers: Array.isArray(d.reviewers) && d.reviewers.length ? d.reviewers : DEFAULT_REVIEWERS,
           usernames: Array.isArray(d.usernames) ? d.usernames : [],
           optionalReviewers: Array.isArray(d.optionalReviewers) ? d.optionalReviewers : [],
+          reviewerMaxRounds: d.reviewerMaxRounds && typeof d.reviewerMaxRounds === 'object' && !Array.isArray(d.reviewerMaxRounds)
+            ? d.reviewerMaxRounds
+            : {},
           stopMode: d.stopMode || DEFAULT_REVIEW_STOP_MODE,
           reviewerApplies: d.reviewerApplies === true,
           lmstudioModel: d.lmstudioModel || null,

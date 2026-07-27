@@ -70,7 +70,8 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
       ...(review ? {
         reviewers: review.reviewers,
         usernames: review.usernames,
-        optionalReviewers: review.optionalReviewers
+        optionalReviewers: review.optionalReviewers,
+        reviewerMaxRounds: review.reviewerMaxRounds
       } : {})
     }, { silent: true }).catch((err) => {
       setSubmitError(err.message || 'Failed to queue the task');
@@ -133,11 +134,12 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
             reviewers={reviewValue.reviewers}
             usernames={reviewValue.usernames}
             optionalReviewers={reviewValue.optionalReviewers}
+            reviewerMaxRounds={reviewValue.reviewerMaxRounds}
             // The claim flows substitute a reviewer CSV into their prompt and have
             // no slashdo flag string, so stop-mode / reviewer-applies can't be honored.
             showRunFlags={false}
-            onChange={({ reviewers, usernames, optionalReviewers }) =>
-              setReview({ reviewers, usernames, optionalReviewers })}
+            onChange={({ reviewers, usernames, optionalReviewers, reviewerMaxRounds }) =>
+              setReview({ reviewers, usernames, optionalReviewers, reviewerMaxRounds })}
           />
           <p className="text-xs text-gray-500">
             The claim flow opens and merges its own PR, so these reviewers gate that merge (slashdo <code>--review-with</code>).

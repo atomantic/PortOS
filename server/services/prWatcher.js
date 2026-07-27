@@ -329,7 +329,8 @@ export async function processPendingMergePrs(app) {
           prCompletion: PR_COMPLETIONS.MERGE_ON_GREEN,
           reviewers: [],
           usernames: [],
-          optionalReviewers: []
+          optionalReviewers: [],
+          reviewerMaxRounds: {}
         });
         outcomes.set(key, null);
         result.escalated += 1;

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ReviewerPicker from './ReviewerPicker';
 
@@ -142,5 +142,88 @@ describe('ReviewerPicker', () => {
     render(<ReviewerPicker reviewers={['codex', 'ollama']} optionalReviewers={['ollama']} onChange={onChange} />);
     await user.click(screen.getByLabelText('Remove Ollama'));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewers: ['codex'], optionalReviewers: [] }));
+  });
+
+  describe('~max round caps', () => {
+    it('renders a blank cap input per reviewer/username chip when no cap is set', () => {
+      render(<ReviewerPicker reviewers={['codex', 'ollama']} usernames={['flaky-bot']} onChange={() => {}} />);
+      expect(screen.getByLabelText('Max review rounds for Codex')).toHaveValue(null);
+      expect(screen.getByLabelText('Max review rounds for Ollama')).toHaveValue(null);
+      expect(screen.getByLabelText('Max review rounds for @flaky-bot')).toHaveValue(null);
+    });
+
+    it('shows an existing cap, including an explicit 0', () => {
+      render(<ReviewerPicker reviewers={['codex', 'ollama']} reviewerMaxRounds={{ ollama: 0, codex: 2 }} onChange={() => {}} />);
+      // 0 is a real value (loop until clean) and must render as 0, not blank.
+      expect(screen.getByLabelText('Max review rounds for Ollama')).toHaveValue(0);
+      expect(screen.getByLabelText('Max review rounds for Codex')).toHaveValue(2);
+    });
+
+    it('sets a cap for a keyed reviewer', async () => {
+      const onChange = vi.fn();
+      const user = userEvent.setup();
+      render(<ReviewerPicker reviewers={['codex', 'ollama']} onChange={onChange} />);
+      await user.type(screen.getByLabelText('Max review rounds for Ollama'), '1');
+      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewerMaxRounds: { ollama: 1 } }));
+    });
+
+    it('sets a cap for a @username reviewer keyed by its @-form token', async () => {
+      const onChange = vi.fn();
+      const user = userEvent.setup();
+      render(<ReviewerPicker reviewers={['copilot']} usernames={['flaky-bot']} onChange={onChange} />);
+      await user.type(screen.getByLabelText('Max review rounds for @flaky-bot'), '3');
+      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewerMaxRounds: { '@flaky-bot': 3 } }));
+    });
+
+    it('clearing the input DELETES the entry rather than writing 0 (absent ≠ 0)', async () => {
+      const onChange = vi.fn();
+      const user = userEvent.setup();
+      render(<ReviewerPicker reviewers={['codex', 'ollama']} reviewerMaxRounds={{ ollama: 2 }} onChange={onChange} />);
+      await user.clear(screen.getByLabelText('Max review rounds for Ollama'));
+      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewerMaxRounds: {} }));
+    });
+
+    it('clamps a cap above the ceiling instead of sending a value the server would drop', () => {
+      const onChange = vi.fn();
+      render(<ReviewerPicker reviewers={['ollama']} onChange={onChange} />);
+      // fireEvent (not user.type) so the whole out-of-range value lands in one
+      // change event — a controlled input never accumulates keystrokes.
+      fireEvent.change(screen.getByLabelText('Max review rounds for Ollama'), { target: { value: '99' } });
+      expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ reviewerMaxRounds: { ollama: 10 } }));
+    });
+
+    it('clamps a negative cap to 0 rather than dropping the entry silently', () => {
+      const onChange = vi.fn();
+      render(<ReviewerPicker reviewers={['ollama']} onChange={onChange} />);
+      fireEvent.change(screen.getByLabelText('Max review rounds for Ollama'), { target: { value: '-2' } });
+      expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ reviewerMaxRounds: { ollama: 0 } }));
+    });
+
+    it('prunes the cap entry when its reviewer is removed', async () => {
+      const onChange = vi.fn();
+      const user = userEvent.setup();
+      render(<ReviewerPicker reviewers={['codex', 'ollama']} reviewerMaxRounds={{ ollama: 1 }} onChange={onChange} />);
+      await user.click(screen.getByLabelText('Remove Ollama'));
+      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewers: ['codex'], reviewerMaxRounds: {} }));
+    });
+
+    it('prunes the cap entry when its username reviewer is removed', async () => {
+      const onChange = vi.fn();
+      const user = userEvent.setup();
+      render(<ReviewerPicker reviewers={['copilot']} usernames={['flaky-bot']} reviewerMaxRounds={{ '@flaky-bot': 2 }} onChange={onChange} />);
+      await user.click(screen.getByLabelText('Remove @flaky-bot'));
+      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ usernames: [], reviewerMaxRounds: {} }));
+    });
+
+    it('keeps the ~opt toggle and the cap independent', async () => {
+      const onChange = vi.fn();
+      const user = userEvent.setup();
+      render(<ReviewerPicker reviewers={['ollama']} reviewerMaxRounds={{ ollama: 1 }} onChange={onChange} />);
+      await user.click(screen.getByLabelText('Make Ollama non-blocking'));
+      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+        optionalReviewers: ['ollama'],
+        reviewerMaxRounds: { ollama: 1 }
+      }));
+    });
   });
 });

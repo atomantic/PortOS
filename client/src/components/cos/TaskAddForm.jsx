@@ -25,6 +25,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   const [reviewers, setReviewers] = useState(DEFAULT_REVIEWERS);
   const [reviewUsernames, setReviewUsernames] = useState([]);
   const [optionalReviewers, setOptionalReviewers] = useState([]);
+  const [reviewerMaxRounds, setReviewerMaxRounds] = useState({});
   const [reviewStopMode, setReviewStopMode] = useState(DEFAULT_REVIEW_STOP_MODE);
   const [reviewerApplies, setReviewerApplies] = useState(false);
   const [createJiraTicket, setCreateJiraTicket] = useState(false);
@@ -68,6 +69,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
         if (Array.isArray(d.reviewers) && d.reviewers.length) setReviewers(d.reviewers);
         if (Array.isArray(d.usernames)) setReviewUsernames(d.usernames);
         if (Array.isArray(d.optionalReviewers)) setOptionalReviewers(d.optionalReviewers);
+        if (d.reviewerMaxRounds && typeof d.reviewerMaxRounds === 'object' && !Array.isArray(d.reviewerMaxRounds)) setReviewerMaxRounds(d.reviewerMaxRounds);
         if (d.stopMode) setReviewStopMode(d.stopMode);
         if (d.reviewerApplies === true) setReviewerApplies(true);
       })
@@ -306,6 +308,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       reviewers: openPR && prCompletion === 'review-then-merge' ? reviewers : undefined,
       usernames: openPR && prCompletion === 'review-then-merge' ? reviewUsernames : undefined,
       optionalReviewers: openPR && prCompletion === 'review-then-merge' ? optionalReviewers : undefined,
+      reviewerMaxRounds: openPR && prCompletion === 'review-then-merge' ? reviewerMaxRounds : undefined,
       reviewStopMode: openPR && prCompletion === 'review-then-merge' ? reviewStopMode : undefined,
       reviewerApplies: openPR && prCompletion === 'review-then-merge' ? reviewerApplies : undefined,
       screenshots: screenshots.length > 0 ? screenshots.map(s => s.path) : undefined,
@@ -558,12 +561,14 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
                 reviewers={reviewers}
                 usernames={reviewUsernames}
                 optionalReviewers={optionalReviewers}
+                reviewerMaxRounds={reviewerMaxRounds}
                 stopMode={reviewStopMode}
                 reviewerApplies={reviewerApplies}
-                onChange={({ reviewers: r, usernames: u, optionalReviewers: o, stopMode, reviewerApplies: ra }) => {
+                onChange={({ reviewers: r, usernames: u, optionalReviewers: o, reviewerMaxRounds: m, stopMode, reviewerApplies: ra }) => {
                   setReviewers(r);
                   setReviewUsernames(u);
                   setOptionalReviewers(o);
+                  setReviewerMaxRounds(m);
                   setReviewStopMode(stopMode);
                   setReviewerApplies(ra);
                 }}

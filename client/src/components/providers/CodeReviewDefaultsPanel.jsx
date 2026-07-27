@@ -28,6 +28,7 @@ export default function CodeReviewDefaultsPanel() {
   const [reviewers, setReviewers] = useState(DEFAULT_REVIEWERS);
   const [usernames, setUsernames] = useState([]);
   const [optionalReviewers, setOptionalReviewers] = useState([]);
+  const [reviewerMaxRounds, setReviewerMaxRounds] = useState({});
   const [stopMode, setStopMode] = useState(DEFAULT_REVIEW_STOP_MODE);
   const [reviewerApplies, setReviewerApplies] = useState(false);
   const [lmstudioModel, setLmstudioModel] = useState('');
@@ -50,6 +51,9 @@ export default function CodeReviewDefaultsPanel() {
         setReviewers(Array.isArray(defaults.reviewers) && defaults.reviewers.length ? defaults.reviewers : DEFAULT_REVIEWERS);
         setUsernames(Array.isArray(defaults.usernames) ? defaults.usernames : []);
         setOptionalReviewers(Array.isArray(defaults.optionalReviewers) ? defaults.optionalReviewers : []);
+        setReviewerMaxRounds(defaults.reviewerMaxRounds && typeof defaults.reviewerMaxRounds === 'object' && !Array.isArray(defaults.reviewerMaxRounds)
+          ? defaults.reviewerMaxRounds
+          : {});
         setStopMode(defaults.stopMode || DEFAULT_REVIEW_STOP_MODE);
         setReviewerApplies(defaults.reviewerApplies === true);
         setLmstudioModel(defaults.lmstudioModel || '');
@@ -104,6 +108,7 @@ export default function CodeReviewDefaultsPanel() {
       reviewers,
       usernames,
       optionalReviewers,
+      reviewerMaxRounds,
       stopMode,
       reviewerApplies,
       lmstudioModel: lmstudioModel || undefined,
@@ -165,13 +170,15 @@ export default function CodeReviewDefaultsPanel() {
             reviewers={reviewers}
             usernames={usernames}
             optionalReviewers={optionalReviewers}
+            reviewerMaxRounds={reviewerMaxRounds}
             stopMode={stopMode}
             reviewerApplies={reviewerApplies}
             disabled={saving}
-            onChange={({ reviewers: r, usernames: u, optionalReviewers: o, stopMode: s, reviewerApplies: a }) => {
+            onChange={({ reviewers: r, usernames: u, optionalReviewers: o, reviewerMaxRounds: m, stopMode: s, reviewerApplies: a }) => {
               setReviewers(r);
               setUsernames(u);
               setOptionalReviewers(o);
+              setReviewerMaxRounds(m);
               setStopMode(s);
               setReviewerApplies(a);
             }}

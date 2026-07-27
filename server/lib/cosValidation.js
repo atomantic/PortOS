@@ -99,6 +99,26 @@ export function resolveReviewUsernames(metadataUsernames, defaultUsernames) {
 }
 
 /**
+ * Normalize ONE raw reviewer identity to the exact token `--review-with` emits:
+ * a keyed slug from `REVIEWER_VALUES` (aliasing `gemini` → `antigravity`) or an
+ * `@<username>`. Returns null for anything else. Single definition of the token
+ * identity shared by `normalizeOptionalReviewers` and
+ * `normalizeReviewerMaxRounds`, so the `~opt` set and the `~max=<n>` map can't
+ * disagree about what a reviewer is called.
+ */
+function normalizeReviewerToken(raw) {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('@')) {
+    const [user] = normalizeReviewUsernames([trimmed]);
+    return user ? `@${user}` : null;
+  }
+  const slug = REVIEWER_ALIASES[trimmed] ?? trimmed;
+  return REVIEWER_VALUES.includes(slug) ? slug : null;
+}
+
+/**
  * Reviewer identities the user marked OPTIONAL (non-blocking). slashdo's `~opt`
  * suffix is appended to each matching `--review-with` token, so an *inconclusive*
  * verdict from that reviewer (timeout / no-verdict / partial) no longer gates the
@@ -119,19 +139,8 @@ export function normalizeOptionalReviewers(list) {
   const seen = new Set();
   const out = [];
   for (const raw of list) {
-    if (typeof raw !== 'string') continue;
-    const trimmed = raw.trim();
-    if (!trimmed) continue;
-    let token;
-    if (trimmed.startsWith('@')) {
-      const [user] = normalizeReviewUsernames([trimmed]);
-      if (!user) continue;
-      token = `@${user}`;
-    } else {
-      const slug = REVIEWER_ALIASES[trimmed] ?? trimmed;
-      if (!REVIEWER_VALUES.includes(slug)) continue;
-      token = slug;
-    }
+    const token = normalizeReviewerToken(raw);
+    if (!token) continue;
     const key = token.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
@@ -152,6 +161,61 @@ export function resolveOptionalReviewers(metadataOptional, defaultOptional) {
     : (normalizeOptionalReviewers(defaultOptional) || []);
 }
 
+// Ceiling on a per-reviewer `~max=<n>` cap. slashdo's inner loops carry their own
+// 10-iteration safety guardrail, so a budget above it can never be spent —
+// accepting one would just be a lie in the flag string.
+export const MAX_REVIEWER_MAX_ROUNDS = 10;
+
+/**
+ * Per-reviewer iteration caps — slashdo's `~max=<n>` suffix (v3.25.0). Caps how
+ * many review → fix → re-review cycles ONE reviewer runs before it stops, so a
+ * slow local model can be included in a chain without paying for its otherwise
+ * hardcoded 3 rounds (`--review-with claude~max=2,ollama~max=1,codex~max=3`).
+ * Stored as a token-keyed map (`{ ollama: 1, '@flaky-bot': 0 }`) rather than a
+ * list because the cap carries a value; the key is the same *emitted*
+ * `--review-with` token `normalizeOptionalReviewers` uses.
+ *
+ * **Absent ≠ 0.** slashdo reads `~max=0` as "loop until this reviewer is clean"
+ * (bounded by its own 10-round guardrail), which is the OPPOSITE of "no cap
+ * requested" (that keeps slashdo's built-in default of 3 for CLI/Ollama
+ * reviewers). So a missing key and an explicit `0` must never collapse: an entry
+ * whose value isn't a usable cap is DROPPED rather than coerced to `0`.
+ * Drops unknown tokens, non-integers, negatives, and anything above
+ * MAX_REVIEWER_MAX_ROUNDS so a hand-edited settings.json can't smuggle in an
+ * unbounded budget. Non-object input → undefined (an omitted field isn't
+ * persisted as an empty override).
+ */
+export function normalizeReviewerMaxRounds(map) {
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return undefined;
+  const out = Object.create(null);
+  for (const [rawKey, rawValue] of Object.entries(map)) {
+    const token = normalizeReviewerToken(rawKey);
+    if (!token) continue;
+    // Only a genuine non-negative integer is a cap. A string "2", null, NaN, or
+    // 1.5 is not — and must NOT fall through to 0, which slashdo reads as
+    // "unlimited".
+    if (!Number.isInteger(rawValue) || rawValue < 0 || rawValue > MAX_REVIEWER_MAX_ROUNDS) continue;
+    // First occurrence wins for two spellings of the same reviewer (`gemini` /
+    // `antigravity`, `@Bot` / `@bot`) — mirrors normalizeOptionalReviewers' dedupe.
+    if (Object.prototype.hasOwnProperty.call(out, token)) continue;
+    out[token] = rawValue;
+  }
+  return { ...out };
+}
+
+/**
+ * Resolve per-reviewer iteration caps with task-over-default precedence: a
+ * task-level map (even explicitly empty) overrides the Code Review Defaults;
+ * only fall back to the defaults when the task didn't pin its own. Mirrors
+ * `resolveOptionalReviewers`.
+ */
+export function resolveReviewerMaxRounds(metadataMap, defaultMap) {
+  const isMap = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+  return isMap(metadataMap)
+    ? (normalizeReviewerMaxRounds(metadataMap) || {})
+    : (normalizeReviewerMaxRounds(defaultMap) || {});
+}
+
 /**
  * Build the set of lowercased optional-reviewer tokens for a fast membership
  * test in the builders. Tolerates the raw (unnormalized) list.
@@ -160,9 +224,28 @@ function optionalReviewerSet(optionalReviewers) {
   return new Set((normalizeOptionalReviewers(optionalReviewers) || []).map(t => t.toLowerCase()));
 }
 
-/** Append slashdo's `~opt` marker to `token` when it's in the optional set. */
-function markOptional(token, optSet) {
-  return optSet.has(token.toLowerCase()) ? `${token}~opt` : token;
+/**
+ * Build a lowercased-token → cap lookup for the builders. Tolerates the raw
+ * (unnormalized) map. A `Map` (not a plain object) so a reviewer token can never
+ * collide with `Object.prototype` keys, and so `.get()` distinguishes an absent
+ * cap (`undefined`) from an explicit `0`.
+ */
+function reviewerMaxRoundsLookup(reviewerMaxRounds) {
+  const normalized = normalizeReviewerMaxRounds(reviewerMaxRounds) || {};
+  return new Map(Object.entries(normalized).map(([token, max]) => [token.toLowerCase(), max]));
+}
+
+/**
+ * Append slashdo's per-entry suffixes to `token` in slashdo's canonical storage
+ * order — `~opt` first, then `~max=<n>` (the grammar accepts either order, and
+ * neither is part of the reviewer's dedupe identity). A reviewer with no cap
+ * emits no `~max` at all, which is what leaves slashdo's built-in default in
+ * place; `~max=0` is a real, distinct value meaning "loop until clean".
+ */
+function markSuffixes(token, optSet, maxLookup) {
+  const key = token.toLowerCase();
+  const max = maxLookup?.get(key);
+  return `${token}${optSet.has(key) ? '~opt' : ''}${max === undefined ? '' : `~max=${max}`}`;
 }
 
 /**
@@ -215,15 +298,17 @@ export function resolveKeyedReviewers(reviewers, hasUsernames) {
  * Build the comma-separated reviewer token list used to fill the `{reviewers}`
  * placeholder in claim/plan prompts: keyed reviewers (falling back to the
  * default when empty) followed by `@user` tokens for the reviewer usernames.
- * Reviewers in `optionalReviewers` get slashdo's `~opt` non-blocking suffix.
+ * Reviewers in `optionalReviewers` get slashdo's `~opt` non-blocking suffix, and
+ * reviewers carrying a `reviewerMaxRounds` cap get `~max=<n>` after it.
  * The flag-string variant is `buildReviewWithArgs`.
  */
-export function buildReviewersCsv(reviewers, usernames = [], optionalReviewers = []) {
+export function buildReviewersCsv(reviewers, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}) {
   const keyed = Array.isArray(reviewers) && reviewers.length ? reviewers : [...DEFAULT_REVIEWERS];
   const users = normalizeReviewUsernames(usernames);
   const optSet = optionalReviewerSet(optionalReviewers);
+  const maxLookup = reviewerMaxRoundsLookup(reviewerMaxRounds);
   const combined = [...keyed, ...users.map(u => `@${u}`)];
-  return combined.map(t => markOptional(t, optSet)).join(',');
+  return combined.map(t => markSuffixes(t, optSet, maxLookup)).join(',');
 }
 
 /**
@@ -238,20 +323,25 @@ export function buildReviewersCsv(reviewers, usernames = [], optionalReviewers =
  *   username reviewer is an external PR reviewer, not a CLI that applies fixes).
  * - Reviewers in `optionalReviewers` get slashdo's `~opt` non-blocking suffix on
  *   their emitted token, so an inconclusive verdict from them doesn't gate the
- *   merge. A lone default `copilot` that is marked optional DOES force the flag
- *   on (otherwise the `~opt` — the whole point — would be dropped with the flag).
+ *   merge. Reviewers with a `reviewerMaxRounds` cap get `~max=<n>` after it.
+ *   A lone default `copilot` that is marked optional OR carries a cap DOES force
+ *   the flag on (otherwise the suffix — the whole point — would be dropped with
+ *   the flag).
  */
-export function buildReviewWithArgs(reviewers, stopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, usernames = [], optionalReviewers = []) {
+export function buildReviewWithArgs(reviewers, stopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}) {
   const users = normalizeReviewUsernames(usernames);
   const keyed = resolveKeyedReviewers(reviewers, users.length > 0);
   const combined = [...keyed, ...users.map(u => `@${u}`)];
   const optSet = optionalReviewerSet(optionalReviewers);
-  // The lone-default-copilot suppression only applies when copilot is NOT marked
-  // optional — a `copilot~opt`-only list must still emit the flag to carry `~opt`.
-  const isDefaultOnly = combined.length === 1 && combined[0] === DEFAULT_REVIEWER && !optSet.has(DEFAULT_REVIEWER);
+  const maxLookup = reviewerMaxRoundsLookup(reviewerMaxRounds);
+  // The lone-default-copilot suppression only applies when copilot carries NO
+  // per-entry suffix — a `copilot~opt` / `copilot~max=2`-only list must still
+  // emit the flag to carry that suffix.
+  const isDefaultOnly = combined.length === 1 && combined[0] === DEFAULT_REVIEWER
+    && !optSet.has(DEFAULT_REVIEWER) && maxLookup.get(DEFAULT_REVIEWER) === undefined;
   const hasNonCopilot = keyed.some(r => r !== DEFAULT_REVIEWER);
   const parts = [];
-  if (!isDefaultOnly) parts.push(`--review-with ${combined.map(t => markOptional(t, optSet)).join(',')}`);
+  if (!isDefaultOnly) parts.push(`--review-with ${combined.map(t => markSuffixes(t, optSet, maxLookup)).join(',')}`);
   if (combined.length >= 2) {
     if (stopMode === 'on-findings') parts.push('--review-stop-on-findings');
     else if (stopMode === 'on-clean') parts.push('--review-stop-on-clean');
@@ -366,6 +456,15 @@ export const createCosTaskSchema = z.object({
   optionalReviewers: z.preprocess(
     v => Array.isArray(v) ? normalizeOptionalReviewers(v) : undefined,
     z.array(z.string()).optional()
+  ),
+  // Per-reviewer iteration caps (slashdo `~max=<n>`), keyed by the emitted
+  // `--review-with` token. Normalized so a hand-crafted request can't smuggle in
+  // an unbounded or non-integer budget. Absent → undefined (not `{}`); an entry
+  // with no usable cap is dropped rather than coerced to `0` (which slashdo reads
+  // as "loop until clean").
+  reviewerMaxRounds: z.preprocess(
+    v => normalizeReviewerMaxRounds(v),
+    z.record(z.number().int().min(0).max(MAX_REVIEWER_MAX_ROUNDS)).optional()
   ),
   // Bundled slashdo workflow this task runs (#3089) — the BARE command name,
   // never a rendered `/do:x` string (see slashdoInvocation.js).
@@ -598,6 +697,13 @@ export const codeReviewSettingsSchema = z.object({
     v => Array.isArray(v) ? normalizeOptionalReviewers(v) : undefined,
     z.array(z.string()).optional()
   ),
+  // Per-reviewer iteration caps (slashdo `~max=<n>`) keyed by emitted token —
+  // e.g. `{ ollama: 1 }` buys one review-and-fix pass from a slow local model.
+  // Absent → undefined; an unusable entry is dropped, never coerced to `0`.
+  reviewerMaxRounds: z.preprocess(
+    v => normalizeReviewerMaxRounds(v),
+    z.record(z.number().int().min(0).max(MAX_REVIEWER_MAX_ROUNDS)).optional()
+  ),
   stopMode: z.enum(REVIEW_STOP_MODES).optional(),
   reviewerApplies: z.boolean().optional(),
   lmstudioModel: z.preprocess(emptyToUndefined, z.string().optional()),
@@ -703,7 +809,7 @@ function sanitizeQuotaBurnFamilies(raw) {
 export const slashdoTaskSchema = createCosTaskSchema
   .pick({
     model: true, provider: true, effort: true, simplify: true,
-    reviewers: true, usernames: true, optionalReviewers: true
+    reviewers: true, usernames: true, optionalReviewers: true, reviewerMaxRounds: true
   })
   .extend({
     command: z.string().min(1),
@@ -771,6 +877,15 @@ export function sanitizeTaskMetadata(raw) {
   // the Code Review Defaults' optional set back to "none optional."
   if (Array.isArray(raw.optionalReviewers)) {
     clean.optionalReviewers = normalizeOptionalReviewers(raw.optionalReviewers) || [];
+    hasKeys = true;
+  }
+  // `reviewerMaxRounds` caps each reviewer's review→fix→re-review cycles (slashdo
+  // `~max=<n>`). Like `optionalReviewers`, an explicitly empty MAP is KEPT so a
+  // task/type can override the Code Review Defaults' caps back to "no caps."
+  // Individual entries with no usable cap are dropped by the normalizer rather
+  // than becoming `0`, which slashdo reads as "loop until clean."
+  if (raw.reviewerMaxRounds && typeof raw.reviewerMaxRounds === 'object' && !Array.isArray(raw.reviewerMaxRounds)) {
+    clean.reviewerMaxRounds = normalizeReviewerMaxRounds(raw.reviewerMaxRounds) || {};
     hasKeys = true;
   }
   if (Object.prototype.hasOwnProperty.call(raw, 'reviewStopMode') && REVIEW_STOP_MODES.includes(raw.reviewStopMode)) {

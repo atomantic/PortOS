@@ -16,7 +16,7 @@ import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { parseTasksMarkdown, groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, generateTasksMarkdown, hasKnownPrefix } from '../lib/taskParser.js';
-import { REVIEW_STOP_MODES, normalizeReviewers, normalizeReviewUsernames } from '../lib/validation.js';
+import { REVIEW_STOP_MODES, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds } from '../lib/validation.js';
 import { PR_COMPLETIONS, PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
 import { loadState, withStateLock, ROOT_DIR } from './cosState.js';
 import { cosEvents } from './cosEvents.js';
@@ -300,6 +300,21 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     // of silently inheriting them.
     if (Array.isArray(taskData.usernames)) {
       metadata.usernames = normalizeReviewUsernames(taskData.usernames);
+    }
+    // Non-blocking (`~opt`) reviewer set. Same explicit-empty semantics as
+    // `usernames`: an empty array is a real "none optional for this task" choice
+    // that must override the Code Review Defaults. Previously validated by
+    // createCosTaskSchema but never persisted here, so the task form's `~opt`
+    // badges silently fell back to the defaults on every task.
+    if (Array.isArray(taskData.optionalReviewers)) {
+      metadata.optionalReviewers = normalizeOptionalReviewers(taskData.optionalReviewers) || [];
+    }
+    // Per-reviewer `~max=<n>` iteration caps, keyed by emitted `--review-with`
+    // token. An explicitly empty MAP overrides the Code Review Defaults' caps;
+    // an entry with no usable cap is dropped rather than coerced to `0`, which
+    // slashdo reads as "loop until clean" (absent ≠ 0).
+    if (taskData.reviewerMaxRounds && typeof taskData.reviewerMaxRounds === 'object' && !Array.isArray(taskData.reviewerMaxRounds)) {
+      metadata.reviewerMaxRounds = normalizeReviewerMaxRounds(taskData.reviewerMaxRounds) || {};
     }
     if (REVIEW_STOP_MODES.includes(taskData.reviewStopMode)) metadata.reviewStopMode = taskData.reviewStopMode;
     if (taskData.reviewerApplies === true) metadata.reviewerApplies = true;

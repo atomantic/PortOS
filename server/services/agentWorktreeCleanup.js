@@ -24,7 +24,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { detectForgeCli } from '../lib/gitForge.js';
 import { PR_COMPLETIONS, PR_COMPLETION_VALUES, leavesPrForHuman } from '../lib/prDisposition.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds } from '../lib/validation.js';
 
 /**
  * Clean up a worktree for a completed agent.
@@ -43,7 +43,7 @@ import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_CA
  * the worktree branch into the source workspace because `gh pr merge` already handled it.
  * Otherwise, merges the worktree branch back to the source branch on success.
  */
-export async function cleanupAgentWorktree(agentId, success, { openPR = false, prCompletion = null, requestCopilotReview: legacyRequestCopilotReview = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, skipMerge = false, description = null, agentOutput = null, originalTask = null } = {}) {
+export async function cleanupAgentWorktree(agentId, success, { openPR = false, prCompletion = null, requestCopilotReview: legacyRequestCopilotReview = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, skipMerge = false, description = null, agentOutput = null, originalTask = null } = {}) {
   const { getAgent: getAgentState } = await import('./cos.js');
   const agentState = await getAgentState(agentId).catch(() => null);
   if (!agentState?.metadata?.isWorktree) return [];
@@ -230,6 +230,7 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, p
             reviewers: runsReviewLoop ? reviewerList : [],
             usernames: runsReviewLoop ? usernames : [],
             optionalReviewers: runsReviewLoop ? optionalReviewers : [],
+            reviewerMaxRounds: runsReviewLoop ? reviewerMaxRounds : {},
             reviewStopMode,
             reviewerApplies,
             reviewerModels,
@@ -295,7 +296,7 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, p
  * branch (via createWorktree's `existingBranch` option) so it can fix-and-push
  * without trampling concurrent agents.
  */
-export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, sourceWorkspace, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, leaveOpen = false }) {
+export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, sourceWorkspace, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, leaveOpen = false }) {
   if (!prUrl || !prBranch) return null;
   if (prCompletion === PR_COMPLETIONS.LEAVE_OPEN) return null;
 
@@ -318,6 +319,11 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   // Non-blocking (`~opt`) marker set — forge-agnostic, threaded verbatim so the
   // follow-up's `--review-with` marks the same reviewers optional.
   const effectiveOptionalReviewers = normalizeOptionalReviewers(optionalReviewers) || [];
+  // Per-reviewer iteration caps (`~max=<n>`) — forge-agnostic, threaded verbatim
+  // so the follow-up's `--review-with` carries the same budgets. Entries for
+  // reviewers that were stripped are inert (the emitter only marks tokens it
+  // actually emits), so no narrowing is needed here.
+  const effectiveReviewerMaxRounds = normalizeReviewerMaxRounds(reviewerMaxRounds) || {};
   // Merge-on-green deliberately skips every reviewer. A legacy review loop
   // whose GitHub-only reviewer vanishes on another forge retains its prior
   // merge-only fallback instead of leaving an orphaned PR.
@@ -405,6 +411,10 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       // and gates the merge on (appended to `--review-with` as `@user`).
       reviewLoopReviewerUsernames: effectiveUsernames,
       reviewLoopOptionalReviewers: effectiveOptionalReviewers,
+      // Per-reviewer `~max=<n>` caps, keyed by emitted token. Empty object = no
+      // caps (leaves slashdo's per-loop built-in default in place); an absent key
+      // is NOT `0`, which slashdo reads as "loop until clean".
+      reviewLoopReviewerMaxRounds: effectiveReviewerMaxRounds,
       reviewLoopStopMode: reviewStopMode,
       reviewLoopReviewerApplies: reviewerApplies,
       // Empty → null so the prompt builder's "no models configured" path is unambiguous.

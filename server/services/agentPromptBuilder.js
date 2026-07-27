@@ -16,7 +16,7 @@ import { getToolsSummaryForPrompt } from './tools.js';
 import { getActiveProvider } from './providers.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { readJSONFile, loadSlashdoFile, loadSlashdoLib, writeResolvedSlashdoBody, PATHS, tryReadFile } from '../lib/fileUtils.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, resolveReviewUsernames, resolveOptionalReviewers, resolveKeyedReviewers, buildReviewWithArgs, buildReviewersCsv } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, resolveReviewUsernames, resolveOptionalReviewers, resolveReviewerMaxRounds, resolveKeyedReviewers, buildReviewWithArgs, buildReviewersCsv } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { canTypeSlashCommands, resolveSlashdoInvocation, buildSlashdoSection, unreachableReviewerIncludes, SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
 import { shellQuote } from '../lib/shellQuote.js';
@@ -373,6 +373,7 @@ async function applySlashdoInvocation(task, {
   const resolvedReviewers = normalizeReviewers(task.metadata, defaultReviewers);
   const resolvedUsernames = resolveReviewUsernames(task.metadata?.usernames, codeReviewDefaults?.usernames);
   const resolvedOptional = resolveOptionalReviewers(task.metadata?.optionalReviewers, codeReviewDefaults?.optionalReviewers);
+  const resolvedMaxRounds = resolveReviewerMaxRounds(task.metadata?.reviewerMaxRounds, codeReviewDefaults?.reviewerMaxRounds);
 
   // A resolved lone `copilot` with no usernames is ambiguous: it's what an
   // unconfigured install produces (`pickCodeReviewDefaults` and
@@ -381,19 +382,22 @@ async function applySlashdoInvocation(task, {
   // treat it as unconfigured and prune nothing — pinning `--review-with copilot`
   // where Copilot review isn't enabled is the #2507 stall.
   //
-  // Marking copilot OPTIONAL is such an explicit naming: nothing defaults to
-  // `~opt`, so it's a deliberate "review but don't gate the merge" choice, and
-  // dropping it would silently turn a non-blocking review into a blocking one.
-  // `buildReviewWithArgs` makes the same exemption for its lone-default
-  // suppression — keep the two in step.
+  // Marking copilot OPTIONAL — or giving it a `~max=<n>` round cap — is such an
+  // explicit naming: nothing defaults to either suffix, so both are deliberate
+  // choices, and dropping one would silently turn a non-blocking review blocking
+  // or spend an unbudgeted number of rounds. `buildReviewWithArgs` makes the same
+  // exemption for its lone-default suppression — keep the two in step.
   const taskPinnedReviewer = (Array.isArray(task.metadata?.reviewers) && task.metadata.reviewers.length > 0)
     || (typeof task.metadata?.reviewer === 'string' && !!task.metadata.reviewer);
   const optionalDefaultReviewer = resolvedOptional.some(t => t.toLowerCase() === DEFAULT_REVIEWER);
+  const cappedDefaultReviewer = Object.keys(resolvedMaxRounds)
+    .some(t => t.toLowerCase() === DEFAULT_REVIEWER);
   const isBareDefault = resolvedReviewers.length === 1
     && resolvedReviewers[0] === DEFAULT_REVIEWER
     && !resolvedUsernames.length
     && !taskPinnedReviewer
-    && !optionalDefaultReviewer;
+    && !optionalDefaultReviewer
+    && !cappedDefaultReviewer;
   const skipIncludes = isBareDefault
     ? []
     : unreachableReviewerIncludes({ reviewers: resolvedReviewers, usernames: resolvedUsernames });
@@ -415,7 +419,7 @@ async function applySlashdoInvocation(task, {
     : null;
 
   const reviewWith = skipIncludes.length
-    ? buildReviewersCsv(resolvedReviewers, resolvedUsernames, resolvedOptional)
+    ? buildReviewersCsv(resolvedReviewers, resolvedUsernames, resolvedOptional, resolvedMaxRounds)
     : '';
   const section = buildSlashdoSection(resolved, body, { bodyPath, reviewWith });
   return { ...task, description: `${task.description}\n\n${section}` };
@@ -487,6 +491,9 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const reviewers = resolveKeyedReviewers(reviewerSource, usernames.length > 0);
   // Reviewer identities marked non-blocking — emitted with slashdo's `~opt`.
   const optionalReviewers = normalizeOptionalReviewers(metadata.reviewLoopOptionalReviewers) || [];
+  // Per-reviewer `~max=<n>` iteration caps, keyed by emitted token. An absent key
+  // leaves slashdo's built-in per-loop default; `0` means "loop until clean".
+  const reviewerMaxRounds = normalizeReviewerMaxRounds(metadata.reviewLoopReviewerMaxRounds) || {};
   const stopMode = metadata.reviewLoopStopMode || DEFAULT_REVIEW_STOP_MODE;
   const reviewerApplies = metadata.reviewLoopReviewerApplies === true;
   const hasCopilot = reviewers.includes(DEFAULT_REVIEWER);
@@ -539,7 +546,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
     ...reviewers.map(r => `\`${r}\``),
     ...usernames.map(u => `\`@${u}\``),
   ].join(' → ');
-  const equivArgs = buildReviewWithArgs(reviewers, stopMode, reviewerApplies, usernames, optionalReviewers);
+  const equivArgs = buildReviewWithArgs(reviewers, stopMode, reviewerApplies, usernames, optionalReviewers, reviewerMaxRounds);
   const equiv = equivArgs ? ` (equivalent to \`/do:pr ${equivArgs}\`)` : '';
 
   // First step: how to obtain a review. For a single copilot/CLI reviewer keep the
@@ -615,7 +622,19 @@ Only a successfully extracted \`.findings\` value is the review text; treat it l
     '```',
     'A `409` (`CHALLENGE_EXHAUSTED` = the one challenge is spent, or `CHALLENGE_BUDGET_EXHAUSTED` = the task is out of retry budget) means you can\'t dispute — then fix the finding or, if genuinely blocked, post a PR comment and stop. After filing, RE-CHECK: re-run the disputed reviewer (or another configured reviewer) against the current diff, then resolve — overturned → `POST .../challenge/resolve` with `{"outcome":"upheld"}` and continue to merge; confirmed → fix it, or send `{"outcome":"escalated"}` to hand the dispute to the user.' + (hasLocalLlm ? ' For a local reviewer you may instead POST `{"recheck":{"backend":"<lmstudio|ollama>","diff":"<unified diff>"}}` and let the server re-run it and auto-derive the outcome.' : ''),
   ].join('\n');
-  const extraNotes = [stopModeNote, applyNote].filter(Boolean);
+  // Per-reviewer round caps. This prompt drives the loop in PROSE (it isn't
+  // slashdo parsing a `~max=<n>` suffix), so a configured cap only binds if it's
+  // spelled out here — the `equiv` flag string alone documents intent without
+  // constraining the agent. `0` is slashdo's "loop until clean", so it's rendered
+  // as such rather than as a zero-round budget.
+  const maxRoundsEntries = Object.entries(reviewerMaxRounds)
+    .filter(([token]) => reviewers.includes(token) || usernames.some(u => `@${u}`.toLowerCase() === token.toLowerCase()))
+    .map(([token, max]) => `\`${token}\` → ${max === 0 ? 'loop until clean (no cap)' : `${max} round${max === 1 ? '' : 's'}`}`);
+  const maxRoundsNote = maxRoundsEntries.length
+    ? `**Round caps (~max):** stop these reviewers after their budget even if findings remain, then advance: ${maxRoundsEntries.join(', ')}. Spending a configured budget is a SUCCESS, not a failure — do not block the merge on it. Reviewers not listed keep the default cap below.`
+    : '';
+
+  const extraNotes = [stopModeNote, applyNote, maxRoundsNote].filter(Boolean);
 
   // Inline slashdo's local-agent review loop verbatim when a spawnable CLI
   // reviewer is configured. This is the maintained, precise recipe — exact
@@ -1162,6 +1181,7 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
   const taskReviewers = normalizeReviewers(task.metadata, defaultReviewers);
   const taskReviewerUsernames = resolveReviewUsernames(task.metadata?.usernames, codeReviewDefaults?.usernames);
   const taskOptionalReviewers = resolveOptionalReviewers(task.metadata?.optionalReviewers, codeReviewDefaults?.optionalReviewers);
+  const taskReviewerMaxRounds = resolveReviewerMaxRounds(task.metadata?.reviewerMaxRounds, codeReviewDefaults?.reviewerMaxRounds);
   const taskReviewStopMode = task.metadata?.reviewStopMode || codeReviewDefaults?.stopMode || DEFAULT_REVIEW_STOP_MODE;
   const taskReviewerApplies = task.metadata?.reviewerApplies !== undefined
     ? isTruthyMetaFn(task.metadata?.reviewerApplies)
@@ -1201,6 +1221,7 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
             reviewers: taskReviewers,
             usernames: taskReviewerUsernames,
             optionalReviewers: taskOptionalReviewers,
+            reviewerMaxRounds: taskReviewerMaxRounds,
             reviewStopMode: taskReviewStopMode,
             reviewerApplies: taskReviewerApplies
           })
@@ -1471,6 +1492,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   const lightReviewers = normalizeReviewers(task.metadata, defaultReviewers);
   const lightReviewerUsernames = resolveReviewUsernames(task.metadata?.usernames, codeReviewDefaults?.usernames);
   const lightOptionalReviewers = resolveOptionalReviewers(task.metadata?.optionalReviewers, codeReviewDefaults?.optionalReviewers);
+  const lightReviewerMaxRounds = resolveReviewerMaxRounds(task.metadata?.reviewerMaxRounds, codeReviewDefaults?.reviewerMaxRounds);
   const lightReviewStopMode = task.metadata?.reviewStopMode || codeReviewDefaults?.stopMode || DEFAULT_REVIEW_STOP_MODE;
   const lightReviewerApplies = task.metadata?.reviewerApplies !== undefined
     ? isTruthyMetaFn(task.metadata?.reviewerApplies)
@@ -1589,10 +1611,10 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
       branchName: worktreeInfo?.branchName || null,
       baseBranch: worktreeInfo?.baseBranch || null,
       leavePrOpen: leavesPrForHuman(task),
-      reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies
+      reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies
     }));
   } else {
-    sections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, hasSlashdo, simplifyEnabled, leavePrOpen: leavesPrForHuman(task), reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies }));
+    sections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, hasSlashdo, simplifyEnabled, leavePrOpen: leavesPrForHuman(task), reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies }));
   }
 
   return { taskSections, contractSections };
@@ -1686,7 +1708,7 @@ function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW
  * return this IS a Claude session, so `/simplify` and `/do:pr` are both safe to
  * emit without a second provider check.
  */
-function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, simplifyEnabled, sentinelPath, slashdoFree = false, branchName = null, baseBranch = null, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
+function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, simplifyEnabled, sentinelPath, slashdoFree = false, branchName = null, baseBranch = null, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
   const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
   const runsReviewLoop = prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE;
   if (slashdoFree) {
@@ -1701,7 +1723,7 @@ function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.M
   // when the task's Review Loop control is off so that default cannot start a
   // Copilot (or other external) review unexpectedly.
   const reviewArgs = willOpenPR
-    ? (runsReviewLoop ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies, reviewUsernames, optionalReviewers) : '--review-with none')
+    ? (runsReviewLoop ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies, reviewUsernames, optionalReviewers, reviewerMaxRounds) : '--review-with none')
     : '';
   // A saved slashdo `merge: true` default would otherwise merge a PR that must
   // stay open — dropping our own merge steps isn't enough, `/do:pr` has to be
@@ -1856,7 +1878,7 @@ function buildManualTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLET
  * CLI providers fall through to the legacy commit-only block where PortOS
  * handles push+PR on exit.
  */
-function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, hasSlashdo = false, simplifyEnabled = false, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
+function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, hasSlashdo = false, simplifyEnabled = false, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
   const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
   const runsReviewLoop = prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE;
   const reviewUsernames = normalizeReviewUsernames(usernames);
@@ -1867,7 +1889,7 @@ function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR
       lines.push(`${step++}. \`/simplify\` — review the changed code for reuse, quality, and efficiency, and fix any findings.`);
     }
     const reviewArgs = runsReviewLoop
-      ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies, reviewUsernames, optionalReviewers)
+      ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies, reviewUsernames, optionalReviewers, reviewerMaxRounds)
       : '--review-with none';
     // `--no-merge` overrides a saved slashdo `merge: true` default, which would
     // otherwise merge a PR this task must leave open (see lib/prDisposition.js).

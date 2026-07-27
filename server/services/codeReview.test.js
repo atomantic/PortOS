@@ -58,6 +58,7 @@ describe('codeReview helpers', () => {
         reviewers: ['copilot'],
         usernames: [],
         optionalReviewers: [],
+        reviewerMaxRounds: {},
         stopMode: 'all',
         reviewerApplies: false,
         lmstudioModel: null,
@@ -69,6 +70,7 @@ describe('codeReview helpers', () => {
         reviewers: ['copilot'],
         usernames: [],
         optionalReviewers: [],
+        reviewerMaxRounds: {},
         stopMode: 'all',
         reviewerApplies: false,
         lmstudioModel: null,
@@ -117,6 +119,7 @@ describe('codeReview helpers', () => {
         codeReview: {
           reviewers: ['codex', 'lmstudio'],
           optionalReviewers: ['lmstudio', 'bogus'],
+          reviewerMaxRounds: { lmstudio: 1, codex: 0, bogus: 2, ollama: -1 },
           stopMode: 'on-clean',
           reviewerApplies: true,
           lmstudioModel: 'qwen2.5-coder:7b',
@@ -130,6 +133,9 @@ describe('codeReview helpers', () => {
         usernames: [],
         // 'bogus' is dropped (not a known reviewer); 'lmstudio' survives.
         optionalReviewers: ['lmstudio'],
+        // 'bogus' (unknown token) and ollama's negative cap are dropped; an
+        // explicit 0 survives as "loop until clean".
+        reviewerMaxRounds: { lmstudio: 1, codex: 0 },
         stopMode: 'on-clean',
         reviewerApplies: true,
         lmstudioModel: 'qwen2.5-coder:7b',
@@ -191,6 +197,21 @@ describe('codeReview helpers', () => {
       const out = await resolveReviewLoopOptions({}, testDeps)
       // ollama's model is injected server-side by /api/code-review/local, never threaded here.
       expect(out.reviewerModels).toEqual({})
+    })
+
+    it('inherits the defaults\' ~max round caps when the task pinned none', async () => {
+      mockedSettings.current = { codeReview: { reviewers: ['ollama'], reviewerMaxRounds: { ollama: 1 } } }
+      const out = await resolveReviewLoopOptions({}, testDeps)
+      expect(out.reviewerMaxRounds).toEqual({ ollama: 1 })
+    })
+
+    it('lets a task-level cap map (including an explicitly empty one) override the defaults', async () => {
+      mockedSettings.current = { codeReview: { reviewers: ['ollama'], reviewerMaxRounds: { ollama: 1 } } }
+      const pinned = await resolveReviewLoopOptions({ reviewerMaxRounds: { ollama: 3 } }, testDeps)
+      expect(pinned.reviewerMaxRounds).toEqual({ ollama: 3 })
+      // An explicitly empty map is a real "no caps for this task" choice.
+      const cleared = await resolveReviewLoopOptions({ reviewerMaxRounds: {} }, testDeps)
+      expect(cleared.reviewerMaxRounds).toEqual({})
     })
   })
 

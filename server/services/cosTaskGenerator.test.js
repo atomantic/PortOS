@@ -166,7 +166,17 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
     // into buildReviewersCsv, which owns the fallback to the hardcoded copilot
     // default when the filter empties the list (unit-tested in validation.test.js).
     expect(GEN_SRC).toContain('.filter((r) => !LOCAL_LLM_REVIEWERS.includes(r))');
-    expect(GEN_SRC).toContain('buildReviewersCsv(promptReviewers, promptUsernames, promptOptionalReviewers)');
+    expect(GEN_SRC).toContain('buildReviewersCsv(promptReviewers, promptUsernames, promptOptionalReviewers, promptReviewerMaxRounds)');
+  });
+
+  it('threads per-reviewer ~max round caps into the prompt CSV on both claim paths', () => {
+    // The `{reviewers}` token IS the flag string for the claim flows, so a
+    // configured cap only reaches slashdo if the CSV carries it. Both the
+    // scheduled path and buildClaimWorkTask resolve it with task-over-default
+    // precedence (unit-tested in validation.test.js).
+    expect(GEN_SRC).toContain('resolveReviewerMaxRounds(metadata.reviewerMaxRounds, codeReviewDefaults?.reviewerMaxRounds)');
+    expect(GEN_SRC).toContain('resolveReviewerMaxRounds(reviewerMaxRounds ?? metadata.reviewerMaxRounds, codeReviewDefaults?.reviewerMaxRounds)');
+    expect(GEN_SRC).toContain('buildReviewersCsv(reviewersList, promptUsernames, promptOptionalReviewers, promptReviewerMaxRounds)');
   });
 });
 

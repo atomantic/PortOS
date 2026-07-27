@@ -26,6 +26,8 @@ import {
   normalizeOptionalReviewers,
   resolveReviewUsernames,
   resolveOptionalReviewers,
+  normalizeReviewerMaxRounds,
+  resolveReviewerMaxRounds,
 } from '../lib/validation.js'
 import { getSettings, settingsEvents } from './settings.js'
 import { getBaseUrl as getLmStudioBaseUrl } from './lmStudioManager.js'
@@ -68,6 +70,11 @@ export function pickCodeReviewDefaults(settings) {
     // Reviewer identities marked non-blocking (`~opt`). Normalized so a
     // hand-edited settings.json can't smuggle in junk. Empty = none optional.
     optionalReviewers: normalizeOptionalReviewers(raw?.optionalReviewers) || [],
+    // Per-reviewer iteration caps (`~max=<n>`) keyed by emitted `--review-with`
+    // token. Normalized so a hand-edited settings.json can't smuggle in a
+    // non-integer or unbounded budget. Empty object = no caps configured; an
+    // absent key is NOT `0` (which slashdo reads as "loop until clean").
+    reviewerMaxRounds: normalizeReviewerMaxRounds(raw?.reviewerMaxRounds) || {},
     stopMode: REVIEW_STOP_MODES.includes(raw?.stopMode) ? raw.stopMode : DEFAULT_REVIEW_STOP_MODE,
     reviewerApplies: raw?.reviewerApplies === true,
     lmstudioModel: typeof raw?.lmstudioModel === 'string' && raw.lmstudioModel ? raw.lmstudioModel : null,
@@ -130,6 +137,8 @@ export async function resolveReviewLoopOptions(metadata, { normalize, isTruthyMe
   const usernames = resolveReviewUsernames(metadata?.usernames, defaults?.usernames)
   // Optional (non-blocking, `~opt`) reviewers: same task-over-default precedence.
   const optionalReviewers = resolveOptionalReviewers(metadata?.optionalReviewers, defaults?.optionalReviewers)
+  // Per-reviewer iteration caps (`~max=<n>`): same task-over-default precedence.
+  const reviewerMaxRounds = resolveReviewerMaxRounds(metadata?.reviewerMaxRounds, defaults?.reviewerMaxRounds)
   const reviewStopMode = metadata?.reviewStopMode || defaults?.stopMode || DEFAULT_REVIEW_STOP_MODE
   const reviewerApplies = metadata?.reviewerApplies !== undefined
     ? isTruthyMeta(metadata?.reviewerApplies)
@@ -142,7 +151,7 @@ export async function resolveReviewLoopOptions(metadata, { normalize, isTruthyMe
     const model = defaults?.[`${r}Model`]
     if (model) reviewerModels[r] = model
   }
-  return { reviewers, usernames, optionalReviewers, reviewStopMode, reviewerApplies, reviewerModels }
+  return { reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewStopMode, reviewerApplies, reviewerModels }
 }
 
 const CODE_REVIEW_SYSTEM_PROMPT = `You are a careful senior code reviewer. The user will paste a unified PR diff. Review only what the diff changes (not the whole repo). Produce findings as a markdown list grouped by severity:

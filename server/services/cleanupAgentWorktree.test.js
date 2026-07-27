@@ -759,6 +759,40 @@ describe('cleanupAgentWorktree - openPR path', () => {
     expect(followUp.metadata.reviewLoopCodexModel).toBe('gpt-5.6-sol');
   });
 
+  it('threads per-reviewer ~max round caps into the follow-up metadata', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/61' });
+    git.requestCopilotReview.mockResolvedValue({ success: true });
+    addTask.mockResolvedValue({ id: 'sys-rl-max' });
+
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true, requestCopilotReview: true, reviewers: ['copilot', 'ollama'],
+      // `nope` is not a reviewer and `codex: -1` is not a cap — both dropped.
+      // An explicit 0 (loop until clean) survives.
+      reviewerMaxRounds: { ollama: 1, copilot: 0, nope: 2, codex: -1 },
+      description: 'Build',
+      originalTask: { id: 'task-orig', priority: 'MEDIUM', metadata: { app: 'sparsetree' }, description: 'Build' }
+    });
+
+    const [followUp] = addTask.mock.calls[0];
+    expect(followUp.metadata.reviewLoopReviewerMaxRounds).toEqual({ ollama: 1, copilot: 0 });
+  });
+
+  it('drops the ~max caps when the run has no review loop', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/62' });
+    addTask.mockResolvedValue({ id: 'sys-rl-nomax' });
+
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true, prCompletion: 'merge-on-green', reviewers: ['copilot', 'ollama'],
+      reviewerMaxRounds: { ollama: 1 }, description: 'Build',
+      originalTask: { id: 'task-orig', priority: 'MEDIUM', metadata: { app: 'sparsetree' }, description: 'Build' }
+    });
+
+    const [followUp] = addTask.mock.calls[0];
+    expect(followUp.metadata.reviewLoopReviewerMaxRounds).toEqual({});
+  });
+
   it('threads the claude model when claude is among the reviewers (Ollama-backed reviewer)', async () => {
     git.push.mockResolvedValue(undefined);
     git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/60' });

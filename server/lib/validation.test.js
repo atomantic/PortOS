@@ -15,6 +15,9 @@ import {
   resolveReviewUsernames,
   normalizeOptionalReviewers,
   resolveOptionalReviewers,
+  normalizeReviewerMaxRounds,
+  resolveReviewerMaxRounds,
+  MAX_REVIEWER_MAX_ROUNDS,
   resolveKeyedReviewers,
   buildReviewersCsv,
   buildReviewWithArgs,
@@ -180,6 +183,20 @@ describe('validation.js', () => {
       const r = codeReviewSettingsSchema.safeParse({ reviewers: ['copilot'] })
       expect(r.success).toBe(true)
       expect(r.data.usernames).toBeUndefined()
+    })
+
+    it('normalizes reviewerMaxRounds (drops unknown tokens / bad values, keeps an explicit 0)', () => {
+      const r = codeReviewSettingsSchema.safeParse({
+        reviewerMaxRounds: { ollama: 1, copilot: 0, nope: 2, codex: -1 },
+      })
+      expect(r.success).toBe(true)
+      expect(r.data.reviewerMaxRounds).toEqual({ ollama: 1, copilot: 0 })
+    })
+
+    it('leaves reviewerMaxRounds undefined when absent', () => {
+      const r = codeReviewSettingsSchema.safeParse({ reviewers: ['copilot'] })
+      expect(r.success).toBe(true)
+      expect(r.data.reviewerMaxRounds).toBeUndefined()
     })
   })
 
@@ -760,6 +777,29 @@ describe('validation.js', () => {
         .toEqual({ useWorktree: true });
     });
 
+    it('should keep a reviewerMaxRounds map (including an explicitly empty one) and drop bad entries', () => {
+      expect(sanitizeTaskMetadata({ reviewerMaxRounds: { ollama: 1 } }))
+        .toEqual({ reviewerMaxRounds: { ollama: 1 } });
+      // An explicitly empty map is a real "no caps for this task/type" override
+      // of the Code Review Defaults — the same contract optionalReviewers has.
+      expect(sanitizeTaskMetadata({ reviewerMaxRounds: {} }))
+        .toEqual({ reviewerMaxRounds: {} });
+      // 0 is a REAL value (slashdo: loop until clean) and must survive; unknown
+      // tokens and non-integers are dropped without collapsing to 0.
+      expect(sanitizeTaskMetadata({ reviewerMaxRounds: { copilot: 0, nope: 2, codex: '3' } }))
+        .toEqual({ reviewerMaxRounds: { copilot: 0 } });
+      // A non-object never becomes an empty override.
+      expect(sanitizeTaskMetadata({ reviewerMaxRounds: [1, 2] })).toBeNull();
+      expect(sanitizeTaskMetadata({ reviewerMaxRounds: 'ollama=1' })).toBeNull();
+    });
+
+    it('should keep an optionalReviewers list (including an explicitly empty one)', () => {
+      expect(sanitizeTaskMetadata({ optionalReviewers: ['ollama', 'nope'] }))
+        .toEqual({ optionalReviewers: ['ollama'] });
+      expect(sanitizeTaskMetadata({ optionalReviewers: [] }))
+        .toEqual({ optionalReviewers: [] });
+    });
+
     it('should accept a valid issueAuthorFilter and drop invalid ones', () => {
       expect(sanitizeTaskMetadata({ issueAuthorFilter: 'self' })).toEqual({ issueAuthorFilter: 'self' });
       expect(sanitizeTaskMetadata({ issueAuthorFilter: 'owner' })).toEqual({ issueAuthorFilter: 'owner' });
@@ -1024,6 +1064,110 @@ describe('validation.js', () => {
       expect(buildReviewersCsv(['claude', 'ollama'], ['@Bot'], ['ollama', '@Bot']))
         .toBe('claude,ollama~opt,@Bot~opt');
     });
+
+    it('appends ~max=<n> after ~opt, in slashdo\'s canonical order', () => {
+      // The CSV fills the `{reviewers}` prompt placeholder, so it must carry the
+      // same suffixes buildReviewWithArgs emits or the two paths disagree.
+      expect(buildReviewersCsv(['claude', 'ollama'], ['@Bot'], ['ollama'], { ollama: 1, '@Bot': 2, claude: 0 }))
+        .toBe('claude~max=0,ollama~opt~max=1,@Bot~max=2');
+    });
+
+    it('emits no ~max for a reviewer with no cap (absent ≠ 0)', () => {
+      expect(buildReviewersCsv(['claude', 'ollama'], [], [], { ollama: 1 }))
+        .toBe('claude,ollama~max=1');
+    });
+  });
+
+  describe('normalizeReviewerMaxRounds', () => {
+    it('keeps non-negative integer caps for known tokens, aliasing gemini→antigravity', () => {
+      expect(normalizeReviewerMaxRounds({ ollama: 1, '@Bot': 3, gemini: 2 }))
+        .toEqual({ ollama: 1, '@Bot': 3, antigravity: 2 });
+    });
+
+    it('keeps an explicit 0 (slashdo: loop until clean) — never collapsed with absent', () => {
+      const out = normalizeReviewerMaxRounds({ ollama: 0 });
+      expect(out).toEqual({ ollama: 0 });
+      expect(Object.prototype.hasOwnProperty.call(out, 'codex')).toBe(false);
+    });
+
+    it('drops unknown tokens, non-integers, negatives, and over-cap values', () => {
+      expect(normalizeReviewerMaxRounds({
+        ollama: 1,
+        nope: 2,
+        '@bad token': 1,
+        codex: 1.5,
+        claude: -1,
+        copilot: '2',
+        grok: MAX_REVIEWER_MAX_ROUNDS + 1,
+        lmstudio: null,
+      })).toEqual({ ollama: 1 });
+    });
+
+    it('accepts a cap exactly at the ceiling', () => {
+      expect(normalizeReviewerMaxRounds({ ollama: MAX_REVIEWER_MAX_ROUNDS }))
+        .toEqual({ ollama: MAX_REVIEWER_MAX_ROUNDS });
+    });
+
+    it('returns undefined for non-object input (an omitted field is not an empty override)', () => {
+      expect(normalizeReviewerMaxRounds(undefined)).toBeUndefined();
+      expect(normalizeReviewerMaxRounds(null)).toBeUndefined();
+      expect(normalizeReviewerMaxRounds([['ollama', 1]])).toBeUndefined();
+      expect(normalizeReviewerMaxRounds('ollama=1')).toBeUndefined();
+    });
+
+    it('returns a prototype-free plain object (no prototype pollution via a __proto__ key)', () => {
+      const out = normalizeReviewerMaxRounds({ __proto__: { polluted: true }, ollama: 1 });
+      expect(out).toEqual({ ollama: 1 });
+      expect({}.polluted).toBeUndefined();
+    });
+  });
+
+  describe('resolveReviewerMaxRounds', () => {
+    it('lets a task-level map (even empty) override the defaults', () => {
+      expect(resolveReviewerMaxRounds({ ollama: 1 }, { codex: 3 })).toEqual({ ollama: 1 });
+      expect(resolveReviewerMaxRounds({}, { codex: 3 })).toEqual({});
+    });
+
+    it('falls back to the defaults when the task did not pin its own', () => {
+      expect(resolveReviewerMaxRounds(undefined, { ollama: 1, nope: 2 })).toEqual({ ollama: 1 });
+      expect(resolveReviewerMaxRounds(undefined, undefined)).toEqual({});
+    });
+  });
+
+  describe('buildReviewWithArgs — ~max round caps', () => {
+    it('emits <token>~max=<n> for exactly the tokens carrying a cap', () => {
+      expect(buildReviewWithArgs(['claude', 'ollama', 'codex'], 'all', false, [], [], { ollama: 1 }))
+        .toBe('--review-with claude,ollama~max=1,codex');
+    });
+
+    it('emits ~opt before ~max when a reviewer carries both', () => {
+      expect(buildReviewWithArgs(['claude', 'ollama'], 'all', false, [], ['ollama'], { ollama: 1 }))
+        .toBe('--review-with claude,ollama~opt~max=1');
+    });
+
+    it('round-trips ~max=0 and distinguishes it from no cap', () => {
+      expect(buildReviewWithArgs(['claude', 'ollama'], 'all', false, [], [], { ollama: 0 }))
+        .toBe('--review-with claude,ollama~max=0');
+      expect(buildReviewWithArgs(['claude', 'ollama'], 'all', false, [], [], {}))
+        .toBe('--review-with claude,ollama');
+    });
+
+    it('caps a @username reviewer by its @-form token', () => {
+      expect(buildReviewWithArgs(['codex'], 'all', false, ['Bot'], [], { '@Bot': 2 }))
+        .toBe('--review-with codex,@Bot~max=2');
+    });
+
+    it('forces the flag on for a lone default copilot carrying a cap (so ~max is not lost)', () => {
+      // Without the suffix this is the suppressed lone-default case ('').
+      expect(buildReviewWithArgs(['copilot'], 'all', false, [], [], { copilot: 2 }))
+        .toBe('--review-with copilot~max=2');
+      expect(buildReviewWithArgs(['copilot'], 'all', false, [], [], {})).toBe('');
+    });
+
+    it('ignores caps for tokens not present in the emitted list, and invalid entries', () => {
+      expect(buildReviewWithArgs(['codex', 'copilot'], 'all', false, [], [], { ollama: 1, nope: 2, codex: -1 }))
+        .toBe('--review-with codex,copilot');
+    });
   });
 
   describe('createCosTaskSchema reviewers fields', () => {
@@ -1061,6 +1205,24 @@ describe('validation.js', () => {
       const withoutUsers = createCosTaskSchema.safeParse({ description: 'x' });
       expect(withoutUsers.success).toBe(true);
       expect(withoutUsers.data.usernames).toBeUndefined();
+    });
+
+    it('normalizes reviewerMaxRounds and leaves the field undefined when absent', () => {
+      const withCaps = createCosTaskSchema.safeParse({
+        description: 'x',
+        reviewerMaxRounds: { ollama: 1, copilot: 0, nope: 2, codex: 1.5 },
+      });
+      expect(withCaps.success).toBe(true);
+      // Unknown token + non-integer dropped; the explicit 0 survives.
+      expect(withCaps.data.reviewerMaxRounds).toEqual({ ollama: 1, copilot: 0 });
+      // Absent → undefined (not coerced to {}), so it isn't persisted as an override.
+      const withoutCaps = createCosTaskSchema.safeParse({ description: 'x' });
+      expect(withoutCaps.success).toBe(true);
+      expect(withoutCaps.data.reviewerMaxRounds).toBeUndefined();
+      // An explicitly empty map IS kept — a real "no caps for this task" override.
+      const cleared = createCosTaskSchema.safeParse({ description: 'x', reviewerMaxRounds: {} });
+      expect(cleared.success).toBe(true);
+      expect(cleared.data.reviewerMaxRounds).toEqual({});
     });
 
     it('accepts multiple image screenshots and attachment objects', () => {

@@ -920,6 +920,33 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/--review-with codex,ollama~opt,@alice --review-stop-on-findings --reviewer-applies/);
     });
 
+    it('threads per-reviewer ~max caps from the Code Review Defaults into the inline /do:pr', () => {
+      const codeReviewDefaults = {
+        reviewers: ['codex', 'ollama'],
+        optionalReviewers: ['ollama'],
+        // `~opt` first, then `~max=<n>` — slashdo's canonical order.
+        reviewerMaxRounds: { ollama: 1, codex: 2 },
+      };
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true, defaultReviewers: codeReviewDefaults.reviewers, codeReviewDefaults });
+      expect(prompt).toMatch(/--review-with codex~max=2,ollama~opt~max=1/);
+    });
+
+    it('lets a task-level ~max cap map override the defaults', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['ollama'], reviewerMaxRounds: { ollama: 0 } } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true, defaultReviewers: ['ollama'], codeReviewDefaults: { reviewers: ['ollama'], reviewerMaxRounds: { ollama: 3 } } });
+      // `0` = loop until clean, and it must not be mistaken for "no cap".
+      expect(prompt).toMatch(/--review-with ollama~max=0/);
+    });
+
     it('does not leak default usernames/stop-mode/reviewer-applies when no Code Review Defaults are set', () => {
       // Same task, no `codeReviewDefaults` option → the lone-copilot default,
       // which suppresses `--review-with` entirely and emits none of the flags.
@@ -991,6 +1018,49 @@ describe('buildLightContextPrompt', () => {
         isTruthyMeta);
       expect(prompt).toMatch(/codex --model gpt-5\.6-sol/);
       expect(prompt).toMatch(/claude --model qwen2\.5:7b/);
+    });
+
+    it('spells out per-reviewer ~max round caps in the follow-up loop instructions', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopPRNumber: 9,
+          reviewLoopReviewers: ['codex', 'ollama'],
+          // `bogus` isn't in the list, so it must not reach the prose.
+          reviewLoopReviewerMaxRounds: { ollama: 1, codex: 0, copilot: 3 },
+          sourceTaskId: 'task-src-max',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      // This prompt drives the loop in prose, so the cap has to be stated —
+      // the `equiv` flag string alone wouldn't bind the agent.
+      expect(prompt).toMatch(/Round caps \(~max\)/);
+      expect(prompt).toMatch(/`ollama` → 1 round/);
+      // 0 renders as unlimited, not as a zero-round budget.
+      expect(prompt).toMatch(/`codex` → loop until clean/);
+      expect(prompt).not.toMatch(/`copilot` →/);
+      // And the equivalent flag string carries the same suffixes.
+      expect(prompt).toMatch(/--review-with codex~max=0,ollama~max=1/);
+    });
+
+    it('omits the round-caps note when no cap is configured', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopPRNumber: 9,
+          reviewLoopReviewers: ['codex', 'ollama'],
+          sourceTaskId: 'task-src-nomax',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      expect(prompt).not.toMatch(/Round caps \(~max\)/);
+      expect(prompt).toMatch(/--review-with codex,ollama/);
     });
 
     it('threads a configured claude model (Ollama-backed reviewer) via the map', () => {
