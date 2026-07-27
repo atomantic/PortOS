@@ -1020,14 +1020,23 @@ export default function VideoGen() {
       // clip across two different IC modes would silently submit a control pass
       // as a "B&W clip to restore" and produce plausible garbage, so the
       // reference is dropped on any real mode change — same as every other
-      // mode-specific input above.
-      if (next !== mode) { setIcReferenceFile(null); setIcReferenceVideoId(''); }
+      // mode-specific input above. The resumed-render hint goes with it, or the
+      // new mode's panel would name the OLD mode's clip as what's conditioning
+      // an in-flight render.
+      if (next !== mode) {
+        setIcReferenceFile(null);
+        setIcReferenceVideoId('');
+        setIcReferenceNames([]);
+      }
       return;
     }
     // The IC-LoRA reference channel only exists in the IC remix modes — the
-    // route 400s IC_LORA_MODE_MISMATCH if one rides along elsewhere.
+    // route 400s IC_LORA_MODE_MISMATCH if one rides along elsewhere. The
+    // resumed-render hint clears with it so a round trip out through a non-IC
+    // mode and back can't resurface a name for a clip that's no longer set.
     setIcReferenceFile(null);
     setIcReferenceVideoId('');
+    setIcReferenceNames([]);
     if (next === 'text') {
       clearSourceImage();
       clearLastImage();
