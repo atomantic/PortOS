@@ -78,7 +78,10 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
       model: selectedModel || undefined,
       effort: effort || undefined,
       simplify,
-      ...(review ? {
+      // `isNext &&` states the route's contract rather than leaning on the picker
+      // being unrendered: only the `next` branch of POST /tasks/slashdo reads these,
+      // so sending them for another command would be a silent no-op.
+      ...(isNext && review ? {
         reviewers: review.reviewers,
         usernames: review.usernames,
         optionalReviewers: review.optionalReviewers,
@@ -142,23 +145,33 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
               Simplify before committing
             </span>
           </label>
-          <ReviewerPicker
-            reviewers={reviewValue.reviewers}
-            usernames={reviewValue.usernames}
-            optionalReviewers={reviewValue.optionalReviewers}
-            reviewerMaxRounds={reviewValue.reviewerMaxRounds}
-            reviewerModels={reviewValue.reviewerModels}
-            modelOptions={reviewerModelOptions}
-            // The claim flows substitute a reviewer CSV into their prompt and have
-            // no slashdo flag string, so stop-mode / reviewer-applies can't be honored.
-            showRunFlags={false}
-            onChange={({ reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels }) =>
-              setReview({ reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels })}
-          />
-          <p className="text-xs text-gray-500">
-            The claim flow opens and merges its own PR, so these reviewers gate that merge (slashdo <code>--review-with</code>).
-            {!review && ' Leave them untouched to use this app’s configured reviewers.'}
-          </p>
+          {/* Reviewer choices are `/do:next`-only: they're substituted into the
+              claim prompt's reviewer CSV, and `POST /tasks/slashdo` reads them only
+              on that branch. Every other `/do:*` body owns its own review/PR
+              sequence, so rendering the picker there would be four knobs wired to
+              nothing — the user would pick a reviewer and a model and the run would
+              silently discard both. */}
+          {isNext && (
+            <>
+              <ReviewerPicker
+                reviewers={reviewValue.reviewers}
+                usernames={reviewValue.usernames}
+                optionalReviewers={reviewValue.optionalReviewers}
+                reviewerMaxRounds={reviewValue.reviewerMaxRounds}
+                reviewerModels={reviewValue.reviewerModels}
+                modelOptions={reviewerModelOptions}
+                // The claim flows substitute a reviewer CSV into their prompt and have
+                // no slashdo flag string, so stop-mode / reviewer-applies can't be honored.
+                showRunFlags={false}
+                onChange={({ reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels }) =>
+                  setReview({ reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels })}
+              />
+              <p className="text-xs text-gray-500">
+                The claim flow opens and merges its own PR, so these reviewers gate that merge (slashdo <code>--review-with</code>).
+                {!review && ' Leave them untouched to use this app’s configured reviewers.'}
+              </p>
+            </>
+          )}
         </section>
 
         {submitError && <p className="text-xs text-port-error">{submitError}</p>}

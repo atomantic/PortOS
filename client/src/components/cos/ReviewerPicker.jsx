@@ -9,7 +9,8 @@ import {
   MAX_REVIEWER_MODEL_LENGTH,
   MODEL_SELECTABLE_REVIEWERS,
   cleanReviewUsername,
-  normalizeReviewUsernames
+  normalizeReviewUsernames,
+  sanitizeReviewerModelInput
 } from './constants';
 
 const labelFor = (value) => REVIEWER_OPTIONS.find(o => o.value === value)?.label || value;
@@ -155,8 +156,12 @@ export default function ReviewerPicker({
   // own default — the DELETE, not an empty-string write, because `''` is not a
   // model id the reviewer could run. Mirrors the server normalizer, which drops a
   // blank value rather than persisting it.
+  //
+  // Structural characters (`[`, `]`, `,`, line breaks) are stripped first: they'd
+  // corrupt the emitted `[<model>]` selector and the server drops any id carrying
+  // one, so accepting them here would show the user a pin that never persists.
   const setModel = (token, raw) => {
-    const model = raw.trim();
+    const model = sanitizeReviewerModelInput(raw).trim();
     if (!model) {
       emit({ reviewerModels: models.without(token) });
       return;

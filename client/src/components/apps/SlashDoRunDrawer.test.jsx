@@ -86,6 +86,31 @@ describe('SlashDoRunDrawer', () => {
     expect(screen.queryByText(/Reviewer applies fixes/)).not.toBeInTheDocument();
   });
 
+  it('hides the reviewer picker entirely for a command that cannot honor it', async () => {
+    // Only the `next` branch of POST /tasks/slashdo reads the reviewer fields —
+    // every other `/do:*` body owns its own review/PR sequence. Rendering the
+    // picker there would let the user pick a reviewer and a model and have the run
+    // silently discard both.
+    renderDrawer({ command: 'better', label: '/do:better' });
+
+    await waitFor(() => expect(screen.getByText('Task settings')).toBeInTheDocument());
+    expect(screen.queryByText('Reviewers (in order):')).not.toBeInTheDocument();
+    expect(screen.queryByText('GitHub reviewers (gate merge):')).not.toBeInTheDocument();
+  });
+
+  it('never sends reviewer fields for a non-next command', async () => {
+    renderDrawer({ command: 'better', label: '/do:better' });
+
+    await waitFor(() => expect(screen.getByText('Task settings')).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /Queue/ }));
+
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
+    const [, , body] = api.createSlashdoTask.mock.calls[0];
+    expect(body.reviewers).toBeUndefined();
+    expect(body.reviewerModels).toBeUndefined();
+    expect(body.reviewerMaxRounds).toBeUndefined();
+  });
+
   it('lists the tracker items once "pick a specific" is chosen and sends the pinned ref', async () => {
     const onQueued = vi.fn();
     renderDrawer({ onQueued });

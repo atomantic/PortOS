@@ -228,6 +228,19 @@ export function resolveReviewerMaxRounds(metadataMap, defaultMap) {
 // then round-trips the TASKS.md store.
 export const MAX_REVIEWER_MODEL_LENGTH = 200;
 
+// Characters a model id may not contain, because they are STRUCTURAL in the
+// emitted `--review-with` token and there is no escape for them:
+//  - `]` would close the `[<model>]` selector early (`foo]~opt` → a corrupt entry
+//    whose remainder slashdo then parses as suffixes),
+//  - `[` would open a nested one,
+//  - `,` would split the entry list, turning one reviewer into two bogus ones,
+//  - whitespace that breaks lines would split the single-line flag string.
+// Everything else stays legal on purpose: the value is free-form in slashdo's
+// grammar (`agy[Gemini 3.5 Flash (High)]` is valid), and the field has to accept
+// whatever id the user's environment actually needs. A space is fine; a newline is
+// not.
+const REVIEWER_MODEL_FORBIDDEN_RE = /[[\],\r\n\t]/;
+
 // Reviewers whose slashdo `--review-with` entry accepts a `[<model>]` bracket
 // (`lib/multi-reviewer-loop.md`: codex/claude/agy/grok/ollama). PortOS's
 // `lmstudio` reviewer has NO slashdo counterpart — it's served by
@@ -253,6 +266,13 @@ export const BRACKET_MODEL_REVIEWERS = MODEL_SELECTABLE_REVIEWERS.filter(r => r 
  * DROPPED rather than persisted as `''` (a `--model ` with no id would break the
  * reviewer invocation). Non-object input → undefined, so an omitted field isn't
  * persisted as an empty override.
+ *
+ * An id carrying a character that is structural in the emitted token
+ * (REVIEWER_MODEL_FORBIDDEN_RE — `[`, `]`, `,`, line breaks) is dropped rather
+ * than emitted: there's no escape for them inside `[<model>]`, so `foo]~opt` would
+ * close the selector early and leave slashdo parsing the remainder as a suffix.
+ * Dropping is the safe failure — the reviewer falls back to its own default model
+ * instead of running against a corrupt reviewer list.
  */
 export function normalizeReviewerModels(map) {
   if (!map || typeof map !== 'object' || Array.isArray(map)) return undefined;
@@ -263,6 +283,7 @@ export function normalizeReviewerModels(map) {
     if (typeof rawValue !== 'string') continue;
     const model = rawValue.trim();
     if (!model || model.length > MAX_REVIEWER_MODEL_LENGTH) continue;
+    if (REVIEWER_MODEL_FORBIDDEN_RE.test(model)) continue;
     // First occurrence wins for two spellings of one reviewer — mirrors the
     // sibling normalizers' dedupe.
     if (Object.prototype.hasOwnProperty.call(out, token)) continue;

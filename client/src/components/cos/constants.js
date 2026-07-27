@@ -207,6 +207,19 @@ export const MODEL_SELECTABLE_REVIEWERS = [...MODEL_CAPABLE_CLI_REVIEWERS, ...LO
 // dropped server-side, so the input must not accept one.
 export const MAX_REVIEWER_MODEL_LENGTH = 200;
 
+// Characters that are STRUCTURAL in slashdo's emitted `--review-with` token and
+// have no escape inside the `[<model>]` selector, so the server drops an id
+// containing one (mirror of REVIEWER_MODEL_FORBIDDEN_RE in
+// server/lib/cosValidation.js). Stripped as the user types rather than silently
+// accepted, so the field can't display a pin the server would refuse to store.
+// A space is deliberately legal — `agy[Gemini 3.5 Flash (High)]` is a valid entry.
+const REVIEWER_MODEL_FORBIDDEN_RE = /[[\],\r\n\t]/g;
+
+// Strip the structural characters from a typed model id. Trimming is left to the
+// caller: an id being typed may legitimately have a trailing space mid-entry.
+export const sanitizeReviewerModelInput = (raw) =>
+  typeof raw === 'string' ? raw.replace(REVIEWER_MODEL_FORBIDDEN_RE, '') : '';
+
 // pr-watcher author gate (taskMetadata.prAuthorFilter). Mirrors
 // PR_AUTHOR_FILTERS in server/lib/validation.js. 'self' = PRs opened by the
 // gh-authenticated operator (or their automation); 'others' = external

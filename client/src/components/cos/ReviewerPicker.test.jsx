@@ -371,5 +371,22 @@ describe('ReviewerPicker', () => {
       render(<ReviewerPicker reviewers={['codex']} reviewerModels={{ Codex: 'gpt-tier-a' }} modelOptions={modelOptions} onChange={() => {}} />);
       expect(screen.getByLabelText('Model for Codex')).toHaveValue('gpt-tier-a');
     });
+
+    it('strips characters that would corrupt the emitted [model] selector', () => {
+      const onChange = vi.fn();
+      render(<ReviewerPicker reviewers={['codex']} modelOptions={modelOptions} onChange={onChange} />);
+      // `foo]~opt` would close the selector early and leave slashdo reading the
+      // rest as a suffix; the server drops such an id, so accepting it here would
+      // show a pin that never persists.
+      fireEvent.change(screen.getByLabelText('Model for Codex'), { target: { value: 'foo]~opt' } });
+      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewerModels: { codex: 'foo~opt' } }));
+    });
+
+    it('keeps a space in a typed id (slashdo selectors are free-form)', () => {
+      const onChange = vi.fn();
+      render(<ReviewerPicker reviewers={['claude']} modelOptions={modelOptions} onChange={onChange} />);
+      fireEvent.change(screen.getByLabelText('Model for Claude'), { target: { value: 'Some Model (High)' } });
+      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewerModels: { claude: 'Some Model (High)' } }));
+    });
   });
 });

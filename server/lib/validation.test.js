@@ -1237,6 +1237,23 @@ describe('validation.js', () => {
       expect(normalizeReviewerModels({ codex: id })).toEqual({ codex: id });
     });
 
+    it('drops an id carrying a character that is structural in the emitted token', () => {
+      // `]` would close the `[<model>]` selector early and leave slashdo parsing
+      // the remainder as a suffix; `,` would split one entry into two. There is no
+      // escape for either inside the selector, so the pin is dropped (the reviewer
+      // falls back to its own default) rather than emitted corrupt.
+      expect(normalizeReviewerModels({ codex: 'foo]~opt' })).toEqual({});
+      expect(normalizeReviewerModels({ codex: 'a[b' })).toEqual({});
+      expect(normalizeReviewerModels({ codex: 'a,b' })).toEqual({});
+      expect(normalizeReviewerModels({ codex: 'a\nb' })).toEqual({});
+    });
+
+    it('still accepts a space — slashdo model selectors are free-form', () => {
+      // e.g. `agy[Gemini 3.5 Flash (High)]` is a valid slashdo entry.
+      expect(normalizeReviewerModels({ claude: 'Some Model (High)' }))
+        .toEqual({ claude: 'Some Model (High)' });
+    });
+
     it('returns undefined for non-object input (an omitted field is not an empty override)', () => {
       expect(normalizeReviewerModels(undefined)).toBeUndefined();
       expect(normalizeReviewerModels(null)).toBeUndefined();
