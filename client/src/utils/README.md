@@ -39,7 +39,7 @@ grep -i "what you want to do" client/src/utils/README.md
 | `urlNormalize` | `isUrl` detection, `normalizeUrl` (optional git/`requireDot` modes), and `isHttpUrl` (explicit http(s) only — safe-href check). |
 | `platform` | `isMac` detection and `modKey` (⌘/Ctrl) for keyboard-shortcut display. |
 | `navWorkingSet` | Recent/pinned nav persistence (`recordVisit`, `togglePin`, `isPinned`) plus `resolveRecentNavEntries` for mapping stored deep links back to their longest matching nav-manifest entry. |
-| `providers` | AI-provider type predicates and helpers (`isCliProvider`, `isApiProvider`, `isCodexProvider`, `filterSelectableModels`, `getProviderTimeout`, configured-default sentinels, and the claude/codex thinking-effort levels — `effortLevelsForProvider`, mirror of server `providerModels.js`). |
+| `providers` | AI-provider type predicates and helpers (`isCliProvider`, `isApiProvider`, `isCodexProvider`, `isAntigravityProvider`, `filterSelectableModels`, `configuredDefaultIn` — the sentinel a provider's catalog carries, so a picker can render an option matching a sentinel-valued tier instead of a blank select — `getProviderTimeout`, configured-default sentinels, and the claude/codex/agy thinking-effort levels — `effortLevelsForProvider`, mirror of server `providerModels.js`). |
 | `layeredIntelligenceReasons` | Canonical gloss for the Layered Intelligence loop's run-outcome reason tokens, shared by the on-demand toast and the durable "Last run" line (`formatLiReason`, `liReasonTone`, `LI_NEUTRAL_REASONS`). |
 
 ## Module loading / resilience

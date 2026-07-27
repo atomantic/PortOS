@@ -40,6 +40,7 @@ import {
   CODEX_EFFORT_LEVELS,
   ANTIGRAVITY_EFFORT_LEVELS,
   isConfiguredDefaultModel,
+  configuredDefaultIn,
   isLocalEndpoint,
   enabledApiProviderFilter,
   providerTypeClass,
@@ -68,6 +69,36 @@ describe('effortLevelsForProvider (server mirror)', () => {
   it.each(CASES)('%s', (_label, provider, expected) => {
     expect(effortLevelsForProvider(provider)).toEqual(expected);
     expect(serverEffortLevelsForProvider(provider)).toEqual(expected);
+  });
+});
+
+// Regression guard for the provider-edit form: an Antigravity provider publishes
+// a real `agy models` catalog while its defaultModel/tiers stay on the sentinel.
+// filterGenerationModels strips the sentinel, so the edit form needs this to
+// render an explicit option for it — otherwise those four selects hold a value
+// matching no option and render blank, reading as "no model configured".
+describe('configuredDefaultIn', () => {
+  it('finds the sentinel in a mixed catalog', () => {
+    expect(configuredDefaultIn([ANTIGRAVITY_CONFIGURED_DEFAULT, 'gemini-3.1-pro-high']))
+      .toBe(ANTIGRAVITY_CONFIGURED_DEFAULT);
+    expect(configuredDefaultIn(['gpt-5.6-terra', CODEX_CONFIGURED_DEFAULT]))
+      .toBe(CODEX_CONFIGURED_DEFAULT);
+  });
+
+  it('returns null when the list carries no sentinel', () => {
+    expect(configuredDefaultIn(['gpt-5.6-terra', 'gpt-5.6-sol'])).toBeNull();
+    expect(configuredDefaultIn([])).toBeNull();
+    expect(configuredDefaultIn(null)).toBeNull();
+    expect(configuredDefaultIn(undefined)).toBeNull();
+  });
+
+  // The sentinel it finds must be exactly what filterGenerationModels removed,
+  // or the option's value still won't match the select's value.
+  it('finds precisely the value the generation filter drops', () => {
+    const models = [ANTIGRAVITY_CONFIGURED_DEFAULT, 'gemini-3.1-pro-high', 'claude-sonnet-4-6'];
+    const sentinel = configuredDefaultIn(models);
+    expect(filterGenerationModels(models)).not.toContain(sentinel);
+    expect([...filterGenerationModels(models), sentinel].sort()).toEqual([...models].sort());
   });
 });
 

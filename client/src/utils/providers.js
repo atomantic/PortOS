@@ -20,6 +20,23 @@ const CONFIGURED_DEFAULT_SENTINELS = new Set([
 /** True for any provider "use CLI's own default" sentinel. Mirror of server `isConfiguredDefaultModel`. */
 export const isConfiguredDefaultModel = (model) => CONFIGURED_DEFAULT_SENTINELS.has(model);
 
+/**
+ * The configured-default sentinel carried in a provider's model list, or null.
+ *
+ * `filterSelectableModels` strips sentinels from every picker, which is right
+ * for a *task's* model choice ("no override" is the empty option there). But a
+ * provider whose `defaultModel`/`lightModel`/… IS the sentinel while its
+ * `models` also holds real ids (Antigravity: `agy` has a real catalog AND its
+ * own configured default) would otherwise drive a `<select>` whose value
+ * matches no `<option>` — the field renders blank and reads as "unset" when the
+ * CLI's own default is in fact what's configured. The provider-edit form uses
+ * this to render an explicit option for it.
+ * @param {string[]|null|undefined} models
+ * @returns {string|null}
+ */
+export const configuredDefaultIn = (models) =>
+  (models || []).find(isConfiguredDefaultModel) || null;
+
 export const DEFAULT_LARGE_CONTEXT_WINDOW = 128_000;
 export const CODEX_CONTEXT_WINDOW = 1_000_000;
 export const GEMINI_CONTEXT_WINDOW = 1_048_576;

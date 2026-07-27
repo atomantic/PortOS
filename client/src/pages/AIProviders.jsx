@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isOllamaBackedProvider, isAntigravityProvider, isGrokBuildCli, isLocalEndpoint, effectiveModelContextWindow } from '../utils/providers';
+import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, configuredDefaultIn, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isOllamaBackedProvider, isAntigravityProvider, isGrokBuildCli, isLocalEndpoint, effectiveModelContextWindow } from '../utils/providers';
 import useLocalModels from '../hooks/useLocalModels';
 import EmptyState from '../components/EmptyState';
 import {
@@ -764,7 +764,28 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
   // Generation pickers (default + light/medium/heavy tiers) — drop embedding-only
   // models (and internal sentinels) so an embedding can't be chosen as a model
   // that runs prompts, consistent with the fallback picker below.
-  const availableModels = filterGenerationModels(mergeModelLists(formData.models, liveModelsFor(formData)));
+  const mergedModels = mergeModelLists(formData.models, liveModelsFor(formData));
+  const availableModels = filterGenerationModels(mergedModels);
+  // A provider can pin its tiers to the "use the CLI's own default" sentinel
+  // while still publishing a real model catalog (Antigravity: `agy models`
+  // lists real ids, but PortOS leaves the tiers on agy's own default). The
+  // sentinel is filtered out of `availableModels`, so without an explicit
+  // option for it the four selects below would hold a value matching no option
+  // and render blank — reading as "no model configured" when one is.
+  const configuredDefault = configuredDefaultIn(mergedModels);
+  // Shared option list for the Default Model + Light/Medium/Heavy tier selects,
+  // so the sentinel option can't be added to some and missed on others.
+  const modelSelectOptions = (
+    <>
+      <option value="">None</option>
+      {configuredDefault && (
+        <option value={configuredDefault}>Use the CLI&apos;s configured default</option>
+      )}
+      {availableModels.map(model => (
+        <option key={model} value={model}>{modelOptionLabel(model, localModels.ctxById)}</option>
+      ))}
+    </>
+  );
 
   // Filter out current provider from fallback options (treat undefined enabled as enabled)
   const fallbackOptions = allProviders.filter(p => p.id !== provider?.id && p.enabled !== false);
@@ -1033,10 +1054,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                 onChange={(e) => setFormData(prev => ({ ...prev, defaultModel: e.target.value }))}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
               >
-                <option value="">None</option>
-                {availableModels.map(model => (
-                  <option key={model} value={model}>{modelOptionLabel(model, localModels.ctxById)}</option>
-                ))}
+                {modelSelectOptions}
               </select>
             ) : (
               <input
@@ -1068,10 +1086,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                     onChange={(e) => setFormData(prev => ({ ...prev, lightModel: e.target.value }))}
                     className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
                   >
-                    <option value="">None</option>
-                    {availableModels.map(model => (
-                      <option key={model} value={model}>{modelOptionLabel(model, localModels.ctxById)}</option>
-                    ))}
+                    {modelSelectOptions}
                   </select>
                 ) : (
                   <input
@@ -1093,10 +1108,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                     onChange={(e) => setFormData(prev => ({ ...prev, mediumModel: e.target.value }))}
                     className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
                   >
-                    <option value="">None</option>
-                    {availableModels.map(model => (
-                      <option key={model} value={model}>{modelOptionLabel(model, localModels.ctxById)}</option>
-                    ))}
+                    {modelSelectOptions}
                   </select>
                 ) : (
                   <input
@@ -1118,10 +1130,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                     onChange={(e) => setFormData(prev => ({ ...prev, heavyModel: e.target.value }))}
                     className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
                   >
-                    <option value="">None</option>
-                    {availableModels.map(model => (
-                      <option key={model} value={model}>{modelOptionLabel(model, localModels.ctxById)}</option>
-                    ))}
+                    {modelSelectOptions}
                   </select>
                 ) : (
                   <input
