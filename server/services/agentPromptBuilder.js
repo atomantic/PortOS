@@ -333,12 +333,13 @@ export function reconcileSplitContext(task) {
  * so what we prune for is exactly what the rest of the prompt resolves — legacy
  * single-`reviewer` tasks and defaults-inherited `optionalReviewers` included.
  *
- * The one case that does NOT authorize pruning is a resolved lone `copilot` with
- * no usernames and no task-level pin: `pickCodeReviewDefaults` and
- * `normalizeReviewers` both fall back to `['copilot']`, so that value can't be
- * told apart from an unconfigured install — and pinning `--review-with copilot`
- * where Copilot review isn't enabled is the #2507 stall. Same suppression
- * `buildReviewWithArgs` already applies to the lone default.
+ * The one case that does NOT authorize pruning is a resolved lone `copilot` that
+ * nothing named explicitly (no task pin, no username reviewers, not marked
+ * optional): `pickCodeReviewDefaults` and `normalizeReviewers` both fall back to
+ * `['copilot']`, so that value can't be told apart from an unconfigured install —
+ * and pinning `--review-with copilot` where Copilot review isn't enabled is the
+ * #2507 stall. This mirrors `buildReviewWithArgs`'s lone-default suppression,
+ * including its exemption for an explicitly-optional copilot.
  *
  * Applied to the description (on a COPY — the stored task is untouched) rather
  * than emitted as its own template slot, because the briefing template renders
@@ -375,15 +376,23 @@ async function applySlashdoInvocation(task, {
   // A resolved lone `copilot` with no usernames is ambiguous: it's what an
   // unconfigured install produces (`pickCodeReviewDefaults` and
   // `normalizeReviewers` both fall back to `['copilot']`), so it can't be told
-  // apart from a real choice UNLESS the task itself named it. Absent a task-level
-  // pin, treat it as unconfigured and prune nothing — pinning `--review-with
-  // copilot` where Copilot review isn't enabled is the #2507 stall.
+  // apart from a real choice UNLESS something names it explicitly. Absent that,
+  // treat it as unconfigured and prune nothing — pinning `--review-with copilot`
+  // where Copilot review isn't enabled is the #2507 stall.
+  //
+  // Marking copilot OPTIONAL is such an explicit naming: nothing defaults to
+  // `~opt`, so it's a deliberate "review but don't gate the merge" choice, and
+  // dropping it would silently turn a non-blocking review into a blocking one.
+  // `buildReviewWithArgs` makes the same exemption for its lone-default
+  // suppression — keep the two in step.
   const taskPinnedReviewer = (Array.isArray(task.metadata?.reviewers) && task.metadata.reviewers.length > 0)
     || (typeof task.metadata?.reviewer === 'string' && !!task.metadata.reviewer);
+  const optionalDefaultReviewer = resolvedOptional.some(t => t.toLowerCase() === DEFAULT_REVIEWER);
   const isBareDefault = resolvedReviewers.length === 1
     && resolvedReviewers[0] === DEFAULT_REVIEWER
     && !resolvedUsernames.length
-    && !taskPinnedReviewer;
+    && !taskPinnedReviewer
+    && !optionalDefaultReviewer;
   const skipIncludes = isBareDefault
     ? []
     : unreachableReviewerIncludes({ reviewers: resolvedReviewers, usernames: resolvedUsernames });

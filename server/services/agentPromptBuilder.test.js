@@ -1807,6 +1807,22 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
       expect(prompt).toContain('--review-with codex~opt');
     });
 
+    it('treats an explicitly-OPTIONAL lone copilot as configured and keeps its ~opt', async () => {
+      // Nothing defaults to `~opt`, so marking copilot optional is a deliberate
+      // "review but don't gate the merge" choice. Suppressing the pin here would
+      // let the run fall back to slashdo's saved BLOCKING copilot default —
+      // silently tightening the merge gate. buildReviewWithArgs makes the same
+      // exemption to its lone-default suppression.
+      vi.mocked(getCodeReviewDefaults).mockResolvedValue({
+        reviewers: ['copilot'], optionalReviewers: ['copilot'],
+      });
+      const prompt = await buildAgentPrompt(
+        slashdoTask(), {}, '/r', null, isTruthyMeta,
+        { providerType: 'cli', providerId: 'codex' });
+      expect(prompt).toContain('--review-with copilot~opt');
+      expect(skipArg()).not.toContain('copilot-review-loop');
+    });
+
     it('prunes NOTHING when the defaults read fails', async () => {
       vi.mocked(getCodeReviewDefaults).mockRejectedValue(new Error('unreadable'));
       await buildAgentPrompt(
