@@ -22,13 +22,35 @@ export const INSTRUMENTS = [
   { id: 'ukulele', label: 'Ukulele' },
   { id: 'bass', label: 'Bass' },
   { id: 'voice', label: 'Voice' },
+  { id: 'drums', label: 'Drums' },
   { id: 'other', label: 'Other' },
 ];
 
 // Display label for a stored instrument id (unknown ids render as-is).
 export const instrumentLabel = (id) => INSTRUMENTS.find((i) => i.id === id)?.label || id;
 
-export const SONG_FORMATS = ['chordpro', 'tab', 'plain'];
+export const SONG_FORMATS = ['chordpro', 'tab', 'plain', 'drum'];
+
+// The content format whose renderer is <DrumSheetView> (kit grid) rather than
+// <TabSheetView>. Named so the viewer/import branches read intent, not a string.
+export const DRUM_FORMAT = 'drum';
+// The instrument that defaults a new song to the drum format.
+export const DRUM_INSTRUMENT = 'drums';
+
+// Options for a `<select>` over a known list plus whatever value is actually
+// stored. A record synced from a NEWER peer (or hand-edited) can carry an
+// instrument/format this client has never heard of — dropping it from the option
+// list would make the select resolve to its first option and silently rewrite
+// the record on the next save. So append the stored value as its own option and
+// let the save round-trip it unchanged.
+//
+// `options` may be `[{ id, label }]` (INSTRUMENTS) or `['tab', …]` (SONG_FORMATS);
+// both normalize to `{ id, label }`.
+export const withStoredOption = (options, stored) => {
+  const normalized = options.map((o) => (typeof o === 'string' ? { id: o, label: o } : o));
+  if (!stored || normalized.some((o) => o.id === stored)) return normalized;
+  return [...normalized, { id: stored, label: stored }];
+};
 
 // Shared form/button recipes for the SongBook pages (index, import, viewer) —
 // kept here so the three pages don't drift on styling.

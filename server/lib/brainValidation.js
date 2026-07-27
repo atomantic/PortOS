@@ -567,11 +567,15 @@ export const brainDigestRunSchema = z.object({
 // Learning stage for a repertoire song
 export const songStageEnum = z.enum(['new', 'learning', 'learned', 'memorized']);
 
-// Instrument the sheet is written for
-export const songInstrumentEnum = z.enum(['guitar', 'piano', 'ukulele', 'bass', 'voice', 'other']);
+// Instrument the sheet is written for. ADDITIVE only — brain records sync raw
+// (LWW, no Zod re-validation on receive), so an older peer already stores an
+// unknown instrument fine; removing a value would 400 an edit of a synced song.
+export const songInstrumentEnum = z.enum(['guitar', 'piano', 'ukulele', 'bass', 'voice', 'drums', 'other']);
 
-// Content notation format (drives the client-side parser/renderer)
-export const songContentFormatEnum = z.enum(['chordpro', 'tab', 'plain']);
+// Content notation format (drives the client-side parser/renderer). `drum` is
+// the kit-grid DSL parsed by client/src/lib/drumNotation.js and drawn by
+// <DrumSheetView> — everything else goes through tabNotation/<TabSheetView>.
+export const songContentFormatEnum = z.enum(['chordpro', 'tab', 'plain', 'drum']);
 
 // Nested content object — named so the update schema below can rebuild it
 // defaults-free (partialWithoutDefaults only strips TOP-LEVEL field defaults).

@@ -71,6 +71,30 @@
       "createdAt": "2026-07-15T00:00:00.000Z",
       "updatedAt": "2026-07-15T00:00:00.000Z",
       "originInstanceId": "seed"
+    },
+    "song-seed-example-rock-beat": {
+      "title": "Example Rock Beat",
+      "artist": "The Placeholders",
+      "instrument": "drums",
+      "stage": "new",
+      "tags": [
+        "drums",
+        "groove",
+        "example"
+      ],
+      "key": "",
+      "capo": 0,
+      "tuning": "",
+      "sourceUrl": "",
+      "content": {
+        "format": "drum",
+        "text": "time: 4/4\ntempo: 96\nsubdivision: 2\n\n# Basic rock beat x2\nHH: x x x x x x x x\nS:  - - - - o - - -\nK:  o - - - - - o -\n\n# Open hats and a ghost\nHH: x - o - x - o -\nS:  - - - - o - - g\nK:  o - - o - - o -\n\n# Fill down the toms\nS:  x - x - X - - -\nT1: - - - - - x - -\nT2: - - - - - - x -\nFT: - - - - - - - x\nK:  o - - - o - - -\n\n# Crash and out\nCR: X - - - - - - -\nK:  o - - - - - - -"
+      },
+      "notes": "Worked example of the PortOS drum-grid format: two bars of a basic rock beat, a bar with open hi-hats and a ghost snare, a fill down the toms, and a crash. Practice it slower with the BPM control, then loop the fill bar.",
+      "attachments": [],
+      "createdAt": "2026-07-26T00:00:00.000Z",
+      "updatedAt": "2026-07-26T00:00:00.000Z",
+      "originInstanceId": "seed"
     }
   }
 }

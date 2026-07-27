@@ -6,7 +6,8 @@
  * overflow-y-auto body the page owns (the autoscroll container).
  *
  * Two URL-param-driven modes (linkable-routes convention):
- * - PLAY (default): the rendered sheet (TabSheetView) with an
+ * - PLAY (default): the rendered sheet (TabSheetView — or DrumSheetView plus a
+ *   drum transport bar when the content format is `drum`, #3115) with an
  *   Ultimate-Guitar-style controls bar — autoscroll play/pause + speed,
  *   transpose ± (render-time transposeText, never mutates stored text; offset
  *   persisted per song via safeStorage), font size ±, an instrument-view
@@ -20,7 +21,10 @@
  *   defaults, so `{ content: { text } }` alone would reset format to 'tab'.
  *
  * Keyboard (play mode): space play/pause, +/- speed, [ ] transpose, 0 top.
- * A screen wake lock holds while autoscroll plays (useWakeLock).
+ * For a drum chart the same keys drive the kit transport instead: space
+ * play/stop, +/- BPM ±1, [ ] set the loop ends at the current bar.
+ * A screen wake lock holds while autoscroll plays — or while the kit plays
+ * (useWakeLock).
  */
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
@@ -36,8 +40,11 @@ import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import AutoSizeTextarea from '../components/ui/AutoSizeTextarea';
 import TabPills from '../components/ui/TabPills';
 import TabSheetView from '../components/songbook/TabSheetView';
+import DrumSheetView from '../components/songbook/DrumSheetView';
+import DrumTransportBar from '../components/songbook/DrumTransportBar';
 import {
-  SONG_STAGES, SONG_STAGE_COLORS, INSTRUMENTS, SONG_FORMATS,
+  SONG_STAGES, SONG_STAGE_COLORS, INSTRUMENTS, SONG_FORMATS, DRUM_FORMAT,
+  DRUM_INSTRUMENT, withStoredOption,
   inputClass, labelClass, btnClass, instrumentLabel,
 } from '../components/songbook/constants';
 import { useAsyncAction } from '../hooks/useAsyncAction';
@@ -45,6 +52,7 @@ import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import useDrawerTab from '../hooks/useDrawerTab';
 import useKeyboardShortcuts from '../hooks/useKeyboardShortcuts';
 import useAutoscroll from '../hooks/useAutoscroll';
+import useDrumPlayer from '../hooks/useDrumPlayer';
 import useWakeLock from '../hooks/useWakeLock';
 import { transposeText } from '../lib/tabNotation.js';
 import { VOICING_INSTRUMENTS, toVoicingInstrument } from '../lib/chordShapes.js';
@@ -85,6 +93,13 @@ const parseTags = (raw) => raw.split(',').map((t) => t.trim()).filter(Boolean);
 
 // Instrument-view toggle tabs (chord-diagram rendering — never mutates the record).
 const VIEW_TABS = VOICING_INSTRUMENTS.map((viewId) => ({ id: viewId, label: instrumentLabel(viewId) }));
+
+// Worked example in the editor's placeholder — the grid DSL is easier to copy
+// than to describe. Invented groove (privacy convention).
+const DRUM_PLACEHOLDER = [
+  'time: 4/4', 'tempo: 96', 'subdivision: 4', '',
+  '# Bar 1 — basic rock beat', 'HH: x x x x x x x x', 'S:  - - - - o - - -', 'K:  o - - - - - o -',
+].join('\n');
 
 // 44px minimum touch targets on the controls bar (mobile-friendly).
 const ctrlBtnClass = 'flex items-center justify-center min-w-[44px] min-h-[44px] rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50';
@@ -187,14 +202,65 @@ export default function SongBookViewer() {
   // presence unknown (rendered as plain links; only an explicit present:false
   // gets the "not on this machine" pill), never a false "No attachments".
   const shownAttachments = attachments === 'failed' ? (song?.attachments || []) : (attachments || []);
-  useWakeLock(playing);
+
+  // Keyed on the content STRING (not the song object) so unrelated record
+  // updates (stage flips, attachment meta) don't re-run the transpose pass.
+  const contentText = song?.content?.text || '';
+  // A drum chart renders on the kit grid and plays back through the drum
+  // transport; transpose and chord voicings are meaningless for it.
+  const isDrum = (song?.content?.format || 'tab') === DRUM_FORMAT;
+  const renderedText = useMemo(
+    () => (transpose && !isDrum ? transposeText(contentText, transpose) : contentText),
+    [contentText, transpose, isDrum],
+  );
+
+  // Edit-form selects carry whatever the DRAFT holds, even when this client's
+  // enum doesn't list it (a song synced from a newer peer) — so a save preserves
+  // the stored value instead of coercing it to the first option.
+  const draftIsDrum = draft?.format === DRUM_FORMAT;
+  const instrumentOptions = useMemo(() => withStoredOption(INSTRUMENTS, draft?.instrument), [draft?.instrument]);
+  const formatOptions = useMemo(() => withStoredOption(SONG_FORMATS, draft?.format), [draft?.format]);
+
+  // Picking the Drums instrument defaults the format to the kit grid (only while
+  // the sheet is still empty — never re-formatting text the user already wrote).
+  const onInstrumentChange = useCallback((instrument) => {
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, instrument };
+      if (instrument === DRUM_INSTRUMENT && !prev.text.trim()) next.format = DRUM_FORMAT;
+      return next;
+    });
+  }, []);
+
+  // --- Drum play-along (kit synth, practice tempo, loop, playhead).
+  // The hook is called unconditionally (hooks rule); it parses to zero bars for
+  // a non-drum song, so it stands up no player and touches no audio.
+  const drum = useDrumPlayer(isDrum ? contentText : '', { songId: id });
+
+  // The wake lock holds while EITHER hands-free surface is running.
+  useWakeLock(playing || drum.playing);
+
+  // Leaving play mode (Edit) or unmounting must not leave the kit sounding — the
+  // hook tears the player down on unmount, but a mode flip keeps it mounted.
+  useEffect(() => { if (editing) drum.stop(); }, [editing, drum.stop]);
 
   const scrollToTop = useCallback(() => {
     stop();
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
   }, [stop]);
 
-  useKeyboardShortcuts(!editing && !!song, {
+  // Play-mode shortcuts. A drum chart rebinds them onto the kit transport (space
+  // play/stop, +/- BPM, [ ] loop ends) since transpose/scroll-speed don't apply.
+  const drumShortcuts = {
+    ' ': drum.toggle,
+    '+': () => drum.setBpm(drum.bpm + 1),
+    '=': () => drum.setBpm(drum.bpm + 1),
+    '-': () => drum.setBpm(drum.bpm - 1),
+    '[': () => { drum.setLoopEnabled(true); drum.setLoopRange(drum.currentBar, drum.loopTo); },
+    ']': () => { drum.setLoopEnabled(true); drum.setLoopRange(drum.loopFrom, drum.currentBar); },
+    '0': scrollToTop,
+  };
+  const sheetShortcuts = {
     ' ': toggle,
     '+': () => setPxPerSec((v) => Math.min(SPEED_MAX, v + 5)),
     '=': () => setPxPerSec((v) => Math.min(SPEED_MAX, v + 5)),
@@ -202,15 +268,8 @@ export default function SongBookViewer() {
     '[': () => setTranspose(transpose - 1),
     ']': () => setTranspose(transpose + 1),
     '0': scrollToTop,
-  });
-
-  // Keyed on the content STRING (not the song object) so unrelated record
-  // updates (stage flips, attachment meta) don't re-run the transpose pass.
-  const contentText = song?.content?.text || '';
-  const renderedText = useMemo(
-    () => (transpose ? transposeText(contentText, transpose) : contentText),
-    [contentText, transpose],
-  );
+  };
+  useKeyboardShortcuts(!editing && !!song, isDrum ? drumShortcuts : sheetShortcuts);
 
   // --- Mutations
   const onStageChange = useCallback((stage) => {
@@ -406,8 +465,11 @@ export default function SongBookViewer() {
             </div>
             <div>
               <label htmlFor="song-edit-instrument" className={labelClass}>Instrument</label>
-              <select id="song-edit-instrument" value={draft.instrument} onChange={(e) => setDraft({ ...draft, instrument: e.target.value })} className={inputClass}>
-                {INSTRUMENTS.map((i) => <option key={i.id} value={i.id}>{i.label}</option>)}
+              {/* withStoredOption keeps a value this client doesn't know (a song
+                  synced from a newer peer) in the list, so saving round-trips it
+                  instead of silently coercing to the first option. */}
+              <select id="song-edit-instrument" value={draft.instrument} onChange={(e) => onInstrumentChange(e.target.value)} className={inputClass}>
+                {instrumentOptions.map((i) => <option key={i.id} value={i.id}>{i.label}</option>)}
               </select>
             </div>
             <div>
@@ -460,7 +522,7 @@ export default function SongBookViewer() {
                     onChange={(e) => setDraft({ ...draft, format: e.target.value })}
                     className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white focus:border-port-accent focus:outline-none"
                   >
-                    {SONG_FORMATS.map((f) => <option key={f} value={f}>{f}</option>)}
+                    {formatOptions.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
                   </select>
                 </div>
               </div>
@@ -468,7 +530,7 @@ export default function SongBookViewer() {
                 id="song-edit-text"
                 value={draft.text}
                 onChange={(e) => setDraft({ ...draft, text: e.target.value })}
-                placeholder={'[Verse 1]\nC        G\nExample lyrics here…'}
+                placeholder={draftIsDrum ? DRUM_PLACEHOLDER : '[Verse 1]\nC        G\nExample lyrics here…'}
                 spellCheck={false}
                 className={`${inputClass} font-mono min-h-[280px] whitespace-pre`}
               />
@@ -476,12 +538,16 @@ export default function SongBookViewer() {
             <div>
               <div className="text-xs text-gray-400 mb-1">Preview</div>
               <div className="bg-port-card border border-port-border rounded-lg p-3 overflow-x-auto">
-                <TabSheetView
-                  text={draft.text}
-                  format={draft.format}
-                  fontSizeRem={fontSize}
-                  instrumentView={toVoicingInstrument(draft.instrument)}
-                />
+                {draftIsDrum ? (
+                  <DrumSheetView text={draft.text} fontSizeRem={fontSize} />
+                ) : (
+                  <TabSheetView
+                    text={draft.text}
+                    format={draft.format}
+                    fontSizeRem={fontSize}
+                    instrumentView={toVoicingInstrument(draft.instrument)}
+                  />
+                )}
               </div>
             </div>
           </div>
@@ -489,6 +555,31 @@ export default function SongBookViewer() {
       ) : (
         /* ============================== PLAY MODE ============================== */
         <>
+          {/* Drum play-along transport — its own bar above the shared controls,
+              so the kit's tempo/loop/click sit together rather than interleaved
+              with the sheet controls. */}
+          {isDrum && (
+            <DrumTransportBar
+              playing={drum.playing}
+              onToggle={drum.toggle}
+              hasMusic={drum.hasMusic}
+              bpm={drum.bpm}
+              onBpmChange={drum.setBpm}
+              onPercent={drum.setBpmPercent}
+              writtenTempo={drum.writtenTempo}
+              countInBars={drum.countInBars}
+              onCountInChange={drum.setCountInBars}
+              loopEnabled={drum.loopEnabled}
+              onLoopToggle={drum.setLoopEnabled}
+              loopFrom={drum.loopFrom}
+              loopTo={drum.loopTo}
+              onLoopRangeChange={drum.setLoopRange}
+              barCount={drum.barCount}
+              clickEnabled={drum.clickEnabled}
+              onClickToggle={drum.setClickEnabled}
+            />
+          )}
+
           <div className="shrink-0 border-b border-port-border bg-port-card/60 px-3 py-2 flex flex-wrap items-center gap-x-4 gap-y-2">
             {/* Autoscroll */}
             <div className="flex items-center gap-2">
@@ -514,18 +605,20 @@ export default function SongBookViewer() {
               />
             </div>
 
-            {/* Transpose */}
-            <div className="flex items-center gap-1" role="group" aria-label="Transpose">
-              <button type="button" onClick={() => setTranspose(transpose - 1)} className={ctrlBtnClass} aria-label="Transpose down" title="Transpose down ([)">
-                <Minus size={16} />
-              </button>
-              <span className="min-w-[3.5rem] text-center text-sm text-gray-300 font-mono" title="Transpose (semitones)">
-                {transpose > 0 ? `+${transpose}` : transpose}
-              </span>
-              <button type="button" onClick={() => setTranspose(transpose + 1)} className={ctrlBtnClass} aria-label="Transpose up" title="Transpose up (])">
-                <Plus size={16} />
-              </button>
-            </div>
+            {/* Transpose — meaningless on a kit grid, so hidden for drum charts */}
+            {!isDrum && (
+              <div className="flex items-center gap-1" role="group" aria-label="Transpose">
+                <button type="button" onClick={() => setTranspose(transpose - 1)} className={ctrlBtnClass} aria-label="Transpose down" title="Transpose down ([)">
+                  <Minus size={16} />
+                </button>
+                <span className="min-w-[3.5rem] text-center text-sm text-gray-300 font-mono" title="Transpose (semitones)">
+                  {transpose > 0 ? `+${transpose}` : transpose}
+                </span>
+                <button type="button" onClick={() => setTranspose(transpose + 1)} className={ctrlBtnClass} aria-label="Transpose up" title="Transpose up (])">
+                  <Plus size={16} />
+                </button>
+              </div>
+            )}
 
             {/* Font size */}
             <div className="flex items-center gap-1" role="group" aria-label="Font size">
@@ -537,17 +630,20 @@ export default function SongBookViewer() {
               </button>
             </div>
 
-            {/* Instrument view (chord diagrams) — render-only, URL-backed */}
-            <TabPills
-              variant="pills"
-              size="sm"
-              tabs={VIEW_TABS}
-              activeTab={instrumentView}
-              onChange={setInstrumentView}
-              ariaLabel="Instrument view"
-              mobileDropdown
-              mobileSelectId="song-instrument-view"
-            />
+            {/* Instrument view (chord diagrams) — render-only, URL-backed. A drum
+                chart has no chords to voice, so the picker hides. */}
+            {!isDrum && (
+              <TabPills
+                variant="pills"
+                size="sm"
+                tabs={VIEW_TABS}
+                activeTab={instrumentView}
+                onChange={setInstrumentView}
+                ariaLabel="Instrument view"
+                mobileDropdown
+                mobileSelectId="song-instrument-view"
+              />
+            )}
 
             {/* Stage */}
             <div>
@@ -582,7 +678,14 @@ export default function SongBookViewer() {
           </div>
 
           <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
-            {song.content?.text ? (
+            {song.content?.text && isDrum ? (
+              <DrumSheetView
+                text={contentText}
+                fontSizeRem={fontSize}
+                activeStep={drum.activeStep}
+                className="max-w-4xl"
+              />
+            ) : song.content?.text ? (
               <TabSheetView
                 text={renderedText}
                 format={song?.content?.format || 'tab'}

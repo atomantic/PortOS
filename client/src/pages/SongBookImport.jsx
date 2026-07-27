@@ -22,13 +22,16 @@ import toast from '../components/ui/Toast';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
 import TabSheetView from '../components/songbook/TabSheetView';
+import DrumSheetView from '../components/songbook/DrumSheetView';
 import {
-  SONG_STAGES, INSTRUMENTS, inputClass, labelClass, btnClass,
+  SONG_STAGES, INSTRUMENTS, DRUM_FORMAT, DRUM_INSTRUMENT,
+  inputClass, labelClass, btnClass,
 } from '../components/songbook/constants';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import useDrawerTab from '../hooks/useDrawerTab';
 import { createSong, importSongFromUrl } from '../services/api';
 import { normalizePastedTab, detectFormat, parseTabSheet } from '../lib/tabNotation.js';
+import { isDrumNotation } from '../lib/drumNotation.js';
 import { readClipboard } from '../lib/clipboard.js';
 import { isUrl, normalizeUrl } from '../utils/urlNormalize';
 
@@ -139,12 +142,18 @@ export default function SongBookImport() {
   useEffect(() => {
     applyMetaDefaults(activeMetaRef.current);
   }, [tab, applyMetaDefaults]);
-  // Memoized on its real inputs so detectFormat (a full line-classifier pass)
-  // doesn't re-run on every unrelated keystroke (title/artist/tags).
-  const contentFormat = useMemo(
-    () => (tab === 'url' && fetchedFormat) || detectFormat(contentText),
-    [tab, fetchedFormat, contentText],
-  );
+  // Memoized on its real inputs so the classifier passes don't re-run on every
+  // unrelated keystroke (title/artist/tags). `isDrumNotation` runs BEFORE
+  // detectFormat: a grid row would otherwise classify as plain text (#3115). A
+  // chosen Drums instrument also implies the kit grid, so the format follows the
+  // instrument even for a chart the sniff can't recognize yet (e.g. mid-typing).
+  const contentFormat = useMemo(() => {
+    if (tab === 'url' && fetchedFormat) return fetchedFormat;
+    if (isDrumNotation(contentText)) return DRUM_FORMAT;
+    if (instrument === DRUM_INSTRUMENT) return DRUM_FORMAT;
+    return detectFormat(contentText);
+  }, [tab, fetchedFormat, contentText, instrument]);
+  const previewIsDrum = contentFormat === DRUM_FORMAT;
 
   const [save, saving] = useAsyncAction(async () => {
     const name = title.trim();
@@ -264,11 +273,15 @@ export default function SongBookImport() {
         <div className="mb-4">
           <div className="text-xs text-gray-400 mb-1">Preview</div>
           <div className="bg-port-card border border-port-border rounded-lg p-3 max-h-[50vh] overflow-y-auto overflow-x-auto">
-            <TabSheetView
-              text={contentText}
-              format={contentFormat}
-              instrumentView={toVoicingInstrument(instrument)}
-            />
+            {previewIsDrum ? (
+              <DrumSheetView text={contentText} />
+            ) : (
+              <TabSheetView
+                text={contentText}
+                format={contentFormat}
+                instrumentView={toVoicingInstrument(instrument)}
+              />
+            )}
           </div>
         </div>
       )}

@@ -110,11 +110,14 @@ describe('migration 190 — seed songbook songs', () => {
   });
 
   it('seeds the SHIPPED reference records against a real repo layout shape', async () => {
-    // Sanity-pin the shipped seed file: three instrument variants of the same
-    // public-domain song, stable ids, and a FIXED originInstanceId sentinel.
+    // Sanity-pin the seeds THIS migration ships: three instrument variants of the
+    // same public-domain song, stable ids, and a FIXED originInstanceId sentinel.
+    // Later migrations add their own seed records to the same file (e.g. 209's
+    // drum example), so this scopes to its own ids rather than the whole file —
+    // and each new seed pins its own shape in its own migration's test.
     const shipped = JSON.parse(readFileSync(new URL('../../data.reference/brain/songs.json', import.meta.url), 'utf-8'));
-    const ids = Object.keys(shipped.records);
-    expect(ids.sort()).toEqual(['song-seed-hotrs-guitar', 'song-seed-hotrs-piano', 'song-seed-hotrs-ukulele']);
+    const ids = Object.keys(shipped.records).filter((id) => id.startsWith('song-seed-hotrs-')).sort();
+    expect(ids).toEqual(['song-seed-hotrs-guitar', 'song-seed-hotrs-piano', 'song-seed-hotrs-ukulele']);
     for (const id of ids) {
       const rec = shipped.records[id];
       expect(rec.title).toBe('House of the Rising Sun');

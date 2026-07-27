@@ -21,11 +21,18 @@ export const createFakeAudio = ({ suspended = false } = {}) => {
     now: 0,
     oscillators: [],
     gains: [],
-    // Modules cache the shared AudioContext (lib/audioContext.js) across a
-    // test file, so create ONE pair per file and reset the recorders per
-    // test — a fresh pair mid-file would record into an object the cached
-    // context no longer points at.
-    reset() { this.now = 0; this.oscillators.length = 0; this.gains.length = 0; resolveResume = null; },
+    // Bandpassed noise voices (createBufferSource + createBiquadFilter) — the
+    // percussion synth in drumPlayback.js. `oscillators` records buffer sources
+    // too (they satisfy the same start/stop/onended surface the transport tracks),
+    // so a caller that only cares "how many voices sounded" reads that one list.
+    filters: [],
+    reset() {
+      this.now = 0;
+      this.oscillators.length = 0;
+      this.gains.length = 0;
+      this.filters.length = 0;
+      resolveResume = null;
+    },
     // Resolve a suspended context's pending resume() so play()'s await continues.
     flushResume() { const r = resolveResume; resolveResume = null; if (r) r(); },
   };
@@ -54,10 +61,31 @@ export const createFakeAudio = ({ suspended = false } = {}) => {
         return osc;
       },
       createGain() {
-        const gain = { gain: fakeParam(), connect: (t) => t };
+        const gain = { gain: fakeParam(), connect: (t) => t, disconnect() {} };
         audio.gains.push(gain);
         return gain;
       },
+      // --- Noise-voice nodes (percussion synth) ------------------------------
+      createBuffer(channels, length, sampleRate) {
+        const data = new Float32Array(length);
+        return { sampleRate, length, numberOfChannels: channels, getChannelData: () => data };
+      },
+      createBufferSource() {
+        const src = {
+          buffer: null, loop: false, playbackRate: { value: 1 },
+          onended: null, started: null, stopped: null, noise: true,
+          connect: (t) => t, start(t) { this.started = t; }, stop(t) { this.stopped = t; },
+        };
+        // Recorded alongside oscillators: the transport tracks both the same way.
+        audio.oscillators.push(src);
+        return src;
+      },
+      createBiquadFilter() {
+        const filter = { type: '', frequency: fakeParam(), Q: { value: 1 }, connect: (t) => t };
+        audio.filters.push(filter);
+        return filter;
+      },
+      sampleRate: 48000,
     };
   }
   return { FakeAudioContext, audio };
