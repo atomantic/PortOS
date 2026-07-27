@@ -117,6 +117,9 @@ export default function useDrumPlayer(text, { songId } = {}) {
     const player = playerRef.current;
     if (!player) return;
     if (playingRef.current) { stop(); return; }
+    // Same gate the Play button carries — an all-rest chart has nothing to sound,
+    // and the space-key binding must not route around a disabled button.
+    if (!hasMusic) return;
     setPlayingBoth(true);
     // play() resolves once playback has STARTED; an autoplay-policy failure lands
     // here — reset the button rather than lying "playing".
@@ -125,7 +128,7 @@ export default function useDrumPlayer(text, { songId } = {}) {
       setPlayingBoth(false);
       setActiveStep(null);
     });
-  }, [setPlayingBoth, stop]);
+  }, [setPlayingBoth, stop, hasMusic]);
 
   // Timing-critical edits stop playback first (see the header note); the sync
   // effect above then hands the new value to the now-idle player.

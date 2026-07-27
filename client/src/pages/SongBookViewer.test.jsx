@@ -269,11 +269,15 @@ K:  o - - - - - o -`;
       await waitFor(() => expect(screen.getByLabelText('BPM').value).toBe('20'));
     });
 
-    it('disables Play for an all-rest chart (bars parse, nothing sounds)', async () => {
+    it('disables Play for an all-rest chart, and space cannot route around it', async () => {
       api.getSong.mockResolvedValue(drumSong({ content: { format: 'drum', text: 'HH: ----\nK: ----' } }));
       renderPage();
       const play = await screen.findByLabelText('Play along');
       expect(play.disabled).toBe(true);
+      // The keyboard binding shares the button's gate — no AudioContext is
+      // touched (jsdom has none, so a start attempt would throw).
+      fireEvent.keyDown(window, { key: ' ' });
+      expect(screen.getByLabelText('Play along').disabled).toBe(true);
     });
 
     it('reveals the loop bar range only when looping is on', async () => {

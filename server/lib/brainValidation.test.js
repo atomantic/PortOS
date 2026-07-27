@@ -813,5 +813,28 @@ describe('brainValidation.js', () => {
       expect(result.data.instrument).toBe('guitar');
       expect(result.data.content).toEqual({ format: 'tab', text: '' });
     });
+
+    // Brain songs sync raw between installs on independent upgrade schedules
+    // (LWW, no Zod on receive), so a newer peer's instrument/format can already be
+    // sitting in a local record. A write that rejected it would make that song
+    // permanently uneditable — every save 400ing on a field the user never
+    // touched — so the WRITE boundary is deliberately wider than the enum.
+    it('accepts (round-trips) an unknown instrument/format from a newer peer', () => {
+      const result = songInputSchema.safeParse({
+        title: 'Synced Song',
+        instrument: 'hurdy-gurdy',
+        content: { format: 'futureformat', text: 'x' },
+      });
+      expect(result.success).toBe(true);
+      expect(result.data.instrument).toBe('hurdy-gurdy');
+      expect(result.data.content.format).toBe('futureformat');
+    });
+
+    it('keeps the forward-compat slot a SLUG, not free text', () => {
+      for (const bad of ['Has Spaces', 'UPPER', 'x'.repeat(33), '', '-leading', 'sym!bol']) {
+        const result = songInputSchema.safeParse({ title: 'T', instrument: bad });
+        expect(result.success, `instrument "${bad}"`).toBe(false);
+      }
+    });
   });
 });

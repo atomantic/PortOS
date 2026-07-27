@@ -44,6 +44,12 @@ export const DRUM_INSTRUMENT = 'drums';
 // the record on the next save. So append the stored value as its own option and
 // let the save round-trip it unchanged.
 //
+// The server half of this contract is in `server/lib/brainValidation.js`: the
+// write schemas accept the enum OR any short slug, precisely so the value this
+// preserves can actually be saved rather than 400ing on a field the user never
+// touched. Keep the two ends together — a client that preserves an unknown value
+// against a server that rejects it just makes the song uneditable.
+//
 // `options` may be `[{ id, label }]` (INSTRUMENTS) or `['tab', …]` (SONG_FORMATS);
 // both normalize to `{ id, label }`.
 export const withStoredOption = (options, stored) => {

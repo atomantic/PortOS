@@ -283,9 +283,14 @@ export const createDrumPlayer = (chart, options = {}) => {
   };
   // Length of one LOOP pass: the music only, since the count-in belongs to pass 0.
   const musicSec = () => schedule.totalSec - schedule.countInSec;
-  // A pass with no music has nothing to advance past — a looping player must not
-  // spin its rebase branch forever on one.
-  const canLoop = () => !!schedule.loop && musicSec() > 0;
+  // A loop pass must have BOTH real duration AND at least one music event to
+  // advance past. A rest-only selected bar has duration but no events, so
+  // `firstMusicIdx()` would return the exhausted end index and the rebase branch
+  // would spin forever (a wedged tab, not just silence) — that's the case this
+  // event check exists for, distinct from the duration check.
+  const canLoop = () => !!schedule.loop
+    && musicSec() > 0
+    && schedule.events.some((ev) => !ev.countIn);
 
   // A cursor walks one list (events or clicks) forward through loop passes. Each
   // walker keeps its OWN `pass` because they advance at different rates: the

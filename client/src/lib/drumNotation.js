@@ -273,11 +273,16 @@ export const parseDrumChart = (text) => {
     }
   }
 
-  // Rows the chart actually uses, in kit order (or the header's `kit:` order,
-  // filtered to what's present — an override must not invent empty rows).
+  // Rows the chart actually uses. `kit:` reorders them; it must NOT hide any —
+  // a piece the header omits is still played back, so dropping it from `pieces`
+  // would sound a snare the sheet never draws. So: the listed pieces first (in
+  // the author's order, filtered to what's present, since an override must not
+  // invent empty rows), then everything else in default kit order.
   const present = new Set(bars.flatMap((bar) => bar.rows.map((r) => r.piece)));
-  const order = header.kit || KIT_PIECES.map((p) => p.id);
-  const pieces = order.filter((id) => present.has(id));
+  const preferred = (header.kit || []).filter((id) => present.has(id));
+  const rest = KIT_PIECES.map((p) => p.id)
+    .filter((id) => present.has(id) && !preferred.includes(id));
+  const pieces = [...preferred, ...rest];
 
   return {
     time: { beats: header.beats, beatValue: header.beatValue },

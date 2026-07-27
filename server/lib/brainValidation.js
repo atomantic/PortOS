@@ -577,10 +577,29 @@ export const songInstrumentEnum = z.enum(['guitar', 'piano', 'ukulele', 'bass', 
 // <DrumSheetView> — everything else goes through tabNotation/<TabSheetView>.
 export const songContentFormatEnum = z.enum(['chordpro', 'tab', 'plain', 'drum']);
 
+// The SHAPES the write endpoints accept for those two fields — the enum above,
+// OR any other short slug. Deliberately wider than the enum, because brain songs
+// sync raw between installs on independent upgrade schedules (LWW, no Zod on
+// receive): a peer running a newer version can hand this install an instrument or
+// format it has never heard of, and that value is already sitting in the record.
+// If a write then rejected it, the user could not edit that song AT ALL — every
+// save would 400 on a field they never touched — and the client's own
+// "keep an unknown stored value in the select" behavior (see
+// `withStoredOption` in client/src/components/songbook/constants.js) would be
+// unable to round-trip what it preserved.
+//
+// The enum stays the source of truth for what the UI OFFERS and what the client
+// mirrors; this is only the acceptance boundary. The slug pattern keeps it from
+// becoming a free-text field: lowercase alphanumerics plus `-`/`_`, ≤32 chars,
+// which is what every value either side has ever used.
+const songForwardCompatSlug = z.string().trim().regex(/^[a-z0-9][a-z0-9_-]{0,31}$/);
+const songInstrumentValue = z.union([songInstrumentEnum, songForwardCompatSlug]);
+const songContentFormatValue = z.union([songContentFormatEnum, songForwardCompatSlug]);
+
 // Nested content object — named so the update schema below can rebuild it
 // defaults-free (partialWithoutDefaults only strips TOP-LEVEL field defaults).
 const songContentSchema = z.object({
-  format: songContentFormatEnum.optional().default('tab'),
+  format: songContentFormatValue.optional().default('tab'),
   text: z.string().max(200000).optional().default('')
 });
 
@@ -591,7 +610,7 @@ const songContentSchema = z.object({
 export const songInputSchema = z.object({
   title: z.string().trim().min(1).max(300),
   artist: z.string().trim().max(300).optional().default(''),
-  instrument: songInstrumentEnum.optional().default('guitar'),
+  instrument: songInstrumentValue.optional().default('guitar'),
   stage: songStageEnum.optional().default('new'),
   tags: z.array(z.string().trim().min(1).max(50)).max(50).optional().default([]),
   key: z.string().trim().max(20).optional().default(''),

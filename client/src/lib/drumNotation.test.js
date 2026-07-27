@@ -65,6 +65,21 @@ describe('parseDrumChart — headers', () => {
     expect(chart.pieces).toEqual(['K', 'S', 'HH']);
   });
 
+  it('kit: REORDERS rows, never hides one the chart plays', () => {
+    // A piece the header omits is still scheduled, so dropping it from `pieces`
+    // would sound a snare the sheet never draws. Listed pieces come first, the
+    // rest follow in default kit order.
+    const chart = parseDrumChart('kit: K, HH\n\nHH: xxxx\nS: --o-\nK: o---');
+    expect(chart.pieces).toEqual(['K', 'HH', 'S']);
+    const played = new Set(chart.bars.flatMap((b) => b.rows.map((r) => r.piece)));
+    for (const id of played) expect(chart.pieces).toContain(id);
+  });
+
+  it('never invents an empty row for a kit: piece the chart does not use', () => {
+    const chart = parseDrumChart('kit: CR, RD, K\n\nK: o---');
+    expect(chart.pieces).toEqual(['K']);
+  });
+
   it('falls back to kit order when kit: names nothing known', () => {
     const chart = parseDrumChart('kit: cowbell, vuvuzela\n\nHH: xxxx\nK: o---');
     expect(chart.pieces).toEqual(['HH', 'K']);
