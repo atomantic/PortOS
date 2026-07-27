@@ -20,12 +20,101 @@
  * Skill-style hosts (and any provider we can't positively identify) get the
  * command's markdown body inlined into the prompt instead — the provider-agnostic
  * fallback that works even when that environment has no slashdo install at all.
+ *
+ * Those bodies are large (38KB–317KB expanded), so two size controls apply
+ * (#3110): unreachable reviewer variants are pruned out of the body
+ * (`unreachableReviewerIncludes`), and whatever is still over
+ * `SLASHDO_INLINE_BUDGET_CHARS` is handed to file-tool hosts as a path to a
+ * resolved copy on disk rather than pasted (`buildSlashdoSection`'s `bodyPath`).
  */
 import { isClaudeProvider, isOpencodeProvider } from './providerModels.js';
 import { inferTuiCommand } from './tuiHandshake.js';
 
 /** slashdo's command namespace — `commands/do/<cmd>.md` in the submodule. */
 export const SLASHDO_NAMESPACE = 'do';
+
+/**
+ * Inline budget for a resolved command body, in characters (issue #3110).
+ *
+ * Under it the body is inlined as before — the section stays self-contained and
+ * the agent needs no extra file read. Over it, a host with file tools gets a
+ * pointer at a resolved copy on disk instead (see `buildSlashdoSection`).
+ *
+ * 24,000 chars ≈ 6k tokens. Every current bundled command is far over it even
+ * after pruning (`review` measures 258,260 chars raw, 162,677 pruned to one
+ * reviewer loop, 112,269 with every reviewer loop dropped), which is the intent:
+ * the budget exists so a future SMALL command still inlines. The budget-pin test
+ * in `slashdoInvocation.test.js` asserts this against the measured sizes, so a
+ * slashdo release that shrinks a command can't silently flip it back to inlining
+ * without someone noticing.
+ */
+export const SLASHDO_INLINE_BUDGET_CHARS = 24000;
+
+/**
+ * slashdo lib includes that are REVIEWER VARIANTS — one loop per reviewer kind,
+ * all five pasted into `review` / `better` / `pr` / `release` / `depfree` though
+ * a given run drives exactly one. Pruning the unreachable ones is where the real
+ * prompt saving is — pruning to a single CLI reviewer measured -37% on `review`,
+ * -43% on `pr`, -45% on `depfree`; the file pointer is the backstop for the rest.
+ *
+ * Keyed by the PortOS reviewer slug (`REVIEWER_VALUES` in `cosValidation.js`) so
+ * the keep-set derives from already-resolved run settings. `copilot` and the
+ * arbitrary-`@login` loop are GitHub-side; `claude`/`codex`/`antigravity`/`grok`
+ * all share slashdo's one local-agent loop; `ollama`/`lmstudio` are the
+ * local-model loop. `multi-reviewer-loop` is the wrapper — only reachable with
+ * 2+ review sources.
+ */
+export const SLASHDO_REVIEWER_INCLUDES = Object.freeze({
+  copilot: 'copilot-review-loop',
+  username: 'github-reviewer-loop',
+  localAgent: 'local-agent-review-loop',
+  localModel: 'ollama-review-loop',
+  multi: 'multi-reviewer-loop',
+});
+
+/** Every reviewer-variant include name — the prunable universe. */
+export const SLASHDO_REVIEWER_INCLUDE_NAMES = Object.freeze(Object.values(SLASHDO_REVIEWER_INCLUDES));
+
+/** Reviewer slugs that drive slashdo's shared local-agent (spawnable CLI) loop. */
+const LOCAL_AGENT_REVIEWERS = new Set(['claude', 'codex', 'antigravity', 'grok']);
+/** Reviewer slugs that drive slashdo's local-model (Ollama-style) loop. */
+const LOCAL_MODEL_REVIEWERS = new Set(['ollama', 'lmstudio']);
+
+/**
+ * Which reviewer-variant includes a run can never reach, given its resolved
+ * reviewers — the `skipIncludes` set for `loadSlashdoFile` (#3110).
+ *
+ * **Defaults to pruning NOTHING** whenever the reviewer set isn't a resolved,
+ * recognized list: no array, an empty array, or a list naming a slug this
+ * mapping doesn't know. An over-pruned prompt that drops the loop the agent
+ * actually needs is far worse than a fat one, so every uncertain case keeps
+ * everything.
+ *
+ * @param {Object} [opts]
+ * @param {string[]|null} [opts.reviewers] - resolved keyed reviewer slugs
+ * @param {string[]} [opts.usernames] - resolved `@login` reviewers
+ * @returns {string[]} include names safe to omit (possibly empty)
+ */
+export function unreachableReviewerIncludes({ reviewers = null, usernames = [] } = {}) {
+  if (!Array.isArray(reviewers)) return [];
+  const users = Array.isArray(usernames) ? usernames.filter(Boolean) : [];
+  if (!reviewers.length && !users.length) return [];
+
+  const keep = new Set();
+  for (const slug of reviewers) {
+    if (slug === 'copilot') keep.add(SLASHDO_REVIEWER_INCLUDES.copilot);
+    else if (LOCAL_AGENT_REVIEWERS.has(slug)) keep.add(SLASHDO_REVIEWER_INCLUDES.localAgent);
+    else if (LOCAL_MODEL_REVIEWERS.has(slug)) keep.add(SLASHDO_REVIEWER_INCLUDES.localModel);
+    // An unrecognized slug means this mapping is behind the reviewer enum —
+    // keep everything rather than guess which loop it needs.
+    else return [];
+  }
+  if (users.length) keep.add(SLASHDO_REVIEWER_INCLUDES.username);
+  // The wrapper is only reachable with more than one review source to sequence.
+  if (reviewers.length + users.length > 1) keep.add(SLASHDO_REVIEWER_INCLUDES.multi);
+
+  return SLASHDO_REVIEWER_INCLUDE_NAMES.filter(name => !keep.has(name));
+}
 
 /**
  * The three invocation shapes slashdo's installer produces. `slash-namespaced`
@@ -207,11 +296,33 @@ export function resolveSlashdoInvocation({
  * slashdo consumer here (`loadSlashdoCommand`, the `/do:rpr` and review-loop
  * inlining), which is why the submodule exists at all: no global install required.
  *
+ * **Over-budget bodies become a pointer (#3110).** When `bodyPath` names a
+ * resolved copy on disk and the body exceeds `SLASHDO_INLINE_BUDGET_CHARS`, the
+ * section emits the path instead of the text and the agent reads it on demand.
+ * This is NOT a token saving by itself — an agent that follows the whole
+ * procedure pays the same tokens through `Read`. It is worth doing because a host
+ * that can invoke slashdo natively, or that only needs part of the procedure,
+ * skips the cost entirely; the prompt-size win comes from pruning unreachable
+ * reviewer variants BEFORE this check (`unreachableReviewerIncludes`).
+ * `bodyPath` is only ever passed for a host with file tools — an HTTP `api`
+ * provider has none, so it always inlines.
+ *
+ * **`reviewWith` is mandatory whenever the body was pruned.** A pruned body has
+ * only the reviewer loop(s) the caller pruned FOR; if the run then resolved some
+ * other reviewer from slashdo's own saved defaults, that loop would be missing
+ * and the agent would improvise it. Emitting the pin makes the body and the run
+ * agree. Callers that prune nothing pass nothing.
+ *
  * @param {ReturnType<typeof resolveSlashdoInvocation>} resolved
  * @param {string|null} [body] - the command's markdown
+ * @param {Object} [opts]
+ * @param {string|null} [opts.bodyPath=null] - absolute path to a resolved copy of
+ *   `body`. Pass only when the host has file tools.
+ * @param {string} [opts.reviewWith=''] - reviewer CSV to pin (`codex,copilot`).
+ *   Required when `body` had reviewer variants pruned out of it.
  * @returns {string} markdown section, or '' when `resolved` is null
  */
-export function buildSlashdoSection(resolved, body = null) {
+export function buildSlashdoSection(resolved, body = null, { bodyPath = null, reviewWith = '' } = {}) {
   if (!resolved) return '';
 
   // Without explicit args the workflow operates on the task described above —
@@ -233,7 +344,18 @@ export function buildSlashdoSection(resolved, body = null) {
       '```'
     );
   }
-  if (body) {
+  if (reviewWith) {
+    lines.push(
+      '',
+      `Run this workflow with \`--review-with ${reviewWith}\` — the procedure you were given carries ONLY those reviewers' loops (the others were omitted as unreachable). Do not substitute a different reviewer from a saved slashdo default.`
+    );
+  }
+  if (body && bodyPath && body.length > SLASHDO_INLINE_BUDGET_CHARS) {
+    lines.push(
+      '',
+      `The full procedure is on disk at \`${bodyPath}\` (${Math.round(body.length / 1000)}KB) — too large to paste here. READ THAT FILE before you start and follow it exactly rather than improvising. It is long: read it in sections as you need them, and do not assume a step you have not read.`
+    );
+  } else if (body) {
     lines.push(
       '',
       'The full procedure is inlined below — follow it exactly rather than improvising:',

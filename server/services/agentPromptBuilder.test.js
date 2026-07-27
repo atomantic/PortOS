@@ -50,6 +50,9 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   return {
     ...actual,
     loadSlashdoFile: vi.fn().mockResolvedValue(null),
+    // #3110 — staging the resolved copy is real disk I/O; mocked so tests can
+    // assert the pointer path without writing under data/.
+    writeResolvedSlashdoBody: vi.fn().mockResolvedValue(null),
   };
 });
 vi.mock('./jira.js', () => ({
@@ -67,7 +70,8 @@ import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBull
 import { getCodeReviewDefaults } from './codeReview.js'; // mocked above — control the configured default
 import { isTruthyMeta } from './agentState.js';
 import { buildPrompt } from './promptService.js'; // mocked above — inspect call args
-import { loadSlashdoFile } from '../lib/fileUtils.js'; // mocked above — control the inlined body
+import { loadSlashdoFile, writeResolvedSlashdoBody } from '../lib/fileUtils.js'; // mocked above — control the inlined body
+import { SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
 
 function makeTask(overrides = {}) {
   return {
@@ -1618,7 +1622,9 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
       slashdoTask(), {}, '/r', null, isTruthyMeta,
       { providerType: 'cli', providerId });
     expect(prompt).toContain('Investigate, then file the issue.');
-    expect(vi.mocked(loadSlashdoFile)).toHaveBeenCalledWith('plan-task', { stripFrontmatter: true });
+    // `skipIncludes: []` — nothing pruned, since this task pins no reviewers and
+    // the mocked defaults are the unconfigured lone-copilot shape (#3110).
+    expect(vi.mocked(loadSlashdoFile)).toHaveBeenCalledWith('plan-task', { stripFrontmatter: true, skipIncludes: [] });
   });
 
   it('still emits the invocation when the body cannot be loaded', async () => {
@@ -1656,5 +1662,148 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
       { providerType: 'cli', providerId: 'codex' });
     expect(prompt).not.toContain('Slashdo Workflow');
     expect(vi.mocked(loadSlashdoFile)).not.toHaveBeenCalledWith('../../etc/passwd', expect.anything());
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Slashdo prompt-size controls (#3110)
+// -----------------------------------------------------------------------------
+// Expanded bodies run 38KB–317KB. Two reductions: prune the reviewer variants a
+// run can't reach, then hand a file-tools host a path for whatever is still over
+// budget. `api` providers have no file tools and keep inlining. Assertions are on
+// SHAPE (pointer present / body present / prune set passed), never on the
+// submodule's text.
+describe('buildAgentPrompt — slashdo prompt-size controls', () => {
+  const OVER = 'B'.repeat(SLASHDO_INLINE_BUDGET_CHARS + 500);
+  const UNDER = '# Small Procedure\n\nStep one.';
+  const slashdoTask = (metadata = {}) => makeTask({
+    description: 'Audit the widget API',
+    metadata: { slashdoCommand: 'review', ...metadata },
+  });
+
+  beforeEach(() => {
+    // mockReset (not just a new return value): several tests here assert the
+    // staging helper was NOT called, so a prior test's call must not leak in.
+    vi.mocked(writeResolvedSlashdoBody).mockReset();
+    vi.mocked(loadSlashdoFile).mockReset();
+    vi.mocked(loadSlashdoFile).mockResolvedValue(OVER);
+    vi.mocked(writeResolvedSlashdoBody).mockResolvedValue('/install/data/cos/slashdo-resolved/review.md');
+    vi.mocked(getCodeReviewDefaults).mockResolvedValue({ reviewers: ['copilot'] });
+  });
+
+  it('hands a file-tools host a pointer instead of the body when over budget', async () => {
+    const prompt = await buildAgentPrompt(
+      slashdoTask(), {}, '/r', null, isTruthyMeta,
+      { providerType: 'cli', providerId: 'codex' });
+    expect(prompt).toContain('/install/data/cos/slashdo-resolved/review.md');
+    expect(prompt).not.toContain(OVER);
+    // Still actionable — the invocation survives.
+    expect(prompt).toContain('do-review');
+  });
+
+  it('inlines the body when it is under budget, and stages no file', async () => {
+    vi.mocked(loadSlashdoFile).mockResolvedValue(UNDER);
+    const prompt = await buildAgentPrompt(
+      slashdoTask(), {}, '/r', null, isTruthyMeta,
+      { providerType: 'cli', providerId: 'codex' });
+    expect(prompt).toContain('Step one.');
+    expect(vi.mocked(writeResolvedSlashdoBody)).not.toHaveBeenCalled();
+  });
+
+  it('inlines for an api provider regardless of size — no file tools to read with', async () => {
+    vi.mocked(buildPrompt).mockClear();
+    await buildAgentPrompt(slashdoTask(), {}, '/r', null, isTruthyMeta,
+      { providerType: 'api', providerId: 'some-http-provider' });
+    const [, context] = vi.mocked(buildPrompt).mock.calls.at(-1);
+    expect(context.task.description).toContain(OVER);
+    expect(vi.mocked(writeResolvedSlashdoBody)).not.toHaveBeenCalled();
+  });
+
+  it('warns once, naming the command and size, when an api provider is handed an over-budget body', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await buildAgentPrompt(slashdoTask(), {}, '/r', null, isTruthyMeta,
+      { providerType: 'api', providerId: 'some-http-provider' });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('review');
+    expect(warn.mock.calls[0][0]).toMatch(/\d+KB/);
+    warn.mockRestore();
+  });
+
+  it('falls back to inlining when the resolved copy cannot be staged', async () => {
+    vi.mocked(writeResolvedSlashdoBody).mockRejectedValue(new Error('EACCES'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const prompt = await buildAgentPrompt(
+      slashdoTask(), {}, '/r', null, isTruthyMeta,
+      { providerType: 'cli', providerId: 'codex' });
+    // A failed write must not silently drop the procedure.
+    expect(prompt).toContain(OVER);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  describe('reviewer-variant pruning', () => {
+    const skipArg = () => vi.mocked(loadSlashdoFile).mock.calls.at(-1)[1].skipIncludes;
+
+    it('prunes unreachable reviewer loops when the task pins its reviewers', async () => {
+      await buildAgentPrompt(
+        slashdoTask({ reviewers: ['codex'] }), {}, '/r', null, isTruthyMeta,
+        { providerType: 'cli', providerId: 'codex' });
+      const skipped = skipArg();
+      expect(skipped).toContain('copilot-review-loop');
+      expect(skipped).not.toContain('local-agent-review-loop');
+    });
+
+    it('pins --review-with alongside a pruned body so the run matches what it got', async () => {
+      const prompt = await buildAgentPrompt(
+        slashdoTask({ reviewers: ['codex'] }), {}, '/r', null, isTruthyMeta,
+        { providerType: 'cli', providerId: 'codex' });
+      expect(prompt).toContain('--review-with codex');
+    });
+
+    it('prunes from the install Code Review Defaults when the task pins nothing', async () => {
+      vi.mocked(getCodeReviewDefaults).mockResolvedValue({ reviewers: ['ollama'] });
+      await buildAgentPrompt(
+        slashdoTask(), {}, '/r', null, isTruthyMeta,
+        { providerType: 'cli', providerId: 'codex' });
+      expect(skipArg()).not.toContain('ollama-review-loop');
+    });
+
+    it('prunes NOTHING on an unconfigured install (a lone copilot default is the unset shape)', async () => {
+      // pickCodeReviewDefaults collapses "nothing configured" to ['copilot'], so a
+      // lone copilot can't authorize pruning — and pinning --review-with copilot on
+      // an install without Copilot review is the #2507 stall.
+      vi.mocked(getCodeReviewDefaults).mockResolvedValue({ reviewers: ['copilot'] });
+      const prompt = await buildAgentPrompt(
+        slashdoTask(), {}, '/r', null, isTruthyMeta,
+        { providerType: 'cli', providerId: 'codex' });
+      expect(skipArg()).toEqual([]);
+      expect(prompt).not.toContain('--review-with');
+    });
+
+    it('prunes NOTHING when the defaults read fails', async () => {
+      vi.mocked(getCodeReviewDefaults).mockRejectedValue(new Error('unreadable'));
+      await buildAgentPrompt(
+        slashdoTask(), {}, '/r', null, isTruthyMeta,
+        { providerType: 'cli', providerId: 'codex' });
+      expect(skipArg()).toEqual([]);
+    });
+
+    it('keeps the @login loop when a username reviewer gates the PR', async () => {
+      await buildAgentPrompt(
+        slashdoTask({ reviewers: ['codex'], usernames: ['octocat'] }), {}, '/r', null, isTruthyMeta,
+        { providerType: 'cli', providerId: 'codex' });
+      const skipped = skipArg();
+      expect(skipped).not.toContain('github-reviewer-loop');
+      // Two review sources ⇒ the multi-reviewer wrapper is reachable.
+      expect(skipped).not.toContain('multi-reviewer-loop');
+    });
+
+    it('keys the staged file on the prune set so two reviewer sets do not share a copy', async () => {
+      await buildAgentPrompt(
+        slashdoTask({ reviewers: ['codex'] }), {}, '/r', null, isTruthyMeta,
+        { providerType: 'cli', providerId: 'codex' });
+      const [, , opts] = vi.mocked(writeResolvedSlashdoBody).mock.calls.at(-1);
+      expect(opts.skipIncludes).toContain('copilot-review-loop');
+    });
   });
 });

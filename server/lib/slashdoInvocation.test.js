@@ -1,13 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import {
+  SLASHDO_INLINE_BUDGET_CHARS,
   SLASHDO_INVOCATION_STYLES,
+  SLASHDO_REVIEWER_INCLUDES,
+  SLASHDO_REVIEWER_INCLUDE_NAMES,
   buildSlashdoSection,
   canTypeSlashCommands,
   isValidSlashdoCommand,
   resolveSlashdoInvocation,
   resolveSlashdoStyle,
   slashdoSkillName,
+  unreachableReviewerIncludes,
 } from './slashdoInvocation.js';
+import { loadSlashdoFile } from './fileUtils.js';
 
 describe('isValidSlashdoCommand', () => {
   it('accepts bare command names', () => {
@@ -207,5 +212,162 @@ describe('buildSlashdoSection', () => {
     const section = buildSlashdoSection(resolveSlashdoInvocation({ command: 'review', providerId: 'codex' }), null);
     expect(section).toContain('do-review');
     expect(section.trim()).not.toBe('');
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Size controls (#3110)
+// -----------------------------------------------------------------------------
+describe('buildSlashdoSection — inline budget vs file pointer', () => {
+  const codex = () => resolveSlashdoInvocation({ command: 'review', providerId: 'codex' });
+  const big = 'x'.repeat(SLASHDO_INLINE_BUDGET_CHARS + 1);
+  const small = 'y'.repeat(SLASHDO_INLINE_BUDGET_CHARS - 1);
+  const PATH = '/install/data/cos/slashdo-resolved/review.md';
+
+  it('emits the pointer and NOT the body when over budget with a file-tools host', () => {
+    const section = buildSlashdoSection(codex(), big, { bodyPath: PATH });
+    expect(section).toContain(PATH);
+    expect(section).not.toContain(big);
+    // The directive still has to be actionable on its own.
+    expect(section).toContain('do-review');
+    expect(section).toMatch(/READ THAT FILE/);
+  });
+
+  it('inlines the body when it is under budget even with a path available', () => {
+    const section = buildSlashdoSection(codex(), small, { bodyPath: PATH });
+    expect(section).toContain(small);
+    expect(section).not.toContain(PATH);
+  });
+
+  it('inlines an over-budget body when no path is offered (an api provider has no file tools)', () => {
+    const section = buildSlashdoSection(codex(), big);
+    expect(section).toContain(big);
+    expect(section).not.toContain('slashdo-resolved');
+  });
+
+  it('pins --review-with whenever the body was pruned, so the run matches the body it got', () => {
+    const section = buildSlashdoSection(codex(), big, { bodyPath: PATH, reviewWith: 'codex,copilot' });
+    expect(section).toContain('--review-with codex,copilot');
+    expect(section).toMatch(/omitted as unreachable/);
+  });
+
+  it('omits the pin when nothing was pruned', () => {
+    expect(buildSlashdoSection(codex(), small)).not.toContain('--review-with');
+  });
+});
+
+describe('unreachableReviewerIncludes', () => {
+  it('prunes nothing when the reviewer set is unresolved or empty', () => {
+    // Absent / empty / non-array all mean "we do not know" — an over-pruned
+    // prompt that drops the loop the agent needs is worse than a fat one.
+    expect(unreachableReviewerIncludes()).toEqual([]);
+    expect(unreachableReviewerIncludes({ reviewers: null })).toEqual([]);
+    expect(unreachableReviewerIncludes({ reviewers: [] })).toEqual([]);
+    expect(unreachableReviewerIncludes({ reviewers: 'codex' })).toEqual([]);
+  });
+
+  it('prunes nothing when the list names a reviewer this mapping does not know', () => {
+    // A new REVIEWER_VALUES entry that lands without a mapping row here must
+    // degrade to keep-all, not silently drop the loop it needed.
+    expect(unreachableReviewerIncludes({ reviewers: ['some-future-reviewer'] })).toEqual([]);
+    expect(unreachableReviewerIncludes({ reviewers: ['codex', 'some-future-reviewer'] })).toEqual([]);
+  });
+
+  it('keeps only the local-agent loop for a lone CLI reviewer', () => {
+    const skipped = unreachableReviewerIncludes({ reviewers: ['codex'] });
+    expect(skipped).not.toContain(SLASHDO_REVIEWER_INCLUDES.localAgent);
+    // Single reviewer ⇒ the multi-reviewer wrapper is unreachable too.
+    expect(skipped).toContain(SLASHDO_REVIEWER_INCLUDES.multi);
+    expect(skipped).toContain(SLASHDO_REVIEWER_INCLUDES.copilot);
+    expect(skipped).toContain(SLASHDO_REVIEWER_INCLUDES.localModel);
+    expect(skipped).toContain(SLASHDO_REVIEWER_INCLUDES.username);
+  });
+
+  it('maps every CLI reviewer onto the one shared local-agent loop', () => {
+    for (const slug of ['claude', 'codex', 'antigravity', 'grok']) {
+      expect(unreachableReviewerIncludes({ reviewers: [slug] }))
+        .not.toContain(SLASHDO_REVIEWER_INCLUDES.localAgent);
+    }
+  });
+
+  it('maps both local-model reviewers onto the local-model loop', () => {
+    for (const slug of ['ollama', 'lmstudio']) {
+      expect(unreachableReviewerIncludes({ reviewers: [slug] }))
+        .not.toContain(SLASHDO_REVIEWER_INCLUDES.localModel);
+    }
+  });
+
+  it('keeps the multi-reviewer wrapper as soon as there are two review sources', () => {
+    expect(unreachableReviewerIncludes({ reviewers: ['codex', 'copilot'] }))
+      .not.toContain(SLASHDO_REVIEWER_INCLUDES.multi);
+    // One keyed reviewer + one @login is also two sources.
+    expect(unreachableReviewerIncludes({ reviewers: ['codex'], usernames: ['octocat'] }))
+      .not.toContain(SLASHDO_REVIEWER_INCLUDES.multi);
+  });
+
+  it('keeps the arbitrary-@login loop only when a username reviewer is present', () => {
+    expect(unreachableReviewerIncludes({ reviewers: ['codex'], usernames: ['octocat'] }))
+      .not.toContain(SLASHDO_REVIEWER_INCLUDES.username);
+    expect(unreachableReviewerIncludes({ reviewers: ['codex'] }))
+      .toContain(SLASHDO_REVIEWER_INCLUDES.username);
+  });
+
+  it('never returns a name outside the reviewer-variant universe', () => {
+    for (const skipped of [
+      unreachableReviewerIncludes({ reviewers: ['codex'] }),
+      unreachableReviewerIncludes({ reviewers: ['copilot', 'ollama'] }),
+      unreachableReviewerIncludes({ reviewers: ['claude'], usernames: ['octocat'] }),
+    ]) {
+      for (const name of skipped) expect(SLASHDO_REVIEWER_INCLUDE_NAMES).toContain(name);
+    }
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Budget pin — the ONE place these tests touch the vendored submodule (#3110)
+// -----------------------------------------------------------------------------
+// The budget only does its job if every big command is actually over it. If a
+// slashdo release shrinks one under 24,000 chars it would silently flip back to
+// being pasted whole, which is exactly the regression this issue removed. These
+// assert on measured SIZE, never on the submodule's text, and skip when the
+// submodule isn't checked out.
+describe('SLASHDO_INLINE_BUDGET_CHARS pin against the bundled commands', () => {
+  // Commands whose expanded bodies are large enough that pasting them dominates
+  // a prompt (measured 2026-07: 38KB–317KB). Not the whole catalog — small
+  // commands like `push` (3KB) are SUPPOSED to stay inlined.
+  const OVER_BUDGET_COMMANDS = ['review', 'better', 'better-swift', 'release', 'depfree', 'next', 'replan', 'plan-task'];
+
+  it('every large bundled command is over the budget, even fully pruned', async () => {
+    const submodulePresent = await loadSlashdoFile('review', { stripFrontmatter: true }).catch(() => null);
+    if (!submodulePresent) return; // submodule not checked out — nothing to pin
+
+    for (const command of OVER_BUDGET_COMMANDS) {
+      // Prune EVERY reviewer variant — the smallest body this code can produce.
+      const pruned = await loadSlashdoFile(command, {
+        stripFrontmatter: true,
+        skipIncludes: SLASHDO_REVIEWER_INCLUDE_NAMES,
+      });
+      expect(pruned, `slashdo ships commands/do/${command}.md`).toBeTruthy();
+      expect(
+        pruned.length,
+        `${command} is ${pruned.length} chars fully pruned — under the ${SLASHDO_INLINE_BUDGET_CHARS} budget, so it would be INLINED again. Either it genuinely shrank (lower the budget deliberately) or the prune is over-eager.`
+      ).toBeGreaterThan(SLASHDO_INLINE_BUDGET_CHARS);
+    }
+  });
+
+  it('pruning unreachable reviewer loops measurably shrinks a reviewer-heavy command', async () => {
+    const full = await loadSlashdoFile('review', { stripFrontmatter: true }).catch(() => null);
+    if (!full) return;
+    // A lone codex reviewer keeps only the local-agent loop.
+    const pruned = await loadSlashdoFile('review', {
+      stripFrontmatter: true,
+      skipIncludes: unreachableReviewerIncludes({ reviewers: ['codex'] }),
+    });
+    // Shape, not an exact byte count: pruning must be a real double-digit-percent
+    // reduction, and must not be a no-op that quietly stopped working.
+    expect(pruned.length).toBeLessThan(full.length * 0.75);
+    // The kept loop is still there and the omission is announced, not silent.
+    expect(pruned).toContain('not applicable to this run');
+    expect(pruned).not.toContain(`\`${SLASHDO_REVIEWER_INCLUDES.localAgent}\` omitted`);
   });
 });

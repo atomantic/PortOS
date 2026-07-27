@@ -15,10 +15,10 @@ import { buildPrompt } from './promptService.js';
 import { getToolsSummaryForPrompt } from './tools.js';
 import { getActiveProvider } from './providers.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
-import { readJSONFile, loadSlashdoFile, loadSlashdoLib, PATHS, tryReadFile } from '../lib/fileUtils.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, resolveReviewUsernames, resolveOptionalReviewers, resolveKeyedReviewers, buildReviewWithArgs } from '../lib/validation.js';
+import { readJSONFile, loadSlashdoFile, loadSlashdoLib, writeResolvedSlashdoBody, PATHS, tryReadFile } from '../lib/fileUtils.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, resolveReviewUsernames, resolveOptionalReviewers, resolveKeyedReviewers, buildReviewWithArgs, buildReviewersCsv } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
-import { canTypeSlashCommands, resolveSlashdoInvocation, buildSlashdoSection } from '../lib/slashdoInvocation.js';
+import { canTypeSlashCommands, resolveSlashdoInvocation, buildSlashdoSection, unreachableReviewerIncludes, SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
 import { shellQuote } from '../lib/shellQuote.js';
 import { detectForgeCli } from '../lib/gitForge.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
@@ -303,10 +303,39 @@ export function reconcileSplitContext(task) {
  * "Auto" — the concrete shape (`/do:x`, `/do-x`, or an Agent Skill selected by
  * name) is only knowable here, once the scheduler has picked a provider.
  *
- * The command body is inlined for every provider, not just the skill-style ones:
- * PortOS ships slashdo as a submodule and only surfaces it as slash commands via
- * the repo-local `.claude/commands/do/` symlinks, which don't exist in the
- * managed-app workspaces most CoS tasks run in. See `buildSlashdoSection`.
+ * The command body travels with the prompt for every provider, not just the
+ * skill-style ones: PortOS ships slashdo as a submodule and only surfaces it as
+ * slash commands via the repo-local `.claude/commands/do/` symlinks, which don't
+ * exist in the managed-app workspaces most CoS tasks run in.
+ *
+ * **Size control (#3110).** Expanded bodies run 38KB–317KB. Two independent
+ * reductions apply, in this order:
+ *
+ * 1. **Prune unreachable reviewer variants.** `review`/`better`/`pr` each paste
+ *    all five of slashdo's reviewer loops though one run drives one of them.
+ *    Pruning to a single CLI reviewer measured -37% on `review` (258,260 →
+ *    162,677 chars), -43% on `pr`, and -45% on `depfree`; dropping every reviewer
+ *    loop reaches -57%. This is where the saving actually is.
+ * 2. **Point at a resolved copy on disk when still over budget** — but only for a
+ *    host with file tools (`cli`/`tui`; an HTTP `api` provider has none and
+ *    inlines with a warning). On its own this is roughly token-NEUTRAL for an
+ *    agent that reads the whole procedure; it pays off when the host can invoke
+ *    slashdo natively or needs only part of the body.
+ *
+ * Pruning is only sound if the run then uses the reviewers we pruned FOR, so the
+ * section emits an explicit `--review-with` pin alongside a pruned body —
+ * otherwise the agent could resolve a different reviewer from slashdo's own saved
+ * defaults and find that loop missing. No explicit pin ⇒ no prune.
+ *
+ * "Explicit" means the task pinned reviewers, or the install's Code Review
+ * Defaults name something other than a lone `copilot`. A lone `copilot` is NOT
+ * treated as explicit for two reasons that point the same way:
+ * `pickCodeReviewDefaults` collapses "nothing configured" into `['copilot']`, so
+ * it is indistinguishable from an unconfigured install; and pinning
+ * `--review-with copilot` on an install with no Copilot review enabled is the
+ * #2507 stall. Same suppression `buildReviewWithArgs` already applies to the
+ * lone default. So an unconfigured install keeps the whole body and lets slashdo
+ * resolve its own reviewer.
  *
  * Applied to the description (on a COPY — the stored task is untouched) rather
  * than emitted as its own template slot, because the briefing template renders
@@ -315,7 +344,10 @@ export function reconcileSplitContext(task) {
  *
  * @returns {Promise<Object>} the task, or a copy carrying the invocation
  */
-async function applySlashdoInvocation(task, { providerId = null, providerCommand = null, leanMode = false } = {}) {
+async function applySlashdoInvocation(task, {
+  providerId = null, providerCommand = null, leanMode = false, hasFileTools = false,
+  defaultReviewers = null, defaultUsernames = null,
+} = {}) {
   const command = task.metadata?.slashdoCommand;
   const resolved = resolveSlashdoInvocation({
     command,
@@ -326,9 +358,41 @@ async function applySlashdoInvocation(task, { providerId = null, providerCommand
   });
   if (!resolved) return task;
 
-  const body = await loadSlashdoFile(command, { stripFrontmatter: true }).catch(() => null);
+  // Task pin first, install-wide Code Review Defaults second — but a lone
+  // `copilot` from the defaults is the unconfigured shape, not a choice (see the
+  // doc above), so it doesn't authorize pruning.
+  const pinnedUsernames = normalizeReviewUsernames(
+    Array.isArray(task.metadata?.usernames) ? task.metadata.usernames : defaultUsernames
+  );
+  const configuredDefaults = Array.isArray(defaultReviewers)
+    && defaultReviewers.length
+    && !(defaultReviewers.length === 1 && defaultReviewers[0] === DEFAULT_REVIEWER && !pinnedUsernames.length);
+  const pinnedReviewers = Array.isArray(task.metadata?.reviewers) && task.metadata.reviewers.length
+    ? task.metadata.reviewers
+    : (configuredDefaults ? defaultReviewers : null);
+  const skipIncludes = unreachableReviewerIncludes({ reviewers: pinnedReviewers, usernames: pinnedUsernames });
+
+  const body = await loadSlashdoFile(command, { stripFrontmatter: true, skipIncludes }).catch(() => null);
   if (!body) console.log(`⚠️ Slashdo command body unavailable, sending invocation only: ${command}`);
-  return { ...task, description: `${task.description}\n\n${buildSlashdoSection(resolved, body)}` };
+  const overBudget = !!body && body.length > SLASHDO_INLINE_BUDGET_CHARS;
+  // An HTTP `api` provider can't read a file, so an over-budget body is pasted
+  // whole. Surface the cost rather than paying it silently.
+  if (overBudget && !hasFileTools) {
+    console.warn(`⚠️ Inlining ${Math.round(body.length / 1000)}KB slashdo body for API provider (no file tools): ${command}`);
+  }
+  // Only spend the write when the pointer will actually be used.
+  const bodyPath = (overBudget && hasFileTools)
+    ? await writeResolvedSlashdoBody(command, body, { skipIncludes }).catch((err) => {
+        console.warn(`⚠️ Could not stage slashdo body for ${command}, inlining instead: ${err.message}`);
+        return null;
+      })
+    : null;
+
+  const reviewWith = skipIncludes.length
+    ? buildReviewersCsv(normalizeReviewers({ reviewers: pinnedReviewers }), pinnedUsernames, task.metadata?.optionalReviewers)
+    : '';
+  const section = buildSlashdoSection(resolved, body, { bodyPath, reviewWith });
+  return { ...task, description: `${task.description}\n\n${section}` };
 }
 
 /**
@@ -926,10 +990,6 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   const isTui = providerType === PROVIDER_TYPES.TUI;
   const leanMode = options.leanMode === true;
 
-  // Render a slashdo-backed task's invocation now that the provider is known —
-  // before the light-path branch below, so both paths carry it.
-  task = await applySlashdoInvocation(task, { providerId, providerCommand, leanMode });
-
   // Install-wide default reviewer list (Code Review Defaults panel →
   // `settings.codeReview.reviewers`). Threaded as the `normalizeReviewers`
   // fallback so a task that pins no `reviewers` (e.g. every app-improve /
@@ -939,8 +999,22 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // `['copilot']` (getCodeReviewDefaults returns the copilot fallback), so
   // behavior is unchanged when nothing is configured. A settings read error
   // degrades to the hardcoded default inside normalizeReviewers.
+  //
+  // Resolved BEFORE the slashdo section below, which prunes the reviewer
+  // variants a run can't reach out of the command body (#3110).
   const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
   const defaultReviewers = codeReviewDefaults?.reviewers;
+
+  // Render a slashdo-backed task's invocation now that the provider is known —
+  // before the light-path branch below, so both paths carry it. `hasFileTools`
+  // is the light/`api` split itself: `cli`/`tui` hosts are agentic CLIs with
+  // native file tools (so an over-budget procedure can live on disk), while an
+  // HTTP `api` provider has none and must have it pasted (#3110).
+  task = await applySlashdoInvocation(task, {
+    providerId, providerCommand, leanMode,
+    hasFileTools: LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType),
+    defaultReviewers, defaultUsernames: codeReviewDefaults?.usernames,
+  });
 
   // Preload slashdo's local-agent review-loop recipe once for review-loop
   // follow-up tasks; both the light/TUI path (via lightOptions) and the full
