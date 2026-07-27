@@ -50,6 +50,19 @@ const parsedMs = (value) => {
 };
 
 /**
+ * Clamp a timestamp at `now`. Nothing can have elapsed INTO the future, but a record's
+ * timestamps are not guaranteed to be in the past: cross-peer clock skew, a repaired
+ * record, or a tracker reporting in a different timezone offset can all leave a
+ * `filedAt`/`outcomeAt` ahead of the local clock. Unclamped that yields a NEGATIVE
+ * pending age (which `formatDuration` renders as a nonsensical "-1m") and an inflated
+ * filing-to-decision latency that drags the median. Clamping reads a future-dated record
+ * as "this just happened", which is the closest true statement available — and it is
+ * applied only to ELAPSED-TIME math, never to the window membership test: a decision is
+ * still a decision whenever it is dated.
+ */
+const elapsedSince = (ms, now) => Math.max(0, now - ms);
+
+/**
  * Compute the approval-funnel metrics for one app's outcome records.
  *
  * @param {Array} [outcomes] - the app's li-outcomes records (from listOutcomes). A
@@ -91,11 +104,13 @@ export function computeApprovalFunnel(outcomes = [], { now = Date.now(), windowM
   const approvedInWindow = decidedInWindow.filter(({ record }) => record.outcome === 'merged');
   // Filing-to-decision latency. Only measurable when BOTH timestamps parse and the
   // decision does not precede the filing (a clock-skewed or hand-edited record);
-  // summarizeDurations drops the NaN/negative values for us.
+  // summarizeDurations drops the NaN/negative values for us. Both ends are clamped at
+  // `now` so a future-dated record cannot contribute a latency longer than the proposal
+  // has existed and drag the median.
   const latency = (entries) => summarizeDurations(
     entries.map(({ record, decidedMs }) => {
       const filedMs = parsedMs(record.filedAt);
-      return filedMs === null ? NaN : decidedMs - filedMs;
+      return filedMs === null ? NaN : Math.min(decidedMs, now) - Math.min(filedMs, now);
     })
   );
 
@@ -110,7 +125,10 @@ export function computeApprovalFunnel(outcomes = [], { now = Date.now(), windowM
   for (const r of pending) {
     const filedMs = parsedMs(r.filedAt);
     if (filedMs === null) { undatedPending += 1; continue; }
-    const ageMs = now - filedMs;
+    // Clamped at zero: a future-dated filing has waited no time at all, not a negative
+    // amount. Without this the oldest-wait line renders as "-1m" and a skewed record
+    // could sort itself to the top of the backlog.
+    const ageMs = elapsedSince(filedMs, now);
     if (oldestAgeMs === null || ageMs > oldestAgeMs) oldestAgeMs = ageMs;
     // CUMULATIVE buckets: a 9-day-old proposal counts in 1d, 3d AND 7d, so the three
     // numbers read as a decay curve. `>=` so an age exactly at the threshold counts —

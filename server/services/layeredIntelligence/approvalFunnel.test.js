@@ -136,6 +136,29 @@ describe('computeApprovalFunnel (#3120)', () => {
     expect(funnel.window.timeToDecision).toMatchObject({ count: 0, medianMs: null });
   });
 
+  it('clamps a FUTURE-dated pending filing to a zero age, never a negative one', () => {
+    // Cross-peer clock skew / a repaired record can leave filedAt ahead of the local
+    // clock. An unclamped age renders as a nonsensical "-1m" wait and would sort itself
+    // to the top of the backlog.
+    const outcomes = [pendingRecord('from-the-future', -2 * DAY), pendingRecord('real', 3 * DAY)];
+    const { pending } = computeApprovalFunnel(outcomes, { now: NOW });
+    expect(pending.count).toBe(2);
+    // The real 3d record still owns the oldest-wait slot; the skewed one reads as 0.
+    expect(pending.oldestAgeMs).toBe(3 * DAY);
+    expect(pending.byAge[delayBucketKey(1)]).toBe(1);
+    expect(pending.byAge[delayBucketKey(3)]).toBe(1);
+  });
+
+  it('clamps a FUTURE-dated decision so it cannot inflate the latency median', () => {
+    // A decision dated 2 days ahead of a filing 1 day ago must not report a 3-day
+    // latency for a proposal that has only existed for one day.
+    const outcomes = [decidedRecord('skewed-forward', 'merged', DAY, -2 * DAY)];
+    const funnel = computeApprovalFunnel(outcomes, { now: NOW });
+    expect(funnel.window).toMatchObject({ decided: 1, approved: 1, approvalRate: 100 });
+    expect(funnel.window.timeToDecision.medianMs).toBe(DAY);
+    expect(funnel.window.timeToDecision.medianMs).toBeLessThanOrEqual(DAY);
+  });
+
   it('honors an injected window span', () => {
     const outcomes = [decidedRecord('mid', 'merged', 6 * DAY, 5 * DAY)];
     expect(computeApprovalFunnel(outcomes, { now: NOW, windowMs: 3 * DAY }).window.approvalRate).toBeNull();
