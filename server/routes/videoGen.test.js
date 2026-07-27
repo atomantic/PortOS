@@ -122,6 +122,7 @@ vi.mock('fs/promises', () => ({
 import * as videoGenService from '../services/videoGen/local.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
 import { resolveGalleryImage } from '../lib/fileUtils.js';
+import { listIcLoraWeights } from '../lib/icLoraWeights.js';
 import videoGenRoutes, { isAudioMime } from './videoGen.js';
 
 // isAudioMime is the gating function inside the fileFilter callback. The
@@ -1025,12 +1026,27 @@ describe('videoGen routes', () => {
           expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
         });
 
-        it('rejects more than 8 references at the schema boundary', async () => {
+        it('rejects more references than any registered weight accepts', async () => {
+          // The schema ceiling is DERIVED from the registry (the largest
+          // maxReferences declared), not a second hardcoded 8 that would pre-empt
+          // the per-weight check with a 422 the moment a weight raised its limit.
+          const ceiling = Math.max(...listIcLoraWeights().map((w) => w.maxReferences));
           const r = await request(app).post('/api/video-gen/').send({
-            prompt: 'recompose', mode: 'ic-ingredients', icReferenceImageFiles: stills(9),
+            prompt: 'recompose', mode: 'ic-ingredients', icReferenceImageFiles: stills(ceiling + 1),
           });
           expect(r.status).toBe(400);
           expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+        });
+
+        it('lets the registry bound speak at the ceiling rather than the schema', async () => {
+          // At exactly the registry maximum the request must reach the per-mode
+          // assertion (and pass), proving the coarse schema bound isn't the one
+          // enforcing the weight contract.
+          const ceiling = Math.max(...listIcLoraWeights().map((w) => w.maxReferences));
+          const r = await request(app).post('/api/video-gen/').send({
+            prompt: 'recompose', mode: 'ic-ingredients', icReferenceImageFiles: stills(ceiling),
+          });
+          expect(r.status).toBe(200);
         });
 
         it('rejects no references with an actionable message', async () => {

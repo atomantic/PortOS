@@ -118,6 +118,12 @@ const optionalInt = (min, max, label) => z.preprocess(
   (v) => v == null || v === '' ? undefined : Number(v),
   z.number().int().refine((n) => n >= min && n <= max, `${label} ${min}..${max}`).optional(),
 );
+// Coarse upper bound for any IC reference array, derived from the registry so a
+// weight raising its own maxReferences doesn't get rejected by a stale literal in
+// the schema before the per-mode assertion below can speak. Per-weight bounds are
+// still enforced against the mode's own spec (assertIcReferenceCount).
+const MAX_IC_REFERENCES = Math.max(...listIcLoraWeights().map((s) => s.maxReferences));
+
 const generateBodySchema = z.object({
   // Render backend: the local runtimes (default) or the Grok Build CLI's
   // image-first image_to_video flow (#2859 phase 2). Grok ignores the
@@ -180,7 +186,7 @@ const generateBodySchema = z.object({
       }
       return v;
     },
-    z.array(z.string().guid()).min(1).max(8).optional(),
+    z.array(z.string().guid()).min(1).max(MAX_IC_REFERENCES).optional(),
   ),
   // Ingredients-style IC references: 2-8 gallery STILLS, not clips. A separate
   // field from icReference / icReferenceVideoIds on purpose — those are
@@ -199,7 +205,12 @@ const generateBodySchema = z.object({
       }
       return v;
     },
-    z.array(z.string().min(1).max(512)).min(1).max(8).optional(),
+    // Ceiling derived from the registry (the largest maxReferences any weight
+    // declares), NOT a hardcoded 8 — a second literal here would silently
+    // pre-empt the per-mode registry check with a 422 the moment a weight raised
+    // its own maximum. This is only a coarse sanity bound; the real per-weight
+    // rule is asserted below against the mode's own spec.
+    z.array(z.string().min(1).max(512)).min(1).max(MAX_IC_REFERENCES).optional(),
   ),
   // Reference-video conditioning strength for the IC-LoRA channel. Distinct
   // from the IC-LoRA's own fusion strength (fixed at 1.0 server-side) and from

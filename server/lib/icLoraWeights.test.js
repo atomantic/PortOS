@@ -5,12 +5,8 @@ import { join } from 'node:path';
 // cache and existsSync probes the pinned weight file. Mock them so these tests
 // cover the registry + resolution logic rather than the user's ~/.cache layout
 // (hfCache.test.js already covers the cache walk).
-const { mockInspectModelCache, mockExistsSync } = vi.hoisted(() => ({
-  mockInspectModelCache: vi.fn(),
-  mockExistsSync: vi.fn(),
-}));
-vi.mock('./hfCache.js', () => ({ inspectModelCache: mockInspectModelCache }));
-vi.mock('node:fs', () => ({ existsSync: mockExistsSync }));
+const { mockFindCachedRepoFile } = vi.hoisted(() => ({ mockFindCachedRepoFile: vi.fn() }));
+vi.mock('./hfCache.js', () => ({ findCachedRepoFile: mockFindCachedRepoFile }));
 
 const {
   IC_LORA_MODES, IC_LORA_MODE_VALUES, isIcLoraMode, icLoraSpecForMode,
@@ -19,8 +15,7 @@ const {
 } = await import('./icLoraWeights.js');
 
 beforeEach(() => {
-  mockInspectModelCache.mockReset();
-  mockExistsSync.mockReset();
+  mockFindCachedRepoFile.mockReset();
 });
 
 describe('IC-LoRA registry', () => {
@@ -98,9 +93,18 @@ describe('IC-LoRA registry', () => {
 });
 
 describe('resolveIcLoraWeight', () => {
+  // `findCachedRepoFile(repo, filename)` returns the absolute path or null. It is
+  // deliberately NOT inspectModelCache: that walks + stats the whole snapshot,
+  // which for an aggregate mirror means hundreds of GB of unrelated weights.
+  const cacheHas = (...pairs) => mockFindCachedRepoFile.mockImplementation(
+    async (repo, filename) => {
+      const hit = pairs.find((p) => p.repo === repo && p.filename === filename);
+      return hit ? join(hit.snapshot, filename) : null;
+    },
+  );
+
   it('pins the exact filename inside the cached snapshot', async () => {
-    mockInspectModelCache.mockResolvedValue({ cached: true, sizeBytes: 1, snapshotPath: '/hf/snap' });
-    mockExistsSync.mockReturnValue(true);
+    cacheHas({ repo: IC_LORA_MODES.control.repo, filename: IC_LORA_MODES.control.filename, snapshot: '/hf/snap' });
 
     const resolved = await resolveIcLoraWeight('ic-control');
     // Pinning the filename (rather than returning the snapshot dir or the repo
@@ -111,29 +115,31 @@ describe('resolveIcLoraWeight', () => {
   });
 
   it('pins each mode to its OWN filename, not the first registry entry', async () => {
-    mockInspectModelCache.mockResolvedValue({ cached: true, sizeBytes: 1, snapshotPath: '/hf/snap' });
-    mockExistsSync.mockReturnValue(true);
+    cacheHas({ repo: IC_LORA_MODES.colorize.repo, filename: IC_LORA_MODES.colorize.filename, snapshot: '/hf/snap' });
 
     const resolved = await resolveIcLoraWeight('ic-colorize');
     expect(resolved.path).toBe(join('/hf/snap', IC_LORA_MODES.colorize.filename));
     expect(resolved.spec).toBe(IC_LORA_MODES.colorize);
-    expect(mockInspectModelCache).toHaveBeenCalledWith(IC_LORA_MODES.colorize.repo);
+    expect(mockFindCachedRepoFile).toHaveBeenCalledWith(
+      IC_LORA_MODES.colorize.repo, IC_LORA_MODES.colorize.filename,
+    );
   });
 
-  it('falls back to the repo id when no snapshot exists', async () => {
-    mockInspectModelCache.mockResolvedValue({ cached: false, sizeBytes: 0, snapshotPath: null });
-
-    const resolved = await resolveIcLoraWeight('ic-control');
-    expect(resolved.path).toBe(IC_LORA_MODES.control.repo);
-    expect(resolved.cached).toBe(false);
+  it('never asks for a whole-snapshot walk, only exact filenames (#3112)', async () => {
+    // The single-file invariant at the resolution layer: every probe names a file.
+    cacheHas();
+    await resolveIcLoraWeight('ic-ingredients');
+    expect(mockFindCachedRepoFile).toHaveBeenCalledTimes(2);
+    for (const [, filename] of mockFindCachedRepoFile.mock.calls) {
+      expect(filename).toMatch(/\.safetensors$/);
+    }
   });
 
-  it('falls back to the repo id when the snapshot lacks the pinned file', async () => {
-    // A partial download leaves the snapshot dir present but the weight absent —
-    // returning the dir-joined path would hand the pipeline a missing file, so
-    // the repo-id fallback (which re-downloads) is the correct degrade.
-    mockInspectModelCache.mockResolvedValue({ cached: true, sizeBytes: 1, snapshotPath: '/hf/snap' });
-    mockExistsSync.mockReturnValue(false);
+  it('falls back to the repo id when the weight is not resident', async () => {
+    // Covers both "no snapshot at all" and "snapshot present but the pinned file
+    // missing / a dangling symlink" — findCachedRepoFile collapses them to null,
+    // and the repo-id fallback (which re-downloads) is the correct degrade.
+    cacheHas();
 
     const resolved = await resolveIcLoraWeight('ic-control');
     expect(resolved.path).toBe(IC_LORA_MODES.control.repo);
@@ -142,7 +148,7 @@ describe('resolveIcLoraWeight', () => {
 
   it('returns null for an unknown mode without touching the cache', async () => {
     expect(await resolveIcLoraWeight('ic-nope')).toBeNull();
-    expect(mockInspectModelCache).not.toHaveBeenCalled();
+    expect(mockFindCachedRepoFile).not.toHaveBeenCalled();
   });
 
   it('SUPPRESSES the repo-id fallback for a requiresPreDownload weight (#3112)', async () => {
@@ -152,7 +158,7 @@ describe('resolveIcLoraWeight', () => {
     // DeepBeepMeep/LTX-2 aggregate, which would fill the user's disk. Neither id
     // may ever reach the pipeline — path must be null so icLoraArgs 400s with
     // "download the weight first".
-    mockInspectModelCache.mockResolvedValue({ cached: false, sizeBytes: 0, snapshotPath: null });
+    cacheHas();
 
     const resolved = await resolveIcLoraWeight('ic-ingredients');
     expect(resolved.path).toBeNull();
@@ -162,16 +168,15 @@ describe('resolveIcLoraWeight', () => {
     expect(resolved.path).not.toBe(IC_LORA_MODES.ingredients.mirrorRepo);
   });
 
-  it('still resolves a requiresPreDownload weight from the mirror snapshot', async () => {
-    // Official repo has no snapshot; the mirror does. The candidate walk must find
-    // it there rather than giving up (that's what makes the un-gated path work for
-    // a user with no HF token).
-    mockInspectModelCache.mockImplementation(async (repo) => (
-      repo === IC_LORA_MODES.ingredients.mirrorRepo
-        ? { cached: true, sizeBytes: 1, snapshotPath: '/hf/mirror-snap' }
-        : { cached: false, sizeBytes: 0, snapshotPath: null }
-    ));
-    mockExistsSync.mockReturnValue(true);
+  it('still resolves a requiresPreDownload weight from the mirror', async () => {
+    // Official repo doesn't have it; the mirror does. The candidate walk must find
+    // it there rather than giving up — that's what makes the un-gated path work
+    // for a user with no HF token.
+    cacheHas({
+      repo: IC_LORA_MODES.ingredients.mirrorRepo,
+      filename: IC_LORA_MODES.ingredients.mirrorFilename,
+      snapshot: '/hf/mirror-snap',
+    });
 
     const resolved = await resolveIcLoraWeight('ic-ingredients');
     expect(resolved.path).toBe(join('/hf/mirror-snap', IC_LORA_MODES.ingredients.mirrorFilename));
@@ -179,17 +184,17 @@ describe('resolveIcLoraWeight', () => {
     expect(resolved.repo).toBe(IC_LORA_MODES.ingredients.mirrorRepo);
   });
 
-  it('prefers the official repo over the mirror when both are cached', async () => {
-    mockInspectModelCache.mockImplementation(async (repo) => ({
-      cached: true,
-      sizeBytes: 1,
-      snapshotPath: repo === IC_LORA_MODES.ingredients.repo ? '/hf/official' : '/hf/mirror',
-    }));
-    mockExistsSync.mockReturnValue(true);
+  it('prefers the official repo over the mirror when both have it', async () => {
+    cacheHas(
+      { repo: IC_LORA_MODES.ingredients.repo, filename: IC_LORA_MODES.ingredients.filename, snapshot: '/hf/official' },
+      { repo: IC_LORA_MODES.ingredients.mirrorRepo, filename: IC_LORA_MODES.ingredients.mirrorFilename, snapshot: '/hf/mirror' },
+    );
 
     const resolved = await resolveIcLoraWeight('ic-ingredients');
     expect(resolved.repo).toBe(IC_LORA_MODES.ingredients.repo);
     expect(resolved.path).toBe(join('/hf/official', IC_LORA_MODES.ingredients.filename));
+    // Short-circuits: the mirror is never even probed once the official hit lands.
+    expect(mockFindCachedRepoFile).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -215,12 +220,16 @@ describe('icLoraWeightCandidates', () => {
 });
 
 describe('findCachedIcLoraWeight', () => {
-  it('treats a dangling snapshot symlink as not cached', async () => {
-    // existsSync FOLLOWS symlinks, so an interrupted download (link present, blob
-    // gone) must NOT count as resident — otherwise the render hands the pipeline a
-    // path that fails on open.
-    mockInspectModelCache.mockResolvedValue({ cached: true, sizeBytes: 1, snapshotPath: '/hf/snap' });
-    mockExistsSync.mockReturnValue(false);
+  it('returns null when no candidate has the file resident', async () => {
+    // findCachedRepoFile already collapses "no snapshot", "file absent" and
+    // "dangling symlink / zero bytes" into null (hfCache.test.js covers those);
+    // this asserts the candidate walk gives up rather than returning a bad path.
+    mockFindCachedRepoFile.mockResolvedValue(null);
     expect(await findCachedIcLoraWeight(IC_LORA_MODES.ingredients)).toBeNull();
+  });
+
+  it('returns nothing for a null spec without probing the cache', async () => {
+    expect(await findCachedIcLoraWeight(null)).toBeNull();
+    expect(mockFindCachedRepoFile).not.toHaveBeenCalled();
   });
 });

@@ -28,9 +28,7 @@
 // so `gated: true` marks it and the mirror provides an un-gated path for users
 // without an HF token.
 
-import { join } from 'node:path';
-import { existsSync } from 'node:fs';
-import { inspectModelCache } from './hfCache.js';
+import { findCachedRepoFile } from './hfCache.js';
 
 // One entry per shipped remix mode. `minReferences`/`maxReferences` are the
 // weight's contract: the Python helper receives them as flags (never a second
@@ -213,13 +211,11 @@ export const icResolutionIssue = (spec, width, height) => {
 // (`{ path, repo, filename, mirror }`) or null when nothing is cached.
 export const findCachedIcLoraWeight = async (spec) => {
   for (const candidate of icLoraWeightCandidates(spec)) {
-    const { snapshotPath } = await inspectModelCache(candidate.repo);
-    if (!snapshotPath) continue;
-    const exact = join(snapshotPath, candidate.filename);
-    // `existsSync` FOLLOWS symlinks, so a dangling snapshot link left by an
-    // interrupted download reports false here — the same "is it really resident?"
-    // question inspectModelCache asks of a whole snapshot.
-    if (existsSync(exact)) return { ...candidate, path: exact };
+    // findCachedRepoFile, NOT inspectModelCache: the latter recursively walks and
+    // stats every weight in the snapshot, which for the aggregate mirror means
+    // hundreds of GB of unrelated files. This resolves the one filename directly.
+    const path = await findCachedRepoFile(candidate.repo, candidate.filename);
+    if (path) return { ...candidate, path };
   }
   return null;
 };

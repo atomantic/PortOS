@@ -129,6 +129,28 @@ export async function inspectModelCache(repoId) {
 
 export const isModelCached = async (repoId) => (await inspectModelCache(repoId)).cached;
 
+// Resolve ONE known file inside a repo's newest snapshot, without walking the
+// snapshot at all. `inspectModelCache` recursively collects and stats every
+// weight in the snapshot — correct when the question is "is this whole model
+// downloaded?", but wrong (and expensive) for an aggregate repo where we only
+// ever care about a single file: `DeepBeepMeep/LTX-2` hosts every LTX weight in
+// one ~708 GB repo, so walking a populated snapshot there stats hundreds of GB
+// of files that have nothing to do with the one we asked for.
+//
+// Returns the absolute path, or null when the repo has no snapshot or the file
+// isn't resident. The `stat` FOLLOWS the symlink, so a dangling snapshot link
+// left by an interrupted download reports null rather than a plausible path
+// that fails on open — the same non-zero test inspectModelCache applies.
+export async function findCachedRepoFile(repoId, filename) {
+  if (!repoId || typeof repoId !== 'string') return null;
+  if (!filename || typeof filename !== 'string') return null;
+  const snapshotPath = await latestSnapshotDir(join(getHfCacheRoot(), repoToDirName(repoId)));
+  if (!snapshotPath) return null;
+  const candidate = join(snapshotPath, filename);
+  const stat = await fs.stat(candidate).catch(() => null);
+  return stat && stat.size > 0 ? candidate : null;
+}
+
 // ---------------------------------------------------------------------------
 // Weight-integrity verification (issue #1324)
 //

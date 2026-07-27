@@ -179,6 +179,34 @@ class RunIcLoraBoundsTest(unittest.TestCase):
             self.helper.run_ic_lora(self._args(references=self.refs[:2], lo=0, hi=8))
         self.assertIn("1 <= min <= max", str(ctx.exception))
 
+    def test_requires_both_bounds_rather_than_defaulting_them(self):
+        # A 1/1 default would silently green-light a direct
+        # `--ic-mode ingredients --ic-reference one.mp4` that omitted the flags —
+        # rendering plausible-looking garbage instead of erroring. Omitting either
+        # bound must fail loudly.
+        for lo, hi in ((None, 8), (2, None), (None, None)):
+            with self.subTest(lo=lo, hi=hi):
+                with self.assertRaises(SystemExit) as ctx:
+                    self.helper.run_ic_lora(
+                        self._args(references=self.refs[:1], lo=lo, hi=hi)
+                    )
+                self.assertIn("both required", str(ctx.exception))
+
+    def test_argparse_leaves_the_bounds_unset_by_default(self):
+        # The flags carry no default at all — a default is exactly what would let a
+        # caller bypass the registry-derived contract.
+        argv = sys.argv
+        sys.argv = [
+            "generate_ltx2.py", "--mode", "ic",
+            "--prompt", "x", "--output", "/tmp/x.mp4", "--model", "/m",
+        ]
+        try:
+            args = self.helper.parse_args()
+        finally:
+            sys.argv = argv
+        self.assertIsNone(args.ic_min_references)
+        self.assertIsNone(args.ic_max_references)
+
     def test_rejects_a_reference_missing_from_disk(self):
         with self.assertRaises(SystemExit) as ctx:
             self.helper.run_ic_lora(

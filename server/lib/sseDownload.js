@@ -93,14 +93,19 @@ export async function startHfDownloadStream({ req, res, repo, repos, fallbacks, 
     const { repo: r, only: onlyFiles } = targets[i];
     const isLastTarget = i === targets.length - 1;
     if (aborted) return;
-    const existing = await inspectModelCache(r);
+    // For a single-file pull the repo-wide cache verdict is both the wrong
+    // question AND too expensive to ask: `inspectModelCache` recursively stats
+    // every weight in the snapshot, and an aggregate mirror reports `cached` off
+    // any unrelated resident file — so it would skip the file the user actually
+    // asked for after walking hundreds of GB to get there. Skip the walk entirely
+    // and defer to the caller's per-file predicate.
+    const singleFile = onlyFiles.length > 0;
+    const existing = singleFile
+      ? { cached: false, sizeBytes: 0 }
+      : await inspectModelCache(r);
     if (aborted) return;
-    // For a single-file pull the repo-wide cache verdict is the wrong question:
-    // an aggregate mirror reports `cached` the moment any unrelated weight is
-    // resident, which would skip the file the user actually asked for. Defer to
-    // the caller's per-file predicate when one is supplied.
-    const alreadyHave = onlyFiles.length && typeof cachedFile === 'function'
-      ? await cachedFile()
+    const alreadyHave = singleFile
+      ? (typeof cachedFile === 'function' ? await cachedFile() : false)
       : existing.cached;
     if (aborted) return;
     // `force` is set by a repair-initiated re-download: repairModelCache()
@@ -110,11 +115,11 @@ export async function startHfDownloadStream({ req, res, repo, repos, fallbacks, 
     // re-runs the HF fetch, which is a cheap no-op for files already present
     // (etag match) and pulls only what's gone.
     if (alreadyHave && !force) {
-      // A single-file pull must NOT claim the repo's resident total: for the
-      // aggregate mirror that's every unrelated weight the user has (hundreds of
-      // GB), which would be a wildly wrong number on the badge. Report 0 there
-      // and let the badge fall back to the registry's size estimate.
-      if (onlyFiles.length) {
+      // A single-file pull has no repo-wide total to report (we deliberately
+      // never computed one) — and claiming the aggregate mirror's resident bytes
+      // would be a wildly wrong number on the badge anyway. Report 0 and let the
+      // badge fall back to the registry's size estimate.
+      if (singleFile) {
         console.log(`📦 HuggingFace weight already cached: ${onlyFiles.join(', ')} (${r})`);
         send({ type: 'log', message: `${onlyFiles.join(', ')} already cached.`, repo: r, sizeBytes: 0 });
       } else {
@@ -130,7 +135,7 @@ export async function startHfDownloadStream({ req, res, repo, repos, fallbacks, 
     // Dedupe key includes the filenames: an aggregate repo hosts many unrelated
     // weights, so two single-file pulls of DIFFERENT files from the same repo are
     // not duplicates and must not block each other.
-    const flightKey = onlyFiles.length ? `${r}::${onlyFiles.join(',')}` : r;
+    const flightKey = singleFile ? `${r}::${onlyFiles.join(',')}` : r;
     if (inFlight.has(flightKey)) {
       console.log(`⏭️  HuggingFace download already running for ${flightKey} — refusing duplicate`);
       send({ type: 'error', message: `Another download for ${r} is already running.`, kind: 'already_running', repo: r });
@@ -139,10 +144,10 @@ export async function startHfDownloadStream({ req, res, repo, repos, fallbacks, 
     // Server-side visibility for a pull that used to surface only on the SSE
     // stream (the browser) — a headless/PM2 log had no record the multi-GB
     // fetch ever ran. Log the start, each file as it streams, and the outcome.
-    console.log(`⬇️  Downloading HuggingFace repo: ${r}${onlyFiles.length ? ` (${onlyFiles.length} file(s) only)` : ''}${force ? ' (forced re-fetch)' : ''}`);
+    console.log(`⬇️  Downloading HuggingFace repo: ${r}${singleFile ? ` (${onlyFiles.length} file(s) only)` : ''}${force ? ' (forced re-fetch)' : ''}`);
     const handle = downloadHfRepo({
       repo: r,
-      only: onlyFiles.length ? onlyFiles : null,
+      only: singleFile ? onlyFiles : null,
       onEvent: (ev) => {
         if (ev.type === 'progress' && ev.file) {
           console.log(`⬇️  ${r}: ${ev.file} (${ev.step}/${ev.total})`);

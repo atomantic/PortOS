@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   inspectModelCache, getHfCacheRoot, isModelCached,
-  verifyModelCache, repairModelCache,
+  verifyModelCache, repairModelCache, findCachedRepoFile, repairCachedFile,
 } from './hfCache.js';
 
 // Build a minimal *valid* .safetensors buffer: 8-byte LE header length, a JSON
@@ -330,5 +330,108 @@ describe('repairModelCache', () => {
     const result = await repairModelCache('org/clean');
     expect(result.status).toBe('ok');
     expect(result.deleted).toEqual([]);
+  });
+});
+
+// ── Single-file probe + repair (#3112) ─────────────────────────────────────
+// A weight can live inside an AGGREGATE repo: `DeepBeepMeep/LTX-2` mirrors every
+// LTX weight in one ~708 GB repo. `inspectModelCache` recursively stats every
+// weight in the snapshot, which there means hundreds of GB of files that have
+// nothing to do with the one we asked for — so these two helpers answer the
+// single-file questions without ever walking the snapshot.
+describe('findCachedRepoFile', () => {
+  let originalEnv;
+  const cleanup = [];
+
+  beforeEach(() => { originalEnv = process.env.HF_HUB_CACHE; });
+  afterEach(() => {
+    if (originalEnv === undefined) delete process.env.HF_HUB_CACHE;
+    else process.env.HF_HUB_CACHE = originalEnv;
+    for (const dir of cleanup.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  const aggregateCache = ({ partial = false } = {}) => {
+    const { root } = buildFakeCache({
+      repoId: 'org/aggregate',
+      snapshots: {
+        sha1: {
+          'wanted.safetensors': 1024,
+          'unrelated-a.safetensors': 2048,
+          'unrelated-b.safetensors': 4096,
+        },
+      },
+      partial,
+    });
+    cleanup.push(root);
+    process.env.HF_HUB_CACHE = root;
+    return root;
+  };
+
+  it('resolves the requested file out of an aggregate repo', async () => {
+    aggregateCache();
+    const found = await findCachedRepoFile('org/aggregate', 'wanted.safetensors');
+    expect(found).toMatch(/snapshots\/sha1\/wanted\.safetensors$/);
+  });
+
+  it('returns null for a file the repo has not fetched, even though siblings exist', async () => {
+    // The precise failure this exists to prevent: inspectModelCache would report
+    // the repo `cached` off the unrelated siblings and the caller would skip a
+    // download for a weight the user does NOT have.
+    aggregateCache();
+    expect(await findCachedRepoFile('org/aggregate', 'never-fetched.safetensors')).toBeNull();
+    expect((await inspectModelCache('org/aggregate')).cached).toBe(true);
+  });
+
+  it('returns null for a dangling snapshot symlink (interrupted download)', async () => {
+    // The stat FOLLOWS the link, so a link with no blob behind it reports null
+    // rather than a plausible path that fails on open inside the render.
+    aggregateCache({ partial: true });
+    expect(await findCachedRepoFile('org/aggregate', 'wanted.safetensors')).toBeNull();
+  });
+
+  it('returns null when the repo has no snapshot at all', async () => {
+    aggregateCache();
+    expect(await findCachedRepoFile('org/never-downloaded', 'wanted.safetensors')).toBeNull();
+  });
+
+  it('returns null for a missing repo id or filename', async () => {
+    aggregateCache();
+    expect(await findCachedRepoFile('', 'wanted.safetensors')).toBeNull();
+    expect(await findCachedRepoFile(null, 'wanted.safetensors')).toBeNull();
+    expect(await findCachedRepoFile('org/aggregate', '')).toBeNull();
+    expect(await findCachedRepoFile('org/aggregate', null)).toBeNull();
+  });
+});
+
+describe('repairCachedFile', () => {
+  const cleanup = [];
+  afterEach(() => {
+    for (const dir of cleanup.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('unlinks the snapshot entry AND the blob behind it, leaving siblings alone', async () => {
+    // Deleting only the symlink is not enough: `hf_hub_download` keys on the
+    // cached etag rather than the content, so a stale blob with the right name
+    // would be trusted and never re-fetched.
+    const { root, repoDir } = buildFakeCache({
+      repoId: 'org/aggregate',
+      snapshots: { sha1: { 'wanted.safetensors': 1024, 'keep.safetensors': 2048 } },
+    });
+    cleanup.push(root);
+    const target = join(repoDir, 'snapshots', 'sha1', 'wanted.safetensors');
+    const blob = readlinkSync(target);
+    const keep = join(repoDir, 'snapshots', 'sha1', 'keep.safetensors');
+
+    expect(await repairCachedFile(target)).toBe(true);
+    expect(existsSync(target)).toBe(false);
+    expect(existsSync(blob)).toBe(false);
+    // The aggregate repo's other weights are untouched — that's the whole point
+    // of not routing through repairModelCache here.
+    expect(existsSync(keep)).toBe(true);
+  });
+
+  it('reports false for a path that is not there', async () => {
+    expect(await repairCachedFile('/nope/missing.safetensors')).toBe(false);
+    expect(await repairCachedFile(null)).toBe(false);
   });
 });

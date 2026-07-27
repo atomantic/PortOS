@@ -387,11 +387,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--ic-reference", action="append", default=None, metavar="PATH",
                    help="Reference clip for the IC-LoRA video-conditioning channel. Repeatable; "
                         "how many the fused weight expects is set by --ic-min/max-references.")
-    p.add_argument("--ic-min-references", type=int, default=1,
+    # NO DEFAULTS. A 1/1 default would silently green-light a direct
+    # `--ic-mode ingredients --ic-reference one.mp4` invocation that omitted the
+    # flags: the wrong reference count for a weight yields plausible-looking
+    # garbage rather than an error, so "caller forgot the bounds" must fail loudly
+    # instead of falling back to some other weight's contract. Required together.
+    p.add_argument("--ic-min-references", type=int, default=None,
                    help="Fewest --ic-reference entries the fused weight accepts (from PortOS' "
-                        "icLoraWeights registry, which owns the per-weight contract).")
-    p.add_argument("--ic-max-references", type=int, default=1,
-                   help="Most --ic-reference entries the fused weight accepts.")
+                        "icLoraWeights registry, which owns the per-weight contract). REQUIRED "
+                        "for --mode ic, alongside --ic-max-references.")
+    p.add_argument("--ic-max-references", type=int, default=None,
+                   help="Most --ic-reference entries the fused weight accepts. REQUIRED for "
+                        "--mode ic, alongside --ic-min-references.")
     p.add_argument("--ic-strength", type=float, default=1.0,
                    help="Per-reference conditioning strength (0.0-1.0+) applied to every "
                         "--ic-reference entry.")
@@ -855,6 +862,12 @@ def run_ic_lora(args: argparse.Namespace) -> str:
     # a weight fed the wrong reference count produces plausible-looking garbage
     # rather than an error, so a direct/script caller needs the guard too.
     lo, hi = args.ic_min_references, args.ic_max_references
+    if lo is None or hi is None:
+        raise SystemExit(
+            "--ic-min-references and --ic-max-references are both required for ic mode "
+            "(they carry the fused weight's reference contract; guessing them would let a "
+            "wrong reference count render plausible-looking garbage)"
+        )
     if lo < 1 or hi < lo:
         raise SystemExit(
             f"--ic-min-references/--ic-max-references must satisfy 1 <= min <= max; got {lo}/{hi}"

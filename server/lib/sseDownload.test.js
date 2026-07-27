@@ -296,6 +296,26 @@ describe('startHfDownloadStream single-file + fallbacks (#3112)', () => {
     expect(parseFrames(frames).at(-1).sizeBytes).toBe(0);
   });
 
+  it('never inspects the whole repo for a single-file pull (#3112)', async () => {
+    // inspectModelCache recursively stats EVERY weight in the snapshot. Against a
+    // populated 708 GB mirror that's the expensive walk the single-file path
+    // exists to avoid — and its verdict would be wrong anyway (cached off any
+    // unrelated resident file). It must not be called at all.
+    const { req, res } = makeReqRes();
+    await startHfDownloadStream({ req, res, fallbacks: CANDIDATES, cachedFile: async () => false });
+    expect(inspectModelCache).not.toHaveBeenCalled();
+  });
+
+  it('does NOT treat a single-file pull as cached when no predicate is supplied', async () => {
+    // Fail-safe direction: a caller that forgot `cachedFile` must re-fetch (cheap,
+    // etag no-op) rather than inherit the repo-wide `cached: true` and skip a
+    // weight the user doesn't have.
+    inspectModelCache.mockResolvedValue({ cached: true, sizeBytes: 700e9, snapshotPath: '/snap' });
+    const { req, res } = makeReqRes();
+    await startHfDownloadStream({ req, res, fallbacks: [CANDIDATES[0]] });
+    expect(downloadHfRepo).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects an empty fallbacks list rather than silently completing', async () => {
     const { req, res, frames } = makeReqRes();
     await startHfDownloadStream({ req, res, fallbacks: [] });

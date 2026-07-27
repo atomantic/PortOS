@@ -919,33 +919,34 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
         { status: 400, code: 'IC_LORA_STILL_NEEDS_FFMPEG' },
       );
     }
-    resolvedIcReferencePaths = await Promise.all(icReferencePaths.map(async (stillPath, i) => {
-      const clipPath = join(tmpdir(), `ic-still-${i}-${jobId}.mp4`);
-      const result = await execFileAsync(stillFfmpeg, [
-        '-loop', '1', '-i', stillPath,
-        '-vf', `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h}`,
-        '-frames:v', String(IC_STILL_REFERENCE_FRAMES),
-        '-r', String(parsedFps),
-        '-pix_fmt', 'yuv420p', '-an',
-        '-y', clipPath,
-      ], { env: safeChildProcessEnv(), timeout: 30000 }).catch((err) => ({ error: err }));
-      if (result.error) {
-        // Unlike the resizeImage fallback (which degrades to the original), there
-        // is no usable degradation here — a still handed straight to the pipeline
-        // fails deep inside the VAE reshape. Fail loudly with the ffmpeg reason.
-        throw new ServerError(
-          `Failed to prepare Ingredients reference ${basename(stillPath)}: ${result.error.message}`,
-          { status: 400, code: 'IC_LORA_STILL_PREP_FAILED' },
-        );
-      }
-      icReferenceTempPaths.push(clipPath);
-      return clipPath;
-    })).catch(async (err) => {
-      // Partial success leaks the clips already written — one still failing
-      // aborts the render, so drop them before rethrowing.
-      for (const p of icReferenceTempPaths) await unlink(p).catch(() => {});
-      throw err;
-    });
+    // Register EVERY target path up-front, before any encode starts, and settle
+    // all of them before deciding. `Promise.all` + push-on-success would reject
+    // at the first failure while sibling encodes were still in flight, so their
+    // files would land after cleanup already ran and leak. Registering the paths
+    // eagerly also means the outer error/close handlers can clean up regardless
+    // of which encodes finished.
+    const clipPaths = icReferencePaths.map((_, i) => join(tmpdir(), `ic-still-${i}-${jobId}.mp4`));
+    icReferenceTempPaths.push(...clipPaths);
+    const encodes = await Promise.all(icReferencePaths.map((stillPath, i) => execFileAsync(stillFfmpeg, [
+      '-loop', '1', '-i', stillPath,
+      '-vf', `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h}`,
+      '-frames:v', String(IC_STILL_REFERENCE_FRAMES),
+      '-r', String(parsedFps),
+      '-pix_fmt', 'yuv420p', '-an',
+      '-y', clipPaths[i],
+    ], { env: safeChildProcessEnv(), timeout: 30000 }).catch((err) => ({ error: err }))));
+    const failedAt = encodes.findIndex((r) => r?.error);
+    if (failedAt !== -1) {
+      // Unlike the resizeImage fallback (which degrades to the original), there is
+      // no usable degradation here — a still handed straight to the pipeline fails
+      // deep inside the VAE reshape. Fail loudly with the ffmpeg reason.
+      for (const p of clipPaths) await unlink(p).catch(() => {});
+      throw new ServerError(
+        `Failed to prepare Ingredients reference ${basename(icReferencePaths[failedAt])}: ${encodes[failedAt].error.message}`,
+        { status: 400, code: 'IC_LORA_STILL_PREP_FAILED' },
+      );
+    }
+    resolvedIcReferencePaths = clipPaths;
   }
 
   const meta = {

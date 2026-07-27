@@ -77,11 +77,16 @@ vi.mock('../../lib/hfToken.js', () => ({
 // cache walk (which hfCache.test.js covers). `snapshotPath` non-null + the
 // always-true existsSync mock below means the weight resolves to its exact
 // pinned filename; a test that wants the un-cached fallback overrides this.
-const { mockInspectModelCache } = vi.hoisted(() => ({
+const { mockInspectModelCache, mockFindCachedRepoFile } = vi.hoisted(() => ({
   mockInspectModelCache: vi.fn(async () => ({ cached: true, sizeBytes: 1000, snapshotPath: '/mock/hf/snap' })),
+  // icLoraWeights resolves an IC weight via the exact-file probe (NOT the
+  // snapshot walk) so an aggregate mirror is never enumerated. Default to
+  // "resident", derived from the same mocked snapshot path the tests assert on.
+  mockFindCachedRepoFile: vi.fn(async (_repo, filename) => join('/mock/hf/snap', filename)),
 }));
 vi.mock('../../lib/hfCache.js', () => ({
   inspectModelCache: mockInspectModelCache,
+  findCachedRepoFile: mockFindCachedRepoFile,
 }));
 
 vi.mock('fs', () => ({
@@ -1757,7 +1762,9 @@ describe('generateVideo — IC-LoRA remix arg threading (#3100)', () => {
   );
 
   beforeEach(() => {
-    mockInspectModelCache.mockResolvedValue({ cached: true, sizeBytes: 1000, snapshotPath: '/mock/hf/snap' });
+    // Every weight resident. The probe is per-FILE (findCachedRepoFile) rather
+    // than a snapshot walk, so an aggregate mirror is never enumerated.
+    mockFindCachedRepoFile.mockImplementation(async (_repo, filename) => join('/mock/hf/snap', filename));
   });
 
   it('routes ic-control to --mode ic with the pinned weight, reference, and strength', async () => {
@@ -1812,7 +1819,7 @@ describe('generateVideo — IC-LoRA remix arg threading (#3100)', () => {
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
-    mockInspectModelCache.mockResolvedValue({ cached: false, sizeBytes: 0, snapshotPath: null });
+    mockFindCachedRepoFile.mockResolvedValue(null);
 
     await generateVideo({ ...baseIcRender, jobId: 'ic-uncached' });
 
@@ -1825,7 +1832,7 @@ describe('generateVideo — IC-LoRA remix arg threading (#3100)', () => {
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const spawnMock = vi.mocked(spawnDetached);
     spawnMock.mockClear();
-    mockInspectModelCache.mockResolvedValue({ cached: false, sizeBytes: 0, snapshotPath: null });
+    mockFindCachedRepoFile.mockResolvedValue(null);
 
     await generateVideo({ ...baseIcRender, jobId: 'ic-colorize-uncached', mode: 'ic-colorize' });
 
@@ -1988,7 +1995,7 @@ describe('generateVideo — IC-LoRA remix arg threading (#3100)', () => {
       // `_resolve_lora_path` would `snapshot_download` a gated repo / a ~708 GB
       // mirror. So an uncached Ingredients render must 400 rather than silently
       // starting an unbounded pull.
-      mockInspectModelCache.mockResolvedValue({ cached: false, sizeBytes: 0, snapshotPath: null });
+      mockFindCachedRepoFile.mockResolvedValue(null);
       await expect(generateVideo({ ...baseIngredients, jobId: 'ing-uncached' }))
         .rejects.toThrow(/is not downloaded — download Ingredients/);
     });
@@ -2013,6 +2020,62 @@ describe('generateVideo — IC-LoRA remix arg threading (#3100)', () => {
       expect(JSON.parse(args[args.indexOf('--user-loras') + 1])).toEqual([
         { path: join(MOCK_PATHS.loras, 'character.safetensors'), strength: 0.9 },
       ]);
+    });
+
+    it('cleans up EVERY temp clip when one still fails to encode', async () => {
+      // Promise.all rejects at the first failure while siblings are still in
+      // flight, so a push-on-success registry would miss the ones that landed
+      // afterwards. Every target path is registered before any encode starts.
+      const { execFile } = await import('child_process');
+      const { unlink } = await import('fs/promises');
+      const execFileMock = vi.mocked(execFile);
+      const unlinkMock = vi.mocked(unlink);
+      execFileMock.mockClear();
+      unlinkMock.mockClear();
+
+      // Fail the SECOND still; the first and third still succeed.
+      let stillIndex = 0;
+      execFileMock.mockImplementation((_bin, args, _opts, cb) => {
+        if (args.includes('-loop')) {
+          const mine = stillIndex++;
+          if (mine === 1) return cb?.(new Error('ffmpeg exploded'));
+        }
+        return cb?.(null, '', '');
+      });
+
+      await expect(generateVideo({
+        ...baseIngredients, jobId: 'ing-partial-fail',
+        icReferencePaths: ['/mock/images/a.png', '/mock/images/b.png', '/mock/images/c.png'],
+      })).rejects.toThrow(/Failed to prepare Ingredients reference b\.png/);
+
+      // All three temp paths unlinked, not just the ones that had resolved when
+      // the rejection fired.
+      const unlinked = unlinkMock.mock.calls.map(([p]) => String(p));
+      for (const i of [0, 1, 2]) {
+        expect(unlinked.some((p) => p.includes(`ic-still-${i}-ing-partial-fail.mp4`))).toBe(true);
+      }
+      // The ORIGINAL gallery stills are the user's files and must survive.
+      for (const f of ['/mock/images/a.png', '/mock/images/b.png', '/mock/images/c.png']) {
+        expect(unlinked).not.toContain(f);
+      }
+      execFileMock.mockImplementation((_bin, _args, _opts, cb) => cb?.(null, '', ''));
+    });
+
+    it('cleans up the temp clips after a successful render', async () => {
+      const { unlink } = await import('fs/promises');
+      const unlinkMock = vi.mocked(unlink);
+      unlinkMock.mockClear();
+
+      await generateVideo({ ...baseIngredients, jobId: 'ing-cleanup' });
+      // Success-path cleanup runs in the child's async close handler, which fires
+      // after generateVideo resolves.
+      await vi.waitFor(() => expect(unlinkMock).toHaveBeenCalled());
+
+      const unlinked = unlinkMock.mock.calls.map(([p]) => String(p));
+      for (const i of [0, 1]) {
+        expect(unlinked.some((p) => p.includes(`ic-still-${i}-ing-cleanup.mp4`))).toBe(true);
+      }
+      expect(unlinked).not.toContain('/mock/images/owl.png');
     });
 
     it('stamps the gallery basenames (not the temp clip paths) onto history', async () => {
