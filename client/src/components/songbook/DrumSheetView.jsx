@@ -52,6 +52,12 @@ const UI_FONT = 'ui-sans-serif, system-ui, sans-serif';
 const strokeStyle = (color) => ({ stroke: color });
 const fillStyle = (color) => ({ fill: color });
 
+// Time-signature denominator → the note glyph for one BEAT at that value, for the
+// tempo marking. The tempo counts notated beats, so 6/8 must read "♪ = 96", not
+// "♩ = 96" — an unlisted denominator falls back to a plain "1/N" fraction rather
+// than a wrong glyph.
+const BEAT_GLYPH = { 1: '𝅝', 2: '𝅗𝅥', 4: '♩', 8: '♪', 16: '𝅘𝅥𝅯' };
+
 // One hit's glyph. `cross` pieces (cymbals, hats) draw an ×; `head` pieces
 // (drums) draw a notehead. The cell's own flags then modify it: a ring for an
 // open hi-hat, a small hollow head for a ghost, a leading grace head for a flam,
@@ -252,7 +258,11 @@ function DrumSheetView({ text, fontSizeRem = 0.875, activeStep = null, onStepCli
     <div className={className} style={{ fontSize: `${fontSizeRem}rem` }}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2 text-xs text-gray-500">
         <span>{chart.time.beats}/{chart.time.beatValue}</span>
-        <span>♩ = {chart.tempo}</span>
+        {/* The tempo counts NOTATED beats — the time-signature denominator — so
+            6/8 is eighth = bpm, not quarter = bpm. Label the actual beat unit
+            rather than always printing ♩, which would misstate the tempo the
+            playback schedule uses (drumPlayback.buildDrumSchedule). */}
+        <span>{BEAT_GLYPH[chart.time.beatValue] || `1/${chart.time.beatValue}`} = {chart.tempo}</span>
         <span>
           {chart.subdivision} per beat
         </span>

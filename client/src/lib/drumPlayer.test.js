@@ -192,17 +192,21 @@ describe('createDrumPlayer', () => {
     player.stop();
   });
 
-  it('does NOT wedge when the looped bar is all rests but the chart has hits', async () => {
-    // canLoop must check for a music EVENT, not just pass duration: a rest-only
-    // selected bar has real duration but no events, so the pass-rebase branch
-    // would reset to the exhausted index and spin forever (a frozen tab, not
-    // just silence). The chart's OTHER bar has hits, so Play is enabled.
+  it('finishes (never wedges) when the looped bar is all rests', async () => {
+    // Two coupled guards, both keyed on canLoop(): the scheduler must not spin its
+    // pass-rebase branch on a range with no music events (a rest-only bar has real
+    // duration but nothing to repeat), AND the transport must not report an
+    // Infinite length for it — otherwise playback sits "playing" forever after the
+    // count-in. The chart's OTHER bar has hits, so Play is enabled.
+    const ended = vi.fn();
     const chart = parseDrumChart('tempo: 240\nsubdivision: 1\n\n# A\nK: o---\n\n# B\nK: ----');
-    const player = createDrumPlayer(chart, { loopBars: { from: 2, to: 2 }, countInBars: 1 });
+    const player = createDrumPlayer(chart, {
+      loopBars: { from: 2, to: 2 }, countInBars: 1, onEnded: ended,
+    });
     await player.play();
-    // Would never return if the rebase spun; the count-in still sounds.
-    drive(3);
-    expect(audio.oscillators.length).toBeGreaterThan(0);
-    player.stop();
+    drive(3); // would never return if the rebase spun
+    expect(audio.oscillators.length).toBeGreaterThan(0); // the count-in still sounds
+    expect(ended).toHaveBeenCalledTimes(1);
+    expect(player.isPlaying()).toBe(false);
   });
 });

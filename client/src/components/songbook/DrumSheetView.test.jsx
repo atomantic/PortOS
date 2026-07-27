@@ -32,6 +32,16 @@ describe('DrumSheetView', () => {
     expect(html).toContain('1 bar');
   });
 
+  it('labels the tempo with the ACTUAL beat unit, not always a quarter note', () => {
+    // The tempo counts notated beats (the time-signature denominator), which is
+    // what playback schedules against — so 6/8 must read as eighth = bpm.
+    expect(renderToStaticMarkup(<DrumSheetView text={'time: 4/4\ntempo: 96\n\nK: o'} />)).toContain('♩ = 96');
+    expect(renderToStaticMarkup(<DrumSheetView text={'time: 6/8\ntempo: 96\n\nK: o'} />)).toContain('♪ = 96');
+    expect(renderToStaticMarkup(<DrumSheetView text={'time: 2/2\ntempo: 60\n\nK: o'} />)).toContain('= 60');
+    // An unlisted denominator degrades to a fraction rather than a wrong glyph.
+    expect(renderToStaticMarkup(<DrumSheetView text={'time: 4/3\ntempo: 60\n\nK: o'} />)).toContain('1/3 = 60');
+  });
+
   it('takes ink from the theme CSS vars via style, never a var() attribute', () => {
     const html = renderToStaticMarkup(<DrumSheetView text={ROCK_BEAT} />);
     // SVG presentation attributes don't evaluate var() — every themed color must

@@ -389,9 +389,12 @@ export const createDrumPlayer = (chart, options = {}) => {
   };
 
   const transport = createLookaheadTransport({
-    // A looping player never "ends" on its own — the transport's end check must
-    // not finish it, so its length is unbounded until stop().
-    getTotalSec: () => (schedule.loop ? Infinity : schedule.totalSec),
+    // A LOOPING player never "ends" on its own, so the transport's end check must
+    // not finish it — unbounded until stop(). But `canLoop()` is the same gate the
+    // scheduler uses: when a selected range holds no music (a rest-only bar) there
+    // is nothing to repeat, so the run must be allowed to finish at its natural
+    // length instead of sitting "playing" forever after the count-in.
+    getTotalSec: () => (canLoop() ? Infinity : schedule.totalSec),
     scheduleWindow,
     prepare: () => {
       schedule = build();
