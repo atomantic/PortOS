@@ -274,19 +274,51 @@ export const BRACKETED_PASTE_MODE_PATTERN = /\x1b\[\?2004([hl])/g;
 export const TUI_TRUST_PROMPT_PATTERN =
   /trustthisfolder|isthisaprojectyou(?:created|trust)/i;
 
-export function createInputReadyTracker() {
+// Antigravity (agy) needs a SECOND, positive readiness signal on top of paste
+// mode. agy enables bracketed paste the moment it enters the alt screen — while
+// it is still "Signing in…", before its folder-trust gate has painted and long
+// before its composer exists. So `sawCommandRun && pasteModeOn` goes true within
+// ~200ms of launch and the paste fires into whatever screen happens to be up.
+// When agy's sign-in round trip outran the 2.5s prompt delay, that screen was
+// the trust gate — it swallowed the prompt and all three paste retries, and the
+// agent died `paste-not-rendered` without the trust auto-confirm ever running
+// (`needsTrust` was still false when the paste went out). agy renders
+// `? for shortcuts` under its composer, and ONLY once the composer is live —
+// i.e. strictly after the trust gate is resolved — so gating on it orders the
+// two signals correctly and removes the race.
+//
+// (`--dangerously-skip-permissions` does NOT bypass agy's trust gate, despite
+// what the flag name suggests — real transcripts show the gate appearing under
+// it, same as claude's.)
+export const AGY_INPUT_READY_PATTERN = /\?forshortcuts/i;
+
+// Handshake markers are matched against a rolling window of whitespace-stripped
+// output rather than a single chunk, so a marker split across two PTY reads
+// (`? for short` | `cuts`) still matches. Sized to a few screens of chrome.
+const OBSERVE_TAIL_MAX_LEN = 4000;
+
+// readyTextPattern: optional extra positive gate, tested against the stripped
+// rolling tail. When supplied, `ready` also requires that marker to have been
+// seen (see AGY_INPUT_READY_PATTERN).
+export function createInputReadyTracker({ readyTextPattern = null } = {}) {
   let pasteModeOn = false;   // LIVE bracketed-paste mode state from the stream
   let sawCommandRun = false; // shell turned paste mode OFF to run the command
   let needsTrust = false;
+  let sawReadyText = false;
+  let tail = '';
   return {
-    // Ready once claude has RE-ENABLED bracketed-paste mode after the launch
-    // shell turned it off to run the command — its input box is live and a
-    // paste will be read as a paste. (The launch shell's own initial ON does
-    // not count: sawCommandRun gates on the intervening OFF.)
-    get ready() { return sawCommandRun && pasteModeOn; },
+    // Ready once the TUI has RE-ENABLED bracketed-paste mode after the launch
+    // shell turned it off to run the command — for claude that means its input
+    // box is live and a paste will be read as a paste. (The launch shell's own
+    // initial ON does not count: sawCommandRun gates on the intervening OFF.)
+    // Providers that enable paste mode before their composer exists supply a
+    // readyTextPattern to close the gap.
+    get ready() {
+      return sawCommandRun && pasteModeOn && (!readyTextPattern || sawReadyText);
+    },
     get needsTrust() { return needsTrust; },
     // rawText: un-stripped chunk (paste-mode toggles live here);
-    // strippedText: ANSI-stripped chunk (the trust-gate text).
+    // strippedText: ANSI-stripped chunk (the trust-gate / composer text).
     observe(rawText, strippedText) {
       if (rawText) {
         for (const m of rawText.matchAll(BRACKETED_PASTE_MODE_PATTERN)) {
@@ -294,8 +326,10 @@ export function createInputReadyTracker() {
           else pasteModeOn = true;
         }
       }
-      if (strippedText && !needsTrust && TUI_TRUST_PROMPT_PATTERN.test(strippedText.replace(/\s+/g, ''))) {
-        needsTrust = true;
+      if (strippedText) {
+        tail = (tail + strippedText.replace(/\s+/g, '')).slice(-OBSERVE_TAIL_MAX_LEN);
+        if (!needsTrust && TUI_TRUST_PROMPT_PATTERN.test(tail)) needsTrust = true;
+        if (readyTextPattern && !sawReadyText && readyTextPattern.test(tail)) sawReadyText = true;
       }
     },
   };

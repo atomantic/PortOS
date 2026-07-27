@@ -46,6 +46,8 @@ import {
   verifyPasteRendered,
   isPasteConfirmed,
   isCollapsedPasteChip,
+  createInputReadyTracker,
+  AGY_INPUT_READY_PATTERN,
 } from './tuiHandshake.js';
 import { CODEX_CONFIGURED_DEFAULT } from './providerModels.js';
 
@@ -817,6 +819,61 @@ describe('tuiHandshake.extractVerifiablePromptPrefix', () => {
     // Should skip the first few characters to avoid matching common prefixes
     expect(prefix.startsWith('You are')).toBe(false);
     expect(prompt.replace(/\s+/g, ' ').includes(prefix)).toBe(true);
+  });
+});
+
+describe('createInputReadyTracker', () => {
+  const PASTE_OFF = '\x1b[?2004l';
+  const PASTE_ON = '\x1b[?2004h';
+
+  it('is ready once paste mode is re-enabled after the launch command ran', () => {
+    const tracker = createInputReadyTracker();
+    tracker.observe(PASTE_ON, ''); // the launch shell's own paste mode — not ready
+    expect(tracker.ready).toBe(false);
+    tracker.observe(PASTE_OFF, ''); // shell turned it off to run the command
+    expect(tracker.ready).toBe(false);
+    tracker.observe(PASTE_ON, '');
+    expect(tracker.ready).toBe(true);
+  });
+
+  it('latches needsTrust on either trust-gate wording', () => {
+    const claude = createInputReadyTracker();
+    claude.observe('', 'Is this a project you trust?');
+    expect(claude.needsTrust).toBe(true);
+
+    const agy = createInputReadyTracker();
+    agy.observe('', 'Do you trust the contents of this project?\n> Yes, I trust this folder\n');
+    expect(agy.needsTrust).toBe(true);
+  });
+
+  it('matches a marker split across two PTY chunks (rolling tail)', () => {
+    const tracker = createInputReadyTracker();
+    tracker.observe('', '> Yes, I trust th');
+    expect(tracker.needsTrust).toBe(false);
+    tracker.observe('', 'is folder');
+    expect(tracker.needsTrust).toBe(true);
+  });
+
+  // agy enables bracketed paste on ALT-SCREEN ENTRY — before its composer, and
+  // before its folder-trust gate paints — so paste mode alone raced the trust
+  // menu and the prompt was pasted into it (`paste-not-rendered`).
+  it('readyTextPattern: paste mode alone is not ready until the composer marker is seen', () => {
+    const tracker = createInputReadyTracker({ readyTextPattern: AGY_INPUT_READY_PATTERN });
+    tracker.observe(`${PASTE_OFF}${PASTE_ON}`, 'Welcome to the Antigravity CLI.\n Signing in...\n');
+    expect(tracker.ready).toBe(false);
+
+    tracker.observe('', 'Do you trust the contents of this project?\n> Yes, I trust this folder\n');
+    expect(tracker.needsTrust).toBe(true);
+    expect(tracker.ready).toBe(false); // still not ready while the trust menu is up
+
+    tracker.observe('', '>\n? for shortcutsGemini 3.6 Flash · medium');
+    expect(tracker.ready).toBe(true);
+  });
+
+  it('readyTextPattern: the composer marker alone is not ready without paste mode', () => {
+    const tracker = createInputReadyTracker({ readyTextPattern: AGY_INPUT_READY_PATTERN });
+    tracker.observe('', '? for shortcuts');
+    expect(tracker.ready).toBe(false);
   });
 });
 

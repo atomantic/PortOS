@@ -938,7 +938,13 @@ describe('spawnTuiAgent runtime', () => {
   // agent sitting at an empty prompt until it was reaped). Without the fix agy
   // took the idle-heuristic path and WOULD have pasted after ~2s of banner idle;
   // asserting pasteCount()===0 there is what discriminates the fix.
-  it('agy input-ready: does NOT paste on the startup banner, only once paste mode is re-enabled', async () => {
+  //
+  // agy needs a SECOND gate on top of paste mode, because — unlike claude — it
+  // enables bracketed paste on alt-screen entry, before its composer exists. Its
+  // composer footer is the marker that says the input box is actually live.
+  const AGY_COMPOSER_FOOTER = '? for shortcuts';
+
+  it('agy input-ready: does NOT paste until the composer footer follows paste-mode-on', async () => {
     runSpawn({ tuiConfig: agyTuiConfig });
     await flushMicrotasks();
 
@@ -949,8 +955,51 @@ describe('spawnTuiAgent runtime', () => {
     await flushMicrotasks();
     expect(pasteCount()).toBe(0); // banner / paste-mode-off is not "input ready"
 
-    // agy re-enables bracketed-paste mode → input box live, safe to paste.
-    await capturedOnData(Buffer.from(PASTE_ON));
+    // agy enables bracketed paste when it enters the alt screen — still signing
+    // in, no composer yet. Paste mode ALONE must not be treated as ready.
+    await capturedOnData(Buffer.from(`${PASTE_ON}Welcome to the Antigravity CLI.\n Signing in...\n`));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(0);
+
+    // Composer renders → input box live, safe to paste.
+    await capturedOnData(Buffer.from(`>\n${AGY_COMPOSER_FOOTER}Gemini 3.5 Flash · medium`));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(400);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(1);
+  });
+
+  // Regression: the real `paste-not-rendered` failure. agy turned bracketed paste
+  // ON at alt-screen entry (~200ms in) and then spent longer than promptDelayMs
+  // signing in, so the old paste-mode-only gate fired while the folder-trust menu
+  // was still pending — `needsTrust` was still false, the trust auto-confirm never
+  // ran, and the menu swallowed the prompt plus all three paste retries.
+  it('agy trust gate: paste mode turns on BEFORE the trust menu — waits for trust confirm, then the composer', async () => {
+    runSpawn({ tuiConfig: agyTuiConfig });
+    await flushMicrotasks();
+
+    // Alt-screen entry enables paste mode while agy is still signing in.
+    await capturedOnData(Buffer.from(`${PASTE_OFF}${PASTE_ON}Welcome to the Antigravity CLI. You are currently not signed in.\n Signing in...\n`));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(0); // would have pasted into the void before the fix
+
+    // Trust gate finally paints (after the sign-in round trip).
+    await capturedOnData(Buffer.from('Do you trust the contents of this project?\nAntigravity CLI requires permission to read, edit, and execute files here.\n> Yes, I trust this folder\n  No, exit\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(700);
+    await flushMicrotasks();
+
+    // Auto-confirmed with a bare Enter, and still no paste.
+    expect(vi.mocked(shellService.writeToSession).mock.calls.filter(([, d]) => d === '\r').length)
+      .toBeGreaterThanOrEqual(1);
+    expect(pasteCount()).toBe(0);
+
+    // Composer comes up only after trust is accepted → now the paste lands.
+    await capturedOnData(Buffer.from(`>\n${AGY_COMPOSER_FOOTER}Gemini 3.5 Flash · medium`));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(400);
     await flushMicrotasks();

@@ -42,6 +42,7 @@ import {
   MCP_BOOT_PASTE_DEADLINE_MS,
   MCP_BOOT_PASTE_RETRY_DELAY_MS,
   createInputReadyTracker,
+  AGY_INPUT_READY_PATTERN,
   rendersWorkCounter,
   PASTE_TO_ENTER_MIN_DELAY_MS,
   PASTE_TO_ENTER_FALLBACK_MS,
@@ -309,7 +310,11 @@ export async function spawnTuiAgent({
   // Tracks claude's interactive input-readiness (footer chrome) and its first-run
   // folder-trust gate. Gates the prompt paste for the claude TUI so we never
   // paste into a startup banner, a trust menu, or a returned shell prompt.
-  const inputReady = createInputReadyTracker();
+  // agy enables bracketed paste on alt-screen entry, before its composer (and
+  // before its trust gate) exists, so it needs the extra composer-footer gate.
+  const inputReady = createInputReadyTracker(
+    isAntigravityCommand(tuiConfig.command) ? { readyTextPattern: AGY_INPUT_READY_PATTERN } : {},
+  );
   let trustAccepted = false;
   // True once shell.js actually injects the `claude` command (after its
   // round-trip readiness probe). The probe runs its OWN shell command first,
@@ -917,19 +922,21 @@ export async function spawnTuiAgent({
   // trust gate, and NEVER blind-paste: if the prompt never appears we surface a
   // failure. Other TUI providers keep the original idle heuristic + deadline.
   //
-  // Antigravity (agy) gets the SAME positive gate (issue #2705). agy's TUI also
-  // enables bracketed-paste mode (`ESC[?2004h`) exactly when its input box is
-  // live — the identical signal createInputReadyTracker keys on — but the old
-  // blind-paste path fired into agy's still-initializing banner, so the prompt
-  // never landed and the agent sat idle at an empty prompt until it was reaped
-  // having done nothing. agy DOES have a first-run folder-trust gate ("Do you
-  // trust the contents of this project?") like claude's — production spawns agy
-  // with `--dangerously-skip-permissions`, which bypasses it; and if it does
-  // appear (agy launched without that flag), its "Yes, I trust this folder"
-  // option matches TUI_TRUST_PROMPT_PATTERN, so the requireInputReady auto-confirm
-  // branch below handles it exactly as it does claude's. If agy ever fails to
-  // signal ready, the requireInputReady path fails fast with a surfaced startup
-  // error instead of silently idle-reaping.
+  // Antigravity (agy) gets the SAME positive gate (issue #2705), but agy alone
+  // needs a second signal on top of paste mode: unlike claude it enables
+  // bracketed paste on ALT-SCREEN ENTRY, ~200ms after launch, while it is still
+  // signing in and before its trust gate has even painted. Gating on paste mode
+  // alone therefore raced agy's sign-in round trip — when that outran the 2.5s
+  // prompt delay the prompt was pasted into the still-pending trust gate, which
+  // swallowed it and all three retries (`paste-not-rendered`). agy's composer
+  // footer (AGY_INPUT_READY_PATTERN) renders only after the trust gate is
+  // resolved, so requiring it orders the two correctly. agy DOES have a
+  // first-run folder-trust gate ("Do you trust the contents of this project?")
+  // and `--dangerously-skip-permissions` does NOT bypass it — the auto-confirm
+  // branch below is load-bearing, matching its "Yes, I trust this folder" option
+  // via TUI_TRUST_PROMPT_PATTERN. If agy ever fails to signal ready, the
+  // requireInputReady path fails fast with a surfaced startup error instead of
+  // silently idle-reaping.
   const requireInputReady = isClaudeCommand(tuiConfig.command) || isAntigravityCommand(tuiConfig.command);
   // sendPrompt / finishStartupFailure are async and dispatched fire-and-forget
   // from the interval below. A setInterval callback can't await, and an
@@ -949,12 +956,13 @@ export async function spawnTuiAgent({
     const elapsed = now - startedAt;
 
     if (requireInputReady) {
-      // Auto-confirm claude's first-run "trust this folder?" gate (default is
-      // "Yes, I trust") so claims can run in fresh worktrees. Send Enter once.
+      // Auto-confirm the first-run "trust this folder?" gate (claude's and agy's
+      // both default to "Yes, I trust") so claims can run in fresh worktrees.
+      // Send Enter once.
       if (inputReady.needsTrust && !trustAccepted) {
         trustAccepted = true;
         shellService.writeToSession(sessionId, '\r');
-        appendLine(`📟 Auto-confirmed claude folder-trust prompt for session ${sessionId.slice(0, 8)}`);
+        appendLine(`📟 Auto-confirmed ${tuiConfig.command} folder-trust prompt for session ${sessionId.slice(0, 8)}`);
         return;
       }
       if (inputReady.ready && elapsed >= tuiConfig.promptDelayMs) {
