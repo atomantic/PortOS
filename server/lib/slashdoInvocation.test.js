@@ -273,14 +273,24 @@ describe('unreachableReviewerIncludes', () => {
     expect(unreachableReviewerIncludes({ reviewers: ['codex', 'some-future-reviewer'] })).toEqual([]);
   });
 
-  it('keeps only the local-agent loop for a lone CLI reviewer', () => {
+  it('keeps the local-agent loop (and the wrapper) for a lone CLI reviewer', () => {
     const skipped = unreachableReviewerIncludes({ reviewers: ['codex'] });
     expect(skipped).not.toContain(SLASHDO_REVIEWER_INCLUDES.localAgent);
-    // Single reviewer ⇒ the multi-reviewer wrapper is unreachable too.
-    expect(skipped).toContain(SLASHDO_REVIEWER_INCLUDES.multi);
     expect(skipped).toContain(SLASHDO_REVIEWER_INCLUDES.copilot);
     expect(skipped).toContain(SLASHDO_REVIEWER_INCLUDES.localModel);
     expect(skipped).toContain(SLASHDO_REVIEWER_INCLUDES.username);
+  });
+
+  it('never prunes the orchestration wrapper for a resolved reviewer, single or not', () => {
+    // slashdo dispatches EVERY non-empty reviewer list through
+    // multi-reviewer-loop ("may contain a single entry"), so pruning it for a
+    // lone reviewer left the inner loop with nothing to dispatch it.
+    for (const reviewers of [['codex'], ['copilot'], ['ollama'], ['codex', 'copilot']]) {
+      expect(unreachableReviewerIncludes({ reviewers }))
+        .not.toContain(SLASHDO_REVIEWER_INCLUDES.multi);
+    }
+    expect(unreachableReviewerIncludes({ reviewers: [], usernames: ['octocat'] }))
+      .not.toContain(SLASHDO_REVIEWER_INCLUDES.multi);
   });
 
   it('maps every CLI reviewer onto the one shared local-agent loop', () => {
@@ -295,14 +305,6 @@ describe('unreachableReviewerIncludes', () => {
       expect(unreachableReviewerIncludes({ reviewers: [slug] }))
         .not.toContain(SLASHDO_REVIEWER_INCLUDES.localModel);
     }
-  });
-
-  it('keeps the multi-reviewer wrapper as soon as there are two review sources', () => {
-    expect(unreachableReviewerIncludes({ reviewers: ['codex', 'copilot'] }))
-      .not.toContain(SLASHDO_REVIEWER_INCLUDES.multi);
-    // One keyed reviewer + one @login is also two sources.
-    expect(unreachableReviewerIncludes({ reviewers: ['codex'], usernames: ['octocat'] }))
-      .not.toContain(SLASHDO_REVIEWER_INCLUDES.multi);
   });
 
   it('keeps the arbitrary-@login loop only when a username reviewer is present', () => {
@@ -364,8 +366,10 @@ describe('SLASHDO_INLINE_BUDGET_CHARS pin against the bundled commands', () => {
       skipIncludes: unreachableReviewerIncludes({ reviewers: ['codex'] }),
     });
     // Shape, not an exact byte count: pruning must be a real double-digit-percent
-    // reduction, and must not be a no-op that quietly stopped working.
-    expect(pruned.length).toBeLessThan(full.length * 0.75);
+    // reduction, and must not be a no-op that quietly stopped working. Measured
+    // -23% for a lone CLI reviewer (258,260 → 198,997) — the orchestration
+    // wrapper is deliberately never pruned, which costs ~37KB of the ceiling.
+    expect(pruned.length).toBeLessThan(full.length * 0.85);
     // The kept loop is still there and the omission is announced, not silent.
     expect(pruned).toContain('not applicable to this run');
     expect(pruned).not.toContain(`\`${SLASHDO_REVIEWER_INCLUDES.localAgent}\` omitted`);

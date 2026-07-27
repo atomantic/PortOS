@@ -313,9 +313,10 @@ export function reconcileSplitContext(task) {
  *
  * 1. **Prune unreachable reviewer variants.** `review`/`better`/`pr` each paste
  *    all five of slashdo's reviewer loops though one run drives one of them.
- *    Pruning to a single CLI reviewer measured -37% on `review` (258,260 →
- *    162,677 chars), -43% on `pr`, and -45% on `depfree`; dropping every reviewer
- *    loop reaches -57%. This is where the saving actually is.
+ *    Pruning to a single CLI reviewer measured -23% on `review` (258,260 →
+ *    198,997 chars), -27% on `pr`, and -28% on `depfree`. (slashdo's
+ *    orchestration wrapper is never pruned — it dispatches even a single-entry
+ *    reviewer list — which is ~37KB of the theoretical ceiling.)
  * 2. **Point at a resolved copy on disk when still over budget** — but only for a
  *    host with file tools (`cli`/`tui`; an HTTP `api` provider has none and
  *    inlines with a warning). On its own this is roughly token-NEUTRAL for an

@@ -41,8 +41,8 @@ export const SLASHDO_NAMESPACE = 'do';
  * pointer at a resolved copy on disk instead (see `buildSlashdoSection`).
  *
  * 24,000 chars ≈ 6k tokens. Every current bundled command is far over it even
- * after pruning (`review` measures 258,260 chars raw, 162,677 pruned to one
- * reviewer loop, 112,269 with every reviewer loop dropped), which is the intent:
+ * after pruning (`review` measures 258,260 chars raw, 198,997 pruned to one
+ * reviewer, 112,269 with every reviewer include dropped), which is the intent:
  * the budget exists so a future SMALL command still inlines. The budget-pin test
  * in `slashdoInvocation.test.js` asserts this against the measured sizes, so a
  * slashdo release that shrinks a command can't silently flip it back to inlining
@@ -54,15 +54,21 @@ export const SLASHDO_INLINE_BUDGET_CHARS = 24000;
  * slashdo lib includes that are REVIEWER VARIANTS — one loop per reviewer kind,
  * all five pasted into `review` / `better` / `pr` / `release` / `depfree` though
  * a given run drives exactly one. Pruning the unreachable ones is where the real
- * prompt saving is — pruning to a single CLI reviewer measured -37% on `review`,
- * -43% on `pr`, -45% on `depfree`; the file pointer is the backstop for the rest.
+ * prompt saving is — pruning to a single CLI reviewer measured -23% on `review`,
+ * -27% on `pr`, -28% on `depfree`; the file pointer is the backstop for the rest.
  *
  * Keyed by the PortOS reviewer slug (`REVIEWER_VALUES` in `cosValidation.js`) so
  * the keep-set derives from already-resolved run settings. `copilot` and the
  * arbitrary-`@login` loop are GitHub-side; `claude`/`codex`/`antigravity`/`grok`
  * all share slashdo's one local-agent loop; `ollama`/`lmstudio` are the
- * local-model loop. `multi-reviewer-loop` is the wrapper — only reachable with
- * 2+ review sources.
+ * local-model loop.
+ *
+ * `multi-reviewer-loop` is the ORCHESTRATION WRAPPER, not a per-reviewer variant:
+ * slashdo's commands hand off to it for any non-empty reviewer list, and its own
+ * spec says `{REVIEW_AGENTS}` "may contain a single entry". So it is listed here
+ * (it is prunable in principle — a run with no reviewers at all doesn't reach it)
+ * but `unreachableReviewerIncludes` never drops it once a reviewer resolves.
+ * Pruning it for a lone reviewer left the inner loop with nothing to dispatch it.
  */
 export const SLASHDO_REVIEWER_INCLUDES = Object.freeze({
   copilot: 'copilot-review-loop',
@@ -110,8 +116,9 @@ export function unreachableReviewerIncludes({ reviewers = null, usernames = [] }
     else return [];
   }
   if (users.length) keep.add(SLASHDO_REVIEWER_INCLUDES.username);
-  // The wrapper is only reachable with more than one review source to sequence.
-  if (reviewers.length + users.length > 1) keep.add(SLASHDO_REVIEWER_INCLUDES.multi);
+  // Always kept: slashdo's commands dispatch EVERY non-empty reviewer list
+  // through the wrapper, single-entry lists included (see SLASHDO_REVIEWER_INCLUDES).
+  keep.add(SLASHDO_REVIEWER_INCLUDES.multi);
 
   return SLASHDO_REVIEWER_INCLUDE_NAMES.filter(name => !keep.has(name));
 }
