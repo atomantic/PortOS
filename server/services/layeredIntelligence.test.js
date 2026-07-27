@@ -729,17 +729,26 @@ describe('computeDeliveryMetrics (#3085)', () => {
     }
   });
 
-  it('reuses a pre-computed roll-up instead of re-deriving it', () => {
-    const metrics = computeProposalOutcomeMetrics(RECORDS);
-    expect(computeDeliveryMetrics([], { metrics })).toEqual(computeDeliveryMetrics(RECORDS));
+  it('agrees with the roll-up it projects', () => {
+    // `scope` is LLM-authored, so the two must never disagree about which scope a
+    // record belongs to — the prompt and the exclusion gate both trace back here.
+    const rolled = computeProposalOutcomeMetrics(RECORDS);
+    const { delivery, deliveryByScope } = computeDeliveryMetrics(RECORDS);
+    expect(delivery.totalApproved).toBe(rolled.totalApproved);
+    expect(delivery.totalDelivered).toBe(rolled.totalCompleted);
+    expect(deliveryByScope['app-improvement'].delivered).toBe(rolled.byScope['app-improvement'].completed);
   });
 
   it('buckets a "__proto__" scope as data rather than rewriting the prototype', () => {
     const { deliveryByScope } = computeDeliveryMetrics([
       { scope: '__proto__', outcome: 'merged', executionOutcome: 'success', filedAt: '2026-07-01T00:00:00.000Z', executionAt: '2026-07-01T01:00:00.000Z' }
     ]);
+    // On a plain object `bucket['__proto__'] = …` swaps the prototype instead of adding
+    // a key, so the bucket would vanish from Object.keys. The null prototype is what
+    // makes it data — assert the prototype directly, since a passing Object.keys check
+    // on Object.prototype pollution would be silent.
+    expect(Object.getPrototypeOf(deliveryByScope)).toBeNull();
     expect(Object.keys(deliveryByScope)).toContain('__proto__');
-    expect({}.approved).toBeUndefined();
   });
 });
 
@@ -1337,6 +1346,17 @@ describe('computeScopeAwareness (#2760)', () => {
 
 describe('buildPrompt', () => {
   const app = { name: 'TestApp' };
+
+  it('drops a blank cosMetrics document instead of rendering an empty block (#3085)', () => {
+    // renderCosMetricsSource returns '' when it has neither task types nor delivery
+    // data, and the hook assigns that straight onto sources — so the omission this
+    // relies on happens HERE. A rendered `### cosMetrics` with nothing under it would
+    // cost prompt budget and tell the reasoner nothing.
+    const base = { app, config: { allowedScopes: ['app-improvement'], rules: '' } };
+    expect(buildPrompt({ ...base, sources: { cosMetrics: '' } })).not.toContain('### cosMetrics');
+    expect(buildPrompt({ ...base, sources: { cosMetrics: '{"delivery":{"totalApproved":3}}' } }))
+      .toContain('### cosMetrics');
+  });
 
   it('injects the scope-awareness block only when present, under its own heading (#2760)', () => {
     const base = { app, isPortos: true, config: { allowedScopes: ['loop-meta'], rules: '' } };

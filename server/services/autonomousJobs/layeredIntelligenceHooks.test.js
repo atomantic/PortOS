@@ -374,18 +374,6 @@ describe('buildTaskInput', () => {
     expect(li.renderCosMetricsSource).toHaveBeenCalledWith(expect.objectContaining({ delivery: null }))
   })
 
-  it('omits the cosMetrics block entirely when neither half has data (#3085)', async () => {
-    // No CoS run history AND no delivery data → renderCosMetricsSource returns '',
-    // which buildPrompt drops rather than emitting a hollow `{}` source block.
-    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { cosMetrics: true } })
-    li.gatherSources.mockResolvedValue({ goals: 'be great', cosMetricsByType: {} })
-    li.renderCosMetricsSource.mockReturnValue('')
-    await buildTaskInput({ app: APP })
-    const { sources } = li.buildPrompt.mock.calls.at(-1)[0]
-    expect(sources.cosMetrics).toBe('')
-    expect('cosMetricsByType' in sources).toBe(false)
-  })
-
   it('leaves cosMetrics alone when the source is off (#3085)', async () => {
     li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { outcomes: true } });
     li.gatherSources.mockResolvedValue({ goals: 'be great' });

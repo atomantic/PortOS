@@ -200,10 +200,13 @@ const COS_METRICS_DELIVERY_KEYS = ['delivery', 'deliveryByScope'];
  * "nothing has been approved yet".
  *
  * Returns '' when there is nothing at all to report (no task types AND no delivery
- * data) so the caller omits the source rather than injecting a hollow `{}` block —
- * both halves of this document are independently optional. A fresh install with no
- * CoS run history can still have approved-but-undelivered proposals worth surfacing,
- * and vice versa.
+ * data) so the caller omits the source rather than injecting a hollow `{}` block.
+ * Within the `cosMetrics` source the two halves are independently optional: a fresh
+ * install with no CoS run history can still have approved-but-undelivered proposals
+ * worth surfacing, and vice versa. Emitting the document at all still requires the
+ * `cosMetrics` source itself to be enabled — an app that turned it off gets no
+ * `### cosMetrics` block, delivery half included, and reads its delivery signal from
+ * the `liOutcomes` / `liSelfEval` blocks instead.
  *
  * @param {object} args
  * @param {Object} [args.metricsByType] - per-task-type run stats (see gatherSources).

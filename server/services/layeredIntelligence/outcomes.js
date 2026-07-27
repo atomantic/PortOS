@@ -211,14 +211,18 @@ export function computeProposalOutcomeMetrics(outcomes = [], { stats = null, exe
  * per-proposal records in `data/cos/li-outcomes/` already hold both sides of the
  * lifecycle, so an on-disk counter pair incremented at each transition would be a
  * second aggregate free to drift from the records it summarizes (and would need a
- * migration to seed on every existing install). Pass `metrics` when the caller has
- * already computed the full roll-up to skip a second pass.
+ * migration to seed on every existing install).
+ *
+ * PROMPT-DISPLAY ONLY. The hard exclusion gate reads its own delivery rate straight
+ * off the records via `computeLiExecutionHealth`, so nothing here is load-bearing for
+ * enforcement — which is why rounding is safe (a threshold compare must never see a
+ * rounded rate; that one does not).
  *
  * `currentDeliveryRate` is null — never 0 — when nothing has been approved yet: the
  * sentinel rule. "No approvals to deliver on" and "every approval was lost" are
- * opposite facts, and this rate is what arms the hard exclusion gate
- * (LI_HARD_GATE_DELIVERY_THRESHOLD), so collapsing them would lock out a cold loop.
- * Rounded because this is display — the gate compares the unrounded rate itself.
+ * opposite facts, and a 0% delivery figure in the prompt is a direct instruction to
+ * the reasoner to hold back on self-directed work — exactly the wrong read for a loop
+ * that simply has no track record yet.
  *
  * `deliveryByScope` lists only scopes with at least one APPROVAL. A scope whose every
  * proposal was rejected has no delivery signal to report (its `approved`/`delivered`
@@ -226,14 +230,12 @@ export function computeProposalOutcomeMetrics(outcomes = [], { stats = null, exe
  * already covers the filing side.
  *
  * @param {Array} [outcomes] - the app's li-outcomes records (from listOutcomes).
- * @param {object} [opts]
- * @param {object} [opts.metrics] - a `computeProposalOutcomeMetrics(outcomes)` result.
  * @returns {{ delivery: { totalApproved: number, totalDelivered: number,
  *   currentDeliveryRate: number|null },
  *   deliveryByScope: Object<string, { approved: number, delivered: number }> }}
  */
-export function computeDeliveryMetrics(outcomes = [], { metrics = null } = {}) {
-  const rolled = metrics || computeProposalOutcomeMetrics(outcomes);
+export function computeDeliveryMetrics(outcomes = []) {
+  const rolled = computeProposalOutcomeMetrics(outcomes);
   // Null prototype for the same reason the roll-up uses one: `scope` is an
   // LLM-authored free string, so a literal "__proto__" key would rewrite the
   // prototype instead of adding a bucket.

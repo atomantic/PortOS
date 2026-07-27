@@ -367,8 +367,10 @@ export async function buildTaskInput({ app } = {}) {
   // never be read as a healthy pipeline. Done here rather than inside gatherSources
   // because only this point has POST-reconciliation outcomes — a pre-reconcile snapshot
   // would report a different approval count than the liOutcomes block in the same
-  // prompt. `cosMetricsByType` is gatherSources' internal hand-off for exactly this
-  // re-render; drop it so it can never leak into buildPrompt as a source block.
+  // prompt. Present only when the `cosMetrics` source is enabled, so an app that turned
+  // that source off gets no block (its delivery signal rides liOutcomes / liSelfEval).
+  // `cosMetricsByType` is gatherSources' internal hand-off for exactly this re-render;
+  // drop it once consumed rather than leaving a spent key on the source map.
   if (sources.cosMetricsByType) {
     const rendered = renderCosMetricsSource({
       metricsByType: sources.cosMetricsByType,
