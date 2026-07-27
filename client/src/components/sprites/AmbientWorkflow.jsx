@@ -15,7 +15,14 @@ export default function AmbientWorkflow({
   record, reference, ambient, renders, hasBackend, mode, onGenerateReference, onGenerateAmbient, onChanged,
   corrections = null, onCorrectionChange = null,
 }) {
-  const [designPrompt, setDesignPrompt] = useState('');
+  // Seeded from the manifest's stored design (the server persists it on every
+  // ambient-main render) so a REGENERATE carries the design forward instead of
+  // starting blank. Load-bearing for the correction note (#3134): the server
+  // requires a design input on this target, so a correction typed against an
+  // empty field would 400 with DESIGN_INPUT_REQUIRED. Re-seeded on record switch
+  // only, so it never fights typing within one sprite.
+  const [designPrompt, setDesignPrompt] = useState(reference?.manifest?.designPrompt || '');
+  useEffect(() => { setDesignPrompt(reference?.manifest?.designPrompt || ''); }, [record.id]);
   const main = reference?.manifest?.mainReference || null;
   const candidate = useMemo(
     () => (reference?.candidates || []).find((item) => item.target === 'main') || null,

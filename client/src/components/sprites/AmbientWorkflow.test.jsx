@@ -97,3 +97,26 @@ describe('AmbientWorkflow correction notes (#3134)', () => {
     expect(screen.queryByRole('button', { name: /correction note/i })).toBeNull();
   });
 });
+
+// The server requires a design input on the ambient main, so the field must
+// carry the manifest's stored design forward — otherwise a correction typed
+// against a blank field 400s with DESIGN_INPUT_REQUIRED (#3134).
+describe('AmbientWorkflow design prompt', () => {
+  it('seeds the design field from the manifest so a regenerate is not blank', () => {
+    renderAmbient({
+      reference: {
+        manifest: { mainReference: { locked: false }, designPrompt: 'a willow by a pond' },
+        candidates: [CANDIDATE],
+      },
+    });
+    expect(screen.getByLabelText(/Describe this place/i)).toHaveValue('a willow by a pond');
+    // With a design present the regenerate is reachable — which is what makes the
+    // correction note usable at all on this surface.
+    expect(screen.getByRole('button', { name: /Regenerate reference/i })).toBeEnabled();
+  });
+
+  it('stays empty for a record that has never been rendered', () => {
+    renderAmbient({ reference: { manifest: { mainReference: { locked: false } }, candidates: [] } });
+    expect(screen.getByLabelText(/Describe this place/i)).toHaveValue('');
+  });
+});
