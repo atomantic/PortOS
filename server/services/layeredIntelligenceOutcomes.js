@@ -31,6 +31,12 @@ import { classifyExecutionFailure, EXECUTION_FAILURE_VALUES } from './layeredInt
 // only bounds a hand-edited/corrupt value — the real tokens are far shorter.
 const FAILURE_SIGNAL_MAX_LEN = 64;
 
+// Where a record's `outcomeAt` came from (#3120) — see `sanitizeOutcomeRecord`.
+// `'tracker'` is a real close time reported by the tracker; `'observed'` was
+// synthesized from the reconcile clock because the tracker (currently only `plan`)
+// reports none, and is therefore only a lower bound on when the human decided.
+export const OUTCOME_AT_SOURCES = ['tracker', 'observed'];
+
 // The report/retention window. Reuses the dedup suppression window so a proposal
 // stays in the outcome report exactly as long as it still suppresses re-proposal —
 // the two "LI remembers this" windows move in lockstep.
@@ -90,6 +96,22 @@ export function sanitizeOutcomeRecord(raw) {
     filedAt: typeof raw.filedAt === 'string' ? raw.filedAt : null,
     outcome,
     outcomeAt: outcome && typeof raw.outcomeAt === 'string' ? raw.outcomeAt : null,
+    // Provenance of `outcomeAt` (#3120). The approval-funnel metrics measure WHEN the
+    // human decided, and only a tracker-reported close time actually says that: the
+    // `plan` tracker reports no timestamp at all, so reconcileOutcomes synthesizes one
+    // from the reconcile clock. Without this flag a PLAN.md item checked off months ago
+    // but first reconciled today would read as a decision made today, inflating both the
+    // sliding-window cohort and the filing-to-decision latency. Three-valued, in the
+    // same spirit as `rejectionReason`:
+    //   - `'tracker'`  — the tracker reported a real close time; authoritative.
+    //   - `'observed'` — synthesized at reconcile time; a LOWER BOUND on the decision,
+    //                    not the decision itself. Excluded from window/latency math.
+    //   - `null`       — unrecognized, or a record written before this field existed.
+    //     Legacy records are treated as `tracker` by the funnel: forge and jira always
+    //     report `closedAt`, so a synthesized timestamp was already the narrow exception,
+    //     and blanking the metric for every existing install to cover it would be the
+    //     worse trade. Such records age out within the 30-day retention window.
+    outcomeAtSource: outcome && OUTCOME_AT_SOURCES.includes(raw.outcomeAtSource) ? raw.outcomeAtSource : null,
     outcomeReason: outcome && typeof raw.outcomeReason === 'string' ? raw.outcomeReason : null,
     rejectionReason: rejectable && REJECTION_REASON_VALUES.includes(raw.rejectionReason) ? raw.rejectionReason : null,
     // Implementing-PR handle (#2748, deliverable 2) — the number of the PR that was
@@ -180,6 +202,8 @@ export async function recordFiledProposal({ appId, slug, tracker = null, issueRe
     filedAt: new Date(now).toISOString(),
     outcome: null,
     outcomeAt: null,
+    // No decision yet, so nothing to attribute a decision timestamp to (#3120).
+    outcomeAtSource: null,
     outcomeReason: null,
     // Unresolved: nothing has rejected it yet, so there is nothing to diagnose.
     rejectionReason: null,
@@ -286,7 +310,7 @@ export async function recordProposalExecution({ appId, slug, scope = null, succe
           appId, slug: normSlug, tracker: null, issueRef: null,
           scope: normScope,
           filedAt: new Date(now).toISOString(),
-          outcome: null, outcomeAt: null, outcomeReason: null, rejectionReason: null,
+          outcome: null, outcomeAt: null, outcomeAtSource: null, outcomeReason: null, rejectionReason: null,
           implementingPr: null
         };
     const next = {
@@ -503,10 +527,21 @@ export async function reconcileOutcomes({ appId, existingIssues = [], now = Date
     // from `issue`, not `fresh`, so a concurrent execution write can't revert them either.
     const ok = await store.queueRecordWrite(id, async () => {
       const fresh = (await store.loadOne(id).catch(() => null)) || r;
+      // Only a tracker-reported `closedAt` dates the human's decision. When the tracker
+      // reports none (the `plan` filer), the fallback is the reconcile clock — which is
+      // a LOWER BOUND, not the decision time — so stamp the provenance alongside it so
+      // the approval-funnel metrics (#3120) can exclude it from the window and latency
+      // math instead of reading a months-old checkbox as a decision made today. A
+      // previously-stored timestamp keeps whatever provenance it already carried.
+      const outcomeAt = issue.closedAt || fresh.outcomeAt || new Date(now).toISOString();
+      const outcomeAtSource = issue.closedAt
+        ? 'tracker'
+        : (fresh.outcomeAt ? (fresh.outcomeAtSource ?? null) : 'observed');
       const next = {
         ...fresh,
         outcome,
-        outcomeAt: issue.closedAt || fresh.outcomeAt || new Date(now).toISOString(),
+        outcomeAt,
+        outcomeAtSource,
         outcomeReason: issue.stateReason || 'auto-derived from tracker state',
         rejectionReason,
         implementingPr: nextImplementingPr

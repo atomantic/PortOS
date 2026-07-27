@@ -235,6 +235,30 @@ describe('reconcileOutcomes', () => {
     expect(byslug['still-open'].outcome).toBeNull();
   });
 
+  it('stamps outcomeAt provenance so a synthesized decision date is distinguishable (#3120)', async () => {
+    await recordFiledProposal({ appId: 'app-1', slug: 'has-closed-at', scope: 'app-improvement' }, store);
+    // A `plan`-tracker close: the filer reports no closedAt at all, so reconcile has to
+    // synthesize the timestamp from its own clock.
+    await recordFiledProposal({ appId: 'app-1', slug: 'no-closed-at', scope: 'app-improvement' }, store);
+
+    const now = Date.parse('2026-07-20T00:00:00Z');
+    await reconcileOutcomes({
+      appId: 'app-1',
+      now,
+      existingIssues: [
+        { slug: 'has-closed-at', state: 'closed', stateReason: 'completed', closedAt: '2026-07-01T00:00:00Z' },
+        { slug: 'no-closed-at', state: 'closed' }
+      ]
+    }, store);
+
+    const bySlug = Object.fromEntries((await listOutcomes({ appId: 'app-1', now }, store)).map(r => [r.slug, r]));
+    // A tracker-reported close time is authoritative — the funnel may date the decision.
+    expect(bySlug['has-closed-at'].outcomeAtSource).toBe('tracker');
+    // A synthesized one is only a lower bound, so it is marked and excluded downstream.
+    expect(bySlug['no-closed-at'].outcomeAtSource).toBe('observed');
+    expect(bySlug['no-closed-at'].outcomeAt).toBe(new Date(now).toISOString());
+  });
+
   it('does not re-resolve an already-resolved record', async () => {
     await recordFiledProposal({ appId: 'app-1', slug: 's', scope: 'app-improvement' }, store);
     await reconcileOutcomes({ appId: 'app-1', existingIssues: [{ slug: 's', state: 'closed', stateReason: 'completed' }] }, store);

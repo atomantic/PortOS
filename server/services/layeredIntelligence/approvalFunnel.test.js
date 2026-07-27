@@ -176,6 +176,32 @@ describe('computeApprovalFunnel (#3120)', () => {
     expect(funnel.window.timeToDecision.maxMs).toBeLessThanOrEqual(4 * DAY);
   });
 
+  it('treats a SYNTHESIZED decision timestamp as undated, not as a decision made now', () => {
+    // The `plan` tracker reports no close time, so reconcileOutcomes stamps the reconcile
+    // clock and marks it `observed`. A PLAN.md item checked off months ago but first
+    // reconciled today must not read as a fresh decision with a months-long latency.
+    const outcomes = [
+      { ...decidedRecord('plan-item', 'merged', 90 * DAY, 0), outcomeAtSource: 'observed' }
+    ];
+    const funnel = computeApprovalFunnel(outcomes, { now: NOW });
+    expect(funnel.window).toMatchObject({ decided: 0, approved: 0, undated: 1, approvalRate: null });
+    expect(funnel.window.timeToDecision.medianMs).toBeNull();
+    // It is still a real verdict for lifetime throughput — only its DATE is unusable.
+    expect(funnel.proposalPhase).toMatchObject({ totalFiled: 1, totalDecided: 1, totalPending: 0 });
+  });
+
+  it('trusts a tracker-reported decision timestamp and a legacy record without the flag', () => {
+    const outcomes = [
+      { ...decidedRecord('forge-item', 'merged', 4 * DAY, 2 * DAY), outcomeAtSource: 'tracker' },
+      // Written before outcomeAtSource existed: forge/jira always report closedAt, so a
+      // legacy record is trusted rather than blanking the metric for existing installs.
+      decidedRecord('legacy-item', 'rejected', 5 * DAY, DAY)
+    ];
+    const funnel = computeApprovalFunnel(outcomes, { now: NOW });
+    expect(funnel.window).toMatchObject({ decided: 2, approved: 1, rejected: 1, undated: 0, approvalRate: 50 });
+    expect(funnel.window.timeToDecision.count).toBe(2);
+  });
+
   it('honors an injected window span', () => {
     const outcomes = [decidedRecord('mid', 'merged', 6 * DAY, 5 * DAY)];
     expect(computeApprovalFunnel(outcomes, { now: NOW, windowMs: 3 * DAY }).window.approvalRate).toBeNull();

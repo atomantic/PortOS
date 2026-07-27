@@ -27,6 +27,13 @@
  * already keeps (the "no cold-bootstrap LLM calls" policy). `now` is an injected clock
  * seam so the ages are testable and so one selfEval run reasons against a single "now".
  *
+ * DECISION TIMESTAMPS MUST BE AUTHORITATIVE. Only a tracker-reported close time dates
+ * the human's decision. The `plan` tracker reports none, so `reconcileOutcomes`
+ * synthesizes one from the reconcile clock and marks it `outcomeAtSource: 'observed'`;
+ * this module treats such a record as UNDATED rather than as a decision made now, so a
+ * PLAN.md item checked off months ago but first reconciled today cannot inflate the
+ * window cohort or report a latency the user never took.
+ *
  * SENTINEL DISCIPLINE throughout — a rate whose denominator is zero is `null`, never 0:
  * "no decision has been made in this window" and "every decision was a rejection" are
  * opposite facts, and a 0% approval rate in the prompt is a direct instruction to the
@@ -93,7 +100,13 @@ export function computeApprovalFunnel(outcomes = [], { now = Date.now(), windowM
   const decidedInWindow = [];
   let undatedDecisions = 0;
   for (const r of decided) {
-    const decidedMs = parsedMs(r.outcomeAt);
+    // A SYNTHESIZED decision timestamp (`outcomeAtSource === 'observed'`) is the
+    // reconcile clock, not the human's decision: the `plan` tracker reports no close
+    // time, so a PLAN.md item checked off months ago but first reconciled today carries
+    // today's date. Treated exactly like an unparseable one — it lands in `undated`
+    // rather than being read as a decision made now, which would both inflate the
+    // window cohort and report a filing-to-decision latency the user never took.
+    const decidedMs = r.outcomeAtSource === 'observed' ? null : parsedMs(r.outcomeAt);
     // An undatable decision cannot be placed in or out of the window. Counting it in
     // would inflate a "recent" rate with an unknown-age verdict; counting it out
     // silently would undercount the user's activity. It gets its own slot.
