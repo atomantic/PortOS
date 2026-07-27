@@ -98,6 +98,14 @@ export function computeApprovalFunnel(outcomes = [], { now = Date.now(), windowM
     // would inflate a "recent" rate with an unknown-age verdict; counting it out
     // silently would undercount the user's activity. It gets its own slot.
     if (decidedMs === null) { undatedDecisions += 1; continue; }
+    // Lower bound only, deliberately. A FUTURE-dated decision (clock skew on the peer
+    // that reconciled it, a repaired record) is still a decision the user made, and it
+    // is by definition the most recent one — so it belongs in the window. Excluding it
+    // would be the more dangerous choice, not the safer one: it would silently drop a
+    // real verdict from BOTH sides of the rate while `proposalPhase.totalDecided` still
+    // counted it, and a dropped REJECTION inflates the approval rate — exactly the
+    // direction that must never be flattered. The elapsed-time math clamps at `now`
+    // separately (see `latency`), so the skew cannot distort a duration.
     if (decidedMs >= windowStart) decidedInWindow.push({ record: r, decidedMs });
   }
   const countOutcome = (name) => decidedInWindow.filter(({ record }) => record.outcome === name).length;

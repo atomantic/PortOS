@@ -159,6 +159,23 @@ describe('computeApprovalFunnel (#3120)', () => {
     expect(funnel.window.timeToDecision.medianMs).toBeLessThanOrEqual(DAY);
   });
 
+  it('keeps a FUTURE-dated decision inside the window rather than dropping the verdict', () => {
+    // Excluding a skewed verdict is the more dangerous choice: it drops a real decision
+    // from BOTH sides of the rate while proposalPhase still counts it, and dropping a
+    // REJECTION inflates the approval rate — the one direction that must never flatter.
+    const outcomes = [
+      decidedRecord('skewed-rejection', 'rejected', DAY, -30 * DAY),
+      decidedRecord('real-approval', 'merged', 4 * DAY, 2 * DAY)
+    ];
+    const funnel = computeApprovalFunnel(outcomes, { now: NOW });
+    expect(funnel.window).toMatchObject({ decided: 2, approved: 1, rejected: 1, approvalRate: 50 });
+    // The window cohort and the lifetime decided count agree — no verdict silently lost.
+    expect(funnel.proposalPhase.totalDecided).toBe(2);
+    // And the skew still cannot distort a duration: the clamp holds it at the age of
+    // the proposal (1d), not the 31d the raw timestamps imply.
+    expect(funnel.window.timeToDecision.maxMs).toBeLessThanOrEqual(4 * DAY);
+  });
+
   it('honors an injected window span', () => {
     const outcomes = [decidedRecord('mid', 'merged', 6 * DAY, 5 * DAY)];
     expect(computeApprovalFunnel(outcomes, { now: NOW, windowMs: 3 * DAY }).window.approvalRate).toBeNull();
