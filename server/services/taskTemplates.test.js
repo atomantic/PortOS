@@ -251,9 +251,11 @@ describe('taskTemplates service', () => {
         ['better', 'depfree', 'next', 'plan-task', 'release', 'replan', 'review', 'scan']
       );
       // Every one of these either writes no code at all or manages its own
-      // worktree/PR, so none of them want PortOS to wrap another one around it.
+      // worktree/PR/review, so none of them want PortOS to wrap another one
+      // around it. `reviewLoop: false` arrived with the shared catalog (#3108) —
+      // the route already sent it, so the two surfaces now agree.
       for (const t of slashdo) {
-        expect(t.settings).toEqual({ useWorktree: false, openPR: false, simplify: false });
+        expect(t.settings).toEqual({ useWorktree: false, openPR: false, simplify: false, reviewLoop: false });
       }
       // The BARE command name is what is stored — a rendered `/do:x` string
       // would be Claude-only, and the provider is unknown at pick time.

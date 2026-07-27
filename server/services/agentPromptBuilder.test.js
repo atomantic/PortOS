@@ -561,7 +561,7 @@ describe('buildLightContextPrompt', () => {
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
         isTruthyMeta,
-        { isTui: false });
+        { isTui: false, providerId: 'codex' });
       expect(prompt).toMatch(/^## Completion$/m);
       expect(prompt).not.toMatch(/`\/do:pr`/);
       expect(prompt).not.toMatch(/`\/quit`/);
@@ -577,10 +577,56 @@ describe('buildLightContextPrompt', () => {
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
         isTruthyMeta,
-        { isTui: false }); // no providerId → not Claude → no slashdo
+        { isTui: false, providerId: 'antigravity' }); // skill-style CLI → no slashdo
       expect(prompt).toMatch(/^## Completion$/m);
       expect(prompt).not.toMatch(/`\/simplify`/);
       expect(prompt).toMatch(/review your changed code for reuse, quality, and efficiency/i);
+      expect(prompt).toMatch(/PortOS will push and open the PR/);
+    });
+
+    // #3108: the slashdo gate derives from `hostTypesSlashdoCommands`, which reads
+    // a provider by its LAUNCH COMMAND rather than an id allowlist. These three
+    // cases are the behavior changes that convergence intends.
+    it('a path-configured claude binary with a custom id gets the slashdo Completion workflow', () => {
+      // Previously gated on `providerId === 'claude-code'`, so a renamed or
+      // path-configured `claude` provider was told PortOS would push for it while
+      // the slashdo section handed it `/do:*` commands — two contradictory answers.
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, simplify: true } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: false, providerId: 'my-custom-agent', providerCommand: '/opt/homebrew/bin/claude' });
+      expect(prompt).toMatch(/`\/simplify`/);
+      expect(prompt).toMatch(/`\/do:pr/);
+      expect(prompt).not.toMatch(/PortOS will push and open the PR/);
+    });
+
+    it('a blank-command provider gets slashdo (the CLI spawner launches `claude` for it)', () => {
+      // `buildCliSpawnConfig`'s default branch spawns `claude` when a provider
+      // configures no command, so a blank command really is a Claude session.
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, simplify: true } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: false });
+      expect(prompt).toMatch(/`\/simplify`/);
+      expect(prompt).toMatch(/`\/do:pr/);
+    });
+
+    it('a blank-command CODEX provider does NOT get slashdo (the spawner launches `codex`)', () => {
+      // The blank command is resolved through `inferTuiCommand`, the same mapping
+      // the spawners use — so a codex id spawns `codex`, which has Agent Skills,
+      // not slash commands.
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, simplify: true } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: false, providerId: 'codex-tui' });
+      expect(prompt).not.toMatch(/`\/simplify`/);
+      expect(prompt).not.toMatch(/`\/do:pr`/);
       expect(prompt).toMatch(/PortOS will push and open the PR/);
     });
 

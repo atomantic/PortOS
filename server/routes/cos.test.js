@@ -909,15 +909,21 @@ describe('CoS Routes', () => {
   });
 
   describe('POST /api/cos/tasks/slashdo', () => {
+    // Every catalog command except `next` (which has its own workTracker-aware
+    // branch below) takes the pin-the-command path: the shared catalog is the
+    // allowlist, so `plan-task`/`depfree`/`scan` — previously template-only — are
+    // dispatchable here too (#3108).
     it.each([
       'push',
       'review',
       'replan',
       'release',
       'better',
-      'better-swift'
+      'better-swift',
+      'plan-task',
+      'depfree',
+      'scan'
     ])('should create a task from slashdo command %s', async (command) => {
-      loadSlashdoCommand.mockResolvedValue('command content');
       cos.addTask.mockResolvedValue({ id: `task-sd-${command}`, status: 'pending' });
 
       const response = await request(app)
@@ -926,7 +932,43 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.id).toBe(`task-sd-${command}`);
-      expect(loadSlashdoCommand).toHaveBeenCalledWith(command);
+      const [taskData] = cos.addTask.mock.calls.at(-1);
+      // The BARE command name is persisted; the prompt builder renders the right
+      // invocation shape once the provider is known. The body is NOT inlined here
+      // — that was a Claude-only assumption the route made for every provider.
+      expect(taskData.slashdoCommand).toBe(command);
+      expect(taskData.context).toBeUndefined();
+      expect(loadSlashdoCommand).not.toHaveBeenCalled();
+      // …and no `/do:` literal leaks into the queue row's description.
+      expect(taskData.description).not.toMatch(/\/do:/);
+      expect(taskData.description).toContain(`do-${command}`);
+      // The catalog's run shape rides along, `reviewLoop: false` included.
+      expect(taskData.reviewLoop).toBe(false);
+      expect(taskData.useWorktree).toBe(false);
+      expect(taskData.openPR).toBe(false);
+    });
+
+    it('rejects a real slashdo command that is not in the launchable catalog', async () => {
+      const response = await request(app)
+        .post('/api/cos/tasks/slashdo')
+        .send({ command: 'rpr', app: 'my-app' });
+
+      expect(response.status).toBe(400);
+      expect(cos.addTask).not.toHaveBeenCalled();
+    });
+
+    it('serves the catalog the client Agent Operations buttons render', async () => {
+      const response = await request(app).get('/api/cos/slashdo-commands');
+
+      expect(response.status).toBe(200);
+      const names = response.body.commands.map(c => c.command);
+      expect(names).toContain('next');
+      expect(names).toContain('plan-task');
+      // Enough per-entry shape for the panel to render a labelled, gated button.
+      const next = response.body.commands.find(c => c.command === 'next');
+      expect(next.label).toBe('/do:next');
+      expect(next.description).toBeTruthy();
+      expect(next.configurable).toBe(true);
     });
 
     it('routes /do:next through the app Work Tracker instead of the raw command', async () => {
@@ -952,6 +994,10 @@ describe('CoS Routes', () => {
       const [taskData] = cos.addTask.mock.calls.at(-1);
       expect(taskData.context).toBe('CLAIM ISSUE PROMPT');
       expect(taskData.description).toContain('GitHub Issues');
+      // The claim prompt IS the instruction here, so no bare command is pinned
+      // (that would make the prompt builder append the slashdo body on top).
+      expect(taskData.slashdoCommand).toBeUndefined();
+      expect(taskData.description).not.toMatch(/\/do:/);
     });
 
     it('threads the run drawer settings — target/author-filter/reviewers into the claim prompt, provider/model/effort/simplify onto the task', async () => {

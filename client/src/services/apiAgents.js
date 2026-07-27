@@ -58,6 +58,10 @@ export const addCosTask = (task, options = {}) => request('/cos/tasks', {
   body: JSON.stringify(task),
   ...options
 });
+// The bundled slashdo workflows a CoS task can run — the shared server catalog
+// (`server/lib/slashdoCatalog.js`), fetched rather than mirrored client-side so a
+// workflow added there shows up in the Agent Operations buttons automatically.
+export const getSlashdoCommands = (options = {}) => request('/cos/slashdo-commands', options);
 // Queue a `/do:*` agent task for an app. `settings` carries the run options the
 // Agent Operations drawer collects — provider/model/effort/simplify for every
 // command, plus the `/do:next`-only target work item, issue author filter, and

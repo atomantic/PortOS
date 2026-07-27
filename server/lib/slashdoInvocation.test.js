@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   SLASHDO_INVOCATION_STYLES,
   buildSlashdoSection,
+  hostTypesSlashdoCommands,
   isValidSlashdoCommand,
   resolveSlashdoInvocation,
   resolveSlashdoStyle,
@@ -71,6 +72,62 @@ describe('resolveSlashdoStyle', () => {
   it('falls back to skill in lean mode — a --bare claude session has no project commands', () => {
     expect(resolveSlashdoStyle({ providerId: 'claude-ollama', providerCommand: 'claude', leanMode: true }))
       .toBe(SLASHDO_INVOCATION_STYLES.SKILL);
+  });
+
+  describe('resolveBlankCommand (the spawner posture, #3108)', () => {
+    it('infers a blank command from the provider id, matching what the spawners launch', () => {
+      // No command configured → `inferTuiCommand` maps the id, exactly as the
+      // TUI/CLI spawners do. A bare/unknown id spawns `claude`…
+      expect(resolveSlashdoStyle({ resolveBlankCommand: true }))
+        .toBe(SLASHDO_INVOCATION_STYLES.SLASH_NAMESPACED);
+      expect(resolveSlashdoStyle({ providerId: 'claude-ollama', resolveBlankCommand: true }))
+        .toBe(SLASHDO_INVOCATION_STYLES.SLASH_NAMESPACED);
+      // …while a codex/antigravity/gemini/kimi id spawns that binary, which has
+      // Agent Skills rather than slash commands.
+      for (const providerId of ['codex-tui', 'antigravity-tui', 'gemini-tui', 'kimi-tui']) {
+        expect(resolveSlashdoStyle({ providerId, resolveBlankCommand: true }))
+          .toBe(SLASHDO_INVOCATION_STYLES.SKILL);
+      }
+    });
+
+    it('does not let a claude-prefixed id override the binary actually configured', () => {
+      expect(resolveSlashdoStyle({ providerId: 'claude-code', providerCommand: 'codex', resolveBlankCommand: true }))
+        .toBe(SLASHDO_INVOCATION_STYLES.SKILL);
+    });
+
+    it('still honors lean mode and an explicit opencode command', () => {
+      expect(resolveSlashdoStyle({ providerId: 'claude-ollama-tui', leanMode: true, resolveBlankCommand: true }))
+        .toBe(SLASHDO_INVOCATION_STYLES.SKILL);
+      expect(resolveSlashdoStyle({ providerId: 'opencode-tui', providerCommand: 'opencode', resolveBlankCommand: true }))
+        .toBe(SLASHDO_INVOCATION_STYLES.SLASH_FLAT);
+    });
+
+    it('leaves the DEFAULT posture strict — a blank command is not Claude when phrasing an invocation', () => {
+      // Same inputs, opposite answers: phrasing an invocation must not guess
+      // `/do:x` for a host it cannot positively identify, while the spawner
+      // question above knows a blank command launches `claude`.
+      expect(resolveSlashdoStyle({})).toBe(SLASHDO_INVOCATION_STYLES.SKILL);
+      expect(resolveSlashdoStyle({ providerId: 'claude-ollama' })).toBe(SLASHDO_INVOCATION_STYLES.SKILL);
+      // A `claude-code*` id is a positive identification even without a command.
+      expect(resolveSlashdoStyle({ providerId: 'claude-code-tui' }))
+        .toBe(SLASHDO_INVOCATION_STYLES.SLASH_NAMESPACED);
+    });
+  });
+});
+
+describe('hostTypesSlashdoCommands', () => {
+  it('is true only for hosts that can type a /do:<cmd> slash command', () => {
+    expect(hostTypesSlashdoCommands({ providerId: 'claude-code' })).toBe(true);
+    expect(hostTypesSlashdoCommands({ providerId: 'claude-code-bedrock' })).toBe(true);
+    // Path-configured / renamed claude — the id allowlist this replaced missed it.
+    expect(hostTypesSlashdoCommands({ providerId: 'my-agent', providerCommand: '/opt/homebrew/bin/claude' })).toBe(true);
+    // Blank command resolves through the spawner mapping.
+    expect(hostTypesSlashdoCommands({})).toBe(true);
+    expect(hostTypesSlashdoCommands({ providerId: 'codex-tui' })).toBe(false);
+    // OpenCode types `/do-x`, not `/do:pr` — so PortOS's slashdo workflows don't apply.
+    expect(hostTypesSlashdoCommands({ providerId: 'opencode-tui', providerCommand: 'opencode' })).toBe(false);
+    expect(hostTypesSlashdoCommands({ providerId: 'codex', providerCommand: 'codex' })).toBe(false);
+    expect(hostTypesSlashdoCommands({ providerId: 'claude-ollama-tui', providerCommand: 'claude', leanMode: true })).toBe(false);
   });
 });
 

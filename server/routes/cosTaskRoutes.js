@@ -7,10 +7,11 @@ import { z } from 'zod';
 import * as cos from '../services/cos.js';
 import * as taskWatcher from '../services/taskWatcher.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
-import { loadSlashdoCommand } from '../services/subAgentSpawner.js';
 import { buildClaimWorkTask, buildJiraTicketTask } from '../services/cosTaskGenerator.js';
 import { getAppById } from '../services/apps.js';
 import { workTrackerLabel } from '../lib/workTracker.js';
+import { SLASHDO_CATALOG, getSlashdoEntry, slashdoCommandNames } from '../lib/slashdoCatalog.js';
+import { slashdoSkillName } from '../lib/slashdoInvocation.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import {
   createCosTaskSchema,
@@ -35,17 +36,15 @@ const jiraTicketTaskSchema = z.object({
   ticketKey: z.string().trim().regex(/^[A-Za-z][A-Za-z0-9]*-\d+$/, 'Invalid JIRA ticket key'),
 });
 
-const SLASHDO_COMMANDS = {
-  push:           { label: 'Push', description: 'Commit and push all work with changelog' },
-  review:         { label: 'Review', description: 'Deep code review of changed files' },
-  replan:         { label: 'Replan', description: 'Audit PLAN.md, archive completed items, prune stale work' },
-  next:           { label: 'Next', description: 'Claim the next unclaimed work item (per the app\'s Work Tracker) and ship a PR' },
-  release:        { label: 'Release', description: 'Create a release PR' },
-  better:         { label: 'Better', description: 'Unified DevSecOps audit and remediation' },
-  'better-swift': { label: 'Better Swift', description: 'SwiftUI DevSecOps audit and remediation' }
-};
-
 const router = Router();
+
+// GET /api/cos/slashdo-commands - The bundled slashdo workflows a CoS task can
+// run. The client's Agent Operations buttons read this instead of mirroring a
+// copy of the catalog (#3108); per-command Tailwind colors stay client-side
+// because they're presentation, not catalog data.
+router.get('/slashdo-commands', asyncHandler(async (_req, res) => {
+  res.json({ commands: SLASHDO_CATALOG });
+}));
 
 // GET /api/cos/tasks - Get all tasks (user + internal), grouped by source.
 //
@@ -130,20 +129,22 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
     target, issueAuthorFilter, reviewers, usernames, optionalReviewers
   } = validateRequest(slashdoTaskSchema, req.body);
 
-  if (!SLASHDO_COMMANDS[command]) {
-    throw new ServerError(`Invalid slashdo command. Allowed: ${Object.keys(SLASHDO_COMMANDS).join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
+  const meta = getSlashdoEntry(command);
+  if (!meta) {
+    throw new ServerError(`Invalid slashdo command. Allowed: ${slashdoCommandNames().join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
   }
-
-  const meta = SLASHDO_COMMANDS[command];
 
   // `/do:next` is the work-claim consumer: route it through the same
   // workTracker-aware logic the scheduled `claim-work` flow uses, so the manual
   // button honors the app's per-app Work Tracker (PLAN.md / GitHub / GitLab /
-  // JIRA) instead of always draining PLAN.md. Every other command inlines its
-  // raw slashdo body verbatim.
+  // JIRA) instead of always draining PLAN.md — genuinely different work, not a
+  // slashdo body. Every other command just pins the bare command name and lets
+  // the prompt builder render the right invocation shape for the provider the
+  // scheduler picks (see server/lib/slashdoInvocation.js).
   let context;
   let taskMetadata = { useWorktree: false, openPR: false };
   let description;
+  let slashdoCommand;
   if (command === 'next') {
     const appObj = await getAppById(app);
     if (!appObj) {
@@ -160,22 +161,24 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
     const scope = claim.target
       ? `claim ${workTrackerLabel(claim.tracker)} item ${claim.target}`
       : `claim next ${workTrackerLabel(claim.tracker)} item`;
-    description = `Run /do:next for ${appObj.name} — ${scope} and ship a PR`;
+    description = `Run the ${slashdoSkillName('next')} workflow for ${appObj.name} — ${scope} and ship a PR`;
   } else {
-    context = await loadSlashdoCommand(command);
-    if (!context) {
-      throw new ServerError(`Failed to load slashdo command: ${command}`, { status: 500, code: 'COMMAND_LOAD_FAILED' });
-    }
-    description = `Run /do:${command} for ${app} — ${meta.description}`;
+    // Provider-neutral description: the concrete invocation (`/do:x` for Claude
+    // Code, `/do-x` for OpenCode, an Agent Skill name elsewhere) is only knowable
+    // at spawn time, so a `/do:` literal here would be wrong for most providers.
+    slashdoCommand = command;
+    description = `Run the ${slashdoSkillName(command)} workflow for ${app} — ${meta.description}`;
   }
 
-  // `reviewLoop` stays off for every slashdo task: each `/do:*` body owns its own
-  // review/PR sequence, so a CoS-managed loop on top would double-review.
+  // `settings` carries the run shape this workflow implies, including
+  // `reviewLoop: false` — each `/do:*` body owns its own review/PR sequence, so a
+  // CoS-managed loop on top would double-review. The request's `simplify` still
+  // wins over the catalog default (the run drawer collects it explicitly).
   const taskData = {
-    description, app, context, ...taskMetadata,
+    description, app, context, ...meta.settings, ...taskMetadata,
+    slashdoCommand,
     provider, model, effort,
-    simplify: simplify === true,
-    reviewLoop: false
+    simplify: simplify === true
   };
   const result = await cos.addTask(taskData, 'user');
 

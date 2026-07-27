@@ -18,8 +18,7 @@ import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { readJSONFile, loadSlashdoFile, loadSlashdoLib, PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, resolveReviewUsernames, resolveOptionalReviewers, resolveKeyedReviewers, buildReviewWithArgs } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
-import { isOpencodeCommand } from '../lib/providerModels.js';
-import { resolveSlashdoInvocation, buildSlashdoSection } from '../lib/slashdoInvocation.js';
+import { resolveSlashdoInvocation, buildSlashdoSection, hostTypesSlashdoCommands } from '../lib/slashdoInvocation.js';
 import { shellQuote } from '../lib/shellQuote.js';
 import { detectForgeCli } from '../lib/gitForge.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
@@ -1252,7 +1251,10 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${too
 ${(() => {
   const bullet = buildCompletionGuidelineBullet({
     isReadOnly: isTruthyMetaFn(task.metadata?.readOnly),
-    isTui, tuiCompletionCommand, slashdoFree: isTui && isOpencodeCommand(providerCommand),
+    // Same gate as the light path (and it now honors leanMode, which this call
+    // site previously dropped — a lean claude TUI got `/do:pr` in the bullet
+    // while its completion section said to use plain git).
+    isTui, tuiCompletionCommand, slashdoFree: isTui && !hostTypesSlashdoCommands({ providerId, providerCommand, leanMode }),
     worktreeInfo, willOpenPR, prCompletion, discardWorktree, noCodeOutput,
     leavePrOpen: leavesPrForHuman(task),
     isPrFollowUp: isReviewLoopFollowUp,
@@ -1354,26 +1356,24 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   const lightReviewerApplies = task.metadata?.reviewerApplies !== undefined
     ? isTruthyMetaFn(task.metadata?.reviewerApplies)
     : (codeReviewDefaults?.reviewerApplies === true);
-  // Claude Code CLI providers can drive `/simplify` + `/do:pr` themselves
-  // (the slashdo submodule mounts those as project-level slash commands).
-  // Other CLI providers (codex, antigravity) can't — they get the legacy
-  // commit-only block where PortOS handles push+PR on exit.
-  //
-  // Deliberately NOT `resolveSlashdoStyle` (slashdoInvocation.js): that resolver
-  // refuses to read a blank command as Claude, while these two gates depend on
-  // the opposite posture — the TUI spawner's `inferTuiCommand` resolves a blank
-  // command to `claude`, so an unidentified TUI is slashdo-capable here. The two
-  // questions ("can this host TYPE /do:pr" vs "how do I PHRASE a workflow
-  // invocation") only look alike. Converging them is issue #3114.
-  const hasSlashdo = !isTui && (providerId === 'claude-code' || providerId === 'claude-code-bedrock');
-  // A TUI that does NOT load Claude Code slash commands can't run `/do:pr` /
-  // `/do:push`, so its completion workflow uses plain git/gh instead. Two ways
-  // to land here: an OpenCode TUI (keyed on the launch command, not the id, so
-  // a path-configured or renamed OpenCode provider is still recognised —
-  // mirrors the arg-builder gate), or a lean-mode Claude session (`--bare`
-  // skips project command discovery, and the small local models lean mode
-  // targets fumble multi-step slashdo flows anyway).
-  const tuiSlashdoFree = isTui && (isOpencodeCommand(providerCommand) || leanMode);
+  // Can this host TYPE `/simplify` + `/do:pr` / `/do:push`? Both gates derive
+  // from `hostTypesSlashdoCommands` (slashdoInvocation.js) — the single home for
+  // the provider→slashdo-shape decision (#3108). It recognises a provider by its
+  // launch command, so a path-configured or renamed `claude` binary is
+  // slashdo-capable, and a blank command is resolved through the same
+  // `inferTuiCommand` the spawners use (so a blank-command codex provider is NOT
+  // told to run `/do:pr`). `leanMode` (`claude --bare`) resolves to no-slashdo
+  // there too: bare mode skips project command discovery, and the small local
+  // models it targets fumble multi-step slashdo flows anyway.
+  const canTypeSlashdo = hostTypesSlashdoCommands({ providerId, providerCommand, leanMode });
+  // CLI (headless) providers that can run slashdo own the full `/simplify` →
+  // `/do:pr` sequence; the rest get the legacy commit-only block where PortOS
+  // handles push+PR on exit.
+  const hasSlashdo = !isTui && canTypeSlashdo;
+  // A TUI that does NOT load Claude Code slash commands finishes with plain
+  // git/gh instead (an OpenCode TUI, a lean-mode Claude session, or a codex/
+  // antigravity/gemini/kimi TUI — which install Agent Skills, not slash commands).
+  const tuiSlashdoFree = isTui && !canTypeSlashdo;
 
   const taskSections = [];
   const contractSections = [];
