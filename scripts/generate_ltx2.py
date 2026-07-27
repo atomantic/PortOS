@@ -23,6 +23,16 @@ Modes (class names shown new→old; we resolve whichever the installed pin has):
   fflf   → KeyframeInterpolationPipeline.generate_and_save (--image start, --last-image end)
   extend → RetakePipeline / ExtendPipeline .extend_from_video (--extend-from-video, --extend-frames, --direction)
   a2v    → A2VidPipelineTwoStage / AudioToVideoPipeline .generate_and_save (--audio, optional --image)
+  ic     → ICLoraPipeline.generate_and_save (--ic-mode, --ic-lora-path, --ic-reference)
+
+IC-LoRA remix modes (--mode ic):
+  The IC ("In-Context") pipeline conditions generation on a *reference video*
+  channel (VideoConditionByReferenceLatent) with a per-mode IC-LoRA fused into
+  the Stage-1 transformer. One pipeline class, several capabilities selected by
+  which IC-LoRA weight you fuse — so `--ic-mode` is a label PortOS carries for
+  logging/validation, not a different code path. `control` drives structure and
+  motion from a depth/pose/edge clip; future modes (ingredients, colorize) reuse
+  the same runner with a different weight and reference count.
 
 Pin compatibility — class renames + frame_rate:
   The v0.14.x line of ltx-2-mlx renamed every public pipeline class and
@@ -311,7 +321,7 @@ def configure_negative_prompt(negative_prompt: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="PortOS ltx-2-mlx bridge")
-    p.add_argument("--mode", required=True, choices=["text", "image", "fflf", "extend", "a2v"])
+    p.add_argument("--mode", required=True, choices=["text", "image", "fflf", "extend", "a2v", "ic"])
     p.add_argument("--prompt", required=True)
     p.add_argument("--negative-prompt", default="")
     p.add_argument("--output", required=True, help="Output .mp4 path")
@@ -363,6 +373,34 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-audio", action="store_true",
                    help="Strip audio from output. The dgrauet pipeline always generates A/V; "
                         "we re-mux without the audio stream when requested.")
+    p.add_argument("--ic-mode", default=None,
+                   help="IC-LoRA remix flavor label for --mode ic (e.g. control). Names which "
+                        "capability the fused IC-LoRA provides; used for logging only — the "
+                        "pipeline itself is identical across flavors, and the real per-mode rules "
+                        "arrive as the flags below. Free-form so PortOS' registry, not this "
+                        "helper, decides which flavors exist.")
+    p.add_argument("--ic-lora-path", default=None,
+                   help="IC-LoRA weight for --mode ic: a local .safetensors path OR a HuggingFace "
+                        "repo id (ICLoraPipeline resolves a repo id via snapshot_download). "
+                        "Required for ic mode — PortOS resolves the per-mode default on the Node "
+                        "side so the weight registry lives in one place.")
+    p.add_argument("--ic-reference", action="append", default=None, metavar="PATH",
+                   help="Reference clip for the IC-LoRA video-conditioning channel. Repeatable; "
+                        "how many the fused weight expects is set by --ic-min/max-references.")
+    p.add_argument("--ic-min-references", type=int, default=1,
+                   help="Fewest --ic-reference entries the fused weight accepts (from PortOS' "
+                        "icLoraWeights registry, which owns the per-weight contract).")
+    p.add_argument("--ic-max-references", type=int, default=1,
+                   help="Most --ic-reference entries the fused weight accepts.")
+    p.add_argument("--ic-strength", type=float, default=1.0,
+                   help="Per-reference conditioning strength (0.0-1.0+) applied to every "
+                        "--ic-reference entry.")
+    p.add_argument("--ic-attention-strength", type=float, default=None,
+                   help="IC-LoRA conditioning ATTENTION strength in [0.0, 1.0] — 0 ignores the "
+                        "reference entirely, 1 is full conditioning. Omit for the pipeline default.")
+    p.add_argument("--ic-skip-stage-2", action="store_true",
+                   help="Skip the IC-LoRA pipeline's 2x upscale + refine pass (half-resolution "
+                        "output, roughly half the wall time).")
     p.add_argument("--no-teacache", action="store_true",
                    help="Disable TeaCache acceleration for supported LTX-2 denoise loops "
                         "(extend and a2v Stage 1).")
@@ -776,6 +814,92 @@ def run_a2v(args: argparse.Namespace) -> str:
         _A2V_TC_CONFIG = None
 
 
+def run_ic_lora(args: argparse.Namespace) -> str:
+    """IC-LoRA reference-conditioned generation (control / ingredients / colorize).
+
+    ICLoraPipeline is a two-stage distilled pipeline whose Stage 1 fuses an
+    IC-LoRA and appends the reference clip(s) as VideoConditionByReferenceLatent
+    tokens; Stage 2 reloads a clean transformer and refines at 2x. The flavor
+    (control/ingredients/colorize) is entirely a function of WHICH IC-LoRA
+    weight is fused — same class, same call — so `--ic-mode` only drives
+    validation + status prose here.
+
+    Notes:
+      - `--ic-lora-path` may be a local .safetensors OR an HF repo id; the
+        pipeline's own _resolve_lora_path handles the download. PortOS normally
+        pre-fetches the weight through its HF-cache surface so the pull shows up
+        with progress instead of stalling silently mid-render.
+      - `reference_downscale_factor` is read off the LoRA's safetensors metadata
+        by the pipeline (Union-Control ships 2, halving the reference clip), and
+        it requires height/width divisible by that factor. A mismatch raises
+        inside the pipeline; we surface the resolution rule in the error so the
+        user knows to nudge the dimensions rather than the reference.
+      - User LoRAs stack ON TOP of the IC-LoRA rather than replacing it: the
+        IC-LoRA rides `lora_paths` (fused by _fuse_loras before Stage 1) while
+        user LoRAs ride the separate `_pending_loras` hook, so an
+        Ingredients x Character stack composes.
+    """
+    ICLoraPipeline = _resolve_pipeline("ICLoraPipeline")
+    ic_mode = args.ic_mode or "control"
+    if not args.ic_lora_path:
+        raise SystemExit("--ic-lora-path is required for ic mode")
+    references = list(args.ic_reference or [])
+    # Bounds come from the caller (PortOS' icLoraWeights registry owns them) so
+    # this helper never carries a second table that can drift. Enforced anyway:
+    # a weight fed the wrong reference count produces plausible-looking garbage
+    # rather than an error, so a direct/script caller needs the guard too.
+    lo, hi = args.ic_min_references, args.ic_max_references
+    if lo < 1 or hi < lo:
+        raise SystemExit(
+            f"--ic-min-references/--ic-max-references must satisfy 1 <= min <= max; got {lo}/{hi}"
+        )
+    if not (lo <= len(references) <= hi):
+        expected = f"exactly {lo}" if lo == hi else f"{lo}-{hi}"
+        raise SystemExit(
+            f"--ic-mode {ic_mode} needs {expected} --ic-reference clip(s); got {len(references)}"
+        )
+    for ref in references:
+        if not Path(ref).exists():
+            raise SystemExit(f"--ic-reference does not exist: {ref}")
+    if args.ic_attention_strength is not None and not (0.0 <= args.ic_attention_strength <= 1.0):
+        raise SystemExit("--ic-attention-strength must be between 0.0 and 1.0")
+
+    emit_status(f"Loading IC-LoRA pipeline ({args.model}, {ic_mode})…")
+    emit_stage(1, 0, 1, "Loading model")
+    pipe = ICLoraPipeline(
+        model_dir=args.model,
+        # Fusion strength 1.0 — the IC-LoRA is the mode, not a stylistic dial, so
+        # PortOS exposes no knob for it (the user-facing dial is --ic-strength,
+        # which weights the reference conditioning). Upstream's CLI defaults the
+        # same way.
+        lora_paths=[(args.ic_lora_path, 1.0)],
+        gemma_model_id=args.gemma,
+    )
+    # User LoRAs go through _pending_loras (fused at DiT load), NOT lora_paths —
+    # so they stack with the IC-LoRA above instead of displacing it.
+    _apply_user_loras(pipe, args.user_lora_specs)
+    bind_output_fps(pipe, args.fps)
+    emit_stage(1, 1, 1, "Loaded")
+    ref_names = ", ".join(Path(r).name for r in references)
+    emit_status(f"Generating IC-LoRA {ic_mode} from {ref_names} (strength {args.ic_strength:g})…")
+    kwargs: dict = dict(
+        prompt=args.prompt,
+        output_path=args.output,
+        video_conditioning=[(ref, args.ic_strength) for ref in references],
+        height=args.height,
+        width=args.width,
+        num_frames=args.num_frames,
+        seed=args.seed,
+        stage1_steps=args.steps,
+        stage2_steps=args.stage2_steps,
+        skip_stage_2=args.ic_skip_stage_2,
+        **_rate_kwargs(pipe.generate_and_save, args.fps),
+    )
+    if args.ic_attention_strength is not None:
+        kwargs["conditioning_attention_strength"] = args.ic_attention_strength
+    return pipe.generate_and_save(**kwargs)
+
+
 def maybe_strip_audio(output_path: str) -> None:
     """Remux the output without the audio stream when --no-audio is set.
 
@@ -825,6 +949,7 @@ def main() -> NoReturn:
         "fflf": run_fflf,
         "extend": run_extend,
         "a2v": run_a2v,
+        "ic": run_ic_lora,
     }
     runner = runners[args.mode]
     saved_path = runner(args)

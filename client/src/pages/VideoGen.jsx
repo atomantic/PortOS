@@ -16,6 +16,11 @@
  *             image for a new image-to-video generation
  *   - a2v:    audio-to-video (uploaded WAV/MP3 drives the video's motion +
  *             audio track) — dgrauet/ltx2 runtime only
+ *   - ic-*:   IC-LoRA remix modes (issue #3100) — a reference clip drives the
+ *             render through ICLoraPipeline with a per-mode IC-LoRA fused into
+ *             Stage 1. Today: `ic-control` (structure/motion from a depth/pose/
+ *             edge clip). dgrauet/ltx2 runtime only; the mode list comes from
+ *             IC_LORA_MODES in lib/videoGenParams.js.
  *
  * Batch queue: client-side serial executor. The form's "Add to queue" button
  * appends a job to the queue (preserving the current params). When no job is
@@ -34,6 +39,7 @@ import FramePanel from '../components/videoGen/FramePanel';
 import KeyframePanel from '../components/videoGen/KeyframePanel';
 import AudioPanel from '../components/videoGen/AudioPanel';
 import ExtendPanel from '../components/videoGen/ExtendPanel';
+import IcLoraPanel from '../components/videoGen/IcLoraPanel';
 import RuntimeFingerprint from '../components/videoGen/RuntimeFingerprint';
 import ModelRepairBanner from '../components/videoGen/ModelRepairBanner';
 import VideoPreviewPanel from '../components/videoGen/VideoPreviewPanel';
@@ -44,7 +50,7 @@ import { normalizeVideo } from '../components/media/normalize';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import {
   Film, Sparkles, Settings as SettingsIcon, RefreshCw, AlertTriangle,
-  Dice5, X, Type, Image as ImageIcon, GitBranch, ListPlus, Music,
+  Dice5, X, Type, Image as ImageIcon, GitBranch, ListPlus, Music, SlidersHorizontal,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import BatchQueuePanel from '../components/media/BatchQueuePanel';
@@ -80,6 +86,7 @@ import { VIDEO_TILING_OPTIONS, VIDEO_TILING_ENUM_SET } from '../lib/videoTilingO
 import {
   FRAME_OPTIONS, FPS_OPTIONS, VIDEO_EDGE_BOUNDS,
   videoModelMemoryGb, computeFflfSafeFrames, isModelAllowedForMode,
+  IC_LORA_MODES, icLoraSpecForMode, icResolutionIssue,
 } from '../lib/videoGenParams.js';
 
 const MODES = [
@@ -88,6 +95,9 @@ const MODES = [
   { id: 'fflf',   label: 'FFLF',   icon: GitBranch,  desc: 'First frame + last frame' },
   { id: 'extend', label: 'Extend', icon: Film,       desc: 'Continue from a prior render' },
   { id: 'a2v',    label: 'Audio',  icon: Music,      desc: 'Audio-to-video (audio drives motion + sync)' },
+  // IC-LoRA remix modes (issue #3100) — derived from the registry so a new
+  // remix mode appears in the mode bar automatically.
+  ...IC_LORA_MODES.map((m) => ({ id: m.mode, label: m.label, icon: SlidersHorizontal, desc: m.description })),
 ];
 
 export default function VideoGen() {
@@ -179,6 +189,19 @@ export default function VideoGen() {
   // is sent as multipart field name 'audioFile'; the server stages it under
   // data/uploads, then the python helper passes it to AudioToVideoPipeline.
   const [audioFile, setAudioFile] = useState(null);
+  // IC-LoRA remix modes (issue #3100) — the reference clip is either a fresh
+  // upload (multipart field 'icReference') or a prior render picked by history
+  // id. The two are mutually exclusive server-side, so the panel's Clear drops
+  // both. `icStrength` weights the reference conditioning channel.
+  const [icReferenceFile, setIcReferenceFile] = useState(null);
+  const [icReferenceVideoId, setIcReferenceVideoId] = useState('');
+  const [icStrength, setIcStrength] = useState(1.0);
+  const [icSkipStage2, setIcSkipStage2] = useState(false);
+  // Display-only: the reference clip name(s) of an IN-FLIGHT render restored via
+  // /active. An upload isn't re-derivable from its basename, so this can't
+  // repopulate the picker — it just tells the user what the running job is
+  // conditioned on instead of showing an empty panel.
+  const [icReferenceNames, setIcReferenceNames] = useState([]);
 
   // Image gallery — used by both the start and end frame pickers so the
   // user can pull from any prior render in either slot.
@@ -474,11 +497,11 @@ export default function VideoGen() {
     const disableAudio = item.disableAudio ?? item.disable_audio;
     setDisableAudio(disableAudio === true);
     // Reset to text-to-video mode and clear any stale conditioning inputs from
-    // image / fflf / extend / a2v modes. Without this, clicking Remix while
-    // currently in (e.g.) image mode would carry the old source image into the
-    // next submit even though Remix is meant to faithfully reproduce the prior
-    // (text-to-video) render. Cross-page Remix already lands the user in text
-    // mode because /media/video without `sourceImageFile` defaults that way.
+    // image / fflf / extend / a2v / IC-remix modes. Without this, clicking Remix
+    // while currently in (e.g.) image mode would carry the old source image into
+    // the next submit even though Remix is meant to faithfully reproduce the
+    // prior (text-to-video) render. Cross-page Remix already lands the user in
+    // text mode because /media/video without `sourceImageFile` defaults that way.
     setMode('text');
     setSourceImageFile(null);
     setSourceImageUpload(null);
@@ -486,6 +509,14 @@ export default function VideoGen() {
     setLastImageUpload(null);
     setExtendFromVideoId('');
     setAudioFile(null);
+    // IC-LoRA reference: the record only stamps the clip's BASENAME (history is
+    // user-facing and never carries staging paths), so a remix can't re-derive
+    // the reference — clear it rather than restore a half-set mode the user
+    // would submit unknowingly. The dials DO round-trip.
+    setIcReferenceFile(null);
+    setIcReferenceVideoId('');
+    if (typeof item.icStrength === 'number') setIcStrength(item.icStrength);
+    setIcSkipStage2(item.icSkipStage2 === true);
     // Restore the LoRA picker from the render record. `item` here is the RAW
     // history record (the gallery passes `handleRemixVideo(item.raw)` and every
     // field above — prompt/modelId/width/… — is read off it directly), so the
@@ -631,6 +662,16 @@ export default function VideoGen() {
       if (Array.isArray(p.keyframes) && p.keyframes.length >= 2) {
         setKeyframes(p.keyframes.map((kf) => ({ file: kf.file, index: kf.index })));
         setKeyframesMode(true);
+      }
+      // IC-LoRA remix: the dials round-trip, but the reference clip can't —
+      // /active echoes only its basename (an upload isn't re-derivable from
+      // one). That's fine while the job runs (the render already holds the real
+      // path); the panel's submit gate correctly blocks a NEW render until the
+      // user re-picks a reference. The names ride into a read-only hint.
+      if (typeof p.icStrength === 'number') setIcStrength(p.icStrength);
+      if (typeof p.icSkipStage2 === 'boolean') setIcSkipStage2(p.icSkipStage2);
+      if (Array.isArray(p.icReferenceNames) && p.icReferenceNames.length) {
+        setIcReferenceNames(p.icReferenceNames);
       }
       // Restore the LoRA picker — params carry { filename, scale } basenames;
       // resolve the display name from the loaded library (falls back to the
@@ -779,6 +820,11 @@ export default function VideoGen() {
   // file, indices strictly ascending and within [0, numFrames-1].
   const keyframesSupported = currentModel?.runtime === 'ltx2';
   const keyframesActive = mode === 'fflf' && keyframesMode && keyframesSupported;
+  // IC-LoRA remix mode is on. `icSpec` is the registry entry (reference count +
+  // the resolution-divisibility rule its encoder imposes); null outside the
+  // family, so every consumer gates on `icModeActive` first.
+  const icSpec = icLoraSpecForMode(mode);
+  const icModeActive = !!icSpec;
   // The worker clamps FFLF/ltx2 numFrames down to fit a pixel-frame budget that
   // depends on resolution, so at default 768×512 the real frame ceiling is far
   // below numFrames. Compute the same cap the server enforces so the picker can
@@ -959,6 +1005,23 @@ export default function VideoGen() {
     // keyframe list can't sneak into the next post (the route would 400 on a
     // non-fflf mode anyway, but keep the form honest).
     if (next !== 'fflf') { setKeyframesMode(false); setKeyframes([]); }
+    const nextIcSpec = icLoraSpecForMode(next);
+    if (nextIcSpec) {
+      // IC conditioning replaces the frame/extend inputs entirely, and chaining
+      // is rejected server-side (IC_LORA_CHUNKS_CONFLICT) — clear them so no
+      // stale value implies it's being used. The reference clip SURVIVES a switch
+      // between two IC modes (same kind of input), which is why it's cleared in
+      // the else branch rather than here.
+      clearSourceImage();
+      clearLastImage();
+      setExtendFromVideoId('');
+      setChunks(1);
+      return;
+    }
+    // The IC-LoRA reference channel only exists in the IC remix modes — the
+    // route 400s IC_LORA_MODE_MISMATCH if one rides along elsewhere.
+    setIcReferenceFile(null);
+    setIcReferenceVideoId('');
     if (next === 'text') {
       clearSourceImage();
       clearLastImage();
@@ -1127,9 +1190,17 @@ export default function VideoGen() {
       // Audio File goes through under the multipart field 'audioFile'. Server
       // routes it to the durable uploads dir and into the a2v helper.
       audioFile: mode === 'a2v' ? (audioFile || '') : '',
-      // Keyframes anchor a single clip — the route rejects chunks > 1 with
-      // KEYFRAMES_CHUNKS_CONFLICT, so suppress chunking when keyframes are on.
-      chunks: mode !== 'a2v' && !keyframesActive && chunks > 1 ? chunks : '',
+      // IC-LoRA remix: the reference clip rides as either the 'icReference'
+      // multipart upload OR an icReferenceVideoIds history id — never both (the
+      // route rejects that with IC_LORA_REFERENCE_CONFLICT).
+      icReference: icModeActive ? (icReferenceFile || '') : '',
+      icReferenceVideoIds: (icModeActive && !icReferenceFile) ? (icReferenceVideoId || '') : '',
+      icStrength: icModeActive ? icStrength : '',
+      icSkipStage2: icModeActive && icSkipStage2 ? 'true' : '',
+      // Keyframes and IC references each anchor a single clip — the route
+      // rejects chunks > 1 with KEYFRAMES_CHUNKS_CONFLICT /
+      // IC_LORA_CHUNKS_CONFLICT, so suppress chunking for both.
+      chunks: mode !== 'a2v' && !keyframesActive && !icModeActive && chunks > 1 ? chunks : '',
     };
   };
 
@@ -1215,6 +1286,15 @@ export default function VideoGen() {
   // mlx_video runtime has no audio-conditioned pipeline. Block submit when
   // either is missing so the request fails the form, not the worker.
   const a2vModeBlocked = mode === 'a2v' && (!audioFile || currentModel?.runtime !== 'ltx2');
+  // IC-LoRA remix needs a reference clip AND an ltx2-runtime model, and the
+  // resolution must divide by the weight's reference-downscale factor (the
+  // server rejects otherwise). Block submit for all three so the request fails
+  // the form rather than the worker.
+  const icLoraModeBlocked = icModeActive && (
+    (!icReferenceFile && !icReferenceVideoId)
+    || currentModel?.runtime !== 'ltx2'
+    || !!icResolutionIssue(icSpec, width, height)
+  );
 
   const handleGenerate = async (e) => {
     e?.preventDefault?.();
@@ -1223,7 +1303,7 @@ export default function VideoGen() {
     // Without these guards the user could press Enter in the prompt
     // textarea and fire a request the disabled button would otherwise
     // have prevented.
-    if (!prompt.trim() || generating || (!isGrok && (notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked || keyframesBlocked))) return;
+    if (!prompt.trim() || generating || (!isGrok && (notConnected || extendModeBlocked || a2vModeBlocked || icLoraModeBlocked || byovGateBlocked || keyframesBlocked))) return;
     await runGeneration(buildGeneratePayload()).catch(() => {});
   };
 
@@ -1232,7 +1312,7 @@ export default function VideoGen() {
     // would silently queue a doomed job that fails late in the worker with
     // VENV_MISSING, hiding the installer banner from the user. Block at
     // enqueue time so the only path forward is the install banner above.
-    if (!prompt.trim() || (!isGrok && (notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked || keyframesBlocked))) return;
+    if (!prompt.trim() || (!isGrok && (notConnected || extendModeBlocked || a2vModeBlocked || icLoraModeBlocked || byovGateBlocked || keyframesBlocked))) return;
     // useVideoGenQueue strips the File blobs into `_blobs` and snapshots the
     // rest as a stable summary for the queue UI.
     enqueue(buildGeneratePayload());
@@ -1357,7 +1437,11 @@ export default function VideoGen() {
               onClick={() => {
                 setBackend(id);
                 if (id === 'grok' && mode !== 'text' && mode !== 'image') {
-                  setMode((sourceImageFile || sourceImageUpload) ? 'image' : 'text');
+                  // Route through handleModeChange (not a bare setMode) so the
+                  // snapped-away mode's inputs are cleared too — otherwise a
+                  // stale a2v audio file or IC reference clip survives the
+                  // switch and reappears if the user flips back.
+                  handleModeChange((sourceImageFile || sourceImageUpload) ? 'image' : 'text');
                 }
               }}
               className={`flex-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
@@ -1564,6 +1648,29 @@ export default function VideoGen() {
               sourceImageFile={sourceImageFile}
               visibleHistory={visibleHistory}
               onPick={handleExtendPick}
+            />
+          )}
+
+          {icModeActive && (
+            <IcLoraPanel
+              spec={icSpec}
+              referenceFile={icReferenceFile}
+              referenceVideoId={icReferenceVideoId}
+              inFlightReferenceNames={icReferenceNames}
+              visibleHistory={visibleHistory}
+              icStrength={icStrength}
+              icSkipStage2={icSkipStage2}
+              width={width}
+              height={height}
+              weightStatus={modelDownload.getStatus(icSpec.mode)}
+              hasCompatibleModel={visibleModels.length > 0}
+              onPickFile={(f) => { setIcReferenceFile(f); if (f) { setIcReferenceVideoId(''); setIcReferenceNames([]); } }}
+              onClearFile={() => setIcReferenceFile(null)}
+              onPickHistory={(id) => { setIcReferenceVideoId(id); if (id) { setIcReferenceFile(null); setIcReferenceNames([]); } }}
+              onStrengthChange={setIcStrength}
+              onSkipStage2Change={setIcSkipStage2}
+              onDownloadWeight={() => modelDownload.start(icSpec.mode)}
+              onCancelWeightDownload={modelDownload.cancel}
             />
           )}
 
@@ -1827,7 +1934,7 @@ export default function VideoGen() {
             ) : (
               <button
                 type="submit"
-                disabled={!prompt.trim() || (!isGrok && (notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked || keyframesBlocked))}
+                disabled={!prompt.trim() || (!isGrok && (notConnected || extendModeBlocked || a2vModeBlocked || icLoraModeBlocked || byovGateBlocked || keyframesBlocked))}
                 className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
                 title={
                   byovRuntimeMissing ? `${byovStatus?.label || byovRuntime} runtime is not installed — use the install banner above`

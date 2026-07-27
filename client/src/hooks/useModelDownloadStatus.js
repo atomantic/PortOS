@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useSseProgress } from './useSseProgress.js';
+import { isIcLoraMode } from '../lib/videoGenParams.js';
 import toast from '../components/ui/Toast';
 import {
   getImageModelStatuses, getVideoModelStatuses,
   verifyImageModels, verifyVideoModels, repairImageModel, repairVideoModel,
-  repairTextEncoder,
+  repairTextEncoder, repairIcLora,
 } from '../services/apiImageVideo.js';
 
 // Sentinel `modelId` used to drive a text-encoder download instead of a model
@@ -13,6 +14,11 @@ import {
 // callers and the hook agree on the magic string.
 export const TEXT_ENCODER_DOWNLOAD_ID = '__text_encoder__';
 
+// IC-LoRA remix weights (issue #3100) are downloadable but aren't registry
+// models, so — like the text encoder — they route to a dedicated endpoint.
+// Callers pass the remix mode itself ('ic-control') as the download id, and
+// membership in the mode registry (NOT a raw `ic-` string prefix) is what
+// identifies one — so an id can never be misrouted by coincidence of naming.
 const buildDownloadUrl = (kind, modelId, force = false) => {
   if (!modelId) return null;
   // A repair-initiated re-download appends `?force=1` so the server re-fetches
@@ -22,6 +28,9 @@ const buildDownloadUrl = (kind, modelId, force = false) => {
   const q = force ? '?force=1' : '';
   if (kind === 'video' && modelId === TEXT_ENCODER_DOWNLOAD_ID) {
     return `/api/video-gen/text-encoder/download${q}`;
+  }
+  if (kind === 'video' && isIcLoraMode(modelId)) {
+    return `/api/video-gen/ic-loras/${encodeURIComponent(modelId)}/download${q}`;
   }
   return `/api/${kind}-gen/models/${encodeURIComponent(modelId)}/download${q}`;
 };
@@ -53,7 +62,10 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
       setExtra({});
     } else if (kind === 'video') {
       setStatuses(Array.isArray(body?.models) ? body.models : []);
-      setExtra({ textEncoder: body?.textEncoder || null });
+      setExtra({
+        textEncoder: body?.textEncoder || null,
+        icLoras: Array.isArray(body?.icLoras) ? body.icLoras : [],
+      });
     } else {
       setStatuses(Array.isArray(body) ? body : []);
       setExtra({});
@@ -119,9 +131,12 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
     // /text-encoder/repair endpoint; the sentinel `start()` below already maps
     // to the dedicated /text-encoder/download SSE for the clean re-fetch.
     const isTextEncoder = kind === 'video' && modelId === TEXT_ENCODER_DOWNLOAD_ID;
+    const isIcLora = kind === 'video' && isIcLoraMode(modelId);
     const run = isTextEncoder
       ? () => repairTextEncoder({ deep })
-      : () => (kind === 'video' ? repairVideoModel : repairImageModel)(modelId, { deep });
+      : isIcLora
+        ? () => repairIcLora(modelId, { deep })
+        : () => (kind === 'video' ? repairVideoModel : repairImageModel)(modelId, { deep });
     const result = await run().catch((err) => {
       toast.error(err?.message || 'Repair failed');
       return null;
@@ -150,19 +165,29 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
   // hand a fresh object to every non-active model's badge (only the active
   // one re-renders). For inactive models we return the raw entry, which is
   // referentially stable across frames.
+  // Look an id up across every download-able collection. IC-LoRA weights
+  // (issue #3100) arrive under `extra.icLoras` rather than `statuses` — they're
+  // not registry models — but they share the `{ id, repo, cached, sizeBytes,
+  // integrity }` badge shape, so one resolver keeps every caller uniform.
+  const findEntry = useCallback((modelId) => {
+    const list = Array.isArray(statuses) ? statuses : [];
+    const found = list.find((s) => s.id === modelId);
+    if (found) return found;
+    const icList = Array.isArray(extra.icLoras) ? extra.icLoras : [];
+    return icList.find((s) => s.id === modelId) || null;
+  }, [statuses, extra.icLoras]);
+
   const activeStatus = useMemo(() => {
     if (!activeModelId) return null;
-    const list = Array.isArray(statuses) ? statuses : [];
-    const entry = list.find((s) => s.id === activeModelId);
+    const entry = findEntry(activeModelId);
     if (!entry) return null;
     return { ...entry, downloading: true, progress: sse.latest };
-  }, [activeModelId, statuses, sse.latest]);
+  }, [activeModelId, findEntry, sse.latest]);
 
   const getStatus = useCallback((modelId) => {
     if (modelId === activeModelId) return activeStatus;
-    const list = Array.isArray(statuses) ? statuses : [];
-    return list.find((s) => s.id === modelId) || null;
-  }, [statuses, activeModelId, activeStatus]);
+    return findEntry(modelId);
+  }, [findEntry, activeModelId, activeStatus]);
 
   return {
     statuses,

@@ -8,6 +8,7 @@
 import { Upload, Music } from 'lucide-react';
 import { formatBytes } from '../../utils/formatters';
 import FilePickerButton from '../ui/FilePickerButton';
+import Ltx2RuntimeMissingNotice from './Ltx2RuntimeMissingNotice';
 
 export default function AudioPanel({ audioFile, numFrames, fps, hasCompatibleModel, onPick, onClear }) {
   return (
@@ -37,14 +38,7 @@ export default function AudioPanel({ audioFile, numFrames, fps, hasCompatibleMod
       <p className="text-[10px] text-gray-500 leading-snug">
         Audio length should match {`${(numFrames / fps).toFixed(1)}s`} (frames ÷ fps). Longer clips are trimmed to fit; shorter clips fail.
       </p>
-      {!hasCompatibleModel && (
-        <p className="text-[11px] text-port-warning">
-          a2v requires an ltx2-runtime model, but none are installed. Add a dgrauet entry to{' '}
-          <code>data/media-models.json</code> (or restore <code>ltx23_dgrauet_q4</code> / <code>_q8</code>{' '}
-          from the built-in defaults), then provision the runtime via{' '}
-          <code>INSTALL_LTX2=1 bash scripts/setup-image-video.sh</code>.
-        </p>
-      )}
+      {!hasCompatibleModel && <Ltx2RuntimeMissingNotice subject="a2v" />}
     </div>
   );
 }

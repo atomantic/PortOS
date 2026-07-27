@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   videoModelMemoryGb, computeFflfSafeFrames, isModelAllowedForMode,
   VIDEO_EDGE_BOUNDS, FRAME_OPTIONS, FPS_OPTIONS,
+  IC_LORA_MODES, IC_LORA_MODE_VALUES, isIcLoraMode, icLoraSpecForMode,
 } from './videoGenParams.js';
 
 describe('videoModelMemoryGb', () => {
@@ -63,5 +64,37 @@ describe('constants', () => {
     expect(FRAME_OPTIONS[0]).toBe(25);
     expect(FRAME_OPTIONS.every((f) => (f - 1) % 8 === 0)).toBe(true);
     expect(FPS_OPTIONS).toEqual([16, 24, 30]);
+  });
+});
+
+describe('IC-LoRA remix modes (#3100)', () => {
+  it('mirrors the server registry shape', () => {
+    expect(IC_LORA_MODE_VALUES).toEqual(['ic-control']);
+    for (const spec of IC_LORA_MODES) {
+      // The `ic-` prefix drives the download-id router in useModelDownloadStatus.
+      expect(spec.mode.startsWith('ic-')).toBe(true);
+      expect(spec.maxReferences).toBeGreaterThanOrEqual(spec.minReferences);
+      expect(spec.referenceDownscaleFactor).toBeGreaterThanOrEqual(1);
+    }
+  });
+  it('identifies IC modes', () => {
+    expect(isIcLoraMode('ic-control')).toBe(true);
+    expect(isIcLoraMode('text')).toBe(false);
+    expect(isIcLoraMode(undefined)).toBe(false);
+  });
+  it('resolves a spec by mode, null otherwise', () => {
+    expect(icLoraSpecForMode('ic-control')?.label).toBe('Control');
+    expect(icLoraSpecForMode('extend')).toBeNull();
+  });
+  it('requires the ltx2 runtime for IC modes', () => {
+    expect(isModelAllowedForMode({ runtime: 'ltx2' }, 'ic-control')).toBe(true);
+    expect(isModelAllowedForMode({ runtime: 'mlx_video' }, 'ic-control')).toBe(false);
+    expect(isModelAllowedForMode({ runtime: 'wan22' }, 'ic-control')).toBe(false);
+  });
+  it('keeps the Control resolution rule aligned with the server (factor 2)', () => {
+    // Mirrors server/lib/icLoraWeights.js — a drift here would let the form
+    // accept a resolution the server rejects with
+    // IC_LORA_RESOLUTION_NOT_DIVISIBLE.
+    expect(icLoraSpecForMode('ic-control').referenceDownscaleFactor).toBe(2);
   });
 });

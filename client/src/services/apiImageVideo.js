@@ -176,6 +176,14 @@ export const repairTextEncoder = ({ deep = false } = {}) => request('/video-gen/
   body: JSON.stringify({ deep }),
   silent: true,
 });
+// Repair an IC-LoRA remix weight (issue #3100). Keyed by the remix mode
+// ('ic-control', …) rather than a model id — the weights aren't registry models,
+// same reason the text encoder has its own scalar endpoint above.
+export const repairIcLora = (mode, { deep = false } = {}) => request(`/video-gen/ic-loras/${encodeURIComponent(mode)}/repair`, {
+  method: 'POST',
+  body: JSON.stringify({ deep }),
+  silent: true,
+});
 // With the cloud lane, video renders are no longer single-flight — pass the
 // jobId so the server cancels exactly this render, not "the first running
 // video". Omitting it keeps the legacy cancel-the-running-one behavior.

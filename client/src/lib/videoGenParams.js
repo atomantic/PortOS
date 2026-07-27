@@ -49,13 +49,56 @@ export const computeFflfSafeFrames = (width, height, numFrames, budget) => {
   return safeLatent * 8 + 1;
 };
 
-// Mode-compatibility predicate for the Model dropdown. a2v requires the
-// ltx2 runtime (dgrauet's pipeline) — the legacy mlx_video pipeline has no
-// audio-conditioned mode, and Wan/Hunyuan don't either. Server enforces the
-// same rule in routes/videoGen.js (A2V_REQUIRES_LTX2); filtering client-side
-// keeps the dropdown honest so the user can't pick a doomed model.
+// IC-LoRA remix modes (issue #3100) — mirror of the server registry in
+// server/lib/icLoraWeights.js, which is the source of truth. The client needs
+// the labels, the input-surface descriptors, and the reference-count/resolution
+// rules to render the panel and validate before submit; the weight repo/filename
+// stays server-side (the client never resolves a weight path).
+//
+// Field names match the server entry exactly so drift is mechanically
+// detectable: server/lib/icLoraWeights.parity.test.js imports BOTH modules and
+// diffs the mirrored fields, so adding a mode (or changing a bound) without
+// updating this list fails CI instead of silently letting the form accept a
+// render the route rejects.
+export const IC_LORA_MODES = [
+  {
+    mode: 'ic-control',
+    label: 'Control',
+    description: 'Structure + motion from a control clip',
+    uploadLabel: 'Upload a control clip (depth / pose / edges)',
+    // The IC encoder downscales the reference by this factor, and the pipeline
+    // requires the OUTPUT dimensions to divide evenly by it (the server rejects
+    // otherwise with IC_LORA_RESOLUTION_NOT_DIVISIBLE).
+    referenceDownscaleFactor: 2,
+    minReferences: 1,
+    maxReferences: 1,
+    referenceKind: 'video',
+  },
+];
+
+export const IC_LORA_MODE_VALUES = IC_LORA_MODES.map((m) => m.mode);
+export const isIcLoraMode = (mode) => IC_LORA_MODE_VALUES.includes(mode);
+export const icLoraSpecForMode = (mode) => IC_LORA_MODES.find((m) => m.mode === mode) || null;
+
+// Mirror of icResolutionIssue in server/lib/icLoraWeights.js: a human message
+// when the output dimensions aren't divisible by the weight's reference-downscale
+// factor, else null. One implementation so the panel's warning and the submit
+// gate can never disagree.
+export const icResolutionIssue = (spec, width, height) => {
+  const scale = spec?.referenceDownscaleFactor ?? 1;
+  if (scale <= 1) return null;
+  if (Number(width) % scale === 0 && Number(height) % scale === 0) return null;
+  return `${spec.label} mode needs a resolution divisible by ${scale} (its reference encoder downscales by ${scale}); got ${width}×${height}.`;
+};
+
+// Mode-compatibility predicate for the Model dropdown. a2v and the IC-LoRA
+// remix modes require the ltx2 runtime (dgrauet's pipeline) — the legacy
+// mlx_video pipeline has no audio-conditioned mode and no IC pipeline, and
+// Wan/Hunyuan don't either. Server enforces the same rules in
+// routes/videoGen.js (A2V_REQUIRES_LTX2 / IC_LORA_REQUIRES_LTX2); filtering
+// client-side keeps the dropdown honest so the user can't pick a doomed model.
 export const isModelAllowedForMode = (model, mode) => {
   if (!model) return false;
-  if (mode === 'a2v') return model.runtime === 'ltx2';
+  if (mode === 'a2v' || isIcLoraMode(mode)) return model.runtime === 'ltx2';
   return true;
 };

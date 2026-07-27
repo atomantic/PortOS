@@ -96,6 +96,7 @@ export * from './hfToken.js';
 export * from './hfErrors.js';
 export * from './hfCache.js';
 export * from './hfDownload.js';
+export * from './icLoraWeights.js';
 export * from './sseDownload.js';
 export * from './sseHeaders.js';
 export * from './installLogger.js';

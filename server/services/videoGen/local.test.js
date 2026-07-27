@@ -71,6 +71,19 @@ vi.mock('../../lib/hfToken.js', () => ({
   getHfToken: vi.fn(async () => null),
 }));
 
+// resolveIcLoraWeight() inspects the HF cache to pin the exact weight file.
+// That's real async fs work against the user's ~/.cache — mock the inspection
+// layer so the IC-LoRA arg tests exercise the registry + arg plumbing, not the
+// cache walk (which hfCache.test.js covers). `snapshotPath` non-null + the
+// always-true existsSync mock below means the weight resolves to its exact
+// pinned filename; a test that wants the un-cached fallback overrides this.
+const { mockInspectModelCache } = vi.hoisted(() => ({
+  mockInspectModelCache: vi.fn(async () => ({ cached: true, sizeBytes: 1000, snapshotPath: '/mock/hf/snap' })),
+}));
+vi.mock('../../lib/hfCache.js', () => ({
+  inspectModelCache: mockInspectModelCache,
+}));
+
 vi.mock('fs', () => ({
   existsSync: vi.fn(() => true),
   statSync: vi.fn(() => ({ size: 1000 })),
@@ -1617,5 +1630,201 @@ describe('generateVideo — chunk-boundary marker parsing (#2463)', () => {
     await vi.advanceTimersByTimeAsync(0);
     // …the reader's flush() on 'close' emits the final line exactly once.
     expect(statusFrames(vi.mocked(broadcastSse), 'Finalizing')).toHaveLength(1);
+  });
+});
+
+describe('generateVideo — IC-LoRA remix arg threading (#3100)', () => {
+  // 704×448 is divisible by the Control weight's referenceDownscaleFactor of 2,
+  // so these renders clear the resolution gate. Frames stay small so the FFLF
+  // pixel-budget clamp (fflf-only anyway) never enters the picture.
+  const baseIcRender = {
+    pythonPath: '/usr/bin/python3',
+    modelId: 'ltx2_unified',
+    prompt: 'a dancer following the depth clip',
+    width: 704, height: 448, numFrames: 25, fps: 24,
+    mode: 'ic-control',
+    icReferencePaths: ['/mock/data/videos/depth.mp4'],
+  };
+
+  const findIcCall = (spawnMock) => spawnMock.mock.calls.find(
+    ([bin, args]) => String(bin).includes('.portos/ltx-2-mlx/.venv/bin/python3')
+      && Array.isArray(args) && args.includes('--ic-mode'),
+  );
+
+  beforeEach(() => {
+    mockInspectModelCache.mockResolvedValue({ cached: true, sizeBytes: 1000, snapshotPath: '/mock/hf/snap' });
+  });
+
+  it('routes ic-control to --mode ic with the pinned weight, reference, and strength', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+
+    await generateVideo({ ...baseIcRender, jobId: 'ic-basic', icStrength: 0.75 });
+
+    const call = findIcCall(spawnMock);
+    expect(call).toBeTruthy();
+    const args = call[1];
+    expect(args[args.indexOf('--mode') + 1]).toBe('ic');
+    expect(args[args.indexOf('--ic-mode') + 1]).toBe('control');
+    expect(args[args.indexOf('--ic-reference') + 1]).toBe('/mock/data/videos/depth.mp4');
+    expect(args[args.indexOf('--ic-strength') + 1]).toBe('0.75');
+    // Cached snapshot → the exact pinned filename, not the bare repo id, so a
+    // multi-weight repo can't glob-pick the wrong file.
+    expect(args[args.indexOf('--ic-lora-path') + 1])
+      .toBe(join('/mock/hf/snap', 'ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors'));
+    // The reference-count bounds are PASSED to the helper rather than hardcoded
+    // there, so the registry stays the single source of truth across languages.
+    expect(args[args.indexOf('--ic-min-references') + 1]).toBe('1');
+    expect(args[args.indexOf('--ic-max-references') + 1]).toBe('1');
+  });
+
+  it('falls back to the HF repo id when the weight is not cached', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+    mockInspectModelCache.mockResolvedValue({ cached: false, sizeBytes: 0, snapshotPath: null });
+
+    await generateVideo({ ...baseIcRender, jobId: 'ic-uncached' });
+
+    const args = findIcCall(spawnMock)[1];
+    expect(args[args.indexOf('--ic-lora-path') + 1])
+      .toBe('Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control');
+  });
+
+  it('defaults --ic-strength to 1.0 and omits the optional dials', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+
+    await generateVideo({ ...baseIcRender, jobId: 'ic-defaults' });
+
+    const args = findIcCall(spawnMock)[1];
+    // JS stringifies 1.0 as "1" — argparse's float parse accepts either.
+    expect(args[args.indexOf('--ic-strength') + 1]).toBe('1');
+    // Omitted so the pipeline applies its own defaults rather than us pinning
+    // values that would shadow a future upstream change.
+    expect(args).not.toContain('--ic-attention-strength');
+    expect(args).not.toContain('--ic-skip-stage-2');
+  });
+
+  it('emits --ic-attention-strength and --ic-skip-stage-2 when requested', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      ...baseIcRender, jobId: 'ic-dials',
+      icAttentionStrength: 0.4, icSkipStage2: true,
+    });
+
+    const args = findIcCall(spawnMock)[1];
+    expect(args[args.indexOf('--ic-attention-strength') + 1]).toBe('0.4');
+    expect(args).toContain('--ic-skip-stage-2');
+  });
+
+  it('stacks user LoRAs alongside the IC-LoRA rather than replacing it', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      ...baseIcRender, jobId: 'ic-plus-user-lora',
+      loras: [{ filename: 'character.safetensors', scale: 0.9 }],
+    });
+
+    const args = findIcCall(spawnMock)[1];
+    // Both channels present: the IC weight rides --ic-lora-path (fused via
+    // lora_paths) and the character LoRA rides --user-loras (_pending_loras).
+    expect(args).toContain('--ic-lora-path');
+    const userLoras = JSON.parse(args[args.indexOf('--user-loras') + 1]);
+    expect(userLoras).toEqual([
+      { path: join(MOCK_PATHS.loras, 'character.safetensors'), strength: 0.9 },
+    ]);
+  });
+
+  it('rejects a reference count outside the weight contract', async () => {
+    // Control is a single-reference weight; two clips would silently produce
+    // plausible garbage rather than an error inside the pipeline.
+    await expect(generateVideo({
+      ...baseIcRender, jobId: 'ic-too-many-refs',
+      icReferencePaths: ['/mock/data/videos/a.mp4', '/mock/data/videos/b.mp4'],
+    })).rejects.toThrow(/needs exactly 1 reference video/);
+    await expect(generateVideo({
+      ...baseIcRender, jobId: 'ic-no-refs', icReferencePaths: [],
+    })).rejects.toThrow(/needs exactly 1 reference video/);
+  });
+
+  it('rejects a reference clip that is not on disk', async () => {
+    const { existsSync } = await import('fs');
+    // The reference path is the one existence check that matters here; every
+    // other existsSync caller in this flow is satisfied by the default mock.
+    vi.mocked(existsSync).mockImplementation((p) => p !== '/mock/data/videos/gone.mp4');
+    await expect(generateVideo({
+      ...baseIcRender, jobId: 'ic-missing-ref',
+      icReferencePaths: ['/mock/data/videos/gone.mp4'],
+    })).rejects.toThrow(/IC-LoRA reference not found on disk/);
+    vi.mocked(existsSync).mockImplementation(() => true);
+  });
+
+  it('rejects an IC render on a non-ltx2 runtime', async () => {
+    await expect(generateVideo({
+      ...baseIcRender, jobId: 'ic-wrong-runtime', modelId: 'ltx23_unified',
+    })).rejects.toThrow(/require an ltx2-runtime model/);
+  });
+
+  it('stamps the IC dials + reference basename onto the history record', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    vi.mocked(spawnDetached).mockClear();
+    const started = [];
+    const onStarted = (p) => started.push(p);
+    videoGenEvents.on('started', onStarted);
+
+    await generateVideo({
+      ...baseIcRender, jobId: 'ic-history-stamp',
+      icStrength: 0.6, icSkipStage2: true,
+    });
+
+    videoGenEvents.off('started', onStarted);
+    const meta = started.find((s) => s.generationId === 'ic-history-stamp');
+    expect(meta).toBeTruthy();
+    expect(meta.mode).toBe('ic-control');
+    expect(meta.icStrength).toBe(0.6);
+    expect(meta.icSkipStage2).toBe(true);
+    // BASENAME only — the absolute staging path is machine-specific and never
+    // belongs in a user-facing history record.
+    expect(meta.icReferenceNames).toEqual(['depth.mp4']);
+  });
+});
+
+describe('icLoraArgs — direct validation (#3100)', () => {
+  let icLoraArgs;
+  beforeEach(async () => { ({ icLoraArgs } = await import('./local.js')); });
+
+  const base = {
+    mode: 'ic-control',
+    width: 704, height: 448,
+    icReferencePaths: ['/mock/data/videos/depth.mp4'],
+    icLoraWeightPath: '/mock/hf/snap/control.safetensors',
+    icStrength: 1.0,
+  };
+
+  it('rejects an output resolution not divisible by the reference-downscale factor', () => {
+    // Unreachable via generateVideo (edges are floored to multiples of 64, so
+    // always even) but live the moment a weight ships with a factor > 2 — an odd
+    // dimension here proves the guard fires instead of failing mid-render.
+    expect(() => icLoraArgs({ ...base, width: 705 }))
+      .toThrow(/divisible by 2/);
+    expect(() => icLoraArgs({ ...base, height: 449 }))
+      .toThrow(/divisible by 2/);
+  });
+
+  it('rejects an unknown remix mode', () => {
+    expect(() => icLoraArgs({ ...base, mode: 'ic-nope' })).toThrow(/Unknown IC-LoRA remix mode/);
+  });
+
+  it('rejects an unresolved weight path', () => {
+    expect(() => icLoraArgs({ ...base, icLoraWeightPath: null }))
+      .toThrow(/could not be resolved/);
   });
 });

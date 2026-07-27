@@ -32,6 +32,10 @@ import { makeVideoGenLineHandler, finalizeGeneratedVideo, isWatchdogSuccess } fr
 import { assertSafeLoraFilename } from '../loras.js';
 import { isMlxVideoLtxLoraCapable } from '../../lib/runners.js';
 import {
+  isIcLoraMode, icLoraSpecForMode, resolveIcLoraWeight,
+  assertIcReferenceCount, icResolutionIssue,
+} from '../../lib/icLoraWeights.js';
+import {
   LTX2_VENV_PYTHON,
   LTX2_HELPER_SCRIPT,
   WAN22_VENV_PYTHON,
@@ -283,7 +287,67 @@ export const resolveVideoLoras = (loras) => {
 // The helper lives in the ltx-2-mlx venv (so its `import ltx_pipelines_mlx`
 // resolves) but the script file lives in the PortOS repo so updates ship
 // with PortOS releases instead of the user's HF cache.
-const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo, loras }) => {
+// Validate an IC-LoRA render against its weight's contract, then emit the
+// helper flags. The rules themselves (reference count, resolution divisibility)
+// live in the registry that owns the numbers; this asserts them and translates
+// to argv.
+//
+// `icLoraWeightPath` is resolved asynchronously up in generateVideo (the HF
+// cache lookup is I/O) and threaded down, so this stays synchronous like every
+// other buildArgs branch.
+//
+// Exported for direct unit testing: generateVideo floors each edge to a
+// multiple of 64 before buildArgs runs, so a factor-2 weight's
+// resolution-divisibility branch is unreachable through the public entry point
+// (64-step flooring always yields an even number). It becomes live the moment a
+// weight ships with `referenceDownscaleFactor > 2`, so it's tested here rather
+// than left unverified.
+export const icLoraArgs = ({ mode, width, height, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2 }) => {
+  const spec = icLoraSpecForMode(mode);
+  if (!spec) {
+    throw new ServerError(`Unknown IC-LoRA remix mode: ${mode}`, { status: 400, code: 'IC_LORA_UNKNOWN_MODE' });
+  }
+  if (!icLoraWeightPath) {
+    throw new ServerError(
+      `IC-LoRA weight for "${spec.mode}" could not be resolved — download ${spec.repo} from the model panel first.`,
+      { status: 400, code: 'IC_LORA_WEIGHT_UNRESOLVED' },
+    );
+  }
+  const refs = Array.isArray(icReferencePaths) ? icReferencePaths : [];
+  assertIcReferenceCount(spec, refs.length, (msg) => new ServerError(msg, {
+    status: 400, code: 'IC_LORA_REFERENCE_COUNT',
+  }));
+  for (const ref of refs) {
+    if (!ref || !existsSync(ref)) {
+      throw new ServerError(
+        `IC-LoRA reference not found on disk: ${ref || '(missing)'}`,
+        { status: 400, code: 'IC_LORA_REFERENCE_MISSING' },
+      );
+    }
+  }
+  // Inside the pipeline a bad resolution surfaces as a bare ValueError mid-render,
+  // after the model has already loaded — catch it here instead.
+  const resolutionIssue = icResolutionIssue(spec, width, height);
+  if (resolutionIssue) {
+    throw new ServerError(resolutionIssue, { status: 400, code: 'IC_LORA_RESOLUTION_NOT_DIVISIBLE' });
+  }
+  const args = [
+    '--ic-mode', spec.id,
+    '--ic-lora-path', icLoraWeightPath,
+    '--ic-strength', String(icStrength ?? 1.0),
+    // Pass the bounds rather than letting the helper carry its own table: the
+    // registry stays the single source of truth across both languages, and the
+    // helper still enforces them for a direct/script caller.
+    '--ic-min-references', String(spec.minReferences),
+    '--ic-max-references', String(spec.maxReferences),
+  ];
+  for (const ref of refs) args.push('--ic-reference', ref);
+  if (icAttentionStrength != null) args.push('--ic-attention-strength', String(icAttentionStrength));
+  if (icSkipStage2) args.push('--ic-skip-stage-2');
+  return args;
+};
+
+const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2 }) => {
   assertByovRuntimeInstalled('ltx2');
   // Map PortOS UI modes to the helper's subcommand. Native extend on ltx2
   // routes to ExtendPipeline.extend_from_video — conditions on the entire
@@ -299,7 +363,8 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
   // their keyframes dropped on the floor. The route handler always sets
   // mode='fflf' when keyframes are present, but defense-in-depth here covers
   // callers that bypass the route (e.g. Writers Room batch dispatch).
-  const helperMode = mode === 'fflf' ? 'fflf'
+  const helperMode = isIcLoraMode(mode) ? 'ic'
+    : mode === 'fflf' ? 'fflf'
     : mode === 'a2v' ? 'a2v'
     : wantsNativeExtend ? 'extend'
     : mode === 'image' || mode === 'extend' ? 'image'
@@ -437,6 +502,12 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
     // so motion + audio sync to the chosen still.
     if (sourceImagePath) args.push('--image', sourceImagePath);
   }
+  if (helperMode === 'ic') {
+    args.push(...icLoraArgs({
+      mode, width, height, icReferencePaths, icLoraWeightPath,
+      icStrength, icAttentionStrength, icSkipStage2,
+    }));
+  }
   return { bin: LTX2_VENV_PYTHON, args };
 };
 
@@ -511,12 +582,22 @@ const buildHunyuanArgs = ({ model, prompt, negativePrompt, width, height, numFra
   return { bin: HUNYUAN_VENV_PYTHON, args };
 };
 
-const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, textEncoderRepo, outputPath, loras }) => {
+const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, textEncoderRepo, outputPath, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2 }) => {
   // Route to the dgrauet/ltx-2-mlx helper when the model declares the new
   // runtime. Existing notapalindrome models default to runtime: 'mlx_video'
   // (or undefined in legacy registries — see backfillRuntime in mediaModels.js).
   if (model.runtime === 'ltx2') {
-    return buildLtx2Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo, loras });
+    return buildLtx2Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2 });
+  }
+  // IC-LoRA remix modes are an LTX-2 primitive (ICLoraPipeline) — no other
+  // runtime has an equivalent. The route guards this too, but a non-route
+  // caller (test, persisted queue replay) would otherwise fall through to a
+  // plain t2v render with the user's reference clip silently dropped.
+  if (isIcLoraMode(mode)) {
+    throw new ServerError(
+      `IC-LoRA remix modes require an ltx2-runtime model. Model "${modelId}" runs on "${model.runtime || 'mlx_video'}".`,
+      { status: 400, code: 'IC_LORA_REQUIRES_LTX2' },
+    );
   }
   const hasLoras = Array.isArray(loras) && loras.length > 0;
   // Defense-in-depth: LoRAs fuse only on ltx2 (handled above) or a non-quantized
@@ -622,7 +703,7 @@ const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, 
 // use (avoiding drift between two hardcoded constants).
 export const DEFAULT_NUM_FRAMES = 121;
 
-export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = 768, height = 512, numFrames = DEFAULT_NUM_FRAMES, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, mode = null, imageStrength = null, loras = null, hidden = false, jobId: providedJobId = null }) {
+export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = 768, height = 512, numFrames = DEFAULT_NUM_FRAMES, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, mode = null, imageStrength = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, hidden = false, jobId: providedJobId = null }) {
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   // Single-flight is now enforced by the mediaJobQueue worker upstream — only
@@ -652,6 +733,22 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // rejects LoRAs on non-ltx2 runtimes (the route also guards), so this is a
   // no-op there.
   const resolvedLoras = resolveVideoLoras(loras);
+
+  // IC-LoRA remix: resolve the per-mode weight before any GPU work. A cached
+  // weight resolves to the exact file inside the HF snapshot; an un-cached one
+  // falls back to the repo id, which ICLoraPipeline downloads itself — log that
+  // so a several-hundred-MB pull mid-render isn't a mystery in the server log.
+  let icLoraWeightPath = null;
+  if (isIcLoraMode(mode)) {
+    const resolved = await resolveIcLoraWeight(mode);
+    if (!resolved) {
+      throw new ServerError(`Unknown IC-LoRA remix mode: ${mode}`, { status: 400, code: 'IC_LORA_UNKNOWN_MODE' });
+    }
+    icLoraWeightPath = resolved.path;
+    if (!resolved.cached) {
+      console.log(`⬇️  IC-LoRA weight not cached — ${resolved.spec.repo} will download at render time`);
+    }
+  }
 
   await ensureDir(PATHS.videos);
   await ensureDir(PATHS.videoThumbnails);
@@ -683,6 +780,13 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   }
   // Caller may pass null/'' to use mlx_video's default (1.0 = preserve source).
   const actualImageStrength = imageStrength != null && imageStrength !== '' ? Number(imageStrength) : null;
+  // IC-LoRA dials. `icStrength` weights the reference-video conditioning
+  // channel (default 1.0 matches the pipeline); `icAttentionStrength` stays
+  // null when unset so the pipeline applies its own default rather than us
+  // pinning 1.0 and shadowing a future upstream change.
+  const actualIcStrength = icStrength != null && icStrength !== '' ? Number(icStrength) : 1.0;
+  const actualIcAttentionStrength = icAttentionStrength != null && icAttentionStrength !== ''
+    ? Number(icAttentionStrength) : null;
   const actualTextEncoderRepo = getTextEncoderRepo();
   const parsedNumFrames = Number(numFrames);
   const parsedFps = Number(fps);
@@ -801,6 +905,18 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // render apart from a user who happened to pick 8 steps — comparing it
     // against the default Standard render is the whole point of the knob.
     ...(t2vTwoStage ? { twoStageT2v: true, stage2Steps: actualStage2Steps } : {}),
+    // IC-LoRA remix settings, stamped so the lightbox Remix flow can round-trip
+    // them. The reference clip is recorded by BASENAME (not the absolute
+    // staging path) — history is user-facing and a durable upload path is both
+    // noise and machine-specific.
+    ...(isIcLoraMode(mode) ? {
+      icStrength: actualIcStrength,
+      ...(actualIcAttentionStrength != null ? { icAttentionStrength: actualIcAttentionStrength } : {}),
+      ...(icSkipStage2 ? { icSkipStage2: true } : {}),
+      ...(Array.isArray(icReferencePaths) && icReferencePaths.length
+        ? { icReferenceNames: icReferencePaths.map((p) => basename(p)) }
+        : {}),
+    } : {}),
     // Stamp applied LoRAs using the SAME parallel-array contract image renders
     // use (`loraFilenames` + `loraScales`) so the existing history consumers —
     // normalizeVideo / getRenderConfigForItem (client/src/components/media/
@@ -824,7 +940,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // logic of the spawn-error handler so failure modes converge.
   let bin, args;
   try {
-    ({ bin, args } = buildArgs({ pythonPath, modelId, model, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, stage2Steps: actualStage2Steps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, outputPath, loras: resolvedLoras }));
+    ({ bin, args } = buildArgs({ pythonPath, modelId, model, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, stage2Steps: actualStage2Steps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, outputPath, loras: resolvedLoras, icReferencePaths, icLoraWeightPath, icStrength: actualIcStrength, icAttentionStrength: actualIcAttentionStrength, icSkipStage2 }));
   } catch (err) {
     job.status = 'error';
     const reason = err.message || 'Failed to build video gen args';

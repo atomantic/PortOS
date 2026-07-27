@@ -44,3 +44,7 @@
 - The reconciler's blanket "never merge unreviewed work" rule read as a veto on the merge step it was supposed to perform, so it has been replaced by the explicit gate each branch already carries (required CI green, mergeable, and the review it names). Merging still only ever happens through `gh pr merge` on a branch the task was handed.
 - Waiting for a Copilot review on an in-review pull request is now time-boxed to 10 minutes — on a repository without Copilot review enabled, the old unbounded wait could strand a green pull request open indefinitely.
 - The merge itself is no longer pinned to a merge commit: on a repository that disallows one, the agent retries with squash and then rebase instead of stranding the branch. It also merges from the repository root and tears the worktree down before deleting the branch, so the cleanup can't fail on a branch that's still checked out.
+
+## Video generation
+
+- **[issue-3100] New Control mode for local video generation** — feed a control clip (a depth pass, a pose track, edges) alongside your prompt and the render follows its structure and motion instead of inventing them. The reference can be a fresh upload or any prior render from your history, and a strength slider dials how tightly the output tracks it. A half-res preview toggle skips the refinement pass so you can check whether a control clip fits before committing to a full render. Requires an LTX-2 model; the ~654 MB Control weight downloads with progress from the mode panel and is covered by the existing model verify/repair buttons.
