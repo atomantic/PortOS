@@ -295,8 +295,25 @@ describe('agent TUI spawning', () => {
     const noEffort = buildTuiSpawnConfig({ id: 'claude-code-tui', command: 'claude', type: 'tui', args: [] }, null);
     expect(noEffort.args).not.toContain('--effort');
 
+    const grok = buildTuiSpawnConfig({ id: 'grok-tui', command: 'grok', type: 'tui', args: [] }, null, { effort: 'high' });
+    expect(grok.args.join(' ')).not.toContain('effort');
+  });
+
+  it('passes --effort through to the Antigravity TUI, clamped to its low|medium|high ladder', () => {
     const agy = buildTuiSpawnConfig({ id: 'antigravity-tui', command: 'agy', type: 'tui', args: [] }, null, { effort: 'high' });
-    expect(agy.args.join(' ')).not.toContain('effort');
+    expect(agy.args).toEqual(['--dangerously-skip-permissions', '--effort', 'high']);
+
+    const clamped = buildTuiSpawnConfig({ id: 'antigravity-tui', command: 'agy', type: 'tui', args: [] }, null, { effort: 'max' });
+    expect(clamped.args).toEqual(['--dangerously-skip-permissions', '--effort', 'high']);
+  });
+
+  it('passes the per-task model through to the Antigravity TUI', () => {
+    const agy = buildTuiSpawnConfig(
+      { id: 'antigravity-tui', command: 'agy', type: 'tui', args: [] },
+      'gemini-3.1-pro-high',
+      { effort: 'low' },
+    );
+    expect(agy.args).toEqual(['--dangerously-skip-permissions', '--model', 'gemini-3.1-pro-high', '--effort', 'low']);
   });
 
   it('adds lean-mode flags and the system-prompt file for an Ollama-backed claude TUI', () => {

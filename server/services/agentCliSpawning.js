@@ -289,9 +289,11 @@ export function buildCliSpawnConfig(provider, model, settingsEnv = {}, { systemP
   }
 
   // Antigravity CLI (`agy`) replaces Gemini CLI. Use print mode for a
-  // headless agent run and keep prompt delivery on stdin.
+  // headless agent run; the prompt rides as the trailing `--print` value.
+  // Per-task `--model` / `--effort` overrides are threaded in the same way as
+  // claude/codex — agy documents both as session-scoped flags.
   if (isAntigravityCliProvider(provider)) {
-    const args = ensureAntigravityPrintArgs(provider?.args || []);
+    const args = ensureAntigravityPrintArgs(provider?.args || [], { model: effectiveModel, effort });
     return {
       command: provider?.command || 'agy',
       args,

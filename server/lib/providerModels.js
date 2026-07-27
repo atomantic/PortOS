@@ -52,18 +52,24 @@ export function commandBasename(command) {
 export const resolveCliModel = (model) => isConfiguredDefaultModel(model) ? null : (model || null);
 
 // ---------------------------------------------------------------------------
-// Reasoning-effort levels — Claude Code (`--effort <level>`) and Codex
-// (`-c model_reasoning_effort=<level>`) both accept a per-invocation override
-// of how hard the model thinks. Value sets verified against claude CLI
-// v2.1.x (`--help`) and codex-cli 0.144 (config enum). Mirrored in
-// client/src/utils/providers.js — keep in sync.
+// Reasoning-effort levels — Claude Code (`--effort <level>`), Antigravity
+// (`--effort <level>`) and Codex (`-c model_reasoning_effort=<level>`) all
+// accept a per-invocation override of how hard the model thinks. Value sets
+// verified against claude CLI v2.1.x (`--help`), codex-cli 0.144 (config enum)
+// and agy (`--help`: "Reasoning effort for the current CLI session
+// (low|medium|high)"). Mirrored in client/src/utils/providers.js — keep in sync.
 // ---------------------------------------------------------------------------
 
 export const CLAUDE_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 export const CODEX_EFFORT_LEVELS = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+export const ANTIGRAVITY_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high']);
 
 /** Union of every accepted effort value across effort-capable CLIs, low→high. */
-export const EFFORT_LEVELS = Object.freeze([...new Set([...CODEX_EFFORT_LEVELS, ...CLAUDE_EFFORT_LEVELS])]);
+export const EFFORT_LEVELS = Object.freeze([...new Set([
+  ...CODEX_EFFORT_LEVELS,
+  ...CLAUDE_EFFORT_LEVELS,
+  ...ANTIGRAVITY_EFFORT_LEVELS,
+])]);
 
 /**
  * True when a provider is codex-flavored — the shipped `codex`/`codex-tui`
@@ -122,10 +128,29 @@ export function isKimiProvider(provider) {
 }
 
 /**
+ * True when a provider is Antigravity-flavored — the shipped
+ * `antigravity-cli`/`antigravity-tui` ids or any provider whose launch command
+ * basename is `agy`/`antigravity` (path/exe tolerant). The provider-shaped
+ * companion to `isAntigravityCommand` in antigravity.js; lives here (rather
+ * than there) so `effortLevelsForProvider` can key on it without this
+ * dependency-light module importing a sibling. Mirrored in
+ * client/src/utils/providers.js — keep in lockstep.
+ * @param {{id?:string, command?:string}|null|undefined} provider
+ * @returns {boolean}
+ */
+export function isAntigravityProvider(provider) {
+  if (!provider) return false;
+  const id = String(provider.id || '').toLowerCase();
+  if (id === 'antigravity-cli' || id === 'antigravity-tui') return true;
+  const base = commandBasename(provider.command);
+  return base === 'agy' || base === 'antigravity';
+}
+
+/**
  * The effort levels a provider's CLI accepts, or null when the provider has no
- * effort control (antigravity, opencode, grok, HTTP API providers). Keyed on the
+ * effort control (opencode, grok, kimi, HTTP API providers). Keyed on the
  * launch command basename (plus the shipped provider ids) so path-configured or
- * renamed claude/codex providers still qualify — same detection posture as
+ * renamed claude/codex/agy providers still qualify — same detection posture as
  * `isClaudeCommand`/`isOpencodeCommand`. A blank command does NOT default to
  * Claude here (unlike `isClaudeCommand`): effort is an opt-in enhancement, and
  * only a provider we can positively identify should advertise levels.
@@ -135,19 +160,25 @@ export function isKimiProvider(provider) {
 export function effortLevelsForProvider(provider) {
   if (!provider) return null;
   if (isCodexProvider(provider)) return CODEX_EFFORT_LEVELS;
+  if (isAntigravityProvider(provider)) return ANTIGRAVITY_EFFORT_LEVELS;
   if (isClaudeProvider(provider)) return CLAUDE_EFFORT_LEVELS;
   return null;
 }
 
-// Codex-only values mapped to their nearest Claude equivalent, so an effort
-// saved against a codex pin survives a provider switch instead of vanishing.
-const EFFORT_CLAMP = Object.freeze({ minimal: 'low', ultra: 'max' });
+// Every effort value any CLI accepts, ordered weakest→strongest. The clamp
+// below walks this so an effort saved against one provider survives a switch to
+// a provider with a narrower ladder (agy tops out at `high`; claude has no
+// `minimal`/`ultra`) instead of vanishing.
+const EFFORT_RANK = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 
 /**
  * Resolve a stored effort override to the value the provider's CLI actually
  * accepts, or null when the flag should be omitted entirely (no override set,
- * provider has no effort control, or the value is unrecognized). Out-of-range
- * values are clamped (`minimal`→`low`, `ultra`→`max`) rather than dropped.
+ * provider has no effort control, or the value isn't a known effort at all).
+ * An out-of-range value is clamped to the nearest supported level at or below
+ * it (`ultra`→`max` on claude, `xhigh`/`max`/`ultra`→`high` on agy), falling
+ * back to the provider's weakest level when nothing sits below it
+ * (`minimal`→`low`) — rather than being dropped.
  * @param {string|null|undefined} effort
  * @param {{id?:string, command?:string}|null|undefined} provider
  * @returns {string|null}
@@ -157,8 +188,12 @@ export function resolveCliEffort(effort, provider) {
   const levels = effortLevelsForProvider(provider);
   if (!levels) return null;
   if (levels.includes(effort)) return effort;
-  const clamped = EFFORT_CLAMP[effort];
-  return clamped && levels.includes(clamped) ? clamped : null;
+  const requested = EFFORT_RANK.indexOf(effort);
+  if (requested === -1) return null; // not an effort value at all
+  const supported = levels.map(l => EFFORT_RANK.indexOf(l)).filter(i => i !== -1).sort((a, b) => a - b);
+  if (supported.length === 0) return null;
+  const below = supported.filter(i => i < requested);
+  return EFFORT_RANK[below.length ? below[below.length - 1] : supported[0]];
 }
 
 /**
@@ -184,7 +219,7 @@ export function hasEffortFlag(args) {
 
 /**
  * The argv fragment that applies an effort override to an effort-capable CLI:
- * `['--effort', <level>]` for claude, `['-c', 'model_reasoning_effort=<level>']`
+ * `['--effort', <level>]` for claude and agy, `['-c', 'model_reasoning_effort=<level>']`
  * for codex, `[]` when the flag should be omitted (no override, provider has no
  * effort control, or a user-baked pin already sits in `existingArgs`). The one
  * home for both the detection AND the arg shape, so the two can't drift — spawn
@@ -431,6 +466,35 @@ export function hasModelFlag(args) {
     }
   }
   return false;
+}
+
+/**
+ * Strip dangling/empty `--model` / `-m` tokens (no value follows, or the joined
+ * form has an empty value). Those would survive into the spawned argv unchanged
+ * and cause the CLI to reject the invocation — see the comment on `hasModelFlag`
+ * for the full reasoning (it deliberately reports such a token as NOT a pin, so
+ * the injection path fires; without this strip the CLI would then see two
+ * `--model` occurrences). Pinned-with-value tokens are preserved untouched so
+ * user-baked model selections still win.
+ * @param {unknown[]} args
+ * @returns {unknown[]}
+ */
+export function stripBrokenModelFlags(args) {
+  if (!Array.isArray(args) || args.length === 0) return [];
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (typeof a === 'string' && (a === '--model=' || a === '-m=')) {
+      continue; // empty joined form
+    }
+    if (a === '--model' || a === '-m') {
+      const next = args[i + 1];
+      const hasValue = typeof next === 'string' && next.length > 0 && !next.startsWith('-');
+      if (!hasValue) continue; // dangling separated form
+    }
+    out.push(a);
+  }
+  return out;
 }
 
 /**

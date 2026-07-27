@@ -857,8 +857,10 @@ export function buildTuiInvocation(provider, model) {
   const command = provider?.command || inferTuiCommand(provider?.id);
   const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
   const effectiveModel = resolveCliModel(model);
-  const shouldInject = !isAntigravityCommand(command) && effectiveModel && !hasModelFlag(baseArgs);
+  const shouldInject = !!effectiveModel && !hasModelFlag(baseArgs);
   // OpenCode TUI: namespace the bare Ollama id (`opencode --model ollama/<id>`).
+  // Antigravity takes the id verbatim — its `claude-*` ids are served by Google's
+  // own gateway, so a Bedrock rewrite would produce an id agy can't resolve.
   // Otherwise map a bare Claude id to its Bedrock form when the box is in Bedrock
   // mode (no-op otherwise / for non-Claude ids) — mirrors buildCliArgs for the
   // claude-code-tui runner.
@@ -866,10 +868,12 @@ export function buildTuiInvocation(provider, model) {
     ? effectiveModel
     : isOpencodeCommand(command)
       ? prefixOpencodeModel(provider, effectiveModel)
-      : resolveBedrockCliModel(effectiveModel, {
-        env: { ...process.env, ...provider?.envVars },
-        providerId: provider?.id,
-      });
+      : isAntigravityCommand(command)
+        ? effectiveModel
+        : resolveBedrockCliModel(effectiveModel, {
+          env: { ...process.env, ...provider?.envVars },
+          providerId: provider?.id,
+        });
   const args = shouldInject ? [...baseArgs, '--model', injectedModel] : baseArgs;
   return { command, args };
 }

@@ -558,6 +558,57 @@ describe('Provider Service', () => {
       expect(antigravityTui.command).toBe('agy');
       expect(antigravityTui.args).toEqual(['--dangerously-skip-permissions']);
       expect(antigravityTui.contextWindow).toBe(1048576);
+      // agy takes a per-session --model, so the migrated provider ships the
+      // selectable catalog alongside the sentinel.
+      expect(antigravity.models[0]).toBe('antigravity-configured-default');
+      expect(antigravity.models).toContain('gemini-3.1-pro-high');
+    });
+
+    it('widens a sentinel-only Antigravity model list to the selectable catalog', async () => {
+      await writeProvidersFile({
+        activeProvider: 'antigravity-cli',
+        providers: {
+          'antigravity-cli': {
+            id: 'antigravity-cli',
+            name: 'Antigravity CLI',
+            type: 'cli',
+            command: 'agy',
+            contextWindow: 1048576,
+            models: ['antigravity-configured-default'],
+            defaultModel: 'antigravity-configured-default',
+            lightModel: 'antigravity-configured-default'
+          }
+        }
+      });
+
+      const antigravity = await providerService.getProviderById('antigravity-cli');
+      expect(antigravity.models.length).toBeGreaterThan(1);
+      expect(antigravity.models[0]).toBe('antigravity-configured-default');
+      expect(antigravity.models).toContain('claude-sonnet-4-6');
+      // The *Model keys are untouched: an install that never picks a model keeps
+      // agy's own configured default (no --model flag), exactly as before.
+      expect(antigravity.defaultModel).toBe('antigravity-configured-default');
+      expect(antigravity.lightModel).toBe('antigravity-configured-default');
+    });
+
+    it('leaves a user-customized Antigravity model list alone', async () => {
+      await writeProvidersFile({
+        activeProvider: 'antigravity-cli',
+        providers: {
+          'antigravity-cli': {
+            id: 'antigravity-cli',
+            name: 'Antigravity CLI',
+            type: 'cli',
+            command: 'agy',
+            contextWindow: 1048576,
+            models: ['antigravity-configured-default', 'my-tuned-model'],
+            defaultModel: 'my-tuned-model'
+          }
+        }
+      });
+
+      const antigravity = await providerService.getProviderById('antigravity-cli');
+      expect(antigravity.models).toEqual(['antigravity-configured-default', 'my-tuned-model']);
     });
   });
 

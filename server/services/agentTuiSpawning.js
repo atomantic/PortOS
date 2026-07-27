@@ -155,7 +155,6 @@ function shellHasLiveChild(shellPid) {
 }
 
 function appendModelArgs(args, model, command, provider) {
-  if (isAntigravityCommand(command)) return args;
   const effectiveModel = resolveCliModel(model);
   if (!effectiveModel) return args;
   // OpenCode TUI launches with `opencode --model ollama/<id>` (the top-level
@@ -165,6 +164,13 @@ function appendModelArgs(args, model, command, provider) {
   if (isOpencodeCommand(command)) {
     if (hasModelFlag(args)) return args;
     return [...args, '--model', prefixOpencodeModel(provider, effectiveModel)];
+  }
+  // Antigravity (`agy --model <id>`). No Bedrock mapping: agy serves
+  // `claude-*` ids through Google's own gateway, so rewriting them to
+  // `global.anthropic.*` would hand it an id it can't resolve.
+  if (isAntigravityCommand(command)) {
+    if (hasModelFlag(args)) return args;
+    return [...args, '--model', effectiveModel];
   }
   // Bedrock box: map a bare Claude id to its region-prefixed form just-in-time
   // (no-op off Bedrock / for non-Claude ids).

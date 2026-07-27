@@ -571,9 +571,7 @@ async function* streamCompletion(provider, model, prompt, signal) {
   // sources + history are concatenated, which exceeds OS argv limits
   // (especially on Windows ~32k).
   const { spawn } = await import('child_process');
-  let args = isAntigravityCliProvider(provider)
-    ? ensureAntigravityPrintArgs(provider.args || [])
-    : [...(provider.args || [])];
+  let args = [...(provider.args || [])];
   // OpenCode runs headless via the `run` subcommand (reads the prompt from
   // stdin); ensure it leads the argv even if a customized/TUI provider config
   // omitted it — a bare `opencode` launches the interactive TUI, which never
@@ -582,7 +580,11 @@ async function* streamCompletion(provider, model, prompt, signal) {
   if (provider.headlessArgs?.length) args.push(...provider.headlessArgs);
   const cliModel = resolveCliModel(model);
   if (isAntigravityCliProvider(provider)) {
-    // Antigravity (`agy`) picks its model from its own configuration.
+    // Antigravity (`agy --print <prompt>`): built LAST so the print marker stays
+    // the final token — anything appended after it (headlessArgs, --model) would
+    // be swallowed as the prompt text. `--model` is injected here, gated on the
+    // configured-default sentinel and any user-baked pin.
+    args = ensureAntigravityPrintArgs(args, { model: cliModel });
   } else if (provider.id === 'gemini-cli') {
     if (!args.includes('--output-format') && !args.includes('-o')) args.push('--output-format', 'text');
     if (cliModel) args.push('--model', cliModel);

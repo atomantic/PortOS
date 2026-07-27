@@ -391,6 +391,73 @@ describe('runAsk', () => {
     expect(child.stdin.end).toHaveBeenCalled();
   });
 
+  it('runs `agy --model <id> --print <prompt>` with headlessArgs still ahead of the print marker', async () => {
+    providers.getActiveProvider.mockResolvedValue({
+      id: 'antigravity-cli',
+      type: 'cli',
+      enabled: true,
+      command: 'agy',
+      args: [],
+      headlessArgs: ['--add-dir', '/tmp/x'],
+      defaultModel: 'gemini-3.1-pro-high',
+      timeout: 5000,
+    });
+
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = { on: vi.fn(), end: vi.fn(), write: vi.fn() };
+    child.kill = vi.fn();
+    setImmediate(() => {
+      child.stdout.emit('data', Buffer.from('answer text'));
+      child.emit('close', 0);
+    });
+    spawn.mockReturnValue(child);
+
+    for await (const _evt of askService.runAsk({ question: 'test question' })) { /* drain */ }
+
+    const [, args] = spawn.mock.calls.at(-1);
+    // agy takes the prompt as the --print VALUE, so --print must be second-to-last
+    // with the prompt after it — nothing else may follow the marker.
+    expect(args.slice(0, -1)).toEqual([
+      '--add-dir', '/tmp/x',
+      '--model', 'gemini-3.1-pro-high',
+      '--dangerously-skip-permissions',
+      '--print',
+    ]);
+    expect(args.at(-1)).toContain('test question');
+  });
+
+  it('omits --model for the Antigravity configured-default sentinel', async () => {
+    providers.getActiveProvider.mockResolvedValue({
+      id: 'antigravity-cli',
+      type: 'cli',
+      enabled: true,
+      command: 'agy',
+      args: [],
+      defaultModel: 'antigravity-configured-default',
+      timeout: 5000,
+    });
+
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = { on: vi.fn(), end: vi.fn(), write: vi.fn() };
+    child.kill = vi.fn();
+    setImmediate(() => {
+      child.stdout.emit('data', Buffer.from('answer text'));
+      child.emit('close', 0);
+    });
+    spawn.mockReturnValue(child);
+
+    for await (const _evt of askService.runAsk({ question: 'test question' })) { /* drain */ }
+
+    const [, args] = spawn.mock.calls.at(-1);
+    expect(args).not.toContain('--model');
+    expect(args.slice(0, -1)).toEqual(['--dangerously-skip-permissions', '--print']);
+    expect(args.at(-1)).toContain('test question');
+  });
+
   it('runs `opencode run --model ollama/<id>` for an OpenCode Ollama provider', async () => {
     providers.getActiveProvider.mockResolvedValue({
       id: 'opencode-ollama',

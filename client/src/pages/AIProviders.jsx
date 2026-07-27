@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isOllamaBackedProvider, isGrokBuildCli, isLocalEndpoint, effectiveModelContextWindow } from '../utils/providers';
+import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isOllamaBackedProvider, isAntigravityProvider, isGrokBuildCli, isLocalEndpoint, effectiveModelContextWindow } from '../utils/providers';
 import useLocalModels from '../hooks/useLocalModels';
 import EmptyState from '../components/EmptyState';
 import {
@@ -161,12 +161,19 @@ export default function AIProviders() {
     if (isOllamaBackedProvider(provider)) {
       return true;
     }
+    // Antigravity (`agy`) exposes a per-session `--model` flag and an
+    // `agy models` catalog, so BOTH its CLI and TUI providers refresh (the
+    // server has a type==='tui' branch for it) — checked before the generic
+    // TUI gate, same as Claude Ollama above.
+    if (isAntigravityProvider(provider)) {
+      return true;
+    }
     if (isTuiProvider(provider)) {
       return false;
     }
-    // Antigravity/Gemini/Grok Build CLIs use their own local model configuration
-    // (no PortOS model list to refresh — same as the configured-default sentinel).
-    if (provider.type === 'cli' && (provider.command === 'agy' || provider.command === 'gemini' || provider.command === 'grok')) {
+    // Gemini/Grok Build CLIs use their own local model configuration (no PortOS
+    // model list to refresh — same as the configured-default sentinel).
+    if (provider.type === 'cli' && (provider.command === 'gemini' || provider.command === 'grok')) {
       return false;
     }
     // All other providers support refresh (API and CLI)

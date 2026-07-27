@@ -205,11 +205,31 @@ describe('buildCliSpawnConfig', () => {
     expect(config.args).toContain('check_for_update_on_startup=false');
   });
 
-  it('uses agy print mode for Antigravity without model flags', () => {
+  it('uses agy print mode for Antigravity without model flags on the configured-default sentinel', () => {
     const config = buildCliSpawnConfig({ id: 'antigravity-cli', command: 'agy', args: [] }, 'antigravity-configured-default');
 
     expect(config.command).toBe('agy');
     expect(config.args).toEqual(['--dangerously-skip-permissions', '--print']);
+  });
+
+  // agy takes the prompt as the trailing --print VALUE, so every injected flag
+  // must land before it or agy reads the flag name as its task.
+  it('threads the per-task model and effort into agy ahead of --print', () => {
+    const config = buildCliSpawnConfig(
+      { id: 'antigravity-cli', command: 'agy', args: [] },
+      'claude-sonnet-4-6',
+      {},
+      { effort: 'medium' },
+    );
+
+    expect(config.command).toBe('agy');
+    expect(config.args).toEqual([
+      '--model', 'claude-sonnet-4-6',
+      '--effort', 'medium',
+      '--dangerously-skip-permissions',
+      '--print',
+    ]);
+    expect(config.args[config.args.length - 1]).toBe('--print');
   });
 
   it('runs `opencode run -m ollama/<model>` for a headless OpenCode Ollama agent', () => {

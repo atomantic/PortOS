@@ -509,8 +509,16 @@ describe('tuiHandshake.applyCommandDefaults', () => {
   });
 
   it('adds Antigravity permission bypass and strips legacy Gemini flags', () => {
-    expect(applyCommandDefaults('agy', ['--yolo', '--model', 'gemini-2.5-pro'])).toEqual([
+    expect(applyCommandDefaults('agy', ['--yolo', '-m', 'gemini-2.5-pro'])).toEqual([
       '--dangerously-skip-permissions',
+    ]);
+  });
+
+  // agy accepts the long `--model` now, so a baked pin survives (and suppresses
+  // the per-run model injection in buildTuiInvocation).
+  it('preserves a long-form --model pin for Antigravity', () => {
+    expect(applyCommandDefaults('agy', ['--model', 'gemini-3.1-pro-high'])).toEqual([
+      '--model', 'gemini-3.1-pro-high', '--dangerously-skip-permissions',
     ]);
   });
 
@@ -656,10 +664,30 @@ describe('tuiHandshake.buildTuiInvocation', () => {
     expect(out.args).toEqual(['--model', 'opus-x']);
   });
 
-  it('does not append --model for Antigravity TUI', () => {
+  it('does not append --model for the Antigravity configured-default sentinel', () => {
     const out = buildTuiInvocation({ id: 'antigravity-tui', command: 'agy', args: [] }, 'antigravity-configured-default');
     expect(out.command).toBe('agy');
     expect(out.args).toEqual(['--dangerously-skip-permissions']);
+  });
+
+  it('appends --model for Antigravity TUI when a real model is selected', () => {
+    const out = buildTuiInvocation({ id: 'antigravity-tui', command: 'agy', args: [] }, 'gemini-3.1-pro-high');
+    expect(out.command).toBe('agy');
+    expect(out.args).toEqual(['--dangerously-skip-permissions', '--model', 'gemini-3.1-pro-high']);
+  });
+
+  // agy serves its `claude-*` ids through Google's own gateway, so a Bedrock box
+  // must NOT rewrite them to `global.anthropic.*` (agy can't resolve that).
+  it('does not Bedrock-map an Antigravity claude-* model id', () => {
+    const prev = process.env.CLAUDE_CODE_USE_BEDROCK;
+    process.env.CLAUDE_CODE_USE_BEDROCK = '1';
+    try {
+      const out = buildTuiInvocation({ id: 'antigravity-tui', command: 'agy', args: [] }, 'claude-sonnet-4-6');
+      expect(out.args).toEqual(['--dangerously-skip-permissions', '--model', 'claude-sonnet-4-6']);
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_CODE_USE_BEDROCK;
+      else process.env.CLAUDE_CODE_USE_BEDROCK = prev;
+    }
   });
 
   it('handles a missing provider with no id (falls back to claude)', () => {

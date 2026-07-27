@@ -25,18 +25,24 @@ export function isAntigravityCliProvider(provider) {
   return provider?.id === ANTIGRAVITY_CLI_ID || isAntigravityCommand(provider?.command);
 }
 
+// `--yolo` is a Gemini-CLI flag agy never accepted, and `-m` /
+// `--output-format` / `-o` are legacy Gemini-CLI spellings agy still rejects (it
+// takes the long `--model` only, and has no output-format flag). The LONG
+// `--model` is deliberately NOT stripped — agy documents it as a per-session
+// flag, so a user-baked pin is a real selection to preserve. Keep in sync with
+// server/lib/antigravity.js#stripAntigravityUnsupportedArgs.
 export function stripAntigravityUnsupportedArgs(args = []) {
   const out = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--yolo') continue;
-    if (arg === '--model' || arg === '-m' || arg === '--output-format' || arg === '-o') {
+    if (arg === '-m' || arg === '--output-format' || arg === '-o') {
       i += 1;
       continue;
     }
     if (
       typeof arg === 'string'
-      && (arg.startsWith('--model=') || arg.startsWith('-m=') || arg.startsWith('--output-format=') || arg.startsWith('-o='))
+      && (arg.startsWith('-m=') || arg.startsWith('--output-format=') || arg.startsWith('-o='))
     ) {
       continue;
     }
@@ -49,7 +55,11 @@ export function stripAntigravityUnsupportedArgs(args = []) {
 // NOT read stdin. So the print flag must be the FINAL token (a marker); the host
 // runner splices the prompt in right after it at spawn time. Keep in sync with
 // server/lib/antigravity.js#ensureAntigravityPrintArgs — the host overrides the
-// runner (setCliRunner), so the prompt injection itself lives host-side.
+// runner (setCliRunner), so the prompt injection itself lives host-side — as
+// does per-run `--model` / `--effort` injection (it needs the shared
+// providerModels helpers this vendored copy must not import). These two
+// builders are only used by the legacy-Gemini→agy provider migration, which has
+// no per-run model to thread.
 const ANTIGRAVITY_PRINT_FLAGS = ['--print', '-p', '--prompt'];
 
 export function ensureAntigravityPrintArgs(args = []) {

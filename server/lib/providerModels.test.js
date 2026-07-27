@@ -24,7 +24,9 @@ import {
   providerSuppliesGithubToken,
   CLAUDE_EFFORT_LEVELS,
   CODEX_EFFORT_LEVELS,
+  ANTIGRAVITY_EFFORT_LEVELS,
   EFFORT_LEVELS,
+  isAntigravityProvider,
   effortLevelsForProvider,
   resolveCliEffort,
   hasEffortFlag,
@@ -177,8 +179,13 @@ describe('providerModels', () => {
       expect(effortLevelsForProvider({ id: 'claude-ollama', command: '/usr/local/bin/claude' })).toBe(CLAUDE_EFFORT_LEVELS);
     });
 
+    it('returns the narrower agy ladder for antigravity ids and the agy command', () => {
+      expect(effortLevelsForProvider({ id: 'antigravity-cli', command: 'agy' })).toBe(ANTIGRAVITY_EFFORT_LEVELS);
+      expect(effortLevelsForProvider({ id: 'antigravity-tui' })).toBe(ANTIGRAVITY_EFFORT_LEVELS);
+      expect(effortLevelsForProvider({ id: 'custom', command: '/Users/x/.local/bin/agy' })).toBe(ANTIGRAVITY_EFFORT_LEVELS);
+    });
+
     it('returns null for providers without an effort control (and does NOT default blank commands to claude)', () => {
-      expect(effortLevelsForProvider({ id: 'antigravity-cli', command: 'agy' })).toBeNull();
       expect(effortLevelsForProvider({ id: 'opencode-ollama', command: 'opencode' })).toBeNull();
       expect(effortLevelsForProvider({ id: 'grok-cli', command: 'grok' })).toBeNull();
       expect(effortLevelsForProvider({ id: 'ollama' })).toBeNull();
@@ -237,11 +244,36 @@ describe('providerModels', () => {
       expect(resolveCliEffort('ultra', { id: 'claude-code', command: 'claude' })).toBe('max');
     });
 
+    // agy tops out at `high`, so an effort saved against claude/codex must clamp
+    // DOWN to the nearest supported level rather than vanish when the user
+    // switches the task's provider to Antigravity.
+    it('clamps down to agy\'s narrower ladder', () => {
+      const agy = { id: 'antigravity-cli', command: 'agy' };
+      expect(resolveCliEffort('medium', agy)).toBe('medium');
+      expect(resolveCliEffort('xhigh', agy)).toBe('high');
+      expect(resolveCliEffort('max', agy)).toBe('high');
+      expect(resolveCliEffort('ultra', agy)).toBe('high');
+      expect(resolveCliEffort('minimal', agy)).toBe('low');
+    });
+
     it('returns null for unset/unknown values and effort-less providers', () => {
       expect(resolveCliEffort(null, { id: 'codex', command: 'codex' })).toBeNull();
       expect(resolveCliEffort('', { id: 'codex', command: 'codex' })).toBeNull();
       expect(resolveCliEffort('bogus', { id: 'codex', command: 'codex' })).toBeNull();
+      expect(resolveCliEffort('bogus', { id: 'antigravity-cli', command: 'agy' })).toBeNull();
       expect(resolveCliEffort('high', { id: 'grok-cli', command: 'grok' })).toBeNull();
+    });
+  });
+
+  describe('isAntigravityProvider', () => {
+    it('matches shipped ids and agy/antigravity command basenames', () => {
+      expect(isAntigravityProvider({ id: 'antigravity-cli' })).toBe(true);
+      expect(isAntigravityProvider({ id: 'antigravity-tui' })).toBe(true);
+      expect(isAntigravityProvider({ id: 'custom', command: '/Users/x/.local/bin/agy' })).toBe(true);
+      expect(isAntigravityProvider({ id: 'custom', command: 'antigravity.exe' })).toBe(true);
+      expect(isAntigravityProvider({ id: 'claude-code', command: 'claude' })).toBe(false);
+      expect(isAntigravityProvider({ id: 'blank' })).toBe(false);
+      expect(isAntigravityProvider(null)).toBe(false);
     });
   });
 

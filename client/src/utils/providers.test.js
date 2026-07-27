@@ -34,6 +34,11 @@ import {
   isOllamaBackedProvider,
   isGrokBuildCli,
   isKimiProvider,
+  isAntigravityProvider,
+  effortLevelsForProvider,
+  CLAUDE_EFFORT_LEVELS,
+  CODEX_EFFORT_LEVELS,
+  ANTIGRAVITY_EFFORT_LEVELS,
   isConfiguredDefaultModel,
   isLocalEndpoint,
   enabledApiProviderFilter,
@@ -41,6 +46,43 @@ import {
   getProviderTimeout,
 } from './providers.js';
 import { PROVIDER_TYPES as SERVER_PROVIDER_TYPES } from '../../../server/lib/aiToolkit/constants.js';
+import {
+  effortLevelsForProvider as serverEffortLevelsForProvider,
+  isAntigravityProvider as serverIsAntigravityProvider,
+} from '../../../server/lib/providerModels.js';
+
+// These drive the Effort/model pickers in the CoS task + schedule forms. The
+// client copy is a hand-mirror of server/lib/providerModels.js (the client can't
+// import server modules at runtime), so pin both sides together here.
+describe('effortLevelsForProvider (server mirror)', () => {
+  const CASES = [
+    ['antigravity CLI', { id: 'antigravity-cli', command: 'agy' }, ANTIGRAVITY_EFFORT_LEVELS],
+    ['antigravity TUI', { id: 'antigravity-tui' }, ANTIGRAVITY_EFFORT_LEVELS],
+    ['path-configured agy', { id: 'custom', command: '/Users/x/.local/bin/agy' }, ANTIGRAVITY_EFFORT_LEVELS],
+    ['claude code', { id: 'claude-code', command: 'claude' }, CLAUDE_EFFORT_LEVELS],
+    ['codex', { id: 'codex', command: 'codex' }, CODEX_EFFORT_LEVELS],
+    ['grok (no effort control)', { id: 'grok-cli', command: 'grok' }, null],
+    ['blank command is not claude', { id: 'ollama' }, null],
+  ];
+
+  it.each(CASES)('%s', (_label, provider, expected) => {
+    expect(effortLevelsForProvider(provider)).toEqual(expected);
+    expect(serverEffortLevelsForProvider(provider)).toEqual(expected);
+  });
+});
+
+describe('isAntigravityProvider (server mirror)', () => {
+  it.each([
+    [{ id: 'antigravity-cli' }, true],
+    [{ id: 'antigravity-tui' }, true],
+    [{ id: 'custom', command: 'agy.exe' }, true],
+    [{ id: 'claude-code', command: 'claude' }, false],
+    [null, false],
+  ])('%o → %s', (provider, expected) => {
+    expect(isAntigravityProvider(provider)).toBe(expected);
+    expect(serverIsAntigravityProvider(provider)).toBe(expected);
+  });
+});
 
 describe('PROVIDER_TYPES', () => {
   it('exposes the three provider-type values', () => {

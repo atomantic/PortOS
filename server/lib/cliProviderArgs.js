@@ -11,14 +11,14 @@
  *
  * Each CLI reads its prompt from stdin under a different convention:
  *   - Codex:       `codex exec -`        (+ `--model` when not the sentinel)
- *   - Antigravity: `agy --print` with prompt piped to stdin
+ *   - Antigravity: `agy --print <prompt>` (argv value, not stdin; + `--model`)
  *   - Gemini CLI:  legacy prompt piped to stdin (+ `-m <model>`)
  *   - Grok Build:  `grok --prompt-file /dev/stdin` (+ `--model <id>`, see grok.js)
  *   - Kimi Code:   `kimi --print --prompt <value>` (argv value, not stdin; see kimi.js)
  *   - Claude Code: `-p -`                (+ `--model <id>`)
  */
 
-import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel, isOpencodeCommand, buildCodexStartupArgs } from './providerModels.js';
+import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel, isOpencodeCommand, buildCodexStartupArgs, stripBrokenModelFlags } from './providerModels.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider, isAntigravityCommand, prepareAntigravityPrompt } from './antigravity.js';
 import { isGrokCommand, ensureGrokHeadlessArgs, prepareGrokPromptFile } from './grok.js';
 import { isKimiCommand, ensureKimiHeadlessArgs, prepareKimiPrompt } from './kimi.js';
@@ -64,10 +64,12 @@ export function buildCliArgs(provider) {
   }
 
   // Antigravity CLI (`agy`) replaces the old Gemini CLI for Google's coding
-  // agent. Print mode is the headless one-shot interface; prompt text still
-  // travels over stdin so large PortOS prompts do not hit OS argv limits.
+  // agent. Print mode is the headless one-shot interface; the prompt is spliced
+  // in as the trailing `--print` value at spawn time (see prepareCliPrompt).
+  // `--model` is honored like every other CLI here — the configured-default
+  // sentinel resolves to null so agy falls back to its own configured model.
   if (isAntigravityCliProvider(provider)) {
-    return ensureAntigravityPrintArgs(baseArgs);
+    return ensureAntigravityPrintArgs(baseArgs, { model: effectiveDefaultModel });
   }
 
   // Grok Build CLI (`grok`): headless one-shot. The prompt is delivered through
@@ -166,25 +168,7 @@ export function prepareCliPrompt(command, args, prompt) {
   return prepareGrokPromptFile(args, prompt);
 }
 
-// Strip dangling/empty `--model` / `-m` tokens (no value follows, or the
-// joined form has an empty value). Those would survive into the spawned
-// argv unchanged and cause the CLI to reject the invocation — see the
-// comment on hasModelFlag for the full reasoning. Pinned-with-value tokens
-// are preserved untouched so user-baked model selections still win.
-export function stripBrokenModelFlags(args) {
-  if (!Array.isArray(args) || args.length === 0) return [];
-  const out = [];
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (typeof a === 'string' && (a === '--model=' || a === '-m=')) {
-      continue; // empty joined form
-    }
-    if (a === '--model' || a === '-m') {
-      const next = args[i + 1];
-      const hasValue = typeof next === 'string' && next.length > 0 && !next.startsWith('-');
-      if (!hasValue) continue; // dangling separated form
-    }
-    out.push(a);
-  }
-  return out;
-}
+// Re-exported from providerModels.js (its home, next to `hasModelFlag`, so the
+// antigravity arg builders can share it without importing this module and
+// creating a cycle). Kept here for the existing importers of this module.
+export { stripBrokenModelFlags };

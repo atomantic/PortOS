@@ -1,4 +1,4 @@
-import { commandBasename } from './providerModels.js';
+import { buildEffortArgs, commandBasename, hasModelFlag, resolveCliModel, stripBrokenModelFlags } from './providerModels.js';
 
 export const ANTIGRAVITY_CLI_ID = 'antigravity-cli';
 export const ANTIGRAVITY_TUI_ID = 'antigravity-tui';
@@ -27,11 +27,43 @@ export function isAntigravityCliProvider(provider) {
 // prompt spliced in right after it at spawn time by prepareAntigravityPrompt.
 export const ANTIGRAVITY_PRINT_FLAGS = ['--print', '-p', '--prompt'];
 
-export function ensureAntigravityPrintArgs(args = []) {
+/**
+ * Append `--model <id>` / `--effort <level>` to an agy argv when the caller has
+ * a per-run override and the provider args don't already pin one. `agy --help`
+ * documents both as session-scoped flags ("Model for the current CLI session",
+ * "Reasoning effort for the current CLI session (low|medium|high)"), so PortOS
+ * threads the task's model/effort selection through exactly like it does for
+ * claude. Configured-default sentinels resolve to null → no `--model`, i.e. agy
+ * keeps using whatever model its own config selects.
+ *
+ * Deliberately NOT Bedrock-mapped: agy offers `claude-sonnet-4-6` /
+ * `claude-opus-4-6-thinking` through Google's own gateway, so rewriting those
+ * to `global.anthropic.*` on a Bedrock host would hand agy an id it can't
+ * resolve.
+ */
+function appendAntigravityModelAndEffort(args, { model = null, effort = null } = {}) {
+  // Drop a dangling `--model` before appending: `hasModelFlag` (correctly)
+  // reports a value-less flag as "not a pin", so leaving it in would hand agy
+  // two `--model` occurrences.
+  const out = stripBrokenModelFlags(args);
+  const effectiveModel = resolveCliModel(model);
+  if (effectiveModel && !hasModelFlag(out)) {
+    out.push('--model', effectiveModel);
+  }
+  out.push(...buildEffortArgs(effort, { id: ANTIGRAVITY_CLI_ID, command: 'agy' }, out));
+  return out;
+}
+
+/**
+ * @param {string[]} [args] - the provider's saved argv
+ * @param {{model?:string|null, effort?:string|null}} [overrides] - per-run selections
+ */
+export function ensureAntigravityPrintArgs(args = [], overrides = {}) {
   // Drop any bare print flag the caller baked in — we re-add exactly one as the
   // trailing marker. (PortOS always supplies the prompt itself, so a
   // user-configured print flag never carries a prompt value to preserve.)
-  const out = stripAntigravityUnsupportedArgs(args).filter((arg) => !ANTIGRAVITY_PRINT_FLAGS.includes(arg));
+  const stripped = stripAntigravityUnsupportedArgs(args).filter((arg) => !ANTIGRAVITY_PRINT_FLAGS.includes(arg));
+  const out = appendAntigravityModelAndEffort(stripped, overrides);
   if (!out.includes('--dangerously-skip-permissions') && !out.includes('--sandbox')) {
     out.push('--dangerously-skip-permissions');
   }
@@ -78,26 +110,36 @@ export function prepareAntigravityPrompt(args = [], prompt = '') {
 // argv value. So, unlike the CLI path, there is no print flag to accidentally
 // swallow --dangerously-skip-permissions: the flag stays a real boolean and the
 // permission auto-approval actually takes effect. Do NOT add --print here.
-export function ensureAntigravityTuiArgs(args = []) {
-  const out = stripAntigravityUnsupportedArgs(args);
+/**
+ * @param {string[]} [args] - the provider's saved argv
+ * @param {{model?:string|null, effort?:string|null}} [overrides] - per-run selections
+ */
+export function ensureAntigravityTuiArgs(args = [], overrides = {}) {
+  const out = appendAntigravityModelAndEffort(stripAntigravityUnsupportedArgs(args), overrides);
   if (!out.includes('--dangerously-skip-permissions') && !out.includes('--sandbox')) {
     out.push('--dangerously-skip-permissions');
   }
   return out;
 }
 
+// `--yolo` is a Gemini-CLI flag agy never accepted, and `-m` / `--output-format`
+// / `-o` are legacy Gemini-CLI spellings agy still rejects (it takes the long
+// `--model` only, and has no output-format flag). The LONG `--model` is
+// deliberately NOT stripped: agy documents it as a per-session flag, so a
+// user-baked pin is a real selection to preserve — and `hasModelFlag` sees it,
+// which is what suppresses PortOS's own injected `--model`.
 export function stripAntigravityUnsupportedArgs(args = []) {
   const out = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--yolo') continue;
-    if (arg === '--model' || arg === '-m' || arg === '--output-format' || arg === '-o') {
+    if (arg === '-m' || arg === '--output-format' || arg === '-o') {
       i += 1;
       continue;
     }
     if (
       typeof arg === 'string'
-      && (arg.startsWith('--model=') || arg.startsWith('-m=') || arg.startsWith('--output-format=') || arg.startsWith('-o='))
+      && (arg.startsWith('-m=') || arg.startsWith('--output-format=') || arg.startsWith('-o='))
     ) {
       continue;
     }

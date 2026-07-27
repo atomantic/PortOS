@@ -42,18 +42,23 @@ describe('stripAntigravityUnsupportedArgs', () => {
     expect(stripAntigravityUnsupportedArgs(['--yolo'])).toEqual([]);
   });
 
-  it('drops the space-separated model/output-format flag AND its value', () => {
+  it('drops the space-separated legacy-Gemini flag AND its value', () => {
     expect(stripAntigravityUnsupportedArgs(['-m', 'gemini-2.5-pro'])).toEqual([]);
-    expect(stripAntigravityUnsupportedArgs(['--model', 'x', 'keep'])).toEqual(['keep']);
     expect(stripAntigravityUnsupportedArgs(['--output-format', 'text'])).toEqual([]);
     expect(stripAntigravityUnsupportedArgs(['-o', 'json'])).toEqual([]);
   });
 
-  it('drops the equals-form model/output-format flag', () => {
-    expect(stripAntigravityUnsupportedArgs(['--model=x'])).toEqual([]);
+  it('drops the equals-form legacy-Gemini flag', () => {
     expect(stripAntigravityUnsupportedArgs(['-m=x'])).toEqual([]);
     expect(stripAntigravityUnsupportedArgs(['--output-format=text'])).toEqual([]);
     expect(stripAntigravityUnsupportedArgs(['-o=json'])).toEqual([]);
+  });
+
+  // agy grew a per-session `--model` flag, so a long-form pin is a real user
+  // selection to keep — only the legacy `-m` spelling it never accepted goes.
+  it('preserves a long-form --model pin (both spellings)', () => {
+    expect(stripAntigravityUnsupportedArgs(['--model', 'x', 'keep'])).toEqual(['--model', 'x', 'keep']);
+    expect(stripAntigravityUnsupportedArgs(['--model=x'])).toEqual(['--model=x']);
   });
 
   it('preserves unrelated flags', () => {
@@ -83,6 +88,28 @@ describe('ensureAntigravityPrintArgs', () => {
   it('strips legacy Gemini flags then emits skip-permissions + trailing --print', () => {
     expect(ensureAntigravityPrintArgs(['--yolo', '-m', 'gemini-2.5-pro', '--output-format', 'text']))
       .toEqual(['--dangerously-skip-permissions', '--print']);
+  });
+
+  // Per-run model/effort must land BEFORE the trailing --print marker, or agy
+  // would consume `--model` as the prompt text.
+  it('injects the per-run model and effort ahead of the trailing --print', () => {
+    expect(ensureAntigravityPrintArgs([], { model: 'claude-sonnet-4-6', effort: 'medium' }))
+      .toEqual(['--model', 'claude-sonnet-4-6', '--effort', 'medium', '--dangerously-skip-permissions', '--print']);
+  });
+
+  it('omits --model for the configured-default sentinel (agy keeps its own default)', () => {
+    expect(ensureAntigravityPrintArgs([], { model: 'antigravity-configured-default' }))
+      .toEqual(['--dangerously-skip-permissions', '--print']);
+  });
+
+  it('clamps an out-of-range effort to agy\'s top level', () => {
+    expect(ensureAntigravityPrintArgs([], { effort: 'max' }))
+      .toEqual(['--effort', 'high', '--dangerously-skip-permissions', '--print']);
+  });
+
+  it('drops a dangling --model rather than emitting it twice', () => {
+    expect(ensureAntigravityPrintArgs(['--model'], { model: 'gemini-3.1-pro-low' }))
+      .toEqual(['--model', 'gemini-3.1-pro-low', '--dangerously-skip-permissions', '--print']);
   });
 
   it('normalizes any pre-baked print flag (--print / -p / --prompt) to a single trailing --print', () => {
@@ -131,12 +158,22 @@ describe('prepareAntigravityPrompt', () => {
 
 describe('ensureAntigravityTuiArgs', () => {
   it('strips legacy flags and adds --dangerously-skip-permissions (no --print)', () => {
-    expect(ensureAntigravityTuiArgs(['--yolo', '--model', 'gemini-2.5-pro']))
+    expect(ensureAntigravityTuiArgs(['--yolo', '-m', 'gemini-2.5-pro']))
       .toEqual(['--dangerously-skip-permissions']);
   });
 
   it('respects an existing --sandbox', () => {
     expect(ensureAntigravityTuiArgs(['--sandbox'])).toEqual(['--sandbox']);
+  });
+
+  it('appends the per-run model and effort', () => {
+    expect(ensureAntigravityTuiArgs([], { model: 'gemini-3.1-pro-high', effort: 'high' }))
+      .toEqual(['--model', 'gemini-3.1-pro-high', '--effort', 'high', '--dangerously-skip-permissions']);
+  });
+
+  it('lets a user-baked --model pin win over the per-run model', () => {
+    expect(ensureAntigravityTuiArgs(['--model', 'claude-sonnet-4-6'], { model: 'gemini-3.1-pro-high' }))
+      .toEqual(['--model', 'claude-sonnet-4-6', '--dangerously-skip-permissions']);
   });
 });
 
