@@ -487,6 +487,10 @@ export const createCosJobSchema = z.object({
     openPR: z.boolean().optional(),
     prCompletion: z.enum(PR_COMPLETION_VALUES).optional(),
     simplify: z.boolean().optional(),
+    // Absent = true (a clean worktree at idle-out is a failure). `false` opts the
+    // job out of the TUI idle-complete worktree-changes gate — see
+    // ALLOWED_TASK_METADATA_KEYS below and agentTuiSpawning.js (#3102).
+    worktreeChangesExpected: z.boolean().optional(),
   }).optional(),
 });
 
@@ -628,7 +632,14 @@ const ALLOWED_TASK_METADATA_KEYS = [
   // Throwaway-worktree posture for programmatic-I/O reasoning tasks (layered-
   // intelligence): the worktree is discarded without a merge or PR so a reasoning
   // agent can't land code. See agentWorktreeCleanup.js.
-  'discardWorktree'
+  'discardWorktree',
+  // Whether a successful run is EXPECTED to leave file changes in the worktree
+  // (#3102). Default (absent) = true: the TUI idle-complete gate fails a run that
+  // idled out on a clean tree. `false` opts a task type out of that gate — e.g. a
+  // reference-watch run against a GitHub/GitLab/JIRA work tracker files its
+  // proposals as issues and, per the prompt, edits no application code, so a
+  // clean worktree is the SUCCESS shape. See agentTuiSpawning.js.
+  'worktreeChangesExpected'
 ];
 
 // pr-watcher author-gate values. 'self' = PRs opened by the gh-authenticated

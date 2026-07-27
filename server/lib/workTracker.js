@@ -122,6 +122,22 @@ export function forgeCliForTracker(tracker) {
 }
 
 /**
+ * True when a concrete tracker records work as FILES in the repo (PLAN.md) —
+ * i.e. an agent that files a proposal there necessarily dirties the worktree.
+ * The forge/ticket trackers (github/gitlab/jira) take their work out-of-band via
+ * `gh`/`glab`/JIRA, so a successful run can legitimately leave a clean tree.
+ * Consumed by `triggerReferenceAnalysis` to stamp `worktreeChangesExpected` on
+ * the spawned task off the SAME resolved value that picks the prompt's
+ * {trackerInstructions} block, so the flag can't drift from the instructions the
+ * agent actually got (see agentTuiSpawning.js's idle-complete gate, #3102).
+ * An unknown/absent tracker is treated as file-based, matching
+ * formatTrackerInstructions' PLAN.md fallback.
+ */
+export function isFileTracker(tracker) {
+  return !['github', 'gitlab', 'jira'].includes(tracker);
+}
+
+/**
  * The CoS claim task type that ships work from a concrete tracker. The
  * claim-work router (cosTaskGenerator) delegates to one of these prompt bodies
  * after resolving the app's tracker:

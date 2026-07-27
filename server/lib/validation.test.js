@@ -710,6 +710,18 @@ describe('validation.js', () => {
         .toEqual({ useWorktree: true, openPR: true, simplify: true, reviewLoop: false });
     });
 
+    it('should accept worktreeChangesExpected as an allowed boolean key (#3102)', () => {
+      // `false` is the load-bearing value: it opts a task out of the TUI
+      // idle-complete clean-worktree gate. If the sanitizer dropped it, a
+      // reference-watch run against a forge tracker would keep failing.
+      expect(sanitizeTaskMetadata({ worktreeChangesExpected: false }))
+        .toEqual({ worktreeChangesExpected: false });
+      expect(sanitizeTaskMetadata({ worktreeChangesExpected: true }))
+        .toEqual({ worktreeChangesExpected: true });
+      // Non-boolean can't smuggle a truthy string past the gate.
+      expect(sanitizeTaskMetadata({ worktreeChangesExpected: 'false' })).toBeNull();
+    });
+
     it('should accept only known PR completion metadata', () => {
       expect(sanitizeTaskMetadata({ prCompletion: 'review-then-merge' }))
         .toEqual({ prCompletion: 'review-then-merge' });

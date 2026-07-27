@@ -405,6 +405,9 @@ describe('triggerReferenceAnalysis', () => {
     // {trackerInstructions} block reflects that.
     expect(taskArg.metadata.workTracker).toBe('plan');
     expect(taskArg.metadata.context).toContain('PLAN.md');
+    // The PLAN.md path COMMITS checklist items, so a successful run dirties the
+    // worktree and the TUI idle-complete gate must stay armed (#3102).
+    expect(taskArg.metadata.worktreeChangesExpected).toBe(true);
   });
 
   it('injects the GitHub-issue tracker instructions when the app is configured for github', async () => {
@@ -416,6 +419,22 @@ describe('triggerReferenceAnalysis', () => {
     // The injected block drives `gh issue create`, not a PLAN.md append.
     expect(taskArg.metadata.context).toContain('gh issue create');
     expect(taskArg.metadata.context).toContain('GitHub Issues');
+    // The agent files ISSUES and edits no application code, so a successful run
+    // leaves a CLEAN worktree — the idle-complete gate must be opted out of, or
+    // the run is recorded as an `idle-no-changes` failure (#3102).
+    expect(taskArg.metadata.worktreeChangesExpected).toBe(false);
+  });
+
+  it.each([
+    ['gitlab', false],
+    ['jira', false],
+    ['plan', true],
+  ])('stamps worktreeChangesExpected off the same resolved tracker (%s → %s)', async (tracker, expected) => {
+    const result = await svc.triggerReferenceAnalysis({ ...app, workTracker: tracker }, ref, snapshot);
+    expect(result.queued).toBe(true);
+    const taskArg = addTaskMock.mock.calls[0][0];
+    expect(taskArg.metadata.workTracker).toBe(tracker);
+    expect(taskArg.metadata.worktreeChangesExpected).toBe(expected);
   });
 
   it('exposes formatTrackerInstructions and falls back to PLAN.md for an unknown tracker', () => {

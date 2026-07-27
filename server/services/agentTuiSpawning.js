@@ -16,7 +16,7 @@ import { registerSpawnedAgent, unregisterSpawnedAgent } from './agents.js';
 import { createOutputSpooler } from './agentTuiSpawning/outputSpooler.js';
 import { captureWorktreeDiff, worktreeHasChanges, resolveErrorAnalysis } from './agentTuiSpawning/finalizeHelpers.js';
 import { finalizeAgent, releaseAgentLane } from './agentFinalization.js';
-import { activeAgents, userTerminatedAgents, pausedAgents } from './agentState.js';
+import { activeAgents, userTerminatedAgents, pausedAgents, isFalsyMeta } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { DONE_SENTINEL_NAME, parseSentinelPayload } from '../lib/agentSentinel.js';
 import * as git from './git.js';
@@ -1096,10 +1096,21 @@ export async function spawnTuiAgent({
         // Gate idle-complete success on evidence of work in the worktree.
         // An agent that shows activity counters but makes no file changes
         // (rambled, invalid tool calls, hit an error) should fail, not succeed.
+        //
+        // ...UNLESS the task declares its work product isn't files (#3102).
+        // `worktreeChangesExpected: false` marks a task type whose deliverable
+        // lands OUTSIDE the repo — a reference-watch run against a GitHub/GitLab/
+        // JIRA work tracker files issues and, per its prompt, edits no application
+        // code, so a clean tree is the SUCCESS shape and this gate would fail a run
+        // that did its whole job. Absent/`true` keeps every code-editing task type
+        // on today's behavior; the `workActivity.active` signal above still
+        // distinguishes "prompt never submitted" → idle-no-activity either way.
+        const worktreeChangesExpected = !isFalsyMeta(task?.metadata?.worktreeChangesExpected);
         (async () => {
-          const hasChanges = await worktreeHasChanges(cwd);
+          const hasChanges = !worktreeChangesExpected || await worktreeHasChanges(cwd);
           // Capture any uncommitted changes for post-mortem analysis regardless
-          // of outcome — the diff is useful even on success for debugging.
+          // of outcome — the diff is useful even on success for debugging, and is
+          // a no-op on a clean tree.
           await captureWorktreeDiff(cwd, agentDir).catch(() => {});
           if (!hasChanges) {
             finish({

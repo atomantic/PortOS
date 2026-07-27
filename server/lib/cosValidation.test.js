@@ -48,3 +48,17 @@ describe('cosValidation autonomous-job effort field', () => {
     expect(updateCosJobSchema.safeParse({ effort: 'bogus' }).success).toBe(false);
   });
 });
+
+describe('cosValidation job taskMetadata.worktreeChangesExpected (#3102)', () => {
+  it('accepts the flag and preserves an explicit false (schema parity with the sanitizer)', () => {
+    // Zod strips undeclared keys, so an unlisted flag would be silently dropped
+    // from a job's taskMetadata — the opt-out has to be declared here too.
+    const parsed = createCosJobSchema.parse({
+      name: 'j',
+      taskMetadata: { useWorktree: true, worktreeChangesExpected: false },
+    });
+    expect(parsed.taskMetadata).toEqual({ useWorktree: true, worktreeChangesExpected: false });
+    expect(createCosJobSchema.safeParse({ name: 'j', taskMetadata: { worktreeChangesExpected: 'nope' } }).success)
+      .toBe(false);
+  });
+});

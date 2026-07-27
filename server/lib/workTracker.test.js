@@ -9,6 +9,7 @@ import {
   githubRepoSpec,
   githubApiHost,
   forgeCliForTracker,
+  isFileTracker,
   trackerToClaimTaskType,
   resolveWorkTracker,
   hostFromOriginUrl,
@@ -115,6 +116,26 @@ describe('forgeCliForTracker', () => {
     expect(forgeCliForTracker('plan')).toBeNull();
     expect(forgeCliForTracker('jira')).toBeNull();
     expect(forgeCliForTracker('auto')).toBeNull();
+  });
+});
+
+describe('isFileTracker', () => {
+  it('is true only for trackers whose work product is a repo file (#3102)', () => {
+    // PLAN.md work lands as a committed file → a run necessarily dirties the tree.
+    expect(isFileTracker('plan')).toBe(true);
+    // Forge/ticket trackers take the work out-of-band → a clean tree is success.
+    expect(isFileTracker('github')).toBe(false);
+    expect(isFileTracker('gitlab')).toBe(false);
+    expect(isFileTracker('jira')).toBe(false);
+  });
+
+  it('treats an unknown/absent tracker as file-based, matching the PLAN.md fallback', () => {
+    // formatTrackerInstructions falls back to the PLAN.md block for anything
+    // unrecognized, so the flag must agree or it drifts from the prompt.
+    expect(isFileTracker('auto')).toBe(true);
+    expect(isFileTracker('nonsense')).toBe(true);
+    expect(isFileTracker(undefined)).toBe(true);
+    expect(isFileTracker(null)).toBe(true);
   });
 });
 

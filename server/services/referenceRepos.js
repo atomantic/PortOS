@@ -33,7 +33,7 @@ import {
   updateApp,
 } from './apps.js';
 import { DEFAULT_REVIEWER } from '../lib/validation.js';
-import { resolveAppWorkTracker } from '../lib/workTracker.js';
+import { resolveAppWorkTracker, isFileTracker } from '../lib/workTracker.js';
 
 const REFERENCE_REPOS_ROOT = join(PATHS.data, 'cos', 'reference-repos');
 
@@ -686,6 +686,15 @@ export async function triggerReferenceAnalysis(app, ref, snapshot) {
       // files" guard into the system prompt and the agent would refuse to
       // write/commit/shell — defeating the whole flow. Mark writable.
       readOnly: false,
+      // Whether the run is expected to dirty the worktree. Derived from the SAME
+      // `workTracker.resolved` value that selected the {trackerInstructions}
+      // block above, so the flag can never disagree with the instructions the
+      // agent actually received: the PLAN.md path commits checklist items (dirty
+      // tree), while the github/gitlab/jira paths file issues/tickets and — per
+      // the prompt's "no source-code edits" contract — leave the tree CLEAN.
+      // Without this the TUI idle reaper records a run that did its whole job as
+      // `idle-no-changes` failure (#3102).
+      worktreeChangesExpected: isFileTracker(workTracker.resolved),
       context: fullPrompt,
     },
     autoApproved: true,

@@ -67,7 +67,10 @@ vi.mock('./agentFinalization.js', () => ({
 vi.mock('./agentState.js', () => ({
   activeAgents: new Map(),
   userTerminatedAgents: new Set(),
-  pausedAgents: new Map()
+  pausedAgents: new Map(),
+  // Mirrors the real predicate (covers the TASKS.md string round-trip) — the
+  // worktreeChangesExpected opt-out reads through it.
+  isFalsyMeta: (value) => value === false || value === 'false',
 }));
 
 vi.mock('./git.js', () => ({
@@ -709,6 +712,122 @@ describe('spawnTuiAgent runtime', () => {
         success: false,
         completionReason: 'idle-no-changes',
       })
+    );
+  });
+
+  // ── 1a-quater. worktreeChangesExpected:false skips the clean-tree gate (#3102) ─
+  // Issue #3102: the #2191 gate above assumes every agent's work product is a
+  // file change. A `reference-watch` run against a GitHub/GitLab/JIRA work
+  // tracker files ISSUES and — per its own prompt — edits no application code,
+  // so a run that did its whole job leaves a CLEAN worktree and was recorded as
+  // `idle-no-changes` failure. `worktreeChangesExpected: false` opts such a task
+  // out of the worktree gate, leaving `workActivity.active` as the sole signal.
+  //
+  // Drives the same PTY sequence as the idle-no-changes test: prompt echo →
+  // submit → an ADVANCING work counter → idle out, with a clean worktree.
+  async function driveIdleWithWorkOnCleanTree(overrides) {
+    vi.mocked(gitService.getStatus).mockResolvedValue({ clean: true, files: [] });
+    vi.mocked(gitService.getDiff).mockResolvedValue('');
+
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+
+    runSpawn(overrides);
+    await flushMicrotasks();
+
+    await capturedOnData(Buffer.from('Codex booting...\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+
+    // Prompt echo so paste verification passes and the submit-Enter fires.
+    await capturedOnData(Buffer.from('do the thing\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(3600);
+    await flushMicrotasks();
+
+    // An ADVANCING work counter → workActivity.active becomes true.
+    await capturedOnData(Buffer.from('(1s · thinking with high effort)\n'));
+    await vi.advanceTimersByTimeAsync(800);
+    await capturedOnData(Buffer.from('(2s · thinking with high effort)\n'));
+
+    await vi.advanceTimersByTimeAsync(21000);
+    vi.useRealTimers();
+    await completeDone;
+  }
+
+  it('idle-complete: worktreeChangesExpected:false succeeds on a clean worktree (non-file work tracker)', async () => {
+    await driveIdleWithWorkOnCleanTree({
+      task: { id: 'task-1', description: 'do the thing', metadata: { worktreeChangesExpected: false } },
+    });
+
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: 'agent-1',
+        success: true,
+        completionReason: 'idle-complete',
+      })
+    );
+    // The gate is skipped, so git status is never consulted — but the diff
+    // capture still runs unconditionally (a no-op on a clean tree, and useful
+    // for post-mortems either way).
+    expect(gitService.getStatus).not.toHaveBeenCalled();
+    expect(gitService.getDiff).toHaveBeenCalledWith('/tmp/ws', true);
+    expect(gitService.getDiff).toHaveBeenCalledWith('/tmp/ws', false);
+  });
+
+  it("idle-no-changes: the TASKS.md string round-trip 'false' also opts out of the gate", async () => {
+    // Task metadata survives a markdown round-trip as strings, so the opt-out
+    // must read through isFalsyMeta rather than a bare `=== false`.
+    await driveIdleWithWorkOnCleanTree({
+      task: { id: 'task-1', description: 'do the thing', metadata: { worktreeChangesExpected: 'false' } },
+    });
+
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true, completionReason: 'idle-complete' })
+    );
+  });
+
+  it('idle-no-changes: worktreeChangesExpected:true still fails on a clean worktree (no behavior change)', async () => {
+    await driveIdleWithWorkOnCleanTree({
+      task: { id: 'task-1', description: 'do the thing', metadata: { worktreeChangesExpected: true } },
+    });
+
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, completionReason: 'idle-no-changes' })
+    );
+  });
+
+  it('idle-no-activity: worktreeChangesExpected:false does NOT rescue a run with zero work-counter activity', async () => {
+    // The flag only relaxes the worktree-evidence gate. A prompt that never
+    // submitted (no working indicator ever appeared) must still fail — otherwise
+    // opting out of the file gate would silently launder a total no-op run.
+    vi.mocked(gitService.getStatus).mockResolvedValue({ clean: true, files: [] });
+    vi.mocked(gitService.getDiff).mockResolvedValue('');
+
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+
+    runSpawn({ task: { id: 'task-1', description: 'do the thing', metadata: { worktreeChangesExpected: false } } });
+    await flushMicrotasks();
+
+    await capturedOnData(Buffer.from('Codex booting...\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+
+    // Chrome-only repaints — the working counter never advances.
+    await capturedOnData(Buffer.from('⏵⏵ bypass permissions on (shift+tab to cycle)\n'));
+    await capturedOnData(Buffer.from('● high · /effort\n'));
+
+    await vi.advanceTimersByTimeAsync(21000);
+    vi.useRealTimers();
+    await completeDone;
+
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, completionReason: 'idle-no-activity' })
     );
   });
 
