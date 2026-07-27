@@ -16,9 +16,10 @@
  *
  * Evidence contract: a locked artifact is never overwritten. A
  * turnaround-derived directional anchor may be deliberately reopened on its
- * own; the turnaround may also be deliberately reopened together with every
- * artifact that descends from it. In either revision flow the old versioned
- * PNG stays on disk and the replacement lands at the next `-vN` filename.
+ * own; the main may be deliberately reopened while retaining its turnaround;
+ * the turnaround may also be deliberately reopened together with every
+ * artifact that descends from it. In every revision flow the old versioned PNG
+ * stays on disk and the replacement lands at the next `-vN` filename.
  */
 
 import { join } from 'path';
@@ -796,6 +797,15 @@ export function unlockReferenceAnchor(recordId, args) {
 }
 
 /**
+ * Re-open the main (south) reference while retaining the locked turnaround
+ * and the independent directional anchors derived from it. The walk service
+ * coordinates invalidating the south animations before this manifest reset.
+ */
+export function unlockReferenceMain(recordId) {
+  return manifestWriteTail(recordId, () => unlockReferenceMainImpl(recordId));
+}
+
+/**
  * Re-open the turnaround identity root and every reference artifact derived
  * from it. The walk service coordinates dependent animation invalidation before
  * calling this write; this layer owns only the reference manifest reset.
@@ -829,6 +839,24 @@ async function loadUnlockableReferenceAnchor(recordId, direction) {
 // reopened; unlockReferenceAnchor repeats the check inside its write tail.
 export async function assertReferenceAnchorUnlockable(recordId, { direction }) {
   await loadUnlockableReferenceAnchor(recordId, direction);
+}
+
+async function loadUnlockableReferenceMain(recordId) {
+  await requireCharacter(recordId);
+  const manifest = await loadManifest(recordId);
+  if (!manifest?.turnaround?.locked) {
+    throw new ServerError('Lock the turnaround sheet before revising the main reference', { status: 409, code: 'TURNAROUND_NOT_LOCKED' });
+  }
+  if (!manifest.mainReference?.locked) {
+    throw new ServerError('Main reference is not locked', { status: 409, code: 'MAIN_NOT_LOCKED' });
+  }
+  return { manifest };
+}
+
+// Read-only preflight for the cross-service revision coordinator. A south walk
+// approval must not be invalidated unless the main pointer can be reopened.
+export async function assertReferenceMainUnlockable(recordId) {
+  await loadUnlockableReferenceMain(recordId);
 }
 
 async function loadUnlockableReferenceTurnaround(recordId) {
@@ -865,6 +893,34 @@ async function unlockReferenceAnchorImpl(recordId, { direction }) {
   await updateRecord(recordId, { status: 'reference' });
   await saveManifest(recordId, manifest);
   console.log(`🔓 sprite reference anchor ${recordId}/${direction} unlocked`);
+  return getReferenceSet(recordId);
+}
+
+async function unlockReferenceMainImpl(recordId) {
+  const { manifest } = await loadUnlockableReferenceMain(recordId);
+  manifest.mainReference = {
+    path: null,
+    role: 'immutable-root',
+    background: 'chroma-key',
+    locked: false,
+  };
+  const south = findAnchor(manifest, anchorIdForDirection('south'));
+  if (south) Object.assign(south, {
+    status: 'pending',
+    source: 'main-reference',
+  });
+  if (south) {
+    delete south.path;
+    delete south.lockedFrom;
+    delete south.lockedAt;
+    delete south.sha256;
+    delete south.clipWarning;
+  }
+  manifest.status = 'needs-main-reference';
+
+  await updateRecord(recordId, { status: 'reference' });
+  await saveManifest(recordId, manifest);
+  console.log(`🔓 sprite main reference ${recordId} unlocked with south anchor reset`);
   return getReferenceSet(recordId);
 }
 

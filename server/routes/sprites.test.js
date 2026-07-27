@@ -45,6 +45,12 @@ vi.mock('../services/sprites/walk.js', () => ({
     candidates: [],
     walkInvalidated: true,
   })),
+  unlockMainReference: vi.fn(async () => ({
+    manifest: { status: 'needs-main-reference' },
+    candidates: [],
+    walkInvalidated: true,
+    scannerInvalidated: false,
+  })),
   unlockTurnaroundReference: vi.fn(async () => ({
     manifest: { status: 'needs-turnaround' },
     candidates: [],
@@ -370,6 +376,15 @@ describe('sprites routes', () => {
     const south = await request(app).post('/api/sprites/pioneer/reference/unlock').send({ direction: 'south' });
     expect(south.status).toBe(400);
     expect(walk.unlockDirectionalAnchor).toHaveBeenCalledTimes(1);
+  });
+
+  it('POST /:id/reference/main/unlock reopens only the main reference chain', async () => {
+    const unlocked = await request(app)
+      .post('/api/sprites/pioneer/reference/main/unlock')
+      .send();
+    expect(unlocked.status).toBe(200);
+    expect(unlocked.body.manifest.status).toBe('needs-main-reference');
+    expect(walk.unlockMainReference).toHaveBeenCalledWith('pioneer');
   });
 
   it('POST /:id/reference/turnaround/unlock reopens the full dependent chain', async () => {

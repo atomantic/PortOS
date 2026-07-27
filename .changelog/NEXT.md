@@ -6,6 +6,7 @@
 
 ## Sprites
 
+- Locked main references can now be explicitly reopened from Sprite Manager while keeping the turnaround and the other directional anchors intact. Reopening the main preserves versioned evidence, clears only the south identity, and reopens its dependent walk/scanner approvals so a better turnaround-derived main can be reviewed and locked as the next version.
 - Sprite turnaround and directional-reference candidates now request a square canvas from image generation and explicitly treat the locked turnaround as the source of truth for accessory side and occlusion. This prevents arbitrary Codex ImageGen candidate aspect ratios and reduces mirrored hip-bag drift before an anchor is locked.
 
 ## CoS agent failure reporting

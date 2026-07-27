@@ -122,7 +122,7 @@ const { lockReference } = await import('./reference.js');
 const {
   getWalkState, startWalkGeneration, attachTuiWalkResult, approveWalkDirection, rerunWalkPostprocess, unlockWalkSet,
   reopenWalkDirection, invalidateWalkDirectionForAnchorRevision,
-  unlockDirectionalAnchor, unlockTurnaroundReference,
+  unlockDirectionalAnchor, unlockMainReference, unlockTurnaroundReference,
   setWalkTarget, importedWalkDirections, getWalkSourceFrames,
 } = await import('./walk.js');
 const { SPRITE_DIRECTIONS, ANCHOR_DIRECTIONS } = await import('./prompts.js');
@@ -1040,6 +1040,24 @@ describe('invalidateWalkDirectionForAnchorRevision', () => {
       });
     }
     expect((await records.getRecord(id)).status).toBe('reference');
+  });
+
+  it('invalidates only south before reopening the main reference', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['south', 'east']);
+    const south = await makeCandidateRun(id, 'south');
+    const east = await makeCandidateRun(id, 'east');
+    await approveWalkDirection(id, { direction: 'south', runId: south.runId });
+    await approveWalkDirection(id, { direction: 'east', runId: east.runId });
+
+    const result = await unlockMainReference(id);
+    const state = await getWalkState(id);
+    expect(result.walkInvalidated).toBe(true);
+    expect(result.manifest.turnaround.locked).toBe(true);
+    expect(result.manifest.mainReference).toMatchObject({ locked: false, path: null });
+    expect(result.manifest.anchors.find((anchor) => anchor.direction === 'south')).toMatchObject({ status: 'pending' });
+    expect(result.manifest.anchors.find((anchor) => anchor.direction === 'east')).toMatchObject({ status: 'locked' });
+    expect(state.selection.directions.south).toBeUndefined();
+    expect(state.selection.directions.east.status).toBe('approved');
   });
 });
 

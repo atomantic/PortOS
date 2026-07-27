@@ -37,6 +37,7 @@ import {
 import {
   requireCharacter, loadManifest,
   assertReferenceAnchorUnlockable, unlockReferenceAnchor,
+  assertReferenceMainUnlockable, unlockReferenceMain,
   assertReferenceTurnaroundUnlockable, unlockReferenceTurnaround,
 } from './reference.js';
 import { SPRITE_DIRECTIONS, anchorIdForDirection, buildWalkVideoPrompt } from './prompts.js';
@@ -1878,6 +1879,19 @@ export async function unlockDirectionalAnchor(recordId, { direction }) {
   const walkInvalidated = await invalidateWalkDirectionForAnchorRevision(recordId, { direction });
   const scannerInvalidated = await invalidateScannerDirectionForAnchorRevision(recordId, { direction });
   const reference = await unlockReferenceAnchor(recordId, { direction });
+  return { ...reference, walkInvalidated, scannerInvalidated };
+}
+
+/**
+ * Reopen the main (south) reference and invalidate only animations conditioned
+ * on it. The locked turnaround and every non-south anchor remain usable.
+ */
+export async function unlockMainReference(recordId) {
+  await assertReferenceMainUnlockable(recordId);
+  const direction = 'south';
+  const walkInvalidated = await invalidateWalkDirectionForAnchorRevision(recordId, { direction });
+  const scannerInvalidated = await invalidateScannerDirectionForAnchorRevision(recordId, { direction });
+  const reference = await unlockReferenceMain(recordId);
   return { ...reference, walkInvalidated, scannerInvalidated };
 }
 

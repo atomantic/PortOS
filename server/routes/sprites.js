@@ -54,7 +54,7 @@ import { WALK_TRACK, SCANNER_TRACK, AMBIENT_TRACK, kindSupportsTrack, tracksForK
 import {
   getWalkState, startWalkGeneration, approveWalkDirection, rerunWalkPostprocess, unlockWalkSet,
   reopenWalkDirection, setWalkTarget, getWalkSourceFrames,
-  unlockDirectionalAnchor, unlockTurnaroundReference,
+  unlockDirectionalAnchor, unlockMainReference, unlockTurnaroundReference,
 } from '../services/sprites/walk.js';
 import { getScannerState, startScannerGeneration, approveScannerDirection } from '../services/sprites/scanner.js';
 import { getAmbientState, startAmbientGeneration, approveAmbientLoop } from '../services/sprites/ambient.js';
@@ -175,6 +175,13 @@ router.post('/:id/reference/lock', asyncHandler(async (req, res) => {
 router.post('/:id/reference/unlock', asyncHandler(async (req, res) => {
   const body = validateRequest(spriteReferenceUnlockSchema, req.body);
   res.json(await unlockDirectionalAnchor(req.params.id, body));
+}));
+
+// Re-open the main (south) reference while keeping the turnaround and the
+// other directional anchors locked. Its dependent walk/scanner approvals are
+// invalidated so they cannot survive a changed source image.
+router.post('/:id/reference/main/unlock', asyncHandler(async (req, res) => {
+  res.json(await unlockMainReference(req.params.id));
 }));
 
 // Re-open the turnaround identity root for regeneration. This deliberately

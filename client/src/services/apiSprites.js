@@ -90,6 +90,13 @@ export const unlockSpriteReferenceAnchor = (id, body, options = {}) => request(`
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
+// Re-open the main (south) reference while preserving the locked turnaround
+// and other directional anchors. Any dependent south walk/scanner is reopened.
+export const unlockSpriteMainReference = (id, options = {}) => request(
+  `/sprites/${encodeURIComponent(id)}/reference/main/unlock`,
+  { method: 'POST', ...options },
+);
+
 // Re-open the turnaround identity root and its full dependent chain. Old
 // versioned references, walks, and atlases remain available as history.
 export const unlockSpriteTurnaround = (id, options = {}) => request(

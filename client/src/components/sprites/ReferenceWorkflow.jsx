@@ -6,7 +6,7 @@ import {
 import toast from '../ui/Toast';
 import {
   generateSpriteReference, lockSpriteReference,
-  unlockSpriteReferenceAnchor, unlockSpriteTurnaround, updateSpriteRecord,
+  unlockSpriteReferenceAnchor, unlockSpriteMainReference, unlockSpriteTurnaround, updateSpriteRecord,
 } from '../../services/apiSprites.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import SpritePreview from './SpritePreview.jsx';
@@ -257,9 +257,13 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [spritePickerOpen, setSpritePickerOpen] = useState(false);
   const [forkOpen, setForkOpen] = useState(false);
+  const [mainUnlockConfirming, setMainUnlockConfirming] = useState(false);
   const [turnaroundUnlockConfirming, setTurnaroundUnlockConfirming] = useState(false);
   const [turnaroundCorrections, setTurnaroundCorrections] = useState({});
-  useEffect(() => { setTurnaroundUnlockConfirming(false); }, [recordId]);
+  useEffect(() => {
+    setMainUnlockConfirming(false);
+    setTurnaroundUnlockConfirming(false);
+  }, [recordId]);
   useEffect(() => { setTurnaroundCorrections({}); }, [recordId]);
 
   // Revoke the previous upload's object URL whenever the source changes or the
@@ -363,6 +367,15 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
       : `${direction} anchor unlocked`);
     onChanged();
   }, { errorMessage: 'Failed to unlock anchor' });
+
+  const [unlockMain, mainUnlocking] = useAsyncAction(async () => {
+    const result = await unlockSpriteMainReference(recordId, { silent: true });
+    toast.success(result.walkInvalidated || result.scannerInvalidated
+      ? 'Main reference unlocked; its south animations were reopened'
+      : 'Main reference unlocked; ready to regenerate from the turnaround');
+    setMainUnlockConfirming(false);
+    onChanged();
+  }, { errorMessage: 'Failed to unlock main reference' });
 
   const [unlockTurnaround, turnaroundUnlocking] = useAsyncAction(async () => {
     const result = await unlockSpriteTurnaround(recordId, { silent: true });
@@ -711,8 +724,43 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
                   <Lock className="h-3.5 w-3.5" /> Frozen · turnaround-derived
                 </p>
                 <p className="text-[11px] leading-relaxed text-gray-500">
-                  This front-facing reference seeds thumbnails and the walk-south identity. Fork for a separate character, or reopen the turnaround to rebuild this reference chain.
+                  This front-facing reference seeds thumbnails and the walk-south identity. Reopen it to derive a better front view from this turnaround, or reopen the turnaround to rebuild the full reference chain.
                 </p>
+                {turnaroundLocked && (mainUnlockConfirming ? (
+                  <div className="rounded border border-port-warning/40 bg-port-warning/10 p-2 text-[11px]">
+                    <p className="text-port-warning">
+                      Reopen the main reference and its south walk/scanner? The turnaround and other directions stay locked; existing files remain in history.
+                    </p>
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        type="button"
+                        aria-label="Confirm unlock main reference"
+                        onClick={unlockMain}
+                        disabled={mainUnlocking}
+                        className="flex-1 rounded bg-port-warning px-2 py-1.5 font-medium text-black disabled:opacity-50"
+                      >
+                        {mainUnlocking ? 'Unlocking…' : 'Unlock for regeneration'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMainUnlockConfirming(false)}
+                        disabled={mainUnlocking}
+                        className="rounded px-2 py-1.5 text-gray-400 hover:text-white disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setMainUnlockConfirming(true)}
+                    disabled={mainUnlocking}
+                    className="flex min-h-9 w-full items-center justify-center gap-1.5 rounded border border-port-border bg-port-card px-2.5 py-1.5 text-xs text-gray-300 hover:border-port-warning hover:text-port-warning disabled:opacity-50"
+                  >
+                    <Unlock className="h-3.5 w-3.5" /> Unlock main reference
+                  </button>
+                ))}
                 <button
                   type="button"
                   onClick={() => setForkOpen(true)}

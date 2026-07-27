@@ -53,7 +53,7 @@ vi.mock('../settings.js', () => ({ getSettings: async () => settings }));
 const records = await import('./records.js');
 const {
   getReferenceSet, startReferenceGeneration, attachReferenceCandidate, lockReference, patchSpriteRecord,
-  unlockReferenceAnchor, unlockReferenceTurnaround,
+  unlockReferenceAnchor, unlockReferenceMain, unlockReferenceTurnaround,
   listReferenceSources, listSpriteThumbnails, forkSprite,
   requireCharacter, requireAnimatable,
 } = await import('./reference.js');
@@ -859,6 +859,40 @@ describe('lockReference', () => {
       .rejects.toMatchObject({ status: 400, code: 'INVALID_TARGET' });
     await expect(unlockReferenceAnchor(id, { direction: 'east' }))
       .rejects.toMatchObject({ status: 409, code: 'ANCHOR_NOT_LOCKED' });
+  });
+
+  it('reopens the main and south anchor while retaining the turnaround and other anchors', async () => {
+    const id = newId();
+    await createCharacter(id);
+    const first = await lockMain(id);
+    const eastCandidate = await placeCandidate(id, 'east', 'walk-east-candidate-01.png');
+    const withEast = await lockReference(id, { target: 'east', candidate: eastCandidate });
+    const oldMainPath = first.manifest.mainReference.path;
+    const oldEastPath = withEast.manifest.anchors.find((anchor) => anchor.direction === 'east').path;
+
+    const reopened = await unlockReferenceMain(id);
+    expect(reopened.manifest).toMatchObject({
+      status: 'needs-main-reference',
+      turnaround: { locked: true },
+      mainReference: { locked: false, path: null },
+    });
+    expect(reopened.manifest.anchors.find((anchor) => anchor.direction === 'south'))
+      .toMatchObject({ status: 'pending', source: 'main-reference' });
+    expect(reopened.manifest.anchors.find((anchor) => anchor.direction === 'east'))
+      .toMatchObject({ status: 'locked', path: oldEastPath });
+    expect(await readFile(join(TEST_ROOT, 'sprites', id, oldMainPath))).toBeTruthy();
+
+    await startReferenceGeneration(id, { target: 'main' });
+    const replacement = await placeCandidate(id, 'main', 'walk-south-candidate-02.png');
+    const relocked = await lockReference(id, { target: 'main', candidate: replacement });
+    expect(relocked.manifest.mainReference.path).toBe(`reference/${id}-walk-south-v2.png`);
+  });
+
+  it('refuses to reopen a main reference without a locked turnaround', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await expect(unlockReferenceMain(id))
+      .rejects.toMatchObject({ status: 409, code: 'TURNAROUND_NOT_LOCKED' });
   });
 
   it('reopens the full turnaround chain, preserves v1 evidence, and relocks the sheet as v2', async () => {
