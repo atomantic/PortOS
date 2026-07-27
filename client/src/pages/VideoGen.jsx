@@ -1010,13 +1010,18 @@ export default function VideoGen() {
     if (nextIcSpec) {
       // IC conditioning replaces the frame/extend inputs entirely, and chaining
       // is rejected server-side (IC_LORA_CHUNKS_CONFLICT) — clear them so no
-      // stale value implies it's being used. The reference clip SURVIVES a switch
-      // between two IC modes (same kind of input), which is why it's cleared in
-      // the else branch rather than here.
+      // stale value implies it's being used.
       clearSourceImage();
       clearLastImage();
       setExtendFromVideoId('');
       setChunks(1);
+      // Every IC mode takes a video, but NOT the same video: Control wants a
+      // depth/pose/edge pass, Colorize wants a desaturated source. Carrying the
+      // clip across two different IC modes would silently submit a control pass
+      // as a "B&W clip to restore" and produce plausible garbage, so the
+      // reference is dropped on any real mode change — same as every other
+      // mode-specific input above.
+      if (next !== mode) { setIcReferenceFile(null); setIcReferenceVideoId(''); }
       return;
     }
     // The IC-LoRA reference channel only exists in the IC remix modes — the
