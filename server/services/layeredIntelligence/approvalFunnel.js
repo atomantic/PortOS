@@ -32,7 +32,9 @@
  * synthesizes one from the reconcile clock and marks it `outcomeAtSource: 'observed'`;
  * this module treats such a record as UNDATED rather than as a decision made now, so a
  * PLAN.md item checked off months ago but first reconciled today cannot inflate the
- * window cohort or report a latency the user never took.
+ * window cohort or report a latency the user never took. A `plan` record that predates
+ * the provenance field is inferred the same way from its `tracker` — see
+ * `hasAuthoritativeDecisionDate` for why that cannot be left to a backfill.
  *
  * SENTINEL DISCIPLINE throughout — a rate whose denominator is zero is `null`, never 0:
  * "no decision has been made in this window" and "every decision was a rejection" are
@@ -69,6 +71,31 @@ const parsedMs = (value) => {
  */
 const elapsedSince = (ms, now) => Math.max(0, now - ms);
 
+// Trackers that report NO close timestamp, so a resolved record's `outcomeAt` can only
+// ever have been synthesized from the reconcile clock. `plan` (PLAN.md checkboxes) is the
+// only one: `extractPlanSlugs` documents that a checked item carries no `closedAt`.
+const TIMESTAMPLESS_TRACKERS = ['plan'];
+
+/**
+ * Can this record's `outcomeAt` be read as WHEN THE HUMAN DECIDED?
+ *
+ * Only a tracker-reported close time can. Two ways a record fails that:
+ *   - `outcomeAtSource === 'observed'` — reconcile explicitly stamped it as synthesized.
+ *   - a `plan`-tracker record with NO provenance stamp — written before the field
+ *     existed. These cannot be trusted the way a legacy forge/jira record can: forge and
+ *     jira always report `closedAt`, so their legacy `outcomeAt` IS a real close time,
+ *     but a `plan` record's never was. And they will not self-heal, because
+ *     `reconcileOutcomes` no-ops on an already-settled record and so never reaches the
+ *     provenance write — hence deriving it here at READ time rather than backfilling.
+ * Anything else (an explicit `'tracker'` stamp, or a legacy timestamped-tracker record)
+ * is authoritative.
+ */
+const hasAuthoritativeDecisionDate = (record) => {
+  if (record?.outcomeAtSource === 'observed') return false;
+  if (record?.outcomeAtSource === 'tracker') return true;
+  return !TIMESTAMPLESS_TRACKERS.includes(record?.tracker);
+};
+
 /**
  * Compute the approval-funnel metrics for one app's outcome records.
  *
@@ -100,13 +127,13 @@ export function computeApprovalFunnel(outcomes = [], { now = Date.now(), windowM
   const decidedInWindow = [];
   let undatedDecisions = 0;
   for (const r of decided) {
-    // A SYNTHESIZED decision timestamp (`outcomeAtSource === 'observed'`) is the
-    // reconcile clock, not the human's decision: the `plan` tracker reports no close
-    // time, so a PLAN.md item checked off months ago but first reconciled today carries
-    // today's date. Treated exactly like an unparseable one — it lands in `undated`
-    // rather than being read as a decision made now, which would both inflate the
-    // window cohort and report a filing-to-decision latency the user never took.
-    const decidedMs = r.outcomeAtSource === 'observed' ? null : parsedMs(r.outcomeAt);
+    // A SYNTHESIZED decision timestamp is the reconcile clock, not the human's decision:
+    // the `plan` tracker reports no close time, so a PLAN.md item checked off months ago
+    // but first reconciled today carries today's date. Treated exactly like an
+    // unparseable one — it lands in `undated` rather than being read as a decision made
+    // now, which would both inflate the window cohort and report a filing-to-decision
+    // latency the user never took.
+    const decidedMs = hasAuthoritativeDecisionDate(r) ? parsedMs(r.outcomeAt) : null;
     // An undatable decision cannot be placed in or out of the window. Counting it in
     // would inflate a "recent" rate with an unknown-age verdict; counting it out
     // silently would undercount the user's activity. It gets its own slot.

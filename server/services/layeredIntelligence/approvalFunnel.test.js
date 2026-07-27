@@ -190,16 +190,40 @@ describe('computeApprovalFunnel (#3120)', () => {
     expect(funnel.proposalPhase).toMatchObject({ totalFiled: 1, totalDecided: 1, totalPending: 0 });
   });
 
-  it('trusts a tracker-reported decision timestamp and a legacy record without the flag', () => {
+  it('trusts a tracker-reported decision timestamp and a legacy timestamped-tracker record', () => {
     const outcomes = [
       { ...decidedRecord('forge-item', 'merged', 4 * DAY, 2 * DAY), outcomeAtSource: 'tracker' },
       // Written before outcomeAtSource existed: forge/jira always report closedAt, so a
       // legacy record is trusted rather than blanking the metric for existing installs.
-      decidedRecord('legacy-item', 'rejected', 5 * DAY, DAY)
+      { ...decidedRecord('legacy-item', 'rejected', 5 * DAY, DAY), tracker: 'github' }
     ];
     const funnel = computeApprovalFunnel(outcomes, { now: NOW });
     expect(funnel.window).toMatchObject({ decided: 2, approved: 1, rejected: 1, undated: 0, approvalRate: 50 });
     expect(funnel.window.timeToDecision.count).toBe(2);
+  });
+
+  it('infers undated for a LEGACY plan-tracker record with no provenance stamp', () => {
+    // reconcileOutcomes no-ops on an already-settled record, so an existing resolved
+    // PLAN.md outcome never receives the `observed` stamp — its synthesized outcomeAt
+    // would otherwise be read as authoritative. `tracker: 'plan'` is the standing signal
+    // that no close time was ever reported.
+    const outcomes = [
+      { ...decidedRecord('legacy-plan-item', 'merged', 120 * DAY, DAY), tracker: 'plan', outcomeAtSource: null }
+    ];
+    const funnel = computeApprovalFunnel(outcomes, { now: NOW });
+    expect(funnel.window).toMatchObject({ decided: 0, undated: 1, approvalRate: null });
+    expect(funnel.window.timeToDecision.medianMs).toBeNull();
+    // Still a real verdict for lifetime throughput — only its date is unusable.
+    expect(funnel.proposalPhase).toMatchObject({ totalFiled: 1, totalDecided: 1 });
+  });
+
+  it('trusts a plan record that carries an explicit tracker provenance stamp', () => {
+    // Defensive: if a future plan-style filer ever does report a real close time, the
+    // explicit stamp wins over the tracker-name inference.
+    const outcomes = [
+      { ...decidedRecord('plan-with-real-date', 'merged', 4 * DAY, 2 * DAY), tracker: 'plan', outcomeAtSource: 'tracker' }
+    ];
+    expect(computeApprovalFunnel(outcomes, { now: NOW }).window).toMatchObject({ decided: 1, approved: 1, approvalRate: 100 });
   });
 
   it('honors an injected window span', () => {
