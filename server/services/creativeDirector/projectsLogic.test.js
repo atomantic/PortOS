@@ -150,6 +150,20 @@ describe('normalizeRenderBackend (#3135)', () => {
     expect(normalizeRenderBackend({ video: { mode: 'local', modelId: ' example-model ' } }))
       .toEqual({ video: { mode: 'local', modelId: 'example-model' } });
   });
+
+  it('never fabricates the key onto an existing record read back or synced', () => {
+    // buildProjectRecord only runs at CREATE. A pre-#3135 project on disk must
+    // round-trip without the key appearing (which would silently change its
+    // content hash), and a pin arriving from a newer peer must survive verbatim.
+    const legacy = sanitizeProjectForSync({ id: 'cd-legacy', name: 'X', updatedAt: '2026-01-01T00:00:00.000Z' });
+    expect('renderBackend' in legacy).toBe(false);
+
+    const fromPeer = sanitizeProjectForSync({
+      id: 'cd-new', name: 'Y', updatedAt: '2026-01-02T00:00:00.000Z',
+      renderBackend: { image: { mode: 'grok' } },
+    });
+    expect(fromPeer.renderBackend).toEqual({ image: { mode: 'grok' } });
+  });
 });
 
 describe('applyProjectPatch', () => {

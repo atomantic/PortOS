@@ -166,9 +166,10 @@ describe('buildProjectParams — every type yields well-formed render settings',
 });
 
 describe('buildRenderBackendPin — per-commission render backend (#3135)', () => {
-  it('returns null when nothing is pinned (auto = no key at all)', () => {
-    // The hard back-compat criterion: an auto/absent pin must not add a
-    // renderBackend key, so createProject stores exactly what it stored before.
+  it('returns null when nothing is pinned (auto = no pin)', () => {
+    // The hard back-compat criterion: an auto/absent pin must never produce a
+    // pin, so the enqueue-time forcing step is a strict no-op (see media.test.js)
+    // and createProject is called with exactly the args it got before.
     expect(buildRenderBackendPin({ generation: { imageMode: 'auto', imageModelId: null } })).toBeNull();
     expect(buildRenderBackendPin({ generation: {} })).toBeNull();
     expect(buildRenderBackendPin({})).toBeNull();

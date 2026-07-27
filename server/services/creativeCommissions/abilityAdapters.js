@@ -103,10 +103,11 @@ function genValue(commission, key) {
  * planner LLM authored, and gives every plan-driven CD project the same knob for
  * free, not just commission-spawned ones.
  *
- * Returns `null` when nothing is pinned (every mode `auto`), so an unpinned
- * commission adds no key at all and the enqueued params stay byte-identical to
- * pre-#3135 behavior. A `modelId` alone is never a pin — the mode has to name a
- * backend for a model id to mean anything.
+ * Returns `null` when nothing is pinned (every mode `auto`), which is what makes
+ * the default a no-op: no pin ⇒ `enforceRenderBackendPin` returns the enqueued
+ * params byte-identical to pre-#3135 behavior, without even reading settings. A
+ * `modelId` alone is never a pin — the mode has to name a backend for a model id
+ * to mean anything.
  */
 export function buildRenderBackendPin(commission) {
   const gen = commission?.generation;
@@ -135,9 +136,15 @@ function buildVideoGeometryParams(commission, { defaultVideoModelId } = {}) {
     quality: gen?.quality || 'standard',
     modelId: gen?.model || (typeof defaultVideoModelId === 'function' ? defaultVideoModelId() : undefined),
     targetDurationSeconds: gen?.targetDurationSeconds || 10,
-    // Only present when the commission actually pinned a backend (#3135) — an
-    // unpinned commission must not even carry the key, so createProject stores
-    // the same `null` a hand-made project gets.
+    // Only passed when the commission actually pinned a backend (#3135), so an
+    // unpinned commission's createProject call is byte-identical to a hand-made
+    // project's — both omit the arg and buildProjectRecord stores `null`, exactly
+    // as it stores `musicBed`/`plan`/`directive` null on a bare project. (The
+    // stored KEY is new either way; that's the standard additive-field shape for
+    // this record, which round-trips through the JSONB column verbatim. What
+    // matters for back-compat is that an unpinned commission can never produce a
+    // non-null pin, and the ENQUEUED job params stay untouched — see
+    // enforceRenderBackendPin.)
     ...(renderBackend ? { renderBackend } : {}),
   };
 }
