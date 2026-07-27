@@ -6,10 +6,11 @@ import * as api from '../../services/api';
 import { processScreenshotUploads, processAttachmentUploads, ATTACHMENT_ACCEPT } from '../../utils/fileUpload';
 import FilePickerButton from '../ui/FilePickerButton';
 import { formatBytes } from '../../utils/formatters';
-import { filterSelectableModels, isTuiProvider, isCliProvider, isProcessProvider, isCodexProvider, effortLevelsForProvider } from '../../utils/providers';
+import { filterSelectableModels, isTuiProvider, isCliProvider, isProcessProvider, isCodexProvider } from '../../utils/providers';
 import { DEFAULT_PR_COMPLETION, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, PR_COMPLETION_OPTIONS } from './constants';
 import { clickableProps } from '../../lib/a11yKeyboard';
 import ReviewerPicker from './ReviewerPicker';
+import EffortSelect from './EffortSelect';
 
 export default function TaskAddForm({ providers, apps, onTaskAdded, compact = false, defaultExpanded = false, defaultApp = '' }) {
   const [newTask, setNewTask] = useState({ description: '', model: '', provider: '', effort: '', app: defaultApp });
@@ -137,7 +138,6 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   // Get models for selected provider
   const selectedProvider = providers?.find(p => p.id === newTask.provider);
   const availableModels = filterSelectableModels(selectedProvider?.models);
-  const effortLevels = effortLevelsForProvider(selectedProvider);
   const providerModelNote = (() => {
     if (!selectedProvider) return '';
     if (isTuiProvider(selectedProvider)) return `${selectedProvider.name} runs in an attachable terminal UI session.`;
@@ -619,23 +619,12 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               {providerModelNote}
             </div>
           ) : null}
-          {effortLevels && (
-            <div className="sm:w-40">
-              <label htmlFor="task-effort" className="sr-only">Thinking effort</label>
-              <select
-                id="task-effort"
-                value={newTask.effort}
-                onChange={e => setNewTask(t => ({ ...t, effort: e.target.value }))}
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
-                title="Thinking effort — how hard the model reasons per turn"
-              >
-                <option value="">Default effort</option>
-                {effortLevels.map(level => (
-                  <option key={level} value={level}>{level}</option>
-                ))}
-              </select>
-            </div>
-          )}
+          <EffortSelect
+            provider={selectedProvider}
+            value={newTask.effort}
+            onChange={effort => setNewTask(t => ({ ...t, effort }))}
+            className="sm:w-40 w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
+          />
         </div>
         {apiOnlyProviders && (
           <div className="px-3 py-2 bg-port-warning/10 border border-port-warning/40 rounded-lg text-xs text-port-warning">

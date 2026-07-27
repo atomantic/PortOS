@@ -41,6 +41,13 @@ export const NON_ACTIONABLE_ISSUE_LABELS = new Set([
 
 const CLI_TIMEOUT_MS = 15000;
 
+// How many actionable work items a detector carries back in `items`. The
+// detectors exist for the perpetual drain (which only needs `actionable`/`count`),
+// but the same scan is what the "/do:next — pick a specific item" picker needs, so
+// each detector also returns the claimable items themselves. Capped so a repo with
+// hundreds of open issues can't balloon the response the picker renders.
+export const WORK_ITEM_LIMIT = 50;
+
 /**
  * Best-effort CLI runner mirroring git.js#spawnCli (which isn't exported).
  * Never rejects: a spawn error, non-zero exit, or timeout all resolve to a
@@ -321,7 +328,7 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self' } =
   // upstream (author filter / empty repo), never by the skip-list — so the toast
   // reads a clean "0 of N open" with no redundant "N filtered".
   const parked = (reason, total = 0) => ({
-    actionable: false, count: 0, total, inFlightCount: 0, filteredCount: 0, reason
+    actionable: false, count: 0, total, inFlightCount: 0, filteredCount: 0, items: [], reason
   });
 
   const args = [...cfg.listArgs];
@@ -405,13 +412,23 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self' } =
     inFlightCount,
     filteredCount,
     reason: actionable.length > 0 ? 'actionable-issues' : 'no-actionable-issues',
-    sample: actionable.slice(0, 5).map((i) => i.number)
+    sample: actionable.slice(0, 5).map((i) => i.number),
+    items: actionable.slice(0, WORK_ITEM_LIMIT).map((i) => ({ ref: String(i.number), title: i.title || '' }))
   };
 }
 
 // Forge-specific detector entry points (thin wrappers over the shared factory).
 export const detectGithubIssues = (app, opts) => detectForgeIssues('claim-issue', app, opts);
 export const detectGitlabIssues = (app, opts) => detectForgeIssues('claim-issue-gitlab', app, opts);
+
+/**
+ * Human-readable title for a PLAN.md item — the checkbox line's text with the
+ * trailing HTML comments (`<!-- NEEDS_INPUT -->`, drift markers) and surrounding
+ * whitespace stripped, so the picker shows the item, not the bookkeeping.
+ */
+function planItemTitle(item) {
+  return (item.rest || '').replace(/<!--[\s\S]*?-->/g, '').trim();
+}
 
 /**
  * plan-task detector. Mirrors applyPlanIdMetadata's pick gate: an item is
@@ -429,13 +446,14 @@ export async function detectPlanTask(app) {
   const knownIds = new Set(extractAllIds(planMd));
   const inFlight = await findInProgressIds(repoPath, knownIds).catch(() => new Set());
   const pick = pickFirstAvailable(items, inFlight);
-  const count = items.filter((it) =>
+  const available = items.filter((it) =>
     !it.checked && !it.needsInput && !it.drifted && it.id && !inFlight.has(it.id)
-  ).length;
+  );
   return {
     actionable: !!pick,
-    count,
-    reason: pick ? 'actionable-plan-items' : 'no-actionable-plan-items'
+    count: available.length,
+    reason: pick ? 'actionable-plan-items' : 'no-actionable-plan-items',
+    items: available.slice(0, WORK_ITEM_LIMIT).map((it) => ({ ref: it.id, title: planItemTitle(it) }))
   };
 }
 

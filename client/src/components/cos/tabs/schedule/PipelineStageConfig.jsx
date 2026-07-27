@@ -1,5 +1,6 @@
-import { filterSelectableModels, effortLevelsForProvider } from '../../../../utils/providers';
+import { filterSelectableModels } from '../../../../utils/providers';
 import { FormField } from '../../../ui/FormField';
+import EffortSelect from '../../EffortSelect';
 
 export default function PipelineStageConfig({ taskType, config, providers, onUpdate, updating, setUpdating }) {
   const stages = config.taskMetadata?.pipeline?.stages || [];
@@ -38,7 +39,6 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
         {stages.map((stage, i) => {
           const stageProvider = providers?.find(p => p.id === stage.providerId);
           const stageModels = filterSelectableModels(stageProvider?.models);
-          const stageEffortLevels = effortLevelsForProvider(stageProvider);
           return (
             <div key={i} className="bg-port-card border border-port-border rounded-lg p-3">
               <div className="flex items-center gap-2 mb-3">
@@ -81,21 +81,15 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
                     ))}
                   </select>
                 </FormField>
-                {stageEffortLevels && (
-                  <FormField label="Thinking Effort" labelClassName="text-xs text-gray-500 block mb-1">
-                    <select
-                      value={stage.effort || ''}
-                      onChange={(e) => handleStageUpdate(i, 'effort', e.target.value || null)}
-                      disabled={updating}
-                      className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs"
-                    >
-                      <option value="">Default effort</option>
-                      {stageEffortLevels.map(level => (
-                        <option key={level} value={level}>{level}</option>
-                      ))}
-                    </select>
-                  </FormField>
-                )}
+                <EffortSelect
+                  provider={stageProvider}
+                  value={stage.effort}
+                  onChange={(effort) => handleStageUpdate(i, 'effort', effort || null)}
+                  disabled={updating}
+                  label="Thinking Effort"
+                  labelClassName="text-xs text-gray-500 block mb-1"
+                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs"
+                />
               </div>
             </div>
           );

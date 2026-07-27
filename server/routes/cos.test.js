@@ -946,12 +946,63 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.id).toBe('task-sd-next');
-      expect(buildClaimWorkTask).toHaveBeenCalledWith(expect.objectContaining({ id: 'my-app' }));
+      expect(buildClaimWorkTask).toHaveBeenCalledWith(expect.objectContaining({ id: 'my-app' }), expect.any(Object));
       // The raw do:next body must NOT be inlined for the next command.
       expect(loadSlashdoCommand).not.toHaveBeenCalledWith('next');
       const [taskData] = cos.addTask.mock.calls.at(-1);
       expect(taskData.context).toBe('CLAIM ISSUE PROMPT');
       expect(taskData.description).toContain('GitHub Issues');
+    });
+
+    it('threads the run drawer settings — target/author-filter/reviewers into the claim prompt, provider/model/effort/simplify onto the task', async () => {
+      getAppById.mockResolvedValue({ id: 'my-app', name: 'MyApp', repoPath: '/repo' });
+      buildClaimWorkTask.mockResolvedValue({
+        tracker: 'github',
+        source: 'config',
+        promptTaskType: 'claim-issue',
+        prompt: 'CLAIM ISSUE PROMPT',
+        taskMetadata: { useWorktree: false, openPR: false },
+        target: '412'
+      });
+      cos.addTask.mockResolvedValue({ id: 'task-sd-target', status: 'pending' });
+
+      const response = await request(app)
+        .post('/api/cos/tasks/slashdo')
+        .send({
+          command: 'next', app: 'my-app', target: '#412', issueAuthorFilter: 'any',
+          reviewers: ['claude', 'codex'], usernames: ['alice'], optionalReviewers: ['codex'],
+          provider: 'claude-cli', model: 'claude-opus-5', effort: 'high', simplify: true
+        });
+
+      expect(response.status).toBe(200);
+      expect(buildClaimWorkTask).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'my-app' }),
+        {
+          target: '#412',
+          issueAuthorFilter: 'any',
+          reviewers: ['claude', 'codex'],
+          usernames: ['alice'],
+          optionalReviewers: ['codex']
+        }
+      );
+      const [taskData] = cos.addTask.mock.calls.at(-1);
+      expect(taskData.provider).toBe('claude-cli');
+      expect(taskData.model).toBe('claude-opus-5');
+      expect(taskData.effort).toBe('high');
+      expect(taskData.simplify).toBe(true);
+      // The claim prompt owns its own review sequence — no CoS loop on top.
+      expect(taskData.reviewLoop).toBe(false);
+      // The pinned item shows in the queue description so the row is self-explaining.
+      expect(taskData.description).toContain('412');
+    });
+
+    it('rejects an out-of-vocabulary issueAuthorFilter', async () => {
+      const response = await request(app)
+        .post('/api/cos/tasks/slashdo')
+        .send({ command: 'next', app: 'my-app', issueAuthorFilter: 'everyone' });
+
+      expect(response.status).toBe(400);
+      expect(buildClaimWorkTask).not.toHaveBeenCalled();
     });
 
     it('returns 404 when /do:next targets an unknown app', async () => {

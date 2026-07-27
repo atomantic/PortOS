@@ -24,6 +24,12 @@ const normalizeReviewerValue = (value) => value === 'gemini' ? 'antigravity' : v
  * Controlled: emits the full next shape via onChange so the parent can store
  * `reviewers` / `usernames` / `reviewStopMode` / `reviewerApplies` however it
  * persists them.
+ *
+ * `showRunFlags={false}` hides the stop-mode select and the "reviewer applies
+ * fixes" checkbox for surfaces that can't honor them — the `/do:next` claim
+ * flows substitute a reviewer CSV into their prompt and have no slashdo flag
+ * string, so rendering those two controls there would be a knob wired to
+ * nothing. The reviewer list itself still applies.
  */
 export default function ReviewerPicker({
   reviewers = [],
@@ -32,7 +38,8 @@ export default function ReviewerPicker({
   stopMode = DEFAULT_REVIEW_STOP_MODE,
   reviewerApplies = false,
   onChange,
-  disabled = false
+  disabled = false,
+  showRunFlags = true
 }) {
   const id = useId();
   const [usernameInput, setUsernameInput] = useState('');
@@ -256,7 +263,7 @@ export default function ReviewerPicker({
         {usernameError && <span className="text-xs text-port-error">{usernameError}</span>}
       </div>
 
-      {selected.length >= 2 && (
+      {showRunFlags && selected.length >= 2 && (
         <div className="flex items-center gap-2">
           <label htmlFor={`${id}-stopmode`} className="text-xs text-gray-500">Stop mode:</label>
           <select
@@ -273,7 +280,7 @@ export default function ReviewerPicker({
         </div>
       )}
 
-      {hasNonCopilot && (
+      {showRunFlags && hasNonCopilot && (
         <label htmlFor={`${id}-applies`} className="flex items-center gap-2 cursor-pointer select-none text-xs text-gray-500">
           <input
             id={`${id}-applies`}

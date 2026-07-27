@@ -24,8 +24,20 @@ vi.mock('../../services/layeredIntelligenceOutcomes.js', () => ({
   listOutcomesResult: vi.fn()
 }));
 
+// The work-item picker composes the claim-work metadata resolver (so the preview
+// scans under the same author filter the run will) with the tracker lister.
+vi.mock('../../services/workItems.js', () => ({
+  listWorkItems: vi.fn()
+}));
+vi.mock('../../services/cosTaskGenerator.js', async (importActual) => ({
+  ...(await importActual()),
+  resolveClaimWorkMetadata: vi.fn()
+}));
+
 import * as appsService from '../../services/apps.js';
 import { listOutcomesResult } from '../../services/layeredIntelligenceOutcomes.js';
+import { listWorkItems } from '../../services/workItems.js';
+import { resolveClaimWorkMetadata } from '../../services/cosTaskGenerator.js';
 
 describe('Apps Task-Type Routes', () => {
   let app;
@@ -35,6 +47,60 @@ describe('Apps Task-Type Routes', () => {
     app.use(express.json());
     app.use('/api/apps', taskTypeRoutes);
     vi.clearAllMocks();
+  });
+
+  describe('GET /api/apps/:id/work-items', () => {
+    beforeEach(() => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'App' });
+      resolveClaimWorkMetadata.mockResolvedValue({ metadata: {}, interval: {} });
+      listWorkItems.mockResolvedValue({
+        tracker: 'github', source: 'origin', promptTaskType: 'claim-issue',
+        items: [{ ref: '7', title: 'Fix the thing' }], count: 1,
+        reason: 'actionable-issues', transient: false
+      });
+    });
+
+    it('scans with the app\'s configured author filter when the caller sends none', async () => {
+      resolveClaimWorkMetadata.mockResolvedValue({ metadata: { issueAuthorFilter: 'any' }, interval: {} });
+
+      const response = await request(app).get('/api/apps/app-001/work-items');
+
+      expect(response.status).toBe(200);
+      expect(listWorkItems).toHaveBeenCalledWith(expect.objectContaining({ id: 'app-001' }), { issueAuthorFilter: 'any' });
+      // Echoed back so the picker's select shows what was actually scanned.
+      expect(response.body.issueAuthorFilter).toBe('any');
+      expect(response.body.items).toEqual([{ ref: '7', title: 'Fix the thing' }]);
+      expect(response.body.tracker).toBe('github');
+    });
+
+    it('defaults to the self boundary when nothing is configured', async () => {
+      await request(app).get('/api/apps/app-001/work-items');
+      expect(listWorkItems).toHaveBeenCalledWith(expect.anything(), { issueAuthorFilter: 'self' });
+    });
+
+    it('lets an explicit query filter override the configured one', async () => {
+      resolveClaimWorkMetadata.mockResolvedValue({ metadata: { issueAuthorFilter: 'self' }, interval: {} });
+
+      const response = await request(app).get('/api/apps/app-001/work-items?issueAuthorFilter=owner');
+
+      expect(response.status).toBe(200);
+      expect(listWorkItems).toHaveBeenCalledWith(expect.anything(), { issueAuthorFilter: 'owner' });
+    });
+
+    it('ignores an out-of-vocabulary filter rather than passing it through', async () => {
+      resolveClaimWorkMetadata.mockResolvedValue({ metadata: { issueAuthorFilter: 'any' }, interval: {} });
+
+      await request(app).get('/api/apps/app-001/work-items?issueAuthorFilter=everyone');
+
+      expect(listWorkItems).toHaveBeenCalledWith(expect.anything(), { issueAuthorFilter: 'any' });
+    });
+
+    it('returns 404 for an unknown app', async () => {
+      appsService.getAppById.mockResolvedValue(null);
+      const response = await request(app).get('/api/apps/app-999/work-items');
+      expect(response.status).toBe(404);
+      expect(listWorkItems).not.toHaveBeenCalled();
+    });
   });
 
   describe('GET /api/apps/:id/layered-intelligence', () => {

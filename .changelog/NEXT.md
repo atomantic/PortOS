@@ -21,6 +21,12 @@
 - When the system already knows why a run ended — the idle watchdog fired, the runtime budget ran out, the provider CLI wasn't installed — that is now what gets reported. Only a genuine provider or system error in the transcript can override it.
 - Failure snippets shown on an agent's record are now short, readable excerpts centered on the actual error instead of raw terminal escape codes. One failed run had been writing an 816KB blob of control characters into its own record.
 
+## Agent Operations — `/do:next` run settings
+
+- **`/do:next` on a managed app now asks before it runs.** Clicking it on an app's Overview opens a settings drawer instead of queuing immediately: let the agent pick the next eligible item as before, or **pick a specific one** from a live list of that app's claimable work — PLAN.md items, GitHub or GitLab issues, or current-sprint JIRA tickets, whichever the app's Work Tracker resolves to. A picked item is pinned into the claim prompt, which still honors every safety check (already assigned, blocked, in flight, an epic → exit cleanly).
+- The same drawer sets the run's **provider, model, and thinking effort**, whether to **simplify** before committing, and the **review-loop reviewers** (plus GitHub reviewer usernames and optional/non-blocking marks) that gate the PR merge. Leave everything untouched and you get exactly the run the old one-click button queued, using the app's configured claim-work defaults.
+- The item list is scanned with the same author filter the run will use, so it can never advertise work the agent would then skip; the filter is adjustable inline for GitHub/GitLab. An unreachable tracker now says so, instead of reporting "nothing to do."
+
 ## Universe canon corrective reference images
 
 - [issue-3103] Any Cast, Place, or Object entry in a Universe's bible can now take a corrective reference image: upload or pick a photo/render that shows what it should actually look like, and a vision model compares it against the entry's current description and proposes a correction. Reviewing and applying it both fixes the description and pins the image as that entry's reference image, so future renders for it are visually anchored to the correction instead of starting from scratch each time.

@@ -58,9 +58,13 @@ export const addCosTask = (task, options = {}) => request('/cos/tasks', {
   body: JSON.stringify(task),
   ...options
 });
-export const createSlashdoTask = (command, app, options = {}) => request('/cos/tasks/slashdo', {
+// Queue a `/do:*` agent task for an app. `settings` carries the run options the
+// Agent Operations drawer collects — provider/model/effort/simplify for every
+// command, plus the `/do:next`-only target work item, issue author filter, and
+// reviewer list. Omit it for a bare "run with the app's configured defaults".
+export const createSlashdoTask = (command, app, settings = {}, options = {}) => request('/cos/tasks/slashdo', {
   method: 'POST',
-  body: JSON.stringify({ command, app }),
+  body: JSON.stringify({ command, app, ...settings }),
   ...options
 });
 // Queue a CoS task to implement one specific JIRA ticket (sprint-board play button).

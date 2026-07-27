@@ -39,6 +39,25 @@ export const getAppTypeLabel = (type) =>
   type === 'macos-native' ? '🖥️ macOS' :
   type === 'swift' ? '🐦 Swift' : '🔨 Xcode';
 
+// Where an app's autonomous work items live. Mirrors WORK_TRACKERS +
+// TRACKER_LABELS in server/lib/workTracker.js — shared by the Edit App picker
+// and the /do:next run drawer so one vocabulary describes both.
+export const WORK_TRACKER_OPTIONS = [
+  { value: 'auto', label: 'Auto (detect from git origin)' },
+  { value: 'plan', label: 'PLAN.md' },
+  { value: 'github', label: 'GitHub Issues' },
+  { value: 'gitlab', label: 'GitLab Issues' },
+  { value: 'jira', label: 'JIRA' }
+];
+
+export const WORK_TRACKER_LABELS = Object.fromEntries(
+  WORK_TRACKER_OPTIONS.map(o => [o.value, o.label])
+);
+
+/** The word a tracker uses for one work item — "issue", "ticket", "item". */
+export const workItemNoun = (tracker) =>
+  tracker === 'jira' ? 'ticket' : (tracker === 'github' || tracker === 'gitlab') ? 'issue' : 'item';
+
 export const APP_DETAIL_TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'automation', label: 'Automation' },

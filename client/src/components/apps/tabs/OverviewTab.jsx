@@ -317,7 +317,7 @@ export default function OverviewTab({ app, onRefresh }) {
       {/* Actions zone — back to capped readable width */}
       <div className="space-y-6 max-w-5xl">
       {/* Agent Operations */}
-      <SlashDoPanel appId={app.id} appType={app.type} />
+      <SlashDoPanel appId={app.id} appName={app.name} appType={app.type} />
 
       {/* Quick Actions */}
       <div className="flex flex-wrap gap-2 pt-2">

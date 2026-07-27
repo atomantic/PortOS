@@ -12,18 +12,7 @@ import { copyToClipboard } from '../../lib/clipboard';
 import LayeredIntelligenceTab, { buildLayeredIntelligenceUpdate, buildLayeredIntelligenceScheduleUpdate } from './LayeredIntelligenceTab';
 import { PROVIDER_TYPES } from '../../utils/providers';
 import { DEFAULT_PR_COMPLETION, PR_COMPLETION_OPTIONS } from '../cos/constants';
-
-const WORK_TRACKER_OPTIONS = [
-  { value: 'auto', label: 'Auto (detect from git origin)' },
-  { value: 'plan', label: 'PLAN.md' },
-  { value: 'github', label: 'GitHub Issues' },
-  { value: 'gitlab', label: 'GitLab Issues' },
-  { value: 'jira', label: 'JIRA' }
-];
-
-const WORK_TRACKER_LABELS = Object.fromEntries(
-  WORK_TRACKER_OPTIONS.map(o => [o.value, o.label])
-);
+import { WORK_TRACKER_OPTIONS, WORK_TRACKER_LABELS } from './constants';
 
 const TABS = [
   { id: 'general', label: 'General' },

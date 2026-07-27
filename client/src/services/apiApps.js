@@ -13,6 +13,14 @@ export const getAppSpriteBindings = (id, options) =>
 // caller (EditAppDrawer) owns its own .catch fallback, so default to silent.
 export const getAppWorkTracker = (id, options) =>
   request(`/apps/${id}/work-tracker`, { silent: true, ...options });
+// Work items a `/do:next` run could claim, from whichever tracker the app
+// resolves to: { tracker, items: [{ ref, title, url? }], reason, transient }.
+// `issueAuthorFilter` previews a filter other than the app's configured one.
+// Read-only; the /do:next drawer owns its own error UI, so default to silent.
+export const getAppWorkItems = (id, { issueAuthorFilter } = {}, options) => {
+  const qs = issueAuthorFilter ? `?issueAuthorFilter=${encodeURIComponent(issueAuthorFilter)}` : '';
+  return request(`/apps/${id}/work-items${qs}`, { silent: true, ...options });
+};
 // Effective Layered Intelligence config (self-improvement loop) for an app —
 // stored partial merged over the shipped defaults. Read-only; saved through
 // updateApp (the `layeredIntelligence` key routes to the merge helper server-

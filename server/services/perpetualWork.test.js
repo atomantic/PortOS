@@ -199,6 +199,12 @@ describe('perpetualWork', () => {
       expect(out.total).toBe(5);
       expect(out.inFlightCount).toBe(1);
       expect(out.filteredCount).toBe(2);
+      // The claimable items themselves, for the /do:next "pick a specific issue"
+      // picker — the same scan, so the list can't advertise work the run skips.
+      expect(out.items).toEqual([
+        { ref: '1', title: 'plain' },
+        { ref: '5', title: 'also plain' }
+      ]);
     });
 
     it('converges (0 actionable) on a queue whose only unblocked issue is a "[Epic]"-prefixed one with no epic label', async () => {

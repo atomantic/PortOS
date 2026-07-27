@@ -5,6 +5,7 @@
  *   PUT  /bulk-task-type/:taskType   → { success, appsUpdated }  (all active apps)
  *   GET  /:id/task-types             → { taskTypeOverrides }
  *   GET  /:id/work-tracker           → { tracker info }
+ *   GET  /:id/work-items             → { tracker, items, reason }
  *   GET  /:id/layered-intelligence           → { config, isPortos }
  *   GET  /:id/layered-intelligence/outcomes  → { stats, execution, rejections, recent }
  *   PUT  /:id/task-types/all         → { success, taskTypeOverrides }
@@ -17,7 +18,9 @@
 import { Router } from 'express';
 import * as appsService from '../../services/apps.js';
 import { PORTOS_APP_ID } from '../../services/apps.js';
-import { sanitizeTaskMetadata } from '../../lib/validation.js';
+import { sanitizeTaskMetadata, ISSUE_AUTHOR_FILTERS } from '../../lib/validation.js';
+import { listWorkItems } from '../../services/workItems.js';
+import { resolveClaimWorkMetadata, resolveClaimAuthorFilter } from '../../services/cosTaskGenerator.js';
 import { parseCronToNextRun } from '../../services/eventScheduler.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from '../../services/taskSchedule.js';
@@ -63,6 +66,25 @@ router.get('/:id/work-tracker', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
   const info = await appsService.getAppWorkTracker(app.id);
   res.json({ appId: app.id, appName: app.name, ...info });
+}));
+
+// GET /api/apps/:id/work-items - The work items a `/do:next` run could claim for
+// this app, from whichever tracker it resolves to. Backs the "pick a specific
+// item" mode of the app-overview `/do:next` drawer; the agent-picks default needs
+// no call. Scanned with the SAME author filter the claim agent will apply
+// (`?issueAuthorFilter=` overrides it for the preview) so the list can't advertise
+// items the run would then skip. Read-only: no LLM call, no claim markers set.
+router.get('/:id/work-items', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
+  const requested = req.query.issueAuthorFilter;
+  const explicit = ISSUE_AUTHOR_FILTERS.includes(requested) ? requested : undefined;
+  // Only read the app's claim-work config when it's actually the answer — an
+  // explicit filter (every drawer refresh after the first) already wins, and the
+  // read costs a schedule load plus a per-app override read.
+  const issueAuthorFilter = explicit
+    ?? resolveClaimAuthorFilter(undefined, (await resolveClaimWorkMetadata(app)).metadata);
+  const result = await listWorkItems(app, { issueAuthorFilter });
+  res.json({ appId: app.id, appName: app.name, issueAuthorFilter, ...result });
 }));
 
 // GET /api/apps/:id/layered-intelligence - Effective Layered Intelligence config

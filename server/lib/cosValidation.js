@@ -656,6 +656,26 @@ export const ISSUE_AUTHOR_FILTERS = ['self', 'owner', 'any'];
 export const SWARM_COUNT_MIN = 2;
 export const SWARM_COUNT_MAX = 6;
 
+// POST /api/cos/tasks/slashdo — a `/do:*` button click from an app's Agent
+// Operations panel. The run-settings fields are PICKED from createCosTaskSchema
+// rather than restated, so the drawer's provider/model/effort/simplify/reviewer
+// knobs stay in lockstep with the Add Task form's (one vocabulary, one set of
+// preprocessors). `command` is only shape-checked here — the route owns the
+// allowed-command map and its 400 message. The remaining fields are `/do:next`
+// specific: `target` pins the run to ONE work item (empty ⇒ the agent picks),
+// and `issueAuthorFilter` overrides the app's configured claim-work gate.
+export const slashdoTaskSchema = createCosTaskSchema
+  .pick({
+    model: true, provider: true, effort: true, simplify: true,
+    reviewers: true, usernames: true, optionalReviewers: true
+  })
+  .extend({
+    command: z.string().min(1),
+    app: z.string().min(1),
+    target: z.preprocess(emptyToUndefined, z.string().trim().max(80).optional()),
+    issueAuthorFilter: z.enum(ISSUE_AUTHOR_FILTERS).optional(),
+  });
+
 /**
  * Sanitize taskMetadata to an allow-list of agent-option keys. Boolean flags
  * (`useWorktree`/`openPR`/`simplify`/`reviewLoop`/`readOnly`/`reviewerApplies`)

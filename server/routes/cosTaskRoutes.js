@@ -14,6 +14,7 @@ import { workTrackerLabel } from '../lib/workTracker.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import {
   createCosTaskSchema,
+  slashdoTaskSchema,
   updateCosTaskSchema,
   challengeTaskSchema,
   resolveChallengeSchema,
@@ -117,15 +118,20 @@ router.post('/tasks/enhance', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// POST /api/cos/tasks/slashdo - Create a task from a slashdo command
+// POST /api/cos/tasks/slashdo - Create a task from a slashdo command.
+//
+// The body carries the run settings the app-overview drawer collects: the
+// provider/model/effort pin and `simplify` apply to every command; `target`,
+// `issueAuthorFilter`, and the reviewer choices are `/do:next`-only (they shape
+// the claim prompt, which self-manages its own PR + review loop).
 router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
-  const { command, app } = req.body;
+  const {
+    command, app, provider, model, effort, simplify,
+    target, issueAuthorFilter, reviewers, usernames, optionalReviewers
+  } = validateRequest(slashdoTaskSchema, req.body);
 
-  if (!command || !SLASHDO_COMMANDS[command]) {
+  if (!SLASHDO_COMMANDS[command]) {
     throw new ServerError(`Invalid slashdo command. Allowed: ${Object.keys(SLASHDO_COMMANDS).join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  if (!app) {
-    throw new ServerError('App ID is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
   const meta = SLASHDO_COMMANDS[command];
@@ -143,7 +149,7 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
     if (!appObj) {
       throw new ServerError(`App not found: ${app}`, { status: 404, code: 'APP_NOT_FOUND' });
     }
-    const claim = await buildClaimWorkTask(appObj);
+    const claim = await buildClaimWorkTask(appObj, { target, issueAuthorFilter, reviewers, usernames, optionalReviewers });
     context = claim.prompt;
     // claim.taskMetadata overrides the false/false default only where it carries
     // a key. All current claim flows (plan-task / claim-issue / claim-issue-gitlab
@@ -151,7 +157,10 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
     // stands; the spread stays for a future delegated type that needs CoS-managed
     // isolation.
     taskMetadata = { ...taskMetadata, ...claim.taskMetadata };
-    description = `Run /do:next for ${appObj.name} — claim next ${workTrackerLabel(claim.tracker)} item and ship a PR`;
+    const scope = claim.target
+      ? `claim ${workTrackerLabel(claim.tracker)} item ${claim.target}`
+      : `claim next ${workTrackerLabel(claim.tracker)} item`;
+    description = `Run /do:next for ${appObj.name} — ${scope} and ship a PR`;
   } else {
     context = await loadSlashdoCommand(command);
     if (!context) {
@@ -160,7 +169,14 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
     description = `Run /do:${command} for ${app} — ${meta.description}`;
   }
 
-  const taskData = { description, app, context, ...taskMetadata, simplify: false, reviewLoop: false };
+  // `reviewLoop` stays off for every slashdo task: each `/do:*` body owns its own
+  // review/PR sequence, so a CoS-managed loop on top would double-review.
+  const taskData = {
+    description, app, context, ...taskMetadata,
+    provider, model, effort,
+    simplify: simplify === true,
+    reviewLoop: false
+  };
   const result = await cos.addTask(taskData, 'user');
 
   if (result?.duplicate) {

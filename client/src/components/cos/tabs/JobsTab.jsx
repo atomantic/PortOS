@@ -5,9 +5,9 @@ import * as api from '../../../services/api';
 import { timeAgo, formatDateTime } from '../../../utils/formatters';
 import { CRON_PRESETS, DEFAULT_CRON, describeCron } from '../../../utils/cronHelpers';
 import WeekdayTimePicker from '../../WeekdayTimePicker';
-import { filterSelectableModels, effortLevelsForProvider } from '../../../utils/providers';
+import { filterSelectableModels } from '../../../utils/providers';
 import ProviderModelSelector from '../../ProviderModelSelector';
-import { FormField } from '../../ui/FormField';
+import EffortSelect from '../EffortSelect';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
@@ -126,7 +126,6 @@ function JobProviderModelFields({ data, providers, onChange }) {
   if (!providers?.length) return null;
   const selectedProvider = providers.find(p => p.id === data.providerId);
   const availableModels = filterSelectableModels(selectedProvider?.models);
-  const effortLevels = effortLevelsForProvider(selectedProvider);
   return (
     <div>
       <span className="text-xs text-gray-400 block mb-1">AI Provider &amp; Model (optional)</span>
@@ -142,20 +141,15 @@ function JobProviderModelFields({ data, providers, onChange }) {
         emptyModelOption="Default model"
         alwaysShowModel
       />
-      {effortLevels && (
-        <FormField label="Thinking Effort (optional)" className="mt-2" labelClassName="text-xs text-gray-400 block mb-1">
-          <select
-            value={data.effort || ''}
-            onChange={e => onChange({ effort: e.target.value })}
-            className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs"
-          >
-            <option value="">Default effort</option>
-            {effortLevels.map(level => (
-              <option key={level} value={level}>{level}</option>
-            ))}
-          </select>
-        </FormField>
-      )}
+      <EffortSelect
+        provider={selectedProvider}
+        value={data.effort}
+        onChange={effort => onChange({ effort })}
+        label="Thinking Effort (optional)"
+        fieldClassName="mt-2"
+        labelClassName="text-xs text-gray-400 block mb-1"
+        className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs"
+      />
     </div>
   );
 }
