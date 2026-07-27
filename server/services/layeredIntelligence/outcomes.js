@@ -200,6 +200,61 @@ export function computeProposalOutcomeMetrics(outcomes = [], { stats = null, exe
 }
 
 /**
+ * Project the outcome metrics down to the compact delivery block folded into the
+ * `cosMetrics` prompt source (#3085). The `cosMetrics` document reports per-task-type
+ * RUN success ("did the agent's task finish?") and nothing about DELIVERY ("did the
+ * approved work actually land?") — so a healthy 90% run rate sitting beside a pipeline
+ * that has delivered 0 of 10 approvals reads as a healthy pipeline. This is the second
+ * number, in the same document.
+ *
+ * DERIVED, not stored — for the same reason `computeProposalOutcomeMetrics` is: the
+ * per-proposal records in `data/cos/li-outcomes/` already hold both sides of the
+ * lifecycle, so an on-disk counter pair incremented at each transition would be a
+ * second aggregate free to drift from the records it summarizes (and would need a
+ * migration to seed on every existing install). Pass `metrics` when the caller has
+ * already computed the full roll-up to skip a second pass.
+ *
+ * `currentDeliveryRate` is null — never 0 — when nothing has been approved yet: the
+ * sentinel rule. "No approvals to deliver on" and "every approval was lost" are
+ * opposite facts, and this rate is what arms the hard exclusion gate
+ * (LI_HARD_GATE_DELIVERY_THRESHOLD), so collapsing them would lock out a cold loop.
+ * Rounded because this is display — the gate compares the unrounded rate itself.
+ *
+ * `deliveryByScope` lists only scopes with at least one APPROVAL. A scope whose every
+ * proposal was rejected has no delivery signal to report (its `approved`/`delivered`
+ * would both be 0, saying only "nothing was approved here"), and the merge-rate block
+ * already covers the filing side.
+ *
+ * @param {Array} [outcomes] - the app's li-outcomes records (from listOutcomes).
+ * @param {object} [opts]
+ * @param {object} [opts.metrics] - a `computeProposalOutcomeMetrics(outcomes)` result.
+ * @returns {{ delivery: { totalApproved: number, totalDelivered: number,
+ *   currentDeliveryRate: number|null },
+ *   deliveryByScope: Object<string, { approved: number, delivered: number }> }}
+ */
+export function computeDeliveryMetrics(outcomes = [], { metrics = null } = {}) {
+  const rolled = metrics || computeProposalOutcomeMetrics(outcomes);
+  // Null prototype for the same reason the roll-up uses one: `scope` is an
+  // LLM-authored free string, so a literal "__proto__" key would rewrite the
+  // prototype instead of adding a bucket.
+  const deliveryByScope = Object.create(null);
+  for (const [scope, bucket] of Object.entries(rolled.byScope)) {
+    if (!bucket.approved) continue;
+    deliveryByScope[scope] = { approved: bucket.approved, delivered: bucket.completed };
+  }
+  return {
+    delivery: {
+      totalApproved: rolled.totalApproved,
+      totalDelivered: rolled.totalCompleted,
+      currentDeliveryRate: rolled.approvalToCompletionRate === null
+        ? null
+        : Math.round(rolled.approvalToCompletionRate)
+    },
+    deliveryByScope
+  };
+}
+
+/**
  * Format the LI outcome-feedback report (#2428) from this app's recorded
  * proposals + their reconciled outcomes. Pure + side-effect-free: the LI hook
  * loads the outcomes and passes them here, then feeds the string into buildPrompt.

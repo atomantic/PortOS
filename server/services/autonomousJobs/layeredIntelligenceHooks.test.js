@@ -56,6 +56,15 @@ vi.mock('../layeredIntelligence.js', () => ({
   resolveJiraBlockKey: vi.fn(() => null),
   applyJiraBlockingLabel: vi.fn().mockResolvedValue({ success: true }),
   computeOutcomesReport: vi.fn(() => ''),
+  // Delivery block folded into cosMetrics (#3085). Both are pure and unit-tested in
+  // layeredIntelligence.test.js; spies here so the hook's WIRING can be asserted —
+  // that the POST-reconciliation outcomes are what get projected, and that the
+  // re-rendered document (not gatherSources' first pass) reaches buildPrompt.
+  computeDeliveryMetrics: vi.fn(() => ({
+    delivery: { totalApproved: 3, totalDelivered: 0, currentDeliveryRate: 0 },
+    deliveryByScope: { 'app-improvement': { approved: 3, delivered: 0 } }
+  })),
+  renderCosMetricsSource: vi.fn(() => 'RE-RENDERED COS METRICS'),
   // selfEval (#2700). The summary's own semantics (signal sentinels, confidence,
   // degraded guidance) are unit-tested in layeredIntelligence.test.js; these are
   // spies so the hook's WIRING can be asserted — which inputs it feeds in.
@@ -116,6 +125,10 @@ beforeEach(() => {
   li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: {} });
   li.filerForTracker.mockImplementation((r) => (r === 'github' || r === 'gitlab') ? 'forge' : (r === 'jira' ? 'jira' : 'plan'));
   li.trackerSupportsPause.mockImplementation((r) => r !== 'plan');
+  // clearAllMocks resets call history but NOT a mockResolvedValue an individual test
+  // set, so restore the module default here — otherwise a test that hands back a
+  // `cosMetricsByType` (#3085) leaks the re-render into every later assertion on sources.
+  li.gatherSources.mockResolvedValue({ goals: 'be great' });
   li.listBlockingIssues.mockResolvedValue({ ok: true, issues: [] });
   li.listForgeIssues.mockResolvedValue({ ok: true, issues: [] });
   li.isAppParked.mockReturnValue(false);
@@ -313,6 +326,44 @@ describe('buildTaskInput', () => {
     expect(reconcileOutcomes).toHaveBeenCalledWith(expect.objectContaining({ appId: 'app-1' }));
     expect(listOutcomesResult).toHaveBeenCalledWith(expect.objectContaining({ appId: 'app-1' }));
     expect(li.buildPrompt).toHaveBeenCalledWith(expect.objectContaining({ outcomesReport: expect.stringContaining('Total filed: 1') }));
+  });
+
+  it('re-renders cosMetrics with the post-reconciliation delivery block (#3085)', async () => {
+    const metricsByType = { 'user-task': { lifetimeSuccessRate: 92, lifetimeCompleted: 25 } };
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { cosMetrics: true, outcomes: true } });
+    li.gatherSources.mockResolvedValue({ goals: 'be great', cosMetrics: 'FIRST PASS', cosMetricsByType: metricsByType });
+    const outcomes = [{ slug: 's', outcome: 'merged', scope: 'app-improvement' }];
+    listOutcomesResult.mockResolvedValue({ read: true, outcomes });
+    await buildTaskInput({ app: APP });
+    // The records projected must be the reconciled ones the liOutcomes block also reads —
+    // a pre-reconcile snapshot would report a different approval count in the same prompt.
+    expect(li.computeDeliveryMetrics).toHaveBeenCalledWith(outcomes);
+    expect(li.renderCosMetricsSource).toHaveBeenCalledWith({
+      metricsByType,
+      delivery: expect.objectContaining({ delivery: expect.objectContaining({ totalApproved: 3 }) })
+    });
+    const { sources } = li.buildPrompt.mock.calls.at(-1)[0];
+    expect(sources.cosMetrics).toBe('RE-RENDERED COS METRICS');
+    // The hand-off key is internal to the re-render — it must never reach buildPrompt,
+    // where it would render as a bogus `### cosMetricsByType` source block.
+    expect('cosMetricsByType' in sources).toBe(false);
+  });
+
+  it('re-renders cosMetrics with NO delivery block when outcomes were not gathered (#3085)', async () => {
+    // Outcomes source off: omit the block rather than emit zeros, which would read as
+    // "nothing has ever been approved" instead of "we have no delivery data".
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { cosMetrics: true } });
+    li.gatherSources.mockResolvedValue({ cosMetrics: 'FIRST PASS', cosMetricsByType: { 'user-task': {} } });
+    await buildTaskInput({ app: APP });
+    expect(li.computeDeliveryMetrics).not.toHaveBeenCalled();
+    expect(li.renderCosMetricsSource).toHaveBeenCalledWith(expect.objectContaining({ delivery: null }));
+  });
+
+  it('leaves cosMetrics alone when the source is off (#3085)', async () => {
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { outcomes: true } });
+    li.gatherSources.mockResolvedValue({ goals: 'be great' });
+    await buildTaskInput({ app: APP });
+    expect(li.renderCosMetricsSource).not.toHaveBeenCalled();
   });
 
   it('skips the selfEval REPORT when the source toggle is off, but still arms the hard-exclusion notice (#2700/#2824)', async () => {

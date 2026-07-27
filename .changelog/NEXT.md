@@ -54,3 +54,7 @@
 ## Video generation
 
 - **[issue-3100] New Control mode for local video generation** — feed a control clip (a depth pass, a pose track, edges) alongside your prompt and the render follows its structure and motion instead of inventing them. The reference can be a fresh upload or any prior render from your history, and a strength slider dials how tightly the output tracks it. A half-res preview toggle skips the refinement pass so you can check whether a control clip fits before committing to a full render. Requires an LTX-2 model; the ~654 MB Control weight downloads with progress from the mode panel and is covered by the existing model verify/repair buttons.
+
+## Layered Intelligence
+
+- **[issue-3085] The self-improvement loop can now see whether its approved proposals actually get delivered, not just whether its agent runs finish.** The `cosMetrics` block it reasons over reported per-task-type run success — "did the agent's task complete?" — and nothing about delivery, so a 90% run rate sat there looking healthy beside a pipeline that had landed none of ten approved proposals. That same block now carries a `delivery` figure (approved, delivered, and the current delivery rate) plus a per-scope breakdown, so the two numbers are read side by side. The rate is reported as unknown rather than 0% until something has actually been approved — a loop with no track record shouldn't read as a loop that fails everything.

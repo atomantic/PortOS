@@ -60,6 +60,7 @@ describe('layeredIntelligence barrel re-exports (issue #2842)', () => {
       'computeCrossReferenceAnalysis', 'computeHandoffRouting',
       'computeHardExclusionGate', 'computeHardExclusionNotice', 'buildPrompt',
       'gatherSources', 'gatherPlannedWork', 'readLiTaskMetrics',
+      'computeDeliveryMetrics', 'renderCosMetricsSource',
       'listForgeIssues', 'fileProposalToForge', 'listJiraIssues',
       'fileProposalToJira', 'appendProposalToPlan', 'extractPlanSlugs',
     ]) {

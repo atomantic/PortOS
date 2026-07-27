@@ -173,6 +173,52 @@ export async function gatherPlannedWork({
   return null;
 }
 
+// Prompt-budget cap on the rendered cosMetrics document, unchanged from when the
+// per-task-type map was the whole payload.
+export const COS_METRICS_MAX_CHARS = 4000;
+
+// The two `cosMetrics` keys that are NOT task types (#3085). Named so the reserved-key
+// contract is stated once rather than implied by assignment order below.
+const COS_METRICS_DELIVERY_KEYS = ['delivery', 'deliveryByScope'];
+
+/**
+ * Render the `cosMetrics` prompt source: this install's per-task-type agent RUN stats,
+ * plus — when the caller has outcome records — the approval → DELIVERY block (#3085).
+ * Pure; the single place the document's shape is decided, so gatherSources' first pass
+ * and the hook's delivery-aware re-render can never produce different shapes.
+ *
+ * The delivery keys are serialized FIRST so the `COS_METRICS_MAX_CHARS` cap can never
+ * truncate them away: an install with dozens of task types can fill the budget on its
+ * own, and the per-task-type tail is the half that already has an interpreted sibling
+ * in the prompt (liScopeAwareness, derived server-side from the untruncated map),
+ * whereas the delivery block has none.
+ *
+ * `delivery` is OMITTED entirely (not zeroed) when no outcome records were gathered —
+ * the outcomes source is off, the tracker cannot report outcomes, or the store was
+ * unreadable. A gathered-but-empty history still emits the block with a null
+ * `currentDeliveryRate`, so "we have no delivery data" stays distinguishable from
+ * "nothing has been approved yet".
+ *
+ * @param {object} args
+ * @param {Object} [args.metricsByType] - per-task-type run stats (see gatherSources).
+ * @param {{ delivery: object, deliveryByScope: object }|null} [args.delivery] - a
+ *   `computeDeliveryMetrics(outcomes)` result, or null when none was gathered.
+ * @returns {string} the JSON document, capped at COS_METRICS_MAX_CHARS.
+ */
+export function renderCosMetricsSource({ metricsByType = {}, delivery = null } = {}) {
+  const payload = {};
+  // Reserved keys are INSERTED first (JSON.stringify follows insertion order, so the
+  // cap above can't cut them) but ASSIGNED last, so a task type that happens to share
+  // one of their names can't shadow the delivery block.
+  if (delivery) for (const key of COS_METRICS_DELIVERY_KEYS) payload[key] = null;
+  Object.assign(payload, metricsByType);
+  if (delivery) {
+    payload.delivery = delivery.delivery;
+    payload.deliveryByScope = delivery.deliveryByScope;
+  }
+  return JSON.stringify(payload).slice(0, COS_METRICS_MAX_CHARS);
+}
+
 /**
  * Gather the enabled Layer-1 sources for one app into a `{ key: string }` map.
  * Deterministic reads only (files + CoS metric JSON + tracker lists); NO LLM calls.
@@ -247,7 +293,15 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos, trustShe
           avgDurationMs: m?.avgDurationMs || 0
         };
       }
-      out.cosMetrics = JSON.stringify(summary).slice(0, 4000);
+      // No delivery block yet: the approval → delivery numbers come from the app's
+      // outcome records, which the hook only has AFTER it has reconciled them against
+      // this run's tracker read. The raw per-type map rides along on
+      // `cosMetricsByType` so the hook can re-render the document once with both
+      // halves (see renderCosMetricsSource) rather than emitting a delivery figure
+      // one cycle stale — two blocks in one prompt disagreeing about how many
+      // proposals are approved is worse than either number alone.
+      out.cosMetricsByType = summary;
+      out.cosMetrics = renderCosMetricsSource({ metricsByType: summary });
       // Scope-awareness guidance (#2760): a deterministic low/high-completion split
       // derived from the SAME per-type rates above, so the reasoner gets an interpreted
       // signal alongside the raw JSON instead of being asked to spot the pattern itself.

@@ -53,6 +53,8 @@ import {
   resolveJiraBlockKey,
   applyJiraBlockingLabel,
   computeOutcomesReport,
+  computeDeliveryMetrics,
+  renderCosMetricsSource,
   computeSelfEvalSummary,
   computeProposalExecutionAwareness,
   computeCrossReferenceAnalysis,
@@ -358,6 +360,24 @@ export async function buildTaskInput({ app } = {}) {
       proposalExecutionReport = computeProposalExecutionAwareness({ outcomes })
       crossReferenceReport = computeCrossReferenceAnalysis({ outcomes })
     }
+  }
+
+  // Delivery block (#3085): fold the approval → delivery numbers into the SAME
+  // cosMetrics document the per-task-type run rates live in, so a healthy run rate can
+  // never be read as a healthy pipeline. Done here rather than inside gatherSources
+  // because only this point has POST-reconciliation outcomes — a pre-reconcile snapshot
+  // would report a different approval count than the liOutcomes block in the same
+  // prompt. `cosMetricsByType` is gatherSources' internal hand-off for exactly this
+  // re-render; drop it so it can never leak into buildPrompt as a source block.
+  if (sources.cosMetricsByType) {
+    sources.cosMetrics = renderCosMetricsSource({
+      metricsByType: sources.cosMetricsByType,
+      // Not an array = the outcomes source is off / the tracker can't report outcomes /
+      // the store was unreadable. Omit the block rather than emitting zeros that would
+      // read as "nothing has ever been approved".
+      delivery: Array.isArray(outcomes) ? computeDeliveryMetrics(outcomes) : null
+    })
+    delete sources.cosMetricsByType
   }
 
   // Self-evaluation (#2700): the loop's deterministic pre-filing check on its own
