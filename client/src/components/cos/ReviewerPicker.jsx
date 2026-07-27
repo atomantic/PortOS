@@ -98,18 +98,24 @@ export default function ReviewerPicker({
     optionalReviewers: isOptional(token) ? withoutToken(token) : [...optionalTokens, token]
   });
 
-  // Blank clears the cap entirely (back to slashdo's built-in default); any other
-  // value is clamped to 0..MAX_REVIEWER_MAX_ROUNDS so the input can't offer a
-  // budget the server would drop.
+  // Blank clears the cap entirely (back to slashdo's built-in default). The two
+  // out-of-range directions are deliberately NOT symmetric, because only one of
+  // them can change what the value MEANS:
+  //  - A negative or non-integer entry is REJECTED (the emit is skipped, so the
+  //    controlled input snaps back). Coercing it would land on `0`, which is
+  //    slashdo's "loop until clean" — turning a typo into an unlimited loop, the
+  //    exact absent-vs-0 collapse the server's normalizer refuses.
+  //  - A value above the ceiling clamps DOWN to it. That can only ever shrink a
+  //    budget, never make it unlimited, and it matches the input's `max`.
   const setMaxRounds = (token, raw) => {
     if (raw === '') {
       emit({ reviewerMaxRounds: maxRoundsWithout(token) });
       return;
     }
-    const parsed = Number.parseInt(raw, 10);
-    if (!Number.isInteger(parsed)) return;
-    const clamped = Math.min(Math.max(parsed, 0), MAX_REVIEWER_MAX_ROUNDS);
-    emit({ reviewerMaxRounds: { ...maxRoundsWithout(token), [token]: clamped } });
+    const parsed = Number(raw);
+    if (!Number.isInteger(parsed) || parsed < 0) return;
+    const capped = Math.min(parsed, MAX_REVIEWER_MAX_ROUNDS);
+    emit({ reviewerMaxRounds: { ...maxRoundsWithout(token), [token]: capped } });
   };
 
   // The `~opt` non-blocking toggle rendered on every reviewer/username chip.

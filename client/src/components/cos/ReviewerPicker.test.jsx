@@ -192,11 +192,19 @@ describe('ReviewerPicker', () => {
       expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ reviewerMaxRounds: { ollama: 10 } }));
     });
 
-    it('clamps a negative cap to 0 rather than dropping the entry silently', () => {
+    it('rejects a negative cap rather than clamping it to 0 (which would mean unlimited)', () => {
       const onChange = vi.fn();
       render(<ReviewerPicker reviewers={['ollama']} onChange={onChange} />);
       fireEvent.change(screen.getByLabelText('Max review rounds for Ollama'), { target: { value: '-2' } });
-      expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ reviewerMaxRounds: { ollama: 0 } }));
+      // Clamping to 0 would silently turn a typo into slashdo's "loop until clean".
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it('rejects a fractional cap rather than truncating it', () => {
+      const onChange = vi.fn();
+      render(<ReviewerPicker reviewers={['ollama']} onChange={onChange} />);
+      fireEvent.change(screen.getByLabelText('Max review rounds for Ollama'), { target: { value: '1.5' } });
+      expect(onChange).not.toHaveBeenCalled();
     });
 
     it('prunes the cap entry when its reviewer is removed', async () => {
