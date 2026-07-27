@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import { effortLevelsForProvider } from '../../utils/providers';
+import { effortLevelsForProvider, resolveCliEffort } from '../../utils/providers';
 import { FormField } from '../ui/FormField';
 
 /**
@@ -39,6 +39,17 @@ export default function EffortSelect({
   const levels = effortLevelsForProvider(provider);
   if (!levels) return null;
 
+  // A stored effort can sit outside this provider's ladder — a task/stage
+  // pinned to claude `max` whose provider was later switched to Antigravity
+  // (which stops at `high`). The server CLAMPS rather than drops it, so the run
+  // still gets an `--effort`. Render an explicit option naming both the stored
+  // value and what it resolves to, or the select would hold a value matching no
+  // option, render blank (reading as "Default effort"), and hide the fact that
+  // the run uses the clamped level. Mirrors the stale-model option the pipeline
+  // stage's Model select already renders.
+  const outOfLadder = value && !levels.includes(value) ? value : null;
+  const clamped = outOfLadder ? resolveCliEffort(outOfLadder, provider) : null;
+
   const select = (
     <select
       id={id}
@@ -50,6 +61,11 @@ export default function EffortSelect({
       aria-label={label ? undefined : 'Thinking effort'}
     >
       <option value="">Default effort</option>
+      {outOfLadder && (
+        <option value={outOfLadder}>
+          {clamped ? `${outOfLadder} (runs as ${clamped})` : `${outOfLadder} (not supported — ignored)`}
+        </option>
+      )}
       {levels.map(level => (
         <option key={level} value={level}>{level}</option>
       ))}

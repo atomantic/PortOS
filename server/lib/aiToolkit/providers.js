@@ -226,6 +226,24 @@ function migrateCodexProvider(data) {
   return changed;
 }
 
+// Remove a `--model <id>` / `--model=<id>` pin (both spellings) from a legacy
+// Gemini-CLI argv being converted to agy. Only the legacy migration wants this —
+// on the spawn paths a long-form `--model` is a legitimate agy pin and is kept.
+function stripLegacyModelPin(args) {
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--model') {
+      const next = args[i + 1];
+      if (typeof next === 'string' && !next.startsWith('-')) i += 1; // skip its value
+      continue;
+    }
+    if (typeof arg === 'string' && arg.startsWith('--model=')) continue;
+    out.push(arg);
+  }
+  return out;
+}
+
 function migrateAntigravityProviders(data) {
   if (!data?.providers) return false;
   let changed = false;
@@ -241,6 +259,14 @@ function migrateAntigravityProviders(data) {
     if (!data.providers[mapping.targetId]) {
       const envVars = { ...(legacy.envVars || {}) };
       delete envVars.GEMINI_SANDBOX;
+      // Drop any `--model` the legacy argv pinned BEFORE normalizing. The arg
+      // builders deliberately preserve a long-form `--model` (agy accepts it,
+      // so a pin is a real user selection) — but this argv came from the
+      // *Gemini* CLI, so its pin is a Gemini id (`gemini-2.5-pro`) that agy
+      // cannot resolve. Carrying it over would both break every run AND make
+      // `hasModelFlag` permanently suppress PortOS's own injection, leaving the
+      // user no way to fix it short of hand-editing the provider args.
+      const legacyArgs = stripLegacyModelPin(legacy.args || []);
       const migrated = {
         ...legacy,
         id: mapping.targetId,
@@ -248,8 +274,8 @@ function migrateAntigravityProviders(data) {
         type: mapping.type,
         command: 'agy',
         args: mapping.type === 'cli'
-          ? ensureAntigravityPrintArgs(legacy.args || [])
-          : ensureAntigravityTuiArgs(legacy.args || []),
+          ? ensureAntigravityPrintArgs(legacyArgs)
+          : ensureAntigravityTuiArgs(legacyArgs),
         models: [...ANTIGRAVITY_MODEL_CATALOG],
         timeout: legacy.timeout || mapping.timeout,
         envVars,
@@ -815,7 +841,12 @@ export function createProviderService(config = {}) {
         return await this._fetchAnthropicModels(provider);
       }
 
-      if (providerName.includes('antigravity') || provider.command === 'agy') {
+      // Path/exe-tolerant (`isAntigravityCommand`, not `command === 'agy'`) so a
+      // provider configured with the absolute binary path still refreshes —
+      // otherwise the client's `isAntigravityProvider` gate offers the Refresh
+      // button and every click falls through to the throw below. Matches the
+      // TUI branch in refreshProviderModels.
+      if (providerName.includes('antigravity') || isAntigravityCommand(provider.command)) {
         return await this._fetchAntigravityModels(provider);
       }
 
@@ -829,10 +860,21 @@ export function createProviderService(config = {}) {
     /**
      * agy ships an `agy models` subcommand that prints one model id per line —
      * the authoritative catalog for this user's plan and binary version, which
-     * a hardcoded list can only go stale against. Falls back to the shipped
-     * catalog when the binary isn't runnable (not installed yet, PATH doesn't
-     * resolve under the service env) so a refresh never empties a working
-     * provider's model list.
+     * a hardcoded list can only go stale against.
+     *
+     * THROWS rather than falling back to `ANTIGRAVITY_MODEL_CATALOG` when the
+     * probe can't run (agy not installed, the service PATH can't resolve it, a
+     * timeout, a non-zero exit) or comes back with nothing parseable. The
+     * shipped catalog is for *seeding and migration* — surfacing it from a
+     * refresh would make a failed probe indistinguishable from a real fetch:
+     * `refreshProviderModels` would persist it and the UI would toast "Models
+     * refreshed", so a user whose PATH can't see agy would pick a model their
+     * plan doesn't have and only find out when the run dies. Throwing makes
+     * `refreshProviderModels` return null → an explicit error toast, and leaves
+     * the existing list untouched (nothing is persisted). Same posture as
+     * `_fetchOllamaToolCapableModels`, and the root CLAUDE.md rule that a
+     * reachable-but-list-failed backend must surface an explicit error rather
+     * than a plausible-looking empty/default result.
      *
      * The sentinel is always re-prepended: it is what keeps "use agy's own
      * configured default" selectable after a refresh.
@@ -849,17 +891,18 @@ export function createProviderService(config = {}) {
       // that's a full 15s hang ending in SIGTERM and an empty catalog. (execFile
       // ignores an `stdio` option, so ending the stream is the way to do it.)
       pending.child?.stdin?.end();
-      const { stdout } = await pending.catch(() => ({ stdout: '' }));
+      const { stdout } = await pending.catch((err) => {
+        throw new Error(`'${bin} models' failed: ${err?.message || 'could not run the binary'}`);
+      });
 
-      const listed = stdout
+      const listed = (stdout || '')
         .split(/\r?\n/)
         .map(line => line.trim())
         // Drop blanks, banner/status lines, and anything that isn't a bare id.
         .filter(line => /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(line) && line !== ANTIGRAVITY_CONFIGURED_DEFAULT);
 
       if (listed.length === 0) {
-        console.error(`⚠️ '${bin} models' returned no model ids — keeping the shipped Antigravity catalog`);
-        return [...ANTIGRAVITY_MODEL_CATALOG];
+        throw new Error(`'${bin} models' returned no model ids`);
       }
       return [ANTIGRAVITY_CONFIGURED_DEFAULT, ...new Set(listed)];
     },

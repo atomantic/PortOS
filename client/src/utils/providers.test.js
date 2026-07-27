@@ -36,6 +36,7 @@ import {
   isKimiProvider,
   isAntigravityProvider,
   effortLevelsForProvider,
+  resolveCliEffort,
   CLAUDE_EFFORT_LEVELS,
   CODEX_EFFORT_LEVELS,
   ANTIGRAVITY_EFFORT_LEVELS,
@@ -50,7 +51,36 @@ import { PROVIDER_TYPES as SERVER_PROVIDER_TYPES } from '../../../server/lib/aiT
 import {
   effortLevelsForProvider as serverEffortLevelsForProvider,
   isAntigravityProvider as serverIsAntigravityProvider,
+  resolveCliEffort as serverResolveCliEffort,
 } from '../../../server/lib/providerModels.js';
+
+// The client copy drives what EffortSelect DISPLAYS; the server copy decides
+// what the CLI actually receives. Any drift means the UI names a level the run
+// won't use, so every case is asserted against both implementations.
+describe('resolveCliEffort (server mirror)', () => {
+  const AGY = { id: 'antigravity-cli', command: 'agy' };
+  const CLAUDE = { id: 'claude-code', command: 'claude' };
+  const CODEX = { id: 'codex', command: 'codex' };
+  const GROK = { id: 'grok-cli', command: 'grok' };
+
+  it.each([
+    ['supported value passes through', 'medium', AGY, 'medium'],
+    ['above agy ladder clamps down', 'xhigh', AGY, 'high'],
+    ['max clamps to agy high', 'max', AGY, 'high'],
+    ['ultra clamps to agy high', 'ultra', AGY, 'high'],
+    ['below agy ladder takes the weakest', 'minimal', AGY, 'low'],
+    ['codex-only ultra clamps on claude', 'ultra', CLAUDE, 'max'],
+    ['codex-only minimal clamps on claude', 'minimal', CLAUDE, 'low'],
+    ['codex accepts its whole ladder', 'ultra', CODEX, 'ultra'],
+    ['unknown value yields no flag', 'bogus', AGY, null],
+    ['effort-less provider yields no flag', 'high', GROK, null],
+    ['unset yields no flag', '', AGY, null],
+    ['null yields no flag', null, CLAUDE, null],
+  ])('%s', (_label, effort, provider, expected) => {
+    expect(resolveCliEffort(effort, provider)).toBe(expected);
+    expect(serverResolveCliEffort(effort, provider)).toBe(expected);
+  });
+});
 
 // These drive the Effort/model pickers in the CoS task + schedule forms. The
 // client copy is a hand-mirror of server/lib/providerModels.js (the client can't

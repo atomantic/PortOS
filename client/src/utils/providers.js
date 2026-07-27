@@ -177,6 +177,37 @@ export const effortLevelsForProvider = (provider) => {
   return null;
 };
 
+// Every effort value any CLI accepts, weakest→strongest. MIRROR of EFFORT_RANK
+// in server/lib/providerModels.js — keep in lockstep.
+const EFFORT_RANK = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+
+/**
+ * The level a stored effort will ACTUALLY run at on this provider, or null when
+ * no flag is emitted. MIRROR of `resolveCliEffort` in
+ * server/lib/providerModels.js — keep in lockstep.
+ *
+ * The UI needs this because the server clamps an out-of-ladder effort rather
+ * than dropping it: a stage pinned to claude `max` and switched to Antigravity
+ * (whose ladder stops at `high`) still runs, at `high`. Without this the select
+ * holds a value matching no option, renders blank — reading as "Default effort"
+ * — while the run silently uses the clamped level.
+ * @param {string|null|undefined} effort
+ * @param {{id?:string, command?:string}|null|undefined} provider
+ * @returns {string|null}
+ */
+export const resolveCliEffort = (effort, provider) => {
+  if (!effort) return null;
+  const levels = effortLevelsForProvider(provider);
+  if (!levels) return null;
+  if (levels.includes(effort)) return effort;
+  const requested = EFFORT_RANK.indexOf(effort);
+  if (requested === -1) return null;
+  const supported = levels.map(l => EFFORT_RANK.indexOf(l)).filter(i => i !== -1).sort((a, b) => a - b);
+  if (supported.length === 0) return null;
+  const below = supported.filter(i => i < requested);
+  return EFFORT_RANK[below.length ? below[below.length - 1] : supported[0]];
+};
+
 /**
  * Embedding-only model detector — mirror of `isEmbeddingModel` in
  * server/lib/localModelHeuristics.js. Keep the two regexes in lockstep (the

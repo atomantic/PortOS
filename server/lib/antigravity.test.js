@@ -112,6 +112,21 @@ describe('ensureAntigravityPrintArgs', () => {
       .toEqual(['--model', 'gemini-3.1-pro-low', '--dangerously-skip-permissions', '--print']);
   });
 
+  // This is the path every production caller uses (buildCliArgs,
+  // buildCliSpawnConfig, askService), so the "user-baked pin wins" contract is
+  // pinned here rather than only on the TUI normalizer.
+  it('lets a user-baked --model pin win over the per-run model (both spellings)', () => {
+    expect(ensureAntigravityPrintArgs(['--model', 'claude-sonnet-4-6'], { model: 'gemini-3.1-pro-high' }))
+      .toEqual(['--model', 'claude-sonnet-4-6', '--dangerously-skip-permissions', '--print']);
+    expect(ensureAntigravityPrintArgs(['--model=claude-sonnet-4-6'], { model: 'gemini-3.1-pro-high' }))
+      .toEqual(['--model=claude-sonnet-4-6', '--dangerously-skip-permissions', '--print']);
+  });
+
+  it('lets a user-baked --effort pin win over the per-run effort', () => {
+    expect(ensureAntigravityPrintArgs(['--effort', 'low'], { effort: 'high' }))
+      .toEqual(['--effort', 'low', '--dangerously-skip-permissions', '--print']);
+  });
+
   it('normalizes any pre-baked print flag (--print / -p / --prompt) to a single trailing --print', () => {
     expect(ensureAntigravityPrintArgs(['--print'])).toEqual(['--dangerously-skip-permissions', '--print']);
     expect(ensureAntigravityPrintArgs(['-p'])).toEqual(['--dangerously-skip-permissions', '--print']);
@@ -166,14 +181,16 @@ describe('ensureAntigravityTuiArgs', () => {
     expect(ensureAntigravityTuiArgs(['--sandbox'])).toEqual(['--sandbox']);
   });
 
-  it('appends the per-run model and effort', () => {
-    expect(ensureAntigravityTuiArgs([], { model: 'gemini-3.1-pro-high', effort: 'high' }))
-      .toEqual(['--model', 'gemini-3.1-pro-high', '--effort', 'high', '--dangerously-skip-permissions']);
+  // The TUI path injects model/effort downstream (agentTuiSpawning), so this
+  // normalizer only preserves a real pin and drops a dangling one — otherwise
+  // that later append would emit a second --model.
+  it('preserves a user-baked --model pin', () => {
+    expect(ensureAntigravityTuiArgs(['--model', 'claude-sonnet-4-6']))
+      .toEqual(['--model', 'claude-sonnet-4-6', '--dangerously-skip-permissions']);
   });
 
-  it('lets a user-baked --model pin win over the per-run model', () => {
-    expect(ensureAntigravityTuiArgs(['--model', 'claude-sonnet-4-6'], { model: 'gemini-3.1-pro-high' }))
-      .toEqual(['--model', 'claude-sonnet-4-6', '--dangerously-skip-permissions']);
+  it('drops a dangling --model so the downstream append cannot double it', () => {
+    expect(ensureAntigravityTuiArgs(['--model'])).toEqual(['--dangerously-skip-permissions']);
   });
 });
 

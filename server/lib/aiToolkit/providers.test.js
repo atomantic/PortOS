@@ -527,7 +527,10 @@ describe('Provider Service', () => {
             name: 'Gemini CLI',
             type: 'cli',
             command: 'gemini',
-            args: ['--yolo', '-m', 'gemini-2.5-pro', '--output-format', 'text'],
+            // Both model spellings: `-m` is the legacy short form agy rejects
+            // outright, `--model` is a form agy DOES accept — but pinned to a
+            // Gemini id agy can't resolve, so the migration must drop it too.
+            args: ['--yolo', '-m', 'gemini-2.5-pro', '--model', 'gemini-1.5-flash', '--output-format', 'text'],
             envVars: { GEMINI_SANDBOX: 'false', KEEP_ME: '1' },
             models: ['gemini-2.5-pro'],
             defaultModel: 'gemini-2.5-pro'
@@ -551,7 +554,11 @@ describe('Provider Service', () => {
       expect(active.id).toBe('antigravity-cli');
       expect(legacy).toBeNull();
       expect(antigravity.command).toBe('agy');
+      // No `--model` survives: a Gemini id would break every agy run AND
+      // permanently suppress PortOS's own model injection via hasModelFlag.
       expect(antigravity.args).toEqual(['--dangerously-skip-permissions', '--print']);
+      expect(antigravity.args).not.toContain('--model');
+      expect(antigravityTui.args).not.toContain('--model');
       expect(antigravity.defaultModel).toBe('antigravity-configured-default');
       expect(antigravity.contextWindow).toBe(1048576);
       expect(antigravity.envVars).toEqual({ KEEP_ME: '1' });
@@ -589,6 +596,38 @@ describe('Provider Service', () => {
       // agy's own configured default (no --model flag), exactly as before.
       expect(antigravity.defaultModel).toBe('antigravity-configured-default');
       expect(antigravity.lightModel).toBe('antigravity-configured-default');
+    });
+
+    // A failed `agy models` probe must be distinguishable from a real fetch.
+    // Returning the shipped catalog here would persist it and toast "Models
+    // refreshed", so a user whose service PATH can't resolve `agy` would pick a
+    // model their plan may not have and only discover it when the run dies.
+    it('reports a failed `agy models` probe as a refresh failure, leaving the stored list intact', async () => {
+      const stored = ['antigravity-configured-default', 'gemini-3.1-pro-high'];
+      await writeProvidersFile({
+        activeProvider: 'antigravity-cli',
+        providers: {
+          'antigravity-cli': {
+            id: 'antigravity-cli',
+            name: 'Antigravity CLI',
+            type: 'cli',
+            command: '/nonexistent/path/to/agy',
+            contextWindow: 1048576,
+            models: [...stored],
+            defaultModel: 'antigravity-configured-default'
+          }
+        }
+      });
+
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const result = await providerService.refreshProviderModels('antigravity-cli');
+      errSpy.mockRestore();
+
+      // null = "nothing to persist"; the routes layer turns this into an error.
+      expect(result).toBeNull();
+      // And the previously-stored list is untouched on disk.
+      const after = await providerService.getProviderById('antigravity-cli');
+      expect(after.models).toEqual(stored);
     });
 
     it('leaves a user-customized Antigravity model list alone', async () => {

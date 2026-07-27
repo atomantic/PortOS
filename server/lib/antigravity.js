@@ -111,11 +111,15 @@ export function prepareAntigravityPrompt(args = [], prompt = '') {
 // swallow --dangerously-skip-permissions: the flag stays a real boolean and the
 // permission auto-approval actually takes effect. Do NOT add --print here.
 /**
+ * Deliberately takes NO per-run model/effort overrides, unlike its `--print`
+ * sibling: the TUI path injects those in `agentTuiSpawning.js#appendModelArgs`
+ * + `buildEffortArgs`, after this normalizer has run (this is only reached via
+ * the provider-agnostic `applyCommandDefaults`). It still drops a dangling
+ * `--model` so that later append can't produce two of them.
  * @param {string[]} [args] - the provider's saved argv
- * @param {{model?:string|null, effort?:string|null}} [overrides] - per-run selections
  */
-export function ensureAntigravityTuiArgs(args = [], overrides = {}) {
-  const out = appendAntigravityModelAndEffort(stripAntigravityUnsupportedArgs(args), overrides);
+export function ensureAntigravityTuiArgs(args = []) {
+  const out = stripBrokenModelFlags(stripAntigravityUnsupportedArgs(args));
   if (!out.includes('--dangerously-skip-permissions') && !out.includes('--sandbox')) {
     out.push('--dangerously-skip-permissions');
   }
