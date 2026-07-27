@@ -1023,7 +1023,12 @@ async function startWalkGenerationImpl(recordId, body) {
   // resamples/labels the cycle afterward. Resolved from the set target above and
   // stored on the run so the completion hook's packageRun (and any later
   // reprocess) applies exactly what the set is pinned to.
-  const prompt = buildWalkVideoPrompt({ name: record.name, direction, chromaKey });
+  // Optional re-roll note (#3134): appended to the motion prompt so a second
+  // render can be told what the first got wrong. Trimmed here and stamped on the
+  // run record below only when non-empty, so a blank note leaves both the prompt
+  // and the persisted run byte-identical to a blind regenerate.
+  const correctionPrompt = typeof body.correctionPrompt === 'string' ? body.correctionPrompt.trim() : '';
+  const prompt = buildWalkVideoPrompt({ name: record.name, direction, chromaKey, correctionPrompt });
   const videoAbs = join(generatedAbs, 'source-video.mp4');
   const grokPath = settings.imageGen?.grok?.grokPath;
 
@@ -1053,6 +1058,7 @@ async function startWalkGenerationImpl(recordId, body) {
     animationInputPath: `${runRel}/generated/input-anchor-chroma.png`,
     animationInputSha256: inputSha256,
     animationInputPreparation: preparation,
+    ...(correctionPrompt ? { correctionPrompt } : {}),
     createdAt: now,
   };
   await saveRunRecord(recordId, run);

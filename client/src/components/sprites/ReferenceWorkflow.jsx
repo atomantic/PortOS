@@ -13,7 +13,9 @@ import SpritePreview from './SpritePreview.jsx';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker.jsx';
 import SpriteReferencePicker from './SpriteReferencePicker.jsx';
 import ForkSpriteModal from './ForkSpriteModal.jsx';
-import CorrectionNote, { correctionPromptPayload } from './CorrectionNote.jsx';
+import CorrectionNote, {
+  CorrectionNoteToggle, correctionPromptPayload, anchorCorrectionKey, MAIN_CORRECTION_KEY,
+} from './CorrectionNote.jsx';
 import FilePickerButton from '../ui/FilePickerButton';
 import { IMAGE_ACCEPT } from '../../utils/fileUpload';
 
@@ -296,14 +298,18 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
         target,
         ...(mode ? { mode } : {}),
         // The sheet owns the design inputs; the main derives from it with no
-        // inputs of its own; anchors carry only their correction note.
+        // design inputs of its own; anchors carry only their correction note.
+        // The main and every anchor DO carry a correction (#3134/#2964) — under
+        // their own key in the shared map, so a main note can't ride an anchor.
         ...(target === 'turnaround' ? {
           designPrompt,
           ...(refSource?.type === 'upload' ? { referenceImageFile: refSource.file } : {}),
           ...(refSource?.type === 'gallery' ? { initImageGalleryFile: refSource.filename } : {}),
           ...(refSource?.type === 'sprite' ? { initImageSpriteId: refSource.id } : {}),
           ...(refSource ? { initImageStrength: strength } : {}),
-        } : target === 'main' ? {} : correctionPromptPayload(corrections, target)),
+        } : target === 'main'
+          ? correctionPromptPayload(corrections, MAIN_CORRECTION_KEY)
+          : correctionPromptPayload(corrections, anchorCorrectionKey(target))),
       }, { silent: true });
       resolveSubmit(target, jobId);
       if (target === 'turnaround') clearSource();
@@ -787,6 +793,16 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
                   {pendingJobs.main ? 'Rendering…' : mainCandidates.length ? 'Regenerate' : 'Generate candidate'}
                 </button>
               </div>
+              {/* The main has no design input of its own (it derives from the
+                  sheet), but it CAN take a correction (#3134) — otherwise a bad
+                  front view could only be re-rolled blind. */}
+              <CorrectionNoteToggle
+                noteKey={MAIN_CORRECTION_KEY}
+                label="main reference"
+                corrections={corrections}
+                onChange={onCorrectionChange}
+                placeholder="Correction (optional), e.g. the cloak hem is cut off"
+              />
               {mainCandidates.length > 0 && (
                 <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,11rem),1fr))] gap-3">
                   {mainCandidates.map((candidate) => (

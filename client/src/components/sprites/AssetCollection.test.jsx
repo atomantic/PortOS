@@ -231,3 +231,60 @@ describe('AssetCollection anchor correction note (#2964)', () => {
     expect(within(card).getByRole('button', { name: /Show correction note/i })).toBeTruthy();
   });
 });
+
+// #3134 extended the card note to walk outputs. It is the WALK-namespaced key,
+// which is the whole point: the same note WalkWorkflow's card drives, and NOT the
+// bare-direction anchor note (a still-image fix must not ride a video re-roll).
+describe('AssetCollection walk correction note (#3134)', () => {
+  const stripCard = () => screen.getByTitle(STRIP).parentElement;
+
+  it('surfaces a note on a walk output card bound to the walk-namespaced key', async () => {
+    const onCorrectionChange = vi.fn();
+    render(
+      <AssetCollection
+        recordId="example-walker"
+        assets={ASSETS}
+        actions={actionsFor()}
+        corrections={{ 'walk:east': 'the legs barely lift' }}
+        onCorrectionChange={onCorrectionChange}
+      />,
+    );
+    const card = stripCard();
+    // An existing note auto-opens and prefills from the shared map.
+    const textarea = within(card).getByLabelText(/Correction guidance for the east walk cycle/i);
+    expect(textarea).toHaveValue('the legs barely lift');
+    await userEvent.type(textarea, '!');
+    const merged = onCorrectionChange.mock.calls[0][0]({ east: 'anchor note' });
+    expect(merged.east).toBe('anchor note');
+    expect(merged).toHaveProperty('walk:east');
+  });
+
+  it('does not show an anchor note on a walk card', () => {
+    render(
+      <AssetCollection
+        recordId="example-walker"
+        assets={ASSETS}
+        actions={actionsFor()}
+        corrections={{ east: 'no pocket on the right sleeve' }}
+        onCorrectionChange={vi.fn()}
+      />,
+    );
+    // The anchor note exists in the map but belongs to a different surface, so
+    // the walk card stays collapsed and shows none of its text.
+    expect(within(stripCard()).queryByLabelText(/Correction guidance/i)).toBeNull();
+  });
+
+  it('leaves a non-actionable asset without a note affordance', () => {
+    render(
+      <AssetCollection
+        recordId="example-walker"
+        assets={ASSETS}
+        actions={actionsFor()}
+        corrections={{}}
+        onCorrectionChange={vi.fn()}
+      />,
+    );
+    // Exactly one actionable card in ASSETS → exactly one note toggle.
+    expect(screen.getAllByRole('button', { name: /correction note/i })).toHaveLength(1);
+  });
+});

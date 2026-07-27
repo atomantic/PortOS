@@ -110,6 +110,7 @@ export * from './songCraft.js';
 export * from './songPlayback.js';
 export * from './songProgress.js';
 export * from './spriteCollectionActions.js';
+export * from './spriteCorrections.js';
 export * from './spriteFacets.js';
 export * from './spriteRecordGroups.js';
 export * from './spriteTrimmer.js';

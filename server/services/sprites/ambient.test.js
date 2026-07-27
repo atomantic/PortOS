@@ -96,4 +96,28 @@ describe('ambient animation track', () => {
       direction: 'south',
     }]);
   });
+
+  it('appends a trimmed correction note to the loop prompt and stamps it on the run (#3134)', async () => {
+    const id = await placeWithLockedMain(newId());
+    const { runId } = await startAmbientGeneration(id, { correctionPrompt: '  the branches barely move  ' });
+    expect(executeTuiRun.mock.calls[0][0].prompt)
+      .toContain('Important correction — apply this over the attached source image: the branches barely move');
+    const { runs } = await getAmbientState(id);
+    expect(runs.find((r) => r.id === runId).correctionPrompt).toBe('the branches barely move');
+  });
+
+  it('leaves a blank correction note out of the prompt and the run record (#3134)', async () => {
+    // The task is `<loop prompt>\n\n<per-run paths>` — compare the prompt only.
+    const loopPrompt = () => executeTuiRun.mock.calls[0][0].prompt.split('\n\n')[0];
+    const plain = await placeWithLockedMain(newId());
+    await startAmbientGeneration(plain, {});
+    const blindPrompt = loopPrompt();
+    executeTuiRun.mockClear();
+
+    const blank = await placeWithLockedMain(newId());
+    const { runId } = await startAmbientGeneration(blank, { correctionPrompt: '  ' });
+    expect(loopPrompt()).toBe(blindPrompt);
+    const { runs } = await getAmbientState(blank);
+    expect(runs.find((r) => r.id === runId)).not.toHaveProperty('correctionPrompt');
+  });
 });

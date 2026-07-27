@@ -1210,6 +1210,10 @@ export const spriteWalkGenerateSchema = z.object({
   // the geometry.
   frameCount: spriteWalkFrameCountSchema.optional(),
   fps: spriteWalkFpsSchema.optional(),
+  // Free-text guidance appended to a re-roll's motion prompt (#3134) — the same
+  // additive correction the reference/anchor renders take. Absent or blank
+  // leaves the prompt byte-identical to a blind regenerate.
+  correctionPrompt: z.string().max(4000).optional(),
 });
 
 // The scanner is a separate, short directional action. It deliberately has its
@@ -1220,6 +1224,7 @@ export const spriteScannerGenerateSchema = z.object({
   duration: grokVideoDurationSchema.optional(),
   frameCount: spriteScannerFrameCountSchema.optional(),
   fps: spriteScannerFpsSchema.optional(),
+  correctionPrompt: z.string().max(4000).optional(),
 });
 
 export const spriteScannerApproveSchema = z.object({
@@ -1233,6 +1238,7 @@ export const spriteAmbientGenerateSchema = z.object({
   duration: grokVideoDurationSchema.optional(),
   frameCount: spriteAmbientFrameCountSchema.optional(),
   fps: spriteAmbientFpsSchema.optional(),
+  correctionPrompt: z.string().max(4000).optional(),
 });
 
 export const spriteAmbientApproveSchema = z.object({

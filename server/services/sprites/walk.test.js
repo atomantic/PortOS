@@ -349,6 +349,34 @@ describe('startWalkGeneration', () => {
     expect(runs[0].animationInputPreparation).toBe('composited-over-solid-chroma-matte');
   });
 
+  it('appends a trimmed correction note to the motion prompt and stamps it on the run (#3134)', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const { runId } = await startWalkGeneration(id, {
+      direction: 'east', correctionPrompt: '  the legs barely lift  ',
+    });
+    expect(executeTuiRun.mock.calls[0][0].prompt)
+      .toContain('Important correction — apply this over the attached source image: the legs barely lift');
+    // Persisted on the run so the provenance rebuild can reproduce it.
+    const { runs } = await getWalkState(id);
+    expect(runs.find((r) => r.id === runId).correctionPrompt).toBe('the legs barely lift');
+  });
+
+  it('leaves a blank correction note out of the prompt and the run record (#3134)', async () => {
+    // The TUI task is `<motion prompt>\n\n<per-run input/output paths>`, so
+    // compare the motion prompt only — the paths legitimately differ per run.
+    const motionPrompt = () => executeTuiRun.mock.calls[0][0].prompt.split('\n\n')[0];
+    const plain = await characterWithLockedAnchors(newId(), ['east']);
+    await startWalkGeneration(plain, { direction: 'east' });
+    const blindPrompt = motionPrompt();
+    executeTuiRun.mockClear();
+
+    const blank = await characterWithLockedAnchors(newId(), ['east']);
+    const { runId: blankRun } = await startWalkGeneration(blank, { direction: 'east', correctionPrompt: '   ' });
+    expect(motionPrompt()).toBe(blindPrompt);
+    const { runs } = await getWalkState(blank);
+    expect(runs.find((r) => r.id === blankRun)).not.toHaveProperty('correctionPrompt');
+  });
+
   it('honors duration 10 (passed to the grok task)', async () => {
     const id = await characterWithLockedAnchors(newId(), []);
     const result = await startWalkGeneration(id, { direction: 'south', duration: 10 });

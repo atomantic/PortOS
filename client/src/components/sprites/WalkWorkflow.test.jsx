@@ -882,3 +882,56 @@ describe('delivered clip length', () => {
     expect(screen.queryByText(/0\.0s/)).toBeNull();
   });
 });
+
+// Correction notes on the walk card (#3134). The card writes the WALK-namespaced
+// key in the page-owned map, so a note typed here (or on the asset-collection
+// walk card, which uses the same key) rides the next Generate.
+describe('walk correction note (#3134)', () => {
+  const renderCard = (props = {}) => render(
+    <MemoryRouter>
+      <WalkWorkflow
+        record={{ id: 'example-walker' }}
+        reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked', path: 'reference/example-walker-east-v1.png' }] } }}
+        walk={{ runs: [], selection: { directions: {} }, walkSet: null }}
+        renders={noRenders()}
+        duration={6}
+        onDurationChange={vi.fn()}
+        onGenerate={vi.fn()}
+        onChanged={vi.fn()}
+        {...props}
+      />
+    </MemoryRouter>,
+  );
+
+  it('writes through to the shared map under the walk-namespaced key', () => {
+    const onCorrectionChange = vi.fn();
+    renderCard({ corrections: {}, onCorrectionChange });
+    fireEvent.click(screen.getByRole('button', { name: /Show correction note for east walk cycle/i }));
+    fireEvent.change(screen.getByLabelText(/Correction guidance for the east walk cycle/i), {
+      target: { value: 'the legs barely lift' },
+    });
+    const merged = onCorrectionChange.mock.calls[0][0]({ east: 'anchor note' });
+    // The anchor's still-image note survives, and the walk note is written to
+    // its OWN key — that separation is the whole point of the namespace.
+    expect(merged.east).toBe('anchor note');
+    expect(merged).toHaveProperty('walk:east');
+  });
+
+  it('prefills an existing walk note and leaves the affordance out with no writer', () => {
+    renderCard({ corrections: { 'walk:east': 'the legs barely lift' }, onCorrectionChange: vi.fn() });
+    expect(screen.getByLabelText(/Correction guidance for the east walk cycle/i))
+      .toHaveValue('the legs barely lift');
+    cleanup();
+    renderCard();
+    expect(screen.queryByRole('button', { name: /correction note/i })).toBeNull();
+  });
+
+  it('hides the note for a direction whose anchor is not locked yet', () => {
+    renderCard({
+      reference: { manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'pending' }] } },
+      corrections: {},
+      onCorrectionChange: vi.fn(),
+    });
+    expect(screen.queryByRole('button', { name: /correction note/i })).toBeNull();
+  });
+});

@@ -22,6 +22,8 @@
  * uses the same backend the workflow would, not a server default.
  */
 
+import { anchorCorrectionKey, walkCorrectionKey } from './spriteCorrections.js';
+
 // Roles that represent a walk run's rendered output. A manifest or a review
 // sheet from the same run is not something you re-render on its own.
 const WALK_OUTPUT_ROLES = new Set(['strip', 'animation', 'frame']);
@@ -77,6 +79,15 @@ export function buildCollectionActions({
       const pending = Boolean(walkPending[direction]);
       return {
         kind: 'walk',
+        // The card binds an inline correction note to this key in the shared
+        // page-owned corrections map (#3134). It is the WALK namespace, not the
+        // bare direction the anchor re-roll uses — a still-image anchor note
+        // ("no pocket on the right sleeve") must not ride a walk VIDEO re-roll.
+        // The page's `generateWalk` reads the same key, so the note applies
+        // whether it was typed here or in `WalkWorkflow`.
+        correctionKey: walkCorrectionKey(direction),
+        correctionLabel: `${direction} walk cycle`,
+        correctionPlaceholder: 'Correction (optional), e.g. the legs barely lift',
         pending,
         disabled: finalized || approved || !locked || pending,
         title: finalized ? 'The walk set is finalized — regenerating is disabled'
@@ -103,6 +114,8 @@ export function buildCollectionActions({
         // shared per-direction corrections state (#2964) — the same note the
         // ReferenceWorkflow anchor grid shows — before firing generateAnchor.
         direction,
+        correctionKey: anchorCorrectionKey(direction),
+        correctionLabel: `${direction} pose`,
         pending,
         disabled: !hasBackend || locked || pending,
         title: !hasBackend

@@ -446,7 +446,13 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
       }
       anchorId = 'main';
       direction = 'south';
-      prompt = buildAmbientReferencePrompt({ name: record.name, kind: record.kind, designPrompt, chromaKey: genKey });
+      // A place/object main takes BOTH inputs (#3134): `designPrompt` replaces
+      // the design outright, `correctionPrompt` keeps it and fixes one thing
+      // about the last render. They compose — the user can do either or both.
+      correctionPrompt = typeof body.correctionPrompt === 'string' ? body.correctionPrompt.trim() : '';
+      prompt = buildAmbientReferencePrompt({
+        name: record.name, kind: record.kind, designPrompt, chromaKey: genKey, correctionPrompt,
+      });
       ({ initImagePath, designReferencePath } = await resolveSeedSource(recordId, body, upload));
       if (initImagePath) initImageStrength ??= UPLOAD_DEFAULT_STRENGTH;
       if (designPrompt) manifest.designPrompt = designPrompt;
@@ -461,10 +467,15 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
       }
       anchorId = anchorIdForDirection('south');
       direction = 'south';
+      // Same optional re-roll note the anchors take (#3134) — the main derives
+      // from the sheet, so a bad front view can be described instead of only
+      // re-rolled blind.
+      correctionPrompt = typeof body.correctionPrompt === 'string' ? body.correctionPrompt.trim() : '';
       prompt = buildMainReferencePrompt({
         name: record.name,
         designPrompt: designPrompt || manifest.designPrompt,
         chromaKey: genKey,
+        correctionPrompt,
         fromTurnaround: true,
       });
       // The sheet IS the seed here, so a caller-supplied one has nowhere to go.

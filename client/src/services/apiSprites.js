@@ -63,7 +63,9 @@ export const importSprites = (body, options = {}) => request('/sprites/import', 
 // Queue one reference candidate render. `referenceImageFile` (main target
 // only) switches the POST to multipart so the design reference uploads with
 // the fields. `initImageCandidate` re-processes one turnaround candidate with
-// a correctionPrompt. Returns { jobId, mode, target, anchorId }.
+// a correctionPrompt; every target (turnaround, main, anchor) accepts a
+// standalone `correctionPrompt` for a corrected re-roll. Returns
+// { jobId, mode, target, anchorId }.
 export const generateSpriteReference = (id, { referenceImageFile, ...fields }, options = {}) => {
   let body;
   if (referenceImageFile) {
@@ -116,12 +118,16 @@ export const forkSpriteRecord = (id, body, options = {}) => request(`/sprites/${
 // approval into the finalized walk set.
 
 // Queue one walk video render. Returns { jobId, runId, direction, duration }.
+// An optional `correctionPrompt` (#3134) is appended to the motion prompt so a
+// re-roll can be told what the previous clip got wrong; omit it (never send an
+// empty string) for a blind regenerate — `correctionPromptPayload` handles that.
 export const generateSpriteWalk = (id, body, options = {}) => request(`/sprites/${encodeURIComponent(id)}/walk/generate`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
 // Queue one user-requested scanner action. Its 2–8 frame, 2–12fps contract is
 // validated by the named scanner track on the server, independently of walk.
+// Takes the same optional `correctionPrompt` as the walk render.
 export const generateSpriteScanner = (id, body, options = {}) => request(`/sprites/${encodeURIComponent(id)}/scanner/generate`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
@@ -136,6 +142,8 @@ export const approveSpriteScanner = (id, body, options = {}) => request(`/sprite
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
+// Queue the one non-directional ambient loop. Also takes the optional
+// `correctionPrompt` (#3134).
 export const generateSpriteAmbient = (id, body = {}, options = {}) => request(`/sprites/${encodeURIComponent(id)}/ambient/generate`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });

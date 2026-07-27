@@ -10,6 +10,7 @@ import {
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import Banner from '../ui/Banner.jsx';
 import CycleTarget from './CycleTarget.jsx';
+import { CorrectionNoteToggle, walkCorrectionKey } from './CorrectionNote.jsx';
 import SpritePreview from './SpritePreview.jsx';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import { spriteAssetUrl, checkerboardStyle, PIXELATED } from './spriteAssets.js';
@@ -207,6 +208,7 @@ function DirectionCard({
   recordId, direction, anchorLocked, anchorPath, run, approved, finalized, pending,
   onOpenTrimmer, onGenerate, onApprove, onRetry, onReprocess, onReopen,
   reprocessing, retrying, cycleLabel, drift, targetSaving, imported,
+  corrections, onCorrectionChange,
 }) {
   const [confirming, setConfirming] = useState(false);
   const [reopening, setReopening] = useState(false);
@@ -379,6 +381,19 @@ function DirectionCard({
 
       {!finalized && !approved && (
         <div className="space-y-1.5">
+          {/* Correction note for the NEXT render (#3134) — the same key the
+              asset-collection walk card writes, so a note typed on either
+              surface is visible on both and rides whichever Generate fires.
+              Hidden when this direction can't be rendered at all. */}
+          {anchorLocked && onCorrectionChange && (
+            <CorrectionNoteToggle
+              noteKey={walkCorrectionKey(direction)}
+              label={`${direction} walk cycle`}
+              corrections={corrections}
+              onChange={onCorrectionChange}
+              placeholder="Correction (optional), e.g. the legs barely lift"
+            />
+          )}
           <button
             onClick={() => onGenerate(direction)}
             disabled={!anchorLocked || busy}
@@ -507,7 +522,7 @@ function DirectionCard({
 
 export default function WalkWorkflow({
   record, reference, walk, renders, duration, onDurationChange, onGenerate,
-  onOpenTrimmer = () => {}, onChanged,
+  onOpenTrimmer = () => {}, onChanged, corrections = null, onCorrectionChange = null,
 }) {
   const recordId = record.id;
   // The cycle target is server-resolved (app contract → set pin → first approved
@@ -787,6 +802,8 @@ export default function WalkWorkflow({
             onReopen={reopen}
             reprocessing={reprocessingDir === anchor.direction}
             cycleLabel={cycleLabel}
+            corrections={corrections}
+            onCorrectionChange={onCorrectionChange}
           />
         ))}
       </div>

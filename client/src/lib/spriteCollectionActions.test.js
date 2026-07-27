@@ -48,6 +48,16 @@ describe('regenerateFor — walk outputs', () => {
     expect(r).toMatchObject({ disabled: true, pending: true });
   });
 
+  it('names a WALK-namespaced correction key, never the bare direction (#3134)', () => {
+    // Bare-direction would be the anchor's key, so an anchor's still-image note
+    // ("no pocket on the right sleeve") would silently ride a walk VIDEO re-roll.
+    const r = build().regenerateFor(STRIP_EAST);
+    expect(r.correctionKey).toBe('walk:east');
+    expect(r.correctionKey).not.toBe('east');
+    // Every walk output role carries it, so the note is reachable from any card.
+    expect(build().regenerateFor(FRAME_EAST).correctionKey).toBe('walk:east');
+  });
+
   it('treats the submitting sentinel as in flight — that is the double-click guard', () => {
     expect(build({}, { walkPending: { east: 'submitting' } }).regenerateFor(STRIP_EAST).disabled).toBe(true);
   });
@@ -94,6 +104,8 @@ describe('regenerateFor — reference anchors', () => {
     const r = build({ reference: { manifest: { anchors: [{ direction: 'east', status: 'pending' }] } } })
       .regenerateFor(CANDIDATE_EAST);
     expect(r.direction).toBe('east');
+    // The anchor's map key is the BARE direction (pre-#3134 state still resolves).
+    expect(r.correctionKey).toBe('east');
   });
 
   it('disables the re-roll once the anchor is locked — locks are irreversible', () => {

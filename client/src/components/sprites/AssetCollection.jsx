@@ -16,9 +16,9 @@
  */
 
 import { useMemo, useState } from 'react';
-import { FolderOpen, RefreshCw, Scissors, Sparkles, Film, FileJson, NotebookPen } from 'lucide-react';
+import { FolderOpen, RefreshCw, Scissors, Sparkles, Film, FileJson } from 'lucide-react';
 import AssetInspector from './AssetInspector.jsx';
-import CorrectionNote from './CorrectionNote.jsx';
+import CorrectionNote, { CorrectionToggleButton } from './CorrectionNote.jsx';
 import SpritePreview from './SpritePreview.jsx';
 import { hasSpritePreview, isVideoAsset, assetVersionToken, spriteAssetUrl } from './spriteAssets.js';
 import { groupSpriteAssetsByRole } from '../../lib/spriteFacets.js';
@@ -53,14 +53,16 @@ function AssetCard({ recordId, asset, actions, corrections, onCorrectionChange, 
   // links to its own build metadata — geometry, chroma key, provenance.
   const manifest = asset.manifest;
 
-  // Inline anchor-correction note (#2964): an anchor re-roll can carry the same
-  // per-direction correction the ReferenceWorkflow grid drives, so a note typed
-  // on either surface is visible on both and rides the re-roll. Only reference
-  // regenerates expose a `direction`; walk regenerates and non-character records
-  // (no `onCorrectionChange`) never show the affordance.
-  const correctionDir = regenerate?.kind === 'reference' ? regenerate.direction : null;
-  const canCorrect = Boolean(correctionDir && onCorrectionChange);
-  const correctionValue = canCorrect ? (corrections?.[correctionDir] || '') : '';
+  // Inline correction note (#2964, extended to walk cards by #3134): a re-roll
+  // can carry the same correction the authoritative workflow surface drives, so
+  // a note typed on either surface is visible on both and rides the re-roll.
+  // Every actionable regenerate names its own key in the page-owned map —
+  // `correctionKey` — so an anchor (still-image) note can never leak into a walk
+  // (video) re-roll. Non-character records (no `onCorrectionChange`) and assets
+  // with no regenerate action never show the affordance.
+  const correctionKey = regenerate?.correctionKey || null;
+  const canCorrect = Boolean(correctionKey && onCorrectionChange);
+  const correctionValue = canCorrect ? (corrections?.[correctionKey] || '') : '';
   const [noteOpen, setNoteOpen] = useState(Boolean(correctionValue));
 
   return (
@@ -109,16 +111,12 @@ function AssetCard({ recordId, asset, actions, corrections, onCorrectionChange, 
             </button>
           )}
           {canCorrect && (
-            <button
-              type="button"
-              onClick={() => setNoteOpen((o) => !o)}
-              aria-expanded={noteOpen}
-              aria-label={`${noteOpen ? 'Hide' : 'Show'} correction note for ${name}`}
-              title={correctionValue ? `Correction: ${correctionValue}` : 'Add a correction for this anchor re-roll'}
-              className={`px-1.5 py-0.5 text-[10px] bg-port-card border rounded hover:border-port-accent ${correctionValue ? 'border-port-accent text-port-accent' : 'border-port-border text-gray-300'}`}
-            >
-              <NotebookPen className="w-3 h-3" />
-            </button>
+            <CorrectionToggleButton
+              open={noteOpen}
+              onToggle={() => setNoteOpen((o) => !o)}
+              hasValue={Boolean(correctionValue.trim())}
+              label={name}
+            />
           )}
           {trim && (
             <button
@@ -146,9 +144,11 @@ function AssetCard({ recordId, asset, actions, corrections, onCorrectionChange, 
       )}
       {canCorrect && noteOpen && (
         <CorrectionNote
-          direction={correctionDir}
+          noteKey={correctionKey}
           value={correctionValue}
           onChange={onCorrectionChange}
+          ariaLabel={`Correction guidance for the ${regenerate.correctionLabel || correctionKey}`}
+          placeholder={regenerate.correctionPlaceholder}
           className="text-[10px]"
         />
       )}

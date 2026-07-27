@@ -247,6 +247,74 @@ describe('resolveSpriteAssetPrompt', () => {
     expect(res.prompt).toContain('Hero');
   });
 
+  it('rebuilds each animation track with its OWN builder (#3134)', async () => {
+    const id = newId();
+    await records.createRecord({ kind: 'place', name: 'Old Grove' }, `${id}-grove`);
+    await createCharacter(id);
+    const writeRun = async (recordId, runId, run) => {
+      const runDir = join(TEST_ROOT, 'sprites', recordId, 'runs', runId);
+      await mkdir(join(runDir, 'generated'), { recursive: true });
+      await writeFile(join(runDir, 'animation-run.json'), JSON.stringify({
+        schemaVersion: 1, id: runId, characterId: recordId, direction: 'east', chromaKey: '#FF00FF', ...run,
+      }));
+      await writeFile(join(runDir, 'generated', 'source-video.mp4'), 'fake');
+      return `runs/${runId}/generated/source-video.mp4`;
+    };
+
+    // Scanner used to rebuild with the WALK builder, reporting a prompt that was
+    // never sent. It now has its own.
+    const scannerRel = await writeRun(id, 'scanner-east-abc12345', { track: 'scanner' });
+    const scanner = await resolveSpriteAssetPrompt(id, scannerRel);
+    expect(scanner.source).toBe('scanner');
+    expect(scanner.prompt).toContain('scanner action for Hero');
+    expect(scanner.prompt).not.toContain('walk-in-place loop');
+
+    const ambientRel = await writeRun(`${id}-grove`, 'ambient-abc12345', { track: 'ambient', direction: 'south' });
+    const ambient = await resolveSpriteAssetPrompt(`${id}-grove`, ambientRel);
+    expect(ambient.source).toBe('ambient');
+    expect(ambient.prompt).toContain('at-rest place sprite Old Grove');
+  });
+
+  it('rebuilds a corrected animation re-roll with its correction clause (#3134)', async () => {
+    const id = newId();
+    await createCharacter(id);
+    const runDir = join(TEST_ROOT, 'sprites', id, 'runs', 'walk-east-abc12345');
+    await mkdir(join(runDir, 'generated'), { recursive: true });
+    await writeFile(join(runDir, 'animation-run.json'), JSON.stringify({
+      schemaVersion: 1,
+      id: 'walk-east-abc12345',
+      characterId: id,
+      track: 'walk',
+      direction: 'east',
+      chromaKey: '#FF00FF',
+      correctionPrompt: 'the legs barely lift',
+    }));
+    await writeFile(join(runDir, 'generated', 'source-video.mp4'), 'fake');
+
+    const res = await resolveSpriteAssetPrompt(id, 'runs/walk-east-abc12345/generated/source-video.mp4');
+    expect(res.source).toBe('walk');
+    expect(res.prompt)
+      .toContain('Important correction — apply this over the attached source image: the legs barely lift');
+  });
+
+  it('rebuilds a corrected reference candidate with its correction clause (#3134)', async () => {
+    const id = newId();
+    await createCharacter(id);
+    const candDir = join(TEST_ROOT, 'sprites', id, 'reference', 'candidates');
+    await mkdir(candDir, { recursive: true });
+    await writeCandidatePng(join(candDir, 'walk-east-candidate-03.png'));
+    // A pre-capture sidecar (no literal `prompt`) that DID record its correction.
+    await writeFile(join(candDir, 'walk-east-candidate-03.generation.json'), JSON.stringify({
+      schemaVersion: 1, target: 'east', direction: 'east', chromaKey: '#FF00FF',
+      correctionPrompt: 'no pocket on the right sleeve',
+    }));
+
+    const res = await resolveSpriteAssetPrompt(id, 'reference/candidates/walk-east-candidate-03.png');
+    expect(res.source).toBe('candidate-reconstructed');
+    expect(res.prompt)
+      .toContain('Important correction — apply this over the attached reference: no pocket on the right sleeve');
+  });
+
   it('returns null for an asset with no prompt provenance', async () => {
     const id = newId();
     await createCharacter(id);

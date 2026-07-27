@@ -4,13 +4,16 @@ import toast from '../ui/Toast';
 import { approveSpriteScanner } from '../../services/apiSprites.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import { SPRITE_DIRECTIONS } from '../../lib/spriteFacets.js';
+import { CorrectionNoteToggle, scannerCorrectionKey } from './CorrectionNote.jsx';
 import { checkerboardStyle, spriteAssetUrl } from './spriteAssets.js';
 
 // Scanner is intentionally compact: it is a named action track, not a second
 // walk editor. The server owns the 4-frame / 6fps default and validates its
 // track-specific range; this UI exposes the direct user action, candidate review
 // strip, and per-direction approval that freezes its atlas input.
-export default function ScannerWorkflow({ record, reference, scanner, onGenerate, onChanged }) {
+export default function ScannerWorkflow({
+  record, reference, scanner, onGenerate, onChanged, corrections = null, onCorrectionChange = null,
+}) {
   const runs = scanner?.runs || [];
   const selection = scanner?.selection || null;
   const finalized = Boolean(scanner?.scannerSet);
@@ -74,26 +77,39 @@ export default function ScannerWorkflow({ record, reference, scanner, onGenerate
                 </div>
               )}
               {!finalized && !approved && (
-                <div className="flex gap-1.5">
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => onGenerate(direction)}
-                    className="flex-1 rounded border border-port-border px-2 py-1 text-xs text-gray-300 hover:border-port-accent disabled:opacity-50"
-                  >
-                    {busy ? <RefreshCw className="mx-auto w-3 h-3 animate-spin" /> : run?.status === 'error' ? 'Retry' : 'Generate'}
-                  </button>
-                  {candidate && (
+                <div className="space-y-1.5">
+                  {/* Optional correction the next render carries (#3134) — same
+                      shared page-owned map every other re-roll surface writes. */}
+                  {onCorrectionChange && (
+                    <CorrectionNoteToggle
+                      noteKey={scannerCorrectionKey(direction)}
+                      label={`${direction} scanner action`}
+                      corrections={corrections}
+                      onChange={onCorrectionChange}
+                      placeholder="Correction (optional), e.g. the sweep never returns to the start pose"
+                    />
+                  )}
+                  <div className="flex gap-1.5">
                     <button
                       type="button"
-                      disabled={approving}
-                      aria-label={`Approve scanner ${direction}`}
-                      onClick={() => approve(direction, run.id)}
-                      className="rounded bg-port-accent px-2 py-1 text-xs text-white disabled:opacity-50"
+                      disabled={busy}
+                      onClick={() => onGenerate(direction)}
+                      className="flex-1 rounded border border-port-border px-2 py-1 text-xs text-gray-300 hover:border-port-accent disabled:opacity-50"
                     >
-                      <Check className="w-3 h-3" />
+                      {busy ? <RefreshCw className="mx-auto w-3 h-3 animate-spin" /> : run?.status === 'error' ? 'Retry' : 'Generate'}
                     </button>
-                  )}
+                    {candidate && (
+                      <button
+                        type="button"
+                        disabled={approving}
+                        aria-label={`Approve scanner ${direction}`}
+                        onClick={() => approve(direction, run.id)}
+                        className="rounded bg-port-accent px-2 py-1 text-xs text-white disabled:opacity-50"
+                      >
+                        <Check className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
               {run?.postprocessError && <p className="text-[10px] text-red-300">{run.postprocessError}</p>}

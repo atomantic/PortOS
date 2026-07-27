@@ -51,3 +51,45 @@ describe('ScannerWorkflow', () => {
     ));
   });
 });
+
+// Correction note on the scanner card (#3134) — the same shared page-owned map
+// every other regeneration surface writes, under a scanner-namespaced key.
+describe('scanner correction note (#3134)', () => {
+  const scanner = { runs: [], selection: { directions: {} } };
+
+  it('writes through to the shared map under the scanner-namespaced key', () => {
+    const onCorrectionChange = vi.fn();
+    render(
+      <ScannerWorkflow
+        record={record}
+        reference={reference}
+        scanner={scanner}
+        onGenerate={vi.fn()}
+        onChanged={vi.fn()}
+        corrections={{}}
+        onCorrectionChange={onCorrectionChange}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Show correction note for east scanner action/i }));
+    fireEvent.change(screen.getByLabelText(/Correction guidance for the east scanner action/i), {
+      target: { value: 'the sweep never returns to the start pose' },
+    });
+    const merged = onCorrectionChange.mock.calls[0][0]({ east: 'anchor note' });
+    // The anchor's still-image note is untouched; the scanner note gets its own key.
+    expect(merged.east).toBe('anchor note');
+    expect(merged).toHaveProperty('scanner:east');
+  });
+
+  it('omits the affordance when the page supplies no writer', () => {
+    render(
+      <ScannerWorkflow
+        record={record}
+        reference={reference}
+        scanner={scanner}
+        onGenerate={vi.fn()}
+        onChanged={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /correction note/i })).toBeNull();
+  });
+});

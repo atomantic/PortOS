@@ -97,4 +97,30 @@ describe('scanner animation track', () => {
       direction: 'east',
     }]);
   });
+
+  it('appends a trimmed correction note to the prompt and stamps it on the run (#3134)', async () => {
+    const id = await characterWithEastAnchor(newId());
+    const { runId } = await startScannerGeneration(id, {
+      direction: 'east', correctionPrompt: '  the sweep never returns to the start pose  ',
+    });
+    expect(executeTuiRun.mock.calls[0][0].prompt)
+      .toContain('Important correction — apply this over the attached source image: the sweep never returns to the start pose');
+    const { runs } = await getScannerState(id);
+    expect(runs.find((r) => r.id === runId).correctionPrompt).toBe('the sweep never returns to the start pose');
+  });
+
+  it('leaves a blank correction note out of the prompt and the run record (#3134)', async () => {
+    // The task is `<action prompt>\n\n<per-run paths>` — compare the prompt only.
+    const actionPrompt = () => executeTuiRun.mock.calls[0][0].prompt.split('\n\n')[0];
+    const plain = await characterWithEastAnchor(newId());
+    await startScannerGeneration(plain, { direction: 'east' });
+    const blindPrompt = actionPrompt();
+    executeTuiRun.mockClear();
+
+    const blank = await characterWithEastAnchor(newId());
+    const { runId } = await startScannerGeneration(blank, { direction: 'east', correctionPrompt: ' \n ' });
+    expect(actionPrompt()).toBe(blindPrompt);
+    const { runs } = await getScannerState(blank);
+    expect(runs.find((r) => r.id === runId)).not.toHaveProperty('correctionPrompt');
+  });
 });

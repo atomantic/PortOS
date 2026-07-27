@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   SPRITE_DIRECTIONS, ANCHOR_DIRECTIONS, REFERENCE_FACING, anchorIdForDirection,
   keyColorPhrase, buildMainReferencePrompt, buildAnchorPrompt, buildTurnaroundPrompt,
-  buildWalkVideoPrompt, viewGeometryClause, TURNAROUND_VIEWS, SPRITE_REFERENCE_CANVAS_SIZE,
+  buildWalkVideoPrompt, buildScannerPrompt, buildAmbientReferencePrompt, buildAmbientVideoPrompt,
+  correctionClause, viewGeometryClause, TURNAROUND_VIEWS, SPRITE_REFERENCE_CANVAS_SIZE,
 } from './prompts.js';
 
 describe('sprite direction contracts', () => {
@@ -286,5 +287,89 @@ describe('fromTurnaround prompt variants (#2979)', () => {
     expect(p).toContain('turnaround model sheet');
     expect(p).toContain(REFERENCE_FACING.south);
     expect(p).toContain('a wiry ranger');
+  });
+});
+
+describe('correction prompts on every regeneration surface (#3134)', () => {
+  // One table so a newly-added builder can't quietly ship without the
+  // correction contract: each row is a builder plus the base params it needs and
+  // the noun its clause is expected to name.
+  const SURFACES = [
+    {
+      label: 'turnaround sheet',
+      build: (extra) => buildTurnaroundPrompt({ name: 'Scout', designPrompt: 'a wiry ranger', chromaKey: '#FF00FF', ...extra }),
+      subject: 'turnaround',
+    },
+    {
+      label: 'main reference (from the sheet)',
+      build: (extra) => buildMainReferencePrompt({ name: 'Scout', designPrompt: 'a wiry ranger', chromaKey: '#FF00FF', fromTurnaround: true, ...extra }),
+      subject: 'turnaround',
+    },
+    {
+      label: 'main reference (legacy, no sheet)',
+      build: (extra) => buildMainReferencePrompt({ name: 'Scout', designPrompt: 'a wiry ranger', chromaKey: '#FF00FF', ...extra }),
+      subject: 'reference',
+    },
+    {
+      label: 'directional anchor',
+      build: (extra) => buildAnchorPrompt({ name: 'Scout', direction: 'east', chromaKey: '#FF00FF', ...extra }),
+      subject: 'reference',
+    },
+    {
+      label: 'ambient/place reference',
+      build: (extra) => buildAmbientReferencePrompt({ name: 'Old Willow', kind: 'place', designPrompt: 'a willow by a pond', chromaKey: '#FF00FF', ...extra }),
+      subject: 'reference',
+    },
+    {
+      label: 'walk video',
+      build: (extra) => buildWalkVideoPrompt({ name: 'Scout', direction: 'east', chromaKey: '#FF00FF', ...extra }),
+      subject: 'source image',
+    },
+    {
+      label: 'scanner action video',
+      build: (extra) => buildScannerPrompt({ name: 'Scout', direction: 'east', chromaKey: '#FF00FF', ...extra }),
+      subject: 'source image',
+    },
+    {
+      label: 'ambient loop video',
+      build: (extra) => buildAmbientVideoPrompt({ name: 'Old Willow', kind: 'place', chromaKey: '#FF00FF', ...extra }),
+      subject: 'source image',
+    },
+  ];
+
+  for (const { label, build, subject } of SURFACES) {
+    describe(label, () => {
+      it('appends one trimmed correction clause, last', () => {
+        const p = build({ correctionPrompt: '  the strap floats off the shoulder  ' });
+        expect(p).toContain(`Important correction — apply this over the attached ${subject}: the strap floats off the shoulder`);
+        // Last so it reads as an override of the base clauses, not one more of them.
+        expect(p.trimEnd().endsWith('the strap floats off the shoulder')).toBe(true);
+        // Exactly one clause — a second would let the surfaces disagree on emphasis.
+        expect(p.match(/Important correction/g)).toHaveLength(1);
+      });
+
+      // The hard acceptance criterion: a blank note must not perturb the blind
+      // regenerate by even one byte, on any surface.
+      it('is byte-identical to a blind regenerate for absent/blank input', () => {
+        const base = build({});
+        expect(base).not.toContain('Important correction');
+        for (const blank of [undefined, null, '', '   ', '\n\t ', 42, {}]) {
+          expect(build({ correctionPrompt: blank }), String(blank)).toBe(base);
+        }
+      });
+    });
+  }
+});
+
+describe('correctionClause', () => {
+  it('names the subject the correction applies over', () => {
+    expect(correctionClause('fix the arm', 'turnaround'))
+      .toBe(' Important correction — apply this over the attached turnaround: fix the arm');
+  });
+
+  it('returns the empty string for anything blank or non-string', () => {
+    for (const v of [undefined, null, '', '   ', 0, 7, [], {}, () => {}]) {
+      expect(correctionClause(v, 'reference'), String(v)).toBe('');
+    }
   });
 });

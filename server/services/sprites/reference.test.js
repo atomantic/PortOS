@@ -373,6 +373,53 @@ describe('startReferenceGeneration', () => {
     })).rejects.toMatchObject({ code: 'CANDIDATE_TARGET_MISMATCH', status: 400 });
   });
 
+  it('threads a correction prompt into the main-reference derive and its tag (#3134)', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await lockTurnaround(id);
+    enqueueJob.mockClear();
+    await startReferenceGeneration(id, { target: 'main', correctionPrompt: '  the cloak hem is cut off  ' });
+    const call = enqueueJob.mock.calls[0][0];
+    expect(call.params.prompt)
+      .toContain('Important correction — apply this over the attached turnaround: the cloak hem is cut off');
+    expect(call.params.spriteRef.correctionPrompt).toBe('the cloak hem is cut off');
+  });
+
+  it('leaves a blank main-reference correction byte-identical to a blind re-roll (#3134)', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await lockTurnaround(id);
+    enqueueJob.mockClear();
+    await startReferenceGeneration(id, { target: 'main' });
+    const blind = enqueueJob.mock.calls[0][0].params.prompt;
+    enqueueJob.mockClear();
+    await startReferenceGeneration(id, { target: 'main', correctionPrompt: '   ' });
+    const call = enqueueJob.mock.calls[0][0];
+    expect(call.params.prompt).toBe(blind);
+    expect(call.params.spriteRef).not.toHaveProperty('correctionPrompt');
+  });
+
+  it('applies a correction alongside the ambient main\'s full-replace design prompt (#3134)', async () => {
+    const id = 'grove-correction';
+    await records.createRecord({ kind: 'place', name: 'Old Grove' }, id);
+    enqueueJob.mockClear();
+    await startReferenceGeneration(id, {
+      target: 'main', designPrompt: 'a willow by a pond', correctionPrompt: '  the trunk leans too far right  ',
+    });
+    const call = enqueueJob.mock.calls[0][0];
+    // Both inputs land: designPrompt replaces the design, the correction is additive.
+    expect(call.params.prompt).toContain('Design: a willow by a pond');
+    expect(call.params.prompt)
+      .toContain('Important correction — apply this over the attached reference: the trunk leans too far right');
+    expect(call.params.spriteRef.correctionPrompt).toBe('the trunk leans too far right');
+
+    enqueueJob.mockClear();
+    await startReferenceGeneration(id, { target: 'main', designPrompt: 'a willow by a pond', correctionPrompt: '  ' });
+    const blank = enqueueJob.mock.calls[0][0];
+    expect(blank.params.prompt).not.toContain('Important correction');
+    expect(blank.params.spriteRef).not.toHaveProperty('correctionPrompt');
+  });
+
   it('omits the correction from the tag when blank', async () => {
     const id = newId();
     await createCharacter(id);

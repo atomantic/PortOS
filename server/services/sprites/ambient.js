@@ -106,6 +106,9 @@ async function startAmbientGenerationImpl(recordId, body) {
 
   const frameCount = clampTrackFrameCount(body.frameCount, AMBIENT_TRACK);
   const fps = clampTrackFps(body.fps, AMBIENT_TRACK);
+  // Optional re-roll note (#3134) — blank leaves the prompt and the run record
+  // exactly as a blind regenerate would.
+  const correctionPrompt = typeof body.correctionPrompt === 'string' ? body.correctionPrompt.trim() : '';
   const runId = `${AMBIENT_TRACK}-${randomUUID().slice(0, 8)}`;
   const runRel = runRelPath(runId);
   const generatedAbs = join(spriteDir(recordId), runRel, 'generated');
@@ -137,6 +140,7 @@ async function startAmbientGenerationImpl(recordId, body) {
     animationInputPath: `${runRel}/generated/input-main-chroma.png`,
     animationInputSha256: inputSha256,
     animationInputPreparation: preparation,
+    ...(correctionPrompt ? { correctionPrompt } : {}),
     createdAt: new Date().toISOString(),
   };
   await saveRun(recordId, run);
@@ -145,7 +149,12 @@ async function startAmbientGenerationImpl(recordId, body) {
     generatedAbs,
     videoAbs,
     grokPath: settings.imageGen?.grok?.grokPath,
-    task: ambientTask({ prompt: buildAmbientVideoPrompt({ name: record.name, kind: record.kind, chromaKey }), inputAbs, videoAbs, duration }),
+    task: ambientTask({
+      prompt: buildAmbientVideoPrompt({ name: record.name, kind: record.kind, chromaKey, correctionPrompt }),
+      inputAbs,
+      videoAbs,
+      duration,
+    }),
   }).catch((err) => console.error(`❌ sprite ambient grok-tui render crashed ${recordId}/${runId}: ${err?.message || err}`));
   console.log(`📡 sprite ambient grok-tui render started ${recordId}/${runId}`);
   return { runId, duration, shellSession: runId };

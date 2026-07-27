@@ -17,7 +17,7 @@ import { GROK_TUI_ID } from '../../lib/grok.js';
 import { getSettings } from '../settings.js';
 import { getRecord } from './records.js';
 import { requireTrack, loadManifest } from './reference.js';
-import { SPRITE_DIRECTIONS, anchorIdForDirection } from './prompts.js';
+import { SPRITE_DIRECTIONS, anchorIdForDirection, buildScannerPrompt } from './prompts.js';
 import { SCANNER_TRACK, clampTrackFrameCount, clampTrackFps, getAnimationTrack } from './animationTracks.js';
 import { spriteDir, resolveSpriteAssetPath, SOURCE_CLIP_NAME } from './paths.js';
 import { prepareWalkAnchorChromaInput, runWalkPostprocess } from './walkPostprocess.js';
@@ -92,13 +92,6 @@ const lockedAnchorFor = (manifest, direction) => {
   return anchor?.status === 'locked' && anchor.path ? anchor : null;
 };
 
-function scannerPrompt({ name, direction, chromaKey }) {
-  return `Create a short, seamless scanner action for ${name}, facing ${direction}. `
-    + 'The character raises a handheld scanner, makes one deliberate sweep, then returns to the exact starting pose. '
-    + `Keep the character centered, full body visible, and animate only over a solid ${chromaKey} background. `
-    + 'No text, UI, scenery, camera movement, cuts, or additional characters.';
-}
-
 function scannerTask({ prompt, inputAbs, videoAbs, duration }) {
   return `${prompt}\n\nUse your built-in image_to_video tool to animate this exact image for ${duration} seconds:\n${inputAbs}\n\n`
     + `Save the resulting animation as an MP4 file at exactly this path:\n${videoAbs}\n\n`
@@ -125,6 +118,9 @@ async function startScannerGenerationImpl(recordId, body) {
 
   const frameCount = clampTrackFrameCount(body.frameCount, SCANNER_TRACK);
   const fps = clampTrackFps(body.fps, SCANNER_TRACK);
+  // Optional re-roll note (#3134) — blank leaves the prompt and the run record
+  // exactly as a blind regenerate would.
+  const correctionPrompt = typeof body.correctionPrompt === 'string' ? body.correctionPrompt.trim() : '';
   const runId = `${SCANNER_TRACK}-${direction}-${randomUUID().slice(0, 8)}`;
   const runRel = runRelPath(runId);
   const generatedAbs = join(spriteDir(recordId), runRel, 'generated');
@@ -156,6 +152,7 @@ async function startScannerGenerationImpl(recordId, body) {
     animationInputPath: `${runRel}/generated/input-anchor-chroma.png`,
     animationInputSha256: inputSha256,
     animationInputPreparation: preparation,
+    ...(correctionPrompt ? { correctionPrompt } : {}),
     createdAt: new Date().toISOString(),
   };
   await saveRun(recordId, run);
@@ -165,7 +162,12 @@ async function startScannerGenerationImpl(recordId, body) {
     generatedAbs,
     videoAbs,
     grokPath: settings.imageGen?.grok?.grokPath,
-    task: scannerTask({ prompt: scannerPrompt({ name: record.name, direction, chromaKey }), inputAbs, videoAbs, duration }),
+    task: scannerTask({
+      prompt: buildScannerPrompt({ name: record.name, direction, chromaKey, correctionPrompt }),
+      inputAbs,
+      videoAbs,
+      duration,
+    }),
   }).catch((err) => console.error(`❌ sprite scanner grok-tui render crashed ${recordId}/${runId}: ${err?.message || err}`));
   console.log(`📡 sprite scanner grok-tui render started ${recordId}/${runId}`);
   return { runId, direction, duration, shellSession: runId };

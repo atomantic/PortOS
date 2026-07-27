@@ -139,6 +139,24 @@ export function viewGeometryClause(direction) {
 export const TURNAROUND_ID = 'turnaround';
 
 /**
+ * The one appended clause that turns a blind re-roll into a corrected one
+ * (#2964, extended to every surface by #3134). `subject` names what the model is
+ * being corrected ON — the noun of whatever image/clip is attached ("turnaround",
+ * "reference", "source image") — so each surface reads naturally while the
+ * instruction shape stays identical everywhere.
+ *
+ * Returns `''` for absent/blank input, which is the hard contract every caller
+ * depends on: a whitespace-only note must leave the prompt byte-identical to
+ * today's blind regenerate. Callers append the result LAST so the correction
+ * reads as an override of the base clauses rather than one more of them.
+ */
+export function correctionClause(correctionPrompt, subject) {
+  return (typeof correctionPrompt === 'string' && correctionPrompt.trim())
+    ? ` Important correction — apply this over the attached ${subject}: ${correctionPrompt.trim()}`
+    : '';
+}
+
+/**
  * Stage-0 prompt (issue #2979): the character turnaround sheet — the identity
  * root every later render descends from. One image, `TURNAROUND_VIEWS.length`
  * panels of the SAME character, so the model that later draws a back or side
@@ -161,9 +179,7 @@ export function buildTurnaroundPrompt({ name, designPrompt, chromaKey, correctio
   const panelRules = TURNAROUND_VIEWS
     .map((view, i) => `Panel ${i + 1} (${REFERENCE_FACING[view] || view}): ${viewGeometryClause(view)}`)
     .join(' ');
-  const correction = (typeof correctionPrompt === 'string' && correctionPrompt.trim())
-    ? ` Important correction — apply this over the attached turnaround: ${correctionPrompt.trim()}`
-    : '';
+  const correction = correctionClause(correctionPrompt, 'turnaround');
   return (
     `Create a character turnaround model sheet for a game character named ${name}. `
     + `Character design: ${description} `
@@ -241,12 +257,19 @@ const geometryRule = (direction) => {
  * Stage-1 prompt: create the frozen walk-south identity reference from a
  * text description and/or an attached visual reference. `fromTurnaround`
  * switches the copy for the turnaround-first flow (#2979), where the main is
- * derived from the locked sheet like any other direction.
+ * derived from the locked sheet like any other direction. `correctionPrompt`
+ * (#3134) is the optional re-roll note — the same additive correction the
+ * turnaround and anchors already take, so a bad main can be described rather
+ * than only re-rolled blind.
  */
-export function buildMainReferencePrompt({ name, designPrompt, chromaKey, fromTurnaround = false }) {
+export function buildMainReferencePrompt({ name, designPrompt, chromaKey, correctionPrompt, fromTurnaround = false }) {
   const description = (typeof designPrompt === 'string' && designPrompt.trim())
     ? designPrompt.trim()
     : 'Use the attached visual reference as the character design.';
+  // The main derives from the sheet when there is one, so name the sheet as
+  // what the correction applies OVER; a legacy record has only its own
+  // reference attached.
+  const correction = correctionClause(correctionPrompt, fromTurnaround ? 'turnaround' : 'reference');
   return (
     (fromTurnaround ? fromTurnaroundClause('south') : '')
     + `Create the frozen walk-south identity reference for a game character named ${name}. `
@@ -257,15 +280,18 @@ export function buildMainReferencePrompt({ name, designPrompt, chromaKey, fromTu
     + `accessories exactly. ${geometryRule('south')}Flat non-isometric pixel-art game sprite reference, centered on `
     + `a plain exact ${keyColorPhrase(chromaKey)} background on a square 1:1 canvas. No motion, labels, grid, shadows, scenery, `
     + 'wireframe, or extra figures. Return exactly one PNG.'
+    + correction
   );
 }
 
 /**
  * The identity root for a place/object ambient loop. Unlike a character it has
  * no facing or turnaround: this one locked still is both the idle cell and the
- * image-to-video source, so it must be legible on its own.
+ * image-to-video source, so it must be legible on its own. `correctionPrompt`
+ * (#3134) is additive — distinct from `designPrompt`, which REPLACES the design
+ * outright: a correction keeps the design and fixes one thing about the render.
  */
-export function buildAmbientReferencePrompt({ name, kind, designPrompt, chromaKey }) {
+export function buildAmbientReferencePrompt({ name, kind, designPrompt, chromaKey, correctionPrompt }) {
   const description = (typeof designPrompt === 'string' && designPrompt.trim())
     ? designPrompt.trim()
     : 'Use the attached visual reference as the design.';
@@ -274,17 +300,24 @@ export function buildAmbientReferencePrompt({ name, kind, designPrompt, chromaKe
     + 'Show its at-rest state with a clear readable silhouette. Match the attached visual reference when provided. '
     + `Use a plain exact ${keyColorPhrase(chromaKey)} background on a square 1:1 canvas. No people, scenery, text, labels, grid, `
     + 'camera angle, shadows, wireframe, or extra objects. Return exactly one PNG.'
+    + correctionClause(correctionPrompt, 'reference')
   );
 }
 
-/** Ambient image-to-video instruction: preserve the still while moving only its natural loop detail. */
-export function buildAmbientVideoPrompt({ name, kind, chromaKey }) {
+/**
+ * Ambient image-to-video instruction: preserve the still while moving only its
+ * natural loop detail. `correctionPrompt` (#3134) describes what the previous
+ * loop got wrong (e.g. "the branches barely move" / "the flame drifts off the
+ * trunk") so a re-roll diverges instead of reproducing it.
+ */
+export function buildAmbientVideoPrompt({ name, kind, chromaKey, correctionPrompt }) {
   return (
     `The source image is the locked at-rest ${kind} sprite ${name}. Animate one subtle seamless ambient loop `
     + '(for example wind, water, flame, or a gentle flicker appropriate to the source), then return to the exact starting pose. '
     + 'Preserve its identity, silhouette, palette, scale, and centered ground position. Use a locked camera and an exactly '
     + `uniform non-emissive ${keyColorPhrase(chromaKey)} background only as a compositing matte: no scenery, text, labels, `
     + 'camera movement, cuts, added objects, or people.'
+    + correctionClause(correctionPrompt, 'source image')
   );
 }
 
@@ -295,8 +328,12 @@ export function buildAmbientVideoPrompt({ name, kind, chromaKey }) {
  * mechanics (one image_to_video call, save one MP4), so this carries only
  * the identity/matte/motion constraints — the source pipeline's
  * `animation_prompt` minus its CLI/tool scaffolding.
+ *
+ * `correctionPrompt` (#3134) is the optional re-roll note describing what the
+ * previous clip got wrong (e.g. "the legs barely lift", "the cape clips through
+ * the pack") — same additive contract as the reference builders.
  */
-export function buildWalkVideoPrompt({ name, direction, chromaKey }) {
+export function buildWalkVideoPrompt({ name, direction, chromaKey, correctionPrompt }) {
   const facing = REFERENCE_FACING[direction] || direction;
   return (
     `The source image is the locked directional identity anchor for the game character ${name}, `
@@ -309,7 +346,25 @@ export function buildWalkVideoPrompt({ name, direction, chromaKey }) {
     + 'bounce light, reflections, color cast, glow, or shadow on the character. Keep a stable '
     + 'pivot and ground line with loop-friendly walk-in-place motion. No scenery, no text, no '
     + 'labels, no camera motion, no extra figures.'
+    + correctionClause(correctionPrompt, 'source image')
   );
+}
+
+/**
+ * The named scanner action track's i2v instruction (#3134 promoted it out of
+ * `services/sprites/scanner.js` so every stage's prompt lives in this one pure
+ * module — which is also what lets `assetPrompt.js` rebuild a scanner run's
+ * provenance with the builder that actually produced it instead of the walk's).
+ *
+ * The wording is unchanged from the version that lived in `scanner.js`, so an
+ * existing scanner run's rebuilt provenance prompt still matches what was sent.
+ */
+export function buildScannerPrompt({ name, direction, chromaKey, correctionPrompt }) {
+  return `Create a short, seamless scanner action for ${name}, facing ${direction}. `
+    + 'The character raises a handheld scanner, makes one deliberate sweep, then returns to the exact starting pose. '
+    + `Keep the character centered, full body visible, and animate only over a solid ${chromaKey} background. `
+    + 'No text, UI, scenery, camera movement, cuts, or additional characters.'
+    + correctionClause(correctionPrompt, 'source image');
 }
 
 /**
@@ -323,9 +378,7 @@ export function buildWalkVideoPrompt({ name, direction, chromaKey }) {
  */
 export function buildAnchorPrompt({ name, direction, chromaKey, correctionPrompt, fromTurnaround = false }) {
   const facing = REFERENCE_FACING[direction] || direction;
-  const correction = (typeof correctionPrompt === 'string' && correctionPrompt.trim())
-    ? ` Important correction — apply this over the attached reference: ${correctionPrompt.trim()}`
-    : '';
+  const correction = correctionClause(correctionPrompt, 'reference');
   return (
     (fromTurnaround ? fromTurnaroundClause(direction) : '')
     + `Redraw the attached ${name} character as one `

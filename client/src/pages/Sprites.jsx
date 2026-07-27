@@ -19,7 +19,10 @@ import { GROK_VIDEO_DEFAULT_DURATION } from '../lib/grokVideoClip.js';
 import LoopTrimmer from '../components/sprites/LoopTrimmer.jsx';
 import PublishWorkflow from '../components/sprites/PublishWorkflow.jsx';
 import AssetCollection from '../components/sprites/AssetCollection.jsx';
-import { correctionPromptPayload } from '../components/sprites/CorrectionNote.jsx';
+import {
+  correctionPromptPayload, anchorCorrectionKey, walkCorrectionKey, scannerCorrectionKey,
+  AMBIENT_REFERENCE_CORRECTION_KEY, AMBIENT_LOOP_CORRECTION_KEY,
+} from '../components/sprites/CorrectionNote.jsx';
 import SpriteCatalog from '../components/sprites/SpriteCatalog.jsx';
 import SpriteDetailHeader from '../components/sprites/SpriteDetailHeader.jsx';
 import TabPills from '../components/ui/TabPills.jsx';
@@ -438,13 +441,17 @@ export default function Sprites() {
     onChanged: onWorkflowChanged,
   });
 
-  // Per-direction anchor correction guidance is page-owned (#2964) so the
-  // ReferenceWorkflow anchor grid and the asset-collection Regenerate button
+  // Correction guidance for EVERY regeneration surface is page-owned (#2964,
+  // extended to the main reference / walk / scanner / ambient surfaces by
+  // #3134) so a workflow panel and the asset-collection Regenerate button
   // read/write ONE source: a correction typed on either surface applies to the
   // other AND rides along as `correctionPrompt` on whichever re-roll fires.
-  // Keyed by direction — the 8 anchor keys are identical across characters, so
-  // reset on record switch to keep a leftover note from bleeding into the next
-  // sprite (the reset ReferenceWorkflow used to own before the state was lifted).
+  // Keys are namespaced PER SURFACE by `lib/spriteCorrections.js` — anchors keep
+  // the bare direction, everything else prefixes — so an anchor's still-image
+  // note can't leak into that direction's walk video. Every key is identical
+  // across characters, so reset on record switch to keep a leftover note from
+  // bleeding into the next sprite (the reset ReferenceWorkflow used to own
+  // before the state was lifted).
   const [corrections, setCorrections] = useState({});
   useEffect(() => { setCorrections({}); }, [id]);
 
@@ -546,16 +553,25 @@ export default function Sprites() {
     }
   }, []);
 
+  // The direction's walk-scoped correction (#3134) rides along, read from the
+  // SAME page-owned map both WalkWorkflow's card and the asset-collection walk
+  // card write — so a note typed on either surface applies to whichever
+  // Generate the user clicks. The key is walk-namespaced, so an anchor
+  // (still-image) note can never leak into the video prompt.
   const generateWalk = useCallback((direction) => submitRender(
     walkBegin, walkResolve, walkCancel, direction,
-    () => generateSpriteWalk(id, { direction, duration }, { silent: true }),
+    () => generateSpriteWalk(id, {
+      direction,
+      duration,
+      ...correctionPromptPayload(corrections, walkCorrectionKey(direction)),
+    }, { silent: true }),
     `Failed to queue ${direction} walk`,
     // Refetch immediately so the server's 'rendering' run lands before the
     // media-job poll evicts the optimistic key (~4s) — otherwise the Generate
     // button briefly re-enables and a second click would 409 the in-flight
     // render. The server guard is the real backstop; this closes the UI gap.
     onWorkflowChanged,
-  ), [id, duration, walkBegin, walkResolve, walkCancel, submitRender, onWorkflowChanged]);
+  ), [id, duration, corrections, walkBegin, walkResolve, walkCancel, submitRender, onWorkflowChanged]);
 
   // Scanner has its own server-side in-flight guard and independent named set;
   // keeping its submit path separate means a scanner render never occupies the
@@ -565,31 +581,40 @@ export default function Sprites() {
   // TUI run for polling.
   const generateScanner = useCallback(async (direction) => {
     try {
-      await generateSpriteScanner(id, { direction }, { silent: true });
+      await generateSpriteScanner(id, {
+        direction,
+        ...correctionPromptPayload(corrections, scannerCorrectionKey(direction)),
+      }, { silent: true });
       onWorkflowChanged();
     } catch (err) {
       toast.error(err?.message || `Failed to queue ${direction} scanner action`);
     }
-  }, [id, onWorkflowChanged]);
+  }, [id, corrections, onWorkflowChanged]);
 
+  // The ambient main takes BOTH inputs: `designPrompt` replaces the design
+  // outright, while the correction (#3134) keeps it and fixes one thing about
+  // the last render.
   const generateAmbientReference = useCallback((designPrompt) => submitRender(
     refBegin, refResolve, refCancel, 'main',
     () => generateSpriteReference(id, {
       target: 'main', designPrompt,
       ...(imageMode ? { mode: imageMode } : {}),
+      ...correctionPromptPayload(corrections, AMBIENT_REFERENCE_CORRECTION_KEY),
     }, { silent: true }),
     'Failed to queue ambient reference',
     onWorkflowChanged,
-  ), [id, imageMode, refBegin, refResolve, refCancel, submitRender, onWorkflowChanged]);
+  ), [id, imageMode, corrections, refBegin, refResolve, refCancel, submitRender, onWorkflowChanged]);
 
   const generateAmbient = useCallback(async () => {
     try {
-      await generateSpriteAmbient(id, {}, { silent: true });
+      await generateSpriteAmbient(id, {
+        ...correctionPromptPayload(corrections, AMBIENT_LOOP_CORRECTION_KEY),
+      }, { silent: true });
       onWorkflowChanged();
     } catch (err) {
       toast.error(err?.message || 'Failed to queue ambient loop');
     }
-  }, [id, onWorkflowChanged]);
+  }, [id, corrections, onWorkflowChanged]);
 
   // `mode` is the workflow-selected backend, threaded from the asset card via
   // buildCollectionActions (#2938) so a re-roll uses the same backend the
@@ -603,7 +628,7 @@ export default function Sprites() {
     () => generateSpriteReference(id, {
       target: direction,
       ...((mode || imageMode) ? { mode: mode || imageMode } : {}),
-      ...correctionPromptPayload(corrections, direction),
+      ...correctionPromptPayload(corrections, anchorCorrectionKey(direction)),
     }, { silent: true }),
     `Failed to queue ${direction} render`,
   ), [id, imageMode, corrections, refBegin, refResolve, refCancel, submitRender]);
@@ -744,6 +769,8 @@ export default function Sprites() {
                         onGenerate={generateWalk}
                         onOpenTrimmer={openTrimmer}
                         onChanged={onWorkflowChanged}
+                        corrections={corrections}
+                        onCorrectionChange={setCorrections}
                       />
                       <ScannerWorkflow
                         record={detail.record}
@@ -751,6 +778,8 @@ export default function Sprites() {
                         scanner={detail.scanner}
                         onGenerate={generateScanner}
                         onChanged={onWorkflowChanged}
+                        corrections={corrections}
+                        onCorrectionChange={setCorrections}
                       />
                       {/* Keyed by record so form state and an armed publish/overwrite
                           confirmation never survive switching characters. */}
@@ -775,6 +804,8 @@ export default function Sprites() {
                         onGenerateReference={generateAmbientReference}
                         onGenerateAmbient={generateAmbient}
                         onChanged={onWorkflowChanged}
+                        corrections={corrections}
+                        onCorrectionChange={setCorrections}
                       />
                       <PublishWorkflow
                         key={detail.record.id}
