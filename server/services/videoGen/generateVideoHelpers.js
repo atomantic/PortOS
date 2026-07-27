@@ -250,11 +250,19 @@ export function formatRuntimeFingerprint(fp) {
 //
 // Keys are the signal NAMES Node reports on `close` (spawnDetached decodes the
 // supervisor's 128+signum status back into the same names).
+//
+// NOTE on the SIGABRT advice: the LoRA-trainer mitigation for this same watchdog
+// is "let the display sleep" (docs/TROUBLESHOOTING.md), but that is NOT offered
+// here — generateVideo holds a `caffeinate -dis` assertion for the child's whole
+// lifetime, so display sleep is impossible during a render by construction.
+// Telling the user to do something the render itself prevents would be worse
+// than saying nothing. Running the machine headless still works (caffeinate
+// can't wake a display that isn't attached), so that's what we point at.
 const nativeCrashCause = (signal) => `Render crashed (${signal}) — a native fault inside the MLX/Metal layer, not a PortOS-level error. Retry with a lower resolution/frame count; if it repeats on the same model, reinstall that runtime from Settings → Video (a mismatched mlx / mlx-metal pair in the venv is the usual cause).`;
 
 const SIGNAL_DEATH_CAUSES = Object.freeze({
   SIGKILL: 'Process killed (likely out of memory — try a smaller model or resolution)',
-  SIGABRT: 'Render aborted (SIGABRT) — on Apple Silicon this is almost always the macOS Metal command-buffer watchdog killing an over-long GPU command buffer (kIOGPUCommandBufferCallbackErrorImpactingInteractivity), not a bug in the model or PortOS. Lower the resolution and/or frame count so each command buffer does less work, and keep the display asleep (or drive the machine headless) so the render is not competing with WindowServer compositing.',
+  SIGABRT: 'Render aborted (SIGABRT) — on Apple Silicon this is almost always the macOS Metal command-buffer watchdog killing an over-long GPU command buffer (kIOGPUCommandBufferCallbackErrorImpactingInteractivity), not a bug in the model or PortOS. Lower the resolution and/or frame count so each command buffer does less work, and quit other GPU-heavy apps so the render is not competing for the GPU with WindowServer compositing (driving this machine headless over SSH avoids that contention entirely).',
   SIGBUS: nativeCrashCause('SIGBUS'),
   SIGSEGV: nativeCrashCause('SIGSEGV'),
 });
