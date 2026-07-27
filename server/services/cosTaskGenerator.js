@@ -2075,13 +2075,23 @@ async function resolveIssueReconcileBlock(app, taskType, metadata, taskSchedule)
 
 /**
  * reference-watch: dynamically build {referenceData} — a Markdown chunk per ref
- * configured on the app + commits since lastReviewedSha. The check persists
- * status/lastError so a bad URL surfaces in the UI even when dispatch is skipped.
+ * configured on the app + commits since lastReviewedSha — AND the
+ * {trackerInstructions} block naming where the agent files its proposals. The
+ * check persists status/lastError so a bad URL surfaces in the UI even when
+ * dispatch is skipped.
+ *
  * Returns `{ skip }` when no ref produced reviewable commits, else
- * `{ skip: false, block }`. Empty block for every non-reference-watch type.
+ * `{ skip: false, block, trackerInstructions, workTracker }`. Empty
+ * block/instructions (and a null tracker) for every non-reference-watch type.
+ *
+ * The tracker resolution mirrors `triggerReferenceAnalysis` (the on-commit
+ * trigger path) rather than restating its block table: both paths run
+ * `resolveAppWorkTracker` → `formatTrackerInstructions` / `isFileTracker`, so
+ * the prompt the agent gets and the `worktreeChangesExpected` flag stamped on
+ * its task can never disagree (#3140, #3102).
  */
 async function resolveReferenceWatchBlock(app, taskType) {
-  if (taskType !== 'reference-watch') return { skip: false, block: '' };
+  if (taskType !== 'reference-watch') return { skip: false, block: '', trackerInstructions: '', workTracker: null };
   const refs = Array.isArray(app.referenceRepos) ? app.referenceRepos : [];
   if (refs.length === 0) {
     emitLog('info', `Skipping reference-watch for ${app.name}: no reference repos configured`, { appId: app.id });
@@ -2109,7 +2119,19 @@ async function resolveReferenceWatchBlock(app, taskType) {
     emitLog('info', `Skipping reference-watch for ${app.name}: no refs produced reviewable commits`, { appId: app.id });
     return { skip: true };
   }
-  return { skip: false, block: blocks.join('\n\n---\n\n') };
+  // Where THIS app records autonomous work (PLAN.md / GitHub / GitLab / JIRA).
+  // Never throws — degrades to the PLAN.md block, same as the on-commit path.
+  const { resolveAppWorkTracker, isFileTracker } = await import('../lib/workTracker.js');
+  const workTracker = await resolveAppWorkTracker(app).catch(() => ({ resolved: 'plan' }));
+  return {
+    skip: false,
+    block: blocks.join('\n\n---\n\n'),
+    trackerInstructions: referenceRepos.formatTrackerInstructions(workTracker.resolved),
+    workTracker: workTracker.resolved,
+    // Derived here (not at the call site) so the flag and the instructions come
+    // off the same resolved value in one place.
+    worktreeChangesExpected: isFileTracker(workTracker.resolved),
+  };
 }
 
 /**
@@ -2218,6 +2240,10 @@ async function buildImprovementTaskDescription({ promptTemplate, app, promptTask
   const swarmBlock = resolveSwarmBlock(promptTaskType, metadata.swarmCount);
 
   return `${swarmBlock}${promptTemplate}`
+    // {trackerInstructions} FIRST — the injected block itself carries
+    // {appName}/{repoPath} placeholders that the replacers below expand. This
+    // ordering is load-bearing (mirrors triggerReferenceAnalysis).
+    .replace(/\{trackerInstructions\}/g, () => blocks.trackerInstructions)
     .replace(/\{appName\}/g, app.name)
     .replace(/\{repoPath\}/g, app.repoPath)
     .replace(/\{appId\}/g, app.id)
@@ -2337,10 +2363,24 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
       : await getTaskPrompt(promptKeyForBody));
 
   // reference-watch: dynamically inject {referenceData} — a Markdown chunk
-  // describing each ref configured on the app + commits since lastReviewedSha.
+  // describing each ref configured on the app + commits since lastReviewedSha —
+  // plus the {trackerInstructions} block for the app's resolved work tracker.
   const referenceWatch = await resolveReferenceWatchBlock(app, taskType);
   if (referenceWatch.skip) return null;
   const referenceDataBlock = referenceWatch.block;
+  if (referenceWatch.workTracker) {
+    // Traceability + the TUI idle-complete gate, derived from the SAME resolved
+    // tracker that selected the {trackerInstructions} block above so the flag
+    // can't drift from the instructions the agent actually got: the PLAN.md path
+    // commits checklist items (dirty tree), while github/gitlab/jira file
+    // issues/tickets and leave the tree CLEAN. Without this a scheduled
+    // forge-tracker run is recorded as an `idle-no-changes` failure (#3102).
+    metadata.workTracker = referenceWatch.workTracker;
+    // Stamped unconditionally — a schedule/per-app `worktreeChangesExpected`
+    // override would let the flag disagree with the instructions the agent
+    // actually got, which is the exact drift this derivation exists to prevent.
+    metadata.worktreeChangesExpected = referenceWatch.worktreeChangesExpected;
+  }
 
   // pr-watcher: poll the app's GitHub repo for PRs newly opened against the
   // default branch; injects {prData}/{repoFullName}/{defaultBranch}.
@@ -2364,6 +2404,7 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     promptTemplate, app, promptTaskType, metadata,
     blocks: {
       referenceData: referenceDataBlock,
+      trackerInstructions: referenceWatch.trackerInstructions,
       prData: prDataBlock,
       inFlightBranches: inFlightBranchesBlock,
       zombieIssues: zombieIssuesBlock,

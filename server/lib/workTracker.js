@@ -126,10 +126,12 @@ export function forgeCliForTracker(tracker) {
  * i.e. an agent that files a proposal there necessarily dirties the worktree.
  * The forge/ticket trackers (github/gitlab/jira) take their work out-of-band via
  * `gh`/`glab`/JIRA, so a successful run can legitimately leave a clean tree.
- * Consumed by `triggerReferenceAnalysis` to stamp `worktreeChangesExpected` on
- * the spawned task off the SAME resolved value that picks the prompt's
- * {trackerInstructions} block, so the flag can't drift from the instructions the
- * agent actually got (see agentTuiSpawning.js's idle-complete gate, #3102).
+ * Consumed by BOTH reference-watch dispatch paths — `triggerReferenceAnalysis`
+ * (on-commit) and `resolveReferenceWatchBlock` (the WEEKLY scheduled task) — to
+ * stamp `worktreeChangesExpected` on the spawned task off the SAME resolved
+ * value that picks the prompt's {trackerInstructions} block, so the flag can't
+ * drift from the instructions the agent actually got (see agentTuiSpawning.js's
+ * idle-complete gate, #3102/#3140).
  * An unknown/absent tracker is treated as file-based, matching
  * formatTrackerInstructions' PLAN.md fallback.
  */

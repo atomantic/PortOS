@@ -12,7 +12,10 @@
  * tracker — PLAN.md, GitHub Issues, GitLab Issues, or JIRA (resolved via
  * `resolveAppWorkTracker`) — which `/claim` / `plan-task` / `claim-issue*`
  * picks up later. The destination-specific guidance is injected into the
- * prompt's `{trackerInstructions}` block by `triggerReferenceAnalysis`.
+ * prompt's `{trackerInstructions}` block by BOTH dispatch paths —
+ * `triggerReferenceAnalysis` here (the on-commit trigger) and
+ * `resolveReferenceWatchBlock` in cosTaskGenerator.js (the WEEKLY scheduled
+ * task) — via the shared `formatTrackerInstructions` below (#3140).
  *
  * Storage: refs live inline on each app in data/apps.json under the
  * `referenceRepos` array — fits the existing per-app config model and
@@ -579,8 +582,9 @@ export function formatReferenceForPrompt(ref, snapshot) {
 // PLAN.md: it injects the block matching the app's RESOLVED work tracker, so an
 // app configured for GitHub issues gets `gh issue create` proposals instead of
 // a PLAN.md checklist. The blocks carry {appName}/{repoPath} placeholders that
-// the shared replace chain in triggerReferenceAnalysis expands (it substitutes
-// {trackerInstructions} FIRST so these inner placeholders are filled too).
+// each dispatch path's replace chain expands — both triggerReferenceAnalysis
+// (below) and buildImprovementTaskDescription (cosTaskGenerator.js) substitute
+// {trackerInstructions} FIRST so these inner placeholders are filled too.
 const TRACKER_INSTRUCTIONS = {
   plan: `This app records autonomous work in **PLAN.md** at the repo root ({repoPath}).
 
