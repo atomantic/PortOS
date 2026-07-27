@@ -4,6 +4,10 @@
 
 - **[issue-3124] Usage cost estimates now include pre-breakdown history** — Older activity is grouped as legacy usage, conflicting totals agree, missing provider IDs are labeled clearly, and the report explains which token costs remain uncounted.
 
+## Quota-burn automation
+
+- **[issue-3090] Provider quota can now be spent deliberately before a reset.** Configure a prompt, reserve, reset window, and dispatch cap for each CLI provider family; the opt-in scheduler checks usage without consuming tokens and only runs the selected provider when safe, known quota remains.
+
 ## Navigation
 
 - Third-level Create navigation for Series and Universes can now be collapsed and expanded independently.

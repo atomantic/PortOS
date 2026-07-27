@@ -106,6 +106,7 @@ export * from './promptPartials.js';
 export * from './promptRunner.js';
 export * from './promptTemplate.js';
 export * from './providerModels.js';
+export * from './quotaReset.js';
 export * from './opencodeConfig.js';
 // `runners.js` re-defines `isFlux2`/`isZImage`/`isErnie` that also live in
 // mediaModels.js — namespace it so the barrel surface is unambiguous.

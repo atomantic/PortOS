@@ -482,6 +482,10 @@ export function hasWorkDetector(taskType) {
 registerWorkDetector('claim-issue', detectGithubIssues);
 registerWorkDetector('claim-issue-gitlab', detectGitlabIssues);
 registerWorkDetector('plan-task', detectPlanTask);
+registerWorkDetector('quota-burn', async (app) => {
+  const { detectQuotaBurn } = await import('./quotaBurn.js');
+  return detectQuotaBurn(app);
+});
 
 /**
  * Probe whether `taskType` has actionable work for `app`. Always resolves to a

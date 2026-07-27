@@ -34,6 +34,7 @@
 // or both hooks; a missing export means "no hook of that kind for this type".
 const HOOK_MODULES = {
   'layered-intelligence': () => import('./autonomousJobs/layeredIntelligenceHooks.js'),
+  'quota-burn': () => import('./autonomousJobs/quotaBurnHooks.js'),
 };
 
 async function loadHookModule(taskType) {
