@@ -52,3 +52,25 @@ export const resolveGrokDuration = (requested) => {
   const n = Number(requested);
   return GROK_VIDEO_DURATIONS.includes(n) ? n : GROK_VIDEO_DEFAULT_DURATION;
 };
+
+/**
+ * The shortest deliverable length that still COVERS `requested`, for callers
+ * translating a target duration authored against another backend's contract
+ * (#3135: the Creative Director planner and the commission's
+ * `targetDurationSeconds` are written in local-lane seconds, which are
+ * continuous).
+ *
+ * Distinct from `resolveGrokDuration`, which validates an ALREADY-grok-shaped
+ * request and defaults anything else to 6s: that's correct at the route boundary
+ * (the picker only offers 6/10, so a third value is bad input), but wrong when
+ * translating — an 8-second brief would silently become 6s and truncate the
+ * beat. Rounds UP because there is no cost or render-time saving at a shorter
+ * clip (see the measurement note above), so covering the request is free; a
+ * request beyond the longest clip clamps to that longest.
+ */
+export const nearestGrokDuration = (requested) => {
+  if (typeof requested !== 'number' && typeof requested !== 'string') return GROK_VIDEO_DEFAULT_DURATION;
+  const n = Number(requested);
+  if (!Number.isFinite(n) || n <= 0) return GROK_VIDEO_DEFAULT_DURATION;
+  return GROK_VIDEO_DURATIONS.find((d) => d >= n) ?? GROK_VIDEO_DURATIONS[GROK_VIDEO_DURATIONS.length - 1];
+};

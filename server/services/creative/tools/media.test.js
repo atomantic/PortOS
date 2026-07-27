@@ -143,14 +143,19 @@ describe('render-backend pin — video (#3135)', () => {
     expect(enqueued().params.modelId).toBe('pinned-video-model');
   });
 
-  it('STRIPS a planner-authored grok discriminator when the pin says local', async () => {
-    // The discriminator and the t2v/i2v semantic share `params.mode`, so leaving
-    // a planner-written 'grok' in place would dispatch to grok in defiance of the
-    // pin. Dropping it lets local.js infer the semantic (= what an unset mode means).
+  it('STRIPS a planner-authored BACKEND token from `mode` when the pin says local', async () => {
+    // The discriminator and the t2v/i2v semantic share `params.mode`. A leftover
+    // 'grok' would dispatch to grok in defiance of the pin; a leftover 'local' is
+    // worse than useless — local.js reads an unrecognized non-empty mode as plain
+    // text-to-video and would silently ignore the step's sourceImagePath. Dropping
+    // the key lets local.js INFER the semantic, which is what an unset mode means.
     getSettings.mockResolvedValue({ imageGen: {} });
     getProject.mockResolvedValue(projectWithPin({ video: { mode: 'local' } }));
-    await run('media_enqueueVideoJob', { prompt: 'p', mode: 'grok' }, { projectId: 'cd-1' });
-    expect(enqueued().params).toEqual({ prompt: 'p' });
+
+    for (const backendToken of ['grok', 'local']) {
+      await run('media_enqueueVideoJob', { prompt: 'p', mode: backendToken, sourceImagePath: '/tmp/f.png' }, { projectId: 'cd-1' });
+      expect(enqueued().params).toEqual({ prompt: 'p', sourceImagePath: '/tmp/f.png' });
+    }
   });
 
   it('degrades a grok video pin to local when the grok toggle is off — and strips the discriminator', async () => {
@@ -170,6 +175,41 @@ describe('render-backend pin — video (#3135)', () => {
     getProject.mockResolvedValue(projectWithPin({ video: { mode: 'local', modelId: 'pinned-video-model' } }));
     await run('media_enqueueVideoJob', { prompt: 'p', modelId: 'planner-model' }, { projectId: 'cd-1' });
     expect(enqueued().params.modelId).toBe('pinned-video-model');
+  });
+
+  describe('grok clip length crosses a contract boundary', () => {
+    // The local lane derives frames from `durationSeconds`; grok's worker reads
+    // `duration` and silently falls back to 6s for anything absent. Without the
+    // translation a 10s commission would quietly render a 6s clip.
+    beforeEach(() => {
+      getSettings.mockResolvedValue({ imageGen: { grok: { enabled: true, grokPath: '/bin/grok' } } });
+    });
+
+    it('translates the step durationSeconds, rounding up to a deliverable clip', async () => {
+      getProject.mockResolvedValue(projectWithPin({ video: { mode: 'grok' } }));
+      await run('media_enqueueVideoJob', { prompt: 'p', durationSeconds: 8 }, { projectId: 'cd-1' });
+      // 8s isn't deliverable; rounding DOWN to 6 would truncate the beat, and a
+      // longer clip costs nothing extra.
+      expect(enqueued().params.duration).toBe(10);
+    });
+
+    it("falls back to the project's target duration when the step names none", async () => {
+      getProject.mockResolvedValue({ id: 'cd-1', targetDurationSeconds: 10, renderBackend: { video: { mode: 'grok' } } });
+      await run('media_enqueueVideoJob', { prompt: 'p' }, { projectId: 'cd-1' });
+      expect(enqueued().params.duration).toBe(10);
+    });
+
+    it('prefers an explicit grok-shaped duration a caller already set', async () => {
+      getProject.mockResolvedValue({ id: 'cd-1', targetDurationSeconds: 10, renderBackend: { video: { mode: 'grok' } } });
+      await run('media_enqueueVideoJob', { prompt: 'p', duration: 6, durationSeconds: 10 }, { projectId: 'cd-1' });
+      expect(enqueued().params.duration).toBe(6);
+    });
+
+    it('defaults to the shortest clip when nothing names a length', async () => {
+      getProject.mockResolvedValue(projectWithPin({ video: { mode: 'grok' } }));
+      await run('media_enqueueVideoJob', { prompt: 'p' }, { projectId: 'cd-1' });
+      expect(enqueued().params.duration).toBe(6);
+    });
   });
 
   it('applies the video pin alongside the locked geometry preset', async () => {

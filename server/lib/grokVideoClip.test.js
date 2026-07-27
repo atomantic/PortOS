@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  GROK_VIDEO_DURATIONS, GROK_VIDEO_DEFAULT_DURATION, resolveGrokDuration,
+  GROK_VIDEO_DURATIONS, GROK_VIDEO_DEFAULT_DURATION, resolveGrokDuration, nearestGrokDuration,
 } from './grokVideoClip.js';
 
 describe('grokVideoClip', () => {
@@ -40,6 +40,43 @@ describe('grokVideoClip', () => {
   it('does not coerce a non-scalar into a supported length', () => {
     expect(resolveGrokDuration([10])).toBe(GROK_VIDEO_DEFAULT_DURATION);
     expect(resolveGrokDuration({ valueOf: () => 10 })).toBe(GROK_VIDEO_DEFAULT_DURATION);
+  });
+});
+
+describe('nearestGrokDuration — translating another backend\'s continuous length (#3135)', () => {
+  it('rounds UP to the shortest clip that covers the request', () => {
+    // Rounding down would truncate the beat, and there is no render-time or cost
+    // saving at a shorter clip, so covering the request is free.
+    expect(nearestGrokDuration(1)).toBe(6);
+    expect(nearestGrokDuration(6)).toBe(6);
+    expect(nearestGrokDuration(7)).toBe(10);
+    expect(nearestGrokDuration(8)).toBe(10);
+    expect(nearestGrokDuration(10)).toBe(10);
+  });
+
+  it('clamps a request longer than the longest clip', () => {
+    expect(nearestGrokDuration(30)).toBe(10);
+    expect(nearestGrokDuration(600)).toBe(10);
+  });
+
+  it('accepts a numeric string', () => {
+    expect(nearestGrokDuration('8')).toBe(10);
+  });
+
+  it.each([
+    ['zero', 0], ['a negative', -6], ['a non-numeric string', 'six'],
+    ['null', null], ['undefined', undefined], ['NaN', NaN],
+    ['a non-scalar', [8]],
+  ])('falls back to the default for %s', (_label, input) => {
+    expect(nearestGrokDuration(input)).toBe(GROK_VIDEO_DEFAULT_DURATION);
+  });
+
+  it('differs from resolveGrokDuration exactly where it should', () => {
+    // resolveGrokDuration VALIDATES an already-grok-shaped request (a third value
+    // is bad input at the route boundary); nearestGrokDuration TRANSLATES a
+    // continuous one. 8s must not silently become 6s.
+    expect(resolveGrokDuration(8)).toBe(6);
+    expect(nearestGrokDuration(8)).toBe(10);
   });
 });
 
