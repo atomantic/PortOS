@@ -1024,8 +1024,10 @@ Use the findings from the previous stage to inform your work. If the previous st
   const simplifyEnabled = isTruthyMetaFn(task.metadata?.simplify);
   // `/simplify` is a Claude Code built-in slash command — only Claude providers
   // can run it. Everyone else (API/CLI) gets the inline equivalent describing the
-  // same reuse/quality/efficiency self-review so the pass still happens.
-  const canRunSlashCommands = providerId === 'claude-code' || providerId === 'claude-code-bedrock';
+  // same reuse/quality/efficiency self-review so the pass still happens. Same gate
+  // as the completion sections (#3108), so one run can't be told to hand-review
+  // *and* to run `/do:pr`.
+  const canRunSlashCommands = hostTypesSlashdoCommands({ providerId, providerCommand, leanMode });
   const simplifyInstruction = canRunSlashCommands
     ? 'run `/simplify` to review the changed code for reuse, quality, and efficiency'
     : SIMPLIFY_INLINE_REVIEW;
@@ -1074,6 +1076,9 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
       : isTui
         ? buildTuiCompletionSection({
             willOpenPR, prCompletion, simplifyEnabled, providerId,
+            // Same gate as the light path: a TUI that can't type `/do:*` gets the
+            // plain-git workflow (which carries the inline simplify equivalent).
+            slashdoFree: !canRunSlashCommands,
             sentinelPath,
             leavePrOpen: leavesPrForHuman(task),
             reviewers: taskReviewers,
@@ -1251,10 +1256,10 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${too
 ${(() => {
   const bullet = buildCompletionGuidelineBullet({
     isReadOnly: isTruthyMetaFn(task.metadata?.readOnly),
-    // Same gate as the light path (and it now honors leanMode, which this call
-    // site previously dropped — a lean claude TUI got `/do:pr` in the bullet
-    // while its completion section said to use plain git).
-    isTui, tuiCompletionCommand, slashdoFree: isTui && !hostTypesSlashdoCommands({ providerId, providerCommand, leanMode }),
+    // Same gate as the completion section above (and it now honors leanMode,
+    // which this call site previously dropped — a lean claude TUI got `/do:pr` in
+    // the bullet while its completion section said to use plain git).
+    isTui, tuiCompletionCommand, slashdoFree: isTui && !canRunSlashCommands,
     worktreeInfo, willOpenPR, prCompletion, discardWorktree, noCodeOutput,
     leavePrOpen: leavesPrForHuman(task),
     isPrFollowUp: isReviewLoopFollowUp,
@@ -1591,13 +1596,11 @@ function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.M
         ? ' — `/do:pr` runs the Copilot review loop after the PR opens.'
         : ` — \`/do:pr\` runs the review loop for ${reviewerListLabel} in order after the PR opens.`)
     : (willOpenPR ? ' — external review is disabled for this task.' : '');
-  // `/simplify` is a Claude Code TUI built-in. Non-Claude TUI providers
-  // (codex-tui, antigravity-tui) can't run it, so give them the inline equivalent.
-  // Default (no providerId) stays Claude-shaped for backward compatibility.
-  const canRunSimplifyCommand = !providerId || /claude/i.test(providerId);
-  const simplifyStep = simplifyEnabled
-    ? (canRunSimplifyCommand ? '1. `/simplify`' : `1. Before committing, ${SIMPLIFY_INLINE_REVIEW} and fix any findings.`)
-    : '1. (simplify disabled — skip)';
+  // `/simplify` is a Claude Code TUI built-in, and reaching this point means the
+  // host types slashdo commands — a provider that can't (codex/antigravity TUI,
+  // OpenCode, lean mode) took the `slashdoFree` branch above, which emits the
+  // inline self-review equivalent instead. One gate decides both (#3108).
+  const simplifyStep = simplifyEnabled ? '1. `/simplify`' : '1. (simplify disabled — skip)';
   const sentinelTail = willOpenPR ? '   ## PR\n   <PR URL>' : '   ## Branch\n   <branch name>';
   // A PR gets merge steps — gated on the review verdict when a loop runs, on CI
   // alone when it doesn't (nothing else merges a no-review-loop PR). The one

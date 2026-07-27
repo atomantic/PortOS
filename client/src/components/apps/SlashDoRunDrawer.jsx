@@ -29,7 +29,7 @@ const SELECT_CLASS = 'w-full px-3 py-2 bg-port-bg border border-port-border roun
  * Mount only while open (the parent conditionally renders it): the provider fetch
  * runs on mount, and unmounting is what resets the form between runs.
  */
-function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, onQueued }) {
+function SlashDoRunDrawerBody({ open, command, label, claimsWork = false, appId, appName, onClose, onQueued }) {
   const codeReviewDefaults = useCodeReviewDefaults();
   const {
     providers, selectedProviderId, selectedModel, availableModels, selectedProvider,
@@ -49,10 +49,12 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
 
   const handleWorkChange = useCallback((next) => setWork(next), []);
 
-  const isNext = command === 'next';
+  // Only a work-claiming workflow gets the item picker. Comes from the shared
+  // catalog entry (#3108) rather than a `command === 'next'` literal, so a second
+  // claiming workflow doesn't have to be special-cased here too.
   // In pick mode an unselected item must block, not silently fall back to the
   // agent-picked run the user just opted out of.
-  const awaitingPick = isNext && work.mode === 'pick' && !work.target;
+  const awaitingPick = claimsWork && work.mode === 'pick' && !work.target;
 
   const handleQueue = async () => {
     setSubmitting(true);
@@ -90,7 +92,7 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
       closeOnBackdrop={false}
     >
       <div className="space-y-6">
-        {isNext && <WorkItemPicker appId={appId} target={work.target} onChange={handleWorkChange} />}
+        {claimsWork && <WorkItemPicker appId={appId} target={work.target} onChange={handleWorkChange} />}
 
         <section className="space-y-3">
           <div className="text-xs text-gray-500 uppercase tracking-wide">Agent</div>

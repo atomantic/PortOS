@@ -9,28 +9,26 @@ import * as api from '../../services/api';
 // Per-command button colors. Presentation, NOT catalog data — the commands
 // themselves (labels, descriptions, Swift gating, which ones open the run
 // drawer) come from the shared server catalog via `getSlashdoCommands` (#3108),
-// so a workflow added there appears here without a client-side edit. A command
-// with no entry falls back to the neutral accent styling.
+// so a workflow added there appears here without a client-side edit; it just
+// renders in the neutral accent below until someone gives it a color.
+const DEFAULT_BUTTON_CLASSES = 'bg-port-accent/20 text-port-accent hover:bg-port-accent/30 border-port-accent/30';
+const AUDIT_BUTTON_CLASSES = 'bg-port-warning/20 text-port-warning hover:bg-port-warning/30 border-port-warning/30';
+const PLANNING_BUTTON_CLASSES = 'bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 border-cyan-500/30';
 const BUTTON_CLASSES = {
   push: 'bg-port-success/20 text-port-success hover:bg-port-success/30 border-port-success/30',
-  review: 'bg-port-accent/20 text-port-accent hover:bg-port-accent/30 border-port-accent/30',
-  replan: 'bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 border-cyan-500/30',
   next: 'bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 border-blue-500/30',
   release: 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 border-purple-500/30',
-  better: 'bg-port-warning/20 text-port-warning hover:bg-port-warning/30 border-port-warning/30',
-  'better-swift': 'bg-port-warning/20 text-port-warning hover:bg-port-warning/30 border-port-warning/30',
-  'plan-task': 'bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 border-cyan-500/30',
-  depfree: 'bg-port-accent/20 text-port-accent hover:bg-port-accent/30 border-port-accent/30',
-  scan: 'bg-port-accent/20 text-port-accent hover:bg-port-accent/30 border-port-accent/30',
+  replan: PLANNING_BUTTON_CLASSES,
+  'plan-task': PLANNING_BUTTON_CLASSES,
+  better: AUDIT_BUTTON_CLASSES,
+  'better-swift': AUDIT_BUTTON_CLASSES,
 };
-const DEFAULT_BUTTON_CLASSES = 'bg-port-accent/20 text-port-accent hover:bg-port-accent/30 border-port-accent/30';
 
 export default function SlashDoPanel({ appId, appName, appType }) {
   const [loading, setLoading] = useState(null);
-  // `null` = catalog not fetched yet (or the fetch failed) vs `[]` = fetched and
-  // legitimately empty — the panel renders nothing in either case, but only the
-  // empty array means "the server really has no launchable workflows".
-  const [catalog, setCatalog] = useState(null);
+  // Empty until the catalog resolves (and on a failed fetch) — the panel renders
+  // its header with no buttons in both cases, so there is nothing to branch on.
+  const [catalog, setCatalog] = useState([]);
   // A `configurable` command opens a pre-flight drawer instead of firing
   // immediately: the run's provider / model / effort / reviewer / simplify
   // settings, plus (for `/do:next`) which work item to claim. Holds the whole
@@ -48,7 +46,7 @@ export default function SlashDoPanel({ appId, appName, appType }) {
     return () => { active = false; };
   }, []);
 
-  const commands = (catalog || []).filter(cmd => {
+  const commands = catalog.filter(cmd => {
     if (cmd.swiftOnly && !isSwiftApp) return false;
     if (cmd.hideForSwift && isSwiftApp) return false;
     return true;
@@ -97,6 +95,7 @@ export default function SlashDoPanel({ appId, appName, appType }) {
           open
           command={drawerCommand.command}
           label={drawerCommand.label}
+          claimsWork={drawerCommand.claimsWork === true}
           appId={appId}
           appName={appName}
           onClose={() => setDrawerCommand(null)}

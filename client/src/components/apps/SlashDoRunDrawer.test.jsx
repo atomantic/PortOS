@@ -17,6 +17,9 @@ const renderDrawer = (props = {}) => render(
     open
     command="next"
     label="/do:next"
+    // The work-item picker is gated on the catalog's `claimsWork` flag, which
+    // SlashDoPanel threads in from the fetched entry (#3108).
+    claimsWork
     appId="acme"
     appName="Acme App"
     onClose={vi.fn()}

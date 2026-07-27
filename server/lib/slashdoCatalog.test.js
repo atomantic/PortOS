@@ -9,9 +9,11 @@ import { readdir } from 'fs/promises';
 import { join } from 'path';
 import {
   SLASHDO_CATALOG,
+  SLASHDO_CLIENT_CATALOG,
   getSlashdoEntry,
   isLaunchableSlashdoCommand,
   slashdoCommandNames,
+  slashdoLabel,
   templateEligibleEntries,
 } from './slashdoCatalog.js';
 import { isValidSlashdoCommand } from './slashdoInvocation.js';
@@ -33,8 +35,15 @@ describe('SLASHDO_CATALOG', () => {
       // The bare name is what gets persisted and joined into a path — never a
       // rendered `/do:x`, which would also be Claude-only.
       expect(isValidSlashdoCommand(entry.command)).toBe(true);
-      expect(entry.label).toBe(`/do:${entry.command}`);
+      // The typed label is DERIVED, so no entry may hand-declare one that could
+      // drift from its command.
+      expect(entry.label).toBeUndefined();
     }
+  });
+
+  it('derives the typed label from the command', () => {
+    expect(slashdoLabel('plan-task')).toBe('/do:plan-task');
+    expect(slashdoLabel('next')).toBe('/do:next');
   });
 
   it('gives every command one name, description, and full run shape', () => {
@@ -75,9 +84,48 @@ describe('SLASHDO_CATALOG', () => {
     expect(SLASHDO_CATALOG.filter(e => e.configurable).map(e => e.command)).toEqual(['next']);
   });
 
+  it('marks /do:next as the work-claiming workflow', () => {
+    // The route builds a workTracker-aware claim prompt for a claimsWork command
+    // instead of pinning the bare command, and the run drawer shows the item
+    // picker for it — both read this flag rather than comparing to 'next'.
+    expect(SLASHDO_CATALOG.filter(e => e.claimsWork).map(e => e.command)).toEqual(['next']);
+  });
+
   it('gates the Swift audit to Swift apps and hides the generic one there', () => {
     expect(getSlashdoEntry('better-swift').swiftOnly).toBe(true);
     expect(getSlashdoEntry('better').hideForSwift).toBe(true);
+  });
+});
+
+describe('SLASHDO_CLIENT_CATALOG', () => {
+  it('covers every command, with the label derived', () => {
+    expect(SLASHDO_CLIENT_CATALOG.map(e => e.command)).toEqual(slashdoCommandNames());
+    expect(SLASHDO_CLIENT_CATALOG.map(e => e.label)).toEqual(slashdoCommandNames().map(slashdoLabel));
+  });
+
+  it('keeps the server-only run-shape fields off the wire', () => {
+    // `settings`/`context`/`templateEligible` exist for the route and the quick
+    // templates; shipping them would make internal run config a client-visible
+    // shape someone could start depending on.
+    for (const entry of SLASHDO_CLIENT_CATALOG) {
+      expect(Object.keys(entry).sort()).toEqual(
+        expect.arrayContaining(['command', 'description', 'label'])
+      );
+      expect(entry.settings).toBeUndefined();
+      expect(entry.context).toBeUndefined();
+      expect(entry.templateEligible).toBeUndefined();
+    }
+  });
+
+  it('carries the flags the panel and drawer branch on', () => {
+    const next = SLASHDO_CLIENT_CATALOG.find(e => e.command === 'next');
+    expect(next.configurable).toBe(true);
+    expect(next.claimsWork).toBe(true);
+    expect(SLASHDO_CLIENT_CATALOG.find(e => e.command === 'better-swift').swiftOnly).toBe(true);
+    expect(SLASHDO_CLIENT_CATALOG.find(e => e.command === 'better').hideForSwift).toBe(true);
+    // Absent rather than `false` — the panel's checks are truthiness, and omitting
+    // them keeps the payload to what actually applies.
+    expect(SLASHDO_CLIENT_CATALOG.find(e => e.command === 'review').configurable).toBeUndefined();
   });
 });
 

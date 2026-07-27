@@ -11,15 +11,17 @@ const api = vi.hoisted(() => ({
 
 vi.mock('../../services/api', () => api);
 vi.mock('./SlashDoRunDrawer', () => ({
-  default: ({ command }) => <div data-testid="run-drawer">{command}</div>
+  default: ({ command, claimsWork }) => (
+    <div data-testid="run-drawer" data-claims-work={String(claimsWork)}>{command}</div>
+  )
 }));
 
-// Shape mirrors what `GET /api/cos/slashdo-commands` serves from the shared
-// server catalog (server/lib/slashdoCatalog.js) — the panel renders whatever it
-// returns rather than a client-side copy (#3108).
+// Shape mirrors SLASHDO_CLIENT_CATALOG, what `GET /api/cos/slashdo-commands`
+// serves from the shared server catalog (server/lib/slashdoCatalog.js) — the panel
+// renders whatever it returns rather than a client-side copy (#3108).
 const CATALOG = [
   { command: 'review', label: '/do:review', description: 'Deep code review of the changed files' },
-  { command: 'next', label: '/do:next', description: 'Claim a work item and ship a PR', configurable: true },
+  { command: 'next', label: '/do:next', description: 'Claim a work item and ship a PR', configurable: true, claimsWork: true },
   { command: 'better', label: '/do:better', description: 'DevSecOps audit', hideForSwift: true },
   { command: 'better-swift', label: '/do:better-swift', description: 'SwiftUI DevSecOps audit', swiftOnly: true }
 ];
@@ -59,7 +61,11 @@ describe('SlashDoPanel', () => {
     renderPanel();
     await userEvent.click(await screen.findByRole('button', { name: '/do:next' }));
 
-    expect(await screen.findByTestId('run-drawer')).toHaveTextContent('next');
+    const drawer = await screen.findByTestId('run-drawer');
+    expect(drawer).toHaveTextContent('next');
+    // The catalog's claimsWork flag reaches the drawer, which gates the work-item
+    // picker on it rather than on a `command === 'next'` literal.
+    expect(drawer).toHaveAttribute('data-claims-work', 'true');
     expect(api.createSlashdoTask).not.toHaveBeenCalled();
   });
 

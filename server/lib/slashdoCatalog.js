@@ -22,6 +22,7 @@
  * Claude-only. `server/lib/slashdoInvocation.js` renders the concrete invocation
  * once the provider is known at spawn time.
  */
+import { SLASHDO_NAMESPACE } from './slashdoInvocation.js';
 
 /**
  * Run-shape every bundled workflow implies: PortOS wraps none of them in its own
@@ -48,9 +49,9 @@ const WORKFLOW_OWNS_ITS_OWN_GIT = Object.freeze({
  * One entry per launchable bundled workflow, in the order surfaces should show them.
  *
  * - `command` — bare slashdo command name (`lib/slashdo/commands/do/<command>.md`).
- * - `name` — short human label for a template/menu row (`Ship Next Issue`).
- * - `label` — the typed form users recognise on a button (`/do:next`).
- * - `icon` — emoji for the quick-template row.
+ *   `label` is NOT stored: it is always `/do:<command>`, so it is derived by
+ *   `slashdoLabel` rather than typed ten times and kept in sync by hand.
+ * - `name` / `icon` — short human label + emoji for a template or menu row.
  * - `description` — one line, user-facing. The ONE description for this command
  *   across every surface.
  * - `context` — extra prose the quick-template seeds into the task context.
@@ -61,12 +62,14 @@ const WORKFLOW_OWNS_ITS_OWN_GIT = Object.freeze({
  * - `templateEligible` — whether this command ships as a CoS quick template.
  * - `configurable` — clicking it opens the pre-flight run-settings drawer instead
  *   of queuing immediately.
+ * - `claimsWork` — this workflow drains a work tracker, so the route builds a
+ *   workTracker-aware claim prompt for it instead of pinning the bare command, and
+ *   the run drawer offers a work-item picker.
  */
 export const SLASHDO_CATALOG = Object.freeze([
   {
     command: 'plan-task',
     name: 'Plan a Task',
-    label: '/do:plan-task',
     icon: '📋',
     description: 'Investigate the codebase and file a decision-complete issue',
     context: 'Runs the slashdo plan-task workflow: investigate the codebase, then file a ready-to-work issue.',
@@ -77,18 +80,17 @@ export const SLASHDO_CATALOG = Object.freeze([
   {
     command: 'next',
     name: 'Ship Next Issue',
-    label: '/do:next',
     icon: '🎯',
     description: "Claim a work item (per this app's Work Tracker) and ship a PR",
     context: 'Runs the slashdo next workflow: claim an unclaimed item, do the work in its own worktree, ship a PR.',
     settings: WORKFLOW_OWNS_ITS_OWN_GIT,
     templateEligible: true,
     configurable: true,
+    claimsWork: true,
   },
   {
     command: 'replan',
     name: 'Replan Backlog',
-    label: '/do:replan',
     icon: '🗺️',
     description: 'Audit the backlog — prune shipped items, surface new work',
     context: 'Runs the slashdo replan workflow: prune completed items, suggest new work, keep the plan lean.',
@@ -98,7 +100,6 @@ export const SLASHDO_CATALOG = Object.freeze([
   {
     command: 'review',
     name: 'Review Changes',
-    label: '/do:review',
     icon: '🔍',
     description: 'Deep code review of the changed files',
     context: 'Runs the slashdo review workflow: review changed files against software engineering best practices.',
@@ -108,7 +109,6 @@ export const SLASHDO_CATALOG = Object.freeze([
   {
     command: 'push',
     name: 'Push Work',
-    label: '/do:push',
     icon: '⬆️',
     description: 'Commit and push all work with a changelog entry',
     context: 'Runs the slashdo push workflow: commit staged work with a changelog entry and push safely.',
@@ -118,7 +118,6 @@ export const SLASHDO_CATALOG = Object.freeze([
   {
     command: 'release',
     name: 'Cut a Release',
-    label: '/do:release',
     icon: '🚀',
     description: 'Create a release PR',
     context: "Runs the slashdo release workflow using the project's documented release process.",
@@ -128,7 +127,6 @@ export const SLASHDO_CATALOG = Object.freeze([
   {
     command: 'better',
     name: 'DevSecOps Audit',
-    label: '/do:better',
     icon: '🛡️',
     description: 'Run a DevSecOps audit and remediation pass',
     context: 'Runs the slashdo better workflow: audit, remediate, enhance tests, open per-category PRs.',
@@ -139,7 +137,6 @@ export const SLASHDO_CATALOG = Object.freeze([
   {
     command: 'better-swift',
     name: 'SwiftUI DevSecOps Audit',
-    label: '/do:better-swift',
     icon: '🛡️',
     description: 'Run a SwiftUI DevSecOps audit and remediation pass',
     context: 'Runs the slashdo better-swift workflow: audit and remediate a multi-platform Swift/SwiftUI app.',
@@ -150,7 +147,6 @@ export const SLASHDO_CATALOG = Object.freeze([
   {
     command: 'depfree',
     name: 'Prune Dependencies',
-    label: '/do:depfree',
     icon: '📦',
     description: 'Audit dependencies and remove the unnecessary ones',
     context: 'Runs the slashdo depfree workflow: audit third-party deps and replace the removable ones with code.',
@@ -160,7 +156,6 @@ export const SLASHDO_CATALOG = Object.freeze([
   {
     command: 'scan',
     name: 'Safety Scan',
-    label: '/do:scan',
     icon: '🔒',
     description: 'Read-only safety audit — malware patterns, network calls, vulnerable deps',
     context: 'Runs the slashdo scan workflow: flag malware patterns, network calls, and vulnerable deps.',
@@ -184,7 +179,9 @@ export function getSlashdoEntry(command) {
 }
 
 /**
- * True when `command` names a launchable bundled workflow.
+ * True when `command` names a launchable bundled workflow — the allowlist behind
+ * `slashdoTaskSchema`'s `command` field, so an out-of-catalog command is rejected
+ * by validation rather than by a hand-rolled check in the route.
  * @param {unknown} command
  * @returns {boolean}
  */
@@ -208,3 +205,33 @@ export function slashdoCommandNames() {
 export function templateEligibleEntries() {
   return SLASHDO_CATALOG.filter(entry => entry.templateEligible);
 }
+
+/**
+ * The typed slash-command form users recognise on a button (`/do:next`). Derived
+ * rather than stored — `slashdoInvocation.js` owns the per-host invocation shapes,
+ * and this is only the Claude-Code label the UI prints.
+ * @param {string} command - bare command name
+ * @returns {string}
+ */
+export function slashdoLabel(command) {
+  return `/${SLASHDO_NAMESPACE}:${command}`;
+}
+
+/**
+ * The catalog projected to just what the client's Agent Operations buttons read,
+ * served by `GET /api/cos/slashdo-commands`. Built once: the catalog is a frozen
+ * constant, so the payload never varies per request. Deliberately narrow — the
+ * server-only fields (`settings`, `context`, `templateEligible`, …) stay off the
+ * wire so they don't become a shape the client can start depending on.
+ */
+export const SLASHDO_CLIENT_CATALOG = Object.freeze(
+  SLASHDO_CATALOG.map(({ command, description, configurable, claimsWork, swiftOnly, hideForSwift }) => Object.freeze({
+    command,
+    label: slashdoLabel(command),
+    description,
+    ...(configurable ? { configurable } : {}),
+    ...(claimsWork ? { claimsWork } : {}),
+    ...(swiftOnly ? { swiftOnly } : {}),
+    ...(hideForSwift ? { hideForSwift } : {}),
+  }))
+);

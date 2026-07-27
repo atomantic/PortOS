@@ -61,7 +61,23 @@ export const addCosTask = (task, options = {}) => request('/cos/tasks', {
 // The bundled slashdo workflows a CoS task can run — the shared server catalog
 // (`server/lib/slashdoCatalog.js`), fetched rather than mirrored client-side so a
 // workflow added there shows up in the Agent Operations buttons automatically.
-export const getSlashdoCommands = (options = {}) => request('/cos/slashdo-commands', options);
+//
+// Cached at module scope because the catalog is a frozen server constant that
+// cannot change within a session: the Agent Operations panel unmounts on every
+// app-detail tab switch, so without this it would re-fetch (and flash an empty
+// button row) each time you return to Overview. Same shape as
+// `listImageStylePresets` — the slot clears on failure so a transient error
+// re-fetches rather than caching the rejection forever.
+let slashdoCommandsPromise = null;
+export const getSlashdoCommands = (options = {}) => {
+  if (!slashdoCommandsPromise) {
+    slashdoCommandsPromise = request('/cos/slashdo-commands', options).catch(err => {
+      slashdoCommandsPromise = null;
+      throw err;
+    });
+  }
+  return slashdoCommandsPromise;
+};
 // Queue a `/do:*` agent task for an app. `settings` carries the run options the
 // Agent Operations drawer collects — provider/model/effort/simplify for every
 // command, plus the `/do:next`-only target work item, issue author filter, and

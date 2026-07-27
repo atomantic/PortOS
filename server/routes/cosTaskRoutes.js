@@ -10,7 +10,7 @@ import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import { buildClaimWorkTask, buildJiraTicketTask } from '../services/cosTaskGenerator.js';
 import { getAppById } from '../services/apps.js';
 import { workTrackerLabel } from '../lib/workTracker.js';
-import { SLASHDO_CATALOG, getSlashdoEntry, slashdoCommandNames } from '../lib/slashdoCatalog.js';
+import { SLASHDO_CLIENT_CATALOG, getSlashdoEntry } from '../lib/slashdoCatalog.js';
 import { slashdoSkillName } from '../lib/slashdoInvocation.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import {
@@ -41,10 +41,12 @@ const router = Router();
 // GET /api/cos/slashdo-commands - The bundled slashdo workflows a CoS task can
 // run. The client's Agent Operations buttons read this instead of mirroring a
 // copy of the catalog (#3108); per-command Tailwind colors stay client-side
-// because they're presentation, not catalog data.
-router.get('/slashdo-commands', asyncHandler(async (_req, res) => {
-  res.json({ commands: SLASHDO_CATALOG });
-}));
+// because they're presentation, not catalog data. Serves the pre-built client
+// projection, not the whole catalog — the server-only run-shape fields stay off
+// the wire. Synchronous: the payload is a frozen module constant.
+router.get('/slashdo-commands', (_req, res) => {
+  res.json({ commands: SLASHDO_CLIENT_CATALOG });
+});
 
 // GET /api/cos/tasks - Get all tasks (user + internal), grouped by source.
 //
@@ -129,39 +131,40 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
     target, issueAuthorFilter, reviewers, usernames, optionalReviewers
   } = validateRequest(slashdoTaskSchema, req.body);
 
+  // `slashdoTaskSchema` already rejected anything outside the catalog, so the
+  // entry always resolves here.
   const meta = getSlashdoEntry(command);
-  if (!meta) {
-    throw new ServerError(`Invalid slashdo command. Allowed: ${slashdoCommandNames().join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
-  }
 
-  // `/do:next` is the work-claim consumer: route it through the same
-  // workTracker-aware logic the scheduled `claim-work` flow uses, so the manual
-  // button honors the app's per-app Work Tracker (PLAN.md / GitHub / GitLab /
-  // JIRA) instead of always draining PLAN.md — genuinely different work, not a
-  // slashdo body. Every other command just pins the bare command name and lets
-  // the prompt builder render the right invocation shape for the provider the
-  // scheduler picks (see server/lib/slashdoInvocation.js).
+  // A `claimsWork` workflow (`/do:next`) is the work-claim consumer: route it
+  // through the same workTracker-aware logic the scheduled `claim-work` flow
+  // uses, so the manual button honors the app's per-app Work Tracker (PLAN.md /
+  // GitHub / GitLab / JIRA) instead of always draining PLAN.md — genuinely
+  // different work, not a slashdo body. Every other command just pins the bare
+  // command name and lets the prompt builder render the right invocation shape
+  // for the provider the scheduler picks (see server/lib/slashdoInvocation.js).
   let context;
-  let taskMetadata = { useWorktree: false, openPR: false };
+  // Run-shape defaults come from `meta.settings` alone (spread below); this only
+  // carries what the claim flow overrides.
+  let taskMetadata = {};
   let description;
   let slashdoCommand;
-  if (command === 'next') {
+  if (meta.claimsWork) {
     const appObj = await getAppById(app);
     if (!appObj) {
       throw new ServerError(`App not found: ${app}`, { status: 404, code: 'APP_NOT_FOUND' });
     }
     const claim = await buildClaimWorkTask(appObj, { target, issueAuthorFilter, reviewers, usernames, optionalReviewers });
     context = claim.prompt;
-    // claim.taskMetadata overrides the false/false default only where it carries
-    // a key. All current claim flows (plan-task / claim-issue / claim-issue-gitlab
-    // / claim-issue-jira) self-manage their worktree + MR/PR, so false/false
-    // stands; the spread stays for a future delegated type that needs CoS-managed
-    // isolation.
-    taskMetadata = { ...taskMetadata, ...claim.taskMetadata };
+    // claim.taskMetadata overrides the catalog's run shape only where it carries a
+    // key. All current claim flows (plan-task / claim-issue / claim-issue-gitlab /
+    // claim-issue-jira) self-manage their worktree + MR/PR, so the catalog's
+    // false/false stands; the spread stays for a future delegated type that needs
+    // CoS-managed isolation.
+    taskMetadata = { ...claim.taskMetadata };
     const scope = claim.target
       ? `claim ${workTrackerLabel(claim.tracker)} item ${claim.target}`
       : `claim next ${workTrackerLabel(claim.tracker)} item`;
-    description = `Run the ${slashdoSkillName('next')} workflow for ${appObj.name} — ${scope} and ship a PR`;
+    description = `Run the ${slashdoSkillName(command)} workflow for ${appObj.name} — ${scope} and ship a PR`;
   } else {
     // Provider-neutral description: the concrete invocation (`/do:x` for Claude
     // Code, `/do-x` for OpenCode, an Agent Skill name elsewhere) is only knowable

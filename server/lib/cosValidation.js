@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { emptyToUndefined, emptyToNull } from './zodCompat.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { isValidSlashdoCommand } from './slashdoInvocation.js';
+import { isLaunchableSlashdoCommand, slashdoCommandNames } from './slashdoCatalog.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 
 // =============================================================================
@@ -526,10 +527,14 @@ export const generateWeeklyDigestSchema = z.object({
 // a tri-state: ABSENT means "leave the form's current toggle alone", `false`
 // means "turn it off". Collapsing absent to false would make every template
 // silently clear toggles it never intended to touch.
+// A template's implied run shape. `.strict()`, so this must carry every key the
+// shipped built-ins do — otherwise saving a copy of one 400s (schema parity, per
+// server/CLAUDE.md). `reviewLoop` arrived with the shared slashdo catalog (#3108).
 export const taskTemplateSettingsSchema = z.object({
   useWorktree: z.boolean().optional(),
   openPR: z.boolean().optional(),
   simplify: z.boolean().optional(),
+  reviewLoop: z.boolean().optional(),
 }).strict();
 
 export const createTaskTemplateSchema = z.object({
@@ -670,7 +675,12 @@ export const slashdoTaskSchema = createCosTaskSchema
     reviewers: true, usernames: true, optionalReviewers: true
   })
   .extend({
-    command: z.string().min(1),
+    // Not just a bare-name shape check: the command must name a LAUNCHABLE
+    // bundled workflow, so an out-of-catalog `/do:*` (e.g. `rpr`, `update`) is
+    // rejected here rather than by a hand-rolled check in the route.
+    command: slashdoCommandSchema.refine(isLaunchableSlashdoCommand, {
+      message: `must be a launchable slashdo workflow: ${slashdoCommandNames().join(', ')}`,
+    }),
     app: z.string().min(1),
     target: z.preprocess(emptyToUndefined, z.string().trim().max(80).optional()),
     issueAuthorFilter: z.enum(ISSUE_AUTHOR_FILTERS).optional(),

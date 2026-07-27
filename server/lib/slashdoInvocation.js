@@ -21,8 +21,7 @@
  * command's markdown body inlined into the prompt instead — the provider-agnostic
  * fallback that works even when that environment has no slashdo install at all.
  */
-import { isClaudeCommand, isClaudeProvider, isOpencodeProvider } from './providerModels.js';
-import { inferTuiCommand } from './tuiHandshake.js';
+import { isClaudeProvider, isOpencodeProvider, resolveProviderCommand } from './providerModels.js';
 
 /** slashdo's command namespace — `commands/do/<cmd>.md` in the submodule. */
 export const SLASHDO_NAMESPACE = 'do';
@@ -78,52 +77,21 @@ export function slashdoSkillName(command) {
  * `skill`: the lean session skips project command discovery, so `/do:<cmd>`
  * would resolve to nothing.
  *
- * **Blank-command posture (`resolveBlankCommand`).** A provider with NO launch
- * command is ambiguous, and the two questions built on this resolver need
- * opposite readings of it:
- *   - "How do I PHRASE a workflow invocation?" (the default, `false`): a blank
- *     command is NOT Claude. `isClaudeProvider` refuses it deliberately —
- *     printing `/do:<cmd>` for a host we can't identify hands it a line of prose
- *     it can't run, while the `skill` fallback always works because the caller
- *     inlines the procedure.
- *   - "Can this host TYPE `/do:pr`?" (`true`): the spawners resolve a blank
- *     command from the provider id — `inferTuiCommand` for a TUI,
- *     `buildCliSpawnConfig`'s default branch for a CLI — so the honest answer
- *     depends on what will actually launch. `claude-ollama` with no command
- *     spawns `claude` (slash commands work); a blank-command `codex-tui` spawns
- *     `codex` (they don't).
- * Passing `true` runs the blank command through `inferTuiCommand` first rather
- * than assuming Claude, so a blank-command codex/gemini/kimi provider is
- * correctly classified `skill` instead of being handed an uninvokable `/do:pr`.
+ * A BLANK command stays blank here, so `isClaudeProvider` can refuse it. Callers
+ * that need the opposite reading — "what will the spawner actually launch" — pass
+ * `resolveProviderCommand(provider)` as `providerCommand` rather than asking this
+ * function to guess (see `hostTypesSlashdoCommands`).
  *
  * @param {Object} [opts]
  * @param {string|null} [opts.providerId]
  * @param {string|null} [opts.providerCommand]
  * @param {boolean} [opts.leanMode]
- * @param {boolean} [opts.resolveBlankCommand] - infer a blank/absent command from
- *   the provider id, matching what the spawners actually launch. Default `false`.
  * @returns {string} one of SLASHDO_INVOCATION_STYLES
  */
-export function resolveSlashdoStyle({
-  providerId = null,
-  providerCommand = null,
-  leanMode = false,
-  resolveBlankCommand = false,
-} = {}) {
-  // Only the spawner posture substitutes an inferred command; the default leaves
-  // a blank command blank so `isClaudeProvider` can refuse it.
-  const command = (resolveBlankCommand && !providerCommand)
-    ? inferTuiCommand(providerId)
-    : providerCommand;
-  const provider = { id: providerId, command };
+export function resolveSlashdoStyle({ providerId = null, providerCommand = null, leanMode = false } = {}) {
+  const provider = { id: providerId, command: providerCommand };
   if (isOpencodeProvider(provider)) return SLASHDO_INVOCATION_STYLES.SLASH_FLAT;
-  // With a resolved command, identify on the COMMAND alone: the id already fed
-  // the inference above, and consulting it again would let a `claude-*`-prefixed
-  // id (e.g. `claude-codex`) override the binary it actually spawns.
-  const isClaude = resolveBlankCommand
-    ? isClaudeCommand(command)
-    : isClaudeProvider(provider);
-  if (!leanMode && isClaude) return SLASHDO_INVOCATION_STYLES.SLASH_NAMESPACED;
+  if (!leanMode && isClaudeProvider(provider)) return SLASHDO_INVOCATION_STYLES.SLASH_NAMESPACED;
   // Codex / Grok / Antigravity install Agent Skills, not slash commands — as
   // does anything we can't positively identify.
   return SLASHDO_INVOCATION_STYLES.SKILL;
@@ -134,17 +102,31 @@ export function resolveSlashdoStyle({
  * i.e. its style is `slash-namespaced`, the Claude Code shape PortOS's own
  * completion workflows (`/simplify`, `/do:pr`, `/do:push`) are written in.
  *
- * The one gate `agentPromptBuilder.js`'s completion sections use, replacing the
- * two inline provider-id allowlists that drifted from this resolver (#3108).
- * Runs with the spawner blank-command posture, because the question is about the
- * process that will actually launch.
+ * The one gate behind `agentPromptBuilder.js`'s completion sections, replacing
+ * the inline provider-id allowlists that drifted from this resolver (#3108).
  *
- * @param {Object} [opts] - same shape as `resolveSlashdoStyle`
+ * The difference from `resolveSlashdoStyle` is which *command* it asks about:
+ * phrasing an invocation must not guess for a host it can't identify, while this
+ * question is about the process that will really run — so the provider id is
+ * first resolved to a launch command via `resolveProviderCommand`, exactly as the
+ * spawners do. A blank-command `claude-ollama` spawns `claude` (slash commands
+ * work); a blank-command `codex-tui` spawns `codex` (they don't).
+ *
+ * The id is then deliberately NOT passed through: it has already been consumed by
+ * that resolution, and re-consulting it would let a `claude-code`-prefixed id
+ * override the binary it actually spawns.
+ *
+ * @param {Object} [opts]
+ * @param {string|null} [opts.providerId]
+ * @param {string|null} [opts.providerCommand]
+ * @param {boolean} [opts.leanMode]
  * @returns {boolean}
  */
-export function hostTypesSlashdoCommands(opts = {}) {
-  return resolveSlashdoStyle({ ...opts, resolveBlankCommand: true })
-    === SLASHDO_INVOCATION_STYLES.SLASH_NAMESPACED;
+export function hostTypesSlashdoCommands({ providerId = null, providerCommand = null, leanMode = false } = {}) {
+  return resolveSlashdoStyle({
+    providerCommand: resolveProviderCommand({ id: providerId, command: providerCommand }),
+    leanMode,
+  }) === SLASHDO_INVOCATION_STYLES.SLASH_NAMESPACED;
 }
 
 /**

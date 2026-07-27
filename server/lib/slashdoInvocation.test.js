@@ -8,6 +8,7 @@ import {
   resolveSlashdoStyle,
   slashdoSkillName,
 } from './slashdoInvocation.js';
+import { inferTuiCommand } from './providerModels.js';
 
 describe('isValidSlashdoCommand', () => {
   it('accepts bare command names', () => {
@@ -74,60 +75,60 @@ describe('resolveSlashdoStyle', () => {
       .toBe(SLASHDO_INVOCATION_STYLES.SKILL);
   });
 
-  describe('resolveBlankCommand (the spawner posture, #3108)', () => {
-    it('infers a blank command from the provider id, matching what the spawners launch', () => {
-      // No command configured → `inferTuiCommand` maps the id, exactly as the
-      // TUI/CLI spawners do. A bare/unknown id spawns `claude`…
-      expect(resolveSlashdoStyle({ resolveBlankCommand: true }))
-        .toBe(SLASHDO_INVOCATION_STYLES.SLASH_NAMESPACED);
-      expect(resolveSlashdoStyle({ providerId: 'claude-ollama', resolveBlankCommand: true }))
-        .toBe(SLASHDO_INVOCATION_STYLES.SLASH_NAMESPACED);
-      // …while a codex/antigravity/gemini/kimi id spawns that binary, which has
-      // Agent Skills rather than slash commands.
-      for (const providerId of ['codex-tui', 'antigravity-tui', 'gemini-tui', 'kimi-tui']) {
-        expect(resolveSlashdoStyle({ providerId, resolveBlankCommand: true }))
-          .toBe(SLASHDO_INVOCATION_STYLES.SKILL);
-      }
-    });
-
-    it('does not let a claude-prefixed id override the binary actually configured', () => {
-      expect(resolveSlashdoStyle({ providerId: 'claude-code', providerCommand: 'codex', resolveBlankCommand: true }))
-        .toBe(SLASHDO_INVOCATION_STYLES.SKILL);
-    });
-
-    it('still honors lean mode and an explicit opencode command', () => {
-      expect(resolveSlashdoStyle({ providerId: 'claude-ollama-tui', leanMode: true, resolveBlankCommand: true }))
-        .toBe(SLASHDO_INVOCATION_STYLES.SKILL);
-      expect(resolveSlashdoStyle({ providerId: 'opencode-tui', providerCommand: 'opencode', resolveBlankCommand: true }))
-        .toBe(SLASHDO_INVOCATION_STYLES.SLASH_FLAT);
-    });
-
-    it('leaves the DEFAULT posture strict — a blank command is not Claude when phrasing an invocation', () => {
-      // Same inputs, opposite answers: phrasing an invocation must not guess
-      // `/do:x` for a host it cannot positively identify, while the spawner
-      // question above knows a blank command launches `claude`.
-      expect(resolveSlashdoStyle({})).toBe(SLASHDO_INVOCATION_STYLES.SKILL);
-      expect(resolveSlashdoStyle({ providerId: 'claude-ollama' })).toBe(SLASHDO_INVOCATION_STYLES.SKILL);
-      // A `claude-code*` id is a positive identification even without a command.
-      expect(resolveSlashdoStyle({ providerId: 'claude-code-tui' }))
-        .toBe(SLASHDO_INVOCATION_STYLES.SLASH_NAMESPACED);
-    });
-  });
 });
 
+// #3108 — the one gate behind agentPromptBuilder's completion sections. It asks
+// about the process that will really launch, so a blank command is resolved
+// through the same provider-id mapping the spawners use.
 describe('hostTypesSlashdoCommands', () => {
-  it('is true only for hosts that can type a /do:<cmd> slash command', () => {
+  it('is true for Claude Code, by id or by launch command', () => {
     expect(hostTypesSlashdoCommands({ providerId: 'claude-code' })).toBe(true);
     expect(hostTypesSlashdoCommands({ providerId: 'claude-code-bedrock' })).toBe(true);
     // Path-configured / renamed claude — the id allowlist this replaced missed it.
     expect(hostTypesSlashdoCommands({ providerId: 'my-agent', providerCommand: '/opt/homebrew/bin/claude' })).toBe(true);
-    // Blank command resolves through the spawner mapping.
+    expect(hostTypesSlashdoCommands({ providerId: 'my-agent', providerCommand: 'C:\\tools\\claude.exe' })).toBe(true);
+  });
+
+  it('resolves a blank command the way the spawners do', () => {
+    // No command configured → the provider id picks the binary. A bare/unknown id
+    // spawns `claude`, so slash commands work…
     expect(hostTypesSlashdoCommands({})).toBe(true);
-    expect(hostTypesSlashdoCommands({ providerId: 'codex-tui' })).toBe(false);
-    // OpenCode types `/do-x`, not `/do:pr` — so PortOS's slashdo workflows don't apply.
+    expect(hostTypesSlashdoCommands({ providerId: 'claude-ollama' })).toBe(true);
+    // …while a codex/antigravity/gemini/kimi id spawns that binary, which gets
+    // Agent Skills rather than slash commands.
+    for (const providerId of ['codex-tui', 'antigravity-tui', 'gemini-tui', 'kimi-tui']) {
+      expect(hostTypesSlashdoCommands({ providerId })).toBe(false);
+    }
+  });
+
+  it('never lets the provider id override the binary actually configured', () => {
+    expect(hostTypesSlashdoCommands({ providerId: 'claude-code', providerCommand: 'codex' })).toBe(false);
+  });
+
+  it('is false for OpenCode (it types /do-x, not the /do:pr PortOS workflows use)', () => {
     expect(hostTypesSlashdoCommands({ providerId: 'opencode-tui', providerCommand: 'opencode' })).toBe(false);
-    expect(hostTypesSlashdoCommands({ providerId: 'codex', providerCommand: 'codex' })).toBe(false);
+  });
+
+  it('reads a blank-command OpenCode provider the way the spawner does — as claude', () => {
+    // Not a wart in this gate: `inferTuiCommand` has no opencode branch, so an
+    // opencode provider that configures NO command really is spawned as `claude`
+    // (both by `spawnTuiAgent` and `buildCliSpawnConfig`), and slash commands do
+    // work in that session. Locked in so a future opencode branch in
+    // `inferTuiCommand` has to flip this deliberately, in lockstep.
+    expect(hostTypesSlashdoCommands({ providerId: 'opencode' })).toBe(true);
+    expect(inferTuiCommand('opencode')).toBe('claude');
+  });
+
+  it('is false in lean mode — a --bare claude session has no project commands', () => {
     expect(hostTypesSlashdoCommands({ providerId: 'claude-ollama-tui', providerCommand: 'claude', leanMode: true })).toBe(false);
+  });
+
+  it('differs from resolveSlashdoStyle exactly on the blank-command reading', () => {
+    // Same input, opposite answers — and that is the point: phrasing an invocation
+    // must not guess `/do:x` for a host it cannot positively identify, while this
+    // gate knows a blank command launches `claude`.
+    expect(resolveSlashdoStyle({ providerId: 'claude-ollama' })).toBe(SLASHDO_INVOCATION_STYLES.SKILL);
+    expect(hostTypesSlashdoCommands({ providerId: 'claude-ollama' })).toBe(true);
   });
 });
 

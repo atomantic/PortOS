@@ -85,6 +85,37 @@ export function isCodexProvider(provider) {
 }
 
 /**
+ * The binary a provider id implies when it configures no explicit `command` —
+ * the launch-command fallback shared by the TUI spawner (`buildTuiInvocation`,
+ * `spawnTuiAgent`) and `buildCliSpawnConfig`'s default branch. Lives here with
+ * the other provider predicates (rather than in `tuiHandshake.js`, whose
+ * `os`/`fs`/`crypto` closure it doesn't need) so a caller can answer "what will
+ * actually launch for this provider" without importing the spawn machinery.
+ * @param {string|null|undefined} id
+ * @returns {string} a bare binary name (`claude` when nothing else matches)
+ */
+export function inferTuiCommand(id) {
+  if (!id) return 'claude';
+  if (id.includes('codex')) return 'codex';
+  if (id.includes('antigravity')) return 'agy';
+  if (id.includes('gemini')) return 'gemini';
+  if (id.includes('kimi')) return 'kimi';
+  return 'claude';
+}
+
+/**
+ * The launch command a provider will actually be spawned with: its explicit
+ * `command` when set, else the binary its id implies. The one place the
+ * "blank command → inferred binary" fallback is expressed, for callers that must
+ * reason about the real process (e.g. which slash commands it can run).
+ * @param {{id?:string, command?:string}|null|undefined} provider
+ * @returns {string}
+ */
+export function resolveProviderCommand(provider) {
+  return provider?.command || inferTuiCommand(provider?.id);
+}
+
+/**
  * True when a provider is Claude-Code-flavored — a `claude-code*` provider id or
  * any provider whose launch command basename is `claude` (path/exe tolerant).
  *

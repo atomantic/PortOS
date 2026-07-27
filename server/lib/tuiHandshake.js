@@ -12,7 +12,7 @@
  * No cycle risk: this module imports nothing from either consumer.
  */
 
-import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel, isOpencodeCommand, buildCodexStartupArgs, commandBasename } from './providerModels.js';
+import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel, isOpencodeCommand, buildCodexStartupArgs, commandBasename, inferTuiCommand, resolveProviderCommand } from './providerModels.js';
 import { ensureAntigravityTuiArgs, isAntigravityCommand } from './antigravity.js';
 import { ensureGrokTuiArgs, isGrokCommand } from './grok.js';
 import { ensureKimiTuiArgs, isKimiCommand } from './kimi.js';
@@ -761,14 +761,11 @@ export const RAW_SPOOL_MAX_BYTES = 256 * 1024 * 1024;
 
 // ─── Command + args helpers ───────────────────────────────────────────────
 
-export function inferTuiCommand(id) {
-  if (!id) return 'claude';
-  if (id.includes('codex')) return 'codex';
-  if (id.includes('antigravity')) return 'agy';
-  if (id.includes('gemini')) return 'gemini';
-  if (id.includes('kimi')) return 'kimi';
-  return 'claude';
-}
+// `inferTuiCommand` moved to providerModels.js (with the other provider
+// predicates) so callers that only need "what binary will this provider launch"
+// don't pull in this module's os/fs/crypto closure. Re-exported for the existing
+// import sites.
+export { inferTuiCommand };
 
 /**
  * True when the given TUI command renders the elapsed working counter
@@ -854,7 +851,7 @@ function codexHasApprovalPolicy(args) {
  * gate `runner.js#buildCliArgs` uses for CLI providers.
  */
 export function buildTuiInvocation(provider, model) {
-  const command = provider?.command || inferTuiCommand(provider?.id);
+  const command = resolveProviderCommand(provider);
   const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
   const effectiveModel = resolveCliModel(model);
   const shouldInject = !!effectiveModel && !hasModelFlag(baseArgs);
