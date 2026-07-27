@@ -1915,6 +1915,121 @@ describe('generateVideo — IC-LoRA remix arg threading (#3100)', () => {
     })).rejects.toThrow(/require an ltx2-runtime model/);
   });
 
+  // ── Ingredients: image-kind references (#3112) ─────────────────────────
+  describe('ic-ingredients still references (#3112)', () => {
+    const baseIngredients = {
+      ...baseIcRender,
+      mode: 'ic-ingredients',
+      prompt: 'the owl greets the camera outside the store',
+      icReferencePaths: ['/mock/images/owl.png', '/mock/images/store.png'],
+    };
+
+    it('materializes each still into a 9-frame clip at the render resolution', async () => {
+      const { execFile } = await import('child_process');
+      const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+      const execFileMock = vi.mocked(execFile);
+      const spawnMock = vi.mocked(spawnDetached);
+      execFileMock.mockClear();
+      spawnMock.mockClear();
+
+      await generateVideo({ ...baseIngredients, jobId: 'ing-stills' });
+
+      // One ffmpeg per still. The pipeline's reference channel probes with ffprobe
+      // and feeds the video VAE, whose reshape needs a (1 + 8k)-frame input — a
+      // bare PNG has neither, so a still can't be passed through unchanged.
+      const stillCalls = execFileMock.mock.calls.filter(([, args]) => args.includes('-loop'));
+      expect(stillCalls).toHaveLength(2);
+      for (const [, args] of stillCalls) {
+        expect(args[args.indexOf('-frames:v') + 1]).toBe('9');
+        // Scaled/cropped to the FLOORED render resolution — the pipeline requires
+        // exact dimensions and won't pad.
+        expect(args[args.indexOf('-vf') + 1]).toContain('crop=704:448');
+        // No audio stream on a throwaway reference clip.
+        expect(args).toContain('-an');
+      }
+
+      // The helper receives the materialized CLIPS, never the source stills.
+      const args = findIcCall(spawnMock)[1];
+      const refs = args.reduce((acc, a, i) => (a === '--ic-reference' ? [...acc, args[i + 1]] : acc), []);
+      expect(refs).toHaveLength(2);
+      for (const r of refs) expect(r).toMatch(/ic-still-\d+-ing-stills\.mp4$/);
+      expect(refs).not.toContain('/mock/images/owl.png');
+      expect(args[args.indexOf('--ic-mode') + 1]).toBe('ingredients');
+      expect(args[args.indexOf('--ic-min-references') + 1]).toBe('2');
+      expect(args[args.indexOf('--ic-max-references') + 1]).toBe('8');
+    });
+
+    it('accepts the full 2-8 range', async () => {
+      const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+      const spawnMock = vi.mocked(spawnDetached);
+      for (const n of [2, 5, 8]) {
+        spawnMock.mockClear();
+        await generateVideo({
+          ...baseIngredients, jobId: `ing-${n}`,
+          icReferencePaths: Array.from({ length: n }, (_, i) => `/mock/images/ref-${i}.png`),
+        });
+        const args = findIcCall(spawnMock)[1];
+        expect(args.filter((a) => a === '--ic-reference')).toHaveLength(n);
+      }
+    });
+
+    it('rejects a reference count outside the 2-8 contract', async () => {
+      await expect(generateVideo({
+        ...baseIngredients, jobId: 'ing-one', icReferencePaths: ['/mock/images/owl.png'],
+      })).rejects.toThrow(/needs 2-8 reference image/);
+      await expect(generateVideo({
+        ...baseIngredients, jobId: 'ing-nine',
+        icReferencePaths: Array.from({ length: 9 }, (_, i) => `/mock/images/ref-${i}.png`),
+      })).rejects.toThrow(/needs 2-8 reference image/);
+    });
+
+    it('fails fast when the weight is not downloaded (no snapshot_download fallback)', async () => {
+      // The registry refuses to hand the pipeline a bare repo id for this weight:
+      // `_resolve_lora_path` would `snapshot_download` a gated repo / a ~708 GB
+      // mirror. So an uncached Ingredients render must 400 rather than silently
+      // starting an unbounded pull.
+      mockInspectModelCache.mockResolvedValue({ cached: false, sizeBytes: 0, snapshotPath: null });
+      await expect(generateVideo({ ...baseIngredients, jobId: 'ing-uncached' }))
+        .rejects.toThrow(/is not downloaded — download Ingredients/);
+    });
+
+    it('stacks user LoRAs alongside the Ingredients weight rather than replacing it', async () => {
+      const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+      const spawnMock = vi.mocked(spawnDetached);
+      spawnMock.mockClear();
+
+      await generateVideo({
+        ...baseIngredients, jobId: 'ing-plus-character-lora',
+        loras: [{ filename: 'character.safetensors', scale: 0.9 }],
+      });
+
+      const args = findIcCall(spawnMock)[1];
+      // The payoff of the Phase 1 split: the IC weight rides --ic-lora-path (→
+      // `lora_paths`, fused by _fuse_loras pre-Stage-1) while the user LoRA rides
+      // --user-loras (→ `_pending_loras`, fused at DiT load), so an Ingredients ×
+      // Character stack COMPOSES instead of one displacing the other.
+      expect(args[args.indexOf('--ic-lora-path') + 1])
+        .toBe(join('/mock/hf/snap', 'ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors'));
+      expect(JSON.parse(args[args.indexOf('--user-loras') + 1])).toEqual([
+        { path: join(MOCK_PATHS.loras, 'character.safetensors'), strength: 0.9 },
+      ]);
+    });
+
+    it('stamps the gallery basenames (not the temp clip paths) onto history', async () => {
+      const started = [];
+      const onStarted = (p) => started.push(p);
+      videoGenEvents.on('started', onStarted);
+      await generateVideo({ ...baseIngredients, jobId: 'ing-history' });
+      videoGenEvents.off('started', onStarted);
+
+      const meta = started.find((s) => s.generationId === 'ing-history');
+      // History is user-facing: the gallery filenames are meaningful, the
+      // `ic-still-N-<jobId>.mp4` temp encodes are not.
+      expect(meta.icReferenceNames).toEqual(['owl.png', 'store.png']);
+      expect(meta.mode).toBe('ic-ingredients');
+    });
+  });
+
   it('stamps the IC dials + reference basename onto the history record', async () => {
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     vi.mocked(spawnDetached).mockClear();
@@ -1977,6 +2092,39 @@ describe('icLoraArgs — direct validation (#3100)', () => {
 
   it('rejects an unresolved weight path', () => {
     expect(() => icLoraArgs({ ...base, icLoraWeightPath: null }))
-      .toThrow(/could not be resolved/);
+      .toThrow(/is not downloaded — download Control/);
+  });
+
+  it('enforces the 2-8 reference bounds for Ingredients and passes them to the helper (#3112)', () => {
+    // The count is a WEIGHT CONTRACT: a wrong one yields plausible garbage rather
+    // than an error inside the pipeline, so it's enforced here (and in the route,
+    // and again in the Python helper via the flags below).
+    const ing = {
+      ...base, mode: 'ic-ingredients',
+      icLoraWeightPath: '/mock/hf/snap/ingredients.safetensors',
+    };
+    const ref = (n) => Array.from({ length: n }, (_, i) => `/mock/data/videos/ing-${i}.mp4`);
+    expect(() => icLoraArgs({ ...ing, icReferencePaths: ref(1) })).toThrow(/needs 2-8 reference image/);
+    expect(() => icLoraArgs({ ...ing, icReferencePaths: ref(9) })).toThrow(/needs 2-8 reference image/);
+    expect(() => icLoraArgs({ ...ing, icReferencePaths: [] })).toThrow(/needs 2-8 reference image/);
+    for (const n of [2, 5, 8]) {
+      const args = icLoraArgs({ ...ing, icReferencePaths: ref(n) });
+      expect(args[args.indexOf('--ic-mode') + 1]).toBe('ingredients');
+      // Bounds are PASSED, never hardcoded in the helper — one registry entry
+      // drives all three layers.
+      expect(args[args.indexOf('--ic-min-references') + 1]).toBe('2');
+      expect(args[args.indexOf('--ic-max-references') + 1]).toBe('8');
+      expect(args.filter((a) => a === '--ic-reference')).toHaveLength(n);
+    }
+  });
+
+  it('imposes no resolution-divisibility rule on Ingredients (factor 1) (#3112)', () => {
+    // Its safetensors metadata reports reference_downscale_factor=1 (verified by a
+    // Range read of the weight's header) — conditioning is full-resolution.
+    expect(() => icLoraArgs({
+      ...base, mode: 'ic-ingredients', width: 705, height: 449,
+      icLoraWeightPath: '/mock/hf/snap/ingredients.safetensors',
+      icReferencePaths: ['/mock/a.mp4', '/mock/b.mp4'],
+    })).not.toThrow();
   });
 });

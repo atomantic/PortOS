@@ -56,7 +56,13 @@ export async function resolveHfDownloadPython() {
 // Returns `{ promise, kill }`. The promise resolves with `{ ok, sizeBytes,
 // errorKind, errorMessage }`. `kill()` SIGTERMs the python child so the
 // SSE handler can stop the download when the EventSource client closes.
-export function downloadHfRepo({ repo, revision = null, onEvent }) {
+//
+// `only` is an array of exact repo-relative filenames. When set, the helper
+// runs in SINGLE-FILE mode: it never enumerates the repo and fetches only those
+// files. This is MANDATORY for aggregate repos — `DeepBeepMeep/LTX-2` mirrors
+// every LTX weight in one ~708 GB repo, so a snapshot would fill the user's
+// disk to pull one 1.3 GB IC-LoRA (see server/lib/icLoraWeights.js).
+export function downloadHfRepo({ repo, revision = null, only = null, onEvent }) {
   let proc = null;
   let killed = false;
   let errorKind = null;
@@ -88,8 +94,16 @@ export function downloadHfRepo({ repo, revision = null, onEvent }) {
 
     const args = [HELPER_SCRIPT, '--repo', repo, '--token-env', 'HF_TOKEN'];
     if (revision) args.push('--revision', revision);
+    const onlyFiles = Array.isArray(only) ? only.filter((f) => typeof f === 'string' && f.length > 0) : [];
+    for (const f of onlyFiles) args.push('--only', f);
 
-    onEvent({ type: 'stage', stage: 'starting', message: `Downloading ${repo}…` });
+    onEvent({
+      type: 'stage',
+      stage: 'starting',
+      message: onlyFiles.length
+        ? `Downloading ${onlyFiles.join(', ')} from ${repo}…`
+        : `Downloading ${repo}…`,
+    });
 
     return new Promise((resolve) => {
       proc = spawn(pythonPath, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });

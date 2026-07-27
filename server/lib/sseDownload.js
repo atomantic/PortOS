@@ -29,15 +29,36 @@ export function openSseStream(res) {
   return { send, safeEnd };
 }
 
-export async function startHfDownloadStream({ req, res, repo, repos, alreadyDownloadedMessage, force = false }) {
-  // Caller passes either `repo` (single string, legacy callers) OR `repos`
-  // (ordered array, used when a model has auxiliary repos that must be
-  // present alongside the main weights — e.g. HiDream's separate Llama-3.1
-  // text encoder). Multi-repo runs are sequential and short-circuit on any
-  // single-repo error.
-  const targets = Array.isArray(repos)
-    ? repos.filter((r) => typeof r === 'string' && r.length > 0)
-    : (typeof repo === 'string' && repo.length > 0 ? [repo] : []);
+export async function startHfDownloadStream({ req, res, repo, repos, fallbacks, cachedFile = null, alreadyDownloadedMessage, force = false }) {
+  // Three input shapes, two semantics:
+  //  - `repo` (single string) / `repos` (ordered array) — ALL must succeed. Used
+  //    when a model has auxiliary repos that must be present alongside the main
+  //    weights (e.g. HiDream's separate Llama-3.1 text encoder). Sequential;
+  //    short-circuits on any single-repo error.
+  //  - `fallbacks` (ordered array of `{ repo, only? }`) — FIRST SUCCESS wins, and
+  //    a failure advances to the next entry. Used when the same file lives in
+  //    several repos with different access (Ingredients: gated first-party repo,
+  //    then an un-gated mirror), so a user with no HF token still succeeds.
+  //
+  // `only` (array of exact repo-relative filenames, per entry) forwards to the
+  // helper's single-file mode — MANDATORY for aggregate repos where a snapshot is
+  // catastrophic (the ~708 GB DeepBeepMeep/LTX-2 mirror).
+  //
+  // `cachedFile` is the "is it already here?" predicate for a single-file pull:
+  // `inspectModelCache` reports the whole repo cached as soon as ANY weight is
+  // resident, which for an aggregate mirror is true after the first unrelated
+  // file — so the generic already-cached short-circuit would skip a weight the
+  // user doesn't have. Callers pass an async `() => boolean` that checks the one
+  // file instead.
+  const normalizeOnly = (v) => (Array.isArray(v) ? v.filter((f) => typeof f === 'string' && f.length > 0) : []);
+  const firstSuccessWins = Array.isArray(fallbacks);
+  const targets = firstSuccessWins
+    ? fallbacks
+      .filter((t) => t && typeof t.repo === 'string' && t.repo.length > 0)
+      .map((t) => ({ repo: t.repo, only: normalizeOnly(t.only) }))
+    : (Array.isArray(repos) ? repos : [repo])
+      .filter((r) => typeof r === 'string' && r.length > 0)
+      .map((r) => ({ repo: r, only: [] }));
   const { send, safeEnd } = openSseStream(res);
 
   if (targets.length === 0) {
@@ -64,10 +85,23 @@ export async function startHfDownloadStream({ req, res, repo, repos, alreadyDown
 
   let downloadedAny = false;
   let totalSize = 0;
+  // Only meaningful in first-success-wins mode: which repo actually delivered,
+  // and the per-attempt failures to report if none did.
+  let succeededRepo = null;
+  const attemptErrors = [];
   for (let i = 0; i < targets.length; i += 1) {
-    const r = targets[i];
+    const { repo: r, only: onlyFiles } = targets[i];
+    const isLastTarget = i === targets.length - 1;
     if (aborted) return;
     const existing = await inspectModelCache(r);
+    if (aborted) return;
+    // For a single-file pull the repo-wide cache verdict is the wrong question:
+    // an aggregate mirror reports `cached` the moment any unrelated weight is
+    // resident, which would skip the file the user actually asked for. Defer to
+    // the caller's per-file predicate when one is supplied.
+    const alreadyHave = onlyFiles.length && typeof cachedFile === 'function'
+      ? await cachedFile()
+      : existing.cached;
     if (aborted) return;
     // `force` is set by a repair-initiated re-download: repairModelCache()
     // deleted the corrupt file(s), but for a multi-shard repo the remaining
@@ -75,61 +109,118 @@ export async function startHfDownloadStream({ req, res, repo, repos, alreadyDown
     // would leave the just-deleted shard missing and never re-fetched. Forcing
     // re-runs the HF fetch, which is a cheap no-op for files already present
     // (etag match) and pulls only what's gone.
-    if (existing.cached && !force) {
-      totalSize += existing.sizeBytes || 0;
-      console.log(`📦 HuggingFace repo already cached: ${r} (${existing.sizeBytes} bytes)`);
-      send({ type: 'log', message: `${r} already cached (${existing.sizeBytes} bytes).`, repo: r, sizeBytes: existing.sizeBytes });
+    if (alreadyHave && !force) {
+      // A single-file pull must NOT claim the repo's resident total: for the
+      // aggregate mirror that's every unrelated weight the user has (hundreds of
+      // GB), which would be a wildly wrong number on the badge. Report 0 there
+      // and let the badge fall back to the registry's size estimate.
+      if (onlyFiles.length) {
+        console.log(`📦 HuggingFace weight already cached: ${onlyFiles.join(', ')} (${r})`);
+        send({ type: 'log', message: `${onlyFiles.join(', ')} already cached.`, repo: r, sizeBytes: 0 });
+      } else {
+        totalSize += existing.sizeBytes || 0;
+        console.log(`📦 HuggingFace repo already cached: ${r} (${existing.sizeBytes} bytes)`);
+        send({ type: 'log', message: `${r} already cached (${existing.sizeBytes} bytes).`, repo: r, sizeBytes: existing.sizeBytes });
+      }
+      // In first-success-wins mode the file being present is the whole goal —
+      // don't fall through and try the mirror for something we already have.
+      if (firstSuccessWins) { succeededRepo = r; break; }
       continue;
     }
-    if (inFlight.has(r)) {
-      console.log(`⏭️  HuggingFace download already running for ${r} — refusing duplicate`);
+    // Dedupe key includes the filenames: an aggregate repo hosts many unrelated
+    // weights, so two single-file pulls of DIFFERENT files from the same repo are
+    // not duplicates and must not block each other.
+    const flightKey = onlyFiles.length ? `${r}::${onlyFiles.join(',')}` : r;
+    if (inFlight.has(flightKey)) {
+      console.log(`⏭️  HuggingFace download already running for ${flightKey} — refusing duplicate`);
       send({ type: 'error', message: `Another download for ${r} is already running.`, kind: 'already_running', repo: r });
       return safeEnd();
     }
     // Server-side visibility for a pull that used to surface only on the SSE
     // stream (the browser) — a headless/PM2 log had no record the multi-GB
     // fetch ever ran. Log the start, each file as it streams, and the outcome.
-    console.log(`⬇️  Downloading HuggingFace repo: ${r}${force ? ' (forced re-fetch)' : ''}`);
+    console.log(`⬇️  Downloading HuggingFace repo: ${r}${onlyFiles.length ? ` (${onlyFiles.length} file(s) only)` : ''}${force ? ' (forced re-fetch)' : ''}`);
     const handle = downloadHfRepo({
       repo: r,
+      only: onlyFiles.length ? onlyFiles : null,
       onEvent: (ev) => {
         if (ev.type === 'progress' && ev.file) {
           console.log(`⬇️  ${r}: ${ev.file} (${ev.step}/${ev.total})`);
+        }
+        // A failure that we're about to retry against the next candidate isn't a
+        // user-facing error — downgrade it to a log so the UI doesn't flash a red
+        // "gated repo" banner for something the mirror then delivers fine.
+        if (firstSuccessWins && !isLastTarget && ev.type === 'error') {
+          send({ type: 'log', message: `${r}: ${ev.message} — trying the next source.`, repo: r });
+          return;
         }
         send({ ...ev, repo: r });
       },
     });
     currentHandle = handle;
-    inFlight.set(r, handle);
+    inFlight.set(flightKey, handle);
+    let result;
     try {
-      const result = await handle.promise;
-      downloadedAny = true;
+      result = await handle.promise;
       if (result?.ok) {
         console.log(`✅ HuggingFace download complete: ${r} (${result.sizeBytes || 0} bytes)`);
       } else if (result?.errorKind !== 'cancelled') {
         console.error(`❌ HuggingFace download failed: ${r} — ${result?.errorMessage || 'unknown error'}`);
       }
     } finally {
-      inFlight.delete(r);
+      inFlight.delete(flightKey);
       currentHandle = null;
     }
+    if (!firstSuccessWins) {
+      downloadedAny = true;
+      continue;
+    }
+    if (result?.ok) {
+      downloadedAny = true;
+      succeededRepo = r;
+      totalSize += result.sizeBytes || 0;
+      break;
+    }
+    // A user cancel must not silently roll onto the next candidate.
+    if (result?.errorKind === 'cancelled') return safeEnd();
+    attemptErrors.push(`${r}: ${result?.errorMessage || 'unknown error'}`);
   }
 
   if (!aborted) {
+    if (firstSuccessWins) {
+      if (!succeededRepo) {
+        send({
+          type: 'error',
+          kind: 'all_sources_failed',
+          message: `Every source failed — ${attemptErrors.join('; ')}`,
+        });
+        return safeEnd();
+      }
+      send({
+        type: 'complete',
+        message: downloadedAny
+          ? `${succeededRepo} downloaded.`
+          : (alreadyDownloadedMessage || `${succeededRepo} already downloaded.`),
+        repos: [succeededRepo],
+        sizeBytes: totalSize,
+      });
+      return safeEnd();
+    }
+    const names = targets.map((t) => t.repo);
     let message;
-    if (targets.length === 1) {
+    if (names.length === 1) {
       // Preserve legacy single-repo `complete` message semantics: if it was
       // already cached on entry, surface the caller's `alreadyDownloadedMessage`
       // (or the default already-downloaded line).
       message = !downloadedAny
-        ? (alreadyDownloadedMessage || `${targets[0]} already downloaded.`)
-        : `${targets[0]} downloaded.`;
+        ? (alreadyDownloadedMessage || `${names[0]} already downloaded.`)
+        : `${names[0]} downloaded.`;
     } else {
       message = downloadedAny
-        ? `Downloaded ${targets.length} repos: ${targets.join(', ')}`
-        : `All ${targets.length} repos already cached: ${targets.join(', ')}`;
+        ? `Downloaded ${names.length} repos: ${names.join(', ')}`
+        : `All ${names.length} repos already cached: ${names.join(', ')}`;
     }
-    send({ type: 'complete', message, repos: targets, sizeBytes: totalSize });
+    send({ type: 'complete', message, repos: names, sizeBytes: totalSize });
   }
   safeEnd();
 }

@@ -1,30 +1,45 @@
 /**
  * IC-LoRA remix panel (issue #3100) — dgrauet/ltx2 runtime only. The user
- * supplies a reference clip (upload or a prior render) that the fused IC-LoRA
- * reads structure/motion out of, then dials how strongly it conditions.
+ * supplies the reference(s) the fused IC-LoRA conditions on, then dials how
+ * strongly they apply.
  *
- * Presentational — the reference upload File, the picked history ids, the
- * strength dials, the weight's download status, and the "no compatible model
- * installed" condition are all owned by the VideoGen page. `onPickHistory('')`
- * clears the history selection.
+ * Two input surfaces, chosen by the registry's `spec.referenceKind`:
+ *  - `video` (Control, Colorize) — ONE reference clip: a fresh upload or a
+ *    prior render picked by history id, mutually exclusive server-side.
+ *  - `image` (Ingredients, #3112) — a 2-8 ROW gallery list, modeled on
+ *    KeyframePanel. Gallery-only, matching the route (references resolve under
+ *    PATHS.images, so there's no upload shape to reconcile).
+ *
+ * Presentational — the reference upload File, the picked history id, the gallery
+ * reference rows, the strength dials, the weight's download status, and the "no
+ * compatible model installed" condition are all owned by the VideoGen page.
+ * `onPickHistory('')` clears the history selection.
  *
  * The IC-LoRA weight is a separate several-hundred-MB HF pull, so the panel
  * hosts its own ModelDownloadBadge: without it a first render silently stalls
  * on an un-progressed download inside the Python child.
  */
-import { Upload, Film } from 'lucide-react';
+import { Upload, Film, X, ListPlus } from 'lucide-react';
 import { formatBytes } from '../../utils/formatters';
 import { icResolutionIssue } from '../../lib/videoGenParams';
 import FilePickerButton from '../ui/FilePickerButton';
 import ModelDownloadBadge from '../media/ModelDownloadBadge';
+import ImagePreview from './ImagePreview';
 import Ltx2RuntimeMissingNotice from './Ltx2RuntimeMissingNotice';
 
 export default function IcLoraPanel({
-  spec,                 // { mode, label, desc, referenceDownscaleFactor, min/maxReferences }
-  referenceFile,        // File | null — fresh upload
+  spec,                 // { mode, label, desc, referenceDownscaleFactor, min/maxReferences, referenceKind }
+  referenceFile,        // File | null — fresh upload (video-kind only)
   referenceVideoId,     // string — picked prior render (mutually exclusive with the upload)
   inFlightReferenceNames = [], // display-only basenames of a resumed in-flight render
   visibleHistory,
+  // Image-kind (Ingredients) reference rows: gallery basenames, min/max enforced
+  // by the registry spec. The page owns the array and the three mutators.
+  referenceImageFiles = [],
+  visibleGallery = [],
+  onAddReferenceImage,
+  onUpdateReferenceImage,
+  onRemoveReferenceImage,
   icStrength,
   icSkipStage2,
   width,
@@ -44,12 +59,24 @@ export default function IcLoraPanel({
   const resolutionIssue = icResolutionIssue(spec, width, height);
   const strengthId = `ic-strength-${spec.mode}`;
   const skipId = `ic-skip-stage2-${spec.mode}`;
+  const imageKind = spec.referenceKind === 'image';
+  // Row count is a WEIGHT CONTRACT, not a UI preference — read the bounds off the
+  // spec so a future weight with different limits needs no component change (and
+  // can't disagree with what the route enforces).
+  const { minReferences: minRefs, maxReferences: maxRefs } = spec;
 
   return (
     <div className="border border-port-border/50 rounded-lg p-2 space-y-1.5">
       <div className="flex items-center justify-between">
-        <span className="text-[11px] font-medium text-gray-400">{spec.label} reference</span>
-        {(referenceFile || referenceVideoId) && (
+        <span className="text-[11px] font-medium text-gray-400">
+          {spec.label} reference{imageKind ? 's' : ''}
+          {imageKind && (
+            <span className="block text-[10px] text-gray-500 font-normal">
+              Pick {minRefs}–{maxRefs} gallery stills to recompose from
+            </span>
+          )}
+        </span>
+        {!imageKind && (referenceFile || referenceVideoId) && (
           <button
             type="button"
             onClick={() => { onClearFile(); onPickHistory(''); }}
@@ -60,7 +87,54 @@ export default function IcLoraPanel({
         )}
       </div>
 
-      {referenceFile ? (
+      {imageKind ? (
+        <div className="space-y-2">
+          {referenceImageFiles.map((file, i) => (
+            <div key={i} className="flex items-start gap-2">
+              <div className="flex-1 space-y-1">
+                <label htmlFor={`ic-ref-img-${i}`} className="sr-only">{`${spec.label} reference ${i + 1} gallery image`}</label>
+                <select
+                  id={`ic-ref-img-${i}`}
+                  value={file}
+                  onChange={(e) => onUpdateReferenceImage(i, e.target.value)}
+                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-port-accent"
+                >
+                  <option value="">Pick from gallery…</option>
+                  {visibleGallery.map((img) => (
+                    <option key={img.filename} value={img.filename}>{img.filename}</option>
+                  ))}
+                </select>
+                {file && (
+                  <ImagePreview src={`/data/images/${file}`} alt={`${spec.label} reference ${i + 1}`} label={file} />
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => onRemoveReferenceImage(i)}
+                disabled={referenceImageFiles.length <= minRefs}
+                aria-label={`Remove reference ${i + 1}`}
+                className="mt-1 p-1 text-gray-400 hover:text-port-error disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              onClick={onAddReferenceImage}
+              disabled={referenceImageFiles.length >= maxRefs}
+              className="flex items-center gap-1.5 text-[11px] text-port-accent hover:text-port-accent/80 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <ListPlus className="w-3.5 h-3.5" /> Add reference
+            </button>
+            <span className="text-[10px] text-gray-500">{referenceImageFiles.length}/{maxRefs}</span>
+          </div>
+          <p className="text-[10px] text-gray-500 leading-snug">
+            References pull from your gallery only. Each still is prepared at the render resolution before conditioning.
+          </p>
+        </div>
+      ) : referenceFile ? (
         <div className="flex items-center gap-2 text-[11px] text-gray-300">
           <Film className="w-3.5 h-3.5 text-port-accent" />
           <span className="truncate" title={referenceFile.name}>{referenceFile.name}</span>
@@ -92,7 +166,7 @@ export default function IcLoraPanel({
         </>
       )}
 
-      {!referenceFile && !referenceVideoId && inFlightReferenceNames.length > 0 && (
+      {!imageKind && !referenceFile && !referenceVideoId && inFlightReferenceNames.length > 0 && (
         <p className="text-[10px] text-gray-500">
           In-flight render is conditioned on {inFlightReferenceNames.join(', ')} — re-pick a reference to run a new one.
         </p>
@@ -127,8 +201,17 @@ export default function IcLoraPanel({
       </div>
 
       <p className="text-[10px] text-gray-500 leading-snug">
-        {spec.description}. The reference is trimmed to fit the frame count.
+        {spec.description}.
+        {imageKind ? '' : ' The reference is trimmed to fit the frame count.'}
       </p>
+
+      {weightStatus?.gated && !weightStatus.cached && (
+        <p className="text-[10px] text-gray-500 leading-snug">
+          The official weight repo is gated. Download tries it first (accept its license and add an
+          HF token in Image Gen settings for that path) and falls back to the un-gated mirror
+          automatically, so no token is required.
+        </p>
+      )}
 
       {resolutionIssue && (
         <p className="text-[11px] text-port-warning">

@@ -990,6 +990,102 @@ describe('videoGen routes', () => {
         expect(r.body.error).toMatch(/chunks > 1/i);
         expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
       });
+
+      // ── Ingredients: 2-8 gallery STILLS (#3112) ──────────────────────────
+      // A separate input surface from the clip fields above. The counts are the
+      // weight's contract — a wrong one yields plausible garbage rather than an
+      // error inside the pipeline, so the route asserts them before enqueue.
+      describe('ic-ingredients image references (#3112)', () => {
+        const stills = (n) => Array.from({ length: n }, (_, i) => `ref-${i}.png`);
+
+        it('resolves 2-8 gallery stills to absolute paths', async () => {
+          for (const n of [2, 5, 8]) {
+            mediaJobQueue.enqueueJob.mockClear();
+            const r = await request(app).post('/api/video-gen/').send({
+              prompt: 'the owl greets the camera outside the store',
+              mode: 'ic-ingredients', icReferenceImageFiles: stills(n),
+            });
+            expect(r.status).toBe(200);
+            expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+              params: expect.objectContaining({
+                mode: 'ic-ingredients',
+                icReferencePaths: stills(n).map((f) => `/mock/images/${f}`),
+                chunks: 1,
+              }),
+            }));
+          }
+        });
+
+        it('rejects fewer than 2 references', async () => {
+          const r = await request(app).post('/api/video-gen/').send({
+            prompt: 'recompose', mode: 'ic-ingredients', icReferenceImageFiles: stills(1),
+          });
+          expect(r.status).toBe(400);
+          expect(r.body.error).toMatch(/needs 2-8 reference image/i);
+          expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+        });
+
+        it('rejects more than 8 references at the schema boundary', async () => {
+          const r = await request(app).post('/api/video-gen/').send({
+            prompt: 'recompose', mode: 'ic-ingredients', icReferenceImageFiles: stills(9),
+          });
+          expect(r.status).toBe(400);
+          expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+        });
+
+        it('rejects no references with an actionable message', async () => {
+          const r = await request(app).post('/api/video-gen/').send({
+            prompt: 'recompose', mode: 'ic-ingredients',
+          });
+          expect(r.status).toBe(400);
+          // Names the field to use — "needs 2-8; got 0" alone doesn't say HOW.
+          expect(r.body.error).toMatch(/icReferenceImageFiles/);
+          expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+        });
+
+        it('rejects a gallery miss before enqueue', async () => {
+          vi.mocked(resolveGalleryImage).mockImplementation((f) => (f === 'gone.png' ? null : `/mock/images/${f}`));
+          const r = await request(app).post('/api/video-gen/').send({
+            prompt: 'recompose', mode: 'ic-ingredients',
+            icReferenceImageFiles: ['ref-0.png', 'gone.png'],
+          });
+          expect(r.status).toBe(400);
+          expect(r.body.error).toMatch(/icReferenceImageFiles\[1\] not found in gallery/);
+          expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+          vi.mocked(resolveGalleryImage).mockImplementation((name) => `/mock/images/${name}`);
+        });
+
+        it('rejects clip inputs on an image-kind weight (IC_LORA_REFERENCE_KIND_MISMATCH)', async () => {
+          // Feeding a clip to an image-kind weight does NOT error in the pipeline —
+          // it produces plausible-looking garbage. So reject rather than drop.
+          setPendingUpload(icUpload);
+          const r = await request(app).post('/api/video-gen/').send({
+            prompt: 'recompose', mode: 'ic-ingredients', icReferenceImageFiles: stills(2),
+          });
+          expect(r.status).toBe(400);
+          expect(r.body.error).toMatch(/conditions on still images/i);
+          expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+        });
+
+        it('rejects image references on a video-kind weight (IC_LORA_REFERENCE_KIND_MISMATCH)', async () => {
+          const r = await request(app).post('/api/video-gen/').send({
+            prompt: 'follow the depth clip', mode: 'ic-control',
+            icReferenceImageFiles: stills(2),
+          });
+          expect(r.status).toBe(400);
+          expect(r.body.error).toMatch(/conditions on a reference clip/i);
+          expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+        });
+
+        it('rejects image references outside an IC mode', async () => {
+          const r = await request(app).post('/api/video-gen/').send({
+            prompt: 'plain render', mode: 'text', icReferenceImageFiles: stills(2),
+          });
+          expect(r.status).toBe(400);
+          expect(r.body.error).toMatch(/only valid with an IC remix mode/i);
+          expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+        });
+      });
     });
   });
 

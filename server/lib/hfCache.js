@@ -327,6 +327,27 @@ export async function repairModelCache(repoId, { deep = false } = {}) {
   return { repoId, status: 'bad', deleted };
 }
 
+// Delete ONE cached file (plus the blob behind its symlink) so the resumable HF
+// fetch re-downloads it. The single-file counterpart to repairModelCache, for a
+// weight that lives inside an aggregate repo: repairModelCache walks the entire
+// snapshot, which against a ~700 GB mirror means stat-ing (and under `deep`,
+// hashing) every unrelated weight the user happens to have. Unlinking the blob as
+// well as the snapshot link is essential — `hf_hub_download` keys on the cached
+// etag, not the content, so a stale blob with the right name is trusted and never
+// re-fetched (same reasoning as repairModelCache). Returns true when something
+// was removed.
+export async function repairCachedFile(path) {
+  if (!path || typeof path !== 'string') return false;
+  const lst = await fs.lstat(path).catch(() => null);
+  if (!lst) return false;
+  if (lst.isSymbolicLink()) {
+    const target = await fs.readlink(path).catch(() => null);
+    if (target) await fs.unlink(resolvePath(dirname(path), target)).catch(() => {});
+  }
+  await fs.unlink(path).catch(() => {});
+  return true;
+}
+
 // Condense a verifyModelCache() result to the UI-facing shape `{ status,
 // checkedDeep, badFiles: [{ name, reason }] }`. Drops the internal file paths
 // and per-tensor details — the banner only needs which files are bad and why.

@@ -94,3 +94,84 @@ describe('IcLoraPanel', () => {
     expect(screen.getByText(/In-flight render is conditioned on depth\.mp4/i)).toBeTruthy();
   });
 });
+
+// ── Image-kind (Ingredients) surface (#3112) ───────────────────────────────
+// referenceKind: 'image' swaps the single upload/history pair for a 2-8 gallery
+// ROW list, modeled on KeyframePanel. Bounds are read off the spec, never
+// hardcoded, so they can't disagree with what the route enforces.
+describe('IcLoraPanel — image-kind references (#3112)', () => {
+  const ING = icLoraSpecForMode('ic-ingredients');
+  const imageProps = {
+    ...baseProps,
+    spec: ING,
+    referenceImageFiles: ['owl.png', ''],
+    visibleGallery: [
+      { filename: 'owl.png' }, { filename: 'store.png' }, { filename: 'tote.png' },
+    ],
+    weightStatus: { id: 'ic-ingredients', repo: 'org/ingredients', cached: true, sizeBytes: 1_308_778_338 },
+    onAddReferenceImage: vi.fn(),
+    onUpdateReferenceImage: vi.fn(),
+    onRemoveReferenceImage: vi.fn(),
+  };
+
+  it('renders one gallery row per reference, not the clip upload/history pair', () => {
+    render(<IcLoraPanel {...imageProps} />);
+    expect(screen.getByLabelText(/Ingredients reference 1 gallery image/i)).toBeTruthy();
+    expect(screen.getByLabelText(/Ingredients reference 2 gallery image/i)).toBeTruthy();
+    // The video-only inputs must be absent — offering them would let a clip ride
+    // into an image-kind weight, which the route rejects.
+    expect(screen.queryByText(/Upload a reference still/i)).toBeNull();
+    expect(screen.queryByLabelText(/Pick a previous render/i)).toBeNull();
+  });
+
+  it('reports the picked gallery file through onUpdateReferenceImage', () => {
+    const onUpdateReferenceImage = vi.fn();
+    render(<IcLoraPanel {...imageProps} onUpdateReferenceImage={onUpdateReferenceImage} />);
+    fireEvent.change(screen.getByLabelText(/Ingredients reference 2 gallery image/i), {
+      target: { value: 'store.png' },
+    });
+    expect(onUpdateReferenceImage).toHaveBeenCalledWith(1, 'store.png');
+  });
+
+  it('shows the row count against the spec maximum', () => {
+    render(<IcLoraPanel {...imageProps} />);
+    expect(screen.getByText('2/8')).toBeTruthy();
+  });
+
+  it('disables Add at the spec maximum', () => {
+    const eight = Array.from({ length: 8 }, (_, i) => `ref-${i}.png`);
+    render(<IcLoraPanel {...imageProps} referenceImageFiles={eight} />);
+    expect(screen.getByText(/Add reference/i).closest('button').disabled).toBe(true);
+    expect(screen.getByText('8/8')).toBeTruthy();
+  });
+
+  it('disables Remove at the spec minimum so the list cannot go under 2', () => {
+    render(<IcLoraPanel {...imageProps} referenceImageFiles={['a.png', 'b.png']} />);
+    for (const i of [1, 2]) {
+      expect(screen.getByLabelText(`Remove reference ${i}`).disabled).toBe(true);
+    }
+  });
+
+  it('enables Remove above the minimum', () => {
+    render(<IcLoraPanel {...imageProps} referenceImageFiles={['a.png', 'b.png', 'c.png']} />);
+    expect(screen.getByLabelText('Remove reference 1').disabled).toBe(false);
+  });
+
+  it('never warns about resolution (factor 1 imposes no rule)', () => {
+    // Ingredients' safetensors metadata reports reference_downscale_factor=1, so
+    // an odd resolution is legal — a copied factor-2 rule would block it for
+    // nothing.
+    render(<IcLoraPanel {...imageProps} width={705} height={449} />);
+    expect(screen.queryByText(/divisible by/i)).toBeNull();
+  });
+
+  it('explains the gated repo + automatic mirror fallback when un-cached', () => {
+    render(<IcLoraPanel {...imageProps} weightStatus={{ ...imageProps.weightStatus, cached: false, gated: true }} />);
+    expect(screen.getByText(/falls back to the un-gated mirror/i)).toBeTruthy();
+  });
+
+  it('omits the gated notice once the weight is cached', () => {
+    render(<IcLoraPanel {...imageProps} weightStatus={{ ...imageProps.weightStatus, cached: true, gated: true }} />);
+    expect(screen.queryByText(/falls back to the un-gated mirror/i)).toBeNull();
+  });
+});

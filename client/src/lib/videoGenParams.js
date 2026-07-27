@@ -87,6 +87,20 @@ export const IC_LORA_MODES = [
     maxReferences: 1,
     referenceKind: 'video',
   },
+  {
+    mode: 'ic-ingredients',
+    label: 'Ingredients',
+    description: 'A scene recomposed from 2-8 reference stills (characters, props, settings)',
+    uploadLabel: 'Upload a reference still (character / prop / setting)',
+    // 1 — read off the weight's safetensors metadata server-side; conditions on
+    // full-resolution references, so no divisibility rule.
+    referenceDownscaleFactor: 1,
+    minReferences: 2,
+    maxReferences: 8,
+    // Images, not clips: `referenceKind` drives the panel's picker (a 2-8 row
+    // gallery list rather than the single upload/history pair).
+    referenceKind: 'image',
+  },
 ];
 
 export const IC_LORA_MODE_VALUES = IC_LORA_MODES.map((m) => m.mode);

@@ -14,7 +14,8 @@ vi.mock('node:fs', () => ({ existsSync: mockExistsSync }));
 
 const {
   IC_LORA_MODES, IC_LORA_MODE_VALUES, isIcLoraMode, icLoraSpecForMode,
-  icLoraRepos, resolveIcLoraWeight, icResolutionIssue,
+  icLoraRepos, listIcLoraWeights, icLoraWeightCandidates, findCachedIcLoraWeight,
+  resolveIcLoraWeight, icResolutionIssue,
 } = await import('./icLoraWeights.js');
 
 beforeEach(() => {
@@ -24,7 +25,7 @@ beforeEach(() => {
 
 describe('IC-LoRA registry', () => {
   it('exposes ic-prefixed mode values derived from the registry', () => {
-    expect(IC_LORA_MODE_VALUES).toEqual(['ic-control', 'ic-colorize']);
+    expect(IC_LORA_MODE_VALUES).toEqual(['ic-control', 'ic-colorize', 'ic-ingredients']);
     // The `ic-` prefix is load-bearing: the client's download-id router and the
     // route's mode enum both key off it.
     for (const v of IC_LORA_MODE_VALUES) expect(v.startsWith('ic-')).toBe(true);
@@ -52,7 +53,17 @@ describe('IC-LoRA registry', () => {
     expect(icLoraRepos()).toEqual([
       'Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control',
       'DoctorDiffusion/LTX-2.3-IC-LoRA-Colorizer',
+      'Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients',
     ]);
+  });
+
+  it('excludes mirror repos from the integrity-scan surface (#3112)', () => {
+    // An unscoped integrity scan walks each repo's WHOLE snapshot. The Ingredients
+    // mirror is the ~708 GB `DeepBeepMeep/LTX-2` aggregate, so including it would
+    // stat (and under `deep`, hash) every unrelated LTX weight the user has.
+    const mirrors = listIcLoraWeights().map((s) => s.mirrorRepo).filter(Boolean);
+    expect(mirrors.length).toBeGreaterThan(0);
+    for (const mirror of mirrors) expect(icLoraRepos()).not.toContain(mirror);
   });
 
   it('keeps every entry internally consistent', () => {
@@ -132,5 +143,84 @@ describe('resolveIcLoraWeight', () => {
   it('returns null for an unknown mode without touching the cache', async () => {
     expect(await resolveIcLoraWeight('ic-nope')).toBeNull();
     expect(mockInspectModelCache).not.toHaveBeenCalled();
+  });
+
+  it('SUPPRESSES the repo-id fallback for a requiresPreDownload weight (#3112)', async () => {
+    // This is the whole point of the flag. `_resolve_lora_path` implements a bare
+    // repo id as `snapshot_download(id)`: for Ingredients the official repo is
+    // gated (401 deep inside the render) and the mirror is the ~708 GB
+    // DeepBeepMeep/LTX-2 aggregate, which would fill the user's disk. Neither id
+    // may ever reach the pipeline — path must be null so icLoraArgs 400s with
+    // "download the weight first".
+    mockInspectModelCache.mockResolvedValue({ cached: false, sizeBytes: 0, snapshotPath: null });
+
+    const resolved = await resolveIcLoraWeight('ic-ingredients');
+    expect(resolved.path).toBeNull();
+    expect(resolved.cached).toBe(false);
+    expect(resolved.spec).toBe(IC_LORA_MODES.ingredients);
+    expect(resolved.path).not.toBe(IC_LORA_MODES.ingredients.repo);
+    expect(resolved.path).not.toBe(IC_LORA_MODES.ingredients.mirrorRepo);
+  });
+
+  it('still resolves a requiresPreDownload weight from the mirror snapshot', async () => {
+    // Official repo has no snapshot; the mirror does. The candidate walk must find
+    // it there rather than giving up (that's what makes the un-gated path work for
+    // a user with no HF token).
+    mockInspectModelCache.mockImplementation(async (repo) => (
+      repo === IC_LORA_MODES.ingredients.mirrorRepo
+        ? { cached: true, sizeBytes: 1, snapshotPath: '/hf/mirror-snap' }
+        : { cached: false, sizeBytes: 0, snapshotPath: null }
+    ));
+    mockExistsSync.mockReturnValue(true);
+
+    const resolved = await resolveIcLoraWeight('ic-ingredients');
+    expect(resolved.path).toBe(join('/hf/mirror-snap', IC_LORA_MODES.ingredients.mirrorFilename));
+    expect(resolved.cached).toBe(true);
+    expect(resolved.repo).toBe(IC_LORA_MODES.ingredients.mirrorRepo);
+  });
+
+  it('prefers the official repo over the mirror when both are cached', async () => {
+    mockInspectModelCache.mockImplementation(async (repo) => ({
+      cached: true,
+      sizeBytes: 1,
+      snapshotPath: repo === IC_LORA_MODES.ingredients.repo ? '/hf/official' : '/hf/mirror',
+    }));
+    mockExistsSync.mockReturnValue(true);
+
+    const resolved = await resolveIcLoraWeight('ic-ingredients');
+    expect(resolved.repo).toBe(IC_LORA_MODES.ingredients.repo);
+    expect(resolved.path).toBe(join('/hf/official', IC_LORA_MODES.ingredients.filename));
+  });
+});
+
+describe('icLoraWeightCandidates', () => {
+  it('orders official first, mirror second, and pins each filename', () => {
+    // Order IS the policy: a user WITH an HF token gets the first-party weight; a
+    // user without one falls through to the un-gated mirror.
+    expect(icLoraWeightCandidates(IC_LORA_MODES.ingredients)).toEqual([
+      { repo: IC_LORA_MODES.ingredients.repo, filename: IC_LORA_MODES.ingredients.filename, mirror: false },
+      { repo: IC_LORA_MODES.ingredients.mirrorRepo, filename: IC_LORA_MODES.ingredients.mirrorFilename, mirror: true },
+    ]);
+  });
+
+  it('yields a single candidate for a mirror-less spec', () => {
+    expect(icLoraWeightCandidates(IC_LORA_MODES.control)).toEqual([
+      { repo: IC_LORA_MODES.control.repo, filename: IC_LORA_MODES.control.filename, mirror: false },
+    ]);
+  });
+
+  it('returns nothing for a null spec', () => {
+    expect(icLoraWeightCandidates(null)).toEqual([]);
+  });
+});
+
+describe('findCachedIcLoraWeight', () => {
+  it('treats a dangling snapshot symlink as not cached', async () => {
+    // existsSync FOLLOWS symlinks, so an interrupted download (link present, blob
+    // gone) must NOT count as resident — otherwise the render hands the pipeline a
+    // path that fails on open.
+    mockInspectModelCache.mockResolvedValue({ cached: true, sizeBytes: 1, snapshotPath: '/hf/snap' });
+    mockExistsSync.mockReturnValue(false);
+    expect(await findCachedIcLoraWeight(IC_LORA_MODES.ingredients)).toBeNull();
   });
 });

@@ -838,6 +838,12 @@ def run_ic_lora(args: argparse.Namespace) -> str:
         IC-LoRA rides `lora_paths` (fused by _fuse_loras before Stage 1) while
         user LoRAs ride the separate `_pending_loras` hook, so an
         Ingredients x Character stack composes.
+      - Ingredients is MULTI-reference (2-8) and conditions on stills, but the
+        reference channel is a video encoder end-to-end: iclora_utils probes each
+        reference with ffprobe and feeds it to the video VAE, whose reshape needs
+        a (1 + 8k)-frame input. PortOS therefore materializes each still into a
+        tiny 9-frame constant clip before invoking this helper, so `--ic-reference`
+        is uniformly a video path regardless of the weight's reference kind.
     """
     ICLoraPipeline = _resolve_pipeline("ICLoraPipeline")
     ic_mode = args.ic_mode or "control"

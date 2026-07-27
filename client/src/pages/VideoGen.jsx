@@ -196,6 +196,11 @@ export default function VideoGen() {
   // both. `icStrength` weights the reference conditioning channel.
   const [icReferenceFile, setIcReferenceFile] = useState(null);
   const [icReferenceVideoId, setIcReferenceVideoId] = useState('');
+  // Image-kind IC references (Ingredients, #3112) — 2-8 gallery basenames rather
+  // than the single clip above. Gallery-only, mirroring the route: the reference
+  // list is a separate submit field (icReferenceImageFiles) so a clip can never
+  // ride into an image-kind weight (which would silently produce garbage).
+  const [icReferenceImageFiles, setIcReferenceImageFiles] = useState([]);
   const [icStrength, setIcStrength] = useState(1.0);
   const [icSkipStage2, setIcSkipStage2] = useState(false);
   // Display-only: the reference clip name(s) of an IN-FLIGHT render restored via
@@ -516,6 +521,7 @@ export default function VideoGen() {
     // would submit unknowingly. The dials DO round-trip.
     setIcReferenceFile(null);
     setIcReferenceVideoId('');
+    setIcReferenceImageFiles([]);
     if (typeof item.icStrength === 'number') setIcStrength(item.icStrength);
     setIcSkipStage2(item.icSkipStage2 === true);
     // Restore the LoRA picker from the render record. `item` here is the RAW
@@ -674,6 +680,12 @@ export default function VideoGen() {
       if (Array.isArray(p.icReferenceNames) && p.icReferenceNames.length) {
         setIcReferenceNames(p.icReferenceNames);
       }
+      // Unlike a clip, an image-kind reference IS re-derivable: it's a gallery
+      // basename, which is exactly the submit shape. So the resumed form
+      // repopulates its picker and the submit gate unblocks without a re-pick.
+      if (Array.isArray(p.icReferenceImageFiles) && p.icReferenceImageFiles.length) {
+        setIcReferenceImageFiles(p.icReferenceImageFiles);
+      }
       // Restore the LoRA picker — params carry { filename, scale } basenames;
       // resolve the display name from the loaded library (falls back to the
       // filename if the library hasn't loaded yet or the LoRA was deleted).
@@ -826,6 +838,23 @@ export default function VideoGen() {
   // family, so every consumer gates on `icModeActive` first.
   const icSpec = icLoraSpecForMode(mode);
   const icModeActive = !!icSpec;
+  // Which input surface this weight wants — `image` swaps the single clip
+  // upload/history pair for the 2-8 gallery row list.
+  const icImageKind = icSpec?.referenceKind === 'image';
+  // Pad the row list up to the weight's MINIMUM whenever an image-kind mode is
+  // active. Without rows the panel renders an empty list with nothing to fill,
+  // and the panel's remove button floors at min so it can't get back down.
+  // Derived from the registry (never a hardcoded 2) and driven from an effect so
+  // every entry path is covered — the mode bar, a ?mode= deep link, and an
+  // /active resume — not just handleModeChange.
+  useEffect(() => {
+    if (!icImageKind) return;
+    setIcReferenceImageFiles((prev) => (
+      prev.length >= icSpec.minReferences
+        ? prev
+        : [...prev, ...Array.from({ length: icSpec.minReferences - prev.length }, () => '')]
+    ));
+  }, [icImageKind, icSpec?.minReferences]);
   // The worker clamps FFLF/ltx2 numFrames down to fit a pixel-frame budget that
   // depends on resolution, so at default 768×512 the real frame ceiling is far
   // below numFrames. Compute the same cap the server enforces so the picker can
@@ -1027,6 +1056,10 @@ export default function VideoGen() {
         setIcReferenceFile(null);
         setIcReferenceVideoId('');
         setIcReferenceNames([]);
+        // Just clear — the pad-to-minimum effect below re-seeds empty rows. Doing
+        // it there rather than here covers every path that lands on an IC mode
+        // (mode bar, ?mode= deep link, an /active resume), not only this handler.
+        setIcReferenceImageFiles([]);
       }
       return;
     }
@@ -1208,8 +1241,12 @@ export default function VideoGen() {
       // IC-LoRA remix: the reference clip rides as either the 'icReference'
       // multipart upload OR an icReferenceVideoIds history id — never both (the
       // route rejects that with IC_LORA_REFERENCE_CONFLICT).
-      icReference: icModeActive ? (icReferenceFile || '') : '',
-      icReferenceVideoIds: (icModeActive && !icReferenceFile) ? (icReferenceVideoId || '') : '',
+      // Image-kind weights take gallery stills on their own field; the clip
+      // fields stay empty for them (the route rejects mixing the two kinds with
+      // IC_LORA_REFERENCE_KIND_MISMATCH).
+      icReference: (icModeActive && !icImageKind) ? (icReferenceFile || '') : '',
+      icReferenceVideoIds: (icModeActive && !icImageKind && !icReferenceFile) ? (icReferenceVideoId || '') : '',
+      icReferenceImageFiles: icImageKind ? icReferenceImageFiles.filter(Boolean) : undefined,
       icStrength: icModeActive ? icStrength : '',
       icSkipStage2: icModeActive && icSkipStage2 ? 'true' : '',
       // Keyframes and IC references each anchor a single clip — the route
@@ -1305,8 +1342,14 @@ export default function VideoGen() {
   // resolution must divide by the weight's reference-downscale factor (the
   // server rejects otherwise). Block submit for all three so the request fails
   // the form rather than the worker.
+  // An image-kind weight is satisfied by min..max FILLED gallery rows (blank rows
+  // are dropped from the payload, so an unfilled row must block rather than
+  // silently submit a short list the route would 400).
+  const icFilledImageRefs = icReferenceImageFiles.filter(Boolean).length;
   const icLoraModeBlocked = icModeActive && (
-    (!icReferenceFile && !icReferenceVideoId)
+    (icImageKind
+      ? (icFilledImageRefs < icSpec.minReferences || icFilledImageRefs > icSpec.maxReferences)
+      : (!icReferenceFile && !icReferenceVideoId))
     || currentModel?.runtime !== 'ltx2'
     || !!icResolutionIssue(icSpec, width, height)
   );
@@ -1673,6 +1716,17 @@ export default function VideoGen() {
               referenceVideoId={icReferenceVideoId}
               inFlightReferenceNames={icReferenceNames}
               visibleHistory={visibleHistory}
+              referenceImageFiles={icReferenceImageFiles}
+              visibleGallery={visibleGallery}
+              onAddReferenceImage={() => setIcReferenceImageFiles((prev) => (
+                prev.length >= icSpec.maxReferences ? prev : [...prev, '']
+              ))}
+              onUpdateReferenceImage={(i, file) => setIcReferenceImageFiles((prev) => (
+                prev.map((f, idx) => (idx === i ? file : f))
+              ))}
+              onRemoveReferenceImage={(i) => setIcReferenceImageFiles((prev) => (
+                prev.length <= icSpec.minReferences ? prev : prev.filter((_, idx) => idx !== i)
+              ))}
               icStrength={icStrength}
               icSkipStage2={icSkipStage2}
               width={width}

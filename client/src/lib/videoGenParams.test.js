@@ -3,6 +3,7 @@ import {
   videoModelMemoryGb, computeFflfSafeFrames, isModelAllowedForMode,
   VIDEO_EDGE_BOUNDS, FRAME_OPTIONS, FPS_OPTIONS,
   IC_LORA_MODES, IC_LORA_MODE_VALUES, isIcLoraMode, icLoraSpecForMode,
+  icResolutionIssue,
 } from './videoGenParams.js';
 
 describe('videoModelMemoryGb', () => {
@@ -69,7 +70,7 @@ describe('constants', () => {
 
 describe('IC-LoRA remix modes (#3100)', () => {
   it('mirrors the server registry shape', () => {
-    expect(IC_LORA_MODE_VALUES).toEqual(['ic-control', 'ic-colorize']);
+    expect(IC_LORA_MODE_VALUES).toEqual(['ic-control', 'ic-colorize', 'ic-ingredients']);
     for (const spec of IC_LORA_MODES) {
       // The `ic-` prefix drives the download-id router in useModelDownloadStatus.
       expect(spec.mode.startsWith('ic-')).toBe(true);
@@ -78,7 +79,22 @@ describe('IC-LoRA remix modes (#3100)', () => {
       // The panel renders these two directly — an empty one ships blank copy.
       expect(spec.uploadLabel).toBeTruthy();
       expect(spec.description).toBeTruthy();
+      // Drives which input surface the panel renders (single clip vs the 2-8
+      // gallery row list), so an unrecognized value would render nothing.
+      expect(['video', 'image']).toContain(spec.referenceKind);
     }
+  });
+
+  it('mirrors the Ingredients bounds + image kind (#3112)', () => {
+    // The 2-8 count is the weight's contract, mirrored here so the form blocks
+    // before a POST the route would reject; the parity test in
+    // server/lib/icLoraWeights.parity.test.js is what keeps the two in step.
+    const ing = icLoraSpecForMode('ic-ingredients');
+    expect(ing.minReferences).toBe(2);
+    expect(ing.maxReferences).toBe(8);
+    expect(ing.referenceKind).toBe('image');
+    // Factor 1 → no divisibility rule at all, so an odd resolution is legal.
+    expect(icResolutionIssue(ing, 705, 449)).toBeNull();
   });
   it('identifies IC modes', () => {
     expect(isIcLoraMode('ic-control')).toBe(true);

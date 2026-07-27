@@ -309,8 +309,12 @@ export const icLoraArgs = ({ mode, width, height, icReferencePaths, icLoraWeight
     throw new ServerError(`Unknown IC-LoRA remix mode: ${mode}`, { status: 400, code: 'IC_LORA_UNKNOWN_MODE' });
   }
   if (!icLoraWeightPath) {
+    // A `requiresPreDownload` weight lands here by design: resolveIcLoraWeight
+    // refuses to hand the pipeline a bare repo id it would `snapshot_download`
+    // (gated official repo / 708 GB mirror), so the ONLY way forward is the
+    // explicit single-file download from the panel.
     throw new ServerError(
-      `IC-LoRA weight for "${spec.mode}" could not be resolved — download ${spec.repo} from the model panel first.`,
+      `IC-LoRA weight for "${spec.mode}" is not downloaded — download ${spec.label} (${spec.filename}) from the model panel first.`,
       { status: 400, code: 'IC_LORA_WEIGHT_UNRESOLVED' },
     );
   }
@@ -704,6 +708,14 @@ const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, 
 // use (avoiding drift between two hardcoded constants).
 export const DEFAULT_NUM_FRAMES = 121;
 
+// Frame count for the throwaway clip an `image`-kind IC reference (Ingredients)
+// is materialized into. The pipeline's reference channel runs every reference
+// through ffprobe + the video VAE, whose `space_to_depth` reshape needs a
+// (1 + 8k)-frame input — 9 is the smallest legal value, so it's the cheapest
+// encode that satisfies the encoder. Every frame is identical; the reference is
+// a still regardless of how many frames carry it.
+export const IC_STILL_REFERENCE_FRAMES = 9;
+
 export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = 768, height = 512, numFrames = DEFAULT_NUM_FRAMES, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, mode = null, imageStrength = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, hidden = false, jobId: providedJobId = null }) {
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
@@ -746,8 +758,14 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       throw new ServerError(`Unknown IC-LoRA remix mode: ${mode}`, { status: 400, code: 'IC_LORA_UNKNOWN_MODE' });
     }
     icLoraWeightPath = resolved.path;
-    if (!resolved.cached) {
+    if (!resolved.cached && resolved.path) {
       console.log(`⬇️  IC-LoRA weight not cached — ${resolved.spec.repo} will download at render time`);
+    }
+    // A null path means the registry deliberately refused the repo-id fallback
+    // (requiresPreDownload). icLoraArgs turns that into the user-facing 400; log
+    // the reason here so the server log explains WHY there's no auto-download.
+    if (!resolved.path) {
+      console.log(`⛔ IC-LoRA weight for ${mode} needs an explicit download (auto-fetch would snapshot ${resolved.spec.mirrorRepo || resolved.spec.repo})`);
     }
   }
 
@@ -878,6 +896,58 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     });
   }
 
+  // An `image`-kind IC weight (Ingredients) takes STILLS, but the pipeline's
+  // reference channel is a video encoder end-to-end: iclora_utils probes the
+  // reference with ffprobe and feeds it to the VAE, which requires a (1 + 8k)
+  // frame count. A bare PNG has neither a probeable frame count nor 9 frames, so
+  // materialize each still into a tiny 9-frame constant clip at the render
+  // resolution first. 9 = the smallest legal (1 + 8k) count, so this is the
+  // cheapest possible encode and every frame is identical — the reference is a
+  // still either way.
+  //
+  // Done here rather than in the route because the target resolution is only
+  // known after the 64-flooring above, and it mirrors resizeImage's contract:
+  // temp paths are tracked for the same cleanup sites.
+  const icReferenceTempPaths = [];
+  let resolvedIcReferencePaths = icReferencePaths;
+  if (isIcLoraMode(mode) && icLoraSpecForMode(mode)?.referenceKind === 'image'
+    && Array.isArray(icReferencePaths) && icReferencePaths.length) {
+    const stillFfmpeg = ffmpeg || await findFfmpeg();
+    if (!stillFfmpeg) {
+      throw new ServerError(
+        'ffmpeg is required to prepare still references for Ingredients mode — install it (brew install ffmpeg) and retry.',
+        { status: 400, code: 'IC_LORA_STILL_NEEDS_FFMPEG' },
+      );
+    }
+    resolvedIcReferencePaths = await Promise.all(icReferencePaths.map(async (stillPath, i) => {
+      const clipPath = join(tmpdir(), `ic-still-${i}-${jobId}.mp4`);
+      const result = await execFileAsync(stillFfmpeg, [
+        '-loop', '1', '-i', stillPath,
+        '-vf', `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h}`,
+        '-frames:v', String(IC_STILL_REFERENCE_FRAMES),
+        '-r', String(parsedFps),
+        '-pix_fmt', 'yuv420p', '-an',
+        '-y', clipPath,
+      ], { env: safeChildProcessEnv(), timeout: 30000 }).catch((err) => ({ error: err }));
+      if (result.error) {
+        // Unlike the resizeImage fallback (which degrades to the original), there
+        // is no usable degradation here — a still handed straight to the pipeline
+        // fails deep inside the VAE reshape. Fail loudly with the ffmpeg reason.
+        throw new ServerError(
+          `Failed to prepare Ingredients reference ${basename(stillPath)}: ${result.error.message}`,
+          { status: 400, code: 'IC_LORA_STILL_PREP_FAILED' },
+        );
+      }
+      icReferenceTempPaths.push(clipPath);
+      return clipPath;
+    })).catch(async (err) => {
+      // Partial success leaks the clips already written — one still failing
+      // aborts the render, so drop them before rethrowing.
+      for (const p of icReferenceTempPaths) await unlink(p).catch(() => {});
+      throw err;
+    });
+  }
+
   const meta = {
     id: jobId,
     prompt,
@@ -941,7 +1011,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // logic of the spawn-error handler so failure modes converge.
   let bin, args;
   try {
-    ({ bin, args } = buildArgs({ pythonPath, modelId, model, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, stage2Steps: actualStage2Steps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, outputPath, loras: resolvedLoras, icReferencePaths, icLoraWeightPath, icStrength: actualIcStrength, icAttentionStrength: actualIcAttentionStrength, icSkipStage2 }));
+    ({ bin, args } = buildArgs({ pythonPath, modelId, model, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, stage2Steps: actualStage2Steps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, outputPath, loras: resolvedLoras, icReferencePaths: resolvedIcReferencePaths, icLoraWeightPath, icStrength: actualIcStrength, icAttentionStrength: actualIcAttentionStrength, icSkipStage2 }));
   } catch (err) {
     job.status = 'error';
     const reason = err.message || 'Failed to build video gen args';
@@ -951,6 +1021,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     if (resizedSrcTempPath) unlink(resizedSrcTempPath).catch(() => {});
     if (resizedLastTempPath) unlink(resizedLastTempPath).catch(() => {});
     for (const p of resizedKeyframeTempPaths) unlink(p).catch(() => {});
+    for (const p of icReferenceTempPaths) unlink(p).catch(() => {});
     if (uploadedTempPath) unlink(uploadedTempPath).catch(() => {});
     for (const p of uploadedTempPaths) unlink(p).catch(() => {});
     if (audioFilePath && !uploadedTempPaths.includes(audioFilePath)) {
@@ -1108,6 +1179,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     if (resizedSrcTempPath) unlink(resizedSrcTempPath).catch(() => {});
     if (resizedLastTempPath) unlink(resizedLastTempPath).catch(() => {});
     for (const p of resizedKeyframeTempPaths) unlink(p).catch(() => {});
+    for (const p of icReferenceTempPaths) unlink(p).catch(() => {});
     if (uploadedTempPath) unlink(uploadedTempPath).catch(() => {});
     for (const p of uploadedTempPaths) unlink(p).catch(() => {});
     // Defensive: a direct caller (bypassing the route) may pass audioFilePath
@@ -1198,6 +1270,10 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       if (resizedSrcTempPath) await unlink(resizedSrcTempPath).catch(() => {});
       if (resizedLastTempPath) await unlink(resizedLastTempPath).catch(() => {});
       for (const p of resizedKeyframeTempPaths) await unlink(p).catch(() => {});
+      // The throwaway still→clip encodes for an image-kind IC reference. The
+      // ORIGINAL stills are gallery files (or route-staged uploads) and are NOT
+      // ours to remove — only these temp clips.
+      for (const p of icReferenceTempPaths) await unlink(p).catch(() => {});
       // Cleanup the original multipart upload temp file too — without this,
       // every i2v request leaves a file in os.tmpdir() forever.
       if (uploadedTempPath) await unlink(uploadedTempPath).catch(() => {});

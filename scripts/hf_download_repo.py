@@ -10,6 +10,12 @@ from `GET /api/image-gen/models/:id/download` and the matching
 the id to an HF repo before invoking this helper), plus
 `GET /api/video-gen/text-encoder/download` for the Gemma encoder.
 
+`--only <filename>` (repeatable) switches to SINGLE-FILE mode: the repo is
+never enumerated and exactly the named files are fetched. That is the only
+safe way to pull one weight out of a multi-hundred-GB aggregate repo (e.g. the
+`DeepBeepMeep/LTX-2` mirror, ~708 GB) — a snapshot of that would fill the
+user's disk. Prefer it whenever the caller already knows the exact filename.
+
 Wire protocol (matches the STAGE:/DOWNLOAD: convention the rest of the
 image-gen runners use, so the existing SSE bridge picks it up unchanged):
 
@@ -60,7 +66,17 @@ def main() -> int:
     parser.add_argument("--token-env", default=None, help="Env var name to read the HF token from (e.g. HF_TOKEN).")
     parser.add_argument("--local-dir", default=None, help="If set, materialize the repo as a flat copy at this dir instead of relying on the standard HF cache symlinks (used by BYOV installers like HiDream-O1 that need a real on-disk repo).")
     parser.add_argument("--ignore", action="append", default=[], help="Glob pattern (fnmatch) to skip from the file list. Repeat for multiple patterns. e.g. --ignore 'scripts/**' --ignore 'docs/**' to skip non-weight subdirs.")
+    parser.add_argument("--only", action="append", default=[], metavar="FILENAME",
+                        help="Fetch ONLY this exact repo-relative filename, skipping repo enumeration "
+                             "entirely. Repeat for several files. Required for aggregate repos where a "
+                             "snapshot would be catastrophic (e.g. the ~708 GB DeepBeepMeep/LTX-2 mirror). "
+                             "Mutually exclusive with --ignore, which only filters an enumerated list.")
     args = parser.parse_args()
+
+    if args.only and args.ignore:
+        print("USER_ERROR:bad_args:only_with_ignore", file=sys.stderr, flush=True)
+        print("❌ --only and --ignore are mutually exclusive (--only never enumerates the repo).", file=sys.stderr, flush=True)
+        return 2
 
     token = None
     if args.token_env:
@@ -68,36 +84,45 @@ def main() -> int:
     # huggingface_hub also reads HF_TOKEN itself, but being explicit lets
     # the caller scope which env var the child trusts.
 
-    api = HfApi()
-    print("STAGE:list", file=sys.stderr, flush=True)
-    try:
-        files = api.list_repo_files(args.repo, revision=args.revision, token=token)
-    except GatedRepoError:
-        print(f"USER_ERROR:gated_repo:{args.repo}", file=sys.stderr, flush=True)
-        print(f"❌ Access to {args.repo} is gated. Accept the license at https://huggingface.co/{args.repo} and paste your HuggingFace token into Image Gen settings, then retry.", file=sys.stderr, flush=True)
-        return 2
-    except RepositoryNotFoundError:
-        print(f"USER_ERROR:repo_not_found:{args.repo}", file=sys.stderr, flush=True)
-        print(f"❌ Repository {args.repo} not found on HuggingFace.", file=sys.stderr, flush=True)
-        return 2
-    except Exception as err:  # noqa: BLE001
-        # Anything that smells like 401 from list_repo_files — surface it
-        # as token-rejected so the UI can prompt for a new HF_TOKEN.
-        if "401" in str(err) or "Unauthorized" in str(err):
-            print(f"USER_ERROR:hf_unauthorized:{args.repo}", file=sys.stderr, flush=True)
-            print(f"❌ HuggingFace rejected the token. Update HF_TOKEN in Image Gen settings.", file=sys.stderr, flush=True)
+    if args.only:
+        # SINGLE-FILE mode. Deliberately skips `list_repo_files` — enumerating a
+        # 125-file/708 GB aggregate repo is wasted work, and more importantly the
+        # absence of a list means no code path downstream can widen this into a
+        # whole-repo pull. A typo'd filename surfaces as download_failed (HF 404)
+        # rather than being silently dropped from a filtered list.
+        files = list(dict.fromkeys(args.only))
+    else:
+        api = HfApi()
+        print("STAGE:list", file=sys.stderr, flush=True)
+        try:
+            files = api.list_repo_files(args.repo, revision=args.revision, token=token)
+        except GatedRepoError:
+            print(f"USER_ERROR:gated_repo:{args.repo}", file=sys.stderr, flush=True)
+            print(f"❌ Access to {args.repo} is gated. Accept the license at https://huggingface.co/{args.repo} and paste your HuggingFace token into Image Gen settings, then retry.", file=sys.stderr, flush=True)
             return 2
-        print(f"USER_ERROR:list_failed:{args.repo}", file=sys.stderr, flush=True)
-        print(f"❌ Failed to list {args.repo}: {err}", file=sys.stderr, flush=True)
-        return 2
+        except RepositoryNotFoundError:
+            print(f"USER_ERROR:repo_not_found:{args.repo}", file=sys.stderr, flush=True)
+            print(f"❌ Repository {args.repo} not found on HuggingFace.", file=sys.stderr, flush=True)
+            return 2
+        except Exception as err:  # noqa: BLE001
+            # Anything that smells like 401 from list_repo_files — surface it
+            # as token-rejected so the UI can prompt for a new HF_TOKEN.
+            if "401" in str(err) or "Unauthorized" in str(err):
+                print(f"USER_ERROR:hf_unauthorized:{args.repo}", file=sys.stderr, flush=True)
+                print(f"❌ HuggingFace rejected the token. Update HF_TOKEN in Image Gen settings.", file=sys.stderr, flush=True)
+                return 2
+            print(f"USER_ERROR:list_failed:{args.repo}", file=sys.stderr, flush=True)
+            print(f"❌ Failed to list {args.repo}: {err}", file=sys.stderr, flush=True)
+            return 2
 
-    # Skip the few HF housekeeping files that are not actually downloadable
-    # as part of a snapshot (`.gitattributes` is, but `LICENSE` and similar
-    # are — we keep them; the only true skip is the `.huggingface` folder).
-    files = [f for f in files if not f.startswith(".huggingface/")]
-    if args.ignore:
-        import fnmatch
-        files = [f for f in files if not any(fnmatch.fnmatch(f, pat) for pat in args.ignore)]
+        # Skip the few HF housekeeping files that are not actually downloadable
+        # as part of a snapshot (`.gitattributes` is, but `LICENSE` and similar
+        # are — we keep them; the only true skip is the `.huggingface` folder).
+        files = [f for f in files if not f.startswith(".huggingface/")]
+        if args.ignore:
+            import fnmatch
+            files = [f for f in files if not any(fnmatch.fnmatch(f, pat) for pat in args.ignore)]
+
     total = len(files)
     if total == 0:
         print(f"USER_ERROR:repo_empty:{args.repo}", file=sys.stderr, flush=True)
