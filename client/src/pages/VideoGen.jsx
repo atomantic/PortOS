@@ -19,7 +19,8 @@
  *   - ic-*:   IC-LoRA remix modes (issue #3100) — a reference clip drives the
  *             render through ICLoraPipeline with a per-mode IC-LoRA fused into
  *             Stage 1. Today: `ic-control` (structure/motion from a depth/pose/
- *             edge clip). dgrauet/ltx2 runtime only; the mode list comes from
+ *             edge clip) and `ic-colorize` (color restored onto a B&W clip).
+ *             dgrauet/ltx2 runtime only; the mode list comes from
  *             IC_LORA_MODES in lib/videoGenParams.js.
  *
  * Batch queue: client-side serial executor. The form's "Add to queue" button

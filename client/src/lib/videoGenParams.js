@@ -68,8 +68,21 @@ export const IC_LORA_MODES = [
     uploadLabel: 'Upload a control clip (depth / pose / edges)',
     // The IC encoder downscales the reference by this factor, and the pipeline
     // requires the OUTPUT dimensions to divide evenly by it (the server rejects
-    // otherwise with IC_LORA_RESOLUTION_NOT_DIVISIBLE).
+    // otherwise with IC_LORA_RESOLUTION_NOT_DIVISIBLE). Per-weight — read from
+    // the weight's safetensors metadata server-side, never assumed.
     referenceDownscaleFactor: 2,
+    minReferences: 1,
+    maxReferences: 1,
+    referenceKind: 'video',
+  },
+  {
+    mode: 'ic-colorize',
+    label: 'Colorize',
+    description: 'Color restored onto a black-and-white clip',
+    uploadLabel: 'Upload a B&W clip to restore',
+    // 1 — the Colorizer conditions on a full-resolution reference, so it imposes
+    // no divisibility rule at all (icResolutionIssue short-circuits at <= 1).
+    referenceDownscaleFactor: 1,
     minReferences: 1,
     maxReferences: 1,
     referenceKind: 'video',

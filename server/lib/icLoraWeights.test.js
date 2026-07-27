@@ -14,7 +14,7 @@ vi.mock('node:fs', () => ({ existsSync: mockExistsSync }));
 
 const {
   IC_LORA_MODES, IC_LORA_MODE_VALUES, isIcLoraMode, icLoraSpecForMode,
-  icLoraRepos, resolveIcLoraWeight,
+  icLoraRepos, resolveIcLoraWeight, icResolutionIssue,
 } = await import('./icLoraWeights.js');
 
 beforeEach(() => {
@@ -24,7 +24,7 @@ beforeEach(() => {
 
 describe('IC-LoRA registry', () => {
   it('exposes ic-prefixed mode values derived from the registry', () => {
-    expect(IC_LORA_MODE_VALUES).toEqual(['ic-control']);
+    expect(IC_LORA_MODE_VALUES).toEqual(['ic-control', 'ic-colorize']);
     // The `ic-` prefix is load-bearing: the client's download-id router and the
     // route's mode enum both key off it.
     for (const v of IC_LORA_MODE_VALUES) expect(v.startsWith('ic-')).toBe(true);
@@ -32,6 +32,7 @@ describe('IC-LoRA registry', () => {
 
   it('identifies IC modes and rejects everything else', () => {
     expect(isIcLoraMode('ic-control')).toBe(true);
+    expect(isIcLoraMode('ic-colorize')).toBe(true);
     expect(isIcLoraMode('text')).toBe(false);
     expect(isIcLoraMode('a2v')).toBe(false);
     expect(isIcLoraMode(undefined)).toBe(false);
@@ -41,12 +42,17 @@ describe('IC-LoRA registry', () => {
   it('resolves a spec from either the prefixed mode or the bare id', () => {
     expect(icLoraSpecForMode('ic-control')).toBe(IC_LORA_MODES.control);
     expect(icLoraSpecForMode('control')).toBe(IC_LORA_MODES.control);
+    expect(icLoraSpecForMode('ic-colorize')).toBe(IC_LORA_MODES.colorize);
+    expect(icLoraSpecForMode('colorize')).toBe(IC_LORA_MODES.colorize);
     expect(icLoraSpecForMode('ic-nope')).toBeNull();
     expect(icLoraSpecForMode(null)).toBeNull();
   });
 
   it('lists every weight repo for the integrity-scan surface', () => {
-    expect(icLoraRepos()).toEqual(['Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control']);
+    expect(icLoraRepos()).toEqual([
+      'Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control',
+      'DoctorDiffusion/LTX-2.3-IC-LoRA-Colorizer',
+    ]);
   });
 
   it('keeps every entry internally consistent', () => {
@@ -54,10 +60,29 @@ describe('IC-LoRA registry', () => {
       expect(spec.mode).toBe(`ic-${spec.id}`);
       expect(spec.filename.endsWith('.safetensors')).toBe(true);
       expect(spec.repo).toMatch(/^[^/]+\/[^/]+$/);
+      expect(spec.sizeBytes).toBeGreaterThan(0);
+      expect(spec.uploadLabel).toBeTruthy();
       expect(spec.minReferences).toBeGreaterThanOrEqual(1);
       expect(spec.maxReferences).toBeGreaterThanOrEqual(spec.minReferences);
       expect(spec.referenceDownscaleFactor).toBeGreaterThanOrEqual(1);
     }
+  });
+
+  it('keeps each weight on its OWN downscale factor, read from its metadata', () => {
+    // Verified against each weight's safetensors `__metadata__` header
+    // (`reference_downscale_factor`, the value read_lora_reference_downscale_factor
+    // in the vendored iclora_utils.py returns). They DIFFER — copying Control's 2
+    // onto the Colorizer would make the form reject perfectly valid odd-multiple
+    // resolutions, so this pins the per-weight values rather than a shared one.
+    expect(IC_LORA_MODES.control.referenceDownscaleFactor).toBe(2);
+    expect(IC_LORA_MODES.colorize.referenceDownscaleFactor).toBe(1);
+  });
+
+  it('imposes no resolution rule for a factor-1 weight but does for factor 2', () => {
+    // Factor 1 → icResolutionIssue short-circuits, so an odd resolution is fine.
+    expect(icResolutionIssue(IC_LORA_MODES.colorize, 705, 449)).toBeNull();
+    expect(icResolutionIssue(IC_LORA_MODES.control, 705, 449)).toMatch(/divisible by 2/);
+    expect(icResolutionIssue(IC_LORA_MODES.control, 704, 448)).toBeNull();
   });
 });
 
@@ -72,6 +97,16 @@ describe('resolveIcLoraWeight', () => {
     expect(resolved.path).toBe(join('/hf/snap', IC_LORA_MODES.control.filename));
     expect(resolved.cached).toBe(true);
     expect(resolved.spec).toBe(IC_LORA_MODES.control);
+  });
+
+  it('pins each mode to its OWN filename, not the first registry entry', async () => {
+    mockInspectModelCache.mockResolvedValue({ cached: true, sizeBytes: 1, snapshotPath: '/hf/snap' });
+    mockExistsSync.mockReturnValue(true);
+
+    const resolved = await resolveIcLoraWeight('ic-colorize');
+    expect(resolved.path).toBe(join('/hf/snap', IC_LORA_MODES.colorize.filename));
+    expect(resolved.spec).toBe(IC_LORA_MODES.colorize);
+    expect(mockInspectModelCache).toHaveBeenCalledWith(IC_LORA_MODES.colorize.repo);
   });
 
   it('falls back to the repo id when no snapshot exists', async () => {

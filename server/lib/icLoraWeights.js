@@ -31,7 +31,9 @@ import { inspectModelCache } from './hfCache.js';
 // value from the weight's safetensors metadata): the IC encoder divides the
 // reference clip by it, and it requires the OUTPUT height/width to be
 // divisible by that factor — so surfacing it lets the route reject a bad
-// resolution up-front instead of failing deep inside the pipeline.
+// resolution up-front instead of failing deep inside the pipeline. It is
+// PER-WEIGHT and must be READ from the weight's `__metadata__`, never copied
+// from a sibling entry: Union-Control ships 2, the Colorizer ships 1.
 //
 // The MIRRORED fields (label/description/referenceKind/uploadLabel/the counts/
 // the factor) are duplicated in client/src/lib/videoGenParams.js so the form can
@@ -50,7 +52,29 @@ export const IC_LORA_MODES = Object.freeze({
     filename: 'ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors',
     // ~654 MB — used for the download badge's size estimate before the pull.
     sizeBytes: 654 * 1024 * 1024,
+    // Read from the weight's safetensors `__metadata__.reference_downscale_factor`.
     referenceDownscaleFactor: 2,
+    minReferences: 1,
+    maxReferences: 1,
+    referenceKind: 'video',
+  }),
+  colorize: Object.freeze({
+    id: 'colorize',
+    mode: 'ic-colorize',
+    label: 'Colorize',
+    description: 'Color restored onto a black-and-white clip',
+    uploadLabel: 'Upload a B&W clip to restore',
+    // Community-published (DoctorDiffusion), not Lightricks — un-gated all the
+    // same, so it rides the identical download/verify surface.
+    repo: 'DoctorDiffusion/LTX-2.3-IC-LoRA-Colorizer',
+    filename: 'LTX-2.3-22b-IC-LoRA-Colorizer-0.9.safetensors',
+    // ~312 MiB (327 MB) — used for the download badge's size estimate.
+    sizeBytes: 312 * 1024 * 1024,
+    // Read from the weight's safetensors `__metadata__.reference_downscale_factor`,
+    // which is "1" here — the Colorizer conditions on a FULL-resolution reference
+    // rather than Union-Control's halved one, so it imposes no divisibility rule
+    // (icResolutionIssue short-circuits at factor <= 1). Do not "align" it to 2.
+    referenceDownscaleFactor: 1,
     minReferences: 1,
     maxReferences: 1,
     referenceKind: 'video',

@@ -1784,6 +1784,30 @@ describe('generateVideo — IC-LoRA remix arg threading (#3100)', () => {
     expect(args[args.indexOf('--ic-max-references') + 1]).toBe('1');
   });
 
+  it('routes ic-colorize to its own weight and bare mode id (#3111)', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      ...baseIcRender, jobId: 'ic-colorize-basic', mode: 'ic-colorize',
+      prompt: 'restore natural color to the archival footage',
+      icReferencePaths: ['/mock/data/videos/bw.mp4'],
+    });
+
+    const args = findIcCall(spawnMock)[1];
+    expect(args[args.indexOf('--mode') + 1]).toBe('ic');
+    // The bare registry id, not the `ic-` prefixed PortOS mode — the Python
+    // helper's --ic-mode is free-form, so a prefixed value would only surface
+    // as odd status prose.
+    expect(args[args.indexOf('--ic-mode') + 1]).toBe('colorize');
+    expect(args[args.indexOf('--ic-lora-path') + 1])
+      .toBe(join('/mock/hf/snap', 'LTX-2.3-22b-IC-LoRA-Colorizer-0.9.safetensors'));
+    expect(args[args.indexOf('--ic-reference') + 1]).toBe('/mock/data/videos/bw.mp4');
+    expect(args[args.indexOf('--ic-min-references') + 1]).toBe('1');
+    expect(args[args.indexOf('--ic-max-references') + 1]).toBe('1');
+  });
+
   it('falls back to the HF repo id when the weight is not cached', async () => {
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const spawnMock = vi.mocked(spawnDetached);
@@ -1795,6 +1819,19 @@ describe('generateVideo — IC-LoRA remix arg threading (#3100)', () => {
     const args = findIcCall(spawnMock)[1];
     expect(args[args.indexOf('--ic-lora-path') + 1])
       .toBe('Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control');
+  });
+
+  it('falls back to the Colorizer repo id when its weight is not cached', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+    mockInspectModelCache.mockResolvedValue({ cached: false, sizeBytes: 0, snapshotPath: null });
+
+    await generateVideo({ ...baseIcRender, jobId: 'ic-colorize-uncached', mode: 'ic-colorize' });
+
+    const args = findIcCall(spawnMock)[1];
+    expect(args[args.indexOf('--ic-lora-path') + 1])
+      .toBe('DoctorDiffusion/LTX-2.3-IC-LoRA-Colorizer');
   });
 
   it('defaults --ic-strength to 1.0 and omits the optional dials', async () => {
@@ -1922,6 +1959,16 @@ describe('icLoraArgs — direct validation (#3100)', () => {
       .toThrow(/divisible by 2/);
     expect(() => icLoraArgs({ ...base, height: 449 }))
       .toThrow(/divisible by 2/);
+  });
+
+  it('accepts any resolution for a factor-1 weight (#3111)', () => {
+    // The Colorizer's safetensors metadata reports reference_downscale_factor=1,
+    // so it conditions on a full-res reference and imposes NO divisibility rule.
+    // Had we copied Control's 2, these would 400 for no reason.
+    expect(() => icLoraArgs({ ...base, mode: 'ic-colorize', width: 705, height: 449 }))
+      .not.toThrow();
+    const args = icLoraArgs({ ...base, mode: 'ic-colorize' });
+    expect(args[args.indexOf('--ic-mode') + 1]).toBe('colorize');
   });
 
   it('rejects an unknown remix mode', () => {
