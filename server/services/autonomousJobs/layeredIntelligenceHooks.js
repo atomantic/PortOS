@@ -370,13 +370,16 @@ export async function buildTaskInput({ app } = {}) {
   // prompt. `cosMetricsByType` is gatherSources' internal hand-off for exactly this
   // re-render; drop it so it can never leak into buildPrompt as a source block.
   if (sources.cosMetricsByType) {
-    sources.cosMetrics = renderCosMetricsSource({
+    const rendered = renderCosMetricsSource({
       metricsByType: sources.cosMetricsByType,
       // Not an array = the outcomes source is off / the tracker can't report outcomes /
       // the store was unreadable. Omit the block rather than emitting zeros that would
       // read as "nothing has ever been approved".
       delivery: Array.isArray(outcomes) ? computeDeliveryMetrics(outcomes) : null
     })
+    // '' when BOTH halves are empty (no task types, no delivery data) — buildPrompt
+    // drops a blank source, so the block is omitted rather than rendering a hollow `{}`.
+    sources.cosMetrics = rendered
     delete sources.cosMetricsByType
   }
 

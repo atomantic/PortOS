@@ -129,6 +129,8 @@ beforeEach(() => {
   // set, so restore the module default here — otherwise a test that hands back a
   // `cosMetricsByType` (#3085) leaks the re-render into every later assertion on sources.
   li.gatherSources.mockResolvedValue({ goals: 'be great' });
+  li.renderCosMetricsSource.mockReturnValue('RE-RENDERED COS METRICS');
+  listOutcomesResult.mockResolvedValue({ read: true, outcomes: [] });
   li.listBlockingIssues.mockResolvedValue({ ok: true, issues: [] });
   li.listForgeIssues.mockResolvedValue({ ok: true, issues: [] });
   li.isAppParked.mockReturnValue(false);
@@ -358,6 +360,31 @@ describe('buildTaskInput', () => {
     expect(li.computeDeliveryMetrics).not.toHaveBeenCalled();
     expect(li.renderCosMetricsSource).toHaveBeenCalledWith(expect.objectContaining({ delivery: null }));
   });
+
+  it('renders NO delivery block when the outcome store was unreadable (#3085)', async () => {
+    // A FAILED read is not an empty history: `read: false` must not project as
+    // "0 approved", which would tell the reasoner delivery is fine when we simply
+    // cannot see it. Distinct from the source-off case above — same required outcome,
+    // different cause, and only this one goes through the outcomes pipeline.
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { cosMetrics: true, outcomes: true } })
+    li.gatherSources.mockResolvedValue({ cosMetrics: 'FIRST PASS', cosMetricsByType: { 'user-task': {} } })
+    listOutcomesResult.mockResolvedValue({ read: false, outcomes: [] })
+    await buildTaskInput({ app: APP })
+    expect(li.computeDeliveryMetrics).not.toHaveBeenCalled()
+    expect(li.renderCosMetricsSource).toHaveBeenCalledWith(expect.objectContaining({ delivery: null }))
+  })
+
+  it('omits the cosMetrics block entirely when neither half has data (#3085)', async () => {
+    // No CoS run history AND no delivery data → renderCosMetricsSource returns '',
+    // which buildPrompt drops rather than emitting a hollow `{}` source block.
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { cosMetrics: true } })
+    li.gatherSources.mockResolvedValue({ goals: 'be great', cosMetricsByType: {} })
+    li.renderCosMetricsSource.mockReturnValue('')
+    await buildTaskInput({ app: APP })
+    const { sources } = li.buildPrompt.mock.calls.at(-1)[0]
+    expect(sources.cosMetrics).toBe('')
+    expect('cosMetricsByType' in sources).toBe(false)
+  })
 
   it('leaves cosMetrics alone when the source is off (#3085)', async () => {
     li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { outcomes: true } });

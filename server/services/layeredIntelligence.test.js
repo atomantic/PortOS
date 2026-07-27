@@ -754,6 +754,23 @@ describe('renderCosMetricsSource (#3085)', () => {
     expect(parsed.delivery).toBeUndefined();
   });
 
+  it('renders delivery alone when the install has no CoS run history yet', () => {
+    // The two halves are independently optional: an install with no learning.json can
+    // still have approved-but-undelivered proposals, and that is exactly the signal
+    // that arms the exclusion gate — it must not be withheld for lack of run stats.
+    const parsed = JSON.parse(renderCosMetricsSource({
+      metricsByType: {},
+      delivery: computeDeliveryMetrics([{ scope: 'loop-meta', outcome: 'merged', executionOutcome: null, filedAt: '2026-07-01T00:00:00.000Z' }])
+    }));
+    expect(parsed.delivery).toEqual({ totalApproved: 1, totalDelivered: 0, currentDeliveryRate: 0 });
+  });
+
+  it('returns an empty string when both halves are empty so the source is omitted', () => {
+    // A hollow `{}` block would tell the reasoner nothing while costing prompt budget.
+    expect(renderCosMetricsSource()).toBe('');
+    expect(renderCosMetricsSource({ metricsByType: {}, delivery: null })).toBe('');
+  });
+
   it('folds delivery into the same document as the run rates', () => {
     const delivery = computeDeliveryMetrics([
       { scope: 'app-improvement', outcome: 'merged', executionOutcome: 'success', filedAt: '2026-07-01T00:00:00.000Z', executionAt: '2026-07-01T01:00:00.000Z' }
@@ -2984,6 +3001,16 @@ describe('gatherSources cosMetrics windowed rate (issue #2460)', () => {
     const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: true } }, { cosPath: dir });
     expect(out.cosMetricsByType['user-task'].lifetimeSuccessRate).toBe(90);
     expect(JSON.parse(out.cosMetrics).delivery).toBeUndefined();
+  });
+
+  it('still hands off an empty per-type map when learning.json is missing, so delivery can render (#3085)', async () => {
+    // No learning.json at all: the source used to be skipped outright, which would have
+    // withheld the delivery half too — and that half comes from the outcome records, not
+    // from here. Hand back an empty map so the hook can still render delivery; the
+    // rendered document stays omitted while BOTH halves are empty.
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: true } }, { cosPath: dir });
+    expect(out.cosMetricsByType).toEqual({});
+    expect(out.cosMetrics).toBeUndefined();
   });
 
   it('does not emit scopeGuidance when cosMetrics is off (#2760)', async () => {

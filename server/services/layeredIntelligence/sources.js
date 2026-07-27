@@ -199,14 +199,21 @@ const COS_METRICS_DELIVERY_KEYS = ['delivery', 'deliveryByScope'];
  * `currentDeliveryRate`, so "we have no delivery data" stays distinguishable from
  * "nothing has been approved yet".
  *
+ * Returns '' when there is nothing at all to report (no task types AND no delivery
+ * data) so the caller omits the source rather than injecting a hollow `{}` block —
+ * both halves of this document are independently optional. A fresh install with no
+ * CoS run history can still have approved-but-undelivered proposals worth surfacing,
+ * and vice versa.
+ *
  * @param {object} args
  * @param {Object} [args.metricsByType] - per-task-type run stats (see gatherSources).
  * @param {{ delivery: object, deliveryByScope: object }|null} [args.delivery] - a
  *   `computeDeliveryMetrics(outcomes)` result, or null when none was gathered.
- * @returns {string} the JSON document, capped at COS_METRICS_MAX_CHARS.
+ * @returns {string} the JSON document capped at COS_METRICS_MAX_CHARS, or ''.
  */
 export function renderCosMetricsSource({ metricsByType = {}, delivery = null } = {}) {
   const payload = {};
+  if (!delivery && Object.keys(metricsByType || {}).length === 0) return '';
   // Reserved keys are INSERTED first (JSON.stringify follows insertion order, so the
   // cap above can't cut them) but ASSIGNED last, so a task type that happens to share
   // one of their names can't shadow the delivery block.
@@ -272,48 +279,53 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos, trustShe
     // the app being analyzed — see the default-config note for the PortOS-vs-managed
     // rationale (default-off for managed apps).
     const learning = await readJSONFile(join(cosPath, 'learning.json'), null);
-    if (learning?.byTaskType) {
-      // Surface BOTH the lifetime rate (the cumulative dashboard/telemetry truth)
-      // AND a recency-windowed rate (issue #2460) per task type, labeled distinctly
-      // so the reasoner doesn't conflate them. The windowed rate lets a
-      // since-resolved failure burst age out of the "is work needed" signal instead
-      // of permanently depressing it; `recentSuccessRate` is null when there are no
-      // in-window runs, in which case the reasoner leans on the lifetime rate.
-      // Note the intentional rename: computeWindowedStats' internal `windowed*`
-      // fields are surfaced to the reasoner as `recent*` (reads more naturally in
-      // the prompt context) — same concept, deliberately different label here.
-      const summary = {};
-      for (const [type, m] of Object.entries(learning.byTaskType)) {
-        const windowed = computeWindowedStats(m?.recentOutcomes);
-        summary[type] = {
-          lifetimeSuccessRate: typeof m?.successRate === 'number' ? m.successRate : null,
-          lifetimeCompleted: m?.completed || 0,
-          recentSuccessRate: windowed.windowedSuccessRate,
-          recentCompleted: windowed.windowedCompleted,
-          avgDurationMs: m?.avgDurationMs || 0
-        };
-      }
-      // No delivery block yet: the approval → delivery numbers come from the app's
-      // outcome records, which the hook only has AFTER it has reconciled them against
-      // this run's tracker read. The raw per-type map rides along on
-      // `cosMetricsByType` so the hook can re-render the document once with both
-      // halves (see renderCosMetricsSource) rather than emitting a delivery figure
-      // one cycle stale — two blocks in one prompt disagreeing about how many
-      // proposals are approved is worse than either number alone.
-      out.cosMetricsByType = summary;
-      out.cosMetrics = renderCosMetricsSource({ metricsByType: summary });
-      // Scope-awareness guidance (#2760): a deterministic low/high-completion split
-      // derived from the SAME per-type rates above, so the reasoner gets an interpreted
-      // signal alongside the raw JSON instead of being asked to spot the pattern itself.
-      // Rendered as its own prompt block (see buildPrompt). Gated on isPortos (codex P2):
-      // these are THIS install's own CoS completion rates, meaningless to a managed app —
-      // and a managed app CAN enable the cosMetrics source, so the cosMetrics toggle
-      // alone is not the PortOS boundary. buildPrompt re-checks isPortos as defense in
-      // depth; deriving it here only for PortOS also avoids the wasted work.
-      if (isPortos) {
-        const scopeGuidance = computeScopeAwareness({ metricsByType: summary });
-        if (scopeGuidance) out.scopeGuidance = scopeGuidance;
-      }
+    // Surface BOTH the lifetime rate (the cumulative dashboard/telemetry truth)
+    // AND a recency-windowed rate (issue #2460) per task type, labeled distinctly
+    // so the reasoner doesn't conflate them. The windowed rate lets a
+    // since-resolved failure burst age out of the "is work needed" signal instead
+    // of permanently depressing it; `recentSuccessRate` is null when there are no
+    // in-window runs, in which case the reasoner leans on the lifetime rate.
+    // Note the intentional rename: computeWindowedStats' internal `windowed*`
+    // fields are surfaced to the reasoner as `recent*` (reads more naturally in
+    // the prompt context) — same concept, deliberately different label here.
+    //
+    // An unreadable / byTaskType-less learning store yields an EMPTY map rather than
+    // skipping the source: the delivery half of this document (#3085) comes from the
+    // outcome records, not learning.json, so an install with no CoS run history can
+    // still have approved-but-undelivered proposals worth surfacing. When both halves
+    // are empty renderCosMetricsSource returns '' and the source is omitted as before.
+    const summary = {};
+    for (const [type, m] of Object.entries(learning?.byTaskType || {})) {
+      const windowed = computeWindowedStats(m?.recentOutcomes);
+      summary[type] = {
+        lifetimeSuccessRate: typeof m?.successRate === 'number' ? m.successRate : null,
+        lifetimeCompleted: m?.completed || 0,
+        recentSuccessRate: windowed.windowedSuccessRate,
+        recentCompleted: windowed.windowedCompleted,
+        avgDurationMs: m?.avgDurationMs || 0
+      };
+    }
+    // No delivery block yet: the approval → delivery numbers come from the app's
+    // outcome records, which the hook only has AFTER it has reconciled them against
+    // this run's tracker read. The raw per-type map rides along on `cosMetricsByType`
+    // so the hook can re-render the document once with both halves (see
+    // renderCosMetricsSource) rather than emitting a delivery figure one cycle stale —
+    // two blocks in one prompt disagreeing about how many proposals are approved is
+    // worse than either number alone.
+    out.cosMetricsByType = summary;
+    const rendered = renderCosMetricsSource({ metricsByType: summary });
+    if (rendered) out.cosMetrics = rendered;
+    // Scope-awareness guidance (#2760): a deterministic low/high-completion split
+    // derived from the SAME per-type rates above, so the reasoner gets an interpreted
+    // signal alongside the raw JSON instead of being asked to spot the pattern itself.
+    // Rendered as its own prompt block (see buildPrompt). Gated on isPortos (codex P2):
+    // these are THIS install's own CoS completion rates, meaningless to a managed app —
+    // and a managed app CAN enable the cosMetrics source, so the cosMetrics toggle
+    // alone is not the PortOS boundary. buildPrompt re-checks isPortos as defense in
+    // depth; deriving it here only for PortOS also avoids the wasted work.
+    if (isPortos) {
+      const scopeGuidance = computeScopeAwareness({ metricsByType: summary });
+      if (scopeGuidance) out.scopeGuidance = scopeGuidance;
     }
   }
   for (const custom of src.custom || []) {
