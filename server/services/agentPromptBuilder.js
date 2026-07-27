@@ -327,15 +327,18 @@ export function reconcileSplitContext(task) {
  * otherwise the agent could resolve a different reviewer from slashdo's own saved
  * defaults and find that loop missing. No explicit pin ⇒ no prune.
  *
- * "Explicit" means the task pinned reviewers, or the install's Code Review
- * Defaults name something other than a lone `copilot`. A lone `copilot` is NOT
- * treated as explicit for two reasons that point the same way:
- * `pickCodeReviewDefaults` collapses "nothing configured" into `['copilot']`, so
- * it is indistinguishable from an unconfigured install; and pinning
- * `--review-with copilot` on an install with no Copilot review enabled is the
- * #2507 stall. Same suppression `buildReviewWithArgs` already applies to the
- * lone default. So an unconfigured install keeps the whole body and lets slashdo
- * resolve its own reviewer.
+ * The reviewers, usernames, and optional-reviewers are resolved through the SAME
+ * three helpers as the inline `/do:pr` completion path further down
+ * (`normalizeReviewers` / `resolveReviewUsernames` / `resolveOptionalReviewers`),
+ * so what we prune for is exactly what the rest of the prompt resolves — legacy
+ * single-`reviewer` tasks and defaults-inherited `optionalReviewers` included.
+ *
+ * The one case that does NOT authorize pruning is a resolved lone `copilot` with
+ * no usernames and no task-level pin: `pickCodeReviewDefaults` and
+ * `normalizeReviewers` both fall back to `['copilot']`, so that value can't be
+ * told apart from an unconfigured install — and pinning `--review-with copilot`
+ * where Copilot review isn't enabled is the #2507 stall. Same suppression
+ * `buildReviewWithArgs` already applies to the lone default.
  *
  * Applied to the description (on a COPY — the stored task is untouched) rather
  * than emitted as its own template slot, because the briefing template renders
@@ -346,7 +349,7 @@ export function reconcileSplitContext(task) {
  */
 async function applySlashdoInvocation(task, {
   providerId = null, providerCommand = null, leanMode = false, hasFileTools = false,
-  defaultReviewers = null, defaultUsernames = null,
+  defaultReviewers = null, codeReviewDefaults = null,
 } = {}) {
   const command = task.metadata?.slashdoCommand;
   const resolved = resolveSlashdoInvocation({
@@ -358,19 +361,32 @@ async function applySlashdoInvocation(task, {
   });
   if (!resolved) return task;
 
-  // Task pin first, install-wide Code Review Defaults second — but a lone
-  // `copilot` from the defaults is the unconfigured shape, not a choice (see the
-  // doc above), so it doesn't authorize pruning.
-  const pinnedUsernames = normalizeReviewUsernames(
-    Array.isArray(task.metadata?.usernames) ? task.metadata.usernames : defaultUsernames
-  );
-  const configuredDefaults = Array.isArray(defaultReviewers)
-    && defaultReviewers.length
-    && !(defaultReviewers.length === 1 && defaultReviewers[0] === DEFAULT_REVIEWER && !pinnedUsernames.length);
-  const pinnedReviewers = Array.isArray(task.metadata?.reviewers) && task.metadata.reviewers.length
-    ? task.metadata.reviewers
-    : (configuredDefaults ? defaultReviewers : null);
-  const skipIncludes = unreachableReviewerIncludes({ reviewers: pinnedReviewers, usernames: pinnedUsernames });
+  // Resolved through the SAME three helpers the inline `/do:pr` completion path
+  // uses below (`taskReviewers` / `taskReviewerUsernames` / `taskOptionalReviewers`),
+  // so the reviewers we prune for are exactly the ones the rest of the prompt
+  // resolves. Hand-rolling `metadata.reviewers` here instead dropped the legacy
+  // single `reviewer` string and the defaults' `optionalReviewers` — pruning for
+  // one reviewer while the run resolved another, and pinning an optional reviewer
+  // as blocking.
+  const resolvedReviewers = normalizeReviewers(task.metadata, defaultReviewers);
+  const resolvedUsernames = resolveReviewUsernames(task.metadata?.usernames, codeReviewDefaults?.usernames);
+  const resolvedOptional = resolveOptionalReviewers(task.metadata?.optionalReviewers, codeReviewDefaults?.optionalReviewers);
+
+  // A resolved lone `copilot` with no usernames is ambiguous: it's what an
+  // unconfigured install produces (`pickCodeReviewDefaults` and
+  // `normalizeReviewers` both fall back to `['copilot']`), so it can't be told
+  // apart from a real choice UNLESS the task itself named it. Absent a task-level
+  // pin, treat it as unconfigured and prune nothing — pinning `--review-with
+  // copilot` where Copilot review isn't enabled is the #2507 stall.
+  const taskPinnedReviewer = (Array.isArray(task.metadata?.reviewers) && task.metadata.reviewers.length > 0)
+    || (typeof task.metadata?.reviewer === 'string' && !!task.metadata.reviewer);
+  const isBareDefault = resolvedReviewers.length === 1
+    && resolvedReviewers[0] === DEFAULT_REVIEWER
+    && !resolvedUsernames.length
+    && !taskPinnedReviewer;
+  const skipIncludes = isBareDefault
+    ? []
+    : unreachableReviewerIncludes({ reviewers: resolvedReviewers, usernames: resolvedUsernames });
 
   const body = await loadSlashdoFile(command, { stripFrontmatter: true, skipIncludes }).catch(() => null);
   if (!body) console.log(`⚠️ Slashdo command body unavailable, sending invocation only: ${command}`);
@@ -389,7 +405,7 @@ async function applySlashdoInvocation(task, {
     : null;
 
   const reviewWith = skipIncludes.length
-    ? buildReviewersCsv(normalizeReviewers({ reviewers: pinnedReviewers }), pinnedUsernames, task.metadata?.optionalReviewers)
+    ? buildReviewersCsv(resolvedReviewers, resolvedUsernames, resolvedOptional)
     : '';
   const section = buildSlashdoSection(resolved, body, { bodyPath, reviewWith });
   return { ...task, description: `${task.description}\n\n${section}` };
@@ -1013,7 +1029,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   task = await applySlashdoInvocation(task, {
     providerId, providerCommand, leanMode,
     hasFileTools: LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType),
-    defaultReviewers, defaultUsernames: codeReviewDefaults?.usernames,
+    defaultReviewers, codeReviewDefaults,
   });
 
   // Preload slashdo's local-agent review-loop recipe once for review-loop

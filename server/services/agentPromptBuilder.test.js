@@ -1780,6 +1780,33 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
       expect(prompt).not.toContain('--review-with');
     });
 
+    // Both regressions found by the codex review pass: hand-rolling the reviewer
+    // resolution here diverged from the three helpers the rest of the prompt uses,
+    // so the body was pruned for a different reviewer than the run resolves.
+    it('honors the legacy single `reviewer` string, not just the reviewers array', async () => {
+      vi.mocked(getCodeReviewDefaults).mockResolvedValue({ reviewers: ['ollama'] });
+      const prompt = await buildAgentPrompt(
+        slashdoTask({ reviewer: 'codex' }), {}, '/r', null, isTruthyMeta,
+        { providerType: 'cli', providerId: 'codex' });
+      // Legacy `reviewer` beats the defaults, so the CLI loop is kept and the
+      // local-model loop (the default's) is what gets dropped.
+      const skipped = skipArg();
+      expect(skipped).not.toContain('local-agent-review-loop');
+      expect(skipped).toContain('ollama-review-loop');
+      expect(prompt).toContain('--review-with codex');
+    });
+
+    it('carries the ~opt marker for an optional reviewer inherited from the defaults', async () => {
+      vi.mocked(getCodeReviewDefaults).mockResolvedValue({
+        reviewers: ['codex'], optionalReviewers: ['codex'],
+      });
+      const prompt = await buildAgentPrompt(
+        slashdoTask(), {}, '/r', null, isTruthyMeta,
+        { providerType: 'cli', providerId: 'codex' });
+      // Pinning a non-blocking reviewer as blocking changes the merge gate.
+      expect(prompt).toContain('--review-with codex~opt');
+    });
+
     it('prunes NOTHING when the defaults read fails', async () => {
       vi.mocked(getCodeReviewDefaults).mockRejectedValue(new Error('unreadable'));
       await buildAgentPrompt(
