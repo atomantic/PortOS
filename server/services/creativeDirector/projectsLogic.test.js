@@ -22,6 +22,7 @@ import {
   mergeProjectRecord,
   startingImageFilename,
   normalizeModelOverrides,
+  normalizeRenderBackend,
   resolveStagePin,
 } from './projectsLogic.js';
 
@@ -113,6 +114,41 @@ describe('buildProjectRecord', () => {
       { id: 'cd-3', now: '2026-06-07T00:00:00.000Z', collectionId: 'col-1' },
     );
     expect(bad.cast).toEqual([]);
+  });
+
+  it('defaults renderBackend to null and persists a supplied pin (#3135)', () => {
+    const ctx = { id: 'cd-1', now: '2026-06-07T00:00:00.000Z', collectionId: 'col-1' };
+    const base = { name: 'X', aspectRatio: '1:1', quality: 'draft', modelId: 'm', targetDurationSeconds: 9 };
+    // A hand-made project stores exactly what it stored pre-#3135.
+    expect(buildProjectRecord(base, ctx).renderBackend).toBeNull();
+
+    const pinned = buildProjectRecord(
+      { ...base, renderBackend: { image: { mode: 'grok', modelId: null }, video: { mode: 'local', modelId: 'example-model' } } },
+      ctx,
+    );
+    expect(pinned.renderBackend).toEqual({ image: { mode: 'grok' }, video: { mode: 'local', modelId: 'example-model' } });
+  });
+});
+
+describe('normalizeRenderBackend (#3135)', () => {
+  it('returns null for anything that pins nothing', () => {
+    expect(normalizeRenderBackend(null)).toBeNull();
+    expect(normalizeRenderBackend('nope')).toBeNull();
+    expect(normalizeRenderBackend([])).toBeNull();
+    expect(normalizeRenderBackend({})).toBeNull();
+    // A mode-less pin can't be dispatched (the queue routes on mode first).
+    expect(normalizeRenderBackend({ image: { modelId: 'example-model' } })).toBeNull();
+    expect(normalizeRenderBackend({ image: { mode: '  ' } })).toBeNull();
+  });
+
+  it('keeps only kinds that name a mode, and drops an empty model id', () => {
+    expect(normalizeRenderBackend({ image: { mode: ' grok ', modelId: '' }, video: null, bogus: { mode: 'x' } }))
+      .toEqual({ image: { mode: 'grok' } });
+  });
+
+  it('trims and keeps a real model id', () => {
+    expect(normalizeRenderBackend({ video: { mode: 'local', modelId: ' example-model ' } }))
+      .toEqual({ video: { mode: 'local', modelId: 'example-model' } });
   });
 });
 

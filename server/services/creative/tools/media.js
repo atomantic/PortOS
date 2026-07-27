@@ -7,6 +7,10 @@
 import { z } from 'zod';
 import { enqueueJob } from '../../mediaJobQueue/index.js';
 import { ASPECT_PRESETS, QUALITY_PRESETS, presetToRenderParams } from '../../../lib/creativeDirectorPresets.js';
+import { getSettings } from '../../settings.js';
+import { IMAGE_GEN_MODE, resolveQueueImageMode } from '../../imageGen/modes.js';
+import { resolveCloudProviderConfig } from '../../imageGen/cloudProviderConfig.js';
+import { VIDEO_GEN_MODE, resolveVideoMode } from '../../videoGen/modes.js';
 import { COST_RENDER, resolveOwner } from './shared.js';
 
 const paramsSchema = z.object({ params: z.record(z.any()).default({}), owner: z.string().optional() });
@@ -28,10 +32,7 @@ const paramsSchema = z.object({ params: z.record(z.any()).default({}), owner: z.
  * unrecognized aspect/quality (hand-edited/legacy project) falls through to the
  * LLM's params untouched — best-effort, never throws.
  */
-async function enforceVideoRenderPreset(params, ctx) {
-  if (!ctx?.projectId) return params;
-  const { getProject } = await import('../../creativeDirector/local.js');
-  const project = await getProject(ctx.projectId).catch(() => null);
+async function enforceVideoRenderPreset(params, project) {
   // Only a directive-driven CD project locks a preset; a bare enqueue (no
   // recognized aspect/quality) keeps the caller's params as-is.
   if (!project || !ASPECT_PRESETS[project.aspectRatio] || !QUALITY_PRESETS[project.quality]) {
@@ -81,6 +82,92 @@ function attachMusicBedTag(params, ctx) {
   return { ...params, creativeDirectorMusicBed: { projectId: ctx.projectId } };
 }
 
+/**
+ * Force an image/video render onto the project's PINNED render backend (#3135),
+ * overriding whatever `mode` the planner LLM authored.
+ *
+ * Backend dispatch in the media job queue is purely `job.params.mode`-driven
+ * (`mediaJobQueue/index.js#getGenModuleForJob`). The planner writes these params
+ * freehand and — before #3135 — never set `mode` at all, so every plan-driven
+ * render silently landed on local diffusion regardless of the user's intent. A
+ * creative commission can now pin the backend per commission
+ * (`generation.imageMode` / `.videoMode`); `buildRenderBackendPin` carries it onto
+ * the project as `renderBackend`, and this is where it beats the LLM.
+ *
+ * No pin (the default, and every pre-#3135 project) ⇒ returns `params`
+ * UNTOUCHED — not "auto-resolved to something", untouched — so the enqueued job
+ * is byte-identical to today and dispatch falls through to the install-wide
+ * default the same way it always has.
+ *
+ * A pin is re-resolved against LIVE settings rather than trusted verbatim: the
+ * cloud backends are gated on their `imageGen.<mode>.enabled` toggle, which the
+ * user can flip off long after pinning. `resolveQueueImageMode` /
+ * `resolveVideoMode` degrade an unusable pin to a usable backend (never throw) —
+ * a nightly commission must still produce something rather than failing every
+ * fire because a toggle moved. Cloud modes additionally need their provider knob
+ * bundle (`codexPath`/`model`/`effort`, `grokPath`/`aspectRatio`) in the job
+ * params, since the queue dispatches straight to the provider module and skips
+ * the imageGen dispatcher that would otherwise assemble them.
+ *
+ * Deliberately NOT resolved here: the saved `cleanC2PA`/`denoise` post-processing
+ * settings (which `pipeline/visualStageHelpers.js#enqueueImageJob` does resolve,
+ * for the same skips-the-dispatcher reason). No planner-enqueued render has ever
+ * carried them — pinned or not — so resolving them only on the pinned path would
+ * make the same commission post-process differently depending on whether a
+ * backend happens to be pinned. Fixing it for BOTH paths would break the "auto is
+ * byte-identical" contract this change rests on, so it's a separate concern.
+ */
+async function enforceRenderBackendPin(kind, params, project) {
+  const pin = project?.renderBackend?.[kind];
+  if (!pin?.mode) return params;
+  const settings = await getSettings().catch(() => null);
+  if (!settings) return params;
+
+  if (kind === 'video') {
+    const mode = resolveVideoMode(pin.mode, settings);
+    if (mode !== VIDEO_GEN_MODE.GROK) {
+      // Local video: `params.mode` is the t2v/i2v SEMANTIC for this lane (see
+      // videoGen/modes.js), so it must not be stamped with the backend name —
+      // absence of the 'grok' discriminator IS "render locally". Only the model
+      // pin travels, and only when the planner didn't name one itself.
+      return pin.modelId && !params?.modelId ? { ...params, modelId: pin.modelId } : params;
+    }
+    const grok = settings.imageGen?.grok || {};
+    // videoGen/grok.js reads the same `imageGen.grok` slice the image path does
+    // (one CLI, one config). `videoMode` carries the semantic the local lane
+    // keeps in `mode`, matching what routes/videoGen.js enqueues.
+    return {
+      ...params,
+      mode: VIDEO_GEN_MODE.GROK,
+      videoMode: params?.sourceImagePath ? 'image' : 'text',
+      grokPath: grok.grokPath,
+      ...(grok.aspectRatio ? { aspectRatio: grok.aspectRatio } : {}),
+    };
+  }
+
+  const mode = resolveQueueImageMode(pin.mode, settings);
+  const cloud = resolveCloudProviderConfig(settings, mode);
+  if (cloud) return { ...params, ...cloud.jobParams };
+  return {
+    ...params,
+    mode: IMAGE_GEN_MODE.LOCAL,
+    pythonPath: settings.imageGen?.local?.pythonPath || null,
+    // The planner's own modelId wins if it named one; otherwise the pin's.
+    ...(pin.modelId && !params?.modelId ? { modelId: pin.modelId } : {}),
+  };
+}
+
+// Load the owning CD project ONCE per enqueue — both the video preset
+// reconciliation and the render-backend pin read from it, and re-reading would
+// double the store round-trips per plan step. Null outside a project context (a
+// bare enqueue) or when the read fails: both forcing steps treat that as "no
+// project locks anything" and pass the caller's params through.
+async function loadOwningProject(ctx) {
+  if (!ctx?.projectId) return null;
+  const { getProject } = await import('../../creativeDirector/local.js');
+  return getProject(ctx.projectId).catch(() => null);
+}
+
 const mediaTool = (kind, label) => ({
   name: `media_enqueue${label}Job`,
   description: `Enqueue a ${kind} media job. Long-running: returns a job handle; completion arrives via media-job events. Tags the job owner to the calling project.`,
@@ -97,8 +184,15 @@ const mediaTool = (kind, label) => ({
   },
   execute: async (args, ctx) => {
     let params = args.params || {};
-    if (kind === 'video') params = await enforceVideoRenderPreset(params, ctx);
-    else if (kind === 'audio') params = attachMusicBedTag(params, ctx);
+    if (kind === 'audio') {
+      params = attachMusicBedTag(params, ctx);
+    } else {
+      // Image + video both consult the owning project: video for its locked
+      // geometry preset, both for a pinned render backend (#3135).
+      const project = await loadOwningProject(ctx);
+      if (kind === 'video') params = await enforceVideoRenderPreset(params, project);
+      params = await enforceRenderBackendPin(kind, params, project);
+    }
     return enqueueJob({ kind, params, owner: resolveOwner(args, ctx) });
   },
 });

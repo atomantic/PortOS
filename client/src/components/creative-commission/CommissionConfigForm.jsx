@@ -14,10 +14,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { isProcessProvider } from '../../utils/providers';
-import { getProviders } from '../../services/api';
+import { getProviders, getSettings, listImageModels, listVideoModels } from '../../services/api';
+import { deriveAvailableBackends } from '../../lib/imageGenBackends';
 import {
   WEEKDAYS, inputCls, labelCls, describeSchedule,
   ABILITY_OPTIONS, GENERATION_FIELDS_BY_ABILITY, mergeGenerationForAbility,
+  backendFieldsForAbility, RENDER_BACKEND_AUTO,
 } from './commissionForm.js';
 
 export default function CommissionConfigForm({ form, patchForm, saving, onSave, onCancel, saveLabel = 'Save' }) {
@@ -183,6 +185,9 @@ export default function CommissionConfigForm({ form, patchForm, saving, onSave, 
       {/* Generation — fields adapt to the selected output type (#2769) */}
       <GenerationSection ability={form.targetAbility} generation={form.generation} patchForm={patchForm} />
 
+      {/* Render backend — which image/video backend actually renders (#3135) */}
+      <RenderBackendSection ability={form.targetAbility} generation={form.generation} patchForm={patchForm} />
+
       {/* AI provider & model — who processes this commission */}
       <section className="space-y-2 border-t border-port-border pt-4">
         <h3 className="text-sm font-semibold text-gray-200">AI provider &amp; model</h3>
@@ -237,7 +242,11 @@ export default function CommissionConfigForm({ form, patchForm, saving, onSave, 
 // share one layout — a select for enum fields, a bounded number input otherwise.
 // The label names the type so it's clear which output these knobs drive.
 function GenerationSection({ ability, generation, patchForm }) {
-  const fields = GENERATION_FIELDS_BY_ABILITY[ability] || GENERATION_FIELDS_BY_ABILITY.video;
+  // Backend pins (#3135) are rendered by RenderBackendSection — they need a
+  // conditional model picker and live availability data the generic grid has no
+  // room for, so they're excluded here rather than squeezed into a bare select.
+  const fields = (GENERATION_FIELDS_BY_ABILITY[ability] || GENERATION_FIELDS_BY_ABILITY.video)
+    .filter((f) => f.type !== 'backend');
   const abilityLabel = (ABILITY_OPTIONS.find((o) => o.id === ability) || ABILITY_OPTIONS[0]).label;
   return (
     <section className="space-y-3 border-t border-port-border pt-4">
@@ -268,6 +277,123 @@ function GenerationSection({ ability, generation, patchForm }) {
                   value={value}
                   onChange={(e) => patchForm(['generation', field.key], e.target.value)}
                 />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+// Which backend a mode's model picker reads its catalog from.
+const MODEL_LOADERS = { image: listImageModels, video: listVideoModels };
+
+/**
+ * Render-backend pin for the selected output type (#3135) — a mode selector plus
+ * a conditional model picker, mirroring the UX already shipped for pipeline
+ * visual stages (VisualGenSettings.jsx). Rendered only for abilities that
+ * actually enqueue that kind of render (image / video / music-video); `music` and
+ * `series` declare no backend fields, so the whole section disappears.
+ *
+ * 'Auto' is the default and a true no-op: the scheduled fire resolves the
+ * install-wide default exactly as it did before pins existed.
+ */
+function RenderBackendSection({ ability, generation, patchForm }) {
+  const fields = backendFieldsForAbility(ability);
+  const [settings, setSettings] = useState(null);
+  const [models, setModels] = useState({ image: [], video: [] });
+
+  useEffect(() => {
+    let cancelled = false;
+    // Silent: an unavailable list degrades to "Auto only + a Default model
+    // option", which is still a usable form — no toast for that.
+    getSettings({ silent: true })
+      .then((s) => { if (!cancelled) setSettings(s); })
+      .catch(() => { /* availability hints omitted */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Load a catalog per model-bearing kind actually on screen, so a music/series
+  // commission fetches nothing and an image commission never pulls the video list.
+  const modelKinds = fields.map((f) => f.modelKind).join(',');
+  useEffect(() => {
+    let cancelled = false;
+    for (const kind of modelKinds ? modelKinds.split(',') : []) {
+      MODEL_LOADERS[kind]?.({ silent: true })
+        .then((list) => {
+          if (!cancelled) setModels((prev) => ({ ...prev, [kind]: Array.isArray(list) ? list : [] }));
+        })
+        .catch(() => { /* picker falls back to the default-only option */ });
+    }
+    return () => { cancelled = true; };
+  }, [modelKinds]);
+
+  // Which backends this install can actually render on. Used to warn (not to
+  // hide) — a pin for a currently-disabled backend must stay visible and editable,
+  // otherwise the user can't tell why their choice stopped applying.
+  const availableIds = useMemo(
+    () => new Set(deriveAvailableBackends(settings, { excludeExternal: true }).map((b) => b.id)),
+    [settings],
+  );
+
+  if (fields.length === 0) return null;
+
+  return (
+    <section className="space-y-3 border-t border-port-border pt-4">
+      <h3 className="text-sm font-semibold text-gray-200">Render backend</h3>
+      <p className="text-xs text-gray-500">
+        Which backend actually renders each run. Leave on <strong className="text-gray-400">Auto</strong> to
+        follow your install&apos;s Image Gen default.
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {fields.map((field) => {
+          const modeId = `commission-gen-${field.key}`;
+          const modelId = `commission-gen-${field.modelKey}`;
+          const mode = generation?.[field.key] || RENDER_BACKEND_AUTO;
+          const showModel = field.modelModes.includes(mode);
+          const list = models[field.modelKind] || [];
+          // Only warn about a cloud CLI the settings say is off. `local` is
+          // reported unavailable purely for a missing pythonPath, which the
+          // local-model picker below already makes obvious.
+          const unavailable = mode !== RENDER_BACKEND_AUTO && mode !== 'local' && settings && !availableIds.has(mode);
+          return (
+            <div key={field.key} className="space-y-2">
+              <div>
+                <label className={labelCls} htmlFor={modeId}>{field.label}</label>
+                <select
+                  id={modeId}
+                  className={inputCls}
+                  value={mode}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    patchForm(['generation', field.key], next);
+                    // Drop a stale model id when moving to a backend that has no
+                    // model knob, so the form never shows a pin that can't apply.
+                    if (!field.modelModes.includes(next)) patchForm(['generation', field.modelKey], null);
+                  }}
+                >
+                  {field.options.map(([val, lbl]) => <option key={val} value={val}>{lbl}</option>)}
+                </select>
+                {unavailable && (
+                  <p className="text-xs text-port-warning mt-1">
+                    This backend is disabled in Settings → Image Gen — runs fall back to the default until you enable it.
+                  </p>
+                )}
+              </div>
+              {showModel && (
+                <div>
+                  <label className={labelCls} htmlFor={modelId}>{field.modelLabel}</label>
+                  <select
+                    id={modelId}
+                    className={inputCls}
+                    value={generation?.[field.modelKey] || ''}
+                    onChange={(e) => patchForm(['generation', field.modelKey], e.target.value || null)}
+                  >
+                    <option value="">Default ({list.find((m) => m.default)?.name || list[0]?.name || 'install default'})</option>
+                    {list.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
+                  </select>
+                </div>
               )}
             </div>
           );

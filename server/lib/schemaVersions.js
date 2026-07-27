@@ -450,7 +450,15 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // receive — and could push the video-shaped downgrade back via LWW. The bump
   // gates mixed-version transfers of this category so a v1 peer never mangles a v2
   // brief (compareSchemaVersions marks a v2 sender "ahead" of a v1 receiver).
-  creativeCommissions: 2,
+  // v3 = per-commission render-backend pin (#3135): `generation` gained
+  // `imageMode`/`videoMode` (+ optional `imageModelId`/`videoModelId`), naming the
+  // backend (local diffusion / Codex / Grok) a scheduled fire must render on.
+  // Exactly the #2769 failure mode: `generation` is a FEDERATED field, and a v2
+  // peer's `ABILITY_GENERATION_KEYS` doesn't list these keys — its
+  // `sanitizeGenerationFor` keeps only the keys it knows, so it would silently
+  // strip the user's pinned backend on receive and then push the un-pinned
+  // downgrade back via LWW.
+  creativeCommissions: 3,
   // v1 = standalone media-library federation (#1566). NOT a record kind — it's
   // the wire contract for the library-level asset manifest a full-sync peer
   // advertises at GET /api/peer-sync/library-manifest. The receiver-pull sweep

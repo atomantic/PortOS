@@ -102,6 +102,52 @@ describe('POST /api/creative-commission', () => {
     expect(svc.createCommission).not.toHaveBeenCalled();
   });
 
+  it('accepts an image-backend pin with a model id (#3135)', async () => {
+    svc.createCommission.mockResolvedValue({ id: 'commission-3', name: 'Daily Stills' });
+    const res = await request(buildApp()).post('/api/creative-commission')
+      .send({ ...validBody(), targetAbility: 'image', generation: { imageMode: 'grok', imageModelId: null } });
+    expect(res.status).toBe(201);
+    expect(svc.createCommission).toHaveBeenCalledWith(expect.objectContaining({
+      generation: expect.objectContaining({ imageMode: 'grok', imageModelId: null }),
+    }));
+  });
+
+  it('accepts a video-backend pin on a video commission (#3135)', async () => {
+    svc.createCommission.mockResolvedValue({ id: 'commission-4' });
+    const res = await request(buildApp()).post('/api/creative-commission')
+      .send({ ...validBody(), targetAbility: 'video', generation: { videoMode: 'local', videoModelId: 'example-model' } });
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects an unknown render backend with 400 (#3135)', async () => {
+    const res = await request(buildApp()).post('/api/creative-commission')
+      .send({ ...validBody(), targetAbility: 'image', generation: { imageMode: 'midjourney' } });
+    expect(res.status).toBe(400);
+    expect(svc.createCommission).not.toHaveBeenCalled();
+  });
+
+  it('rejects a video-backend pin on an IMAGE commission with 400 (#3135)', async () => {
+    // videoMode is not an image knob — the per-ability superRefine catches it.
+    const res = await request(buildApp()).post('/api/creative-commission')
+      .send({ ...validBody(), targetAbility: 'image', generation: { videoMode: 'grok' } });
+    expect(res.status).toBe(400);
+    expect(svc.createCommission).not.toHaveBeenCalled();
+  });
+
+  it('rejects a render-backend pin on a MUSIC commission with 400 (#3135)', async () => {
+    const res = await request(buildApp()).post('/api/creative-commission')
+      .send({ ...validBody(), targetAbility: 'music', generation: { imageMode: 'grok' } });
+    expect(res.status).toBe(400);
+    expect(svc.createCommission).not.toHaveBeenCalled();
+  });
+
+  it('accepts both pins on a music-video commission (#3135)', async () => {
+    svc.createCommission.mockResolvedValue({ id: 'commission-5' });
+    const res = await request(buildApp()).post('/api/creative-commission')
+      .send({ ...validBody(), targetAbility: 'music-video', generation: { videoMode: 'grok', imageMode: 'codex' } });
+    expect(res.status).toBe(201);
+  });
+
   it('rejects an invalid IANA timezone with 400 (before it can wedge the scheduler)', async () => {
     const res = await request(buildApp()).post('/api/creative-commission')
       .send({ ...validBody(), schedule: { kind: 'DAILY', atLocalTime: '02:00', timezone: 'Not/AZone' } });

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  ABILITY_ADAPTERS, getAbilityAdapter, buildCommissionDirective,
+  ABILITY_ADAPTERS, getAbilityAdapter, buildCommissionDirective, buildRenderBackendPin,
 } from './abilityAdapters.js';
 import { CREATIVE_COMMISSION_ABILITIES, ABILITY_GENERATION_SPEC } from '../../lib/creativeCommissionValidation.js';
 
@@ -115,11 +115,17 @@ describe('per-ability directives steer the planner to the right tools', () => {
 describe('sanitizeGeneration — fills defaults and preserves only the type keys', () => {
   it('video keeps its keys and drops off-type ones', () => {
     const g = getAbilityAdapter('video').sanitizeGeneration({ quality: 'high', aspectRatio: '9:16', targetDurationSeconds: 20, imageCount: 5, model: ' ltx ' });
-    expect(g).toEqual({ model: 'ltx', quality: 'high', aspectRatio: '9:16', targetDurationSeconds: 20 });
+    expect(g).toEqual({
+      model: 'ltx', quality: 'high', aspectRatio: '9:16', targetDurationSeconds: 20,
+      videoMode: 'auto', videoModelId: null,
+    });
   });
 
   it('image fills defaults for missing keys and clamps an out-of-range count', () => {
-    expect(getAbilityAdapter('image').sanitizeGeneration({})).toEqual({ model: null, quality: 'standard', aspectRatio: '16:9', imageCount: 1 });
+    expect(getAbilityAdapter('image').sanitizeGeneration({})).toEqual({
+      model: null, quality: 'standard', aspectRatio: '16:9', imageCount: 1,
+      imageMode: 'auto', imageModelId: null,
+    });
     expect(getAbilityAdapter('image').sanitizeGeneration({ imageCount: 99 }).imageCount).toBe(1);
     expect(getAbilityAdapter('image').sanitizeGeneration({ imageCount: 4 }).imageCount).toBe(4);
   });
@@ -156,5 +162,45 @@ describe('buildProjectParams — every type yields well-formed render settings',
       expect(p.modelId).toBe('ltx-default');
       expect(typeof p.targetDurationSeconds).toBe('number');
     }
+  });
+});
+
+describe('buildRenderBackendPin — per-commission render backend (#3135)', () => {
+  it('returns null when nothing is pinned (auto = no key at all)', () => {
+    // The hard back-compat criterion: an auto/absent pin must not add a
+    // renderBackend key, so createProject stores exactly what it stored before.
+    expect(buildRenderBackendPin({ generation: { imageMode: 'auto', imageModelId: null } })).toBeNull();
+    expect(buildRenderBackendPin({ generation: {} })).toBeNull();
+    expect(buildRenderBackendPin({})).toBeNull();
+    expect(buildRenderBackendPin(null)).toBeNull();
+  });
+
+  it('a model id alone is not a pin — the mode has to name a backend', () => {
+    expect(buildRenderBackendPin({ generation: { imageMode: 'auto', imageModelId: 'example-model' } })).toBeNull();
+  });
+
+  it('carries a pinned image backend and its model id', () => {
+    expect(buildRenderBackendPin({ generation: { imageMode: 'local', imageModelId: ' example-model ' } }))
+      .toEqual({ image: { mode: 'local', modelId: 'example-model' } });
+  });
+
+  it('carries a cloud pin with a null model id (cloud CLIs pick their own model)', () => {
+    expect(buildRenderBackendPin({ generation: { imageMode: 'grok', imageModelId: null } }))
+      .toEqual({ image: { mode: 'grok', modelId: null } });
+  });
+
+  it('carries both kinds for a music-video commission', () => {
+    expect(buildRenderBackendPin({
+      generation: { videoMode: 'grok', videoModelId: null, imageMode: 'codex', imageModelId: null },
+    })).toEqual({ video: { mode: 'grok', modelId: null }, image: { mode: 'codex', modelId: null } });
+  });
+
+  it('is reflected in buildProjectParams only when pinned', () => {
+    const ctx = { defaultVideoModelId: () => 'ltx-default' };
+    const unpinned = getAbilityAdapter('image').buildProjectParams({ generation: { imageMode: 'auto' } }, ctx);
+    expect(unpinned).not.toHaveProperty('renderBackend');
+
+    const pinned = getAbilityAdapter('image').buildProjectParams({ generation: { imageMode: 'grok' } }, ctx);
+    expect(pinned.renderBackend).toEqual({ image: { mode: 'grok', modelId: null } });
   });
 });

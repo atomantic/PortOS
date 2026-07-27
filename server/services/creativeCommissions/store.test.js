@@ -93,13 +93,46 @@ describe('sanitizeCommission', () => {
     const img = sanitizeCommission({ id: 'c1', targetAbility: 'image', generation: { imageCount: 4, targetDurationSeconds: 30 } });
     expect(img.targetAbility).toBe('image');
     // Keeps the image key; drops the off-type video duration key.
-    expect(img.generation).toEqual({ model: null, quality: 'standard', aspectRatio: '16:9', imageCount: 4 });
+    expect(img.generation).toEqual({
+      model: null, quality: 'standard', aspectRatio: '16:9', imageCount: 4,
+      imageMode: 'auto', imageModelId: null,
+    });
 
     const music = sanitizeCommission({ id: 'c2', targetAbility: 'music', generation: { lengthSeconds: 60 } });
     expect(music.generation).toEqual({ model: null, lengthSeconds: 60 });
 
     const series = sanitizeCommission({ id: 'c3', targetAbility: 'series', generation: { episodeCount: 2 } });
     expect(series.generation).toEqual({ model: null, episodeCount: 2 });
+  });
+
+  it('round-trips a render-backend pin and normalizes a blank model id to null (#3135)', () => {
+    const pinned = sanitizeCommission({
+      id: 'c-pin', targetAbility: 'image',
+      generation: { imageMode: 'grok', imageModelId: '  ' },
+    });
+    expect(pinned.generation.imageMode).toBe('grok');
+    // A blank id means "the install default" — a real value, normalized not rejected.
+    expect(pinned.generation.imageModelId).toBeNull();
+
+    const localPin = sanitizeCommission({
+      id: 'c-pin2', targetAbility: 'video',
+      generation: { videoMode: 'local', videoModelId: ' example-model ' },
+    });
+    expect(localPin.generation.videoMode).toBe('local');
+    expect(localPin.generation.videoModelId).toBe('example-model');
+  });
+
+  it('defaults a legacy (pre-#3135) record to the auto sentinel — no behavior change', () => {
+    // The hard back-compat criterion: an existing commission with no pin reads as
+    // `auto`, which buildRenderBackendPin turns into no project pin at all.
+    const legacy = sanitizeCommission({ id: 'c-legacy', targetAbility: 'image', generation: { imageCount: 2 } });
+    expect(legacy.generation.imageMode).toBe('auto');
+    expect(legacy.generation.imageModelId).toBeNull();
+  });
+
+  it('falls back to auto for an unrecognized backend value (a hand-edited row)', () => {
+    const bad = sanitizeCommission({ id: 'c-bad', targetAbility: 'image', generation: { imageMode: 'midjourney' } });
+    expect(bad.generation.imageMode).toBe('auto');
   });
 
   it('preserves an unknown (forward-version) output type verbatim so a newer peer record round-trips (#2769)', () => {

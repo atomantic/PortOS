@@ -90,6 +90,30 @@ export const creativeDirectorModelOverridesSchema = z.object({
   evaluation: creativeDirectorStagePinSchema.optional(),
 }).strict();
 
+// Per-project RENDER-backend pin (#3135) — which image/video backend the
+// project's enqueued media jobs actually render on (local diffusion / Codex
+// imagegen / Grok), as opposed to `modelOverrides` above, which pins the LLM that
+// *thinks*. Set from a creative commission's `generation.imageMode`/`.videoMode`
+// (the pin has to ride the project because the planner's enqueue tool only sees
+// `ctx.projectId`); a hand-made project leaves it null and the enqueue resolves
+// the install-wide default exactly as before.
+//
+// Values stay permissive strings rather than a re-typed enum: the forcing step in
+// `creative/tools/media.js` validates the mode against the live backend enums +
+// enable toggles at dispatch (`resolveQueueImageMode` / `resolveVideoMode`), so an
+// unusable pin degrades to the default instead of failing a render. Additive on
+// the project record (round-trips through the JSONB `data` column verbatim), so
+// it needs no `creativeDirectorProjects` schema-version bump.
+const creativeDirectorRenderPinSchema = z.object({
+  mode: z.string().max(32).nullable().optional(),
+  modelId: z.string().max(64).nullable().optional(),
+}).strict();
+
+export const creativeDirectorRenderBackendSchema = z.object({
+  image: creativeDirectorRenderPinSchema.optional(),
+  video: creativeDirectorRenderPinSchema.optional(),
+}).strict();
+
 export const creativeDirectorProjectCreateSchema = z.object({
   name: z.string().min(1).max(200),
   aspectRatio: creativeDirectorAspectRatioSchema,
@@ -124,6 +148,9 @@ export const creativeDirectorProjectCreateSchema = z.object({
   // Optional per-project provider/model pins for the treatment/plan/evaluation
   // stages. Absent → every stage inherits the global AI Assignment.
   modelOverrides: creativeDirectorModelOverridesSchema.optional(),
+  // Optional per-project image/video RENDER-backend pin (#3135). Absent → each
+  // enqueued media job resolves the install-wide default.
+  renderBackend: creativeDirectorRenderBackendSchema.nullable().optional(),
 });
 
 // Autonomous auto-cast (#1810). `types` narrows the catalog search to a set of

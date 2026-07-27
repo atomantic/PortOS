@@ -4,6 +4,7 @@ import {
   describeSchedule, describeAssignment,
   ABILITY_OPTIONS, GENERATION_FIELDS_BY_ABILITY, GENERATION_DEFAULTS_BY_ABILITY,
   generationToForm, mergeGenerationForAbility, generationToPayload,
+  backendFieldsForAbility, RENDER_BACKEND_AUTO,
 } from './commissionForm.js';
 
 describe('commissionForm helpers', () => {
@@ -16,7 +17,10 @@ describe('commissionForm helpers', () => {
       expect(f.brief).toEqual({ intent: '', genre: '', styleSpec: '' });
       expect(f.schedule.kind).toBe('DAILY');
       expect(f.schedule.atLocalTime).toBe('02:00');
-      expect(f.generation).toEqual({ quality: 'standard', aspectRatio: '16:9', targetDurationSeconds: 10 });
+      expect(f.generation).toEqual({
+        quality: 'standard', aspectRatio: '16:9', targetDurationSeconds: 10,
+        videoMode: 'auto', videoModelId: null,
+      });
       expect(f.assignment).toEqual({ providerId: '', model: '' });
       expect(f.feedbackWindow).toBe(5);
     });
@@ -133,9 +137,13 @@ describe('commissionForm helpers', () => {
     });
 
     it('generationToForm fills the ability defaults and keeps only that ability keys', () => {
-      expect(generationToForm('image', {})).toEqual({ quality: 'standard', aspectRatio: '16:9', imageCount: 1 });
+      expect(generationToForm('image', {})).toEqual({
+        quality: 'standard', aspectRatio: '16:9', imageCount: 1, imageMode: 'auto', imageModelId: null,
+      });
       // A stored video key is ignored when projecting as image.
-      expect(generationToForm('image', { imageCount: 4, targetDurationSeconds: 30 })).toEqual({ quality: 'standard', aspectRatio: '16:9', imageCount: 4 });
+      expect(generationToForm('image', { imageCount: 4, targetDurationSeconds: 30 })).toEqual({
+        quality: 'standard', aspectRatio: '16:9', imageCount: 4, imageMode: 'auto', imageModelId: null,
+      });
       expect(generationToForm('music', { lengthSeconds: 60 })).toEqual({ lengthSeconds: 60 });
     });
 
@@ -148,7 +156,7 @@ describe('commissionForm helpers', () => {
     it('mergeGenerationForAbility carries overlapping keys across a type switch', () => {
       // video → image keeps quality/aspectRatio, seeds imageCount default, drops duration.
       expect(mergeGenerationForAbility('image', { quality: 'high', aspectRatio: '9:16', targetDurationSeconds: 20 }))
-        .toEqual({ quality: 'high', aspectRatio: '9:16', imageCount: 1 });
+        .toEqual({ quality: 'high', aspectRatio: '9:16', imageCount: 1, imageMode: 'auto', imageModelId: null });
       // image → music keeps nothing overlapping, just the music default.
       expect(mergeGenerationForAbility('music', { imageCount: 4 })).toEqual({ lengthSeconds: 30 });
     });
@@ -156,7 +164,7 @@ describe('commissionForm helpers', () => {
     it('generationToPayload emits only the ability keys and coerces numbers', () => {
       // number inputs arrive as strings from the DOM.
       expect(generationToPayload('image', { quality: 'standard', aspectRatio: '1:1', imageCount: '3' }))
-        .toEqual({ quality: 'standard', aspectRatio: '1:1', imageCount: 3 });
+        .toEqual({ quality: 'standard', aspectRatio: '1:1', imageCount: 3, imageMode: 'auto', imageModelId: null });
       expect(generationToPayload('music', { lengthSeconds: '45' })).toEqual({ lengthSeconds: 45 });
     });
 
@@ -164,7 +172,16 @@ describe('commissionForm helpers', () => {
       const form = toForm({ name: 'Daily Stills', targetAbility: 'image', brief: { intent: 'x' }, generation: { imageCount: 2 } });
       const payload = toPayload(form);
       expect(payload.targetAbility).toBe('image');
-      expect(payload.generation).toEqual({ quality: 'standard', aspectRatio: '16:9', imageCount: 2 });
+      expect(payload.generation).toEqual({
+        quality: 'standard', aspectRatio: '16:9', imageCount: 2, imageMode: 'auto', imageModelId: null,
+      });
+    });
+
+    it('validateForm ignores the non-numeric backend fields', () => {
+      // A backend descriptor has no min/max — the numeric guard must skip it or
+      // every image commission would fail validation on `imageMode`.
+      const form = { ...blankForm(), name: 'x', brief: { intent: 'y' }, targetAbility: 'image', generation: generationToForm('image', {}) };
+      expect(validateForm(form)).toBeNull();
     });
 
     it('validateForm rejects an out-of-range per-ability number', () => {
@@ -175,6 +192,68 @@ describe('commissionForm helpers', () => {
       expect(validateForm(badImage)).toMatch(/Image count/);
       const clearedMusic = { ...base, targetAbility: 'music', generation: { lengthSeconds: '' } };
       expect(validateForm(clearedMusic)).toMatch(/Length/);
+    });
+  });
+
+  describe('render-backend pin (#3135)', () => {
+    it('declares backend fields only for the abilities that enqueue that render kind', () => {
+      expect(backendFieldsForAbility('image').map((f) => f.key)).toEqual(['imageMode']);
+      expect(backendFieldsForAbility('video').map((f) => f.key)).toEqual(['videoMode']);
+      // A music video renders both a video and (potentially) stills for it.
+      expect(backendFieldsForAbility('music-video').map((f) => f.key)).toEqual(['videoMode', 'imageMode']);
+      expect(backendFieldsForAbility('music')).toEqual([]);
+      expect(backendFieldsForAbility('series')).toEqual([]);
+    });
+
+    it('defaults to auto with no model id — the pre-#3135 behavior', () => {
+      const f = toForm({ targetAbility: 'image', brief: { intent: 'x' } });
+      expect(f.generation.imageMode).toBe(RENDER_BACKEND_AUTO);
+      expect(f.generation.imageModelId).toBeNull();
+      expect(toPayload(f).generation.imageMode).toBe('auto');
+      expect(toPayload(f).generation.imageModelId).toBeNull();
+    });
+
+    it('projects a stored pin (mode + model) back onto the form', () => {
+      const f = toForm({
+        targetAbility: 'image', brief: { intent: 'x' },
+        generation: { imageMode: 'local', imageModelId: 'example-model' },
+      });
+      expect(f.generation.imageMode).toBe('local');
+      expect(f.generation.imageModelId).toBe('example-model');
+    });
+
+    it('sends the model id for a model-bearing backend', () => {
+      const payload = generationToPayload('image', {
+        quality: 'standard', aspectRatio: '16:9', imageCount: 1, imageMode: 'local', imageModelId: 'example-model',
+      });
+      expect(payload.imageMode).toBe('local');
+      expect(payload.imageModelId).toBe('example-model');
+    });
+
+    it('nulls a stale model id when the pinned backend has no model knob', () => {
+      // Cloud CLIs pick their own model — a leftover local model id must not ride
+      // along, and must be sent as null (not omitted) so the server merge clears it.
+      const payload = generationToPayload('image', {
+        quality: 'standard', aspectRatio: '16:9', imageCount: 1, imageMode: 'grok', imageModelId: 'example-model',
+      });
+      expect(payload.imageMode).toBe('grok');
+      expect(payload.imageModelId).toBeNull();
+      expect('imageModelId' in payload).toBe(true);
+    });
+
+    it('emits both video and image pins for a music-video commission', () => {
+      const payload = generationToPayload('music-video', {
+        quality: 'standard', aspectRatio: '16:9', targetDurationSeconds: 10,
+        videoMode: 'grok', videoModelId: null, imageMode: 'local', imageModelId: 'example-model',
+      });
+      expect(payload.videoMode).toBe('grok');
+      expect(payload.imageMode).toBe('local');
+      expect(payload.imageModelId).toBe('example-model');
+    });
+
+    it('never emits a backend key for an ability that has none', () => {
+      const payload = generationToPayload('music', { lengthSeconds: 30, imageMode: 'grok' });
+      expect(payload).toEqual({ lengthSeconds: 30 });
     });
   });
 });

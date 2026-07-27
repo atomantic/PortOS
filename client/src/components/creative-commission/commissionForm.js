@@ -26,6 +26,42 @@ const QUALITY_FIELD = { key: 'quality', label: 'Quality', type: 'select', option
 const ASPECT_FIELD = { key: 'aspectRatio', label: 'Aspect ratio', type: 'select', options: [['16:9', '16:9'], ['9:16', '9:16'], ['1:1', '1:1']] };
 const DURATION_FIELD = { key: 'targetDurationSeconds', label: 'Duration (sec)', type: 'number', min: 5, max: 600 };
 
+// Render-backend pin (#3135) — the client mirror of the server's
+// CREATIVE_COMMISSION_IMAGE_MODES / _VIDEO_MODES. `auto` is the default and means
+// "no pin": the scheduled fire resolves the install-wide default exactly as it did
+// before the pin existed. `type: 'backend'` fields render as a mode picker plus a
+// conditional model picker (see CommissionConfigForm's RenderBackendSection),
+// mirroring the pipeline's VisualGenSettings UX; the generic field renderer in
+// GenerationSection skips them.
+export const RENDER_BACKEND_AUTO = 'auto';
+
+export const IMAGE_BACKEND_OPTIONS = [
+  [RENDER_BACKEND_AUTO, 'Auto (install default)'],
+  ['local', 'Local diffusion'],
+  ['codex', 'Codex'],
+  ['grok', 'Grok'],
+];
+
+export const VIDEO_BACKEND_OPTIONS = [
+  [RENDER_BACKEND_AUTO, 'Auto (install default)'],
+  ['local', 'Local (MLX)'],
+  ['grok', 'Grok'],
+];
+
+// `modelKind` names which media-model catalog the conditional model picker reads,
+// and `modelModes` lists the modes that HAVE a model knob — the cloud CLIs pick
+// their own model, so the picker only appears for local.
+const IMAGE_BACKEND_FIELD = {
+  key: 'imageMode', modelKey: 'imageModelId', label: 'Image backend', type: 'backend',
+  options: IMAGE_BACKEND_OPTIONS, modelKind: 'image', modelModes: ['local'],
+  modelLabel: 'Local image model',
+};
+const VIDEO_BACKEND_FIELD = {
+  key: 'videoMode', modelKey: 'videoModelId', label: 'Video backend', type: 'backend',
+  options: VIDEO_BACKEND_OPTIONS, modelKind: 'video', modelModes: ['local'],
+  modelLabel: 'Local video model',
+};
+
 // Per-ability generation field descriptors — the client mirror of the server's
 // GENERATION_KEY_DEFS / ABILITY_GENERATION_SPEC (server/lib/creativeCommissionValidation.js).
 // The config form renders exactly these fields for the selected type. There is no
@@ -34,10 +70,10 @@ const DURATION_FIELD = { key: 'targetDurationSeconds', label: 'Duration (sec)', 
 // client-internal invariant (every field has a matching default), not server↔client
 // parity.
 export const GENERATION_FIELDS_BY_ABILITY = {
-  video: [QUALITY_FIELD, ASPECT_FIELD, DURATION_FIELD],
-  image: [QUALITY_FIELD, ASPECT_FIELD, { key: 'imageCount', label: 'Image count', type: 'number', min: 1, max: 6 }],
+  video: [QUALITY_FIELD, ASPECT_FIELD, DURATION_FIELD, VIDEO_BACKEND_FIELD],
+  image: [QUALITY_FIELD, ASPECT_FIELD, { key: 'imageCount', label: 'Image count', type: 'number', min: 1, max: 6 }, IMAGE_BACKEND_FIELD],
   music: [{ key: 'lengthSeconds', label: 'Length (sec)', type: 'number', min: 5, max: 600 }],
-  'music-video': [QUALITY_FIELD, ASPECT_FIELD, DURATION_FIELD],
+  'music-video': [QUALITY_FIELD, ASPECT_FIELD, DURATION_FIELD, VIDEO_BACKEND_FIELD, IMAGE_BACKEND_FIELD],
   series: [{ key: 'episodeCount', label: 'Episodes', type: 'number', min: 1, max: 6 }],
 };
 
@@ -45,12 +81,21 @@ export const GENERATION_FIELDS_BY_ABILITY = {
 // project a stored record into the form and to seed the fields when the user
 // switches output type.
 export const GENERATION_DEFAULTS_BY_ABILITY = {
-  video: { quality: 'standard', aspectRatio: '16:9', targetDurationSeconds: 10 },
-  image: { quality: 'standard', aspectRatio: '16:9', imageCount: 1 },
+  video: { quality: 'standard', aspectRatio: '16:9', targetDurationSeconds: 10, videoMode: RENDER_BACKEND_AUTO, videoModelId: null },
+  image: { quality: 'standard', aspectRatio: '16:9', imageCount: 1, imageMode: RENDER_BACKEND_AUTO, imageModelId: null },
   music: { lengthSeconds: 30 },
-  'music-video': { quality: 'standard', aspectRatio: '16:9', targetDurationSeconds: 10 },
+  'music-video': {
+    quality: 'standard', aspectRatio: '16:9', targetDurationSeconds: 10,
+    videoMode: RENDER_BACKEND_AUTO, videoModelId: null, imageMode: RENDER_BACKEND_AUTO, imageModelId: null,
+  },
   series: { episodeCount: 1 },
 };
+
+// The render-backend descriptors for an ability, in field order. Drives the
+// dedicated backend section; the generic field grid skips `type: 'backend'`.
+export function backendFieldsForAbility(ability) {
+  return (GENERATION_FIELDS_BY_ABILITY[abilityOr(ability)] || []).filter((f) => f.type === 'backend');
+}
 
 function abilityOr(ability) {
   return GENERATION_DEFAULTS_BY_ABILITY[ability] ? ability : 'video';
@@ -86,6 +131,19 @@ export function generationToPayload(ability, generation) {
   const out = {};
   for (const field of fields) {
     const v = generation?.[field.key];
+    if (field.type === 'backend') {
+      // A backend descriptor owns TWO record keys. The model id only travels when
+      // the pinned mode actually has a model knob — otherwise a stale id left over
+      // from a previous local pin would ride along on a cloud pin and confuse the
+      // stored record. Send `null` (not omit) so clearing a pin clears the id too:
+      // the server merges `generation` shallowly, and an omitted key would preserve
+      // the stale value (the absent-vs-empty rule).
+      const mode = v || RENDER_BACKEND_AUTO;
+      const model = generation?.[field.modelKey];
+      out[field.key] = mode;
+      out[field.modelKey] = field.modelModes.includes(mode) && model ? model : null;
+      continue;
+    }
     out[field.key] = field.type === 'number' ? Number(v) : v;
   }
   return out;

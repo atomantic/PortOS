@@ -44,6 +44,29 @@ export function normalizeModelOverrides(raw) {
   return out;
 }
 
+// Per-project RENDER-backend pin (#3135) — `renderBackend.{image,video}`, each an
+// optional `{ mode, modelId }`. Distinct from `modelOverrides` above: that pins the
+// LLM that THINKS, this pins the backend that RENDERS. Only kinds that name a
+// non-empty `mode` are kept, and the whole field normalizes to `null` when nothing
+// is pinned — so an unpinned project stores exactly what it stored pre-#3135 and
+// the enqueue-time forcing step has one falsy check instead of three.
+export const RENDER_BACKEND_KINDS = ['image', 'video'];
+
+export function normalizeRenderBackend(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out = {};
+  for (const kind of RENDER_BACKEND_KINDS) {
+    const v = raw[kind];
+    if (!v || typeof v !== 'object' || Array.isArray(v)) continue;
+    const mode = isStr(v.mode) ? v.mode.trim() : '';
+    const modelId = isStr(v.modelId) ? v.modelId.trim() : '';
+    // A modelId with no mode can't be dispatched (the queue routes on mode
+    // first), so drop a mode-less pin — it would resolve to the default anyway.
+    if (mode) out[kind] = { mode, ...(modelId ? { modelId } : {}) };
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 /**
  * Resolve the effective provider/model pin for one CD cognitive stage. The
  * per-project override wins when it names a providerId; otherwise the global
@@ -130,7 +153,7 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
     styleSpec = '', startingImageFile = null, userStory = null,
     disableAudio = true, autoAcceptScenes = false, sourceIssueId = null,
     cast = [], generateFirstPass = false, directive = null,
-    modelOverrides = {},
+    modelOverrides = {}, renderBackend = null,
   } = input;
   return {
     id,
@@ -190,6 +213,14 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
     // global AI Assignment. Additive — round-trips through the JSONB column
     // verbatim, so no schema-version bump is needed for federation.
     modelOverrides: normalizeModelOverrides(modelOverrides),
+    // Which image/video BACKEND this project's enqueued media jobs render on
+    // (#3135) — `{ image?: { mode, modelId? }, video?: { … } }`, or null for "use
+    // the install default", which is what every pre-#3135 project has. Set from a
+    // creative commission's `generation.imageMode`/`.videoMode` so a scheduled
+    // fire can't have its pinned backend silently overridden by the planner LLM's
+    // freehand job params. Additive — the whole record round-trips through the
+    // JSONB column verbatim, so this needs no schema-version bump.
+    renderBackend: normalizeRenderBackend(renderBackend),
     runs: [],
     // Soft-delete / LWW tombstone trio (#1564) — projects federate across peers
     // via the per-record push pipeline (record kind `creativeDirectorProject`,
