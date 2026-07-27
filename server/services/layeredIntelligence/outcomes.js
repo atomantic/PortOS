@@ -17,6 +17,7 @@ import {
 } from './constants.js';
 import { normalizeSlug, extractSlugFromBody, isIssueWithinDedupWindow } from './dedup.js';
 import { computePostApprovalCompletion, scopeKeyOf } from './awareness.js';
+import { formatApprovalFunnelLines } from './approvalFunnel.js';
 
 /**
  * Derive a resolved outcome for a filed proposal from its live tracker issue.
@@ -453,6 +454,10 @@ export function describeSuppressedIssue(issue, reasonBySlug = null) {
  *   1. Proposal merge rate      — do the user's triage decisions validate my picks?
  *   2. Already-filed proposals  — what have I said already that I must not repeat?
  *   3. LI execution health      — are my own agent runs even succeeding?
+ * Plus the APPROVAL FUNNEL (#3120) — approval rate over a sliding window, the
+ * pending-human-review backlog and its age buckets, time-to-decision, and
+ * proposal-phase throughput. Reported alongside the three but NOT counted toward
+ * `confidence`: it measures the approver's throughput, not LI's self-knowledge.
  *
  * Unlike computeOutcomesReport this ALWAYS returns a block when called: "you are
  * reasoning with no signal about yourself, hold a higher bar" is the single most
@@ -635,6 +640,17 @@ export function computeSelfEvalSummary({
       + `${health.deliveryConfident ? '' : ' — too small a sample to judge'}.`
     );
   }
+
+  // --- Signal 4: where are my proposals stuck in HUMAN review? ----------------
+  // The approval funnel (#3120): approval rate over a sliding window, the pending-review
+  // backlog with its age buckets, time-to-decision, and proposal-phase throughput. This
+  // is the one signal above that is about the APPROVER rather than about LI — a full
+  // review queue is a reason to file less, which no merge rate or delivery rate shows.
+  // Deliberately NOT folded into the confidence count below: the funnel measures the
+  // human's throughput, and "my approver is behind" is not evidence about LI's own
+  // reasoning quality, so letting it raise `confidence` would misreport the loop's
+  // self-knowledge. It carries its own guidance inline instead.
+  lines.push(...formatApprovalFunnelLines({ outcomes, now }));
 
   // --- Confidence: how much do I actually know about myself? ------------------
   // Purely a count of PRESENT signals — it rates the evidence available to the

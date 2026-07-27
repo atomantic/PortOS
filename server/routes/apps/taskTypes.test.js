@@ -175,6 +175,14 @@ describe('Apps Task-Type Routes', () => {
       expect(response.body.metrics.byScope['app-data-gap']).toMatchObject({
         approved: 0, abandonedAtFiling: 1, approvalToCompletionRate: null
       });
+      // The approval funnel (#3120): the human-review side of the same records. The
+      // fixture holds 3 decided + 1 pending, so the pending indicator is populated and
+      // the proposal-phase throughput is distinct from any agent-task rate.
+      expect(response.body.approvalFunnel.proposalPhase).toMatchObject({
+        totalFiled: 4, totalDecided: 3, totalPending: 1
+      });
+      expect(response.body.approvalFunnel.pending.count).toBe(1);
+      expect(response.body.approvalFunnel.windowDays).toBe(14);
       // Real diagnoses only in entries; the undiagnosed abandoned row is `unknown`.
       expect(response.body.rejections.entries).toEqual([{ reason: 'user-rejected', count: 1 }]);
       expect(response.body.rejections.unknown).toBe(1);
@@ -210,6 +218,9 @@ describe('Apps Task-Type Routes', () => {
       // Null, not a zeroed roll-up: an unreadable store must not read as "LI has
       // approved nothing and delivered nothing" — the same sentinel rule as `stats`.
       expect(response.body.metrics).toBeNull();
+      // Same sentinel rule for the funnel: an unreadable store must not report "0
+      // proposals awaiting review" — that is indistinguishable from a clean queue.
+      expect(response.body.approvalFunnel).toBeNull();
       expect(response.body.recent).toEqual([]);
     });
 

@@ -31,6 +31,7 @@ export * from './layeredIntelligence/dedup.js';
 export * from './layeredIntelligence/proposal.js';
 export * from './layeredIntelligence/outcomes.js';
 export * from './layeredIntelligence/awareness.js';
+export * from './layeredIntelligence/approvalFunnel.js';
 export * from './layeredIntelligence/gates.js';
 export * from './layeredIntelligence/prompt.js';
 export * from './layeredIntelligence/runCli.js';

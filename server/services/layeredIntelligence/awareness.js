@@ -198,6 +198,39 @@ export function computeExecutionByDomain(outcomes = []) {
 }
 
 /**
+ * Summarize a list of millisecond durations into the `{ count, averageMs, medianMs,
+ * p90Ms, minMs, maxMs }` shape every LI duration report uses. Pure; shared by the
+ * post-approval filed-to-completed durations and the approval-funnel time-to-decision
+ * medians (#3120) so the two can never disagree on how a median or p90 is picked.
+ *
+ * The input is filtered to finite, non-negative values (a record with an unparseable
+ * timestamp yields NaN and must not be laundered into a 0ms duration) and sorted, so
+ * callers can pass raw differences. An EMPTY sample reports `count: 0` with NULL
+ * statistics — the sentinel rule: "nothing has completed yet" is not "it completed
+ * instantly". The median of an even-length sample is the rounded mean of the two middle
+ * values; p90 is the nearest-rank value at ceil(n * 0.9).
+ */
+export function summarizeDurations(values = []) {
+  const durations = (Array.isArray(values) ? values : [])
+    .filter(value => Number.isFinite(value) && value >= 0)
+    .sort((a, b) => a - b);
+  if (durations.length === 0) {
+    return { count: 0, averageMs: null, medianMs: null, p90Ms: null, minMs: null, maxMs: null };
+  }
+  const median = durations.length % 2 === 1
+    ? durations[Math.floor(durations.length / 2)]
+    : Math.round((durations[(durations.length / 2) - 1] + durations[durations.length / 2]) / 2);
+  return {
+    count: durations.length,
+    averageMs: Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length),
+    medianMs: median,
+    p90Ms: durations[Math.max(0, Math.ceil(durations.length * 0.9) - 1)],
+    minMs: durations[0],
+    maxMs: durations.at(-1)
+  };
+}
+
+/**
  * Summarize what happens after a proposal has been approved/merged. The existing
  * outcome store already persists both sides of this lifecycle: `outcome: 'merged'`
  * marks approval, while `executionOutcome` records the terminal LI hand-off result.
@@ -231,27 +264,9 @@ export function computePostApprovalCompletion(outcomes = []) {
     const abandoned = records.filter(record => record.executionOutcome === 'failure').length;
     const completed = completedRecords.length;
     const attempted = completed + abandoned;
-    const durations = completedRecords
-      .map(record => Date.parse(record.executionAt) - Date.parse(record.filedAt))
-      .filter(duration => Number.isFinite(duration) && duration >= 0)
-      .sort((a, b) => a - b);
-    const percentile = (fraction) => {
-      if (durations.length === 0) return null;
-      return durations[Math.max(0, Math.ceil(durations.length * fraction) - 1)];
-    };
-    const median = durations.length % 2 === 1
-      ? durations[Math.floor(durations.length / 2)]
-      : Math.round((durations[(durations.length / 2) - 1] + durations[durations.length / 2]) / 2);
-    const duration = durations.length === 0
-      ? { count: 0, averageMs: null, medianMs: null, p90Ms: null, minMs: null, maxMs: null }
-      : {
-          count: durations.length,
-          averageMs: Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length),
-          medianMs: median,
-          p90Ms: percentile(0.9),
-          minMs: durations[0],
-          maxMs: durations.at(-1)
-        };
+    const duration = summarizeDurations(
+      completedRecords.map(record => Date.parse(record.executionAt) - Date.parse(record.filedAt))
+    );
     return {
       approved: records.length,
       completed,

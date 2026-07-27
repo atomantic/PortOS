@@ -1979,6 +1979,55 @@ describe('computeSelfEvalSummary (#2700)', () => {
     expect(report).not.toContain('DEGRADED');
   });
 
+  const DAY_AGO_MS = 24 * 60 * 60 * 1000;
+
+  it('folds the approval funnel into the block on every run (#3120)', () => {
+    const now = Date.parse('2026-07-20T12:00:00.000Z');
+    const ago = (ms) => new Date(now - ms).toISOString();
+    const report = computeSelfEvalSummary({
+      liTaskStats: liMetrics(),
+      existingIssues: [],
+      outcomes: [
+        { slug: 'approved-one', outcome: 'merged', filedAt: ago(5 * DAY_AGO_MS), outcomeAt: ago(3 * DAY_AGO_MS) },
+        { slug: 'rejected-one', outcome: 'rejected', filedAt: ago(6 * DAY_AGO_MS), outcomeAt: ago(2 * DAY_AGO_MS) },
+        { slug: 'stalled-one', outcome: null, filedAt: ago(9 * DAY_AGO_MS), outcomeAt: null }
+      ],
+      now
+    });
+    expect(report).toContain('LI approval rate (last 14d): 50%');
+    expect(report).toContain('LI time-to-decision: median');
+    expect(report).toContain('PENDING HUMAN REVIEW: 1 filed proposal(s)');
+    expect(report).toContain('LI proposal-phase throughput');
+  });
+
+  it('omits the pending-review indicator when the count is zero (#3120)', () => {
+    const report = computeSelfEvalSummary({
+      liTaskStats: liMetrics(),
+      outcomes: [{ slug: 'done', outcome: 'merged', filedAt: '2026-07-18T00:00:00.000Z', outcomeAt: '2026-07-19T00:00:00.000Z' }],
+      now: Date.parse('2026-07-20T12:00:00.000Z')
+    });
+    expect(report).not.toContain('PENDING HUMAN REVIEW');
+  });
+
+  it('reports the funnel as UNAVAILABLE when outcomes were not gathered (#3120)', () => {
+    const report = computeSelfEvalSummary({ outcomes: null, liTaskStats: liMetrics() });
+    expect(report).toContain('LI approval funnel: UNAVAILABLE');
+    expect(report).not.toContain('PENDING HUMAN REVIEW');
+  });
+
+  it('does not let the approval funnel inflate the confidence count (#3120)', () => {
+    // The funnel measures the APPROVER's throughput, not LI's self-knowledge — a rich
+    // funnel must not make a signal-less loop look well-informed.
+    const now = Date.parse('2026-07-20T12:00:00.000Z');
+    const report = computeSelfEvalSummary({
+      outcomes: [
+        { slug: 'a', outcome: 'merged', filedAt: new Date(now - 4 * DAY_AGO_MS).toISOString(), outcomeAt: new Date(now - 2 * DAY_AGO_MS).toISOString() }
+      ],
+      now
+    });
+    expect(report).toContain('Reasoning confidence: low');
+  });
+
   it('rates confidence high with all three signals, and drops guidance', () => {
     const outcomes = Array.from({ length: 6 }, () => ({ outcome: 'merged' }));
     const report = computeSelfEvalSummary({

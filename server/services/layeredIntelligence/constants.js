@@ -172,6 +172,22 @@ export const LI_DEGRADED_MIN_SAMPLE = 4;
 // CONFIDENT read (>= LI_DEGRADED_MIN_SAMPLE runs) — a cold loop is never locked out.
 export const LI_HARD_GATE_EXECUTION_THRESHOLD = 75;
 
+// Sliding window for the approval-funnel metrics (#3120) — the span over which the
+// approval rate and the time-to-decision medians are measured. Deliberately SHORTER
+// than the 30-day record retention (CLOSED_SUPPRESSION_MS, which is the hard ceiling on
+// what the store can still see): a window equal to retention would make the "recent"
+// rate identical to the lifetime rate summarizeOutcomeStats already reports, so it would
+// never move when the user's triage behavior changes. Two weeks is long enough to hold
+// several proposals from a loop that files at most one per run, short enough that a
+// change in triage habits shows up within a couple of runs.
+export const LI_APPROVAL_FUNNEL_WINDOW_MS = 14 * DAY;
+
+// Age thresholds (in days) for the approver-delay buckets (#3120): how many proposals
+// are sitting undecided past each mark. CUMULATIVE and ascending — a proposal 9 days old
+// counts in all three — so the buckets read as a decay curve rather than a partition.
+// Ascending order is load-bearing for the rendered line and the bucket keys.
+export const LI_APPROVAL_DELAY_BUCKET_DAYS = [1, 3, 7];
+
 // Approved proposals need a separate evidence floor from LI's own reasoning runs:
 // a single accepted proposal that is still awaiting execution is not enough evidence
 // to lock the loop out of self-directed work. Once five approvals exist, a poor
