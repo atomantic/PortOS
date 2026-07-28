@@ -87,6 +87,14 @@ export function applyProjectPatch(project, patch) {
   if (patch.status && !MUSIC_VIDEO_STATUSES.includes(patch.status)) {
     throw new ServerError(`Invalid status: ${patch.status}`, { status: 400, code: 'VALIDATION_ERROR' });
   }
+  // A `concept` patch merges into the existing concept sub-fields rather than
+  // replacing the whole object — mirrors applySceneUpdate's per-field scene merge
+  // below, so a caller sending only the sub-field it edited (e.g. { style: '…' })
+  // can't clobber a sibling sub-field (e.g. prompt) set concurrently by another
+  // sync peer (#3168). An explicit `concept: null` still clears it outright.
+  const mergedPatch = ('concept' in patch && patch.concept && project.concept)
+    ? { ...patch, concept: { ...project.concept, ...patch.concept } }
+    : patch;
   // Changing the audio source invalidates the cached beat/tempo analysis —
   // it was computed from the OLD track. AI Plan / Auto-arrange / BeatTimeline
   // gate on `audioAnalysis` truthiness, and the render's beat-snap step reads
@@ -100,7 +108,7 @@ export function applyProjectPatch(project, patch) {
   // the flag set would render the old song's cut points against new audio.
   const trackChanged = ('trackId' in patch && patch.trackId !== project.trackId)
     || ('uploadedAudioFilename' in patch && patch.uploadedAudioFilename !== project.uploadedAudioFilename);
-  if (!trackChanged) return touch(project, patch);
+  if (!trackChanged) return touch(project, mergedPatch);
   const scenes = (project.scenes || []).map((s) => (s.beatAligned ? { ...s, beatAligned: false } : s));
   // Clearing audioAnalysis means the project must be re-analyzed before it can be
   // planned/arranged/rendered, so a status that implies analysis existed
@@ -112,7 +120,7 @@ export function applyProjectPatch(project, patch) {
   const statusPatch = regressStatus ? { status: 'draft' } : {};
   // The MIDI transcription was produced from the OLD audio too — clear it with
   // the analysis so a stale .mid can't masquerade as the new track's score.
-  return touch(project, { ...patch, ...statusPatch, audioAnalysis: null, midiTranscription: null, scenes });
+  return touch(project, { ...mergedPatch, ...statusPatch, audioAnalysis: null, midiTranscription: null, scenes });
 }
 
 /**

@@ -142,6 +142,23 @@ describe('applyProjectPatch', () => {
     const next = applyProjectPatch(withScenes, { name: 'Renamed' });
     expect(next.scenes[0].beatAligned).toBe(true);
   });
+
+  it('merges a concept patch into the existing concept instead of replacing it (#3168)', () => {
+    const withConcept = { ...baseProject(), concept: { prompt: 'A road trip', style: 'Cyberpunk anime' } };
+    const next = applyProjectPatch(withConcept, { concept: { style: 'Watercolor noir' } });
+    expect(next.concept).toEqual({ prompt: 'A road trip', style: 'Watercolor noir' });
+  });
+
+  it('sets a concept sub-field on a project with no existing concept', () => {
+    const next = applyProjectPatch(baseProject(), { concept: { prompt: 'Underwater festival' } });
+    expect(next.concept).toEqual({ prompt: 'Underwater festival' });
+  });
+
+  it('clears the concept outright when the patch sets it to null', () => {
+    const withConcept = { ...baseProject(), concept: { prompt: 'A road trip', style: 'Cyberpunk anime' } };
+    const next = applyProjectPatch(withConcept, { concept: null });
+    expect(next.concept).toBeNull();
+  });
 });
 
 describe('setAudioAnalysis', () => {

@@ -262,7 +262,7 @@ describe('MusicVideo concept & style editor (#3168)', () => {
     fireEvent.blur(conceptField);
     await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(
       'mv-2',
-      { concept: { prompt: 'A heist across a dying star', style: 'Cyberpunk anime' } },
+      { concept: { prompt: 'A heist across a dying star' } },
       { silent: true },
     ));
 
@@ -270,9 +270,19 @@ describe('MusicVideo concept & style editor (#3168)', () => {
     fireEvent.blur(styleField);
     await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(
       'mv-2',
-      { concept: { prompt: 'A heist across a dying star', style: 'Watercolor noir' } },
+      { concept: { style: 'Watercolor noir' } },
       { silent: true },
     ));
+  });
+
+  it('does not re-PATCH when a field is focused and blurred without an edit', async () => {
+    const withConcept = { ...PROJECT_NO_CLIP, concept: { prompt: 'Unchanged', style: 'Unchanged' } };
+    await openProject(withConcept);
+    const conceptField = await screen.findByLabelText('Concept');
+    fireEvent.focus(conceptField);
+    fireEvent.blur(conceptField);
+    await settle();
+    expect(updateMusicVideoProject).not.toHaveBeenCalled();
   });
 
   it('starts empty and enables AI Plan to use them once set', async () => {

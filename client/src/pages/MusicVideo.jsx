@@ -22,6 +22,7 @@ import {
   cancelMusicVideoMidiTranscription,
 } from '../services/apiMusicVideo.js';
 import useMidiTranscription from '../hooks/useMidiTranscription.js';
+import useFieldDraft from '../hooks/useFieldDraft.js';
 import MidiInstallModal from '../components/install/MidiInstallModal.jsx';
 import MidiGatedModal from '../components/install/MidiGatedModal.jsx';
 import MidiVisualization from '../components/songs/MidiVisualization.jsx';
@@ -462,16 +463,21 @@ export default function MusicVideo() {
       .catch((err) => toast.error(err?.message || 'Failed to save scene'));
   };
 
-  // Project-level concept/style (issue #3168) — same optimistic-local + silent-PATCH
-  // blur pattern as scene fields. Consumed by buildScenePlanPrompt (AI Plan) and by
-  // buildFramePrompt/buildShotPrompt's style suffix, both already reading concept.
-  const editConceptLocal = (patch) => {
+  // Project-level concept/style (issue #3168) — optimistic-local + silent-PATCH on
+  // commit, same as commitSceneTiming below. Sends only the changed sub-field;
+  // the server merges it into the existing concept (applyProjectPatch), so a
+  // stale local copy can't clobber a sibling sub-field. Consumed by
+  // buildScenePlanPrompt (AI Plan) and by buildFramePrompt/buildShotPrompt's
+  // style suffix, both already reading concept.
+  const commitConcept = (patch) => {
     replaceProject({ ...selected, concept: { ...selected.concept, ...patch } });
-  };
-  const saveConcept = (patch) => {
-    updateMusicVideoProject(selected.id, { concept: { ...selected.concept, ...patch } }, { silent: true })
+    updateMusicVideoProject(selected.id, { concept: patch }, { silent: true })
       .catch((err) => toast.error(err?.message || 'Failed to save concept'));
   };
+  // Buffered so a concept/style keystroke doesn't fire a round-trip per character,
+  // and a focus-without-edit blur doesn't re-PATCH an unchanged value.
+  const conceptDraft = useFieldDraft(selected?.concept?.prompt, (v) => commitConcept({ prompt: v }));
+  const styleDraft = useFieldDraft(selected?.concept?.style, (v) => commitConcept({ style: v }));
   // BeatTimeline drag commit — same optimistic-local + silent-PATCH pattern as
   // the other scene field editors (#1854).
   const commitSceneTiming = (sceneId, patch) => {
@@ -717,19 +723,17 @@ export default function MusicVideo() {
                   </div>
                 </div>
                 {/* Concept & style — optional global direction for the whole video,
-                    set before "AI Plan" so buildScenePlanPrompt (server) can build on
-                    it, and reused by buildFramePrompt/buildShotPrompt's style suffix
-                    (issue #3168). Local-edit + blur-save, same pattern as scene fields. */}
+                    set before "AI Plan" (see commitConcept above for what reads it). */}
                 <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <div>
                     <label htmlFor="mv-concept" className="block text-xs text-port-text-muted mb-1">Concept</label>
                     <textarea
                       id="mv-concept"
-                      value={selected.concept?.prompt || ''}
+                      value={conceptDraft.value}
                       rows={2}
                       maxLength={8000}
-                      onChange={(e) => editConceptLocal({ prompt: e.target.value })}
-                      onBlur={(e) => saveConcept({ prompt: e.target.value })}
+                      onChange={conceptDraft.onChange}
+                      onBlur={conceptDraft.onBlur}
                       placeholder="What is this video about — story, theme, or narrative thread for the AI plan to build on."
                       className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
                     />
@@ -738,11 +742,11 @@ export default function MusicVideo() {
                     <label htmlFor="mv-style" className="block text-xs text-port-text-muted mb-1">Visual style</label>
                     <textarea
                       id="mv-style"
-                      value={selected.concept?.style || ''}
+                      value={styleDraft.value}
                       rows={2}
                       maxLength={2000}
-                      onChange={(e) => editConceptLocal({ style: e.target.value })}
-                      onBlur={(e) => saveConcept({ style: e.target.value })}
+                      onChange={styleDraft.onChange}
+                      onBlur={styleDraft.onBlur}
                       placeholder="Art style, references, palette, mood — appended to every generated frame and shot prompt."
                       className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
                     />
