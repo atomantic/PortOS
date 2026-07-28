@@ -150,20 +150,27 @@ which claude
 
 **Symptom**: You pick an app as the workspace (in a CoS task, or **Settings → Providers → Run Prompt**) and ask the agent to create a file. It lands in the PortOS directory instead of the app's repo. Giving the agent an **absolute** path in the prompt works fine.
 
-**Cause**: The agent's working directory comes from the selected app's **Repository Path** (`repoPath`) — nothing else. If that value is empty, points at a folder that doesn't exist, or the app can't be resolved, PortOS falls back to its own directory, and a prompt naming a relative file (`HelloWorld.md`) writes there.
+**Cause**: The agent's working directory comes from the selected app's **Repository Path** (`repoPath`) — nothing else. If that value was empty, pointed at a folder that no longer exists, or the app couldn't be resolved, older versions of PortOS fell back to their own directory without saying so, and a prompt naming a relative file (`HelloWorld.md`) wrote there.
 
 **`PORTOS_WORKSPACE_ROOTS` does not control this.** That variable only scopes which directories the repo-detection and command-execution routes are allowed to read. Setting it will not change where an agent runs, and it is not required for agent workspaces to work.
 
 **Solution**:
-1. Open **Apps**, edit the app, and confirm **Repository Path** is the absolute path to the repo — e.g. `C:\Users\Example\Projects\MyApp` on Windows, `/Users/example/Projects/MyApp` on macOS/Linux. A path with a typo, a trailing quote, or a since-moved folder is the usual culprit.
-2. Re-run. PortOS logs the working directory it chose for every run:
+1. Open **Apps**, edit the app, and confirm **Repository Path** is the path to the repo — e.g. `C:\Users\Example\Projects\MyApp` on Windows, `/Users/example/Projects/MyApp` on macOS/Linux. A path with a typo, a trailing quote, or a since-moved folder is the usual culprit.
+2. Re-run and read the working directory PortOS now reports for every run:
    ```
    📂 Run <run-id> cwd: C:\Users\Example\Projects\MyApp
    ```
-   CoS tasks show the same thing in the task log as `📂 Agent workspace: …`. If you instead see a `⚠️` line saying the app did not resolve to a repo path, the app record is the problem — go back to step 1.
-3. If the configured path does not exist, the run now fails immediately with `Workspace path does not exist: …` rather than silently running in the PortOS folder. Fix the path and run again.
+   CoS tasks show the same line in the task log as `📂 Agent workspace: …`. If that path is your app's repo, the workspace is working — anything landing elsewhere is coming from the prompt, not the workspace setting.
 
-**Note for Windows**: use a real filesystem path with drive letter (`C:\...`). Both `C:\Users\...` and `C:/Users/...` work; a path inside OneDrive-redirected folders is fine as long as it exists locally.
+PortOS no longer falls back silently, so a misconfigured app now surfaces as one of these instead of a wrong-directory write:
+
+| What you see | What it means |
+|---|---|
+| `❌ Workspace path does not exist: <path>` (run fails immediately) | The Repository Path points somewhere that isn't there. Fix it in Apps and re-run. |
+| `❌ Workspace path is not a directory: <path>` | The Repository Path points at a file. Set it to the repo folder. |
+| `❌ App '<id>' has no usable Repository Path` (CoS task is **blocked**, no agent starts) | The app record has an empty Repository Path, or couldn't be found at all. Set it in Apps, then re-run the task. |
+
+**Note for Windows**: use a real filesystem path with a drive letter (`C:\...`). Both `C:\Users\...` and `C:/Users/...` work, as does a leading `~`; a path inside OneDrive-redirected folders is fine as long as it exists locally.
 
 ### Memory System Not Working
 
