@@ -216,13 +216,21 @@ describe('buildCliChildEnv — per-call-site composition', () => {
   });
 
   it('cos-runner/index.js: request envVars over process.env, no OpenCode layer, unguarded', () => {
-    // The runner receives loose envVars over HTTP with no `command` to classify.
+    // Mirrors the real call exactly — `before: envVars`, no provider record. The
+    // runner receives an ALREADY-composed delta over HTTP (agentLifecycle built it
+    // with composeProviderEnv), so this side must add only the base, the pin, and
+    // the strip; inventing an OpenCode config here would clobber the baked-in one.
     const env = buildCliChildEnv({
       baseEnv: { A: 'base', PATH: '/usr/bin', CLAUDECODE: '1' },
-      provider: { envVars: { A: 'request' } },
+      before: { A: 'request', OPENCODE_CONFIG_CONTENT: '{"baked":"upstream"}' },
       cwd: '/workspace',
     });
-    expect(env).toEqual({ A: 'request', PATH: '/usr/bin', PWD: '/workspace' });
+    expect(env).toEqual({
+      A: 'request',
+      OPENCODE_CONFIG_CONTENT: '{"baked":"upstream"}',
+      PATH: '/usr/bin',
+      PWD: '/workspace',
+    });
   });
 
   it('askService.js: no cwd means no PWD is invented', () => {

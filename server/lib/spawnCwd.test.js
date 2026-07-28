@@ -246,11 +246,33 @@ describe('every cwd-passing spawn pins PWD', () => {
    * reintroducing #3193 verbatim. `withSpawnCwdEnv(x, cwd)` can't be called without
    * one, so requiring the key keeps the two markers equally strong.
    *
-   * A window rather than a brace match, because an argument object nests
-   * (`before: { … }`) and `[^}]*` would stop at the inner brace.
+   * This reads the call's OWN argument list via a balanced-paren walk — NOT a
+   * fixed character window. A window is wrong here in the exact shape that
+   * matters: the statement after the composer is nearly always the spawn, whose
+   * options carry `cwd`, so a window sees the SPAWN's cwd and passes an unpinned
+   * composer call. That is not hypothetical — it is the natural way to write a
+   * new site, and it silently reopens #3193 with every test still green.
    */
-  const countCwdBearingComposerCalls = (src) => [...src.matchAll(/\bbuildCliChildEnv\s*\(/g)]
-    .filter((m) => /\bcwd\s*[:,}]/.test(src.slice(m.index, m.index + 400))).length;
+  const countCwdBearingComposerCalls = (src) => {
+    let count = 0;
+    for (const m of src.matchAll(/\bbuildCliChildEnv\s*\(/g)) {
+      // Walk from the call's open paren to its matching close paren, so nested
+      // object/array/call braces inside the argument (e.g. `before: { … }`) are
+      // spanned but the argument list is never overrun.
+      let depth = 0;
+      let end = src.length;
+      for (let i = src.indexOf('(', m.index); i < src.length; i += 1) {
+        const ch = src[i];
+        if (ch === '(' || ch === '{' || ch === '[') depth += 1;
+        else if (ch === ')' || ch === '}' || ch === ']') {
+          depth -= 1;
+          if (depth === 0) { end = i; break; }
+        }
+      }
+      if (/\bcwd\s*[:,}]/.test(src.slice(m.index, end))) count += 1;
+    }
+    return count;
+  };
 
   // A spawn is in scope when its options carry a `cwd` — either written inline
   // (`spawn(cmd, args, { cwd, ... })`) or FORWARDED from a caller-supplied
@@ -292,6 +314,35 @@ describe('every cwd-passing spawn pins PWD', () => {
     }
     return count;
   };
+
+  // The composer marker must read the COMPOSER call, not its surroundings. A
+  // fixed-width window failed exactly here: the statement after the composer is
+  // nearly always the spawn, whose options carry `cwd`, so the window matched the
+  // SPAWN's cwd and counted an unpinned composer call as pinned — passing this
+  // whole suite while the child inherited a stale PWD (#3193 reopened, silently).
+  it('does not count a composer call that omits cwd, even next to a cwd-passing spawn', () => {
+    const unpinned = [
+      'const childEnv = buildCliChildEnv({ provider, model });',
+      'const child = spawn(command, args, { cwd, env: childEnv });',
+    ].join('\n');
+    expect(spawnSitesInScope(unpinned), 'the spawn must still be in scope').toBe(1);
+    expect(
+      countCwdBearingComposerCalls(unpinned),
+      'a buildCliChildEnv call with no cwd must NOT count as a PWD pin',
+    ).toBe(0);
+  });
+
+  it('counts a composer call that passes cwd, including across a nested argument', () => {
+    expect(countCwdBearingComposerCalls('buildCliChildEnv({ provider, cwd });')).toBe(1);
+    // A nested object in an earlier slot must not end the argument-list walk.
+    expect(countCwdBearingComposerCalls(
+      'buildCliChildEnv({\n  before: { ...forgeTokenEnv, ...claudeSettingsEnv },\n  provider,\n  cwd,\n  guard: true,\n});',
+    )).toBe(1);
+    // ...and a nested object must not let the walk run on into the NEXT statement.
+    expect(countCwdBearingComposerCalls(
+      'buildCliChildEnv({ before: { A: 1 } });\nspawn(c, a, { cwd });',
+    )).toBe(0);
+  });
 
   it('discovers the cwd-passing spawn sites (guard is not vacuous)', () => {
     const found = collectServerSources().filter((rel) => spawnSitesInScope(readServerSource(rel)) > 0);
