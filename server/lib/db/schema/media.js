@@ -135,6 +135,22 @@ export const mediaDdl = [
     )`,
     `CREATE INDEX IF NOT EXISTS idx_sprite_records_live ON sprite_records (deleted) WHERE deleted = FALSE`,
 
+    // Game studio (#3177). One row per managed-app asset plan; reusable sprite
+    // and music bindings, compile pointers/history, and user-requested AI
+    // feedback history live in `data` JSONB. app_id/name/updated_at are mirrored
+    // for list and relationship queries. Compiled manifests stay on disk under
+    // data/games/<id>/manifests. Machine-local: app registry and referenced
+    // asset bytes are machine-local, so there is no peer-sync/tombstone shape.
+    `CREATE TABLE IF NOT EXISTS games (
+      id TEXT PRIMARY KEY,
+      app_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_games_app_updated ON games (app_id, updated_at DESC)`,
+
     // Media asset index (Phase 3.2, issue #1000). One row per generated image
     // or video; the bytes stay on disk (data/images, data/videos) and the
     // sidecar/.json history files remain authoritative — this table is a

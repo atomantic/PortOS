@@ -110,6 +110,7 @@ import { mediaCollectionStore } from './mediaCollections.js';
 import { loraDatasetStore } from './loraDatasets.js';
 import { commissionStore, backfillAllCommissionFeedback } from './creativeCommissions/store.js';
 import { outcomesStore as liOutcomesStore } from './layeredIntelligenceOutcomes.js';
+import * as gameStore from './games/store.js';
 
 /**
  * Pre-route boot. Everything a route handler may depend on being ready the
@@ -144,7 +145,7 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
   // but DO NOT crash the server. PortOS is single-user (CLAUDE.md "Security
   // Model"); a hard exit on startup is worse than a noisy log the user can act
   // on. Returns per-store statuses for downstream telemetry; we discard them.
-  await verifyCollectionVersions([universeStore(), seriesStore(), issueStore(), conflictJournalStore(), storyBuilderStore(), mediaCollectionStore(), loraDatasetStore, liOutcomesStore(), commissionStore(), ...brainCollectionStores()]).catch(err => {
+  await verifyCollectionVersions([universeStore(), seriesStore(), issueStore(), conflictJournalStore(), storyBuilderStore(), mediaCollectionStore(), loraDatasetStore, liOutcomesStore(), commissionStore(), gameStore, ...brainCollectionStores()]).catch(err => {
     console.error(`❌ Collection version check failed at startup: ${err?.stack ?? err}`);
   });
 

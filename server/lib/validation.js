@@ -19,6 +19,7 @@ import {
 import { QUEUEABLE_IMAGE_MODES } from '../services/imageGen/modes.js';
 import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
+import { EFFORT_LEVELS } from './providerModels.js';
 
 // Clip lengths grok's image_to_video delivers, as a Zod union built from the
 // single shared list (see grokVideoClip.js). `z.literal` per value rather than
@@ -313,6 +314,39 @@ export const referenceRepoUpdateSchema = z.object({
 // from appSchema (see comment there) so it can't sneak in via PUT
 // either — all ref CRUD goes through /api/apps/:appId/reference-repos.
 export const appUpdateSchema = partialWithoutDefaults(appSchema);
+
+// Game studio (#3177): managed-app binding, reusable asset bindings, bundle
+// compile, and user-triggered AI feedback.
+const gameNameSchema = z.string().trim().min(1).max(120);
+const gameAppIdSchema = z.string().trim().min(1).max(128);
+const gameAssetIdSchema = z.string().trim().min(1).max(128);
+
+export const gameCreateSchema = z.object({
+  appId: gameAppIdSchema,
+  name: gameNameSchema,
+}).strict();
+
+export const gameUpdateSchema = z.object({
+  appId: gameAppIdSchema.optional(),
+  name: gameNameSchema.optional(),
+}).strict().refine((patch) => Object.keys(patch).length > 0, {
+  message: 'at least one field is required',
+});
+
+export const gameSpriteBindingSchema = z.object({
+  spriteId: gameAssetIdSchema,
+}).strict();
+
+export const gameMusicBindingSchema = z.object({
+  trackId: gameAssetIdSchema,
+}).strict();
+
+export const gameFeedbackSchema = z.object({
+  providerId: z.string().trim().min(1).max(128),
+  model: z.string().trim().min(1).max(256).optional(),
+  effort: z.enum(EFFORT_LEVELS).nullable().optional(),
+  prompt: z.string().trim().min(1).max(4_000),
+}).strict();
 
 // Provider schema
 export const providerSchema = z.object({

@@ -755,6 +755,21 @@ CREATE TABLE IF NOT EXISTS sprite_records (
 );
 CREATE INDEX IF NOT EXISTS idx_sprite_records_live ON sprite_records (deleted) WHERE deleted = FALSE;
 
+-- Game studio (#3177). One row per managed-app asset plan; reusable sprite and
+-- music bindings, compile pointers/history, and user-requested AI feedback live
+-- in `data` JSONB. Compiled bundle manifests stay under
+-- data/games/<id>/manifests. Machine-local because the app registry and bound
+-- asset bytes are machine-local; no peer-sync tombstones.
+CREATE TABLE IF NOT EXISTS games (
+  id TEXT PRIMARY KEY,
+  app_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_games_app_updated ON games (app_id, updated_at DESC);
+
 -- Mood boards (issue #911). A dedicated inspiration/mood-board canvas, distinct
 -- from raw Media History, for collecting visual + textual references that feed
 -- the Create suite. One row per board, the full record (name/description/items[])
@@ -1356,6 +1371,8 @@ DROP TRIGGER IF EXISTS trg_image_to_3d_models_audit ON image_to_3d_models;
 CREATE TRIGGER trg_image_to_3d_models_audit AFTER UPDATE OR DELETE ON image_to_3d_models FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_sprite_records_audit ON sprite_records;
 CREATE TRIGGER trg_sprite_records_audit AFTER UPDATE OR DELETE ON sprite_records FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_games_audit ON games;
+CREATE TRIGGER trg_games_audit AFTER UPDATE OR DELETE ON games FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_mood_boards_audit ON mood_boards;
 CREATE TRIGGER trg_mood_boards_audit AFTER UPDATE OR DELETE ON mood_boards FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_lora_training_runs_audit ON lora_training_runs;

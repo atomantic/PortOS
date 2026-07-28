@@ -12,6 +12,9 @@
 ## Image generation
 
 - **[issue-3186] Agy CLI is now an opt-in image-generation backend.** Users can enable Antigravity in Image Gen settings, select an installed or custom model, and send text-to-image work through its `generate_image` tool with queue progress, cancellation, gallery metadata, cleaner options, and CoS tool registration. Each render runs in an isolated scratch directory and only a signature-verified directed image is imported; image-edit surfaces continue to use an edit-capable backend.
+## Game
+
+- **[issue-3177] Added a Game studio for assembling managed-app asset bundles.** Create a Game workspace, bind reusable Sprite records and Music tracks, compile an immutable versioned manifest with SHA-256 asset references, and request persisted AI feedback with any configured provider, model, and supported effort. The new `/game/:id` workspace is reachable from Create, Cmd+K, and voice navigation.
 
 ## Quota burn
 
