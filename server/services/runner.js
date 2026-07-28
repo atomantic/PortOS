@@ -118,10 +118,16 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
 
   await atomicWrite(metadataPath, metadata).catch(() => {});
 
+  // Guarded: these hooks are host-supplied, and every caller of this function
+  // runs outside the request lifecycle — the /runs route never awaits its
+  // executor. An unguarded throw (or rejected promise) from a hook propagates
+  // out of finalizeRunRecord, past the caller's own settlement, and lands as an
+  // unhandled rejection with the run stuck looking in-flight. The metadata is
+  // already persisted by this point, so a failing hook must not un-finalize it.
   if (success) {
-    runnerConfig.hooks?.onRunCompleted?.(metadata, output);
+    safeSettle(() => runnerConfig.hooks?.onRunCompleted?.(metadata, output), 'onRunCompleted');
   } else {
-    runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output);
+    safeSettle(() => runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output), 'onRunFailed');
   }
 
   return metadata;

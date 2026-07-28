@@ -59,23 +59,37 @@ const SAFE_ENV_NAMES_WIN32 = new Set([
   'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PROGRAMW6432',
   'PROGRAMDATA', 'COMMONPROGRAMFILES', 'COMMONPROGRAMFILES(X86)', 'COMMONPROGRAMW6432',
   'TEMP', 'TMP',
-  'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'OS', 'PSMODULEPATH'
+  'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'OS', 'PSMODULEPATH',
+  // Windows spellings of variables the POSIX prefixes above cover only on
+  // POSIX. They are listed here — rather than case-folding the POSIX prefix
+  // list on Windows — because folding a PREFIX list widens it: `NPM_` would
+  // then match npm's lower-case `npm_config__authToken` (a registry credential)
+  // and hand it to an attachable agent shell. An exact-name Set can be matched
+  // case-insensitively with no such reach.
+  'PATH', 'PATHEXT',
+  'USERPROFILE', 'USERNAME', 'USERDOMAIN', 'USERDOMAIN_ROAMINGPROFILE',
+  'HOMEDRIVE', 'HOMEPATH'
 ]);
 
 /**
  * Filter `process.env` down to the allowlist above.
  *
- * On Windows, matching folds case: Windows env names are case-insensitive and
- * arrive in mixed case, so the real variable is `Path`, not `PATH`. A
- * case-sensitive `startsWith('PATH')` dropped the child's entire PATH there
- * (while keeping the coincidentally-upper-case `PATHEXT`), leaving the shell
- * unable to resolve any CLI provider.
+ * Two matching rules, deliberately different:
  *
- * POSIX matching stays case-SENSITIVE — folding it would WIDEN the allowlist,
- * not preserve it. PortOS starts under `npm run`, which exports dozens of
- * lower-case `npm_config_*` / `npm_package_*` vars (including values from a
- * user's `.npmrc`); upper-casing keys would let every one of them through the
- * `NPM_` prefix into an attachable shell.
+ *   - `SAFE_ENV_PREFIXES` is matched **case-sensitively on both platforms**.
+ *     These are grouped families, and folding case widens a prefix rather than
+ *     preserving it: upper-casing keys would push npm's lower-case
+ *     `npm_config_*` / `npm_package_*` vars — `npm_config__authToken` among
+ *     them — through the `NPM_` prefix into an attachable shell. PortOS starts
+ *     under `npm run`, so those variables are always present.
+ *   - `SAFE_ENV_NAMES_WIN32` is matched **case-insensitively, on Windows only,
+ *     as exact names**. Windows env names are case-insensitive and arrive in
+ *     mixed case (the real variable is `Path`, not `PATH`), and an exact-name
+ *     Set can be folded safely because it has no prefix reach.
+ *
+ * Before this split, `Path` was dropped entirely on Windows by the
+ * case-sensitive `startsWith('PATH')` — the agent shell then couldn't resolve
+ * any CLI provider — while the coincidentally-upper-case `PATHEXT` survived.
  *
  * Exported for tests; `platform` is injectable so the Windows branch is
  * testable from any host.
@@ -88,11 +102,8 @@ export function buildSafeEnv(env = process.env, platform = process.platform) {
   const isWin32 = platform === 'win32';
   const safeEnv = {};
   for (const [key, value] of Object.entries(env)) {
-    // Windows env names are case-insensitive, so both the prefix test and the
-    // exact-name lookup compare against the upper-cased key there.
-    const candidate = isWin32 ? key.toUpperCase() : key;
-    const allowed = SAFE_ENV_PREFIXES.some(prefix => candidate.startsWith(prefix))
-      || (isWin32 && SAFE_ENV_NAMES_WIN32.has(candidate));
+    const allowed = SAFE_ENV_PREFIXES.some(prefix => key.startsWith(prefix))
+      || (isWin32 && SAFE_ENV_NAMES_WIN32.has(key.toUpperCase()));
     if (allowed) safeEnv[key] = value;
   }
   return safeEnv;

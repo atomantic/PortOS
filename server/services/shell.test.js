@@ -684,3 +684,34 @@ describe('buildSafeEnv — Windows names are exact, not prefixes', () => {
     expect(safe).toHaveProperty('ProgramW6432');
   });
 });
+
+describe('buildSafeEnv — Windows folding must not widen the POSIX prefixes', () => {
+  // Folding case for the PREFIX list (rather than only for the exact-name
+  // Windows Set) reaches much further than intended: PortOS starts under
+  // `npm run`, so npm's lower-case config vars are always present, and
+  // npm_config__authToken is a registry credential.
+  it('does not admit lower-case npm_config_* on Windows via the NPM_ prefix', () => {
+    const safe = shell.buildSafeEnv({
+      Path: 'C:\\Windows',
+      npm_config__authToken: 'npm-registry-credential',
+      npm_config_registry: 'https://example.com',
+      npm_package_name: 'portos',
+    }, 'win32');
+    expect(safe).toHaveProperty('Path');
+    expect(safe).not.toHaveProperty('npm_config__authToken');
+    expect(safe).not.toHaveProperty('npm_config_registry');
+    expect(safe).not.toHaveProperty('npm_package_name');
+  });
+
+  // The Windows names still need case-insensitive matching — that is the whole
+  // point of the exact-name Set, and `Path` is why the fix exists.
+  it('still matches the Windows names case-insensitively', () => {
+    const safe = shell.buildSafeEnv(
+      { Path: 'C:\\Windows', SystemRoot: 'C:\\Windows', windir: 'C:\\Windows', ComSpec: 'C:\\cmd.exe', ProgramData: 'C:\\PD' },
+      'win32'
+    );
+    for (const key of ['Path', 'SystemRoot', 'windir', 'ComSpec', 'ProgramData']) {
+      expect(safe, `expected ${key} to survive`).toHaveProperty(key);
+    }
+  });
+});
