@@ -33,3 +33,11 @@
 - **Chief of Staff feedback now captures why an agent helped or missed the mark.** Add detail to positive, negative, or neutral ratings so future CoS learning has the context needed to improve.
 
 - **Branch reconciler prioritizes recognized work branches.** The in-flight set handed to the coordinator agent is now ordered by branch prefix — `claim/`, `cos/`, `next/`, `feature/`, `fix/`, and other conventional prefixes are reconciled ahead of unrecognized/ad-hoc branches — so a bounded run spends its budget on real deliverables first. Both `/` and `-` separators match.
+
+## AI providers
+
+- **[issue-3194] Ask and image captioning now work on a local OpenCode provider.** If you pointed Ask Yourself or vision captioning at an OpenCode provider backed by Ollama, the run failed with the model reported as "not valid" — OpenCode has to be told which local models exist before it will accept one, and only the agent and Run Prompt paths were doing that. Every path that starts a coding CLI now declares them the same way, so the model you picked is accepted wherever you use it.
+
+## Internal
+
+- **[issue-3194] Consolidated the AI-CLI child-environment composition.** Eight spawn sites each rebuilt the same environment tuple by hand (provider env vars, the OpenCode declared-models map, the working-directory pin, the nested-session strip, and the pm2 guard shim for agents), so every environment-level fix had to sweep all eight and a missed site failed silently. A single `buildCliChildEnv` helper now owns it, preserving each site's original precedence, and a discovery-based test fails when a new spawn site composes the environment by hand instead.
