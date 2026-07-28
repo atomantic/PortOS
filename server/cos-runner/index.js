@@ -188,12 +188,9 @@ app.post('/spawn', async (req, res) => {
   // Ensure workspacePath is valid
   const cwd = workspacePath && typeof workspacePath === 'string' ? workspacePath : ROOT_DIR;
 
-  // withSpawnCwdEnv pins PWD to `cwd`. Passing `cwd` to spawn() changes the
-  // child's real working directory but leaves the inherited PWD naming the
-  // PortOS checkout this runner was started in — and OpenCode resolves its
-  // project root as `process.env.PWD ?? process.cwd()`, so every CoS agent on
-  // that provider wrote into the PortOS folder while this handler's own log line
-  // correctly reported the app's workspace. See issue #3193.
+  // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). This is the path the
+  // bug was reported through: the log line above named the app's workspace
+  // correctly while every OpenCode agent still ran in the PortOS folder.
   const childEnv = (() => { const e = withSpawnCwdEnv({ ...process.env, ...envVars }, cwd); delete e.CLAUDECODE; return e; })();
 
   // Resolve a bare npm-installed CLI (opencode/codex/claude/… — a .cmd/.bat

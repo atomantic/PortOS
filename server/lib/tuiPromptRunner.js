@@ -177,9 +177,8 @@ ${prompt}`;
   // for the same reason.
   // For OpenCode Ollama providers, build dynamic OPENCODE_CONFIG_CONTENT with
   // the models map so --model is accepted (the static env var lacked this).
-  // withSpawnCwdEnv pins PWD to the directory this TUI actually runs in, so a
-  // CLI that reads its project root from PWD (OpenCode does) can't fall back to
-  // the PortOS checkout the server was started in — see issue #3193.
+  // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). This PTY runs the
+  // CLI directly, so there is no login shell to rewrite PWD for us.
   const opencodeEnv = buildOpencodeEnvVars(provider, provider.defaultModel);
   const childEnv = withSpawnCwdEnv(
     { ...process.env, ...(provider.envVars || {}), ...opencodeEnv, TERM: 'xterm-256color', COLORTERM: 'truecolor' },

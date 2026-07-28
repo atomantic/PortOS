@@ -408,21 +408,21 @@ export function createRunnerService(config = {}) {
       const args = [...(provider.args || [])];
       console.log(`🚀 Executing CLI: ${provider.command} ${args.join(' ')} (${prompt.length} chars via stdin)`);
 
-      // PWD is pinned to the spawn cwd: passing `cwd` to spawn() changes the
-      // child's real working directory but leaves the inherited PWD naming the
-      // directory the host process was started in, and OpenCode resolves its
-      // project root as `process.env.PWD ?? process.cwd()` — so it would run in
-      // the host's directory instead of `workspacePath` (issue #3193). Inlined
-      // rather than importing PortOS's `withSpawnCwdEnv` because this toolkit is
-      // vendored and must not import out to other PortOS modules. The
-      // case-insensitive filter matters on Windows, where a spread of
-      // `process.env` can surface this variable as `Pwd`/`pwd` and a second
-      // `PWD` key would hand the child two spellings of one variable.
-      const childEnv = Object.fromEntries(
-        Object.entries({ ...process.env, ...provider.envVars })
-          .filter(([key]) => !(workspacePath && /^pwd$/i.test(key))),
-      );
-      if (workspacePath) childEnv.PWD = workspacePath;
+      // Pin PWD to the spawn cwd — `spawn({ cwd })` does not rewrite the
+      // inherited PWD, and OpenCode resolves its project root as
+      // `process.env.PWD ?? process.cwd()`, so it would run wherever the host
+      // process was started instead of in `workspacePath`. Deliberately mirrors
+      // PortOS's `withSpawnCwdEnv` line for line rather than importing it: this
+      // toolkit is vendored and must not import out to other PortOS modules.
+      // (PortOS overrides `executeCliRun` via `setCliRunner`, so this particular
+      // spawn is dormant here — the copy keeps the vendored toolkit correct
+      // standalone.) The case-insensitive delete matters on Windows, where a
+      // spread of `process.env` can surface the variable as `Pwd`/`pwd`.
+      const childEnv = { ...process.env, ...provider.envVars };
+      if (workspacePath) {
+        for (const key of Object.keys(childEnv)) if (/^pwd$/i.test(key)) delete childEnv[key];
+        childEnv.PWD = workspacePath;
+      }
       // Resolved against `childEnv` (not bare process.env) so a
       // provider-configured PATH override is honored.
       const resolvedCommand = resolveWindowsExecutable(provider.command, undefined, childEnv) || provider.command;

@@ -49,6 +49,7 @@ import { constants as osConstants } from 'os';
 import { join } from 'path';
 import { open, readFile, rm, stat, readdir } from 'fs/promises';
 import { ensureDir, sleep } from './fileUtils.js';
+import { withSpawnCwdEnv } from './spawnCwd.js';
 
 // Default cadence for tailing the job's log files and polling for completion.
 // 250ms matches the high-frequency-write batching cadence used elsewhere — far
@@ -219,7 +220,7 @@ export async function spawnDetached(bin, args = [], { env, cwd, controlDir, poll
   // exitCode / signalCode), so callers are unaffected. Surviving a pm2 restart
   // is a POSIX-only guarantee; Windows keeps its prior spawn semantics.
   if (process.platform === 'win32') {
-    return spawn(bin, args, { env, cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    return spawn(bin, args, { env: withSpawnCwdEnv(env ?? process.env, cwd), cwd, stdio: ['ignore', 'pipe', 'pipe'] });
   }
 
   const handle = new EventEmitter();
@@ -259,7 +260,8 @@ export async function spawnDetached(bin, args = [], { env, cwd, controlDir, poll
   // launcher; `.unref()` so the server never waits on the (instantly-exiting)
   // outer sh.
   const launcher = spawn('sh', ['-c', LAUNCHER, 'sh', controlDir, bin, ...args], {
-    env,
+    // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193).
+    env: withSpawnCwdEnv(env ?? process.env, cwd),
     cwd,
     detached: true,
     stdio: 'ignore',

@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import { logAction } from './history.js';
 import { ALLOWED_COMMANDS, validateCommand } from '../lib/commandSecurity.js';
 import { safeChildProcessEnv } from '../lib/processEnv.js';
+import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 
 // Track active commands
 const activeCommands = new Map();
@@ -38,9 +39,13 @@ export function executeCommand(command, workspacePath, onData, onComplete) {
   // it strips macOS Malloc* debug noise but intentionally inherits the rest of
   // the parent env — allowlisted commands like gh/git/npm legitimately need
   // PATH/HOME and their auth tokens.
+  // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). The allowlist
+  // includes AI CLIs, so a command run against an app workspace must not be told
+  // it lives in the PortOS checkout.
+  const commandCwd = workspacePath || process.cwd();
   const child = spawn(baseCommand, args, {
-    cwd: workspacePath || process.cwd(),
-    env: safeChildProcessEnv({ FORCE_COLOR: '1' }),
+    cwd: commandCwd,
+    env: withSpawnCwdEnv(safeChildProcessEnv({ FORCE_COLOR: '1' }), commandCwd),
     shell: false,
     windowsHide: true
   });

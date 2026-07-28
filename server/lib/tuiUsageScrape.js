@@ -99,9 +99,8 @@ export async function scrapeTuiUsage({
   // Provider envVars (auth/config) merged over process.env, then the PTY hints.
   // CLAUDECODE leaks when PortOS itself runs under Claude Code; strip it so a
   // spawned TUI doesn't think it's nested (mirrors tuiPromptRunner.js).
-  // withSpawnCwdEnv pins PWD to the sandbox dir so a CLI that reads its project
-  // root from PWD (OpenCode does) scrapes usage from the sandbox rather than
-  // opening the PortOS checkout as a project. See issue #3193.
+  // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). Keeps the scrape in
+  // the throwaway sandbox instead of opening the PortOS checkout as a project.
   const env = withSpawnCwdEnv(
     { ...process.env, ...extraEnv, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
     sandboxDir,

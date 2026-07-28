@@ -149,11 +149,9 @@ export function createShellSession(socket, options = {}) {
       cols,
       rows,
       cwd,
-      // withSpawnCwdEnv pins PWD to this session's cwd. An interactive login
-      // shell normally rewrites PWD itself at startup, but a non-login shell may
-      // not — and an agent-TUI session injects a CLI command into this shell, so
-      // an inherited PWD naming the PortOS checkout would send a PWD-reading CLI
-      // (OpenCode does) to the wrong repo. See issue #3193.
+      // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). An interactive
+      // login shell rewrites PWD itself at startup, but a non-login shell may
+      // not, and an agent-TUI session injects its CLI command into this shell.
       env: withSpawnCwdEnv({
         ...buildSafeEnv(), // filters process.env to prevent leaking inherited secrets (e.g. shell-inherited API keys)
         // options.env is the caller's explicit opt-in env (e.g. TUI provider API keys for codex/claude).

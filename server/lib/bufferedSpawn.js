@@ -1,6 +1,7 @@
 import { spawn, ChildProcess } from 'child_process';
 import { existsSync } from 'fs';
 import { delimiter, isAbsolute, join } from 'path';
+import { withSpawnCwdEnv } from './spawnCwd.js';
 
 /**
  * Shared buffered-spawn + Windows kill-tree machinery used by the app build and
@@ -268,6 +269,12 @@ export function bufferedSpawn(cmd, args, { cwd, timeoutMs, shell } = {}) {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, {
       cwd,
+      // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). Done in this
+      // shared wrapper rather than at each caller so every present and future
+      // bufferedSpawn user inherits it; `withSpawnCwdEnv` returns an unchanged
+      // copy of process.env when no cwd was given, matching the previous
+      // implicit-inherit behavior exactly.
+      env: withSpawnCwdEnv(process.env, cwd),
       windowsHide: true,
       shell: shell === undefined ? needsShell(cmd) : shell,
     });

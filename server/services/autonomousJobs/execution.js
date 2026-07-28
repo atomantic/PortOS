@@ -11,6 +11,7 @@
 
 import { spawn } from 'child_process'
 import { PATHS } from '../../lib/fileUtils.js'
+import { withSpawnCwdEnv } from '../../lib/spawnCwd.js'
 import { validateCommand, redactOutput, ALLOWED_COMMANDS_SORTED } from '../../lib/commandSecurity.js'
 import { cosEvents } from '../cosEvents.js'
 import { withLock } from './constants.js'
@@ -74,6 +75,10 @@ async function executeShellJob(job) {
     let killed = false
     const child = spawn(validation.baseCommand, validation.args || [], {
       cwd: PATHS.root,
+      // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). The allowlist
+      // includes AI CLIs, and the inherited PWD only happens to match PATHS.root
+      // when the server was started from its own checkout.
+      env: withSpawnCwdEnv(process.env, PATHS.root),
       shell: false,
       windowsHide: true
     })

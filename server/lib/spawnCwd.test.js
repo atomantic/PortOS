@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync } from 'fs';
 import { tmpdir, homedir } from 'os';
-import { join } from 'path';
+import { join, relative } from 'path';
+import { fileURLToPath } from 'url';
 import { resolveSpawnCwd, withSpawnCwdEnv } from './spawnCwd.js';
 
 describe('resolveSpawnCwd', () => {
@@ -185,39 +186,108 @@ describe('withSpawnCwdEnv', () => {
   });
 });
 
-// Source invariant: every place PortOS spawns an AI CLI/TUI into a user
-// workspace must pin PWD, or that provider silently runs in the PortOS checkout
-// again (#3193). A unit-tested helper is worthless if a new spawn site forgets
-// to call it, and the failure is invisible in normal use — the spawn logs still
-// print the right cwd, only the FILES land in the wrong repo. So assert the call
-// at each site rather than trusting convention.
-describe('every AI CLI/TUI spawn site pins PWD to its spawn cwd', () => {
-  const SPAWN_SITES = [
-    // The #3193 repro: CoS task → runner → OpenCode agent.
-    ['../cos-runner/index.js', 'withSpawnCwdEnv('],
-    // Settings → Providers → Run Prompt (the #3180 repro path).
-    ['../services/runner.js', 'withSpawnCwdEnv('],
-    // CoS agent spawned in-process rather than through the runner.
-    ['../services/agentCliSpawning.js', 'withSpawnCwdEnv('],
-    // Every PTY session: the user's Shell page and agent-TUI sessions, which
-    // inject the CLI command into this shell.
-    ['../services/shell.js', 'withSpawnCwdEnv('],
-    // Fire-and-collect CLI prompts (vision, app detect, feature helpers).
-    ['./cliProviderRun.js', 'withSpawnCwdEnv('],
-    // TUI-driven one-shot prompt runs (PTY spawned directly, no login shell to
-    // rewrite PWD for us).
-    ['./tuiPromptRunner.js', 'withSpawnCwdEnv('],
-    // `/usage` quota scraping — spawns the TUI in a throwaway sandbox dir.
-    ['./tuiUsageScrape.js', 'withSpawnCwdEnv('],
-    // The vendored toolkit must not import out to other PortOS modules, so it
-    // inlines the same pin instead of calling the shared helper.
-    ['./aiToolkit/runner.js', 'childEnv.PWD = workspacePath'],
-  ];
+// Source invariant: any spawn that names its own working directory must also
+// pin PWD, or a CLI that reads PWD (OpenCode does) silently runs in the PortOS
+// checkout again (#3193). A unit-tested helper is worthless if a new spawn site
+// forgets to call it, and this failure is invisible in normal use — the spawn
+// logs still print the right cwd, only the FILES land in the wrong repo.
+//
+// Deliberately DISCOVERS the spawn sites rather than listing them: an allowlist
+// of "these files must contain the call" passes the day someone adds a ninth
+// spawn site, which is exactly when the guard needs to fire. Here a new
+// cwd-passing spawn fails the suite until it is either pinned or explicitly
+// exempted below with a reason.
+describe('every cwd-passing spawn pins PWD', () => {
+  const SERVER_DIR = fileURLToPath(new URL('..', import.meta.url));
 
-  for (const [relPath, marker] of SPAWN_SITES) {
-    it(`${relPath} pins PWD`, () => {
-      const src = readFileSync(new URL(relPath, import.meta.url), 'utf8');
-      expect(src, `${relPath} spawns an AI CLI/TUI — it must pin PWD to the spawn cwd (see withSpawnCwdEnv)`).toContain(marker);
-    });
-  }
+  // Files whose cwd-passing spawn does NOT need the pin, each with the reason it
+  // is safe. Anything not listed here must pin. The common reason is "this spawns
+  // a tool that resolves paths from its real cwd, never from PWD" — git, gh,
+  // glab, pm2, psql, npm, xcodegen, python.
+  const EXEMPT = new Map([
+    ['services/git.js', 'git/gh resolve from real cwd (and -C), never PWD'],
+    ['lib/execGit.js', 'git only'],
+    ['lib/planIds.js', 'git only'],
+    ['services/githubCloner.js', 'git clone/fetch only'],
+    ['services/gitlab.js', 'glab only'],
+    ['services/perpetualWork.js', 'git/gh/glab probes only'],
+    ['services/pm2Standardizer.js', 'git + pm2 only'],
+    ['services/pm2.js', 'pm2 only'],
+    ['services/appDeployer.js', 'deploy shell commands, not an AI CLI'],
+    ['services/xcodeScripts.js', 'xcodebuild/ls, not an AI CLI'],
+    ['services/imageTo3d/trellis2.js', 'python/uv toolchain inside its own install root'],
+    ['services/updateExecutor.js', "PortOS's own update scripts, run in the PortOS root by design"],
+    ['services/calendarGoogleSync.js', 'runs in process.cwd(), so the inherited PWD is already truthful'],
+    ['routes/database.js', 'psql/pg_dump, not an AI CLI'],
+    ['routes/scaffold.js', 'npm/git scaffolding, not an AI CLI'],
+    ['routes/scaffoldVite.js', 'npm scaffolding, not an AI CLI'],
+    ['routes/scaffoldIOS.js', 'xcodegen, not an AI CLI'],
+    ['routes/scaffoldXcode.js', 'xcodegen, not an AI CLI'],
+    ['routes/apps/launch.js', "detached launch into the user's own terminal; the CLI reads process.cwd()"],
+  ]);
+
+  // Files whose cwd-passing spawns all go through a shared wrapper that already
+  // pins, so they need no call of their own.
+  const DELEGATES = new Map([
+    ['services/appBuilder.js', 'bufferedSpawn'],
+    ['services/agentRunTracking.js', 'bufferedSpawn'],
+  ]);
+
+  // Files that pin by inlining the assignment instead of calling the shared
+  // helper, with the reason they cannot call it.
+  const INLINE_PIN = new Map([
+    ['lib/aiToolkit/runner.js', 'vendored toolkit — must not import out to other PortOS modules'],
+  ]);
+
+  const SPAWN_CALL_RE = /\b(?:spawn|ptySpawn|spawnImpl|pty\.spawn|bufferedSpawn|execFile|execAsync)\s*\(/g;
+
+  /** Recursively collect non-test .js files under `dir`, as server-relative paths. */
+  const collectSources = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    if (entry.name === 'node_modules' || entry.name.startsWith('.')) return [];
+    const abs = join(dir, entry.name);
+    if (entry.isDirectory()) return collectSources(abs);
+    if (!entry.name.endsWith('.js') || entry.name.endsWith('.test.js')) return [];
+    return [relative(SERVER_DIR, abs)];
+  });
+
+  // A spawn "passes a cwd" when a `cwd` option appears within the call's own
+  // options object. Scanning a short window after the call open-paren keeps this
+  // to a regex instead of a parser, at the cost of the occasional false positive
+  // — which is fine: a false positive is an exemption line, not a wrong pass.
+  const passesCwd = (src) => {
+    for (const match of src.matchAll(SPAWN_CALL_RE)) {
+      if (/\bcwd\s*[:,]/.test(src.slice(match.index, match.index + 400))) return true;
+    }
+    return false;
+  };
+
+  it('discovers the cwd-passing spawn sites (guard is not vacuous)', () => {
+    const found = collectSources(SERVER_DIR).filter((rel) => passesCwd(readFileSync(join(SERVER_DIR, rel), 'utf8')));
+    // If this ever collapses toward zero the scan broke (a rename, a new spawn
+    // wrapper) and every assertion below would pass for the wrong reason.
+    expect(found.length, 'expected the scan to still find the known spawn sites').toBeGreaterThan(10);
+    expect(found).toContain('cos-runner/index.js');
+    expect(found).toContain('services/shell.js');
+  });
+
+  it('every cwd-passing spawn either pins PWD or is explicitly exempt', () => {
+    const unpinned = [];
+    for (const rel of collectSources(SERVER_DIR)) {
+      const src = readFileSync(join(SERVER_DIR, rel), 'utf8');
+      if (!passesCwd(src)) continue;
+      if (EXEMPT.has(rel)) continue;
+      if (DELEGATES.has(rel) && src.includes(DELEGATES.get(rel))) continue;
+      const pinned = INLINE_PIN.has(rel)
+        ? /childEnv\.PWD\s*=/.test(src)
+        : src.includes('withSpawnCwdEnv(');
+      if (!pinned) unpinned.push(rel);
+    }
+    expect(
+      unpinned,
+      'These files spawn a child with an explicit cwd but never pin PWD. A CLI that '
+      + 'resolves its project root from PWD (OpenCode does) will ignore that cwd and run '
+      + 'in the PortOS checkout instead — see withSpawnCwdEnv in server/lib/spawnCwd.js '
+      + '(#3193). Either pin PWD, or add the file to EXEMPT above with the reason it is safe.',
+    ).toEqual([]);
+  });
 });

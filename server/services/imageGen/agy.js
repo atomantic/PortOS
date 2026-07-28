@@ -26,6 +26,7 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { imageGenEvents } from '../imageGenEvents.js';
 import { buildNoImageReason } from './noImageReason.js';
 import { IMAGE_GEN_MODE } from './modes.js';
+import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
 
 const AGY_TIMEOUT_MS = (() => {
   const n = Number(process.env.AGY_IMAGEGEN_TIMEOUT_MS);
@@ -245,7 +246,10 @@ async function runAgy(job, jobId, bin, args, {
 }) {
   const resolvedBin = (!isAbsolute(bin) && (bin.includes('/') || bin.includes(sep))) ? pathResolve(bin) : bin;
   const { command, args: spawnArgs } = prepareCliSpawn(resolvedBin, args);
-  const proc = spawn(command, spawnArgs, { cwd: scratchDir, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+  // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). agy reads
+  // process.cwd(), so this is defensive rather than a live fix; it keeps every
+  // scratch-dir spawn telling the child one consistent story about where it is.
+  const proc = spawn(command, spawnArgs, { cwd: scratchDir, env: withSpawnCwdEnv(process.env, scratchDir), shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
   activeProcs.set(jobId, proc);
   const removeScratch = () => rm(scratchDir, { recursive: true, force: true }).catch(() => {});
   let stdoutTail = '';

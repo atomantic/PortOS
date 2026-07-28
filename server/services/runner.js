@@ -266,9 +266,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
   // buildOpencodeEnvVars rebuilds OPENCODE_CONFIG_CONTENT with a declared models
   // map for OpenCode Ollama providers (empty/no-op otherwise) so the injected
   // `--model ollama/<id>` isn't rejected as "not valid" — see issue-2190.
-  // withSpawnCwdEnv pins PWD to the directory this child actually runs in, so a
-  // CLI that reads its project root from PWD (OpenCode does) can't fall back to
-  // the PortOS checkout the server itself was started in — see issue #3193.
+  // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193).
   const childEnv = withSpawnCwdEnv(
     { ...process.env, ...provider.envVars, ...buildOpencodeEnvVars(provider, provider.defaultModel) },
     effectiveCwd,

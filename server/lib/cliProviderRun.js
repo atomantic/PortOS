@@ -108,9 +108,7 @@ export function runCliProviderPrompt(args = {}) {
     // models map for OpenCode Ollama providers (empty/no-op otherwise) so the
     // injected `--model ollama/<id>` isn't rejected as "not valid" — see
     // issue-2190. effectiveProvider carries the per-call model as defaultModel.
-    // withSpawnCwdEnv pins PWD to the directory this child actually runs in, so
-    // a CLI that reads its project root from PWD (OpenCode does) can't fall back
-    // to the PortOS checkout the server was started in — see issue #3193.
+    // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193).
     const effectiveCwd = cwd || process.cwd();
     const childEnv = withSpawnCwdEnv(
       { ...baseEnv, ...provider.envVars, ...buildOpencodeEnvVars(effectiveProvider, effectiveProvider.defaultModel) },

@@ -46,6 +46,7 @@ import sharp from 'sharp';
 import { bufferedSpawn, killProcessTree, prepareCliSpawn } from '../../lib/bufferedSpawn.js';
 import { ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../../lib/grok.js';
 import { IMAGE_GEN_MODE, describeFidelity } from './modes.js';
+import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
 
 // 20 minutes — grok's image_gen typically returns in well under a minute, but
 // the agent turn wrapping it (skill load, tool call, file write) has no
@@ -283,7 +284,10 @@ async function runGrok(job, jobId, bin, args, {
   // shell:false spawn — a no-op on POSIX.
   const resolvedBin = (!isAbsolute(bin) && (bin.includes('/') || bin.includes(sep))) ? pathResolve(bin) : bin;
   const { command: spawnBin, args: spawnArgs } = prepareCliSpawn(resolvedBin, args);
-  const proc = spawn(spawnBin, spawnArgs, { cwd: scratchDir, shell: false, stdio: [useStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+  // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). grok reads
+  // process.cwd(), so this is defensive rather than a live fix; it keeps every
+  // scratch-dir spawn telling the child one consistent story about where it is.
+  const proc = spawn(spawnBin, spawnArgs, { cwd: scratchDir, env: withSpawnCwdEnv(process.env, scratchDir), shell: false, stdio: [useStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
   activeProcs.set(jobId, proc);
   const removeScratch = () => rm(scratchDir, { recursive: true, force: true }).catch(() => {});
 

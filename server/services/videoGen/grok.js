@@ -37,6 +37,7 @@ import { finalizeGeneratedVideo } from './generateVideoHelpers.js';
 import { mutateVideoHistory } from './history.js';
 import { noImageReason, deriveAspectRatio, GROK_ASPECT_RATIOS } from '../imageGen/grok.js';
 import { resolveGrokDuration } from '../../lib/grokVideoClip.js';
+import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
 
 // 30 minutes — an image-first video turn is two sequential tool calls
 // (image_gen then image_to_video render + download), so it runs meaningfully
@@ -196,7 +197,10 @@ async function runGrokVideo(job, jobId, bin, args, {
   // cwd moves to the scratch dir; bare names stay bare for PATH lookup.
   const resolvedBin = (!isAbsolute(bin) && (bin.includes('/') || bin.includes(sep))) ? pathResolve(bin) : bin;
   const { command: spawnBin, args: spawnArgs } = prepareCliSpawn(resolvedBin, args);
-  const proc = spawn(spawnBin, spawnArgs, { cwd: scratchDir, shell: false, stdio: [useStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+  // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). grok reads
+  // process.cwd(), so this is defensive rather than a live fix; it keeps every
+  // scratch-dir spawn telling the child one consistent story about where it is.
+  const proc = spawn(spawnBin, spawnArgs, { cwd: scratchDir, env: withSpawnCwdEnv(process.env, scratchDir), shell: false, stdio: [useStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
   activeProcs.set(jobId, proc);
   const removeScratch = () => rm(scratchDir, { recursive: true, force: true }).catch(() => {});
   // The route stages a multipart source image into data/uploads and hands us

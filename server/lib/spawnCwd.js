@@ -118,15 +118,12 @@ const PWD_KEY_RE = /^pwd$/i;
  * @returns {object} a copy of `env` with `PWD` set to `cwd` (unchanged copy when `cwd` is absent)
  */
 export function withSpawnCwdEnv(env, cwd) {
-  const next = {};
-  const pin = typeof cwd === 'string' && cwd.length > 0;
-  for (const [key, value] of Object.entries(env || {})) {
-    // Only strip the stale variants when there's a real value to replace them
-    // with — otherwise a caller that spawns without an explicit cwd would have
-    // its inherited PWD deleted, which is a different (and equally wrong) lie.
-    if (pin && PWD_KEY_RE.test(key)) continue;
-    next[key] = value;
-  }
-  if (pin) next.PWD = cwd;
+  const next = { ...(env || {}) };
+  // No cwd means the child inherits the parent's real working directory, so the
+  // inherited PWD is already truthful — stripping it would substitute a
+  // different lie for the one being fixed.
+  if (typeof cwd !== 'string' || !cwd) return next;
+  for (const key of Object.keys(next)) if (PWD_KEY_RE.test(key)) delete next[key];
+  next.PWD = cwd;
   return next;
 }
