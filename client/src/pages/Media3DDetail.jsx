@@ -14,7 +14,7 @@ import toast from '../components/ui/Toast';
 // Poll cadence while a render is in flight (a real TRELLIS.2 render is multi-minute).
 const POLL_INTERVAL_MS = 2500;
 
-// Per-record detail view for an image-to-3D model (`/media/3d/:id`). The record
+// Per-record detail view for an image-to-3D model (`/3d/:id`). The record
 // id is the URL, so a finished mesh is a shareable, reload-safe deep link. Mounts
 // the reusable GlbViewer once the render lands (status `ready` + `assetPath`),
 // with a Download .glb, and offers re-render / delete. Polls while generating.
@@ -40,7 +40,7 @@ export default function Media3DDetail() {
   }, [id, mountedRef]);
 
   // Re-fetch from scratch whenever the routed id changes — reset loading/notFound
-  // so switching between two `/media/3d/:id` records shows a spinner instead of
+  // so switching between two `/3d/:id` records shows a spinner instead of
   // the previous record's content (and doesn't carry a stale not-found flag).
   useEffect(() => {
     setLoading(true); setNotFound(false);
@@ -73,7 +73,7 @@ export default function Media3DDetail() {
       toast.error(err?.message || 'Delete failed');
       return false;
     });
-    if (ok) navigate('/media/3d');
+    if (ok) navigate('/3d');
   }, [id, navigate]);
 
   if (loading) {
@@ -88,7 +88,7 @@ export default function Media3DDetail() {
     return (
       <div className="mx-auto max-w-4xl py-16 text-center">
         <p className="text-sm text-gray-400">This 3D model no longer exists.</p>
-        <Link to="/media/3d" className="mt-3 inline-flex items-center gap-1.5 text-sm text-port-accent hover:underline">
+        <Link to="/3d" className="mt-3 inline-flex items-center gap-1.5 text-sm text-port-accent hover:underline">
           <ArrowLeft className="h-4 w-4" /> Back to 3D
         </Link>
       </div>
@@ -108,7 +108,7 @@ export default function Media3DDetail() {
   return (
     <div className="mx-auto max-w-4xl">
       <header className="mb-4">
-        <Link to="/media/3d" className="inline-flex items-center gap-1.5 text-xs text-gray-400 hover:text-white">
+        <Link to="/3d" className="inline-flex items-center gap-1.5 text-xs text-gray-400 hover:text-white">
           <ArrowLeft className="h-3.5 w-3.5" /> Back to 3D
         </Link>
         <div className="mt-2 flex flex-wrap items-center justify-between gap-3">

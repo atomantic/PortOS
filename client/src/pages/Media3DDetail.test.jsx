@@ -36,10 +36,10 @@ const record = (over = {}) => ({
 
 function renderAt(id = 'image3d-1') {
   return render(
-    <MemoryRouter initialEntries={[`/media/3d/${id}`]}>
+    <MemoryRouter initialEntries={[`/3d/${id}`]}>
       <Routes>
-        <Route path="/media/3d" element={<div>3D index</div>} />
-        <Route path="/media/3d/:id" element={<Media3DDetail />} />
+        <Route path="/3d" element={<div>3D index</div>} />
+        <Route path="/3d/:id" element={<Media3DDetail />} />
       </Routes>
     </MemoryRouter>,
   );

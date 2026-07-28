@@ -66,7 +66,7 @@ function LocationProbe() {
 
 // Media3D reads the source image / target / glb from the URL, so every render
 // needs a router. The path is irrelevant to useSearchParams — only the query is.
-function renderAt(entry = '/media/3d', extra = null) {
+function renderAt(entry = '/3d', extra = null) {
   return render(
     <MemoryRouter initialEntries={[entry]}>
       <Media3D />
@@ -178,7 +178,7 @@ describe('Media3D — generation workspace', () => {
   });
 
   it('shows the source image from the ?image= deep link', async () => {
-    renderAt('/media/3d?image=example-robot.png');
+    renderAt('/3d?image=example-robot.png');
     expect(await screen.findByAltText('Selected source image')).toBeInTheDocument();
     expect(screen.queryByText(/Pick a source image to continue/i)).not.toBeInTheDocument();
   });
@@ -188,7 +188,7 @@ describe('Media3D — generation workspace', () => {
     getImageTo3dModel.mockResolvedValue({
       id: 'm1', status: 'ready', assetPath: '/data/image-to-3d/m1/model.glb', runs: [{ percent: 100 }],
     });
-    renderAt('/media/3d?image=example-robot.png');
+    renderAt('/3d?image=example-robot.png');
     const btn = await screen.findByRole('button', { name: /Generate 3D/i });
     expect(btn).toBeEnabled();
     fireEvent.click(btn);
@@ -205,7 +205,7 @@ describe('Media3D — generation workspace', () => {
       id: 'm2', status: 'failed', assetPath: null,
       error: 'TRELLIS.2 could not download a gated model dependency from Hugging Face. Accept the terms … huggingface-cli login',
     });
-    renderAt('/media/3d?image=example-robot.png');
+    renderAt('/3d?image=example-robot.png');
     fireEvent.click(await screen.findByRole('button', { name: /Generate 3D/i }));
     expect(await screen.findByText(/could not download a gated model dependency from Hugging Face/i)).toBeInTheDocument();
     // No mesh preview on failure.
@@ -213,7 +213,7 @@ describe('Media3D — generation workspace', () => {
   });
 
   it('offers inline token entry, not terminal instructions, when no HF token is stored', async () => {
-    renderAt('/media/3d?image=example-robot.png');
+    renderAt('/3d?image=example-robot.png');
     expect(await screen.findByText(/needs a free Hugging Face account/i)).toBeInTheDocument();
     // The fix for #3032: a paste-and-save field, not a "run huggingface-cli login" nag.
     expect(screen.getByPlaceholderText('hf_…')).toBeInTheDocument();
@@ -226,7 +226,7 @@ describe('Media3D — generation workspace', () => {
 
   it('renders no gated-access notice when the selected target omits gatedRepos', async () => {
     getImageTo3dTargets.mockResolvedValue({ targets: [target({ gatedRepos: undefined, installed: true })] });
-    renderAt('/media/3d?image=example-robot.png');
+    renderAt('/3d?image=example-robot.png');
     await screen.findByRole('button', { name: /Generate 3D/i });
     await waitFor(() => expect(getHfTokenStatus).toHaveBeenCalled());
     expect(screen.queryByPlaceholderText('hf_…')).toBeNull();
@@ -238,7 +238,7 @@ describe('Media3D — generation workspace', () => {
     // The user's real complaint: an HF_TOKEN set for imagegen/local-LLM downloads was
     // ignored here, so the page kept demanding a terminal login.
     getHfTokenStatus.mockResolvedValue({ hfTokenPresent: true, source: 'env' });
-    renderAt('/media/3d?image=example-robot.png');
+    renderAt('/3d?image=example-robot.png');
     expect(await screen.findByText(/Hugging Face token configured/i)).toBeInTheDocument();
     expect(screen.getByText(/HF_TOKEN environment variable/i)).toBeInTheDocument();
     expect(screen.queryByPlaceholderText('hf_…')).toBeNull();
@@ -251,7 +251,7 @@ describe('Media3D — generation workspace', () => {
     // tells the user to add a token on THIS page — so the form must stay reachable
     // when one is already configured, or that instruction can't be followed here.
     getHfTokenStatus.mockResolvedValue({ hfTokenPresent: true, source: 'stored' });
-    renderAt('/media/3d?image=example-robot.png');
+    renderAt('/3d?image=example-robot.png');
     fireEvent.click(await screen.findByRole('button', { name: /use a different token/i }));
     expect(screen.getByPlaceholderText('hf_…')).toBeInTheDocument();
   });
@@ -260,14 +260,14 @@ describe('Media3D — generation workspace', () => {
     // Absent-vs-failed: a pending/failed status must not flash "add a token" at a user
     // who has one (nor claim one is configured).
     getHfTokenStatus.mockRejectedValue(new Error('offline'));
-    renderAt('/media/3d?image=example-robot.png');
+    renderAt('/3d?image=example-robot.png');
     await screen.findByRole('button', { name: /Generate 3D/i });
     expect(screen.queryByPlaceholderText('hf_…')).toBeNull();
     expect(screen.queryByText(/Hugging Face token configured/i)).toBeNull();
   });
 
   it('keeps Generate disabled and explains why when no image is picked', async () => {
-    renderAt('/media/3d');
+    renderAt('/3d');
     const btn = await screen.findByRole('button', { name: /Generate 3D/i });
     expect(btn).toBeDisabled();
     expect(screen.getByText(/Pick a source image to continue/i)).toBeInTheDocument();
@@ -275,14 +275,14 @@ describe('Media3D — generation workspace', () => {
 
   it('gates Generate when the chosen target still needs installing', async () => {
     getImageTo3dTargets.mockResolvedValue({ targets: [target({ installed: false })] });
-    renderAt('/media/3d?image=example-robot.png');
+    renderAt('/3d?image=example-robot.png');
     const btn = await screen.findByRole('button', { name: /Generate 3D/i });
     expect(btn).toBeDisabled();
     expect(screen.getByText(/Install TRELLIS\.2 below before generating/i)).toBeInTheDocument();
   });
 
   it('writes a picked image into the shareable URL', async () => {
-    renderAt('/media/3d', <LocationProbe />);
+    renderAt('/3d', <LocationProbe />);
     fireEvent.click(await screen.findByRole('button', { name: /Pick source image/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Pick hero' }));
     await waitFor(() => {
@@ -291,14 +291,14 @@ describe('Media3D — generation workspace', () => {
   });
 
   it('reflects the resolved default target back into the URL', async () => {
-    renderAt('/media/3d', <LocationProbe />);
+    renderAt('/3d', <LocationProbe />);
     await waitFor(() => {
       expect(screen.getByLabelText('Current query')).toHaveTextContent('target=trellis2');
     });
   });
 
   it('renders the mesh preview from a ?glb= deep link', async () => {
-    renderAt('/media/3d?image=example-robot.png&glb=%2Fdata%2Fmodels3d%2Frobot.glb');
+    renderAt('/3d?image=example-robot.png&glb=%2Fdata%2Fmodels3d%2Frobot.glb');
     expect(await screen.findByTestId('glb-viewer')).toHaveTextContent('/data/models3d/robot.glb');
   });
 
@@ -308,6 +308,6 @@ describe('Media3D — generation workspace', () => {
     ]);
     renderAt();
     const link = await screen.findByRole('link', { name: /Example Beacon/i });
-    expect(link.getAttribute('href')).toBe('/media/3d/image3d-abc');
+    expect(link.getAttribute('href')).toBe('/3d/image3d-abc');
   });
 });

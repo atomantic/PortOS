@@ -220,7 +220,7 @@ const navItems = [
     icon: Sparkles,
     defaultTo: '/media',
     children: [
-      { to: '/media/3d', label: '3D', icon: Boxes },
+      { to: '/3d', label: '3D', icon: Boxes },
       { to: '/authors', label: 'Authors', icon: FilePen },
       { to: '/catalog', label: 'Catalog', icon: Sparkles },
       { to: '/creative-commission', label: 'Creative Commissions', icon: CalendarClock },
@@ -230,7 +230,7 @@ const navItems = [
       { to: '/media', label: 'Media Gen', icon: Layers },
       { to: '/mood-boards', label: 'Mood Boards', icon: Palette },
       { to: '/music', label: 'Music', icon: Mic },
-      { to: '/media/music-video', label: 'Music Video', icon: Music },
+      { to: '/music-video', label: 'Music Video', icon: Music },
       { to: '/rounds', label: 'Rounds', icon: Music },
       { to: '/pipeline', label: 'Series Pipeline', icon: WorkflowIcon, dynamic: 'pipelineSeries' },
       { to: '/sharing', label: 'Sharing', icon: Share2 },

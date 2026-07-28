@@ -200,7 +200,7 @@ export default function Media3D() {
   const [genPercent, setGenPercent] = useState(null);
   const [modelId, setModelId] = useState(null);
   // Existing image-to-3D records (newest-first) so the page doubles as a library:
-  // each links to its `/media/3d/:id` detail view.
+  // each links to its `/3d/:id` detail view.
   const [records, setRecords] = useState([]);
   // Central HF-token status (stored / env / cli) for the gated-model notice. `present`
   // is tri-state — see useHfTokenStatus; `null` means unknown, not absent.
@@ -249,7 +249,7 @@ export default function Media3D() {
       || targets[0];
   }, [targets, targetFromRoute]);
 
-  // Keep the URL honest: if a bare `/media/3d` resolved a default target, reflect
+  // Keep the URL honest: if a bare `/3d` resolved a default target, reflect
   // it so the selection is shareable/reload-safe (URL as source of truth). The
   // functional updater reads the freshest params, so this effect depends only on
   // the resolved target — not on every unrelated `?image=`/`?glb=` change.
@@ -435,7 +435,7 @@ export default function Media3D() {
         </section>
       )}
 
-      {/* Library of existing renders — each opens its `/media/3d/:id` detail
+      {/* Library of existing renders — each opens its `/3d/:id` detail
           view (GLB viewer + download). URL is the source of truth for what's
           open, so every card is a deep link. */}
       {records.length > 0 && (
@@ -447,7 +447,7 @@ export default function Media3D() {
               return (
                 <Link
                   key={record.id}
-                  to={`/media/3d/${record.id}`}
+                  to={`/3d/${record.id}`}
                   className="group overflow-hidden rounded-lg border border-port-border bg-port-card hover:border-port-accent"
                 >
                   <div className="relative aspect-square bg-port-bg">

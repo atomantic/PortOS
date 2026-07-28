@@ -172,8 +172,9 @@ function UniverseRouteRedirect({ fromPrefix, canon = false }) {
 // Rebase a legacy route prefix onto its current one, preserving the trailing
 // path (ids, tabs), query string, and hash. Every page promoted out of the
 // Media Gen tab shell into its own Create page needs exactly this — Creative
-// Director (`/media/creative-director/:id/:tab`) and Sprites
-// (`/media/sprites/:id`) so far — so it's parameterized rather than copied per
+// Director (`/media/creative-director/:id/:tab`), Sprites
+// (`/media/sprites/:id`), Music Video (`/media/music-video/:projectId`), and
+// 3D (`/media/3d/:id`) so far — so it's parameterized rather than copied per
 // move. `from` must be an anchored regex so it can only match the prefix.
 function PrefixRedirect({ from, to }) {
   const { pathname, search, hash } = useLocation();
@@ -183,6 +184,8 @@ function PrefixRedirect({ from, to }) {
 
 const MEDIA_CREATIVE_DIRECTOR_PREFIX = /^\/media\/creative-director/;
 const MEDIA_SPRITES_PREFIX = /^\/media\/sprites/;
+const MEDIA_MUSIC_VIDEO_PREFIX = /^\/media\/music-video/;
+const MEDIA_3D_PREFIX = /^\/media\/3d/;
 
 // Normalize a tab-less /creative-director/:id URL to its overview tab while
 // preserving any query string + hash. A bare `<Navigate to="overview">` would
@@ -334,8 +337,11 @@ export default function App() {
             <Route path="creative-director" element={<RedirectWithSearch to="/creative-director" />} />
             <Route path="creative-director/:id" element={<PrefixRedirect from={MEDIA_CREATIVE_DIRECTOR_PREFIX} to="/creative-director" />} />
             <Route path="creative-director/:id/:tab" element={<PrefixRedirect from={MEDIA_CREATIVE_DIRECTOR_PREFIX} to="/creative-director" />} />
-            <Route path="music-video" element={<MusicVideo />} />
-            <Route path="music-video/:projectId" element={<MusicVideo />} />
+            {/* Music Video moved to the top-level /music-video route (Create
+                sidebar link). These redirects keep legacy /media/music-video
+                bookmarks + in-app deep-links working. */}
+            <Route path="music-video" element={<PrefixRedirect from={MEDIA_MUSIC_VIDEO_PREFIX} to="/music-video" />} />
+            <Route path="music-video/:projectId" element={<PrefixRedirect from={MEDIA_MUSIC_VIDEO_PREFIX} to="/music-video" />} />
             {/* Sprites live at /sprites (Create sidebar link). These redirects
                 keep legacy /media/sprites bookmarks working after the MediaGen
                 tab was removed. */}
@@ -346,8 +352,11 @@ export default function App() {
             <Route path="models" element={<MediaModels />} />
             <Route path="threejs" element={<ThreejsModels />} />
             <Route path="threejs/:id" element={<ThreejsModelDetail />} />
-            <Route path="3d" element={<Media3D />} />
-            <Route path="3d/:id" element={<Media3DDetail />} />
+            {/* 3D moved to the top-level /3d route (Create sidebar link). These
+                redirects keep legacy /media/3d bookmarks + in-app deep-links
+                working. */}
+            <Route path="3d" element={<PrefixRedirect from={MEDIA_3D_PREFIX} to="/3d" />} />
+            <Route path="3d/:id" element={<PrefixRedirect from={MEDIA_3D_PREFIX} to="/3d" />} />
             <Route path="loras" element={<Loras />} />
             <Route path="training" element={<LoraTraining />} />
             <Route path="training/:datasetId" element={<LoraDatasetDetail />} />
@@ -371,6 +380,15 @@ export default function App() {
           <Route path="creative-director" element={<CreativeDirector />} />
           <Route path="creative-director/:id" element={<CreativeDirectorOverviewRedirect />} />
           <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
+          {/* Music Video — a top-level Create page (moved out of the Media Gen
+              tabs). The project id is the URL, per the ID-based deep-linking
+              convention. */}
+          <Route path="music-video" element={<MusicVideo />} />
+          <Route path="music-video/:projectId" element={<MusicVideo />} />
+          {/* 3D — a top-level Create page (moved out of the Media Gen tabs). The
+              record id is the URL, per the ID-based deep-linking convention. */}
+          <Route path="3d" element={<Media3D />} />
+          <Route path="3d/:id" element={<Media3DDetail />} />
           {/* Index (list) hosts the create drawer at /new; `:id` is now a routed
               detail page (editable config + render history), not a sidebar edit
               drawer. React Router ranks the static `new` segment above `:id`, so
