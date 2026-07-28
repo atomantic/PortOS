@@ -102,7 +102,7 @@ export const musicVideoPlanRequestSchema = z.object({
 // from a ballad to hardcore/gabber); `offsetSec` is the first downbeat, by ear.
 export const musicVideoManualAnalysisSchema = z.object({
   bpm: z.number().min(20).max(300),
-  offsetSec: z.number().min(0).max(600).optional(),
+  offsetSec: z.number().min(0).max(600).default(0),
 }).strict();
 
 // MuScriptor audio → MIDI transcription request (services/audioMidiTranscription.js).

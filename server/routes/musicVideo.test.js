@@ -206,6 +206,7 @@ describe('musicVideo routes', () => {
       expect(r.body.audioAnalysis.durationSec).toBe(20);
       expect(r.body.audioAnalysis.bpm).toBe(100);
       expect(r.body.audioAnalysis.beats[0]).toBeCloseTo(0.5, 3);
+
     });
   });
 
