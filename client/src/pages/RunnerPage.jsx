@@ -183,7 +183,13 @@ ${prompt.trim()}`;
       model: selectedModel || undefined,
       prompt: finalPrompt,
       workspacePath: workspacePath || undefined,
-      workspaceName: apps.find(a => a.repoPath === workspacePath)?.name,
+      // Take the name from the app that is actually selected, not from a
+      // reverse lookup by repoPath. When the selected app's Repository Path is
+      // unset, `workspacePath` is '' and the lookup matched some *other*
+      // pathless app (or nothing) — so the server saw no workspace at all and
+      // ran in the PortOS directory instead of rejecting the misconfigured app
+      // it was pointed at (#3180).
+      workspaceName: selectedApp?.name,
       timeout: timeout * 60 * 1000, // Convert minutes to milliseconds
       screenshots: screenshots.map(s => s.path) // Include screenshot paths
     }).catch(err => ({ error: err.message }));
