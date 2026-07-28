@@ -84,6 +84,7 @@ const CreateApp = lazyWithReload(() => import('./pages/CreateApp'));
 const Templates = lazyWithReload(() => import('./pages/Templates'));
 const PromptManager = lazyWithReload(() => import('./pages/PromptManager'));
 const Brain = lazyWithReload(() => import('./pages/Brain'));
+const BrainScanReport = lazyWithReload(() => import('./pages/BrainScanReport'));
 const Security = lazyWithReload(() => import('./pages/Security'));
 const DigitalTwin = lazyWithReload(() => import('./pages/DigitalTwin'));
 const Privacy = lazyWithReload(() => import('./pages/Privacy'));
@@ -262,6 +263,7 @@ export default function App() {
           <Route path="calendar" element={<Navigate to="/calendar/agenda" replace />} />
           <Route path="calendar/:tab" element={<CalendarPage />} />
           <Route path="brain" element={<Navigate to="/brain/inbox" replace />} />
+          <Route path="brain/links/:id/scan-report" element={<BrainScanReport />} />
           <Route path="brain/:tab" element={<Brain />} />
           <Route path="digital-twin" element={<Navigate to="/digital-twin/overview" replace />} />
           <Route path="digital-twin/:tab" element={<DigitalTwin />} />

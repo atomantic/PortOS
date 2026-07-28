@@ -748,13 +748,11 @@ function ReviewItem({ item, config, isEditing, onComplete, onDismiss, onDelete, 
                 )}
                 {item.metadata?.reportUrl && (
                   <a
-                    href={item.metadata.reportUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                    href={api.normalizeBrainScanReportPath(item.metadata.reportUrl)}
                     className={`mt-2 inline-flex items-center gap-1 text-xs hover:underline ${item.metadata.verdict === 'DANGEROUS' ? 'text-port-error' : 'text-port-accent'}`}
                   >
                     <FileText size={13} />
-                    View markdown scan report{item.metadata.verdict ? ` (${item.metadata.verdict})` : ''}
+                    View scan report{item.metadata.verdict ? ` (${item.metadata.verdict})` : ''}
                   </a>
                 )}
               </div>

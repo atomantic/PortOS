@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import * as api from '../../../services/api';
 import {
   Link2,
@@ -21,7 +22,8 @@ import {
   ChevronDown,
   ChevronUp,
   FolderClosed,
-  GripVertical
+  GripVertical,
+  FileText
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
@@ -64,7 +66,7 @@ export default function LinksTab({ onRefresh }) {
   const [links, setLinks] = useState([]);
   const [buckets, setBuckets] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState('all'); // all, github, other, ungrouped
+  const [filter, setFilter] = useState('all'); // all, github, scanned, other, ungrouped
   const [search, setSearch] = useState('');
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({});
@@ -97,6 +99,7 @@ export default function LinksTab({ onRefresh }) {
   // Client-side filter (type / bucket membership) then keyword search.
   const matchesFilter = (link) => {
     if (filter === 'github') return link.isGitHubRepo;
+    if (filter === 'scanned') return Boolean(link.malwareScan?.reportId);
     if (filter === 'other') return !link.isGitHubRepo;
     if (filter === 'ungrouped') return !link.bucketId;
     return true;
@@ -416,6 +419,7 @@ export default function LinksTab({ onRefresh }) {
         {[
           { id: 'all', label: 'All', count: links.length },
           { id: 'github', label: 'GitHub Repos', icon: GitBranch, count: links.filter(l => l.isGitHubRepo).length },
+          { id: 'scanned', label: 'Scan Reports', icon: FileText, count: links.filter(l => l.malwareScan?.reportId).length },
           { id: 'other', label: 'Other Links', icon: Link2, count: links.filter(l => !l.isGitHubRepo).length },
           { id: 'ungrouped', label: 'Ungrouped', icon: FolderClosed, count: links.filter(l => !l.bucketId).length }
         ].map(tab => {
@@ -680,16 +684,14 @@ export default function LinksTab({ onRefresh }) {
                     )}
 
                     {link.malwareScan?.reportId && (
-                      <a
-                        href={`/api/brain/links/${link.id}/scan-report`}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                      <Link
+                        to={api.brainScanReportPath(link.id)}
                         className={`flex items-center gap-1 text-xs ${link.malwareScan.verdict === 'DANGEROUS' ? 'text-port-error' : 'text-port-accent'} hover:underline`}
-                        title="Open malware scan markdown report"
+                        title="View malware scan report"
                       >
                         {link.malwareScan.verdict === 'DANGEROUS' ? <Skull size={12} /> : <ShieldCheck size={12} />}
                         {link.malwareScan.verdict || 'Scan report'}
-                      </a>
+                      </Link>
                     )}
 
                     {/* Local path */}

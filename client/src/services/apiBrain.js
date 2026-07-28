@@ -191,7 +191,7 @@ export const getBrainLinks = (options = {}) => {
   if (options.offset) params.set('offset', options.offset);
   return request(`/brain/links?${params}`);
 };
-export const getBrainLink = (id) => request(`/brain/links/${id}`);
+export const getBrainLink = (id, options = {}) => request(`/brain/links/${id}`, options);
 export const createBrainLink = (data, options = {}) => request('/brain/links', {
   method: 'POST',
   body: JSON.stringify(data),
@@ -215,6 +215,21 @@ export const cloneBrainLink = (id, options = {}) => request(`/brain/links/${id}/
 export const pullBrainLink = (id, options = {}) => request(`/brain/links/${id}/pull`, { method: 'POST', ...options });
 export const openBrainLinkFolder = (id, options = {}) => request(`/brain/links/${id}/open-folder`, { method: 'POST', ...options });
 export const scanBrainLink = (id, options = {}) => request(`/brain/links/${id}/scan`, { method: 'POST', ...options });
+export const brainScanReportPath = (id) => `/brain/links/${encodeURIComponent(id)}/scan-report`;
+export const getBrainScanReport = (id, options = {}) => request(`/brain/links/${encodeURIComponent(id)}/scan-report`, {
+  responseType: 'text',
+  ...options
+});
+
+// Scan report links created before the in-app viewer used the raw API endpoint.
+// Keep old Review and CoS records inside PortOS too, rather than opening a .md
+// response in the standalone Home Screen browser context.
+export const normalizeBrainScanReportPath = (reportUrl) => {
+  const match = typeof reportUrl === 'string'
+    ? reportUrl.match(/^\/api\/brain\/links\/([^/]+)\/scan-report$/)
+    : null;
+  return match ? brainScanReportPath(match[1]) : reportUrl;
+};
 
 // Brain - Buckets (bookmark groups for links)
 export const getBrainBuckets = (options = {}) => request('/brain/buckets', options);

@@ -805,13 +805,11 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
             {agent.metadata?.taskSummary && <MarkdownOutput content={agent.metadata.taskSummary} />}
             {agent.metadata?.malwareScan?.reportUrl && (
               <a
-                href={agent.metadata.malwareScan.reportUrl}
-                target="_blank"
-                rel="noopener noreferrer"
+                href={api.normalizeBrainScanReportPath(agent.metadata.malwareScan.reportUrl)}
                 className={`mt-2 inline-flex items-center gap-1 text-xs hover:underline ${agent.metadata.malwareScan.verdict === 'DANGEROUS' ? 'text-port-error' : 'text-port-accent'}`}
               >
                 {agent.metadata.malwareScan.verdict === 'DANGEROUS' ? <Skull size={13} /> : <ExternalLink size={13} />}
-                View markdown scan report{agent.metadata.malwareScan.verdict ? ` (${agent.metadata.malwareScan.verdict})` : ''}
+                View scan report{agent.metadata.malwareScan.verdict ? ` (${agent.metadata.malwareScan.verdict})` : ''}
               </a>
             )}
           </div>
