@@ -57,8 +57,7 @@ import {
   buildTuiInvocation,
   detectMissingTuiBinary,
 } from './tuiHandshake.js';
-import { buildOpencodeEnvVars } from './opencodeConfig.js';
-import { withSpawnCwdEnv } from './spawnCwd.js';
+import { buildCliChildEnv } from './cliChildEnv.js';
 
 // One-shot defaults that don't apply to the long-running agent path:
 //   - hard run cap (5 min vs unbounded for agents)
@@ -171,20 +170,18 @@ ${prompt}`;
   // unstripped) is counted the same way the stripped post-paste buffer is.
   const promptMarkerCount = countPasteMarkers(stripAnsi(wrappedPrompt));
 
-  // CLAUDECODE is set when PortOS itself runs inside Claude Code; passing it
-  // through to a spawned Claude Code TUI would make the child think it's
-  // nested. Other AI spawn paths (runner.js, agentCliSpawning.js) strip it
-  // for the same reason.
-  // For OpenCode Ollama providers, build dynamic OPENCODE_CONFIG_CONTENT with
-  // the models map so --model is accepted (the static env var lacked this).
-  // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). This PTY runs the
-  // CLI directly, so there is no login shell to rewrite PWD for us.
-  const opencodeEnv = buildOpencodeEnvVars(provider, provider.defaultModel);
-  const childEnv = withSpawnCwdEnv(
-    { ...process.env, ...(provider.envVars || {}), ...opencodeEnv, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
-    workingDir,
-  );
-  delete childEnv.CLAUDECODE;
+  // Shared composition (provider.envVars + OpenCode models map + PWD pin +
+  // CLAUDECODE strip) — see buildCliChildEnv. The PWD pin matters here because
+  // this PTY runs the CLI directly, so there is no login shell to rewrite PWD
+  // for us. TERM/COLORTERM go in `extra` so they override any provider setting —
+  // the PTY is always a truecolor xterm regardless of provider config. No
+  // `guard`: this is a Run Prompt TUI, not an autonomous agent.
+  const childEnv = buildCliChildEnv({
+    provider,
+    model: provider.defaultModel,
+    cwd: workingDir,
+    extra: { TERM: 'xterm-256color', COLORTERM: 'truecolor' },
+  });
 
   let ptyProcess;
   try {

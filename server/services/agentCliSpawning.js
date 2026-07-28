@@ -30,11 +30,9 @@ import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { isGrokCommand, ensureGrokHeadlessArgs } from '../lib/grok.js';
 import { isKimiCommand, ensureKimiHeadlessArgs } from '../lib/kimi.js';
 import { resolveCliModel, buildEffortArgs, buildCodexStartupArgs, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs, providerSuppliesGithubToken } from '../lib/providerModels.js';
-import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { resolveForgeTokenEnv } from './git.js';
-import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
-import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
+import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { resolvePrCompletion } from '../lib/prDisposition.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
@@ -483,17 +481,19 @@ export async function spawnDirectly({
     providerSuppliesGithubToken(provider) ? Promise.resolve({}) : resolveForgeTokenEnv(cwd),
   ]);
 
-  // For OpenCode Ollama providers, build dynamic OPENCODE_CONFIG_CONTENT with
-  // the models map so --model is accepted (the static env var lacked this).
-  const opencodeEnv = buildOpencodeEnvVars(provider, model);
-
-  // The pm2 shim must be prepended onto the FINAL PATH (after any
-  // provider.envVars override) so a `--dangerously-skip-permissions` agent
-  // can't `pm2 kill` the shared daemon. opencodeEnv comes LAST to override
-  // the static OPENCODE_CONFIG_CONTENT in provider.envVars; forgeTokenEnv sits
-  // before provider.envVars so an explicit provider GH_TOKEN override still wins.
-  // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193).
-  const childEnv = (() => { const e = withSpawnCwdEnv({ ...process.env, ...forgeTokenEnv, ...claudeSettingsEnv, ...provider.envVars, ...opencodeEnv }, cwd); delete e.CLAUDECODE; Object.assign(e, agentGuardEnv(e)); return e; })();
+  // Shared composition (provider.envVars + OpenCode models map + PWD pin +
+  // CLAUDECODE strip) — see buildCliChildEnv. forgeTokenEnv/claudeSettingsEnv go
+  // in `before` so they sit UNDER provider.envVars and an explicit provider
+  // GH_TOKEN override still wins. `guard: true` prepends the pm2 shim onto the
+  // final PATH so a `--dangerously-skip-permissions` agent can't `pm2 kill` the
+  // shared daemon.
+  const childEnv = buildCliChildEnv({
+    before: { ...forgeTokenEnv, ...claudeSettingsEnv },
+    provider,
+    model,
+    cwd,
+    guard: true,
+  });
 
   // Resolve a bare npm-installed CLI (a .cmd/.bat shim on Windows) to its real
   // path and wrap a shim as `cmd.exe /c <path>` so spawn() under shell:false

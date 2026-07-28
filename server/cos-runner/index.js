@@ -17,7 +17,7 @@ import http from 'http';
 import { Server as SocketServer } from 'socket.io';
 import { ensureDir, PATHS, sleep } from '../lib/fileUtils.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
-import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
+import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { createStreamJsonParser } from './streamJsonParser.js';
@@ -188,10 +188,17 @@ app.post('/spawn', async (req, res) => {
   // Ensure workspacePath is valid
   const cwd = workspacePath && typeof workspacePath === 'string' ? workspacePath : ROOT_DIR;
 
-  // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). This is the path the
-  // bug was reported through: the log line above named the app's workspace
-  // correctly while every OpenCode agent still ran in the PortOS folder.
-  const childEnv = (() => { const e = withSpawnCwdEnv({ ...process.env, ...envVars }, cwd); delete e.CLAUDECODE; return e; })();
+  // Shared composition (provider.envVars + OpenCode models map + PWD pin +
+  // CLAUDECODE strip) — see buildCliChildEnv. The runner receives the provider's
+  // envVars over HTTP rather than a provider record, so it wraps them into the
+  // `provider` slot; with no `command` in the payload the OpenCode layer is a
+  // no-op and the result is exactly `{ ...process.env, ...envVars }` as before.
+  // The PWD pin is the path #3193 was reported through: the log line above named
+  // the app's workspace correctly while every OpenCode agent still ran in the
+  // PortOS folder. No `guard`, preserving today's behavior: this runner is a
+  // separate process that does not carry the pm2 shim (only the in-process
+  // agent-spawning paths opt in).
+  const childEnv = buildCliChildEnv({ provider: { envVars }, cwd });
 
   // Resolve a bare npm-installed CLI (opencode/codex/claude/… — a .cmd/.bat
   // shim on Windows) to its real path and wrap a shim as `cmd.exe /c <path>` so

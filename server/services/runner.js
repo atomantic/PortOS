@@ -6,11 +6,10 @@ import { spawn } from 'child_process';
 import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, ensureDir, tryReadFile, PATHS } from '../lib/fileUtils.js';
-import { resolveSpawnCwd, withSpawnCwdEnv } from '../lib/spawnCwd.js';
+import { resolveSpawnCwd } from '../lib/spawnCwd.js';
 import { hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
-import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
 import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
-import { agentGuardEnv } from '../lib/agentGuard/index.js';
+import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn } from '../lib/bufferedSpawn.js';
 import {
@@ -261,18 +260,16 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
   const { args, useStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(provider.command, builtArgs, prompt);
   console.log(`🚀 Executing CLI: ${provider.command} (${prompt.length} chars via ${useStdin ? 'stdin' : 'argv'})`);
 
-  // Prepend the pm2 shim (agentGuardEnv) onto the final PATH so an unrestricted
-  // agent can't `pm2 kill` the shared daemon. See server/lib/agentGuard.
-  // buildOpencodeEnvVars rebuilds OPENCODE_CONFIG_CONTENT with a declared models
-  // map for OpenCode Ollama providers (empty/no-op otherwise) so the injected
-  // `--model ollama/<id>` isn't rejected as "not valid" — see issue-2190.
-  // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193).
-  const childEnv = withSpawnCwdEnv(
-    { ...process.env, ...provider.envVars, ...buildOpencodeEnvVars(provider, provider.defaultModel) },
-    effectiveCwd,
-  );
-  delete childEnv.CLAUDECODE;
-  Object.assign(childEnv, agentGuardEnv(childEnv));
+  // Shared composition (provider.envVars + OpenCode models map + PWD pin +
+  // CLAUDECODE strip) — see buildCliChildEnv. `guard: true` prepends the pm2
+  // shim onto the final PATH so an unrestricted agent can't `pm2 kill` the
+  // shared daemon.
+  const childEnv = buildCliChildEnv({
+    provider,
+    model: provider.defaultModel,
+    cwd: effectiveCwd,
+    guard: true,
+  });
 
   // See the executeCliRun docblock above for why this is a resolve+wrap, not
   // a shell:true. Resolved against `childEnv` (not bare process.env) so a

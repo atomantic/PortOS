@@ -36,6 +36,7 @@ import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/ant
 import { isGrokCommand, ensureGrokHeadlessArgs } from '../lib/grok.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
+import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
 import { evaluateSecretEndpoint } from '../lib/aiToolkit/internal/endpointGuard.js';
 
@@ -603,7 +604,14 @@ async function* streamCompletion(provider, model, prompt, signal) {
   // --print VALUE (agy doesn't read stdin); grok's /dev/stdin sentinel via stdin
   // (POSIX) / temp file (Windows); everyone else via stdin (writePromptToStdin).
   const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(provider.command, args, prompt);
-  const childEnv = (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; return e; })();
+  // Shared composition (provider.envVars + OpenCode models map + CLAUDECODE
+  // strip) — see buildCliChildEnv. No cwd is passed to spawn below, so there is
+  // no PWD to pin; no `guard` — Ask is a one-shot answer, not an agent. Routing
+  // through the shared builder also brings the OpenCode declared-models map here
+  // for the first time, so the `--model` this path injects above isn't rejected
+  // by an Ollama-backed OpenCode provider (the #2190 fix, previously applied
+  // only at the runner/agent sites).
+  const childEnv = buildCliChildEnv({ provider, model: cliModel });
   // Resolve a bare npm-installed CLI (a .cmd/.bat shim on Windows) to its real
   // path and wrap it as `cmd.exe /c <path>` so spawn() under shell:false can
   // launch it — a bare shim name ENOENTs otherwise. No-op off Windows. Mirrors

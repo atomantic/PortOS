@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { stripAnsi } from './ansiStrip.js';
 import { sleep } from './fileUtils.js';
-import { withSpawnCwdEnv } from './spawnCwd.js';
+import { buildCliChildEnv } from './cliChildEnv.js';
 
 /**
  * Drive an interactive coding-agent TUI (Antigravity `agy`, Grok Build `grok`)
@@ -96,16 +96,18 @@ export async function scrapeTuiUsage({
 
   mkdirSync(sandboxDir, { recursive: true });
 
-  // Provider envVars (auth/config) merged over process.env, then the PTY hints.
-  // CLAUDECODE leaks when PortOS itself runs under Claude Code; strip it so a
-  // spawned TUI doesn't think it's nested (mirrors tuiPromptRunner.js).
-  // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). Keeps the scrape in
-  // the throwaway sandbox instead of opening the PortOS checkout as a project.
-  const env = withSpawnCwdEnv(
-    { ...process.env, ...extraEnv, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
-    sandboxDir,
-  );
-  delete env.CLAUDECODE;
+  // Shared composition (provider envVars + PWD pin + CLAUDECODE strip) — see
+  // buildCliChildEnv. `extraEnv` is the provider's auth/config env, handed in
+  // loose rather than as a provider record; with no command to classify, the
+  // OpenCode layer is a no-op here. TERM/COLORTERM go in `extra` so the PTY is
+  // always a truecolor xterm regardless of provider config (mirrors
+  // tuiPromptRunner.js). The PWD pin keeps the scrape in the throwaway sandbox
+  // instead of opening the PortOS checkout as a project.
+  const env = buildCliChildEnv({
+    provider: { envVars: extraEnv },
+    cwd: sandboxDir,
+    extra: { TERM: 'xterm-256color', COLORTERM: 'truecolor' },
+  });
 
   let pty;
   try {

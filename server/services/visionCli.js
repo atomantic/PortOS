@@ -31,7 +31,7 @@ import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { resolveCliModel, isCodexProvider, buildCodexStartupArgs } from '../lib/providerModels.js';
 import { extractCodexAssistant, extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
 import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn } from '../lib/bufferedSpawn.js';
-import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
+import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 
 const CLI_VISION_TIMEOUT_MS = 120000;
 const IMAGE_BASENAME = 'vision-input.png';
@@ -128,13 +128,18 @@ export async function describeImageViaCli({
     const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup } = prepareCliPrompt(command, args, stdin);
     cleanupPromptFile = cleanup;
 
-    // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). Load-bearing here:
-    // the non-codex branch above tells the CLI the image is "in the current
-    // directory", and the vision provider is user-configurable — so on OpenCode
-    // (which resolves its project root from PWD) a stale value both hides
-    // vision-input.png and turns the CLI loose in the PortOS checkout.
-    const childEnv = withSpawnCwdEnv({ ...process.env, ...provider?.envVars }, cwd);
-    delete childEnv.CLAUDECODE;
+    // Shared composition (provider.envVars + OpenCode models map + PWD pin +
+    // CLAUDECODE strip) — see buildCliChildEnv. The PWD pin is load-bearing
+    // here: the non-codex branch above tells the CLI the image is "in the
+    // current directory", and the vision provider is user-configurable — so on
+    // OpenCode (which resolves its project root from PWD) a stale value both
+    // hides vision-input.png and turns the CLI loose in the PortOS checkout.
+    // Routing through the shared builder also brings the OpenCode declared-models
+    // map here for the first time, so the `--model` buildCliVisionInvocation
+    // injects isn't rejected by an Ollama-backed OpenCode provider (the #2190
+    // fix, previously applied only at the runner/agent sites). No `guard` —
+    // vision is a one-shot describe, not an agent.
+    const childEnv = buildCliChildEnv({ provider, model: visionModel, cwd });
 
     // npm-installed CLI providers are .cmd/.bat shims on Windows; resolve+wrap
     // (cmd.exe /c) instead of enabling a shell. This matters even more here

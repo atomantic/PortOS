@@ -323,9 +323,13 @@ describe('every cwd-passing spawn pins PWD', () => {
       // Count pins rather than merely asserting one exists: a file that already
       // pins its first spawn would otherwise pass forever, even after a second,
       // unpinned cwd-spawn is added to it.
+      // Two markers count as a pin: the low-level helper, and buildCliChildEnv —
+      // the shared AI-CLI env composer, which calls withSpawnCwdEnv internally
+      // (#3194). Counting the composer here is what lets the five AI-CLI spawn
+      // sites collapse to one call each without going dark to this guard.
       const pins = INLINE_PIN.has(rel)
         ? (src.match(/childEnv\.PWD\s*=/g) || []).length
-        : (src.match(/withSpawnCwdEnv\(/g) || []).length;
+        : (src.match(/(?:withSpawnCwdEnv|buildCliChildEnv)\(/g) || []).length;
       if (pins < sites) unpinned.push(`${rel} (${sites} cwd-passing spawn(s), ${pins} pin(s))`);
     }
     expect(

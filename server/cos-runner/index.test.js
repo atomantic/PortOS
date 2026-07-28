@@ -34,10 +34,11 @@ describe('cos-runner spawn — Windows CLI shim resolve+wrap (#2243)', () => {
   });
 
   it('resolves the command against the child env (childEnv) so a provider PATH override is honored', () => {
-    // childEnv (process.env + provider envVars, CLAUDECODE stripped) is built
-    // BEFORE the resolve so PATH resolution sees the child's PATH, and is reused
-    // as the spawn env — matching the working server/services/runner.js path.
-    const childEnvIdx = RUNNER_SRC.indexOf('const childEnv = (() =>');
+    // childEnv (process.env + provider envVars, CLAUDECODE stripped, PWD pinned
+    // — composed by the shared buildCliChildEnv) is built BEFORE the resolve so
+    // PATH resolution sees the child's PATH, and is reused as the spawn env —
+    // matching the working server/services/runner.js path.
+    const childEnvIdx = RUNNER_SRC.indexOf('const childEnv = buildCliChildEnv(');
     const prepareIdx = RUNNER_SRC.indexOf('prepareCliSpawn(command, deliveredArgs, childEnv)');
     expect(childEnvIdx, 'childEnv must be defined').toBeGreaterThan(-1);
     expect(prepareIdx, 'prepareCliSpawn must run against childEnv').toBeGreaterThan(-1);
