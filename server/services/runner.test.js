@@ -770,3 +770,52 @@ describe('executeCliRun — workspace validation (#3180)', () => {
     expect(onComplete.mock.calls[0][0]).toMatchObject({ success: false });
   });
 });
+
+describe('resolveRunCwd — callback containment (#3180)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setAIToolkit(fakeToolkit(), { dataDir: '/tmp/test-runner' });
+  });
+
+  // /runs never awaits its executor, so a throwing onComplete here would reject
+  // resolveRunCwd AFTER the failed run was persisted — landing as the unhandled
+  // rejection and hung-looking run this helper exists to prevent.
+  it('does not reject when the caller onComplete throws on the failure path', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const onComplete = vi.fn(() => { throw new Error('caller exploded'); });
+
+    await expect(runner.resolveRunCwd({
+      runId: 'run-cb-throws',
+      workspacePath: '/definitely/not/a/real/repo/path',
+      label: 'Run cb',
+      onComplete,
+    })).resolves.toMatchObject({ failure: expect.objectContaining({ success: false }) });
+
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    errSpy.mockRestore();
+  });
+
+  it('does not reject when the caller onComplete rejects asynchronously', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const onComplete = vi.fn(async () => { throw new Error('async caller exploded'); });
+
+    await expect(runner.resolveRunCwd({
+      runId: 'run-cb-rejects',
+      workspacePath: '/definitely/not/a/real/repo/path',
+      label: 'Run cb2',
+      onComplete,
+    })).resolves.toBeTruthy();
+    errSpy.mockRestore();
+  });
+
+  // The whitespace-only repoPath z.string().min(1) still lets through.
+  it('fails the run for a whitespace-only workspace rather than using the root', async () => {
+    const onComplete = vi.fn();
+    const { failure, cwd } = await runner.resolveRunCwd({
+      runId: 'run-blank-ws', workspacePath: '   ', label: 'Run blank', onComplete,
+    });
+    expect(cwd).toBeUndefined();
+    expect(failure).toMatchObject({ success: false });
+    expect(failure.error).toMatch(/blank/);
+  });
+});

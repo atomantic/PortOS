@@ -34,15 +34,28 @@ import { expandHome } from './fileUtils.js';
  * @throws {Error} when `workspacePath` was supplied but is not an existing directory
  */
 export function resolveSpawnCwd(workspacePath, fallbackRoot, label = 'run') {
-  // expandHome so a repoPath saved as `~/Projects/App` resolves instead of
-  // hard-failing as "does not exist" — `repoPath` is only validated as a
-  // non-empty string, and every other user-supplied-path boundary in the repo
-  // expands it too.
-  const requested = expandHome(typeof workspacePath === 'string' ? workspacePath.trim() : '');
-
-  if (!requested) {
+  // "Nothing was supplied" and "something blank was supplied" are different
+  // answers and must not collapse. `repoPath` is validated only as
+  // `z.string().min(1)`, so an app can hold "   " — that is a MISCONFIGURED
+  // workspace, not an absent one. Deciding on the trimmed value would turn it
+  // back into the fallback root and silently run in the PortOS checkout: the
+  // exact bug this module exists to prevent, reachable through the one input
+  // the schema still lets through.
+  const supplied = typeof workspacePath === 'string' && workspacePath.length > 0;
+  if (!supplied) {
     console.log(`📂 ${label} cwd: ${fallbackRoot} (no workspace selected)`);
     return fallbackRoot;
+  }
+
+  // expandHome so a repoPath saved as `~/Projects/App` resolves instead of
+  // hard-failing as "does not exist" — every other user-supplied-path boundary
+  // in the repo expands it too.
+  const requested = expandHome(workspacePath.trim());
+  if (!requested) {
+    throw new Error(
+      `Workspace path is blank: the Repository Path for this app is only whitespace. `
+      + `Set it to the repo folder (Apps → edit → Repository Path) and run again.`
+    );
   }
 
   // Fail loudly instead of silently running in the PortOS checkout. A bad

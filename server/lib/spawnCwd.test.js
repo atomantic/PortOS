@@ -26,9 +26,16 @@ describe('resolveSpawnCwd', () => {
     expect(resolveSpawnCwd(undefined, '/fallback')).toBe('/fallback');
     expect(resolveSpawnCwd(null, '/fallback')).toBe('/fallback');
     expect(resolveSpawnCwd('', '/fallback')).toBe('/fallback');
-    // A whitespace-only value is a blank field, not a real path — it must not
-    // reach existsSync and fail as "does not exist".
-    expect(resolveSpawnCwd('   ', '/fallback')).toBe('/fallback');
+  });
+
+  // "Nothing supplied" and "something blank supplied" must not collapse.
+  // repoPath is validated as z.string().min(1), so an app CAN hold "   ";
+  // treating that as absent hands the run the PortOS root and silently writes
+  // there — the bug this module exists to prevent, through the one input the
+  // schema still allows.
+  it('rejects a whitespace-only workspace instead of falling back', () => {
+    expect(() => resolveSpawnCwd('   ', '/fallback')).toThrow(/blank/);
+    expect(() => resolveSpawnCwd('\t\n ', '/fallback')).toThrow(/Repository Path/);
   });
 
   it('logs the effective cwd so a run is never silently misrouted', () => {

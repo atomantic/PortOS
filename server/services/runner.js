@@ -146,11 +146,16 @@ export async function resolveRunCwd({ runId, workspacePath, label, startTime = D
     return { cwd: resolveSpawnCwd(workspacePath, PATHS.root, label) };
   } catch (err) {
     const message = `❌ ${err.message}`;
-    onData?.(message);
+    // Settle the caller's callbacks through the same guard the close handler
+    // uses. A throwing (or rejecting) onComplete here would reject
+    // resolveRunCwd itself AFTER the failed run was already persisted — and
+    // since /runs never awaits its executor, that lands as the unhandled
+    // rejection + hung-looking run this helper exists to prevent.
+    safeSettle(() => onData?.(message), 'onData');
     const failure = await finalizeRunRecord({
       runId, output: message, exitCode: null, success: false, error: err.message, startTime,
     });
-    onComplete?.(failure);
+    safeSettle(() => onComplete?.(failure), 'onComplete');
     return { failure };
   }
 }
