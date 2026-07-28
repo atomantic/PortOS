@@ -150,7 +150,10 @@ which claude
 
 **Symptom**: You pick an app as the workspace (in a CoS task, or **Settings → Providers → Run Prompt**) and ask the agent to create a file. It lands in the PortOS directory instead of the app's repo. Giving the agent an **absolute** path in the prompt works fine.
 
-**Cause**: The agent's working directory comes from the selected app's **Repository Path** (`repoPath`) — nothing else. If that value was empty, pointed at a folder that no longer exists, or the app couldn't be resolved, older versions of PortOS fell back to their own directory without saying so, and a prompt naming a relative file (`HelloWorld.md`) wrote there.
+**Cause**: There were two, and they look identical from the outside.
+
+1. **A workspace that didn't resolve.** The agent's working directory comes from the selected app's **Repository Path** (`repoPath`) — nothing else. If that value was empty, pointed at a folder that no longer exists, or the app couldn't be resolved, older versions of PortOS fell back to their own directory without saying so, and a prompt naming a relative file (`HelloWorld.md`) wrote there.
+2. **A CLI that ignored the working directory it was given.** Starting a process with a working directory does not update `PWD` in the environment it inherits, and **OpenCode** reads `PWD` in preference to its real working directory. So OpenCode agents ran in the PortOS folder no matter which app was selected — the spawn logs reported the app's repo correctly, and asking the agent to print its own working directory printed the PortOS path. Codex, Claude Code, and Gemini were unaffected, which made it look like an OpenCode-only quirk. PortOS now pins `PWD` to the real working directory at every spawn, so OpenCode lands in the same place as everything else.
 
 **`PORTOS_WORKSPACE_ROOTS` does not control this.** That variable only scopes which directories the repo-detection and command-execution routes are allowed to read. Setting it will not change where an agent runs, and it is not required for agent workspaces to work.
 
@@ -160,7 +163,8 @@ which claude
    ```
    📂 Run <run-id> cwd: C:\Users\Example\Projects\MyApp
    ```
-   CoS tasks show the same line in the task log as `📂 Agent workspace: …`. If that path is your app's repo, the workspace is working — anything landing elsewhere is coming from the prompt, not the workspace setting.
+   CoS tasks show the same line in the task log as `📂 Agent workspace: …`.
+3. If that logged path is already your app's repo but files still land in the PortOS folder, you're hitting cause 2 above — **update PortOS**. Until you do, the workaround is to give the agent absolute paths in the prompt, or to run the task on a different provider (Codex, Claude Code, and Gemini were never affected).
 
 PortOS no longer falls back silently, so a misconfigured app now surfaces as one of these instead of a wrong-directory write:
 
