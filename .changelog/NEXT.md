@@ -1,5 +1,9 @@
 # Unreleased Changes
 
+## Music Video
+
+- **[issue-3168] Music Video projects now have a Concept and Visual style field.** Set them before clicking "AI Plan" to steer the proposed scenes toward a story or theme, and every generated frame and shot prompt now carries your chosen visual style automatically.
+
 ## Usage cost reporting
 
 - **[issue-3156] Historical usage estimates can now be reconciled against provider transcripts.** The Usage page offers an explicit, progress-reporting repair that matches transcripts only to PortOS run windows, preserves configured provider IDs, replaces each old estimate once, and rebuilds corrected totals without inventing legacy cost.

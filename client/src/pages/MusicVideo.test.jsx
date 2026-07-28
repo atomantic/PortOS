@@ -248,6 +248,48 @@ describe('MusicVideo autonomous shot planner (#1855)', () => {
   });
 });
 
+describe('MusicVideo concept & style editor (#3168)', () => {
+  it('seeds the fields from the project and persists each on blur', async () => {
+    const withConcept = { ...PROJECT_NO_CLIP, concept: { prompt: 'A road trip through neon ruins', style: 'Cyberpunk anime' } };
+    await openProject(withConcept);
+
+    const conceptField = await screen.findByLabelText('Concept');
+    const styleField = screen.getByLabelText('Visual style');
+    expect(conceptField).toHaveValue('A road trip through neon ruins');
+    expect(styleField).toHaveValue('Cyberpunk anime');
+
+    fireEvent.change(conceptField, { target: { value: 'A heist across a dying star' } });
+    fireEvent.blur(conceptField);
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(
+      'mv-2',
+      { concept: { prompt: 'A heist across a dying star', style: 'Cyberpunk anime' } },
+      { silent: true },
+    ));
+
+    fireEvent.change(styleField, { target: { value: 'Watercolor noir' } });
+    fireEvent.blur(styleField);
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(
+      'mv-2',
+      { concept: { prompt: 'A heist across a dying star', style: 'Watercolor noir' } },
+      { silent: true },
+    ));
+  });
+
+  it('starts empty and enables AI Plan to use them once set', async () => {
+    await openProject(PROJECT_ANALYZED);
+    const conceptField = await screen.findByLabelText('Concept');
+    expect(conceptField).toHaveValue('');
+
+    fireEvent.change(conceptField, { target: { value: 'Underwater festival' } });
+    fireEvent.blur(conceptField);
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(
+      'mv-3',
+      { concept: { prompt: 'Underwater festival' } },
+      { silent: true },
+    ));
+  });
+});
+
 describe('MusicVideo YouTube audio import (#1945)', () => {
   it('starts an import from the detail view and attaches the finished track to the project', async () => {
     await openProject(PROJECT_NO_CLIP);

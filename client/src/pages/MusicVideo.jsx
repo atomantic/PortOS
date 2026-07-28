@@ -461,6 +461,17 @@ export default function MusicVideo() {
     updateMusicVideoScene(selected.id, sceneId, patch, { silent: true })
       .catch((err) => toast.error(err?.message || 'Failed to save scene'));
   };
+
+  // Project-level concept/style (issue #3168) — same optimistic-local + silent-PATCH
+  // blur pattern as scene fields. Consumed by buildScenePlanPrompt (AI Plan) and by
+  // buildFramePrompt/buildShotPrompt's style suffix, both already reading concept.
+  const editConceptLocal = (patch) => {
+    replaceProject({ ...selected, concept: { ...selected.concept, ...patch } });
+  };
+  const saveConcept = (patch) => {
+    updateMusicVideoProject(selected.id, { concept: { ...selected.concept, ...patch } }, { silent: true })
+      .catch((err) => toast.error(err?.message || 'Failed to save concept'));
+  };
   // BeatTimeline drag commit — same optimistic-local + silent-PATCH pattern as
   // the other scene field editors (#1854).
   const commitSceneTiming = (sceneId, patch) => {
@@ -703,6 +714,38 @@ export default function MusicVideo() {
                       className="flex items-center gap-1 text-port-error border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0">
                       <Trash2 size={15} />
                     </button>
+                  </div>
+                </div>
+                {/* Concept & style — optional global direction for the whole video,
+                    set before "AI Plan" so buildScenePlanPrompt (server) can build on
+                    it, and reused by buildFramePrompt/buildShotPrompt's style suffix
+                    (issue #3168). Local-edit + blur-save, same pattern as scene fields. */}
+                <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label htmlFor="mv-concept" className="block text-xs text-port-text-muted mb-1">Concept</label>
+                    <textarea
+                      id="mv-concept"
+                      value={selected.concept?.prompt || ''}
+                      rows={2}
+                      maxLength={8000}
+                      onChange={(e) => editConceptLocal({ prompt: e.target.value })}
+                      onBlur={(e) => saveConcept({ prompt: e.target.value })}
+                      placeholder="What is this video about — story, theme, or narrative thread for the AI plan to build on."
+                      className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="mv-style" className="block text-xs text-port-text-muted mb-1">Visual style</label>
+                    <textarea
+                      id="mv-style"
+                      value={selected.concept?.style || ''}
+                      rows={2}
+                      maxLength={2000}
+                      onChange={(e) => editConceptLocal({ style: e.target.value })}
+                      onBlur={(e) => saveConcept({ style: e.target.value })}
+                      placeholder="Art style, references, palette, mood — appended to every generated frame and shot prompt."
+                      className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
+                    />
                   </div>
                 </div>
                 {/* Track picker — pick an existing library track or import fresh audio
