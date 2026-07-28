@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../../testHelper.js';
 import { createRunsRoutes } from './runs.js';
+import { asyncHandler as portosAsyncHandler, errorMiddleware, ServerError } from '../../errorHandler.js';
 
 // Route-level harness for POST /api/runs fallback-model execution.
 //
@@ -45,10 +46,13 @@ function runData({ providerType, defaultModel, usedFallback = false, fallbackMod
   };
 }
 
+// Sends BOTH workspace fields, as the real client does — a name without a path
+// means "app selected but its Repository Path is unset" and is now a 400 (see
+// the selected-app-without-a-path suite at the bottom of this file).
 const post = (app) =>
   request(app)
     .post('/api/runs')
-    .send({ providerId: 'p1', model: REQUEST_MODEL, prompt: 'hello', workspaceName: 'ws' });
+    .send({ providerId: 'p1', model: REQUEST_MODEL, prompt: 'hello', workspaceName: 'ws', workspacePath: '/srv/repos/ws' });
 
 describe('POST /api/runs — fallback-model execution', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -195,5 +199,60 @@ describe('POST /api/runs — fallback-model execution', () => {
       expect(runnerService.createRun.mock.calls[0][0].screenshots).toEqual(['grab.png']);
       expect(runnerService.executeApiRun.mock.calls[0][0].screenshots).toEqual(['grab.png']);
     });
+  });
+});
+
+describe('POST /api/runs — selected-app-without-a-path guard (#3180)', () => {
+  // "No app selected" sends neither field; "app selected whose Repository Path
+  // is unset" sends a name but no path. Both reach the runner as an absent
+  // workspacePath, so without this guard the second silently ran in the PortOS
+  // checkout while the UI showed the app as the chosen workspace.
+  // Mounted under PortOS's real error middleware so the 400 body is the canonical
+  // envelope — the actionable message naming the app IS the fix, so assert it.
+  function makeAppWithEnvelope(rd) {
+    const runnerService = { createRun: vi.fn().mockResolvedValue(rd), executeApiRun: vi.fn(), executeCliRun: vi.fn(), executeTuiRun: vi.fn() };
+    const app = express();
+    app.use(express.json());
+    app.use('/api/runs', createRunsRoutes(runnerService, { asyncHandler: portosAsyncHandler, ServerError }));
+    app.use(errorMiddleware);
+    return { app, runnerService };
+  }
+
+  it('rejects a workspaceName with no workspacePath instead of running in the host directory', async () => {
+    const { app, runnerService } = makeAppWithEnvelope(runData({ providerType: 'cli', defaultModel: 'm' }));
+    const res = await request(app).post('/api/runs').send({
+      providerId: 'p1', prompt: 'create HelloWorld.md', workspaceName: 'Primes',
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Primes/);
+    expect(res.body.error).toMatch(/Repository Path/);
+    expect(res.body.code).toBe('WORKSPACE_PATH_MISSING');
+    expect(runnerService.createRun).not.toHaveBeenCalled();
+    expect(runnerService.executeCliRun).not.toHaveBeenCalled();
+  });
+
+  it('rejects a whitespace-only workspacePath alongside a name', async () => {
+    const { app, runnerService } = makeApp(runData({ providerType: 'cli', defaultModel: 'm' }));
+    const res = await request(app).post('/api/runs').send({
+      providerId: 'p1', prompt: 'go', workspaceName: 'Primes', workspacePath: '   ',
+    });
+    expect(res.status).toBe(400);
+    expect(runnerService.createRun).not.toHaveBeenCalled();
+  });
+
+  it('still allows a run with no workspace selected at all', async () => {
+    const { app, runnerService } = makeApp(runData({ providerType: 'cli', defaultModel: 'm' }));
+    const res = await request(app).post('/api/runs').send({ providerId: 'p1', prompt: 'go' });
+    expect(res.status).toBeLessThan(400);
+    expect(runnerService.createRun).toHaveBeenCalled();
+  });
+
+  it('still allows a run with both a name and a path', async () => {
+    const { app, runnerService } = makeApp(runData({ providerType: 'cli', defaultModel: 'm' }));
+    const res = await request(app).post('/api/runs').send({
+      providerId: 'p1', prompt: 'go', workspaceName: 'Primes', workspacePath: '/srv/repos/primes',
+    });
+    expect(res.status).toBeLessThan(400);
+    expect(runnerService.createRun).toHaveBeenCalled();
   });
 });

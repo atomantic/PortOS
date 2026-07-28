@@ -38,6 +38,20 @@ export function createRunsRoutes(runnerService, options = {}) {
       throw new ServerError('prompt is required', { status: 400 });
     }
 
+    // A workspace NAME with no PATH means the caller picked an app whose
+    // Repository Path is unset — distinct from picking no app at all, which
+    // sends neither. Downstream both arrive as an absent `workspacePath` and
+    // the run falls back to the host's own directory, so a prompt naming a
+    // relative file writes there instead of into the chosen app (#3180). The
+    // name is the only signal that a choice was made, and it is already on the
+    // wire, so reject here rather than letting the two cases collapse.
+    if (workspaceName && !(typeof workspacePath === 'string' && workspacePath.trim())) {
+      throw new ServerError(
+        `Workspace '${workspaceName}' has no Repository Path — set it for this app, then run again.`,
+        { status: 400, code: 'WORKSPACE_PATH_MISSING' }
+      );
+    }
+
     // `screenshots[]` is untrusted user input that the vision loader
     // base64-encodes and forwards to the external provider — constrain it to
     // safe screenshots-dir basenames here so a `../` traversal or absolute path
