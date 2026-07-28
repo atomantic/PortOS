@@ -27,6 +27,7 @@
 
 import { spawn } from 'child_process'
 import { PATHS, safeJSONParse } from '../../lib/fileUtils.js'
+import { withSpawnCwdEnv } from '../../lib/spawnCwd.js'
 import { loadLearningData, computeWindowedStats } from '../taskLearning/store.js'
 
 // The label that marks the ONE persistent summary issue to reuse across runs, and
@@ -154,7 +155,15 @@ export function buildDiagnosticsIssueBody(failing, { generatedAt = new Date().to
 /** Run a CLI, resolving `{ code, stdout, stderr }` (never rejects). Pure I/O. */
 function runCli(cmd, args, options = {}) {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { shell: false, windowsHide: true, ...options })
+    // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193). `options` may
+    // carry a caller-supplied `cwd`, so this wrapper owns the pin for every
+    // caller (mirrors layeredIntelligence/runCli.js, which has the same shape).
+    const child = spawn(cmd, args, {
+      shell: false,
+      windowsHide: true,
+      ...options,
+      env: withSpawnCwdEnv(options.env ?? process.env, options.cwd),
+    })
     let stdout = ''
     let stderr = ''
     child.stdout?.on('data', d => { stdout += d.toString() })

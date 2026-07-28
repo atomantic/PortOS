@@ -217,7 +217,6 @@ describe('every cwd-passing spawn pins PWD', () => {
     ['services/xcodeScripts.js', 'xcodebuild/ls, not an AI CLI'],
     ['services/imageTo3d/trellis2.js', 'python/uv toolchain inside its own install root'],
     ['services/updateExecutor.js', "PortOS's own update scripts, run in the PortOS root by design"],
-    ['services/calendarGoogleSync.js', 'runs in process.cwd(), so the inherited PWD is already truthful'],
     ['routes/database.js', 'psql/pg_dump, not an AI CLI'],
     ['routes/scaffold.js', 'npm/git scaffolding, not an AI CLI'],
     ['routes/scaffoldVite.js', 'npm scaffolding, not an AI CLI'],
@@ -250,44 +249,92 @@ describe('every cwd-passing spawn pins PWD', () => {
     return [relative(SERVER_DIR, abs)];
   });
 
-  // A spawn "passes a cwd" when a `cwd` option appears within the call's own
-  // options object. Scanning a short window after the call open-paren keeps this
-  // to a regex instead of a parser, at the cost of the occasional false positive
-  // — which is fine: a false positive is an exemption line, not a wrong pass.
-  const passesCwd = (src) => {
-    for (const match of src.matchAll(SPAWN_CALL_RE)) {
-      if (/\bcwd\s*[:,]/.test(src.slice(match.index, match.index + 400))) return true;
+  // A spawn is in scope when its options carry a `cwd` — either written inline
+  // (`spawn(cmd, args, { cwd, ... })`) or FORWARDED from a caller-supplied
+  // options object (`spawn(cmd, args, { ...options })`, the shape of a generic
+  // wrapper like layeredIntelligence/runCli). The forwarding case matters as
+  // much as the inline one: a wrapper that passes a caller's cwd through is
+  // exactly where an unpinned spawn hides from a scan that only reads literals.
+  //
+  // Scanning a window after the call's open-paren keeps this a regex rather than
+  // a parser. It over-matches sometimes — a false positive costs one EXEMPT line,
+  // whereas a false negative silently reopens #3193, so the bias is deliberate.
+  //
+  // KNOWN BLIND SPOT, stated rather than papered over: a call whose options are
+  // hoisted into a variable first (`const opts = { cwd, … }; spawn(c, a, opts)`)
+  // is invisible here — the window sees only the identifier. Detecting it needs
+  // real parsing, and the identifier-shaped heuristics all collide with the
+  // ordinary two-argument `spawn(cmd, args)` form. No such call exists in the
+  // tree today; if one is added, add it to EXEMPT/DELEGATES deliberately or
+  // rewrite it inline. Everything else — inline `cwd:` and forwarded
+  // `...options` — is covered.
+  const OPTIONS_SPREAD_RE = /\.\.\.\s*(?:options|opts|spawnOptions|spawnOpts)\b/;
+  const spawnSitesInScope = (src) => {
+    // `function bufferedSpawn(cmd, args, { cwd, … })` matches SPAWN_CALL_RE, and
+    // its destructured params contain `cwd` — so a wrapper's own DECLARATION
+    // reads as a second cwd-passing call site and inflates the count past the
+    // pin count. Only actual invocations count.
+    const starts = [...src.matchAll(SPAWN_CALL_RE)]
+      .filter((m) => !/\bfunction\s+$/.test(src.slice(Math.max(0, m.index - 20), m.index)))
+      .map((m) => m.index);
+    let count = 0;
+    for (const [i, start] of starts.entries()) {
+      // End the window at the NEXT spawn call so two adjacent calls can't share
+      // one `cwd`. Without this, a cwd-less `spawn('taskkill', …)` sitting within
+      // 400 chars of a cwd-passing spawn is counted as in-scope itself, inflating
+      // the site count past the pin count and failing a correctly-pinned file.
+      const end = Math.min(starts[i + 1] ?? src.length, start + 400);
+      const window = src.slice(start, end);
+      if (/\bcwd\s*[:,]/.test(window) || OPTIONS_SPREAD_RE.test(window)) count += 1;
     }
-    return false;
+    return count;
   };
 
   it('discovers the cwd-passing spawn sites (guard is not vacuous)', () => {
-    const found = collectSources(SERVER_DIR).filter((rel) => passesCwd(readFileSync(join(SERVER_DIR, rel), 'utf8')));
+    const found = collectSources(SERVER_DIR).filter((rel) => spawnSitesInScope(readFileSync(join(SERVER_DIR, rel), 'utf8')) > 0);
     // If this ever collapses toward zero the scan broke (a rename, a new spawn
     // wrapper) and every assertion below would pass for the wrong reason.
     expect(found.length, 'expected the scan to still find the known spawn sites').toBeGreaterThan(10);
     expect(found).toContain('cos-runner/index.js');
     expect(found).toContain('services/shell.js');
+    // The forwarding-wrapper shape specifically — this one is invisible to a
+    // scan that only reads inline `cwd:` literals, and missing it is what let an
+    // unpinned caller-forwarded cwd through.
+    expect(found).toContain('services/layeredIntelligence/runCli.js');
+  });
+
+  // Every EXEMPT entry must correspond to a file the scan actually finds.
+  // A stale entry is worse than no entry: it silently pre-approves whatever
+  // cwd-passing spawn is added to that file later.
+  it('has no dead EXEMPT / DELEGATES / INLINE_PIN entries', () => {
+    const inScope = new Set(collectSources(SERVER_DIR).filter((rel) => spawnSitesInScope(readFileSync(join(SERVER_DIR, rel), 'utf8')) > 0));
+    const dead = [...EXEMPT.keys(), ...DELEGATES.keys(), ...INLINE_PIN.keys()].filter((rel) => !inScope.has(rel));
+    expect(dead, 'these entries name files the scan no longer finds — delete them').toEqual([]);
   });
 
   it('every cwd-passing spawn either pins PWD or is explicitly exempt', () => {
     const unpinned = [];
     for (const rel of collectSources(SERVER_DIR)) {
       const src = readFileSync(join(SERVER_DIR, rel), 'utf8');
-      if (!passesCwd(src)) continue;
+      const sites = spawnSitesInScope(src);
+      if (sites === 0) continue;
       if (EXEMPT.has(rel)) continue;
       if (DELEGATES.has(rel) && src.includes(DELEGATES.get(rel))) continue;
-      const pinned = INLINE_PIN.has(rel)
-        ? /childEnv\.PWD\s*=/.test(src)
-        : src.includes('withSpawnCwdEnv(');
-      if (!pinned) unpinned.push(rel);
+      // Count pins rather than merely asserting one exists: a file that already
+      // pins its first spawn would otherwise pass forever, even after a second,
+      // unpinned cwd-spawn is added to it.
+      const pins = INLINE_PIN.has(rel)
+        ? (src.match(/childEnv\.PWD\s*=/g) || []).length
+        : (src.match(/withSpawnCwdEnv\(/g) || []).length;
+      if (pins < sites) unpinned.push(`${rel} (${sites} cwd-passing spawn(s), ${pins} pin(s))`);
     }
     expect(
       unpinned,
-      'These files spawn a child with an explicit cwd but never pin PWD. A CLI that '
-      + 'resolves its project root from PWD (OpenCode does) will ignore that cwd and run '
-      + 'in the PortOS checkout instead — see withSpawnCwdEnv in server/lib/spawnCwd.js '
-      + '(#3193). Either pin PWD, or add the file to EXEMPT above with the reason it is safe.',
+      'These files spawn a child with an explicit (or forwarded) cwd without pinning PWD '
+      + 'for it. A CLI that resolves its project root from PWD (OpenCode does) will ignore '
+      + 'that cwd and run in the PortOS checkout instead — see withSpawnCwdEnv in '
+      + 'server/lib/spawnCwd.js (#3193). Either pin PWD, or add the file to EXEMPT above '
+      + 'with the reason it is safe.',
     ).toEqual([]);
   });
 });
