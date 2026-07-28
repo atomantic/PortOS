@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { tmpdir, homedir } from 'os';
 import { join } from 'path';
 import { resolveSpawnCwd } from './spawnCwd.js';
 
@@ -54,5 +54,16 @@ describe('resolveSpawnCwd', () => {
     const file = join(dir, 'a-file.txt');
     writeFileSync(file, 'x');
     expect(() => resolveSpawnCwd(file, '/fallback')).toThrow(/not a directory/);
+  });
+});
+
+describe('resolveSpawnCwd — home expansion', () => {
+  // repoPath is only validated as a non-empty string, so a user can save
+  // `~/Projects/App`. Without expansion the new guard would hard-fail it with a
+  // message naming a path that was never meant to be literal.
+  it('expands a leading ~ instead of rejecting it as missing', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    expect(resolveSpawnCwd('~', '/fallback')).toBe(homedir());
+    logSpy.mockRestore();
   });
 });

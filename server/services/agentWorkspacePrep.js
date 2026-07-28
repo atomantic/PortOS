@@ -54,22 +54,23 @@ export async function prepareAgentWorkspace({ agentId, task }) {
     ? (await getAppById(task.metadata.app).catch(() => null))?.name || null
     : null;
 
-  // Surface the resolved cwd in the task log. The agent runs with this as its
-  // working directory, so a prompt that names a relative file ("create
-  // HelloWorld.md") writes HERE — and when resolution silently fell back to the
-  // PortOS root the files landed in the PortOS checkout with nothing in the log
-  // to explain it (issue #3180). Both failure shapes are now visible to the user
-  // in the UI, not just in server stdout.
-  if (task.metadata?.app && workspacePath === ROOT_DIR) {
-    emitLog('warn', `⚠️ App '${task.metadata.app}' did not resolve to a repo path — the agent will run in the PortOS directory, not your app. Check the app's Repository Path in Apps.`, {
-      taskId: task.id, workspace: workspacePath
-    });
-  } else if (!existsSync(workspacePath)) {
-    emitLog('warn', `⚠️ Workspace path does not exist: ${workspacePath} — the agent will likely fail to start or write to the wrong place.`, {
-      taskId: task.id, workspace: workspacePath
-    });
-  } else {
-    emitLog('info', `📂 Agent workspace: ${workspacePath}`, { taskId: task.id, workspace: workspacePath });
+  // Refuse to run an agent whose app didn't resolve to a usable directory.
+  // Previously both failures fell through to the PortOS root and the agent
+  // silently did its work in the PortOS checkout instead of the user's app
+  // (issue #3180) — a wrong-repo commit is far worse than a blocked task, and
+  // the block carries the exact thing to fix. Validated ONCE here rather than in
+  // each of the three spawn helpers (TUI / runner / direct), which all take
+  // their cwd from this function.
+  if (task.metadata?.app && !workspacePath) {
+    const reason = `App '${task.metadata.app}' has no usable Repository Path — set it in Apps, then re-run this task. `
+      + `(The agent was not started, so it could not write into the PortOS directory by mistake.)`;
+    emitLog('error', `❌ ${reason}`, { taskId: task.id });
+    return { outcome: 'blocked', reason };
+  }
+  if (!existsSync(workspacePath)) {
+    const reason = `Workspace path does not exist: ${workspacePath} — fix this app's Repository Path in Apps, then re-run this task.`;
+    emitLog('error', `❌ ${reason}`, { taskId: task.id, workspace: workspacePath });
+    return { outcome: 'blocked', reason };
   }
 
   let jiraTicket = null;
@@ -277,6 +278,11 @@ export async function prepareAgentWorkspace({ agentId, task }) {
       }
     }
   } // end !isReadOnly
+
+  // Announce the FINAL cwd — emitted here, after any worktree reassignment
+  // above, so the task log names the directory the agent actually runs in
+  // rather than the repo it was cut from (#3180).
+  emitLog('info', `📂 Agent workspace: ${workspacePath}`, { taskId: task.id, workspace: workspacePath });
 
   return {
     outcome: 'ready',

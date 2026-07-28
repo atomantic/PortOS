@@ -37,6 +37,7 @@ vi.mock('./agentPromptBuilder.js', () => ({
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import { ensureLatest } from './git.js';
 import { detectConflicts } from './taskConflict.js';
+import { getAppWorkspace } from './agentPromptBuilder.js';
 
 beforeEach(() => { vi.clearAllMocks(); });
 
@@ -67,5 +68,35 @@ describe('prepareAgentWorkspace', () => {
     expect(r.outcome).toBe('ready');
     expect(r.worktreeInfo).toBeNull();
     expect(detectConflicts).toHaveBeenCalled();
+  });
+});
+
+describe('prepareAgentWorkspace — workspace validation (#3180)', () => {
+  // Both shapes used to fall through to the PortOS root, so the agent did its
+  // work in the PortOS checkout instead of the user's app. A blocked task the
+  // user can fix beats a wrong-repo commit they have to discover later.
+  it('blocks when the task names an app that resolves to no repo path', async () => {
+    getAppWorkspace.mockResolvedValue(null);
+    const task = { id: 't-no-path', taskType: 'user', metadata: { app: 'primes' } };
+    const r = await prepareAgentWorkspace({ agentId: 'agent-np', task });
+    expect(r.outcome).toBe('blocked');
+    expect(r.reason).toContain('primes');
+    expect(r.reason).toContain('Repository Path');
+  });
+
+  it('blocks when the resolved workspace does not exist on disk', async () => {
+    getAppWorkspace.mockResolvedValue('/definitely/not/a/real/repo/path');
+    const task = { id: 't-missing', taskType: 'user', metadata: { app: 'primes' } };
+    const r = await prepareAgentWorkspace({ agentId: 'agent-ms', task });
+    expect(r.outcome).toBe('blocked');
+    expect(r.reason).toContain('/definitely/not/a/real/repo/path');
+  });
+
+  it('proceeds when the app resolves to a real directory', async () => {
+    getAppWorkspace.mockResolvedValue(process.cwd());
+    const task = { id: 't-ok', taskType: 'user', metadata: { app: 'primes', readOnly: true } };
+    const r = await prepareAgentWorkspace({ agentId: 'agent-ok', task });
+    expect(r.outcome).toBe('ready');
+    expect(r.workspacePath).toBe(process.cwd());
   });
 });

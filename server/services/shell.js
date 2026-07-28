@@ -42,26 +42,32 @@ const SAFE_ENV_PREFIXES = [
 // variables the OS itself needs to create a working process, so a PTY session
 // started from it launches into a crippled shell (no DLL search root, no temp
 // dir, no per-user app data — which is where `claude`/`codex` keep their
-// credentials and config). Enumerated explicitly rather than by prefix because
-// these have no common stem, and kept separate so POSIX sessions are unchanged.
+// credentials and config). Only names NOT already covered by a prefix above are
+// listed: PATHEXT/USERPROFILE/HOMEDRIVE/HOMEPATH already match PATH/USER/HOME.
 const SAFE_ENV_PREFIXES_WIN32 = [
-  'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'COMSPEC', 'PATHEXT',
-  'USERPROFILE', 'USERNAME', 'USERDOMAIN', 'HOMEDRIVE', 'HOMEPATH',
-  'APPDATA', 'LOCALAPPDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)',
-  'PROGRAMDATA', 'PROGRAMW6432', 'COMMONPROGRAMFILES', 'TEMP', 'TMP',
+  'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'COMSPEC',
+  'APPDATA', 'LOCALAPPDATA', 'PROGRAMFILES', 'PROGRAMDATA', 'PROGRAMW6432',
+  'COMMONPROGRAMFILES', 'TEMP', 'TMP',
   'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'OS', 'PSMODULEPATH'
 ];
+
+// Precomputed so the merge doesn't run per session.
+const SAFE_ENV_PREFIXES_ALL = [...SAFE_ENV_PREFIXES, ...SAFE_ENV_PREFIXES_WIN32];
 
 /**
  * Filter `process.env` down to the allowlist above.
  *
- * Matching is case-INSENSITIVE because Windows environment variable names are
- * case-insensitive and Windows supplies them in mixed case: the real variable
- * is `Path`, not `PATH`, so a case-sensitive `startsWith('PATH')` dropped the
- * child's entire PATH on Windows while keeping `PATHEXT` (which happens to be
- * upper-case) — the shell then couldn't resolve any CLI provider. POSIX env
- * names are conventionally upper-case already, so folding case is a no-op
- * there.
+ * On Windows, matching folds case: Windows env names are case-insensitive and
+ * arrive in mixed case, so the real variable is `Path`, not `PATH`. A
+ * case-sensitive `startsWith('PATH')` dropped the child's entire PATH there
+ * (while keeping the coincidentally-upper-case `PATHEXT`), leaving the shell
+ * unable to resolve any CLI provider.
+ *
+ * POSIX matching stays case-SENSITIVE — folding it would WIDEN the allowlist,
+ * not preserve it. PortOS starts under `npm run`, which exports dozens of
+ * lower-case `npm_config_*` / `npm_package_*` vars (including values from a
+ * user's `.npmrc`); upper-casing keys would let every one of them through the
+ * `NPM_` prefix into an attachable shell.
  *
  * Exported for tests; `platform` is injectable so the Windows branch is
  * testable from any host.
@@ -71,13 +77,12 @@ const SAFE_ENV_PREFIXES_WIN32 = [
  * @returns {Record<string, string>} filtered environment
  */
 export function buildSafeEnv(env = process.env, platform = process.platform) {
-  const prefixes = platform === 'win32'
-    ? [...SAFE_ENV_PREFIXES, ...SAFE_ENV_PREFIXES_WIN32]
-    : SAFE_ENV_PREFIXES;
+  const isWin32 = platform === 'win32';
+  const prefixes = isWin32 ? SAFE_ENV_PREFIXES_ALL : SAFE_ENV_PREFIXES;
   const safeEnv = {};
   for (const [key, value] of Object.entries(env)) {
-    const upper = key.toUpperCase();
-    if (prefixes.some(prefix => upper === prefix || upper.startsWith(prefix))) {
+    const candidate = isWin32 ? key.toUpperCase() : key;
+    if (prefixes.some(prefix => candidate.startsWith(prefix))) {
       safeEnv[key] = value;
     }
   }

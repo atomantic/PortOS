@@ -38,7 +38,7 @@ import { join, resolve } from 'path';
 import { ensureDir, PATHS, tryReadFile } from './fileUtils.js';
 import { createStreamingAnsiStripper, stripAnsi } from './ansiStrip.js';
 import { createImmediateFallbackSignalDetector, createTerminalModelErrorDetector } from './aiToolkit/errorDetection.js';
-import { getRunsPath, finalizeRunRecord, emitRunStarted, registerActiveRun, unregisterActiveRun } from '../services/runner.js';
+import { getRunsPath, finalizeRunRecord, emitRunStarted, registerActiveRun, unregisterActiveRun, resolveRunCwd } from '../services/runner.js';
 import { registerExternalSession, unregisterExternalSession, isExternalSessionAttached } from '../services/shell.js';
 import {
   DEFAULT_TUI_PROMPT_DELAY_MS,
@@ -58,7 +58,6 @@ import {
   detectMissingTuiBinary,
 } from './tuiHandshake.js';
 import { buildOpencodeEnvVars } from './opencodeConfig.js';
-import { resolveSpawnCwd } from './spawnCwd.js';
 
 // One-shot defaults that don't apply to the long-running agent path:
 //   - hard run cap (5 min vs unbounded for agents)
@@ -131,22 +130,11 @@ export async function executeTuiRun({ runId, provider, prompt, workspacePath, on
 
   // Logs the effective cwd, and rejects a workspace that was requested but is
   // missing on disk instead of silently spawning in the PortOS root (#3180).
-  // Reported through the run's own completion record rather than thrown: the
-  // /runs route invokes executeTuiRun without awaiting, so a bare throw would
-  // surface only as an unhandled rejection and the run would look stuck.
   // Sequenced after ensureDir so finalizeRunRecord has a run dir to write into.
-  let workingDir;
-  try {
-    workingDir = resolveSpawnCwd(workspacePath, PATHS.root, `TUI run ${runId}`);
-  } catch (err) {
-    const message = `❌ ${err.message}`;
-    onData?.(message);
-    const metadata = await finalizeRunRecord({
-      runId, output: message, exitCode: null, success: false, error: err.message, startTime: Date.now(),
-    });
-    onComplete?.(metadata);
-    return metadata;
-  }
+  const { cwd: workingDir, failure } = await resolveRunCwd({
+    runId, workspacePath, label: `TUI run ${runId}`, onData, onComplete,
+  });
+  if (failure) return failure;
 
   // TUI screens redraw their banner, input chrome, and status bar on every
   // keystroke — scraping the PTY stream for the model's reply is

@@ -128,6 +128,34 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
 }
 
 /**
+ * Resolve a run's spawn cwd, turning an unusable workspace into a normal failed
+ * run rather than a throw.
+ *
+ * Shared by both spawning runners (`executeCliRun` here, `executeTuiRun` in
+ * `lib/tuiPromptRunner.js`) because the /runs route invokes them WITHOUT
+ * awaiting: a bare throw would surface only as an unhandled rejection and the
+ * UI would show the run hanging forever. Returning the failure instead keeps
+ * the "report it through the run record" contract in one place, so a third
+ * runner can't reintroduce the hang by forgetting the try/catch.
+ *
+ * @returns {Promise<{cwd: string, failure?: undefined} | {cwd?: undefined, failure: object}>}
+ *   `cwd` on success; `failure` (the finalized metadata) when the workspace is unusable.
+ */
+export async function resolveRunCwd({ runId, workspacePath, label, startTime = Date.now(), onData, onComplete }) {
+  try {
+    return { cwd: resolveSpawnCwd(workspacePath, PATHS.root, label) };
+  } catch (err) {
+    const message = `❌ ${err.message}`;
+    onData?.(message);
+    const failure = await finalizeRunRecord({
+      runId, output: message, exitCode: null, success: false, error: err.message, startTime,
+    });
+    onComplete?.(failure);
+    return { failure };
+  }
+}
+
+/**
  * Fire the `onRunStarted` lifecycle hook — used by execution paths that
  * don't go through the toolkit's executeCliRun/executeApiRun (which fire
  * it internally). `tuiPromptRunner.js` calls this on PTY spawn so UI/SSE
@@ -200,25 +228,15 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
     killProcessTree(childProcess);
   };
 
-  // Resolve (and log) the working directory before spawning. A supplied-but-
+  // Resolve (and log) the working directory before spawning, so a supplied-but-
   // missing workspace fails the run with an actionable message instead of
   // silently spawning in the PortOS checkout, where relative file writes from
-  // the prompt would land in the wrong repo (#3180). Reported through the run's
-  // own completion path rather than thrown: the toolkit route invokes this
-  // without awaiting, so a bare throw would surface only as an unhandled
-  // rejection and the UI would show the run hanging.
-  let effectiveCwd;
-  try {
-    effectiveCwd = resolveSpawnCwd(workspacePath, PATHS.root, `Run ${runId}`);
-  } catch (err) {
-    const message = `❌ ${err.message}`;
-    onData?.(message);
-    const metadata = await finalizeRunRecord({
-      runId, output: message, exitCode: null, success: false, error: err.message, startTime,
-    });
-    onComplete?.(metadata);
-    return;
-  }
+  // the prompt would land in the wrong repo (#3180). Placed ahead of
+  // prepareCliPrompt so a bad workspace short-circuits before any temp-file I/O.
+  const { cwd: effectiveCwd, failure } = await resolveRunCwd({
+    runId, workspacePath, label: `Run ${runId}`, startTime, onData, onComplete,
+  });
+  if (failure) return;
 
   // Build provider-specific args for prompt delivery
   const builtArgs = buildCliArgs(provider);
@@ -313,7 +331,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
     // Record the cwd the child ACTUALLY ran in, not the requested one — when no
     // workspace was selected these differ, and the /runs replay claiming a
     // workspace the run never used is the confusion this fixes (#3180).
-    if (metadata.workspacePath == null && effectiveCwd) metadata.workspacePath = effectiveCwd;
+    metadata.workspacePath ??= effectiveCwd;
 
     try {
       if (timeoutHandle) clearTimeout(timeoutHandle);

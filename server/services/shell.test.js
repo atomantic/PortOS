@@ -632,3 +632,20 @@ describe('buildSafeEnv', () => {
     expect(safe).not.toHaveProperty('ANTHROPIC_API_KEY');
   });
 });
+
+describe('buildSafeEnv — POSIX case sensitivity', () => {
+  // Folding case on POSIX would WIDEN the allowlist, not preserve it: PortOS
+  // starts under `npm run`, which exports dozens of lower-case npm_config_*
+  // vars (including values read from the user's .npmrc). Upper-casing keys
+  // would push every one of them through the 'NPM_' prefix into an attachable
+  // shell, so POSIX matching stays case-sensitive.
+  it('does not admit lower-case npm_config_* through the NPM_ prefix', () => {
+    const safe = shell.buildSafeEnv(
+      { PATH: '/usr/bin', npm_config_registry: 'https://example.com', npm_config_mysecret: 'hunter2' },
+      'linux'
+    );
+    expect(safe).toHaveProperty('PATH');
+    expect(safe).not.toHaveProperty('npm_config_registry');
+    expect(safe).not.toHaveProperty('npm_config_mysecret');
+  });
+});

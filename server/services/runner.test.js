@@ -26,20 +26,25 @@ vi.mock('../lib/bufferedSpawn.js', async (importOriginal) => {
   };
 });
 
-vi.mock('../lib/fileUtils.js', () => ({
-  tryReadFile: vi.fn().mockResolvedValue(null),
-  ensureDir: vi.fn().mockResolvedValue(undefined),
-  // executeCliRun resolves its spawn cwd against PATHS.root when no workspace
-  // is supplied; the mock must carry it or every run short-circuits (#3180).
-  PATHS: { root: process.cwd(), data: '/tmp/test-runner', runs: '/tmp/test-runner/runs' },
-  // atomicWrite replaced the raw writeFile(JSON.stringify) metadata sites (#1837);
-  // route it through the mocked fs/promises.writeFile so it resolves cleanly.
-  atomicWrite: vi.fn(async (filePath, data) => {
-    const payload = (typeof data === 'string' || Buffer.isBuffer(data)) ? data : JSON.stringify(data, null, 2);
-    const { writeFile } = await import('fs/promises');
-    return writeFile(filePath, payload);
-  }),
-}));
+// Spread the real module and override only the three I/O entry points. A
+// hand-listed mock silently drops everything else — the cwd resolution reaches
+// for PATHS and expandHome, and an absent expandHome failed every run rather
+// than only the bad-workspace one (#3180).
+vi.mock('../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    tryReadFile: vi.fn().mockResolvedValue(null),
+    ensureDir: vi.fn().mockResolvedValue(undefined),
+    // atomicWrite replaced the raw writeFile(JSON.stringify) metadata sites (#1837);
+    // route it through the mocked fs/promises.writeFile so it resolves cleanly.
+    atomicWrite: vi.fn(async (filePath, data) => {
+      const payload = (typeof data === 'string' || Buffer.isBuffer(data)) ? data : JSON.stringify(data, null, 2);
+      const { writeFile } = await import('fs/promises');
+      return writeFile(filePath, payload);
+    }),
+  };
+});
 
 vi.mock('fs/promises', () => ({
   writeFile: vi.fn().mockResolvedValue(undefined),
@@ -71,6 +76,10 @@ function fakeToolkit(errorDetection = null) {
     },
   };
 }
+
+// Let executeCliRun run to its spawn(): it awaits ensureDir and the cwd
+// resolution first, so a single microtask tick is not enough.
+const flushMicrotasks = () => new Promise((resolve) => setImmediate(resolve));
 
 function makeChild() {
   const child = new EventEmitter();
@@ -158,7 +167,7 @@ describe('executeCliRun — Codex sentinel suppression', () => {
       executeCliRun({ runId: 'run-extra-usage', provider, prompt: 'test prompt', workspacePath: TEST_WORKSPACE, onData: undefined, onComplete: resolve, timeout: 60000 });
     });
 
-    await Promise.resolve();
+    await flushMicrotasks();
     child.stderr.emit('data', Buffer.from('Now using extra '));
     expect(child.kill).not.toHaveBeenCalled();
     child.stderr.emit('data', Buffer.from('usage\n'));
@@ -190,7 +199,7 @@ describe('executeCliRun — Codex sentinel suppression', () => {
       executeCliRun({ runId: 'run-fallback-exit0', provider, prompt: 'test prompt', workspacePath: TEST_WORKSPACE, onData: undefined, onComplete: resolve, timeout: 60000 });
     });
 
-    await Promise.resolve();
+    await flushMicrotasks();
     child.stderr.emit('data', Buffer.from('Now using extra usage\n'));
     expect(child.kill).toHaveBeenCalledWith('SIGTERM');
 
@@ -739,34 +748,25 @@ describe('executeCliRun — workspace validation (#3180)', () => {
   // The bug: a workspace that doesn't exist used to fall through to spawn(),
   // which quietly ran the agent in the PortOS checkout. A prompt naming a
   // relative file then wrote into the wrong repo with no error anywhere.
+  // Also asserts the call RESOLVES rather than rejecting: the /runs route
+  // invokes executeCliRun without awaiting it, so a bare throw would surface
+  // only as an unhandled rejection and leave the run looking stuck.
   it('fails the run instead of spawning when the workspace does not exist', async () => {
     const onComplete = vi.fn();
     const onData = vi.fn();
 
-    await executeCliRun({
+    await expect(executeCliRun({
       runId: 'run-bad-workspace',
       provider,
       prompt: 'test prompt',
       workspacePath: '/definitely/not/a/real/repo/path',
       onData,
       onComplete,
-    });
+    })).resolves.toBeUndefined();
 
     expect(spawn).not.toHaveBeenCalled();
     expect(onData).toHaveBeenCalledWith(expect.stringContaining('Workspace path does not exist'));
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(onComplete.mock.calls[0][0]).toMatchObject({ success: false });
-  });
-
-  // The /runs route invokes executeCliRun without awaiting it, so this path
-  // must report through onComplete rather than rejecting — a bare throw would
-  // surface only as an unhandled rejection and leave the run looking stuck.
-  it('reports the failure via onComplete rather than rejecting', async () => {
-    await expect(executeCliRun({
-      runId: 'run-bad-workspace-2',
-      provider,
-      prompt: 'test prompt',
-      workspacePath: '/definitely/not/a/real/repo/path',
-    })).resolves.toBeUndefined();
   });
 });

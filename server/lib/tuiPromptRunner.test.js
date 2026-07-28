@@ -24,6 +24,10 @@ const { ptyInstances, ptySpawnMock, runnerMocks, shellMocks, runsTmpDirRef } = v
     registerActiveRun: vi.fn(),
     unregisterActiveRun: vi.fn(),
     getRunsPath: vi.fn(),
+    // Real implementation (and its bad-workspace failure path) is covered by
+    // lib/spawnCwd.test.js + services/runner.test.js; here it just needs to
+    // hand back the cwd so the PTY spawn assertions below still see it.
+    resolveRunCwd: vi.fn(async ({ workspacePath }) => ({ cwd: workspacePath })),
   },
   // shell.js is mocked so the runner's Shell-view registration is observable
   // here without dragging in the real session registry singleton.

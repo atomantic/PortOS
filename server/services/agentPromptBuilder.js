@@ -1992,22 +1992,28 @@ function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR
 }
 
 /**
- * Get workspace path for an app.
+ * Get the workspace path for an app, or `null` when it can't be resolved.
  *
- * Falls back to the PortOS repo root when the app can't be resolved or carries
- * no `repoPath`. That fallback is deliberate (an agent still needs *a* cwd) but
- * it used to be silent, which is indistinguishable from "the workspace worked"
- * — the agent just quietly wrote its files into the PortOS checkout instead of
- * the target app (issue #3180). Every fallback now says why.
+ * This used to substitute the PortOS repo root for every failure — registry
+ * missing, app not found, app carrying no `repoPath` — which made an
+ * unresolvable app indistinguishable from a working one: the agent quietly
+ * wrote its files into the PortOS checkout and nothing said otherwise
+ * (issue #3180). A downstream existence check can't recover that case either,
+ * because the substituted root is a real directory.
+ *
+ * So this returns an explicit `null` sentinel and lets each caller decide
+ * whether "no workspace" is legal for it (per the sentinel-and-validate rule in
+ * CLAUDE.md — absent must not collapse into a valid-looking value). The reason
+ * is logged here, where it's known.
+ *
+ * @returns {Promise<string|null>} the app's repoPath, or null if unresolvable
  */
 export async function getAppWorkspace(appName) {
   const appsFile = join(ROOT_DIR, 'data/apps.json');
+  const unresolved = (why) => { console.warn(`⚠️ ${why} — no agent workspace resolved`); return null; };
 
   const data = await readJSONFile(appsFile, null);
-  if (!data) {
-    console.warn(`⚠️ No apps registry at ${appsFile} — agent workspace falls back to PortOS root`);
-    return ROOT_DIR;
-  }
+  if (!data) return unresolved(`No apps registry at ${appsFile}`);
 
   // Handle both object format { apps: { id: {...} } } and array format [...]
   const apps = data.apps || data;
@@ -2017,14 +2023,8 @@ export async function getAppWorkspace(appName) {
     // Object format - keys are app IDs
     : (apps[appName] || Object.values(apps).find(a => a.name === appName));
 
-  if (!app) {
-    console.warn(`⚠️ App '${appName}' not found in apps registry — agent workspace falls back to PortOS root`);
-    return ROOT_DIR;
-  }
-  if (!app.repoPath) {
-    console.warn(`⚠️ App '${appName}' has no repoPath — agent workspace falls back to PortOS root`);
-    return ROOT_DIR;
-  }
+  if (!app) return unresolved(`App '${appName}' not found in apps registry`);
+  if (!app.repoPath) return unresolved(`App '${appName}' has no repoPath`);
   return app.repoPath;
 }
 
