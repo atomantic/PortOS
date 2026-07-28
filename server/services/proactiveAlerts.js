@@ -14,7 +14,7 @@
 
 import os from 'os';
 import { getGoals } from './identity.js';
-import { getPerformanceSummary, getLearningSummary } from './taskLearning.js';
+import { getPerformanceSummary } from './taskLearning.js';
 import { listProcesses } from './pm2.js';
 import { annotateExpectedExit } from './apps.js';
 import { getUsage } from './usage.js';
@@ -66,25 +66,31 @@ async function checkGoalStalls() {
 }
 
 /**
- * Detect task types with poor success rates
+ * A low lifetime rate is historical context, not a current anomaly. The
+ * performance summary only selects `windowed` after at least five runs in the
+ * 30-day window, so this also keeps thin samples from creating noisy alerts.
+ */
+function hasCurrentPerformanceEvidence(item) {
+  return item?.rateSource === 'windowed';
+}
+
+/**
+ * Detect recently active task types with poor success rates
  */
 async function checkSuccessRates() {
   const perf = await getPerformanceSummary().catch(() => null);
   if (!perf) return [];
 
-  return (perf.needsAttention || []).map(item => ({
-    type: 'success_drop',
-    severity: item.successRate < 30 ? 'high' : 'medium',
-    title: `Low success rate: ${item.taskType}`,
-    // Evidence pairing (issue #2617): a recency-windowed rate is quoted with
-    // the WINDOW's sample count — "0% success across 200 tasks" (lifetime
-    // count next to a 6-sample windowed rate) would overstate the evidence.
-    detail: item.rateSource === 'windowed'
-      ? `${item.successRate}% success across the last ${item.windowedCompleted} runs`
-      : `${item.successRate}% success across ${item.completed} tasks`,
-    link: '/cos/learning',
-    metadata: { taskType: item.taskType, successRate: item.successRate, completed: item.completed, rateSource: item.rateSource, windowedCompleted: item.windowedCompleted }
-  }));
+  return (perf.needsAttention || [])
+    .filter(hasCurrentPerformanceEvidence)
+    .map(item => ({
+      type: 'success_drop',
+      severity: item.successRate < 30 ? 'high' : 'medium',
+      title: `Low success rate: ${item.taskType}`,
+      detail: `${item.successRate}% success across the last ${item.windowedCompleted} runs`,
+      link: '/cos/learning',
+      metadata: { taskType: item.taskType, successRate: item.successRate, completed: item.completed, rateSource: item.rateSource, windowedCompleted: item.windowedCompleted }
+    }));
 }
 
 /**
@@ -161,28 +167,32 @@ async function checkSystemHealth() {
  * Check task learning health for critical issues
  */
 async function checkLearningHealth() {
-  const summary = await getLearningSummary().catch(() => null);
-  if (!summary || summary.status === 'good' || summary.status === 'none') return [];
+  const perf = await getPerformanceSummary().catch(() => null);
+  if (!perf) return [];
 
   const alerts = [];
+  const recentAttention = (perf.needsAttention || []).filter(hasCurrentPerformanceEvidence);
+  const skipped = (perf.skipped || []).filter(hasCurrentPerformanceEvidence).length;
+  const critical = recentAttention.filter(item => item.successRate < 40).length;
+  const warning = recentAttention.length - critical;
 
-  if (summary.skipped > 0) {
+  if (skipped > 0) {
     alerts.push({
       type: 'learning_health',
       severity: 'high',
-      title: `${summary.skipped} task type${summary.skipped > 1 ? 's' : ''} being skipped`,
+      title: `${skipped} task type${skipped > 1 ? 's' : ''} being skipped`,
       detail: 'Very low success rates caused automatic skip — review task configuration',
       link: '/cos/learning',
-      metadata: { skipped: summary.skipped, critical: summary.critical }
+      metadata: { skipped, critical }
     });
-  } else if (summary.critical > 0) {
+  } else if (critical > 0) {
     alerts.push({
       type: 'learning_health',
       severity: 'medium',
-      title: `${summary.critical} task type${summary.critical > 1 ? 's' : ''} need attention`,
+      title: `${critical} task type${critical > 1 ? 's' : ''} need attention`,
       detail: `Success rates below ${SUCCESS_RATE_WARNING}% — may need provider or prompt adjustments`,
       link: '/cos/learning',
-      metadata: { critical: summary.critical, warning: summary.warning }
+      metadata: { critical, warning }
     });
   }
 

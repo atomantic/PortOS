@@ -3,13 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mock = vi.hoisted(() => ({
   processes: [],
   desktopProcessNames: new Set(),
-  desktopLookupError: null
+  desktopLookupError: null,
+  performance: { needsAttention: [], skipped: [] }
 }));
 
 vi.mock('./identity.js', () => ({ getGoals: vi.fn(async () => []) }));
 vi.mock('./taskLearning.js', () => ({
-  getPerformanceSummary: vi.fn(async () => ({ byType: [] })),
-  getLearningSummary: vi.fn(async () => ({ byType: [] }))
+  getPerformanceSummary: vi.fn(async () => mock.performance)
 }));
 vi.mock('./pm2.js', () => ({ listProcesses: vi.fn(async () => mock.processes) }));
 // Mirrors the real annotateExpectedExit, including its fail-open behavior: a
@@ -41,6 +41,7 @@ describe('proactiveAlerts — desktop (GUI) process exemption (#2991)', () => {
     mock.processes = [];
     mock.desktopProcessNames = new Set();
     mock.desktopLookupError = null;
+    mock.performance = { needsAttention: [], skipped: [] };
   });
 
   it('does not alert when the only errored process is a quit game window', async () => {
@@ -95,5 +96,48 @@ describe('proactiveAlerts — desktop (GUI) process exemption (#2991)', () => {
 
     const alerts = await processAlerts();
     expect(alerts).toHaveLength(1);
+  });
+});
+
+describe('proactiveAlerts — current task performance', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mock.processes = [];
+    mock.desktopProcessNames = new Set();
+    mock.desktopLookupError = null;
+    mock.performance = { needsAttention: [], skipped: [] };
+  });
+
+  it('does not alert on a low historical rate when the task type has not run recently', async () => {
+    const stale = {
+      taskType: 'self-improve:example',
+      successRate: 0,
+      completed: 12,
+      rateSource: 'lifetime',
+      windowedCompleted: 0
+    };
+    mock.performance = { needsAttention: [stale], skipped: [stale] };
+
+    const { alerts } = await generateAlerts();
+    expect(alerts.filter(a => a.type === 'success_drop' || a.type === 'learning_health')).toEqual([]);
+  });
+
+  it('keeps alerts backed by enough runs in the current window', async () => {
+    const active = {
+      taskType: 'self-improve:example',
+      successRate: 20,
+      completed: 25,
+      rateSource: 'windowed',
+      windowedCompleted: 5
+    };
+    mock.performance = { needsAttention: [active], skipped: [active] };
+
+    const { alerts } = await generateAlerts();
+    expect(alerts.find(a => a.type === 'success_drop')).toMatchObject({
+      detail: '20% success across the last 5 runs'
+    });
+    expect(alerts.find(a => a.type === 'learning_health')).toMatchObject({
+      metadata: { skipped: 1, critical: 1 }
+    });
   });
 });
