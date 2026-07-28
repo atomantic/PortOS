@@ -198,7 +198,6 @@ describe('withSpawnCwdEnv', () => {
 // cwd-passing spawn fails the suite until it is either pinned or explicitly
 // exempted below with a reason.
 describe('every cwd-passing spawn pins PWD', () => {
-  
   // Files whose cwd-passing spawn does NOT need the pin, each with the reason it
   // is safe. Anything not listed here must pin. The common reason is "this spawns
   // a tool that resolves paths from its real cwd, never from PWD" — git, gh,
