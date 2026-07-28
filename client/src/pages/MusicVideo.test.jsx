@@ -285,6 +285,31 @@ describe('MusicVideo concept & style editor (#3168)', () => {
     expect(updateMusicVideoProject).not.toHaveBeenCalled();
   });
 
+  it('discards an unsaved draft on project switch instead of leaking it onto the next project', async () => {
+    // The page reuses one component instance across projects (route param
+    // change, no remount) — an edit left unblurred when the selection changes
+    // (deep link, browser Back, ⌘K) must not survive to be committed against
+    // whichever project is now selected.
+    const projectB = { ...PROJECT_NO_CLIP, id: 'mv-3', name: 'Other Project', concept: { prompt: 'B original' } };
+    listMusicVideoProjects.mockResolvedValue([PROJECT_NO_CLIP, projectB]);
+    renderMV();
+    fireEvent.click(await screen.findByRole('button', { name: new RegExp(PROJECT_NO_CLIP.name) }));
+
+    const conceptField = await screen.findByLabelText('Concept');
+    fireEvent.change(conceptField, { target: { value: 'A unsaved draft' } });
+    // No blur — switch projects while the edit is still pending.
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(projectB.name) }));
+
+    await waitFor(() => expect(screen.getByLabelText('Concept')).toHaveValue('B original'));
+    fireEvent.blur(screen.getByLabelText('Concept'));
+    await settle();
+    expect(updateMusicVideoProject).not.toHaveBeenCalledWith(
+      'mv-3',
+      { concept: { prompt: 'A unsaved draft' } },
+      { silent: true },
+    );
+  });
+
   it('starts empty and enables AI Plan to use them once set', async () => {
     await openProject(PROJECT_ANALYZED);
     const conceptField = await screen.findByLabelText('Concept');

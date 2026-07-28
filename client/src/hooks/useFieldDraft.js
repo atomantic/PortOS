@@ -24,5 +24,11 @@ export default function useFieldDraft(persisted, onCommit) {
     setDraft(undefined);
   };
 
-  return { value, onChange, onBlur };
+  // Discards a pending, uncommitted edit without firing onCommit — for a caller
+  // whose `persisted` identity can change out from under a still-focused input
+  // (e.g. the user navigates to a different record before blurring), so the
+  // stale draft can't be blurred onto the new record on the next unrelated blur.
+  const reset = () => setDraft(undefined);
+
+  return { value, onChange, onBlur, reset };
 }
