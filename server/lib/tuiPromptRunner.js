@@ -58,6 +58,7 @@ import {
   detectMissingTuiBinary,
 } from './tuiHandshake.js';
 import { buildOpencodeEnvVars } from './opencodeConfig.js';
+import { resolveSpawnCwd } from './spawnCwd.js';
 
 // One-shot defaults that don't apply to the long-running agent path:
 //   - hard run cap (5 min vs unbounded for agents)
@@ -122,13 +123,30 @@ export async function executeTuiRun({ runId, provider, prompt, workspacePath, on
   const promptDelayMs = provider.tuiPromptDelayMs ?? DEFAULT_TUI_PROMPT_DELAY_MS;
   const idleThresholdMs = idleMs ?? provider.tuiOneShotIdleMs ?? DEFAULT_ONE_SHOT_IDLE_MS;
   const totalTimeoutMs = timeout ?? provider.timeout ?? DEFAULT_TIMEOUT_MS;
-  const workingDir = (typeof workspacePath === 'string' && workspacePath) ? workspacePath : PATHS.root;
-
   // Mirror runner.js#executeCliRun's runs-path resolution so TUI runs land
   // under the runner-config dataDir (not always PATHS.runs) — otherwise a
   // non-default dataDir would split metadata + output across two trees.
   const runDir = join(getRunsPath(), runId);
   await ensureDir(runDir);
+
+  // Logs the effective cwd, and rejects a workspace that was requested but is
+  // missing on disk instead of silently spawning in the PortOS root (#3180).
+  // Reported through the run's own completion record rather than thrown: the
+  // /runs route invokes executeTuiRun without awaiting, so a bare throw would
+  // surface only as an unhandled rejection and the run would look stuck.
+  // Sequenced after ensureDir so finalizeRunRecord has a run dir to write into.
+  let workingDir;
+  try {
+    workingDir = resolveSpawnCwd(workspacePath, PATHS.root, `TUI run ${runId}`);
+  } catch (err) {
+    const message = `❌ ${err.message}`;
+    onData?.(message);
+    const metadata = await finalizeRunRecord({
+      runId, output: message, exitCode: null, success: false, error: err.message, startTime: Date.now(),
+    });
+    onComplete?.(metadata);
+    return metadata;
+  }
 
   // TUI screens redraw their banner, input chrome, and status bar on every
   // keystroke — scraping the PTY stream for the model's reply is

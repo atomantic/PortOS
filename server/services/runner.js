@@ -5,7 +5,8 @@
 import { spawn } from 'child_process';
 import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
-import { atomicWrite, ensureDir, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, tryReadFile, PATHS } from '../lib/fileUtils.js';
+import { resolveSpawnCwd } from '../lib/spawnCwd.js';
 import { hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
 import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
@@ -199,6 +200,26 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
     killProcessTree(childProcess);
   };
 
+  // Resolve (and log) the working directory before spawning. A supplied-but-
+  // missing workspace fails the run with an actionable message instead of
+  // silently spawning in the PortOS checkout, where relative file writes from
+  // the prompt would land in the wrong repo (#3180). Reported through the run's
+  // own completion path rather than thrown: the toolkit route invokes this
+  // without awaiting, so a bare throw would surface only as an unhandled
+  // rejection and the UI would show the run hanging.
+  let effectiveCwd;
+  try {
+    effectiveCwd = resolveSpawnCwd(workspacePath, PATHS.root, `Run ${runId}`);
+  } catch (err) {
+    const message = `❌ ${err.message}`;
+    onData?.(message);
+    const metadata = await finalizeRunRecord({
+      runId, output: message, exitCode: null, success: false, error: err.message, startTime,
+    });
+    onComplete?.(metadata);
+    return;
+  }
+
   // Build provider-specific args for prompt delivery
   const builtArgs = buildCliArgs(provider);
   // Rewrite the argv for prompt delivery and learn whether to still write stdin:
@@ -227,7 +248,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
   const { command: spawnCommand, args: spawnArgs } = prepareWindowsSafeSpawn(resolvedCommand, args);
 
   childProcess = spawn(spawnCommand, spawnArgs, {
-    cwd: workspacePath,
+    cwd: effectiveCwd,
     env: childEnv,
     windowsHide: true
   });
@@ -289,7 +310,10 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
     if (metadata.providerId == null && provider.id) metadata.providerId = provider.id;
     if (metadata.providerName == null && (provider.name || provider.id)) metadata.providerName = provider.name || provider.id;
     if (metadata.model == null && provider.defaultModel) metadata.model = provider.defaultModel;
-    if (metadata.workspacePath == null && workspacePath) metadata.workspacePath = workspacePath;
+    // Record the cwd the child ACTUALLY ran in, not the requested one — when no
+    // workspace was selected these differ, and the /runs replay claiming a
+    // workspace the run never used is the confusion this fixes (#3180).
+    if (metadata.workspacePath == null && effectiveCwd) metadata.workspacePath = effectiveCwd;
 
     try {
       if (timeoutHandle) clearTimeout(timeoutHandle);

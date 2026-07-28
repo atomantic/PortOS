@@ -583,3 +583,52 @@ describe('getSession / getSessionProcess / getSessionCount', () => {
     expect(shell.getSessionCount()).toBe(2);
   });
 });
+
+describe('buildSafeEnv', () => {
+  // Windows environment variable names are case-insensitive and arrive in mixed
+  // case: the real variable is `Path`, not `PATH`. A case-SENSITIVE prefix match
+  // dropped it (while keeping the coincidentally-upper-case `PATHEXT`), leaving
+  // the agent shell unable to resolve any CLI provider (#3180).
+  it('keeps mixed-case Windows variables that a case-sensitive match dropped', () => {
+    const env = {
+      Path: 'C:\\Windows\\system32',
+      PATHEXT: '.COM;.EXE;.BAT;.CMD',
+      SystemRoot: 'C:\\Windows',
+      windir: 'C:\\Windows',
+      ComSpec: 'C:\\Windows\\system32\\cmd.exe',
+      TEMP: 'C:\\Users\\Example\\AppData\\Local\\Temp',
+      APPDATA: 'C:\\Users\\Example\\AppData\\Roaming',
+      LOCALAPPDATA: 'C:\\Users\\Example\\AppData\\Local',
+      ProgramFiles: 'C:\\Program Files',
+      USERPROFILE: 'C:\\Users\\Example',
+    };
+    const safe = shell.buildSafeEnv(env, 'win32');
+    for (const key of Object.keys(env)) {
+      expect(safe, `expected ${key} to survive the allowlist`).toHaveProperty(key);
+    }
+  });
+
+  it('still strips secrets on Windows', () => {
+    const safe = shell.buildSafeEnv(
+      { Path: 'C:\\Windows', ANTHROPIC_API_KEY: 'sk-secret', GITHUB_TOKEN: 'ghp_secret' },
+      'win32'
+    );
+    expect(safe).toHaveProperty('Path');
+    expect(safe).not.toHaveProperty('ANTHROPIC_API_KEY');
+    expect(safe).not.toHaveProperty('GITHUB_TOKEN');
+  });
+
+  // The Windows names must not widen the POSIX allowlist — a Linux/macOS box
+  // with an `OS` or `TEMP` var set should filter exactly as it did before.
+  it('does not apply the Windows additions on POSIX', () => {
+    const safe = shell.buildSafeEnv(
+      { PATH: '/usr/bin', HOME: '/home/example', APPDATA: 'x', SystemRoot: 'y', ANTHROPIC_API_KEY: 'sk-secret' },
+      'linux'
+    );
+    expect(safe).toHaveProperty('PATH');
+    expect(safe).toHaveProperty('HOME');
+    expect(safe).not.toHaveProperty('APPDATA');
+    expect(safe).not.toHaveProperty('SystemRoot');
+    expect(safe).not.toHaveProperty('ANTHROPIC_API_KEY');
+  });
+});

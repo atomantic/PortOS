@@ -3,6 +3,11 @@ import { mkdtemp, rm, writeFile, mkdir } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
+// executeTuiRun validates that a requested workspace actually exists before
+// spawning (#3180 — a bad repoPath used to silently run in the PortOS root), so
+// these tests need a real directory rather than a synthetic '/cwd' sentinel.
+const TEST_WORKSPACE = process.cwd();
+
 // node-pty + runner hooks are mocked so executeTuiRun can be driven
 // synchronously from the test without spawning a real terminal. fileUtils
 // stays real for everything except `ensureDir` (which would otherwise create
@@ -311,7 +316,7 @@ describe('executeTuiRun', () => {
       const provider = {
         id: 'claude', type: 'tui', command: 'echo', defaultModel: 'claude-3.5',
       };
-      const promise = executeTuiRun({ runId: 'run-A', provider, prompt: 'do thing big enough', workspacePath: '/cwd', onData: undefined, onComplete: undefined, timeout: 60000 });
+      const promise = executeTuiRun({ runId: 'run-A', provider, prompt: 'do thing big enough', workspacePath: TEST_WORKSPACE, onData: undefined, onComplete: undefined, timeout: 60000 });
       await flushAsync();
 
       expect(ptySpawnMock).toHaveBeenCalledTimes(1);
@@ -331,7 +336,7 @@ describe('executeTuiRun', () => {
     it('registers a read-only Shell view (labelled by source) and tears it down on finish', async () => {
       const provider = { id: 'claude', type: 'tui', command: 'claude', defaultModel: 'claude-fable-5' };
       const promise = executeTuiRun({
-        runId: 'run-view', provider, prompt: 'review this manuscript', workspacePath: '/work',
+        runId: 'run-view', provider, prompt: 'review this manuscript', workspacePath: TEST_WORKSPACE,
         label: 'pipeline-manuscript-completeness',
       });
       await flushAsync();
@@ -342,7 +347,7 @@ describe('executeTuiRun', () => {
         expect.objectContaining({
           label: 'pipeline-manuscript-completeness',
           kind: 'tui-run',
-          cwd: '/work',
+          cwd: TEST_WORKSPACE,
         }),
       );
       expect(shellMocks.unregisterExternalSession).not.toHaveBeenCalled();
@@ -354,7 +359,7 @@ describe('executeTuiRun', () => {
 
     it('falls back to a command·model label when no source label is supplied', async () => {
       const provider = { id: 'codex', type: 'tui', command: 'codex', defaultModel: 'gpt-x' };
-      const promise = executeTuiRun({ runId: 'run-nolabel', provider, prompt: 'do the thing', workspacePath: '/w' });
+      const promise = executeTuiRun({ runId: 'run-nolabel', provider, prompt: 'do the thing', workspacePath: TEST_WORKSPACE });
       await flushAsync();
       expect(shellMocks.registerExternalSession).toHaveBeenCalledWith(
         'run-nolabel', ptyInstances[0], expect.objectContaining({ label: 'codex · gpt-x' }),
@@ -376,7 +381,7 @@ describe('executeTuiRun', () => {
           id: 'claude', type: 'tui', command: 'echo',
           envVars: { CUSTOM_PROVIDER_VAR: 'on' },
         };
-        const promise = executeTuiRun({ runId: 'run-B', provider, prompt: 'p large enough to clear the guard', workspacePath: '/cwd', onData: undefined, onComplete: undefined, timeout: 60000 });
+        const promise = executeTuiRun({ runId: 'run-B', provider, prompt: 'p large enough to clear the guard', workspacePath: TEST_WORKSPACE, onData: undefined, onComplete: undefined, timeout: 60000 });
         await flushAsync();
 
         const env = ptySpawnMock.mock.calls[0][2].env;
@@ -404,7 +409,7 @@ describe('executeTuiRun', () => {
         tuiPromptDelayMs: 50, tuiOneShotIdleMs: 500,
       };
       const onComplete = vi.fn();
-      const promise = executeTuiRun({ runId: 'run-idle', provider, prompt: 'do thing big enough to clear the prompt guard', workspacePath: '/cwd', onData: undefined, onComplete, timeout: 60000 });
+      const promise = executeTuiRun({ runId: 'run-idle', provider, prompt: 'do thing big enough to clear the prompt guard', workspacePath: TEST_WORKSPACE, onData: undefined, onComplete, timeout: 60000 });
       await flushAsync();
 
       const pty = ptyInstances[0];
@@ -450,7 +455,7 @@ describe('executeTuiRun', () => {
         tuiPromptDelayMs: 50, tuiOneShotIdleMs: 500,
       };
       const onComplete = vi.fn();
-      const promise = executeTuiRun({ runId: 'run-watched', provider, prompt: 'do thing big enough to clear the prompt guard', workspacePath: '/cwd', onComplete, timeout: 60000 });
+      const promise = executeTuiRun({ runId: 'run-watched', provider, prompt: 'do thing big enough to clear the prompt guard', workspacePath: TEST_WORKSPACE, onComplete, timeout: 60000 });
       await flushAsync();
 
       const pty = ptyInstances[0];
@@ -492,7 +497,7 @@ describe('executeTuiRun', () => {
         tuiPromptDelayMs: 50, tuiOneShotIdleMs: 500,
       };
       const runId = 'run-respfile';
-      const promise = executeTuiRun({ runId, provider, prompt: 'review this manuscript thoroughly enough to clear the guard', workspacePath: '/cwd', timeout: 60000 });
+      const promise = executeTuiRun({ runId, provider, prompt: 'review this manuscript thoroughly enough to clear the guard', workspacePath: TEST_WORKSPACE, timeout: 60000 });
       await flushAsync();
 
       const pty = ptyInstances[0];
@@ -532,7 +537,7 @@ describe('executeTuiRun', () => {
       // hard-timeout salvage despite the result already being on disk.
       const provider = { id: 'claude', type: 'tui', command: 'claude', tuiPromptDelayMs: 50 };
       const runId = 'run-silent-respfile';
-      const promise = executeTuiRun({ runId, provider, prompt: 'do the task quietly then write the file', workspacePath: '/cwd', timeout: 60000 });
+      const promise = executeTuiRun({ runId, provider, prompt: 'do the task quietly then write the file', workspacePath: TEST_WORKSPACE, timeout: 60000 });
       await flushAsync();
 
       const pty = ptyInstances[0];
@@ -574,7 +579,7 @@ describe('executeTuiRun', () => {
       await mkdir(runDir, { recursive: true });
       await writeFile(join(runDir, 'tui-response.txt'), 'the completed review body');
 
-      const promise = executeTuiRun({ runId, provider, prompt: 'a prompt long enough to clear the guard', workspacePath: '/cwd', timeout: 500 });
+      const promise = executeTuiRun({ runId, provider, prompt: 'a prompt long enough to clear the guard', workspacePath: TEST_WORKSPACE, timeout: 500 });
       await flushAsync();
       await vi.advanceTimersByTimeAsync(600); // hard timeout fires
       await flushAsync();
@@ -594,7 +599,7 @@ describe('executeTuiRun', () => {
         toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
       });
       const provider = { id: 'claude', type: 'tui', command: 'echo' };
-      const promise = executeTuiRun({ runId: 'run-timeout', provider, prompt: 'a prompt long enough to clear the guard', workspacePath: '/cwd', onData: undefined, onComplete: undefined, timeout: 500 });
+      const promise = executeTuiRun({ runId: 'run-timeout', provider, prompt: 'a prompt long enough to clear the guard', workspacePath: TEST_WORKSPACE, onData: undefined, onComplete: undefined, timeout: 500 });
       await flushAsync();
 
       // No data emitted → no firstOutputAt → ready-watch never triggers paste
@@ -620,7 +625,7 @@ describe('executeTuiRun', () => {
       });
       shellMocks.isExternalSessionAttached.mockReturnValue(true); // a viewer is watching
       const provider = { id: 'claude', type: 'tui', command: 'echo' };
-      const promise = executeTuiRun({ runId: 'run-tmo-watched', provider, prompt: 'a prompt long enough to clear the guard', workspacePath: '/cwd', timeout: 500 });
+      const promise = executeTuiRun({ runId: 'run-tmo-watched', provider, prompt: 'a prompt long enough to clear the guard', workspacePath: TEST_WORKSPACE, timeout: 500 });
       await flushAsync();
 
       // The hard timeout fires even though a viewer is attached — only idle
@@ -638,7 +643,7 @@ describe('executeTuiRun', () => {
 
     it('early-fails with reason "command-not-found" and exitCode 127 when "command not found" appears pre-paste', async () => {
       const provider = { id: 'codex', type: 'tui', command: 'no-such-tui' };
-      const promise = executeTuiRun({ runId: 'run-missing', provider, prompt: 'a prompt long enough', workspacePath: '/cwd', onData: undefined, onComplete: undefined, timeout: 60000 });
+      const promise = executeTuiRun({ runId: 'run-missing', provider, prompt: 'a prompt long enough', workspacePath: TEST_WORKSPACE, onData: undefined, onComplete: undefined, timeout: 60000 });
       await flushAsync();
 
       // Shell banner echoing the missing-command error before paste.
@@ -657,7 +662,7 @@ describe('executeTuiRun', () => {
     it('early-fails with reason "fallback-signal" when Claude switches to extra usage', async () => {
       const provider = { id: 'claude', type: 'tui', command: 'claude' };
       const onComplete = vi.fn();
-      const promise = executeTuiRun({ runId: 'run-extra-usage', provider, prompt: 'a prompt long enough', workspacePath: '/cwd', onData: undefined, onComplete, timeout: 60000 });
+      const promise = executeTuiRun({ runId: 'run-extra-usage', provider, prompt: 'a prompt long enough', workspacePath: TEST_WORKSPACE, onData: undefined, onComplete, timeout: 60000 });
       await flushAsync();
 
       ptyInstances[0].emitData('Now using extra ');
@@ -683,7 +688,7 @@ describe('executeTuiRun', () => {
     it('early-fails with reason "fallback-signal" when the model id is rejected (Bedrock invalid identifier) instead of idling to a bogus-scrape success', async () => {
       const provider = { id: 'claude', type: 'tui', command: 'claude' };
       const onComplete = vi.fn();
-      const promise = executeTuiRun({ runId: 'run-bad-model', provider, prompt: 'a prompt long enough', workspacePath: '/cwd', onData: undefined, onComplete, timeout: 60000 });
+      const promise = executeTuiRun({ runId: 'run-bad-model', provider, prompt: 'a prompt long enough', workspacePath: TEST_WORKSPACE, onData: undefined, onComplete, timeout: 60000 });
       await flushAsync();
 
       // Claude Code renders the terminal model-id rejection inline and then sits
@@ -708,7 +713,7 @@ describe('executeTuiRun', () => {
 
     it('finishes with reason "exit" + exitCode 0 when the PTY closes cleanly', async () => {
       const provider = { id: 'claude', type: 'tui', command: 'echo' };
-      const promise = executeTuiRun({ runId: 'run-exit', provider, prompt: 'a prompt long enough', workspacePath: '/cwd', onData: undefined, onComplete: undefined, timeout: 60000 });
+      const promise = executeTuiRun({ runId: 'run-exit', provider, prompt: 'a prompt long enough', workspacePath: TEST_WORKSPACE, onData: undefined, onComplete: undefined, timeout: 60000 });
       await flushAsync();
 
       ptyInstances[0].emitExit({ exitCode: 0 });
@@ -735,7 +740,7 @@ describe('executeTuiRun', () => {
       });
       const provider = { id: 'claude', type: 'tui', command: 'echo' };
       const onComplete = vi.fn();
-      const promise = executeTuiRun({ runId: 'run-finish-throws', provider, prompt: 'a prompt long enough', workspacePath: '/cwd', onComplete, timeout: 60000 });
+      const promise = executeTuiRun({ runId: 'run-finish-throws', provider, prompt: 'a prompt long enough', workspacePath: TEST_WORKSPACE, onComplete, timeout: 60000 });
       await flushAsync();
 
       ptyInstances[0].emitExit({ exitCode: 0 });
@@ -767,7 +772,7 @@ describe('executeTuiRun', () => {
       // success-then-failure. The run promise must still resolve exactly once.
       const provider = { id: 'claude', type: 'tui', command: 'echo' };
       const onComplete = vi.fn(() => { throw new Error('boom: caller onComplete blew up'); });
-      const promise = executeTuiRun({ runId: 'run-oncomplete-throws', provider, prompt: 'a prompt long enough', workspacePath: '/cwd', onComplete, timeout: 60000 });
+      const promise = executeTuiRun({ runId: 'run-oncomplete-throws', provider, prompt: 'a prompt long enough', workspacePath: TEST_WORKSPACE, onComplete, timeout: 60000 });
       await flushAsync();
 
       ptyInstances[0].emitExit({ exitCode: 0 });
@@ -780,7 +785,7 @@ describe('executeTuiRun', () => {
 
     it('finishes with reason "killed" and surfaces the signal in the error when the PTY is terminated', async () => {
       const provider = { id: 'claude', type: 'tui', command: 'echo' };
-      const promise = executeTuiRun({ runId: 'run-killed', provider, prompt: 'a prompt long enough', workspacePath: '/cwd', onData: undefined, onComplete: undefined, timeout: 60000 });
+      const promise = executeTuiRun({ runId: 'run-killed', provider, prompt: 'a prompt long enough', workspacePath: TEST_WORKSPACE, onData: undefined, onComplete: undefined, timeout: 60000 });
       await flushAsync();
 
       ptyInstances[0].emitData('some screen output');
@@ -798,7 +803,7 @@ describe('executeTuiRun', () => {
 
     it('finishes with a tail-bearing error message when the PTY exits non-zero with prior output', async () => {
       const provider = { id: 'claude', type: 'tui', command: 'echo' };
-      const promise = executeTuiRun({ runId: 'run-nonzero', provider, prompt: 'a prompt long enough', workspacePath: '/cwd', onData: undefined, onComplete: undefined, timeout: 60000 });
+      const promise = executeTuiRun({ runId: 'run-nonzero', provider, prompt: 'a prompt long enough', workspacePath: TEST_WORKSPACE, onData: undefined, onComplete: undefined, timeout: 60000 });
       await flushAsync();
 
       ptyInstances[0].emitData('fatal: provider config malformed at line 42');

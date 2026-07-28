@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import EventEmitter from 'events';
 
+// executeCliRun validates that a requested workspace actually exists before
+// spawning (#3180 — a bad repoPath used to silently run in the PortOS root), so
+// these tests need a real directory rather than a synthetic '/workspace' path.
+const TEST_WORKSPACE = process.cwd();
+
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, spawn: vi.fn() };
@@ -22,8 +27,11 @@ vi.mock('../lib/bufferedSpawn.js', async (importOriginal) => {
 });
 
 vi.mock('../lib/fileUtils.js', () => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
+  tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn().mockResolvedValue(undefined),
+  // executeCliRun resolves its spawn cwd against PATHS.root when no workspace
+  // is supplied; the mock must carry it or every run short-circuits (#3180).
+  PATHS: { root: process.cwd(), data: '/tmp/test-runner', runs: '/tmp/test-runner/runs' },
   // atomicWrite replaced the raw writeFile(JSON.stringify) metadata sites (#1837);
   // route it through the mocked fs/promises.writeFile so it resolves cleanly.
   atomicWrite: vi.fn(async (filePath, data) => {
@@ -97,7 +105,7 @@ describe('executeCliRun — Codex sentinel suppression', () => {
       child.emit('close', 0);
     });
 
-    await executeCliRun({ runId: 'run-1', provider, prompt: 'test prompt', workspacePath: '/workspace' });
+    await executeCliRun({ runId: 'run-1', provider, prompt: 'test prompt', workspacePath: TEST_WORKSPACE });
 
     const [, capturedArgs] = spawn.mock.calls.at(-1);
     expect(capturedArgs).not.toContain('--model');
@@ -124,7 +132,7 @@ describe('executeCliRun — Codex sentinel suppression', () => {
       child.emit('close', 0);
     });
 
-    await executeCliRun({ runId: 'run-2', provider, prompt: 'test prompt', workspacePath: '/workspace' });
+    await executeCliRun({ runId: 'run-2', provider, prompt: 'test prompt', workspacePath: TEST_WORKSPACE });
 
     const [, capturedArgs] = spawn.mock.calls.at(-1);
     const modelIdx = capturedArgs.indexOf('--model');
@@ -147,7 +155,7 @@ describe('executeCliRun — Codex sentinel suppression', () => {
     };
 
     const completed = new Promise((resolve) => {
-      executeCliRun({ runId: 'run-extra-usage', provider, prompt: 'test prompt', workspacePath: '/workspace', onData: undefined, onComplete: resolve, timeout: 60000 });
+      executeCliRun({ runId: 'run-extra-usage', provider, prompt: 'test prompt', workspacePath: TEST_WORKSPACE, onData: undefined, onComplete: resolve, timeout: 60000 });
     });
 
     await Promise.resolve();
@@ -179,7 +187,7 @@ describe('executeCliRun — Codex sentinel suppression', () => {
     };
 
     const completed = new Promise((resolve) => {
-      executeCliRun({ runId: 'run-fallback-exit0', provider, prompt: 'test prompt', workspacePath: '/workspace', onData: undefined, onComplete: resolve, timeout: 60000 });
+      executeCliRun({ runId: 'run-fallback-exit0', provider, prompt: 'test prompt', workspacePath: TEST_WORKSPACE, onData: undefined, onComplete: resolve, timeout: 60000 });
     });
 
     await Promise.resolve();
@@ -216,7 +224,7 @@ describe('executeCliRun — Windows .cmd/.bat shim spawning (#1865)', () => {
       child.emit('close', 0);
     });
 
-    await executeCliRun({ runId: 'run-resolved', provider, prompt: 'test prompt', workspacePath: '/workspace' });
+    await executeCliRun({ runId: 'run-resolved', provider, prompt: 'test prompt', workspacePath: TEST_WORKSPACE });
 
     const [command, args, options] = spawn.mock.calls.at(-1);
     expect(command).toBe('cmd.exe');
@@ -244,7 +252,7 @@ describe('executeCliRun — Windows .cmd/.bat shim spawning (#1865)', () => {
       child.emit('close', 0);
     });
 
-    await executeCliRun({ runId: 'run-unresolved', provider, prompt: 'test prompt', workspacePath: '/workspace' });
+    await executeCliRun({ runId: 'run-unresolved', provider, prompt: 'test prompt', workspacePath: TEST_WORKSPACE });
 
     const [command, , options] = spawn.mock.calls.at(-1);
     expect(command).toBe('codex');
@@ -270,7 +278,7 @@ describe('executeCliRun — close handler crash guard', () => {
       defaultModel: 'codex-configured-default', timeout: 5000,
     };
     const onComplete = vi.fn();
-    await executeCliRun({ runId, provider, prompt: 'test prompt', workspacePath: '/workspace', onComplete });
+    await executeCliRun({ runId, provider, prompt: 'test prompt', workspacePath: TEST_WORKSPACE, onComplete });
 
     child.stdout.emit('data', Buffer.from('output'));
     child.emit('close', 0);
@@ -317,7 +325,7 @@ describe('executeCliRun — close handler crash guard', () => {
       defaultModel: 'codex-configured-default', timeout: 5000,
     };
     const onComplete = vi.fn();
-    await executeCliRun({ runId: 'run-success-hook-throws', provider, prompt: 'test prompt', workspacePath: '/workspace', onComplete });
+    await executeCliRun({ runId: 'run-success-hook-throws', provider, prompt: 'test prompt', workspacePath: TEST_WORKSPACE, onComplete });
 
     child.stdout.emit('data', Buffer.from('output'));
     child.emit('close', 0);
@@ -345,7 +353,7 @@ describe('executeCliRun — close handler crash guard', () => {
       defaultModel: 'codex-configured-default', timeout: 5000,
     };
     const onComplete = vi.fn();
-    await executeCliRun({ runId: 'run-async-hook-rejects', provider, prompt: 'test prompt', workspacePath: '/workspace', onComplete });
+    await executeCliRun({ runId: 'run-async-hook-rejects', provider, prompt: 'test prompt', workspacePath: TEST_WORKSPACE, onComplete });
 
     child.stdout.emit('data', Buffer.from('output'));
     child.emit('close', 0);
@@ -386,7 +394,7 @@ describe('executeCliRun — close handler crash guard', () => {
       runId: 'run-spawn-error',
       provider,
       prompt: 'test prompt',
-      workspacePath: '/workspace',
+      workspacePath: TEST_WORKSPACE,
       onComplete,
     });
 
@@ -717,5 +725,48 @@ describe('emitRunStarted — payload-flattening contract', () => {
       provider: { name: 'codex', defaultModel: 'o4-mini' },
       model: 'gpt-4',
     })).not.toThrow();
+  });
+});
+
+describe('executeCliRun — workspace validation (#3180)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setAIToolkit(fakeToolkit(), { dataDir: '/tmp/test-runner' });
+  });
+
+  const provider = { id: 'codex', name: 'Codex', command: 'codex', args: [], timeout: 5000 };
+
+  // The bug: a workspace that doesn't exist used to fall through to spawn(),
+  // which quietly ran the agent in the PortOS checkout. A prompt naming a
+  // relative file then wrote into the wrong repo with no error anywhere.
+  it('fails the run instead of spawning when the workspace does not exist', async () => {
+    const onComplete = vi.fn();
+    const onData = vi.fn();
+
+    await executeCliRun({
+      runId: 'run-bad-workspace',
+      provider,
+      prompt: 'test prompt',
+      workspacePath: '/definitely/not/a/real/repo/path',
+      onData,
+      onComplete,
+    });
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(onData).toHaveBeenCalledWith(expect.stringContaining('Workspace path does not exist'));
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onComplete.mock.calls[0][0]).toMatchObject({ success: false });
+  });
+
+  // The /runs route invokes executeCliRun without awaiting it, so this path
+  // must report through onComplete rather than rejecting — a bare throw would
+  // surface only as an unhandled rejection and leave the run looking stuck.
+  it('reports the failure via onComplete rather than rejecting', async () => {
+    await expect(executeCliRun({
+      runId: 'run-bad-workspace-2',
+      provider,
+      prompt: 'test prompt',
+      workspacePath: '/definitely/not/a/real/repo/path',
+    })).resolves.toBeUndefined();
   });
 });

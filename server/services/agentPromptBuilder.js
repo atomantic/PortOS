@@ -1993,26 +1993,39 @@ function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR
 
 /**
  * Get workspace path for an app.
+ *
+ * Falls back to the PortOS repo root when the app can't be resolved or carries
+ * no `repoPath`. That fallback is deliberate (an agent still needs *a* cwd) but
+ * it used to be silent, which is indistinguishable from "the workspace worked"
+ * — the agent just quietly wrote its files into the PortOS checkout instead of
+ * the target app (issue #3180). Every fallback now says why.
  */
 export async function getAppWorkspace(appName) {
   const appsFile = join(ROOT_DIR, 'data/apps.json');
 
   const data = await readJSONFile(appsFile, null);
   if (!data) {
+    console.warn(`⚠️ No apps registry at ${appsFile} — agent workspace falls back to PortOS root`);
     return ROOT_DIR;
   }
 
   // Handle both object format { apps: { id: {...} } } and array format [...]
   const apps = data.apps || data;
 
-  if (Array.isArray(apps)) {
-    const app = apps.find(a => a.name === appName || a.id === appName);
-    return app?.repoPath || ROOT_DIR;
-  }
+  const app = Array.isArray(apps)
+    ? apps.find(a => a.name === appName || a.id === appName)
+    // Object format - keys are app IDs
+    : (apps[appName] || Object.values(apps).find(a => a.name === appName));
 
-  // Object format - keys are app IDs
-  const app = apps[appName] || Object.values(apps).find(a => a.name === appName);
-  return app?.repoPath || ROOT_DIR;
+  if (!app) {
+    console.warn(`⚠️ App '${appName}' not found in apps registry — agent workspace falls back to PortOS root`);
+    return ROOT_DIR;
+  }
+  if (!app.repoPath) {
+    console.warn(`⚠️ App '${appName}' has no repoPath — agent workspace falls back to PortOS root`);
+    return ROOT_DIR;
+  }
+  return app.repoPath;
 }
 
 /**

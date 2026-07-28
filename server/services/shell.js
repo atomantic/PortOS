@@ -38,10 +38,46 @@ const SAFE_ENV_PREFIXES = [
   'KUBECONFIG', 'LESS', 'PAGER', 'MANPATH', 'INFOPATH', 'ZDOTDIR', 'STARSHIP_'
 ];
 
-function buildSafeEnv() {
+// Windows-only additions. The list above is POSIX-shaped: on Windows it drops
+// variables the OS itself needs to create a working process, so a PTY session
+// started from it launches into a crippled shell (no DLL search root, no temp
+// dir, no per-user app data — which is where `claude`/`codex` keep their
+// credentials and config). Enumerated explicitly rather than by prefix because
+// these have no common stem, and kept separate so POSIX sessions are unchanged.
+const SAFE_ENV_PREFIXES_WIN32 = [
+  'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'COMSPEC', 'PATHEXT',
+  'USERPROFILE', 'USERNAME', 'USERDOMAIN', 'HOMEDRIVE', 'HOMEPATH',
+  'APPDATA', 'LOCALAPPDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)',
+  'PROGRAMDATA', 'PROGRAMW6432', 'COMMONPROGRAMFILES', 'TEMP', 'TMP',
+  'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'OS', 'PSMODULEPATH'
+];
+
+/**
+ * Filter `process.env` down to the allowlist above.
+ *
+ * Matching is case-INSENSITIVE because Windows environment variable names are
+ * case-insensitive and Windows supplies them in mixed case: the real variable
+ * is `Path`, not `PATH`, so a case-sensitive `startsWith('PATH')` dropped the
+ * child's entire PATH on Windows while keeping `PATHEXT` (which happens to be
+ * upper-case) — the shell then couldn't resolve any CLI provider. POSIX env
+ * names are conventionally upper-case already, so folding case is a no-op
+ * there.
+ *
+ * Exported for tests; `platform` is injectable so the Windows branch is
+ * testable from any host.
+ *
+ * @param {NodeJS.ProcessEnv} [env] - source environment; defaults to `process.env`
+ * @param {string} [platform] - `process.platform` value; defaults to the real one
+ * @returns {Record<string, string>} filtered environment
+ */
+export function buildSafeEnv(env = process.env, platform = process.platform) {
+  const prefixes = platform === 'win32'
+    ? [...SAFE_ENV_PREFIXES, ...SAFE_ENV_PREFIXES_WIN32]
+    : SAFE_ENV_PREFIXES;
   const safeEnv = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (SAFE_ENV_PREFIXES.some(prefix => key === prefix || key.startsWith(prefix))) {
+  for (const [key, value] of Object.entries(env)) {
+    const upper = key.toUpperCase();
+    if (prefixes.some(prefix => upper === prefix || upper.startsWith(prefix))) {
       safeEnv[key] = value;
     }
   }

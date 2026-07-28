@@ -146,6 +146,25 @@ which claude
 2. Check file path in CoS config matches your TASKS.md location
 3. Trigger manual evaluation via UI
 
+### Agent Writes Files Into the PortOS Folder Instead of My App
+
+**Symptom**: You pick an app as the workspace (in a CoS task, or **Settings → Providers → Run Prompt**) and ask the agent to create a file. It lands in the PortOS directory instead of the app's repo. Giving the agent an **absolute** path in the prompt works fine.
+
+**Cause**: The agent's working directory comes from the selected app's **Repository Path** (`repoPath`) — nothing else. If that value is empty, points at a folder that doesn't exist, or the app can't be resolved, PortOS falls back to its own directory, and a prompt naming a relative file (`HelloWorld.md`) writes there.
+
+**`PORTOS_WORKSPACE_ROOTS` does not control this.** That variable only scopes which directories the repo-detection and command-execution routes are allowed to read. Setting it will not change where an agent runs, and it is not required for agent workspaces to work.
+
+**Solution**:
+1. Open **Apps**, edit the app, and confirm **Repository Path** is the absolute path to the repo — e.g. `C:\Users\Example\Projects\MyApp` on Windows, `/Users/example/Projects/MyApp` on macOS/Linux. A path with a typo, a trailing quote, or a since-moved folder is the usual culprit.
+2. Re-run. PortOS logs the working directory it chose for every run:
+   ```
+   📂 Run <run-id> cwd: C:\Users\Example\Projects\MyApp
+   ```
+   CoS tasks show the same thing in the task log as `📂 Agent workspace: …`. If you instead see a `⚠️` line saying the app did not resolve to a repo path, the app record is the problem — go back to step 1.
+3. If the configured path does not exist, the run now fails immediately with `Workspace path does not exist: …` rather than silently running in the PortOS folder. Fix the path and run again.
+
+**Note for Windows**: use a real filesystem path with drive letter (`C:\...`). Both `C:\Users\...` and `C:/Users/...` work; a path inside OneDrive-redirected folders is fine as long as it exists locally.
+
 ### Memory System Not Working
 
 **Symptom**: Memory search returns no results, embeddings fail.

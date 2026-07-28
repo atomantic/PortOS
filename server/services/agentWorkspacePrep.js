@@ -54,6 +54,24 @@ export async function prepareAgentWorkspace({ agentId, task }) {
     ? (await getAppById(task.metadata.app).catch(() => null))?.name || null
     : null;
 
+  // Surface the resolved cwd in the task log. The agent runs with this as its
+  // working directory, so a prompt that names a relative file ("create
+  // HelloWorld.md") writes HERE — and when resolution silently fell back to the
+  // PortOS root the files landed in the PortOS checkout with nothing in the log
+  // to explain it (issue #3180). Both failure shapes are now visible to the user
+  // in the UI, not just in server stdout.
+  if (task.metadata?.app && workspacePath === ROOT_DIR) {
+    emitLog('warn', `⚠️ App '${task.metadata.app}' did not resolve to a repo path — the agent will run in the PortOS directory, not your app. Check the app's Repository Path in Apps.`, {
+      taskId: task.id, workspace: workspacePath
+    });
+  } else if (!existsSync(workspacePath)) {
+    emitLog('warn', `⚠️ Workspace path does not exist: ${workspacePath} — the agent will likely fail to start or write to the wrong place.`, {
+      taskId: task.id, workspace: workspacePath
+    });
+  } else {
+    emitLog('info', `📂 Agent workspace: ${workspacePath}`, { taskId: task.id, workspace: workspacePath });
+  }
+
   let jiraTicket = null;
   let jiraBranchName = null;
   let worktreeInfo = null;
