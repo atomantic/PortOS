@@ -137,7 +137,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
   }, [agent.btwMessages]);
   const [submittingFeedback, setSubmittingFeedback] = useState(false);
   const [showFeedbackComment, setShowFeedbackComment] = useState(false);
-  const [feedbackComment, setFeedbackComment] = useState('');
+  const [feedbackComment, setFeedbackComment] = useState(agent.feedback?.comment || '');
 
   // Determine if this is a system agent (health check, etc.)
   const isSystemAgent = agent.taskId?.startsWith('sys-') || agent.id?.startsWith('sys-');
@@ -161,7 +161,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
     if (result?.success) {
       setFeedbackState(rating);
       setShowFeedbackComment(false);
-      setFeedbackComment('');
+      setFeedbackComment(result.agent?.feedback?.comment || '');
       toast.success(`Feedback recorded: ${rating}`);
       onFeedbackChange?.(result.agent);
     }
@@ -840,42 +840,66 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                 >
                   <ThumbsDown size={14} />
                 </button>
-                {!feedbackState && (
-                  <button
-                    onClick={() => setShowFeedbackComment(!showFeedbackComment)}
-                    className="p-1.5 rounded text-gray-500 hover:text-white hover:bg-port-border/50 transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center"
-                    title="Add comment"
-                    aria-label="Add feedback comment"
-                    aria-expanded={showFeedbackComment}
-                  >
-                    <MessageSquare size={14} />
-                  </button>
-                )}
+                <button
+                  onClick={() => setShowFeedbackComment(!showFeedbackComment)}
+                  className="p-1.5 rounded text-gray-500 hover:text-white hover:bg-port-border/50 transition-colors min-w-[32px] min-h-[32px] flex items-center justify-center"
+                  title={feedbackState ? 'Add feedback detail' : 'Add feedback comment'}
+                  aria-label={feedbackState ? 'Add feedback detail' : 'Add feedback comment'}
+                  aria-expanded={showFeedbackComment}
+                >
+                  <MessageSquare size={14} />
+                </button>
               </div>
               {feedbackState && (
-                <span className={`text-xs ${feedbackState === 'positive' ? 'text-port-success' : 'text-port-error'}`}>
-                  {feedbackState === 'positive' ? 'Thanks for the feedback!' : 'We\'ll improve'}
+                <span className={`text-xs ${feedbackState === 'positive' ? 'text-port-success' : feedbackState === 'negative' ? 'text-port-error' : 'text-gray-400'}`}>
+                  {feedbackState === 'positive' ? 'Thanks for the feedback!' : feedbackState === 'negative' ? 'We\'ll improve' : 'Feedback recorded'}
                 </span>
               )}
             </div>
             {/* Comment input */}
-            {showFeedbackComment && !feedbackState && (
-              <div className="mt-2 flex gap-2">
+            {showFeedbackComment && (
+              <div className="mt-2 flex flex-col gap-2 sm:flex-row">
                 <input
                   type="text"
                   value={feedbackComment}
                   onChange={(e) => setFeedbackComment(e.target.value)}
-                  placeholder="Optional: add a comment..."
+                  placeholder="What made this work well or poorly?"
                   className="flex-1 px-2 py-1 text-sm bg-port-bg border border-port-border rounded text-white placeholder-gray-500 focus:outline-hidden focus:border-port-accent min-h-[32px]"
                   maxLength={200}
                 />
-                <button
-                  onClick={() => submitFeedback('neutral')}
-                  disabled={submittingFeedback || !feedbackComment.trim()}
-                  className="px-3 py-1 text-xs bg-port-accent hover:bg-port-accent/80 text-white rounded disabled:opacity-50 min-h-[32px]"
-                >
-                  Submit
-                </button>
+                {feedbackState ? (
+                  <button
+                    onClick={() => submitFeedback(feedbackState)}
+                    disabled={submittingFeedback || !feedbackComment.trim()}
+                    className="px-3 py-1 text-xs bg-port-accent hover:bg-port-accent/80 text-white rounded disabled:opacity-50 min-h-[32px]"
+                  >
+                    Save detail
+                  </button>
+                ) : (
+                  <div className="flex flex-wrap gap-1">
+                    <button
+                      onClick={() => submitFeedback('positive')}
+                      disabled={submittingFeedback || !feedbackComment.trim()}
+                      className="px-2 py-1 text-xs text-port-success border border-port-success/40 hover:bg-port-success/10 rounded disabled:opacity-50 min-h-[32px]"
+                    >
+                      Helpful
+                    </button>
+                    <button
+                      onClick={() => submitFeedback('negative')}
+                      disabled={submittingFeedback || !feedbackComment.trim()}
+                      className="px-2 py-1 text-xs text-port-error border border-port-error/40 hover:bg-port-error/10 rounded disabled:opacity-50 min-h-[32px]"
+                    >
+                      Needs work
+                    </button>
+                    <button
+                      onClick={() => submitFeedback('neutral')}
+                      disabled={submittingFeedback || !feedbackComment.trim()}
+                      className="px-2 py-1 text-xs text-gray-300 border border-port-border hover:bg-port-border/50 rounded disabled:opacity-50 min-h-[32px]"
+                    >
+                      Neutral
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>

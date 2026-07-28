@@ -10,4 +10,6 @@
 
 ## Changed
 
+- **Chief of Staff feedback now captures why an agent helped or missed the mark.** Add detail to positive, negative, or neutral ratings so future CoS learning has the context needed to improve.
+
 - **Branch reconciler prioritizes recognized work branches.** The in-flight set handed to the coordinator agent is now ordered by branch prefix — `claim/`, `cos/`, `next/`, `feature/`, `fix/`, and other conventional prefixes are reconciled ahead of unrecognized/ad-hoc branches — so a bounded run spends its budget on real deliverables first. Both `/` and `-` separators match.

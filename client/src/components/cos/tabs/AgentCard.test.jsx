@@ -55,4 +55,62 @@ describe('AgentCard feedback', () => {
     );
     await waitFor(() => expect(onFeedbackChange).toHaveBeenCalledWith(updatedAgent));
   });
+
+  it('records a negative rating with the detail needed to improve future work', async () => {
+    const user = userEvent.setup();
+    const updatedAgent = {
+      ...agent,
+      feedback: {
+        rating: 'negative',
+        comment: 'The implementation did not include tests.',
+        submittedAt: '2026-07-13T12:00:00.000Z'
+      }
+    };
+    api.submitCosAgentFeedback.mockResolvedValue({ success: true, agent: updatedAgent });
+
+    render(
+      <MemoryRouter>
+        <AgentCard agent={agent} completed />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Add feedback comment' }));
+    await user.type(screen.getByPlaceholderText('What made this work well or poorly?'), updatedAgent.feedback.comment);
+    await user.click(screen.getByRole('button', { name: 'Needs work' }));
+
+    expect(api.submitCosAgentFeedback).toHaveBeenCalledWith(
+      agent.id,
+      { rating: 'negative', comment: updatedAgent.feedback.comment },
+      { silent: true }
+    );
+  });
+
+  it('lets a quick rating receive a follow-up detail', async () => {
+    const user = userEvent.setup();
+    const ratedAgent = {
+      ...agent,
+      feedback: { rating: 'positive', submittedAt: '2026-07-13T12:00:00.000Z' }
+    };
+    const detailedAgent = {
+      ...ratedAgent,
+      feedback: { ...ratedAgent.feedback, comment: 'The focused test coverage was useful.' }
+    };
+    api.submitCosAgentFeedback.mockResolvedValue({ success: true, agent: detailedAgent });
+
+    render(
+      <MemoryRouter>
+        <AgentCard agent={ratedAgent} completed />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Add feedback detail' }));
+    await user.type(screen.getByPlaceholderText('What made this work well or poorly?'), detailedAgent.feedback.comment);
+    await user.click(screen.getByRole('button', { name: 'Save detail' }));
+
+    expect(api.submitCosAgentFeedback).toHaveBeenCalledWith(
+      agent.id,
+      { rating: 'positive', comment: detailedAgent.feedback.comment },
+      { silent: true }
+    );
+  });
 });
