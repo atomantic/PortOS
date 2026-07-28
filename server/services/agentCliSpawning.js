@@ -34,6 +34,7 @@ import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { resolveForgeTokenEnv } from './git.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
+import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 import { resolvePrCompletion } from '../lib/prDisposition.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
@@ -491,7 +492,9 @@ export async function spawnDirectly({
   // can't `pm2 kill` the shared daemon. opencodeEnv comes LAST to override
   // the static OPENCODE_CONFIG_CONTENT in provider.envVars; forgeTokenEnv sits
   // before provider.envVars so an explicit provider GH_TOKEN override still wins.
-  const childEnv = (() => { const e = { ...process.env, ...forgeTokenEnv, ...claudeSettingsEnv, ...provider.envVars, ...opencodeEnv }; delete e.CLAUDECODE; Object.assign(e, agentGuardEnv(e)); return e; })();
+  // withSpawnCwdEnv pins PWD to `cwd` so a CLI that reads its project root from
+  // PWD (OpenCode does) can't fall back to the PortOS checkout — see issue #3193.
+  const childEnv = (() => { const e = withSpawnCwdEnv({ ...process.env, ...forgeTokenEnv, ...claudeSettingsEnv, ...provider.envVars, ...opencodeEnv }, cwd); delete e.CLAUDECODE; Object.assign(e, agentGuardEnv(e)); return e; })();
 
   // Resolve a bare npm-installed CLI (a .cmd/.bat shim on Windows) to its real
   // path and wrap a shim as `cmd.exe /c <path>` so spawn() under shell:false

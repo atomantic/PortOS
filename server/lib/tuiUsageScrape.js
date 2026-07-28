@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { stripAnsi } from './ansiStrip.js';
 import { sleep } from './fileUtils.js';
+import { withSpawnCwdEnv } from './spawnCwd.js';
 
 /**
  * Drive an interactive coding-agent TUI (Antigravity `agy`, Grok Build `grok`)
@@ -98,7 +99,13 @@ export async function scrapeTuiUsage({
   // Provider envVars (auth/config) merged over process.env, then the PTY hints.
   // CLAUDECODE leaks when PortOS itself runs under Claude Code; strip it so a
   // spawned TUI doesn't think it's nested (mirrors tuiPromptRunner.js).
-  const env = { ...process.env, ...extraEnv, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
+  // withSpawnCwdEnv pins PWD to the sandbox dir so a CLI that reads its project
+  // root from PWD (OpenCode does) scrapes usage from the sandbox rather than
+  // opening the PortOS checkout as a project. See issue #3193.
+  const env = withSpawnCwdEnv(
+    { ...process.env, ...extraEnv, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
+    sandboxDir,
+  );
   delete env.CLAUDECODE;
 
   let pty;

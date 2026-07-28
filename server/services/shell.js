@@ -1,6 +1,7 @@
 import * as pty from 'node-pty';
 import os from 'os';
 import { v4 as uuidv4 } from '../lib/uuid.js';
+import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 
 // Store active shell sessions (persist across socket reconnects)
 const shellSessions = new Map();
@@ -148,7 +149,12 @@ export function createShellSession(socket, options = {}) {
       cols,
       rows,
       cwd,
-      env: {
+      // withSpawnCwdEnv pins PWD to this session's cwd. An interactive login
+      // shell normally rewrites PWD itself at startup, but a non-login shell may
+      // not — and an agent-TUI session injects a CLI command into this shell, so
+      // an inherited PWD naming the PortOS checkout would send a PWD-reading CLI
+      // (OpenCode does) to the wrong repo. See issue #3193.
+      env: withSpawnCwdEnv({
         ...buildSafeEnv(), // filters process.env to prevent leaking inherited secrets (e.g. shell-inherited API keys)
         // options.env is the caller's explicit opt-in env (e.g. TUI provider API keys for codex/claude).
         // Callers are responsible for not passing vars they don't want visible inside attachable shells.
@@ -156,7 +162,7 @@ export function createShellSession(socket, options = {}) {
         ...(options.env || {}),
         TERM: 'xterm-256color',
         COLORTERM: 'truecolor'
-      }
+      }, cwd)
     });
   } catch (err) {
     console.error(`❌ Failed to spawn PTY: ${err.message}`);

@@ -408,7 +408,21 @@ export function createRunnerService(config = {}) {
       const args = [...(provider.args || [])];
       console.log(`🚀 Executing CLI: ${provider.command} ${args.join(' ')} (${prompt.length} chars via stdin)`);
 
-      const childEnv = { ...process.env, ...provider.envVars };
+      // PWD is pinned to the spawn cwd: passing `cwd` to spawn() changes the
+      // child's real working directory but leaves the inherited PWD naming the
+      // directory the host process was started in, and OpenCode resolves its
+      // project root as `process.env.PWD ?? process.cwd()` — so it would run in
+      // the host's directory instead of `workspacePath` (issue #3193). Inlined
+      // rather than importing PortOS's `withSpawnCwdEnv` because this toolkit is
+      // vendored and must not import out to other PortOS modules. The
+      // case-insensitive filter matters on Windows, where a spread of
+      // `process.env` can surface this variable as `Pwd`/`pwd` and a second
+      // `PWD` key would hand the child two spellings of one variable.
+      const childEnv = Object.fromEntries(
+        Object.entries({ ...process.env, ...provider.envVars })
+          .filter(([key]) => !(workspacePath && /^pwd$/i.test(key))),
+      );
+      if (workspacePath) childEnv.PWD = workspacePath;
       // Resolved against `childEnv` (not bare process.env) so a
       // provider-configured PATH override is honored.
       const resolvedCommand = resolveWindowsExecutable(provider.command, undefined, childEnv) || provider.command;

@@ -19,6 +19,10 @@
  * caught where the app is looked up, because "no path" arrives here
  * indistinguishable from "no app selected". `getAppWorkspace` returns `null`
  * for that case rather than silently substituting the PortOS root.
+ *
+ * `withSpawnCwdEnv` covers the remaining failure mode: a CLI that resolves its
+ * own working directory from the inherited `PWD` env var rather than from the
+ * cwd it was actually spawned in (issue #3193).
  */
 
 import { statSync } from 'fs';
@@ -77,4 +81,52 @@ export function resolveSpawnCwd(workspacePath, fallbackRoot, label = 'run') {
 
   console.log(`📂 ${label} cwd: ${requested}`);
   return requested;
+}
+
+// Windows environment-variable names are case-insensitive, so a spread of
+// `process.env` can surface this variable as `Pwd`/`pwd`. Adding a separate
+// `PWD` key to that object would hand the child two spellings of one variable
+// with no defined winner — so every case variant is dropped before the correct
+// value is set.
+const PWD_KEY_RE = /^pwd$/i;
+
+/**
+ * Return a copy of `env` whose `PWD` names the directory the child will
+ * actually run in.
+ *
+ * Passing `cwd` to `spawn()` changes the child's real working directory but
+ * does NOT rewrite `PWD` in the inherited environment — that variable is
+ * maintained by the shell, so a child spawned from the long-running PortOS
+ * server inherits `PWD=<the PortOS checkout>` no matter where it was pointed.
+ * Most CLIs never notice, because they read `process.cwd()`. OpenCode does:
+ * `opencode run` resolves its project root as `process.env.PWD ?? process.cwd()`
+ * (`packages/opencode/src/cli/cmd/run.ts`), so it ran every PortOS agent in the
+ * PortOS folder while the spawn logs correctly reported the app's workspace —
+ * "create HelloWorld.md" landed in the PortOS checkout, and asking the agent to
+ * print its own working directory printed the PortOS path (issue #3193,
+ * follow-up to #3180). Codex/Claude/Gemini were unaffected, which is why the
+ * bug looked OpenCode-specific.
+ *
+ * Upstream closed that behavior as won't-fix and documented exporting a correct
+ * `PWD` as the supported workaround, so PortOS pins it at every spawn site.
+ * This is the right fix generally, not just for OpenCode: a `PWD` that
+ * disagrees with the child's actual cwd is wrong for any process that reads it,
+ * and pinning it costs nothing for the ones that don't.
+ *
+ * @param {NodeJS.ProcessEnv|object} env - env the child would otherwise receive
+ * @param {string|undefined|null} cwd - the directory being passed to `spawn` as `cwd`
+ * @returns {object} a copy of `env` with `PWD` set to `cwd` (unchanged copy when `cwd` is absent)
+ */
+export function withSpawnCwdEnv(env, cwd) {
+  const next = {};
+  const pin = typeof cwd === 'string' && cwd.length > 0;
+  for (const [key, value] of Object.entries(env || {})) {
+    // Only strip the stale variants when there's a real value to replace them
+    // with — otherwise a caller that spawns without an explicit cwd would have
+    // its inherited PWD deleted, which is a different (and equally wrong) lie.
+    if (pin && PWD_KEY_RE.test(key)) continue;
+    next[key] = value;
+  }
+  if (pin) next.PWD = cwd;
+  return next;
 }

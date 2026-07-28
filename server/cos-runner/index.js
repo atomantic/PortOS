@@ -17,6 +17,7 @@ import http from 'http';
 import { Server as SocketServer } from 'socket.io';
 import { ensureDir, PATHS, sleep } from '../lib/fileUtils.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
+import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { createStreamJsonParser } from './streamJsonParser.js';
@@ -187,7 +188,13 @@ app.post('/spawn', async (req, res) => {
   // Ensure workspacePath is valid
   const cwd = workspacePath && typeof workspacePath === 'string' ? workspacePath : ROOT_DIR;
 
-  const childEnv = (() => { const e = { ...process.env, ...envVars }; delete e.CLAUDECODE; return e; })();
+  // withSpawnCwdEnv pins PWD to `cwd`. Passing `cwd` to spawn() changes the
+  // child's real working directory but leaves the inherited PWD naming the
+  // PortOS checkout this runner was started in — and OpenCode resolves its
+  // project root as `process.env.PWD ?? process.cwd()`, so every CoS agent on
+  // that provider wrote into the PortOS folder while this handler's own log line
+  // correctly reported the app's workspace. See issue #3193.
+  const childEnv = (() => { const e = withSpawnCwdEnv({ ...process.env, ...envVars }, cwd); delete e.CLAUDECODE; return e; })();
 
   // Resolve a bare npm-installed CLI (opencode/codex/claude/… — a .cmd/.bat
   // shim on Windows) to its real path and wrap a shim as `cmd.exe /c <path>` so

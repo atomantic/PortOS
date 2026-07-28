@@ -6,7 +6,7 @@ import { spawn } from 'child_process';
 import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, ensureDir, tryReadFile, PATHS } from '../lib/fileUtils.js';
-import { resolveSpawnCwd } from '../lib/spawnCwd.js';
+import { resolveSpawnCwd, withSpawnCwdEnv } from '../lib/spawnCwd.js';
 import { hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
 import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
@@ -266,7 +266,13 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
   // buildOpencodeEnvVars rebuilds OPENCODE_CONFIG_CONTENT with a declared models
   // map for OpenCode Ollama providers (empty/no-op otherwise) so the injected
   // `--model ollama/<id>` isn't rejected as "not valid" — see issue-2190.
-  const childEnv = { ...process.env, ...provider.envVars, ...buildOpencodeEnvVars(provider, provider.defaultModel) };
+  // withSpawnCwdEnv pins PWD to the directory this child actually runs in, so a
+  // CLI that reads its project root from PWD (OpenCode does) can't fall back to
+  // the PortOS checkout the server itself was started in — see issue #3193.
+  const childEnv = withSpawnCwdEnv(
+    { ...process.env, ...provider.envVars, ...buildOpencodeEnvVars(provider, provider.defaultModel) },
+    effectiveCwd,
+  );
   delete childEnv.CLAUDECODE;
   Object.assign(childEnv, agentGuardEnv(childEnv));
 

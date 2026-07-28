@@ -58,6 +58,7 @@ import {
   detectMissingTuiBinary,
 } from './tuiHandshake.js';
 import { buildOpencodeEnvVars } from './opencodeConfig.js';
+import { withSpawnCwdEnv } from './spawnCwd.js';
 
 // One-shot defaults that don't apply to the long-running agent path:
 //   - hard run cap (5 min vs unbounded for agents)
@@ -176,8 +177,14 @@ ${prompt}`;
   // for the same reason.
   // For OpenCode Ollama providers, build dynamic OPENCODE_CONFIG_CONTENT with
   // the models map so --model is accepted (the static env var lacked this).
+  // withSpawnCwdEnv pins PWD to the directory this TUI actually runs in, so a
+  // CLI that reads its project root from PWD (OpenCode does) can't fall back to
+  // the PortOS checkout the server was started in — see issue #3193.
   const opencodeEnv = buildOpencodeEnvVars(provider, provider.defaultModel);
-  const childEnv = { ...process.env, ...(provider.envVars || {}), ...opencodeEnv, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
+  const childEnv = withSpawnCwdEnv(
+    { ...process.env, ...(provider.envVars || {}), ...opencodeEnv, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
+    workingDir,
+  );
   delete childEnv.CLAUDECODE;
 
   let ptyProcess;
