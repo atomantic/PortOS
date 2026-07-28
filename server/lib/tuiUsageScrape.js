@@ -96,15 +96,13 @@ export async function scrapeTuiUsage({
 
   mkdirSync(sandboxDir, { recursive: true });
 
-  // Shared composition (provider envVars + PWD pin + CLAUDECODE strip) — see
-  // buildCliChildEnv. `extraEnv` is the provider's auth/config env, handed in
-  // loose rather than as a provider record; with no command to classify, the
-  // OpenCode layer is a no-op here. TERM/COLORTERM go in `extra` so the PTY is
-  // always a truecolor xterm regardless of provider config (mirrors
-  // tuiPromptRunner.js). The PWD pin keeps the scrape in the throwaway sandbox
-  // instead of opening the PortOS checkout as a project.
+  // TERM/COLORTERM go in `extra` so the PTY is always a truecolor xterm
+  // regardless of the provider's own env (mirrors tuiPromptRunner.js). The PWD
+  // pin keeps the scrape in the throwaway sandbox instead of opening the PortOS
+  // checkout as a project. No provider record here — this drives a slash command,
+  // not a model, so there is nothing for the OpenCode layer to declare.
   const env = buildCliChildEnv({
-    provider: { envVars: extraEnv },
+    before: extraEnv,
     cwd: sandboxDir,
     extra: { TERM: 'xterm-256color', COLORTERM: 'truecolor' },
   });

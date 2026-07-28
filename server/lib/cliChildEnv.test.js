@@ -1,9 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync } from 'fs';
-import { join, relative } from 'path';
-import { fileURLToPath } from 'url';
-import { buildCliChildEnv } from './cliChildEnv.js';
+import { buildCliChildEnv, composeProviderEnv } from './cliChildEnv.js';
 import { AGENT_GUARD_BIN } from './agentGuard/index.js';
+import { collectServerSources, readServerSource } from './testHelper.js';
 
 // An OpenCode provider that IS ollama-backed — the only shape for which
 // buildOpencodeEnvVars returns anything. Everyone else gets `{}`, which is why
@@ -64,12 +62,11 @@ describe('buildCliChildEnv — layering', () => {
   });
 
   it('tolerates an absent provider / before / extra', () => {
-    expect(buildCliChildEnv({ baseEnv: { A: '1' } })).toEqual({ A: '1' });
     expect(buildCliChildEnv({ baseEnv: { A: '1' }, provider: null, before: null, extra: null })).toEqual({ A: '1' });
   });
 
   it('defaults baseEnv to process.env', () => {
-    expect(buildCliChildEnv({ cwd: undefined }).PATH).toBe(process.env.PATH);
+    expect(buildCliChildEnv().PATH).toBe(process.env.PATH);
   });
 
   it('copies rather than mutating the caller env', () => {
@@ -132,6 +129,44 @@ describe('buildCliChildEnv — pm2 guard', () => {
   });
 });
 
+// composeProviderEnv is the same layering WITHOUT a base env, PWD pin, or strip
+// — for the two sites that build a DELTA someone else bases and spawns. Those
+// are exactly the sites an earlier draft of the guard could not see, and where
+// the OpenCode sweep was missed once before.
+describe('composeProviderEnv — delta for sites that do not spawn directly', () => {
+  it('emits only the provider layers, with no base env, PWD, or strip', () => {
+    const delta = composeProviderEnv({
+      before: { GH_TOKEN: 'forge' },
+      provider: { envVars: { GH_TOKEN: 'provider', CLAUDECODE: '1' } },
+    });
+    // No process.env keys leak in — the consumer supplies the base.
+    expect(delta).toEqual({ GH_TOKEN: 'provider', CLAUDECODE: '1' });
+    // And no PWD is invented for a caller that has no cwd to pin.
+    expect(delta.PWD).toBeUndefined();
+  });
+
+  it('keeps the same layer order buildCliChildEnv uses', () => {
+    expect(composeProviderEnv({
+      before: { K: 'before' },
+      provider: { envVars: { K: 'provider' } },
+      extra: { K: 'extra' },
+    }).K).toBe('extra');
+  });
+
+  it('declares the OpenCode models map for the runner payload (#2243/#2190)', () => {
+    // agentLifecycle hands this to the cos-runner over HTTP, which has no
+    // provider record of its own — so the map has to be baked in HERE or the
+    // runner-spawned agent rejects its own --model.
+    const delta = composeProviderEnv({ provider: OLLAMA_OPENCODE, model: 'llama3.1:8b' });
+    expect(declaredModels(delta).sort()).toEqual(['llama3.1:8b', 'qwen2.5:7b']);
+  });
+
+  it('is what buildCliChildEnv layers over its base env', () => {
+    const layers = { before: { A: '1' }, provider: { envVars: { B: '2' } }, extra: { C: '3' } };
+    expect(buildCliChildEnv({ baseEnv: {}, ...layers })).toEqual(composeProviderEnv(layers));
+  });
+});
+
 // One case per real call site, asserting the precedence THAT site depends on.
 // The sites do not all layer the same way, so a single "extra wins" rule would
 // have silently changed two of them — these pin the actual contracts.
@@ -145,10 +180,10 @@ describe('buildCliChildEnv — per-call-site composition', () => {
   });
 
   it('cliProviderRun.js: honors a sanitized baseEnv instead of process.env', () => {
-    // The autofixer passes an allowlist so host credentials never reach the CLI.
+    // The autofixer passes an allowlist so host credentials never reach the CLI —
+    // so the builder must not smuggle process.env back in under it.
     const env = buildCliChildEnv({ baseEnv: { PATH: '/usr/bin' }, provider: { envVars: {} }, cwd: '/w' });
-    expect(env.HOME).toBeUndefined();
-    expect(env.PATH).toBe('/usr/bin');
+    expect(Object.keys(env).sort()).toEqual(['PATH', 'PWD']);
   });
 
   it('agentCliSpawning.js: forgeToken/claudeSettings sit UNDER provider.envVars', () => {
@@ -215,21 +250,14 @@ describe('buildCliChildEnv — per-call-site composition', () => {
 // an allowlist of "these files must call the builder" passes the day someone
 // adds a ninth spawn site, which is exactly when the guard needs to fire.
 describe('no spawn site rebuilds the CLI child env by hand', () => {
-  const SERVER_DIR = fileURLToPath(new URL('..', import.meta.url));
-
   // Files allowed to compose the tuple themselves, each with the reason.
   const EXEMPT = new Map([
     ['lib/cliChildEnv.js', 'this module IS the shared composer'],
-    ['lib/aiToolkit/runner.js', 'vendored toolkit — must not import out to other PortOS modules'],
+    // Worth stating both halves: the import constraint is why it cannot call the
+    // composer, and the dormancy is why its missing CLAUDECODE strip / OpenCode
+    // map is not a live PortOS gap someone needs to chase.
+    ['lib/aiToolkit/runner.js', 'vendored toolkit — must not import out to other PortOS modules, and its spawn is dormant under PortOS\'s setCliRunner override'],
   ]);
-
-  const collectSources = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    if (entry.name === 'node_modules' || entry.name.startsWith('.')) return [];
-    const abs = join(dir, entry.name);
-    if (entry.isDirectory()) return collectSources(abs);
-    if (!entry.name.endsWith('.js') || entry.name.endsWith('.test.js')) return [];
-    return [relative(SERVER_DIR, abs)];
-  });
 
   // Two independent markers, because either one alone has a blind spot: a new
   // site could strip CLAUDECODE without spreading provider.envVars, or spread
@@ -239,45 +267,51 @@ describe('no spawn site rebuilds the CLI child env by hand', () => {
   // strips it, and nothing else in the tree does.
   const STRIPS_CLAUDECODE = /delete\s+[A-Za-z_$][\w$]*\.CLAUDECODE\b/;
 
-  // Marker B — a provider-env-over-base composition that is handed to a child
-  // running in a workspace. The `cwd` requirement is what separates a real spawn
-  // env from the two shapes that merge the same objects for a different purpose
-  // and correctly need none of this: a model-id LOOKUP env
-  // (`resolveBedrockCliModel({ env })`, `resolveWindowsExecutable(…, searchEnv)`)
-  // and a capability PROBE (`agy models`, `--version`) — neither runs a model,
-  // writes files, or has a workspace to be misrouted into.
+  // Marker B — a `provider.envVars` spread that reaches a child process.
   //
-  // A window rather than a parser: the composition is always one object literal.
-  // KNOWN BLIND SPOT, stated rather than papered over: a real spawn env built
-  // with NO cwd (askService's Ask path is the one such shape today) is invisible
-  // to this marker. Marker A still catches it as long as the new site strips
-  // CLAUDECODE — and a site that does not strip it has the very bug marker B
-  // was never going to be able to name.
+  // Keyed on the spread + the handoff, NOT on a `...process.env` base. An
+  // earlier draft anchored on the base env and had to be widened once already
+  // (for cliProviderRun's `baseEnv` parameter name) — and it still could not see
+  // the two sites that compose a DELTA someone else bases: agentLifecycle's
+  // runner payload and agentTuiSpawning's shell overlay, which is exactly where
+  // the OpenCode sweep was missed once before. Requiring only the spread and a
+  // nearby handoff catches both shapes.
+  //
+  // The handoff requirement is what separates a real child env from the two
+  // shapes that merge the same objects for a different purpose and correctly
+  // need none of this: a model-id LOOKUP env (`resolveBedrockCliModel({ env })`,
+  // `resolveWindowsExecutable(…, searchEnv)`) and a capability PROBE
+  // (`agy models`, `--version`) — neither runs a model, writes files, nor has a
+  // workspace to be misrouted into.
+  //
+  // A window rather than a parser, sized from the real tree: the widest real gap
+  // is ~1400 chars (agentTuiSpawning's `env:` overlay sits that far below its
+  // `createShellSession(`, behind a long comment block), so the back-window is
+  // 1500. Verified empirically — at 1500 the only files flagged across all of
+  // `server/` are the two EXEMPT ones, and every pre-refactor hand-rolled site
+  // is caught. Over-matching costs one EXEMPT line; under-matching silently
+  // reopens the N-file sweep, so the bias is deliberate.
+  //
+  // The optional `(` in the spread pattern matters: `...(provider.envVars || {})`
+  // is the shape two sites use, and a pattern without it reads them as clean.
+  const HANDS_OFF_TO_CHILD = /\b(?:spawn|ptySpawn|spawnImpl|pty\.spawn|createShellSession|spawnAgentViaRunner)\s*\(|\benvVars:/;
   const SPREADS_PROVIDER_ENV_INTO_SPAWN = (src) => {
-    for (const m of src.matchAll(/\.\.\.\s*(?:process\.env|baseEnv)\b/g)) {
-      // Wide enough to span the comment blocks that sit between the composition
-      // and the spawn call it feeds (the vendored toolkit runner has ~500 chars
-      // of them). Over-matching costs one EXEMPT line; under-matching silently
-      // reopens the N-file sweep, so the bias is deliberate.
-      const window = src.slice(m.index, m.index + 900);
-      if (/\.\.\.\s*[A-Za-z_$][\w$]*\??\.envVars\b/.test(window) && /\bcwd\s*[:,]/.test(window)) return true;
+    for (const m of src.matchAll(/\.\.\.\s*\(?\s*[A-Za-z_$][\w$]*\??\.envVars\b/g)) {
+      if (HANDS_OFF_TO_CHILD.test(src.slice(Math.max(0, m.index - 1500), m.index + 900))) return true;
     }
     return false;
   };
 
-  const offenders = () => collectSources(SERVER_DIR).filter((rel) => {
-    if (EXEMPT.has(rel)) return false;
-    const src = readFileSync(join(SERVER_DIR, rel), 'utf8');
-    return STRIPS_CLAUDECODE.test(src) || SPREADS_PROVIDER_ENV_INTO_SPAWN(src);
-  });
+  const isOffender = (src) => STRIPS_CLAUDECODE.test(src) || SPREADS_PROVIDER_ENV_INTO_SPAWN(src);
+  const offenders = () => collectServerSources()
+    .filter((rel) => !EXEMPT.has(rel) && isOffender(readServerSource(rel)));
 
   it('finds the exempt files (guard is not vacuous)', () => {
     // If the markers stop matching even the composer itself, the scan broke and
     // the assertion below would pass for the wrong reason.
     for (const rel of EXEMPT.keys()) {
-      const src = readFileSync(join(SERVER_DIR, rel), 'utf8');
       expect(
-        STRIPS_CLAUDECODE.test(src) || SPREADS_PROVIDER_ENV_INTO_SPAWN(src),
+        isOffender(readServerSource(rel)),
         `${rel} no longer matches either marker — the scan broke`,
       ).toBe(true);
     }

@@ -188,17 +188,13 @@ app.post('/spawn', async (req, res) => {
   // Ensure workspacePath is valid
   const cwd = workspacePath && typeof workspacePath === 'string' ? workspacePath : ROOT_DIR;
 
-  // Shared composition (provider.envVars + OpenCode models map + PWD pin +
-  // CLAUDECODE strip) — see buildCliChildEnv. The runner receives the provider's
-  // envVars over HTTP rather than a provider record, so it wraps them into the
-  // `provider` slot; with no `command` in the payload the OpenCode layer is a
-  // no-op and the result is exactly `{ ...process.env, ...envVars }` as before.
-  // The PWD pin is the path #3193 was reported through: the log line above named
-  // the app's workspace correctly while every OpenCode agent still ran in the
-  // PortOS folder. No `guard`, preserving today's behavior: this runner is a
-  // separate process that does not carry the pm2 shim (only the in-process
-  // agent-spawning paths opt in).
-  const childEnv = buildCliChildEnv({ provider: { envVars }, cwd });
+  // The env arrives already composed — agentLifecycle built it with
+  // composeProviderEnv (provider.envVars + the OpenCode models map) and POSTed it
+  // — so this side only needs the base, the PWD pin, and the CLAUDECODE strip.
+  // The pin is the path #3193 was reported through: the log line above named the
+  // app's workspace correctly while every OpenCode agent still ran in the PortOS
+  // folder. No `guard` — this separate process has never carried the pm2 shim.
+  const childEnv = buildCliChildEnv({ before: envVars, cwd });
 
   // Resolve a bare npm-installed CLI (opencode/codex/claude/… — a .cmd/.bat
   // shim on Windows) to its real path and wrap a shim as `cmd.exe /c <path>` so

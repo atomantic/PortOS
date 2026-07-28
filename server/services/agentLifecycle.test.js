@@ -441,31 +441,44 @@ describe('runAgentSpawn source — instance provenance + claim ordering (#1563)'
   });
 });
 
+// These used to be three source-regex assertions pinning a hand-spread env
+// literal (`...forgeTokenEnv, ...provider.envVars, ...opencodeEnv`) inside
+// spawnViaRunner. The layering now lives in `lib/cliChildEnv.js#composeProviderEnv`,
+// where `cliChildEnv.test.js` asserts the ORDER against the real function instead
+// of against source text — which is the point of #3194: a grep-shaped guard was
+// what let this exact site miss the #2243/#2190 sweep in the first place.
+//
+// What is still worth pinning HERE is the wiring: that spawnViaRunner routes
+// through the shared composer and feeds it the right inputs.
 describe('agentLifecycle — runner OpenCode Ollama env (#2243 / #2190)', () => {
-  it('source: imports buildOpencodeEnvVars from opencodeConfig', () => {
-    expect(AGENT_LIFECYCLE_SRC).toMatch(
-      /import\s*\{\s*buildOpencodeEnvVars\s*\}\s*from\s*'\.\.\/lib\/opencodeConfig\.js';/
-    );
-  });
-
-  it('source: spawnViaRunner merges buildOpencodeEnvVars into the runner envVars so --model ollama/<id> is accepted', () => {
+  const runnerBody = () => {
     const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnViaRunner');
     expect(fnStart, 'spawnViaRunner must exist').toBeGreaterThan(-1);
-    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 4000);
-    const buildIdx = fnBody.indexOf('buildOpencodeEnvVars(provider, model)');
-    expect(buildIdx, 'must build the opencode env from provider+model').toBeGreaterThan(-1);
-    expect(fnBody).toMatch(/envVars:\s*\{[^}]*\.\.\.opencodeEnv[^}]*\}/);
-    expect(fnBody.indexOf('...opencodeEnv'), 'opencodeEnv must be spread AFTER provider.envVars so it overrides the static config')
-      .toBeGreaterThan(fnBody.indexOf('...provider.envVars'));
+    return AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 4000);
+  };
+
+  it('source: composes the runner envVars through the shared composeProviderEnv', () => {
+    expect(AGENT_LIFECYCLE_SRC).toMatch(
+      /import\s*\{\s*composeProviderEnv\s*\}\s*from\s*'\.\.\/lib\/cliChildEnv\.js';/
+    );
+    // The payload must BE the composed env — not a literal that re-spreads it,
+    // which is how the layer order drifted from the other spawn sites before.
+    expect(runnerBody()).toMatch(/envVars:\s*composeProviderEnv\(\{/);
   });
 
-  it("source: spawnViaRunner pins GH_TOKEN via resolveForgeTokenEnv so the runner-spawned agent's `gh` uses the repo-owner account", () => {
-    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnViaRunner');
-    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 4000);
+  it('source: feeds the composer the provider + per-call model so --model ollama/<id> is accepted', () => {
+    const fnBody = runnerBody();
+    const call = fnBody.slice(fnBody.indexOf('composeProviderEnv({'), fnBody.indexOf('composeProviderEnv({') + 300);
+    expect(call, 'the OpenCode declared-models map is built from provider+model').toContain('provider,');
+    expect(call).toContain('model,');
+  });
+
+  it("source: pins GH_TOKEN via resolveForgeTokenEnv so the runner-spawned agent's `gh` uses the repo-owner account", () => {
+    const fnBody = runnerBody();
     expect(fnBody).toContain('resolveForgeTokenEnv(workspacePath)');
-    expect(fnBody).toMatch(/envVars:\s*\{[^}]*\.\.\.forgeTokenEnv[^}]*\}/);
-    expect(fnBody.indexOf('...forgeTokenEnv'), 'forgeTokenEnv must be spread BEFORE provider.envVars')
-      .toBeLessThan(fnBody.indexOf('...provider.envVars'));
+    // `before` is the slot that sits UNDER provider.envVars, so an explicit
+    // provider GH_TOKEN still wins — passing it as `extra` would invert that.
+    expect(fnBody).toMatch(/before:\s*\{[^}]*\.\.\.forgeTokenEnv[^}]*\}/);
   });
 });
 

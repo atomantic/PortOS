@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir, homedir } from 'os';
-import { join, relative } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { resolveSpawnCwd, withSpawnCwdEnv } from './spawnCwd.js';
+import { collectServerSources, readServerSource } from './testHelper.js';
 
 describe('resolveSpawnCwd', () => {
   let dir;
@@ -198,8 +198,7 @@ describe('withSpawnCwdEnv', () => {
 // cwd-passing spawn fails the suite until it is either pinned or explicitly
 // exempted below with a reason.
 describe('every cwd-passing spawn pins PWD', () => {
-  const SERVER_DIR = fileURLToPath(new URL('..', import.meta.url));
-
+  
   // Files whose cwd-passing spawn does NOT need the pin, each with the reason it
   // is safe. Anything not listed here must pin. The common reason is "this spawns
   // a tool that resolves paths from its real cwd, never from PWD" — git, gh,
@@ -240,14 +239,19 @@ describe('every cwd-passing spawn pins PWD', () => {
 
   const SPAWN_CALL_RE = /\b(?:spawn|ptySpawn|spawnImpl|pty\.spawn|bufferedSpawn|execFile|execAsync)\s*\(/g;
 
-  /** Recursively collect non-test .js files under `dir`, as server-relative paths. */
-  const collectSources = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    if (entry.name === 'node_modules' || entry.name.startsWith('.')) return [];
-    const abs = join(dir, entry.name);
-    if (entry.isDirectory()) return collectSources(abs);
-    if (!entry.name.endsWith('.js') || entry.name.endsWith('.test.js')) return [];
-    return [relative(SERVER_DIR, abs)];
-  });
+  /**
+   * Count `buildCliChildEnv({ … cwd … })` calls — the shared AI-CLI env composer
+   * (#3194), which pins PWD internally. Only a call that actually PASSES a cwd
+   * counts: `cwd` is an optional key there, so a bare `buildCliChildEnv({ provider })`
+   * next to a `spawn(cmd, args, { cwd })` would otherwise satisfy this guard while
+   * reintroducing #3193 verbatim. `withSpawnCwdEnv(x, cwd)` can't be called without
+   * one, so requiring the key keeps the two markers equally strong.
+   *
+   * A window rather than a brace match, because an argument object nests
+   * (`before: { … }`) and `[^}]*` would stop at the inner brace.
+   */
+  const countCwdBearingComposerCalls = (src) => [...src.matchAll(/\bbuildCliChildEnv\s*\(/g)]
+    .filter((m) => /\bcwd\s*[:,}]/.test(src.slice(m.index, m.index + 400))).length;
 
   // A spawn is in scope when its options carry a `cwd` — either written inline
   // (`spawn(cmd, args, { cwd, ... })`) or FORWARDED from a caller-supplied
@@ -291,7 +295,7 @@ describe('every cwd-passing spawn pins PWD', () => {
   };
 
   it('discovers the cwd-passing spawn sites (guard is not vacuous)', () => {
-    const found = collectSources(SERVER_DIR).filter((rel) => spawnSitesInScope(readFileSync(join(SERVER_DIR, rel), 'utf8')) > 0);
+    const found = collectServerSources().filter((rel) => spawnSitesInScope(readServerSource(rel)) > 0);
     // If this ever collapses toward zero the scan broke (a rename, a new spawn
     // wrapper) and every assertion below would pass for the wrong reason.
     expect(found.length, 'expected the scan to still find the known spawn sites').toBeGreaterThan(10);
@@ -307,15 +311,15 @@ describe('every cwd-passing spawn pins PWD', () => {
   // A stale entry is worse than no entry: it silently pre-approves whatever
   // cwd-passing spawn is added to that file later.
   it('has no dead EXEMPT / DELEGATES / INLINE_PIN entries', () => {
-    const inScope = new Set(collectSources(SERVER_DIR).filter((rel) => spawnSitesInScope(readFileSync(join(SERVER_DIR, rel), 'utf8')) > 0));
+    const inScope = new Set(collectServerSources().filter((rel) => spawnSitesInScope(readServerSource(rel)) > 0));
     const dead = [...EXEMPT.keys(), ...DELEGATES.keys(), ...INLINE_PIN.keys()].filter((rel) => !inScope.has(rel));
     expect(dead, 'these entries name files the scan no longer finds — delete them').toEqual([]);
   });
 
   it('every cwd-passing spawn either pins PWD or is explicitly exempt', () => {
     const unpinned = [];
-    for (const rel of collectSources(SERVER_DIR)) {
-      const src = readFileSync(join(SERVER_DIR, rel), 'utf8');
+    for (const rel of collectServerSources()) {
+      const src = readServerSource(rel);
       const sites = spawnSitesInScope(src);
       if (sites === 0) continue;
       if (EXEMPT.has(rel)) continue;
@@ -325,11 +329,19 @@ describe('every cwd-passing spawn pins PWD', () => {
       // unpinned cwd-spawn is added to it.
       // Two markers count as a pin: the low-level helper, and buildCliChildEnv —
       // the shared AI-CLI env composer, which calls withSpawnCwdEnv internally
-      // (#3194). Counting the composer here is what lets the five AI-CLI spawn
-      // sites collapse to one call each without going dark to this guard.
+      // (#3194). Counting the composer here is what lets the AI-CLI spawn sites
+      // collapse to one call each without going dark to this guard.
+      //
+      // The composer's marker REQUIRES a `cwd` in the call. `withSpawnCwdEnv(x, cwd)`
+      // cannot be called without one, but `buildCliChildEnv({ … })` takes `cwd` as an
+      // optional key — so a bare `buildCliChildEnv({ provider })` followed by a
+      // `spawn(cmd, args, { cwd })` would otherwise satisfy this guard while
+      // reintroducing #3193 verbatim. Requiring the key keeps the two markers
+      // equally strong. (askService.js legitimately calls it with no cwd — it also
+      // spawns with no cwd, so it is not in scope here at all.)
       const pins = INLINE_PIN.has(rel)
         ? (src.match(/childEnv\.PWD\s*=/g) || []).length
-        : (src.match(/(?:withSpawnCwdEnv|buildCliChildEnv)\(/g) || []).length;
+        : (src.match(/withSpawnCwdEnv\(/g) || []).length + countCwdBearingComposerCalls(src);
       if (pins < sites) unpinned.push(`${rel} (${sites} cwd-passing spawn(s), ${pins} pin(s))`);
     }
     expect(

@@ -266,7 +266,6 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
   // shared daemon.
   const childEnv = buildCliChildEnv({
     provider,
-    model: provider.defaultModel,
     cwd: effectiveCwd,
     guard: true,
   });

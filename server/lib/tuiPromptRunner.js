@@ -178,7 +178,6 @@ ${prompt}`;
   // `guard`: this is a Run Prompt TUI, not an autonomous agent.
   const childEnv = buildCliChildEnv({
     provider,
-    model: provider.defaultModel,
     cwd: workingDir,
     extra: { TERM: 'xterm-256color', COLORTERM: 'truecolor' },
   });

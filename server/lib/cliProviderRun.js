@@ -111,7 +111,6 @@ export function runCliProviderPrompt(args = {}) {
     const childEnv = buildCliChildEnv({
       baseEnv,
       provider: effectiveProvider,
-      model: effectiveProvider.defaultModel,
       cwd: effectiveCwd,
     });
 

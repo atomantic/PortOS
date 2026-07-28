@@ -66,7 +66,7 @@ import {
   isPasteConfirmed,
 } from '../lib/tuiHandshake.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
-import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
+import { composeProviderEnv } from '../lib/cliChildEnv.js';
 import { execFile } from 'child_process';
 
 // Agent-specific timing/lifecycle constants (not shared with the one-shot
@@ -103,9 +103,6 @@ const DONE_POLL_INTERVAL_MS = 2000;
  * to bail out via its `finish` path.
  */
 export function createAgentTuiSession({ agentId, provider, model, tuiConfig, cwd, forgeTokenEnv = {}, onData, onExit, onInitialCommandSent }) {
-  // For OpenCode Ollama providers, build dynamic OPENCODE_CONFIG_CONTENT with
-  // the models map so --model is accepted (the static env var lacked this).
-  const opencodeEnv = buildOpencodeEnvVars(provider, model);
   const sessionId = shellService.createShellSession(null, {
     cwd,
     kind: 'agent-tui',
@@ -122,15 +119,19 @@ export function createAgentTuiSession({ agentId, provider, model, tuiConfig, cwd
     // claude's input-readiness only after this so the readiness probe's own
     // shell activity can't prematurely open the paste gate.
     onInitialCommandSent,
-    // agentGuardEnv() prepends the pm2 shim to the agent session's PATH (and
-    // points it at the real pm2). Spread LAST so it wins over any provider PATH.
-    // Only AI agent sessions get this — the user's own Shell page does not.
-    // opencodeEnv comes after provider.envVars to override the static config.
-    // forgeTokenEnv is threaded in explicitly because buildSafeEnv strips
-    // GH_TOKEN from the inherited env (see resolveForgeTokenEnv); it goes before
-    // provider.envVars so an explicit provider GH_TOKEN override still wins,
-    // matching the direct-CLI and runner spawn paths.
-    env: { ...forgeTokenEnv, ...(provider.envVars || {}), ...opencodeEnv, ...agentGuardEnv() },
+    // A DELTA, not a full env — buildSafeEnv inside createShellSession supplies
+    // the base and shell.js does the PWD pin. composeProviderEnv owns the layer
+    // order (forgeTokenEnv before provider.envVars so an explicit provider
+    // GH_TOKEN still wins; the OpenCode declared-models map after it, overriding
+    // the static config). forgeTokenEnv has to be threaded in explicitly because
+    // buildSafeEnv strips GH_TOKEN from the inherited env (resolveForgeTokenEnv).
+    //
+    // agentGuardEnv() is spread last so the pm2 shim wins over any provider PATH.
+    // It reads PATH from process.env rather than the composed env — correct here
+    // and NOT what buildCliChildEnv's `guard` does, because this is an overlay
+    // whose real base env is assembled downstream. Only AI agent sessions get
+    // the shim; the user's own Shell page does not.
+    env: { ...composeProviderEnv({ before: forgeTokenEnv, provider, model }), ...agentGuardEnv() },
     onData,
     onExit,
   });
