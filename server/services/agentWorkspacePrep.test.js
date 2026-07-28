@@ -92,6 +92,30 @@ describe('prepareAgentWorkspace — workspace validation (#3180)', () => {
     expect(r.reason).toContain('/definitely/not/a/real/repo/path');
   });
 
+  it('blocks when the resolved workspace is a file, not a directory', async () => {
+    const { mkdtempSync, writeFileSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const file = join(mkdtempSync(join(tmpdir(), 'prep-')), 'a-file.txt');
+    writeFileSync(file, 'x');
+    getAppWorkspace.mockResolvedValue(file);
+    const task = { id: 't-file', taskType: 'user', metadata: { app: 'primes' } };
+    const r = await prepareAgentWorkspace({ agentId: 'agent-f', task });
+    expect(r.outcome).toBe('blocked');
+    expect(r.reason).toContain('not a directory');
+  });
+
+  // The repoPath field accepts a literal '~/...' — the CoS path must expand it
+  // the same way the /runs path does, or every task for that app is blocked.
+  it('expands a ~ repoPath instead of blocking it', async () => {
+    const { homedir } = await import('os');
+    getAppWorkspace.mockResolvedValue('~');
+    const task = { id: 't-tilde', taskType: 'user', metadata: { app: 'primes', readOnly: true } };
+    const r = await prepareAgentWorkspace({ agentId: 'agent-t', task });
+    expect(r.outcome).toBe('ready');
+    expect(r.workspacePath).toBe(homedir());
+  });
+
   it('proceeds when the app resolves to a real directory', async () => {
     getAppWorkspace.mockResolvedValue(process.cwd());
     const task = { id: 't-ok', taskType: 'user', metadata: { app: 'primes', readOnly: true } };

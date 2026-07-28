@@ -34,6 +34,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import * as git from './git.js';
 import { detectConflicts } from './taskConflict.js';
 import { createWorktree } from './worktreeManager.js';
+import { resolveSpawnCwd } from '../lib/spawnCwd.js';
 import { getAppWorkspace, getAppDataForTask, createJiraTicketForTask } from './agentPromptBuilder.js';
 
 const ROOT_DIR = PATHS.root;
@@ -67,8 +68,15 @@ export async function prepareAgentWorkspace({ agentId, task }) {
     emitLog('error', `❌ ${reason}`, { taskId: task.id });
     return { outcome: 'blocked', reason };
   }
-  if (!existsSync(workspacePath)) {
-    const reason = `Workspace path does not exist: ${workspacePath} — fix this app's Repository Path in Apps, then re-run this task.`;
+  // Same resolver the /runs spawn paths use, so a `~/Projects/App` repoPath
+  // expands here too and a repoPath pointing at a FILE is rejected up front
+  // rather than flowing into the git operations below with a non-directory cwd.
+  // Reusing it is what keeps the two validation sites from drifting — an
+  // inline existsSync here did both of those wrong.
+  try {
+    workspacePath = resolveSpawnCwd(workspacePath, ROOT_DIR, `Task ${task.id}`);
+  } catch (err) {
+    const reason = `${err.message} (Task blocked before the agent started, so it could not write into the PortOS directory by mistake.)`;
     emitLog('error', `❌ ${reason}`, { taskId: task.id, workspace: workspacePath });
     return { outcome: 'blocked', reason };
   }

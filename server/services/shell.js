@@ -38,21 +38,29 @@ const SAFE_ENV_PREFIXES = [
   'KUBECONFIG', 'LESS', 'PAGER', 'MANPATH', 'INFOPATH', 'ZDOTDIR', 'STARSHIP_'
 ];
 
-// Windows-only additions. The list above is POSIX-shaped: on Windows it drops
-// variables the OS itself needs to create a working process, so a PTY session
-// started from it launches into a crippled shell (no DLL search root, no temp
-// dir, no per-user app data — which is where `claude`/`codex` keep their
-// credentials and config). Only names NOT already covered by a prefix above are
-// listed: PATHEXT/USERPROFILE/HOMEDRIVE/HOMEPATH already match PATH/USER/HOME.
-const SAFE_ENV_PREFIXES_WIN32 = [
+// Windows-only additions, matched as EXACT names rather than prefixes. The list
+// above is POSIX-shaped: on Windows it drops variables the OS itself needs to
+// create a working process, so a PTY session started from it launches into a
+// crippled shell (no DLL search root, no temp dir, no per-user app data — which
+// is where `claude`/`codex` keep their credentials and config).
+//
+// Exact-match is load-bearing, not a style choice: these are individual OS
+// variables, not grouped families like `NPM_`/`XDG_`, so prefix-matching them
+// would admit anything merely STARTING with one — `APPDATA_TOKEN`,
+// `TEMP_SECRET`, and (worst, since it is two characters) `OS_API_KEY` would all
+// be handed to an attachable agent shell by a filter whose entire job is
+// withholding credentials.
+//
+// PATHEXT / USERPROFILE / HOMEDRIVE / HOMEPATH are deliberately absent: the
+// POSIX PATH / USER / HOME prefixes already cover them.
+const SAFE_ENV_NAMES_WIN32 = new Set([
   'SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'COMSPEC',
-  'APPDATA', 'LOCALAPPDATA', 'PROGRAMFILES', 'PROGRAMDATA', 'PROGRAMW6432',
-  'COMMONPROGRAMFILES', 'TEMP', 'TMP',
+  'APPDATA', 'LOCALAPPDATA',
+  'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PROGRAMW6432',
+  'PROGRAMDATA', 'COMMONPROGRAMFILES', 'COMMONPROGRAMFILES(X86)', 'COMMONPROGRAMW6432',
+  'TEMP', 'TMP',
   'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'OS', 'PSMODULEPATH'
-];
-
-// Precomputed so the merge doesn't run per session.
-const SAFE_ENV_PREFIXES_ALL = [...SAFE_ENV_PREFIXES, ...SAFE_ENV_PREFIXES_WIN32];
+]);
 
 /**
  * Filter `process.env` down to the allowlist above.
@@ -78,13 +86,14 @@ const SAFE_ENV_PREFIXES_ALL = [...SAFE_ENV_PREFIXES, ...SAFE_ENV_PREFIXES_WIN32]
  */
 export function buildSafeEnv(env = process.env, platform = process.platform) {
   const isWin32 = platform === 'win32';
-  const prefixes = isWin32 ? SAFE_ENV_PREFIXES_ALL : SAFE_ENV_PREFIXES;
   const safeEnv = {};
   for (const [key, value] of Object.entries(env)) {
+    // Windows env names are case-insensitive, so both the prefix test and the
+    // exact-name lookup compare against the upper-cased key there.
     const candidate = isWin32 ? key.toUpperCase() : key;
-    if (prefixes.some(prefix => candidate.startsWith(prefix))) {
-      safeEnv[key] = value;
-    }
+    const allowed = SAFE_ENV_PREFIXES.some(prefix => candidate.startsWith(prefix))
+      || (isWin32 && SAFE_ENV_NAMES_WIN32.has(candidate));
+    if (allowed) safeEnv[key] = value;
   }
   return safeEnv;
 }

@@ -649,3 +649,38 @@ describe('buildSafeEnv — POSIX case sensitivity', () => {
     expect(safe).not.toHaveProperty('npm_config_mysecret');
   });
 });
+
+describe('buildSafeEnv — Windows names are exact, not prefixes', () => {
+  // The Windows additions are individual OS variables, not grouped families
+  // like NPM_/XDG_. Prefix-matching them would hand anything merely STARTING
+  // with one to an attachable agent shell — and `OS` is two characters, so it
+  // would admit OS_API_KEY from a filter whose whole job is withholding
+  // credentials.
+  it('does not admit token-like lookalikes of the Windows names', () => {
+    const safe = shell.buildSafeEnv({
+      Path: 'C:\\Windows',
+      APPDATA: 'C:\\Users\\Example\\AppData\\Roaming',
+      APPDATA_TOKEN: 'leak-me',
+      TEMP: 'C:\\Temp',
+      TEMP_SECRET: 'leak-me',
+      OS: 'Windows_NT',
+      OS_API_KEY: 'leak-me',
+    }, 'win32');
+    expect(safe).toHaveProperty('Path');
+    expect(safe).toHaveProperty('APPDATA');
+    expect(safe).toHaveProperty('TEMP');
+    expect(safe).toHaveProperty('OS');
+    expect(safe).not.toHaveProperty('APPDATA_TOKEN');
+    expect(safe).not.toHaveProperty('TEMP_SECRET');
+    expect(safe).not.toHaveProperty('OS_API_KEY');
+  });
+
+  it('keeps the parenthesized ProgramFiles variants that exact-matching could drop', () => {
+    const safe = shell.buildSafeEnv({
+      'ProgramFiles(x86)': 'C:\\Program Files (x86)',
+      ProgramW6432: 'C:\\Program Files',
+    }, 'win32');
+    expect(safe).toHaveProperty('ProgramFiles(x86)');
+    expect(safe).toHaveProperty('ProgramW6432');
+  });
+});
