@@ -647,10 +647,10 @@ export default function LinksTab({ onRefresh }) {
 
                 {/* Tags */}
                 {link.tags?.length > 0 && (
-                  <div className="flex items-center gap-1">
+                  <div className="flex min-w-0 flex-wrap items-center gap-1">
                     <Tag size={12} className="text-gray-500" />
                     {link.tags.map((tag, i) => (
-                      <span key={i} className="px-1.5 py-0.5 text-xs bg-port-border/50 text-gray-400 rounded">
+                      <span key={i} className="max-w-full break-all px-1.5 py-0.5 text-xs bg-port-border/50 text-gray-400 rounded">
                         {tag}
                       </span>
                     ))}
