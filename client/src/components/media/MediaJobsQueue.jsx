@@ -55,6 +55,12 @@ function modelLabel(params) {
     const ratio = (typeof params.aspectRatio === 'string' ? params.aspectRatio.trim() : '');
     return ratio ? `grok · ${ratio}` : 'grok';
   }
+  if (params.mode === IMAGE_GEN_MODE.AGY) {
+    const model = (typeof params.model === 'string' ? params.model.trim() : '');
+    return model && model !== 'antigravity-configured-default'
+      ? `agy / ${model}`
+      : 'agy / configured default';
+  }
   const id = (params.modelId || '').trim();
   if (!id) return 'local';
   const tail = id.includes('/') ? id.slice(id.lastIndexOf('/') + 1) : id;

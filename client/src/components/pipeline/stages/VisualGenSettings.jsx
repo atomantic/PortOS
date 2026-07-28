@@ -88,12 +88,15 @@ const loadLookups = () => {
 const resolveAutoLabel = (s) => {
   const codexEnabled = s?.imageGen?.codex?.enabled === true;
   const grokEnabled = s?.imageGen?.grok?.enabled === true;
+  const agyEnabled = s?.imageGen?.agy?.enabled === true;
   const pinned = s?.imageGen?.mode;
   if (pinned === IMAGE_GEN_MODE.CODEX && codexEnabled) return 'Codex';
   if (pinned === IMAGE_GEN_MODE.GROK && grokEnabled) return 'Grok';
+  if (pinned === IMAGE_GEN_MODE.AGY && agyEnabled) return 'Agy';
   if (pinned === IMAGE_GEN_MODE.LOCAL) return 'Local diffusion';
   if (codexEnabled) return 'Codex';
   if (grokEnabled) return 'Grok';
+  if (agyEnabled) return 'Agy';
   if (s?.imageGen?.local?.pythonPath) return 'Local diffusion';
   return 'Local diffusion (not configured)';
 };

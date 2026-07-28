@@ -16,7 +16,7 @@ export const MEDIA_TOOLS = [
   {
     name: 'image_generate',
     description:
-      'Generate an image from a text prompt and save it to the user\'s gallery. Defaults to the user\'s saved Image Gen backend (Local mflux, External SD API, or Codex CLI). Pass `provider` to override per-call: "local" for fast Flux drafts, "external" for an A1111-compatible server, "codex" for the Codex CLI built-in image_gen tool, or "grok" for the Grok Build CLI built-in image_gen tool (both subject to the user enabling them in Settings). Returns the saved file path.',
+      'Generate an image from a text prompt and save it to the user\'s gallery. Defaults to the user\'s saved Image Gen backend. Pass `provider` to override per-call: "local", "external", "codex", "grok", or text-to-image-only "agy". Cloud CLI providers must be enabled in Settings. Returns the saved file path.',
     parameters: {
       type: 'object',
       properties: {
@@ -59,7 +59,9 @@ export const MEDIA_TOOLS = [
       if (imageGen.CLOUD_IMAGE_GEN_MODES.includes(requestedMode)) {
         const s = await getSettings();
         if (!s?.imageGen?.[requestedMode]?.enabled) {
-          const label = requestedMode === imageGen.IMAGE_GEN_MODE.CODEX ? 'Codex' : 'Grok';
+          const label = requestedMode === imageGen.IMAGE_GEN_MODE.CODEX
+            ? 'Codex'
+            : requestedMode === imageGen.IMAGE_GEN_MODE.GROK ? 'Grok' : 'Agy';
           return { ok: false, summary: `${label} Imagegen is disabled — enable it in Settings → Image Gen first.` };
         }
       }

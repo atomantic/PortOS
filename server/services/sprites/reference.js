@@ -32,10 +32,11 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import {
-  IMAGE_GEN_MODE, resolveQueueImageMode,
+  IMAGE_GEN_MODE, resolveQueueImageMode, resolveQueueImageEditMode,
   CODEX_IMAGEGEN_DEFAULT_MODEL, LOCAL_IMAGEGEN_DEFAULT_MODEL,
 } from '../imageGen/modes.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
+import { resolveCloudProviderConfig } from '../imageGen/cloudProviderConfig.js';
 import { getSettings } from '../settings.js';
 import { getRecord, updateRecord, listRecords, createCharacter } from './records.js';
 import { spriteDir, resolveSpriteAssetPath, listSpriteAssets } from './paths.js';
@@ -385,7 +386,7 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
   // fork subsequent renders onto a different background than the frozen set.
   const genKey = manifest.chromaKey || record.chromaKey || DEFAULT_CHROMA_KEY;
   const settings = await getSettings();
-  const mode = resolveQueueImageMode(body.mode, settings);
+  let mode = resolveQueueImageMode(body.mode, settings);
 
   let prompt;
   let initImagePath;
@@ -532,12 +533,21 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
     // pipeline i2i renders on that platform. Cloud modes are unaffected.
   }
 
+  if (mode === IMAGE_GEN_MODE.AGY && initImagePath) {
+    mode = resolveQueueImageEditMode(undefined, settings);
+  }
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, mode);
   const codexModel = body.model || settings.imageGen?.codex?.model || CODEX_IMAGEGEN_DEFAULT_MODEL;
   // The model the provider will ACTUALLY run, for candidate provenance —
   // grok picks its model internally, so its sidecars record null.
+  const cloud = resolveCloudProviderConfig(settings, mode);
+  const cloudJobParams = mode === IMAGE_GEN_MODE.CODEX
+    ? { ...cloud?.jobParams, model: codexModel, effort: body.effort || settings.imageGen?.codex?.effort }
+    : cloud?.jobParams;
   const effectiveModel = mode === IMAGE_GEN_MODE.CODEX
     ? codexModel
+    : mode === IMAGE_GEN_MODE.AGY
+      ? cloud.modelId
     : mode === IMAGE_GEN_MODE.LOCAL
       ? (body.model || settings.imageGen?.local?.modelId || LOCAL_IMAGEGEN_DEFAULT_MODEL)
       : null;
@@ -558,10 +568,8 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
       ...(designReferencePath ? { designReferencePath } : {}),
     },
   };
-  const params = mode === IMAGE_GEN_MODE.CODEX
-    ? { mode, codexPath: settings.imageGen?.codex?.codexPath, model: codexModel, effort: body.effort || settings.imageGen?.codex?.effort, ...baseParams }
-    : mode === IMAGE_GEN_MODE.GROK
-      ? { mode, grokPath: settings.imageGen?.grok?.grokPath, aspectRatio: settings.imageGen?.grok?.aspectRatio, ...baseParams }
+  const params = cloud
+    ? { ...cloudJobParams, ...baseParams }
       // Thread the resolved model (request override → saved local model) —
       // the queue dispatches straight to local.generateImage, which does NOT
       // read settings and would otherwise fall back to its own default.

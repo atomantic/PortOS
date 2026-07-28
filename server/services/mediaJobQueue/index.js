@@ -47,12 +47,12 @@ import { audioGenEvents } from '../audioGen/events.js';
 import { getSettings } from '../settings.js';
 import { IMAGE_GEN_MODE, CLOUD_IMAGE_GEN_MODES } from '../imageGen/modes.js';
 
-// Cloud-CLI jobs (codex/grok images, grok videos) share one parallel lane —
+// Cloud-CLI jobs (Codex/Grok/Agy images, Grok videos) share one parallel lane —
 // each render
 // shells out to its own external child spending remote quota, so they don't
 // serialize on the MLX runtime the way GPU jobs do. The lane's slot count is
 // `codexParallelLimit` (settings key `imageGen.codex.parallelLimit`, kept
-// under the codex name for backward compat — it now bounds codex + grok
+// under the codex name for backward compat — it now bounds every cloud CLI
 // renders combined).
 const isCloudImageJob = (j) =>
   (j.kind === 'image' && CLOUD_IMAGE_GEN_MODES.includes(j.params?.mode))
@@ -138,6 +138,7 @@ function getGenModuleForJob(job) {
   if (job.kind === 'audio') return import('../audioGen/local.js');
   if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.CODEX) return import('../imageGen/codex.js');
   if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.GROK) return import('../imageGen/grok.js');
+  if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.AGY) return import('../imageGen/agy.js');
   if (job.kind === 'image') return import('../imageGen/local.js');
   return Promise.resolve(null);
 }
@@ -522,14 +523,14 @@ export function removeArchivedJob(jobId) {
   return true;
 }
 
-// "Run now" bypass — start a queued cloud-CLI (codex/grok) job immediately
+// "Run now" bypass — start a queued cloud-CLI image job immediately
 // even if the lane is at its limit. GPU jobs are rejected (single MLX runtime
 // would OOM). The rejection code stays 'NOT_CODEX' for client back-compat.
 export function runJobNow(jobId) {
   const job = queue.find((j) => j.id === jobId);
   if (!job) return { ok: false, code: 'NOT_FOUND', error: 'Job not found in queue' };
   if (!isCloudImageJob(job)) {
-    return { ok: false, code: 'NOT_CODEX', error: 'Only cloud-CLI (Codex/Grok) image jobs can be run-now; GPU jobs serialize on the MLX runtime' };
+    return { ok: false, code: 'NOT_CODEX', error: 'Only cloud-CLI image jobs can be run now; GPU jobs serialize on the MLX runtime' };
   }
   startLaneJob(job, { isCloud: true });
   return { ok: true, status: 'running' };

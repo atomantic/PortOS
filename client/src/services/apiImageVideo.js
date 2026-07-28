@@ -4,6 +4,7 @@ import { request, API_BASE, maybeRedirectToLogin } from './apiCore.js';
 // generateImage / getImageGenStatus / generateAvatar live in apiSystem.js for
 // backward compatibility with existing call sites.
 export const listImageModels = (options) => request('/image-gen/models', options);
+export const listAgyImageModels = (options) => request('/image-gen/agy/models', options);
 // Per-model download status: `[{ id, repo, cached, sizeBytes }]`. Drives the
 // inline Available/Download badge on the image gen form.
 export const getImageModelStatuses = () => request('/image-gen/models/status', { silent: true });

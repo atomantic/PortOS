@@ -926,6 +926,21 @@ export const imageGenGrokSettingsSchema = z.object({
   denoise: z.boolean().optional(),
 });
 
+const agyImageModelSchema = z.preprocess(
+  (v) => (v === '' ? undefined : v),
+  z.string().trim().max(200)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/, 'model must be a valid Agy model id')
+    .optional(),
+);
+
+export const imageGenAgySettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  agyPath: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(500).optional()),
+  model: agyImageModelSchema,
+  cleanC2PA: z.boolean().optional(),
+  denoise: z.boolean().optional(),
+});
+
 // Provider-agnostic embeddings settings. `provider: 'none'` is the default and
 // makes embedText() a no-op — rows persist without an embedding and a future
 // admin "Re-embed missing" action backfills. Model is optional so the user can

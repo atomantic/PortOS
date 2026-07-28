@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { enqueueJob } from '../../mediaJobQueue/index.js';
 import { ASPECT_PRESETS, QUALITY_PRESETS, presetToRenderParams } from '../../../lib/creativeDirectorPresets.js';
 import { getSettings } from '../../settings.js';
-import { IMAGE_GEN_MODE, resolveQueueImageMode } from '../../imageGen/modes.js';
+import { IMAGE_GEN_MODE, resolveQueueImageMode, resolveQueueImageEditMode } from '../../imageGen/modes.js';
 import { resolveCloudProviderConfig } from '../../imageGen/cloudProviderConfig.js';
 import { VIDEO_GEN_MODE, VIDEO_GEN_MODES, resolveVideoMode } from '../../videoGen/modes.js';
 import { nearestGrokDuration } from '../../../lib/grokVideoClip.js';
@@ -172,7 +172,10 @@ async function enforceRenderBackendPin(kind, params, project) {
     };
   }
 
-  const mode = resolveQueueImageMode(pin.mode, settings);
+  const wantsEdit = !!params?.initImagePath || params?.referenceImagePaths?.length > 0;
+  const mode = wantsEdit
+    ? resolveQueueImageEditMode(pin.mode, settings)
+    : resolveQueueImageMode(pin.mode, settings);
   const cloud = resolveCloudProviderConfig(settings, mode);
   if (cloud) return { ...params, ...cloud.jobParams };
   return {

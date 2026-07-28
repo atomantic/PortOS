@@ -10,7 +10,7 @@ import {
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -215,6 +215,9 @@ router.put('/', asyncHandler(async (req, res) => {
   // polymorphic; only the grok sub-slice has a schema here.
   if (req.body?.imageGen?.grok !== undefined) {
     validateRequest(imageGenGrokSettingsSchema.partial(), req.body.imageGen.grok);
+  }
+  if (req.body?.imageGen?.agy !== undefined) {
+    validateRequest(imageGenAgySettingsSchema.partial(), req.body.imageGen.agy);
   }
   // Install-level Layered Intelligence settings (#2515) — validate the slice when
   // present so a malformed `trustShellSources` can't persist and silently unlock

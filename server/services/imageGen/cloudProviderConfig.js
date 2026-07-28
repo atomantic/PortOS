@@ -17,6 +17,7 @@
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
+import { ANTIGRAVITY_CONFIGURED_DEFAULT } from '../../lib/antigravity.js';
 import {
   CLOUD_IMAGE_GEN_MODES,
   CODEX_IMAGEGEN_DEFAULT_MODEL,
@@ -47,6 +48,12 @@ export const CLOUD_PROVIDER_SPECS = Object.freeze({
     // Grok's image tools run on xAI's fixed image backend — no model knob.
     modelId: () => 'grok-imagegen',
     params: (g) => ({ grokPath: g.grokPath, aspectRatio: g.aspectRatio }),
+  }),
+  [IMAGE_GEN_MODE.AGY]: Object.freeze({
+    label: 'Agy Imagegen',
+    errorCode: 'AGY_IMAGEGEN_DISABLED',
+    modelId: (a) => a.model || ANTIGRAVITY_CONFIGURED_DEFAULT,
+    params: (a) => ({ agyPath: a.agyPath, model: a.model || ANTIGRAVITY_CONFIGURED_DEFAULT }),
   }),
 });
 

@@ -30,12 +30,13 @@ export function readPipelineImageSettings(settings) {
   const stored = settings?.pipeline?.imageGen || {};
   const codexEnabled = settings?.imageGen?.codex?.enabled === true;
   const grokEnabled = settings?.imageGen?.grok?.enabled === true;
+  const agyEnabled = settings?.imageGen?.agy?.enabled === true;
   // Prefer an enabled cloud backend (codex first, then grok — the same order
   // as the server's visual-stage resolver) so a cloud-only install doesn't
   // default pipeline renders to an unconfigured local diffusion.
   const defaultMode = codexEnabled ? IMAGE_GEN_MODE.CODEX
     : grokEnabled ? IMAGE_GEN_MODE.GROK
-      : PIPELINE_IMAGE_DEFAULTS.mode;
+      : agyEnabled ? IMAGE_GEN_MODE.AGY : PIPELINE_IMAGE_DEFAULTS.mode;
   return {
     mode: stored.mode || defaultMode,
     modelId: stored.modelId || PIPELINE_IMAGE_DEFAULTS.modelId,

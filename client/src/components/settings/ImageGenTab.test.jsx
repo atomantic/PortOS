@@ -12,6 +12,7 @@ vi.mock('../../services/api', () => ({
   getToolsList: vi.fn(),
   saveHfToken: vi.fn(),
   clearHfToken: vi.fn(),
+  listAgyImageModels: vi.fn(),
 }));
 vi.mock('../../hooks/useHfTokenStatus', () => ({
   useHfTokenStatus: vi.fn(),
@@ -31,7 +32,7 @@ vi.mock('../../hooks/useMediaJobSse', () => ({
 }));
 
 import {
-  getSettings, getToolsList, updateSettings,
+  getSettings, getToolsList, updateSettings, listAgyImageModels,
 } from '../../services/api';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
 import { ImageGenTab } from './ImageGenTab';
@@ -60,13 +61,14 @@ beforeEach(() => {
   getToolsList.mockResolvedValue([]);
   useHfTokenStatus.mockReturnValue({ present: false, source: 'none', refresh: vi.fn() });
   updateSettings.mockResolvedValue({});
+  listAgyImageModels.mockResolvedValue({ models: ['gemini-image', 'custom/image-v2'], error: null });
 });
 
 describe('ImageGenTab grouped tabs', () => {
-  it('renders a pills sub-nav with all eight media-settings groups', async () => {
+  it('renders a pills sub-nav with all media-settings groups', async () => {
     await renderTab();
     const tabs = screen.getAllByRole('tab').map((t) => t.textContent);
-    for (const label of ['Backend', 'External', 'Local', 'Codex CLI', 'Grok CLI', 'Tokens', 'Expose', 'Test']) {
+    for (const label of ['Backend', 'External', 'Local', 'Codex CLI', 'Grok CLI', 'Agy CLI', 'Tokens', 'Expose', 'Test']) {
       expect(tabs.some((t) => t.includes(label))).toBe(true);
     }
   });
@@ -147,7 +149,36 @@ describe('ImageGenTab grouped tabs', () => {
     expect(patch.imageGen.mode).toBe('external');
     expect(patch.imageGen).toHaveProperty('codex');
     expect(patch.imageGen).toHaveProperty('grok');
+    expect(patch.imageGen).toHaveProperty('agy');
     expect(patch.imageGen).toHaveProperty('expose');
+  });
+});
+
+describe('ImageGenTab — Agy CLI section', () => {
+  it('loads installed models, allows a custom model id, and saves the Agy slice', async () => {
+    getSettings.mockResolvedValue({
+      imageGen: {
+        mode: 'agy',
+        agy: { enabled: true, agyPath: '/opt/agy', model: 'gemini-image' },
+      },
+    });
+    await renderTab(['/media/image?mediaTab=agy']);
+    await waitFor(() => expect(listAgyImageModels).toHaveBeenCalledWith({ silent: true }));
+    const modelInput = screen.getByLabelText('Image model');
+    expect(modelInput.value).toBe('gemini-image');
+    fireEvent.change(modelInput, { target: { value: 'custom/image-v3' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+    expect(updateSettings.mock.calls[0][0].imageGen.agy).toEqual(expect.objectContaining({
+      enabled: true,
+      agyPath: '/opt/agy',
+      model: 'custom/image-v3',
+    }));
+  });
+
+  it('states that Agy is text-to-image only', async () => {
+    await renderTab(['/media/image?mediaTab=agy']);
+    expect(screen.getByText(/Image editing is not supported/i)).toBeTruthy();
   });
 });
 

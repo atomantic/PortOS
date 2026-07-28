@@ -220,8 +220,10 @@ export default function ImageGen() {
   // so the form doesn't flicker between defaults.
   const effectiveMode = selectedMode || status?.mode || IMAGE_GEN_MODE.EXTERNAL;
   const isLocalMode = effectiveMode === IMAGE_GEN_MODE.LOCAL;
-  const isGrokMode = effectiveMode === IMAGE_GEN_MODE.GROK;
   const isCloudMode = isCloudCliMode(effectiveMode);
+  const cloudModeLabel = effectiveMode === IMAGE_GEN_MODE.GROK
+    ? 'Grok'
+    : effectiveMode === IMAGE_GEN_MODE.AGY ? 'Agy' : 'Codex';
   const isAsyncMode = isLocalMode || isCloudMode;
   // Whether the active backend supports image-to-image (init image). Distinct
   // concept from isAsyncMode (queued vs sync) even though they coincide today.
@@ -291,9 +293,10 @@ export default function ImageGen() {
         local: resolveCleanersFromConfig(s?.imageGen?.local, IMAGE_GEN_MODE.LOCAL),
         codex: resolveCleanersFromConfig(s?.imageGen?.codex, IMAGE_GEN_MODE.CODEX),
         grok: resolveCleanersFromConfig(s?.imageGen?.grok, IMAGE_GEN_MODE.GROK),
+        agy: resolveCleanersFromConfig(s?.imageGen?.agy, IMAGE_GEN_MODE.AGY),
       };
-      const c2 = { external: perMode.external.cleanC2PA, local: perMode.local.cleanC2PA, codex: perMode.codex.cleanC2PA, grok: perMode.grok.cleanC2PA };
-      const dn = { external: perMode.external.denoise, local: perMode.local.denoise, codex: perMode.codex.denoise, grok: perMode.grok.denoise };
+      const c2 = { external: perMode.external.cleanC2PA, local: perMode.local.cleanC2PA, codex: perMode.codex.cleanC2PA, grok: perMode.grok.cleanC2PA, agy: perMode.agy.cleanC2PA };
+      const dn = { external: perMode.external.denoise, local: perMode.local.denoise, codex: perMode.codex.denoise, grok: perMode.grok.denoise, agy: perMode.agy.denoise };
       const saved = s?.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
       // If the user just disabled the currently-selected backend, fall
       // through to the first viable one — a just-toggled provider should
@@ -713,7 +716,7 @@ export default function ImageGen() {
       prompt: composed.prompt,
       negativePrompt: composed.negativePrompt || undefined,
       width: w, height: h,
-      mode: isGrokMode ? IMAGE_GEN_MODE.GROK : IMAGE_GEN_MODE.CODEX,
+      mode: effectiveMode,
       cleanC2PA, denoise,
     } : {
       prompt: composed.prompt,
@@ -1059,7 +1062,7 @@ export default function ImageGen() {
                 : 'border-port-error/40 bg-port-error/10 text-port-error'
             }`}>
               {status.connected ? (
-                <><span className="w-2 h-2 rounded-full bg-port-success" /> {status.model || (status.mode === IMAGE_GEN_MODE.LOCAL ? 'mflux/local' : status.mode === IMAGE_GEN_MODE.CODEX ? 'codex CLI' : status.mode === IMAGE_GEN_MODE.GROK ? 'grok CLI' : 'external SD API')}</>
+                <><span className="w-2 h-2 rounded-full bg-port-success" /> {status.model || (status.mode === IMAGE_GEN_MODE.LOCAL ? 'mflux/local' : status.mode === IMAGE_GEN_MODE.CODEX ? 'codex CLI' : status.mode === IMAGE_GEN_MODE.GROK ? 'grok CLI' : status.mode === IMAGE_GEN_MODE.AGY ? 'agy CLI' : 'external SD API')}</>
               ) : (
                 <>
                   <AlertTriangle className="w-3 h-3" />
@@ -1227,7 +1230,7 @@ export default function ImageGen() {
             <button
               type="submit"
               disabled={notConnected || editImageMissing || cloudNeedsPrompt}
-              title={editImageMissing ? 'This image-edit model needs a source image — upload one below first' : cloudNeedsPrompt ? `${isGrokMode ? 'Grok' : 'Codex'} text-to-image needs a prompt — add one, or attach a source image to edit` : undefined}
+              title={editImageMissing ? 'This image-edit model needs a source image — upload one below first' : cloudNeedsPrompt ? `${cloudModeLabel} text-to-image needs a prompt` : undefined}
               className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
             >
               <Sparkles className="w-4 h-4" /> {generating ? 'Queue' : 'Generate'}
@@ -1237,7 +1240,7 @@ export default function ImageGen() {
               <span className="text-xs text-port-warning">Upload a source image to use this edit model</span>
             )}
             {cloudNeedsPrompt && (
-              <span className="text-xs text-port-warning">Codex needs a prompt, or attach a source image to edit</span>
+              <span className="text-xs text-port-warning">{cloudModeLabel} text-to-image needs a prompt</span>
             )}
             {isAsyncMode && (
               <label className="flex items-center gap-1.5 text-xs text-gray-400" title="Batch size: number of renders to queue per submit">

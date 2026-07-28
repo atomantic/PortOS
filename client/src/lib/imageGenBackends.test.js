@@ -8,11 +8,12 @@ import {
 } from './imageGenBackends';
 
 describe('I2I_CAPABLE_MODES / isI2iCapableMode', () => {
-  it('treats local, codex, and grok as i2i-capable, external as not', () => {
+  it('treats local, codex, and grok as i2i-capable, but not Agy or external', () => {
     expect(I2I_CAPABLE_MODES).toEqual([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK]);
     expect(isI2iCapableMode(IMAGE_GEN_MODE.LOCAL)).toBe(true);
     expect(isI2iCapableMode(IMAGE_GEN_MODE.CODEX)).toBe(true);
     expect(isI2iCapableMode(IMAGE_GEN_MODE.GROK)).toBe(true);
+    expect(isI2iCapableMode(IMAGE_GEN_MODE.AGY)).toBe(false);
     expect(isI2iCapableMode(IMAGE_GEN_MODE.EXTERNAL)).toBe(false);
     expect(isI2iCapableMode(undefined)).toBe(false);
   });
@@ -42,13 +43,14 @@ describe('deriveAvailableBackends', () => {
       imageGen: {
         local: { pythonPath: '/usr/bin/python3' },
         codex: { enabled: true },
+        agy: { enabled: true },
         external: { sdapiUrl: 'http://localhost:7860' },
       },
     };
     expect(deriveAvailableBackends(settings).map((b) => b.id))
-      .toEqual([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.EXTERNAL]);
+      .toEqual([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.AGY, IMAGE_GEN_MODE.EXTERNAL]);
     expect(deriveAvailableBackends(settings, { excludeExternal: true }).map((b) => b.id))
-      .toEqual([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX]);
+      .toEqual([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.AGY]);
     expect(deriveAvailableBackends(undefined)).toEqual([]);
   });
 });

@@ -125,3 +125,35 @@ describe('Settings routes — imageGen.grok slice (#2859)', () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe('Settings routes — imageGen.agy slice', () => {
+  beforeEach(() => {
+    store = {};
+    vi.clearAllMocks();
+  });
+
+  it('accepts a valid Agy slice and persists the selected model', async () => {
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ imageGen: { agy: { enabled: true, agyPath: '/usr/local/bin/agy', model: 'gemini/image-v2' } } });
+    expect(res.status).toBe(200);
+    expect(res.body.imageGen.agy).toEqual(expect.objectContaining({
+      enabled: true,
+      model: 'gemini/image-v2',
+    }));
+  });
+
+  it('accepts empty-string UI sentinels for path and model', async () => {
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ imageGen: { agy: { enabled: false, agyPath: '', model: '' } } });
+    expect(res.status).toBe(200);
+  });
+
+  it('rejects a model id containing shell syntax', async () => {
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ imageGen: { agy: { model: 'gemini; rm -rf /' } } });
+    expect(res.status).toBe(400);
+  });
+});

@@ -57,13 +57,14 @@ export default function ImageGenSettingsForm({
   const merge = (patch) => onChange?.({ ...cfg, ...patch });
   const isCodex = cfg.mode === IMAGE_GEN_MODE.CODEX;
   const isGrok = cfg.mode === IMAGE_GEN_MODE.GROK;
+  const isAgy = cfg.mode === IMAGE_GEN_MODE.AGY;
   const isLocal = cfg.mode === IMAGE_GEN_MODE.LOCAL;
   const labelCls = 'block text-xs font-medium text-gray-400 mb-1';
   const textareaCls = 'w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 resize-y';
 
   const noBackend = availableBackends.length === 0 ? (
     <div className="text-[11px] text-port-warning bg-port-warning/10 border border-port-warning/40 rounded px-2 py-1.5">
-      No image gen backend configured. Open Settings → Image Gen to enable Local mflux or Codex <code className="text-gray-400">$imagegen</code>.
+      No image gen backend configured. Open Settings → Image Gen to enable a local, external, or cloud CLI backend.
     </div>
   ) : null;
 
@@ -86,6 +87,10 @@ export default function ImageGenSettingsForm({
       ) : isGrok ? (
         <p className="text-[10px] text-gray-500 mt-1">
           Grok's <code className="text-gray-400">image_gen</code> picks model, steps, and seed internally. Resolution maps to the nearest supported aspect ratio; style fields apply.
+        </p>
+      ) : isAgy ? (
+        <p className="text-[10px] text-gray-500 mt-1">
+          Agy uses the model selected in Settings and supports text-to-image only. Resolution and style fields apply.
         </p>
       ) : null}
     </div>

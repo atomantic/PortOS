@@ -20,7 +20,7 @@ import { isLoopbackHost } from '../../lib/loopbackHost.js';
 import {
   getSettings, updateSettings, getImageGenStatus, generateImage,
   registerTool, updateTool, getToolsList,
-  saveHfToken, clearHfToken,
+  saveHfToken, clearHfToken, listAgyImageModels,
 } from '../../services/api';
 import { isCloudCliMode, IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_EFFORT, GROK_ASPECT_RATIOS } from '../../lib/imageGenBackends';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
@@ -31,6 +31,7 @@ import { CODEX_EFFORT_LEVELS } from '../../utils/providers';
 const SDAPI_TOOL_ID = 'sdapi';
 const CODEX_TOOL_ID = 'codex-imagegen';
 const GROK_TOOL_ID = 'grok-imagegen';
+const AGY_TOOL_ID = 'agy-imagegen';
 // Mirror of server/services/imageGen/modes.js — shown as placeholder/default
 // hints so the user sees what a blank Model / Effort field will actually use.
 // The server owns the real default; these are display-only. The effort default
@@ -59,6 +60,7 @@ const MEDIA_TABS = [
   { id: 'local', label: 'Local', icon: Cpu },
   { id: 'codex', label: 'Codex CLI', icon: Terminal },
   { id: 'grok', label: 'Grok CLI', icon: Sparkles },
+  { id: 'agy', label: 'Agy CLI', icon: Terminal },
   { id: 'tokens', label: 'Tokens', icon: Key },
   { id: 'expose', label: 'Expose', icon: Globe },
   { id: 'test', label: 'Test', icon: Sparkles },
@@ -106,6 +108,12 @@ export function ImageGenTab() {
   const [grokPath, setGrokPath] = useState('');
   // Empty = let the caller's width/height (or the tool default) decide.
   const [grokAspectRatio, setGrokAspectRatio] = useState('');
+  const [agyEnabled, setAgyEnabled] = useState(false);
+  const [agyPath, setAgyPath] = useState('');
+  const [agyModel, setAgyModel] = useState('');
+  const [agyModels, setAgyModels] = useState([]);
+  const [agyModelsError, setAgyModelsError] = useState(null);
+  const [agyModelsLoading, setAgyModelsLoading] = useState(false);
   // Per-provider cleaner toggles. Both run after the PNG lands and before
   // the SSE complete event so subscribers see the cleaned bytes. SynthID
   // (the gpt-image / Imagen / Gemini pixel-level watermark) is unaffected
@@ -115,8 +123,8 @@ export function ImageGenTab() {
   //     provenance chunk. Lossless — pixels untouched.
   //   - denoise   (default OFF): median(3) + sharpen pass for AI-artifact
   //     reduction. LOSSY: blurs annotation text and small details.
-  const [cleanC2PAByMode, setCleanC2PAByMode] = useState({ external: true, local: true, codex: true, grok: false });
-  const [denoiseByMode, setDenoiseByMode] = useState({ external: false, local: false, codex: false, grok: false });
+  const [cleanC2PAByMode, setCleanC2PAByMode] = useState({ external: true, local: true, codex: true, grok: false, agy: false });
+  const [denoiseByMode, setDenoiseByMode] = useState({ external: false, local: false, codex: false, grok: false, agy: false });
   const setCleanC2PAFor = (m) => (v) => setCleanC2PAByMode((p) => ({ ...p, [m]: v }));
   const setDenoiseFor = (m) => (v) => setDenoiseByMode((p) => ({ ...p, [m]: v }));
   // Raw string held while the user is typing in the parallel-limit input.
@@ -134,14 +142,18 @@ export function ImageGenTab() {
   const codexParallelId = useId();
   const grokPathId = useId();
   const grokRatioId = useId();
+  const agyPathId = useId();
+  const agyModelId = useId();
+  const agyModelsListId = useId();
 
   // Snapshot of saved values so we can show the "dirty" state
   const [saved, setSaved] = useState({
     mode: IMAGE_GEN_MODE.EXTERNAL, sdapiUrl: '', pythonPath: '', exposeA1111: false,
     codexEnabled: false, codexPath: '', codexModel: '', codexEffort: '', codexParallelLimit: 1,
     grokEnabled: false, grokPath: '', grokAspectRatio: '',
-    cleanC2PAByMode: { external: true, local: true, codex: true, grok: false },
-    denoiseByMode: { external: false, local: false, codex: false, grok: false },
+    agyEnabled: false, agyPath: '', agyModel: '',
+    cleanC2PAByMode: { external: true, local: true, codex: true, grok: false, agy: false },
+    denoiseByMode: { external: false, local: false, codex: false, grok: false, agy: false },
   });
 
   const [status, setStatus] = useState(null);
@@ -149,6 +161,7 @@ export function ImageGenTab() {
   const [toolRegistered, setToolRegistered] = useState(false);
   const [codexToolRegistered, setCodexToolRegistered] = useState(false);
   const [grokToolRegistered, setGrokToolRegistered] = useState(false);
+  const [agyToolRegistered, setAgyToolRegistered] = useState(false);
 
   const [testPrompt, setTestPrompt] = useState(DEFAULT_TEST_PROMPT);
   const [rendering, setRendering] = useState(false);
@@ -216,14 +229,19 @@ export function ImageGenTab() {
         const gkEnabled = gk.enabled === true;
         const gkPath = gk.grokPath || '';
         const gkRatio = gk.aspectRatio || '';
+        const ay = ig.agy || {};
+        const ayEnabled = ay.enabled === true;
+        const ayPath = ay.agyPath || '';
+        const ayModel = ay.model || '';
         // Per-mode cleaner reads via the shared helper (mirrored from
         // server/lib/imageClean.js).
         const codexClean = resolveCleanersFromConfig(cx, IMAGE_GEN_MODE.CODEX);
         const grokClean = resolveCleanersFromConfig(gk, IMAGE_GEN_MODE.GROK);
+        const agyClean = resolveCleanersFromConfig(ay, IMAGE_GEN_MODE.AGY);
         const localClean = resolveCleanersFromConfig(ig.local, IMAGE_GEN_MODE.LOCAL);
         const externalClean = resolveCleanersFromConfig(ig.external, IMAGE_GEN_MODE.EXTERNAL);
-        const c2 = { codex: codexClean.cleanC2PA, grok: grokClean.cleanC2PA, local: localClean.cleanC2PA, external: externalClean.cleanC2PA };
-        const dn = { codex: codexClean.denoise, grok: grokClean.denoise, local: localClean.denoise, external: externalClean.denoise };
+        const c2 = { codex: codexClean.cleanC2PA, grok: grokClean.cleanC2PA, agy: agyClean.cleanC2PA, local: localClean.cleanC2PA, external: externalClean.cleanC2PA };
+        const dn = { codex: codexClean.denoise, grok: grokClean.denoise, agy: agyClean.denoise, local: localClean.denoise, external: externalClean.denoise };
         setMode(m);
         setSdapiUrl(url);
         setPythonPath(py);
@@ -237,6 +255,9 @@ export function ImageGenTab() {
         setGrokEnabled(gkEnabled);
         setGrokPath(gkPath);
         setGrokAspectRatio(gkRatio);
+        setAgyEnabled(ayEnabled);
+        setAgyPath(ayPath);
+        setAgyModel(ayModel);
         setCleanC2PAByMode(c2);
         setDenoiseByMode(dn);
         setSaved({
@@ -244,15 +265,37 @@ export function ImageGenTab() {
           codexEnabled: cxEnabled, codexPath: cxPath, codexModel: cxModel, codexEffort: cxEffort,
           codexParallelLimit: cxParallel,
           grokEnabled: gkEnabled, grokPath: gkPath, grokAspectRatio: gkRatio,
+          agyEnabled: ayEnabled, agyPath: ayPath, agyModel: ayModel,
           cleanC2PAByMode: c2, denoiseByMode: dn,
         });
         setToolRegistered(tools.some((t) => t.id === SDAPI_TOOL_ID));
         setCodexToolRegistered(tools.some((t) => t.id === CODEX_TOOL_ID));
         setGrokToolRegistered(tools.some((t) => t.id === GROK_TOOL_ID));
+        setAgyToolRegistered(tools.some((t) => t.id === AGY_TOOL_ID));
       })
       .catch(() => toast.error('Failed to load image gen settings'))
       .finally(() => setLoading(false));
   }, []);
+
+  const refreshAgyModels = useCallback(() => {
+    if (!agyEnabled) return;
+    setAgyModelsLoading(true);
+    setAgyModelsError(null);
+    listAgyImageModels({ silent: true })
+      .then((result) => {
+        setAgyModels(Array.isArray(result?.models) ? result.models : []);
+        setAgyModelsError(result?.error || null);
+      })
+      .catch((err) => {
+        setAgyModels([]);
+        setAgyModelsError(err.message || 'Failed to list Agy models');
+      })
+      .finally(() => setAgyModelsLoading(false));
+  }, [agyEnabled]);
+
+  useEffect(() => {
+    if (mediaTab === 'agy' && agyEnabled) refreshAgyModels();
+  }, [mediaTab, agyEnabled, refreshAgyModels]);
 
   const checkStatus = useCallback(() => {
     setChecking(true);
@@ -274,6 +317,11 @@ export function ImageGenTab() {
     || grokEnabled !== saved.grokEnabled
     || grokPath !== saved.grokPath
     || grokAspectRatio !== saved.grokAspectRatio
+    || agyEnabled !== saved.agyEnabled
+    || agyPath !== saved.agyPath
+    || agyModel !== saved.agyModel
+    || cleanC2PAByMode.agy !== saved.cleanC2PAByMode.agy
+    || denoiseByMode.agy !== saved.denoiseByMode.agy
     || cleanC2PAByMode.grok !== saved.cleanC2PAByMode.grok
     || denoiseByMode.grok !== saved.denoiseByMode.grok
     || cleanC2PAByMode.codex !== saved.cleanC2PAByMode.codex
@@ -292,6 +340,8 @@ export function ImageGenTab() {
     const cxParallel = clampParallel(codexParallelLimit, parallelBounds);
     const gkPath = grokPath?.trim() || undefined;
     const gkRatio = grokAspectRatio?.trim() || undefined;
+    const ayPath = agyPath?.trim() || undefined;
+    const ayModel = agyModel?.trim() || undefined;
     const patch = {
       imageGen: {
         mode,
@@ -304,6 +354,10 @@ export function ImageGenTab() {
         grok: {
           enabled: grokEnabled, grokPath: gkPath, aspectRatio: gkRatio,
           cleanC2PA: cleanC2PAByMode.grok, denoise: denoiseByMode.grok,
+        },
+        agy: {
+          enabled: agyEnabled, agyPath: ayPath, model: ayModel,
+          cleanC2PA: cleanC2PAByMode.agy, denoise: denoiseByMode.agy,
         },
         expose: { a1111: exposeA1111 },
         // Keep the legacy field populated so anything still reading
@@ -322,6 +376,7 @@ export function ImageGenTab() {
         codexEnabled, codexPath: cxPath || '', codexModel: cxModel || '', codexEffort: cxEffort || '',
         codexParallelLimit: cxParallel,
         grokEnabled, grokPath: gkPath || '', grokAspectRatio: gkRatio || '',
+        agyEnabled, agyPath: ayPath || '', agyModel: ayModel || '',
         cleanC2PAByMode, denoiseByMode,
       });
       if (cxParallel !== codexParallelLimit) {
@@ -335,6 +390,8 @@ export function ImageGenTab() {
       if (cxEffort !== codexEffort) setCodexEffort(cxEffort || '');
       if (gkPath !== grokPath) setGrokPath(gkPath || '');
       if (gkRatio !== grokAspectRatio) setGrokAspectRatio(gkRatio || '');
+      if (ayPath !== agyPath) setAgyPath(ayPath || '');
+      if (ayModel !== agyModel) setAgyModel(ayModel || '');
       toast.success('Image gen settings saved');
     } catch (err) {
       toast.error(err.message || 'Failed to save settings');
@@ -369,6 +426,14 @@ export function ImageGenTab() {
       config: { codexPath: cxPath, model: cxModel, effort: cxEffort },
       promptHints: 'Use POST /api/image-gen/generate with { prompt, mode: "codex" } — or call the image_generate voice tool with provider: "codex".',
     };
+    const agyToolData = {
+      name: 'Agy Imagegen',
+      category: 'image-generation',
+      description: 'Generate text-to-image renders through the Antigravity CLI generate_image tool.',
+      enabled: agyEnabled,
+      config: { agyPath: ayPath, model: ayModel },
+      promptHints: 'Use POST /api/image-gen/generate with { prompt, mode: "agy" } — or call image_generate with provider: "agy". Image editing is not supported.',
+    };
 
     const syncTool = async ({ id, registered, data, shouldCreate, onCreated, errLabel }) => {
       if (registered) {
@@ -399,6 +464,11 @@ export function ImageGenTab() {
         id: GROK_TOOL_ID, registered: grokToolRegistered, data: grokToolData,
         shouldCreate: grokEnabled, onCreated: () => setGrokToolRegistered(true),
         errLabel: 'Grok Imagegen tool',
+      }),
+      syncTool({
+        id: AGY_TOOL_ID, registered: agyToolRegistered, data: agyToolData,
+        shouldCreate: agyEnabled, onCreated: () => setAgyToolRegistered(true),
+        errLabel: 'Agy Imagegen tool',
       }),
     ]);
 
@@ -492,7 +562,7 @@ export function ImageGenTab() {
           generation locally with mflux on this Mac. Pick whichever fits — you can also
           expose this PortOS as an A1111-compatible endpoint for other tailnet boxes.
         </p>
-        <div className={`grid grid-cols-1 sm:grid-cols-2 ${(codexEnabled || grokEnabled) ? 'lg:grid-cols-3' : ''} gap-3`}>
+        <div className={`grid grid-cols-1 sm:grid-cols-2 ${(codexEnabled || grokEnabled || agyEnabled) ? 'lg:grid-cols-3' : ''} gap-3`}>
           <button
             type="button"
             onClick={() => setMode(IMAGE_GEN_MODE.EXTERNAL)}
@@ -539,6 +609,19 @@ export function ImageGenTab() {
                 <span className="font-medium text-sm">Grok CLI</span>
               </div>
               <p className="text-xs text-gray-500 mt-1">Route through the Grok Build CLI built-in image_gen tool. Counts against your Grok plan.</p>
+            </button>
+          )}
+          {agyEnabled && (
+            <button
+              type="button"
+              onClick={() => setMode(IMAGE_GEN_MODE.AGY)}
+              className={`text-left p-4 rounded-lg border transition-colors ${mode === IMAGE_GEN_MODE.AGY ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400 hover:bg-port-border/30 hover:text-white'}`}
+            >
+              <div className="flex items-center gap-2">
+                <Terminal className="w-4 h-4" />
+                <span className="font-medium text-sm">Agy CLI</span>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">Text-to-image through Antigravity's generate_image tool and your selected model.</p>
             </button>
           )}
         </div>
@@ -774,6 +857,83 @@ export function ImageGenTab() {
               denoise={denoiseByMode.grok}
               onCleanC2PAChange={setCleanC2PAFor(IMAGE_GEN_MODE.GROK)}
               onDenoiseChange={setDenoiseFor(IMAGE_GEN_MODE.GROK)}
+            />
+          </div>
+        )}
+      </div>
+      )}
+
+      {mediaTab === 'agy' && (
+      <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
+        <div className="flex items-center gap-2 text-white">
+          <Terminal size={18} />
+          <h2 className="text-lg font-semibold">Agy CLI Imagegen</h2>
+        </div>
+        <p className="text-xs text-gray-500">
+          Route text-to-image generation through Antigravity's built-in
+          <code className="text-gray-400"> generate_image </code> tool. Agy runs in an isolated scratch
+          directory and PortOS imports only the directed image output. Image editing is not supported.
+        </p>
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={agyEnabled}
+            onChange={(e) => {
+              const enabled = e.target.checked;
+              setAgyEnabled(enabled);
+              if (!enabled && mode === IMAGE_GEN_MODE.AGY) {
+                setMode(pythonPath?.trim() ? IMAGE_GEN_MODE.LOCAL : IMAGE_GEN_MODE.EXTERNAL);
+              }
+            }}
+            className="rounded"
+          />
+          <span className="text-sm text-gray-300">Enable Agy Imagegen</span>
+        </label>
+        {agyEnabled && (
+          <div className="space-y-3 pl-6 border-l-2 border-port-border">
+            <div>
+              <label htmlFor={agyPathId} className="block text-xs font-medium text-gray-400 mb-1">Agy binary path (optional)</label>
+              <input
+                id={agyPathId}
+                type="text"
+                value={agyPath}
+                onChange={(e) => setAgyPath(e.target.value)}
+                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+                placeholder="agy (uses $PATH)"
+              />
+            </div>
+            <div>
+              <div className="flex items-end justify-between gap-3 mb-1">
+                <label htmlFor={agyModelId} className="block text-xs font-medium text-gray-400">Image model</label>
+                <button
+                  type="button"
+                  onClick={refreshAgyModels}
+                  disabled={agyModelsLoading}
+                  className="text-xs text-port-accent hover:underline disabled:opacity-50"
+                >
+                  {agyModelsLoading ? 'Loading…' : 'Refresh models'}
+                </button>
+              </div>
+              <input
+                id={agyModelId}
+                list={agyModelsListId}
+                type="text"
+                value={agyModel}
+                onChange={(e) => setAgyModel(e.target.value)}
+                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+                placeholder="Select an installed model or enter a custom id"
+              />
+              <datalist id={agyModelsListId}>
+                {agyModels.map((modelId) => <option key={modelId} value={modelId} />)}
+              </datalist>
+              {agyModelsError && <p className="text-xs text-port-warning mt-1">{agyModelsError}. You can still enter a custom model id.</p>}
+              {!agyModelsError && <p className="text-xs text-gray-500 mt-1">Choose an installed Agy model or enter a custom model id.</p>}
+            </div>
+            <CleanersToggles
+              cleanC2PA={cleanC2PAByMode.agy}
+              denoise={denoiseByMode.agy}
+              onCleanC2PAChange={setCleanC2PAFor(IMAGE_GEN_MODE.AGY)}
+              onDenoiseChange={setDenoiseFor(IMAGE_GEN_MODE.AGY)}
             />
           </div>
         )}

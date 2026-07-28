@@ -4,7 +4,13 @@ import {
   pickUsableMode,
   resolveCloudProviderConfig,
 } from './cloudProviderConfig.js';
-import { CODEX_IMAGEGEN_DEFAULT_MODEL, IMAGE_GEN_MODE } from './modes.js';
+import {
+  CODEX_IMAGEGEN_DEFAULT_MODEL,
+  IMAGE_GEN_MODE,
+  resolveQueueImageEditMode,
+  resolveQueueImageMode,
+} from './modes.js';
+import { ANTIGRAVITY_CONFIGURED_DEFAULT } from '../../lib/antigravity.js';
 
 const settingsWith = (imageGen) => ({ imageGen });
 
@@ -53,6 +59,26 @@ describe('resolveCloudProviderConfig', () => {
     });
   });
 
+  it('bundles Agy path and selected model, defaulting to its configured model sentinel', () => {
+    const selected = resolveCloudProviderConfig(
+      settingsWith({ agy: { enabled: true, agyPath: '/bin/agy', model: 'gemini-image' } }),
+      IMAGE_GEN_MODE.AGY,
+    );
+    expect(selected.modelId).toBe('gemini-image');
+    expect(selected.jobParams).toEqual({
+      mode: IMAGE_GEN_MODE.AGY,
+      agyPath: '/bin/agy',
+      model: 'gemini-image',
+    });
+
+    const fallback = resolveCloudProviderConfig(
+      settingsWith({ agy: { enabled: true } }),
+      IMAGE_GEN_MODE.AGY,
+    );
+    expect(fallback.modelId).toBe(ANTIGRAVITY_CONFIGURED_DEFAULT);
+    expect(fallback.providerParams.model).toBe(ANTIGRAVITY_CONFIGURED_DEFAULT);
+  });
+
   it('produces a ready-to-throw ServerError + skip reason when disabled', () => {
     const cloud = resolveCloudProviderConfig(settingsWith({ grok: { enabled: false } }), IMAGE_GEN_MODE.GROK);
     expect(cloud.enabled).toBe(false);
@@ -78,9 +104,10 @@ describe('resolveCloudProviderConfig', () => {
 
 describe('isModeUsable', () => {
   it('gates cloud modes on their enable toggle', () => {
-    const s = settingsWith({ codex: { enabled: true }, grok: { enabled: false } });
+    const s = settingsWith({ codex: { enabled: true }, grok: { enabled: false }, agy: { enabled: true } });
     expect(isModeUsable(s, IMAGE_GEN_MODE.CODEX)).toBe(true);
     expect(isModeUsable(s, IMAGE_GEN_MODE.GROK)).toBe(false);
+    expect(isModeUsable(s, IMAGE_GEN_MODE.AGY)).toBe(true);
   });
 
   it('always allows local and never allows the non-queueable external backend', () => {
@@ -124,5 +151,22 @@ describe('pickUsableMode', () => {
   it('honors an explicit local candidate over an enabled cloud backend', () => {
     const s = settingsWith({ codex: { enabled: true } });
     expect(pickUsableMode(s, [IMAGE_GEN_MODE.LOCAL])).toBe(IMAGE_GEN_MODE.LOCAL);
+  });
+});
+
+describe('queue mode resolution with Agy', () => {
+  const settings = settingsWith({
+    mode: IMAGE_GEN_MODE.AGY,
+    codex: { enabled: true },
+    grok: { enabled: false },
+    agy: { enabled: true },
+  });
+
+  it('selects enabled Agy for text-to-image work', () => {
+    expect(resolveQueueImageMode(undefined, settings)).toBe(IMAGE_GEN_MODE.AGY);
+  });
+
+  it('excludes Agy from image-edit fallback', () => {
+    expect(resolveQueueImageEditMode(IMAGE_GEN_MODE.AGY, settings)).toBe(IMAGE_GEN_MODE.CODEX);
   });
 });

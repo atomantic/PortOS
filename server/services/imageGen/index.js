@@ -14,16 +14,22 @@
 
 import { getSettings } from '../settings.js';
 import { resolveCleanersFromConfig } from '../../lib/imageClean.js';
+import { ServerError } from '../../lib/errorHandler.js';
 import * as external from './external.js';
 import * as local from './local.js';
 import * as codex from './codex.js';
 import * as grok from './grok.js';
+import * as agy from './agy.js';
 import { IMAGE_GEN_MODE, IMAGE_GEN_MODES, CLOUD_IMAGE_GEN_MODES } from './modes.js';
 import { resolveCloudProviderConfig } from './cloudProviderConfig.js';
 
 // Cloud-CLI provider modules keyed by mode, so the shared gate in
 // checkConnection/generateImage dispatches without a per-provider branch.
-const CLOUD_PROVIDERS = { [IMAGE_GEN_MODE.CODEX]: codex, [IMAGE_GEN_MODE.GROK]: grok };
+const CLOUD_PROVIDERS = {
+  [IMAGE_GEN_MODE.CODEX]: codex,
+  [IMAGE_GEN_MODE.GROK]: grok,
+  [IMAGE_GEN_MODE.AGY]: agy,
+};
 
 // Re-export the enum + array so the existing import surface from this module
 // keeps working. `IMAGE_GEN_MODE.X` is the preferred form at dispatch sites
@@ -102,13 +108,19 @@ export async function generateImage(params) {
   delete normalized.cleanC2PA;
   delete normalized.denoise;
   delete normalized.autoClean; // legacy body field — accept-and-ignore
-  // Cloud CLIs (codex, grok) share one gate + param bundle — the per-provider
+  // Cloud CLIs share one gate + param bundle — the per-provider
   // knobs (codexPath/model/effort vs grokPath/aspectRatio) come from the
   // resolver's spec, so a saved override always wins over the provider's own
   // internal defaults.
   const cloud = resolveCloudProviderConfig(s, mode);
   if (cloud) {
     if (!cloud.enabled) throw cloud.disabledError;
+    if (mode === IMAGE_GEN_MODE.AGY && (normalized.initImagePath || normalized.referenceImagePaths?.length)) {
+      throw new ServerError('Agy Imagegen supports text-to-image only', {
+        status: 400,
+        code: 'AGY_IMAGE_EDIT_UNSUPPORTED',
+      });
+    }
     return CLOUD_PROVIDERS[mode].generateImage({ ...cloud.providerParams, cleanC2PA, denoise, ...normalized });
   }
   if (mode === IMAGE_GEN_MODE.LOCAL) {
@@ -152,7 +164,7 @@ export async function generateAvatar({ name, characterClass, prompt }) {
 // Callers wanting all of them can read individual providers via the
 // re-exports below.
 export async function getActiveJob() {
-  const jobs = [local.getActiveJob(), external.getActiveJob(), codex.getActiveJob(), grok.getActiveJob()].filter(Boolean);
+  const jobs = [local.getActiveJob(), external.getActiveJob(), codex.getActiveJob(), grok.getActiveJob(), agy.getActiveJob()].filter(Boolean);
   if (!jobs.length) return null;
   return jobs.sort((a, b) => {
     const ta = a.createdAt ? Date.parse(a.createdAt) : 0;
@@ -168,23 +180,25 @@ export const attachSseClient = (jobId, res) => {
   if (local.attachSseClient(jobId, res)) return true;
   if (codex.attachSseClient(jobId, res)) return true;
   if (grok.attachSseClient(jobId, res)) return true;
+  if (agy.attachSseClient(jobId, res)) return true;
   return false;
 };
 
 export const cancel = () => {
   // The "stop everything" dispatcher — invoked by routes/imageGen.js's
   // `/cancel` fallback when no specific jobId or queue entry is targeted.
-  // local has at most one in-flight, codex/grok can have N (parallel cloud
+  // local has at most one in-flight, cloud CLIs can have N (parallel cloud
   // lane), so their bulk variants are the right ones here. Return whether
   // anything was actually cancelled — short-circuiting on the first hit
   // would orphan a cloud job whenever local is also active.
   const localCancelled = local.cancel();
   const codexCancelled = codex.cancelAll();
   const grokCancelled = grok.cancelAll();
-  return localCancelled || codexCancelled || grokCancelled;
+  const agyCancelled = agy.cancelAll();
+  return localCancelled || codexCancelled || grokCancelled || agyCancelled;
 };
 
 // Re-exports so routes can hit a specific backend directly when the request
 // is shape-specific (gallery, LoRAs). The dispatcher is for the generic
 // generate/status flow used by all modes.
-export { local, external, codex, grok };
+export { local, external, codex, grok, agy };

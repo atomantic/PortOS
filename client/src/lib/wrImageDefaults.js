@@ -61,9 +61,10 @@ export function readWrImageSettings(settings, availableBackends = null) {
   const stored = settings?.writersRoom?.imageGen || {};
   const codexEnabled = settings?.imageGen?.codex?.enabled === true;
   const grokEnabled = settings?.imageGen?.grok?.enabled === true;
+  const agyEnabled = settings?.imageGen?.agy?.enabled === true;
   const defaultMode = codexEnabled ? IMAGE_GEN_MODE.CODEX
     : grokEnabled ? IMAGE_GEN_MODE.GROK
-      : WR_IMAGE_DEFAULTS.mode;
+      : agyEnabled ? IMAGE_GEN_MODE.AGY : WR_IMAGE_DEFAULTS.mode;
   let mode = stored.mode || defaultMode;
   if (Array.isArray(availableBackends) && availableBackends.length > 0
       && !availableBackends.some((b) => b.id === mode)) {

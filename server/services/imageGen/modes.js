@@ -15,6 +15,7 @@ export const IMAGE_GEN_MODE = Object.freeze({
   LOCAL: 'local',
   CODEX: 'codex',
   GROK: 'grok',
+  AGY: 'agy',
 });
 
 export const IMAGE_GEN_MODES = Object.freeze(Object.values(IMAGE_GEN_MODE));
@@ -24,7 +25,11 @@ export const IMAGE_GEN_MODES = Object.freeze(Object.values(IMAGE_GEN_MODE));
 // The mediaJobQueue routes these through its parallel cloud lane (they don't
 // serialize on the MLX runtime) and async callers treat them like local:
 // generateImage returns a job descriptor before the file lands.
-export const CLOUD_IMAGE_GEN_MODES = Object.freeze([IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK]);
+export const CLOUD_IMAGE_GEN_MODES = Object.freeze([
+  IMAGE_GEN_MODE.CODEX,
+  IMAGE_GEN_MODE.GROK,
+  IMAGE_GEN_MODE.AGY,
+]);
 
 // Modes the mediaJobQueue can run (external SD-API stays synchronous — a
 // remote HTTP call with no local single-flight constraint to absorb). Single
@@ -74,13 +79,32 @@ export const LOCAL_IMAGEGEN_DEFAULT_MODEL = 'dev';
 export function resolveQueueImageMode(requested, settings) {
   const codexEnabled = settings?.imageGen?.codex?.enabled === true;
   const grokEnabled = settings?.imageGen?.grok?.enabled === true;
+  const agyEnabled = settings?.imageGen?.agy?.enabled === true;
   if (requested === IMAGE_GEN_MODE.CODEX && codexEnabled) return IMAGE_GEN_MODE.CODEX;
   if (requested === IMAGE_GEN_MODE.GROK && grokEnabled) return IMAGE_GEN_MODE.GROK;
+  if (requested === IMAGE_GEN_MODE.AGY && agyEnabled) return IMAGE_GEN_MODE.AGY;
   if (requested === IMAGE_GEN_MODE.LOCAL) return IMAGE_GEN_MODE.LOCAL;
   const settingsMode = settings?.imageGen?.mode;
   if (settingsMode === IMAGE_GEN_MODE.CODEX && codexEnabled) return IMAGE_GEN_MODE.CODEX;
   if (settingsMode === IMAGE_GEN_MODE.GROK && grokEnabled) return IMAGE_GEN_MODE.GROK;
+  if (settingsMode === IMAGE_GEN_MODE.AGY && agyEnabled) return IMAGE_GEN_MODE.AGY;
   if (settingsMode === IMAGE_GEN_MODE.LOCAL) return IMAGE_GEN_MODE.LOCAL;
+  if (codexEnabled) return IMAGE_GEN_MODE.CODEX;
+  if (grokEnabled) return IMAGE_GEN_MODE.GROK;
+  if (agyEnabled) return IMAGE_GEN_MODE.AGY;
+  return IMAGE_GEN_MODE.LOCAL;
+}
+
+export function resolveQueueImageEditMode(requested, settings) {
+  const codexEnabled = settings?.imageGen?.codex?.enabled === true;
+  const grokEnabled = settings?.imageGen?.grok?.enabled === true;
+  if (requested === IMAGE_GEN_MODE.CODEX && codexEnabled) return IMAGE_GEN_MODE.CODEX;
+  if (requested === IMAGE_GEN_MODE.GROK && grokEnabled) return IMAGE_GEN_MODE.GROK;
+  if (requested === IMAGE_GEN_MODE.LOCAL) return IMAGE_GEN_MODE.LOCAL;
+  const saved = settings?.imageGen?.mode;
+  if (saved === IMAGE_GEN_MODE.CODEX && codexEnabled) return IMAGE_GEN_MODE.CODEX;
+  if (saved === IMAGE_GEN_MODE.GROK && grokEnabled) return IMAGE_GEN_MODE.GROK;
+  if (saved === IMAGE_GEN_MODE.LOCAL) return IMAGE_GEN_MODE.LOCAL;
   if (codexEnabled) return IMAGE_GEN_MODE.CODEX;
   if (grokEnabled) return IMAGE_GEN_MODE.GROK;
   return IMAGE_GEN_MODE.LOCAL;

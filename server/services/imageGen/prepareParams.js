@@ -78,6 +78,13 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
   // is cheap — it's already read again below for the per-mode dispatch.)
   const settings = await getSettings();
   const mode = data.mode || settings.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
+  if (mode === IMAGE_GEN_MODE.AGY && (initUpload || data.initImageFile)) {
+    cleanupReqFilesTemp();
+    throw new ServerError('Agy Imagegen supports text-to-image only', {
+      status: 400,
+      code: 'AGY_IMAGE_EDIT_UNSUPPORTED',
+    });
+  }
 
   // Resolve cleaners ONCE at the route layer so all three dispatch paths
   // (synchronous external, codex queue, local queue) see the same values.
@@ -163,12 +170,13 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
   }
 
   // Empty prompt is allowed for i2i / local / external, but cloud-CLI
-  // text-to-image (codex/grok, no init image) still needs one — reject
+  // text-to-image (no init image) still needs one — reject
   // synchronously here so direct API callers get a 400 instead of a
   // 200-then-async-job-failure. Mirrors the guards in codex.js/grok.js and
   // the client's needs-prompt gate.
   if (CLOUD_IMAGE_GEN_MODES.includes(mode) && !initImagePath && !data.prompt?.trim()) {
-    throw new ServerError(`Prompt is required for ${mode === IMAGE_GEN_MODE.CODEX ? 'Codex' : 'Grok'} text-to-image`, { status: 400, code: 'VALIDATION_ERROR' });
+    const label = mode === IMAGE_GEN_MODE.CODEX ? 'Codex' : mode === IMAGE_GEN_MODE.GROK ? 'Grok' : 'Agy';
+    throw new ServerError(`Prompt is required for ${label} text-to-image`, { status: 400, code: 'VALIDATION_ERROR' });
   }
 
   if (data.guidance == null && data.cfgScale != null) {

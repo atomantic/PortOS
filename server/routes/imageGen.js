@@ -43,6 +43,7 @@ import { findOrCreateUniverseCollection } from '../services/mediaCollections.js'
 import * as characterService from '../services/character.js';
 import { randomUUID } from 'crypto';
 import { buildUniverseRunTag } from '../services/universeRunTag.js';
+import { getSettings } from '../services/settings.js';
 
 const router = Router();
 
@@ -295,6 +296,13 @@ router.get('/active', asyncHandler(async (_req, res) => {
   res.json({ activeJob: await imageGen.getActiveJob() });
 }));
 
+router.get('/agy/models', asyncHandler(async (_req, res) => {
+  const settings = await getSettings();
+  res.json(await imageGen.agy.listModels({
+    agyPath: settings.imageGen?.agy?.agyPath,
+  }));
+}));
+
 // SynthID-defeat regen availability (issue #912). Drives whether the lightbox
 // shows the "Regenerate" action — it's hardware-gated on a local FLUX runner.
 // Optional `?filename=` (issue #2036): when the caller names a source image, its
@@ -394,6 +402,12 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     // gated behind an explicit toggle each (not every Codex account has access
     // to the image_gen tool, and grok spends the user's Grok quota).
     if (!cloud.enabled) throw cloud.disabledError;
+    if (mode === IMAGE_GEN_MODE.AGY && (params.initImagePath || params.referenceImagePaths?.length)) {
+      throw new ServerError('Agy Imagegen supports text-to-image only', {
+        status: 400,
+        code: 'AGY_IMAGE_EDIT_UNSUPPORTED',
+      });
+    }
     // `mode` inside jobParams is the queue's discriminator — laneForJob()
     // routes cloud jobs to the parallel cloud lane, and runJob's image branch
     // dispatches to the matching imageGen provider module when it sees it.
