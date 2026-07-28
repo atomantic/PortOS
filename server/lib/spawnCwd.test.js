@@ -74,3 +74,60 @@ describe('resolveSpawnCwd — home expansion', () => {
     logSpy.mockRestore();
   });
 });
+
+// Two review rounds each surfaced a different *input shape* that collapsed back
+// into the silent fallback (`~` rejected as missing, a file accepted as a repo,
+// whitespace-only treated as absent). The shapes differ; the invariant doesn't:
+//
+//   a workspace that was SUPPLIED but is not a usable directory must never
+//   resolve to fallbackRoot — it throws, or it returns the real directory.
+//
+// Enumerating the shape space and asserting the invariant catches the next
+// variant without waiting for a reviewer to name it.
+describe('resolveSpawnCwd — supplied-but-unusable never reaches the fallback', () => {
+  let dir, file, logSpy;
+  const FALLBACK = '/the-portos-checkout';
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'spawncwd-inv-'));
+    file = join(dir, 'a-file.txt');
+    writeFileSync(file, 'x');
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    logSpy.mockRestore();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('never returns the fallback for any supplied-but-unusable shape', () => {
+    const unusable = () => [
+      '   ', '\t', '\n', ' \t\n ',            // blank after trim
+      join(dir, 'no-such-dir'),                // missing
+      join(dir, 'no', 'such', 'nested'),       // missing, nested
+      file,                                    // exists but is a file
+      `${file}  `,                             // file with trailing space
+      '~/definitely-not-a-real-portos-dir',    // expands, still missing
+    ];
+    for (const shape of unusable()) {
+      let result, threw = false;
+      try { result = resolveSpawnCwd(shape, FALLBACK); } catch { threw = true; }
+      expect(threw, `expected ${JSON.stringify(shape)} to be rejected`).toBe(true);
+      expect(result, `${JSON.stringify(shape)} must never resolve to the fallback`).not.toBe(FALLBACK);
+    }
+  });
+
+  it('returns the real directory for usable shapes, never the fallback', () => {
+    for (const shape of [dir, `  ${dir}  `, `${dir}/`]) {
+      const result = resolveSpawnCwd(shape, FALLBACK);
+      expect(result).not.toBe(FALLBACK);
+      expect(result.replace(/\/$/, '')).toBe(dir);
+    }
+  });
+
+  // The complement: only a genuinely ABSENT workspace earns the fallback.
+  it('returns the fallback only for absent shapes', () => {
+    for (const shape of [undefined, null, '']) {
+      expect(resolveSpawnCwd(shape, FALLBACK)).toBe(FALLBACK);
+    }
+  });
+});
