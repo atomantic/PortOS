@@ -2,6 +2,7 @@
 
 ## Music Video
 
+- **A track that "Analyze" reports as having no detectable tempo can now get a beat map by hand.** The offline detector deliberately reports no BPM rather than guessing when a track's beats aren't strong/periodic enough or its tempo falls outside its search range — which used to leave the whole beat grid (timeline, AI Plan, Auto-arrange, beat-snapped render) permanently unusable. When Analyze finds no tempo, a "set it by ear" row now appears: enter a BPM (or use Tap tempo) and the first downbeat's offset, and the same beat/downbeat/section map the auto path produces gets cached on the project.
 - **[issue-3168] Music Video projects now have a Concept and Visual style field.** Set them before clicking "AI Plan" to steer the proposed scenes toward a story or theme, and every generated frame and shot prompt now carries your chosen visual style automatically.
 
 ## Local LLM installs

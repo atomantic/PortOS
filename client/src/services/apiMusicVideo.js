@@ -22,6 +22,14 @@ export const analyzeMusicVideoProject = (id, options = {}) => request(`/music-vi
   method: 'POST', ...options,
 });
 
+// Manual-tempo fallback: supply a known BPM + first-downbeat offset by ear
+// when auto-detect caches `audioAnalysis.bpm === null` (see
+// server/services/musicVideo/audioAnalysis.js for why). Returns the updated
+// project with the same audioAnalysis shape the auto path produces.
+export const setMusicVideoManualTempo = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/analyze/manual`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
 // Autonomous shot planner (#1855): propose one scene per analyzed audio
 // section and seed them onto the board. `seedPrompts` (default true) also
 // best-effort asks the active provider for a first-pass framePrompt/prompt

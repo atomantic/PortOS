@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Plus, Film, Trash2, Music, Activity, ArrowUp, ArrowDown, Image as ImageIcon, Video, Wand2, Download } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -9,6 +9,7 @@ import {
   updateMusicVideoProject,
   deleteMusicVideoProject,
   analyzeMusicVideoProject,
+  setMusicVideoManualTempo,
   planMusicVideoProject,
   addMusicVideoScene,
   updateMusicVideoScene,
@@ -36,6 +37,12 @@ import useYoutubeTrackImport from '../hooks/useYoutubeTrackImport.js';
 import { useSseProgress, isTerminalSseFrame } from '../hooks/useSseProgress.js';
 import { formatDurationSec } from '../utils/formatters.js';
 import { MUSCRIPTOR_MODELS, DEFAULT_MUSCRIPTOR_MODEL } from '../lib/muscriptorModels.js';
+import { clampBpm } from '../lib/metronome.js';
+
+// Matches musicVideoManualAnalysisSchema's `bpm.max` on the server —
+// clampBpm's own ceiling (320, metronome-focused) is looser than what the
+// manual-tempo endpoint accepts.
+const MUSIC_VIDEO_MANUAL_BPM_MAX = 300;
 
 const MODES = ['director', 'autonomous'];
 
@@ -299,6 +306,48 @@ export default function MusicVideo() {
       .then((proj) => { replaceProject(proj); toast.success(`Analyzed — ${proj.audioAnalysis?.bpm ? `${proj.audioAnalysis.bpm} BPM` : 'no tempo detected'}`); })
       .catch((err) => toast.error(err?.message || 'Analysis failed'))
       .finally(() => setAnalyzing(false));
+  };
+
+  // Manual-tempo fallback: shown when the auto-detector caches `bpm: null`
+  // (see server/services/musicVideo/audioAnalysis.js for why). "Tap tempo"
+  // estimates BPM from the average interval between clicks (resets if the gap
+  // since the last tap exceeds 2s, i.e. the director paused/restarted).
+  const [manualBpm, setManualBpm] = useState('');
+  const [manualOffset, setManualOffset] = useState('0');
+  const [settingManualTempo, setSettingManualTempo] = useState(false);
+  const tapTimesRef = useRef([]);
+
+  useEffect(() => {
+    setManualBpm('');
+    setManualOffset('0');
+    tapTimesRef.current = [];
+  }, [selected?.id]);
+
+  const handleTapTempo = () => {
+    const now = Date.now();
+    const taps = tapTimesRef.current;
+    if (taps.length && now - taps[taps.length - 1] > 2000) taps.length = 0;
+    taps.push(now);
+    if (taps.length > 8) taps.shift();
+    if (taps.length >= 2) {
+      const intervals = [];
+      for (let i = 1; i < taps.length; i++) intervals.push(taps[i] - taps[i - 1]);
+      const avgMs = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+      setManualBpm(String(Math.round(60000 / avgMs)));
+    }
+  };
+
+  const handleSetManualTempo = () => {
+    if (!selected) return;
+    const bpm = clampBpm(manualBpm);
+    if (bpm == null) { toast.error('Enter a BPM'); return; }
+    const boundedBpm = Math.min(bpm, MUSIC_VIDEO_MANUAL_BPM_MAX);
+    const offsetSec = Number(manualOffset) || 0;
+    setSettingManualTempo(true);
+    setMusicVideoManualTempo(selected.id, { bpm: boundedBpm, offsetSec }, { silent: true })
+      .then((proj) => { replaceProject(proj); toast.success(`Tempo set — ${proj.audioAnalysis?.bpm} BPM`); tapTimesRef.current = []; })
+      .catch((err) => toast.error(err?.message || 'Could not set tempo'))
+      .finally(() => setSettingManualTempo(false));
   };
 
   // Autonomous shot planner (#1855): propose one scene per analyzed audio
@@ -845,6 +894,31 @@ export default function MusicVideo() {
                     <span>Duration: {formatDurationSec(selected.audioAnalysis.durationSec)}</span>
                     <span>Beats: {selected.audioAnalysis.beats?.length || 0}</span>
                     <span>Sections: {selected.audioAnalysis.sections?.length || 0}</span>
+                  </div>
+                )}
+                {selected.audioAnalysis && !selected.audioAnalysis.bpm && (
+                  <div className="mt-2 flex flex-wrap items-end gap-2 text-xs bg-port-bg border border-port-border rounded-lg p-2">
+                    <span className="text-port-text-muted w-full">No tempo detected — set it by ear to unlock the beat grid:</span>
+                    <div>
+                      <label htmlFor="mv-manual-bpm" className="block text-port-text-muted mb-1">BPM</label>
+                      <input id="mv-manual-bpm" type="number" min={20} max={300} step={1} value={manualBpm}
+                        onChange={(e) => setManualBpm(e.target.value)} placeholder="120"
+                        className="w-16 bg-port-card border border-port-border rounded px-1.5 py-1" />
+                    </div>
+                    <button onClick={handleTapTempo} type="button"
+                      className="bg-port-card border border-port-border rounded px-2 py-1.5 min-h-[32px] hover:bg-port-border/40">
+                      Tap tempo
+                    </button>
+                    <div>
+                      <label htmlFor="mv-manual-offset" className="block text-port-text-muted mb-1">First downbeat (s)</label>
+                      <input id="mv-manual-offset" type="number" min={0} max={600} step={0.1} value={manualOffset}
+                        onChange={(e) => setManualOffset(e.target.value)}
+                        className="w-20 bg-port-card border border-port-border rounded px-1.5 py-1" />
+                    </div>
+                    <button onClick={handleSetManualTempo} disabled={settingManualTempo || !manualBpm}
+                      className="bg-port-accent text-white rounded px-2 py-1.5 min-h-[32px] disabled:opacity-50">
+                      {settingManualTempo ? 'Setting…' : 'Set tempo'}
+                    </button>
                   </div>
                 )}
               </div>

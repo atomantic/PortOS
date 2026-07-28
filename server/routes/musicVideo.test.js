@@ -17,8 +17,12 @@ vi.mock('../services/musicVideo/projects.js', () => ({
   setProjectMidiTranscription: vi.fn(async (id, midi) => ({ id, midiTranscription: midi })),
 }));
 
-vi.mock('../services/musicVideo/audioAnalysis.js', () => ({
+// Keeps the real `buildManualAnalysisFromCached` (pure arithmetic, worth
+// exercising for real) and only stubs the two ffmpeg-decode-backed functions.
+vi.mock('../services/musicVideo/audioAnalysis.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   analyzeAudioFile: vi.fn(),
+  analyzeAudioFileManual: vi.fn(),
 }));
 
 vi.mock('../services/tracks/index.js', () => ({
@@ -51,7 +55,7 @@ vi.mock('../services/musicVideo/planner.js', () => ({
 }));
 
 import * as svc from '../services/musicVideo/projects.js';
-import { analyzeAudioFile } from '../services/musicVideo/audioAnalysis.js';
+import { analyzeAudioFile, analyzeAudioFileManual } from '../services/musicVideo/audioAnalysis.js';
 import { getTrack } from '../services/tracks/index.js';
 import * as renderSvc from '../services/musicVideo/render.js';
 import * as midiSvc from '../services/audioMidiTranscription.js';
@@ -149,6 +153,59 @@ describe('musicVideo routes', () => {
       expect(r.status).toBe(200);
       expect(r.body.audioAnalysis).toEqual(analysis);
       expect(svc.setProjectAnalysis).toHaveBeenCalledWith('mv-1', analysis);
+    });
+  });
+
+  describe('POST /:id/analyze/manual', () => {
+    it('400s on an out-of-range BPM', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/analyze/manual').send({ bpm: 400 });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('400s when the project has no audio source', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', trackId: null, uploadedAudioFilename: null });
+      const r = await request(app).post('/api/music-video/mv-1/analyze/manual').send({ bpm: 120 });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('NO_AUDIO');
+    });
+
+    it('422s when the decoder cannot decode', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', trackId: 't1' });
+      getTrack.mockResolvedValue({ id: 't1', audioFilename: 'song.wav' });
+      analyzeAudioFileManual.mockResolvedValue(null);
+      const r = await request(app).post('/api/music-video/mv-1/analyze/manual').send({ bpm: 120 });
+      expect(r.status).toBe(422);
+      expect(r.body.code).toBe('ANALYZE_FAILED');
+    });
+
+    it('caches the manual analysis, passing bpm/offsetSec through to the builder', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', trackId: 't1' });
+      getTrack.mockResolvedValue({ id: 't1', audioFilename: 'song.wav' });
+      const analysis = { bpm: 128, beats: [0.25], downbeats: [0.25], sections: [], durationSec: 5 };
+      analyzeAudioFileManual.mockResolvedValue(analysis);
+      const r = await request(app).post('/api/music-video/mv-1/analyze/manual').send({ bpm: 128, offsetSec: 0.25 });
+      expect(r.status).toBe(200);
+      expect(r.body.audioAnalysis).toEqual(analysis);
+      expect(analyzeAudioFileManual).toHaveBeenCalledWith(expect.stringContaining('song.wav'), { bpm: 128, offsetSec: 0.25 });
+      expect(svc.setProjectAnalysis).toHaveBeenCalledWith('mv-1', analysis);
+    });
+
+    it('skips the ffmpeg decode and reuses cached sections/durationSec when a prior analysis exists', async () => {
+      const cachedSections = [{ label: 'Section 1', startSec: 0, endSec: 20, energy: 1 }];
+      svc.getProject.mockResolvedValue({
+        id: 'mv-1',
+        trackId: 't1',
+        audioAnalysis: { bpm: null, beats: [], downbeats: [], sections: cachedSections, durationSec: 20 },
+      });
+      const r = await request(app).post('/api/music-video/mv-1/analyze/manual').send({ bpm: 100, offsetSec: 0.5 });
+      expect(r.status).toBe(200);
+      expect(analyzeAudioFileManual).not.toHaveBeenCalled();
+      expect(getTrack).not.toHaveBeenCalled(); // never needed to resolve the audio path
+      expect(r.body.audioAnalysis.sections).toEqual(cachedSections);
+      expect(r.body.audioAnalysis.durationSec).toBe(20);
+      expect(r.body.audioAnalysis.bpm).toBe(100);
+      expect(r.body.audioAnalysis.beats[0]).toBeCloseTo(0.5, 3);
     });
   });
 

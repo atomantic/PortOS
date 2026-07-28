@@ -6,6 +6,8 @@ import {
   analyzePcm,
   analyzeAudioFile,
   decodeAudioToPcm,
+  buildManualAnalysis,
+  buildManualAnalysisFromCached,
   ANALYSIS_SAMPLE_RATE,
 } from './audioAnalysis.js';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
@@ -209,6 +211,72 @@ describe('analyzePcm', () => {
     const result = analyzePcm(new Float32Array(100), ANALYSIS_SAMPLE_RATE);
     expect(result.bpm).toBeNull();
     expect(result.beats).toEqual([]);
+  });
+});
+
+describe('buildManualAnalysis (manual-tempo fallback)', () => {
+  it('builds an even beat grid from the given BPM and offset', () => {
+    // Structureless input (analyzePcm would report bpm: null on this) — the
+    // manual path must still produce a full beat grid since it never runs the
+    // autocorrelation estimator.
+    const samples = new Float32Array(ANALYSIS_SAMPLE_RATE * 16);
+    const result = buildManualAnalysis(samples, ANALYSIS_SAMPLE_RATE, { bpm: 120, offsetSec: 0.5 });
+    expect(result.bpm).toBe(120);
+    expect(result.beats[0]).toBeCloseTo(0.5, 3);
+    expect(result.beats[1] - result.beats[0]).toBeCloseTo(0.5, 3); // 60/120s
+    expect(result.beats[result.beats.length - 1]).toBeLessThanOrEqual(result.durationSec);
+  });
+
+  it('picks downbeats as every 4th beat starting at the offset', () => {
+    const samples = new Float32Array(ANALYSIS_SAMPLE_RATE * 16);
+    const { beats, downbeats } = buildManualAnalysis(samples, ANALYSIS_SAMPLE_RATE, { bpm: 100, offsetSec: 0 });
+    const idx = downbeats.map((d) => beats.indexOf(d));
+    expect(idx[0]).toBe(0);
+    for (let i = 1; i < idx.length; i++) expect(idx[i] - idx[i - 1]).toBe(4);
+  });
+
+  it('still derives sections from real energy segmentation, not the manual BPM', () => {
+    const samples = clickTrack({ bpm: 120, durationSec: 40 });
+    const half = Math.round(samples.length / 2);
+    for (let i = 0; i < half; i++) samples[i] *= 0.15;
+    const { sections } = buildManualAnalysis(samples, ANALYSIS_SAMPLE_RATE, { bpm: 90, offsetSec: 0 });
+    expect(sections.length).toBeGreaterThanOrEqual(2);
+    expect(sections[sections.length - 1].energy).toBeGreaterThan(sections[0].energy);
+  });
+
+  it('handles too-short input without throwing', () => {
+    const result = buildManualAnalysis(new Float32Array(100), ANALYSIS_SAMPLE_RATE, { bpm: 120 });
+    expect(result.bpm).toBe(120);
+    expect(result.sections.length).toBe(1);
+  });
+});
+
+describe('buildManualAnalysisFromCached (no-decode manual-tempo fast path)', () => {
+  it('builds a beat grid from a cached durationSec without touching PCM', () => {
+    const cached = { sections: [{ label: 'Section 1', startSec: 0, endSec: 16, energy: 1 }], durationSec: 16 };
+    const result = buildManualAnalysisFromCached(cached, { bpm: 120, offsetSec: 0.5 });
+    expect(result.bpm).toBe(120);
+    expect(result.durationSec).toBe(16);
+    expect(result.beats[0]).toBeCloseTo(0.5, 3);
+    expect(result.beats[1] - result.beats[0]).toBeCloseTo(0.5, 3);
+    expect(result.beats[result.beats.length - 1]).toBeLessThanOrEqual(16);
+  });
+
+  it('passes the cached sections through unchanged (does not re-segment)', () => {
+    const sections = [{ label: 'Section 1', startSec: 0, endSec: 10, energy: 0.4 }, { label: 'Section 2', startSec: 10, endSec: 20, energy: 1 }];
+    const result = buildManualAnalysisFromCached({ sections, durationSec: 20 }, { bpm: 90 });
+    expect(result.sections).toBe(sections);
+  });
+
+  it('matches buildManualAnalysis\'s beat/downbeat output for the same inputs', () => {
+    const samples = new Float32Array(ANALYSIS_SAMPLE_RATE * 16);
+    const fromPcm = buildManualAnalysis(samples, ANALYSIS_SAMPLE_RATE, { bpm: 128, offsetSec: 0.1 });
+    const fromCached = buildManualAnalysisFromCached(
+      { sections: fromPcm.sections, durationSec: fromPcm.durationSec },
+      { bpm: 128, offsetSec: 0.1 },
+    );
+    expect(fromCached.beats).toEqual(fromPcm.beats);
+    expect(fromCached.downbeats).toEqual(fromPcm.downbeats);
   });
 });
 

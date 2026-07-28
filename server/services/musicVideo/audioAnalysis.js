@@ -375,6 +375,21 @@ function segmentSections(energy, fps, durationSec) {
   return sections;
 }
 
+// The too-short guard + onset-envelope + section-segmentation pass is shared
+// by the auto-detector (analyzePcm) and the manual-tempo builder below — both
+// need the same section map, differing only in how bpm/beats are derived from
+// it. Returns `onset: null` for the too-short case so callers that need onset
+// (only analyzePcm does) can branch on it without re-checking sample length.
+function deriveSections(samples, sampleRate, hop) {
+  const durationSec = samples?.length ? samples.length / sampleRate : 0;
+  if (!samples || samples.length < hop * 4) {
+    return { sections: segmentSections(new Float32Array(0), 1, durationSec), onset: null, fps: null };
+  }
+  const { onset, energy, fps } = onsetEnvelope(samples, sampleRate, hop);
+  const sections = segmentSections(energy, fps, durationSec);
+  return { sections, onset, fps };
+}
+
 /**
  * Pure DSP core: analyze a mono PCM buffer and return the `audioAnalysis`
  * shape. Deterministic and ffmpeg-free, so it is unit-tested directly.
@@ -389,15 +404,12 @@ function segmentSections(energy, fps, durationSec) {
 export function analyzePcm(samples, sampleRate, { hop = ONSET_HOP } = {}) {
   const durationSec = samples?.length ? samples.length / sampleRate : 0;
   const roundedDuration = Number(durationSec.toFixed(3));
-
-  // Too short to analyze: still report a single section spanning the track.
-  if (!samples || samples.length < hop * 4) {
-    return { bpm: null, beats: [], downbeats: [], sections: segmentSections(new Float32Array(0), 1, durationSec), durationSec: roundedDuration };
+  const { sections, onset, fps } = deriveSections(samples, sampleRate, hop);
+  if (!onset) {
+    return { bpm: null, beats: [], downbeats: [], sections, durationSec: roundedDuration };
   }
 
-  const { onset, energy, fps } = onsetEnvelope(samples, sampleRate, hop);
   const { bpm } = estimateTempo(onset, fps);
-  const sections = segmentSections(energy, fps, durationSec);
   const roundedBpm = bpm == null ? null : Number(bpm.toFixed(2));
   const beats = roundedBpm == null ? [] : fitBeats(onset, fps, bpm, durationSec);
   const downbeats = roundedBpm == null ? [] : pickDownbeats(beats, onset, fps);
@@ -416,4 +428,68 @@ export async function analyzeAudioFile(audioPath, { signal } = {}) {
   const decoded = await decodeAudioToPcm(audioPath, { signal });
   if (!decoded) return null;
   return analyzePcm(decoded.samples, decoded.sampleRate);
+}
+
+// Manual-tempo fallback (see `estimateTempo`'s TEMPO_PEAK_MIN/MIN_BPM/MAX_BPM
+// comments above for why bpm can come back null): lets a director supply a
+// known BPM + first-downbeat offset by ear instead, producing the same shape
+// the auto path does so every beat-grid consumer (BeatTimeline, auto-arrange,
+// beatSnapClips) works off it identically.
+function manualBeatTimes(bpm, offsetSec, durationSec) {
+  const period = 60 / bpm;
+  const beats = [];
+  for (let t = offsetSec; t <= durationSec; t += period) beats.push(Number(t.toFixed(3)));
+  return beats;
+}
+
+const manualDownbeats = (beats) => beats.filter((_, i) => i % 4 === 0);
+
+/**
+ * Build the manual-tempo `audioAnalysis` shape from an already-cached prior
+ * analysis's `sections`/`durationSec` — pure arithmetic, no decode. The UI
+ * only offers manual entry after a prior `/analyze` call has cached those
+ * fields (even when it found no bpm, `analyzePcm` still returns them), so this
+ * is the common path; it avoids re-decoding + re-segmenting audio the server
+ * already has a section map for.
+ *
+ * @param {{ sections: Array, durationSec: number }} cached prior audioAnalysis
+ * @param {{ bpm: number, offsetSec?: number }} tempo
+ */
+export function buildManualAnalysisFromCached({ sections, durationSec }, { bpm, offsetSec = 0 }) {
+  const beats = manualBeatTimes(bpm, offsetSec, durationSec);
+  return { bpm: Number(bpm.toFixed(2)), beats, downbeats: manualDownbeats(beats), sections, durationSec };
+}
+
+/**
+ * Build the manual-tempo `audioAnalysis` shape from raw PCM (no cached prior
+ * analysis to reuse) — `beats` are an even grid from `offsetSec` at the given
+ * BPM; `downbeats` assume 4/4 starting on the first beat; sections still come
+ * from real energy-novelty segmentation via the shared `deriveSections` pass.
+ *
+ * @param {Float32Array} samples mono PCM
+ * @param {number} sampleRate
+ * @param {{ bpm: number, offsetSec?: number, hop?: number }} opts
+ */
+export function buildManualAnalysis(samples, sampleRate, { bpm, offsetSec = 0, hop = ONSET_HOP }) {
+  const durationSec = samples?.length ? samples.length / sampleRate : 0;
+  const roundedDuration = Number(durationSec.toFixed(3));
+  const beats = manualBeatTimes(bpm, offsetSec, durationSec);
+  const { sections } = deriveSections(samples, sampleRate, hop);
+  return { bpm: Number(bpm.toFixed(2)), beats, downbeats: manualDownbeats(beats), sections, durationSec: roundedDuration };
+}
+
+/**
+ * Decode `audioPath` via ffmpeg and build the manual-tempo analysis. Returns
+ * `null` under the same conditions as `analyzeAudioFile` (decode failure).
+ * Callers that already have a cached prior analysis should prefer
+ * `buildManualAnalysisFromCached` to skip the decode entirely.
+ *
+ * @param {string} audioPath absolute path to the source audio
+ * @param {{ bpm: number, offsetSec?: number }} tempo
+ * @param {{ signal?: AbortSignal }} [opts]
+ */
+export async function analyzeAudioFileManual(audioPath, { bpm, offsetSec = 0 }, { signal } = {}) {
+  const decoded = await decodeAudioToPcm(audioPath, { signal });
+  if (!decoded) return null;
+  return buildManualAnalysis(decoded.samples, decoded.sampleRate, { bpm, offsetSec });
 }

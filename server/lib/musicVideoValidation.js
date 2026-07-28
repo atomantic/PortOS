@@ -96,6 +96,15 @@ export const musicVideoPlanRequestSchema = z.object({
   model: z.string().max(200).optional(),
 }).strict();
 
+// Manual-tempo fallback (see services/musicVideo/audioAnalysis.js for why bpm
+// can come back null from auto-detection). `bpm` range is loosened from the
+// detector's own search window for manual entry (20-300 covers everything
+// from a ballad to hardcore/gabber); `offsetSec` is the first downbeat, by ear.
+export const musicVideoManualAnalysisSchema = z.object({
+  bpm: z.number().min(20).max(300),
+  offsetSec: z.number().min(0).max(600).optional(),
+}).strict();
+
 // MuScriptor audio → MIDI transcription request (services/audioMidiTranscription.js).
 // `model` picks the MuScriptor size tier; the service clamps unknown values to
 // its default, this only types the field.

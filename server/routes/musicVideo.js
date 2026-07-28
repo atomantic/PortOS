@@ -18,6 +18,7 @@ import {
   musicVideoSceneUpdateSchema,
   musicVideoSceneReorderSchema,
   musicVideoPlanRequestSchema,
+  musicVideoManualAnalysisSchema,
   musicVideoTranscribeMidiRequestSchema,
 } from '../lib/validation.js';
 import { PATHS } from '../lib/fileUtils.js';
@@ -40,7 +41,7 @@ import {
   attachMidiTranscriptionSseClient,
   cancelMidiTranscription,
 } from '../services/audioMidiTranscription.js';
-import { analyzeAudioFile } from '../services/musicVideo/audioAnalysis.js';
+import { analyzeAudioFile, analyzeAudioFileManual, buildManualAnalysisFromCached } from '../services/musicVideo/audioAnalysis.js';
 import { renderMusicVideo, attachRenderSseClient, cancelRender } from '../services/musicVideo/render.js';
 import { planProject } from '../services/musicVideo/planner.js';
 import { getTrack } from '../services/tracks/index.js';
@@ -102,6 +103,28 @@ router.post('/:id/analyze', asyncHandler(async (req, res) => {
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const audioPath = await resolveAudioPath(project);
   const analysis = await analyzeAudioFile(audioPath);
+  if (!analysis) {
+    throw new ServerError('Could not analyze audio (decode failed or ffmpeg unavailable)', { status: 422, code: 'ANALYZE_FAILED' });
+  }
+  const updated = await setProjectAnalysis(project.id, analysis);
+  res.json(updated);
+}));
+
+// Manual-tempo fallback: lets a director supply a known BPM + first-downbeat
+// offset by ear when the auto-detector caches `bpm: null` (see
+// services/musicVideo/audioAnalysis.js `estimateTempo` for why). Reuses the
+// prior analysis's cached `sections`/`durationSec` when present — the UI only
+// offers this after a prior `/analyze` call has cached them, so this is pure
+// arithmetic in the common case rather than a second ffmpeg decode; it only
+// falls back to decoding when no usable prior analysis exists.
+router.post('/:id/analyze/manual', asyncHandler(async (req, res) => {
+  const { bpm, offsetSec } = validateRequest(musicVideoManualAnalysisSchema, req.body);
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const cached = project.audioAnalysis;
+  const analysis = cached && Array.isArray(cached.sections) && typeof cached.durationSec === 'number'
+    ? buildManualAnalysisFromCached(cached, { bpm, offsetSec })
+    : await analyzeAudioFileManual(await resolveAudioPath(project), { bpm, offsetSec });
   if (!analysis) {
     throw new ServerError('Could not analyze audio (decode failed or ffmpeg unavailable)', { status: 422, code: 'ANALYZE_FAILED' });
   }
