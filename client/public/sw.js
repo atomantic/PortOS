@@ -57,6 +57,47 @@ const CURRENT_CACHES = new Set([SHELL_CACHE, ASSET_CACHE, STATIC_CACHE, FONT_CAC
 // (every SPA navigation resolves to the same index.html on the server).
 const SHELL_KEY = '/index.html';
 
+// Last-resort HTML for a failed navigation when NEITHER the offline shell nor
+// an exact-URL cache entry exists (e.g. the very first install, before the
+// precache has committed, combined with a flaky-link fetch failure). A bare
+// `Response.error()` here is an opaque network-error the browser can't render
+// — a dead tab with no way to recover, since the SW sits upstream of React
+// ever mounting. This is a minimal, dependency-free page so it needs no fetch
+// of its own to render.
+const OFFLINE_FALLBACK_HTML = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PortOS — Connection failed</title>
+<style>
+  body { margin: 0; display: flex; align-items: center; justify-content: center; min-height: 100vh;
+    font-family: system-ui, -apple-system, sans-serif; background: #111827; color: #e5e7eb; text-align: center; }
+  .box { max-width: 22rem; padding: 2rem; }
+  h1 { font-size: 1.25rem; margin: 0 0 0.5rem; }
+  p { color: #9ca3af; margin: 0 0 1.25rem; }
+  button { font: inherit; padding: 0.6rem 1.4rem; border-radius: 0.4rem; border: none;
+    background: #3b82f6; color: #fff; cursor: pointer; }
+  button:hover { background: #2563eb; }
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>Connection failed</h1>
+  <p>PortOS couldn't reach the server, and no offline copy of this page is cached yet.</p>
+  <button onclick="location.reload()">Retry</button>
+</div>
+</body>
+</html>`;
+
+function offlineFallbackResponse() {
+  return new Response(OFFLINE_FALLBACK_HTML, {
+    status: 503,
+    statusText: 'Service Unavailable',
+    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+  });
+}
+
 // Cap the immutable-asset cache so many rebuilds don't grow it without bound.
 // Old build chunks accumulate here (their hashed names never collide); trim to
 // the most-recently-added entries. Generous because a single build's chunk set
@@ -260,7 +301,9 @@ async function navigationHandler(event, onCachingSettled) {
     // Last resort: whatever we have for this exact navigation URL.
     const exact = await caches.match(event.request).catch(() => null);
     if (exact) return exact;
-    return Response.error();
+    // Nothing cached at all — render an actionable page instead of an opaque
+    // network-error response.
+    return offlineFallbackResponse();
   }
 }
 

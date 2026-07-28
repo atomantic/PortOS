@@ -1,5 +1,9 @@
 # Unreleased Changes
 
+## Offline reliability
+
+- **[issue-3174] A dropped connection on first visit no longer strands the tab on a dead browser network-error page.** If the service worker hasn't finished caching the offline app shell yet (a fresh install, or a deploy that just activated) and a page navigation fails over a flaky link, the tab used to hit an opaque, unrecoverable network error with no way to retry. It now shows a plain "Connection failed" page with a Retry button instead.
+
 ## Music Video
 
 - **A track that "Analyze" reports as having no detectable tempo can now get a beat map by hand.** The offline detector deliberately reports no BPM rather than guessing when a track's beats aren't strong/periodic enough or its tempo falls outside its search range — which used to leave the whole beat grid (timeline, AI Plan, Auto-arrange, beat-snapped render) permanently unusable. When Analyze finds no tempo, a "set it by ear" row now appears: enter a BPM (or use Tap tempo) and the first downbeat's offset, and the same beat/downbeat/section map the auto path produces gets cached on the project.

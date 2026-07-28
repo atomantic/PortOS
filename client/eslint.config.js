@@ -11,6 +11,7 @@ const browserGlobals = {
   requestAnimationFrame: 'readonly', cancelAnimationFrame: 'readonly',
   queueMicrotask: 'readonly',
   fetch: 'readonly', URL: 'readonly', URLSearchParams: 'readonly',
+  Request: 'readonly', Response: 'readonly',
   EventSource: 'readonly',
   FormData: 'readonly', File: 'readonly', FileReader: 'readonly',
   Blob: 'readonly', Event: 'readonly', CustomEvent: 'readonly',
