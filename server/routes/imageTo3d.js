@@ -227,7 +227,7 @@ router.get('/trellis2/install', asyncHandler((req, res) => handleTargetInstall('
 
 // ── Image-to-3D model records ─────────────────────────────────────────────
 // Namespaced under /models so `/:id` never shadows the `/targets` and
-// `/trellis2/install` routes above. These drive the /media/3d page: create a
+// `/trellis2/install` routes above. These drive the /3d page: create a
 // record from a gallery image (which kicks off the local render), poll the
 // record for status, re-generate, delete, and download the exported GLB.
 

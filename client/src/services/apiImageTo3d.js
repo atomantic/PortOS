@@ -1,6 +1,6 @@
 import { request } from './apiCore.js';
 
-// Image-to-3D (the /media/3d page): the selectable targets (TRELLIS.2, …)
+// Image-to-3D (the /3d page): the selectable targets (TRELLIS.2, …)
 // annotated with host availability + install status, plus the per-image model
 // records that drive create → render → preview → download.
 

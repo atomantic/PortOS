@@ -89,16 +89,16 @@ const PROJECT_ANALYZED = {
 };
 
 // The page now selects the open project via the route param
-// (/media/music-video/:projectId), so tests render it inside a router that
+// (/music-video/:projectId), so tests render it inside a router that
 // serves the same component at both the index and the :projectId route —
 // clicking a project navigates to its id'd URL, and the component re-reads
 // useParams() to open its board (no remount: both routes render the same
 // component type, so React preserves the instance across the param change).
 const renderMV = () => render(
-  <MemoryRouter initialEntries={['/media/music-video']}>
+  <MemoryRouter initialEntries={['/music-video']}>
     <Routes>
-      <Route path="/media/music-video" element={<MusicVideo />} />
-      <Route path="/media/music-video/:projectId" element={<MusicVideo />} />
+      <Route path="/music-video" element={<MusicVideo />} />
+      <Route path="/music-video/:projectId" element={<MusicVideo />} />
     </Routes>
   </MemoryRouter>,
 );
@@ -127,12 +127,12 @@ function NavTo({ to }) {
   return <button onClick={() => navigate(to)}>{`go-${to}`}</button>;
 }
 const renderMVWithNav = (to) => render(
-  <MemoryRouter initialEntries={['/media/music-video']}>
+  <MemoryRouter initialEntries={['/music-video']}>
     <LocationProbe />
     <NavTo to={to} />
     <Routes>
-      <Route path="/media/music-video" element={<MusicVideo />} />
-      <Route path="/media/music-video/:projectId" element={<MusicVideo />} />
+      <Route path="/music-video" element={<MusicVideo />} />
+      <Route path="/music-video/:projectId" element={<MusicVideo />} />
     </Routes>
   </MemoryRouter>,
 );
@@ -420,10 +420,10 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
 
   it('bounces URL-driven navigation (deep link / Back / ⌘K) away from a project with an in-flight import back to it', async () => {
     listMusicVideoProjects.mockResolvedValue([PROJECT_NO_CLIP]); // mv-2
-    renderMVWithNav('/media/music-video/mv-3');
+    renderMVWithNav('/music-video/mv-3');
     // Open mv-2 and start its detail-view import.
     fireEvent.click(await screen.findByRole('button', { name: new RegExp(PROJECT_NO_CLIP.name) }));
-    await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/media/music-video/mv-2'));
+    await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/music-video/mv-2'));
     const editInput = screen.getAllByPlaceholderText(/Import audio from a YouTube URL/i)
       .find((el) => el.id !== 'mv-yt-create');
     fireEvent.change(editInput, { target: { value: 'https://youtu.be/xyz' } });
@@ -433,9 +433,9 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     // A router-driven jump to another project (not via the list buttons, so it
     // bypasses selectProject's guard) must be bounced back to the import's
     // project with the same guard message.
-    fireEvent.click(screen.getByRole('button', { name: 'go-/media/music-video/mv-3' }));
+    fireEvent.click(screen.getByRole('button', { name: 'go-/music-video/mv-3' }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/before switching projects/i)));
-    await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/media/music-video/mv-2'));
+    await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/music-video/mv-2'));
   });
 
   it('blocks deleting the selected project while its import is in flight', async () => {

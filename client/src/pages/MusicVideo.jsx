@@ -96,7 +96,7 @@ function YoutubeImportControls({ id, url, onUrlChange, job, onStart, compact = f
 
 export default function MusicVideo() {
   // Deep-linkable project selection: the selected project lives in the URL
-  // (/media/music-video/:projectId) rather than local state, so a project's
+  // (/music-video/:projectId) rather than local state, so a project's
   // scene board is directly shareable/bookmarkable and reachable from the
   // media job-completion hooks. selectProject() navigates; the browser URL is
   // the single source of truth for "which project is open".
@@ -153,7 +153,7 @@ export default function MusicVideo() {
       toast.error('Finish or cancel the in-progress YouTube import before switching projects');
       return;
     }
-    navigate(id ? `/media/music-video/${id}` : '/media/music-video');
+    navigate(id ? `/music-video/${id}` : '/music-video');
   };
   // Drop the binding once the import settles (or is cancelled) so the backstop
   // below stops guarding a project the user is free to leave again.
@@ -170,7 +170,7 @@ export default function MusicVideo() {
     if (!ytImportEdit.active || !ytEditProjectId) return;
     if (routeProjectId !== ytEditProjectId) {
       toast.error('Finish or cancel the in-progress YouTube import before switching projects');
-      navigate(`/media/music-video/${ytEditProjectId}`, { replace: true });
+      navigate(`/music-video/${ytEditProjectId}`, { replace: true });
     }
   }, [routeProjectId, ytImportEdit.active, ytEditProjectId, navigate]);
   // Merge ONLY a scene's referenceImageId via a functional update so a render
@@ -265,7 +265,7 @@ export default function MusicVideo() {
     deleteMusicVideoProject(id, { silent: true })
       .then(() => {
         setProjects((prev) => prev.filter((p) => p.id !== id));
-        if (selectedId === id) navigate('/media/music-video');
+        if (selectedId === id) navigate('/music-video');
       })
       .catch((err) => toast.error(err?.message || 'Failed to delete project'));
   };
@@ -706,7 +706,7 @@ export default function MusicVideo() {
           {!selected && !loading && routeProjectId && (
             <p className="text-sm text-port-text-muted">
               Project not found — it may have been deleted.{' '}
-              <button onClick={() => navigate('/media/music-video')} className="text-port-accent underline">Back to projects</button>
+              <button onClick={() => navigate('/music-video')} className="text-port-accent underline">Back to projects</button>
             </p>
           )}
           {!selected && (loading || !routeProjectId) && <p className="text-sm text-port-text-muted">Select or create a project to open its scene board.</p>}
