@@ -15,7 +15,7 @@ import { buildPrompt } from './promptService.js';
 import { getToolsSummaryForPrompt } from './tools.js';
 import { getActiveProvider } from './providers.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
-import { readJSONFile, loadSlashdoFile, loadSlashdoLib, writeResolvedSlashdoBody, PATHS, tryReadFile } from '../lib/fileUtils.js';
+import { readJSONFile, loadSlashdoFile, loadSlashdoLib, writeResolvedSlashdoBody, PATHS, tryReadFile, expandHome } from '../lib/fileUtils.js';
 import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, resolveReviewUsernames, resolveOptionalReviewers, resolveReviewerMaxRounds, resolveReviewerModels, reviewerModelsFromDefaults, resolveKeyedReviewers, buildReviewWithArgs, buildReviewersCsv } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { canTypeSlashCommands, resolveSlashdoInvocation, buildSlashdoSection, unreachableReviewerIncludes, SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
@@ -2025,7 +2025,13 @@ export async function getAppWorkspace(appName) {
 
   if (!app) return unresolved(`App '${appName}' not found in apps registry`);
   if (!app.repoPath) return unresolved(`App '${appName}' has no repoPath`);
-  return app.repoPath;
+  // Expand here, not just at the spawn boundary. Callers do more with this than
+  // spawn into it: agentLifecycle persists it as an agent's `sourceWorkspace`,
+  // and the worktree cleanup/merge paths later hand that value to a child
+  // process as its cwd. Node never shell-expands `~`, so returning the raw
+  // tilde form would let a task start (the spawn path expands) and then strand
+  // its worktree and branch when cleanup runs against a path that doesn't exist.
+  return expandHome(app.repoPath);
 }
 
 /**

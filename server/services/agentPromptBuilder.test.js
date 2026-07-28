@@ -50,6 +50,9 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   return {
     ...actual,
     loadSlashdoFile: vi.fn().mockResolvedValue(null),
+    // getAppWorkspace reads data/apps.json through this — mocked so the tilde
+    // tests below never touch the real registry.
+    readJSONFile: vi.fn(actual.readJSONFile),
     // #3110 — staging the resolved copy is real disk I/O; mocked so tests can
     // assert the pointer path without writing under data/.
     writeResolvedSlashdoBody: vi.fn().mockResolvedValue(null),
@@ -66,7 +69,7 @@ vi.mock('./codeReview.js', () => ({
   getCodeReviewDefaults: vi.fn().mockResolvedValue({ reviewers: ['copilot'] }),
 }));
 
-import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBullet, reconcileSplitContext, buildReviewLoopFollowUpSection } from './agentPromptBuilder.js';
+import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBullet, reconcileSplitContext, buildReviewLoopFollowUpSection, getAppWorkspace } from './agentPromptBuilder.js';
 import { getCodeReviewDefaults } from './codeReview.js'; // mocked above — control the configured default
 import { isTruthyMeta } from './agentState.js';
 import { buildPrompt } from './promptService.js'; // mocked above — inspect call args
@@ -1941,5 +1944,34 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
       const [, , opts] = vi.mocked(writeResolvedSlashdoBody).mock.calls.at(-1);
       expect(opts.skipIncludes).toContain('copilot-review-loop');
     });
+  });
+});
+
+describe('getAppWorkspace — tilde expansion (#3180)', () => {
+  // Callers do more than spawn into this: agentLifecycle persists it as an
+  // agent's sourceWorkspace, and worktree cleanup/merge later hand that value
+  // to a child process as cwd. Node never shell-expands `~`, so a raw tilde
+  // here lets a task start (the spawn path expands) and then strands its
+  // worktree and branch when cleanup runs against a path that doesn't exist.
+  it('returns an expanded path so worktree cleanup can use it as a cwd', async () => {
+    const { homedir } = await import('os');
+    const { join } = await import('path');
+    const { readJSONFile } = await import('../lib/fileUtils.js');
+
+    readJSONFile.mockResolvedValueOnce({
+      apps: { 'tilde-app': { name: 'Tilde App', repoPath: '~/some-repo' } },
+    });
+
+    const resolved = await getAppWorkspace('tilde-app');
+    expect(resolved).toBe(join(homedir(), 'some-repo'));
+    expect(resolved.startsWith('~')).toBe(false);
+  });
+
+  it('leaves an already-absolute repoPath untouched', async () => {
+    const { readJSONFile } = await import('../lib/fileUtils.js');
+    readJSONFile.mockResolvedValueOnce({
+      apps: { 'abs-app': { name: 'Abs App', repoPath: '/srv/repos/abs-app' } },
+    });
+    expect(await getAppWorkspace('abs-app')).toBe('/srv/repos/abs-app');
   });
 });
