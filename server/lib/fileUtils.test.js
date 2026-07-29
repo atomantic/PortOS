@@ -21,6 +21,7 @@ vi.mock('fs/promises', async (importOriginal) => {
 });
 import {
   assertSafeFilename,
+  isSafeFilename,
   atomicWrite,
   ensureDir,
   pathExists,
@@ -817,6 +818,32 @@ describe('fileUtils', () => {
         .toThrow(/each extension must be a non-empty string starting with/);
       expect(() => assertSafeFilename('foo.png', { extensions: [123] }))
         .toThrow(/each extension must be a non-empty string starting with/);
+    });
+
+    // `isSafeFilename` is the same rule as a predicate, for read-only callers
+    // that must report a bad name as data. The two share one implementation, so
+    // the contract worth pinning is that they never disagree — a future edit to
+    // either must keep the gate and the reported verdict in lockstep.
+    it('agrees with isSafeFilename on every input class', () => {
+      const extensions = ['.png', '.mp3'];
+      const cases = [
+        'foo.png', 'FOO.PNG', 'x.mp3', 'my..render.png', // accepted
+        'foo.jpg', 'png', 'foo.png.txt', // bad extension
+        'sub/foo.png', 'sub\\foo.png', '/foo.png', '../foo.png', '..\\foo.png', // separators
+        '.', '..', // exact traversal
+        'foo\0.png', '\0', // null bytes
+        '', null, undefined, 0, false, [], {}, // missing / non-string
+      ];
+      for (const name of cases) {
+        let threw = false;
+        try {
+          assertSafeFilename(name, { extensions });
+        } catch {
+          threw = true;
+        }
+        expect(isSafeFilename(name, extensions), `disagreed on ${JSON.stringify(name)}`)
+          .toBe(!threw);
+      }
     });
 
     it('honors requiredMessage override for the missing-input case only', () => {
