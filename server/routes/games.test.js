@@ -67,6 +67,13 @@ describe('Game routes', () => {
     expect(games.getGameIntegrity).toHaveBeenCalledWith('game-1');
   });
 
+  it('404s the integrity preflight for a game that does not exist', async () => {
+    games.getGameIntegrity.mockResolvedValueOnce(null);
+    const response = await request(makeApp()).get('/api/games/missing/integrity');
+    expect(response.status).toBe(404);
+    expect(response.body.code).toBe('NOT_FOUND');
+  });
+
   it('passes explicit provider, model, effort, and prompt to feedback', async () => {
     games.requestGameFeedback.mockResolvedValueOnce({
       feedback: { id: 'feedback-1', text: 'Add a victory cue.' },
