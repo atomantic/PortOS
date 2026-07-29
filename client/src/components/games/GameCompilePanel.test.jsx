@@ -60,6 +60,48 @@ describe('GameCompilePanel', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('does not match its recorded hash');
   });
 
+  it('reports a failed preflight as unverified, not as "not built"', () => {
+    // A failed integrity fetch must not read the same as "no bundle exists" —
+    // that would leave Build enabled on an unverified tree and label an existing
+    // bundle "Not built" right above the block describing it.
+    const onRetryIntegrity = vi.fn();
+    render(
+      <GameCompilePanel
+        game={{ compiledManifest: { version: 2, spriteCount: 1, musicCount: 0, builtAt: '2026-07-28T12:00:00.000Z', manifestPath: 'manifests/game-assets-v2.json' } }}
+        integrity={null}
+        loadingIntegrity={false}
+        onCompile={() => {}}
+        onLaunch={() => {}}
+        onRetryIntegrity={onRetryIntegrity}
+      />,
+    );
+
+    expect(screen.getByText('Unverified')).toBeInTheDocument();
+    expect(screen.queryByText('Not built')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Rebuild & verify' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Start game' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRetryIntegrity).toHaveBeenCalledOnce();
+  });
+
+  it('does not offer to build while the preflight is still loading', () => {
+    render(
+      <GameCompilePanel
+        game={game}
+        integrity={null}
+        loadingIntegrity
+        onCompile={() => {}}
+        onLaunch={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('Checking…')).toBeInTheDocument();
+    // Loading is not the same as failed — no error banner, no retry.
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Build & verify' })).toBeDisabled();
+  });
+
   it('allows a verified bundle to launch', () => {
     const onLaunch = vi.fn();
     render(

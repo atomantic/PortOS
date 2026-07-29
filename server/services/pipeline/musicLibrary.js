@@ -18,7 +18,13 @@ import { stat, copyFile, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, extname, basename } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, ensureDir, assertSafeFilename, listDirectoryByExtension } from '../../lib/fileUtils.js';
+import {
+  PATHS,
+  ensureDir,
+  assertSafeFilename,
+  isSafeFilename,
+  listDirectoryByExtension,
+} from '../../lib/fileUtils.js';
 
 // Mirror of the sanitizer's MUSIC_SOURCES set in `services/pipeline/issues.js`.
 // Exported so routes don't sprinkle bare strings; `'gen'` is reserved for the
@@ -66,6 +72,17 @@ export function assertSafeMusicFilename(filename) {
     subject: 'music filename',
   });
 }
+
+/**
+ * The same rule as a predicate, for read-only callers that must treat a bad
+ * stored filename as data. `sanitizeTrack` only `trimTo`s the top-level
+ * `audioFilename` (unlike `renders[]`, which goes through
+ * `trackAudioFilename`), so a legacy or peer-synced track can carry an
+ * unsupported name — a preflight has to report that as one blocked asset, not
+ * 400 the whole sweep via `assertSafeMusicFilename`.
+ */
+export const isSafeMusicFilename = (filename) =>
+  isSafeFilename(filename, SUPPORTED_AUDIO_EXTENSIONS);
 
 /**
  * Generate a fresh deterministic basename for a newly-uploaded track. Keeps

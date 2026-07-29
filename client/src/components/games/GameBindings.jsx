@@ -1,19 +1,25 @@
 import { useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Music2, PersonStanding, Plus, Unlink } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, HelpCircle, Music2, PersonStanding, Plus, Unlink } from 'lucide-react';
 import Pill from '../ui/Pill.jsx';
 
 const selectClass = 'w-full min-h-[44px] rounded-lg border border-port-border bg-port-bg px-3 py-2 text-sm text-white';
 const actionClass = 'inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-port-accent px-3 py-2 text-sm font-medium text-white disabled:opacity-50';
 
-// Anything the preflight didn't mark `ready` — including an asset it hasn't
-// reported on yet — reads as needing attention. Sprites and music share the
-// mapping so a new status can't render one way in one list and another in the
-// other.
+// Sprites and music share this mapping so a new status can't render one way in
+// one list and another in the other. Three outcomes, deliberately distinct:
+// no preflight result at all (it hasn't loaded, or the fetch failed) is
+// UNKNOWN, not a warning — painting every asset amber because verification is
+// unavailable claims a problem nobody detected. An unrecognized status still
+// falls to `blocked`, which is the conservative read for a real verdict.
 const HEALTH_TONES = {
   ready: { Icon: CheckCircle2, className: 'text-emerald-400' },
   blocked: { Icon: AlertTriangle, className: 'text-amber-400' },
+  unknown: { Icon: HelpCircle, className: 'text-gray-500' },
 };
-const healthTone = (health) => HEALTH_TONES[health?.status] || HEALTH_TONES.blocked;
+const healthTone = (health) => {
+  if (!health) return HEALTH_TONES.unknown;
+  return HEALTH_TONES[health.status] || HEALTH_TONES.blocked;
+};
 
 function BindingRow({ label, detail, health, disabled, onUnbind, unbindTitle }) {
   const { Icon, className } = healthTone(health);

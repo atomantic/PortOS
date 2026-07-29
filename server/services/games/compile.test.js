@@ -70,6 +70,7 @@ vi.mock('../tracks/index.js', () => ({
 
 vi.mock('../pipeline/musicLibrary.js', () => ({
   statMusicTrack: vi.fn(async (filename) => ({ filename, sizeBytes: 100 })),
+  isSafeMusicFilename: vi.fn((name) => /\.(?:mp3|wav|m4a|ogg|flac)$/i.test(String(name || ''))),
 }));
 
 import { atomicWrite } from '../../lib/fileUtils.js';

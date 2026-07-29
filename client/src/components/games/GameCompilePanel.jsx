@@ -3,6 +3,7 @@ import {
   Boxes,
   CheckCircle2,
   CircleDashed,
+  HelpCircle,
   Play,
   RefreshCw,
   ShieldCheck,
@@ -31,6 +32,14 @@ const statusStyle = {
     label: 'Not built',
     className: 'border-port-border bg-port-bg/60 text-gray-400',
   },
+  // "The preflight could not be read" is NOT "nothing is built" — collapsing
+  // the two would show "Not built" above a details block describing the bundle
+  // that exists, and would leave Build enabled on an unverified tree.
+  unavailable: {
+    icon: HelpCircle,
+    label: 'Unverified',
+    className: 'border-port-warning/30 bg-port-warning/10 text-port-warning',
+  },
 };
 
 export default function GameCompilePanel({
@@ -42,11 +51,17 @@ export default function GameCompilePanel({
   compileError,
   onCompile,
   onLaunch,
+  onRetryIntegrity,
 }) {
   const current = game.compiledManifest;
-  const bundleStatus = statusStyle[integrity?.bundle?.status] || statusStyle.missing;
+  // Three distinct states, deliberately not collapsed: still fetching, fetched
+  // and reporting, and fetch failed. Only the middle one can unblock a build.
+  const unavailable = !loadingIntegrity && !integrity;
+  const bundleStatus = unavailable
+    ? statusStyle.unavailable
+    : statusStyle[integrity?.bundle?.status] || statusStyle.missing;
   const StatusIcon = bundleStatus.icon;
-  const blocked = integrity && !integrity.readyToCompile;
+  const blocked = !integrity || !integrity.readyToCompile;
   const issues = integrity?.issues || [];
   return (
     <section className="rounded-xl border border-port-border bg-port-card p-4">
@@ -66,7 +81,9 @@ export default function GameCompilePanel({
             onClick={onCompile}
             disabled={compiling || loadingIntegrity || blocked}
             className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-port-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-            title={blocked ? 'Resolve the asset integrity blockers first' : undefined}
+            title={unavailable
+              ? 'Asset verification is unavailable — retry it first'
+              : blocked ? 'Resolve the asset integrity blockers first' : undefined}
           >
             <RefreshCw className={`h-4 w-4 ${compiling ? 'animate-spin' : ''}`} aria-hidden="true" />
             {compiling ? 'Verifying…' : current ? 'Rebuild & verify' : 'Build & verify'}
@@ -103,6 +120,29 @@ export default function GameCompilePanel({
           <div className="font-medium text-white">{integrity?.counts?.verifiedFiles ?? '—'}</div>
         </div>
       </div>
+
+      {unavailable && (
+        <Banner
+          tone="warning"
+          size="md"
+          icon={AlertTriangle}
+          title="Asset verification is unavailable"
+          className="mt-4"
+          actions={onRetryIntegrity ? (
+            <button
+              type="button"
+              onClick={onRetryIntegrity}
+              className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-port-warning/40 px-3 py-2 text-sm font-medium"
+            >
+              <RefreshCw className="h-4 w-4" aria-hidden="true" />
+              Retry
+            </button>
+          ) : undefined}
+        >
+          The preflight could not be read, so nothing below reflects the current state of this
+          game&apos;s assets. Building and starting stay disabled until it succeeds.
+        </Banner>
+      )}
 
       {issues.length > 0 && (
         <Banner

@@ -48,8 +48,13 @@ export default function Game() {
   const [apps, setApps] = useState([]);
   const [sprites, setSprites] = useState([]);
   const [tracks, setTracks] = useState([]);
-  const [integrity, setIntegrity] = useState(null);
-  const [integrityLoading, setIntegrityLoading] = useState(false);
+  // Integrity is keyed by the game it describes, never stored bare. `/game/A` →
+  // `/game/B` reuses the same route, so the component does NOT remount: unkeyed
+  // state would render B's panel with A's verdict — enabling "Start game" for a
+  // game with no verified bundle — and an in-flight fetch for A that resolves
+  // after B's would overwrite B's result permanently, with nothing to clear it.
+  const [integrityFor, setIntegrityFor] = useState(null);
+  const [integrityFetching, setIntegrityFetching] = useState(false);
   const [compileError, setCompileError] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
@@ -80,17 +85,24 @@ export default function Game() {
 
   const refreshIntegrity = useCallback(async () => {
     if (!id) {
-      setIntegrity(null);
+      setIntegrityFor(null);
       return;
     }
-    setIntegrityLoading(true);
-    setIntegrity(await getGameIntegrity(id, silent).catch(() => null));
-    setIntegrityLoading(false);
+    setIntegrityFetching(true);
+    const data = await getGameIntegrity(id, silent).catch(() => null);
+    setIntegrityFor({ gameId: id, data });
+    setIntegrityFetching(false);
   }, [id]);
 
   useEffect(() => {
     refreshIntegrity();
   }, [refreshIntegrity]);
+
+  // Only a result carrying THIS game's id counts. Anything else — another
+  // game's verdict, or nothing fetched yet — reads as "still loading", which
+  // keeps every gate closed rather than open on a stale `canLaunch`.
+  const integrity = integrityFor?.gameId === id ? integrityFor.data : null;
+  const integrityLoading = integrityFetching || integrityFor?.gameId !== id;
 
   const game = useMemo(() => games.find((entry) => entry.id === id) || null, [games, id]);
   const app = apps.find((entry) => entry.id === game?.appId);
@@ -131,14 +143,23 @@ export default function Game() {
     const refreshed = result ? await getGame(game.id, silent).catch(() => null) : null;
     await refreshIntegrity();
     setBusy('');
-    if (!refreshed) {
+    if (!result) {
       setCompileError(message || 'Bundle compilation failed');
       return;
     }
-    replaceGame(refreshed);
-    toast.success(result.created
+    const built = result.created
       ? `Built and verified bundle v${result.version}`
-      : `Bundle v${result.version} is already verified`);
+      : `Bundle v${result.version} is already verified`;
+    // The build landed — say so. A failed re-read is a separate, lesser problem
+    // (this view is out of date), not evidence the build failed; reporting it as
+    // "Bundle compilation failed" would contradict the Verified badge that the
+    // independent integrity refresh just set.
+    toast.success(built);
+    if (!refreshed) {
+      setCompileError('The bundle was built, but this page could not reload it. Refresh to see the new version.');
+      return;
+    }
+    replaceGame(refreshed);
   };
 
   const launch = async () => {
@@ -302,6 +323,7 @@ export default function Game() {
             compileError={compileError}
             onCompile={compile}
             onLaunch={launch}
+            onRetryIntegrity={refreshIntegrity}
           />
         </div>
       )}

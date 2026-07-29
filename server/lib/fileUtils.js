@@ -1414,18 +1414,32 @@ export function assertSafeFilename(filename, { extensions, subject = 'filename',
   if (filename.includes('\0')) {
     throw new ServerError(`Invalid ${subjectText}`, { status: 400, code: 'VALIDATION_ERROR' });
   }
-  const isExactTraversal = filename === '.' || filename === '..';
-  const hasSeparator = filename.includes('/') || filename.includes('\\');
-  const isPureBasename = basename(filename) === filename;
-  // Leading dot is fine for normal hidden files, but combined with the no-
-  // separator rule it's already covered above for `.`/`..`. We keep the
-  // basename equality check so e.g. `subdir\foo.png` (which has a `\` and
-  // also has basename `foo.png`) is still rejected by hasSeparator.
-  const lower = filename.toLowerCase();
-  const extOk = extensions.some((ext) => lower.endsWith(String(ext).toLowerCase()));
-  if (!extOk || hasSeparator || isExactTraversal || !isPureBasename) {
+  if (!isSafeFilename(filename, extensions)) {
     throw new ServerError(`Invalid ${subjectText}`, { status: 400, code: 'VALIDATION_ERROR' });
   }
+}
+
+/**
+ * `assertSafeFilename`'s non-throwing twin: the same rule as a predicate, for
+ * callers that must report a bad name as *data* rather than fail the request —
+ * e.g. a read-only preflight that names one corrupt record as a blocked row
+ * instead of 400-ing the whole sweep. Both share this implementation so the
+ * thrown gate and the reported verdict can never disagree.
+ *
+ * Rejects: empty/non-string, null bytes (they terminate C strings, so some
+ * POSIX syscalls treat the prefix as a separate path), `.`/`..`, any path
+ * separator, anything that isn't already a pure basename, and any extension
+ * outside `extensions`. The basename equality check is kept alongside the
+ * separator check so e.g. `subdir\foo.png` is rejected on both counts.
+ */
+export function isSafeFilename(filename, extensions) {
+  if (!filename || typeof filename !== 'string') return false;
+  if (filename.includes('\0')) return false;
+  if (filename === '.' || filename === '..') return false;
+  if (filename.includes('/') || filename.includes('\\')) return false;
+  if (basename(filename) !== filename) return false;
+  const lower = filename.toLowerCase();
+  return extensions.some((ext) => lower.endsWith(String(ext).toLowerCase()));
 }
 
 /**

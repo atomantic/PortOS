@@ -284,7 +284,10 @@ export function __resetSpriteMetadataCache() {
  *    should not pay a probe per image on every call.
  */
 export async function listSpriteAssets(recordId, { subdir = '', metadata = true } = {}) {
-  const dir = subdir ? join(spriteDir(recordId), subdir) : spriteDir(recordId);
+  // `subdir` goes through the confinement gate rather than a bare join — every
+  // other path this module hands out is confined, and a future caller passing a
+  // request-influenced value shouldn't be the thing that discovers otherwise.
+  const dir = subdir ? resolveSpriteAssetPath(recordId, subdir) : spriteDir(recordId);
   const out = [];
   async function walk(current, relPrefix) {
     let entries;

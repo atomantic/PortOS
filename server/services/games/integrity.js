@@ -17,7 +17,7 @@ import {
 } from '../../lib/fileUtils.js';
 import { canonicalStringify } from '../../lib/objects.js';
 import { getAppById } from '../apps.js';
-import { statMusicTrack } from '../pipeline/musicLibrary.js';
+import { isSafeMusicFilename, statMusicTrack } from '../pipeline/musicLibrary.js';
 import { getAtlasState } from '../sprites/atlas.js';
 import {
   listRuntimeAtlasAssets,
@@ -50,7 +50,18 @@ const blocked = (assetType, identity, code, message, shortMessage = message) => 
   summary: { ...identity, status: 'blocked', message: shortMessage },
 });
 
-const hashIfPresent = (path) => sha256File(path).catch(() => null);
+// A null hash means "no verifiable bytes" — absent, or present but unreadable.
+// The verdict is the same either way (it can never match a recorded hash), but
+// the CAUSE is not: a permissions/descriptor failure on intact bytes reads to
+// the user as corruption and sends them to recompile a perfectly good atlas.
+// ENOENT is the expected case and stays quiet; anything else leaves a
+// breadcrumb naming the real errno.
+const hashIfPresent = (path) => sha256File(path).catch((err) => {
+  if (err?.code !== 'ENOENT') {
+    console.error(`❌ Unreadable game asset ${path}: ${err?.code || ''} ${err?.message || err}`);
+  }
+  return null;
+});
 
 async function resolveRuntimeAtlas(record, current) {
   const identity = { assetId: record.id, name: record.name, kind: record.kind };
@@ -82,7 +93,7 @@ async function resolveRuntimeAtlas(record, current) {
       'sprite',
       identity,
       'SPRITE_ATLAS_INTEGRITY_FAILED',
-      `The runtime atlas for "${record.name}" is missing or does not match its recorded hash`,
+      `The runtime atlas for "${record.name}" is missing, unreadable, or does not match its recorded hash`,
       'Runtime atlas integrity failed',
     );
   }
@@ -196,7 +207,12 @@ async function resolveMusic(binding) {
   }
   const identity = { assetId: track.id, bindingId: binding.id, name: track.title };
 
-  if (!track.audioFilename || !(await statMusicTrack(track.audioFilename))) {
+  // `statMusicTrack` THROWS a 400 on an unsupported filename, and `sanitizeTrack`
+  // only trims the top-level `audioFilename` — so a legacy or peer-synced track
+  // can reach here with one. Screen it first, or one bad track fails the whole
+  // read-only preflight instead of naming itself (same reason the sprite path
+  // guards on `isValidSpriteId`).
+  if (!isSafeMusicFilename(track.audioFilename) || !(await statMusicTrack(track.audioFilename))) {
     return blocked(
       'music',
       identity,
@@ -315,6 +331,13 @@ export async function getGameIntegrity(id) {
     getAppById(game.appId),
     resolveGameAssets(game),
   ]);
+  // Inspect the bundle against the ASSET issues only, BEFORE the app blocker is
+  // appended: `inspectCurrentBundle` reads a non-empty issue list as evidence
+  // the bound assets drifted, so a missing managed app would otherwise report a
+  // byte-perfect bundle as `stale` — "Bound assets changed after this bundle was
+  // built" — which is a false statement about the assets, and pairs an amber
+  // "Needs rebuild" badge with a disabled Rebuild button.
+  const bundle = await inspectCurrentBundle(game, resolved);
   if (!app) {
     resolved.issues.push(issue(
       'app',
@@ -324,7 +347,6 @@ export async function getGameIntegrity(id) {
       'The bound managed app no longer exists',
     ));
   }
-  const bundle = await inspectCurrentBundle(game, resolved);
   const readyToCompile = resolved.issues.length === 0 && Boolean(app);
   return {
     schemaVersion: BUNDLE_SCHEMA_VERSION,
