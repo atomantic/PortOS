@@ -76,7 +76,7 @@ export default function GameCompilePanel({
           <button
             type="button"
             onClick={onLaunch}
-            disabled={launching || !integrity?.canLaunch}
+            disabled={launching || loadingIntegrity || !integrity?.canLaunch}
             className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-40"
             title={!integrity?.canLaunch ? 'Build a current, verified bundle before starting the game' : undefined}
           >

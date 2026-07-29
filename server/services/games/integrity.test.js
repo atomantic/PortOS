@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({
   atlases: {},
   assets: {},
   manifest: null,
+  tracks: {},
 }));
 
 vi.mock('./records.js', () => ({
@@ -41,15 +42,14 @@ vi.mock('../sprites/recordsLogic.js', () => ({
 }));
 
 vi.mock('../tracks/index.js', () => ({
-  getTrack: vi.fn(async (id) => ({
-    id,
-    title: 'Example Theme',
-    audioFilename: 'example-theme.ogg',
-  })),
+  getTrack: vi.fn(async (id) => state.tracks[id] || null),
 }));
 
 vi.mock('../pipeline/musicLibrary.js', () => ({
-  statMusicTrack: vi.fn(async () => ({ sizeBytes: 128 })),
+  statMusicTrack: vi.fn(async (filename) => {
+    if (filename.startsWith('../')) throw new Error('unsafe filename');
+    return { sizeBytes: 128 };
+  }),
 }));
 
 vi.mock('../../lib/fileUtils.js', () => ({
@@ -102,6 +102,13 @@ describe('Game bundle integrity', () => {
     state.assets = {
       props: [{ path: 'atlas/props.png', size: 512 }],
     };
+    state.tracks = {
+      theme: {
+        id: 'theme',
+        title: 'Example Theme',
+        audioFilename: 'example-theme.ogg',
+      },
+    };
     state.manifest = null;
   });
 
@@ -138,6 +145,41 @@ describe('Game bundle integrity', () => {
     expect(resolved.summaries.sprites[0]).toMatchObject({ status: 'blocked' });
   });
 
+  it('does not accept loose atlas files as a compiled character atlas', async () => {
+    state.game.spriteBindings = [{ spriteId: 'draft-character' }];
+    state.game.musicBindings = [];
+    state.assets['draft-character'] = [{ path: 'atlas/placeholder.png', size: 64 }];
+
+    const resolved = await resolveGameAssets(state.game);
+
+    expect(resolved.sprites).toEqual([]);
+    expect(resolved.issues).toEqual([
+      expect.objectContaining({
+        assetId: 'draft-character',
+        code: 'SPRITE_ATLAS_REQUIRED',
+      }),
+    ]);
+  });
+
+  it('reports an invalid stored audio path as one blocked asset', async () => {
+    state.game.spriteBindings = [];
+    state.tracks.theme.audioFilename = '../bad.mp3';
+
+    const resolved = await resolveGameAssets(state.game);
+
+    expect(resolved.music).toEqual([]);
+    expect(resolved.issues).toEqual([
+      expect.objectContaining({
+        assetId: 'theme',
+        code: 'TRACK_AUDIO_INTEGRITY_FAILED',
+      }),
+    ]);
+    expect(resolved.summaries.music[0]).toMatchObject({
+      status: 'blocked',
+      message: 'Audio path invalid',
+    });
+  });
+
   it('marks a complete hash-matching manifest current and launchable', async () => {
     state.game.spriteBindings = state.game.spriteBindings.filter(
       (binding) => binding.spriteId !== 'draft-character',
@@ -166,5 +208,29 @@ describe('Game bundle integrity', () => {
       musicTotal: 1,
       verifiedFiles: 4,
     });
+  });
+
+  it('marks the bundle stale when the serialized game name changes', async () => {
+    state.game.spriteBindings = state.game.spriteBindings.filter(
+      (binding) => binding.spriteId !== 'draft-character',
+    );
+    const resolved = await resolveGameAssets(state.game);
+    state.game.compiledManifest = {
+      version: 3,
+      manifestPath: 'manifests/game-assets-v3.json',
+      manifestSha256: 'bundle-sha',
+      inputSha256: resolved.inputSha256,
+    };
+    state.manifest = {
+      kind: 'portos-game-assets',
+      game: { id: 'game-1', name: state.game.name },
+      version: 3,
+    };
+    state.game.name = 'Renamed Example Game';
+
+    const integrity = await getGameIntegrity('game-1');
+
+    expect(integrity.bundle.status).toBe('stale');
+    expect(integrity.canLaunch).toBe(false);
   });
 });

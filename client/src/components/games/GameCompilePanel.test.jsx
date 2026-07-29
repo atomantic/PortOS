@@ -98,4 +98,24 @@ describe('GameCompilePanel', () => {
     expect(onLaunch).toHaveBeenCalledOnce();
     expect(screen.getByText('Verified')).toBeInTheDocument();
   });
+
+  it('keeps launch disabled while a fresh integrity check is in flight', () => {
+    render(
+      <GameCompilePanel
+        game={game}
+        integrity={{
+          readyToCompile: true,
+          canLaunch: true,
+          bundle: { status: 'current' },
+          issues: [],
+          counts: { spriteReady: 1, spriteTotal: 1, verifiedFiles: 2 },
+        }}
+        loadingIntegrity
+        onCompile={() => {}}
+        onLaunch={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Start game' })).toBeDisabled();
+  });
 });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Boxes, Gamepad2, Images, MessageSquare, Plus } from 'lucide-react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import toast from '../components/ui/Toast';
@@ -55,6 +55,7 @@ export default function Game() {
   const [busy, setBusy] = useState('');
   const [name, setName] = useState('');
   const [appId, setAppId] = useState('');
+  const integrityRequestRef = useRef(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -79,17 +80,25 @@ export default function Game() {
   useEffect(() => { load(); }, [load]);
 
   const refreshIntegrity = useCallback(async () => {
+    const requestId = ++integrityRequestRef.current;
     if (!id) {
       setIntegrity(null);
+      setIntegrityLoading(false);
       return;
     }
     setIntegrityLoading(true);
-    setIntegrity(await getGameIntegrity(id, silent).catch(() => null));
+    const result = await getGameIntegrity(id, silent).catch(() => null);
+    if (requestId !== integrityRequestRef.current) return;
+    setIntegrity(result);
     setIntegrityLoading(false);
   }, [id]);
 
   useEffect(() => {
+    // A prior game's verified state must never enable actions while this
+    // workspace's integrity request is still in flight.
+    setIntegrity(null);
     refreshIntegrity();
+    return () => { integrityRequestRef.current += 1; };
   }, [refreshIntegrity]);
 
   const game = useMemo(() => games.find((entry) => entry.id === id) || null, [games, id]);

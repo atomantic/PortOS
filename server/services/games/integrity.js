@@ -31,6 +31,9 @@ import { gameRecordDir } from './store.js';
 
 export const BUNDLE_SCHEMA_VERSION = 2;
 
+const IMPORTED_RUNTIME_KINDS = new Set(['object', 'props']);
+const MUSIC_STAT_FAILED = Symbol('music-stat-failed');
+
 const issue = (assetType, assetId, name, code, message) => ({
   assetType,
   assetId,
@@ -172,8 +175,10 @@ async function resolveSprite(binding) {
   const runtime = await resolveRuntimeAtlas(record, atlas.current);
   if (runtime) return runtime;
 
-  const imported = await resolveImportedAssets(record);
-  if (imported) return imported;
+  if (IMPORTED_RUNTIME_KINDS.has(record.kind)) {
+    const imported = await resolveImportedAssets(record);
+    if (imported) return imported;
+  }
 
   return blocked(
     'sprite',
@@ -196,7 +201,31 @@ async function resolveMusic(binding) {
   }
   const identity = { assetId: track.id, bindingId: binding.id, name: track.title };
 
-  if (!track.audioFilename || !(await statMusicTrack(track.audioFilename))) {
+  if (!track.audioFilename) {
+    return blocked(
+      'music',
+      identity,
+      'TRACK_AUDIO_REQUIRED',
+      `Render or upload audio for "${track.title}" before building the game bundle`,
+      'Audio render required',
+    );
+  }
+
+  // Persisted records can predate today's filename validation. Keep one
+  // malformed peer-synced track scoped to its blocker row instead of rejecting
+  // the entire game's integrity report.
+  const audioStat = await statMusicTrack(track.audioFilename)
+    .catch(() => MUSIC_STAT_FAILED);
+  if (audioStat === MUSIC_STAT_FAILED) {
+    return blocked(
+      'music',
+      identity,
+      'TRACK_AUDIO_INTEGRITY_FAILED',
+      `The rendered audio path for "${track.title}" is invalid`,
+      'Audio path invalid',
+    );
+  }
+  if (!audioStat) {
     return blocked(
       'music',
       identity,
@@ -255,6 +284,7 @@ export async function resolveGameAssets(game) {
   const inputs = {
     schemaVersion: BUNDLE_SCHEMA_VERSION,
     gameId: game.id,
+    gameName: game.name,
     appId: game.appId,
     sprites,
     music,
