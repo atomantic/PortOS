@@ -1210,6 +1210,10 @@ export default function Layout() {
             location.pathname.startsWith('/brain') ||
             location.pathname.startsWith('/digital-twin') ||
             location.pathname.startsWith('/feature-agents') ||
+            // Game DETAIL workspaces pin their compact header + section tabs
+            // above an internal scrolling panel. Keep the bare /game index on
+            // the normal padded page layout.
+            location.pathname.startsWith('/game/') ||
             location.pathname.startsWith('/goals') ||
             location.pathname.startsWith('/insights') ||
             location.pathname.startsWith('/meatspace') ||

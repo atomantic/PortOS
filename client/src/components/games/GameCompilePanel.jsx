@@ -1,4 +1,5 @@
 import {
+  ArrowRight,
   AlertTriangle,
   Boxes,
   CheckCircle2,
@@ -42,6 +43,7 @@ export default function GameCompilePanel({
   compileError,
   onCompile,
   onLaunch,
+  onReviewIssues,
 }) {
   const current = game.compiledManifest;
   const bundleStatus = statusStyle[integrity?.bundle?.status] || statusStyle.missing;
@@ -112,10 +114,26 @@ export default function GameCompilePanel({
           title={`${issues.length} ${issues.length === 1 ? 'asset needs' : 'assets need'} attention`}
           className="mt-4"
         >
-          <ul className="mt-2 grid gap-1 sm:grid-cols-2">
+          {onReviewIssues ? (
+            <div className="mt-2 flex">
+              <button
+                type="button"
+                onClick={onReviewIssues}
+                className="inline-flex min-h-[36px] w-full items-center justify-center gap-1 rounded-md border border-port-warning/40 bg-port-warning/10 px-3 py-1.5 text-xs font-medium text-port-warning hover:bg-port-warning/20 sm:ml-auto sm:w-auto"
+              >
+                Review affected assets
+                <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </div>
+          ) : null}
+          <ul className="mt-2 grid gap-2 sm:grid-cols-2">
             {issues.map((item) => (
-              <li key={`${item.assetType}-${item.assetId}`} className="truncate" title={item.message}>
-                <span className="font-medium">{item.name}</span>: {item.message}
+              <li
+                key={`${item.assetType}-${item.assetId}`}
+                className="rounded-md border border-port-warning/20 bg-port-bg/30 px-2.5 py-2 text-xs leading-5 text-gray-300"
+              >
+                <span className="block font-medium text-white">{item.name}</span>
+                {item.message}
               </li>
             ))}
           </ul>

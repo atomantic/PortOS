@@ -180,6 +180,21 @@ describe('Layout — persistent mobile touch targets', () => {
   });
 });
 
+describe('Layout — page scroll ownership', () => {
+  it('makes Game details full-bleed while keeping the Game index padded', async () => {
+    const detail = await renderLayout('/game/example-game');
+    const detailMain = screen.getByRole('main');
+    expect(detailMain.className).toContain('overflow-hidden');
+    expect(detailMain.className).not.toContain('md:p-6');
+    detail.unmount();
+
+    await renderLayout('/game');
+    const indexMain = screen.getByRole('main');
+    expect(indexMain.className).toContain('overflow-auto');
+    expect(indexMain.className).toContain('md:p-6');
+  });
+});
+
 describe('Layout — dynamic third-level navigation', () => {
   it('collapses and expands the Series and Universes children', async () => {
     api.listPipelineSeries.mockResolvedValue([{ id: 'series-1', name: 'Example Series' }]);

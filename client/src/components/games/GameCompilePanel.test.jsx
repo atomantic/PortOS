@@ -8,6 +8,7 @@ const game = {
 
 describe('GameCompilePanel', () => {
   it('surfaces integrity blockers and gates build and launch', () => {
+    const onReviewIssues = vi.fn();
     render(
       <GameCompilePanel
         game={game}
@@ -29,6 +30,7 @@ describe('GameCompilePanel', () => {
         }}
         onCompile={() => {}}
         onLaunch={() => {}}
+        onReviewIssues={onReviewIssues}
       />,
     );
 
@@ -36,6 +38,8 @@ describe('GameCompilePanel', () => {
     expect(screen.getByText('Draft Hero')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Build & verify' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Start game' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Review affected assets' }));
+    expect(onReviewIssues).toHaveBeenCalledOnce();
   });
 
   it('surfaces a compile failure as an alert', () => {

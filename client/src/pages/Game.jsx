@@ -259,19 +259,21 @@ export default function Game() {
   // feedback, launch, …) doesn't have to be remembered in an exclusion list.
   const bindingBusy = /^(un)?bind-/.test(busy);
   return (
-    <div className="mx-auto max-w-6xl space-y-4">
-      <header className="flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
-        <div>
-          <Link to="/game" className="mb-2 inline-flex min-h-[44px] items-center gap-2 text-sm text-gray-400 hover:text-white">
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="flex shrink-0 flex-col justify-between gap-2 border-b border-port-border px-4 py-3 sm:flex-row sm:items-center">
+        <div className="flex min-w-0 items-center gap-3">
+          <Link
+            to="/game"
+            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-port-card hover:text-white"
+            aria-label="All Games"
+            title="All Games"
+          >
             <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-            All Games
           </Link>
-          <div className="flex items-center gap-3">
-            <Gamepad2 className="h-7 w-7 text-port-accent" aria-hidden="true" />
-            <div>
-              <h1 className="text-2xl font-bold text-white">{game.name}</h1>
-              <p className="text-sm text-gray-400">{app?.name || 'Managed app unavailable'}</p>
-            </div>
+          <Gamepad2 className="h-6 w-6 shrink-0 text-port-accent" aria-hidden="true" />
+          <div className="min-w-0">
+            <h1 className="truncate text-xl font-bold text-white">{game.name}</h1>
+            <p className="truncate text-xs text-gray-400">{app?.name || 'Managed app unavailable'}</p>
           </div>
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-400">
@@ -291,40 +293,45 @@ export default function Game() {
         mobileSelectId="game-section"
       />
 
-      {activeTab === 'bundle' && (
-        <div id="game-panel-bundle" role="tabpanel" aria-labelledby="tab-bundle">
-          <GameCompilePanel
-            game={game}
-            integrity={integrity}
-            loadingIntegrity={integrityLoading}
-            compiling={busy === 'compile'}
-            launching={busy === 'launch'}
-            compileError={compileError}
-            onCompile={compile}
-            onLaunch={launch}
-          />
+      <div className="min-h-0 flex-1 overflow-auto p-4">
+        <div className="mx-auto max-w-6xl">
+          {activeTab === 'bundle' && (
+            <div id="game-panel-bundle" role="tabpanel" aria-labelledby="tab-bundle">
+              <GameCompilePanel
+                game={game}
+                integrity={integrity}
+                loadingIntegrity={integrityLoading}
+                compiling={busy === 'compile'}
+                launching={busy === 'launch'}
+                compileError={compileError}
+                onCompile={compile}
+                onLaunch={launch}
+                onReviewIssues={() => setActiveTab('assets')}
+              />
+            </div>
+          )}
+          {activeTab === 'assets' && (
+            <div id="game-panel-assets" role="tabpanel" aria-labelledby="tab-assets">
+              <GameBindings
+                game={game}
+                sprites={sprites}
+                tracks={tracks}
+                integrity={integrity}
+                busy={bindingBusy}
+                onBindSprite={(spriteId) => mutate('bind-sprite', () => bindGameSprite(game.id, spriteId, silent), 'Sprite bound')}
+                onUnbindSprite={(spriteId) => mutate('unbind-sprite', () => unbindGameSprite(game.id, spriteId, silent), 'Sprite unbound')}
+                onBindMusic={(trackId) => mutate('bind-music', () => bindGameMusic(game.id, trackId, silent), 'Music bound')}
+                onUnbindMusic={(bindingId) => mutate('unbind-music', () => unbindGameMusic(game.id, bindingId, silent), 'Music unbound')}
+              />
+            </div>
+          )}
+          {activeTab === 'feedback' && (
+            <div id="game-panel-feedback" role="tabpanel" aria-labelledby="tab-feedback">
+              <GameFeedback history={game.feedbackHistory} submitting={busy === 'feedback'} onSubmit={feedback} />
+            </div>
+          )}
         </div>
-      )}
-      {activeTab === 'assets' && (
-        <div id="game-panel-assets" role="tabpanel" aria-labelledby="tab-assets">
-          <GameBindings
-            game={game}
-            sprites={sprites}
-            tracks={tracks}
-            integrity={integrity}
-            busy={bindingBusy}
-            onBindSprite={(spriteId) => mutate('bind-sprite', () => bindGameSprite(game.id, spriteId, silent), 'Sprite bound')}
-            onUnbindSprite={(spriteId) => mutate('unbind-sprite', () => unbindGameSprite(game.id, spriteId, silent), 'Sprite unbound')}
-            onBindMusic={(trackId) => mutate('bind-music', () => bindGameMusic(game.id, trackId, silent), 'Music bound')}
-            onUnbindMusic={(bindingId) => mutate('unbind-music', () => unbindGameMusic(game.id, bindingId, silent), 'Music unbound')}
-          />
-        </div>
-      )}
-      {activeTab === 'feedback' && (
-        <div id="game-panel-feedback" role="tabpanel" aria-labelledby="tab-feedback">
-          <GameFeedback history={game.feedbackHistory} submitting={busy === 'feedback'} onSubmit={feedback} />
-        </div>
-      )}
+      </div>
     </div>
   );
 }
