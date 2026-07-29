@@ -1431,6 +1431,10 @@ export function assertSafeFilename(filename, { extensions, subject = 'filename',
  * separator, anything that isn't already a pure basename, and any extension
  * outside `extensions`. The basename equality check is kept alongside the
  * separator check so e.g. `subdir\foo.png` is rejected on both counts.
+ *
+ * `extensions` must be dot-prefixed, and unlike `assertSafeFilename` this does
+ * not police that for you — a bare suffix like `png` would also match
+ * `not-an-imagepng`. Pass a module constant, never a caller-supplied list.
  */
 export function isSafeFilename(filename, extensions) {
   if (!filename || typeof filename !== 'string') return false;

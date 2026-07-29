@@ -101,8 +101,14 @@ export default function Game() {
   // Only a result carrying THIS game's id counts. Anything else — another
   // game's verdict, or nothing fetched yet — reads as "still loading", which
   // keeps every gate closed rather than open on a stale `canLaunch`.
-  const integrity = integrityFor?.gameId === id ? integrityFor.data : null;
-  const integrityLoading = integrityFetching || integrityFor?.gameId !== id;
+  //
+  // `integrityFor && id &&` is load-bearing, not defensive padding: on the index
+  // route `id` is undefined AND there is no result, so a bare
+  // `integrityFor?.gameId === id` compares undefined to undefined, matches, and
+  // dereferences null.
+  const matchesGame = Boolean(integrityFor && id && integrityFor.gameId === id);
+  const integrity = matchesGame ? integrityFor.data : null;
+  const integrityLoading = integrityFetching || !matchesGame;
 
   const game = useMemo(() => games.find((entry) => entry.id === id) || null, [games, id]);
   const app = apps.find((entry) => entry.id === game?.appId);

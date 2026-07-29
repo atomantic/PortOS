@@ -194,7 +194,11 @@ export default function GameBindings({
                 <BindingRow
                   key={binding.id}
                   label={track?.title || binding.trackId}
-                  detail={track?.audioFilename ? 'Audio ready' : 'Audio render required'}
+                  // Shown only when the preflight has no verdict for this track,
+                  // so it must state what the RECORD says, not claim a
+                  // verification result — "Audio ready" here would assert bytes
+                  // nobody hashed. The server's own message wins when present.
+                  detail={track?.audioFilename ? 'Audio attached' : 'No audio yet'}
                   health={musicIntegrity.get(binding.id)}
                   disabled={busy}
                   onUnbind={() => onUnbindMusic(binding.id)}
