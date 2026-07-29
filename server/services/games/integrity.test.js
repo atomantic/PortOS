@@ -37,7 +37,7 @@ vi.mock('../sprites/paths.js', () => ({
 }));
 
 vi.mock('../sprites/recordsLogic.js', () => ({
-  isValidSpriteId: vi.fn(() => true),
+  isValidSpriteId: vi.fn((id) => !String(id).includes('/')),
 }));
 
 vi.mock('../tracks/index.js', () => ({
@@ -122,6 +122,20 @@ describe('Game bundle integrity', () => {
       expect.objectContaining({ assetId: 'props', status: 'ready', fileCount: 1 }),
       expect.objectContaining({ assetId: 'draft-character', status: 'blocked' }),
     ]));
+  });
+
+  it('reports a corrupt binding id as a blocked asset instead of throwing', async () => {
+    // The atlas pointer read is issued in parallel with the record read, so a
+    // binding whose id is not a valid slug must be gated — `spriteDir` throws a
+    // 400 on one, which would fail the whole preflight instead of naming the
+    // one bad binding.
+    state.game.spriteBindings = [{ spriteId: '../escape' }];
+    const resolved = await resolveGameAssets(state.game);
+    expect(resolved.sprites).toEqual([]);
+    expect(resolved.issues).toEqual([
+      expect.objectContaining({ assetId: '../escape', code: 'SPRITE_MISSING' }),
+    ]);
+    expect(resolved.summaries.sprites[0]).toMatchObject({ status: 'blocked' });
   });
 
   it('marks a complete hash-matching manifest current and launchable', async () => {

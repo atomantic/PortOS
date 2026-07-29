@@ -38,6 +38,28 @@ describe('GameCompilePanel', () => {
     expect(screen.getByRole('button', { name: 'Start game' })).toBeDisabled();
   });
 
+  it('surfaces a compile failure as an alert', () => {
+    // The inline alert is the only surface for a failed compile — the page
+    // deliberately does not also toast it.
+    render(
+      <GameCompilePanel
+        game={game}
+        integrity={{
+          readyToCompile: true,
+          canLaunch: false,
+          bundle: { status: 'missing' },
+          issues: [],
+          counts: { spriteReady: 1, spriteTotal: 1, verifiedFiles: 2 },
+        }}
+        compileError="The runtime atlas for &quot;Hero&quot; is missing or does not match its recorded hash"
+        onCompile={() => {}}
+        onLaunch={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('does not match its recorded hash');
+  });
+
   it('allows a verified bundle to launch', () => {
     const onLaunch = vi.fn();
     render(
