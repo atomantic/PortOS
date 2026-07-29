@@ -19,6 +19,7 @@ import {
   createGame,
   deleteGame,
   getGame,
+  getGameIntegrity,
   listGames,
   requestGameFeedback,
   unbindMusic,
@@ -41,6 +42,12 @@ router.get('/:id', asyncHandler(async (req, res) => {
   const game = await getGame(req.params.id);
   if (!game) throw new ServerError('Game not found', { status: 404, code: 'NOT_FOUND' });
   res.json(game);
+}));
+
+router.get('/:id/integrity', asyncHandler(async (req, res) => {
+  const integrity = await getGameIntegrity(req.params.id);
+  if (!integrity) throw new ServerError('Game not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(integrity);
 }));
 
 router.patch('/:id', asyncHandler(async (req, res) => {

@@ -75,6 +75,14 @@ export function toRecordRelativeAssetPath(recordId, rawPath) {
   return rel;
 }
 
+// The confinement check itself, shared by the throwing gate below and the
+// non-throwing `safeResolveSpriteAssetPath` so the two can never disagree on
+// what counts as an escape.
+const confineToRecordDir = (dir, relPath) => {
+  const abs = resolve(dir, relPath);
+  return abs === dir || isPathInsideDir(dir, abs) ? abs : null;
+};
+
 /**
  * Resolve a relative asset path inside a record's directory, refusing any
  * path that escapes it (`..`, absolute paths).
@@ -84,8 +92,8 @@ export function resolveSpriteAssetPath(recordId, relPath) {
   if (typeof relPath !== 'string' || !relPath) {
     throw new ServerError('Missing asset path', { status: 400, code: 'INVALID_ASSET_PATH' });
   }
-  const abs = resolve(dir, relPath);
-  if (abs !== dir && !isPathInsideDir(dir, abs)) {
+  const abs = confineToRecordDir(dir, relPath);
+  if (!abs) {
     throw new ServerError(`Asset path escapes sprite directory: ${relPath}`, { status: 400, code: 'INVALID_ASSET_PATH' });
   }
   return abs;
@@ -267,9 +275,16 @@ export function __resetSpriteMetadataCache() {
  * run in parallel. A record with no directory yet returns []. A non-image
  * carries no image fields at all; an image sharp can't read carries
  * `imageError: true` — see `readImageMetadata`.
+ *
+ * Options narrow the walk for consumers that don't need the whole record:
+ *  - `subdir` — descend only this record-relative directory (paths stay
+ *    record-relative, so callers see the same shape either way)
+ *  - `metadata` — set false to skip the sharp header probe entirely. The
+ *    asset browser wants dimensions; a caller that only needs bytes and sizes
+ *    should not pay a probe per image on every call.
  */
-export async function listSpriteAssets(recordId) {
-  const dir = spriteDir(recordId);
+export async function listSpriteAssets(recordId, { subdir = '', metadata = true } = {}) {
+  const dir = subdir ? join(spriteDir(recordId), subdir) : spriteDir(recordId);
   const out = [];
   async function walk(current, relPrefix) {
     let entries;
@@ -287,12 +302,42 @@ export async function listSpriteAssets(recordId) {
       } else if (entry.isFile()) {
         const abs = join(current, entry.name);
         const s = await stat(abs);
-        const meta = await readImageMetadata(abs, s);
+        const meta = metadata ? await readImageMetadata(abs, s) : null;
         out.push({ path: rel, size: s.size, mtime: s.mtimeMs, ...meta });
       }
     }));
   }
-  await walk(dir, '');
+  await walk(dir, subdir);
   out.sort((a, b) => a.path.localeCompare(b.path));
   return out;
+}
+
+/**
+ * The runtime-ready files a record contributes to a game asset bundle:
+ * everything under `atlas/` with a loadable extension. Named here rather than
+ * in the games bundler because this module owns the on-disk layout — imported
+ * prop/object families land in `atlas/` via `importer.js` `importPropsFamily`,
+ * and that anchor has already moved once (migration 202).
+ *
+ * The extension filter is narrower than what the importer copies (it also
+ * brings `.md` docs across) and wider than what PortOS itself emits, so a
+ * hand-placed sheet in another image format still bundles.
+ */
+export const IMPORTED_ATLAS_DIR = 'atlas';
+const RUNTIME_ASSET_EXT = /\.(?:png|gif|webp|jpe?g|json)$/i;
+
+export async function listRuntimeAtlasAssets(recordId) {
+  const assets = await listSpriteAssets(recordId, { subdir: IMPORTED_ATLAS_DIR, metadata: false });
+  return assets.filter((asset) => RUNTIME_ASSET_EXT.test(asset.path));
+}
+
+/**
+ * `resolveSpriteAssetPath` for callers that want a bad path to be a data row
+ * rather than a 400 — preflight/verification sweeps report a broken pointer as
+ * a blocked asset instead of failing the whole request. Returns null for a
+ * non-slug id, an empty path, or anything that escapes the record dir.
+ */
+export function safeResolveSpriteAssetPath(recordId, relPath) {
+  if (!isValidSpriteId(recordId) || typeof relPath !== 'string' || !relPath) return null;
+  return confineToRecordDir(join(PATHS.sprites, recordId), relPath);
 }

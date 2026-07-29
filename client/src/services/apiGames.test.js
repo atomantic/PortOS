@@ -44,4 +44,9 @@ describe('apiGames', () => {
     await api.compileGameAssets('game-1');
     expect(request).toHaveBeenCalledWith('/games/game-1/compile', { method: 'POST' });
   });
+
+  it('loads the integrity preflight silently', async () => {
+    await api.getGameIntegrity('game/1', { silent: true });
+    expect(request).toHaveBeenCalledWith('/games/game%2F1/integrity', { silent: true });
+  });
 });

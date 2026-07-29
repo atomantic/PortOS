@@ -13,6 +13,11 @@ export {
   updateGame,
 } from './records.js';
 export { compileGameAssets } from './compile.js';
+export {
+  BUNDLE_SCHEMA_VERSION,
+  getGameIntegrity,
+  resolveGameAssets,
+} from './integrity.js';
 export { requestGameFeedback } from './feedback.js';
 export {
   _resetGamesBackend,

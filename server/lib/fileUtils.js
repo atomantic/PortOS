@@ -1746,6 +1746,9 @@ export async function dirSize(path) {
   return kb * 1024;
 }
 
+/** SHA-256 a string or Buffer as hex — `sha256File`'s in-memory twin. */
+export const sha256Text = (value) => createHash('sha256').update(value).digest('hex');
+
 /**
  * SHA-256 a file as hex. One-shot read under 512 KB; streams above so multi-GB
  * videos don't blow heap. Threshold matches `server/services/backup.js`'s
