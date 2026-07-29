@@ -8,5 +8,6 @@ The Game studio binds a managed app to reusable Sprite and Music records, compil
 | `db.js` | PostgreSQL leaf I/O for `games` JSONB records. |
 | `records.js` | Game CRUD, managed-app validation, and sprite/music bind/unbind operations. |
 | `compile.js` | Deterministic, idempotent asset-manifest compiler with SHA-256 references. |
+| `integrity.js` | Bundle preflight, imported-runtime resolution, and current manifest/source hash verification. |
 | `feedback.js` | Explicitly user-triggered provider/model/effort feedback and history persistence. |
 | `index.js` | Public Game service barrel. |

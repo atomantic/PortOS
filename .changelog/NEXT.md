@@ -23,6 +23,7 @@
 ## Game
 
 - **[issue-3177] Added a Game studio for assembling managed-app asset bundles.** Create a Game workspace, bind reusable Sprite records and Music tracks, compile an immutable versioned manifest with SHA-256 asset references, and request persisted AI feedback with any configured provider, model, and supported effort. The new `/game/:id` workspace is reachable from Create, Cmd+K, and voice navigation.
+- **Game workspaces now stay compact and verify assets before launch.** Bundle, Assets, and Feedback live in separate deep-linkable tabs; large sprite sets use a dense contained grid; imported prop atlases participate in bundles; and a preflight names every missing, stale, or hash-mismatched asset. A game can be started from its workspace only after the current manifest and all bound asset bytes pass verification.
 
 ## Quota burn
 

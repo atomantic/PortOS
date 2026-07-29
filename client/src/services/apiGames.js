@@ -2,6 +2,8 @@ import { request } from './apiCore.js';
 
 export const listGames = (options = {}) => request('/games', options);
 export const getGame = (id, options = {}) => request(`/games/${encodeURIComponent(id)}`, options);
+export const getGameIntegrity = (id, options = {}) =>
+  request(`/games/${encodeURIComponent(id)}/integrity`, options);
 
 export const createGame = (body, options = {}) => request('/games', {
   method: 'POST',
