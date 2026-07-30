@@ -37,7 +37,8 @@ import {
 import { getImageModels } from '../lib/mediaModels.js';
 import { enqueueJob, mediaJobEvents } from './mediaJobQueue/index.js';
 import { IMAGE_GEN_MODE } from './imageGen/modes.js';
-import { resolveCloudProviderConfig } from './imageGen/cloudProviderConfig.js';
+import { resolveRenderTargetConfig } from './imageGen/cloudProviderConfig.js';
+import { RENDER_TARGET } from '../lib/renderTargets.js';
 import {
   datasetImagePath,
   datasetImagesDir,
@@ -337,7 +338,11 @@ async function onRenderComplete({ datasetId, imageId, file, sourceFilename }) {
  */
 async function resolveRenderParams({ modelId: modelOverride = null } = {}) {
   const settings = await getSettings();
-  const activeMode = settings.imageGen?.mode || IMAGE_GEN_MODE.LOCAL;
+  // Render-target ladder (#3231): the lora-dataset pin in
+  // settings.renderDefaults → the install default → local.
+  const { mode: activeMode, cloud } = resolveRenderTargetConfig(settings, RENDER_TARGET.LORA_DATASET, {
+    fallbackMode: IMAGE_GEN_MODE.LOCAL,
+  });
   const base = {
     mode: activeMode,
     width: DATASET_IMAGE_SIZE,
@@ -345,7 +350,6 @@ async function resolveRenderParams({ modelId: modelOverride = null } = {}) {
     cleanC2PA: true,
     denoise: false,
   };
-  const cloud = resolveCloudProviderConfig(settings, activeMode);
   if (cloud) {
     if (!cloud.enabled) throw cloud.disabledError;
     return { base: { ...base, ...cloud.providerParams }, activeMode, modelId: cloud.modelId };

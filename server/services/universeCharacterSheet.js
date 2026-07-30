@@ -24,7 +24,8 @@ import { getImageModels } from '../lib/mediaModels.js';
 import { enqueueJob, mediaJobEvents } from './mediaJobQueue/index.js';
 import { buildUniverseRunTag } from './universeRunTag.js';
 import { IMAGE_GEN_MODE } from './imageGen/modes.js';
-import { resolveCloudProviderConfig } from './imageGen/cloudProviderConfig.js';
+import { resolveRenderTargetConfig } from './imageGen/cloudProviderConfig.js';
+import { RENDER_TARGET } from '../lib/renderTargets.js';
 import {
   flattenStats, flattenPalette, flattenWardrobes, flattenProps, flattenNamedList,
 } from '../lib/canonPrompt.js';
@@ -417,7 +418,12 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   // the media-job queue with the active mode set; codex and local are both
   // first-class. External SD-API has no multi-zone layout support, so it
   // gets a clear remediation rather than a silently-degraded render.
-  const activeMode = settings.imageGen?.mode || IMAGE_GEN_MODE.LOCAL;
+  // Render-target ladder (#3231): the universe-character-sheet pin in
+  // settings.renderDefaults → the install default → local.
+  const sheetTarget = resolveRenderTargetConfig(settings, RENDER_TARGET.UNIVERSE_CHARACTER_SHEET, {
+    fallbackMode: IMAGE_GEN_MODE.LOCAL,
+  });
+  const activeMode = sheetTarget.mode;
   // Sheet renders hard-code cleanC2PA=true (lossless metadata strip — gpt-image
   // adds a caBX provenance chunk we don't want to ship) and denoise=false
   // (the median+sharpen pass blurs annotation text; sheets ship with their
@@ -442,7 +448,7 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
 
   let modelId = null;
   let params;
-  const cloud = resolveCloudProviderConfig(settings, activeMode);
+  const cloud = sheetTarget.cloud;
   if (cloud) {
     if (!cloud.enabled) throw cloud.disabledError;
     modelId = cloud.modelId;

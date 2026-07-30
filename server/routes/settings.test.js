@@ -157,3 +157,42 @@ describe('Settings routes — imageGen.agy slice', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('Settings routes — renderDefaults slice (#3231)', () => {
+  beforeEach(() => {
+    store = {};
+    vi.clearAllMocks();
+  });
+
+  it('accepts per-target backend + model pins and persists them', async () => {
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ renderDefaults: {
+        'universe-bible': { imageMode: 'codex' },
+        'sprite-reference': { imageMode: 'agy', imageModel: 'gemini-3.6-flash-low' },
+      } });
+    expect(res.status).toBe(200);
+    expect(res.body.renderDefaults).toEqual({
+      'universe-bible': { imageMode: 'codex' },
+      'sprite-reference': { imageMode: 'agy', imageModel: 'gemini-3.6-flash-low' },
+    });
+  });
+
+  it('rejects an unknown render target key (strict)', async () => {
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ renderDefaults: { 'not-a-target': { imageMode: 'codex' } } });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a non-queueable backend and a shell-syntax model id', async () => {
+    const external = await request(buildApp())
+      .put('/api/settings')
+      .send({ renderDefaults: { 'universe-bible': { imageMode: 'external' } } });
+    expect(external.status).toBe(400);
+    const shell = await request(buildApp())
+      .put('/api/settings')
+      .send({ renderDefaults: { 'universe-bible': { imageModel: 'x; rm -rf /' } } });
+    expect(shell.status).toBe(400);
+  });
+});

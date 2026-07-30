@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   isModeUsable,
   pickUsableMode,
+  renderTargetDefaults,
   resolveCloudProviderConfig,
+  resolveRenderTargetConfig,
 } from './cloudProviderConfig.js';
 import {
   AGY_IMAGEGEN_DEFAULT_MODEL,
@@ -218,5 +220,71 @@ describe('queue mode resolution with Agy', () => {
 
   it('excludes Agy from image-edit fallback', () => {
     expect(resolveQueueImageEditMode(IMAGE_GEN_MODE.AGY, settings)).toBe(IMAGE_GEN_MODE.CODEX);
+  });
+});
+
+describe('resolveRenderTargetConfig (#3231)', () => {
+  const withDefaults = (imageGen, renderDefaults) => ({ imageGen, renderDefaults });
+
+  it('per-request mode wins over the target pin, which wins over the install default', () => {
+    const settings = withDefaults(
+      { mode: IMAGE_GEN_MODE.LOCAL, codex: { enabled: true }, agy: { enabled: true } },
+      { 'universe-bible': { imageMode: IMAGE_GEN_MODE.AGY } },
+    );
+    expect(resolveRenderTargetConfig(settings, 'universe-bible', { mode: IMAGE_GEN_MODE.CODEX }).mode)
+      .toBe(IMAGE_GEN_MODE.CODEX);
+    expect(resolveRenderTargetConfig(settings, 'universe-bible').mode).toBe(IMAGE_GEN_MODE.AGY);
+    expect(resolveRenderTargetConfig(settings, 'series-first-pass').mode).toBe(IMAGE_GEN_MODE.LOCAL);
+  });
+
+  it("an 'auto' or absent pin falls through to the install default, then fallbackMode", () => {
+    const auto = withDefaults({}, { 'universe-bible': { imageMode: 'auto' } });
+    expect(resolveRenderTargetConfig(auto, 'universe-bible', { fallbackMode: IMAGE_GEN_MODE.EXTERNAL }).mode)
+      .toBe(IMAGE_GEN_MODE.EXTERNAL);
+    const saved = withDefaults({ mode: IMAGE_GEN_MODE.GROK, grok: { enabled: true } }, {});
+    expect(resolveRenderTargetConfig(saved, 'universe-bible', { fallbackMode: IMAGE_GEN_MODE.EXTERNAL }).mode)
+      .toBe(IMAGE_GEN_MODE.GROK);
+  });
+
+  it('threads the target imageModel pin into the cloud provider params', () => {
+    const settings = withDefaults(
+      { agy: { enabled: true } },
+      { 'sprite-reference': { imageMode: IMAGE_GEN_MODE.AGY, imageModel: 'gemini-3.6-flash-low' } },
+    );
+    const { cloud } = resolveRenderTargetConfig(settings, 'sprite-reference');
+    expect(cloud.modelId).toBe('gemini-3.6-flash-low');
+    expect(cloud.jobParams.model).toBe('gemini-3.6-flash-low');
+  });
+
+  it('a per-request model override wins over the target imageModel pin', () => {
+    const settings = withDefaults(
+      { codex: { enabled: true } },
+      { 'sprite-reference': { imageMode: IMAGE_GEN_MODE.CODEX, imageModel: 'pinned-model' } },
+    );
+    const { cloud } = resolveRenderTargetConfig(settings, 'sprite-reference', { model: 'request-model' });
+    expect(cloud.modelId).toBe('request-model');
+  });
+
+  it('a resolveMode ladder receives the layered candidate and owns the fallback', () => {
+    const settings = withDefaults(
+      { codex: { enabled: true } },
+      // Pin grok but leave it DISABLED — the ladder must fall through, not
+      // honor a pinned-but-unusable backend.
+      { 'sprite-reference': { imageMode: IMAGE_GEN_MODE.GROK } },
+    );
+    const { mode } = resolveRenderTargetConfig(settings, 'sprite-reference', {
+      resolveMode: (candidate, s) => resolveQueueImageMode(candidate, s),
+    });
+    expect(mode).toBe(IMAGE_GEN_MODE.CODEX);
+  });
+
+  it('renderTargetDefaults normalizes auto/blank/missing to null', () => {
+    expect(renderTargetDefaults({}, 'universe-bible')).toEqual({
+      imageMode: null, imageModel: null, videoMode: null, videoModel: null,
+    });
+    expect(renderTargetDefaults(
+      { renderDefaults: { 'universe-bible': { imageMode: 'auto', imageModel: '  ' } } },
+      'universe-bible',
+    )).toEqual({ imageMode: null, imageModel: null, videoMode: null, videoModel: null });
   });
 });

@@ -236,6 +236,37 @@ describe('ImageGenTab — Agy CLI section', () => {
     }));
   });
 
+  it('render-defaults tab pins a backend + model per surface and saves the slice (#3231)', async () => {
+    getSettings.mockResolvedValue({
+      imageGen: { mode: 'local', agy: { enabled: true } },
+      renderDefaults: { 'universe-bible': { imageMode: 'codex' } },
+    });
+    await renderTab(['/media/image?mediaTab=defaults']);
+    // Existing pin loads into its select.
+    const bibleSelect = await screen.findByLabelText('Universe Bible batch renders');
+    expect(bibleSelect.value).toBe('codex');
+    // Pin a model-capable backend on another surface → model input appears.
+    const spriteSelect = screen.getByLabelText('Sprite references & anchors');
+    fireEvent.change(spriteSelect, { target: { value: 'agy' } });
+    const modelInput = screen.getByLabelText('Sprite references & anchors model');
+    fireEvent.change(modelInput, { target: { value: 'gemini-3.6-flash-low' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+    // The saved wire body carries exactly the pinned entries — no 'auto' no-ops.
+    expect(updateSettings.mock.calls[0][0].renderDefaults).toEqual({
+      'universe-bible': { imageMode: 'codex' },
+      'sprite-reference': { imageMode: 'agy', imageModel: 'gemini-3.6-flash-low' },
+    });
+  });
+
+  it('grok pins never show a model input — its backend has no model knob (#3231)', async () => {
+    getSettings.mockResolvedValue({ imageGen: { mode: 'local' } });
+    await renderTab(['/media/image?mediaTab=defaults']);
+    const select = await screen.findByLabelText('LoRA training datasets');
+    fireEvent.change(select, { target: { value: 'grok' } });
+    expect(screen.queryByLabelText('LoRA training datasets model')).toBeNull();
+  });
+
   it('names the fixed server-side image model as a read-only fact (#3231)', async () => {
     getSettings.mockResolvedValue({
       imageGen: { mode: 'agy', agy: { enabled: true } },

@@ -9,7 +9,8 @@ import { enqueueJob } from '../../mediaJobQueue/index.js';
 import { ASPECT_PRESETS, QUALITY_PRESETS, presetToRenderParams } from '../../../lib/creativeDirectorPresets.js';
 import { getSettings } from '../../settings.js';
 import { IMAGE_GEN_MODE, resolveQueueImageMode, resolveQueueImageEditMode } from '../../imageGen/modes.js';
-import { resolveCloudProviderConfig } from '../../imageGen/cloudProviderConfig.js';
+import { resolveRenderTargetConfig } from '../../imageGen/cloudProviderConfig.js';
+import { RENDER_TARGET } from '../../../lib/renderTargets.js';
 import { VIDEO_GEN_MODE, VIDEO_GEN_MODES, resolveVideoMode } from '../../videoGen/modes.js';
 import { nearestGrokDuration } from '../../../lib/grokVideoClip.js';
 import { COST_RENDER, resolveOwner } from './shared.js';
@@ -176,7 +177,9 @@ async function enforceRenderBackendPin(kind, params, project) {
   const mode = wantsEdit
     ? resolveQueueImageEditMode(pin.mode, settings)
     : resolveQueueImageMode(pin.mode, settings);
-  const cloud = resolveCloudProviderConfig(settings, mode);
+  // Mode is pinned/laddered above; this threads the creative-agent
+  // renderDefaults imageModel into the cloud job params (#3231).
+  const { cloud } = resolveRenderTargetConfig(settings, RENDER_TARGET.CREATIVE_AGENT, { mode });
   if (cloud) return { ...params, ...cloud.jobParams };
   return {
     ...params,

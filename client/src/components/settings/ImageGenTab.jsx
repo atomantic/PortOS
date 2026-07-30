@@ -9,7 +9,7 @@
 import { useState, useEffect, useCallback, useId } from 'react';
 import {
   Save, Image as ImageIcon, Zap, Wrench, Cloud, Cpu, Globe, AlertTriangle,
-  Sparkles, Terminal, Key, Check, Trash2
+  Sparkles, Terminal, Key, Check, Trash2, SlidersHorizontal
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import TabPills from '../ui/TabPills';
@@ -22,7 +22,7 @@ import {
   registerTool, updateTool, getToolsList,
   saveHfToken, clearHfToken,
 } from '../../services/api';
-import { isCloudCliMode, IMAGE_GEN_MODE, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, GROK_ASPECT_RATIOS } from '../../lib/imageGenBackends';
+import { isCloudCliMode, IMAGE_GEN_MODE, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, GROK_ASPECT_RATIOS, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, modeLabel, supportsCloudModelOverride } from '../../lib/imageGenBackends';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
 import { useMediaJobSse } from '../../hooks/useMediaJobSse';
 import { useAgyModels } from '../../hooks/useAgyModels';
@@ -66,6 +66,7 @@ const clampParallel = (n, bounds = PARALLEL_FALLBACK) =>
 // to probing the saved default again.
 export const MEDIA_TABS = [
   { id: 'backend', label: 'Backend', icon: ImageIcon },
+  { id: 'defaults', label: 'Defaults', icon: SlidersHorizontal },
   { id: 'external', label: 'External', icon: Cloud, probeMode: IMAGE_GEN_MODE.EXTERNAL },
   { id: 'local', label: 'Local', icon: Cpu, probeMode: IMAGE_GEN_MODE.LOCAL },
   { id: 'codex', label: 'Codex CLI', icon: Terminal, probeMode: IMAGE_GEN_MODE.CODEX },
@@ -100,6 +101,9 @@ export function ImageGenTab() {
 
   // Mode + per-mode config
   const [mode, setMode] = useState(IMAGE_GEN_MODE.EXTERNAL);
+  // Per-surface render defaults (#3231) — `{ [target]: { imageMode, imageModel } }`.
+  // Only pinned entries are kept; an absent target means "auto".
+  const [renderDefaults, setRenderDefaults] = useState({});
   const [sdapiUrl, setSdapiUrl] = useState('');
   const [pythonPath, setPythonPath] = useState('');
   const [exposeA1111, setExposeA1111] = useState(false);
@@ -161,6 +165,7 @@ export function ImageGenTab() {
     agyEnabled: false, agyPath: '', agyModel: '',
     cleanC2PAByMode: { external: true, local: true, codex: true, grok: false, agy: false },
     denoiseByMode: { external: false, local: false, codex: false, grok: false, agy: false },
+    renderDefaultsJson: '{}',
   });
 
   const [status, setStatus] = useState(null);
@@ -218,6 +223,11 @@ export function ImageGenTab() {
     Promise.all([getSettings({ silent: true }), getToolsList({ silent: true })])
       .then(([s, tools]) => {
         const ig = s?.imageGen || {};
+        // Round-trip the FULL renderDefaults object (including videoMode /
+        // videoModel keys this tab doesn't edit yet) — the server replaces the
+        // top-level slice wholesale on save, so dropping unedited keys here
+        // would erase them.
+        const rd = (s?.renderDefaults && typeof s.renderDefaults === 'object') ? s.renderDefaults : {};
         const m = ig.mode || IMAGE_GEN_MODE.EXTERNAL;
         const url = normalizeUrl(ig.external?.sdapiUrl || ig.sdapiUrl);
         const py = ig.local?.pythonPath || '';
@@ -250,6 +260,7 @@ export function ImageGenTab() {
         const c2 = { codex: codexClean.cleanC2PA, grok: grokClean.cleanC2PA, agy: agyClean.cleanC2PA, local: localClean.cleanC2PA, external: externalClean.cleanC2PA };
         const dn = { codex: codexClean.denoise, grok: grokClean.denoise, agy: agyClean.denoise, local: localClean.denoise, external: externalClean.denoise };
         setMode(m);
+        setRenderDefaults(rd);
         setSdapiUrl(url);
         setPythonPath(py);
         setExposeA1111(expose);
@@ -274,6 +285,7 @@ export function ImageGenTab() {
           grokEnabled: gkEnabled, grokPath: gkPath, grokAspectRatio: gkRatio,
           agyEnabled: ayEnabled, agyPath: ayPath, agyModel: ayModel,
           cleanC2PAByMode: c2, denoiseByMode: dn,
+          renderDefaultsJson: JSON.stringify(rd),
         });
         setToolRegistered(tools.some((t) => t.id === SDAPI_TOOL_ID));
         setCodexToolRegistered(tools.some((t) => t.id === CODEX_TOOL_ID));
@@ -332,7 +344,8 @@ export function ImageGenTab() {
     || cleanC2PAByMode.external !== saved.cleanC2PAByMode.external
     || denoiseByMode.codex !== saved.denoiseByMode.codex
     || denoiseByMode.local !== saved.denoiseByMode.local
-    || denoiseByMode.external !== saved.denoiseByMode.external;
+    || denoiseByMode.external !== saved.denoiseByMode.external
+    || JSON.stringify(renderDefaults) !== saved.renderDefaultsJson;
 
   const handleSave = async () => {
     setSaving(true);
@@ -367,6 +380,14 @@ export function ImageGenTab() {
         // `imageGen.sdapiUrl` directly stays working.
         sdapiUrl: url,
       },
+      // Per-surface render defaults (#3231). Entries with no effective pin are
+      // dropped so settings.json doesn't accumulate `{ imageMode: 'auto' }`
+      // no-ops for every surface the user merely glanced at.
+      renderDefaults: Object.fromEntries(
+        Object.entries(renderDefaults).filter(([, entry]) => entry && Object.values(entry).some(
+          (v) => typeof v === 'string' && v.trim() && v !== RENDER_TARGET_BACKEND_AUTO,
+        )),
+      ),
     };
     try {
       await updateSettings(patch, { silent: true });
@@ -381,7 +402,11 @@ export function ImageGenTab() {
         grokEnabled, grokPath: gkPath || '', grokAspectRatio: gkRatio || '',
         agyEnabled, agyPath: ayPath || '', agyModel: ayModel || '',
         cleanC2PAByMode, denoiseByMode,
+        renderDefaultsJson: JSON.stringify(patch.renderDefaults),
       });
+      // Reflect the pruned no-op entries back into the editor state so the
+      // dirty check compares like against like after a save.
+      setRenderDefaults(patch.renderDefaults);
       if (cxParallel !== codexParallelLimit) {
         setCodexParallelLimit(cxParallel);
         setParallelLimitDraft(String(cxParallel));
@@ -627,6 +652,73 @@ export function ImageGenTab() {
               <p className="text-xs text-gray-500 mt-1">Text-to-image through Antigravity's generate_image tool and your selected model.</p>
             </button>
           )}
+        </div>
+      </div>
+      )}
+
+      {/* Per-surface render defaults (#3231) — pin a backend (and, for the
+          model-override-capable cloud CLIs, a model) per creative surface,
+          without touching the install-wide default above. */}
+      {mediaTab === 'defaults' && (
+      <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
+        <div className="flex items-center gap-2 text-white">
+          <SlidersHorizontal size={18} />
+          <h2 className="text-lg font-semibold">Render defaults</h2>
+        </div>
+        <p className="text-xs text-gray-500">
+          Each surface below follows the install default backend unless pinned here. A pinned
+          backend that is disabled (or unconfigured) falls back to whatever that surface would
+          have used anyway — enable the backend on its own tab to make a pin take effect. A
+          model can be pinned for backends that accept one (Codex, Agy); Grok and Local pick
+          their models elsewhere.
+        </p>
+        <div className="space-y-3">
+          {RENDER_TARGET_OPTIONS.map(({ id, label }) => {
+            const entry = renderDefaults[id] || {};
+            const pinnedMode = entry.imageMode && entry.imageMode !== RENDER_TARGET_BACKEND_AUTO ? entry.imageMode : '';
+            const modeSelectId = `render-default-mode-${id}`;
+            const modelInputId = `render-default-model-${id}`;
+            const setPin = (key, value) => setRenderDefaults((rd) => {
+              const nextEntry = { ...(rd[id] || {}) };
+              if (value) nextEntry[key] = value; else delete nextEntry[key];
+              const next = { ...rd };
+              if (Object.keys(nextEntry).length) next[id] = nextEntry; else delete next[id];
+              return next;
+            });
+            return (
+              <div key={id} className="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-2 sm:items-center border border-port-border rounded-lg px-3 py-2">
+                <label htmlFor={modeSelectId} className="text-sm text-gray-300">{label}</label>
+                <select
+                  id={modeSelectId}
+                  value={pinnedMode}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setPin('imageMode', v || null);
+                    // A backend change invalidates a model pinned for another
+                    // backend — clear it rather than sending codex a gemini id.
+                    if (!v || !supportsCloudModelOverride(v)) setPin('imageModel', null);
+                  }}
+                  className="bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent sm:w-44"
+                >
+                  <option value="">Auto (install default)</option>
+                  {[IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK, IMAGE_GEN_MODE.AGY].map((m) => (
+                    <option key={m} value={m}>{modeLabel(m)}</option>
+                  ))}
+                </select>
+                {supportsCloudModelOverride(pinnedMode) ? (
+                  <input
+                    id={modelInputId}
+                    type="text"
+                    value={entry.imageModel || ''}
+                    onChange={(e) => setPin('imageModel', e.target.value.trim() || null)}
+                    placeholder="Model (optional)"
+                    aria-label={`${label} model`}
+                    className="bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent sm:w-52"
+                  />
+                ) : <span className="hidden sm:block sm:w-52" />}
+              </div>
+            );
+          })}
         </div>
       </div>
       )}

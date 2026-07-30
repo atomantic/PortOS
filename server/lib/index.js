@@ -229,6 +229,7 @@ export * from './postProgression.js';
 export * from './postStreak.js';
 export * from './planIds.js';
 export * from './renderSlot.js';
+export * from './renderTargets.js';
 export * from './telegramClient.js';
 export * from './textUtils.js';
 export * from './vaultCrypto.js';

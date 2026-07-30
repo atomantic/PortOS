@@ -17,6 +17,7 @@
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
+import { RENDER_TARGET_BACKEND_AUTO } from '../../lib/renderTargets.js';
 import {
   AGY_IMAGEGEN_DEFAULT_MODEL,
   CLOUD_IMAGE_GEN_MODES,
@@ -150,4 +151,77 @@ export function isModeUsable(settings, mode) {
 export function pickUsableMode(settings, candidates = []) {
   const ordered = [...candidates, ...CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE.LOCAL];
   return ordered.find((m) => m && isModeUsable(settings, m)) || IMAGE_GEN_MODE.LOCAL;
+}
+
+/**
+ * The user's saved per-surface pins for one render target (#3231 Phase 2) —
+ * `settings.renderDefaults[target]`, normalized: the `'auto'` sentinel and
+ * blank strings collapse to null ("no pin — fall through").
+ */
+export function renderTargetDefaults(settings, target) {
+  const d = settings?.renderDefaults?.[target] || {};
+  const norm = (v) => {
+    const s = typeof v === 'string' ? v.trim() : '';
+    return s && s !== RENDER_TARGET_BACKEND_AUTO ? s : null;
+  };
+  return {
+    imageMode: norm(d.imageMode),
+    imageModel: norm(d.imageModel),
+    videoMode: norm(d.videoMode),
+    videoModel: norm(d.videoModel),
+  };
+}
+
+/**
+ * Resolve one surface's image render config through the render-target ladder
+ * (#3231 Phase 2): per-request/per-record override → the target's saved
+ * `renderDefaults` pin → the install-wide `settings.imageGen.mode` → the
+ * caller's own fallback. Every creative surface resolves through THIS (the
+ * guard test in renderTargets.guard.test.js fails a direct
+ * `resolveCloudProviderConfig` call outside the dispatcher) so a new surface
+ * is one `RENDER_TARGET` entry + one call here — and so the target's saved
+ * `imageModel` actually reaches the provider instead of being dropped, which
+ * is exactly what all seven pre-#3231 call sites did.
+ *
+ * Options:
+ *  - `mode`        — the surface's per-request/per-record mode override
+ *                    (e.g. `body.mode`). Wins over the target pin.
+ *  - `model`       — per-request cloud model override. Wins over the target's
+ *                    `imageModel` pin.
+ *  - `resolveMode` — optional `(candidateMode, settings) => finalMode` ladder
+ *                    (e.g. `resolveQueueImageMode`) applied to the layered
+ *                    candidate, for surfaces that gate on backend usability.
+ *  - `fallbackMode`— the surface's historical final fallback when nothing
+ *                    else resolves (EXTERNAL for batch-reject surfaces, LOCAL
+ *                    for local-first ones). Ignored when `resolveMode` is
+ *                    given (the ladder owns the fallback).
+ *
+ * Returns `{ mode, model, cloud }` — `cloud` is the resolveCloudProviderConfig
+ * bundle (null for non-cloud modes), with the layered model threaded through.
+ */
+export function resolveRenderTargetConfig(settings, target, {
+  mode = null,
+  model = null,
+  resolveMode = null,
+  fallbackMode = null,
+} = {}) {
+  const defaults = renderTargetDefaults(settings, target);
+  // The target pin is usability-gated: a pinned backend whose enable toggle is
+  // off (or that isn't queueable) falls through to the next rung instead of
+  // bricking every render on this surface with a disabled-error. An explicit
+  // per-request `mode` deliberately is NOT gated — it keeps each surface's
+  // existing explicit-request error semantics.
+  const pinnedMode = defaults.imageMode && isModeUsable(settings, defaults.imageMode)
+    ? defaults.imageMode
+    : null;
+  const candidate = mode || pinnedMode;
+  const finalMode = resolveMode
+    ? resolveMode(candidate, settings)
+    : (candidate || settings?.imageGen?.mode || fallbackMode);
+  const finalModel = (typeof model === 'string' && model.trim()) ? model.trim() : defaults.imageModel;
+  return {
+    mode: finalMode,
+    model: finalModel,
+    cloud: resolveCloudProviderConfig(settings, finalMode, { model: finalModel }),
+  };
 }

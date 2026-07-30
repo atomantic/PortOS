@@ -32,7 +32,8 @@ import { enqueueJob } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
-import { resolveCloudProviderConfig } from '../imageGen/cloudProviderConfig.js';
+import { resolveRenderTargetConfig } from '../imageGen/cloudProviderConfig.js';
+import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { getIngredient, listMediaForIngredient } from '../catalogDB.js';
 import { resolveAspectDimensions } from '../../lib/creativeDirectorPresets.js';
 import { payloadSnippet, getActiveCatalogType } from '../../lib/catalogTypes.js';
@@ -72,8 +73,11 @@ export function buildPortraitPrompt(ingredient) {
  */
 async function resolveQueueModeParams() {
   const settings = await getSettings();
-  const mode = settings.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
-  const cloud = resolveCloudProviderConfig(settings, mode);
+  // Render-target ladder (#3231): the series-first-pass pin in
+  // settings.renderDefaults → the install default → external (not ready).
+  const { mode, cloud } = resolveRenderTargetConfig(settings, RENDER_TARGET.SERIES_FIRST_PASS, {
+    fallbackMode: IMAGE_GEN_MODE.EXTERNAL,
+  });
   if (cloud) {
     if (!cloud.enabled) return { mode, ready: false, reason: cloud.disabledReason };
     const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, mode);

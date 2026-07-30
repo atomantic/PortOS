@@ -10,7 +10,7 @@ import {
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, renderDefaultsSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -218,6 +218,13 @@ router.put('/', asyncHandler(async (req, res) => {
   }
   if (req.body?.imageGen?.agy !== undefined) {
     validateRequest(imageGenAgySettingsSchema.partial(), req.body.imageGen.agy);
+  }
+  // Per-surface render defaults (#3231) — validate when present so a typo'd
+  // target key or a non-enum backend can't persist a slice the render-target
+  // resolver would then silently ignore (or worse, hand an invalid model id
+  // to a cloud CLI's argv).
+  if (req.body?.renderDefaults !== undefined) {
+    validateRequest(renderDefaultsSettingsSchema, req.body.renderDefaults);
   }
   // Install-level Layered Intelligence settings (#2515) — validate the slice when
   // present so a malformed `trustShellSources` can't persist and silently unlock

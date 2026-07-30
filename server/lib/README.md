@@ -254,6 +254,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `postStreak.js` | Pure DST-safe POST practice-streak math — the single `computePostStreaks` implementation shared by scored sessions and the training log, plus `computeUnifiedStreak` (a day is active with EITHER a session or a practice entry). |
 | `planIds.js` | Utilities for PLAN.md `[slug]` IDs. |
 | `renderSlot.js` | Render-slot helpers for `(proof\|final)Image` per stage. |
+| `renderTargets.js` | Render-target alphabet (#3231): `RENDER_TARGET`/`RENDER_TARGETS` name every creative surface that enqueues renders (universe-bible, sprite-reference, music-video, …) — the keys into `settings.renderDefaults` — plus the `RENDER_TARGET_BACKEND_AUTO` fall-through sentinel. Dependency-free leaf; resolved per surface by `services/imageGen/cloudProviderConfig.js#resolveRenderTargetConfig`. |
 | `telegramClient.js` | Telegram bot client. |
 | `vaultCrypto.js` | Privacy Center PII Vault field-level encryption (issue #2140). AES-256-GCM `encryptValue`/`decryptValue` (`v1:<iv>:<tag>:<ct>` format, per-value 12-byte IV), `ensureVaultKey()` self-heal (generates `PRIVACY_VAULT_KEY` into the install root's `.env` on first write, replacing any invalid line; never logs the value), key resolution that falls back to reading `.env` so decrypt/status survive a server restart, `isVaultKeyConfigured()`, and the per-type `maskValue(type, plaintext)` display masking (last-4 / domain-visible / street-masked). Plaintext must never be logged by callers. |
 

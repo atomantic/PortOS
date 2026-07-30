@@ -29,6 +29,23 @@ export const AGY_IMAGEGEN_DEFAULT_MODEL = 'gemini-3.5-flash-low';
 // mistaken for an image-model picker.
 export const AGY_IMAGEGEN_IMAGE_MODEL = 'imagen-3.0-generate-002';
 
+// Client mirror of the server's render-target alphabet
+// (server/lib/renderTargets.js, #3231) — the surfaces whose default backend +
+// model are pinnable via settings.renderDefaults. Only targets whose resolver
+// is LIVE are listed here (music-video ships with the Phase 4 video lane) —
+// showing a pin no resolver reads would be a control that silently does
+// nothing. Labels are the Settings-UI display names.
+export const RENDER_TARGET_BACKEND_AUTO = 'auto';
+export const RENDER_TARGET_OPTIONS = Object.freeze([
+  { id: 'universe-bible', label: 'Universe Bible batch renders' },
+  { id: 'universe-character-sheet', label: 'Universe character sheets' },
+  { id: 'series-first-pass', label: 'Series first-pass portraits & frames' },
+  { id: 'sprite-reference', label: 'Sprite references & anchors' },
+  { id: 'pipeline-visual', label: 'Pipeline visuals (storyboards, comics, covers)' },
+  { id: 'lora-dataset', label: 'LoRA training datasets' },
+  { id: 'creative-agent', label: 'Creative agent renders' },
+]);
+
 // Client mirror of the server's GROK_ASPECT_RATIOS (imageGen/grok.js) — the
 // aspect ratios grok's image_gen/image_edit tools accept, offered as the
 // default-ratio picker in Settings → Image Gen → Grok.

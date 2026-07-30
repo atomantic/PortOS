@@ -17,6 +17,8 @@ import {
   effectiveTrack, getEffectiveAnimationTracks, getEffectiveAnimationTrackIds,
 } from '../services/sprites/animationTrackStore.js';
 import { QUEUEABLE_IMAGE_MODES } from '../services/imageGen/modes.js';
+import { VIDEO_GEN_MODES } from '../services/videoGen/modes.js';
+import { RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { EFFORT_LEVELS } from './providerModels.js';
@@ -981,6 +983,29 @@ const agyImageModelSchema = z.preprocess(
     .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/, 'model must be a valid Agy model id')
     .optional(),
 );
+
+// Per-surface render defaults (`settings.renderDefaults`, #3231 Phase 2) —
+// one optional entry per render target, each pinning a backend and/or a cloud
+// model for that surface. `'auto'`, `''`, and null all mean "no pin — fall
+// through to the install default" (renderTargetDefaults normalizes them).
+// Strict at both levels so a typo'd target key or a stray field is rejected
+// instead of silently persisting a slice no resolver reads.
+const renderTargetModelSchema = z.preprocess(
+  (v) => (v === '' ? null : v),
+  z.string().trim().max(200)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/, 'model must be a valid model id')
+    .nullable()
+    .optional(),
+);
+const renderTargetEntrySchema = z.object({
+  imageMode: z.enum([RENDER_TARGET_BACKEND_AUTO, ...QUEUEABLE_IMAGE_MODES]).nullable().optional(),
+  imageModel: renderTargetModelSchema,
+  videoMode: z.enum([RENDER_TARGET_BACKEND_AUTO, ...VIDEO_GEN_MODES]).nullable().optional(),
+  videoModel: renderTargetModelSchema,
+}).strict();
+export const renderDefaultsSettingsSchema = z.object(
+  Object.fromEntries(RENDER_TARGETS.map((t) => [t, renderTargetEntrySchema.optional()])),
+).strict();
 
 export const imageGenAgySettingsSchema = z.object({
   enabled: z.boolean().optional(),

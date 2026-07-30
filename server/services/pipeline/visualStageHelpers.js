@@ -22,7 +22,8 @@ import { loraCompatKey } from '../../lib/runners.js';
 import { resolveCharacterLoras } from '../characterLoraResolver.js';
 import { pickCanon } from './seriesCanon.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
-import { pickUsableMode, resolveCloudProviderConfig } from '../imageGen/cloudProviderConfig.js';
+import { pickUsableMode, renderTargetDefaults, resolveRenderTargetConfig } from '../imageGen/cloudProviderConfig.js';
+import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
 
 const joinStyleParts = (...parts) =>
@@ -70,7 +71,13 @@ const applyWorldStyle = (prompt, world, series = null) => {
 // two explicit candidates. (Sprite renders use the equivalent
 // `resolveQueueImageMode` ladder in imageGen/modes.js — #2896 hoisted that
 // one first; this is the wider param-assembly consolidation from #2881.)
-const resolveMode = (options, settings) => pickUsableMode(settings, [options.mode, settings?.imageGen?.mode]);
+// The pipeline-visual renderDefaults pin (#3231) slots between the explicit
+// per-request override and the install default — usability-gated like both.
+const resolveMode = (options, settings) => pickUsableMode(settings, [
+  options.mode,
+  renderTargetDefaults(settings, RENDER_TARGET.PIPELINE_VISUAL).imageMode,
+  settings?.imageGen?.mode,
+]);
 
 /**
  * Resolve trained character LoRAs for a pipeline render. Local mode only —
@@ -251,7 +258,9 @@ const enqueueImageJob = ({ prompt, world, settings, options, mode, owner, logLin
   // the saved settings.imageGen[mode].{cleanC2PA,denoise} would have no
   // effect on storyboard, comic-panel, or cover renders.
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, mode);
-  const cloud = resolveCloudProviderConfig(settings, mode);
+  // Mode is already resolved through the ladder above; this call threads the
+  // pipeline-visual renderDefaults imageModel into the cloud job params.
+  const { cloud } = resolveRenderTargetConfig(settings, RENDER_TARGET.PIPELINE_VISUAL, { mode });
   const params = cloud
     ? { ...cloud.jobParams, cleanC2PA, denoise, ...baseParams }
     : { pythonPath: settings.imageGen?.local?.pythonPath || null, modelId: options.modelId, cleanC2PA, denoise, ...baseParams };
