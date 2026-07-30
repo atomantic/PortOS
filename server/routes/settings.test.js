@@ -178,11 +178,16 @@ describe('Settings routes — renderDefaults slice (#3231)', () => {
     });
   });
 
-  it('rejects an unknown render target key (strict)', async () => {
+  it('tolerates and preserves unknown target keys (forward compat after rollback)', async () => {
+    // A newer build's target (or field) must not 400 every Image Gen save on
+    // an older build — the UI round-trips the whole stored object. Unknown
+    // keys pass validation and persist raw, so the newer pins survive.
     const res = await request(buildApp())
       .put('/api/settings')
-      .send({ renderDefaults: { 'not-a-target': { imageMode: 'codex' } } });
-    expect(res.status).toBe(400);
+      .send({ renderDefaults: { 'future-target': { imageMode: 'codex' }, 'universe-bible': { imageMode: 'codex', futureField: 'x' } } });
+    expect(res.status).toBe(200);
+    expect(res.body.renderDefaults['future-target']).toEqual({ imageMode: 'codex' });
+    expect(res.body.renderDefaults['universe-bible'].futureField).toBe('x');
   });
 
   it('rejects a non-queueable backend and a shell-syntax model id', async () => {

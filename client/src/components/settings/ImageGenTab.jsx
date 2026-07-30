@@ -694,9 +694,12 @@ export function ImageGenTab() {
                   onChange={(e) => {
                     const v = e.target.value;
                     setPin('imageMode', v || null);
-                    // A backend change invalidates a model pinned for another
-                    // backend — clear it rather than sending codex a gemini id.
-                    if (!v || !supportsCloudModelOverride(v)) setPin('imageModel', null);
+                    // ANY backend change invalidates the pinned model — model ids
+                    // are namespaced per provider, and a codex→agy switch that
+                    // kept the gpt-* id would save a pin agy errors on. The
+                    // server's leak guard can't catch this case (mode and model
+                    // are pinned together), so the clear must happen here.
+                    setPin('imageModel', null);
                   }}
                   className="bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent sm:w-44"
                 >

@@ -992,8 +992,16 @@ const agyImageModelSchema = z.preprocess(
 // one optional entry per render target, each pinning a backend and/or a cloud
 // model for that surface. `'auto'`, `''`, and null all mean "no pin — fall
 // through to the install default" (renderTargetDefaults normalizes them).
-// Strict at both levels so a typo'd target key or a stray field is rejected
-// instead of silently persisting a slice no resolver reads.
+// Deliberately TOLERANT of unknown keys at both levels (no `.strict()`): the
+// Settings UI round-trips the WHOLE stored object on every save, so after a
+// version rollback (or a newer client against an older server) a target/field
+// this build doesn't know would otherwise 400 every Image Gen save until the
+// user hand-edits settings.json — the same forward-compat call the settings
+// route makes for catalogUserTypes. The route persists the raw body, so a
+// newer build's pins survive the round-trip intact rather than being dropped.
+// Known fields keep full enum/charset enforcement (that's what stops a bad
+// model id reaching a CLI argv); the client mirror's parity test guards the
+// known-key alphabet.
 const renderTargetModelSchema = z.preprocess(
   (v) => (v === '' ? null : v),
   cloudModelIdString('model must be a valid model id').nullable().optional(),
@@ -1003,10 +1011,10 @@ const renderTargetEntrySchema = z.object({
   imageModel: renderTargetModelSchema,
   videoMode: z.enum([RENDER_TARGET_BACKEND_AUTO, ...VIDEO_GEN_MODES]).nullable().optional(),
   videoModel: renderTargetModelSchema,
-}).strict();
+});
 export const renderDefaultsSettingsSchema = z.object(
   Object.fromEntries(RENDER_TARGETS.map((t) => [t, renderTargetEntrySchema.optional()])),
-).strict();
+);
 
 export const imageGenAgySettingsSchema = z.object({
   enabled: z.boolean().optional(),
