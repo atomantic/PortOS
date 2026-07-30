@@ -977,11 +977,15 @@ export const imageGenGrokSettingsSchema = z.object({
   denoise: z.boolean().optional(),
 });
 
+// Shared "valid model id" base — one definition of the shape a cloud-CLI
+// model id may take (bounds + charset), derived per consumer below so a
+// future tweak (e.g. allowing `@`) lands everywhere at once.
+const cloudModelIdString = (message) => z.string().trim().max(200)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/, message);
+
 const agyImageModelSchema = z.preprocess(
   (v) => (v === '' ? undefined : v),
-  z.string().trim().max(200)
-    .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/, 'model must be a valid Agy model id')
-    .optional(),
+  cloudModelIdString('model must be a valid Agy model id').optional(),
 );
 
 // Per-surface render defaults (`settings.renderDefaults`, #3231 Phase 2) —
@@ -992,10 +996,7 @@ const agyImageModelSchema = z.preprocess(
 // instead of silently persisting a slice no resolver reads.
 const renderTargetModelSchema = z.preprocess(
   (v) => (v === '' ? null : v),
-  z.string().trim().max(200)
-    .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/, 'model must be a valid model id')
-    .nullable()
-    .optional(),
+  cloudModelIdString('model must be a valid model id').nullable().optional(),
 );
 const renderTargetEntrySchema = z.object({
   imageMode: z.enum([RENDER_TARGET_BACKEND_AUTO, ...QUEUEABLE_IMAGE_MODES]).nullable().optional(),

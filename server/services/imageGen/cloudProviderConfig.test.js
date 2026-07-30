@@ -265,17 +265,27 @@ describe('resolveRenderTargetConfig (#3231)', () => {
     expect(cloud.modelId).toBe('request-model');
   });
 
-  it('a resolveMode ladder receives the layered candidate and owns the fallback', () => {
+  it('a disabled pinned backend falls through — and takes its model pin with it', () => {
     const settings = withDefaults(
-      { codex: { enabled: true } },
-      // Pin grok but leave it DISABLED — the ladder must fall through, not
-      // honor a pinned-but-unusable backend.
-      { 'sprite-reference': { imageMode: IMAGE_GEN_MODE.GROK } },
+      // Agy pin is DISABLED; install default is codex.
+      { mode: IMAGE_GEN_MODE.CODEX, codex: { enabled: true }, agy: { enabled: false } },
+      { 'universe-bible': { imageMode: IMAGE_GEN_MODE.AGY, imageModel: 'gemini-3.6-flash-low' } },
     );
-    const { mode } = resolveRenderTargetConfig(settings, 'sprite-reference', {
-      resolveMode: (candidate, s) => resolveQueueImageMode(candidate, s),
-    });
+    const { mode, cloud } = resolveRenderTargetConfig(settings, 'universe-bible');
     expect(mode).toBe(IMAGE_GEN_MODE.CODEX);
+    // The gemini model pinned FOR AGY must not leak into codex's --model —
+    // supportsModelOverride gates by provider, not by id namespace.
+    expect(cloud.modelId).toBe(CODEX_IMAGEGEN_DEFAULT_MODEL);
+    expect(cloud.jobParams.model).toBe(CODEX_IMAGEGEN_DEFAULT_MODEL);
+  });
+
+  it('an explicit mode on another backend does not inherit the pinned model', () => {
+    const settings = withDefaults(
+      { codex: { enabled: true }, agy: { enabled: true } },
+      { 'sprite-reference': { imageMode: IMAGE_GEN_MODE.AGY, imageModel: 'gemini-3.6-flash-low' } },
+    );
+    const { cloud } = resolveRenderTargetConfig(settings, 'sprite-reference', { mode: IMAGE_GEN_MODE.CODEX });
+    expect(cloud.modelId).toBe(CODEX_IMAGEGEN_DEFAULT_MODEL);
   });
 
   it('renderTargetDefaults normalizes auto/blank/missing to null', () => {

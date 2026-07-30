@@ -188,21 +188,20 @@ export function renderTargetDefaults(settings, target) {
  *                    (e.g. `body.mode`). Wins over the target pin.
  *  - `model`       — per-request cloud model override. Wins over the target's
  *                    `imageModel` pin.
- *  - `resolveMode` — optional `(candidateMode, settings) => finalMode` ladder
- *                    (e.g. `resolveQueueImageMode`) applied to the layered
- *                    candidate, for surfaces that gate on backend usability.
  *  - `fallbackMode`— the surface's historical final fallback when nothing
  *                    else resolves (EXTERNAL for batch-reject surfaces, LOCAL
- *                    for local-first ones). Ignored when `resolveMode` is
- *                    given (the ladder owns the fallback).
+ *                    for local-first ones). Surfaces with their own usability
+ *                    ladder (resolveQueueImageMode / pickUsableMode) resolve
+ *                    mode first — seeding the ladder with
+ *                    `renderTargetDefaults(...).imageMode` — and pass the
+ *                    result as `mode` here for model threading.
  *
- * Returns `{ mode, model, cloud }` — `cloud` is the resolveCloudProviderConfig
+ * Returns `{ mode, cloud }` — `cloud` is the resolveCloudProviderConfig
  * bundle (null for non-cloud modes), with the layered model threaded through.
  */
 export function resolveRenderTargetConfig(settings, target, {
   mode = null,
   model = null,
-  resolveMode = null,
   fallbackMode = null,
 } = {}) {
   const defaults = renderTargetDefaults(settings, target);
@@ -214,14 +213,17 @@ export function resolveRenderTargetConfig(settings, target, {
   const pinnedMode = defaults.imageMode && isModeUsable(settings, defaults.imageMode)
     ? defaults.imageMode
     : null;
-  const candidate = mode || pinnedMode;
-  const finalMode = resolveMode
-    ? resolveMode(candidate, settings)
-    : (candidate || settings?.imageGen?.mode || fallbackMode);
-  const finalModel = (typeof model === 'string' && model.trim()) ? model.trim() : defaults.imageModel;
+  const finalMode = mode || pinnedMode || settings?.imageGen?.mode || fallbackMode;
+  // The model pin rides WITH its backend pin: apply defaults.imageModel only
+  // when the resolved mode is still the pinned backend. When the mode fell
+  // back (pin disabled) or an explicit request chose another backend, the
+  // pinned model must not leak — codex would happily accept `--model` with a
+  // gemini id (supportsModelOverride gates by PROVIDER, not by id namespace).
+  const requestedModel = (typeof model === 'string' && model.trim()) ? model.trim() : null;
+  const finalModel = requestedModel
+    || (defaults.imageMode && finalMode === defaults.imageMode ? defaults.imageModel : null);
   return {
     mode: finalMode,
-    model: finalModel,
     cloud: resolveCloudProviderConfig(settings, finalMode, { model: finalModel }),
   };
 }

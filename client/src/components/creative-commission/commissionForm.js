@@ -33,7 +33,10 @@ const DURATION_FIELD = { key: 'targetDurationSeconds', label: 'Duration (sec)', 
 // conditional model picker (see CommissionConfigForm's RenderBackendSection),
 // mirroring the pipeline's VisualGenSettings UX; the generic field renderer in
 // GenerationSection skips them.
-export const RENDER_BACKEND_AUTO = 'auto';
+// Re-exported from the shared lib so the commission form and the Settings
+// Defaults tab (#3231) can never disagree on the "no pin" protocol value.
+export { RENDER_TARGET_BACKEND_AUTO as RENDER_BACKEND_AUTO } from '../../lib/imageGenBackends';
+import { RENDER_TARGET_BACKEND_AUTO as RENDER_BACKEND_AUTO } from '../../lib/imageGenBackends';
 
 export const IMAGE_BACKEND_OPTIONS = [
   [RENDER_BACKEND_AUTO, 'Auto (install default)'],

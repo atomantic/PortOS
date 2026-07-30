@@ -9,7 +9,7 @@ import { enqueueJob } from '../../mediaJobQueue/index.js';
 import { ASPECT_PRESETS, QUALITY_PRESETS, presetToRenderParams } from '../../../lib/creativeDirectorPresets.js';
 import { getSettings } from '../../settings.js';
 import { IMAGE_GEN_MODE, resolveQueueImageMode, resolveQueueImageEditMode } from '../../imageGen/modes.js';
-import { resolveRenderTargetConfig } from '../../imageGen/cloudProviderConfig.js';
+import { renderTargetDefaults, resolveRenderTargetConfig } from '../../imageGen/cloudProviderConfig.js';
 import { RENDER_TARGET } from '../../../lib/renderTargets.js';
 import { VIDEO_GEN_MODE, VIDEO_GEN_MODES, resolveVideoMode } from '../../videoGen/modes.js';
 import { nearestGrokDuration } from '../../../lib/grokVideoClip.js';
@@ -121,9 +121,18 @@ function attachMusicBedTag(params, ctx) {
  */
 async function enforceRenderBackendPin(kind, params, project) {
   const pin = project?.renderBackend?.[kind];
-  if (!pin?.mode) return params;
+  // The image lane has TWO pin sources: the project's own renderBackend pin
+  // (per-record, wins) and the install-wide creative-agent renderDefaults pin
+  // (#3231). The video lane stays project-pin-only until the Phase 4 video
+  // wiring lands. When NEITHER source pins, params pass through untouched —
+  // the "auto is byte-identical" contract above.
+  if (!pin?.mode && kind !== 'image') return params;
   const settings = await getSettings().catch(() => null);
   if (!settings) return params;
+  if (!pin?.mode && kind === 'image'
+      && !renderTargetDefaults(settings, RENDER_TARGET.CREATIVE_AGENT).imageMode) {
+    return params;
+  }
 
   if (kind === 'video') {
     const mode = resolveVideoMode(pin.mode, settings);
@@ -174,11 +183,19 @@ async function enforceRenderBackendPin(kind, params, project) {
   }
 
   const wantsEdit = !!params?.initImagePath || params?.referenceImagePaths?.length > 0;
+  // Project pin (explicit, per-record) → creative-agent renderDefaults pin —
+  // both usability-laddered so a disabled backend degrades instead of failing
+  // a nightly commission.
+  const requested = pin?.mode
+    || renderTargetDefaults(settings, RENDER_TARGET.CREATIVE_AGENT).imageMode;
   const mode = wantsEdit
-    ? resolveQueueImageEditMode(pin.mode, settings)
-    : resolveQueueImageMode(pin.mode, settings);
-  // Mode is pinned/laddered above; this threads the creative-agent
-  // renderDefaults imageModel into the cloud job params (#3231).
+    ? resolveQueueImageEditMode(requested, settings)
+    : resolveQueueImageMode(requested, settings);
+  // Mode is laddered above; this threads the creative-agent renderDefaults
+  // imageModel into the cloud job params (#3231). The project's own
+  // `pin.modelId` is deliberately NOT passed as the cloud model override —
+  // commissions pick it from the LOCAL diffusion catalog, so it only applies
+  // on the local branch below.
   const { cloud } = resolveRenderTargetConfig(settings, RENDER_TARGET.CREATIVE_AGENT, { mode });
   if (cloud) return { ...params, ...cloud.jobParams };
   return {
@@ -186,7 +203,7 @@ async function enforceRenderBackendPin(kind, params, project) {
     mode: IMAGE_GEN_MODE.LOCAL,
     pythonPath: settings.imageGen?.local?.pythonPath || null,
     // The user's pinned model wins over the planner's freehand guess.
-    ...(pin.modelId ? { modelId: pin.modelId } : {}),
+    ...(pin?.modelId ? { modelId: pin.modelId } : {}),
   };
 }
 

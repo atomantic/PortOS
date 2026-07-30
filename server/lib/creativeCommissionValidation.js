@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { QUEUEABLE_IMAGE_MODES } from '../services/imageGen/modes.js';
 import { VIDEO_GEN_MODES } from '../services/videoGen/modes.js';
+import { RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 
 // =============================================================================
 // CREATIVE COMMISSION SCHEMAS (Autonomous Creation Engine — #2657, Phase 1)
@@ -46,8 +47,10 @@ export const CREATIVE_COMMISSION_ASPECT_RATIOS = Object.freeze(['16:9', '9:16', 
 // so an existing commission that never sets the field behaves exactly as before.
 // It is deliberately NOT a member of the backend enums — it is the absence of a
 // pin, mirroring the `'auto'` sentinel the pipeline visual stages already ship
-// (client/src/components/pipeline/stages/VisualGenSettings.jsx).
-export const COMMISSION_RENDER_BACKEND_AUTO = 'auto';
+// (client/src/components/pipeline/stages/VisualGenSettings.jsx). Re-exported
+// from the render-target leaf (#3231) so the two "no pin" protocol values can
+// never diverge.
+export const COMMISSION_RENDER_BACKEND_AUTO = RENDER_TARGET_BACKEND_AUTO;
 
 // Image backends a commission may pin: the queueable image modes (local / codex
 // / grok — `external` never queues) plus the auto sentinel. Derived from

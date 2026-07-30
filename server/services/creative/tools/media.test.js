@@ -27,18 +27,38 @@ beforeEach(() => {
 });
 
 describe('render-backend pin — the auto/unpinned path is a strict no-op (#3135)', () => {
-  it('leaves image params untouched with no owning project', async () => {
+  // Note (#3231): the image lane now reads settings even without a project pin
+  // — the install-wide creative-agent renderDefaults pin is a second pin
+  // source — so the old "no settings read at all" assertion is gone. The
+  // load-bearing contract is unchanged: with NO pin from either source, the
+  // enqueued params are byte-identical to the caller's.
+  it('leaves image params untouched with no owning project and no renderDefaults pin', async () => {
     await run('media_enqueueImageJob', { prompt: 'a lighthouse' });
     expect(enqueued().params).toEqual({ prompt: 'a lighthouse' });
-    // No project ⇒ no settings read at all.
-    expect(getSettings).not.toHaveBeenCalled();
   });
 
   it('leaves image params untouched when the project has no pin', async () => {
     getProject.mockResolvedValue(projectWithPin(null));
     await run('media_enqueueImageJob', { prompt: 'p' }, { projectId: 'cd-1' });
     expect(enqueued().params).toEqual({ prompt: 'p' });
-    expect(getSettings).not.toHaveBeenCalled();
+  });
+
+  it('applies the creative-agent renderDefaults pin when the project has none (#3231)', async () => {
+    getSettings.mockResolvedValue({
+      imageGen: { codex: { enabled: true, codexPath: '/bin/codex', model: 'example-model', effort: 'low' } },
+      renderDefaults: { 'creative-agent': { imageMode: 'codex' } },
+    });
+    await run('media_enqueueImageJob', { prompt: 'p' });
+    expect(enqueued().params).toEqual(expect.objectContaining({ mode: 'codex', model: 'example-model' }));
+  });
+
+  it('a disabled creative-agent renderDefaults pin still leaves params flowing (degrades, never fails)', async () => {
+    getSettings.mockResolvedValue({
+      renderDefaults: { 'creative-agent': { imageMode: 'codex' } },
+    });
+    await run('media_enqueueImageJob', { prompt: 'p' });
+    // Codex pin present but disabled → the usability ladder degrades to local.
+    expect(enqueued().params).toEqual(expect.objectContaining({ mode: 'local', prompt: 'p' }));
   });
 
   it('leaves video params untouched when the project has no pin', async () => {
