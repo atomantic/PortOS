@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import DrumTransportBar from './DrumTransportBar.jsx';
+import { DRUM_KIT_IDS } from '../../lib/drumKits.js';
 
 // The phone-first split (primary controls always visible, setup behind a
 // disclosure under `sm`) is the whole point of this bar — pin it, plus the
@@ -23,6 +24,8 @@ const props = (extra = {}) => ({
   barCount: 4,
   clickEnabled: true,
   onClickToggle: vi.fn(),
+  kitId: '909',
+  onKitChange: vi.fn(),
   beatsPerBar: 4,
   pulse: null,
   currentBar: 1,
@@ -78,6 +81,16 @@ describe('DrumTransportBar', () => {
   it('draws a dot per notated beat of the bar, whatever the time signature', () => {
     render(<DrumTransportBar {...props({ beatsPerBar: 6 })} />);
     expect(screen.getByRole('status').querySelectorAll('span')).toHaveLength(6);
+  });
+
+  it('picks the kit from the setup row, listing every kit', () => {
+    const p = props();
+    render(<DrumTransportBar {...p} />);
+    const select = screen.getByLabelText('Kit');
+    expect(select.value).toBe('909');
+    expect([...select.options].map((o) => o.value)).toEqual(DRUM_KIT_IDS);
+    fireEvent.change(select, { target: { value: '808' } });
+    expect(p.onKitChange).toHaveBeenCalledWith('808');
   });
 
   it('marks the percent button matching the current BPM', () => {

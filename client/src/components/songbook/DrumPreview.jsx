@@ -57,6 +57,12 @@ export default function DrumPreview({
     player.setClickEnabled(enabled);
     settingsMirror?.setClickEnabled(enabled);
   }, [player.setClickEnabled, settingsMirror]);
+  // The kit persists globally, but the viewer's transport already read it at
+  // mount — mirror the change so the two don't disagree until a reload.
+  const setKitId = useCallback((next) => {
+    player.setKitId(next);
+    settingsMirror?.setKitId(next);
+  }, [player.setKitId, settingsMirror]);
 
   const toggle = useCallback(() => {
     player.toggle();
@@ -85,6 +91,8 @@ export default function DrumPreview({
         barCount={player.barCount}
         clickEnabled={player.clickEnabled}
         onClickToggle={setClickEnabled}
+        kitId={player.kitId}
+        onKitChange={setKitId}
         beatsPerBar={player.beatsPerBar}
         pulse={player.pulse}
         currentBar={player.currentBar}

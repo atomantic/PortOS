@@ -26,16 +26,29 @@ export const createFakeAudio = ({ suspended = false } = {}) => {
     // too (they satisfy the same start/stop/onended surface the transport tracks),
     // so a caller that only cares "how many voices sounded" reads that one list.
     filters: [],
+    // WaveShaperNodes — per-voice saturation and the master soft-clipper in
+    // drumPlayback.js. `curve` is recorded so a test can assert a voice is
+    // actually driven (the harmonics that make a sub-bass kick audible).
+    shapers: [],
     reset() {
       this.now = 0;
       this.oscillators.length = 0;
       this.gains.length = 0;
       this.filters.length = 0;
+      this.shapers.length = 0;
       resolveResume = null;
     },
     // Resolve a suspended context's pending resume() so play()'s await continues.
     flushResume() { const r = resolveResume; resolveResume = null; if (r) r(); },
   };
+  // Every node records what it was connected TO, so a test can assert ROUTING
+  // ("the kick's oscillator feeds a drive shaper") rather than inferring it from
+  // node creation order. `connect` still returns its target so chains work.
+  const connectable = () => ({
+    connections: [],
+    connect(target) { this.connections.push(target); return target; },
+    disconnect() {},
+  });
   const fakeParam = () => {
     const values = [];
     return {
@@ -55,13 +68,13 @@ export const createFakeAudio = ({ suspended = false } = {}) => {
       createOscillator() {
         const osc = {
           type: '', frequency: fakeParam(), onended: null, started: null, stopped: null,
-          connect: (t) => t, start(t) { this.started = t; }, stop(t) { this.stopped = t; },
+          ...connectable(), start(t) { this.started = t; }, stop(t) { this.stopped = t; },
         };
         audio.oscillators.push(osc);
         return osc;
       },
       createGain() {
-        const gain = { gain: fakeParam(), connect: (t) => t, disconnect() {} };
+        const gain = { gain: fakeParam(), ...connectable() };
         audio.gains.push(gain);
         return gain;
       },
@@ -74,16 +87,21 @@ export const createFakeAudio = ({ suspended = false } = {}) => {
         const src = {
           buffer: null, loop: false, playbackRate: { value: 1 },
           onended: null, started: null, stopped: null, noise: true,
-          connect: (t) => t, start(t) { this.started = t; }, stop(t) { this.stopped = t; },
+          ...connectable(), start(t) { this.started = t; }, stop(t) { this.stopped = t; },
         };
         // Recorded alongside oscillators: the transport tracks both the same way.
         audio.oscillators.push(src);
         return src;
       },
       createBiquadFilter() {
-        const filter = { type: '', frequency: fakeParam(), Q: { value: 1 }, connect: (t) => t };
+        const filter = { type: '', frequency: fakeParam(), Q: { value: 1 }, ...connectable() };
         audio.filters.push(filter);
         return filter;
+      },
+      createWaveShaper() {
+        const shaper = { curve: null, oversample: 'none', ...connectable() };
+        audio.shapers.push(shaper);
+        return shaper;
       },
       sampleRate: 48000,
     };

@@ -587,6 +587,8 @@ export default function SongBookViewer() {
               barCount={drum.barCount}
               clickEnabled={drum.clickEnabled}
               onClickToggle={drum.setClickEnabled}
+              kitId={drum.kitId}
+              onKitChange={drum.setKitId}
               beatsPerBar={drum.beatsPerBar}
               pulse={drum.pulse}
               currentBar={drum.currentBar}

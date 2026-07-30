@@ -4,9 +4,10 @@
  * Purely presentational over `useDrumPlayer`: play/stop, a practice-tempo
  * stepper + number input (slider on wider screens, clamped by `clampBpm`,
  * 20–320), percent-of-written quick buttons that recompute BPM from the chart's
- * `tempo:` marking, a count-in select, a loop toggle with a from/to bar range,
- * a metronome-click toggle, and a live beat/bar readout. All state and audio
- * live in the hook — this file only renders and calls back.
+ * `tempo:` marking, a kit picker (TR-909 / TR-808 / Acoustic), a count-in select,
+ * a loop toggle with a from/to bar range, a metronome-click toggle, and a live
+ * beat/bar readout. All state and audio live in the hook — this file only
+ * renders and calls back.
  *
  * PHONE-FIRST LAYOUT. A phone is the primary SongBook surface, and the previous
  * one-flat-wrapping-row bar cost three stacked rows (~330px) before the sheet
@@ -24,6 +25,7 @@
 import { useMemo, useState } from 'react';
 import { Play, Square, Repeat, Timer, Minus, Plus, SlidersHorizontal } from 'lucide-react';
 import { METRONOME_BPM_MIN, METRONOME_BPM_MAX } from '../../lib/metronome.js';
+import { DRUM_KIT_LIST, resolveDrumKit } from '../../lib/drumKits.js';
 import { ctrlBtnClass, activeCtrlClass } from './constants.js';
 
 // Practice speeds as a percentage of the chart's written tempo.
@@ -66,6 +68,7 @@ export default function DrumTransportBar({
   countInBars, onCountInChange,
   loopEnabled, onLoopToggle, loopFrom, loopTo, onLoopRangeChange, barCount,
   clickEnabled, onClickToggle,
+  kitId, onKitChange,
   beatsPerBar = 4, pulse = null, currentBar = null,
 }) {
   // Setup controls: collapsed by default on a phone, always shown from `sm` up.
@@ -205,6 +208,24 @@ export default function DrumTransportBar({
               {p}%
             </button>
           ))}
+        </div>
+
+        {/* Which synthesized kit sounds the chart. A taste setting rather than a
+            practice one, so it sits with the setup controls — but it applies
+            live, without stopping playback. */}
+        <div className="flex items-center gap-2">
+          <label htmlFor="drum-kit" className="text-xs text-gray-400">Kit</label>
+          <select
+            id="drum-kit"
+            value={kitId}
+            onChange={(e) => onKitChange(e.target.value)}
+            className={smallSelectClass}
+            title={resolveDrumKit(kitId).description}
+          >
+            {DRUM_KIT_LIST.map((kit) => (
+              <option key={kit.id} value={kit.id}>{kit.label}</option>
+            ))}
+          </select>
         </div>
 
         <div className="flex items-center gap-2">

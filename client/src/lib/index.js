@@ -91,6 +91,7 @@ export * from './canvasRoll.js';
 export * from './chiptunePlayback.js';
 export * from './chordShapes.js';
 export * from './colorMatch.js';
+export * from './drumKits.js';
 export * from './drumNotation.js';
 export * from './drumPlayback.js';
 export * from './editorialChecks.js';

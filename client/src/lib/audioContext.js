@@ -29,3 +29,21 @@ export function getAudioContext() {
   }
   return sharedCtx;
 }
+
+// One second of white noise, shared by every synth that needs a noise source
+// (chiptune drums, the drum-kit snare/hats/cymbals). It lives beside the shared
+// context for the same reason the context does: each copy is a megabyte of
+// Float32 that every noise voice can read from instead of re-generating.
+// Re-generated only if the sample rate changes — which for the shared context
+// means never, but a per-mount context (MorseTrainer) may differ.
+let noiseBuffer = null;
+
+/** The shared white-noise buffer for `c`. Loop an AudioBufferSourceNode over it. */
+export function getNoiseBuffer(c) {
+  if (!noiseBuffer || noiseBuffer.sampleRate !== c.sampleRate) {
+    noiseBuffer = c.createBuffer(1, c.sampleRate, c.sampleRate);
+    const data = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < data.length; i += 1) data[i] = Math.random() * 2 - 1;
+  }
+  return noiseBuffer;
+}

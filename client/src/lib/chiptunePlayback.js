@@ -11,7 +11,7 @@
 // by re-basing its cursor each time it exhausts the event list, so the loop
 // boundary is sample-scheduler-exact rather than "restart on a timer".
 
-import { getAudioContext as ctx } from './audioContext.js';
+import { getAudioContext as ctx, getNoiseBuffer } from './audioContext.js';
 import { createLookaheadTransport, SYNTH_TIMING } from './lookaheadTransport.js';
 import { midiToFreq, makeSafeCall } from './scorePlayback.js';
 
@@ -97,17 +97,8 @@ const pulseWave = (c, duty) => {
   return c.createPeriodicWave(real, imag, { disableNormalization: false });
 };
 
-// Shared white-noise buffer (1s, reused by every noise voice via offset 0 —
-// the LFSR aesthetic matters less in preview than in the deterministic render).
-let noiseBuffer = null;
-const getNoiseBuffer = (c) => {
-  if (!noiseBuffer || noiseBuffer.sampleRate !== c.sampleRate) {
-    noiseBuffer = c.createBuffer(1, c.sampleRate, c.sampleRate);
-    const data = noiseBuffer.getChannelData(0);
-    for (let i = 0; i < data.length; i += 1) data[i] = Math.random() * 2 - 1;
-  }
-  return noiseBuffer;
-};
+// Noise voices read the app-wide buffer from audioContext.js via offset 0 — the
+// LFSR aesthetic matters less in preview than in the deterministic render.
 
 const NOISE_VOICES = {
   kick: { decaySec: 0.11 },

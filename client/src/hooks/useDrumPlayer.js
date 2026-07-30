@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { parseDrumChart, chartHasMusic } from '../lib/drumNotation.js';
 import { createDrumPlayer, resolveLoopRange, resolvePlayhead } from '../lib/drumPlayback.js';
+import { resolveDrumKit } from '../lib/drumKits.js';
 import { clampBpm } from '../lib/metronome.js';
 import { useLocalStorageBool } from './useLocalStorageBool.js';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage.js';
+
+// The selected kit is global to the machine (see the `kitId` state below).
+const KIT_STORAGE_KEY = 'songbook:drumKit';
 
 /**
  * Drum play-along transport for a SongBook `drum` chart (#3115) — React wrapper
@@ -20,8 +24,9 @@ import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage.js';
  * A timing-critical edit (tempo, count-in, loop range) while playing STOPS
  * playback rather than re-timing a running schedule — already-scheduled audio
  * can't be moved, so a live rebase would desync the position from what you hear.
- * The user presses play again at the new setting. The click toggle is the
- * exception: it only gates FUTURE scheduling, so it applies live.
+ * The user presses play again at the new setting. The click toggle and the kit
+ * selection are the exceptions: they only gate FUTURE scheduling, so they apply
+ * live.
  *
  * Settings live in state AND are pushed into the player by a sync effect, so the
  * order the seeding effects happen to run in can't leave the player holding a
@@ -74,6 +79,11 @@ export default function useDrumPlayer(text, { songId, initialSettings } = {}) {
   // against no pulse is the unusual case, and "never chosen" must not read as
   // "chosen off" (the hook's own default handles that distinction).
   const [clickEnabled, setClickEnabled] = useLocalStorageBool('songbook:drumClick', true);
+  // Which synth kit sounds the chart (909 / 808 / acoustic). Like the metronome
+  // it's a taste setting global to the MACHINE, not per song — and it changes no
+  // timing, so unlike the tempo/loop settings it applies without stopping
+  // playback. `resolveDrumKit` normalizes a missing or stale stored id.
+  const [kitId, setKitIdState] = useState(() => resolveDrumKit(safeReadStorage(KIT_STORAGE_KEY)).id);
   const [playing, setPlaying] = useState(false);
   const [pulse, setPulse] = useState(null);
 
@@ -137,6 +147,12 @@ export default function useDrumPlayer(text, { songId, initialSettings } = {}) {
     player.setLoop(loopEnabled ? { from: loopFrom, to: loopTo } : null);
     player.setClick(clickEnabled);
   }, [chart, bpm, countInBars, loopEnabled, loopFrom, loopTo, clickEnabled]);
+
+  // The kit gets its OWN effect rather than joining the one above: each timing
+  // setter there rebuilds the schedule while idle, so folding the kit in would
+  // re-flatten and re-sort every event three times over to deliver what is
+  // really a one-line assignment.
+  useEffect(() => { playerRef.current?.setKit(kitId); }, [chart, kitId]);
 
   // Live playhead read — the source both consumers below share. Stable identity
   // so a caller's animation-frame loop can depend on it without restarting.
@@ -203,6 +219,14 @@ export default function useDrumPlayer(text, { songId, initialSettings } = {}) {
     if (storageKey) safeWriteStorage(storageKey, String(clamped));
   }, [stopIfPlaying, storageKey]);
 
+  // Kit swaps affect no timing, so playback keeps running — the sync effect above
+  // hands the new kit to the live player and the next scheduled hit uses it.
+  const setKitId = useCallback((next) => {
+    const id = resolveDrumKit(next).id;
+    setKitIdState(id);
+    safeWriteStorage(KIT_STORAGE_KEY, id);
+  }, []);
+
   // Percent of the chart's WRITTEN tempo (the practice-slower control).
   const setBpmPercent = useCallback((percent) => {
     setBpm(Math.round((writtenTempo * percent) / 100));
@@ -249,6 +273,8 @@ export default function useDrumPlayer(text, { songId, initialSettings } = {}) {
     setLoopRange,
     clickEnabled,
     setClickEnabled,
+    kitId,
+    setKitId,
     playing,
     pulse,
     currentBar,

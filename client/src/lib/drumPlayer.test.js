@@ -53,25 +53,116 @@ describe('createDrumPlayer', () => {
     expect(player.isPlaying()).toBe(false);
   });
 
-  it('uses bandpassed noise for cymbals/snare and a pitched sweep for the kick', async () => {
+  it('uses filtered noise for the hat and a pitched sweep for the kick', async () => {
     const player = createDrumPlayer(parseDrumChart('tempo: 240\nsubdivision: 1\n\nHH: x---\nK: -o--'), {});
     await player.play();
     drive(2);
-    // The hat is a filtered noise burst; the kick is a sine sweep (no filter).
-    expect(audio.filters.length).toBe(1);
-    expect(audio.filters[0].type).toBe('bandpass');
+    // The hat is a filtered noise burst; the kick's body is a pitched oscillator.
     expect(audio.oscillators.some((o) => o.noise)).toBe(true);
-    expect(audio.oscillators.some((o) => !o.noise)).toBe(true);
+    expect(audio.filters.length).toBeGreaterThan(0);
+    const swept = audio.oscillators.filter((o) => !o.noise && o.frequency.values.length > 1);
+    expect(swept.length).toBeGreaterThan(0);
+    // Every sweep DROPS in pitch — a membrane falling to its fundamental.
+    expect(swept.every((o) => o.frequency.values[1] < o.frequency.values[0])).toBe(true);
+  });
+
+  it('drops the kick pitch far faster than its amplitude decays', async () => {
+    // The punch fix: the pitch envelope and the amplitude envelope are separate.
+    // A kick whose sweep runs the full length of its tail is the weak-sounding
+    // recipe this replaced, so the two are pinned apart here rather than left to
+    // whichever numbers a kit happens to carry.
+    const player = createDrumPlayer(parseDrumChart('tempo: 240\nsubdivision: 1\n\nK: o---'), {});
+    await player.play();
+    drive(0.2);
+    const body = audio.oscillators.find((o) => !o.noise && o.frequency.values.length > 1);
+    expect(body).toBeDefined();
+    // stop() is scheduled at attack + decay + 0.02 — a proxy for the amp tail.
+    const ampTail = body.stopped - body.started;
+    expect(ampTail).toBeGreaterThan(0.3);
+    // …and the sweep lands in the first tenth of it (~30–60ms in every kit).
+    expect(body.frequency.values[1]).toBeLessThan(body.frequency.values[0] / 2);
+    player.stop();
+  });
+
+  it('routes the kick body through a drive shaper, and the bus through a clipper', async () => {
+    // A sub-50Hz sine is inaudible on a phone speaker; the drive shaper supplies
+    // the harmonics that make it read. Both shapers are load-bearing for the
+    // "the kick sounds weak" fix, so both are pinned — structurally, off the
+    // fake's recorded connections rather than off node creation order.
+    const player = createDrumPlayer(parseDrumChart('tempo: 240\nsubdivision: 1\n\nK: o---'), {});
+    await player.play();
+    drive(0.2);
+    const body = audio.oscillators.find((o) => !o.noise && o.frequency.values.length > 1);
+    expect(audio.shapers).toContain(body.connections[0]);
+    // The master gain feeds a shaper, which feeds the destination.
+    const busShaper = audio.shapers.find((s) => s.connections.some((t) => t?.id === 'destination'));
+    expect(busShaper).toBeDefined();
+    expect(audio.gains.some((g) => g.connections.includes(busShaper))).toBe(true);
+    // Every curve is a real saturation curve: bounded to ±1 and monotonic.
+    for (const shaper of audio.shapers) {
+      expect(shaper.curve.length).toBeGreaterThan(0);
+      expect(Math.max(...shaper.curve)).toBeLessThanOrEqual(1);
+      expect(Math.min(...shaper.curve)).toBeGreaterThanOrEqual(-1);
+      expect(shaper.curve.every((v, i, a) => i === 0 || v >= a[i - 1])).toBe(true);
+    }
+    player.stop();
   });
 
   it('scales voice gain by the glyph velocity (accent louder than ghost)', async () => {
     const player = createDrumPlayer(parseDrumChart('tempo: 240\nsubdivision: 1\n\nHH: X-g-'), {});
     await player.play();
     drive(2);
-    const peaks = audio.gains.map((g) => Math.max(...g.gain.values, 0));
-    // [master, accent, ghost] in creation order — the accent must be louder.
-    expect(peaks[1]).toBeGreaterThan(peaks[2]);
+    // Creation order is [master, ...accent layers, ...ghost layers] — a voice can
+    // be several layers (the 808 hat is a six-oscillator cluster), so compare the
+    // two halves rather than two fixed indices.
+    const peaks = audio.gains.slice(1).map((g) => Math.max(...g.gain.values, 0));
+    const half = peaks.length / 2;
+    expect(Number.isInteger(half)).toBe(true);
+    expect(Math.max(...peaks.slice(0, half))).toBeGreaterThan(Math.max(...peaks.slice(half)));
     player.stop();
+  });
+
+  it('setKit swaps the voices live, without stopping playback', async () => {
+    const player = createDrumPlayer(parseDrumChart('tempo: 120\nsubdivision: 1\n\nHH: xxxx'), {});
+    await player.play();
+    drive(0.5);
+    // The default 909 hat is one noise burst.
+    expect(audio.oscillators.every((o) => o.noise)).toBe(true);
+    player.setKit('808');
+    drive(1);
+    // The 808's is a square cluster — so the swap shows up as pitched sources
+    // appearing mid-run, and playback never stopped to do it.
+    expect(audio.oscillators.some((o) => !o.noise)).toBe(true);
+    expect(player.isPlaying()).toBe(true);
+    player.stop();
+  });
+
+  it('shares one filter and envelope across a square cluster', async () => {
+    // The 808 hat is six oscillators; they must sum into ONE filter + gain (a
+    // biquad is linear, so per-partial filters would be six times the nodes for
+    // an identical signal) while each partial stays individually stoppable.
+    const player = createDrumPlayer(parseDrumChart('tempo: 240\nsubdivision: 1\n\nHH: x---'), {
+      kit: '808',
+    });
+    await player.play();
+    drive(0.2);
+    expect(audio.oscillators.length).toBeGreaterThan(1);
+    expect(audio.filters).toHaveLength(1);
+    expect(audio.gains).toHaveLength(2); // the master bus + one voice envelope
+    for (const osc of audio.oscillators) expect(osc.connections).toEqual([audio.filters[0]]);
+    player.stop();
+    // Every partial was stopped — one tracked entry per oscillator, so an open
+    // hat or a 1.2s crash can't ring on after Stop.
+    expect(audio.oscillators.every((o) => o.stopped !== null)).toBe(true);
+  });
+
+  it('falls back to the default kit for an unknown id rather than going silent', async () => {
+    const player = createDrumPlayer(parseDrumChart('tempo: 240\nsubdivision: 1\n\nK: o---'), {
+      kit: 'roland-tr-nope',
+    });
+    await player.play();
+    drive(2);
+    expect(audio.oscillators.length).toBeGreaterThan(0);
   });
 
   it('reports the playhead per grid position, once per bar+step', async () => {
