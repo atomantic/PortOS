@@ -41,7 +41,7 @@ const renders = {
   cancelSubmit: vi.fn(),
 };
 
-const renderWorkflow = ({ turnaround } = {}) => render(
+const renderWorkflow = ({ turnaround, trackDefinitions } = {}) => render(
   <ReferenceWorkflow
     record={{ id: 'example-pioneer', name: 'Example Pioneer', chromaKey: '#FF00FF' }}
     reference={{
@@ -66,6 +66,7 @@ const renderWorkflow = ({ turnaround } = {}) => render(
     corrections={{}}
     onCorrectionChange={vi.fn()}
     backends={[{ id: 'codex', label: 'Codex' }]}
+    trackDefinitions={trackDefinitions}
     mode="codex"
     onModeChange={vi.fn()}
     onChanged={vi.fn()}
@@ -159,9 +160,36 @@ describe('ReferenceWorkflow workspace', () => {
 
     const main = screen.getByRole('region', { name: 'Main reference' });
     await user.click(within(main).getByRole('button', { name: 'Unlock main reference' }));
-    expect(within(main).getByText(/Reopen the main reference and its south walk\/scanner/)).toBeInTheDocument();
+    // No definitions supplied → the generic noun, never a track name this record
+    // may not carry.
+    expect(within(main).getByText(/Reopen the main reference and its south animations\?/)).toBeInTheDocument();
     await user.click(within(main).getByRole('button', { name: 'Confirm unlock main reference' }));
     expect(unlockSpriteMainReference).toHaveBeenCalledWith('example-pioneer', { silent: true });
+  });
+
+  // #3152 made every non-walk track user-defined, so the reopen warnings may not
+  // name `scanner` (or any other seeded row) as copy: an install whose user
+  // deleted it would be warned about an animation it does not have, and one who
+  // authored their own would not be warned about the approvals being dropped.
+  it('names this record\'s own directional tracks in the reopen warnings', async () => {
+    const user = userEvent.setup();
+    renderWorkflow({
+      turnaround: { locked: true, path: 'reference/example-pioneer-turnaround-v1.png' },
+      trackDefinitions: [
+        { id: 'walk', label: 'Walk cycle', directional: true },
+        { id: 'chest-open', label: 'Chest opening', directional: true },
+        // Non-directional tracks seed from the main itself, not a per-facing
+        // anchor, so they are NOT part of the anchor-dependent sweep.
+        { id: 'ambient', label: 'Ambient loop', directional: false },
+      ],
+    });
+
+    const main = screen.getByRole('region', { name: 'Main reference' });
+    await user.click(within(main).getByRole('button', { name: 'Unlock main reference' }));
+    const warning = within(main).getByText(/Reopen the main reference and its south/);
+    expect(warning.textContent).toContain('walk cycle / chest opening');
+    expect(warning.textContent).not.toContain('scanner');
+    expect(warning.textContent).not.toContain('ambient loop');
   });
 
   it('re-processes one turnaround attempt with its own correction note', async () => {

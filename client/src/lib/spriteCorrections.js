@@ -3,8 +3,9 @@
  * regeneration surface by #3134).
  *
  * Every Sprite Manager surface that can re-roll a render — the turnaround sheet,
- * the main reference, the 7 directional anchors, the walk and scanner clips, and
- * the ambient reference + loop — writes its note into ONE page-owned
+ * the main reference, the 7 directional anchors, and each animation track's
+ * reference + clips (`walk` plus whatever the user's registry holds) — writes
+ * its note into ONE page-owned
  * `corrections` map (lifted to `Sprites.jsx`). This module owns that map's key
  * vocabulary and the single helper that turns a note into a request fragment, so
  * the pure action-gating layer (`spriteCollectionActions.js`) and the React

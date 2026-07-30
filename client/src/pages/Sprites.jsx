@@ -443,7 +443,7 @@ export default function Sprites() {
   });
 
   // Correction guidance for EVERY regeneration surface is page-owned (#2964,
-  // extended to the main reference / walk / scanner / ambient surfaces by
+  // extended to the main reference and every animation track's surfaces by
   // #3134) so a workflow panel and the asset-collection Regenerate button
   // read/write ONE source: a correction typed on either surface applies to the
   // other AND rides along as `correctionPrompt` on whichever re-roll fires.
@@ -798,6 +798,7 @@ export default function Sprites() {
                         corrections={corrections}
                         onCorrectionChange={setCorrections}
                         backends={imageBackends}
+                        trackDefinitions={detail.trackDefinitions}
                         mode={imageMode}
                         onModeChange={setImageMode}
                         onChanged={onWorkflowChanged}

@@ -197,7 +197,7 @@ function StageHeading({ id, number, title, status, statusTone = 'text-gray-500' 
   );
 }
 
-export default function ReferenceWorkflow({ record, reference, renders, corrections, onCorrectionChange, backends, mode, onModeChange, onChanged, onForked }) {
+export default function ReferenceWorkflow({ record, reference, renders, corrections, onCorrectionChange, backends, trackDefinitions, mode, onModeChange, onChanged, onForked }) {
   const recordId = record.id;
   const manifest = reference?.manifest || null;
   const candidates = reference?.candidates || [];
@@ -210,6 +210,25 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
   const backfilling = mainLocked && !turnaroundLocked;
   // Whichever lock froze the canonical key closes the pin control.
   const keyFrozen = mainLocked || turnaroundLocked;
+  // What a reference reopen actually drops, named from THIS record's registry
+  // slice rather than as literal copy. The old wording said "walk/scanner",
+  // which was already wrong twice over since #3152 made every non-walk track
+  // user-defined: an install whose user deleted the seeded `scanner` row was
+  // warned about an animation it does not have, and one who authored a track of
+  // their own was not warned about the approvals they were about to lose.
+  //
+  // Directional is the client-side spelling of the server's `sourceReferenceFor`
+  // === 'anchor' (a per-facing track must seed from that facing's own anchor) —
+  // which is exactly the set `invalidateAnchorDependentTracks` sweeps, so this
+  // sentence and the invalidation it describes cannot drift.
+  const anchorSeededLabels = useMemo(() => (trackDefinitions || [])
+    .filter((row) => row.directional)
+    .map((row) => row.label.toLowerCase()), [trackDefinitions]);
+  // Falls back to the generic noun when the record carries no directional track
+  // (or the caller passed no definitions) rather than rendering an empty list.
+  const anchorSeededPhrase = anchorSeededLabels.length
+    ? anchorSeededLabels.join(' / ')
+    : 'animations';
   // Once every anchor is locked this grid is just static previews of files the
   // "Reference set" file browser below already lists (and makes inspectable /
   // downloadable), so it reads as duplicate content. Collapse it by default
@@ -368,8 +387,12 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
       { direction },
       { silent: true },
     );
-    toast.success(result.walkInvalidated
-      ? `${direction} anchor unlocked; its walk was reopened`
+    // Same per-track map the main unlock reads below — `unlockDirectionalAnchor`
+    // sweeps every anchor-seeded track for this facing, not just walk, so a toast
+    // that reads only `walkInvalidated` under-reports what it just dropped.
+    const tracksReopened = Object.values(result.tracksInvalidated || {}).some(Boolean);
+    toast.success(result.walkInvalidated || tracksReopened
+      ? `${direction} anchor unlocked; its animations were reopened`
       : `${direction} anchor unlocked`);
     onChanged();
   }, { errorMessage: 'Failed to unlock anchor' });
@@ -390,9 +413,17 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
 
   const [unlockTurnaround, turnaroundUnlocking] = useAsyncAction(async () => {
     const result = await unlockSpriteTurnaround(recordId, { silent: true });
-    const invalidated = result.walkInvalidatedDirections?.length || 0;
+    // A turnaround reopen resets the whole identity chain, so the server sweeps
+    // EVERY anchor-seeded track across every facing (`tracksInvalidatedDirections`)
+    // alongside walk. Count the reopened facings across all of them rather than
+    // reporting walk's alone — a record whose user deleted `walk`'s seeded
+    // companions, or added their own, otherwise sees a number that doesn't match
+    // the cards that just went back to draft.
+    const trackDirections = Object.values(result.tracksInvalidatedDirections || {})
+      .reduce((total, directions) => total + (directions?.length || 0), 0);
+    const invalidated = (result.walkInvalidatedDirections?.length || 0) + trackDirections;
     toast.success(invalidated
-      ? `Turnaround unlocked; ${invalidated} dependent walks were reopened`
+      ? `Turnaround unlocked; ${invalidated} dependent ${invalidated === 1 ? 'animation was' : 'animations were'} reopened`
       : 'Turnaround unlocked; dependent references were reopened');
     setTurnaroundUnlockConfirming(false);
     onChanged();
@@ -531,7 +562,7 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
                 {turnaroundUnlockConfirming ? (
                   <div className="mt-3 rounded border border-port-warning/40 bg-port-warning/10 p-2 text-[11px]">
                     <p className="text-port-warning">
-                      Reopen the turnaround, main, all 8 anchors, and any approved walks? Existing versioned files stay in history.
+                      Reopen the turnaround, main, all 8 anchors, and every approved {anchorSeededPhrase}? Existing versioned files stay in history.
                     </p>
                     <div className="mt-2 flex gap-2">
                       <button
@@ -740,7 +771,7 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
                 {turnaroundLocked && (mainUnlockConfirming ? (
                   <div className="rounded border border-port-warning/40 bg-port-warning/10 p-2 text-[11px]">
                     <p className="text-port-warning">
-                      Reopen the main reference and its south walk/scanner? The turnaround and other directions stay locked; existing files remain in history.
+                      Reopen the main reference and its south {anchorSeededPhrase}? The turnaround and other directions stay locked; existing files remain in history.
                     </p>
                     <div className="mt-2 flex gap-2">
                       <button

@@ -3,8 +3,9 @@
  * by #3134).
  *
  * Every surface that can re-roll a render — the turnaround sheet, the main
- * reference, the 7 directional anchors, the walk/scanner clips, and the ambient
- * reference + loop — renders the SAME control writing the SAME page-owned
+ * reference, the 7 directional anchors, and each animation track's clips
+ * (`walk` plus whatever the user's registry holds) — renders the SAME control
+ * writing the SAME page-owned
  * `corrections` map (lifted to `Sprites.jsx`), so the placeholder, aria-label,
  * and updater shape live in one place and can't drift between surfaces.
  * `className` lets each host keep its own chrome (full grid tile vs. compact
@@ -69,8 +70,8 @@ export function CorrectionToggleButton({ open, onToggle, hasValue, label, text =
 }
 
 /**
- * Toggle + revealed note, stacked — the affordance the walk / scanner / ambient
- * cards use. Opens by default when a note already exists so a set correction is
+ * Toggle + revealed note, stacked — the affordance every animation-track card
+ * uses. Opens by default when a note already exists so a set correction is
  * never invisible. Keeps the note out of the way on the (common) blind-re-roll
  * path, which matters on cards that are already dense on mobile.
  */
