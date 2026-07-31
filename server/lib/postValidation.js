@@ -254,7 +254,9 @@ export const postConfigUpdateSchema = z.object({
   memory: z.object({
     enabled: z.boolean().optional(),
     drillTypes: z.partialRecord(z.enum(MEMORY_DRILL_TYPES), drillTypeConfigSchema).optional(),
-    items: z.record(z.string(), z.object({ enabled: z.boolean().optional() })).optional()
+    // Keys are memory item ids — an open record, capped at the same 200 chars
+    // every other id field here uses so a hand-edited config can't grow unbounded.
+    items: z.record(z.string().max(200), z.object({ enabled: z.boolean().optional() })).optional()
   }).optional(),
   // Morse (issue #3252). Morse has no drill-type knobs here — its trainer owns
   // its own Koch settings — so the block is just the participation toggle that
