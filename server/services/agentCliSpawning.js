@@ -34,7 +34,8 @@ import { resolveForgeTokenEnv } from './git.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { resolvePrCompletion } from '../lib/prDisposition.js';
-import { isHostShuttingDown, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
+import { DONE_SENTINEL_NAME } from '../lib/agentSentinel.js';
+import { isHostShuttingDown, shouldAbandonForHostShutdown, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
 
@@ -748,6 +749,8 @@ export async function spawnDirectly({
 
     const terminatedByUser = userTerminatedAgents.has(agentId);
     if (terminatedByUser) userTerminatedAgents.delete(agentId);
+    const completionSentinelPresent = !!workspacePath && existsSync(join(workspacePath, DONE_SENTINEL_NAME));
+    const completedBeforeHostShutdown = isHostShuttingDown() && completionSentinelPresent;
 
     // If the user terminated the agent, force success=false even if the
     // process happened to exit 0 in the race window — otherwise the run is
@@ -755,8 +758,12 @@ export async function spawnDirectly({
     // `finish` path's `finalSuccess = terminatedByUser ? false : success`.
     // A mid-stream fallback signal (e.g. usage-limit hit) kills the CLI; if it
     // races to exit 0, don't record success or the fallback/retry never fires.
+    // A completion sentinel written before host shutdown is also authoritative:
+    // TreeKill may surface its otherwise-completed child with a null exit code.
     // Mirrors the runner path (`runner.js`) and the TUI finish() handling.
-    const finalSuccess = terminatedByUser ? false : (success && !immediateFallbackAnalysis);
+    const finalSuccess = terminatedByUser
+      ? false
+      : ((success || completedBeforeHostShutdown) && !immediateFallbackAnalysis);
     const finalError = terminatedByUser ? 'Agent terminated by user' : null;
 
     // Drain any queued transcript writes before reading/appending outputBuffer
@@ -816,7 +823,11 @@ export async function spawnDirectly({
     // The transcript is already flushed and output.txt written above.
     // A user-terminated run still finalizes, so it's recorded as such rather
     // than resurrected by the requeue.
-    if (isHostShuttingDown() && !terminatedByUser) {
+    if (shouldAbandonForHostShutdown({
+      sentinelPresent: completionSentinelPresent,
+      terminatedByUser,
+      paused: pausedAgents.has(agentId),
+    })) {
       outputBatcher.push('🛑 PortOS restarted while this agent was running — the run was interrupted, not completed. Its worktree is preserved and the task will resume.');
       emitLog('warn', `Agent ${agentId} interrupted by a PortOS host restart — preserved for resume`, { agentId, phase: 'interrupted' });
       await Promise.all([

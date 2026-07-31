@@ -19,7 +19,7 @@ import { finalizeAgent, releaseAgentLane } from './agentFinalization.js';
 import { activeAgents, userTerminatedAgents, pausedAgents, isFalsyMeta } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { DONE_SENTINEL_NAME, parseSentinelPayload } from '../lib/agentSentinel.js';
-import { isHostShuttingDown, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
+import { shouldAbandonForHostShutdown, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
 import { SENTINEL_COMPLETION_MARKER } from '../lib/agentOutputMarkers.js';
 import { resolvePrCompletion } from '../lib/prDisposition.js';
 import { canTypeSlashCommands } from '../lib/slashdoInvocation.js';
@@ -545,10 +545,11 @@ export async function spawnTuiAgent({
     // recovery's user-terminated skip would miss it and resurrect the run. And a
     // run the user paused already has its own don't-finalize branch below, which
     // owns the paused bookkeeping (pid unregister, activeAgents delete).
-    if (isHostShuttingDown()
-      && !sentinelPresent()
-      && !userTerminatedAgents.has(agentId)
-      && !pausedAgents.has(agentId)) {
+    if (shouldAbandonForHostShutdown({
+      sentinelPresent: sentinelPresent(),
+      terminatedByUser: userTerminatedAgents.has(agentId),
+      paused: pausedAgents.has(agentId),
+    })) {
       await abandonForHostShutdown();
       return;
     }

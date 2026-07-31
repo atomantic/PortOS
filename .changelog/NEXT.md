@@ -21,6 +21,10 @@
 
 - **[issue-3247] Forked sprites now validate their pinned render model before saving.** Invalid model IDs are rejected immediately instead of leaving a sprite pinned to a model that later renders cannot use or replace.
 
+## Agents
+
+- **[issue-3246] Completed direct-CLI agents now survive a PortOS restart without repeating their work.** When an agent has already written its completion sentinel, shutdown finalizes that result and dispatches its output instead of requeuing the task and potentially opening a duplicate pull request.
+
 ## POST
 
 - **[issue-3253] Powers practice now teaches a fast mental path before raising the difficulty.** New sessions begin with recall-friendly powers of two, unlock named techniques through speed-and-accuracy mastery, never generate a pair without a documented method, and show the worked steps after a miss and in session review. Manual base and exponent controls remain available when Progressive is switched off.

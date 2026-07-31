@@ -66,6 +66,22 @@ export function isHostShuttingDown() {
 }
 
 /**
+ * Should an agent exit be preserved for restart recovery instead of finalized?
+ *
+ * Completion, user termination, and pause are all authoritative outcomes that
+ * retain their normal handling even when the host shutdown latch is set. Keep
+ * this policy shared by every spawn path so their recovery behavior cannot
+ * drift independently.
+ */
+export function shouldAbandonForHostShutdown({
+  sentinelPresent = false,
+  terminatedByUser = false,
+  paused = false,
+} = {}) {
+  return shuttingDown && !sentinelPresent && !terminatedByUser && !paused;
+}
+
+/**
  * Reset the flag. Test-only — production never un-shuts-down.
  */
 export function resetHostShutdownFlagForTests() {

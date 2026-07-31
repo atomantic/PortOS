@@ -93,6 +93,7 @@ import { buildCliSpawnConfig, createStreamJsonParser, spawnDirectly } from './ag
 // Real module — the flag is a plain process-local boolean, so driving it
 // directly exercises the same code path production does.
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
+import { existsSync } from 'fs';
 import { spawn } from 'child_process';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
 
@@ -481,6 +482,7 @@ describe('stream error containment', () => {
     (await import('./agentRunTracking.js')).completeAgentRun.mockResolvedValue(undefined);
     (await import('./agentFinalization.js')).finalizeAgent.mockResolvedValue(undefined);
     minimalArgs.cleanupWorktreeFn.mockResolvedValue(undefined);
+    vi.mocked(existsSync).mockReturnValue(false);
     // Reset the resolve+wrap helper to its POSIX passthrough before each test
     // (afterEach's restoreAllMocks can clear the factory implementation).
     vi.mocked(prepareCliSpawn).mockImplementation((command, args) => ({ command, args }));
@@ -819,11 +821,11 @@ describe('stream error containment', () => {
 
     afterEach(() => resetHostShutdownFlagForTests());
 
-    const runToClose = async (args) => {
+    const runToClose = async (args, code = 0) => {
       spawnDirectly(args);
       await new Promise((r) => setTimeout(r, 10));
       markHostShuttingDown();
-      fakeProcess.emit('close', 0);
+      fakeProcess.emit('close', code);
       await new Promise((r) => setTimeout(r, 80));
     };
 
@@ -853,6 +855,21 @@ describe('stream error containment', () => {
         expect.objectContaining({ terminatedByUser: true, success: false }),
       );
       userTerminatedAgents.delete(minimalArgs.agentId);
+    });
+
+    it('still finalizes when the agent already wrote its completion sentinel', async () => {
+      const { finalizeAgent } = await import('./agentFinalization.js');
+      vi.mocked(existsSync).mockImplementation((path) => path === '/tmp/.agent-done');
+
+      await runToClose({ ...minimalArgs }, null);
+
+      expect(finalizeAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: minimalArgs.agentId,
+          success: true,
+          workspacePath: minimalArgs.workspacePath,
+        }),
+      );
     });
   });
 });

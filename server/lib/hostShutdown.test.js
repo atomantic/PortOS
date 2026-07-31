@@ -31,6 +31,7 @@ const { createTempDataRoot } = await import('./mockPathsDataRoot.js');
 const {
   markHostShuttingDown,
   isHostShuttingDown,
+  shouldAbandonForHostShutdown,
   resetHostShutdownFlagForTests,
   writeHostShutdownMarker,
   readHostShutdownMarker,
@@ -60,6 +61,19 @@ describe('in-process shutdown flag', () => {
 
   it('names a stable completion reason', () => {
     expect(HOST_SHUTDOWN_REASON).toBe('host-shutdown');
+  });
+
+  it('abandons only unfinished, unpaused runs that were not user-terminated', () => {
+    markHostShuttingDown();
+
+    expect(shouldAbandonForHostShutdown()).toBe(true);
+    expect(shouldAbandonForHostShutdown({ sentinelPresent: true })).toBe(false);
+    expect(shouldAbandonForHostShutdown({ terminatedByUser: true })).toBe(false);
+    expect(shouldAbandonForHostShutdown({ paused: true })).toBe(false);
+  });
+
+  it('never abandons while the host is still running', () => {
+    expect(shouldAbandonForHostShutdown()).toBe(false);
   });
 });
 
