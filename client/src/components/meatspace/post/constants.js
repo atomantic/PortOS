@@ -15,11 +15,27 @@ export const COGNITIVE_DRILL_TYPES = ['n-back', 'digit-span', 'stroop', 'schulte
 // isn't one of the types PostSessionLauncher offers to pick from yet.
 export const POST_UNSUPPORTED_DRILL_TYPES = ['memory-fill-blank'];
 
-// Element Flash is backed by the built-in periodic-table item. Other memory
-// drills can use any enabled memorized text, but selecting a custom item for
-// Element Flash makes the server generator return null.
+// The server generators have item-shape requirements: Sequence Recall needs a
+// successor line, while Element Flash is backed by the built-in periodic-table
+// item. Keep the launcher and Practice Plan preview from advertising a drill
+// that would make generation return null.
 export function memoryItemSupportsDrill(item, drillType) {
-  return drillType !== 'memory-element-flash' || item?.id === 'elements-song';
+  if (drillType === 'memory-sequence') {
+    return (item?.content?.lines || [])
+      .filter(line => (typeof line === 'string' ? line : line?.text || '').trim())
+      .length >= 2;
+  }
+  if (drillType === 'memory-element-flash') return item?.id === 'elements-song';
+  return true;
+}
+
+/** Lowest-mastery enabled item that can generate a specific memory drill. */
+export function selectMemoryItemForDrill(items, drillType) {
+  const compatible = (items || []).filter(item => memoryItemSupportsDrill(item, drillType));
+  if (!compatible.length) return null;
+  return compatible.reduce((lowest, item) =>
+    (item?.mastery?.overallPct ?? 0) < (lowest?.mastery?.overallPct ?? 0) ? item : lowest
+  );
 }
 
 // The four wordplay drill types with a dedicated standalone trainer

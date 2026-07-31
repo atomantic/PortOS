@@ -201,10 +201,19 @@ describe('composedSessionDrillTypes (issue #3252)', () => {
     };
 
     expect(composedSessionDrillTypes(memoryConfig, [
-      { id: 'elements-song' },
-      { id: 'example-memory' },
+      { id: 'elements-song', content: { lines: [{ text: 'Hydrogen' }, { text: 'Helium' }] } },
+      { id: 'example-memory', content: { lines: [{ text: 'First' }, { text: 'Second' }] } },
     ])).toEqual({ memory: ['memory-sequence'] });
     expect(composedSessionDrillTypes(memoryConfig, [])).toEqual({});
+  });
+
+  it('omits Sequence Recall when enabled items have fewer than two usable lines', () => {
+    const config = {
+      memory: { enabled: true, drillTypes: { 'memory-sequence': { enabled: true } } },
+    };
+    expect(composedSessionDrillTypes(config, [
+      { id: 'one-line', content: { lines: [{ text: 'Only line' }] } },
+    ])).toEqual({});
   });
 });
 

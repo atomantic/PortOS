@@ -4,7 +4,7 @@ import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer, Radio, 
 import { getProviders, getPostReviewReps, getPostRecommendations, getMorseProgress, getPostProgress, getMemoryItems } from '../../../services/api';
 import { FormField } from '../../ui/FormField';
 import { isApiProvider } from '../../../utils/providers';
-import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS, computeDomainAverages, computeGoalProgress, isTopicEnabled, memoryItemSupportsDrill, resolveTopicForDrillType } from './constants';
+import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS, computeDomainAverages, computeGoalProgress, isTopicEnabled, selectMemoryItemForDrill, resolveTopicForDrillType } from './constants';
 import { streakGlyph } from '../../../lib/streakGlyph.js';
 import useUserTimezone from '../../../hooks/useUserTimezone.js';
 import { todayKeyInTimezone } from '../../../utils/timezone.js';
@@ -190,8 +190,13 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     ? DOMAINS.memory.drillTypes
       .map(type => [type, config.memory?.drillTypes?.[type]])
       .filter(([type, cfg]) => cfg && cfg.enabled !== false && topicAllowed(type)
-        && enabledMemoryItems.some(item => memoryItemSupportsDrill(item, type)))
+        && selectMemoryItemForDrill(enabledMemoryItems, type))
     : [];
+
+  const memoryDrillConfig = (type, count) => ({
+    count,
+    memoryItemId: selectMemoryItemForDrill(enabledMemoryItems, type)?.id,
+  });
 
   // Only the fields each cognitive generator reads; extras are harmless.
   // stimulusMs (n-back) / showMs (digit-span) are forwarded so that manual mode
@@ -267,10 +272,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     const memoryConfigs = (moduleAllowed('memory') ? enabledMemoryDrills : []).map(([type, cfg]) => ({
       type,
       domain: 'memory',
-      config: {
-        count: cfg.count,
-        ...(type === 'memory-element-flash' && { memoryItemId: 'elements-song' }),
-      },
+      config: memoryDrillConfig(type, cfg.count),
       timeLimitSec: DOMAINS.memory.timeBudgetSec,
     }));
 
@@ -346,10 +348,10 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
         // Keep the drill short for a balanced 5-minute session.
         quickConfig = { ...cognitiveDrillConfig(cfg), count: cfg.count ? Math.min(cfg.count, 10) : undefined };
       } else {
-        quickConfig = {
-          count: Math.min(cfg.count || 5, 3),
-          ...(pick.type === 'memory-element-flash' && { memoryItemId: 'elements-song' }),
-        }; // Fewer prompts for quick session
+        const count = Math.min(cfg.count || 5, 3);
+        quickConfig = pick.source === 'memory'
+          ? memoryDrillConfig(pick.type, count)
+          : { count }; // Fewer prompts for quick session
       }
 
       const drillConfig = {
@@ -405,10 +407,9 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     } else if (source === 'cognitive') {
       focusConfig = cognitiveDrillConfig(cfg);
     } else {
-      focusConfig = {
-        count: cfg.count || 5,
-        ...(type === 'memory-element-flash' && { memoryItemId: 'elements-song' }),
-      };
+      focusConfig = source === 'memory'
+        ? memoryDrillConfig(type, cfg.count || 5)
+        : { count: cfg.count || 5 };
     }
     const drillConfig = {
       type,

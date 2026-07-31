@@ -633,7 +633,11 @@ describe('PostSessionLauncher composed memory drills (issue #3254)', () => {
     vi.clearAllMocks();
     getPostRecommendations.mockResolvedValue({ recommendations: [] });
     getPostReviewReps.mockResolvedValue({ reps: [] });
-    getMemoryItems.mockResolvedValue([{ id: 'example-memory' }]);
+    getMemoryItems.mockResolvedValue([{
+      id: 'example-memory',
+      content: { lines: [{ text: 'First line' }, { text: 'Second line' }] },
+      mastery: { overallPct: 20 },
+    }]);
   });
 
   it('adds enabled memory drill types to Full and Quick sessions', async () => {
@@ -646,7 +650,7 @@ describe('PostSessionLauncher composed memory drills (issue #3254)', () => {
       expect.objectContaining({
         type: 'memory-sequence',
         domain: 'memory',
-        config: { count: 4 },
+        config: { count: 4, memoryItemId: 'example-memory' },
         timeLimitSec: 90,
       }),
     ]));
@@ -654,7 +658,11 @@ describe('PostSessionLauncher composed memory drills (issue #3254)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Quick 5 Min/ }));
     expect(onStart.mock.calls[1][0]).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'memory-sequence', domain: 'memory', config: { count: 3 } }),
+      expect.objectContaining({
+        type: 'memory-sequence',
+        domain: 'memory',
+        config: { count: 3, memoryItemId: 'example-memory' },
+      }),
     ]));
   });
 
@@ -685,7 +693,11 @@ describe('PostSessionLauncher composed memory drills (issue #3254)', () => {
 
   it('omits Element Flash when the built-in elements item is unavailable', async () => {
     const onStart = vi.fn();
-    getMemoryItems.mockResolvedValue([{ id: 'example-memory', mastery: { overallPct: 0 } }]);
+    getMemoryItems.mockResolvedValue([{
+      id: 'example-memory',
+      content: { lines: [{ text: 'First line' }, { text: 'Second line' }] },
+      mastery: { overallPct: 0 },
+    }]);
     renderWith(memoryConfig({
       memory: {
         enabled: true,
@@ -702,8 +714,8 @@ describe('PostSessionLauncher composed memory drills (issue #3254)', () => {
   it('pins Element Flash to the compatible elements item', async () => {
     const onStart = vi.fn();
     getMemoryItems.mockResolvedValue([
-      { id: 'example-memory', mastery: { overallPct: 0 } },
-      { id: 'elements-song', mastery: { overallPct: 90 } },
+      { id: 'example-memory', content: { lines: [{ text: 'First' }, { text: 'Second' }] }, mastery: { overallPct: 0 } },
+      { id: 'elements-song', content: { lines: [{ text: 'Hydrogen' }, { text: 'Helium' }] }, mastery: { overallPct: 90 } },
     ]);
     renderWith(memoryConfig({
       memory: {
@@ -719,6 +731,38 @@ describe('PostSessionLauncher composed memory drills (issue #3254)', () => {
       expect.objectContaining({
         type: 'memory-element-flash',
         config: { count: 6, memoryItemId: 'elements-song' },
+      }),
+    ]));
+  });
+
+  it('omits Sequence Recall when no enabled item has two usable lines', async () => {
+    const onStart = vi.fn();
+    getMemoryItems.mockResolvedValue([{
+      id: 'one-line',
+      content: { lines: [{ text: 'Only line' }] },
+      mastery: { overallPct: 0 },
+    }]);
+    renderWith(memoryConfig(), onStart);
+    await waitFor(() => expect(getMemoryItems).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByText('Full POST'));
+    expect(onStart.mock.calls[0][0].some(d => d.type === 'memory-sequence')).toBe(false);
+  });
+
+  it('pins Sequence Recall to a compatible item instead of a lower-mastery one-line item', async () => {
+    const onStart = vi.fn();
+    getMemoryItems.mockResolvedValue([
+      { id: 'one-line', content: { lines: [{ text: 'Only line' }] }, mastery: { overallPct: 0 } },
+      { id: 'runnable', content: { lines: [{ text: 'First' }, { text: 'Second' }] }, mastery: { overallPct: 80 } },
+    ]);
+    renderWith(memoryConfig(), onStart);
+    await waitFor(() => expect(getMemoryItems).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByText('Full POST'));
+    expect(onStart.mock.calls[0][0]).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'memory-sequence',
+        config: { count: 4, memoryItemId: 'runnable' },
       }),
     ]));
   });
