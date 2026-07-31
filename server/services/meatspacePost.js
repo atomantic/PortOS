@@ -17,6 +17,7 @@ import { resolveMultiplicationLevel, MASTERY_DEFAULTS } from '../lib/postMultipl
 import {
   POWERS_MASTERY_DEFAULTS,
   powersPoolForLevel,
+  powersTechniqueForPair,
   resolvePowersLevel,
 } from '../lib/postPowersLadder.js';
 import {
@@ -1504,9 +1505,16 @@ async function getPowersLevelStats(windowDays = POWERS_MASTERY_DEFAULTS.windowDa
       const anyAnswered = (task.questions || []).some(question => question?.answered != null);
       if (anyAnswered && level > floorLevel) floorLevel = level;
       if (cutoffStr && session.date < cutoffStr) continue;
-      const bucket = byLevel[level] || (byLevel[level] = { samples: 0, correct: 0, totalResponseMs: 0 });
       for (const question of task.questions || []) {
         if (question?.answered == null) continue;
+        const match = typeof question.prompt === 'string' ? question.prompt.match(/^(\d+)\^(\d+)$/) : null;
+        const pair = match ? powersTechniqueForPair(Number(match[1]), Number(match[2])) : null;
+        // Progressive pools are cumulative for review, but mastery belongs to
+        // the technique that actually covered this question. Otherwise quick
+        // recall reps in a later-rung session could unlock that rung without
+        // the user ever answering one of its new pairs.
+        const sampleLevel = pair?.level ?? level;
+        const bucket = byLevel[sampleLevel] || (byLevel[sampleLevel] = { samples: 0, correct: 0, totalResponseMs: 0 });
         bucket.samples += 1;
         if (question.correct) bucket.correct += 1;
         bucket.totalResponseMs += Math.min(

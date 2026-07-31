@@ -1008,6 +1008,47 @@ describe('resolveDrillConfig — progressive multiplication', () => {
   });
 });
 
+describe('resolveDrillConfig — progressive Powers mastery attribution', () => {
+  const today = new Date().toISOString().split('T')[0];
+
+  function mockPowersQuestions(prompt) {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-sessions')) return Promise.resolve({
+        sessions: [{
+          date: today,
+          tasks: [{
+            module: 'mental-math',
+            type: 'powers',
+            config: { level: 1 },
+            questions: Array.from({ length: 14 }, () => ({
+              prompt, answered: 1, correct: true, responseMs: 1000,
+            })),
+          }],
+        }],
+      });
+      return Promise.resolve(defaultValue);
+    });
+  }
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('does not let lower-rung review questions master the current technique', async () => {
+    mockPowersQuestions('2^8');
+    const { progression } = await resolveDrillConfig('powers', { count: 8 });
+    expect(progression.level).toBe(1);
+    expect(progression.levels[0].samples).toBe(14);
+    expect(progression.levels[1].samples).toBe(0);
+  });
+
+  it('advances when questions covered by the current technique clear mastery', async () => {
+    mockPowersQuestions('3^4');
+    const { progression } = await resolveDrillConfig('powers', { count: 8 });
+    expect(progression.level).toBe(2);
+    expect(progression.levels[1].samples).toBe(14);
+  });
+});
+
 // =============================================================================
 // ADAPTIVE PREVIEW / resolveDrillConfig PARITY — multiplication (issue #2099, fix #2)
 //
