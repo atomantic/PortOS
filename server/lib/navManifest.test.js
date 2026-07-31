@@ -35,13 +35,16 @@ const TABBED_PAGES = [
   { prefix: '/settings', file: 'client/src/components/settings/SettingsTabsHeader.jsx', kind: 'links', constName: 'TABS' },
   { prefix: '/sharing', file: 'client/src/pages/Sharing.jsx', kind: 'links', constName: 'SECTIONS' },
   // POST's morse tab has routed `:mode` sub-pages (/post/morse/copy|send) and the
-  // memory tab has the Elements study sub-page (/post/memory/elements) — none are
-  // top-level switch cases, so declare their sources so the guard covers them in
-  // both directions (nav ↔ real sub-page). Adding an entry flows automatically.
+  // memory tab has the Elements study sub-page (/post/memory/elements) plus its
+  // own routed practice modes — none are top-level switch cases, so declare their
+  // sources so the guard covers them in both directions (nav ↔ real sub-page).
+  // Adding an entry flows automatically. `parent` may itself be a multi-segment
+  // path, which is how the two-deep Elements modes are declared.
   { prefix: '/post', file: 'client/src/components/meatspace/tabs/PostTab.jsx', kind: 'switch', switchVar: 'tab',
     nestedIdSources: [
       { parent: 'morse', file: 'client/src/components/meatspace/post/MorseTrainer.jsx', constName: 'MODES' },
       { parent: 'memory', file: 'client/src/components/meatspace/tabs/PostTab.jsx', constName: 'MEMORY_SUBROUTES' },
+      { parent: 'memory/elements', file: 'client/src/components/meatspace/post/ElementsSong.jsx', constName: 'PRACTICE_MODES' },
     ] },
 ];
 

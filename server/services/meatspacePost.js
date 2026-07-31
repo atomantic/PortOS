@@ -979,6 +979,42 @@ export function stalledProgressions(mulProgress, cogProgress, morse) {
  * When nothing is actionable (e.g. a fresh install with no history), a single
  * sensible default ("run a full POST") is returned so the panel is never empty.
  */
+// The built-in Elements Song has its own study surface (`/post/memory/elements`)
+// rather than the generic per-item practice route.
+const ELEMENTS_SONG_ID = 'elements-song';
+
+/**
+ * Deep link that lands a due memory item INSIDE a practice mode rather than on
+ * the item list (issue #3249) — an "Up next" rec should start the drill, not
+ * open a page the user still has to navigate. Mode choice per surface:
+ *   - Elements Song → `element-flash` (recall test; its study deck is one click
+ *     away on that surface)
+ *   - any other item → `spaced`, which targets the weakest chunks — exactly what
+ *     an item that has come due needs.
+ * Pure — exported for unit tests.
+ */
+export function memoryPracticeDeepLink(itemId) {
+  if (!itemId) return '/post/memory';
+  if (itemId === ELEMENTS_SONG_ID) return '/post/memory/elements/element-flash';
+  return `/post/memory/${itemId}/spaced`;
+}
+
+/**
+ * The memory item a `kind: 'memory'` review entry belongs to. Prefers the
+ * explicit `memoryItemId` field; falls back to parsing the `memory:<itemId>:<chunkId>`
+ * skillId, splitting on the LAST colon so an item id containing one still
+ * resolves. Returns null for a non-memory or unparseable entry. Pure.
+ */
+export function memoryItemIdFromReview(review) {
+  if (review?.memoryItemId) return review.memoryItemId;
+  const skillId = review?.skillId;
+  if (typeof skillId !== 'string' || !skillId.startsWith('memory:')) return null;
+  const rest = skillId.slice('memory:'.length);
+  const lastColon = rest.lastIndexOf(':');
+  const itemId = lastColon > 0 ? rest.slice(0, lastColon) : rest;
+  return itemId || null;
+}
+
 export function composePostRecommendations({
   dueMemoryItems = [],
   dueReviews = [],
@@ -995,7 +1031,7 @@ export function composePostRecommendations({
       kind: 'memory-due',
       title: `Review "${item.title}"`,
       detail: 'Due for spaced-repetition practice',
-      deepLink: '/post/memory',
+      deepLink: memoryPracticeDeepLink(item.id),
       drillType: 'memory-sequence',
     });
   }
@@ -1004,7 +1040,8 @@ export function composePostRecommendations({
     // A memory-chunk re-verification can't run through the launcher's review-rep
     // path (getPostReviewReps only regenerates multiplication/cognitive reps —
     // memory retention lives under /post/memory), so route it there instead of a
-    // dead /post/launcher link (issue #2100 review).
+    // dead /post/launcher link (issue #2100 review). It routes all the way INTO a
+    // practice mode rather than the item list (issue #3249).
     recs.push({
       id: `skill-review:${review.skillId}`,
       kind: 'skill-review',
@@ -1012,7 +1049,9 @@ export function composePostRecommendations({
       detail: review.status === 'needs-refresh'
         ? 'Needs a refresh — last review slipped'
         : 'Maintenance rep due',
-      deepLink: review.kind === 'memory' ? '/post/memory' : '/post/launcher',
+      deepLink: review.kind === 'memory'
+        ? memoryPracticeDeepLink(memoryItemIdFromReview(review))
+        : '/post/launcher',
       drillType: review.drillType || null,
     });
   }

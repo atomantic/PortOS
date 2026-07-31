@@ -177,6 +177,14 @@ export const NAV_COMMANDS = [
   { id: 'nav.post.history', path: '/post/history', label: 'History', section: 'POST', aliases: ['post-history'] },
   { id: 'nav.post.memory', path: '/post/memory', label: 'Memory', section: 'POST', aliases: ['post-memory'] },
   { id: 'nav.post.memory.elements', path: '/post/memory/elements', label: 'Elements', section: 'POST', aliases: ['post-elements', 'elements', 'periodic-table', 'elements-song'], keywords: ['periodic table', 'chemistry', 'symbols', 'flash cards', 'tom lehrer', 'atomic number'] },
+  // Elements practice modes are individually navigable, the way each Morse mode
+  // is — so ⌘K and voice can start a drill instead of only opening the page
+  // (issue #3249). Per-item memory routes (`/post/memory/:itemId`) stay dynamic
+  // and unregistered, like other `:id` detail routes.
+  { id: 'nav.post.memory.elements.study', path: '/post/memory/elements/element-study', label: 'Elements Flash Cards', section: 'POST', aliases: ['elements-study', 'element-study', 'elements flash cards', 'flash-cards'], keywords: ['study', 'flip', 'reveal', 'symbols', 'pairings', 'periodic table'] },
+  { id: 'nav.post.memory.elements.flash', path: '/post/memory/elements/element-flash', label: 'Element Flash', section: 'POST', aliases: ['element-flash', 'elements-flash', 'element flash'], keywords: ['recall', 'quiz', 'test', 'symbols', 'name the element', 'periodic table'] },
+  { id: 'nav.post.memory.elements.lyrics', path: '/post/memory/elements/fill-blank', label: 'Elements Fill the Lyrics', section: 'POST', aliases: ['elements-fill-blank', 'fill-the-lyrics', 'elements lyrics'], keywords: ['lyrics', 'fill in the blank', 'recall', 'tom lehrer', 'song'] },
+  { id: 'nav.post.memory.elements.learn', path: '/post/memory/elements/learn', label: 'Elements Learn Lyrics', section: 'POST', aliases: ['elements-learn', 'learn-lyrics', 'elements learn'], keywords: ['read', 'verses', 'study', 'lyrics', 'tom lehrer', 'song'] },
   { id: 'nav.post.morse', path: '/post/morse', label: 'Morse', section: 'POST', aliases: ['post-morse', 'morse', 'morse-code'], keywords: ['cw', 'ham', 'radio', 'koch', 'cognitive'] },
   { id: 'nav.post.morse.copy', path: '/post/morse/copy', label: 'Morse Copy', section: 'POST', aliases: ['morse-copy', 'morse copy', 'copy-morse', 'morse-listen'], keywords: ['cw', 'koch', 'listen', 'decode', 'receive', 'ear'] },
   { id: 'nav.post.morse.head-copy', path: '/post/morse/head-copy', label: 'Morse Head Copy', section: 'POST', aliases: ['morse-head-copy', 'morse head copy', 'head-copy', 'head copy'], keywords: ['cw', 'koch', 'audio only', 'no reference', 'memory', 'recall'] },

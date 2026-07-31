@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import PostTab from '../components/meatspace/tabs/PostTab';
 
 export default function Post() {
-  const { tab, subtab } = useParams();
+  const { tab, subtab, mode } = useParams();
 
   return (
     <div className="flex flex-col h-full">
@@ -15,7 +15,7 @@ export default function Post() {
         </div>
       </div>
       <div className="flex-1 overflow-auto p-6">
-        <PostTab tab={tab} subtab={subtab} />
+        <PostTab tab={tab} subtab={subtab} mode={mode} />
       </div>
     </div>
   );

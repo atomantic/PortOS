@@ -13,7 +13,8 @@ import PostHistory from '../post/PostHistory';
 import PostProgress from '../post/PostProgress';
 import PostDrillConfig from '../post/PostDrillConfig';
 import MemoryBuilder from '../post/MemoryBuilder';
-import ElementsSong from '../post/ElementsSong';
+import MemoryPractice, { MEMORY_PRACTICE_MODE_IDS } from '../post/MemoryPractice';
+import ElementsSong, { ELEMENTS_MODE_IDS } from '../post/ElementsSong';
 import DrillTransition from '../post/DrillTransition';
 import WordplayTrainer from '../post/WordplayTrainer';
 import MorseTrainer, { MORSE_MODE_IDS } from '../post/MorseTrainer';
@@ -28,16 +29,18 @@ import { LLM_DRILL_TYPES, COGNITIVE_DRILL_TYPES } from '../post/constants';
 const RUN_SUBROUTE = 'run';
 const isRunSubroute = (subtab) => subtab === RUN_SUBROUTE;
 
-// Routed memory sub-pages (`/post/memory/:subtab`). The Elements Song study
-// surface is the only one today; kept as a const so the guard below and the
-// nav-manifest contract test (server/lib/navManifest.test.js) share one source
-// of truth for which `/post/memory/*` deep links resolve to a real page.
+// RESERVED memory sub-routes (`/post/memory/:subtab`) — segments that name a
+// dedicated study surface rather than a memory item id. `elements` is the only
+// one today; kept as a const so the guard below and the nav-manifest contract
+// test (server/lib/navManifest.test.js) share one source of truth. Any OTHER
+// `:subtab` is a memory ITEM id, mirroring how the session tab reserves `run`
+// and treats every other subtab as a saved session id (issue #3249).
 export const MEMORY_SUBROUTES = [
   { id: 'elements', label: 'Elements' },
 ];
 const MEMORY_SUBROUTE_IDS = MEMORY_SUBROUTES.map((s) => s.id);
 
-export default function PostTab({ tab = 'launcher', subtab }) {
+export default function PostTab({ tab = 'launcher', subtab, mode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [config, setConfig] = useState(null);
@@ -45,7 +48,11 @@ export default function PostTab({ tab = 'launcher', subtab }) {
   const [stats, setStats] = useState(null);
   const [statsWeek, setStatsWeek] = useState(null);
   const session = usePostSession();
+  // Seed items handed to the routed practice surfaces so a click from the list
+  // skips the refetch. The URL is still the source of truth — a seed is only
+  // used when its id matches the route, and a cold deep link has none.
   const [elementsItem, setElementsItem] = useState(null);
+  const [memoryItem, setMemoryItem] = useState(null);
 
   useEffect(() => { loadData(); }, []);
 
@@ -230,22 +237,53 @@ export default function PostTab({ tab = 'launcher', subtab }) {
         />
       );
     }
-    case 'memory':
+    case 'memory': {
+      // `/post/memory` → the item list. Any other `:subtab` selects an item:
+      // `elements` is the reserved Elements Song surface, everything else is a
+      // memory item id. The optional third segment is the practice mode, so a
+      // drill is directly linkable (issue #3249). An unrecognized mode degrades
+      // to the mode picker, mirroring MorseTrainer's MORSE_MODE_IDS guard.
+      if (!subtab) {
+        return (
+          <MemoryBuilder
+            onBack={() => navigate('/post/launcher')}
+            onSelectItem={(item) => {
+              if (item.id === 'elements-song') { setElementsItem(item); navigate('/post/memory/elements'); }
+              else { setMemoryItem(item); navigate(`/post/memory/${item.id}`); }
+            }}
+          />
+        );
+      }
       if (MEMORY_SUBROUTE_IDS.includes(subtab)) {
+        const elementsMode = ELEMENTS_MODE_IDS.includes(mode) ? mode : null;
         return (
           <ElementsSong
             item={elementsItem}
+            mode={elementsMode}
+            onSelectMode={(id) => navigate(`/post/memory/elements/${id}`)}
+            onExitMode={() => navigate('/post/memory/elements')}
             onBack={() => { setElementsItem(null); navigate('/post/memory'); }}
             loadItemOnMount={!elementsItem}
           />
         );
       }
+      const practiceMode = MEMORY_PRACTICE_MODE_IDS.includes(mode) ? mode : null;
+      // Only pass the cached item when it actually matches the URL — a stale
+      // one from a previous selection would render the wrong item's practice.
+      // Keying on the mode remounts the runner per entry, so each run starts
+      // from clean state without a manual reset.
       return (
-        <MemoryBuilder
-          onBack={() => navigate('/post/launcher')}
-          onNavigateElements={(item) => { setElementsItem(item); navigate('/post/memory/elements'); }}
+        <MemoryPractice
+          key={`${subtab}:${practiceMode || 'picker'}`}
+          itemId={subtab}
+          item={memoryItem?.id === subtab ? memoryItem : null}
+          mode={practiceMode}
+          onSelectMode={(id) => navigate(`/post/memory/${subtab}/${id}`)}
+          onExitMode={() => navigate(`/post/memory/${subtab}`)}
+          onBack={() => { setMemoryItem(null); navigate('/post/memory'); }}
         />
       );
+    }
     default:
       return (
         <PostSessionLauncher

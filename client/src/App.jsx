@@ -301,6 +301,11 @@ export default function App() {
           <Route path="post" element={<Navigate to="/post/launcher" replace />} />
           <Route path="post/:tab" element={<Post />} />
           <Route path="post/:tab/:subtab" element={<Post />} />
+          {/* Third segment carries the practice mode for the memory tab
+              (/post/memory/:itemId/:mode) so a drill is directly linkable — the
+              same "selection lives in the URL" contract Morse/Wordplay already
+              satisfy with their :mode subtab (issue #3249). */}
+          <Route path="post/:tab/:subtab/:mode" element={<Post />} />
           <Route path="review" element={<Review />} />
           <Route path="messages" element={<Navigate to="/messages/inbox" replace />} />
           {/* :chatKey is only used by the imessage tab; other tabs strip a stray second segment. */}

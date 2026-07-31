@@ -290,3 +290,119 @@ describe('PostSessionLauncher render (issue #2100)', () => {
     expect(drills.some(d => d.type === 'multiplication')).toBe(true);
   });
 });
+
+// The launcher is the entry point to a DAILY habit, so the actions that start a
+// session must be the first thing on the page — they used to sit under Today's
+// Status, Goals, Up next, the analytics block, the mode toggle and the
+// Conditions form, i.e. below the fold on a laptop (issue #3249).
+describe('PostSessionLauncher — Start card (issue #3249)', () => {
+  const baseConfig = {
+    mentalMath: { enabled: true, drillTypes: {
+      multiplication: { enabled: true, count: 10, timeLimitSec: 120 },
+      powers: { enabled: true, count: 10, timeLimitSec: 120 },
+    } },
+    llmDrills: { enabled: false, drillTypes: {} },
+    cognitive: { enabled: true, drillTypes: { 'n-back': { enabled: true, n: 2 } } },
+    goals: { streakTarget: 10 },
+  };
+  const stats = { sessionCount: 3, overall: 70, currentStreak: 4, longestStreak: 8, byDrill: { 'mental-math:multiplication': 70 } };
+
+  const renderLauncher = (props = {}) => render(
+    <MemoryRouter>
+      <PostSessionLauncher
+        config={baseConfig}
+        recentSessions={[]}
+        stats={stats}
+        statsWeek={{ sessionCount: 2 }}
+        onStart={vi.fn()}
+        onViewHistory={vi.fn()}
+        onViewConfig={vi.fn()}
+        onViewMemory={vi.fn()}
+        onViewMorse={vi.fn()}
+        {...props}
+      />
+    </MemoryRouter>,
+  );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getPostRecommendations.mockResolvedValue({ recommendations: [] });
+    getPostReviewReps.mockResolvedValue({ reps: [] });
+    getMorseProgress.mockResolvedValue({ settings: { wpm: 18, farnsworthWpm: 12 } });
+    getPostProgress.mockResolvedValue({ series: { byDay: [] } });
+  });
+
+  it('puts the session starts ahead of status, goals, Up next and the analytics block', async () => {
+    getPostRecommendations.mockResolvedValue({ recommendations: [
+      { id: 'default:full-post', kind: 'default', title: 'Keep your streak going', detail: 'No gaps', deepLink: '/post/launcher', priority: 0 },
+    ] });
+    const { container } = renderLauncher();
+    await waitFor(() => expect(screen.getByText('Up next')).toBeTruthy());
+
+    // Compare document order: the Full POST button must precede every panel it
+    // used to sit below. Node.compareDocumentPosition returns FOLLOWING (4) when
+    // the argument comes after the reference node.
+    const start = screen.getByText('Full POST');
+    for (const label of ["Today's Status", 'Goals', 'Up next', 'Session Mode'].filter(Boolean)) {
+      const el = screen.queryByText(label);
+      if (!el) continue;
+      expect(start.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(container).toBeTruthy();
+  });
+
+  it('leads with a CTA that dispatches the top recommendation', async () => {
+    const onStart = vi.fn();
+    getPostRecommendations.mockResolvedValue({ recommendations: [
+      { id: 'weak-skill:mental-math:powers', kind: 'weak-skill', title: 'Shore up Powers', detail: '40% accuracy', deepLink: '/post/launcher', drillType: 'powers', priority: 0 },
+    ] });
+    renderLauncher({ onStart });
+    await waitFor(() => expect(screen.getByText('Start: Shore up Powers')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('Start: Shore up Powers'));
+    expect(onStart).toHaveBeenCalledTimes(1);
+    // The EXACT recommended drill, not its whole domain.
+    const drills = onStart.mock.calls[0][0];
+    expect(drills).toHaveLength(1);
+    expect(drills[0].type).toBe('powers');
+  });
+
+  it('renders the CTA as a link for a routed recommendation', async () => {
+    getPostRecommendations.mockResolvedValue({ recommendations: [
+      { id: 'memory-due:raven', kind: 'memory-due', title: 'Review "The Raven"', detail: 'Due', deepLink: '/post/memory/raven/spaced', priority: 0 },
+    ] });
+    const { container } = renderLauncher();
+    await waitFor(() => expect(screen.getByText('Start: Review "The Raven"')).toBeTruthy());
+    // One click from the launcher into the drill itself — not the item list.
+    expect(container.querySelectorAll('a[href="/post/memory/raven/spaced"]')).toHaveLength(2);
+  });
+
+  it('falls back to a Full POST CTA when no recommendation loaded', async () => {
+    const onStart = vi.fn();
+    getPostRecommendations.mockResolvedValue({ recommendations: [] });
+    renderLauncher({ onStart });
+    await waitFor(() => expect(screen.getByText('Start: Full POST')).toBeTruthy());
+    fireEvent.click(screen.getByText('Start: Full POST'));
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(onStart.mock.calls[0][0].length).toBeGreaterThan(1);
+  });
+
+  it('collapses Conditions by default and keeps typed values when re-collapsed', async () => {
+    renderLauncher();
+    await waitFor(() => expect(screen.getByText(/Conditions \(optional\)/)).toBeTruthy());
+    // Collapsed: no inputs rendered.
+    expect(screen.queryByPlaceholderText('good/poor')).toBeNull();
+
+    const toggle = screen.getByText(/Conditions \(optional\)/).closest('button');
+    fireEvent.click(toggle);
+    const sleep = screen.getByPlaceholderText('good/poor');
+    fireEvent.change(sleep, { target: { value: 'poor' } });
+
+    // Re-collapse, then re-expand — the value survives (state lives above it).
+    fireEvent.click(toggle);
+    expect(screen.queryByPlaceholderText('good/poor')).toBeNull();
+    expect(screen.getByText('· 1 set')).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(screen.getByPlaceholderText('good/poor').value).toBe('poor');
+  });
+});

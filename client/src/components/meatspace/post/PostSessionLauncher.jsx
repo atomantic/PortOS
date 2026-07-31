@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer, Radio, Target, TrendingUp, TrendingDown, Minus, Compass, ArrowRight, Layers } from 'lucide-react';
+import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer, Radio, Target, TrendingUp, TrendingDown, Minus, Compass, ArrowRight, ChevronRight, Layers } from 'lucide-react';
 import { getProviders, getPostReviewReps, getPostRecommendations, getMorseProgress, getPostProgress } from '../../../services/api';
 import { FormField } from '../../ui/FormField';
 import { isApiProvider } from '../../../utils/providers';
@@ -75,6 +75,10 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   // from `new Date().toISOString()` (UTC) would disagree near local/UTC midnight.
   const timezone = useUserTimezone();
   const [tags, setTags] = useState({ sleep: '', caffeine: '', stress: '' });
+  // Conditions is optional metadata, so it starts collapsed and the start
+  // buttons stay above the fold (issue #3249). Purely presentational — `tags`
+  // lives above it, so collapsing never discards typed values.
+  const [showConditions, setShowConditions] = useState(false);
   const [mode, setMode] = useState('test'); // 'test' | 'train'
   const [providers, setProviders] = useState([]);
   // Mastered-but-inactive skills due for a maintenance review (issue #2096) —
@@ -425,6 +429,64 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   // them all — surface why the start buttons are disabled.
   const compositionExcludesAll = hasAnyDrills && !hasSessionDrills;
 
+  // How the launcher acts on a recommendation: either an in-page session start
+  // (`onClick`) or a navigation (`to`). A rec that targets the launcher should DO
+  // the practice, not navigate to the page the user is already on (issue #2100
+  // review); routed recs (/post/memory/…, /post/morse/copy) stay links. Shared by
+  // the primary Start CTA and the "Up next" rows so the two can never diverge
+  // (issue #3249). Returns null when the rec isn't actionable right now.
+  function recAction(rec) {
+    if (!rec) return null;
+    if (rec.deepLink && rec.deepLink !== '/post/launcher') return { to: rec.deepLink };
+    // Launch the actual review rep (with its markers), not plain practice.
+    if (rec.kind === 'skill-review') return { onClick: () => startReviewRep(rec) };
+    // Start the EXACT recommended drill when it's enabled and in an allowed
+    // module; else (no specific drill) start a Full POST.
+    const domainKey = rec.drillType ? DRILL_TO_DOMAIN[rec.drillType] : null;
+    const drillRunnable = domainKey && sessionEnabledDomains[domainKey]
+      && sessionEnabledDomains[domainKey].some(d => d.type === rec.drillType);
+    if (drillRunnable) return { onClick: () => startDrillByType(rec.drillType) };
+    return hasSessionDrills ? { onClick: handleStart } : null;
+  }
+
+  // The Start card's primary CTA. Normally the top recommendation; when the
+  // recommendations fetch failed (the panel is empty) it degrades to a plain
+  // Full POST so the card always leads with a runnable action.
+  // The label is prefixed rather than echoing the rec title verbatim: the same
+  // title also renders in the "Up next" row below, and two identical labels on
+  // one screen read as a duplicate rather than as "this is the recommended one."
+  const topRec = recommendations[0] || null;
+  const topRecAction = recAction(topRec);
+  const primaryAction = topRecAction
+    ? { ...topRecAction, label: `Start: ${topRec.title}`, detail: topRec.detail || null }
+    : (hasSessionDrills
+      ? { onClick: handleStart, label: `Start: ${mode === 'train' ? 'Full Training' : 'Full POST'}`, detail: null }
+      : null);
+
+  // Count of condition fields filled in, surfaced on the collapsed disclosure so
+  // entered values aren't invisible once it's closed.
+  const filledTagCount = Object.values(tags).filter(v => v.trim()).length;
+
+  // The CTA renders as a <Link> for a routed rec and a <button> for an in-page
+  // start, but is otherwise identical — so build the shared parts once. A
+  // navigation gets the Compass icon; a session start gets the mode's own icon.
+  const PrimaryIcon = primaryAction?.to ? Compass : (mode === 'train' ? Dumbbell : Play);
+  const primaryCtaClass = `w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+    mode === 'train' && !primaryAction?.to
+      ? 'bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2'
+      : 'bg-port-accent hover:bg-port-accent/80 text-white'
+  }`;
+  const primaryCtaInner = primaryAction && (
+    <>
+      <PrimaryIcon size={18} className="shrink-0" />
+      <span className="min-w-0 flex-1 text-left">
+        <span className="block font-medium truncate">{primaryAction.label}</span>
+        {primaryAction.detail && <span className="block text-xs opacity-75 truncate">{primaryAction.detail}</span>}
+      </span>
+      <ArrowRight size={16} className="shrink-0" />
+    </>
+  );
+
   // Analytics derived from the 30-day stats window. Streaks span all history.
   const hasStats = stats && stats.sessionCount > 0;
   const currentStreak = stats?.currentStreak ?? 0;
@@ -499,6 +561,128 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_22rem] gap-6 items-start">
         {/* Primary flow — kept above the fold */}
         <div className="space-y-6 min-w-0">
+          {/* Start — the first thing on the page, so a daily-habit user never has
+              to scroll past status/goals/analytics to begin (issue #3249). Holds
+              the recommended next action, both session starts, and the mode
+              toggle; the optional Conditions form is collapsed behind a
+              disclosure so it can't push the buttons below the fold. */}
+          <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
+            {/* Composition-excludes-everything notice — the start buttons are
+                disabled because Session Composition filtered out all enabled drills. */}
+            {compositionExcludesAll && (
+              <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-port-warning/10 border border-port-warning/30 text-sm text-port-warning">
+                <Layers size={16} className="mt-0.5 shrink-0" />
+                <span>Your Session Composition excludes every enabled drill — adjust it under Config → Session Composition to run a session.</span>
+              </div>
+            )}
+
+            {/* Recommended next action — dispatches the top "Up next" rec through
+                the SAME resolver the rec rows use, so the two can't diverge. */}
+            {primaryAction && (
+              primaryAction.to ? (
+                <Link to={primaryAction.to} className={primaryCtaClass}>{primaryCtaInner}</Link>
+              ) : (
+                <button type="button" onClick={primaryAction.onClick} className={primaryCtaClass}>{primaryCtaInner}</button>
+              )
+            )}
+
+            {/* Standard sessions */}
+            <div className="flex flex-col sm:flex-row gap-3">
+              {domainCount >= 2 && (
+                <button
+                  onClick={handleQuickSession}
+                  disabled={!hasSessionDrills}
+                  className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 ${
+                    mode === 'train'
+                      ? 'bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2'
+                      : 'bg-port-success hover:bg-port-success/80 text-white'
+                  } disabled:opacity-50 disabled:cursor-not-allowed font-medium rounded-lg transition-colors`}
+                >
+                  <Timer size={18} />
+                  Quick 5 Min ({domainCount} domains)
+                </button>
+              )}
+              <button
+                onClick={handleStart}
+                disabled={!hasSessionDrills}
+                className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 ${
+                  mode === 'train'
+                    ? 'bg-port-accent-2/70 hover:bg-port-accent-2/80 text-port-on-accent-2'
+                    : 'bg-port-accent hover:bg-port-accent/80 text-white'
+                } disabled:opacity-50 disabled:cursor-not-allowed font-medium rounded-lg transition-colors`}
+              >
+                {mode === 'train' ? <Dumbbell size={18} /> : <Play size={18} />}
+                {mode === 'train' ? 'Full Training' : 'Full POST'}
+              </button>
+            </div>
+
+            {/* Mode toggle — compact, on the same card as the starts it governs */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setMode('test')}
+                className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  mode === 'test'
+                    ? 'bg-port-accent text-white'
+                    : 'bg-port-bg border border-port-border text-gray-400 hover:text-white'
+                }`}
+              >
+                <Zap size={14} />
+                Test
+              </button>
+              <button
+                onClick={() => setMode('train')}
+                className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  mode === 'train'
+                    ? 'bg-port-accent-2 text-port-on-accent-2'
+                    : 'bg-port-bg border border-port-border text-gray-400 hover:text-white'
+                }`}
+              >
+                <Dumbbell size={14} />
+                Train
+              </button>
+            </div>
+            <p className="text-xs text-gray-500">
+              {mode === 'train'
+                ? 'Training mode: immediate feedback, hints on wrong answers. Not scored.'
+                : 'Test mode: timed drills with scoring. Saved to history.'}
+            </p>
+
+            {/* Conditions — optional session metadata, collapsed by default so it
+                can't push the start buttons below the fold. Values are held in
+                `tags` above, so collapsing never discards what was typed. */}
+            {mode === 'test' && (
+              <div className="border-t border-port-border pt-3">
+                <button
+                  type="button"
+                  onClick={() => setShowConditions(v => !v)}
+                  aria-expanded={showConditions}
+                  className="w-full flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-300 transition-colors"
+                >
+                  <ChevronRight size={14} className={`transition-transform ${showConditions ? 'rotate-90' : ''}`} />
+                  Conditions (optional)
+                  {!showConditions && filledTagCount > 0 && (
+                    <span className="text-port-accent">· {filledTagCount} set</span>
+                  )}
+                </button>
+                {showConditions && (
+                  <div className="grid grid-cols-3 gap-3 mt-3">
+                    {Object.entries(tags).map(([key, value]) => (
+                      <FormField key={key} labelClassName="text-xs text-gray-500 mb-1 block capitalize" label={key}>
+                        <input
+                          type="text"
+                          value={value}
+                          onChange={e => setTags(prev => ({ ...prev, [key]: e.target.value }))}
+                          placeholder={key === 'sleep' ? 'good/poor' : key === 'caffeine' ? '1 cup' : 'low/high'}
+                          className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:border-port-accent focus:outline-none"
+                        />
+                      </FormField>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Today's Status */}
           <div className="bg-port-card border border-port-border rounded-lg p-4">
             <div className="flex items-center justify-between">
@@ -560,36 +744,21 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
                       <ArrowRight size={14} className="text-gray-600 group-hover:text-port-accent shrink-0" />
                     </>
                   );
-                  // A rec that targets the launcher should DO the practice, not
-                  // just navigate to the page the user is already on (issue #2100
-                  // review): focus the recommended drill's domain when it maps to
-                  // a runnable one, else start a Full POST. Routed recs
-                  // (/post/memory, /post/morse/copy) stay navigational links.
-                  if (rec.deepLink === '/post/launcher') {
-                    let onClick;
-                    if (rec.kind === 'skill-review') {
-                      // Launch the actual review rep (with markers), not plain practice.
-                      onClick = () => startReviewRep(rec);
-                    } else {
-                      const domainKey = rec.drillType ? DRILL_TO_DOMAIN[rec.drillType] : null;
-                      // Start the EXACT recommended drill when it's enabled and in
-                      // an allowed module; else (no specific drill) start a Full POST.
-                      const drillRunnable = domainKey && sessionEnabledDomains[domainKey]
-                        && sessionEnabledDomains[domainKey].some(d => d.type === rec.drillType);
-                      onClick = drillRunnable
-                        ? () => startDrillByType(rec.drillType)
-                        : (hasSessionDrills ? handleStart : null);
-                    }
+                  // Resolved by the shared `recAction` helper, so an Up next row
+                  // and the Start card's CTA always do the same thing for the
+                  // same rec (issue #3249).
+                  const action = recAction(rec);
+                  if (action?.to) {
                     return (
-                      <button key={rec.id} type="button" onClick={onClick || undefined} disabled={!onClick} className={`${rowClass} disabled:opacity-50 disabled:cursor-not-allowed`}>
+                      <Link key={rec.id} to={action.to} className={rowClass}>
                         {inner}
-                      </button>
+                      </Link>
                     );
                   }
                   return (
-                    <Link key={rec.id} to={rec.deepLink} className={rowClass}>
+                    <button key={rec.id} type="button" onClick={action?.onClick} disabled={!action} className={`${rowClass} disabled:opacity-50 disabled:cursor-not-allowed`}>
                       {inner}
-                    </Link>
+                    </button>
                   );
                 })}
               </div>
@@ -665,58 +834,6 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
             </div>
           )}
 
-          {/* Mode Toggle */}
-          <div className="bg-port-card border border-port-border rounded-lg p-4">
-            <h3 className="text-sm font-medium text-gray-400 mb-3">Session Mode</h3>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setMode('test')}
-                className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                  mode === 'test'
-                    ? 'bg-port-accent text-white'
-                    : 'bg-port-bg border border-port-border text-gray-400 hover:text-white'
-                }`}
-              >
-                <Zap size={14} />
-                Test
-              </button>
-              <button
-                onClick={() => setMode('train')}
-                className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                  mode === 'train'
-                    ? 'bg-port-accent-2 text-port-on-accent-2'
-                    : 'bg-port-bg border border-port-border text-gray-400 hover:text-white'
-                }`}
-              >
-                <Dumbbell size={14} />
-                Train
-              </button>
-            </div>
-            <p className="text-xs text-gray-500 mt-2">
-              {mode === 'train'
-                ? 'Training mode: immediate feedback, hints on wrong answers. Not scored.'
-                : 'Test mode: timed drills with scoring. Saved to history.'}
-            </p>
-          </div>
-
-          {/* Condition Tags */}
-          {mode === 'test' && <div className="bg-port-card border border-port-border rounded-lg p-4">
-            <h3 className="text-sm font-medium text-gray-400 mb-3">Conditions (optional)</h3>
-            <div className="grid grid-cols-3 gap-3">
-              {Object.entries(tags).map(([key, value]) => (
-                <FormField key={key} labelClassName="text-xs text-gray-500 mb-1 block capitalize" label={key}>
-                  <input
-                    type="text"
-                    value={value}
-                    onChange={e => setTags(prev => ({ ...prev, [key]: e.target.value }))}
-                    placeholder={key === 'sleep' ? 'good/poor' : key === 'caffeine' ? '1 cup' : 'low/high'}
-                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:border-port-accent focus:outline-none"
-                  />
-                </FormField>
-              ))}
-            </div>
-          </div>}
-
           {/* Maintenance-review nudge (issue #2096) — mastered skills due for a
               refresh, mixed into the next Quick session as labeled review reps. */}
           {reviewReps.length > 0 && (
@@ -728,45 +845,6 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
               </span>
             </div>
           )}
-
-          {/* Composition-excludes-everything notice — the start buttons below are
-              disabled because Session Composition filtered out all enabled drills. */}
-          {compositionExcludesAll && (
-            <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-port-warning/10 border border-port-warning/30 text-sm text-port-warning">
-              <Layers size={16} className="mt-0.5 shrink-0" />
-              <span>Your Session Composition excludes every enabled drill — adjust it under Config → Session Composition to run a session.</span>
-            </div>
-          )}
-
-          {/* Start Buttons */}
-          <div className="flex flex-col sm:flex-row gap-3">
-            {domainCount >= 2 && (
-              <button
-                onClick={handleQuickSession}
-                disabled={!hasSessionDrills}
-                className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 ${
-                  mode === 'train'
-                    ? 'bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2'
-                    : 'bg-port-success hover:bg-port-success/80 text-white'
-                } disabled:opacity-50 disabled:cursor-not-allowed font-medium rounded-lg transition-colors`}
-              >
-                <Timer size={18} />
-                Quick 5 Min ({domainCount} domains)
-              </button>
-            )}
-            <button
-              onClick={handleStart}
-              disabled={!hasSessionDrills}
-              className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 ${
-                mode === 'train'
-                  ? 'bg-port-accent-2/70 hover:bg-port-accent-2/80 text-port-on-accent-2'
-                  : 'bg-port-accent hover:bg-port-accent/80 text-white'
-              } disabled:opacity-50 disabled:cursor-not-allowed font-medium rounded-lg transition-colors`}
-            >
-              {mode === 'train' ? <Dumbbell size={18} /> : <Play size={18} />}
-              {mode === 'train' ? 'Full Training' : 'Full POST'}
-            </button>
-          </div>
         </div>
 
         {/* Sidebar — drill summaries + recent sessions flow alongside on desktop */}

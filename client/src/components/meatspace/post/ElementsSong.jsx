@@ -41,7 +41,10 @@ function getCategory(sym) {
 
 const ROW_LABELS = [null, null, null, null, null, null, null, 'Lanthanides', 'Actinides'];
 
-const PRACTICE_MODES = [
+// Exported so the nav-manifest contract test (server/lib/navManifest.test.js)
+// reads these ids as the source of truth for which /post/memory/elements/:mode
+// deep links must be registered.
+export const PRACTICE_MODES = [
   { id: 'learn', label: 'Learn Lyrics', icon: BookOpen, desc: 'Read through the song verse by verse' },
   // Study (flip-to-reveal) before the recall test, mirroring the study→test
   // split of Morse (copy vs head-copy) and MemoryPractice (learn vs recall).
@@ -50,11 +53,15 @@ const PRACTICE_MODES = [
   { id: 'fill-blank', label: 'Fill the Lyrics', icon: Target, desc: 'Fill in missing element names from the lyrics' },
 ];
 
-export default function ElementsSong({ item: itemProp, onBack, loadItemOnMount }) {
+// The routable practice modes (`/post/memory/elements/:mode`). PostTab validates
+// the URL segment against this list and degrades an unknown one to the mode
+// picker, mirroring MorseTrainer's MORSE_MODE_IDS (issue #3249).
+export const ELEMENTS_MODE_IDS = PRACTICE_MODES.map(m => m.id);
+
+export default function ElementsSong({ item: itemProp, onBack, loadItemOnMount, mode, onSelectMode, onExitMode }) {
   const [loadedItem, setLoadedItem] = useState(null);
   const item = itemProp || loadedItem;
   const [mastery, setMastery] = useState(item?.mastery || { overallPct: 0, chunks: {}, elements: {} });
-  const [mode, setMode] = useState(null);
 
   useEffect(() => {
     if (!itemProp && loadItemOnMount) {
@@ -71,7 +78,7 @@ export default function ElementsSong({ item: itemProp, onBack, loadItemOnMount }
 
   function handlePracticeComplete(newMastery) {
     if (newMastery) setMastery(newMastery);
-    setMode(null);
+    onExitMode();
   }
 
   if (!item) {
@@ -83,15 +90,46 @@ export default function ElementsSong({ item: itemProp, onBack, loadItemOnMount }
     );
   }
 
-  if (mode === 'learn') return <LearnMode item={item} onBack={() => setMode(null)} onComplete={handlePracticeComplete} />;
-  if (mode === 'element-study') return <ElementStudyMode item={item} mastery={mastery} onBack={() => setMode(null)} onComplete={handlePracticeComplete} />;
-  if (mode === 'element-flash') return <ElementFlashMode item={item} mastery={mastery} onBack={() => setMode(null)} onComplete={handlePracticeComplete} />;
-  if (mode === 'fill-blank') return <FillBlankMode item={item} onBack={() => setMode(null)} onComplete={handlePracticeComplete} />;
+  if (mode === 'learn') return <LearnMode item={item} onBack={onExitMode} onComplete={handlePracticeComplete} />;
+  if (mode === 'element-study') return <ElementStudyMode item={item} mastery={mastery} onBack={onExitMode} onComplete={handlePracticeComplete} />;
+  if (mode === 'element-flash') return <ElementFlashMode item={item} mastery={mastery} onBack={onExitMode} onComplete={handlePracticeComplete} />;
+  if (mode === 'fill-blank') return <FillBlankMode item={item} onBack={onExitMode} onComplete={handlePracticeComplete} />;
 
-  return <ElementsSongMain item={item} mastery={mastery} setMode={setMode} onBack={onBack} />;
+  return <ElementsSongMain item={item} mastery={mastery} onSelectMode={onSelectMode} onBack={onBack} />;
 }
 
-function ElementsSongMain({ item, mastery, setMode, onBack }) {
+// Sum `{ attempts, correct }` mastery buckets into a single accuracy in [0,1].
+// Returns null when nothing has been attempted, so "never practiced" stays
+// distinguishable from "practiced and scored zero" (the sentinel rule in
+// CLAUDE.md) — the caller routes those two to different modes.
+function bucketAccuracy(buckets) {
+  const attempted = Object.values(buckets || {}).filter(m => (m?.attempts || 0) > 0);
+  if (attempted.length === 0) return null;
+  const attempts = attempted.reduce((sum, m) => sum + m.attempts, 0);
+  const correct = attempted.reduce((sum, m) => sum + (m.correct || 0), 0);
+  return attempts > 0 ? correct / attempts : null;
+}
+
+/**
+ * Which practice mode to lead with on the Elements page (issue #3249) — the
+ * surface offers five modes with no ordering, so a "Start here" hint answers
+ * "which do I pick?". Pure, so it's unit-testable. Follows study → test → apply:
+ *   - nothing practiced yet    → Flash Cards (study the name↔symbol pairings)
+ *   - element recall still weak → Element Flash (test those pairings)
+ *   - elements solid, verses not → Fill the Lyrics
+ *   - everything solid          → Element Flash as maintenance
+ */
+export function recommendedElementsMode(mastery) {
+  const elementAccuracy = bucketAccuracy(mastery?.elements);
+  if (elementAccuracy === null) return 'element-study';
+  if (elementAccuracy < 0.8) return 'element-flash';
+  const chunkAccuracy = bucketAccuracy(mastery?.chunks);
+  if (chunkAccuracy === null || chunkAccuracy < 0.8) return 'fill-blank';
+  return 'element-flash';
+}
+
+function ElementsSongMain({ item, mastery, onSelectMode, onBack }) {
+  const recommendedMode = recommendedElementsMode(mastery);
   const elementMap = useMemo(() => item.content?.elementMap ?? {}, [item]);
   const songElements = useMemo(() => {
     const s = new Set();
@@ -163,6 +201,46 @@ function ElementsSongMain({ item, mastery, setMode, onBack }) {
           <div>{Object.keys(mastery.elements || {}).filter(s => { const m = mastery.elements[s]; return m?.attempts >= 3 && m.correct / m.attempts >= 0.8; }).length} / {Object.keys(elementMap).length} elements mastered</div>
           <div>{Object.keys(elementMap).length} elements in song</div>
         </div>
+      </div>
+
+      {/* Practice Modes — above the periodic table so the page leads with what
+          to DO, not what to look at (issue #3249). The recommended mode carries a
+          "Start here" hint so the five options aren't an undirected menu. */}
+      <div className="space-y-3">
+        <h3 className="text-sm font-medium text-gray-400">Practice</h3>
+        {PRACTICE_MODES.map(m => {
+          const recommended = m.id === recommendedMode;
+          return (
+            <button key={m.id} onClick={() => onSelectMode(m.id)}
+              className={`w-full bg-port-card border rounded-lg p-4 text-left transition-colors flex items-center gap-4 ${
+                recommended ? 'border-emerald-500/60 hover:border-emerald-400' : 'border-port-border hover:border-port-accent/50'
+              }`}>
+              <m.icon size={20} className="text-emerald-400 shrink-0" />
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-white font-medium">{m.label}</span>
+                  {recommended && (
+                    <span className="text-[10px] uppercase tracking-wide text-emerald-400 border border-emerald-500/40 rounded px-1.5 py-0.5">
+                      Start here
+                    </span>
+                  )}
+                </div>
+                <div className="text-gray-500 text-sm">{m.desc}</div>
+              </div>
+            </button>
+          );
+        })}
+        {/* Rapid Read — RSVP speed-reading of the whole song to burn the element
+            order into memory one word at a time. Stays a modal (it's also
+            triggerable per-verse below), so it isn't a routable practice mode. */}
+        <button onClick={() => setRapidRead({ text: songText, title: 'The Elements Song' })}
+          className="w-full bg-port-card border border-port-border rounded-lg p-4 text-left hover:border-port-accent/50 transition-colors flex items-center gap-4">
+          <Gauge size={20} className="text-emerald-400 shrink-0" />
+          <div>
+            <div className="text-white font-medium">Rapid Read</div>
+            <div className="text-gray-500 text-sm">Speed-read the full lyrics one word at a time (RSVP)</div>
+          </div>
+        </button>
       </div>
 
       {/* Periodic Table */}
@@ -265,31 +343,6 @@ function ElementsSongMain({ item, mastery, setMode, onBack }) {
             verses={elementVerseMap[selectedElement] || []} chunks={item.content?.chunks || []}
             lines={item.content?.lines || []} onClear={() => setSelectedElement(null)} />
         )}
-      </div>
-
-      {/* Practice Modes */}
-      <div className="space-y-3">
-        <h3 className="text-sm font-medium text-gray-400">Practice</h3>
-        {/* Rapid Read — RSVP speed-reading of the whole song to burn the element
-            order into memory one word at a time. */}
-        <button onClick={() => setRapidRead({ text: songText, title: 'The Elements Song' })}
-          className="w-full bg-port-card border border-port-border rounded-lg p-4 text-left hover:border-port-accent/50 transition-colors flex items-center gap-4">
-          <Gauge size={20} className="text-emerald-400 shrink-0" />
-          <div>
-            <div className="text-white font-medium">Rapid Read</div>
-            <div className="text-gray-500 text-sm">Speed-read the full lyrics one word at a time (RSVP)</div>
-          </div>
-        </button>
-        {PRACTICE_MODES.map(m => (
-          <button key={m.id} onClick={() => setMode(m.id)}
-            className="w-full bg-port-card border border-port-border rounded-lg p-4 text-left hover:border-port-accent/50 transition-colors flex items-center gap-4">
-            <m.icon size={20} className="text-emerald-400 shrink-0" />
-            <div>
-              <div className="text-white font-medium">{m.label}</div>
-              <div className="text-gray-500 text-sm">{m.desc}</div>
-            </div>
-          </button>
-        ))}
       </div>
 
       {/* Verse breakdown */}

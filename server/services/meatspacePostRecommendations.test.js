@@ -37,6 +37,8 @@ import {
   getPostRecommendations,
   updatePostConfig,
   isRecDrillRunnable,
+  memoryPracticeDeepLink,
+  memoryItemIdFromReview,
 } from './meatspacePost.js';
 import { atomicWrite } from '../lib/fileUtils.js';
 
@@ -207,7 +209,7 @@ describe('composePostRecommendations priority + composition', () => {
       hasHistory: true,
     });
     expect(recs.map(r => r.kind)).toEqual(['memory-due', 'weak-skill', 'stalled-progression']);
-    expect(recs[0].deepLink).toBe('/post/memory');
+    expect(recs[0].deepLink).toBe('/post/memory/song/spaced');
     expect(recs.map(r => r.priority)).toEqual([0, 1, 2]);
   });
 
@@ -222,13 +224,13 @@ describe('composePostRecommendations priority + composition', () => {
     expect(recs[1].kind).toBe('weak-skill');
   });
 
-  it('routes a memory-chunk re-verification to the memory tab, not the launcher', () => {
+  it('routes a memory-chunk re-verification into a practice mode, not the launcher', () => {
     const recs = composePostRecommendations({
       dueReviews: [{ skillId: 'memory:song:c1', label: 'Elements — Chorus', kind: 'memory', status: 'due' }],
       hasHistory: true,
     });
     expect(recs[0].kind).toBe('skill-review');
-    expect(recs[0].deepLink).toBe('/post/memory');
+    expect(recs[0].deepLink).toBe('/post/memory/song/spaced');
   });
 
   it('returns a sensible default for an empty (fresh) history', () => {
@@ -264,7 +266,15 @@ describe('getPostRecommendations (integration)', () => {
     }];
     const { recommendations } = await getPostRecommendations();
     expect(recommendations[0].kind).toBe('memory-due');
-    expect(recommendations[0].deepLink).toBe('/post/memory');
+    // The built-in Elements Song is seeded (and also due), so address this
+    // item's rec by id rather than assuming it sorts first.
+    const songRec = recommendations.find(r => r.id === 'memory-due:song');
+    expect(songRec.deepLink).toBe('/post/memory/song/spaced');
+    // Every due-memory rec lands INSIDE a practice mode, not on the item list.
+    for (const rec of recommendations.filter(r => r.kind === 'memory-due')) {
+      expect(rec.deepLink).not.toBe('/post/memory');
+      expect(rec.deepLink.split('/').length).toBeGreaterThan(3);
+    }
   });
 
   it('never returns an empty list on a fresh install', async () => {
@@ -276,5 +286,45 @@ describe('getPostRecommendations (integration)', () => {
       expect(typeof rec.deepLink).toBe('string');
       expect(rec.deepLink.startsWith('/post')).toBe(true);
     }
+  });
+});
+
+// An "Up next" rec should START the practice, not open a page the user still
+// has to navigate — memory recs used to point at the bare item list, which cost
+// 4 clicks to reach an actual drill (issue #3249).
+describe('memoryPracticeDeepLink', () => {
+  it('routes the built-in Elements Song to its own recall test', () => {
+    expect(memoryPracticeDeepLink('elements-song')).toBe('/post/memory/elements/element-flash');
+  });
+
+  it('routes any other item to spaced repetition, which targets its weakest chunks', () => {
+    expect(memoryPracticeDeepLink('raven')).toBe('/post/memory/raven/spaced');
+  });
+
+  it('degrades to the item list when there is no id to route to', () => {
+    expect(memoryPracticeDeepLink(null)).toBe('/post/memory');
+    expect(memoryPracticeDeepLink(undefined)).toBe('/post/memory');
+    expect(memoryPracticeDeepLink('')).toBe('/post/memory');
+  });
+});
+
+describe('memoryItemIdFromReview', () => {
+  it('prefers the explicit memoryItemId field', () => {
+    expect(memoryItemIdFromReview({ memoryItemId: 'raven', skillId: 'memory:other:c1' })).toBe('raven');
+  });
+
+  it('falls back to parsing the memory:<itemId>:<chunkId> skillId', () => {
+    expect(memoryItemIdFromReview({ skillId: 'memory:raven:v1' })).toBe('raven');
+  });
+
+  it('splits on the LAST colon so an item id containing one still resolves', () => {
+    expect(memoryItemIdFromReview({ skillId: 'memory:poe:raven:v1' })).toBe('poe:raven');
+  });
+
+  it('returns null for a non-memory or unparseable entry', () => {
+    expect(memoryItemIdFromReview({ skillId: 'multiplication:L1' })).toBeNull();
+    expect(memoryItemIdFromReview({ skillId: 'memory:' })).toBeNull();
+    expect(memoryItemIdFromReview({})).toBeNull();
+    expect(memoryItemIdFromReview(null)).toBeNull();
   });
 });

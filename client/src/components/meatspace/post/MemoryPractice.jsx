@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { ChevronLeft, Check, X, SkipForward, RotateCcw, Target, ChevronDown } from 'lucide-react';
-import { submitMemoryPractice, getChunkMastery } from '../../../services/api';
+import { ChevronLeft, Check, X, SkipForward, RotateCcw, Target, ChevronDown, Loader } from 'lucide-react';
+import { submitMemoryPractice, getChunkMastery, getMemoryItem } from '../../../services/api';
 
 const MODES = [
   { id: 'learn', label: 'Learn', desc: 'Progressive reveal — read and absorb line by line' },
@@ -10,8 +10,83 @@ const MODES = [
   { id: 'spaced', label: 'Spaced Repetition', desc: 'Focus on your weakest chunks with graduated hints' },
 ];
 
-export default function MemoryPractice({ item, onBack }) {
-  const [mode, setMode] = useState(null);
+// The routable practice modes (`/post/memory/:itemId/:mode`). PostTab validates
+// the URL segment against this list and degrades an unknown one to the picker,
+// mirroring MorseTrainer's MORSE_MODE_IDS (issue #3249).
+export const MEMORY_PRACTICE_MODE_IDS = MODES.map(m => m.id);
+
+/**
+ * Route-facing entry point: resolves `itemId` to a memory item, then renders the
+ * practice runner. `item` is an optional seed the caller already has in hand (a
+ * fresh navigation from the list) — a cold deep link has none, so the item is
+ * fetched. An id that doesn't resolve renders a not-found fallback rather than a
+ * blank panel, per the deep-link contract in CLAUDE.md.
+ */
+export default function MemoryPractice({ itemId, item: seedItem, mode, onSelectMode, onExitMode, onBack }) {
+  const [loadedItem, setLoadedItem] = useState(null);
+  const [notFound, setNotFound] = useState(false);
+  const item = seedItem || loadedItem;
+
+  useEffect(() => {
+    if (seedItem || !itemId) return;
+    let cancelled = false;
+    setLoadedItem(null);
+    setNotFound(false);
+    getMemoryItem(itemId)
+      .then(data => { if (!cancelled) { if (data) setLoadedItem(data); else setNotFound(true); } })
+      .catch(err => {
+        console.warn(`⚠️ Failed to load memory item ${itemId}: ${err.message}`);
+        if (!cancelled) setNotFound(true);
+      });
+    return () => { cancelled = true; };
+  }, [itemId, seedItem]);
+
+  if (notFound) {
+    return (
+      <div className="space-y-4 max-w-2xl">
+        <div className="flex items-center gap-3">
+          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+            <ChevronLeft size={20} />
+          </button>
+          <h2 className="text-xl font-bold text-white">Item not found</h2>
+        </div>
+        <p className="text-gray-400 text-sm">
+          No memory item with id <span className="font-mono text-gray-300">{itemId}</span> — it may have been deleted.
+        </p>
+        <button
+          onClick={onBack}
+          className="px-4 py-2 text-sm bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
+        >
+          Back to Memory Builder
+        </button>
+      </div>
+    );
+  }
+
+  if (!item) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-3">
+        <Loader size={32} className="text-emerald-400 animate-spin" />
+        <div className="text-gray-400">Loading item...</div>
+      </div>
+    );
+  }
+
+  return (
+    <MemoryPracticeRunner
+      item={item}
+      mode={mode}
+      onSelectMode={onSelectMode}
+      onExitMode={onExitMode}
+      onBack={onBack}
+    />
+  );
+}
+
+// The practice runner itself. `mode` is URL-driven; PostTab keys this component
+// on it, so every mode entry (and every return to the picker) mounts fresh —
+// no manual per-run state reset is needed.
+function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack }) {
   const [results, setResults] = useState([]);
   const [currentIdx, setCurrentIdx] = useState(0);
   const [answer, setAnswer] = useState('');
@@ -84,6 +159,10 @@ export default function MemoryPractice({ item, onBack }) {
     }
   }, [mode, chunkMastery, spacedChunkIdx, spacedLineIdx, currentIdx, done]);
 
+  // Back goes up exactly one level: from a running mode (or the results screen)
+  // to the mode picker via `onExitMode`, and from the picker out to the item
+  // list via `onBack` — matching how ElementsSong's sub-modes exit, and keeping
+  // the button in step with the URL now that the mode is a route segment.
   if (!mode) {
     return (
       <div className="space-y-6 max-w-4xl">
@@ -100,7 +179,7 @@ export default function MemoryPractice({ item, onBack }) {
           {MODES.map(m => (
             <button
               key={m.id}
-              onClick={() => setMode(m.id)}
+              onClick={() => onSelectMode(m.id)}
               className="w-full bg-port-card border border-port-border rounded-lg p-4 text-left hover:border-port-accent/50 transition-colors"
             >
               <div className="flex items-center gap-2">
@@ -128,7 +207,7 @@ export default function MemoryPractice({ item, onBack }) {
     return (
       <div className="space-y-6 max-w-2xl">
         <div className="flex items-center gap-3">
-          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onExitMode} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
           </button>
           <h2 className="text-xl font-bold text-white">Practice Complete</h2>
@@ -159,7 +238,7 @@ export default function MemoryPractice({ item, onBack }) {
 
         <div className="flex gap-3">
           <button
-            onClick={() => { setMode(null); setResults([]); setCurrentIdx(0); setDone(false); setShowResult(null); setSpacedChunkIdx(0); setSpacedLineIdx(0); }}
+            onClick={onExitMode}
             className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-port-card border border-port-border rounded-lg text-gray-300 hover:text-white transition-colors"
           >
             <RotateCcw size={16} />
@@ -190,7 +269,7 @@ export default function MemoryPractice({ item, onBack }) {
       return (
         <div className="space-y-6 max-w-2xl">
           <div className="flex items-center gap-3">
-            <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+            <button aria-label="Back" onClick={onExitMode} className="text-gray-400 hover:text-white transition-colors">
               <ChevronLeft size={20} />
             </button>
             <h2 className="text-lg font-bold text-white">Spaced Repetition — {item.title}</h2>
@@ -225,7 +304,7 @@ export default function MemoryPractice({ item, onBack }) {
     return (
       <div className="space-y-6 max-w-2xl">
         <div className="flex items-center gap-3">
-          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onExitMode} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
           </button>
           <h2 className="text-lg font-bold text-white">Spaced — {item.title}</h2>
@@ -321,7 +400,7 @@ export default function MemoryPractice({ item, onBack }) {
     return (
       <div className="space-y-6 max-w-4xl">
         <div className="flex items-center gap-3">
-          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onExitMode} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
           </button>
           <h2 className="text-lg font-bold text-white">Learn — {item.title}</h2>
@@ -388,7 +467,7 @@ export default function MemoryPractice({ item, onBack }) {
     return (
       <div className="space-y-6 max-w-2xl">
         <div className="flex items-center gap-3">
-          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onExitMode} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
           </button>
           <h2 className="text-lg font-bold text-white">Sequence — {item.title}</h2>
@@ -470,7 +549,7 @@ export default function MemoryPractice({ item, onBack }) {
     return (
       <div className="space-y-6 max-w-2xl">
         <div className="flex items-center gap-3">
-          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onExitMode} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
           </button>
           <h2 className="text-lg font-bold text-white">Fill Blank — {item.title}</h2>
@@ -540,7 +619,7 @@ export default function MemoryPractice({ item, onBack }) {
     return (
       <div className="space-y-6 max-w-4xl">
         <div className="flex items-center gap-3">
-          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onExitMode} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
           </button>
           <h2 className="text-lg font-bold text-white">Speed Run — {item.title}</h2>

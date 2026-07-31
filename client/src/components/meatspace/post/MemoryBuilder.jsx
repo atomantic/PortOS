@@ -4,8 +4,6 @@ import { getMemoryItems, createMemoryItem, deleteMemoryItem } from '../../../ser
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { FormField } from '../../ui/FormField';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
-import MemoryPractice from './MemoryPractice';
-import ElementsSong from './ElementsSong';
 
 const ITEM_TYPES = [
   { id: 'song', label: 'Song' },
@@ -36,10 +34,10 @@ function mostOverdueFirst(a, b) {
   return va === vb ? 0 : va < vb ? -1 : 1;
 }
 
-export default function MemoryBuilder({ onBack, onNavigateElements }) {
+// Practice selection is URL-driven (`/post/memory/:itemId`), so this component
+// only ever renders the list — `onSelectItem` navigates (issue #3249).
+export default function MemoryBuilder({ onBack, onSelectItem }) {
   const [items, setItems] = useState([]);
-  const [selectedItem, setSelectedItem] = useState(null);
-  const [view, setView] = useState('list'); // list, practice, elements, create
   const [creating, setCreating] = useState(false);
 
   // Create form state
@@ -63,19 +61,6 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
     if (!Array.isArray(data)) return false;
     setItems(data);
     return true;
-  }
-
-  function handleSelect(item) {
-    if (item.id === 'elements-song' && onNavigateElements) {
-      onNavigateElements(item);
-      return;
-    }
-    setSelectedItem(item);
-    if (item.id === 'elements-song') {
-      setView('elements');
-    } else {
-      setView('practice');
-    }
   }
 
   async function handleDelete(id) {
@@ -115,24 +100,6 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
       setItems(prev => [...prev, item]);
       resetCreateForm();
     }
-  }
-
-  if (view === 'elements' && selectedItem) {
-    return (
-      <ElementsSong
-        item={selectedItem}
-        onBack={() => { setView('list'); setSelectedItem(null); loadItems(); }}
-      />
-    );
-  }
-
-  if (view === 'practice' && selectedItem) {
-    return (
-      <MemoryPractice
-        item={selectedItem}
-        onBack={() => { loadItems(); setView('list'); setSelectedItem(null); }}
-      />
-    );
   }
 
   return (
@@ -183,7 +150,7 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
               </div>
             </div>
             <button
-              onClick={() => handleSelect(dueItems[0])}
+              onClick={() => onSelectItem(dueItems[0])}
               className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-sm bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors"
             >
               <BookOpen size={14} />
@@ -301,7 +268,7 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
 
             <div className="flex items-center gap-2 mt-4">
               <button
-                onClick={() => handleSelect(item)}
+                onClick={() => onSelectItem(item)}
                 className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-sm bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
               >
                 <BookOpen size={14} />
