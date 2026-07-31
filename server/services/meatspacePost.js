@@ -537,10 +537,17 @@ export async function getPostReviewReps(now = new Date(), limit = 2) {
   // capping first would let older due memory-chunk entries (which have no
   // runnable rep) consume the limit slots and starve runnable multiplication/
   // cognitive reps that are due later in the schedule.
-  const due = await getDueReviews(now, Infinity);
+  const [due, config] = await Promise.all([
+    getDueReviews(now, Infinity),
+    getPostConfig(),
+  ]);
   const reps = [];
   for (const entry of due) {
     if (reps.length >= limit) break;
+    // Review reps are mixed directly into Quick sessions, so enforce the same
+    // topic, module-composition, module, and per-drill gates as recommendations.
+    // A skill may have become due after the user switched that practice off.
+    if (!isRecDrillRunnable(config, recModuleForDrillType(entry.drillType, 'cognitive'), entry.drillType)) continue;
     if (entry.kind === 'multiplication') {
       reps.push({
         skillId: entry.skillId,

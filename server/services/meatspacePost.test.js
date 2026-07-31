@@ -2025,6 +2025,27 @@ describe('getSessionSkillContext', () => {
     expect(drill.questions).toHaveLength(5);
     expect(drill.questions.every(question => question.techniqueLevel === 1)).toBe(true);
   });
+
+  it('does not return a due Powers review after Powers is disabled', async () => {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      const p = String(path);
+      if (p.includes('post-review-schedule')) return Promise.resolve({
+        skills: {
+          'powers:L1': {
+            skillId: 'powers:L1', kind: 'powers', label: 'Powers review',
+            drillType: 'powers', level: 1,
+            nextReviewAt: '2020-01-01T00:00:00.000Z', status: 'fresh',
+          },
+        },
+      });
+      if (p.includes('post-config')) return Promise.resolve({
+        mentalMath: { drillTypes: { powers: { enabled: false } } },
+      });
+      return Promise.resolve(defaultValue);
+    });
+
+    expect(await getPostReviewReps(new Date('2026-07-31T00:00:00.000Z'))).toEqual([]);
+  });
 });
 
 describe('resolveDrillConfig — maintenance-review bypass (issue #2096)', () => {
