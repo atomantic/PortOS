@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm } from 'fs/promises';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -55,6 +55,23 @@ describe('parseImageQuotaSignal', () => {
     // Misreading this would show a phantom "0% left" meter with no reset.
     const signal = parseImageQuotaSignal('Agy said: "I cannot generate that image."');
     expect(signal.exhausted).toBe(false);
+  });
+
+  it('does not treat prompt content echoed in a decline as a quota block', () => {
+    // The classified text is the model's own narration, which quotes the image
+    // prompt back. A bare "credit"/"payment" in the artwork description must
+    // never read as a billing failure and paint a phantom 0%-left meter.
+    const decline = 'Agy said: "I cannot generate that image: a wizard holding a credit card and a payment terminal."';
+    expect(parseImageQuotaSignal(decline).exhausted).toBe(false);
+  });
+
+  it('still catches a genuine out-of-credits refusal', () => {
+    // The precise phrasing survives — only the bare-word match was dropped.
+    expect(parseImageQuotaSignal('Render failed: you are out of credits.').exhausted).toBe(true);
+  });
+
+  it('inherits rate-limit phrasings the shared CLI classifier already knows', () => {
+    expect(parseImageQuotaSignal('Grok said: "too many requests, slow down"').exhausted).toBe(true);
   });
 
   it('does not treat a crashed CLI as a quota block', () => {
@@ -190,6 +207,15 @@ describe('getImageGenQuota', () => {
     await recordImageGenOutcome({ mode: 'agy', ok: false, error: AGY_429, at: now });
     const card = await getImageGenQuota({ enabledModes: ['agy'], now });
     expect(card.limits[0].resetsAt).toBe('2026-07-31T21:38:09.000Z');
+  });
+
+  it('reports an unreadable ledger as an error, not as zero renders', async () => {
+    // "Could not read" must never render as a reassuring "No renders · 24h" —
+    // that would also silently hide an active block.
+    await writeFile(join(TEST_ROOT, 'imagegen-quota.json'), '{ this is not json');
+    const card = await getImageGenQuota({ enabledModes: ['agy'], now });
+    expect(card.error).toContain('Could not read');
+    expect(card.metrics).toEqual([]);
   });
 
   it('ages renders out of the 24h window', async () => {

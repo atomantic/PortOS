@@ -113,10 +113,19 @@ const IMAGE_QUOTA_PATTERNS = [
 ];
 
 // Categories from the shared classifier that mean "refused for quota reasons".
+//
+// QUOTA_EXCEEDED is deliberately EXCLUDED despite the name: its pattern is
+// /billing|payment|credit|insufficient funds/, and the text classified here is
+// the model's own narration, which routinely quotes the image prompt back. A
+// render of "a wizard holding a credit card" that gets declined on content
+// grounds would match on the bare word "credit" and paint a phantom 0%-left
+// meter with no reset. RATE_LIMIT and USAGE_LIMIT key on phrases no image
+// prompt produces by accident ("429", "rate limit", "hit your usage limit").
+// The genuinely-billing image phrasings are covered precisely by
+// IMAGE_QUOTA_PATTERNS above, which requires "out of credits", not "credit".
 const QUOTA_CATEGORIES = new Set([
   ERROR_CATEGORIES.RATE_LIMIT,
   ERROR_CATEGORIES.USAGE_LIMIT,
-  ERROR_CATEGORIES.QUOTA_EXCEEDED,
 ]);
 
 /**
@@ -209,6 +218,23 @@ export async function getImageGenQuota({ enabledModes = [], now = Date.now() } =
   if (!tracked.length) return null;
 
   const ledger = await readLedger();
+  // A failed/corrupt read is NOT "no renders" — reporting a cheerful zero for a
+  // ledger we could not read is the sentinel-vs-empty footgun this card exists
+  // to avoid. Say so instead.
+  if (!ledger) {
+    return {
+      family: 'imagegen',
+      label: 'Image Gen',
+      supported: true,
+      burnable: false,
+      limits: [],
+      activity: [],
+      metrics: [],
+      approximate: true,
+      fetchedAt: new Date(now).toISOString(),
+      error: 'Could not read the observed image-quota ledger — render counts and any active limit are unavailable.',
+    };
+  }
   const cutoff = now - ACTIVITY_WINDOW_MS;
   const limits = [];
   const metrics = [];
