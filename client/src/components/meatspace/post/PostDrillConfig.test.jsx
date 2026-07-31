@@ -29,6 +29,11 @@ const NEWLY_EXPOSED_TYPES = ALL_LLM_TYPES.filter(t => !LEGACY_ENABLED_TYPES.incl
 // Mirrors the server DEFAULT_CONFIG: only the 5 legacy LLM drills ship enabled.
 const config = {
   mentalMath: { drillTypes: { 'multiplication': { enabled: true, count: 10 } } },
+  memory: {
+    enabled: true,
+    drillTypes: { 'memory-sequence': { enabled: true, count: 4 } },
+    items: {},
+  },
   llmDrills: {
     enabled: true,
     providerId: null,
@@ -83,7 +88,10 @@ beforeEach(() => {
       thresholds: { minSamples: 3, targetAccuracy: 0.85 }, windowDays: 30,
     },
   });
-  getMemoryItems.mockResolvedValue([{ id: 'example-memory' }]);
+  getMemoryItems.mockResolvedValue([{
+    id: 'example-memory',
+    content: { lines: [{ text: 'First' }, { text: 'Second' }] },
+  }]);
 });
 
 // Render + settle the mount-effect fetches (providers, adaptive preview,
@@ -158,7 +166,26 @@ describe('PostDrillConfig', () => {
     await renderConfig(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
     const memory = await screen.findByRole('checkbox', { name: 'Memory' });
     expect(memory.disabled).toBe(true);
-    expect(screen.getByText('Add or enable a memory item in Practice Plan first.')).toBeTruthy();
+    expect(screen.getByText('Enable Memory, a runnable drill, and an item in Practice Plan first.')).toBeTruthy();
+  });
+
+  it('disables Memory composition when its topic or every runnable drill is off', async () => {
+    const topicOff = {
+      ...config,
+      topics: { memory: { enabled: false } },
+    };
+    const { unmount } = await renderConfig(
+      <PostDrillConfig config={topicOff} onSaved={vi.fn()} onBack={vi.fn()} />,
+    );
+    expect((await screen.findByRole('checkbox', { name: 'Memory' })).disabled).toBe(true);
+    unmount();
+
+    const drillsOff = {
+      ...config,
+      memory: { ...config.memory, drillTypes: { 'memory-sequence': { enabled: false } } },
+    };
+    await renderConfig(<PostDrillConfig config={drillsOff} onSaved={vi.fn()} onBack={vi.fn()} />);
+    expect((await screen.findByRole('checkbox', { name: 'Memory' })).disabled).toBe(true);
   });
 
   it('clears a previously-set goal to an empty goals patch on save', async () => {

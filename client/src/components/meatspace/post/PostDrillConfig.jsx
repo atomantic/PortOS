@@ -4,7 +4,7 @@ import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultipli
 import toast from '../../ui/Toast';
 import { FormField } from '../../ui/FormField';
 import { filterSelectableModels, enabledApiProviderFilter } from '../../../utils/providers';
-import { GOAL_DEFS, POST_TOPICS, MODULE_LABELS } from './constants';
+import { GOAL_DEFS, POST_TOPICS, MODULE_LABELS, composedSessionDrillTypes } from './constants';
 
 // Modules a Full/Quick composed session can draw from (issue #2100), DERIVED
 // from the shared topic registry so the list has one owner (issue #3252): a
@@ -571,8 +571,14 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
       .catch(() => setMemoryItemsState({ status: 'error', items: [] }));
   }, []);
 
-  const hasEnabledMemoryItem = memoryItemsState.status === 'ready'
-    && memoryItemsState.items.some(item => config?.memory?.items?.[item.id]?.enabled !== false);
+  // Force Memory through the same topic/module/drill/item compatibility chain
+  // as the launcher while ignoring its current Session Composition membership:
+  // this predicate decides whether that membership may be added in the first place.
+  const hasRunnableMemoryDrill = memoryItemsState.status === 'ready'
+    && !!composedSessionDrillTypes(
+      { ...config, sessionModules: ['memory'] },
+      memoryItemsState.items,
+    ).memory?.length;
 
   // Load the effective-difficulty preview when Adaptive is on, so each math card
   // can show what a session would actually use. Reflects saved config + recent
@@ -892,12 +898,12 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
         <div className="flex flex-wrap gap-2">
           {SESSION_MODULE_OPTIONS.map(opt => {
             const on = sessionModules.includes(opt.id);
-            const memoryUnavailable = opt.id === 'memory' && !hasEnabledMemoryItem;
+            const memoryUnavailable = opt.id === 'memory' && !hasRunnableMemoryDrill;
             const unavailableReason = memoryItemsState.status === 'loading'
               ? 'Checking memory items…'
               : memoryItemsState.status === 'error'
                 ? 'Memory items could not be loaded.'
-                : 'Add or enable a memory item in Practice Plan first.';
+                : 'Enable Memory, a runnable drill, and an item in Practice Plan first.';
             return (
               <div key={opt.id} className="flex flex-col gap-1">
                 <button
