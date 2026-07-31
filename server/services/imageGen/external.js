@@ -146,7 +146,7 @@ export async function generateImage({ sdapiUrl, prompt, negativePrompt, width, h
   } catch (err) {
     stopPolling();
     activeJob = null;
-    imageGenEvents.emit('failed', { generationId, error: 'Network error contacting image generation service' });
+    imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.EXTERNAL, generationId, error: 'Network error contacting image generation service' });
     throw err;
   }
   stopPolling();
@@ -154,14 +154,14 @@ export async function generateImage({ sdapiUrl, prompt, negativePrompt, width, h
   if (!res.ok) {
     const errBody = await res.text().catch(() => '');
     activeJob = null;
-    imageGenEvents.emit('failed', { generationId, error: `SD API error ${res.status}` });
+    imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.EXTERNAL, generationId, error: `SD API error ${res.status}` });
     throw new Error(`SD API error ${res.status}: ${errBody.slice(0, 200)}`);
   }
 
   const data = await res.json();
   if (!data.images?.length) {
     activeJob = null;
-    imageGenEvents.emit('failed', { generationId, error: 'No images returned' });
+    imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.EXTERNAL, generationId, error: 'No images returned' });
     throw new Error('SD API returned no images');
   }
 
@@ -176,6 +176,6 @@ export async function generateImage({ sdapiUrl, prompt, negativePrompt, width, h
   const path = `/data/images/${filename}`;
   console.log(`🖼️ Image saved: ${filename}`);
   activeJob = null;
-  imageGenEvents.emit('completed', { generationId, path, filename });
+  imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.EXTERNAL, generationId, path, filename });
   return { generationId, filename, path, mode: IMAGE_GEN_MODE.EXTERNAL, model };
 }

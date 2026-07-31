@@ -143,6 +143,49 @@ describe('agy image provider', () => {
     expect(sidecar.imageModel).toBe('imagen-3.0-generate-002');
   });
 
+  // agy is a coding agent: when generate_image is quota-exhausted it can still
+  // satisfy "a PNG exists at this path" by writing a script that draws one. The
+  // bytes pass the signature gate, so the residue left by the script is what
+  // catches it (see fabricationGuard.js).
+  it('rejects a PNG the agent drew with code instead of generate_image', async () => {
+    const failed = vi.fn();
+    imageGenEvents.on('failed', failed);
+    const job = await agy.generateImage({ prompt: 'a character sheet' });
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from('drawn by matplotlib'),
+    ]);
+    await writeFile(stagingPathFor(job.jobId), png);
+    await writeFile(join(tmpdir(), `portos-agy-${job.jobId}`, 'render_sheet.py'), 'import matplotlib');
+    await closeChild(0, 0);
+
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline && failed.mock.calls.length === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(failed.mock.calls[0][0].error).toContain('drawn by code');
+    expect(existsSync(join(FAKE_IMAGES_DIR, job.filename))).toBe(false);
+  });
+
+  it('forbids fabricating the image by any other means', () => {
+    const prompt = agy._internals.buildAgyPrompt({ prompt: 'a fox', stagingPath: '/tmp/out.png' });
+    expect(prompt).toContain('Only the generate_image tool may produce this image');
+    expect(prompt).toContain('Reporting the failure is the correct outcome');
+  });
+
+  it('never states pixel dimensions, which generate_image cannot honor', () => {
+    // AspectRatio is the only size knob (#3231). A "target dimensions" line is
+    // an unsatisfiable instruction that invites the agent to reach for code —
+    // and it leaked into the artwork as a rendered caption.
+    const prompt = agy._internals.buildAgyPrompt({
+      prompt: 'a fox', stagingPath: '/tmp/out.png', width: 832, height: 1216,
+    });
+    expect(prompt).not.toContain('832');
+    expect(prompt).not.toContain('1216');
+    expect(prompt).toContain('Pass AspectRatio "2:3" to the tool.');
+  });
+
   // The tool's AspectRatio parameter defaults to '1:1', so a render that names
   // only pixel dimensions comes back square no matter what was asked for —
   // measured against agy 1.1.8 (1024×1024 with no ratio, 1376×768 with 16:9).

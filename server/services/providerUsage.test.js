@@ -16,6 +16,19 @@ vi.mock('./claudeCodeUsage.js', () => ({
 vi.mock('../lib/tuiUsageScrape.js', () => ({
   scrapeTuiUsage: vi.fn()
 }));
+// The image-gen card keys off imageGen SETTINGS (a cloud image backend is
+// enabled per-mode, independently of the agent-provider registry). Default to
+// none enabled so the family assertions below stay about provider families.
+vi.mock('./settings.js', () => ({
+  getSettings: vi.fn().mockResolvedValue({ imageGen: {} })
+}));
+vi.mock('./imageGenQuota.js', () => ({
+  getImageGenQuota: vi.fn(async ({ enabledModes }) => (enabledModes.length ? {
+    family: 'imagegen', label: 'Image Gen', supported: true, burnable: false,
+    limits: [], activity: [], metrics: enabledModes.map((m) => ({ key: m, label: m, value: '0 renders · 24h' })),
+    approximate: true, fetchedAt: new Date().toISOString()
+  } : null))
+}));
 
 import {
   parseCodexRateLimits, mapCodexQuota, resolveEnabledFamilies, getProviderQuotas,
@@ -24,6 +37,8 @@ import {
 import { getAllProviders } from './providers.js';
 import { scrapeTuiUsage } from '../lib/tuiUsageScrape.js';
 import { systemTimeZone } from './claudeCodeUsage.js';
+import { getSettings } from './settings.js';
+import { getImageGenQuota } from './imageGenQuota.js';
 
 // Synthetic Antigravity `/usage` panel — invented values, redacted account, in
 // the real rendered shape. The bar percentage is percent REMAINING; a full bar
@@ -161,6 +176,24 @@ describe('getProviderQuotas', () => {
     const quotas = await getProviderQuotas();
     expect(Array.isArray(quotas)).toBe(true);
     expect(quotas.map((q) => q.family)).toEqual(['grok']);
+  });
+
+  it('adds an image-gen card when a cloud image backend is enabled', async () => {
+    // Antigravity's /usage panel reports only its token groups — the imagen
+    // backend that renders the pixels has no row there, so the image card is
+    // derived from observed renders instead (see imageGenQuota.js).
+    getAllProviders.mockResolvedValueOnce({ activeProvider: null, providers: [] });
+    getSettings.mockResolvedValueOnce({ imageGen: { agy: { enabled: true }, local: { enabled: true } } });
+    const quotas = await getProviderQuotas();
+    expect(quotas.map((q) => q.family)).toEqual(['imagegen']);
+    // Only the cloud backend is tracked — local renders spend no remote quota.
+    expect(getImageGenQuota).toHaveBeenCalledWith({ enabledModes: ['agy'] });
+  });
+
+  it('omits the image-gen card entirely when only local image gen is on', async () => {
+    getAllProviders.mockResolvedValueOnce({ activeProvider: null, providers: [] });
+    getSettings.mockResolvedValueOnce({ imageGen: { local: { enabled: true } } });
+    expect(await getProviderQuotas()).toEqual([]);
   });
 });
 

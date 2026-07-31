@@ -563,7 +563,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     const reason = `Failed to spawn ${bin}: ${err.message}`;
     console.log(`❌ Image generation spawn error [${jobId.slice(0, 8)}]: ${reason}`);
     broadcastSse(job, { type: 'error', error: reason });
-    imageGenEvents.emit('failed', { generationId: jobId, error: reason });
+    imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: reason });
     activeProcess = null;
     activeJob = null;
     rm(stepwiseDir, { recursive: true, force: true }).catch(() => {});
@@ -808,7 +808,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       broadcastSse(job, { type: 'error', error: errorText, kind: userKind, repo: userRepo });
       // Propagate the friendly message (not the raw "Exit code 1") to the
       // job queue so its `failed` log line and future SSE replays carry it.
-      imageGenEvents.emit('failed', { generationId: jobId, error: userMessage || reason });
+      imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: userMessage || reason });
     } else {
       job.status = 'complete';
       // Large-source regen (issue #912): the render ran at a clamped FLUX-sane
@@ -876,11 +876,11 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       // federated. The queue's own `completed` handler still fires off the
       // return value below, so the job settles either way.
       if (!skipSidecar) {
-        imageGenEvents.emit('completed', { generationId: jobId, path: publicPath, filename, seed: actualSeed });
+        imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, path: publicPath, filename, seed: actualSeed });
       } else {
         // `temp: true` tells the media-asset-index + peer-sync hooks to ignore
         // this render — there's no gallery file or sidecar to index/federate.
-        imageGenEvents.emit('completed', { generationId: jobId, path: null, filename, seed: actualSeed, outputPath, temp: true });
+        imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, path: null, filename, seed: actualSeed, outputPath, temp: true });
       }
     }
     closeJobAfterDelay(jobs, jobId);

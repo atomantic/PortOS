@@ -65,6 +65,18 @@ function UsageMeter({ limit }) {
   );
 }
 
+// Small labelled stat, used for both the per-period activity counts and the
+// `metrics[]` a backend returns when its quota can't be queried at all.
+function StatTile({ label, value, detail }) {
+  return (
+    <div className="bg-port-bg border border-port-border rounded-lg p-2.5">
+      <div className="text-xs text-gray-400 mb-0.5">{label}</div>
+      <div className="text-sm text-white">{value}</div>
+      {detail && <div className="text-[10px] sm:text-xs text-gray-500 mt-0.5">{detail}</div>}
+    </div>
+  );
+}
+
 // One subscription-quota card per enabled provider family. Providers with no
 // queryable usage surface (supported: false) render a muted note, never an
 // error; a supported adapter that failed transiently shows a soft warning.
@@ -91,27 +103,42 @@ function ProviderQuotaCard({ quota }) {
 
       {quota.supported && !quota.error && (
         <div className="space-y-2">
-          {quota.limits?.length > 0 ? (
+          {quota.limits?.length > 0 && (
             <div>
               {quota.limits.map((limit) => (
                 <UsageMeter key={limit.key} limit={limit} />
               ))}
             </div>
-          ) : (
+          )}
+
+          {!quota.limits?.length && !quota.metrics?.length && (
             <div className="text-gray-500 text-sm">No rate-limit data reported</div>
+          )}
+
+          {/* Backends with no queryable quota report observed counts instead of
+              a meter — a percentage we cannot measure must not be invented. */}
+          {quota.metrics?.length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {quota.metrics.map((m) => (
+                <StatTile key={m.key} label={m.label} value={m.value} detail={m.detail} />
+              ))}
+            </div>
           )}
 
           {quota.activity?.length > 0 && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
               {quota.activity.map((a) => (
-                <div key={a.period} className="bg-port-bg border border-port-border rounded-lg p-2.5">
-                  <div className="text-xs text-gray-400 mb-0.5">{a.period}</div>
-                  <div className="text-sm text-white">
-                    {formatCompactCount(a.requests)} requests
-                    <span className="mx-2 text-gray-600">•</span>
-                    {formatCompactCount(a.sessions)} sessions
-                  </div>
-                </div>
+                <StatTile
+                  key={a.period}
+                  label={a.period}
+                  value={(
+                    <>
+                      {formatCompactCount(a.requests)} requests
+                      <span className="mx-2 text-gray-600">•</span>
+                      {formatCompactCount(a.sessions)} sessions
+                    </>
+                  )}
+                />
               ))}
             </div>
           )}

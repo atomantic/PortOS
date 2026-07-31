@@ -26,8 +26,10 @@
  * image generation. Grok exposes no image-tool-only permission mode, so the
  * child is confined the ways we can: it runs with cwd set to a throwaway
  * per-job scratch directory (relative-path tool ops and default file writes
- * land there, and the whole dir is removed on every terminal path), and the
- * staged output is signature-sniffed before it is accepted into the gallery.
+ * land there, and the whole dir is removed on every terminal path), the staged
+ * output is signature-sniffed before it is accepted into the gallery, and that
+ * scratch dir is scanned for the script residue that betrays an image the agent
+ * drew itself rather than generated (see fabricationGuard.js).
  */
 
 import { spawn } from 'child_process';
@@ -42,10 +44,11 @@ import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { buildNoImageReason } from './noImageReason.js';
+import { checkFabrication, noFabricationClause } from './fabricationGuard.js';
 import sharp from 'sharp';
 import { bufferedSpawn, killProcessTree, prepareCliSpawn } from '../../lib/bufferedSpawn.js';
 import { ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../../lib/grok.js';
-import { IMAGE_GEN_MODE, describeFidelity, nearestAspectRatio } from './modes.js';
+import { IMAGE_GEN_MODE, describeFidelity, grokImageTool, nearestAspectRatio } from './modes.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
 
 // 20 minutes — grok's image_gen typically returns in well under a minute, but
@@ -163,7 +166,7 @@ export function buildGrokPrompt({ prompt, negativePrompt, aspectRatio, stagingPa
   const task = initImagePath
     ? `Use your built-in image_edit tool to transform the source image at ${initImagePath} — ${describeFidelity(initImageStrength)}.\nEdit instruction: ${prompt.trim()}${avoid}`
     : `Use your built-in image_gen tool to generate exactly one image.\nImage prompt: ${prompt.trim()}${avoid}`;
-  return `${task}${ratio}\nSave the generated image as a PNG file at exactly this path: ${stagingPath}\nDo not create any other files, do not modify any code, and do not run any other tools beyond what is needed to generate the image and write it to that path. When the file is written, you are done.`;
+  return `${task}${ratio}\nSave the generated image as a PNG file at exactly this path: ${stagingPath}\n${noFabricationClause(grokImageTool(initImagePath))}\nDo not create any other files, do not modify any code, and do not run any other tools beyond what is needed to generate the image and write it to that path. When the file is written, you are done.`;
 }
 
 // `initImageStrength` maps to a fidelity phrase (grok's image_edit has no
@@ -242,6 +245,7 @@ export async function generateImage({
   // attaches to the per-job SSE stream (mirrors codex.js/local.js).
   runGrok(job, jobId, bin, args, {
     useStdin, fullPrompt, cleanupPromptFile, scratchDir, stagingPath, outputPath, filename, meta, cleanC2PA, denoise,
+    toolName: grokImageTool(validInitImagePath),
   }).catch((err) => {
     console.log(`❌ grok run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
   });
@@ -257,6 +261,7 @@ export async function generateImage({
 
 async function runGrok(job, jobId, bin, args, {
   useStdin, fullPrompt, cleanupPromptFile, scratchDir, stagingPath, outputPath, filename, meta, cleanC2PA = false, denoise = false,
+  toolName = grokImageTool(null),
 }) {
   // A path-shaped grokPath (contains a separator) must resolve against the
   // PortOS working directory NOW — the child spawns with cwd set to the
@@ -334,6 +339,15 @@ async function runGrok(job, jobId, bin, args, {
         const prefix = harvested.invalid ? 'Grok wrote a non-image file at the directed path. ' : '';
         return finalizeError(job, jobId, proc, `${prefix}${noImageReason(stdoutTail)}`);
       }
+      // Image bytes are not proof the image tool made them — reject a picture
+      // the agent drew with code (see fabricationGuard.js). The narration tail
+      // rides along like every other failure path here: it carries WHY the tool
+      // was skipped, which the quota card reads to spot a rate-limit block.
+      const fabricated = await checkFabrication(scratchDir, toolName);
+      if (fabricated) {
+        removeScratch();
+        return finalizeError(job, jobId, proc, `${fabricated} ${noImageReason(stdoutTail)}`);
+      }
       if (harvested.format === 'png') {
         // Move, not copy — the staging file is PortOS-owned and disposable,
         // so rename is a metadata-only op when tmpdir and the gallery share
@@ -361,7 +375,7 @@ async function runGrok(job, jobId, bin, args, {
       console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (grok)`);
       const result = { filename, path: `/data/images/${filename}` };
       broadcastSse(job, { type: 'complete', result });
-      imageGenEvents.emit('completed', { generationId: jobId, path: `/data/images/${filename}`, filename });
+      imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.GROK, generationId: jobId, path: `/data/images/${filename}`, filename });
       closeJobAfterDelay(jobs, jobId);
     } catch (err) {
       removeScratch();
@@ -381,7 +395,7 @@ const finalizeError = (job, jobId, proc, reason) => {
   activeJobs.delete(jobId);
   console.log(`❌ grok image generation failed [${jobId.slice(0, 8)}]: ${reason.split('\n')[0]}`);
   broadcastSse(job, { type: 'error', error: reason });
-  imageGenEvents.emit('failed', { generationId: jobId, error: reason });
+  imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.GROK, generationId: jobId, error: reason });
   closeJobAfterDelay(jobs, jobId);
 };
 

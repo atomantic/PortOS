@@ -31,6 +31,29 @@ export const CLOUD_IMAGE_GEN_MODES = Object.freeze([
   IMAGE_GEN_MODE.AGY,
 ]);
 
+// The provider-side image tool each cloud CLI is directed to call. Single
+// source: the prompt builders name it, the fabrication guard names it when it
+// rejects a code-drawn stand-in, and the usage card labels its quota row with
+// it — six string literals before this existed. Grok is the one backend with
+// two, picked by whether the render has a source image.
+export const IMAGE_TOOL_NAMES = Object.freeze({
+  [IMAGE_GEN_MODE.AGY]: 'generate_image',
+  [IMAGE_GEN_MODE.GROK]: 'image_gen',
+  [IMAGE_GEN_MODE.CODEX]: 'image_gen',
+});
+
+/** Grok's tool depends on the direction: i2i edits go to `image_edit`. */
+export const grokImageTool = (initImagePath) => (initImagePath ? 'image_edit' : IMAGE_TOOL_NAMES[IMAGE_GEN_MODE.GROK]);
+
+/**
+ * Cloud image backends the user has enabled in Settings → Image Gen. Hoisted
+ * here so callers outside the dispatcher (the usage card) don't re-encode how
+ * a backend is enabled — `settings.imageGen[mode].enabled` was already spelled
+ * out at a dozen sites and drifts the moment enablement grows a nuance.
+ */
+export const enabledCloudImageModes = (settings) =>
+  CLOUD_IMAGE_GEN_MODES.filter((mode) => settings?.imageGen?.[mode]?.enabled === true);
+
 // Modes the mediaJobQueue can run (external SD-API stays synchronous — a
 // remote HTTP call with no local single-flight constraint to absorb). Single
 // source for the pipeline routes' Zod enums and batch-render guards, so a

@@ -25,7 +25,8 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { buildNoImageReason } from './noImageReason.js';
-import { AGY_IMAGEGEN_IMAGE_MODEL, IMAGE_GEN_MODE, nearestAgyAspectRatio } from './modes.js';
+import { checkFabrication, noFabricationClause } from './fabricationGuard.js';
+import { AGY_IMAGEGEN_IMAGE_MODEL, IMAGE_GEN_MODE, IMAGE_TOOL_NAMES, nearestAgyAspectRatio } from './modes.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
 
 const AGY_TIMEOUT_MS = (() => {
@@ -130,6 +131,8 @@ export function listModels({ agyPath } = {}) {
   });
 }
 
+const AGY_TOOL = IMAGE_TOOL_NAMES[IMAGE_GEN_MODE.AGY];
+
 const AGY_NO_IMAGE_HINT =
   'Agy returned no image — the selected model may not expose generate_image, or the model declined. Check Settings → Image Gen → Agy CLI.';
 
@@ -146,14 +149,18 @@ export function buildAgyPrompt({ prompt, negativePrompt, width, height, stagingP
   // requested size. Directed on its own line so it reads as an instruction to
   // the agent rather than as image content: anything that lands inside the
   // tool's `Prompt` becomes part of what gets drawn.
+  //
+  // The exact pixel dimensions are deliberately NOT stated. AspectRatio is the
+  // only size knob generate_image exposes (#3231), so a "target dimensions"
+  // line is an instruction the tool cannot satisfy — which invites the agent to
+  // reach for code that can. It also leaks into the artwork: the render that
+  // exposed this failure mode captioned itself "DIMENSIONS: 832 x 1216 (2:3)".
   const ratio = nearestAgyAspectRatio(width, height);
-  const dimensions = Number(width) > 0 && Number(height) > 0
-    ? `\nTarget dimensions: ${Number(width)}×${Number(height)} pixels.`
-    : '';
   const aspect = ratio ? `\nPass AspectRatio "${ratio}" to the tool.` : '';
-  return `Use your built-in generate_image tool to generate exactly one image.
-Image prompt: ${prompt.trim()}${avoid}${dimensions}${aspect}
+  return `Use your built-in ${AGY_TOOL} tool to generate exactly one image.
+Image prompt: ${prompt.trim()}${avoid}${aspect}
 Save the generated image as a PNG file at exactly this path: ${stagingPath}
+${noFabricationClause(AGY_TOOL)}
 Do not create any other files, do not modify any code or workspace content, and do not run unrelated tools. When the file is written, you are done.`;
 }
 
@@ -299,6 +306,16 @@ async function runAgy(job, jobId, bin, args, {
         const prefix = harvested.invalid ? 'Agy wrote a non-image file at the directed path. ' : '';
         return finalizeError(job, jobId, proc, `${prefix}${noImageReason(stdoutTail)}`);
       }
+      // A PNG landed — but the harvest gate only proves it is image bytes, not
+      // that generate_image made them. Reject a file the agent drew itself.
+      // The narration tail rides along like every other failure path here: it
+      // carries WHY the tool was skipped (the 429 that triggers a fabricated
+      // stand-in is only ever stated there), which the quota card then reads.
+      const fabricated = await checkFabrication(scratchDir, AGY_TOOL);
+      if (fabricated) {
+        removeScratch();
+        return finalizeError(job, jobId, proc, `${fabricated} ${noImageReason(stdoutTail)}`);
+      }
       if (harvested.format === 'png') {
         await rename(stagingPath, outputPath).catch(async () => {
           await copyFile(stagingPath, outputPath);
@@ -323,7 +340,7 @@ async function runAgy(job, jobId, bin, args, {
       console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (agy)`);
       const result = { filename, path: `/data/images/${filename}` };
       broadcastSse(job, { type: 'complete', result });
-      imageGenEvents.emit('completed', { generationId: jobId, path: result.path, filename });
+      imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.AGY, generationId: jobId, path: result.path, filename });
       closeJobAfterDelay(jobs, jobId);
     } catch (err) {
       removeScratch();
@@ -339,7 +356,7 @@ const finalizeError = (job, jobId, proc, reason) => {
   activeJobs.delete(jobId);
   console.log(`❌ agy image generation failed [${jobId.slice(0, 8)}]: ${reason.split('\n')[0]}`);
   broadcastSse(job, { type: 'error', error: reason });
-  imageGenEvents.emit('failed', { generationId: jobId, error: reason });
+  imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.AGY, generationId: jobId, error: reason });
   closeJobAfterDelay(jobs, jobId);
 };
 

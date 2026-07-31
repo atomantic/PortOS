@@ -18,6 +18,15 @@
  * because not every Codex account has access to the `image_gen` tool. When
  * disabled the dispatcher rejects up front; this module assumes it's enabled
  * by the time generateImage() is called.
+ *
+ * No fabrication guard here, unlike agy/grok (see imageGen/fabricationGuard.js):
+ * those direct the agent to write a PNG at a path PortOS chose, which is a goal
+ * a coding agent can satisfy by drawing one when the image tool is unavailable.
+ * Codex is never told a destination — we harvest from its own
+ * `~/.codex/generated_images/<session-id>/` dir and the session JSONL, and it
+ * has no scratch cwd — so there is no "a file exists at path X" criterion for a
+ * fabricated image to meet. If Codex ever gains a directed staging path, it
+ * needs the guard too.
  */
 
 import { spawn } from 'child_process';
@@ -382,7 +391,7 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
       console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (codex)`);
       const result = { filename, path: `/data/images/${filename}` };
       broadcastSse(job, { type: 'complete', result });
-      imageGenEvents.emit('completed', { generationId: jobId, path: `/data/images/${filename}`, filename });
+      imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.CODEX, generationId: jobId, path: `/data/images/${filename}`, filename });
       closeJobAfterDelay(jobs, jobId);
     } catch (err) {
       finalizeError(job, jobId, proc, `Codex post-exit handler failed: ${err?.message || err}`);
@@ -404,7 +413,7 @@ const finalizeError = (job, jobId, proc, reason) => {
   activeJobs.delete(jobId);
   console.log(`❌ codex image generation failed [${jobId.slice(0, 8)}]: ${reason.split('\n')[0]}`);
   broadcastSse(job, { type: 'error', error: reason });
-  imageGenEvents.emit('failed', { generationId: jobId, error: reason });
+  imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.CODEX, generationId: jobId, error: reason });
   closeJobAfterDelay(jobs, jobId);
 };
 

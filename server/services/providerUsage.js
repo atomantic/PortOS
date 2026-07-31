@@ -6,19 +6,28 @@ import { getClaudeCodeUsage, systemTimeZone } from './claudeCodeUsage.js';
 import { commandBasename, isClaudeCommand } from '../lib/providerModels.js';
 import { isGrokCommand } from '../lib/grok.js';
 import { scrapeTuiUsage } from '../lib/tuiUsageScrape.js';
+import { getSettings } from './settings.js';
+import { getImageGenQuota } from './imageGenQuota.js';
+import { enabledCloudImageModes } from './imageGen/modes.js';
 
 /**
  * Provider subscription-quota adapters for /devtools/usage — one card per
  * enabled provider *family* (claude, codex, agy, grok), each answering "how
  * much usage do I have left." Every adapter returns the common shape:
  *
- *   { family, label, supported, plan?, limits[], activity[], approximate,
- *     fetchedAt, note?, error? }
+ *   { family, label, supported, plan?, limits[], activity[], metrics?[],
+ *     approximate, fetchedAt, note?, error?, burnable? }
  *
  * `supported: false` means the provider has no queryable usage surface at all
  * (the UI renders a muted "not available" note, never an error). A supported
  * adapter that fails transiently returns `error` instead of throwing so one
  * broken CLI can't 500 the whole endpoint.
+ *
+ * `metrics[]` is for a backend whose quota cannot be queried at all: it renders
+ * as labelled stat tiles instead of a meter, so an adapter never has to invent
+ * a percentage to have something to show. `burnable: false` marks a card the
+ * quota-burn candidate feed must skip — a limit with no measurable headroom is
+ * not capacity to spend down.
  *
  * AI Provider Usage Policy: these fetches run only on user request from the
  * usage page — never at server boot — and none of them consume tokens (the
@@ -515,6 +524,32 @@ export async function getProviderQuotas({ refresh = false } = {}) {
   const providers = Array.isArray(result) ? result : (result?.providers || []);
   const enabled = providers.filter((p) => p?.enabled && p.ollamaBacked !== true);
   const families = resolveEnabledFamilies(providers);
-  return Promise.all(families.map((family) =>
+  const familyCards = await Promise.all(families.map((family) =>
     fetchFamilyQuota(family, { refresh, providers: enabled.filter((p) => family.matches(p)) })));
+  // Image gen last: it is a derived/observed card, not a provider-family
+  // scrape, and it reads as a footnote to the model-quota cards above it. Not
+  // raced with the family scrapes — this is two small local file reads against
+  // their multi-second TUI PTY spawns, so concurrency would buy no wall-clock.
+  const imageCard = await fetchImageGenQuota();
+  return imageCard ? [...familyCards, imageCard] : familyCards;
 }
+
+/**
+ * The image-gen card is keyed off the imageGen SETTINGS, not the provider
+ * registry — a cloud image backend is enabled per-mode in Settings → Image Gen,
+ * independently of whether that CLI is also an enabled agent provider. That is
+ * why it isn't a FAMILIES entry: `resolveEnabledFamilies` gates on
+ * `matches(providerConfig)` and there is no provider config to match.
+ *
+ * Never rejects — a broken read must not 500 the whole usage page, and no card
+ * is a better answer than a card asserting a quota state we failed to read.
+ */
+const fetchImageGenQuota = async () => {
+  const settings = await getSettings().catch(() => null);
+  const enabledModes = enabledCloudImageModes(settings);
+  if (!enabledModes.length) return null; // no cloud image backend → no card
+  return getImageGenQuota({ enabledModes }).catch((err) => {
+    console.error(`❌ Image-gen quota card failed: ${err?.message || err}`);
+    return null;
+  });
+};
