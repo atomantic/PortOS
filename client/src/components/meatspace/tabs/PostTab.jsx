@@ -12,6 +12,7 @@ import PostSessionDetail from '../post/PostSessionDetail';
 import PostHistory from '../post/PostHistory';
 import PostProgress from '../post/PostProgress';
 import PostDrillConfig from '../post/PostDrillConfig';
+import PracticePlan from '../post/PracticePlan';
 import MemoryBuilder from '../post/MemoryBuilder';
 import MemoryPractice, { MEMORY_PRACTICE_MODE_IDS } from '../post/MemoryPractice';
 import ElementsSong, { ELEMENTS_MODE_IDS } from '../post/ElementsSong';
@@ -206,6 +207,20 @@ export default function PostTab({ tab = 'launcher', subtab, mode }) {
         />
       ) : (
         <div className="text-gray-500">Loading configuration...</div>
+      );
+    case 'plan':
+      // Practice Plan owns "what am I studying" (issue #3252). Same null guard
+      // as `config`: the editor seeds its draft state once from the loaded
+      // config, so mounting before it resolves would save defaults over the
+      // user's settings.
+      return config ? (
+        <PracticePlan
+          config={config}
+          onSaved={handleConfigSaved}
+          onBack={() => navigate('/post/launcher')}
+        />
+      ) : (
+        <div className="text-gray-500">Loading practice plan...</div>
       );
     case 'wordplay':
       // Selected game mode is the `:mode` sub-route (URL is source of truth),

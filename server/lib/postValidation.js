@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { CACHEABLE_TYPES } from '../services/meatspacePostDrillCache.js';
 import { COGNITIVE_DRILL_TYPES } from '../services/meatspacePostCognitive.js';
+import { TOPIC_IDS } from './postTopics.js';
 import { HHMM_STRICT_RE } from './timezone.js';
 
 // =============================================================================
@@ -240,6 +241,34 @@ export const postConfigUpdateSchema = z.object({
     enabled: z.boolean().optional(),
     drillTypes: z.record(z.enum(COGNITIVE_DRILL_TYPES), drillTypeConfigSchema).optional()
   }).optional(),
+  // Memory practice (issue #3252). Mirrors the other module blocks, plus an
+  // `items` map so an INDIVIDUAL memorized text — e.g. the seeded Elements Song
+  // — can be dropped from the daily rotation without deleting it (which would
+  // throw away its mastery/schedule history). Keys are memory item ids, so this
+  // is an open `z.string()` record rather than an enum.
+  // `partialRecord`, not `record`: an enum-keyed `z.record` is EXHAUSTIVE in
+  // zod 4 (every enum member required), which is why the sibling module blocks
+  // above force their UI to write a complete drillTypes map. These blocks are
+  // new, so they take the more forgiving contract — a patch may carry just the
+  // one flag it is changing.
+  memory: z.object({
+    enabled: z.boolean().optional(),
+    drillTypes: z.partialRecord(z.enum(MEMORY_DRILL_TYPES), drillTypeConfigSchema).optional(),
+    items: z.record(z.string(), z.object({ enabled: z.boolean().optional() })).optional()
+  }).optional(),
+  // Morse (issue #3252). Morse has no drill-type knobs here — its trainer owns
+  // its own Koch settings — so the block is just the participation toggle that
+  // suppresses the `morse-copy` stalled-progression recommendation.
+  morse: z.object({
+    enabled: z.boolean().optional()
+  }).optional(),
+  // Practice-topic participation (issue #3252) — the fine-grained "what am I
+  // studying?" layer that sits ON TOP of the coarse `sessionModules` filter.
+  // Absent entry = enabled (see server/lib/postTopics.js), so a config that
+  // predates this key behaves exactly as before — additive, no migration.
+  topics: z.partialRecord(z.enum(TOPIC_IDS), z.object({
+    enabled: z.boolean().optional()
+  })).optional(),
   sessionModules: z.array(z.enum(POST_MODULES)).optional(),
   // Optional practice goals (issue #2100) — see postGoalsSchema above.
   goals: postGoalsSchema.optional(),

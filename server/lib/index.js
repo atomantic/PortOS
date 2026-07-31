@@ -227,6 +227,7 @@ export * from './postAdaptive.js';
 export * from './postMultiplicationLadder.js';
 export * from './postProgression.js';
 export * from './postStreak.js';
+export * from './postTopics.js';
 export * from './planIds.js';
 export * from './renderSlot.js';
 export * from './renderTargets.js';

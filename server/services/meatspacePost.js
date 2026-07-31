@@ -11,6 +11,7 @@ import { EventEmitter } from 'events';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { deepMerge, isPlainObject } from '../lib/objects.js';
 import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from '../lib/postValidation.js';
+import { resolveTopicForDrillType, isTopicEnabled, isMemoryItemEnabled } from '../lib/postTopics.js';
 import { adaptDrillConfig, ADAPTIVE_SPECS, ADAPTIVE_DEFAULTS } from '../lib/postAdaptive.js';
 import { resolveMultiplicationLevel, MASTERY_DEFAULTS } from '../lib/postMultiplicationLadder.js';
 import {
@@ -103,6 +104,22 @@ const DEFAULT_CONFIG = {
       'reaction-time': { enabled: true, mode: 'simple', count: 15, minDelayMs: 1000, maxDelayMs: 3000, choices: 3 }
     }
   },
+  // Memory practice (issue #3252). Present so the block's shape is discoverable
+  // in the saved config; `items` is deliberately ABSENT — a per-item entry is
+  // only written when the user actually switches an item off, and absent =
+  // enabled, so a fresh or legacy install rotates every memory item as before.
+  memory: {
+    enabled: true,
+    drillTypes: {
+      'memory-fill-blank': { enabled: true },
+      'memory-sequence': { enabled: true },
+      'memory-element-flash': { enabled: true }
+    }
+  },
+  // Morse participation (issue #3252) — on by default so existing installs keep
+  // seeing Koch-progression recommendations; a user not learning CW turns it off
+  // from the Practice Plan.
+  morse: { enabled: true },
   // Default session composition is a balanced, interleaved mix of the free
   // (no-provider) modules the launcher can actually compose — mental math and
   // deterministic cognitive drills (issue #2100). LLM drills are deliberately
@@ -1104,12 +1121,36 @@ const MODULE_CONFIG_KEY = { 'mental-math': 'mentalMath', 'llm-drills': 'llmDrill
  * Whether a recommended drill can actually be run under the current config
  * (issue #2100 review): a weak-skill / stalled rec deep-links into a session,
  * so recommending a drill the user has since disabled — or a module they've
- * removed from Session Composition — would be a dead end. Memory practice runs
- * from its own tab, so it's always runnable regardless of session composition.
+ * removed from Session Composition — would be a dead end.
+ *
+ * Three gates, checked in order (issue #3252):
+ *   1. The drill's practice TOPIC — off means off everywhere, including the
+ *      standalone surfaces (Memory, Morse) that session composition never gated.
+ *   2. Module-specific participation — `memory` and `morse` run from their own
+ *      tabs, so `sessionModules` doesn't apply to them; memory additionally
+ *      honors the per-ITEM toggle when the caller knows which item is involved.
+ *   3. Session composition + the per-module/per-drill `enabled` flags.
+ *
+ * `memoryItemId` is only meaningful for `module === 'memory'`; absent means
+ * "no specific item", which is never filtered.
  * Pure — exported for unit tests.
  */
-export function isRecDrillRunnable(config, module, type) {
-  if (module === 'memory') return true;
+export function isRecDrillRunnable(config, module, type, memoryItemId = null) {
+  // An unmapped drill type has no topic — treat it as not topic-gated rather
+  // than disabled, so a type added ahead of its registry entry still surfaces.
+  const topic = resolveTopicForDrillType(type);
+  if (topic && !isTopicEnabled(config, topic.id)) return false;
+
+  if (module === 'memory') {
+    if (config?.memory?.enabled === false) return false;
+    const dt = config?.memory?.drillTypes?.[type];
+    if (dt && dt.enabled === false) return false;
+    return isMemoryItemEnabled(config, memoryItemId);
+  }
+  // Morse isn't a POST module (it never posts a scored task), so it is gated by
+  // its own block alone — never by sessionModules, which can't contain it.
+  if (module === 'morse') return config?.morse?.enabled !== false;
+
   const sm = Array.isArray(config?.sessionModules) ? config.sessionModules : null;
   // null = legacy/absent → all modules allowed; an explicit array must include it.
   if (sm !== null && !sm.includes(module)) return false;
@@ -1152,19 +1193,36 @@ export async function getPostRecommendations({ limit = RECOMMENDATION_LIMIT } = 
       : null;
   }
 
-  // Stalled progressions — keep Morse (runs from its own tab) and any ladder
-  // whose drill is still runnable under the current config.
+  // Due memory items — drop the ones the user has switched off for the daily
+  // rotation (issue #3252). The item keeps its mastery/schedule history and is
+  // still practiceable on demand from its own page; it just stops being
+  // recommended. getDueMemoryItems() itself stays unfiltered — it also backs the
+  // Memory tab's own list.
+  const enabledDueMemoryItems = dueMemoryItems
+    .filter(item => isRecDrillRunnable(config, 'memory', 'memory-sequence', item.id));
+
+  // Memory chunk re-verifications point at a specific item too, so a disabled
+  // item shouldn't surface one. Non-memory reviews pass through untouched.
+  const enabledDueReviews = dueReviews.filter(review => review.kind !== 'memory'
+    || isRecDrillRunnable(config, 'memory', review.drillType || 'memory-sequence', memoryItemIdFromReview(review)));
+
+  // Stalled progressions — Morse runs from its own tab (so it's gated by its own
+  // topic/config block rather than session composition), and any ladder whose
+  // drill is still runnable under the current config.
   const stalled = stalledProgressions(mulProgress, cogProgress, {
     kochLevel: morse?.kochLevel,
     kochLevelSet: morse?.kochLevelSet,
     maxKochLevel: MAX_KOCH_LEVEL,
-  }).filter(s => s.drillType === 'morse-copy'
-    || isRecDrillRunnable(config, s.drillType === 'multiplication' ? 'mental-math' : 'cognitive', s.drillType));
+  }).filter(s => isRecDrillRunnable(
+    config,
+    s.drillType === 'morse-copy' ? 'morse' : s.drillType === 'multiplication' ? 'mental-math' : 'cognitive',
+    s.drillType,
+  ));
 
   return {
     recommendations: composePostRecommendations({
-      dueMemoryItems,
-      dueReviews,
+      dueMemoryItems: enabledDueMemoryItems,
+      dueReviews: enabledDueReviews,
       weakestSkill,
       stalled,
       hasHistory: sessions.length > 0,

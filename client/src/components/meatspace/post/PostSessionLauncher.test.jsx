@@ -406,3 +406,91 @@ describe('PostSessionLauncher — Start card (issue #3249)', () => {
     expect(screen.getByPlaceholderText('good/poor').value).toBe('poor');
   });
 });
+
+// Practice-topic gating (issue #3252). The four fine-grained domains that
+// collapse into the single `llm-drills` module could not be separated by the
+// coarse sessionModules filter — "Wordplay only" meant unchecking eight drill
+// types by hand. A topic toggle now does it in one move.
+describe('PostSessionLauncher topic gating (issue #3252)', () => {
+  const llmConfig = (topics) => ({
+    mentalMath: { enabled: true, drillTypes: {} },
+    llmDrills: {
+      enabled: true,
+      drillTypes: {
+        'pun-wordplay': { enabled: true, count: 5 },
+        'bridge-word': { enabled: true, count: 5 },
+        'wit-comeback': { enabled: true, count: 5 },
+        'what-if': { enabled: true, count: 5 },
+      },
+    },
+    cognitive: { enabled: false, drillTypes: {} },
+    sessionModules: ['llm-drills'],
+    ...(topics ? { topics } : {}),
+  });
+
+  const renderWith = (config, onStart) => render(
+    <MemoryRouter>
+      <PostSessionLauncher
+        config={config}
+        recentSessions={[]}
+        stats={{ sessionCount: 1, overall: 70, currentStreak: 1, longestStreak: 1, byDrill: {} }}
+        statsWeek={{ sessionCount: 1 }}
+        onStart={onStart}
+        onViewHistory={vi.fn()}
+        onViewConfig={vi.fn()}
+        onViewMemory={vi.fn()}
+        onViewMorse={vi.fn()}
+      />
+    </MemoryRouter>,
+  );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getPostRecommendations.mockResolvedValue({ recommendations: [] });
+    getPostReviewReps.mockResolvedValue({ reps: [] });
+    getMorseProgress.mockResolvedValue({ settings: { wpm: 18, farnsworthWpm: 12 } });
+    getPostProgress.mockResolvedValue({ series: { byDay: [] } });
+  });
+
+  it('composes every llm-drills topic when no topics key is set (legacy config)', async () => {
+    const onStart = vi.fn();
+    renderWith(llmConfig(null), onStart);
+    await waitFor(() => expect(screen.getByText('Full POST')).toBeTruthy());
+    fireEvent.click(screen.getByText('Full POST'));
+
+    const types = onStart.mock.calls[0][0].map(d => d.type).sort();
+    expect(types).toEqual(['bridge-word', 'pun-wordplay', 'what-if', 'wit-comeback']);
+  });
+
+  it('composes ONLY wordplay drills when the sibling llm topics are switched off', async () => {
+    const onStart = vi.fn();
+    renderWith(llmConfig({ verbal: { enabled: false }, imagination: { enabled: false } }), onStart);
+    await waitFor(() => expect(screen.getByText('Full POST')).toBeTruthy());
+    fireEvent.click(screen.getByText('Full POST'));
+
+    const types = onStart.mock.calls[0][0].map(d => d.type).sort();
+    expect(types).toEqual(['bridge-word', 'pun-wordplay']);
+  });
+
+  it('a disabled topic is excluded from Quick sessions too, not just Full POST', async () => {
+    const onStart = vi.fn();
+    // The Quick button only renders with ≥2 composable domains, so keep math in
+    // alongside wordplay while verbal/imagination are switched off.
+    renderWith({
+      ...llmConfig({ verbal: { enabled: false }, imagination: { enabled: false } }),
+      mentalMath: { enabled: true, drillTypes: { multiplication: { enabled: true, count: 10 } } },
+      sessionModules: ['mental-math', 'llm-drills'],
+    }, onStart);
+    // The label interpolates the domain count, so it spans multiple text nodes
+    // — query the button by accessible name, not by a text node.
+    const quick = await screen.findByRole('button', { name: /Quick 5 Min/ });
+    fireEvent.click(quick);
+
+    for (const drill of onStart.mock.calls[0][0]) {
+      expect(['pun-wordplay', 'bridge-word', 'multiplication']).toContain(drill.type);
+    }
+    // Quick picks one drill per domain — math and wordplay only, never the two
+    // switched-off llm topics.
+    expect(onStart.mock.calls[0][0].map(d => d.domain).sort()).toEqual(['math', 'wordplay']);
+  });
+});

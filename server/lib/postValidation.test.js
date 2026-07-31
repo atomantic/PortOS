@@ -12,6 +12,7 @@ import {
   POST_MODULES,
   POST_SUPPORTED_MEMORY_TYPES,
 } from './postValidation.js';
+import { getTopic } from './postTopics.js';
 
 describe('postConfigUpdateSchema llmDrills', () => {
   // Regression: the config UI (PostDrillConfig.jsx) exposed only 5 of the 14
@@ -482,5 +483,76 @@ describe('postSessionSubmitSchema client-generated id (issue #2098)', () => {
 
   it('rejects a non-uuid id', () => {
     expect(() => postSessionSubmitSchema.parse({ ...baseBody(), id: 'not-a-uuid' })).toThrow();
+  });
+});
+
+// Practice Plan config blocks (issue #3252). All three are additive: a config
+// saved by the pre-#3252 UI must still validate byte-for-byte unchanged, which
+// is what makes this shippable with no migration.
+// Sourced from the topic registry so this test can't drift from the enums the
+// schema actually validates against (postTopics.test.js asserts registry ↔ enum
+// parity, so registry order IS the enum content).
+const MATH_DRILL_TYPE_IDS = getTopic('math').drillTypes;
+const LLM_DRILL_TYPE_IDS = ['wordplay', 'verbal', 'imagination'].flatMap(id => getTopic(id).drillTypes);
+const COGNITIVE_DRILL_TYPE_IDS = getTopic('cognitive').drillTypes;
+
+describe('postConfigUpdateSchema topics/memory/morse (issue #3252)', () => {
+  it('accepts a topics map and preserves it', () => {
+    const parsed = postConfigUpdateSchema.parse({
+      topics: { wordplay: { enabled: true }, verbal: { enabled: false }, morse: {} }
+    });
+    expect(parsed.topics).toEqual({ wordplay: { enabled: true }, verbal: { enabled: false }, morse: {} });
+  });
+
+  it('rejects a topic id that is not in the registry', () => {
+    expect(() => postConfigUpdateSchema.parse({ topics: { 'not-a-topic': { enabled: false } } })).toThrow();
+  });
+
+  it('accepts a memory block with drill types and per-item flags', () => {
+    const parsed = postConfigUpdateSchema.parse({
+      memory: {
+        enabled: true,
+        drillTypes: { 'memory-sequence': { enabled: false } },
+        items: { 'elements-song': { enabled: false }, raven: { enabled: true } }
+      }
+    });
+    expect(parsed.memory.items['elements-song']).toEqual({ enabled: false });
+    expect(parsed.memory.drillTypes['memory-sequence']).toEqual({ enabled: false });
+  });
+
+  it('rejects a memory drill type that is not a memory drill', () => {
+    expect(() => postConfigUpdateSchema.parse({ memory: { drillTypes: { 'n-back': { enabled: false } } } })).toThrow();
+  });
+
+  it('accepts a morse participation toggle', () => {
+    expect(postConfigUpdateSchema.parse({ morse: { enabled: false } }).morse).toEqual({ enabled: false });
+  });
+
+  it('a memory patch may carry just the flag it changes (partialRecord, not exhaustive)', () => {
+    const parsed = postConfigUpdateSchema.parse({ memory: { drillTypes: { 'memory-sequence': { enabled: false } } } });
+    expect(Object.keys(parsed.memory.drillTypes)).toEqual(['memory-sequence']);
+  });
+
+  it('a legacy config with none of the three keys still validates unchanged', () => {
+    // The pre-#3252 UI's exact save shape: enum-keyed `z.record` is exhaustive
+    // in zod 4, so the module blocks carry a complete drillTypes map.
+    const fullMap = (types, entry) => Object.fromEntries(types.map(t => [t, { ...entry }]));
+    const legacy = {
+      mentalMath: { enabled: true, drillTypes: fullMap(MATH_DRILL_TYPE_IDS, { enabled: true, timeLimitSec: 60 }) },
+      llmDrills: { enabled: true, providerId: null, model: null, drillTypes: fullMap(LLM_DRILL_TYPE_IDS, { enabled: false, count: 5 }) },
+      cognitive: { enabled: true, drillTypes: fullMap(COGNITIVE_DRILL_TYPE_IDS, { enabled: true, progressive: true }) },
+      sessionModules: ['mental-math', 'cognitive'],
+      goals: { dailyMinutes: 20 },
+      scoring: { weights: { 'mental-math': 1 } },
+      adaptive: { enabled: false },
+      reminder: { enabled: true, time: '09:30' }
+    };
+    const parsed = postConfigUpdateSchema.parse(legacy);
+    expect(parsed).toEqual(legacy);
+    // No `topics` / `memory` / `morse` invented on the way through — absent
+    // stays absent, and absent means enabled. That is the no-migration promise.
+    expect(parsed.topics).toBeUndefined();
+    expect(parsed.memory).toBeUndefined();
+    expect(parsed.morse).toBeUndefined();
   });
 });

@@ -174,9 +174,12 @@ export const removeEyeExam = (index) => request(`/meatspace/eyes/${index}`, {
 
 // MeatSpace - POST (Power On Self Test)
 export const getPostConfig = () => request('/meatspace/post/config');
-export const updatePostConfig = (data) => request('/meatspace/post/config', {
+// `options` lets a caller that owns its own error UI pass `{ silent: true }` so
+// the failure only toasts once (see CLAUDE.md's silent-vs-toasting convention).
+export const updatePostConfig = (data, options = {}) => request('/meatspace/post/config', {
   method: 'PUT',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
 export const getPostSessions = (from, to) => {
   const params = new URLSearchParams();
@@ -229,7 +232,7 @@ export const fillPostDrillCache = (types, providerId, model) => request('/meatsp
 });
 
 // MeatSpace - POST Memory Builder
-export const getMemoryItems = () => request('/meatspace/post/memory-items');
+export const getMemoryItems = (options = {}) => request('/meatspace/post/memory-items', options);
 export const getMemoryItem = (id) => request(`/meatspace/post/memory-items/${id}`);
 export const createMemoryItem = (data) => request('/meatspace/post/memory-items', {
   method: 'POST',

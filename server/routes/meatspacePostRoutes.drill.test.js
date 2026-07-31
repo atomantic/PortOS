@@ -29,12 +29,15 @@ vi.mock('../services/meatspacePost.js', () => ({
   resolveDrillConfig: vi.fn(),
   generateDrill: vi.fn(),
   getPostReviewReps: vi.fn(),
+  // The memory branch reads the saved config to scope generateMemoryDrill's
+  // auto-picked item to the user's enabled Practice Plan topics (issue #3252).
+  getPostConfig: vi.fn(),
 }));
 
 import { getCachedDrill, triggerReplenish } from '../services/meatspacePostDrillCache.js';
 import { generateLlmDrill } from '../services/meatspacePostLlm.js';
 import { generateMemoryDrill } from '../services/meatspacePostMemory.js';
-import { resolveDrillConfig, generateDrill, getPostReviewReps } from '../services/meatspacePost.js';
+import { resolveDrillConfig, generateDrill, getPostReviewReps, getPostConfig } from '../services/meatspacePost.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import meatspacePostRoutes from './meatspacePostRoutes.js';
 
@@ -105,18 +108,26 @@ describe('POST /api/meatspace/post/drill', () => {
   describe('Memory drill types', () => {
     it('strips the memory- prefix into `mode` and forwards count/memoryItemId', async () => {
       const drill = { type: 'memory-sequence', memoryItemId: 'song-1', questions: [] };
+      const savedConfig = { memory: { items: { 'elements-song': { enabled: false } } } };
       generateMemoryDrill.mockResolvedValue(drill);
+      getPostConfig.mockResolvedValue(savedConfig);
 
       const r = await request(app).post('/api/meatspace/post/drill')
         .send({ type: 'memory-sequence', config: { count: 3, memoryItemId: 'song-1' } });
 
       expect(r.status).toBe(200);
       expect(r.body).toEqual(drill);
-      expect(generateMemoryDrill).toHaveBeenCalledWith({ mode: 'sequence', count: 3, memoryItemId: 'song-1' });
+      // The saved config rides along so the generator can scope its
+      // lowest-mastery candidate pool to enabled items (issue #3252).
+      expect(generateMemoryDrill).toHaveBeenCalledWith(
+        { mode: 'sequence', count: 3, memoryItemId: 'song-1' },
+        savedConfig,
+      );
     });
 
     it('throws MEMORY_DRILL_FAILED when no drill can be generated', async () => {
       generateMemoryDrill.mockResolvedValue(null);
+      getPostConfig.mockResolvedValue({});
 
       const r = await request(app).post('/api/meatspace/post/drill')
         .send({ type: 'memory-element-flash', config: {} });

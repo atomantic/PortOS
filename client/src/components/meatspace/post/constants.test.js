@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { computeDomainAverages, domainLabel, computeGoalProgress, hasGoals } from './constants';
+import {
+  computeDomainAverages, domainLabel, computeGoalProgress, hasGoals,
+  POST_TOPICS, DOMAINS, DRILL_TO_DOMAIN, composedSessionDrillTypes,
+  isTopicEnabled, isMemoryItemEnabled, resolveTopicForDrillType,
+} from './constants';
 
 describe('domainLabel', () => {
   it('maps known domain keys to their human label', () => {
@@ -104,5 +108,110 @@ describe('computeGoalProgress (issue #2100)', () => {
   it('returns no rows for absent goals', () => {
     expect(computeGoalProgress({}, { currentStreak: 5 })).toEqual([]);
     expect(computeGoalProgress(undefined, {})).toEqual([]);
+  });
+});
+
+// Practice-topic registry (issue #3252). DOMAINS is now DERIVED from POST_TOPICS
+// rather than hand-maintained, so these lock in that the derivation reproduces
+// exactly what the launcher has always composed from.
+describe('POST_TOPICS → DOMAINS derivation (issue #3252)', () => {
+  it('derives exactly the six scored domains, in order — Morse is not a domain', () => {
+    expect(Object.keys(DOMAINS)).toEqual(['math', 'memory', 'wordplay', 'verbal', 'imagination', 'cognitive']);
+    expect(DOMAINS.morse).toBeUndefined();
+  });
+
+  it('keeps each domain\'s presentation fields', () => {
+    for (const [key, domain] of Object.entries(DOMAINS)) {
+      expect(domain.label, key).toBeTruthy();
+      expect(domain.icon, key).toBeTruthy();
+      expect(domain.color, key).toMatch(/^text-/);
+      expect(domain.timeBudgetSec, key).toBeGreaterThan(0);
+    }
+  });
+
+  it('excludes drill types the session picker cannot run', () => {
+    // memory-fill-blank belongs to the memory TOPIC (it has a config block) but
+    // is not offered by the session picker — DOMAINS must not gain it.
+    expect(POST_TOPICS.find(t => t.id === 'memory').drillTypes).toContain('memory-fill-blank');
+    expect(DOMAINS.memory.drillTypes).toEqual(['memory-sequence', 'memory-element-flash']);
+    expect(DRILL_TO_DOMAIN['memory-fill-blank']).toBeUndefined();
+  });
+
+  it('maps every domain drill type back to its domain', () => {
+    for (const [key, domain] of Object.entries(DOMAINS)) {
+      for (const type of domain.drillTypes) expect(DRILL_TO_DOMAIN[type]).toBe(key);
+    }
+  });
+});
+
+describe('composedSessionDrillTypes (issue #3252)', () => {
+  const config = {
+    mentalMath: { enabled: true, drillTypes: { multiplication: { enabled: true }, powers: { enabled: false } } },
+    llmDrills: { enabled: true, drillTypes: { 'pun-wordplay': { enabled: true }, 'wit-comeback': {} } },
+    cognitive: { enabled: true, drillTypes: { 'n-back': { enabled: true } } },
+  };
+
+  it('groups the drills a composed session would run, by topic', () => {
+    expect(composedSessionDrillTypes(config)).toEqual({
+      math: ['multiplication'],
+      // `wit-comeback` has no `enabled` field — LLM drills are opt-OUT, so it runs.
+      wordplay: ['pun-wordplay'],
+      verbal: ['wit-comeback'],
+      cognitive: ['n-back'],
+    });
+  });
+
+  it('math drills are opt-IN: an entry with no `enabled` field does not run', () => {
+    const out = composedSessionDrillTypes({ mentalMath: { drillTypes: { multiplication: {} } } });
+    expect(out.math).toBeUndefined();
+  });
+
+  it('drops a topic the user switched off, keeping its module siblings', () => {
+    const out = composedSessionDrillTypes({ ...config, topics: { verbal: { enabled: false } } });
+    expect(out.wordplay).toEqual(['pun-wordplay']);
+    expect(out.verbal).toBeUndefined();
+  });
+
+  it('still honors the coarse sessionModules filter', () => {
+    const out = composedSessionDrillTypes({ ...config, sessionModules: ['mental-math'] });
+    expect(Object.keys(out)).toEqual(['math']);
+  });
+
+  it('never includes a standalone topic (memory / morse)', () => {
+    const out = composedSessionDrillTypes({
+      ...config,
+      memory: { enabled: true, drillTypes: { 'memory-sequence': { enabled: true } } },
+      morse: { enabled: true },
+    });
+    expect(out.memory).toBeUndefined();
+    expect(out.morse).toBeUndefined();
+  });
+});
+
+describe('isTopicEnabled / isMemoryItemEnabled client mirrors', () => {
+  it('absent = enabled, so a legacy config runs everything', () => {
+    expect(isTopicEnabled({}, 'wordplay')).toBe(true);
+    expect(isMemoryItemEnabled({}, 'elements-song')).toBe(true);
+  });
+
+  it('only an explicit false disables', () => {
+    expect(isTopicEnabled({ topics: { wordplay: { enabled: false } } }, 'wordplay')).toBe(false);
+    expect(isMemoryItemEnabled({ memory: { items: { 'elements-song': { enabled: false } } } }, 'elements-song')).toBe(false);
+  });
+
+  it('a disabled memory topic disables every item under it', () => {
+    expect(isMemoryItemEnabled({ topics: { memory: { enabled: false } } }, 'raven')).toBe(false);
+  });
+});
+
+describe('resolveTopicForDrillType client mirror', () => {
+  it('splits the llm-drills module into its three topics', () => {
+    expect(resolveTopicForDrillType('bridge-word').id).toBe('wordplay');
+    expect(resolveTopicForDrillType('story-recall').id).toBe('verbal');
+    expect(resolveTopicForDrillType('reframe').id).toBe('imagination');
+  });
+
+  it('returns null for an unmapped type', () => {
+    expect(resolveTopicForDrillType('nope')).toBeNull();
   });
 });

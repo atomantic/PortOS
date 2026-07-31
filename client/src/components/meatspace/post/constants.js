@@ -33,57 +33,125 @@ export function countLlmCorrect(scoredResponses = []) {
   return scoredResponses.filter(r => (r?.llmScore ?? r?.score ?? 0) >= LLM_TRAINING_CORRECT_THRESHOLD).length;
 }
 
-// Domain definitions for 5-minute balanced sessions
-export const DOMAINS = {
-  math: {
+// ---------------------------------------------------------------------------
+// Practice topics (issue #3252)
+// ---------------------------------------------------------------------------
+// MIRROR of server/lib/postTopics.js `POST_TOPICS` — the single source of truth
+// for "what am I actually studying?". Keep the two identical: id / label /
+// module / surface / drillTypes are asserted field-for-field by
+// server/lib/postTopics.mirror.test.js, which imports THIS file.
+//
+// Only the plain registry data lives here; the UI-only presentation (icon,
+// color, per-domain time budget) is layered on in TOPIC_UI below, so a topic
+// added server-side shows up here as soon as its UI row is filled in.
+export const POST_TOPICS = [
+  {
+    id: 'math',
     label: 'Mental Math',
-    icon: 'Calculator',
-    color: 'text-blue-400',
-    bgColor: 'bg-blue-500/20',
-    timeBudgetSec: 60,
+    module: 'mental-math',
+    surface: 'session',
     drillTypes: ['doubling-chain', 'serial-subtraction', 'multiplication', 'powers', 'estimation'],
   },
-  memory: {
+  {
+    id: 'memory',
     label: 'Memory',
-    icon: 'BookOpen',
-    color: 'text-green-400',
-    bgColor: 'bg-green-500/20',
-    timeBudgetSec: 90,
-    drillTypes: ['memory-sequence', 'memory-element-flash'],
+    module: 'memory',
+    surface: 'standalone',
+    drillTypes: ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'],
   },
-  wordplay: {
+  {
+    id: 'wordplay',
     label: 'Wordplay',
-    icon: 'MessageCircle',
-    color: 'text-purple-400',
-    bgColor: 'bg-purple-500/20',
-    timeBudgetSec: 60,
+    module: 'llm-drills',
+    surface: 'session',
     drillTypes: ['pun-wordplay', 'word-association', 'compound-chain', 'bridge-word', 'double-meaning', 'idiom-twist'],
   },
-  verbal: {
+  {
+    id: 'verbal',
     label: 'Verbal Agility',
-    icon: 'Mic',
-    color: 'text-amber-400',
-    bgColor: 'bg-amber-500/20',
-    timeBudgetSec: 60,
+    module: 'llm-drills',
+    surface: 'session',
     drillTypes: ['story-recall', 'verbal-fluency', 'wit-comeback'],
   },
-  imagination: {
+  {
+    id: 'imagination',
     label: 'Imagination',
-    icon: 'Sparkles',
-    color: 'text-cyan-400',
-    bgColor: 'bg-cyan-500/20',
-    timeBudgetSec: 60,
+    module: 'llm-drills',
+    surface: 'session',
     drillTypes: ['what-if', 'alternative-uses', 'story-prompt', 'invention-pitch', 'reframe'],
   },
-  cognitive: {
+  {
+    id: 'cognitive',
     label: 'Cognitive',
-    icon: 'Brain',
-    color: 'text-rose-400',
-    bgColor: 'bg-rose-500/20',
-    timeBudgetSec: 90,
+    module: 'cognitive',
+    surface: 'session',
     drillTypes: ['n-back', 'digit-span', 'stroop', 'schulte-table', 'mental-rotation', 'reaction-time'],
   },
+  {
+    id: 'morse',
+    label: 'Morse',
+    module: null,
+    surface: 'standalone',
+    drillTypes: ['morse-copy', 'morse-head-copy', 'morse-send'],
+  },
+];
+
+export const TOPIC_IDS = POST_TOPICS.map(t => t.id);
+
+// Per-topic presentation. `timeBudgetSec` is only meaningful for topics that
+// compose into a session (it sizes the drill's slice of a 5-minute Quick run);
+// Morse carries none because it never composes.
+export const TOPIC_UI = {
+  math: { icon: 'Calculator', color: 'text-blue-400', bgColor: 'bg-blue-500/20', timeBudgetSec: 60 },
+  memory: { icon: 'BookOpen', color: 'text-green-400', bgColor: 'bg-green-500/20', timeBudgetSec: 90 },
+  wordplay: { icon: 'MessageCircle', color: 'text-purple-400', bgColor: 'bg-purple-500/20', timeBudgetSec: 60 },
+  verbal: { icon: 'Mic', color: 'text-amber-400', bgColor: 'bg-amber-500/20', timeBudgetSec: 60 },
+  imagination: { icon: 'Sparkles', color: 'text-cyan-400', bgColor: 'bg-cyan-500/20', timeBudgetSec: 60 },
+  cognitive: { icon: 'Brain', color: 'text-rose-400', bgColor: 'bg-rose-500/20', timeBudgetSec: 90 },
+  morse: { icon: 'Radio', color: 'text-sky-400', bgColor: 'bg-sky-500/20' },
 };
+
+/** The topic that owns a drill type, or `null` for an unmapped/legacy type. */
+export function resolveTopicForDrillType(type) {
+  return POST_TOPICS.find(t => t.drillTypes.includes(type)) || null;
+}
+
+/**
+ * Whether a topic participates in composition/recommendations under `config`.
+ * MIRRORS the server's `isTopicEnabled` — absent entry = enabled, so a config
+ * that predates the `topics` key behaves exactly as it did before.
+ */
+export function isTopicEnabled(config, topicId) {
+  if (!topicId) return true;
+  return config?.topics?.[topicId]?.enabled !== false;
+}
+
+/**
+ * MIRRORS the server's `isMemoryItemEnabled` — a per-item opt-out that keeps the
+ * item's mastery/schedule history and its own practice page, and only removes it
+ * from the automatic rotation.
+ */
+export function isMemoryItemEnabled(config, itemId) {
+  if (!itemId) return true;
+  if (!isTopicEnabled(config, 'memory')) return false;
+  return config?.memory?.items?.[itemId]?.enabled !== false;
+}
+
+// Domain definitions for 5-minute balanced sessions — DERIVED from POST_TOPICS
+// so the domain list has exactly one owner. A POST *domain* is a topic that
+// reports a coarse module (i.e. can produce a scored POST task); Morse has a
+// null module and is therefore not a domain. Drill types the session picker
+// can't run yet (POST_UNSUPPORTED_DRILL_TYPES) are filtered out here, so
+// DOMAINS keeps exactly the drill lists the launcher has always composed from.
+export const DOMAINS = Object.fromEntries(
+  POST_TOPICS
+    .filter(t => t.module)
+    .map(t => [t.id, {
+      label: t.label,
+      ...TOPIC_UI[t.id],
+      drillTypes: t.drillTypes.filter(dt => !POST_UNSUPPORTED_DRILL_TYPES.includes(dt)),
+    }])
+);
 
 // Map drill type → domain key
 export const DRILL_TO_DOMAIN = {};
@@ -91,6 +159,55 @@ for (const [domainKey, domain] of Object.entries(DOMAINS)) {
   for (const dt of domain.drillTypes) {
     DRILL_TO_DOMAIN[dt] = domainKey;
   }
+}
+
+// Coarse module → the config block that carries its per-drill `enabled` flags.
+// Mirrors the server's MODULE_CONFIG_KEY (meatspacePost.js), extended with
+// `memory` now that it has a real config block (issue #3252).
+export const MODULE_CONFIG_KEY = {
+  'mental-math': 'mentalMath',
+  'llm-drills': 'llmDrills',
+  cognitive: 'cognitive',
+  memory: 'memory',
+};
+
+/** Whether a coarse module passes the `sessionModules` composition filter. */
+export function isModuleInSession(config, module) {
+  const sm = Array.isArray(config?.sessionModules) ? config.sessionModules : null;
+  // null = legacy/absent → all modules allowed; an explicit array (INCLUDING an
+  // empty one) is honored as-is.
+  return sm === null || sm.includes(module);
+}
+
+/**
+ * The drill types a Full/Quick composed session would actually run right now,
+ * grouped by topic id — the data behind the Practice Plan's "your daily POST
+ * will include…" summary (issue #3252).
+ *
+ * MIRRORS PostSessionLauncher's filter chain, in the same order: topic enabled →
+ * `sessionModules` → module `enabled` → per-drill `enabled`. It iterates the
+ * SAVED config's `drillTypes` entries (not the registry's full list) for the
+ * same reason the launcher does: a drill type absent from the config was never
+ * offered by the launcher either, so the preview must not invent it. Math drills
+ * are opt-IN (`enabled` truthy) while LLM/cognitive/memory are opt-OUT
+ * (`enabled !== false`) — again matching the launcher exactly.
+ */
+export function composedSessionDrillTypes(config) {
+  const out = {};
+  for (const topic of POST_TOPICS) {
+    if (topic.surface !== 'session' || !topic.module) continue;
+    if (!isTopicEnabled(config, topic.id)) continue;
+    if (!isModuleInSession(config, topic.module)) continue;
+    const mod = config?.[MODULE_CONFIG_KEY[topic.module]];
+    if (!mod || mod.enabled === false) continue;
+    const types = topic.drillTypes.filter((t) => {
+      const cfg = mod.drillTypes?.[t];
+      if (!cfg) return false;
+      return topic.module === 'mental-math' ? !!cfg.enabled : cfg.enabled !== false;
+    });
+    if (types.length) out[topic.id] = types;
+  }
+  return out;
 }
 
 // Human-readable labels for all drill types

@@ -376,6 +376,53 @@ describe('generateMemoryDrill', () => {
     const drill = await generateMemoryDrill({ mode: 'sequence', count: 1 });
     expect(drill.memoryItemId).toBe('b');
   });
+
+  // Practice Plan per-item participation (issue #3252). A user who doesn't want
+  // a memorized text in the daily rotation switches it off instead of deleting
+  // it — deletion would throw away its mastery/schedule history.
+  describe('enabled-item candidate pool', () => {
+    const THREE_ITEMS = {
+      items: [
+        { ...ELEMENTS_SONG, mastery: { overallPct: 5, chunks: {}, elements: {} } },
+        { id: 'a', title: 'A', type: 'text', builtin: false, mastery: { overallPct: 90, chunks: {}, elements: {} }, content: { lines: [{ text: 'Line 1' }, { text: 'Line 2' }, { text: 'Line 3' }], chunks: [] } },
+        { id: 'b', title: 'B', type: 'text', builtin: false, mastery: { overallPct: 40, chunks: {}, elements: {} }, content: { lines: [{ text: 'Line A' }, { text: 'Line B' }, { text: 'Line C' }], chunks: [] } },
+      ]
+    };
+
+    it('skips a disabled item when auto-picking the lowest-mastery target', async () => {
+      readJSONFile.mockResolvedValue(THREE_ITEMS);
+      // elements-song has the lowest mastery, so it would win — but it's off.
+      const drill = await generateMemoryDrill(
+        { mode: 'sequence', count: 1 },
+        { memory: { items: { 'elements-song': { enabled: false } } } },
+      );
+      expect(drill.memoryItemId).toBe('b');
+    });
+
+    it('still honors an EXPLICIT memoryItemId for a disabled item (its own page)', async () => {
+      readJSONFile.mockResolvedValue(THREE_ITEMS);
+      const drill = await generateMemoryDrill(
+        { mode: 'sequence', count: 1, memoryItemId: 'elements-song' },
+        { memory: { items: { 'elements-song': { enabled: false } } } },
+      );
+      expect(drill.memoryItemId).toBe('elements-song');
+    });
+
+    it('falls back to every item when the plan leaves none enabled', async () => {
+      readJSONFile.mockResolvedValue(THREE_ITEMS);
+      const drill = await generateMemoryDrill(
+        { mode: 'sequence', count: 1 },
+        { topics: { memory: { enabled: false } } },
+      );
+      expect(drill.memoryItemId).toBe('elements-song');
+    });
+
+    it('behaves exactly as before when no config is passed (legacy callers)', async () => {
+      readJSONFile.mockResolvedValue(THREE_ITEMS);
+      const drill = await generateMemoryDrill({ mode: 'sequence', count: 1 });
+      expect(drill.memoryItemId).toBe('elements-song');
+    });
+  });
 });
 
 // =============================================================================

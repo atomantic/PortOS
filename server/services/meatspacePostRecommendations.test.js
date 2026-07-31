@@ -165,6 +165,46 @@ describe('isRecDrillRunnable (issue #2100)', () => {
   });
 });
 
+describe('isRecDrillRunnable topic/standalone gating (issue #3252)', () => {
+  it('a disabled TOPIC blocks its drills even when the module is allowed', () => {
+    const config = { sessionModules: ['cognitive'], topics: { cognitive: { enabled: false } } };
+    expect(isRecDrillRunnable(config, 'cognitive', 'n-back')).toBe(false);
+  });
+
+  it('topic granularity splits the three llm-drills topics apart', () => {
+    // wordplay / verbal / imagination all collapse into `llm-drills`, so only a
+    // topic-level gate can express "wordplay only".
+    const config = { sessionModules: ['llm-drills'], topics: { verbal: { enabled: false }, imagination: { enabled: false } } };
+    expect(isRecDrillRunnable(config, 'llm-drills', 'bridge-word')).toBe(true);
+    expect(isRecDrillRunnable(config, 'llm-drills', 'wit-comeback')).toBe(false);
+    expect(isRecDrillRunnable(config, 'llm-drills', 'what-if')).toBe(false);
+  });
+
+  it('morse is gated by its own block, never by sessionModules (it is not a POST module)', () => {
+    expect(isRecDrillRunnable({ sessionModules: ['mental-math'] }, 'morse', 'morse-copy')).toBe(true);
+    expect(isRecDrillRunnable({ morse: { enabled: false } }, 'morse', 'morse-copy')).toBe(false);
+    expect(isRecDrillRunnable({ topics: { morse: { enabled: false } } }, 'morse', 'morse-copy')).toBe(false);
+  });
+
+  it('memory honors the module block, the drill type, and the per-ITEM toggle', () => {
+    expect(isRecDrillRunnable({ memory: { enabled: false } }, 'memory', 'memory-sequence')).toBe(false);
+    expect(isRecDrillRunnable({ memory: { drillTypes: { 'memory-sequence': { enabled: false } } } }, 'memory', 'memory-sequence')).toBe(false);
+    const perItem = { memory: { items: { 'elements-song': { enabled: false } } } };
+    expect(isRecDrillRunnable(perItem, 'memory', 'memory-sequence', 'elements-song')).toBe(false);
+    expect(isRecDrillRunnable(perItem, 'memory', 'memory-sequence', 'raven')).toBe(true);
+    // No item id supplied → nothing to filter on.
+    expect(isRecDrillRunnable(perItem, 'memory', 'memory-sequence')).toBe(true);
+  });
+
+  it('a legacy config with no topics/memory/morse keys runs everything (no migration)', () => {
+    const legacy = { sessionModules: ['mental-math', 'cognitive', 'llm-drills', 'memory'] };
+    expect(isRecDrillRunnable(legacy, 'memory', 'memory-sequence', 'elements-song')).toBe(true);
+    expect(isRecDrillRunnable(legacy, 'morse', 'morse-copy')).toBe(true);
+    expect(isRecDrillRunnable(legacy, 'llm-drills', 'wit-comeback')).toBe(true);
+    expect(isRecDrillRunnable(legacy, 'cognitive', 'n-back')).toBe(true);
+  });
+});
+
 describe('getPostRecommendations config filtering (issue #2100)', () => {
   it('drops a weakest-skill rec for a drill excluded from session composition', async () => {
     // History makes n-back the weakest skill, but the config excludes cognitive
@@ -176,6 +216,54 @@ describe('getPostRecommendations config filtering (issue #2100)', () => {
     }];
     const { recommendations } = await getPostRecommendations();
     expect(recommendations.some(r => r.kind === 'weak-skill')).toBe(false);
+  });
+});
+
+describe('getPostRecommendations topic/item filtering (issue #3252)', () => {
+  const dueItem = (id, title) => ({
+    id, title, type: 'song', content: { chunks: [] },
+    schedule: { ease: 2.5, intervalDays: 1, nextReview: new Date(Date.now() - 86400000).toISOString() },
+    mastery: { overallPct: 40, chunks: {} },
+  });
+
+  it('drops a due memory item the user switched off, keeping its siblings', async () => {
+    state.memoryItems = [dueItem('elements-song', 'The Elements'), dueItem('raven', 'The Raven')];
+    state.config = { memory: { items: { 'elements-song': { enabled: false } } } };
+
+    const { recommendations } = await getPostRecommendations();
+    const dueIds = recommendations.filter(r => r.kind === 'memory-due').map(r => r.id);
+    expect(dueIds).toContain('memory-due:raven');
+    expect(dueIds).not.toContain('memory-due:elements-song');
+  });
+
+  it('a disabled memory TOPIC drops every due item', async () => {
+    state.memoryItems = [dueItem('elements-song', 'The Elements'), dueItem('raven', 'The Raven')];
+    state.config = { topics: { memory: { enabled: false } } };
+
+    const { recommendations } = await getPostRecommendations();
+    expect(recommendations.some(r => r.kind === 'memory-due')).toBe(false);
+  });
+
+  it('keeps every due item under a legacy config with no memory block', async () => {
+    state.memoryItems = [dueItem('elements-song', 'The Elements'), dueItem('raven', 'The Raven')];
+    state.config = {};
+
+    const { recommendations } = await getPostRecommendations();
+    const dueIds = recommendations.filter(r => r.kind === 'memory-due').map(r => r.id);
+    expect(dueIds).toEqual(expect.arrayContaining(['memory-due:elements-song', 'memory-due:raven']));
+  });
+
+  it('suppresses the morse-copy stalled rec when Morse is switched off', async () => {
+    // Mid-Koch progression: the stalled-progression rec fires for a user who has
+    // engaged with Morse and isn't at the final level.
+    state.morse = { kochLevel: 5, kochLevelSet: true, settings: null, rounds: [] };
+    state.config = {};
+    const before = await getPostRecommendations();
+    expect(before.recommendations.some(r => r.drillType === 'morse-copy')).toBe(true);
+
+    state.config = { morse: { enabled: false } };
+    const after = await getPostRecommendations();
+    expect(after.recommendations.some(r => r.drillType === 'morse-copy')).toBe(false);
   });
 });
 

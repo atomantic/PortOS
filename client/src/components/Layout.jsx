@@ -350,6 +350,7 @@ const navItems = [
       { to: '/post/launcher', label: 'Launcher', icon: Play },
       { to: '/post/memory', label: 'Memory', icon: Brain },
       { to: '/post/morse', label: 'Morse', icon: Radio },
+      { to: '/post/plan', label: 'Practice Plan', icon: ListChecks },
       { to: '/post/progress', label: 'Progress', icon: TrendingUp },
       { to: '/post/wordplay', label: 'Wordplay', icon: MessageCircle },
     ],

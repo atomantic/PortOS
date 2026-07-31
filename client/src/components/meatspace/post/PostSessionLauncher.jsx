@@ -4,7 +4,7 @@ import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer, Radio, 
 import { getProviders, getPostReviewReps, getPostRecommendations, getMorseProgress, getPostProgress } from '../../../services/api';
 import { FormField } from '../../ui/FormField';
 import { isApiProvider } from '../../../utils/providers';
-import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS, computeDomainAverages, computeGoalProgress } from './constants';
+import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS, computeDomainAverages, computeGoalProgress, isTopicEnabled, resolveTopicForDrillType } from './constants';
 import { streakGlyph } from '../../../lib/streakGlyph.js';
 import useUserTimezone from '../../../hooks/useUserTimezone.js';
 import { todayKeyInTimezone } from '../../../utils/timezone.js';
@@ -144,11 +144,19 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   const todaySession = recentSessions?.find(s => s.date === today);
   const lastThree = (recentSessions || []).slice(-3).reverse();
 
+  // Practice-topic gate (issue #3252). Applied at the SOURCE of every enabled-
+  // drill list so a switched-off topic disappears from composed sessions, Quick
+  // sessions, domain-focus practice, and the "Up next" actions alike — that's
+  // what makes "only Wordplay" a single toggle instead of unchecking eight
+  // individual LLM drill types. A drill type with no registry entry has no topic
+  // and is never gated.
+  const topicAllowed = (type) => isTopicEnabled(config, resolveTopicForDrillType(type)?.id);
+
   const enabledMathDrills = Object.entries(config.mentalMath?.drillTypes || {})
-    .filter(([, cfg]) => cfg.enabled);
+    .filter(([type, cfg]) => cfg.enabled && topicAllowed(type));
 
   const enabledLlmDrills = config.llmDrills?.enabled !== false
-    ? Object.entries(config.llmDrills?.drillTypes || {}).filter(([, cfg]) => cfg.enabled !== false)
+    ? Object.entries(config.llmDrills?.drillTypes || {}).filter(([type, cfg]) => cfg.enabled !== false && topicAllowed(type))
     : [];
 
   const llmProviderId = config.llmDrills?.providerId || null;
@@ -156,7 +164,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
 
   // Deterministic cognitive drills (n-back / digit-span / stroop). No provider.
   const enabledCognitiveDrills = config.cognitive?.enabled !== false
-    ? Object.entries(config.cognitive?.drillTypes || {}).filter(([, cfg]) => cfg.enabled !== false)
+    ? Object.entries(config.cognitive?.drillTypes || {}).filter(([type, cfg]) => cfg.enabled !== false && topicAllowed(type))
     : [];
 
   // Only the fields each cognitive generator reads; extras are harmless.

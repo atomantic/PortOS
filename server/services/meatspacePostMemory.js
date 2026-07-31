@@ -9,6 +9,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { shuffle } from '../lib/arrayUtils.js';
+import { isMemoryItemEnabled } from '../lib/postTopics.js';
 import { userLocalToday } from '../lib/timezone.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
@@ -697,8 +698,16 @@ export async function getTrainingLog(memoryItemId, limit = 50) {
  * Picks the memory item with the lowest mastery (or user-configured item)
  * and creates a fill-in-the-blank or sequence recall exercise.
  * Uses spaced repetition: focuses on lowest-mastery chunks.
+ *
+ * `postConfig` (the saved POST config) scopes the automatic lowest-mastery
+ * candidate pool to items the user hasn't switched off in their Practice Plan
+ * (issue #3252). An EXPLICIT `config.memoryItemId` always wins — a disabled item
+ * stays practiceable on demand from its own page, it just isn't auto-picked.
+ * When every item is disabled the pool falls back to all of them rather than
+ * failing the drill: a composed session that asked for a memory drill should
+ * still get one.
  */
-export async function generateMemoryDrill(config = {}) {
+export async function generateMemoryDrill(config = {}, postConfig = null) {
   const items = await loadMemoryItems();
   if (!items.length) return null;
 
@@ -708,7 +717,9 @@ export async function generateMemoryDrill(config = {}) {
     item = items.find(i => i.id === config.memoryItemId);
   }
   if (!item) {
-    item = items.reduce((lowest, i) => i.mastery.overallPct < lowest.mastery.overallPct ? i : lowest, items[0]);
+    const enabled = items.filter(i => isMemoryItemEnabled(postConfig, i.id));
+    const pool = enabled.length ? enabled : items;
+    item = pool.reduce((lowest, i) => i.mastery.overallPct < lowest.mastery.overallPct ? i : lowest, pool[0]);
   }
 
   const mode = config.mode || 'fill-blank';
