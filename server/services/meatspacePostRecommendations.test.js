@@ -253,6 +253,49 @@ describe('getPostRecommendations topic/item filtering (issue #3252)', () => {
     expect(dueIds).toEqual(expect.arrayContaining(['memory-due:elements-song', 'memory-due:raven']));
   });
 
+  // Regression: the due-item filter used to probe isRecDrillRunnable with a
+  // hardcoded 'memory-sequence', so switching off that ONE practice mode blanked
+  // the entire spaced-repetition feed — including items whose recs deep-link to
+  // `spaced` / `element-flash` and never run memory-sequence at all.
+  it('keeps due items when a single memory DRILL TYPE is switched off', async () => {
+    state.memoryItems = [dueItem('elements-song', 'The Elements'), dueItem('raven', 'The Raven')];
+    state.config = { memory: { drillTypes: { 'memory-sequence': { enabled: false } } } };
+
+    const { recommendations } = await getPostRecommendations();
+    const dueIds = recommendations.filter(r => r.kind === 'memory-due').map(r => r.id);
+    expect(dueIds).toEqual(expect.arrayContaining(['memory-due:elements-song', 'memory-due:raven']));
+  });
+
+  it('drops every due item when the memory MODULE is switched off', async () => {
+    state.memoryItems = [dueItem('elements-song', 'The Elements'), dueItem('raven', 'The Raven')];
+    state.config = { memory: { enabled: false } };
+
+    const { recommendations } = await getPostRecommendations();
+    expect(recommendations.some(r => r.kind === 'memory-due')).toBe(false);
+  });
+
+  // Due re-verifications are config-dependent recs like weakest-skill and
+  // stalled-progression, so they get the same gate — they used to pass through
+  // ungated, surfacing "Re-verify N-Back" for a topic the user had switched off
+  // while the stalled rec for that same ladder was correctly dropped.
+  it('drops a ladder re-verification whose topic is switched off', async () => {
+    state.reviewSchedule = {
+      skills: {
+        'n-back:L2': {
+          skillId: 'n-back:L2', kind: 'cognitive', drillType: 'n-back', label: 'N-Back level 2',
+          nextReview: new Date(Date.now() - 86400000).toISOString(), status: 'due',
+        },
+      },
+    };
+    state.config = {};
+    const before = await getPostRecommendations();
+    expect(before.recommendations.some(r => r.kind === 'skill-review')).toBe(true);
+
+    state.config = { topics: { cognitive: { enabled: false } } };
+    const after = await getPostRecommendations();
+    expect(after.recommendations.some(r => r.kind === 'skill-review')).toBe(false);
+  });
+
   it('suppresses the morse-copy stalled rec when Morse is switched off', async () => {
     // Mid-Koch progression: the stalled-progression rec fires for a user who has
     // engaged with Morse and isn't at the final level.

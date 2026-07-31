@@ -59,7 +59,19 @@ function ToggleRow({ id, label, hint, checked, disabled, onChange, indent = fals
 export default function PracticePlan({ config, onSaved, onBack }) {
   // Draft state seeded once from the loaded config — mirrors PostDrillConfig,
   // which is why PostTab only mounts this after the config resolves.
-  const [topics, setTopics] = useState(() => ({ ...(config?.topics || {}) }));
+  const [topics, setTopics] = useState(() => {
+    const seeded = { ...(config?.topics || {}) };
+    // Memory and Morse each have a module-level `enabled` flag AND a topic entry
+    // on the server, and this surface exposes ONE control that writes both. Seed
+    // the topic entry from the module flag when THAT is the one switched off, or
+    // a config carrying `morse: { enabled: false }` with no `topics.morse` would
+    // render as ON and the next Save — even one that only touched Wordplay —
+    // would silently switch Morse back on.
+    for (const id of ['memory', 'morse']) {
+      if (config?.[id]?.enabled === false) seeded[id] = { ...seeded[id], enabled: false };
+    }
+    return seeded;
+  });
   // Seeded with an entry for EVERY drill type the module owns, because the
   // config schema's enum-keyed drill-type records are exhaustive (zod 4) — a
   // partial map would 400 on save. A type absent from the saved config is

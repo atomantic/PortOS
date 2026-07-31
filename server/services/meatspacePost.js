@@ -1198,13 +1198,24 @@ export async function getPostRecommendations({ limit = RECOMMENDATION_LIMIT } = 
   // still practiceable on demand from its own page; it just stops being
   // recommended. getDueMemoryItems() itself stays unfiltered — it also backs the
   // Memory tab's own list.
+  //
+  // Gated on the topic + module + per-ITEM flags only, never on a drill type:
+  // these recs deep-link into a practice MODE (`spaced` / `element-flash`), so
+  // probing them with one arbitrary drill type would let switching off a single
+  // mode blank the entire spaced-repetition feed.
   const enabledDueMemoryItems = dueMemoryItems
-    .filter(item => isRecDrillRunnable(config, 'memory', 'memory-sequence', item.id));
+    .filter(item => isMemoryItemEnabled(config, item.id));
 
-  // Memory chunk re-verifications point at a specific item too, so a disabled
-  // item shouldn't surface one. Non-memory reviews pass through untouched.
-  const enabledDueReviews = dueReviews.filter(review => review.kind !== 'memory'
-    || isRecDrillRunnable(config, 'memory', review.drillType || 'memory-sequence', memoryItemIdFromReview(review)));
+  // Due re-verifications are config-dependent recommendations like weakest-skill
+  // and stalled-progression, so they get the same gate. A memory chunk
+  // re-verification points at a specific item (same mode-not-drill-type reasoning
+  // as above); a ladder re-verification names its drill, so it routes through
+  // isRecDrillRunnable exactly as the stalled rec for that same ladder does.
+  const enabledDueReviews = dueReviews.filter((review) => {
+    if (review.kind === 'memory') return isMemoryItemEnabled(config, memoryItemIdFromReview(review));
+    const module = review.kind === 'multiplication' || review.drillType === 'multiplication' ? 'mental-math' : 'cognitive';
+    return isRecDrillRunnable(config, module, review.drillType);
+  });
 
   // Stalled progressions — Morse runs from its own tab (so it's gated by its own
   // topic/config block rather than session composition), and any ladder whose

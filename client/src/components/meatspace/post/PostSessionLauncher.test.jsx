@@ -494,3 +494,103 @@ describe('PostSessionLauncher topic gating (issue #3252)', () => {
     expect(onStart.mock.calls[0][0].map(d => d.domain).sort()).toEqual(['math', 'wordplay']);
   });
 });
+
+// Maintenance review reps are drills too. The topic gate has to reach them, or
+// switching Cognitive off still mixed an n-back rep into a Quick session (and
+// the launcher still advertised it) — contradicting the gate's own promise.
+describe('PostSessionLauncher review-rep topic gating (issue #3252)', () => {
+  const twoDomainConfig = (topics) => ({
+    mentalMath: { enabled: true, drillTypes: { multiplication: { enabled: true, count: 10 } } },
+    llmDrills: { enabled: true, drillTypes: { 'pun-wordplay': { enabled: true, count: 5 } } },
+    cognitive: { enabled: true, drillTypes: { 'n-back': { enabled: true } } },
+    sessionModules: ['mental-math', 'llm-drills', 'cognitive'],
+    ...(topics ? { topics } : {}),
+  });
+
+  const renderWith = (config, onStart) => render(
+    <MemoryRouter>
+      <PostSessionLauncher
+        config={config}
+        recentSessions={[]}
+        stats={{ sessionCount: 1, overall: 70, currentStreak: 1, longestStreak: 1, byDrill: {} }}
+        statsWeek={{ sessionCount: 1 }}
+        onStart={onStart}
+        onViewHistory={vi.fn()}
+        onViewConfig={vi.fn()}
+        onViewMemory={vi.fn()}
+        onViewMorse={vi.fn()}
+      />
+    </MemoryRouter>,
+  );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getPostRecommendations.mockResolvedValue({ recommendations: [] });
+    getPostReviewReps.mockResolvedValue({ reps: [
+      { skillId: 'n-back:L2', type: 'n-back', label: 'N-Back level 2', config: { n: 2 } },
+    ] });
+    getMorseProgress.mockResolvedValue({ settings: { wpm: 18, farnsworthWpm: 12 } });
+    getPostProgress.mockResolvedValue({ series: { byDay: [] } });
+  });
+
+  it('mixes a review rep into a Quick session while its topic is on', async () => {
+    const onStart = vi.fn();
+    renderWith(twoDomainConfig(null), onStart);
+    await waitFor(() => expect(screen.getByText(/due for a maintenance rep/)).toBeTruthy());
+    fireEvent.click(await screen.findByRole('button', { name: /Quick 5 Min/ }));
+
+    expect(onStart.mock.calls[0][0].some(d => d.isReview && d.type === 'n-back')).toBe(true);
+  });
+
+  it('drops the review rep — and its launcher nudge — when its topic is switched off', async () => {
+    const onStart = vi.fn();
+    renderWith(twoDomainConfig({ cognitive: { enabled: false } }), onStart);
+    await waitFor(() => expect(screen.getByText('Full POST')).toBeTruthy());
+    expect(screen.queryByText(/due for a maintenance rep/)).toBeNull();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Quick 5 Min/ }));
+    expect(onStart.mock.calls[0][0].some(d => d.isReview)).toBe(false);
+    expect(onStart.mock.calls[0][0].some(d => d.type === 'n-back')).toBe(false);
+  });
+});
+
+// The mirror the Practice Plan preview uses (composedSessionDrillTypes) gates on
+// the module-level `enabled` flag; the launcher used to ignore it for math only,
+// so a `mentalMath.enabled: false` config previewed as "no Mental Math" while a
+// Full POST still ran all five math drills.
+describe('PostSessionLauncher honors the mentalMath module flag (issue #3252)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getPostRecommendations.mockResolvedValue({ recommendations: [] });
+    getPostReviewReps.mockResolvedValue({ reps: [] });
+    getMorseProgress.mockResolvedValue({ settings: { wpm: 18, farnsworthWpm: 12 } });
+    getPostProgress.mockResolvedValue({ series: { byDay: [] } });
+  });
+
+  it('composes no math drills when mentalMath.enabled is false', async () => {
+    const onStart = vi.fn();
+    render(
+      <MemoryRouter>
+        <PostSessionLauncher
+          config={{
+            mentalMath: { enabled: false, drillTypes: { multiplication: { enabled: true, count: 10 } } },
+            cognitive: { enabled: true, drillTypes: { 'n-back': { enabled: true } } },
+            llmDrills: { enabled: false, drillTypes: {} },
+          }}
+          recentSessions={[]}
+          stats={{ sessionCount: 1, overall: 70, currentStreak: 1, longestStreak: 1, byDrill: {} }}
+          statsWeek={{ sessionCount: 1 }}
+          onStart={onStart}
+          onViewHistory={vi.fn()}
+          onViewConfig={vi.fn()}
+          onViewMemory={vi.fn()}
+          onViewMorse={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByText('Full POST')).toBeTruthy());
+    fireEvent.click(screen.getByText('Full POST'));
+
+    expect(onStart.mock.calls[0][0].map(d => d.type)).toEqual(['n-back']);
+  });
+});

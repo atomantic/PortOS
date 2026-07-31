@@ -198,3 +198,42 @@ describe('PracticePlan save', () => {
     expect(toast.success).not.toHaveBeenCalled();
   });
 });
+
+// Memory and Morse each have a module-level `enabled` flag on the server as well
+// as a topic entry, and this surface exposes ONE control that writes both. If the
+// control only read the topic entry, a config carrying the module flag off with no
+// topic entry would render ON and the next Save would switch it back on.
+describe('PracticePlan two-flags-one-control seeding (issue #3252)', () => {
+  it('renders Morse OFF when only the module flag is off', async () => {
+    await renderPlan(baseConfig({ morse: { enabled: false } }));
+    expect(screen.getByLabelText('Morse', { selector: 'input' })).not.toBeChecked();
+  });
+
+  it('renders Memory OFF when only the module flag is off', async () => {
+    await renderPlan(baseConfig({ memory: { enabled: false, drillTypes: {} } }));
+    expect(screen.getByLabelText('Memory', { selector: 'input' })).not.toBeChecked();
+  });
+
+  it('does not silently re-enable a module-flag-off topic on an unrelated save', async () => {
+    await renderPlan(baseConfig({ morse: { enabled: false } }));
+    // Touch a completely different topic, then save.
+    fireEvent.click(screen.getByLabelText('Wordplay', { selector: 'input' }));
+    fireEvent.click(screen.getByRole('button', { name: /Save/ }));
+
+    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    const [patch] = updatePostConfig.mock.calls[0];
+    expect(patch.morse).toEqual({ enabled: false });
+    expect(patch.topics.morse).toEqual({ enabled: false });
+  });
+
+  it('writes BOTH the topic entry and the module flag so the server gates agree', async () => {
+    await renderPlan();
+    fireEvent.click(screen.getByLabelText('Memory', { selector: 'input' }));
+    fireEvent.click(screen.getByRole('button', { name: /Save/ }));
+
+    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    const [patch] = updatePostConfig.mock.calls[0];
+    expect(patch.topics.memory).toEqual({ enabled: false });
+    expect(patch.memory.enabled).toBe(false);
+  });
+});

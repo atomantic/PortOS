@@ -127,13 +127,21 @@ export function isTopicEnabled(config, topicId) {
 }
 
 /**
+ * MIRRORS the server's `isMemoryPracticeEnabled` — the topic entry plus the
+ * module block, with no drill type consulted.
+ */
+export function isMemoryPracticeEnabled(config) {
+  return isTopicEnabled(config, 'memory') && config?.memory?.enabled !== false;
+}
+
+/**
  * MIRRORS the server's `isMemoryItemEnabled` — a per-item opt-out that keeps the
  * item's mastery/schedule history and its own practice page, and only removes it
  * from the automatic rotation.
  */
 export function isMemoryItemEnabled(config, itemId) {
+  if (!isMemoryPracticeEnabled(config)) return false;
   if (!itemId) return true;
-  if (!isTopicEnabled(config, 'memory')) return false;
   return config?.memory?.items?.[itemId]?.enabled !== false;
 }
 

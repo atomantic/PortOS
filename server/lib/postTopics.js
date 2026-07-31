@@ -130,14 +130,30 @@ export function enabledTopicIds(config) {
 }
 
 /**
+ * Whether memory practice participates AT ALL — the topic entry and the module
+ * block, WITHOUT consulting any drill type.
+ *
+ * The drill-type exclusion is load-bearing: a due-memory recommendation links
+ * into a practice MODE (`/post/memory/<id>/spaced`, `/post/memory/elements/
+ * element-flash`), not into a specific POST drill type. Gating those recs on one
+ * arbitrary type would mean switching off e.g. Memory Sequence silently killed
+ * the whole spaced-repetition reminder feed, including items whose recs never
+ * run that type.
+ */
+export function isMemoryPracticeEnabled(config) {
+  return isTopicEnabled(config, 'memory') && config?.memory?.enabled !== false;
+}
+
+/**
  * Whether an individual memory item participates in recommendations and in
  * `generateMemoryDrill`'s lowest-mastery candidate pool. Same absent = enabled
  * convention. A disabled item keeps its full mastery/schedule history and stays
  * practiceable on demand from its own page — this only scopes the *automatic*
- * paths (issue #3252). A null/absent id is never filtered.
+ * paths (issue #3252). A null/absent id means "no specific item", which is never
+ * filtered on its own — but memory practice still has to be on.
  */
 export function isMemoryItemEnabled(config, itemId) {
+  if (!isMemoryPracticeEnabled(config)) return false;
   if (!itemId) return true;
-  if (!isTopicEnabled(config, 'memory')) return false;
   return config?.memory?.items?.[itemId]?.enabled !== false;
 }

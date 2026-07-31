@@ -152,8 +152,17 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   // and is never gated.
   const topicAllowed = (type) => isTopicEnabled(config, resolveTopicForDrillType(type)?.id);
 
-  const enabledMathDrills = Object.entries(config.mentalMath?.drillTypes || {})
-    .filter(([type, cfg]) => cfg.enabled && topicAllowed(type));
+  // Maintenance review reps are drills too, so they get the same topic gate —
+  // otherwise switching Cognitive off still mixed an n-back rep into a Quick
+  // session (and the launcher still advertised it below).
+  const allowedReviewReps = reviewReps.filter(rep => topicAllowed(rep.type));
+
+  // Math honors its module-level `enabled` flag like the llmDrills/cognitive
+  // branches below — it used to ignore it, so a `mentalMath.enabled: false`
+  // config still composed every math drill.
+  const enabledMathDrills = config.mentalMath?.enabled !== false
+    ? Object.entries(config.mentalMath?.drillTypes || {}).filter(([type, cfg]) => cfg.enabled && topicAllowed(type))
+    : [];
 
   const enabledLlmDrills = config.llmDrills?.enabled !== false
     ? Object.entries(config.llmDrills?.drillTypes || {}).filter(([type, cfg]) => cfg.enabled !== false && topicAllowed(type))
@@ -329,7 +338,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     // Mix in up to 2 maintenance reps for mastered-but-inactive skills that are
     // due for re-verification (issue #2096). Each carries the review markers so
     // the server re-verifies the specific rung and records the pass/fail.
-    for (const rep of reviewReps.slice(0, 2)) {
+    for (const rep of allowedReviewReps.slice(0, 2)) {
       drillConfigs.push({
         type: rep.type,
         domain: DRILL_TO_DOMAIN[rep.type],
@@ -406,10 +415,10 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   // runnable rep, so do nothing rather than start an unrelated session.
   async function startReviewRep(rec) {
     const skillId = rec.id.replace(/^skill-review:/, '');
-    let rep = reviewReps.find(r => r.skillId === skillId);
+    let rep = allowedReviewReps.find(r => r.skillId === skillId);
     if (!rep) {
       const fresh = await getPostReviewReps(5).then(r => r?.reps || []).catch(() => []);
-      rep = fresh.find(r => r.skillId === skillId);
+      rep = fresh.filter(r => topicAllowed(r.type)).find(r => r.skillId === skillId);
     }
     if (!rep) return;
     const drillConfig = {
@@ -844,12 +853,12 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
 
           {/* Maintenance-review nudge (issue #2096) — mastered skills due for a
               refresh, mixed into the next Quick session as labeled review reps. */}
-          {reviewReps.length > 0 && (
+          {allowedReviewReps.length > 0 && (
             <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-port-warning/10 border border-port-warning/30 text-sm text-port-warning">
               <Target size={16} className="mt-0.5 shrink-0" />
               <span>
-                {reviewReps.length} skill{reviewReps.length > 1 ? 's' : ''} due for a maintenance rep
-                {' '}— a Quick session will mix {reviewReps.length > 1 ? 'them' : 'it'} in: {reviewReps.slice(0, 2).map(r => r.label).join(', ')}
+                {allowedReviewReps.length} skill{allowedReviewReps.length > 1 ? 's' : ''} due for a maintenance rep
+                {' '}— a Quick session will mix {allowedReviewReps.length > 1 ? 'them' : 'it'} in: {allowedReviewReps.slice(0, 2).map(r => r.label).join(', ')}
               </span>
             </div>
           )}

@@ -12,7 +12,7 @@ import {
   POST_MODULES,
   POST_SUPPORTED_MEMORY_TYPES,
 } from './postValidation.js';
-import { getTopic } from './postTopics.js';
+import { getTopic, POST_TOPICS } from './postTopics.js';
 
 describe('postConfigUpdateSchema llmDrills', () => {
   // Regression: the config UI (PostDrillConfig.jsx) exposed only 5 of the 14
@@ -554,5 +554,52 @@ describe('postConfigUpdateSchema topics/memory/morse (issue #3252)', () => {
     expect(parsed.topics).toBeUndefined();
     expect(parsed.memory).toBeUndefined();
     expect(parsed.morse).toBeUndefined();
+  });
+});
+
+// Regression guard for the class of bug where a client suite mocks its API
+// wrapper and a `.strict()`/exhaustive-record rejection is therefore invisible:
+// PracticePlan.test.jsx asserts its save patch against a MOCKED updatePostConfig,
+// so nothing there would catch a body the real schema rejects. This test rebuilds
+// that exact wire body from the topic registry and parses it for real — so a
+// future topic or drill type that desyncs POST_TOPICS from the schema's enums
+// fails here instead of 400-ing every save in production behind two green suites.
+describe('Practice Plan save body ↔ postConfigUpdateSchema (issue #3252)', () => {
+  // Mirrors PracticePlan.jsx's `modules` seeding + handleSave payload exactly.
+  const practicePlanSaveBody = () => {
+    const drillTypesFor = (module) => Object.fromEntries(
+      POST_TOPICS.filter(t => t.module === module)
+        .flatMap(t => t.drillTypes)
+        .map(type => [type, { enabled: true }])
+    );
+    return {
+      topics: Object.fromEntries(POST_TOPICS.map(t => [t.id, { enabled: true }])),
+      mentalMath: { drillTypes: drillTypesFor('mental-math') },
+      llmDrills: { drillTypes: drillTypesFor('llm-drills') },
+      cognitive: { drillTypes: drillTypesFor('cognitive') },
+      memory: { enabled: true, drillTypes: drillTypesFor('memory'), items: { 'elements-song': { enabled: false } } },
+      morse: { enabled: true },
+    };
+  };
+
+  it('the exact body the Practice Plan sends validates and survives round-trip', () => {
+    const body = practicePlanSaveBody();
+    const parsed = postConfigUpdateSchema.parse(body);
+    expect(parsed).toEqual(body);
+  });
+
+  it('every enum-keyed drill-type record the body sends is complete', () => {
+    // The sibling module blocks use an EXHAUSTIVE z.record — a missing key is a
+    // 400, not a silent strip — so assert the registry supplies every enum member.
+    const body = practicePlanSaveBody();
+    expect(Object.keys(body.mentalMath.drillTypes).sort()).toEqual([...MATH_DRILL_TYPE_IDS].sort());
+    expect(Object.keys(body.llmDrills.drillTypes).sort()).toEqual([...LLM_DRILL_TYPE_IDS].sort());
+    expect(Object.keys(body.cognitive.drillTypes).sort()).toEqual([...COGNITIVE_DRILL_TYPE_IDS].sort());
+  });
+
+  it('rejects the same body with one drill type dropped, proving the guard bites', () => {
+    const body = practicePlanSaveBody();
+    delete body.llmDrills.drillTypes['bridge-word'];
+    expect(() => postConfigUpdateSchema.parse(body)).toThrow();
   });
 });

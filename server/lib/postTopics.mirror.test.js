@@ -29,7 +29,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_PATH = resolve(__dirname, 'postTopics.js');
 const CLIENT_PATH = resolve(__dirname, '../../client/src/components/meatspace/post/constants.js');
 
-const MIRRORED_NAMES = ['POST_TOPICS', 'isTopicEnabled', 'isMemoryItemEnabled'];
+const MIRRORED_NAMES = ['POST_TOPICS', 'isTopicEnabled', 'isMemoryPracticeEnabled', 'isMemoryItemEnabled'];
 
 describe('postTopics server↔client mirror parity', () => {
   const serverSrc = readFileSync(SERVER_PATH, 'utf8');
