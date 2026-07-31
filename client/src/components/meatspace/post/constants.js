@@ -171,6 +171,18 @@ export const MODULE_CONFIG_KEY = {
   memory: 'memory',
 };
 
+// Human label for a coarse module. Several topics share `llm-drills`, so no
+// single topic label names it — hence an explicit map rather than deriving from
+// the first topic. Shared by Config's Session Composition checkboxes and the
+// Practice Plan's group headings so the same module can't be called two
+// different things on two screens.
+export const MODULE_LABELS = {
+  'mental-math': 'Mental Math',
+  'llm-drills': 'Wit & Memory (AI)',
+  cognitive: 'Cognitive',
+  memory: 'Memory',
+};
+
 /** Whether a coarse module passes the `sessionModules` composition filter. */
 export function isModuleInSession(config, module) {
   const sm = Array.isArray(config?.sessionModules) ? config.sessionModules : null;

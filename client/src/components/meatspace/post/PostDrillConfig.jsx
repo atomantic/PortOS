@@ -4,26 +4,21 @@ import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultipli
 import toast from '../../ui/Toast';
 import { FormField } from '../../ui/FormField';
 import { filterSelectableModels, enabledApiProviderFilter } from '../../../utils/providers';
-import { GOAL_DEFS, POST_TOPICS } from './constants';
+import { GOAL_DEFS, POST_TOPICS, MODULE_LABELS } from './constants';
 
 // Modules a Full/Quick composed session can draw from (issue #2100), DERIVED
 // from the shared topic registry so the list has one owner (issue #3252): a
 // module is offered exactly when some topic composes into a session
 // (`surface: 'session'`). That keeps `memory` and `morse` out — both are
 // standalone surfaces with no launcher-composed drill, so offering them here
-// would only let a user build an empty session. Their participation is
-// controlled from the Practice Plan instead.
-const MODULE_LABEL_OVERRIDES = { 'llm-drills': 'Wit & Memory (AI)' };
-const SESSION_MODULE_OPTIONS = POST_TOPICS
-  .filter(t => t.surface === 'session' && t.module)
-  .reduce((out, t) => {
-    if (out.some(o => o.id === t.module)) return out;
-    // One row per MODULE, not per topic — several topics (wordplay / verbal /
-    // imagination) share `llm-drills`, so the first topic's label would be
-    // misleading; the override names the module.
-    out.push({ id: t.module, label: MODULE_LABEL_OVERRIDES[t.module] || t.label });
-    return out;
-  }, []);
+// would only let a user build an empty session (see issue #3254). Their
+// participation is controlled from the Practice Plan instead.
+//
+// One row per MODULE, not per topic — wordplay / verbal / imagination all share
+// `llm-drills`, so the dedupe below keeps a single row named by MODULE_LABELS.
+const SESSION_MODULE_OPTIONS = [...new Set(
+  POST_TOPICS.filter(t => t.surface === 'session' && t.module).map(t => t.module)
+)].map(module => ({ id: module, label: MODULE_LABELS[module] }));
 
 // Human labels for the adaptive difficulty knob each math drill tunes.
 const ADAPTIVE_FIELD_LABELS = {

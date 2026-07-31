@@ -7,6 +7,7 @@ import {
   TOPIC_UI,
   DRILL_LABELS,
   MODULE_CONFIG_KEY,
+  MODULE_LABELS,
   isTopicEnabled,
   isMemoryItemEnabled,
   composedSessionDrillTypes,
@@ -16,13 +17,11 @@ import {
 // Practice Plan owns the WHAT (which topics, drill types, and memorized texts
 // participate); Drill Config still owns the HOW HARD (per-drill knobs).
 
-// Coarse module → the heading topics are grouped under. Morse has a null module
-// (it never posts a scored POST task) and lands in its own group.
+// Group order for the topic rows: every coarse module (named by the shared
+// MODULE_LABELS so Config and Practice Plan can't disagree), then the null-module
+// bucket for topics that never post a scored POST task (Morse).
 const MODULE_GROUPS = [
-  { module: 'mental-math', label: 'Mental Math' },
-  { module: 'llm-drills', label: 'Wit & Language (AI)' },
-  { module: 'cognitive', label: 'Cognitive' },
-  { module: 'memory', label: 'Memory' },
+  ...['mental-math', 'llm-drills', 'cognitive', 'memory'].map(module => ({ module, label: MODULE_LABELS[module] })),
   { module: null, label: 'Other Practice' },
 ];
 
