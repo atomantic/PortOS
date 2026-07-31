@@ -81,6 +81,16 @@ describe('checkFabrication', () => {
     expect(await checkFabrication(dir, 'image_gen')).toContain('__pycache__');
   });
 
+  it('matches a code directory under either path separator', async () => {
+    // The directory rule splits the relative path into segments. Depending on
+    // `path.sep` would silently make it a no-op on the platform whose recursive
+    // readdir emits the other separator — a nested venv/__pycache__ containing
+    // no code-extension file would then go undetected entirely.
+    await mkdir(join(dir, 'venv', 'lib'), { recursive: true });
+    await writeFile(join(dir, 'venv', 'lib', 'placeholder'), '');
+    expect(await checkFabrication(dir, 'image_gen')).toContain('venv');
+  });
+
   it('ignores a CLI writing its own session state into its cwd', async () => {
     // A false positive here fails an otherwise-good render, so non-source
     // leftovers must not trip the guard.

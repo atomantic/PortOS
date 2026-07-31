@@ -27,7 +27,7 @@
  */
 
 import { readdir } from 'fs/promises';
-import { extname, sep } from 'path';
+import { extname } from 'path';
 
 // Source/markup extensions an agent would write to draw an image itself
 // (matplotlib/PIL scripts, canvas or SVG/HTML renderers). Deliberately narrow:
@@ -86,8 +86,12 @@ export async function checkFabrication(scratchDir, toolName) {
     }
     return [];
   });
+  // Split on BOTH separators rather than `path.sep`: the guard must not depend
+  // on which one Node's recursive readdir emits on a given platform. Getting it
+  // wrong silently degrades the directory rule to a no-op — a nested
+  // `__pycache__/` with no code-extension file in it would go undetected.
   const residue = paths.filter((rel) =>
-    rel.split(sep).some((segment) => CODE_DIRS.has(segment))
+    rel.split(/[\\/]/).some((segment) => CODE_DIRS.has(segment))
     || CODE_EXTENSIONS.has(extname(rel).toLowerCase()));
   if (!residue.length) return null;
   // This sentence is PortOS's inference, not the provider's words, and it gets
