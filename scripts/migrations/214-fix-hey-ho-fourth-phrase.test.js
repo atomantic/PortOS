@@ -7,10 +7,14 @@ import migration, {
   OLD_HEY_HO_SCORE_6BAR,
   OLD_HEY_HO_LYRICS,
   OLD_HEY_HO_NOTATION,
+  OLD_HEY_HO_VOICE_3_NOTES,
+  OLD_HEY_HO_VOICE_4_NOTES,
   NEW_HEY_HO_SCORE,
   NEW_HEY_HO_SCORE_PARTS,
   NEW_HEY_HO_LYRICS,
   NEW_HEY_HO_NOTATION,
+  NEW_HEY_HO_VOICE_3_NOTES,
+  NEW_HEY_HO_VOICE_4_NOTES,
 } from './214-fix-hey-ho-fourth-phrase.js';
 import { OLD_HEY_HO_SCORE as PRE_2105_SCORE } from './158-fix-hey-ho-melody.js';
 import { SEED_ROUNDS } from '../../server/services/rounds.js';
@@ -21,6 +25,7 @@ const writeJson = (path, value) => writeFileSync(path, JSON.stringify(value, nul
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf-8'));
 const findRound = (path, id) => readJson(path).rounds.find((r) => r.id === id);
 const findLyrics = (path) => findRound(path, ROUND_ID).sections.find((s) => s.id === SECTION_ID).lyrics;
+const findLayer = (path, id) => findRound(path, ROUND_ID).layers.find((l) => l.id === id);
 
 // A stored record in the exact pre-#3238 shipped shape.
 const oldRecord = () => ({
@@ -29,6 +34,12 @@ const oldRecord = () => ({
   scoreParts: [{ id: 'part-heyho-v2' }, { id: 'part-heyho-v3' }],
   notation: OLD_HEY_HO_NOTATION,
   sections: [{ id: SECTION_ID, label: 'Round', lyrics: OLD_HEY_HO_LYRICS }],
+  layers: [
+    { id: 'voice-1', notes: 'Starts the round and sings it straight through. Everyone learns this line first.' },
+    { id: 'voice-2', notes: 'Enters as Voice 1 reaches "Meat nor drink…" (phrase 2) — one full phrase behind the lead.' },
+    { id: 'voice-3', notes: OLD_HEY_HO_VOICE_3_NOTES },
+    { id: 'voice-4', notes: OLD_HEY_HO_VOICE_4_NOTES },
+  ],
 });
 
 describe('migration 214 — Hey Ho Nobody Home fourth phrase + lyric', () => {
@@ -58,6 +69,14 @@ describe('migration 214 — Hey Ho Nobody Home fourth phrase + lyric', () => {
     // migration would then write `undefined` over a user's lyrics.
     expect(typeof NEW_HEY_HO_LYRICS).toBe('string');
     expect(NEW_HEY_HO_LYRICS).toContain('Hey, hey, ho.');
+    // Same vacuous-pass hazard for the layer notes, which are looked up by id.
+    expect(NEW_HEY_HO_VOICE_3_NOTES).toBe(seed.layers.find((l) => l.id === 'voice-3').notes);
+    expect(NEW_HEY_HO_VOICE_4_NOTES).toBe(seed.layers.find((l) => l.id === 'voice-4').notes);
+    expect(NEW_HEY_HO_VOICE_3_NOTES).not.toMatch(/three phrases/i);
+    expect(NEW_HEY_HO_VOICE_4_NOTES).not.toMatch(/unison/i);
+    // And the frozen old strings must be the pre-fix text, not the new text.
+    expect(OLD_HEY_HO_VOICE_3_NOTES).toMatch(/three phrases/i);
+    expect(OLD_HEY_HO_VOICE_4_NOTES).toMatch(/unison/i);
   });
 
   // Drift guard (b): the frozen OLD constants are the post-158 / pre-3238 shipped
@@ -111,14 +130,72 @@ describe('migration 214 — Hey Ho Nobody Home fourth phrase + lyric', () => {
     expect(round.updatedAt).toBeTruthy();
   });
 
-  it('persists the fourth canon voice without sharing identity with the in-memory seed', async () => {
+  it('persists the fourth canon voice', async () => {
     writeJson(roundsPath, { rounds: [oldRecord()] });
     await migration.up({ rootDir });
     const round = findRound(roundsPath, ROUND_ID);
     expect(round.scoreParts).toHaveLength(3);
     expect(round.scoreParts.map((p) => p.id)).toEqual(['part-heyho-v2', 'part-heyho-v3', 'part-heyho-v4']);
-    // Deep-cloned on write, so mutating the persisted copy can't reach the seed.
-    expect(round.scoreParts[2]).not.toBe(NEW_HEY_HO_SCORE_PARTS[2]);
+  });
+
+  // The write deep-clones the shipped parts. Re-reading the file can't prove that
+  // (JSON.parse always yields fresh objects, so an identity assertion there passes
+  // whether or not the clone exists) — what it protects is the in-memory seed,
+  // which a later migration in the same process would otherwise share and mutate.
+  it('does not mutate the in-memory seed while writing the record', async () => {
+    const before = JSON.parse(JSON.stringify(NEW_HEY_HO_SCORE_PARTS));
+    writeJson(roundsPath, { rounds: [oldRecord()] });
+    await migration.up({ rootDir });
+    expect(NEW_HEY_HO_SCORE_PARTS).toEqual(before);
+  });
+
+  it('keeps a user-added score part when it extends the shipped canon voices', async () => {
+    // scoreParts is independently editable (Add part / AI-derive), so a stock
+    // melody can carry a hand-written part. Replacing the whole array would
+    // silently delete it.
+    const mine = { id: 'part-mine-a1b2', label: 'My bass line', role: '', score: 'clef: bass\n\n| D3w |' };
+    const record = oldRecord();
+    record.scoreParts = [{ id: 'part-heyho-v2' }, { id: 'part-heyho-v3' }, mine];
+    writeJson(roundsPath, { rounds: [record] });
+    await migration.up({ rootDir });
+
+    const parts = findRound(roundsPath, ROUND_ID).scoreParts;
+    expect(parts.map((p) => p.id)).toEqual(['part-heyho-v2', 'part-heyho-v3', 'part-heyho-v4', 'part-mine-a1b2']);
+    expect(parts.at(-1)).toEqual(mine);
+  });
+
+  it('corrects the stale voice guidance the fourth phrase invalidates', async () => {
+    writeJson(roundsPath, { rounds: [oldRecord()] });
+    const result = await migration.up({ rootDir });
+    expect(result).toMatchObject({ updated: 1, fixedLayers: 2 });
+    // Voice 4 is a real staggered entry now, not a unison double of the lead.
+    expect(findLayer(roundsPath, 'voice-4').notes).toBe(NEW_HEY_HO_VOICE_4_NOTES);
+    expect(findLayer(roundsPath, 'voice-4').notes).not.toMatch(/unison/i);
+    // Voice 3 no longer claims the round is three phrases long.
+    expect(findLayer(roundsPath, 'voice-3').notes).toBe(NEW_HEY_HO_VOICE_3_NOTES);
+    expect(findLayer(roundsPath, 'voice-3').notes).not.toMatch(/three phrases/i);
+    // An untouched layer stays untouched.
+    expect(findLayer(roundsPath, 'voice-1').notes).toBe(oldRecord().layers[0].notes);
+  });
+
+  it('never clobbers voice guidance the user rewrote, and fixes the other layer', async () => {
+    const myNotes = 'I come in on the last line, an octave down.';
+    const record = oldRecord();
+    record.layers = record.layers.map((l) => (l.id === 'voice-4' ? { ...l, notes: myNotes } : l));
+    writeJson(roundsPath, { rounds: [record] });
+    const result = await migration.up({ rootDir });
+    expect(result).toMatchObject({ fixedLayers: 1 });
+    expect(findLayer(roundsPath, 'voice-4').notes).toBe(myNotes);
+    expect(findLayer(roundsPath, 'voice-3').notes).toBe(NEW_HEY_HO_VOICE_3_NOTES);
+  });
+
+  it('tolerates a record with no layers array', async () => {
+    const record = oldRecord();
+    delete record.layers;
+    writeJson(roundsPath, { rounds: [record] });
+    const result = await migration.up({ rootDir });
+    expect(result).toMatchObject({ updated: 1, fixedScore: true, fixedLayers: 0 });
+    expect(findRound(roundsPath, ROUND_ID).score).toBe(NEW_HEY_HO_SCORE);
   });
 
   it('is idempotent across re-runs', async () => {

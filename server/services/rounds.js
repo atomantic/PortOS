@@ -773,7 +773,7 @@ export const SEED_ROUNDS = [
     layers: [
       { id: 'voice-1', label: 'Voice 1 (lead)', part: 'Any', notes: 'Starts the round and sings it straight through. Everyone learns this line first.' },
       { id: 'voice-2', label: 'Voice 2', part: 'Any', notes: 'Enters as Voice 1 reaches "Meat nor drink…" (phrase 2) — one full phrase behind the lead.' },
-      { id: 'voice-3', label: 'Voice 3', part: 'Any', notes: 'Enters at "Still I will be merry" (phrase 3); the three phrases stack into the full minor chord.' },
+      { id: 'voice-3', label: 'Voice 3', part: 'Any', notes: 'Enters at "Still I will be merry" (phrase 3); by here the stacked phrases fill out the minor chord.' },
       { id: 'voice-4', label: 'Voice 4', part: 'Any', notes: 'Enters at the closing "Hey, hey, ho" (phrase 4, bar 7) — the last of the four staggered entries, filling the round out.' },
     ],
     references: [],

@@ -50,6 +50,13 @@ export const NEW_HEY_HO_SCORE = NEW_SEED.score;
 export const NEW_HEY_HO_SCORE_PARTS = NEW_SEED.scoreParts;
 export const NEW_HEY_HO_NOTATION = NEW_SEED.notation;
 export const NEW_HEY_HO_LYRICS = NEW_SEED.sections.find((s) => s.id === SECTION_ID).lyrics;
+// The two voice-guidance strings the four-phrase melody invalidates: voice-3 said
+// "the three phrases stack", and voice-4 described itself as a unison double of
+// the lead (which is what an entry at bar 7 of a SIX-bar round is). With a real
+// fourth phrase they are both wrong, so they migrate like `notation` does.
+const newLayerNotes = (id) => NEW_SEED.layers.find((l) => l.id === id).notes;
+export const NEW_HEY_HO_VOICE_3_NOTES = newLayerNotes('voice-3');
+export const NEW_HEY_HO_VOICE_4_NOTES = newLayerNotes('voice-4');
 
 // The OLD shipped melody — frozen exactly as SEED_ROUNDS shipped it AFTER #2105
 // but BEFORE #3238 (D-centered and correct, but only three phrases / 6 bars).
@@ -77,6 +84,14 @@ export const OLD_HEY_HO_LYRICS =
 // notation correction.
 export const OLD_HEY_HO_NOTATION =
   'A round in up to six voices (Ravenscroft\'s Pammelia, 1609). New voices enter one two-bar phrase behind the last. Centered on D with no key signature — all naturals (D Dorian / natural minor), no B. Melody after the Wikibooks Songbook and Kodály teaching transcriptions, transposed to a D tonal center.';
+
+// The OLD shipped voice guidance — frozen exactly as it read before #3238. Each
+// gates its own layer's correction, so a user who rewrote one note keeps it while
+// the other still gets fixed.
+export const OLD_HEY_HO_VOICE_3_NOTES =
+  'Enters at "Still I will be merry" (phrase 3); the three phrases stack into the full minor chord.';
+export const OLD_HEY_HO_VOICE_4_NOTES =
+  'Optional fourth entry: comes in as Voice 1 loops back to the top, doubling the lead in unison or an octave up.';
 
 const fileExists = (path) => stat(path).then(() => true, (err) => {
   if (err.code === 'ENOENT') return false;
@@ -110,13 +125,24 @@ export default {
     let fixedScore = false;
     let fixedLyrics = false;
     let fixedNotation = false;
+    let fixedLayers = 0;
 
-    // Replace score + scoreParts only when the stored score is still the exact
-    // 6-bar shipped string. Deep-clone the scoreParts so the persisted record
+    // Replace score + the SHIPPED canon voices only when the stored score is still
+    // the exact 6-bar shipped string. Deep-clone the parts so the persisted record
     // can't share array/object identity with the in-memory seed.
+    //
+    // Parts the user added themselves are preserved. `scoreParts` is independently
+    // editable (SongScoreParts' "Add part" and the AI-derive path both append a
+    // part with a generated id), so a stock melody can still carry a hand-written
+    // bass line. Rewriting the whole array — as a naive replace would — would
+    // delete that work with no backup, which is exactly the clobbering this
+    // migration's per-field gating exists to prevent.
     if (round.score === OLD_HEY_HO_SCORE_6BAR) {
       round.score = NEW_HEY_HO_SCORE;
-      round.scoreParts = NEW_HEY_HO_SCORE_PARTS.map((p) => ({ ...p }));
+      const shippedIds = new Set(NEW_HEY_HO_SCORE_PARTS.map((p) => p.id));
+      const userParts = (Array.isArray(round.scoreParts) ? round.scoreParts : [])
+        .filter((p) => p && !shippedIds.has(p.id));
+      round.scoreParts = [...NEW_HEY_HO_SCORE_PARTS.map((p) => ({ ...p })), ...userParts];
       fixedScore = true;
     }
 
@@ -136,14 +162,32 @@ export default {
       fixedNotation = true;
     }
 
-    if (!fixedScore && !fixedLyrics && !fixedNotation) {
+    // Correct the stale voice guidance the same way — per layer, on its own old
+    // string. Without this an upgraded install would carry a real fourth canon
+    // voice while its Voice 4 panel still told the singer to double the lead in
+    // unison, and Voice 3 still claimed the round had three phrases.
+    const staleLayerNotes = [
+      ['voice-3', OLD_HEY_HO_VOICE_3_NOTES, NEW_HEY_HO_VOICE_3_NOTES],
+      ['voice-4', OLD_HEY_HO_VOICE_4_NOTES, NEW_HEY_HO_VOICE_4_NOTES],
+    ];
+    for (const [layerId, oldNotes, nextNotes] of staleLayerNotes) {
+      const layer = Array.isArray(round.layers)
+        ? round.layers.find((l) => l && l.id === layerId)
+        : null;
+      if (layer && layer.notes === oldNotes) {
+        layer.notes = nextNotes;
+        fixedLayers += 1;
+      }
+    }
+
+    if (!fixedScore && !fixedLyrics && !fixedNotation && !fixedLayers) {
       console.log('📦 migration 214: Hey Ho already has its fourth phrase or is customized; leaving it untouched.');
       return { updated: 0, reason: 'already-applied' };
     }
 
     round.updatedAt = new Date().toISOString();
     await writeFile(path, JSON.stringify(doc, null, 2) + '\n');
-    console.log(`📦 migration 214: extended Hey Ho Nobody Home (score: ${fixedScore}, lyrics: ${fixedLyrics}, notation: ${fixedNotation}).`);
-    return { updated: 1, fixedScore, fixedLyrics, fixedNotation };
+    console.log(`📦 migration 214: extended Hey Ho Nobody Home (score: ${fixedScore}, lyrics: ${fixedLyrics}, notation: ${fixedNotation}, layers: ${fixedLayers}).`);
+    return { updated: 1, fixedScore, fixedLyrics, fixedNotation, fixedLayers };
   },
 };
