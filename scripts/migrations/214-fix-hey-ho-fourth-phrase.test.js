@@ -53,6 +53,11 @@ describe('migration 214 — Hey Ho Nobody Home fourth phrase + lyric', () => {
     expect(NEW_HEY_HO_SCORE_PARTS).toBe(seed.scoreParts);
     expect(NEW_HEY_HO_NOTATION).toBe(seed.notation);
     expect(NEW_HEY_HO_LYRICS).toBe(seed.sections.find((s) => s.id === SECTION_ID).lyrics);
+    // Pin the content, not just the identity: a renamed section id would make
+    // BOTH sides of the comparison above `undefined` and pass vacuously, and the
+    // migration would then write `undefined` over a user's lyrics.
+    expect(typeof NEW_HEY_HO_LYRICS).toBe('string');
+    expect(NEW_HEY_HO_LYRICS).toContain('Hey, hey, ho.');
   });
 
   // Drift guard (b): the frozen OLD constants are the post-158 / pre-3238 shipped
