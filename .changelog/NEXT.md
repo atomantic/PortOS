@@ -64,6 +64,10 @@
 
 - **[issue-3218] Tab sheets now explain their articulation characters.** When an arrangement includes a tab staff, a Legend button defines hammer-ons, pull-offs, slides, bends, releases, vibrato, and muted notes, including how to play each technique. Chord-over-lyrics and plain-text sheets stay uncluttered when that notation is absent.
 
+## Rounds
+
+- **[issue-3238] "Hey Ho Nobody Home" now has all four of its lines — and the right words for the last one.** The built-in round printed four lines of lyrics but only ever notated three: the closing line had no notes to sing it on, so the words and the sheet music disagreed. That line was wrong too, repeating the opening ("Hey, ho, nobody home.") instead of the way it is actually sung — **"Hey, hey, ho."** It now has its own two bars, cadencing down onto the note the round is centred on, plus the fourth entering voice the round always described but could not support. That also puts it back in step with Ah Poor Bird and Rose Rose Rose Red: at three phrases it was a quarter shorter than both, so the three-round quodlibet drifted out of alignment every few times round. If you have edited your copy of the round, your version is left exactly as you wrote it.
+
 ## Quota burn
 
 - **[issue-3179] Quota-burn no longer spends window budget on runs that never happened** — a scheduled quota-burn run counted against the family's per-window dispatch cap as soon as it was considered, even when it was subsequently skipped and no agent was ever started. Those phantom dispatches ate the budget, so a family configured for e.g. 5 burns per reset window could fire far fewer — and a family capped at 1 could never fire at all, because the skipped run consumed the only slot before the next gate re-read it. A burn is now counted once its agent has actually run, and a burn that is queued or in progress holds its slot in the meantime, so the cap stays accurate without letting a second app or a repeated "Run" overshoot it.
