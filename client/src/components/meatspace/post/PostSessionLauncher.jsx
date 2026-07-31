@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer, Radio, Target, TrendingUp, TrendingDown, Minus, Compass, ArrowRight, ChevronRight, Layers } from 'lucide-react';
-import { getProviders, getPostReviewReps, getPostRecommendations, getMorseProgress, getPostProgress } from '../../../services/api';
+import { getProviders, getPostReviewReps, getPostRecommendations, getMorseProgress, getPostProgress, getMemoryItems } from '../../../services/api';
 import { FormField } from '../../ui/FormField';
 import { isApiProvider } from '../../../utils/providers';
 import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS, computeDomainAverages, computeGoalProgress, isTopicEnabled, resolveTopicForDrillType } from './constants';
@@ -97,11 +97,18 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   // Training mode, Morse, memory) for the daily-minutes goal. Fetched only when
   // that goal is set; null falls back to the scored-session-only estimate.
   const [todayMinutesTotal, setTodayMinutesTotal] = useState(null);
+  // Memory is opt-in for composed sessions, but its generator cannot run
+  // without an enabled item. Keep loading/error distinct from a confirmed-empty
+  // list and fail closed until the item pool is known (issue #3254).
+  const [memoryItemsState, setMemoryItemsState] = useState({ status: 'loading', items: [] });
 
   useEffect(() => {
     getProviders().then(p => setProviders((p || []).filter(pr => pr.enabled && isApiProvider(pr)))).catch(err => console.warn('⚠️ Failed to load providers: ' + err.message));
     getPostReviewReps(5).then(r => setReviewReps(r?.reps || [])).catch(() => setReviewReps([]));
     getPostRecommendations().then(r => setRecommendations(r?.recommendations || [])).catch(() => setRecommendations([]));
+    getMemoryItems({ silent: true })
+      .then(items => setMemoryItemsState({ status: 'ready', items: Array.isArray(items) ? items : [] }))
+      .catch(() => setMemoryItemsState({ status: 'error', items: [] }));
   }, []);
 
   // Only fetch Morse progress when a Morse WPM goal exists — avoids an extra
@@ -176,6 +183,14 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     ? Object.entries(config.cognitive?.drillTypes || {}).filter(([type, cfg]) => cfg.enabled !== false && topicAllowed(type))
     : [];
 
+  const hasEnabledMemoryItem = memoryItemsState.status === 'ready'
+    && memoryItemsState.items.some(item => config.memory?.items?.[item.id]?.enabled !== false);
+  const enabledMemoryDrills = config.memory?.enabled !== false && hasEnabledMemoryItem
+    ? DOMAINS.memory.drillTypes
+      .map(type => [type, config.memory?.drillTypes?.[type]])
+      .filter(([type, cfg]) => cfg && cfg.enabled !== false && topicAllowed(type))
+    : [];
+
   // Only the fields each cognitive generator reads; extras are harmless.
   // stimulusMs (n-back) / showMs (digit-span) are forwarded so that manual mode
   // (Progressive off) actually uses the presentation-speed values the user set
@@ -199,7 +214,8 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
 
   // Composed sessions (Full POST / Quick) honor `sessionModules` (issue #2100):
   // a module's drills are only added when it's listed. The default
-  // (mental-math + cognitive + memory) excludes LLM drills, so wit/verbal work
+  // (mental-math + cognitive) excludes Memory and LLM drills, so both remain
+  // deliberate opt-ins and wit/verbal work
   // is never auto-added to a default session — provider-cost consent stays
   // opt-in (CLAUDE.md AI-provider policy). An empty/absent list means "all
   // enabled" (back-compat). Focus-practice on a specific weak domain bypasses
@@ -209,7 +225,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   // unchecking every module in Config is a deliberate "no composed sessions"
   // choice, not the same as never having set it (issue #2100 review).
   const sessionModules = Array.isArray(config.sessionModules) ? config.sessionModules : null;
-  const SOURCE_TO_MODULE = { math: 'mental-math', llm: 'llm-drills', cognitive: 'cognitive' };
+  const SOURCE_TO_MODULE = { math: 'mental-math', llm: 'llm-drills', cognitive: 'cognitive', memory: 'memory' };
   const moduleAllowed = (source) => sessionModules === null || sessionModules.includes(SOURCE_TO_MODULE[source]);
 
   function handleStart() {
@@ -246,11 +262,18 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
       // never enforce a countdown (see PostCognitiveDrillRunner.jsx).
     }));
 
+    const memoryConfigs = (moduleAllowed('memory') ? enabledMemoryDrills : []).map(([type, cfg]) => ({
+      type,
+      domain: 'memory',
+      config: { count: cfg.count },
+      timeLimitSec: DOMAINS.memory.timeBudgetSec,
+    }));
+
     // Interleave across domains (math → cognitive → memory → verbal …) rather
     // than running each module blocked, so a full session spaces varied work
     // for better retention (issue #2100). Full coverage is preserved — every
     // enabled drill still runs, just reordered.
-    const drillConfigs = interleaveByDomain([...mathConfigs, ...llmConfigs, ...cognitiveConfigs]);
+    const drillConfigs = interleaveByDomain([...mathConfigs, ...llmConfigs, ...cognitiveConfigs, ...memoryConfigs]);
     onStart(drillConfigs, buildCleanTags(tags), mode === 'train');
   }
 
@@ -259,6 +282,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     ...enabledMathDrills.map(([type, cfg]) => ({ type, cfg, source: 'math' })),
     ...enabledLlmDrills.map(([type, cfg]) => ({ type, cfg, source: 'llm' })),
     ...enabledCognitiveDrills.map(([type, cfg]) => ({ type, cfg, source: 'cognitive' })),
+    ...enabledMemoryDrills.map(([type, cfg]) => ({ type, cfg, source: 'memory' })),
   ];
 
   const enabledDomains = {};
@@ -433,7 +457,7 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     onStart([drillConfig], buildCleanTags(tags), mode === 'train');
   }
 
-  const hasAnyDrills = enabledMathDrills.length > 0 || enabledLlmDrills.length > 0 || enabledCognitiveDrills.length > 0;
+  const hasAnyDrills = enabledMathDrills.length > 0 || enabledLlmDrills.length > 0 || enabledCognitiveDrills.length > 0 || enabledMemoryDrills.length > 0;
   // Quick-session domain count reflects the sessionModules-filtered set, so the
   // "Quick 5 Min (N domains)" button matches what it will actually run.
   const domainCount = Object.keys(sessionEnabledDomains).length;

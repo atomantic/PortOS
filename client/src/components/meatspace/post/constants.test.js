@@ -177,13 +177,13 @@ describe('composedSessionDrillTypes (issue #3252)', () => {
     expect(Object.keys(out)).toEqual(['math']);
   });
 
-  it('never includes a standalone topic (memory / morse)', () => {
+  it('includes session-enabled memory but never standalone Morse', () => {
     const out = composedSessionDrillTypes({
       ...config,
       memory: { enabled: true, drillTypes: { 'memory-sequence': { enabled: true } } },
       morse: { enabled: true },
     });
-    expect(out.memory).toBeUndefined();
+    expect(out.memory).toEqual(['memory-sequence']);
     expect(out.morse).toBeUndefined();
   });
 });

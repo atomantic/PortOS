@@ -56,7 +56,7 @@ export const POST_TOPICS = [
     id: 'memory',
     label: 'Memory',
     module: 'memory',
-    surface: 'standalone',
+    surface: 'session',
     drillTypes: ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'],
   },
   {

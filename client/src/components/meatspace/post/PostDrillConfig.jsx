@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ArrowLeft, Save, Brain, Bell, Target, Layers, TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultiplicationProgress, getPostPowersProgress, getPostCognitiveProgress } from '../../../services/api';
+import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultiplicationProgress, getPostPowersProgress, getPostCognitiveProgress, getMemoryItems } from '../../../services/api';
 import toast from '../../ui/Toast';
 import { FormField } from '../../ui/FormField';
 import { filterSelectableModels, enabledApiProviderFilter } from '../../../utils/providers';
@@ -9,10 +9,8 @@ import { GOAL_DEFS, POST_TOPICS, MODULE_LABELS } from './constants';
 // Modules a Full/Quick composed session can draw from (issue #2100), DERIVED
 // from the shared topic registry so the list has one owner (issue #3252): a
 // module is offered exactly when some topic composes into a session
-// (`surface: 'session'`). That keeps `memory` and `morse` out — both are
-// standalone surfaces with no launcher-composed drill, so offering them here
-// would only let a user build an empty session (see issue #3254). Their
-// participation is controlled from the Practice Plan instead.
+// (`surface: 'session'`). Memory joins this list now that the launcher has a
+// real composed-drill source (issue #3254); Morse remains standalone.
 //
 // One row per MODULE, not per topic — wordplay / verbal / imagination all share
 // `llm-drills`, so the dedupe below keeps a single row named by MODULE_LABELS.
@@ -542,13 +540,14 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
   // goal. Seeded from saved config; the launcher/widget render progress vs these.
   const [goals, setGoals] = useState(() => ({ ...(config?.goals || {}) }));
   // Which modules a Full/Quick COMPOSED session draws from (issue #2100). The
-  // default (mental-math + cognitive + memory) excludes LLM drills so they're
-  // never auto-run without provider-cost consent — check "Wit & Memory" to opt
-  // them into composed sessions.
+  // default (mental-math + cognitive) excludes Memory and LLM drills. Memory is
+  // a deliberate composition opt-in; AI drills are never auto-run without
+  // provider-cost consent — check "Wit & Memory" to opt them in.
   const [sessionModules, setSessionModules] = useState(
     () => Array.isArray(config?.sessionModules) ? config.sessionModules : ['mental-math', 'cognitive']
   );
   const [providers, setProviders] = useState([]);
+  const [memoryItemsState, setMemoryItemsState] = useState({ status: 'loading', items: [] });
   const [saving, setSaving] = useState(false);
 
   const setGoalField = (key, raw) => setGoals(prev => {
@@ -567,7 +566,13 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
 
   useEffect(() => {
     getProviders().then(p => setProviders((p?.providers || []).filter(enabledApiProviderFilter))).catch(err => console.warn('⚠️ Failed to load providers: ' + err.message));
+    getMemoryItems({ silent: true })
+      .then(items => setMemoryItemsState({ status: 'ready', items: Array.isArray(items) ? items : [] }))
+      .catch(() => setMemoryItemsState({ status: 'error', items: [] }));
   }, []);
+
+  const hasEnabledMemoryItem = memoryItemsState.status === 'ready'
+    && memoryItemsState.items.some(item => config?.memory?.items?.[item.id]?.enabled !== false);
 
   // Load the effective-difficulty preview when Adaptive is on, so each math card
   // can show what a session would actually use. Reflects saved config + recent
@@ -887,21 +892,30 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
         <div className="flex flex-wrap gap-2">
           {SESSION_MODULE_OPTIONS.map(opt => {
             const on = sessionModules.includes(opt.id);
+            const memoryUnavailable = opt.id === 'memory' && !hasEnabledMemoryItem;
+            const unavailableReason = memoryItemsState.status === 'loading'
+              ? 'Checking memory items…'
+              : memoryItemsState.status === 'error'
+                ? 'Memory items could not be loaded.'
+                : 'Add or enable a memory item in Practice Plan first.';
             return (
-              <button
-                key={opt.id}
-                type="button"
-                role="checkbox"
-                aria-checked={on}
-                onClick={() => toggleModule(opt.id)}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
-                  on
-                    ? 'bg-port-accent/20 text-port-accent border-port-accent/50'
-                    : 'bg-port-bg text-gray-400 border-port-border hover:text-white'
-                }`}
-              >
-                {opt.label}
-              </button>
+              <div key={opt.id} className="flex flex-col gap-1">
+                <button
+                  type="button"
+                  role="checkbox"
+                  aria-checked={on}
+                  disabled={memoryUnavailable && !on}
+                  onClick={() => toggleModule(opt.id)}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+                    on
+                      ? 'bg-port-accent/20 text-port-accent border-port-accent/50'
+                      : 'bg-port-bg text-gray-400 border-port-border hover:text-white'
+                  } disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:text-gray-400`}
+                >
+                  {opt.label}
+                </button>
+                {memoryUnavailable && <span className="max-w-48 text-xs text-gray-500">{unavailableReason}</span>}
+              </div>
             );
           })}
         </div>

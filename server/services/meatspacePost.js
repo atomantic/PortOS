@@ -132,9 +132,9 @@ const DEFAULT_CONFIG = {
   // excluded: auto-enabling them would queue provider calls the user hasn't
   // consented to (see CLAUDE.md's AI Provider Usage Policy) — a user who wants
   // wit/verbal drills in every session adds `llm-drills` here explicitly.
-  // `memory` is intentionally NOT a default: memory practice lives in its own
-  // tab and has no launcher-composed drill yet, so including it would only risk
-  // an empty composed session. Legacy installs that persisted the old
+  // `memory` is intentionally NOT a default: composed memory practice is opt-in,
+  // so existing installs keep exactly their prior daily session mix. Legacy
+  // installs that persisted the old
   // `['mental-math']` default are upgraded to this by migration 159.
   sessionModules: ['mental-math', 'cognitive'],
   // Optional practice goals (issue #2100). All fields absent by default so a

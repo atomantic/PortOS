@@ -300,11 +300,11 @@ export default function PracticePlan({ config, onSaved, onBack }) {
           <p className="mt-3 pt-3 border-t border-port-border/60 text-xs text-gray-400">
             Also in your rotation (practiced from their own tabs):{' '}
             <span className="text-gray-300">{standaloneOn.map(t => t.label).join(', ')}</span>
-            {memoryItems?.length > 0 && standaloneOn.some(t => t.id === 'memory') && (
-              <span className="text-gray-500">
-                {' '}· {enabledMemoryItems.length} of {memoryItems.length} memorized text{memoryItems.length === 1 ? '' : 's'}
-              </span>
-            )}
+          </p>
+        )}
+        {memoryOn && memoryItems?.length > 0 && (
+          <p className="mt-2 text-xs text-gray-500">
+            Memory rotation: {enabledMemoryItems.length} of {memoryItems.length} memorized text{memoryItems.length === 1 ? '' : 's'}
           </p>
         )}
       </div>

@@ -8,11 +8,12 @@ vi.mock('../../../services/api', () => ({
   getPostMultiplicationProgress: vi.fn(),
   getPostPowersProgress: vi.fn(),
   getPostCognitiveProgress: vi.fn(),
+  getMemoryItems: vi.fn(),
 }));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 import PostDrillConfig from './PostDrillConfig';
-import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultiplicationProgress, getPostPowersProgress, getPostCognitiveProgress } from '../../../services/api';
+import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultiplicationProgress, getPostPowersProgress, getPostCognitiveProgress, getMemoryItems } from '../../../services/api';
 import { LLM_DRILL_TYPES, DRILL_LABELS } from './constants';
 
 // The generatable LLM drill types + labels, imported from the canonical
@@ -82,6 +83,7 @@ beforeEach(() => {
       thresholds: { minSamples: 3, targetAccuracy: 0.85 }, windowDays: 30,
     },
   });
+  getMemoryItems.mockResolvedValue([{ id: 'example-memory' }]);
 });
 
 // Render + settle the mount-effect fetches (providers, adaptive preview,
@@ -139,6 +141,24 @@ describe('PostDrillConfig', () => {
     expect(payload.goals).toEqual({ streakTarget: 10 });
     expect(payload.sessionModules).toContain('llm-drills');
     expect(payload.sessionModules).toContain('mental-math');
+  });
+
+  it('offers Memory for composed sessions when an enabled item exists', async () => {
+    await renderConfig(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+    const memory = await screen.findByRole('checkbox', { name: 'Memory' });
+    expect(memory.disabled).toBe(false);
+    fireEvent.click(memory);
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    expect(updatePostConfig.mock.calls[0][0].sessionModules).toContain('memory');
+  });
+
+  it('disables Memory composition and explains why when no enabled item exists', async () => {
+    getMemoryItems.mockResolvedValue([]);
+    await renderConfig(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+    const memory = await screen.findByRole('checkbox', { name: 'Memory' });
+    expect(memory.disabled).toBe(true);
+    expect(screen.getByText('Add or enable a memory item in Practice Plan first.')).toBeTruthy();
   });
 
   it('clears a previously-set goal to an empty goals patch on save', async () => {

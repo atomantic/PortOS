@@ -10,12 +10,13 @@ vi.mock('../../../services/api', () => ({
   getPostRecommendations: vi.fn().mockResolvedValue({ recommendations: [] }),
   getMorseProgress: vi.fn().mockResolvedValue({ settings: { wpm: 18, farnsworthWpm: 12 } }),
   getPostProgress: vi.fn().mockResolvedValue({ series: { byDay: [] } }),
+  getMemoryItems: vi.fn().mockResolvedValue([{ id: 'example-memory' }]),
   // useUserTimezone (via the today day key) reads getSettings; pin to UTC.
   getSettings: vi.fn().mockResolvedValue({ timezone: 'UTC' }),
 }));
 
 import PostSessionLauncher, { buildCleanTags, cognitiveSummary, interleaveByDomain } from './PostSessionLauncher';
-import { getPostRecommendations, getMorseProgress, getPostProgress, getPostReviewReps } from '../../../services/api';
+import { getPostRecommendations, getMorseProgress, getPostProgress, getPostReviewReps, getMemoryItems } from '../../../services/api';
 
 // Pure-function tests for PostSessionLauncher's pre-submit helpers (issue
 // #2102 gap #10). Both were lifted from component-body closures to module
@@ -592,5 +593,93 @@ describe('PostSessionLauncher honors the mentalMath module flag (issue #3252)', 
     fireEvent.click(screen.getByText('Full POST'));
 
     expect(onStart.mock.calls[0][0].map(d => d.type)).toEqual(['n-back']);
+  });
+});
+
+describe('PostSessionLauncher composed memory drills (issue #3254)', () => {
+  const memoryConfig = (overrides = {}) => ({
+    mentalMath: { enabled: true, drillTypes: { multiplication: { enabled: true, count: 10 } } },
+    llmDrills: { enabled: false, drillTypes: {} },
+    cognitive: { enabled: false, drillTypes: {} },
+    memory: {
+      enabled: true,
+      drillTypes: {
+        'memory-sequence': { enabled: true, count: 4 },
+        'memory-element-flash': { enabled: false, count: 6 },
+      },
+      items: {},
+    },
+    sessionModules: ['mental-math', 'memory'],
+    ...overrides,
+  });
+
+  const renderWith = (config, onStart) => render(
+    <MemoryRouter>
+      <PostSessionLauncher
+        config={config}
+        recentSessions={[]}
+        stats={{ sessionCount: 1, overall: 70, currentStreak: 1, longestStreak: 1, byDrill: {} }}
+        statsWeek={{ sessionCount: 1 }}
+        onStart={onStart}
+        onViewHistory={vi.fn()}
+        onViewConfig={vi.fn()}
+        onViewMemory={vi.fn()}
+        onViewMorse={vi.fn()}
+      />
+    </MemoryRouter>,
+  );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getPostRecommendations.mockResolvedValue({ recommendations: [] });
+    getPostReviewReps.mockResolvedValue({ reps: [] });
+    getMemoryItems.mockResolvedValue([{ id: 'example-memory' }]);
+  });
+
+  it('adds enabled memory drill types to Full and Quick sessions', async () => {
+    const onStart = vi.fn();
+    renderWith(memoryConfig(), onStart);
+    await waitFor(() => expect(getMemoryItems).toHaveBeenCalledWith({ silent: true }));
+
+    fireEvent.click(screen.getByText('Full POST'));
+    expect(onStart.mock.calls[0][0]).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'memory-sequence',
+        domain: 'memory',
+        config: { count: 4 },
+        timeLimitSec: 90,
+      }),
+    ]));
+    expect(onStart.mock.calls[0][0].some(d => d.type === 'memory-element-flash')).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: /Quick 5 Min/ }));
+    expect(onStart.mock.calls[1][0]).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'memory-sequence', domain: 'memory', config: { count: 3 } }),
+    ]));
+  });
+
+  it('does not compose memory when no items exist', async () => {
+    const onStart = vi.fn();
+    getMemoryItems.mockResolvedValue([]);
+    renderWith(memoryConfig(), onStart);
+    await waitFor(() => expect(getMemoryItems).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByText('Full POST'));
+    expect(onStart.mock.calls[0][0].map(d => d.type)).toEqual(['multiplication']);
+  });
+
+  it('does not compose memory when every item is disabled in the Practice Plan', async () => {
+    const onStart = vi.fn();
+    renderWith(memoryConfig({
+      memory: {
+        enabled: true,
+        drillTypes: { 'memory-sequence': { enabled: true, count: 4 } },
+        items: { 'example-memory': { enabled: false } },
+      },
+    }), onStart);
+    await waitFor(() => expect(getMemoryItems).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByText('Full POST'));
+    expect(onStart.mock.calls[0][0].some(d => d.domain === 'memory')).toBe(false);
   });
 });

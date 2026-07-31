@@ -28,15 +28,15 @@ describe('POST_TOPICS registry (issue #3252)', () => {
     expect(new Set(all).size).toBe(all.length);
   });
 
-  it('covers the standalone surfaces that previously had no opt-out', () => {
-    expect(getTopic('memory').surface).toBe('standalone');
+  it('keeps Morse standalone while Memory participates in composed sessions', () => {
+    expect(getTopic('memory').surface).toBe('session');
     expect(getTopic('morse').surface).toBe('standalone');
     // Morse never posts a scored POST task, so it carries no coarse module.
     expect(getTopic('morse').module).toBeNull();
   });
 
   it('SESSION_TOPIC_IDS is exactly the composable subset', () => {
-    expect(SESSION_TOPIC_IDS).toEqual(['math', 'wordplay', 'verbal', 'imagination', 'cognitive']);
+    expect(SESSION_TOPIC_IDS).toEqual(['math', 'memory', 'wordplay', 'verbal', 'imagination', 'cognitive']);
   });
 
   // The registry partitions the SAME drill types the config schema validates. If
