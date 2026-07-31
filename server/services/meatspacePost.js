@@ -1118,6 +1118,19 @@ export function composePostRecommendations({
 const MODULE_CONFIG_KEY = { 'mental-math': 'mentalMath', 'llm-drills': 'llmDrills', cognitive: 'cognitive' };
 
 /**
+ * The module string `isRecDrillRunnable` should be called with for a given drill
+ * type, derived from the topic registry rather than hardcoded per call site.
+ *
+ * Morse carries a null registry module (it never posts a scored POST task) but is
+ * gated by its own config block, so it maps to the `morse` pseudo-module the gate
+ * understands. `fallback` covers a drill type with no registry entry.
+ */
+function recModuleForDrillType(type, fallback) {
+  const topic = resolveTopicForDrillType(type);
+  return topic ? (topic.module || topic.id) : fallback;
+}
+
+/**
  * Whether a recommended drill can actually be run under the current config
  * (issue #2100 review): a weak-skill / stalled rec deep-links into a session,
  * so recommending a drill the user has since disabled — or a module they've
@@ -1213,8 +1226,7 @@ export async function getPostRecommendations({ limit = RECOMMENDATION_LIMIT } = 
   // isRecDrillRunnable exactly as the stalled rec for that same ladder does.
   const enabledDueReviews = dueReviews.filter((review) => {
     if (review.kind === 'memory') return isMemoryItemEnabled(config, memoryItemIdFromReview(review));
-    const module = review.kind === 'multiplication' || review.drillType === 'multiplication' ? 'mental-math' : 'cognitive';
-    return isRecDrillRunnable(config, module, review.drillType);
+    return isRecDrillRunnable(config, recModuleForDrillType(review.drillType, 'cognitive'), review.drillType);
   });
 
   // Stalled progressions — Morse runs from its own tab (so it's gated by its own
@@ -1224,11 +1236,7 @@ export async function getPostRecommendations({ limit = RECOMMENDATION_LIMIT } = 
     kochLevel: morse?.kochLevel,
     kochLevelSet: morse?.kochLevelSet,
     maxKochLevel: MAX_KOCH_LEVEL,
-  }).filter(s => isRecDrillRunnable(
-    config,
-    s.drillType === 'morse-copy' ? 'morse' : s.drillType === 'multiplication' ? 'mental-math' : 'cognitive',
-    s.drillType,
-  ));
+  }).filter(s => isRecDrillRunnable(config, recModuleForDrillType(s.drillType, 'cognitive'), s.drillType));
 
   return {
     recommendations: composePostRecommendations({
