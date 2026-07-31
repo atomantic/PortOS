@@ -46,8 +46,20 @@ describe('checkFabrication', () => {
     const reason = await checkFabrication(dir, 'generate_image');
     expect(reason).toContain('render_sheet.py');
     expect(reason).toContain('drawn by code');
-    expect(reason).toContain('generate_image was unavailable');
+    expect(reason).toContain('generate_image');
     expect(reason).toContain('discarded');
+  });
+
+  it('keeps quota-classifier trigger phrases out of its own prose', async () => {
+    // This message is PortOS's inference and gets appended to the CLI narration
+    // that imageGenQuota's classifier reads. If it carries that classifier's
+    // trigger words, every fabrication rejection self-reports as a provider
+    // quota block — and overwrites a real one recorded earlier.
+    await writeFile(join(dir, 'draw.py'), 'import matplotlib');
+    const reason = await checkFabrication(dir, 'generate_image');
+    for (const trigger of [/quota (?:will reset|exceeded|exhausted)/i, /\b429\b/, /rate.?limit/i, /resource[\s_-]*exhausted/i]) {
+      expect(trigger.test(reason)).toBe(false);
+    }
   });
 
   it('flags an interpreter cache directory', async () => {

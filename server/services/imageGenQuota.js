@@ -36,7 +36,6 @@ import { IMAGE_GEN_MODE, CLOUD_IMAGE_GEN_MODES, IMAGE_TOOL_NAMES } from './image
 import { imageGenEvents } from './imageGenEvents.js';
 import { atomicWrite, PATHS, readJSONFileStrict } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
-import { analyzeError, ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
 
 const STATE_FILE = () => join(PATHS.data, 'imagegen-quota.json');
 
@@ -45,6 +44,10 @@ const ACTIVITY_WINDOW_MS = 24 * 60 * 60 * 1000;
 // Cap the retained render log so a batch run can't grow the file without
 // bound. Both bounds do work: a batch can exceed this inside one 24h window.
 const MAX_RENDER_SAMPLES = 200;
+// How long a block whose refusal stated no reset time stays shown. Bounds an
+// otherwise-permanent block on an install that stops rendering (a successful
+// render clears it immediately, but nothing forces one to happen).
+const UNKNOWN_BLOCK_TTL_MS = 60 * 60 * 1000;
 
 // Only the cloud CLIs spend remote image quota — local renders run on the
 // user's own GPU and external hits their own SD endpoint, so neither has
@@ -82,11 +85,14 @@ async function readLedger() {
  * Parse an absolute ISO instant out of provider error text.
  * Antigravity phrases it as `(around 2026-07-31T21:38:09Z)`. Pure.
  */
-const parseAbsoluteReset = (text) => {
+const parseAbsoluteReset = (text, now) => {
   const m = text.match(/(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)/);
   if (!m) return null;
-  const d = new Date(m[1]);
-  return Number.isNaN(d.getTime()) ? null : d.getTime();
+  const at = new Date(m[1]).getTime();
+  // Narration also carries log lines and session stamps. A timestamp in the
+  // past is not a reset time — accepting one would set `blockedUntil` to an
+  // already-elapsed instant, which reads as "not blocked" downstream.
+  return Number.isNaN(at) || at <= now ? null : at;
 };
 
 /**
@@ -100,51 +106,51 @@ const parseRelativeReset = (text, now) => {
   return now + Number(m[1]) * unitMs;
 };
 
-// Image-backend refusals the shared CLI classifier doesn't cover: it keys on
-// `API Error: 429` / `rate limit` / `too many requests`, none of which match
-// the imagen backend's `429 (Resource Exhausted) ... exhausted your capacity`.
+/**
+ * Phrases that mean "the image backend refused because you are out of quota".
+ *
+ * EVERY pattern here must be anchored to quota context, because the text being
+ * classified is the model's own narration — which routinely quotes the image
+ * prompt back. A bare `\b429\b` matched "I will not draw route 429 signage";
+ * a bare "credit" would match "a wizard holding a credit card". A prompt is
+ * user content, so any pattern a prompt can satisfy by accident paints a
+ * phantom 0%-left meter on an ordinary content decline.
+ *
+ * These deliberately do NOT delegate to the toolkit's `analyzeError`. That
+ * classifier is first-match-wins and its `/billing|payment|credit|insufficient
+ * funds/` rule sits ABOVE its rate-limit rule, so "rate limit exceeded; prompt
+ * was: a wizard holding a credit card" classifies as QUOTA_EXCEEDED — meaning
+ * you cannot filter out the prompt-echo false positive by dropping that
+ * category without also dropping the real rate limit underneath it. Matching
+ * the phrases directly is order-independent and says what it means.
+ */
 const IMAGE_QUOTA_PATTERNS = [
-  /\b429\b/,
+  /(?:error|status|code|http)\W{0,12}429\b/i,
+  /\b429\b\W{0,40}(?:resource[\s_-]*exhausted|too many requests|rate.?limit|quota)/i,
   /resource[\s_-]*exhausted/i,
   /exhausted your (?:capacity|quota)/i,
   /quota (?:will reset|exceeded|exhausted)/i,
   /out of (?:quota|credits)/i,
   /insufficient[\s_-]*quota/i,
+  /rate.?limit(?:ed|s)?\b/i,
+  /too many requests/i,
+  /hit your (?:usage )?limit/i,
 ];
-
-// Categories from the shared classifier that mean "refused for quota reasons".
-//
-// QUOTA_EXCEEDED is deliberately EXCLUDED despite the name: its pattern is
-// /billing|payment|credit|insufficient funds/, and the text classified here is
-// the model's own narration, which routinely quotes the image prompt back. A
-// render of "a wizard holding a credit card" that gets declined on content
-// grounds would match on the bare word "credit" and paint a phantom 0%-left
-// meter with no reset. RATE_LIMIT and USAGE_LIMIT key on phrases no image
-// prompt produces by accident ("429", "rate limit", "hit your usage limit").
-// The genuinely-billing image phrasings are covered precisely by
-// IMAGE_QUOTA_PATTERNS above, which requires "out of credits", not "credit".
-const QUOTA_CATEGORIES = new Set([
-  ERROR_CATEGORIES.RATE_LIMIT,
-  ERROR_CATEGORIES.USAGE_LIMIT,
-]);
 
 /**
  * Classify a failed render's error text. Returns `{ exhausted, resetsAt }`
  * where `resetsAt` is epoch ms or null. Pure given `now`; exported for tests.
- *
- * Layered on purpose: the image-specific patterns catch the backend phrasings
- * measured here, and `analyzeError` folds in every provider phrasing the rest
- * of the toolkit has already learned, so a new one only has to be taught once.
  */
 export function parseImageQuotaSignal(text, { now = Date.now() } = {}) {
   const s = String(text || '');
   if (!s.trim()) return { exhausted: false, resetsAt: null };
-  const exhausted = IMAGE_QUOTA_PATTERNS.some((re) => re.test(s))
-    || QUOTA_CATEGORIES.has(analyzeError(s).category);
-  if (!exhausted) return { exhausted: false, resetsAt: null };
+  if (!IMAGE_QUOTA_PATTERNS.some((re) => re.test(s))) return { exhausted: false, resetsAt: null };
   // Absolute wins: a provider that states both ("in ~5 hours (around <ISO>)")
   // is more precise in the parenthetical, and it survives a slow error path.
-  return { exhausted: true, resetsAt: parseAbsoluteReset(s) ?? parseRelativeReset(s, now) };
+  // Both parsers reject an instant that isn't in the future — narration carries
+  // log/session timestamps too, and a PAST "reset" would read as "not blocked".
+  const resetsAt = parseAbsoluteReset(s, now) ?? parseRelativeReset(s, now);
+  return { exhausted: true, resetsAt };
 }
 
 /**
@@ -165,10 +171,21 @@ export async function recordImageGenOutcome({ mode, ok, error = '', at = Date.no
     if (ok) {
       // A render that succeeded proves the backend is serving again — clear a
       // block that outlived its stated reset (providers round "approximately").
+      entry.blockedAt = null;
       entry.blockedUntil = null;
     } else {
       const signal = parseImageQuotaSignal(error, { now: at });
-      if (signal.exhausted) entry.blockedUntil = signal.resetsAt;
+      if (signal.exhausted) {
+        // `blockedAt` is what marks the backend blocked; `blockedUntil` only
+        // says WHEN it lifts and is legitimately unknown (a refusal need not
+        // state a reset). Keying "blocked" off blockedUntil alone collapsed
+        // "blocked, reset unknown" into "not blocked".
+        entry.blockedAt = at;
+        // Never downgrade a known reset to unknown: a repeat attempt during an
+        // active block typically returns a bare 429 without restating the reset
+        // the first one gave us, which would otherwise erase it.
+        entry.blockedUntil = signal.resetsAt ?? entry.blockedUntil ?? null;
+      }
     }
     await atomicWrite(STATE_FILE(), ledger);
   });
@@ -239,10 +256,16 @@ export async function getImageGenQuota({ enabledModes = [], now = Date.now() } =
   const limits = [];
   const metrics = [];
   for (const mode of tracked) {
-    const entry = ledger?.modes?.[mode] || { renders: [], blockedUntil: null };
+    const entry = ledger.modes?.[mode] || { renders: [], blockedAt: null, blockedUntil: null };
     const key = `imagegen-${mode}`;
     const label = rowLabel(mode);
-    if (entry.blockedUntil > now) {
+    // Blocked while the stated reset is still ahead, or — when the refusal
+    // never stated one — for a bounded window after we observed it, so an
+    // unknown-reset block still shows but can't stick forever on an install
+    // that stops rendering. A success clears it either way.
+    const blocked = entry.blockedAt
+      && (entry.blockedUntil ? entry.blockedUntil > now : now - entry.blockedAt < UNKNOWN_BLOCK_TTL_MS);
+    if (blocked) {
       limits.push({
         key,
         label,
@@ -250,7 +273,9 @@ export async function getImageGenQuota({ enabledModes = [], now = Date.now() } =
         model: MODE_LABELS[mode] || mode,
         percentUsed: 100,
         percentRemaining: 0,
-        resetsAt: new Date(entry.blockedUntil).toISOString(),
+        // Null when the provider didn't state one — the meter renders without a
+        // "resets" line rather than showing a time we made up.
+        resetsAt: entry.blockedUntil ? new Date(entry.blockedUntil).toISOString() : null,
         timezone: null,
       });
       continue;

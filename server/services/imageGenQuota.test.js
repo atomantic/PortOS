@@ -19,6 +19,12 @@ const {
   __resetImageGenQuotaHookForTests,
 } = await import('./imageGenQuota.js');
 const { imageGenEvents } = await import('./imageGenEvents.js');
+const { checkFabrication } = await import('./imageGen/fabricationGuard.js');
+
+// A real scratch dir with drawing-script residue, so the guard's actual message
+// (not a copy of it) is what gets fed to the quota classifier below.
+const FAB_DIR = await mkdtemp(join(tmpdir(), 'portos-igquota-fab-'));
+await writeFile(join(FAB_DIR, 'render_sheet.py'), 'import matplotlib');
 
 // The verbatim shape Antigravity returned on 2026-07-31 (paths/ids redacted).
 const AGY_429 = 'Agy did not produce an image at the directed path. Agy said: "Here is the error details returned by the API: * **Error Code**: 429 (Resource Exhausted) * **Message**: You have exhausted your capacity on this model. Your quota will reset in approximately 5 hours (around 2026-07-31T21:38:09Z). Since the `generate_image` tool relies entirely on this backend service, I am currently unable to write the requested image to `/tmp/portos-agy-<id>/output.png`. Please try again after the quota resets."';
@@ -57,6 +63,27 @@ describe('parseImageQuotaSignal', () => {
     expect(signal.exhausted).toBe(false);
   });
 
+  it('catches a real rate limit even when the prompt echo contains "credit"', () => {
+    // The toolkit's shared classifier is first-match-wins with its billing rule
+    // ABOVE its rate-limit rule, so filtering the prompt-echo false positive by
+    // category would have suppressed this real refusal. Match phrases directly.
+    const s = 'rate limit exceeded for image_gen; prompt was: a wizard holding a credit card';
+    expect(parseImageQuotaSignal(s).exhausted).toBe(true);
+  });
+
+  it('does not treat a bare number in the prompt as a 429', () => {
+    // `\b429\b` unanchored matched artwork descriptions.
+    expect(parseImageQuotaSignal('Agy said: "I will not draw route 429 signage."').exhausted).toBe(false);
+  });
+
+  it('ignores a past timestamp in the narration', () => {
+    // Narration carries log/session stamps. Accepting one as the reset would
+    // set blockedUntil to an elapsed instant, which reads as "not blocked".
+    const now = Date.parse('2026-07-31T17:00:00Z');
+    const s = 'Agy said: "429 Resource Exhausted. [log 2026-07-30T09:00:00Z] retry later."';
+    expect(parseImageQuotaSignal(s, { now })).toEqual({ exhausted: true, resetsAt: null });
+  });
+
   it('does not treat prompt content echoed in a decline as a quota block', () => {
     // The classified text is the model's own narration, which quotes the image
     // prompt back. A bare "credit"/"payment" in the artwork description must
@@ -70,7 +97,7 @@ describe('parseImageQuotaSignal', () => {
     expect(parseImageQuotaSignal('Render failed: you are out of credits.').exhausted).toBe(true);
   });
 
-  it('inherits rate-limit phrasings the shared CLI classifier already knows', () => {
+  it('catches the rate-limit phrasings the shared CLI classifier also knows', () => {
     expect(parseImageQuotaSignal('Grok said: "too many requests, slow down"').exhausted).toBe(true);
   });
 
@@ -163,6 +190,39 @@ describe('getImageGenQuota', () => {
     expect(card.metrics).toHaveLength(1);
     expect(card.metrics[0].value).toBe('2 renders · 24h');
     expect(card.metrics[0].detail).toContain('quota not reported');
+  });
+
+  it('shows a block whose refusal stated no reset time', async () => {
+    // "blocked, reset unknown" must not collapse into "not blocked" — keying
+    // blocked-ness off blockedUntil alone did exactly that.
+    await recordImageGenOutcome({ mode: 'agy', ok: false, error: 'RESOURCE_EXHAUSTED', at: now });
+    const card = await getImageGenQuota({ enabledModes: ['agy'], now });
+    expect(card.limits).toHaveLength(1);
+    expect(card.limits[0]).toMatchObject({ percentRemaining: 0, resetsAt: null });
+  });
+
+  it('expires an unknown-reset block instead of sticking forever', async () => {
+    await recordImageGenOutcome({ mode: 'agy', ok: false, error: 'RESOURCE_EXHAUSTED', at: now });
+    const card = await getImageGenQuota({ enabledModes: ['agy'], now: now + 2 * 60 * 60 * 1000 });
+    expect(card.limits).toEqual([]);
+  });
+
+  it('does not let a repeat refusal erase the reset the first one stated', async () => {
+    // A retry during an active block returns a bare 429 without restating the
+    // reset; overwriting with null would drop the meter mid-block.
+    await recordImageGenOutcome({ mode: 'agy', ok: false, error: AGY_429, at: now });
+    await recordImageGenOutcome({ mode: 'agy', ok: false, error: '429 RESOURCE_EXHAUSTED, please try later', at: now + 60_000 });
+    const card = await getImageGenQuota({ enabledModes: ['agy'], now: now + 120_000 });
+    expect(card.limits).toHaveLength(1);
+    expect(card.limits[0].resetsAt).toBe('2026-07-31T21:38:09.000Z');
+  });
+
+  it('does not let our own fabrication message register as a provider quota block', async () => {
+    // The guard's prose is PortOS's inference, not the provider's words. If it
+    // self-classifies, every fabrication rejection fakes a quota block — and
+    // overwrites a real one.
+    const guardMsg = await checkFabrication(FAB_DIR, 'generate_image');
+    expect(parseImageQuotaSignal(guardMsg).exhausted).toBe(false);
   });
 
   it('drops the block once its stated reset has passed', async () => {

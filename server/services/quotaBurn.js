@@ -159,6 +159,11 @@ export function selectBurnCandidates(quotas, config, { now = Date.now(), dispatc
     .map((family) => {
       const card = cards.get(family.id);
       if (!card || card.supported === false || card.error) return null;
+      // A card can declare it carries no spendable headroom (`burnable: false`)
+      // — e.g. the Image Gen card, whose 0%-left meter is an OBSERVED refusal,
+      // not a measured allowance. Burning against it would dispatch work to a
+      // backend that just refused. Opt-out only: absent means burnable.
+      if (card.burnable === false) return null;
       const selected = selectLimit(card, family, now);
       if (!selected || selected.hours < 0 || selected.hours > family.resetWithinHours) return null;
       const dispatchKey = `${family.id}:${normalizeResetAt(selected.limit, { now, timeZone: family.timeZone }).epochMs}`;

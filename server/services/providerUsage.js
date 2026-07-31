@@ -545,7 +545,13 @@ export async function getProviderQuotas({ refresh = false } = {}) {
  * is a better answer than a card asserting a quota state we failed to read.
  */
 const fetchImageGenQuota = async () => {
-  const settings = await getSettings().catch(() => null);
+  // A settings read that FAILS is not "no cloud backend enabled" — without it
+  // we can't tell which backends to report, and silently dropping the card is
+  // indistinguishable from the user running local-only. Say so in the log.
+  const settings = await getSettings().catch((err) => {
+    console.error(`❌ Image-gen quota card: could not read settings (${err?.message || err}) — card omitted`);
+    return null;
+  });
   const enabledModes = enabledCloudImageModes(settings);
   if (!enabledModes.length) return null; // no cloud image backend → no card
   return getImageGenQuota({ enabledModes }).catch((err) => {

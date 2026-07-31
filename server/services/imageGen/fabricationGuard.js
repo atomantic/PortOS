@@ -73,10 +73,29 @@ export async function checkFabrication(scratchDir, toolName) {
   // Recursive listing rather than a hand-rolled walk so the rule is the same at
   // every depth — a `scripts/draw.py` or a nested `__pycache__` counts exactly
   // as much as one dropped beside the output.
-  const paths = await readdir(scratchDir, { recursive: true }).catch(() => []);
+  //
+  // A scan that FAILS is not a scan that found nothing. ENOENT is a real clean
+  // answer (the dir is gone), but EACCES/EMFILE/EIO on a directory the harvest
+  // just read a file out of means we don't know. This is a backstop, not the
+  // primary defense (the prompt clause is), and failing a legitimate render on
+  // a filesystem hiccup costs the user an image they already spent quota on —
+  // so it passes, but loudly, rather than collapsing into a silent "clean".
+  const paths = await readdir(scratchDir, { recursive: true }).catch((err) => {
+    if (err?.code !== 'ENOENT') {
+      console.error(`⚠️ Fabrication scan failed for ${toolName} (${err?.code || err?.message}) — accepting the render unchecked`);
+    }
+    return [];
+  });
   const residue = paths.filter((rel) =>
     rel.split(sep).some((segment) => CODE_DIRS.has(segment))
     || CODE_EXTENSIONS.has(extname(rel).toLowerCase()));
   if (!residue.length) return null;
-  return `The image was drawn by code, not generated: the agent wrote ${residue.slice(0, 5).join(', ')} in its scratch directory instead of using ${toolName}. This usually means ${toolName} was unavailable (quota exhausted, or not on your plan) and the agent produced a stand-in picture. The file was discarded.`;
+  // This sentence is PortOS's inference, not the provider's words, and it gets
+  // appended to the CLI narration that the image-quota classifier reads. Keep
+  // it free of that classifier's trigger phrases ("quota exhausted", "429",
+  // "rate limit") — otherwise every fabrication rejection self-reports as a
+  // provider quota block, and (worse) overwrites a real one recorded earlier.
+  // The narration appended after it still carries the genuine 429 when there
+  // was one, which is the signal that should decide.
+  return `The image was drawn by code, not generated: the agent wrote ${residue.slice(0, 5).join(', ')} in its scratch directory instead of using ${toolName}. That usually means ${toolName} was not available to it and it produced a stand-in picture. The file was discarded.`;
 }

@@ -14,6 +14,20 @@ const quota = (family, resetsAt, percentRemaining = 50, extras = {}) => ({
 });
 
 describe('selectBurnCandidates', () => {
+  it('skips a card that declares itself unburnable', () => {
+    // A card can carry a 0%-left limit that is an OBSERVED refusal rather than
+    // a measured allowance (the Image Gen card) — burning against it would
+    // dispatch work to a backend that just refused. Opt-out only.
+    const candidates = selectBurnCandidates(
+      [quota('grok', '2026-07-26T18:00:00.000Z', 50, { burnable: false })],
+      config,
+      { now: NOW },
+    );
+    expect(candidates).toEqual([]);
+    // Absent `burnable` still means burnable — this must not regress every card.
+    expect(selectBurnCandidates([quota('grok', '2026-07-26T18:00:00.000Z')], config, { now: NOW })).toHaveLength(1);
+  });
+
   it('selects burnable windows by reset time then priority', () => {
     const candidates = selectBurnCandidates([
       quota('codex', '2026-07-27T00:00:00.000Z'),
