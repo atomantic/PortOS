@@ -598,6 +598,68 @@ describe('rounds service', () => {
     expect([...new Set(letters)].sort()).toEqual(['A', 'D', 'E', 'F', 'G']);
   });
 
+  it('Hey Ho carries all four sung phrases, lyric sheet and staff agreeing (issue #3238)', async () => {
+    const songs = await svc.listRounds();
+    const heyHo = songs.find((s) => s.id === 'seed-hey-ho-nobody-home');
+
+    // Four two-bar phrases = eight bars. The round shipped with only three
+    // phrases, leaving the closing line unsung.
+    const parsed = parseScore(heyHo.score);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.measures).toHaveLength(8);
+
+    // The lyric sheet's four lines each have notes to be sung on. Compare the
+    // staff's own inline syllables against the lyric block, ignoring the
+    // held-syllable hyphens the notation uses to split a word across notes.
+    const lyricLines = heyHo.sections.find((s) => s.id === 'sec-round').lyrics.split('\n');
+    expect(lyricLines).toHaveLength(4);
+    expect(lyricLines[3]).toBe('Hey, hey, ho.');
+    const sung = parsed.measures
+      .flatMap((m) => m.notes.map((n) => n.lyric))
+      .filter(Boolean)
+      .join(' ')
+      .replace(/- /g, '')
+      .toLowerCase();
+    const written = lyricLines.join(' ').replace(/[,.]/g, '').toLowerCase();
+    expect(sung).toBe(written);
+  });
+
+  it('the closing phrase cadences onto the D tonic in full 4/4 bars (issue #3238)', async () => {
+    const songs = await svc.listRounds();
+    const heyHo = songs.find((s) => s.id === 'seed-hey-ho-nobody-home');
+    const parsed = parseScore(heyHo.score);
+    // Every bar is a complete 4/4 measure — a short bar would render as a beat
+    // warning in the editor and break the quodlibet's beat grid.
+    parsed.measures.forEach((m, i) => expect(m.beats, `bar ${i + 1}`).toBe(4));
+    // The round ends on the tonic it is centered on.
+    const lastPitched = parsed.measures.at(-1).notes.filter((n) => !n.rest).at(-1);
+    expect(lastPitched.pitch.letter).toBe('D');
+  });
+
+  it('Hey Ho is bar-aligned with its quodlibet partners so the stack stays in phase (issue #3238)', async () => {
+    const songs = await svc.listRounds();
+    const barCount = (id) => parseScore(songs.find((s) => s.id === id).score).measures.length;
+    // Ah Poor Bird and Rose Rose Rose Red are eight bars; a six-bar Hey Ho lapped
+    // them every four cycles, so the documented three-round quodlibet never
+    // actually lined up.
+    expect(barCount('seed-hey-ho-nobody-home')).toBe(barCount('seed-ah-poor-bird'));
+    expect(barCount('seed-hey-ho-nobody-home')).toBe(barCount('seed-rose-rose-rose-red'));
+  });
+
+  it('Hey Ho stacks four canonic voices entering two bars apart (issue #3238)', async () => {
+    const songs = await svc.listRounds();
+    const heyHo = songs.find((s) => s.id === 'seed-hey-ho-nobody-home');
+    // Voice 1 is the melody itself; the parts carry voices 2-4.
+    expect(heyHo.scoreParts.map((p) => p.role)).toEqual(['voice-2', 'voice-3', 'voice-4']);
+    // Each voice is the same melody delayed by whole-bar rests — 2, 4, then 6.
+    const leadingRests = (part) => parseScore(part.score).measures
+      .findIndex((m) => m.notes.some((n) => !n.rest));
+    expect(heyHo.scoreParts.map(leadingRests)).toEqual([2, 4, 6]);
+    // The documented fourth entry is a real staggered voice now, not a unison double.
+    const voice4 = heyHo.layers.find((l) => l.id === 'voice-4');
+    expect(voice4.notes).not.toMatch(/unison/i);
+  });
+
   it('the D-minor quodlibet trio has no {B,F} tritone at any aligned beat (issue #2105)', async () => {
     const songs = await svc.listRounds();
     const trio = ['seed-hey-ho-nobody-home', 'seed-ah-poor-bird', 'seed-rose-rose-rose-red']

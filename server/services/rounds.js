@@ -543,16 +543,23 @@ const canonVoice = (melody, { delayBars, id, label, role }) => {
   return { id, label, role, score: [...headers, '', ...rests, ...body].join('\n') };
 };
 
-// Hey Ho Nobody Home — six bars, three 2-bar phrases. The classic 3-voice round:
-// voices enter one phrase (2 bars) apart, and the three phrases stack into the
-// full D-minor chord. Centered on D with all naturals (score header `key: C` =
-// no key signature), so it stacks cleanly with Ah Poor Bird and Rose Rose Rose
-// Red in the D-minor quodlibet: phrase 1 (D/A) + phrase 2 (D–E–F) + phrase 3
-// (A–G–F–E) outline a D-minor triad, with no B-natural to sound a tritone
-// against the partners' F. Contour matches the Wikibooks Songbook (E-minor) and
-// Kodály teaching (D natural-minor) transcriptions, transposed to D
-// (1-1-2-2-♭3-♭3-♭3-♭3-2 in phrase 2). Exported so migration 158 can restore it
-// onto installs that still hold the old G-centered, major-third transcription.
+// Hey Ho Nobody Home — eight bars, four 2-bar phrases. A 4-voice round: voices
+// enter one phrase (2 bars) apart, and the phrases stack into the full D-minor
+// chord. Centered on D with all naturals (score header `key: C` = no key
+// signature), so it stacks cleanly with Ah Poor Bird and Rose Rose Rose Red in
+// the D-minor quodlibet: phrase 1 (D/A) + phrase 2 (D–E–F) + phrase 3 (A–G–F–E)
+// outline a D-minor triad, with no B-natural to sound a tritone against the
+// partners' F. Contour matches the Wikibooks Songbook (E-minor) and Kodály
+// teaching (D natural-minor) transcriptions, transposed to D
+// (1-1-2-2-♭3-♭3-♭3-♭3-2 in phrase 2). Exported so migrations 158 and 214 can
+// restore it onto installs holding an older transcription.
+//
+// Phrase 4 ("Hey, hey, ho") is the round's closing line. It was missing entirely
+// until issue #3238 — the lyric sheet listed four lines while the staff carried
+// three, and the 6-bar melody drifted out of phase against its own 8-bar
+// quodlibet partners every four cycles. It cadences F–E–D onto the tonic, in the
+// same two-half-notes-per-bar rhythm as phrase 1, using only the round's
+// existing D natural-minor pentachord (A D E F G — no new pitch letters).
 export const HEY_HO_MELODY = [
   'clef: treble',
   'key: C',
@@ -562,10 +569,12 @@ export const HEY_HO_MELODY = [
   '| D4h(Hey) A3h(ho) | D4q(no-) D4e(bo-) D4e(dy) A3h(home) |',
   '| D4q(Meat) D4q(nor) E4q(drink) E4q(nor) | F4e(mon-) F4e(ey) F4e(have) F4e(I) E4h(none) |',
   '| A4q(Still) G4q(I) A4q(will) G4q(be) | F4h(mer-) E4h(ry) |',
+  '| F4h(Hey) E4h(hey) | D4h(ho) rh |',
 ].join('\n');
 export const HEY_HO_SCORE_PARTS = [
   canonVoice(HEY_HO_MELODY, { delayBars: 2, id: 'part-heyho-v2', label: 'Voice 2', role: 'voice-2' }),
   canonVoice(HEY_HO_MELODY, { delayBars: 4, id: 'part-heyho-v3', label: 'Voice 3', role: 'voice-3' }),
+  canonVoice(HEY_HO_MELODY, { delayBars: 6, id: 'part-heyho-v4', label: 'Voice 4', role: 'voice-4' }),
 ];
 
 // Ah Poor Bird — eight bars, four 2-bar phrases. A 4-voice round; voices enter
@@ -749,7 +758,7 @@ export const SEED_ROUNDS = [
     key: 'D minor (Dorian)',
     tempo: 76,
     rhythmShapeId: 'slow-4-4',
-    notation: 'A round in up to six voices (Ravenscroft\'s Pammelia, 1609). New voices enter one two-bar phrase behind the last. Centered on D with no key signature — all naturals (D Dorian / natural minor), no B. Melody after the Wikibooks Songbook and Kodály teaching transcriptions, transposed to a D tonal center.',
+    notation: 'A round in up to six voices (Ravenscroft\'s Pammelia, 1609). Four two-bar phrases (8 bars); new voices enter one phrase behind the last, so four voices fill the round. Centered on D with no key signature — all naturals (D Dorian / natural minor), no B. Melody after the Wikibooks Songbook and Kodály teaching transcriptions, transposed to a D tonal center; the closing "Hey, hey, ho" cadences F–E–D onto the tonic.',
     score: HEY_HO_MELODY,
     // Canonic voice stack: the melody entering one phrase (2 bars) late per voice
     // — the round sung against itself. Derived from HEY_HO_MELODY so it can't
@@ -759,13 +768,13 @@ export const SEED_ROUNDS = [
     notes: 'One of the oldest English rounds. Sung with Ah Poor Bird and Rose Rose Rose Red it forms a classic three-round quodlibet — all three share one minor chord cycle and can be sung at the same time. Keep it light and lilting despite the minor key.',
     learned: false,
     sections: [
-      { id: 'sec-round', label: 'Round', lyrics: 'Hey, ho, nobody home,\nMeat nor drink nor money have I none,\nStill I will be merry.\nHey, ho, nobody home.' },
+      { id: 'sec-round', label: 'Round', lyrics: 'Hey, ho, nobody home,\nMeat nor drink nor money have I none,\nStill I will be merry.\nHey, hey, ho.' },
     ],
     layers: [
       { id: 'voice-1', label: 'Voice 1 (lead)', part: 'Any', notes: 'Starts the round and sings it straight through. Everyone learns this line first.' },
       { id: 'voice-2', label: 'Voice 2', part: 'Any', notes: 'Enters as Voice 1 reaches "Meat nor drink…" (phrase 2) — one full phrase behind the lead.' },
       { id: 'voice-3', label: 'Voice 3', part: 'Any', notes: 'Enters at "Still I will be merry" (phrase 3); the three phrases stack into the full minor chord.' },
-      { id: 'voice-4', label: 'Voice 4', part: 'Any', notes: 'Optional fourth entry: comes in as Voice 1 loops back to the top, doubling the lead in unison or an octave up.' },
+      { id: 'voice-4', label: 'Voice 4', part: 'Any', notes: 'Enters at the closing "Hey, hey, ho" (phrase 4, bar 7) — the last of the four staggered entries, filling the round out.' },
     ],
     references: [],
     partnerRoundIds: ['seed-ah-poor-bird', 'seed-rose-rose-rose-red', 'seed-zum-gali-gali'],
