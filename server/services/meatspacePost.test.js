@@ -201,6 +201,18 @@ describe('generateMultiplication — progressive factors', () => {
 // =============================================================================
 
 describe('generatePowers', () => {
+  it('uses only technique-covered pairs and orders progressive questions easiest first', () => {
+    const result = generatePowers([99], 20, 30, 4);
+    expect(result.config).toMatchObject({ level: 4, technique: 'split-exponent' });
+    expect(result.questions.map(question => question.techniqueLevel)).toEqual(
+      [...result.questions.map(question => question.techniqueLevel)].sort((a, b) => a - b)
+    );
+    for (const question of result.questions) {
+      expect(question.technique).toBeTruthy();
+      expect(question.prompt).not.toMatch(/^99\^/);
+    }
+  });
+
   it('generates requested number of questions', () => {
     const result = generatePowers([2, 3], 8, 6);
     expect(result.questions).toHaveLength(6);
@@ -1171,7 +1183,10 @@ describe('adaptive signal is accuracy-driven — fast-sloppy vs slow-accurate di
     readJSONFile.mockImplementation((path, defaultValue) => {
       const p = String(path);
       if (p.includes('post-sessions')) return Promise.resolve({ sessions });
-      if (p.includes('post-config')) return Promise.resolve({ adaptive: { enabled: true } });
+      if (p.includes('post-config')) return Promise.resolve({
+        adaptive: { enabled: true },
+        mentalMath: { drillTypes: { powers: { progressive: false } } },
+      });
       return Promise.resolve(defaultValue);
     });
   }
@@ -1408,7 +1423,10 @@ describe('resolveDrillConfig — adaptive integration for serial-subtraction/pow
           }],
         });
       }
-      if (p.includes('post-config')) return Promise.resolve({ adaptive: { enabled: true } });
+      if (p.includes('post-config')) return Promise.resolve({
+        adaptive: { enabled: true },
+        mentalMath: { drillTypes: { powers: { progressive: false } } },
+      });
       return Promise.resolve(defaultValue);
     });
   }

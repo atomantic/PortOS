@@ -6,12 +6,13 @@ vi.mock('../../../services/api', () => ({
   getProviders: vi.fn(),
   getPostAdaptivePreview: vi.fn(),
   getPostMultiplicationProgress: vi.fn(),
+  getPostPowersProgress: vi.fn(),
   getPostCognitiveProgress: vi.fn(),
 }));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 import PostDrillConfig from './PostDrillConfig';
-import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultiplicationProgress, getPostCognitiveProgress } from '../../../services/api';
+import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultiplicationProgress, getPostPowersProgress, getPostCognitiveProgress } from '../../../services/api';
 import { LLM_DRILL_TYPES, DRILL_LABELS } from './constants';
 
 // The generatable LLM drill types + labels, imported from the canonical
@@ -54,6 +55,18 @@ beforeEach(() => {
     levels: [
       { level: 0, label: '1×1-digit', mastered: false },
       { level: 1, label: '1×2-digit', mastered: false },
+    ],
+    thresholds: { minSamples: 12, targetAccuracy: 0.9 },
+    windowDays: 30,
+  });
+  getPostPowersProgress.mockResolvedValue({
+    level: 0,
+    label: 'Powers of 2 — recall table',
+    atHardest: false,
+    currentMastered: false,
+    levels: [
+      { level: 0, label: 'Powers of 2 — recall table', mastered: false },
+      { level: 1, label: 'Small squares & cubes', mastered: false },
     ],
     thresholds: { minSamples: 12, targetAccuracy: 0.9 },
     windowDays: 30,
@@ -243,6 +256,21 @@ describe('PostDrillConfig', () => {
     fireEvent.click(screen.getByText('Save'));
     await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
     expect(updatePostConfig.mock.calls[0][0].mentalMath.drillTypes.multiplication.progressive).toBe(false);
+  });
+
+  it('powers defaults to its technique ladder and can switch back to manual max exponent', async () => {
+    await renderConfig(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
+    const toggle = screen.getByRole('switch', { name: 'Progressive difficulty — Powers' });
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(screen.queryByText('Max Exponent')).toBeNull();
+    await waitFor(() => expect(getPostPowersProgress).toHaveBeenCalled());
+    expect(screen.getByText(/Powers of 2 — recall table/)).toBeTruthy();
+
+    fireEvent.click(toggle);
+    expect(screen.getByText('Max Exponent')).toBeTruthy();
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() => expect(updatePostConfig).toHaveBeenCalled());
+    expect(updatePostConfig.mock.calls[0][0].mentalMath.drillTypes.powers.progressive).toBe(false);
   });
 
   it('cognitive drills default to Progressive on — n-back hides its knobs and shows its rung', async () => {

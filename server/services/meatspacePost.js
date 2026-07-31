@@ -15,6 +15,11 @@ import { resolveTopicForDrillType, isTopicEnabled, isMemoryItemEnabled } from '.
 import { adaptDrillConfig, ADAPTIVE_SPECS, ADAPTIVE_DEFAULTS } from '../lib/postAdaptive.js';
 import { resolveMultiplicationLevel, MASTERY_DEFAULTS } from '../lib/postMultiplicationLadder.js';
 import {
+  POWERS_MASTERY_DEFAULTS,
+  powersPoolForLevel,
+  resolvePowersLevel,
+} from '../lib/postPowersLadder.js';
+import {
   cognitiveLadder,
   cognitiveLevelConfig,
   resolveCognitiveProgression,
@@ -69,7 +74,7 @@ const DEFAULT_CONFIG = {
       // `maxDigits` difficulty. `maxDigits` is retained as the fallback for when
       // a user turns the progressive ladder off.
       'multiplication': { enabled: true, count: 10, maxDigits: 2, progressive: true, timeLimitSec: 120 },
-      'powers': { enabled: true, bases: [2, 3, 5], maxExponent: 10, count: 8, timeLimitSec: 90 },
+      'powers': { enabled: true, bases: [2, 3, 5], maxExponent: 10, count: 8, progressive: true, timeLimitSec: 90 },
       'estimation': { enabled: true, count: 5, tolerancePct: 10, timeLimitSec: 120 }
     }
   },
@@ -1321,7 +1326,28 @@ export function generateMultiplication(count = 10, maxDigits = 2, factors = null
   return { type: 'multiplication', config, questions };
 }
 
-export function generatePowers(bases, maxExponent = 10, count = 8) {
+export function generatePowers(bases, maxExponent = 10, count = 8, level = null) {
+  if (Number.isInteger(level)) {
+    const pool = powersPoolForLevel(level);
+    const questions = Array.from({ length: count }, () => {
+      const pair = pool[Math.floor(Math.random() * pool.length)];
+      return {
+        prompt: `${pair.base}^${pair.exponent}`,
+        expected: Math.pow(pair.base, pair.exponent),
+        technique: pair.technique,
+        techniqueLevel: pair.level,
+      };
+    }).sort((a, b) => a.techniqueLevel - b.techniqueLevel);
+    return {
+      type: 'powers',
+      config: {
+        count,
+        level,
+        technique: pool.at(-1).technique,
+      },
+      questions,
+    };
+  }
   bases = Array.isArray(bases) && bases.length > 0 ? bases : [2, 3, 5];
   const questions = [];
   for (let i = 0; i < count; i++) {
@@ -1367,7 +1393,7 @@ export function generateDrill(type, config = {}) {
     case 'multiplication':
       return generateMultiplication(config.count, config.maxDigits, config.factors, config.level);
     case 'powers':
-      return generatePowers(config.bases, config.maxExponent, config.count);
+      return generatePowers(config.bases, config.maxExponent, config.count, config.level);
     case 'estimation':
       return generateEstimation(config.count, config.tolerancePct);
     case 'n-back':
@@ -1465,6 +1491,41 @@ async function getMultiplicationLevelStats(windowDays = MASTERY_DEFAULTS.windowD
   return { stats, floorLevel };
 }
 
+async function getPowersLevelStats(windowDays = POWERS_MASTERY_DEFAULTS.windowDays) {
+  const sessions = await getPostSessions();
+  const cutoffStr = windowDays > 0 ? ymdShift(await localToday(), -windowDays) : null;
+  const byLevel = {};
+  let floorLevel = 0;
+  for (const session of sessions) {
+    for (const task of session.tasks || []) {
+      if (task.type !== 'powers') continue;
+      const level = Number.isInteger(task.config?.level) ? task.config.level : null;
+      if (level == null) continue;
+      const anyAnswered = (task.questions || []).some(question => question?.answered != null);
+      if (anyAnswered && level > floorLevel) floorLevel = level;
+      if (cutoffStr && session.date < cutoffStr) continue;
+      const bucket = byLevel[level] || (byLevel[level] = { samples: 0, correct: 0, totalResponseMs: 0 });
+      for (const question of task.questions || []) {
+        if (question?.answered == null) continue;
+        bucket.samples += 1;
+        if (question.correct) bucket.correct += 1;
+        bucket.totalResponseMs += Math.min(
+          Math.max(0, question.responseMs || 0),
+          POWERS_MASTERY_DEFAULTS.responseMsCap
+        );
+      }
+    }
+  }
+  return {
+    stats: Object.fromEntries(Object.entries(byLevel).map(([level, bucket]) => [level, {
+      samples: bucket.samples,
+      accuracy: bucket.samples ? bucket.correct / bucket.samples : 0,
+      avgResponseMs: bucket.samples ? bucket.totalResponseMs / bucket.samples : 0,
+    }])),
+    floorLevel,
+  };
+}
+
 /**
  * Resolve the current progressive-multiplication difficulty from history.
  * Exposed for the config UI / route so it can show the ladder + mastery status.
@@ -1473,6 +1534,19 @@ export async function getMultiplicationProgress() {
   const { stats, floorLevel } = await getMultiplicationLevelStats(MASTERY_DEFAULTS.windowDays);
   const progression = resolveMultiplicationLevel(stats, {}, floorLevel);
   return { ...progression, windowDays: MASTERY_DEFAULTS.windowDays, thresholds: { minSamples: MASTERY_DEFAULTS.minSamples, targetAccuracy: MASTERY_DEFAULTS.targetAccuracy } };
+}
+
+export async function getPowersProgress() {
+  const { stats, floorLevel } = await getPowersLevelStats(POWERS_MASTERY_DEFAULTS.windowDays);
+  const progression = resolvePowersLevel(stats, {}, floorLevel);
+  return {
+    ...progression,
+    windowDays: POWERS_MASTERY_DEFAULTS.windowDays,
+    thresholds: {
+      minSamples: POWERS_MASTERY_DEFAULTS.minSamples,
+      targetAccuracy: POWERS_MASTERY_DEFAULTS.targetAccuracy,
+    },
+  };
 }
 
 /**
@@ -1588,6 +1662,25 @@ export async function resolveDrillConfig(type, requestedConfig = {}) {
     }
   }
 
+  if (type === 'powers') {
+    const powersCfg = config?.mentalMath?.drillTypes?.powers || {};
+    if (powersCfg.progressive !== false) {
+      const { stats, floorLevel } = await getPowersLevelStats(POWERS_MASTERY_DEFAULTS.windowDays);
+      const progression = resolvePowersLevel(stats, {}, floorLevel);
+      const { bases: _bases, maxExponent: _maxExponent, ...rest } = requestedConfig || {};
+      return {
+        config: {
+          ...rest,
+          count: rest.count ?? powersCfg.count ?? 8,
+          level: progression.level,
+          technique: progression.technique,
+        },
+        adaptive: null,
+        progression,
+      };
+    }
+  }
+
   // Progressive cognitive ladders (default ON) — per-skill difficulty rungs
   // (n-back n/stimulusMs, digit-span span/direction, schulte grid, mental-
   // rotation/stroop trial count). Selects the rung by sustained-accuracy
@@ -1637,6 +1730,7 @@ export async function getAdaptivePreview() {
   const stats = await getPostStats(ADAPTIVE_DEFAULTS.windowDays);
   const savedDrills = config?.mentalMath?.drillTypes || {};
   const multiplicationProgressive = savedDrills.multiplication?.progressive !== false;
+  const powersProgressive = savedDrills.powers?.progressive !== false;
 
   const drills = {};
   for (const type of Object.keys(ADAPTIVE_SPECS)) {
@@ -1644,6 +1738,10 @@ export async function getAdaptivePreview() {
       // Same source of truth resolveDrillConfig uses for the ladder rung —
       // not the generic maxDigits Adaptive signal.
       drills[type] = { ladder: true, ...(await getMultiplicationProgress()) };
+      continue;
+    }
+    if (type === 'powers' && powersProgressive) {
+      drills[type] = { ladder: true, ...(await getPowersProgress()) };
       continue;
     }
     const key = `${MATH_MODULE}:${type}`;
@@ -1774,4 +1872,3 @@ function computeSessionScore(tasks, weights = {}) {
   if (!totalWeight) return 0;
   return Math.round(totalWeighted / totalWeight);
 }
-

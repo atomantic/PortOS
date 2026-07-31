@@ -343,6 +343,14 @@ describe('drillTypeConfigSchema numeric bounds', () => {
     expect(parsed.config).toMatchObject({ steps: 50, subtrahend: 100, maxDigits: 4, tolerancePct: 50 });
   });
 
+  it('preserves the server-computed Powers ladder level and technique', () => {
+    const parsed = postDrillRequestSchema.parse({
+      type: 'powers',
+      config: { progressive: true, level: 4, technique: 'split-exponent' },
+    });
+    expect(parsed.config).toMatchObject({ progressive: true, level: 4, technique: 'split-exponent' });
+  });
+
   it('rejects steps above the max (50) and below the min (1)', () => {
     expect(() => postDrillRequestSchema.parse({ type: 'serial-subtraction', config: { steps: 51 } })).toThrow();
     expect(() => postDrillRequestSchema.parse({ type: 'serial-subtraction', config: { steps: 0 } })).toThrow();

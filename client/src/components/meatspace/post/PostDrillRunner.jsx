@@ -2,6 +2,20 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { CheckCircle, XCircle } from 'lucide-react';
 
 import { MEMORY_DRILL_TYPES, DRILL_LABELS } from './constants';
+import { powersBreakdownFromPrompt } from '../../../lib/powersBreakdown.js';
+
+function PowersLesson({ prompt }) {
+  const breakdown = powersBreakdownFromPrompt(prompt);
+  if (!breakdown || breakdown.fallback) return null;
+  return (
+    <div className="mt-3 w-full max-w-md rounded-lg border border-port-accent/30 bg-port-bg p-3 text-left">
+      <div className="mb-2 text-xs font-semibold text-port-accent">{breakdown.label}</div>
+      <ol className="space-y-1 text-sm font-mono text-gray-300">
+        {breakdown.steps.map((step, index) => <li key={`${step}-${index}`}>{step}</li>)}
+      </ol>
+    </div>
+  );
+}
 
 export default function PostDrillRunner({ session }) {
   const {
@@ -119,8 +133,9 @@ export default function PostDrillRunner({ session }) {
               )}
               <div className="text-sm text-gray-400">Expected</div>
               <div className="text-3xl font-mono font-bold text-port-success">{lastAnswer.expected}</div>
+              <PowersLesson prompt={lastAnswer.prompt} />
               {/* Hint: break down the calculation */}
-              {lastAnswer.prompt && (
+              {lastAnswer.prompt && powersBreakdownFromPrompt(lastAnswer.prompt)?.fallback !== false && (
                 <div className="text-xs text-gray-500 mt-2 bg-port-bg border border-port-border rounded px-3 py-2">
                   {formatHint(lastAnswer.prompt, lastAnswer.expected)}
                 </div>
@@ -245,6 +260,5 @@ function formatHint(prompt, expected) {
   if (!match) return `${prompt} = ${expected}`;
   const [, a, op, b] = match;
   if (op === 'x') return `${a} × ${b} = ${expected}`;
-  if (op === '^') return `${a}^${b} = ${expected}`;
   return `${prompt} = ${expected}`;
 }

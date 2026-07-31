@@ -212,6 +212,12 @@ router.get('/post/multiplication-progress', asyncHandler(async (req, res) => {
   res.json(progress);
 }));
 
+/** Current technique-anchored Powers ladder level and mastery status. */
+router.get('/post/powers-progress', asyncHandler(async (req, res) => {
+  const progress = await postService.getPowersProgress();
+  res.json(progress);
+}));
+
 /**
  * GET /api/meatspace/post/cognitive-progress
  * Per-drill progressive-ladder level + per-rung mastery for the laddered

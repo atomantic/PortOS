@@ -107,6 +107,7 @@ const drillTypeConfigSchema = z.object({
   // session submit), so they must survive validation on the round-trip.
   progressive: z.boolean().optional(),
   level: z.number().int().min(0).max(50).optional(),
+  technique: z.string().max(100).optional(),
   factors: z.array(z.number().int().min(1).max(4)).min(2).max(6).optional(),
   // Maintenance-review rep (issue #2096): `review` bypasses the progression
   // override so a specific mastered-but-inactive rung is re-verified at its own

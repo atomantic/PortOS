@@ -1,4 +1,5 @@
 import { Check, X, MinusCircle, AlertTriangle } from 'lucide-react';
+import { powersBreakdownFromPrompt } from '../../../lib/powersBreakdown.js';
 
 // Sub-second precision — most drill response times are under a few seconds,
 // so the shared `formatDurationMs` (client/src/utils/formatters.js), which
@@ -122,6 +123,27 @@ function GenericReview({ questions, missed, type }) {
           })}
         </tbody>
       </TableShell>
+    </div>
+  );
+}
+
+function PowersReview({ questions, missed }) {
+  return (
+    <div className="space-y-3">
+      <GenericReview questions={questions} missed={missed} type="powers" />
+      {missed.map((question, index) => {
+        const breakdown = powersBreakdownFromPrompt(question.prompt);
+        if (!breakdown || breakdown.fallback) return null;
+        return (
+          <div key={`${question.prompt}-${index}`} className="rounded-lg border border-port-accent/30 bg-port-bg p-3">
+            <div className="text-sm font-mono text-white">{question.prompt}</div>
+            <div className="mt-1 text-xs font-semibold text-port-accent">{breakdown.label}</div>
+            <ol className="mt-2 space-y-1 text-sm font-mono text-gray-300">
+              {breakdown.steps.map((step, stepIndex) => <li key={`${step}-${stepIndex}`}>{step}</li>)}
+            </ol>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -388,6 +410,8 @@ export default function DrillQuestionReview({ type, questions, drillData }) {
   const missed = list.filter((q) => q.correct === false);
 
   switch (type) {
+    case 'powers':
+      return <PowersReview questions={list} missed={missed} />;
     case 'n-back':
       return <NBackReview questions={list} missed={missed} />;
     case 'digit-span':

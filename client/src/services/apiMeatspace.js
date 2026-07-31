@@ -213,6 +213,7 @@ export const getPostRecommendations = (limit, options = {}) => request(
   { silent: true, ...options }
 );
 export const getPostMultiplicationProgress = () => request('/meatspace/post/multiplication-progress');
+export const getPostPowersProgress = () => request('/meatspace/post/powers-progress');
 export const getPostCognitiveProgress = () => request('/meatspace/post/cognitive-progress');
 export const generatePostDrill = (type, config = {}, providerId, model, options = {}) => request('/meatspace/post/drill', {
   method: 'POST',

@@ -79,6 +79,18 @@ describe('DrillQuestionReview — generic (math/memory/fallback)', () => {
   });
 });
 
+describe('DrillQuestionReview — powers lessons', () => {
+  it('shows a worked technique for each missed supported power', () => {
+    render(<DrillQuestionReview type="powers" questions={[
+      { prompt: '5^9', expected: 1953125, answered: 1000000, correct: false, responseMs: 2200 },
+      { prompt: '2^8', expected: 256, answered: 256, correct: true, responseMs: 900 },
+    ]} />);
+    expect(screen.getByText('Split the exponent from an anchor')).toBeInTheDocument();
+    expect(screen.getByText('5^8 = 625 × 625 = 390,625')).toBeInTheDocument();
+    expect(screen.queryByText('Powers of 2 — recall table')).not.toBeInTheDocument();
+  });
+});
+
 describe('DrillQuestionReview — n-back', () => {
   // Classification is derived purely from answered+correct (no isTarget field
   // is stored on the question) — this is the reconstruction under test.

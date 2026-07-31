@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ArrowLeft, Save, Brain, Bell, Target, Layers, TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultiplicationProgress, getPostCognitiveProgress } from '../../../services/api';
+import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultiplicationProgress, getPostPowersProgress, getPostCognitiveProgress } from '../../../services/api';
 import toast from '../../ui/Toast';
 import { FormField } from '../../ui/FormField';
 import { filterSelectableModels, enabledApiProviderFilter } from '../../../utils/providers';
@@ -529,6 +529,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
   );
   const [adaptivePreview, setAdaptivePreview] = useState(null);
   const [multiplicationProgress, setMultiplicationProgress] = useState(null);
+  const [powersProgress, setPowersProgress] = useState(null);
   const [cognitiveProgress, setCognitiveProgress] = useState(null);
   // Opt-in daily reminder — off by default; see server/services/meatspacePostReminder.js.
   const [reminderEnabled, setReminderEnabled] = useState(
@@ -585,6 +586,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
   // so the config page shows the current rung + mastery before a session.
   // Progressive defaults ON (undefined → true), matching the server default.
   const multiplicationProgressive = drillTypes.multiplication?.progressive !== false;
+  const powersProgressive = drillTypes.powers?.progressive !== false;
   useEffect(() => {
     if (!multiplicationProgressive) { setMultiplicationProgress(null); return; }
     let cancelled = false;
@@ -593,6 +595,15 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
       .catch(err => console.warn('⚠️ Failed to load multiplication progress: ' + err.message));
     return () => { cancelled = true; };
   }, [multiplicationProgressive]);
+
+  useEffect(() => {
+    if (!powersProgressive) { setPowersProgress(null); return; }
+    let cancelled = false;
+    getPostPowersProgress()
+      .then(p => { if (!cancelled) setPowersProgress(p); })
+      .catch(err => console.warn('⚠️ Failed to load powers progress: ' + err.message));
+    return () => { cancelled = true; };
+  }, [powersProgressive]);
 
   // Progressive cognitive-ladder status (per drill type), same pattern as the
   // multiplication badge. Fetched whenever the cognitive section is on and any
@@ -617,10 +628,10 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
     }));
   }
 
-  function toggleProgressive() {
+  function toggleProgressive(type) {
     setDrillTypes(prev => ({
       ...prev,
-      multiplication: { ...prev.multiplication, progressive: !(prev.multiplication?.progressive !== false) }
+      [type]: { ...prev[type], progressive: !(prev[type]?.progressive !== false) }
     }));
   }
 
@@ -934,6 +945,8 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
           {Object.entries(DRILL_META).map(([type, meta]) => {
             const drillConfig = drillTypes[type] || {};
             const isMultiplication = type === 'multiplication';
+            const isPowers = type === 'powers';
+            const isProgressive = isMultiplication || isPowers;
             return (
               <DrillCard
                 key={type}
@@ -944,12 +957,12 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
                 onToggle={() => toggleDrill(type)}
                 onUpdateField={(key, value) => updateField(type, key, value)}
                 adaptiveInfo={adaptiveEnabled ? adaptivePreview?.[type] : null}
-                progressive={isMultiplication ? multiplicationProgressive : undefined}
-                onToggleProgressive={isMultiplication ? toggleProgressive : undefined}
-                progressInfo={isMultiplication ? multiplicationProgress : null}
-                managedFieldKeys={isMultiplication ? ['maxDigits'] : []}
-                speedGated={isMultiplication}
-                managedLabel="Max Digits"
+                progressive={isProgressive ? (isMultiplication ? multiplicationProgressive : powersProgressive) : undefined}
+                onToggleProgressive={isProgressive ? () => toggleProgressive(type) : undefined}
+                progressInfo={isMultiplication ? multiplicationProgress : (isPowers ? powersProgress : null)}
+                managedFieldKeys={isMultiplication ? ['maxDigits'] : (isPowers ? ['maxExponent'] : [])}
+                speedGated={isProgressive}
+                managedLabel={isMultiplication ? 'Max Digits' : 'Max Exponent'}
               />
             );
           })}
