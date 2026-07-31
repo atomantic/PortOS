@@ -47,6 +47,7 @@ import {
   getCognitiveProgress,
   generateDrill,
   getSessionSkillContext,
+  getPostReviewReps,
 } from './meatspacePost.js';
 
 // =============================================================================
@@ -1982,17 +1983,47 @@ describe('getSessionSkillContext', () => {
     expect(getSessionSkillContext(session).reviewResults).toEqual([{ skillId: 'multiplication:L1', passed: false }]);
   });
 
-  it('collects practiced skill ids from normal (non-review) multiplication / cognitive / memory tasks', () => {
+  it('collects practiced skill ids from normal (non-review) progressive and memory tasks', () => {
     const session = { tasks: [
       { type: 'multiplication', config: { level: 2 }, questions: [{ answered: 1, correct: true }] },
+      { type: 'powers', config: { level: 1 }, questions: [{ answered: 81, correct: true }] },
       { type: 'n-back', config: { level: 1 }, accuracy: 0.9, questions: [] },
       { type: 'memory-sequence', memoryItemId: 'song-1', questions: [{ chunkId: 'verse-1', correct: true }, { chunkId: 'verse-2', correct: true }] },
     ] };
     const { practicedSkillIds, reviewResults } = getSessionSkillContext(session);
     expect(reviewResults).toEqual([]);
     expect(practicedSkillIds.sort()).toEqual([
-      'cognitive:n-back:L1', 'memory:song-1:verse-1', 'memory:song-1:verse-2', 'multiplication:L2',
+      'cognitive:n-back:L1', 'memory:song-1:verse-1', 'memory:song-1:verse-2', 'multiplication:L2', 'powers:L1',
     ]);
+  });
+
+  it('regenerates a due Powers review from only its mastered technique rung', async () => {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      if (String(path).includes('post-review-schedule')) return Promise.resolve({
+        skills: {
+          'powers:L1': {
+            skillId: 'powers:L1',
+            kind: 'powers',
+            label: 'Powers Small squares & cubes',
+            drillType: 'powers',
+            level: 1,
+            config: { technique: 'recall-small' },
+            nextReviewAt: '2020-01-01T00:00:00.000Z',
+            status: 'fresh',
+          },
+        },
+      });
+      return Promise.resolve(defaultValue);
+    });
+
+    const [rep] = await getPostReviewReps(new Date('2026-07-31T00:00:00.000Z'));
+    expect(rep).toMatchObject({
+      type: 'powers',
+      config: { level: 1, technique: 'recall-small', review: true, reviewSkillId: 'powers:L1' },
+    });
+    const drill = generateDrill(rep.type, rep.config);
+    expect(drill.questions).toHaveLength(5);
+    expect(drill.questions.every(question => question.techniqueLevel === 1)).toBe(true);
   });
 });
 

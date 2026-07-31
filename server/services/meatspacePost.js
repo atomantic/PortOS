@@ -397,8 +397,8 @@ const MIN_REVIEW_COMPLETION = 0.75;
 
 /**
  * Current mastered-but-inactive skills eligible for re-verification tracking:
- *   - multiplication rungs strictly BELOW the resolved current level (you've
- *     moved past them, so they're no longer actively drilled),
+ *   - multiplication / Powers rungs strictly BELOW the resolved current level
+ *     (you've moved past them, so they're no longer actively drilled),
  *   - cognitive rungs strictly below the current level, per laddered type,
  *   - memory chunks whose windowed mastery clears the gate.
  * Returns opaque skill descriptors the review scheduler upserts + schedules.
@@ -417,6 +417,21 @@ export async function getMasteredSkills() {
         module: 'mental-math',
         level: rung.level,
         factors: rung.factors,
+      });
+    }
+  }
+
+  const powers = await getPowersProgress();
+  for (const rung of powers.levels || []) {
+    if (rung.mastered && rung.level < powers.level) {
+      skills.push({
+        skillId: `powers:L${rung.level}`,
+        kind: 'powers',
+        label: `Powers ${rung.label}`,
+        drillType: 'powers',
+        module: 'mental-math',
+        level: rung.level,
+        config: { technique: rung.technique },
       });
     }
   }
@@ -489,6 +504,8 @@ export function getSessionSkillContext(session) {
     }
     if (task.type === 'multiplication' && Number.isInteger(cfg.level)) {
       practicedSkillIds.add(`multiplication:L${cfg.level}`);
+    } else if (task.type === 'powers' && Number.isInteger(cfg.level)) {
+      practicedSkillIds.add(`powers:L${cfg.level}`);
     } else if (cognitiveLadder(task.type) && Number.isInteger(cfg.level)) {
       practicedSkillIds.add(`cognitive:${task.type}:L${cfg.level}`);
     } else if (task.memoryItemId) {
@@ -510,8 +527,8 @@ export async function syncReviewScheduleForSession(session, now = new Date()) {
 /**
  * Ready-to-run "maintenance rep" drill specs for the mastered skills currently
  * due for review — the labeled review items the launcher mixes into a Quick
- * session (issue #2096). Only multiplication + cognitive reps are generated (both
- * run through the standard /post/drill path); memory-chunk retention is served by
+ * session (issue #2096). Multiplication, Powers, and cognitive reps are generated
+ * through the standard /post/drill path; memory-chunk retention is served by
  * the existing spaced-repetition due-items flow. Each carries `review: true` +
  * `reviewSkillId` so the session-submit path records the pass/fail.
  */
@@ -532,6 +549,15 @@ export async function getPostReviewReps(now = new Date(), limit = 2) {
         module: 'mental-math',
         type: 'multiplication',
         config: { count: 5, level: entry.level, factors: entry.factors, review: true, reviewSkillId: entry.skillId },
+      });
+    } else if (entry.kind === 'powers') {
+      reps.push({
+        skillId: entry.skillId,
+        label: entry.label,
+        state: entry.status === 'needs-refresh' ? 'needs-refresh' : 'due',
+        module: 'mental-math',
+        type: 'powers',
+        config: { ...(entry.config || {}), count: 5, level: entry.level, review: true, reviewSkillId: entry.skillId },
       });
     } else if (entry.kind === 'cognitive') {
       reps.push({
@@ -932,17 +958,18 @@ export function weakestSkillFromStats(stats) {
 }
 
 /**
- * Stalled-progression descriptors from the resolved multiplication + cognitive
+ * Stalled-progression descriptors from the resolved multiplication, Powers, and cognitive
  * ladders: a laddered drill the user is partway up but not yet advancing, with
  * how many more clean/fast reps remain to reach the next rung. Pure — takes the
  * already-resolved progress objects. A ladder that's mastered-and-advancing or
  * at its hardest rung contributes nothing.
  *
  * @param {object} mulProgress - getMultiplicationProgress() result
+ * @param {object} powersProgress - getPowersProgress() result
  * @param {Record<string,object>} cogProgress - getCognitiveProgress() result
  * @param {{kochLevel:number, kochLevelSet:boolean, maxKochLevel:number}} morse
  */
-export function stalledProgressions(mulProgress, cogProgress, morse) {
+export function stalledProgressions(mulProgress, powersProgress, cogProgress, morse) {
   const out = [];
 
   const ladderStall = (prog, drillType, label, deepLink) => {
@@ -969,6 +996,9 @@ export function stalledProgressions(mulProgress, cogProgress, morse) {
 
   const mul = ladderStall(mulProgress, 'multiplication', 'Multiplication', '/post/launcher');
   if (mul) out.push(mul);
+
+  const powers = ladderStall(powersProgress, 'powers', 'Powers', '/post/launcher');
+  if (powers) out.push(powers);
 
   for (const [type, prog] of Object.entries(cogProgress || {})) {
     const stall = ladderStall(prog, type, DRILL_LABEL(type), '/post/launcher');
@@ -1192,11 +1222,12 @@ export function isRecDrillRunnable(config, module, type, memoryItemId = null) {
  * config can actually run.
  */
 export async function getPostRecommendations({ limit = RECOMMENDATION_LIMIT } = {}) {
-  const [dueMemoryItems, dueReviews, stats, mulProgress, cogProgress, morse, sessions, config] = await Promise.all([
+  const [dueMemoryItems, dueReviews, stats, mulProgress, powersProgress, cogProgress, morse, sessions, config] = await Promise.all([
     getDueMemoryItems(),
     getDueReviews(new Date(), Infinity),
     getPostStats(MASTERY_DEFAULTS.windowDays),
     getMultiplicationProgress(),
+    getPowersProgress(),
     getCognitiveProgress(),
     getMorseProgress(MASTERY_DEFAULTS.windowDays),
     getPostSessions(),
@@ -1238,7 +1269,7 @@ export async function getPostRecommendations({ limit = RECOMMENDATION_LIMIT } = 
   // Stalled progressions — Morse runs from its own tab (so it's gated by its own
   // topic/config block rather than session composition), and any ladder whose
   // drill is still runnable under the current config.
-  const stalled = stalledProgressions(mulProgress, cogProgress, {
+  const stalled = stalledProgressions(mulProgress, powersProgress, cogProgress, {
     kochLevel: morse?.kochLevel,
     kochLevelSet: morse?.kochLevelSet,
     maxKochLevel: MAX_KOCH_LEVEL,
@@ -1327,9 +1358,12 @@ export function generateMultiplication(count = 10, maxDigits = 2, factors = null
   return { type: 'multiplication', config, questions };
 }
 
-export function generatePowers(bases, maxExponent = 10, count = 8, level = null) {
+export function generatePowers(bases, maxExponent = 10, count = 8, level = null, review = false) {
   if (Number.isInteger(level)) {
-    const pool = powersPoolForLevel(level);
+    const cumulativePool = powersPoolForLevel(level);
+    const pool = review
+      ? cumulativePool.filter(pair => pair.level === level)
+      : cumulativePool;
     const questions = Array.from({ length: count }, () => {
       const pair = pool[Math.floor(Math.random() * pool.length)];
       return {
@@ -1394,7 +1428,7 @@ export function generateDrill(type, config = {}) {
     case 'multiplication':
       return generateMultiplication(config.count, config.maxDigits, config.factors, config.level);
     case 'powers':
-      return generatePowers(config.bases, config.maxExponent, config.count, config.level);
+      return generatePowers(config.bases, config.maxExponent, config.count, config.level, config.review);
     case 'estimation':
       return generateEstimation(config.count, config.tolerancePct);
     case 'n-back':

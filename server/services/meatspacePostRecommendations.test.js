@@ -92,7 +92,7 @@ describe('stalledProgressions', () => {
   ] };
 
   it('reports remaining reps to the next multiplication rung', () => {
-    const out = stalledProgressions(stalledLadder, {}, {});
+    const out = stalledProgressions(stalledLadder, null, {}, {});
     expect(out).toHaveLength(1);
     expect(out[0].drillType).toBe('multiplication');
     expect(out[0].remaining).toBe(8); // 12 - 4
@@ -100,8 +100,22 @@ describe('stalledProgressions', () => {
   });
 
   it('omits a ladder that is mastered-and-advancing or at its hardest rung', () => {
-    expect(stalledProgressions({ ...stalledLadder, currentMastered: true }, {}, {})).toHaveLength(0);
-    expect(stalledProgressions({ ...stalledLadder, atHardest: true }, {}, {})).toHaveLength(0);
+    expect(stalledProgressions({ ...stalledLadder, currentMastered: true }, null, {}, {})).toHaveLength(0);
+    expect(stalledProgressions({ ...stalledLadder, atHardest: true }, null, {}, {})).toHaveLength(0);
+  });
+
+  it('reports an engaged Powers technique that still needs mastery reps', () => {
+    const powers = {
+      ...stalledLadder,
+      levels: stalledLadder.levels.map(rung => ({ ...rung, label: `Technique ${rung.level}` })),
+    };
+    const out = stalledProgressions(null, powers, {}, {});
+    expect(out).toEqual([expect.objectContaining({
+      drillType: 'powers',
+      label: 'Powers',
+      remaining: 8,
+      nextLabel: 'Technique 2',
+    })]);
   });
 
   it('includes cognitive ladders and a Morse Koch step once level is set', () => {
@@ -109,7 +123,7 @@ describe('stalledProgressions', () => {
       { level: 0, label: '1-back @ 2500ms', samples: 1, mastered: false },
       { level: 1, label: '2-back @ 2500ms', samples: 0, mastered: false },
     ] } };
-    const out = stalledProgressions(null, cog, { kochLevel: 5, kochLevelSet: true, maxKochLevel: 41 });
+    const out = stalledProgressions(null, null, cog, { kochLevel: 5, kochLevelSet: true, maxKochLevel: 41 });
     const nback = out.find(o => o.drillType === 'n-back');
     expect(nback.remaining).toBe(2); // 3 - 1
     const morse = out.find(o => o.drillType === 'morse-copy');
@@ -118,7 +132,7 @@ describe('stalledProgressions', () => {
   });
 
   it('does not surface Morse for a fresh install (level not set)', () => {
-    const out = stalledProgressions(null, {}, { kochLevel: 2, kochLevelSet: false, maxKochLevel: 41 });
+    const out = stalledProgressions(null, null, {}, { kochLevel: 2, kochLevelSet: false, maxKochLevel: 41 });
     expect(out.find(o => o.drillType === 'morse-copy')).toBeUndefined();
   });
 
@@ -127,7 +141,7 @@ describe('stalledProgressions', () => {
       { level: 0, label: '1×1-digit', samples: 0, mastered: false },
       { level: 1, label: '1×2-digit', samples: 0, mastered: false },
     ] };
-    expect(stalledProgressions(fresh, { 'n-back': fresh }, {})).toHaveLength(0);
+    expect(stalledProgressions(fresh, null, { 'n-back': fresh }, {})).toHaveLength(0);
   });
 
   it('surfaces a ladder once the user has earned a higher floor even with no windowed samples', () => {
@@ -136,7 +150,7 @@ describe('stalledProgressions', () => {
       { level: 1, label: '1×2-digit', samples: 0, mastered: false },
       { level: 2, label: '1×1×1-digit', samples: 0, mastered: false },
     ] };
-    const out = stalledProgressions(earned, {}, {});
+    const out = stalledProgressions(earned, null, {}, {});
     expect(out).toHaveLength(1);
     expect(out[0].remaining).toBe(12);
   });

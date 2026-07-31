@@ -78,10 +78,10 @@ export function defaultReviewEntry(skill, now = new Date()) {
   const nowIso = now.toISOString();
   return {
     skillId: skill.skillId,
-    kind: skill.kind,               // 'multiplication' | 'cognitive' | 'memory'
+    kind: skill.kind,               // 'multiplication' | 'powers' | 'cognitive' | 'memory'
     label: skill.label,
     drillType: skill.drillType,     // drill type to regenerate a review rep
-    level: skill.level ?? null,     // rung index (multiplication/cognitive)
+    level: skill.level ?? null,     // rung index (multiplication/powers/cognitive)
     factors: skill.factors ?? null, // multiplication factor plan
     config: skill.config ?? null,   // cognitive rung knobs for regeneration
     memoryItemId: skill.memoryItemId ?? null,
