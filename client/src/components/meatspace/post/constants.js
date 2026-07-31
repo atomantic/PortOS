@@ -15,6 +15,13 @@ export const COGNITIVE_DRILL_TYPES = ['n-back', 'digit-span', 'stroop', 'schulte
 // isn't one of the types PostSessionLauncher offers to pick from yet.
 export const POST_UNSUPPORTED_DRILL_TYPES = ['memory-fill-blank'];
 
+// Element Flash is backed by the built-in periodic-table item. Other memory
+// drills can use any enabled memorized text, but selecting a custom item for
+// Element Flash makes the server generator return null.
+export function memoryItemSupportsDrill(item, drillType) {
+  return drillType !== 'memory-element-flash' || item?.id === 'elements-song';
+}
+
 // The four wordplay drill types with a dedicated standalone trainer
 // (WordplayTrainer.jsx) that shares its render+scoring core (WordplayDrillUI.jsx)
 // with the in-session runner (PostLlmDrillRunner.jsx) — see issue #2097.
@@ -210,9 +217,11 @@ export function isModuleInSession(config, module) {
  * same reason the launcher does: a drill type absent from the config was never
  * offered by the launcher either, so the preview must not invent it. Math drills
  * are opt-IN (`enabled` truthy) while LLM/cognitive/memory are opt-OUT
- * (`enabled !== false`) — again matching the launcher exactly.
+ * (`enabled !== false`) — again matching the launcher exactly. When the loaded
+ * memory item list is supplied, memory drills also require a compatible enabled
+ * item, and drill types the session runner does not expose are always omitted.
  */
-export function composedSessionDrillTypes(config) {
+export function composedSessionDrillTypes(config, memoryItems = null) {
   const out = {};
   for (const topic of POST_TOPICS) {
     if (topic.surface !== 'session' || !topic.module) continue;
@@ -221,9 +230,13 @@ export function composedSessionDrillTypes(config) {
     const mod = config?.[MODULE_CONFIG_KEY[topic.module]];
     if (!mod || mod.enabled === false) continue;
     const types = topic.drillTypes.filter((t) => {
+      if (POST_UNSUPPORTED_DRILL_TYPES.includes(t)) return false;
       const cfg = mod.drillTypes?.[t];
       if (!cfg) return false;
-      return topic.module === 'mental-math' ? !!cfg.enabled : cfg.enabled !== false;
+      const enabled = topic.module === 'mental-math' ? !!cfg.enabled : cfg.enabled !== false;
+      if (!enabled) return false;
+      if (topic.module !== 'memory' || !Array.isArray(memoryItems)) return true;
+      return memoryItems.some(item => isMemoryItemEnabled(config, item.id) && memoryItemSupportsDrill(item, t));
     });
     if (types.length) out[topic.id] = types;
   }

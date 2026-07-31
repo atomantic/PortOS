@@ -186,6 +186,26 @@ describe('composedSessionDrillTypes (issue #3252)', () => {
     expect(out.memory).toEqual(['memory-sequence']);
     expect(out.morse).toBeUndefined();
   });
+
+  it('previews only memory drills runnable with the enabled item pool', () => {
+    const memoryConfig = {
+      memory: {
+        enabled: true,
+        drillTypes: {
+          'memory-fill-blank': { enabled: true },
+          'memory-sequence': { enabled: true },
+          'memory-element-flash': { enabled: true },
+        },
+        items: { 'elements-song': { enabled: false } },
+      },
+    };
+
+    expect(composedSessionDrillTypes(memoryConfig, [
+      { id: 'elements-song' },
+      { id: 'example-memory' },
+    ])).toEqual({ memory: ['memory-sequence'] });
+    expect(composedSessionDrillTypes(memoryConfig, [])).toEqual({});
+  });
 });
 
 describe('isTopicEnabled / isMemoryItemEnabled client mirrors', () => {

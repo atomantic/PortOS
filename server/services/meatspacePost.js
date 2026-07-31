@@ -1181,10 +1181,10 @@ function recModuleForDrillType(type, fallback) {
  *
  * Three gates, checked in order (issue #3252):
  *   1. The drill's practice TOPIC — off means off everywhere, including the
- *      standalone surfaces (Memory, Morse) that session composition never gated.
- *   2. Module-specific participation — `memory` and `morse` run from their own
- *      tabs, so `sessionModules` doesn't apply to them; memory additionally
- *      honors the per-ITEM toggle when the caller knows which item is involved.
+ *      dedicated Memory and Morse practice routes.
+ *   2. Recommendation-specific participation — memory due-item recommendations
+ *      deep-link to dedicated practice, so `sessionModules` doesn't apply;
+ *      memory still honors the per-ITEM toggle when the caller knows the item.
  *   3. Session composition + the per-module/per-drill `enabled` flags.
  *
  * `memoryItemId` is only meaningful for `module === 'memory'`; absent means

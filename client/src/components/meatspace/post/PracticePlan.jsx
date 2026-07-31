@@ -116,7 +116,9 @@ export default function PracticePlan({ config, onSaved, onBack }) {
     memory: { ...config?.memory, ...modules.memory, enabled: memoryOn, items: memoryItemFlags },
   };
 
-  const preview = composedSessionDrillTypes(draftConfig);
+  // Until the item list resolves, fail closed for Memory just like the launcher.
+  // This also keeps incompatible/unsupported memory drills out of the summary.
+  const preview = composedSessionDrillTypes(draftConfig, memoryItems || []);
   const previewTopicIds = Object.keys(preview);
 
   // Standalone topics still shape the daily rotation (they drive "Up next"

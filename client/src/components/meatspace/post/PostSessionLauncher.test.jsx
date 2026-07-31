@@ -682,4 +682,44 @@ describe('PostSessionLauncher composed memory drills (issue #3254)', () => {
     fireEvent.click(screen.getByText('Full POST'));
     expect(onStart.mock.calls[0][0].some(d => d.domain === 'memory')).toBe(false);
   });
+
+  it('omits Element Flash when the built-in elements item is unavailable', async () => {
+    const onStart = vi.fn();
+    getMemoryItems.mockResolvedValue([{ id: 'example-memory', mastery: { overallPct: 0 } }]);
+    renderWith(memoryConfig({
+      memory: {
+        enabled: true,
+        drillTypes: { 'memory-element-flash': { enabled: true, count: 6 } },
+        items: {},
+      },
+    }), onStart);
+    await waitFor(() => expect(getMemoryItems).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByText('Full POST'));
+    expect(onStart.mock.calls[0][0].some(d => d.type === 'memory-element-flash')).toBe(false);
+  });
+
+  it('pins Element Flash to the compatible elements item', async () => {
+    const onStart = vi.fn();
+    getMemoryItems.mockResolvedValue([
+      { id: 'example-memory', mastery: { overallPct: 0 } },
+      { id: 'elements-song', mastery: { overallPct: 90 } },
+    ]);
+    renderWith(memoryConfig({
+      memory: {
+        enabled: true,
+        drillTypes: { 'memory-element-flash': { enabled: true, count: 6 } },
+        items: {},
+      },
+    }), onStart);
+    await waitFor(() => expect(getMemoryItems).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByText('Full POST'));
+    expect(onStart.mock.calls[0][0]).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'memory-element-flash',
+        config: { count: 6, memoryItemId: 'elements-song' },
+      }),
+    ]));
+  });
 });
