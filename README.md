@@ -248,15 +248,22 @@ Track your biological self alongside your digital one.
 
 ## Quick Start
 
+### Requirements
+
+- Node.js 18 or later
+- Git
+- PostgreSQL, either installed locally or available through Docker. PortOS requires a healthy database; the setup command provisions the supported local or Docker-backed instance.
+
 ```bash
-git clone https://github.com/atomantic/PortOS.git
+git clone --recurse-submodules https://github.com/atomantic/PortOS.git
 cd PortOS
-./setup.sh
-pm2 start ecosystem.config.cjs
-pm2 save
+npm run install:all
+npm start
 ```
 
-Access PortOS at `http://localhost:5555` (or via Tailscale at `http://<machine>.<tailnet>.ts.net:5555`).
+`npm run install:all` installs the root, client, server, and Autofixer dependencies; initializes bundled submodules; prepares runtime data; and provisions PostgreSQL. `npm start` builds the client and starts the managed processes with PM2. Access PortOS at `http://localhost:5555` (or via Tailscale at `http://<machine>.<tailnet>.ts.net:5555`).
+
+For a guided setup that also checks optional local media and command-line tooling, run `./setup.sh` instead. It prompts before starting PortOS; choose that option or run `npm start` afterward, not both.
 
 For HTTPS (recommended — required for the in-browser microphone, and you'll get a trusted cert via Tailscale's Let's Encrypt integration):
 
@@ -363,6 +370,7 @@ Full catalog (including design plans, ADRs, and research notes): [docs/README.md
 
 ### Feature Deep Dives
 
+- [Product Surface Map](./docs/features/product-surfaces.md) — Browse every user-facing PortOS surface and its canonical guide
 - [Voice Mode](./docs/features/voice.md) — local STT/TTS/LLM voice assistant setup
 - [Chief of Staff](./docs/features/chief-of-staff.md) — Autonomous agent orchestrator
 - [Operational Goals](./docs/GOALS_OPERATIONAL.md) — Runtime priorities the CoS reads when generating work

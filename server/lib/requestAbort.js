@@ -15,12 +15,16 @@
 //
 // The listener only calls `controller.abort()`, which can't throw — safe to attach
 // outside the request lifecycle without a try/catch.
-// Combine several AbortSignals into one that fires when any of them aborts.
-// Prefers the native `AbortSignal.any` (Node 20.3+ / 18.17+) and falls back to a
-// manual fan-in for older Node 18 builds — PortOS's `package.json` engines accept
-// Node 18, and `AbortSignal.any` is absent on the early-18 line. Mirrors the guard
-// in `fetchWithTimeout.js`. The fallback's listeners are `{ once: true }` and self-
-// removing on first abort, so there's nothing to clean up.
+/**
+ * Combine the supplied live signals into one signal that aborts when any input does.
+ *
+ * Prefers native `AbortSignal.any` and preserves early Node 18 compatibility with a
+ * one-shot fan-in fallback. The fallback listeners remove themselves on first abort.
+ *
+ * @param {(AbortSignal | null | undefined)[]} signals Signals to combine.
+ * @returns {AbortSignal | undefined} The sole signal unchanged, a combined signal,
+ * or `undefined` when no signal was supplied.
+ */
 export function anyAbortSignal(signals) {
   const live = signals.filter(Boolean);
   if (live.length === 0) return undefined;
@@ -39,6 +43,16 @@ export function anyAbortSignal(signals) {
   return controller.signal;
 }
 
+/**
+ * Create a cancellation signal for an Express response's unfinished disconnect.
+ *
+ * `res.close` also fires after a normal response, so the signal aborts only when
+ * `writableEnded` is false. This lets streaming routes stop upstream work when a
+ * browser cancels without treating successful response completion as a cancellation.
+ *
+ * @param {import('express').Response} res Express response associated with the work.
+ * @returns {AbortSignal} A signal that aborts when the client disconnects early.
+ */
 export function abortSignalFromResponse(res) {
   const controller = new AbortController();
   if (res?.writableEnded) return controller.signal; // finished normally — never a cancel
