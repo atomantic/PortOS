@@ -447,6 +447,16 @@ async function runAgentSpawn(task) {
       // the proposal's domain. agent.metadata is a hand-picked projection of
       // task.metadata (not a full spread), so this must be listed explicitly.
       taskLiProposal: task.metadata?.liProposal || null,
+      // Same reason as taskLiProposal — a hand-picked projection, so this must be
+      // listed explicitly. `declaresNoCommitCriterion` (taskTypeHooks.js) reads it
+      // to decide whether a run declared a `[task-<id>]` commit criterion at all,
+      // and taskLearning's history backfill re-processes the ARCHIVED agent shape
+      // through that same predicate. Without the projection an archived
+      // tracker-filing run (reference-watch/ux on a github/gitlab/jira app) looks
+      // like a committing task during backfill, so its stale `validationPassed:
+      // false` fossil survives the sanitizer (#3273). `?? null` — not `|| null` —
+      // because `false` is the load-bearing value here.
+      worktreeChangesExpected: task.metadata?.worktreeChangesExpected ?? null,
       taskAppName: resolvedAppName,
       selfImprovementType: task.metadata?.selfImprovementType || null,
       jobId: task.metadata?.jobId || null,

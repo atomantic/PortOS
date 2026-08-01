@@ -63,6 +63,34 @@ describe('backfillFromHistory — stale coordinator verdict (#2696)', () => {
     expect(recordTaskCompletion.mock.calls[0][0].result.validationPassed).toBeNull();
   });
 
+  it('strips the fossil for an archived tracker-filing run on a forge tracker (#3273)', async () => {
+    // A reference-watch/ux run on a github/gitlab/jira app files issues out of band
+    // and makes no commit, so its persisted `validationPassed: false` is a fossil of
+    // the same #2696 artifact. This is the ARCHIVED shape agentLifecycle projects —
+    // `taskAnalysisType` plus the explicitly-projected `worktreeChangesExpected`
+    // (a hand-picked projection: if that field ever stops being projected, this
+    // fails and the backfill silently stops stripping these).
+    agentsStore.list = ['reference-watch', 'ux'].map((t, i) => ({
+      status: 'completed', taskId: `t${i}`,
+      result: { success: true, duration: 100, validationPassed: false },
+      metadata: { taskAnalysisType: t, taskType: 'internal', worktreeChangesExpected: false },
+    }));
+    await backfillFromHistory();
+    for (const call of recordTaskCompletion.mock.calls) {
+      expect(call[0].result.validationPassed).toBeNull();
+    }
+  });
+
+  it('keeps the fossil for a tracker-filing run on a PLAN.md tracker — it really does commit', async () => {
+    agentsStore.list = [{
+      status: 'completed', taskId: 't1',
+      result: { success: true, duration: 100, validationPassed: false },
+      metadata: { taskAnalysisType: 'ux', taskType: 'internal', worktreeChangesExpected: true },
+    }];
+    await backfillFromHistory();
+    expect(recordTaskCompletion.mock.calls[0][0].result.validationPassed).toBe(false);
+  });
+
   it('passes a committing type through UNTOUCHED — its commit verdict is real', async () => {
     // accessibility genuinely commits; a persisted false is a real miss, not a fossil.
     agentsStore.list = [completed('t1', 'accessibility', false)];
