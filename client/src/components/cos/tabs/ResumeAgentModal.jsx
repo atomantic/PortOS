@@ -164,7 +164,7 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
             {screenshots.length > 0 && (
               <div className="flex gap-2 flex-wrap mt-2">
                 {screenshots.map(s => (
-                  <div key={s.id} className="relative group">
+                  <div key={s.id} className="relative group focus-within:opacity-100">
                     <img
                       src={s.preview}
                       alt={s.filename}
@@ -173,7 +173,7 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
                     <button
                       type="button"
                       onClick={() => removeScreenshot(s.id)}
-                      className="absolute -top-2 -right-2 w-5 h-5 bg-port-error rounded-full flex items-center justify-center md:opacity-0 md:group-hover:opacity-100 transition-opacity"
+                      className="absolute -top-2 -right-2 w-5 h-5 bg-port-error rounded-full flex items-center justify-center md:opacity-0 md:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
                       aria-label={`Remove screenshot ${s.filename}`}
                     >
                       <X size={12} aria-hidden="true" />

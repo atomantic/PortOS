@@ -227,7 +227,7 @@ export function RunsHistoryPage() {
             {filteredRuns.map(run => (
               <div key={run.id}>
                 <div
-                  className="p-3 sm:p-4 hover:bg-port-border/20 cursor-pointer group"
+                  className="p-3 sm:p-4 hover:bg-port-border/20 cursor-pointer group focus-within:opacity-100"
                   onClick={() => toggleExpand(run.id)}
                   {...clickableProps(() => toggleExpand(run.id))}
                   data-testid={`run-row-${run.id}`}
@@ -288,7 +288,7 @@ export function RunsHistoryPage() {
                       {run.success === false && (
                         <button
                           onClick={(e) => { e.stopPropagation(); setLogModalRun(run); }}
-                          className="p-1 text-gray-500 hover:text-port-accent transition-colors sm:opacity-0 sm:group-hover:opacity-100"
+                          className="p-1 text-gray-500 hover:text-port-accent transition-colors sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100"
                           title="View system logs"
                           aria-label="View system logs"
                           data-testid={`view-logs-${run.id}`}
@@ -299,7 +299,7 @@ export function RunsHistoryPage() {
                       {run.success !== null && (
                         <button
                           onClick={(e) => handleResume(run, e)}
-                          className="p-1 text-gray-500 hover:text-port-accent transition-colors sm:opacity-0 sm:group-hover:opacity-100"
+                          className="p-1 text-gray-500 hover:text-port-accent transition-colors sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100"
                           title="Resume run"
                           data-testid={`resume-run-${run.id}`}
                         >
@@ -308,7 +308,7 @@ export function RunsHistoryPage() {
                       )}
                       <button
                         onClick={(e) => handleDelete(run.id, e)}
-                        className="p-1 text-gray-500 hover:text-port-error transition-colors sm:opacity-0 sm:group-hover:opacity-100"
+                        className="p-1 text-gray-500 hover:text-port-error transition-colors sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100"
                         title="Delete run"
                         data-testid={`delete-run-${run.id}`}
                       >
