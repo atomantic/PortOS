@@ -96,8 +96,8 @@ function CandidateTile({ recordId, candidate, locking, onLock, clipRisk, correct
       ) : confirming ? (
         <div className="mt-auto flex flex-wrap items-center gap-1 text-xs">
           <span className="text-port-warning">Freeze this version?</span>
-          <button onClick={() => { setConfirming(false); onLock(candidate); }} disabled={locking} className="px-1.5 py-0.5 bg-port-accent text-white rounded disabled:opacity-50">Lock</button>
-          <button onClick={() => setConfirming(false)} className="px-1.5 py-0.5 text-gray-400 hover:text-white">Cancel</button>
+          <button onClick={() => { setConfirming(false); onLock(candidate); }} disabled={locking} className="min-h-[36px] px-1.5 py-0.5 bg-port-accent text-white rounded disabled:opacity-50">Lock</button>
+          <button onClick={() => setConfirming(false)} className="min-h-[36px] px-1.5 py-0.5 text-gray-400 hover:text-white">Cancel</button>
         </div>
       ) : (
         <button
@@ -135,7 +135,7 @@ function LockedAnchor({ recordId, anchor, canUnlock, unlocking, onUnlock }) {
               aria-label={`Confirm unlock ${direction} anchor`}
               onClick={() => { setConfirming(false); onUnlock(direction); }}
               disabled={unlocking}
-              className="flex-1 rounded bg-port-warning px-1.5 py-1 font-medium text-black disabled:opacity-50"
+              className="min-h-[36px] flex-1 rounded bg-port-warning px-1.5 py-1 font-medium text-black disabled:opacity-50"
             >
               Unlock
             </button>
@@ -143,7 +143,7 @@ function LockedAnchor({ recordId, anchor, canUnlock, unlocking, onUnlock }) {
               type="button"
               onClick={() => setConfirming(false)}
               disabled={unlocking}
-              className="rounded px-1.5 py-1 text-gray-400 hover:text-white disabled:opacity-50"
+              className="min-h-[36px] rounded px-1.5 py-1 text-gray-400 hover:text-white disabled:opacity-50"
             >
               Cancel
             </button>

@@ -423,8 +423,8 @@ function DirectionCard({
             confirming ? (
               <div className="flex items-center gap-1 text-xs">
                 <span className="text-port-warning">Approve?</span>
-                <button onClick={() => { setConfirming(false); onApprove(direction, candidate.id); }} className="px-1.5 py-0.5 bg-port-accent text-white rounded">Yes</button>
-                <button onClick={() => setConfirming(false)} className="px-1.5 py-0.5 text-gray-400 hover:text-white">No</button>
+                <button onClick={() => { setConfirming(false); onApprove(direction, candidate.id); }} className="min-h-[36px] px-1.5 py-0.5 bg-port-accent text-white rounded">Yes</button>
+                <button onClick={() => setConfirming(false)} className="min-h-[36px] px-1.5 py-0.5 text-gray-400 hover:text-white">No</button>
               </div>
             ) : (
               // Approval is where a direction's geometry gets frozen into the
@@ -441,7 +441,7 @@ function DirectionCard({
                 title={run?.importedPackaging
                   ? 'This run was packaged by the source pipeline, which kept its frames — reprocess it from its clip first'
                   : drift ? `Re-derive this direction to ${cycleLabel} before approving it` : undefined}
-                className="w-full px-2 py-0.5 text-xs bg-port-success/20 border border-port-success rounded text-port-success disabled:opacity-50"
+                className="min-h-[36px] w-full px-2 py-0.5 text-xs bg-port-success/20 border border-port-success rounded text-port-success disabled:opacity-50"
               >
                 Approve
               </button>

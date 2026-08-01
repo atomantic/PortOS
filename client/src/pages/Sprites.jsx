@@ -97,7 +97,7 @@ function ImportPanel({ onImported }) {
         <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-white">Import production sprites</h3>
-        <button onClick={() => setOpen(false)} aria-label="Close import panel" className="text-gray-400 hover:text-white">
+        <button onClick={() => setOpen(false)} aria-label="Close import panel" className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-400 hover:text-white">
           <X className="w-4 h-4" />
         </button>
       </div>
@@ -175,7 +175,7 @@ function NewSpritePanel({ onCreated }) {
         <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-white">New sprite</h3>
-        <button onClick={() => setOpen(false)} aria-label="Close new sprite panel" className="text-gray-400 hover:text-white">
+        <button onClick={() => setOpen(false)} aria-label="Close new sprite panel" className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-400 hover:text-white">
           <X className="w-4 h-4" />
         </button>
       </div>
