@@ -284,7 +284,12 @@ export default function ConfigTab({ accounts, setAccounts }) {
                 <div className="flex items-center justify-between p-4">
                   <div className="flex items-center gap-3">
                     {isGoogle && (
-                      <button onClick={() => toggleExpand(account.id)} className="p-0.5 text-gray-500 hover:text-white">
+                      <button
+                        onClick={() => toggleExpand(account.id)}
+                        aria-label={isExpanded ? `Collapse calendars for ${account.name}` : `Expand calendars for ${account.name}`}
+                        aria-expanded={isExpanded}
+                        className="p-0.5 text-gray-500 hover:text-white"
+                      >
                         {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                       </button>
                     )}
