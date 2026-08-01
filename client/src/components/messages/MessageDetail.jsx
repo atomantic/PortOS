@@ -98,11 +98,13 @@ export default function MessageDetail({ message, accounts, onBack }) {
   // Load thread messages if this message is part of a thread
   useEffect(() => {
     if (!message.threadId || !message.accountId) return;
+    let cancelled = false;
     setThreadLoading(true);
     api.getMessageThread(message.accountId, message.threadId)
-      .then(data => setThreadMessages(data?.messages || []))
-      .catch(() => setThreadMessages([]))
-      .finally(() => setThreadLoading(false));
+      .then(data => { if (!cancelled) setThreadMessages(data?.messages || []); })
+      .catch(() => { if (!cancelled) setThreadMessages([]); })
+      .finally(() => { if (!cancelled) setThreadLoading(false); });
+    return () => { cancelled = true; };
   }, [message.threadId, message.accountId]);
 
   const handleRefresh = async () => {

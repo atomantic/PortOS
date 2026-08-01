@@ -9,8 +9,10 @@ export default function OutputTab({ agent }) {
   const bottomRef = useRef(null);
 
   useEffect(() => {
+    let cancelled = false;
     const fetch = () => {
       api.getFeatureAgentOutput(agent.id).then(data => {
+        if (cancelled) return;
         if (data) {
           setOutput(data.output || '');
           setAgentId(data.agentId);
@@ -28,6 +30,7 @@ export default function OutputTab({ agent }) {
     socket.on('cos:feature-agent:output', handler);
 
     return () => {
+      cancelled = true;
       socket.off('cos:agent:output', handler);
       socket.off('cos:feature-agent:output', handler);
     };

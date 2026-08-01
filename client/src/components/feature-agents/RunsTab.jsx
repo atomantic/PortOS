@@ -10,10 +10,13 @@ export default function RunsTab({ agent }) {
   const [expanded, setExpanded] = useState({});
 
   useEffect(() => {
+    let cancelled = false;
     api.getFeatureAgentRuns(agent.id, 50).then(data => {
+      if (cancelled) return;
       setRuns(data || []);
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [agent.id]);
 
   if (loading) {
