@@ -8,6 +8,7 @@ import {
   Brain,
   Newspaper,
   ListTodo,
+  MessageSquare,
   ChevronRight,
   ChevronDown,
   X,
@@ -52,6 +53,7 @@ const ICON_MAP = {
   Brain,
   Newspaper,
   ListTodo,
+  MessageSquare,
   Zap
 };
 

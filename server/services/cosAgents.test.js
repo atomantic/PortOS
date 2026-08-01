@@ -23,7 +23,7 @@ vi.mock('./domainUsage.js', () => ({
   recordDomainUsage: vi.fn(async () => {})
 }));
 
-import { getAgent, createAgentOutputBatcher, completeAgent, updateAgent } from './cosAgents.js';
+import { getAgent, createAgentOutputBatcher, completeAgent, getPendingAgentFeedbackCount, updateAgent } from './cosAgents.js';
 import { saveState } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
@@ -72,6 +72,17 @@ describe('cosAgents', () => {
 
     const persisted = JSON.parse(await readFile(join(archiveDir, 'metadata.json'), 'utf8'));
     expect(persisted.metadata.malwareScan.verdict).toBe('DANGEROUS');
+  });
+
+  it('counts only unrated completed non-system agents for the feedback insight', async () => {
+    mockCosState.state.agents = {
+      'agent-unrated': { id: 'agent-unrated', status: 'completed', completedAt: '2026-08-01T10:00:00.000Z' },
+      'agent-rated': { id: 'agent-rated', status: 'completed', feedback: { rating: 'positive' } },
+      'agent-system': { id: 'agent-system', taskId: 'sys-health-check', status: 'completed' },
+      'agent-running': { id: 'agent-running', status: 'running' }
+    };
+
+    await expect(getPendingAgentFeedbackCount()).resolves.toBe(1);
   });
 });
 

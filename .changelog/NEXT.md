@@ -23,6 +23,7 @@
 
 ## Agents
 
+- **CoS now brings recent unrated completed runs back to you.** The feedback queue was durable but easy to miss once a completion notification disappeared. Tasks now surface an actionable reminder that opens the Agents tab directly in its shareable “Needs feedback” filter, so a quick rating can actually improve future routing and task quality.
 - **[issue-3246] Completed direct-CLI agents now survive a PortOS restart without repeating their work.** When an agent has already written its completion sentinel, shutdown finalizes that result and dispatches its output instead of requeuing the task and potentially opening a duplicate pull request.
 
 ## POST
