@@ -1943,10 +1943,11 @@ export default function VideoGen() {
             {(mode === 'image' || (mode === 'extend' && currentModel?.runtime !== 'ltx2')) && (
               <div className="col-span-2 sm:col-span-3">
                 <div className="flex items-center justify-between gap-3 mb-1">
-                  <label className="block text-xs font-medium text-gray-400">Image Strength</label>
+                  <label htmlFor="video-image-strength" className="block text-xs font-medium text-gray-400">Image Strength</label>
                   <span className="text-[11px] text-gray-500">{imageStrength || '1.0'}</span>
                 </div>
                 <input
+                  id="video-image-strength"
                   type="range" min={0} max={1} step={0.05}
                   value={imageStrength || 1}
                   onChange={(e) => setImageStrength(e.target.value)}
