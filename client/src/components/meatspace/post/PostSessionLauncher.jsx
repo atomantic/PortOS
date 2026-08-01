@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer, Radio, Target, TrendingUp, TrendingDown, Minus, Compass, ArrowRight, ChevronRight, Layers } from 'lucide-react';
-import { getProviders, getPostReviewReps, getPostRecommendations, getMorseProgress, getPostProgress, getMemoryItems } from '../../../services/api';
+import { getPostReviewReps, getPostRecommendations, getMorseProgress, getPostProgress, getMemoryItems } from '../../../services/api';
 import { FormField } from '../../ui/FormField';
-import { isApiProvider } from '../../../utils/providers';
+import { enabledApiProviderFilter } from '../../../utils/providers';
+import useProviderModels from '../../../hooks/useProviderModels.js';
 import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS, computeDomainAverages, computeGoalProgress, isTopicEnabled, selectMemoryItemForDrill, resolveTopicForDrillType } from './constants';
 import { streakGlyph } from '../../../lib/streakGlyph.js';
 import useUserTimezone from '../../../hooks/useUserTimezone.js';
@@ -80,7 +81,17 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   // lives above it, so collapsing never discards typed values.
   const [showConditions, setShowConditions] = useState(false);
   const [mode, setMode] = useState('test'); // 'test' | 'train'
-  const [providers, setProviders] = useState([]);
+  // `getProviders()` resolves `{ activeProvider, providers }`, not a bare array.
+  // Unwrapping it by hand here read the object as the list and threw on every
+  // mount, so the panel below never learned which provider a run would use — go
+  // through the shared hook that owns the unwrap instead of a fourth copy of it.
+  // `allowDefault` keeps it from auto-selecting a provider; this is a read-only
+  // "is anything configured" signal, not a picker.
+  const { providers } = useProviderModels({
+    filter: enabledApiProviderFilter,
+    allowDefault: true,
+    silent: true,
+  });
   // Mastered-but-inactive skills due for a maintenance review (issue #2096) —
   // the Quick session mixes up to 2 of these in as labeled review reps. Empty
   // until a skill is mastered and its review interval elapses; a load failure
@@ -103,7 +114,6 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
   const [memoryItemsState, setMemoryItemsState] = useState({ status: 'loading', items: [] });
 
   useEffect(() => {
-    getProviders().then(p => setProviders((p || []).filter(pr => pr.enabled && isApiProvider(pr)))).catch(err => console.warn('⚠️ Failed to load providers: ' + err.message));
     getPostReviewReps(5).then(r => setReviewReps(r?.reps || [])).catch(() => setReviewReps([]));
     getPostRecommendations().then(r => setRecommendations(r?.recommendations || [])).catch(() => setRecommendations([]));
     getMemoryItems({ silent: true })

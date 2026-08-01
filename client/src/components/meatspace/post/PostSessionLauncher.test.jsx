@@ -4,8 +4,17 @@ import { MemoryRouter } from 'react-router-dom';
 
 // Mock the API surface the launcher touches on mount (providers + review reps +
 // recommendations) so the render tests are deterministic and offline.
+//
+// getProviders MUST resolve the real wire shape — `{ activeProvider, providers }`,
+// not a bare array. This mock used to return `[]`, which made the suite pass
+// whether or not the component unwrapped the response, so it stayed green while
+// the launcher threw on every mount in the real app. Mirror the server contract
+// here or this file proves nothing about provider handling.
 vi.mock('../../../services/api', () => ({
-  getProviders: vi.fn().mockResolvedValue([]),
+  getProviders: vi.fn().mockResolvedValue({
+    activeProvider: 'openai',
+    providers: [{ id: 'openai', name: 'OpenAI', type: 'api', enabled: true, defaultModel: 'gpt-4' }],
+  }),
   getPostReviewReps: vi.fn().mockResolvedValue({ reps: [] }),
   getPostRecommendations: vi.fn().mockResolvedValue({ recommendations: [] }),
   getMorseProgress: vi.fn().mockResolvedValue({ settings: { wpm: 18, farnsworthWpm: 12 } }),
@@ -289,6 +298,22 @@ describe('PostSessionLauncher render (issue #2100)', () => {
     const drills = onStart.mock.calls[0][0];
     expect(drills.some(d => d.type === 'wit-comeback')).toBe(false);
     expect(drills.some(d => d.type === 'multiplication')).toBe(true);
+  });
+
+  // Regression: the launcher read getProviders()'s `{ activeProvider, providers }`
+  // response as if it were a bare array, so the filter threw on mount, the list
+  // stayed empty, and the Wit & Memory panel never rendered its provider hint.
+  // Assert the hint appears purely from a loaded provider list (no pinned
+  // llmProviderId) — that only happens when the response is unwrapped.
+  it('shows the Wit & Memory provider hint once the provider list loads', async () => {
+    renderLauncher({
+      config: {
+        ...baseConfig,
+        sessionModules: ['mental-math', 'llm-drills'],
+        llmDrills: { enabled: true, drillTypes: { 'wit-comeback': { enabled: true, count: 3 } } },
+      },
+    });
+    expect(await screen.findByText('system default')).toBeInTheDocument();
   });
 });
 
