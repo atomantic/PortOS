@@ -26,6 +26,7 @@ import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import Modal from '../../ui/Modal';
 import CollapsibleText from '../../ui/CollapsibleText';
+import { extractCosTaskType } from '../../../lib/cosTaskType';
 
 const statusIcons = {
   pending: <Clock size={16} aria-hidden="true" className="text-yellow-500" />,
@@ -35,58 +36,6 @@ const statusIcons = {
   // A sub-agent disputing a reviewer rejection (#2441) — awaiting resolution.
   challenged: <Scale size={16} aria-hidden="true" className="text-port-warning" />
 };
-
-// Extract task type from description for duration lookup (matches AgentCard logic)
-function extractTaskType(description) {
-  if (!description) return 'general';
-  const d = description.toLowerCase();
-
-  // Check for improvement task patterns first
-  if (d.includes('[self-improvement]') || d.includes('[improvement]')) {
-    if (d.includes('ui bug')) return 'task:ui-bugs';
-    if (d.includes('mobile')) return 'task:mobile-responsive';
-    if (d.includes('security')) return 'task:security';
-    if (d.includes('code quality')) return 'task:code-quality';
-    if (d.includes('console error')) return 'task:console-errors';
-    if (d.includes('performance')) return 'task:performance';
-    if (d.includes('test coverage')) return 'task:test-coverage';
-    if (d.includes('documentation')) return 'task:documentation';
-    if (d.includes('feature idea') || d.includes('brainstorm')) return 'task:feature-ideas';
-    if (d.includes('accessibility')) return 'task:accessibility';
-    if (d.includes('error handling')) return 'task:error-handling';
-    if (d.includes('typing') || d.includes('typescript')) return 'task:typing';
-    if (d.includes('release')) return 'task:release-check';
-    if (d.includes('dependency')) return 'task:dependency-updates';
-    if (d.includes('jira') && d.includes('report')) return 'task:jira-status-report';
-    if (d.includes('jira') || d.includes('sprint')) return 'task:jira-sprint-manager';
-    // plan-task matches before do-replan because both descriptions contain
-    // "plan.md" — plan-task's "Execute next PLAN.md item" must win over
-    // replan's "Audit plan.md" generic match.
-    if (d.includes('plan-task') || (d.includes('execute next') && d.includes('plan.md'))) return 'task:plan-task';
-    if (d.includes('replan') || d.includes('audit plan.md') || d.includes('plan.md')) return 'task:do-replan';
-  }
-
-  // claim-issue carries a "[Claim Issue: <app>]" prefix (not the [improvement]
-  // marker), so classify it here before the generic "issue" → bug-fix fallback
-  // below would otherwise mislabel it (and skew its historical duration lookup).
-  if (d.includes('[claim issue:')) return 'task:claim-issue';
-
-  // General task type classification
-  if (d.includes('fix') || d.includes('bug') || d.includes('error') || d.includes('issue')) return 'bug-fix';
-  if (d.includes('refactor') || d.includes('clean up') || d.includes('improve') || d.includes('optimize')) return 'refactor';
-  if (d.includes('test')) return 'testing';
-  if (d.includes('document') || d.includes('readme') || d.includes('docs')) return 'documentation';
-  if (d.includes('review') || d.includes('audit')) return 'code-review';
-  if (d.includes('mobile') || d.includes('responsive')) return 'mobile-responsive';
-  if (d.includes('security') || d.includes('vulnerability')) return 'security';
-  if (d.includes('performance') || d.includes('speed')) return 'performance';
-  if (d.includes('ui') || d.includes('ux') || d.includes('design') || d.includes('style')) return 'ui-ux';
-  if (d.includes('api') || d.includes('endpoint') || d.includes('route')) return 'api';
-  if (d.includes('database') || d.includes('migration')) return 'database';
-  if (d.includes('deploy') || d.includes('ci') || d.includes('cd')) return 'devops';
-  if (d.includes('investigate') || d.includes('debug')) return 'investigation';
-  return 'feature';
-}
 
 // Get success rate styling based on percentage
 function getSuccessRateStyle(rate) {
@@ -134,7 +83,7 @@ export default function TaskItem({ task, isSystem, onRefresh, providers, duratio
   const durationEstimate = useMemo(() => {
     if (!durations || task.status !== 'pending') return null;
 
-    const taskType = extractTaskType(task.description);
+    const taskType = extractCosTaskType(task);
     const typeData = durations[taskType];
     const overallData = durations._overall;
 
@@ -163,7 +112,7 @@ export default function TaskItem({ task, isSystem, onRefresh, providers, duratio
     }
 
     return null;
-  }, [durations, task.description, task.status]);
+  }, [durations, task, task.status]);
 
   const handleStatusChange = async (newStatus, blockedReasonText = '') => {
     const updates = { status: newStatus, type: taskSource };

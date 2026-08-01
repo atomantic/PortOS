@@ -30,32 +30,12 @@ import MarkdownOutput from '../MarkdownOutput';
 import Modal from '../../ui/Modal';
 import toast from '../../ui/Toast';
 import { copyToClipboard } from '../../../lib/clipboard';
+import { extractCosTaskType } from '../../../lib/cosTaskType';
 import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
 import { formatDurationMs, formatDateTime } from '../../../utils/formatters';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
-
-// Extract task type from description (matches server-side extractTaskType)
-function extractTaskType(description) {
-  if (!description) return 'general';
-  const d = description.toLowerCase();
-  if (d.includes('fix') || d.includes('bug') || d.includes('error') || d.includes('issue')) return 'bug-fix';
-  if (d.includes('refactor') || d.includes('clean up') || d.includes('improve') || d.includes('optimize')) return 'refactor';
-  if (d.includes('test')) return 'testing';
-  if (d.includes('document') || d.includes('readme') || d.includes('docs')) return 'documentation';
-  if (d.includes('review') || d.includes('audit')) return 'code-review';
-  if (d.includes('mobile') || d.includes('responsive')) return 'mobile-responsive';
-  if (d.includes('security') || d.includes('vulnerability')) return 'security';
-  if (d.includes('performance') || d.includes('speed')) return 'performance';
-  if (d.includes('ui') || d.includes('ux') || d.includes('design') || d.includes('style')) return 'ui-ux';
-  if (d.includes('api') || d.includes('endpoint') || d.includes('route')) return 'api';
-  if (d.includes('database') || d.includes('migration')) return 'database';
-  if (d.includes('deploy') || d.includes('ci') || d.includes('cd')) return 'devops';
-  if (d.includes('investigate') || d.includes('debug')) return 'investigation';
-  if (d.includes('self-improvement') || d.includes('improvement') || d.includes('feature idea')) return 'self-improvement';
-  return 'feature';
-}
 
 // Pre-compiled regexes for normalizeDescriptionToMarkdown
 // Avoid lookbehind to support older Safari/iOS runtimes
@@ -266,7 +246,11 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
   const durationEstimate = useMemo(() => {
     if (inactive || !durations) return null;
 
-    const taskType = extractTaskType(agent.metadata?.taskDescription);
+    const taskType = extractCosTaskType({
+      description: agent.metadata?.taskDescription,
+      taskType: agent.metadata?.taskType,
+      metadata: agent.metadata
+    });
     const typeData = durations[taskType];
     const overallData = durations._overall;
 
@@ -291,7 +275,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
     }
 
     return null;
-  }, [inactive, durations, agent.metadata?.taskDescription]);
+  }, [inactive, durations, agent.metadata]);
 
   // Calculate progress percentage using P80-based estimate
   // Cap at 99% for active tasks — only completion can land on 100%

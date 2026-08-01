@@ -29,6 +29,29 @@ beforeEach(() => {
 });
 
 describe('TaskItem task source', () => {
+  it('uses the scheduled task learning bucket for its ETA instead of generic task text', () => {
+    const scheduled = {
+      ...task,
+      id: 'sys-security',
+      description: '[Self-Improvement] security audit: fix exposed configuration',
+      taskType: 'internal',
+      metadata: { analysisType: 'security' },
+    };
+    const durations = {
+      'self-improve:security': {
+        avgDurationMin: 2,
+        p80DurationMs: 120000,
+        completed: 5,
+        successRate: 100,
+      },
+    };
+
+    render(<TaskItem task={scheduled} isSystem onRefresh={vi.fn()} providers={providers} durations={durations} />);
+
+    expect(screen.getByTitle('Based on 5 completed self-improve:security tasks')).toBeInTheDocument();
+    expect(screen.getByText('~2m')).toBeInTheDocument();
+  });
+
   it('updates a system task in the internal queue when saving its model', async () => {
     render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
 

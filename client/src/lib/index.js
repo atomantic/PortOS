@@ -63,6 +63,7 @@ export * from './clinicianReport.js';
 export * from './clipboard.js';
 export * from './compareHelpers.js';
 export * from './consoleFilters.js';
+export * from './cosTaskType.js';
 export * from './diffLines.js';
 export * from './diffWords.js';
 export * from './dndTransform.js';

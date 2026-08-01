@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
@@ -30,7 +30,39 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe('AgentCard feedback', () => {
+  it('uses the archived scheduled type for a running agent ETA', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-13T10:00:00.000Z'));
+    const runningAgent = {
+      ...agent,
+      status: 'running',
+      startedAt: '2026-07-13T09:59:00.000Z',
+      completedAt: null,
+      metadata: {
+        taskDescription: 'Fix the security configuration',
+        taskType: 'internal',
+        taskAnalysisType: 'security',
+      },
+    };
+    const durations = {
+      'self-improve:security': { avgDurationMs: 600000, p80DurationMs: 600000, completed: 5 },
+      _overall: { avgDurationMs: 1000, p80DurationMs: 1000, completed: 20 },
+    };
+
+    render(
+      <MemoryRouter>
+        <AgentCard agent={runningAgent} durations={durations} />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText('10% complete')).toBeInTheDocument();
+  });
+
   it('returns the updated agent to its parent after a successful rating', async () => {
     const user = userEvent.setup();
     const updatedAgent = {
