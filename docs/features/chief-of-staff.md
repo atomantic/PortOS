@@ -21,7 +21,7 @@ Autonomous agent manager that watches task files, spawns sub-agents, and maintai
 6. **Self-Improvement**: Can analyze performance and suggest prompt/config improvements
 7. **Script Generation**: Creates automation scripts for repetitive tasks
 8. **Report Generation**: Daily summaries of completed work
-9. **Durable Agent Feedback**: Completion notifications accept quick ratings, while the Agents tab keeps a filterable queue of loaded runs that still need feedback after a notification expires. Feedback details can be attached to helpful, unhelpful, or neutral ratings so learning has actionable context.
+9. **Durable Agent Feedback**: Completion notifications accept quick ratings, while the Agents tab keeps a filterable queue of loaded runs that still need feedback after a notification expires. Recent unrated completed runs are also surfaced as a CoS insight that links directly to the URL-backed review filter. Feedback details can be attached to helpful, unhelpful, or neutral ratings so learning has actionable context.
 10. **Learning-Aligned ETAs**: Pending tasks and active agents resolve their estimates from the same metadata-first task-learning bucket that records outcomes, including archived scheduled-agent metadata, instead of inferring a potentially different category from task text.
 
 ## Task File Format

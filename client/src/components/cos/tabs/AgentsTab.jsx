@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useSearchParams } from 'react-router';
 import { Trash2, Search, X, ChevronDown, MessageSquare } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
@@ -13,10 +14,10 @@ const needsAgentFeedback = (agent) => {
 };
 
 export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, apps }) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [resumingAgent, setResumingAgent] = useState(null);
   const [durations, setDurations] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [feedbackFilter, setFeedbackFilter] = useState('all');
   const [feedbackUpdates, setFeedbackUpdates] = useState({});
   const [confirmingClear, setConfirmingClear] = useState(false);
 
@@ -25,6 +26,16 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
   const [loadedAgents, setLoadedAgents] = useState([]); // agents loaded so far
   const [loadedDates, setLoadedDates] = useState(new Set()); // dates already fetched
   const [loadingMore, setLoadingMore] = useState(false);
+
+  // Filter selection is URL-backed so actionable insights can open the exact
+  // review queue and the filtered state remains bookmarkable/shareable.
+  const feedbackFilter = searchParams.get('feedback') === 'needs-feedback' ? 'needs-feedback' : 'all';
+  const setFeedbackFilter = useCallback((filter) => {
+    const next = new URLSearchParams(searchParams);
+    if (filter === 'needs-feedback') next.set('feedback', filter);
+    else next.delete('feedback');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   // Fetch duration estimates for progress indicators
   useEffect(() => {

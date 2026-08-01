@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { act } from 'react';
+import { MemoryRouter } from 'react-router';
 
 vi.mock('../../../services/api', () => ({
   getCosLearningDurations: vi.fn(),
@@ -49,14 +50,16 @@ const completedAgent = (id, description, extra = {}) => ({
   ...extra,
 });
 
-const renderTab = (agents, onRefresh = vi.fn()) => render(
-  <AgentsTab
-    agents={agents}
-    onRefresh={onRefresh}
-    liveOutputs={{}}
-    providers={[]}
-    apps={[]}
-  />
+const renderTab = (agents, onRefresh = vi.fn(), initialEntry = '/cos/agents') => render(
+  <MemoryRouter initialEntries={[initialEntry]}>
+    <AgentsTab
+      agents={agents}
+      onRefresh={onRefresh}
+      liveOutputs={{}}
+      providers={[]}
+      apps={[]}
+    />
+  </MemoryRouter>
 );
 
 beforeEach(() => {
@@ -83,6 +86,18 @@ describe('AgentsTab feedback review queue', () => {
     expect(screen.queryByText('Rated task')).not.toBeInTheDocument();
     expect(screen.queryByText('System task')).not.toBeInTheDocument();
     expect(needsFeedback).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('opens the feedback queue directly from the URL', async () => {
+    renderTab([
+      completedAgent('unrated', 'Unrated task'),
+      completedAgent('rated', 'Rated task', { feedback: { rating: 'positive' } }),
+    ], vi.fn(), '/cos/agents?feedback=needs-feedback');
+    await act(async () => {});
+
+    expect(screen.getByText('Unrated task')).toBeInTheDocument();
+    expect(screen.queryByText('Rated task')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Needs feedback: 1' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('removes an archived run from the queue immediately after feedback', async () => {

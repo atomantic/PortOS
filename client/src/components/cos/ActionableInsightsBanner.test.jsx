@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useLocation } from 'react-router';
 import { insightProvenance } from './ActionableInsightsBanner';
 
 // The banner stamps each surfaced insight with a provenance chip. The honesty
@@ -11,7 +11,7 @@ import { insightProvenance } from './ActionableInsightsBanner';
 // regress back to a single hardcoded level.
 describe('ActionableInsightsBanner insightProvenance', () => {
   it('marks direct-count insight types as data-backed', () => {
-    for (const type of ['approval', 'blocked', 'health', 'briefing', 'tasks']) {
+    for (const type of ['approval', 'blocked', 'health', 'agent-feedback', 'briefing', 'tasks']) {
       expect(insightProvenance(type).level).toBe('data-backed');
     }
   });
@@ -41,10 +41,16 @@ vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } })
 
 const ActionableInsightsBanner = (await import('./ActionableInsightsBanner')).default;
 
-const renderBanner = (props) =>
+const LocationDisplay = () => {
+  const location = useLocation();
+  return <output data-testid="location">{`${location.pathname}${location.search}`}</output>;
+};
+
+const renderBanner = (props, { withLocation = false } = {}) =>
   render(
     <MemoryRouter>
       <ActionableInsightsBanner {...props} />
+      {withLocation && <LocationDisplay />}
     </MemoryRouter>,
   );
 
@@ -74,6 +80,18 @@ describe('ActionableInsightsBanner (presentational)', () => {
     expect(screen.getByText('3 approvals waiting')).toBeInTheDocument();
     // The banner never calls the API directly anymore — the parent owns fetching.
     expect(api.updateCosTask).not.toHaveBeenCalled();
+  });
+
+  it('navigates feedback reminders to the URL-backed review queue', () => {
+    renderBanner({
+      insights: [{
+        type: 'agent-feedback', priority: 'medium', icon: 'MessageSquare', title: '1 completed run needs feedback',
+        action: { label: 'Review runs', route: '/cos/agents?feedback=needs-feedback' },
+      }],
+    }, { withLocation: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review runs' }));
+    expect(screen.getByTestId('location')).toHaveTextContent('/cos/agents?feedback=needs-feedback');
   });
 
   it('hides insights the user dismisses', () => {

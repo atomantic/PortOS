@@ -6,6 +6,7 @@ import insightRoutes from './cosInsightRoutes.js';
 vi.mock('../services/cos.js', () => ({
   getAllTasks: vi.fn(),
   runHealthCheck: vi.fn(),
+  getPendingAgentFeedbackCount: vi.fn(),
   getTodayActivity: vi.fn(),
   getRecentTasks: vi.fn()
 }));
@@ -60,6 +61,7 @@ describe('CoS Insight Routes', () => {
     app.use(express.json());
     app.use('/api/cos', insightRoutes);
     vi.clearAllMocks();
+    cos.getPendingAgentFeedbackCount.mockResolvedValue(0);
   });
 
   describe('GET /api/cos/productivity', () => {
@@ -134,6 +136,7 @@ describe('CoS Insight Routes', () => {
       });
       taskLearning.getLearningInsights.mockResolvedValue({ skippedTypes: [] });
       cos.runHealthCheck.mockResolvedValue({ issues: [] });
+      cos.getPendingAgentFeedbackCount.mockResolvedValue(2);
       productivity.getOptimalTimeInfo.mockResolvedValue({ hasData: false });
 
       const response = await request(app).get('/api/cos/actionable-insights');
@@ -146,6 +149,11 @@ describe('CoS Insight Routes', () => {
         action: { label: 'Approve' },
         tasks: [{ id: 'a1', description: 'Approve me' }],
       });
+      expect(response.body.insights).toContainEqual(expect.objectContaining({
+        type: 'agent-feedback',
+        count: 2,
+        action: { label: 'Review runs', route: '/cos/agents?feedback=needs-feedback' }
+      }));
     });
 
     it('should handle errors gracefully in parallel calls', async () => {

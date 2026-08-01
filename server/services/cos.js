@@ -55,7 +55,7 @@ export { cosEvents, emitLog };
 // Callers ask `agentOrchestrator.js` for those (#3450).
 export { registerAgent, updateAgent, completeAgent, appendAgentOutput, getAgents, getAgent, getAgentRecord, getAgentPrompt, terminateAgent, sendBtwToAgent, cleanupZombieAgents, deleteAgent } from './cosAgentLifecycle.js';
 export { getAgentDates, getAgentsByDate, pruneOldAgentArchives } from './cosAgentIndex.js';
-export { submitAgentFeedback, getFeedbackStats, extractTaskType } from './cosAgentFeedback.js';
+export { submitAgentFeedback, getFeedbackStats, getPendingAgentFeedbackCount, extractTaskType } from './cosAgentFeedback.js';
 export { archiveStaleAgents, clearCompletedAgents } from './cosAgentArchive.js';
 
 // Reports and activity (re-export for backward compat with `import * as cos`)

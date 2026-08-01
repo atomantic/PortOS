@@ -16,6 +16,20 @@ import { atomicWrite, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { loadAgentIndex, getAgentDir } from './cosAgentIndex.js';
 import { ServerError } from '../lib/errorHandler.js';
 
+const isSystemAgent = (agent) =>
+  agent.taskId?.startsWith('sys-') || agent.id?.startsWith('sys-');
+
+// Count completed user-facing agents that are still retained in live CoS state
+// and have not received a rating. Archived history is intentionally excluded:
+// actionable insights refresh every 30s, so this remains a cheap, exact count
+// of the recent runs a user can immediately review in the Agents queue.
+export async function getPendingAgentFeedbackCount() {
+  const state = await loadState();
+  return Object.values(state.agents)
+    .filter(agent => agent.status === 'completed' && !isSystemAgent(agent) && !agent.feedback?.rating)
+    .length;
+}
+
 // Submit feedback for a completed agent
 export async function submitAgentFeedback(agentId, feedback) {
   return withStateLock(async () => {

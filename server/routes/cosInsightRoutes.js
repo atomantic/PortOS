@@ -49,12 +49,13 @@ router.get('/productivity/calendar', asyncHandler(async (req, res) => {
 // GET /api/cos/actionable-insights - Get prioritized action items requiring user attention
 // Surfaces the most important things to address right now across all CoS subsystems
 router.get('/actionable-insights', asyncHandler(async (req, res) => {
-  const [tasksData, learningSummary, healthCheck, notificationsModule, optimalTimeInfo] = await Promise.all([
+  const [tasksData, learningSummary, healthCheck, notificationsModule, optimalTimeInfo, pendingFeedbackCount] = await Promise.all([
     cos.getAllTasks().catch(err => { console.error(`❌ Failed to load tasks: ${err.message}`); return { user: null, cos: null }; }),
     taskLearning.getLearningInsights().catch(err => { console.error(`❌ Failed to load learning insights: ${err.message}`); return null; }),
     cos.runHealthCheck().catch(err => { console.error(`❌ Failed to run health check: ${err.message}`); return { issues: [] }; }),
     import('../services/notifications.js').catch(err => { console.error(`❌ Failed to load notifications: ${err.message}`); return null; }),
-    productivity.getOptimalTimeInfo().catch(() => ({ hasData: false }))
+    productivity.getOptimalTimeInfo().catch(() => ({ hasData: false })),
+    cos.getPendingAgentFeedbackCount().catch(err => { console.error(`❌ Failed to load pending agent feedback: ${err.message}`); return 0; })
   ]);
 
   const notificationsData = notificationsModule ? await notificationsModule.getNotifications({ unreadOnly: true, limit: 10 }).catch(() => []) : [];
@@ -111,7 +112,22 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
     });
   }
 
-  // 4. Learning failures (skipped task types)
+  // 4. Recent completed agents without feedback. The count comes directly from
+  // state-resident completed agents, which keeps this 30s-polled endpoint cheap
+  // and avoids treating older archived history as an urgent review interruption.
+  if (pendingFeedbackCount > 0) {
+    insights.push({
+      type: 'agent-feedback',
+      priority: 'medium',
+      icon: 'MessageSquare',
+      title: `${pendingFeedbackCount} completed run${pendingFeedbackCount > 1 ? 's' : ''} need feedback`,
+      description: 'Your ratings help CoS learn which work and providers are useful.',
+      action: { label: 'Review runs', route: '/cos/agents?feedback=needs-feedback' },
+      count: pendingFeedbackCount
+    });
+  }
+
+  // 5. Learning failures (skipped task types)
   const skippedTypes = learningSummary?.skippedTypes || [];
   if (skippedTypes.length > 0) {
     insights.push({
@@ -125,7 +141,7 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
     });
   }
 
-  // 5. Unread notifications (briefings, reviews, etc.)
+  // 6. Unread notifications (briefings, reviews, etc.)
   const briefingNotifs = notificationsData.filter(n => n.type === 'briefing_ready');
   if (briefingNotifs.length > 0) {
     insights.push({
@@ -139,7 +155,7 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
     });
   }
 
-  // 6. Pending user tasks (informational)
+  // 7. Pending user tasks (informational)
   const pendingUserTasks = tasksData.user?.grouped?.pending || [];
   if (pendingUserTasks.length > 0 && insights.length < 4) {
     insights.push({
@@ -153,7 +169,7 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
     });
   }
 
-  // 7. Peak productivity time (proactive suggestion)
+  // 8. Peak productivity time (proactive suggestion)
   // Show when it's a peak hour AND there are pending tasks to work on
   const totalPendingTasks = pendingUserTasks.length + (tasksData.cos?.grouped?.pending?.length || 0);
   if (optimalTimeInfo?.hasData && optimalTimeInfo.isOptimal && totalPendingTasks > 0 && insights.length < 5) {
