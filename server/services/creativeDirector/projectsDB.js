@@ -42,17 +42,31 @@ import {
 
 // The `data` JSONB is the whole record. status/created_at/updated_at are
 // mirrored into columns (kept in lockstep with the JSONB on every write) for
-// future queries, but reads always return `data` verbatim so callers see the
-// exact record shape the file backend gave — the columns are never read back.
+// future queries and are never read back; reads return `data` verbatim so
+// callers see the exact record shape the file backend gave. The lone exception
+// is the `id` primary key — see rowToProject.
 function rowToProject(row) {
   if (!row) return null;
-  // `data` already holds id/status/createdAt/updatedAt; the columns are a
-  // queryable mirror. Return the JSONB verbatim so consumers (and the route
-  // slim projection) see an identical shape to the file backend.
+  // Verbatim, EXCEPT `id`: a legacy row can carry a `data` blob with no id
+  // while the PK column — what every lookup here already matches on — has one.
+  // An id-less record is unaddressable downstream (the UI keys its grid on it,
+  // and sanitizeProjectForSync drops it from peer pushes), so backfill from the
+  // authoritative column. Repairing on read rather than by migration is
+  // deliberate: no current write path can produce the shape (persist() now
+  // asserts the invariant), so this only heals blobs left by older code, and it
+  // does so on every install without one having to run a backfill. The stored
+  // blob catches up on the record's next write. Healthy rows short-circuit on
+  // the first check and are still returned verbatim, without copying.
+  if (row.data && !row.data.id) return { ...row.data, id: row.id };
   return row.data;
 }
 
 async function persist(exec, project) {
+  // The id lives in BOTH the PK column and the `data` blob, and rowToProject
+  // has to repair blobs that lost it. Assert the invariant at the one write
+  // chokepoint so a future refactor that drops `id` from the record fails
+  // loudly here instead of being silently healed on every subsequent read.
+  if (!project?.id) throw new ServerError('Cannot persist a Creative Director project without an id', { status: 500, code: 'PROJECT_ID_MISSING' });
   // Cap runs[] at the single write chokepoint (mirrors the file backend's
   // saveAll) so legacy over-cap rows shrink on first write.
   if (Array.isArray(project.runs)) project.runs = trimRuns(project.runs);
@@ -87,13 +101,13 @@ export async function listProjects({ includeDeleted = false } = {}) {
   // created_at ASC preserves the file backend's append order (the UI sorts
   // client-side; recovery + tests don't depend on order, but stable beats random).
   const result = includeDeleted
-    ? await query(`SELECT data FROM creative_director_projects ORDER BY created_at ASC`)
-    : await query(`SELECT data FROM creative_director_projects WHERE deleted = FALSE ORDER BY created_at ASC`);
+    ? await query(`SELECT id, data FROM creative_director_projects ORDER BY created_at ASC`)
+    : await query(`SELECT id, data FROM creative_director_projects WHERE deleted = FALSE ORDER BY created_at ASC`);
   return result.rows.map(rowToProject);
 }
 
 export async function getProject(id, { includeDeleted = false } = {}) {
-  const result = await query(`SELECT data FROM creative_director_projects WHERE id = $1`, [id]);
+  const result = await query(`SELECT id, data FROM creative_director_projects WHERE id = $1`, [id]);
   const project = rowToProject(result.rows[0]);
   if (!project) return null;
   return includeDeleted || !project.deleted ? project : null;
@@ -125,7 +139,7 @@ export async function createProject(input) {
 async function withLockedProject(id, mutate, { allowMissing = false } = {}) {
   return withTransaction(async (client) => {
     const sel = await client.query(
-      `SELECT data FROM creative_director_projects WHERE id = $1 FOR UPDATE`,
+      `SELECT id, data FROM creative_director_projects WHERE id = $1 FOR UPDATE`,
       [id],
     );
     const project = rowToProject(sel.rows[0]);
@@ -156,7 +170,7 @@ export async function deleteProject(id) {
   // flips and `updatedAt`/`deletedAt` stamp now so the tombstone wins on merge.
   return withTransaction(async (client) => {
     const sel = await client.query(
-      `SELECT data FROM creative_director_projects WHERE id = $1 FOR UPDATE`,
+      `SELECT id, data FROM creative_director_projects WHERE id = $1 FOR UPDATE`,
       [id],
     );
     const current = rowToProject(sel.rows[0]);
@@ -183,7 +197,7 @@ export async function mergeProjectsFromSync(remoteProjects, { source = { via: 's
   let changed = 0;
   for (const remote of remoteProjects) {
     const applied = await withTransaction(async (client) => {
-      const sel = await client.query(`SELECT data FROM creative_director_projects WHERE id = $1 FOR UPDATE`, [remote?.id]);
+      const sel = await client.query(`SELECT id, data FROM creative_director_projects WHERE id = $1 FOR UPDATE`, [remote?.id]);
       const local = rowToProject(sel.rows[0]);
       const { next, inserted, remoteWins, changed: didChange } = mergeProjectRecord(local, remote);
       if (!next) return false; // malformed remote → dropped

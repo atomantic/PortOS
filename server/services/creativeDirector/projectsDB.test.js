@@ -75,6 +75,29 @@ describe.skipIf(!dbReady)('projectsDB round-trip', () => {
     expect(list.some((x) => x.id === p.id)).toBe(true);
   });
 
+  // A legacy/partial write can leave the JSONB without an `id` while the PK
+  // column still has one. Reads used to hand that record out id-less, and the
+  // Creative Director grid then rendered a card keyed on `undefined` that
+  // linked to /creative-director/undefined/overview (start/pause/delete all
+  // acting on `undefined`). Reads must backfill from the authoritative column.
+  it('backfills a missing JSONB id from the primary-key column', async () => {
+    const id = 'cd-legacy-no-json-id';
+    created.push(id);
+    // Deliberately write `data` WITHOUT an id to reproduce the bad row.
+    await query(
+      `INSERT INTO creative_director_projects (id, status, data, created_at, updated_at, deleted)
+       VALUES ($1, 'draft', $2::jsonb, now(), now(), FALSE)`,
+      [id, JSON.stringify({ name: 'Legacy row', status: 'draft' })],
+    );
+
+    const fetched = await db.getProject(id);
+    expect(fetched.id).toBe(id);
+    expect(fetched.name).toBe('Legacy row'); // the spread must not drop fields
+
+    const all = await db.listProjects();
+    expect(all.find((p) => p.name === 'Legacy row')?.id).toBe(id);
+  });
+
   it('applies a treatment and patches a scene', async () => {
     const p = await db.createProject(CREATE_INPUT);
     created.push(p.id);
