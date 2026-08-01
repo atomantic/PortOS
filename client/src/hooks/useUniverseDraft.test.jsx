@@ -124,6 +124,73 @@ describe('useUniverseDraft', () => {
     expect(result.current.isDraftDirty()).toBe(false);
   });
 
+  // A failed fetch and an empty response must not land in the same state. The refresh()
+  // fan-out used to `.catch(() => [])` / `.catch(() => ({}))` every call, so a transient
+  // failure was indistinguishable from a real empty answer — and for settings it was
+  // actively destructive, since deriving from a `{}` stand-in reset the user's saved
+  // image-gen mode and pipeline image config to defaults.
+  describe('refresh() failure handling', () => {
+    // NOTE: refresh() runs from a mount-only effect, so a rerender() does NOT re-run it.
+    // These tests invoke result.current.refresh() directly — otherwise the second load
+    // never happens and the assertions pass vacuously against untouched initial state.
+    it('keeps the last-known image-gen mode and config when the settings fetch fails', async () => {
+      apiMocks.getSettings.mockResolvedValue({ imageGen: { mode: 'local' }, localImageGen: {} });
+      const { result } = renderDraft();
+      await waitFor(() => expect(result.current.loading).toBe(false));
+
+      const modeBefore = result.current.defaultMode;
+      const cfgBefore = result.current.imageCfg;
+      const backendsBefore = result.current.availableBackends;
+      expect(modeBefore).toBeTruthy();
+
+      // Second load fails. Nothing derived from settings may change.
+      apiMocks.getSettings.mockRejectedValueOnce(new Error('network blip'));
+      await act(async () => { await result.current.refresh(); });
+
+      expect(result.current.defaultMode).toBe(modeBefore);
+      expect(result.current.imageCfg).toEqual(cfgBefore);
+      expect(result.current.availableBackends).toEqual(backendsBefore);
+    });
+
+    it('keeps the previously loaded providers and image models when their fetches fail', async () => {
+      apiMocks.getProviders.mockResolvedValue({
+        providers: [{ id: 'p1', name: 'Provider One' }], activeProvider: 'p1',
+      });
+      apiMocks.listImageModels.mockResolvedValue([{ id: 'm1' }]);
+      apiMocks.listLorasFull.mockResolvedValue([{ id: 'l1' }]);
+      const { result } = renderDraft();
+      await waitFor(() => expect(result.current.providers).toHaveLength(1));
+
+      apiMocks.getProviders.mockRejectedValueOnce(new Error('down'));
+      apiMocks.listImageModels.mockRejectedValueOnce(new Error('down'));
+      apiMocks.listLorasFull.mockRejectedValueOnce(new Error('down'));
+      await act(async () => { await result.current.refresh(); });
+
+      // Not wiped to [] — a failed read is not evidence that nothing is configured.
+      expect(result.current.providers).toEqual([{ id: 'p1', name: 'Provider One' }]);
+      expect(result.current.activeProviderId).toBe('p1');
+      expect(result.current.imageModels).toEqual([{ id: 'm1' }]);
+      expect(result.current.availableLoras).toEqual([{ id: 'l1' }]);
+    });
+
+    it('still applies a genuinely empty response (empty is not treated as failure)', async () => {
+      apiMocks.getProviders.mockResolvedValue({
+        providers: [{ id: 'p1', name: 'Provider One' }], activeProvider: 'p1',
+      });
+      apiMocks.listImageModels.mockResolvedValue([{ id: 'm1' }]);
+      const { result } = renderDraft();
+      await waitFor(() => expect(result.current.providers).toHaveLength(1));
+
+      apiMocks.getProviders.mockResolvedValueOnce({ providers: [], activeProvider: null });
+      apiMocks.listImageModels.mockResolvedValueOnce([]);
+      await act(async () => { await result.current.refresh(); });
+
+      expect(result.current.providers).toEqual([]);
+      expect(result.current.activeProviderId).toBe(null);
+      expect(result.current.imageModels).toEqual([]);
+    });
+  });
+
   it('saves general draft edits without replacing canon when canon is clean', async () => {
     const { result } = renderDraft();
     await waitFor(() => expect(result.current.draft.id).toBe('u1'));

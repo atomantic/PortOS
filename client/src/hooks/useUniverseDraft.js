@@ -29,6 +29,11 @@ import {
   normalizeCategoryKey,
 } from '../lib/universeBuilderShared';
 
+// Distinguishes "this request failed" from "this request returned nothing". A unique
+// object is used rather than null/undefined so it can never collide with a legitimate
+// empty payload from any of the endpoints refresh() fans out to.
+const FETCH_FAILED = Symbol('fetch-failed');
+
 export const createEmptyUniverseDraft = () => ({
   name: '',
   starterPrompt: '',
@@ -164,23 +169,35 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
 
   const refresh = async () => {
     setLoading(true);
+    // FETCH_FAILED is a sentinel, not a value: it keeps "the request failed" distinct
+    // from "the request succeeded and the answer is empty". Collapsing both to `[]`/`{}`
+    // is what made a transient blip look identical to an unconfigured install — and, for
+    // settings, silently rewrote the user's saved image-gen mode (see below).
     const [list, providerData, models, loras, settings] = await Promise.all([
-      listUniverses().catch(() => []),
-      getProviders().catch(() => ({ providers: [] })),
-      listImageModels().catch(() => []),
-      listLorasFull().catch(() => []),
-      getSettings().catch(() => ({})),
+      listUniverses().catch(() => FETCH_FAILED),
+      getProviders().catch(() => FETCH_FAILED),
+      listImageModels().catch(() => FETCH_FAILED),
+      listLorasFull().catch(() => FETCH_FAILED),
+      getSettings().catch(() => FETCH_FAILED),
     ]);
-    setWorlds(list);
-    setProviders(providerData.providers || []);
-    setActiveProviderId(providerData.activeProvider || null);
-    setImageModels(models || []);
-    setAvailableLoras(Array.isArray(loras) ? loras : []);
-    const backends = deriveAvailableBackends(settings, { excludeExternal: true });
-    setAvailableBackends(backends);
-    const saved = settings?.imageGen?.mode;
-    setDefaultMode(backends.find((backend) => backend.id === saved)?.id || backends[0]?.id || IMAGE_GEN_MODE.LOCAL);
-    setImageCfg(readPipelineImageSettings(settings));
+    if (list !== FETCH_FAILED) setWorlds(list);
+    if (providerData !== FETCH_FAILED) {
+      setProviders(providerData.providers || []);
+      setActiveProviderId(providerData.activeProvider || null);
+    }
+    if (models !== FETCH_FAILED) setImageModels(models || []);
+    if (loras !== FETCH_FAILED) setAvailableLoras(Array.isArray(loras) ? loras : []);
+    // Deriving the backend list / default mode / image config from a `{}` stand-in on a
+    // failed settings read reset the picker to IMAGE_GEN_MODE.LOCAL and the pipeline
+    // image config to defaults — overwriting the user's real configuration because a
+    // request happened to fail. Leave all three at their last-known-good values instead.
+    if (settings !== FETCH_FAILED) {
+      const backends = deriveAvailableBackends(settings, { excludeExternal: true });
+      setAvailableBackends(backends);
+      const saved = settings?.imageGen?.mode;
+      setDefaultMode(backends.find((backend) => backend.id === saved)?.id || backends[0]?.id || IMAGE_GEN_MODE.LOCAL);
+      setImageCfg(readPipelineImageSettings(settings));
+    }
     setLoading(false);
   };
 
@@ -585,6 +602,9 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
     providerLabel,
     providerModels,
     providers,
+    // Exposed so a consumer can retry the catalog/settings load after a failed
+    // refresh instead of forcing a full page reload.
+    refresh,
     persistStyleReference,
     removeCategory,
     removeStyleReference,
