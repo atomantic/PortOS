@@ -39,6 +39,7 @@ import {
   subdirFilterSchema,
   isPaginationRequested,
   paginateArray,
+  parsePagination,
   seriesAutopilotSettingsSchema,
   portsCheckSchema,
   portsAllocateSchema,
@@ -81,6 +82,55 @@ describe('validation.js', () => {
       expect(isPaginationRequested({ offset: '0' })).toBe(true);
       expect(isPaginationRequested({ limit: '0' })).toBe(true);
       expect(isPaginationRequested({ offset: '' })).toBe(true);
+    });
+  });
+
+  // parsePagination is the contract that route handlers migrate onto in place of
+  // hand-rolled `parseInt(req.query.limit, 10) || N`. It was only ever exercised
+  // indirectly through paginateArray, so the boundary values that differ between the
+  // two spellings — 0, negative, and non-numeric — were unpinned. They are the whole
+  // reason the helper exists, so they are asserted directly here.
+  describe('parsePagination', () => {
+    it('returns the parsed limit and offset for well-formed input', () => {
+      expect(parsePagination({ limit: '10', offset: '20' })).toEqual({ limit: 10, offset: 20 });
+    });
+
+    it('applies the defaults when neither param is present', () => {
+      expect(parsePagination({})).toEqual({ limit: 50, offset: 0 });
+      expect(parsePagination(undefined)).toEqual({ limit: 50, offset: 0 });
+      expect(parsePagination({}, { defaultLimit: 25, maxLimit: 100 })).toEqual({ limit: 25, offset: 0 });
+    });
+
+    it('treats limit=0 as invalid and falls back to the default rather than an empty page', () => {
+      // Deliberate: `rawLimit > 0` rejects 0. Callers that previously wrote `|| N` got
+      // the same outcome by accident; this pins it as the intended contract so the
+      // migration is behaviour-preserving.
+      expect(parsePagination({ limit: '0' }, { defaultLimit: 25 })).toMatchObject({ limit: 25 });
+    });
+
+    it('falls back to the default for a negative or non-numeric limit', () => {
+      expect(parsePagination({ limit: '-5' }, { defaultLimit: 25 })).toMatchObject({ limit: 25 });
+      expect(parsePagination({ limit: 'abc' }, { defaultLimit: 25 })).toMatchObject({ limit: 25 });
+      expect(parsePagination({ limit: '' }, { defaultLimit: 25 })).toMatchObject({ limit: 25 });
+    });
+
+    it('clamps a limit above maxLimit instead of honouring it', () => {
+      // This is the behaviour the hand-rolled `|| N` sites lacked entirely — an
+      // unbounded ?limit=999999 reached the datastore.
+      expect(parsePagination({ limit: '999999' }, { defaultLimit: 50, maxLimit: 200 }))
+        .toMatchObject({ limit: 200 });
+      expect(parsePagination({ limit: '200' }, { defaultLimit: 50, maxLimit: 200 }))
+        .toMatchObject({ limit: 200 });
+    });
+
+    it('accepts offset=0 but resets a negative or non-numeric offset to 0', () => {
+      expect(parsePagination({ offset: '0' })).toMatchObject({ offset: 0 });
+      expect(parsePagination({ offset: '-5' })).toMatchObject({ offset: 0 });
+      expect(parsePagination({ offset: 'abc' })).toMatchObject({ offset: 0 });
+    });
+
+    it('does not clamp offset to maxLimit — the ceiling applies to page size only', () => {
+      expect(parsePagination({ offset: '5000' }, { maxLimit: 200 })).toMatchObject({ offset: 5000 });
     });
   });
 
