@@ -27,7 +27,15 @@ const FAB_DIR = await mkdtemp(join(tmpdir(), 'portos-igquota-fab-'));
 await writeFile(join(FAB_DIR, 'render_sheet.py'), 'import matplotlib');
 
 // The verbatim shape Antigravity returned on 2026-07-31 (paths/ids redacted).
-const AGY_429 = 'Agy did not produce an image at the directed path. Agy said: "Here is the error details returned by the API: * **Error Code**: 429 (Resource Exhausted) * **Message**: You have exhausted your capacity on this model. Your quota will reset in approximately 5 hours (around 2026-07-31T21:38:09Z). Since the `generate_image` tool relies entirely on this backend service, I am currently unable to write the requested image to `/tmp/portos-agy-<id>/output.png`. Please try again after the quota resets."';
+// Its "(around 2026-07-31T21:38:09Z)" is an ABSOLUTE instant, and the parser
+// deliberately ignores an absolute reset that has already passed
+// (`imageGenQuota.js` `parseAbsoluteReset`: `at <= now ? null : at`). So every
+// assertion on that instant must pin `now` to before it — otherwise the test
+// silently starts exercising the relative-fallback branch instead, and compares
+// against the wall clock. Reading it off the real clock is what broke this suite
+// on 2026-08-01 (#3265).
+const FIXTURE_NOW = Date.parse('2026-07-31T16:38:09Z'); // 5h before the reset above
+const AGY_429 ='Agy did not produce an image at the directed path. Agy said: "Here is the error details returned by the API: * **Error Code**: 429 (Resource Exhausted) * **Message**: You have exhausted your capacity on this model. Your quota will reset in approximately 5 hours (around 2026-07-31T21:38:09Z). Since the `generate_image` tool relies entirely on this backend service, I am currently unable to write the requested image to `/tmp/portos-agy-<id>/output.png`. Please try again after the quota resets."';
 
 beforeEach(async () => {
   __resetImageGenQuotaHookForTests();
@@ -40,10 +48,20 @@ afterEach(async () => {
 
 describe('parseImageQuotaSignal', () => {
   it('reads the exact 429 the imagen backend returned', () => {
-    const signal = parseImageQuotaSignal(AGY_429);
+    const signal = parseImageQuotaSignal(AGY_429, { now: FIXTURE_NOW });
     expect(signal.exhausted).toBe(true);
     // The parenthetical absolute instant beats the "approximately 5 hours".
     expect(new Date(signal.resetsAt).toISOString()).toBe('2026-07-31T21:38:09.000Z');
+  });
+
+  it('ignores an absolute reset that has already passed and uses the relative window', () => {
+    // The branch that quietly took over when this suite's `now` drifted past the
+    // fixture's instant. Pinning it means a future drift fails loudly instead of
+    // re-routing another test's assertion into here.
+    const now = Date.parse('2026-08-02T00:00:00Z'); // after the message's 21:38:09Z
+    const signal = parseImageQuotaSignal(AGY_429, { now });
+    expect(signal.exhausted).toBe(true);
+    expect(new Date(signal.resetsAt).toISOString()).toBe('2026-08-02T05:00:00.000Z'); // now + 5h
   });
 
   it('falls back to the relative window when no absolute time is given', () => {
@@ -123,6 +141,18 @@ describe('initImageGenQuotaHook', () => {
   // The recorder rides the imageGenEvents bus rather than provider finalizers,
   // so a backend that emits on the bus is tracked without touching its code.
   const flush = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+  // The bus handler stamps its own `Date.now()`, so unlike the `getImageGenQuota`
+  // suite below there is no `now` to thread in — freeze the clock instead.
+  // `shouldAdvanceTime` keeps `flush()`'s real 20ms timer working under the fake
+  // clock; without it the flush promise never settles and the test times out.
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(FIXTURE_NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   it('records a refused render announced on the bus', async () => {
     initImageGenQuotaHook();

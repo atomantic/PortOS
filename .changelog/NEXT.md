@@ -7,6 +7,7 @@
 
 ## Internal
 
+- **[issue-3265] Fixed a test that broke on its own once the calendar passed 2026-07-31.** An image-quota test compared against a reset timestamp baked into its fixture; once that instant passed, the code correctly ignored the stale time and the test started comparing against the wall clock, failing every run. The test now pins its own clock, and the ignore-a-past-reset path it accidentally exercised has coverage of its own.
 - **[issue-3250] Stabilize Music Video project-selection tests under CI load.** Project-selection coverage now waits for the requested project to be available before opening its board, preventing intermittent false failures.
 
 ## Music Video
