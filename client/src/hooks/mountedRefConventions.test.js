@@ -24,7 +24,7 @@
  * `editorMountedRef` carries the identical bug, and one of the sites this guard
  * was written for was named exactly that.
  *
- * ## 2. Nothing may hand-inline `useMounted`'s body, even correctly
+ * ## 2. Nothing may hand-roll the guard at all, even correctly
  *
  * `#3264` fixed fourteen sites that hand-rolled the guard *wrong*; thirteen more
  * hand-rolled it *right* and were therefore invisible to rule 1. Those thirteen
@@ -33,6 +33,14 @@
  * the StrictMode hazard from first principles — evidence the hazard was being
  * rediscovered per site instead of read off the hook name. So rule 2 rejects the
  * correct hand-roll too (#3266), leaving `useMounted()` as the only spelling.
+ *
+ * Rule 2 keys on the *behavior* — one effect that raises a `useRef(true)` and then
+ * lowers it — not on the hook's characters. A rule that matched the body verbatim
+ * would be defeated by any re-spelling (`||=`, a concise cleanup arrow, a non-empty
+ * dep array, a `clearTimeout` next to the flag), and the last of those is exactly
+ * the form `Ask.jsx` and `ReactionTimeRunner` were in before #3266. The fix there
+ * is the general one: the real cleanup moves to its own effect, and only the ref
+ * bookkeeping becomes `useMounted()`.
  *
  * ## What this guard CANNOT see
  *
@@ -43,18 +51,17 @@
  *   - `let`/`var` declarations (the pattern hardcodes `const`).
  *   - A non-literal seed: `const INIT = true; const r = useRef(INIT)`.
  *   - Two components in ONE file where A is correct and B is broken — rule 1's scan
- *     is file-scoped, so A's `= true` satisfies B. (Rule 2 is per-occurrence and
- *     unaffected.)
+ *     is file-scoped, so A's `= true` satisfies B. (Rule 2 is per-effect, so A's
+ *     effect can't vouch for B's.)
  *   - A ref created in one file and lowered in another (a hook returning its ref to
  *     a caller that writes `ref.current = false`).
  *   - Aliasing (`const g = mountedRef; g.current = false`), computed access
  *     (`ref['current']`), or assignment funneled through a setter function.
- *   - An assignment that only appears inside a comment (no comment stripping).
- *   - Rule 2 matches the hook's body verbatim (modulo whitespace), so a re-spelling
- *     — extra statements in either half, `||=`, a non-empty dep array, the cleanup
- *     before the setup — reads as "does more than useMounted" and is left to rule 1.
- *     That is the intended floor: rule 2 is aimed at the copy-paste, and a variant
- *     that still re-arms correctly is not the bug this file is chasing.
+ *   - An assignment that only appears inside a comment or a string (no comment
+ *     stripping), which also means a `(` inside one can skew rule 2's brace walk.
+ *   - Rule 2 requires the raise and the lower in the SAME `useEffect` call. Split
+ *     across two effects, or funneled through a helper the effect calls, it reads
+ *     as ordinary ref use and only rule 1 applies.
  *
  * Tightening any of these means moving to an AST pass; the shapes above are all
  * unusual enough in this codebase that the grep earns its keep as-is.
@@ -85,20 +92,36 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // push someone to "fix" already-correct code.
 const assignsRe = (name, value) => new RegExp(`\\b${escapeRe(name)}\\.current\\s*(?:\\|\\|)?=\\s*${value}\\b`);
 
-// The body of `hooks/useMounted.js`, hand-inlined: an effect on an empty dep array
-// whose setup does nothing but raise the ref and whose cleanup does nothing but
-// lower it. `\s*` spans newlines, so the one-line and multi-line spellings both
-// match. Anything with extra work in either half is a different effect and is left
-// alone — see "What this guard CANNOT see".
-const inlinedUseMountedRe = (name) => {
-  const ref = `${escapeRe(name)}\\.current`;
-  return new RegExp(
-    `useEffect\\(\\s*\\(\\s*\\)\\s*=>\\s*\\{\\s*`
-    + `${ref}\\s*=\\s*true\\s*;?\\s*`
-    + `return\\s*\\(\\s*\\)\\s*=>\\s*\\{\\s*${ref}\\s*=\\s*false\\s*;?\\s*\\}\\s*;?\\s*`
-    + `\\}\\s*,\\s*\\[\\s*\\]\\s*\\)`,
-  );
-};
+const USE_EFFECT_OPEN = /\buseEffect\s*\(/g;
+
+/**
+ * Text between the `(` at `open` and its matching `)`. A fixed char window or a
+ * lazy `[^)]*` would stop at the first `)` inside the effect — every real effect
+ * has several — and inspect a truncated body, so the walk counts depth instead.
+ * Returns null on an unbalanced run (a truncated file), which reads as "nothing
+ * to inspect" rather than a silent partial match.
+ */
+function balancedArgs(src, open) {
+  let depth = 0;
+  for (let i = open; i < src.length; i += 1) {
+    if (src[i] === '(') depth += 1;
+    else if (src[i] === ')') {
+      depth -= 1;
+      if (depth === 0) return src.slice(open + 1, i);
+    }
+  }
+  return null;
+}
+
+/** The full argument text (callback + deps) of every `useEffect(...)` in `src`. */
+function effectCalls(src) {
+  const calls = [];
+  for (const match of src.matchAll(USE_EFFECT_OPEN)) {
+    const args = balancedArgs(src, match.index + match[0].length - 1);
+    if (args !== null) calls.push(args);
+  }
+  return calls;
+}
 
 /** Refs in `src` that are lowered to false but never re-raised to true. */
 function findOneWayRefs(src) {
@@ -112,12 +135,31 @@ function findOneWayRefs(src) {
   return offenders;
 }
 
-/** Refs in `src` that re-implement `useMounted()` verbatim instead of calling it. */
+/**
+ * Refs in `src` whose mount bookkeeping is hand-rolled instead of delegated to
+ * `useMounted()`: a `useRef(true)` that ONE effect raises and then lowers.
+ *
+ * Matching on that ordered pair rather than on the hook's body verbatim is what
+ * makes the rule hold up. Every re-spelling of the same guard — `||=`, a concise
+ * cleanup arrow, a non-empty dep array, extra work alongside the flag in either
+ * half — still raises before it lowers inside one effect, so all of them are
+ * caught. Two effects that happen to touch the same ref are not: the lower must
+ * appear inside the same call as the raise.
+ */
 function findInlinedUseMounted(src) {
   const offenders = [];
+  const calls = effectCalls(src);
   for (const match of src.matchAll(TRUE_SEEDED_REF)) {
     const name = match[1];
-    if (inlinedUseMountedRe(name).test(src)) offenders.push(name);
+    if (offenders.includes(name)) continue;
+    const raise = assignsRe(name, 'true');
+    const lower = assignsRe(name, 'false');
+    const handRolled = calls.some((call) => {
+      const raisedAt = call.search(raise);
+      // Raise in the setup half, lower after it (the cleanup) — in that order.
+      return raisedAt !== -1 && call.search(lower) > raisedAt;
+    });
+    if (handRolled) offenders.push(name);
   }
   return offenders;
 }
@@ -199,9 +241,10 @@ describe('mounted-guard refs call useMounted() instead of inlining it', () => {
 
     expect(
       violations,
-      'These refs inline the exact body of `useMounted` instead of calling it. They '
-      + 'work today, but they are how the #3264 freezes got written: copy one, drop '
-      + 'the setup line, and the ref is permanently false under StrictMode.\n'
+      'These refs hand-roll `useMounted` — one effect raises the flag on setup and '
+      + 'lowers it on cleanup — instead of calling it. They work today, but they are '
+      + 'how the #3264 freezes got written: copy one, drop the setup line, and the '
+      + 'ref is permanently false under StrictMode.\n'
       + 'Fix: `const mountedRef = useMounted();` — import `useMounted` from '
       + '`client/src/hooks/useMounted.js` and delete the ref + its effect. If the '
       + 'effect also does real cleanup (clearTimeout, abort), keep THAT in its own '
@@ -210,47 +253,109 @@ describe('mounted-guard refs call useMounted() instead of inlining it', () => {
     ).toEqual([]);
   });
 
-  // Guards the guard: the detector must still fire on the shape it exists to ban,
-  // and must not fire on refs that merely happen to be seeded `true`.
-  it('detects the inlined hook body and leaves other true-seeded refs alone', () => {
-    const inlinedMultiline = `
+  // Guards the guard, in both directions. A detector that only knew the hook's
+  // exact characters would be trivially defeated by re-spelling it, so every
+  // re-spelling that still raises-then-lowers is asserted caught here.
+  it('catches every re-spelling of the hand-rolled guard', () => {
+    const verbatim = `
       const mountedRef = useRef(true);
       useEffect(() => {
         mountedRef.current = true;
         return () => { mountedRef.current = false; };
       }, []);
     `;
-    const inlinedOneLine = 'const m = useRef(true);'
+    const oneLine = 'const m = useRef(true);'
       + 'useEffect(() => { m.current = true; return () => { m.current = false; }; }, []);';
+    const logicalAssign = `
+      const mountedRef = useRef(true);
+      useEffect(() => {
+        mountedRef.current ||= true;
+        return () => { mountedRef.current = false; };
+      }, []);
+    `;
+    const conciseCleanup = `
+      const mountedRef = useRef(true);
+      useEffect(() => {
+        mountedRef.current = true;
+        return () => (mountedRef.current = false);
+      }, []);
+    `;
+    // The pre-#3266 shape in Ask.jsx / ReactionTimeRunner: real cleanup work
+    // alongside the flag. Still a hand-rolled guard — the fix is to split the
+    // real work into its own effect, which is what this PR did.
+    const extraCleanup = `
+      const mountedRef = useRef(true);
+      useEffect(() => {
+        mountedRef.current = true;
+        return () => { mountedRef.current = false; abortRef.current?.abort(); };
+      }, []);
+    `;
+    const nonEmptyDeps = `
+      const mountedRef = useRef(true);
+      useEffect(() => {
+        mountedRef.current = true;
+        return () => { mountedRef.current = false; };
+      }, [jobId]);
+    `;
+
+    expect(findInlinedUseMounted(verbatim)).toEqual(['mountedRef']);
+    expect(findInlinedUseMounted(oneLine)).toEqual(['m']);
+    expect(findInlinedUseMounted(logicalAssign)).toEqual(['mountedRef']);
+    expect(findInlinedUseMounted(conciseCleanup)).toEqual(['mountedRef']);
+    expect(findInlinedUseMounted(extraCleanup)).toEqual(['mountedRef']);
+    expect(findInlinedUseMounted(nonEmptyDeps)).toEqual(['mountedRef']);
+  });
+
+  it('leaves refs that are not hand-rolled mount guards alone', () => {
     // The sanctioned form has no effect to match.
     const usesHook = 'const mountedRef = useMounted();';
     // A ref seeded `true` that is toggled as ordinary UI state (SongBook's
-    // follow-the-playhead flag) is not a mounted guard and must not be flagged.
+    // follow-the-playhead flag) is not a mount guard and must not be flagged.
     const unrelatedToggle = `
       const followRef = useRef(true);
       const onPlay = () => { followRef.current = true; };
       const onPan = () => { followRef.current = false; };
     `;
-    // Does strictly more than the hook — rule 1 already covers whether it re-arms.
-    const doesExtraCleanup = `
-      const mountedRef = useRef(true);
-      useEffect(() => {
-        mountedRef.current = true;
-        return () => { mountedRef.current = false; clearTimeout(timerRef.current); };
-      }, []);
+    // Raise and lower in SEPARATE effects is not the copy-paste this rule bans;
+    // requiring both inside one call is what keeps the two cases apart.
+    const separateEffects = `
+      const activeRef = useRef(true);
+      useEffect(() => { activeRef.current = true; }, [id]);
+      useEffect(() => () => { activeRef.current = false; }, []);
     `;
-    // The broken shape has no setup half, so only rule 1 owns it.
+    // Lowered first, raised after — a re-entrancy latch, not a mount guard.
+    const lowerThenRaise = `
+      const idleRef = useRef(true);
+      useEffect(() => {
+        idleRef.current = false;
+        return () => { idleRef.current = true; };
+      }, [busy]);
+    `;
+    // The broken shape has no setup half, so rule 1 owns it exclusively.
     const broken = `
       const mountedRef = useRef(true);
       useEffect(() => () => { mountedRef.current = false; }, []);
     `;
 
-    expect(findInlinedUseMounted(inlinedMultiline)).toEqual(['mountedRef']);
-    expect(findInlinedUseMounted(inlinedOneLine)).toEqual(['m']);
     expect(findInlinedUseMounted(usesHook)).toEqual([]);
     expect(findInlinedUseMounted(unrelatedToggle)).toEqual([]);
-    expect(findInlinedUseMounted(doesExtraCleanup)).toEqual([]);
+    expect(findInlinedUseMounted(separateEffects)).toEqual([]);
+    expect(findInlinedUseMounted(lowerThenRaise)).toEqual([]);
     expect(findInlinedUseMounted(broken)).toEqual([]);
+  });
+
+  // The brace/paren walk is the part most likely to be "simplified" into a regex
+  // later, so pin the case that breaks one: an effect body with its own calls.
+  it('reads the whole effect, not up to the first inner close-paren', () => {
+    const parensBeforeCleanup = `
+      const mountedRef = useRef(true);
+      useEffect(() => {
+        mountedRef.current = true;
+        load(runId).then((res) => setRows(res.rows));
+        return () => { mountedRef.current = false; };
+      }, []);
+    `;
+    expect(findInlinedUseMounted(parensBeforeCleanup)).toEqual(['mountedRef']);
   });
 
   // The hook itself is the one sanctioned copy — if the exclusion ever stops
