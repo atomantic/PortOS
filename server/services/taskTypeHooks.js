@@ -42,6 +42,8 @@
  * importing anything, so a normal task type pays ~zero cost.
  */
 
+import { isFalsyMeta } from './agentState.js';
+
 // taskType → () => import('./path/to/hookModule.js'). A module may export either
 // or both hooks; a missing export means "no hook of that kind for this type".
 const HOOK_MODULES = {
@@ -157,6 +159,30 @@ export function isNonCommittingCoordinatorTask(task) {
   if (task?.metadata?.reviewLoopFollowUp === true || task?.metadata?.reviewLoopFollowUp === 'true') return true;
   const type = task?.metadata?.analysisType || task?.metadata?.taskAnalysisType || task?.taskType || null;
   return NON_COMMITTING_COORDINATOR_TASK_TYPES.has(type);
+}
+
+/**
+ * Whether a task declares NO `[task-<id>]` commit criterion — the union of the
+ * static coordinator set above and the PER-TASK `worktreeChangesExpected: false`
+ * signal that the tracker-filing types (reference-watch / ux) stamp at dispatch
+ * (cosTaskGenerator.js#resolveTrackerFilingBlock, referenceRepos.js#triggerReferenceAnalysis).
+ *
+ * The type-keyed set cannot express the tracker-filing shape: the SAME task type
+ * legitimately commits on a `plan`-tracker app (it appends + commits PLAN.md
+ * checklist items) and legitimately commits NOTHING on a github/gitlab/jira app
+ * (it files issues/tickets out of band). Keying on the already-derived per-task
+ * flag gets both right, and retro-fixes the same latent #2696-class artifact
+ * `reference-watch` has on non-`plan` trackers today — every successful run
+ * scoring as a failure and pinning the type's learning bucket at ~0% (#3273).
+ *
+ * Accepts the `'false'` string form for parity with the spawn-side gate
+ * (agentTuiSpawning.js's `isFalsyMeta`), since task metadata round-trips
+ * through TASKS.md as text. `true`/absent falls through to the commit check
+ * unchanged.
+ */
+export function declaresNoCommitCriterion(task) {
+  if (isFalsyMeta(task?.metadata?.worktreeChangesExpected)) return true;
+  return isNonCommittingCoordinatorTask(task);
 }
 
 /**

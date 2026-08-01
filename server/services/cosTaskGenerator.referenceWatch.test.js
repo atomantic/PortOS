@@ -181,3 +181,52 @@ describe('scheduled reference-watch prompt assembly (#3140)', () => {
     expect(await generate(makeApp())).toBeNull();
   });
 });
+
+/**
+ * The `ux` audit (#3273) is the second TRACKER-FILING task type: it shares the
+ * {trackerInstructions} injection + `workTracker`/`worktreeChangesExpected`
+ * derivation with reference-watch (resolveTrackerFilingBlock), but is worded
+ * from its own TRACKER_FILING_PRESETS entry and never touches reference repos.
+ */
+describe('scheduled ux prompt assembly (#3273)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    checkReferenceRepoMock.mockResolvedValue(SNAPSHOT);
+  });
+
+  const generateUx = (app) => generate(app, 'ux');
+
+  it('injects the ux-worded tracker block and expands its inner placeholders', async () => {
+    const app = makeApp({ workTracker: 'github' });
+    const task = await generateUx(app);
+    expect(task).not.toBeNull();
+    expect(task.description).not.toContain('{trackerInstructions}');
+    // ux wording, not reference-watch's.
+    expect(task.description).toContain('[ux-…]');
+    expect(task.description).toContain('gh label create ux');
+    expect(task.description).not.toContain('ref-watch');
+    // Ordering guard: {trackerInstructions} expands BEFORE {appName}/{repoPath}.
+    expect(task.description).not.toContain('{appName}');
+    expect(task.description).not.toContain('{repoPath}');
+    expect(task.description).toContain(app.name);
+    expect(task.description).toContain(app.repoPath);
+  });
+
+  it.each([
+    ['github', false],
+    ['gitlab', false],
+    ['jira', false],
+    ['plan', true],
+  ])('stamps workTracker + worktreeChangesExpected off the same resolved tracker (%s → %s)', async (tracker, expected) => {
+    const task = await generateUx(makeApp({ workTracker: tracker }));
+    expect(task.metadata.workTracker).toBe(tracker);
+    expect(task.metadata.worktreeChangesExpected).toBe(expected);
+  });
+
+  it('never checks reference repos — and dispatches on an app that has none', async () => {
+    const task = await generateUx(makeApp({ referenceRepos: [] }));
+    expect(task).not.toBeNull();
+    expect(task.metadata.workTracker).toBe('plan');
+    expect(checkReferenceRepoMock).not.toHaveBeenCalled();
+  });
+});

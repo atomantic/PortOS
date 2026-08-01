@@ -58,6 +58,51 @@ describe('evaluateSuccessCriteria (#2344)', () => {
 });
 
 /**
+ * Tracker-filing types (#3273). `reference-watch` and `ux` deliver their findings
+ * as tracker items, not as a commit — but only on a FORGE tracker: on a
+ * `plan`-tracker app the same type appends + commits PLAN.md checklist items. The
+ * static NON_COMMITTING_COORDINATOR_TASK_TYPES set cannot express "sometimes", so
+ * the criterion keys on the per-task `worktreeChangesExpected` flag the generator
+ * already derives from the resolved tracker.
+ */
+describe('evaluateSuccessCriteria — tracker-filing tasks (#3273)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const uxTask = (worktreeChangesExpected) => ({
+    id: 't1', taskType: 'internal',
+    metadata: { analysisType: 'ux', ...(worktreeChangesExpected === undefined ? {} : { worktreeChangesExpected }) },
+  });
+
+  it('declares NO criterion when worktreeChangesExpected is false (forge tracker)', async () => {
+    expect(await evaluateSuccessCriteria({ task: uxTask(false), workspacePath: '/w' })).toBeNull();
+    expect(checkForTaskCommit).not.toHaveBeenCalled();
+  });
+
+  it('accepts the string form the TASKS.md round-trip produces', async () => {
+    expect(await evaluateSuccessCriteria({ task: uxTask('false'), workspacePath: '/w' })).toBeNull();
+    expect(checkForTaskCommit).not.toHaveBeenCalled();
+  });
+
+  it('still applies the commit criterion when the flag is TRUE (plan tracker)', async () => {
+    checkForTaskCommit.mockResolvedValue(true);
+    expect(await evaluateSuccessCriteria({ task: uxTask(true), workspacePath: '/w' })).toBe(true);
+    expect(checkForTaskCommit).toHaveBeenCalledWith('t1', '/w');
+  });
+
+  it('still applies the commit criterion when the flag is ABSENT', async () => {
+    checkForTaskCommit.mockResolvedValue(false);
+    expect(await evaluateSuccessCriteria({ task: uxTask(undefined), workspacePath: '/w' })).toBe(false);
+    expect(checkForTaskCommit).toHaveBeenCalledWith('t1', '/w');
+  });
+
+  it('retro-fixes reference-watch on a forge tracker (the same latent artifact)', async () => {
+    const task = { id: 't2', taskType: 'internal', metadata: { analysisType: 'reference-watch', worktreeChangesExpected: false } };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w' })).toBeNull();
+    expect(checkForTaskCommit).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * The programmatic-I/O criterion (#2727): these tasks declare their OWN success
  * criterion — "the sentinel parsed and the output hook accepted it" — instead of
  * declaring none and falling through to the runner's exit code, which recorded an

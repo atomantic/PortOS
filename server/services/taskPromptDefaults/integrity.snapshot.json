@@ -10,6 +10,7 @@
     "documentation": "74aa8433896647e7815f9d6d9e4a56c8",
     "ui-bugs": "def9ad96bd74ab397233f234d79a1974",
     "mobile-responsive": "16d8e7f63a673a2de48994c0ac08ef3d",
+    "ux": "e03d03fc7c16faa5b5db93be2896b9ad",
     "feature-ideas": "d3282f16da29efe2d53595b3b34778bc",
     "plan-task": "8f5b69fd9336b17184e7f7989f97def5",
     "claim-issue": "dc985be3422c9fdee07d92a059666f0a",
@@ -56,6 +57,7 @@
     "documentation": 4,
     "ui-bugs": 2,
     "mobile-responsive": 2,
+    "ux": 1,
     "release-check": 6
   },
   "REFERENCE_WATCH_AUDITED_VERSION": 3,

@@ -27,7 +27,7 @@ import { release } from './executionLanes.js';
 import { completeExecution, errorExecution } from './toolStateMachine.js';
 import { resolveFailedTaskUpdate, resolveTypeFailureSignal } from './agentErrorAnalysis.js';
 import { completeAgentRun, checkForTaskCommit } from './agentRunTracking.js';
-import { canRunTaskOutputHookWithoutPayload, isProgrammaticIoTaskType, resolveTaskHookType, isNonCommittingCoordinatorTask } from './taskTypeHooks.js';
+import { canRunTaskOutputHookWithoutPayload, isProgrammaticIoTaskType, resolveTaskHookType, declaresNoCommitCriterion } from './taskTypeHooks.js';
 import { processAgentCompletion } from './agentCompletion.js';
 import { extractSimplifySummaries } from './agentSummaryExtraction.js';
 
@@ -114,7 +114,15 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
   // by; fall back to the exit code (null = criterion undeclared). Uses the predicate (not a
   // bare `scheduledType` lookup) so the archived `taskAnalysisType` shape resolves the same
   // way the learning bucket does — see isNonCommittingCoordinatorTask.
-  if (isNonCommittingCoordinatorTask(task)) return null;
+  //
+  // ALSO covers the per-task `worktreeChangesExpected: false` signal the
+  // tracker-filing types (reference-watch / ux) stamp at dispatch: on a
+  // github/gitlab/jira app they file issues/tickets out of band and make no
+  // commit at all, so the commit check would score every SUCCESSFUL run as a
+  // failure — the #2696 artifact again. The flag is per-task, not type-keyed,
+  // so the same type still gets its commit criterion on a `plan`-tracker app
+  // where it legitimately commits PLAN.md items (#3273).
+  if (declaresNoCommitCriterion(task)) return null;
   return await checkForTaskCommit(task.id, workspacePath);
 }
 

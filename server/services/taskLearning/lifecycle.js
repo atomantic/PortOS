@@ -9,7 +9,7 @@
 
 import { cosEvents, emitLog } from './store.js';
 import { recordTaskCompletion, recalculateModelTierMetrics } from './metrics.js';
-import { isNonCommittingCoordinatorTask } from '../taskTypeHooks.js';
+import { declaresNoCommitCriterion } from '../taskTypeHooks.js';
 
 // A pre-#2696 gh/git coordinator run (branch-reconcile/issue-reconcile/branch-cleanup/
 // jira-status-report) carries a FOSSIL `result.validationPassed` — a boolean the old
@@ -19,8 +19,13 @@ import { isNonCommittingCoordinatorTask } from '../taskTypeHooks.js';
 // now declare NO commit criterion, so drop the fossil and let the exit-code success stand —
 // exactly as finalize now records a live coordinator run. Non-coordinator agents (and those
 // with no boolean verdict) pass through untouched.
+//
+// Keyed on the same `declaresNoCommitCriterion` predicate the live criterion uses, so the
+// backfill also drops the fossil off a tracker-filing run (`worktreeChangesExpected: false`,
+// e.g. a reference-watch run on a github-tracker app) — the identical artifact, just carried
+// on a per-task flag instead of the static type set (#3273).
 function withoutStaleCoordinatorVerdict(agent, task) {
-  if (!isNonCommittingCoordinatorTask(task)) return agent;
+  if (!declaresNoCommitCriterion(task)) return agent;
   if (typeof agent?.result?.validationPassed !== 'boolean') return agent;
   return { ...agent, result: { ...agent.result, validationPassed: null } };
 }

@@ -139,6 +139,126 @@ export function isFileTracker(tracker) {
   return !['github', 'gitlab', 'jira'].includes(tracker);
 }
 
+// ── {trackerInstructions} — the shared "where to file what you found" block ──
+//
+// A TRACKER-FILING task type reads the app read-only and delivers its findings
+// as ITEMS IN THE APP'S TRACKER (PLAN.md checklist items / GitHub / GitLab
+// issues / JIRA tickets) rather than as a commit. `reference-watch` was the
+// first; `ux` is the second. The mechanics of "inventory existing items, record
+// one per finding, finalize" are identical across them — only the slug prefix,
+// the label, and the per-item body requirements differ — so the blocks live
+// here (next to the tracker resolution they key off) and are parameterized
+// rather than copied per task type.
+//
+// The blocks carry {appName}/{repoPath} placeholders that each dispatch path's
+// replace chain expands — every caller MUST substitute {trackerInstructions}
+// FIRST so these inner placeholders are filled too (see
+// referenceRepos.js#triggerReferenceAnalysis and
+// cosTaskGenerator.js#buildImprovementTaskDescription).
+
+/**
+ * Per-task-type wording for `formatTrackerInstructions`. Keyed by CoS task type;
+ * every key of `TRACKER_FILING_TASK_TYPES` (cosTaskGenerator.js) has an entry.
+ *
+ * `reference-watch` is ALSO the default option set, so a bare
+ * `formatTrackerInstructions(tracker)` still returns byte-identical output to the
+ * pre-generalization blocks that lived in referenceRepos.js (asserted in
+ * workTracker.trackerInstructions.test.js).
+ */
+export const TRACKER_FILING_PRESETS = {
+  'reference-watch': {
+    // Every recorded item's title carries `[<slugPrefix>…]` so the inventory
+    // step can grep prior items in bulk and skip duplicates.
+    slugPrefix: 'ref-watch-',
+    // How the prose names this task's items ("list existing <label> issues").
+    label: 'reference-watch',
+    // The forge label applied to each filed issue (created if absent).
+    issueLabel: 'reference-watch',
+    labelDescription: 'Proposed from a reference-repo watch',
+    // Everything after `**<Short title.>** ` in the PLAN.md checklist item.
+    planItemBody: 'From `reference-watch` review of <ref name> (commit(s) `<sha>` [+ `<sha>` …], <today\'s date>). <1–2 sentences.> Fix: <files + functions in {appName}>. <Estimated scope.>',
+    // What the forge issue / JIRA description body must contain.
+    bodyRequirements: 'the provenance (ref + commit SHA(s) + today\'s date), the 1–2 sentence rationale, the `Fix:` line naming the {appName} files/functions to change, and the estimated scope',
+    planCommitMessage: 'docs(reference-watch): propose <N> item(s) from <ref names>',
+  },
+  ux: {
+    slugPrefix: 'ux-',
+    label: 'UX-audit',
+    issueLabel: 'ux',
+    labelDescription: 'Proposed from a UX/design audit',
+    planItemBody: 'From the `ux` audit of <route> (<today\'s date>). <What the user is trying to do and why the current design impedes it, 1–2 sentences.> Fix: <proposed change + the component file(s) in {appName}>. Scope: <small/medium/large>.',
+    bodyRequirements: 'the screen/route audited and the date, what the user is trying to do there, why the current design impedes it, a concrete proposed change naming the component file(s) in {appName}, and a `Scope:` of small/medium/large',
+    planCommitMessage: 'docs(ux): propose <N> UX finding(s)',
+  },
+};
+
+/**
+ * The CoS task types that file their findings into the app's work tracker.
+ * DERIVED from the preset table so the gate and the wording can never drift: a
+ * type in the gate with no preset would silently render reference-watch's slug
+ * and label into a different task's prompt.
+ */
+export const TRACKER_FILING_TASK_TYPES = new Set(Object.keys(TRACKER_FILING_PRESETS));
+
+/**
+ * Pick the {trackerInstructions} block for a resolved work tracker, falling back
+ * to the PLAN.md block for an unknown/missing tracker (matching `isFileTracker`,
+ * so the block a caller renders and the `worktreeChangesExpected` flag it stamps
+ * always agree). Exported for tests.
+ *
+ * @param {string} tracker resolved tracker ('plan' | 'github' | 'gitlab' | 'jira')
+ * @param {object} [options] wording overrides — see TRACKER_FILING_PRESETS
+ */
+export function formatTrackerInstructions(tracker, options = {}) {
+  const {
+    slugPrefix, label, issueLabel, labelDescription,
+    planItemBody, bodyRequirements, planCommitMessage,
+  } = { ...TRACKER_FILING_PRESETS['reference-watch'], ...options };
+  // `ref-watch-` → `ref-watch`: the forge title search wants the stem, not the
+  // trailing separator (`--search "ref-watch in:title"`).
+  const slugStem = slugPrefix.replace(/-+$/, '');
+
+  const blocks = {
+    plan: `This app records autonomous work in **PLAN.md** at the repo root ({repoPath}).
+
+- **Inventory:** Read PLAN.md from {repoPath}. Every existing checkbox carries a \`[<slug>]\` ID — collect the \`[${slugPrefix}…]\` ones so you don't duplicate. If PLAN.md does not exist, create it with a single top-level heading (\`# {appName} — Development Plan\`) and a \`## Next Up\` section before appending.
+- **Record** each proposal as a slug-tagged checklist item appended to the \`## Next Up\` section:
+  \`\`\`markdown
+  - [ ] [<slug>] **<Short title.>** ${planItemBody}
+  \`\`\`
+  Place **Maybe — needs human call** items in a \`### Trigger-gated (waiting for a precondition)\` subsection if one exists; otherwise append them under \`## Next Up\`.
+- **Finalize:** Commit the PLAN.md edit with message \`${planCommitMessage}\`. Do NOT create branches or PRs — \`/claim\` (or the \`plan-task\` agent) picks the slugs up later.`,
+
+    github: `This app tracks autonomous work in **GitHub Issues** (via the \`gh\` CLI), NOT PLAN.md — do NOT edit PLAN.md.
+
+- **Inventory:** From {repoPath}, resolve the repo (\`gh repo view --json nameWithOwner -q .nameWithOwner\`) and list existing ${label} issues so you don't duplicate: \`gh issue list --state all --search "${slugStem} in:title" --limit 100 --json number,title\`. Each carries a \`[${slugPrefix}…]\` slug in its title — collect them. If \`gh\` is not authenticated or the remote is not GitHub, exit cleanly.
+- **Record** each proposal as a new GitHub issue. Ensure the label exists first (\`gh label create ${issueLabel} --description "${labelDescription}" --force\`), then:
+  \`\`\`bash
+  gh issue create --title "[<slug>] <Short title>" --label ${issueLabel} --body "<body>"
+  \`\`\`
+  The body must contain ${bodyRequirements}. For **Maybe — needs human call** items, also add \`--label needs-decision\` (create it the same way if absent) and end the body with \`**Decision needed:** <one sentence>.\`.
+- **Finalize:** No source-code edits, no PLAN.md, no branches, no PRs — the issues ARE the deliverable. \`/claim --issues\` (the \`claim-issue\` flow) picks them up later.`,
+
+    gitlab: `This app tracks autonomous work in **GitLab Issues** (via the \`glab\` CLI), NOT PLAN.md — do NOT edit PLAN.md.
+
+- **Inventory:** From {repoPath}, confirm the forge (\`glab repo view\`) and list existing ${label} issues so you don't duplicate: \`glab issue list --label ${issueLabel} --per-page 100 -F json\` (also scan titles for the \`[${slugPrefix}…]\` slug). Collect the existing slugs. If \`glab\` is not authenticated or the remote is not GitLab, exit cleanly.
+- **Record** each proposal as a new GitLab issue:
+  \`\`\`bash
+  glab issue create --title "[<slug>] <Short title>" --label ${issueLabel} --description "<body>"
+  \`\`\`
+  (Run \`glab issue create --help\` if a flag is rejected — glab's flags evolve.) The body must contain ${bodyRequirements}. For **Maybe — needs human call** items, also add \`--label needs-decision\` and end the body with \`**Decision needed:** <one sentence>.\`.
+- **Finalize:** No source-code edits, no PLAN.md, no branches, no MRs — the issues ARE the deliverable. \`/claim --issues\` (the \`claim-issue-gitlab\` flow) picks them up later.`,
+
+    jira: `This app tracks autonomous work in **JIRA**. Create one JIRA issue per proposal in the app's configured project using whatever JIRA CLI/REST this environment provides. **If no JIRA credentials are available, fall back to recording proposals in PLAN.md at {repoPath} (slug-tagged \`- [ ] [<slug>] …\` checklist items under \`## Next Up\`, committed) and say so in your final summary.**
+
+- **Inventory:** Search existing JIRA issues (and PLAN.md, if you fall back) for the \`[${slugPrefix}…]\` slug so you don't duplicate; collect the existing slugs.
+- **Record** each proposal as a new JIRA issue whose summary starts with the \`[<slug>]\` tag. The description must contain ${bodyRequirements}. For **Maybe — needs human call** items, end the description with \`**Decision needed:** <one sentence>.\`.
+- **Finalize:** No source-code edits, no branches, no PRs — the tickets (or the committed PLAN.md fallback) ARE the deliverable. The \`claim-issue-jira\` flow picks them up later.`,
+  };
+
+  return blocks[tracker] || blocks.plan;
+}
+
 /**
  * The CoS claim task type that ships work from a concrete tracker. The
  * claim-work router (cosTaskGenerator) delegates to one of these prompt bodies

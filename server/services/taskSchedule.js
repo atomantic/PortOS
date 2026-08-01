@@ -194,6 +194,16 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // `[ref-watch-…]` checklist items to the app's PLAN.md for `/claim` /
   // `plan-task` to pick up. No source-code edits, no separate review file.
   'reference-watch',
+  // Walks the running app UI with a UX reviewer's eye (Playwright MCP) against a
+  // named checklist — buried primary actions, dead-end empty/error states,
+  // affordances that drift between sibling screens — and files ONE tracker issue
+  // per finding instead of committing a speculative redesign. Design judgment is
+  // proposed, never auto-merged: `ux` is a TRACKER-FILING type (see
+  // TRACKER_FILING_TASK_TYPES in cosTaskGenerator.js), read-only on source.
+  // Deliberately narrower than its siblings: raw console errors belong to
+  // `ui-bugs`, viewport breakage to `mobile-responsive`, ARIA/contrast/keyboard
+  // to `accessibility`.
+  'ux',
   // PortOS-only: researches the current best local LLMs per category and
   // refreshes the bundled suggested-models catalog (server/lib/localLlmCatalog.js)
   // + the editorial family ranking (server/lib/localModelHeuristics.js), opening a
@@ -327,6 +337,15 @@ export const DEFAULT_TASK_INTERVALS = {
   // REFERENCE_WATCH_AUDITED_VERSION above; bumping the prompt version requires
   // re-auditing this default (a guard test in taskSchedule.test.js enforces it).
   'reference-watch':     { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { readOnly: false } },
+  // ux audits the RUNNING app UI and delivers findings as tracker issues, so a
+  // CoS-managed worktree/PR is the wrong shape for it entirely — both are LOCKED
+  // off (MANAGED_AGENT_OPTIONS). `readOnly: false` for the same reason
+  // reference-watch is writable: the prompt's PLAN.md path appends + commits
+  // `[ux-…]` checklist items and the forge paths shell out to `gh`/`glab issue
+  // create`; `readOnly: true` would inject the "do not modify or commit files"
+  // guard and the agent would refuse. Off by default (AI Provider Usage Policy —
+  // enabling it is the user's consent to a weekly browser-driving LLM run).
+  'ux':                  { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, readOnly: false } },
   // pr-watcher polls for newly-opened PRs, so it runs on a short custom
   // interval rather than the loose rotation/daily cadence. 30 min keeps the
   // gh polling cheap while still reacting to a PR within one cycle. Default
@@ -375,7 +394,10 @@ export const MANAGED_AGENT_OPTIONS = {
   'claim-issue': ['useWorktree', 'openPR'],
   // claim-work delegates to one of the above prompt bodies, each of which
   // creates its own worktree + PR — so the same lock applies to the router.
-  'claim-work': ['useWorktree', 'openPR']
+  'claim-work': ['useWorktree', 'openPR'],
+  // ux's deliverable is tracker issues, not code — it never edits source, so a
+  // worktree/PR would only produce an empty branch. Lock both off.
+  'ux': ['useWorktree', 'openPR']
 };
 
 // Strip managed-agent fields from a per-app override map before merging on top
@@ -1870,6 +1892,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'jira-sprint-manager': 'Triage and implement JIRA sprint tickets',
   'jira-status-report': 'Generate JIRA weekly status report',
   'reference-watch': 'Watch reference repos and append PLAN.md items for new upstream work',
+  'ux': 'UX/design audit — files issues, no code changes',
   'refresh-local-llm-catalog': "Refresh PortOS's bundled suggested local-model catalog + editorial ranking (PortOS repo only)",
   'layered-intelligence': "Read this app's goals + telemetry, ask a reasoning model for one improvement, and file one deduplicated tracker issue — no code, no agent",
   'quota-burn': 'When enabled, spend configured provider subscription quota only near its reset window using that provider family\'s prompt'

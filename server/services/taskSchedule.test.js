@@ -1132,6 +1132,44 @@ describe('taskSchedule', () => {
     })
   })
 
+  describe('ux defaults (#3273)', () => {
+    it('is registered as a self-improvement task type with a description', () => {
+      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('ux')
+      expect(TASK_TYPE_DESCRIPTIONS['ux']).toBe('UX/design audit — files issues, no code changes')
+    })
+
+    it('defaults to weekly + disabled with worktree/PR locked off', () => {
+      const cfg = DEFAULT_TASK_INTERVALS['ux']
+      expect(cfg.type).toBe(INTERVAL_TYPES.WEEKLY)
+      // Off by default — enabling it is the user's consent to a weekly LLM run.
+      expect(cfg.enabled).toBe(false)
+      // The deliverable is tracker issues, so a CoS-managed worktree/PR is wrong.
+      expect(cfg.taskMetadata.useWorktree).toBe(false)
+      expect(cfg.taskMetadata.openPR).toBe(false)
+      expect(MANAGED_AGENT_OPTIONS['ux']).toEqual(['useWorktree', 'openPR'])
+      // Writable for the same reason reference-watch is: the agent commits
+      // PLAN.md items / shells out to `gh issue create`.
+      expect(cfg.taskMetadata.readOnly).toBe(false)
+    })
+
+    it('ships a prompt that files findings to the tracker and never edits source', async () => {
+      const prompt = await getTaskPrompt('ux')
+      // The tracker block is injected at dispatch, so the token must survive here.
+      expect(prompt).toContain('{trackerInstructions}')
+      expect(prompt).toContain('[ux-…]')
+      // Read-only on source; the issues ARE the deliverable.
+      expect(prompt).toContain('do NOT create branches or PRs')
+      // Named checklist, not vibes.
+      expect(prompt).toContain('above the fold')
+      expect(prompt).toContain('1440x900')
+      expect(prompt).toContain('375x812')
+      // Explicitly defers to the sibling task types it would otherwise duplicate.
+      expect(prompt).toContain('ui-bugs')
+      expect(prompt).toContain('mobile-responsive')
+      expect(prompt).toContain('accessibility')
+    })
+  })
+
   describe('resetExecutionHistory', () => {
     it('should reset global execution history', async () => {
       mockSchedule({

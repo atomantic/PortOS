@@ -42,6 +42,7 @@ import { getCodeReviewDefaults } from './codeReview.js';
 import { isHeldByOther, getClaimOwner } from './cosTaskClaim.js';
 import { ensureInstanceId } from './instances.js';
 import { PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
+import { resolveAppWorkTracker, isFileTracker, formatTrackerInstructions, TRACKER_FILING_PRESETS, TRACKER_FILING_TASK_TYPES } from '../lib/workTracker.js';
 
 /**
  * Block a task that has exceeded the max spawn limit. Returns true if blocked.
@@ -2086,24 +2087,48 @@ async function resolveIssueReconcileBlock(app, taskType, metadata, taskSchedule)
 }
 
 /**
+ * Resolve the {trackerInstructions} block naming where a tracker-filing task
+ * records what it found, plus the two metadata signals derived from the SAME
+ * resolved tracker so they can never disagree with the instructions the agent
+ * actually got (#3140, #3102):
+ *   - `workTracker` — traceability
+ *   - `worktreeChangesExpected` — the PLAN.md path commits checklist items
+ *     (dirty tree); the github/gitlab/jira paths file issues/tickets out of band
+ *     and legitimately leave the tree CLEAN.
+ *
+ * Mirrors `triggerReferenceAnalysis` (referenceRepos.js, the on-commit path)
+ * rather than restating its block table — both run `resolveAppWorkTracker` →
+ * `formatTrackerInstructions` / `isFileTracker`.
+ *
+ * A TRACKER-FILING type reads the app read-only and delivers its findings as
+ * items in the app's tracker rather than as a commit. The set is derived from
+ * `TRACKER_FILING_PRESETS`, so a type is gated in exactly when it has wording.
+ *
+ * Returns `{ trackerInstructions: '', workTracker: null }` for every other type.
+ */
+async function resolveTrackerFilingBlock(app, taskType) {
+  if (!TRACKER_FILING_TASK_TYPES.has(taskType)) return { trackerInstructions: '', workTracker: null };
+  // Never throws — degrades to the PLAN.md block, same as the on-commit path.
+  const workTracker = await resolveAppWorkTracker(app).catch(() => ({ resolved: 'plan' }));
+  return {
+    trackerInstructions: formatTrackerInstructions(workTracker.resolved, TRACKER_FILING_PRESETS[taskType]),
+    workTracker: workTracker.resolved,
+    worktreeChangesExpected: isFileTracker(workTracker.resolved),
+  };
+}
+
+/**
  * reference-watch: dynamically build {referenceData} — a Markdown chunk per ref
- * configured on the app + commits since lastReviewedSha — AND the
- * {trackerInstructions} block naming where the agent files its proposals. The
- * check persists status/lastError so a bad URL surfaces in the UI even when
- * dispatch is skipped.
+ * configured on the app + commits since lastReviewedSha. The check persists
+ * status/lastError so a bad URL surfaces in the UI even when dispatch is
+ * skipped. (The {trackerInstructions} half is shared with the other
+ * tracker-filing types — see `resolveTrackerFilingBlock` above.)
  *
  * Returns `{ skip }` when no ref produced reviewable commits, else
- * `{ skip: false, block, trackerInstructions, workTracker }`. Empty
- * block/instructions (and a null tracker) for every non-reference-watch type.
- *
- * The tracker resolution mirrors `triggerReferenceAnalysis` (the on-commit
- * trigger path) rather than restating its block table: both paths run
- * `resolveAppWorkTracker` → `formatTrackerInstructions` / `isFileTracker`, so
- * the prompt the agent gets and the `worktreeChangesExpected` flag stamped on
- * its task can never disagree (#3140, #3102).
+ * `{ skip: false, block }`. Empty block for every non-reference-watch type.
  */
 async function resolveReferenceWatchBlock(app, taskType) {
-  if (taskType !== 'reference-watch') return { skip: false, block: '', trackerInstructions: '', workTracker: null };
+  if (taskType !== 'reference-watch') return { skip: false, block: '' };
   const refs = Array.isArray(app.referenceRepos) ? app.referenceRepos : [];
   if (refs.length === 0) {
     emitLog('info', `Skipping reference-watch for ${app.name}: no reference repos configured`, { appId: app.id });
@@ -2131,19 +2156,7 @@ async function resolveReferenceWatchBlock(app, taskType) {
     emitLog('info', `Skipping reference-watch for ${app.name}: no refs produced reviewable commits`, { appId: app.id });
     return { skip: true };
   }
-  // Where THIS app records autonomous work (PLAN.md / GitHub / GitLab / JIRA).
-  // Never throws — degrades to the PLAN.md block, same as the on-commit path.
-  const { resolveAppWorkTracker, isFileTracker } = await import('../lib/workTracker.js');
-  const workTracker = await resolveAppWorkTracker(app).catch(() => ({ resolved: 'plan' }));
-  return {
-    skip: false,
-    block: blocks.join('\n\n---\n\n'),
-    trackerInstructions: referenceRepos.formatTrackerInstructions(workTracker.resolved),
-    workTracker: workTracker.resolved,
-    // Derived here (not at the call site) so the flag and the instructions come
-    // off the same resolved value in one place.
-    worktreeChangesExpected: isFileTracker(workTracker.resolved),
-  };
+  return { skip: false, block: blocks.join('\n\n---\n\n') };
 }
 
 /**
@@ -2388,23 +2401,26 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
       : await getTaskPrompt(promptKeyForBody));
 
   // reference-watch: dynamically inject {referenceData} — a Markdown chunk
-  // describing each ref configured on the app + commits since lastReviewedSha —
-  // plus the {trackerInstructions} block for the app's resolved work tracker.
+  // describing each ref configured on the app + commits since lastReviewedSha.
   const referenceWatch = await resolveReferenceWatchBlock(app, taskType);
   if (referenceWatch.skip) return null;
   const referenceDataBlock = referenceWatch.block;
-  if (referenceWatch.workTracker) {
+
+  // Tracker-filing types (reference-watch / ux): the {trackerInstructions} block
+  // for the app's resolved work tracker.
+  const trackerFiling = await resolveTrackerFilingBlock(app, taskType);
+  if (trackerFiling.workTracker) {
     // Traceability + the TUI idle-complete gate, derived from the SAME resolved
     // tracker that selected the {trackerInstructions} block above so the flag
     // can't drift from the instructions the agent actually got: the PLAN.md path
     // commits checklist items (dirty tree), while github/gitlab/jira file
     // issues/tickets and leave the tree CLEAN. Without this a scheduled
     // forge-tracker run is recorded as an `idle-no-changes` failure (#3102).
-    metadata.workTracker = referenceWatch.workTracker;
+    metadata.workTracker = trackerFiling.workTracker;
     // Stamped unconditionally — a schedule/per-app `worktreeChangesExpected`
     // override would let the flag disagree with the instructions the agent
     // actually got, which is the exact drift this derivation exists to prevent.
-    metadata.worktreeChangesExpected = referenceWatch.worktreeChangesExpected;
+    metadata.worktreeChangesExpected = trackerFiling.worktreeChangesExpected;
   }
 
   // pr-watcher: poll the app's GitHub repo for PRs newly opened against the
@@ -2429,7 +2445,7 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     promptTemplate, app, promptTaskType, metadata,
     blocks: {
       referenceData: referenceDataBlock,
-      trackerInstructions: referenceWatch.trackerInstructions,
+      trackerInstructions: trackerFiling.trackerInstructions,
       prData: prDataBlock,
       inFlightBranches: inFlightBranchesBlock,
       zombieIssues: zombieIssuesBlock,

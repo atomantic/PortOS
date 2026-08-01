@@ -25,6 +25,33 @@ describe('extractCosTaskType', () => {
     })).toBe('user-task');
   });
 
+  // The `ux` audit (#3273) is a scheduled self-improvement type like any other:
+  // TaskItem/AgentCard classify it through this resolver, which is metadata-first
+  // and type-agnostic — so the new type needs no per-type heuristic, and adding
+  // one could only shadow a sibling. These pin that: a `ux` task lands in its own
+  // bucket even though its description is full of words the untyped classifiers
+  // key on ("review", "audit"), and the sibling viewport type is unaffected.
+  it('buckets scheduled ux audits and mobile-responsive runs by their own analysis type', () => {
+    expect(extractCosTaskType({
+      description: '[Self-Improvement] ux: review the design of each route',
+      taskType: 'internal',
+      metadata: { analysisType: 'ux' }
+    })).toBe('self-improve:ux');
+
+    expect(extractCosTaskType({
+      description: '[Self-Improvement] mobile-responsive: check each viewport',
+      taskType: 'internal',
+      metadata: { analysisType: 'mobile-responsive' }
+    })).toBe('self-improve:mobile-responsive');
+
+    // Archived-agent projection of the same run.
+    expect(extractCosTaskType({
+      description: 'UX/design audit',
+      taskType: 'internal',
+      metadata: { taskAnalysisType: 'ux' }
+    })).toBe('self-improve:ux');
+  });
+
   it('supports tagged legacy tasks and safe untyped fallbacks', () => {
     expect(extractCosTaskType({ description: '[self-improvement] accessibility - fix labels' }))
       .toBe('self-improve:accessibility');

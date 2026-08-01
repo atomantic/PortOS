@@ -49,6 +49,7 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
       'security': '🔒',
       'ui-bugs': '🐛',
       'mobile-responsive': '📱',
+      'ux': '🎨',
       'code-quality': '✨',
       'console-errors': '🔧',
       'performance': '⚡',

@@ -35,6 +35,7 @@ export const PROMPT_VERSIONS = {
   'documentation': 4, // v4: generic {appName} body (v1 hardcoded "PortOS"; v2/v3 retired DONE.md wording)
   'ui-bugs': 2, // v2: generic {appName} + the app UI (older default hardcoded "PortOS" + http://localhost:5555)
   'mobile-responsive': 2, // v2: generic {appName} app-UI body (older default hardcoded "PortOS" + http://localhost:5555)
+  'ux': 1, // v1: walk the running UI with Playwright MCP against a 7-item named UX checklist and file ONE tracker item per finding via {trackerInstructions} — read-only on source, no branches/PRs. Net-new type (no PREVIOUS_DEFAULT_PROMPTS entry needed).
   'release-check': 6, // v6: generic {appName} body (older defaults hardcoded "PortOS")
 };
 

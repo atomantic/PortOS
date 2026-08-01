@@ -228,6 +228,107 @@ Use Playwright MCP to test the app at different viewport sizes:
 4. Fix CSS responsive classes as needed
 5. Test fixes and commit changes`,
 
+  'ux': `[Improvement: {appName}] UX / Design Audit
+
+You are reviewing {appName}'s running UI as a UX reviewer, not as an engineer
+fixing bugs. The question you are answering for every screen is **"can a user
+actually get their job done here, and does the design help or fight them?"**
+
+**Read-only on source.** You do NOT edit application code, CSS, or components,
+and you do NOT create branches or PRs. Your deliverable is one item per finding
+in {appName}'s task tracker (described under "Where to record findings" below),
+so a human — or a later \`/claim\`-style task runner — decides what actually gets
+built. Design judgment is proposed, never auto-merged.
+
+Repository: {repoPath}
+
+## Where to record findings
+
+{trackerInstructions}
+
+## Out of scope — sibling task types own these
+
+Duplicate findings are noise. Do NOT file:
+
+- **Raw console errors / broken elements / failed requests** — \`ui-bugs\` owns these.
+- **Viewport breakage** (overflow, sub-44px tap targets, horizontal scroll) — \`mobile-responsive\` owns these.
+- **ARIA labels, contrast ratios, keyboard traps** — \`accessibility\` owns these.
+
+Mention an overlap only when it is the *cause* of a UX failure you are filing
+(e.g. "the empty state is unreachable because the only trigger is a
+keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y one.
+
+## What to do
+
+1. **Inventory existing findings so you don't duplicate.** Follow the
+   "Inventory" step under "Where to record findings" above for this app's
+   tracker. Every prior UX finding carries a \`[ux-…]\` slug — collect the
+   existing slugs and skip any screen/problem pair already filed.
+
+2. **Discover the running app's UI URL** the same way the \`ui-bugs\` and
+   \`mobile-responsive\` audits do — from the app's own config/README/dev-server
+   output. If the UI is not reachable, exit cleanly and say so in your summary;
+   do NOT file speculative findings from source alone.
+
+3. **Walk each main route** with Playwright MCP. For every route:
+   - \`browser_navigate\` to it, then \`browser_snapshot\` to read the structure.
+   - \`browser_resize\` to **1440x900** (desktop) and **375x812** (mobile) and
+     snapshot at each — the fold differs, and a buried primary action is the
+     single most common finding.
+
+4. **Evaluate each route against this named checklist.** Cite the checklist
+   number in the finding so results are reproducible rather than vibes:
+
+   1. **Primary action visible above the fold** at both 1440x900 AND 375x812.
+      What is the one thing a user comes to this screen to do, and can they see
+      it without scrolling?
+   2. **Empty / loading / error states name a next action.** A blank panel, a
+      bare spinner, or "Something went wrong" with no retry/create/back is a
+      finding.
+   3. **Affordances are consistent with sibling screens** — button hierarchy
+      (one primary per view), drawer vs modal for the same class of task,
+      destructive actions confirmed the same way everywhere.
+   4. **Copy states an outcome, not a mechanism.** "Sync now" beats "Execute
+      job"; "3 items couldn't be saved" beats "PATCH failed".
+   5. **No dead ends.** Every state has a way forward or back — a completed
+      wizard, a filtered-to-zero list, a detail view reached by deep link.
+   6. **Visual consistency** — spacing, typography, and color follow the app's
+      own design tokens rather than one-off values drifting per screen.
+   7. **Information hierarchy matches the user's task** — what they came for is
+      the most prominent thing, not the densest table or the newest feature.
+
+5. **File ONE item per finding** using the "Record" mechanics under "Where to
+   record findings" above. Each finding must carry:
+
+   - **A slug-tagged title.** Lowercase kebab-case starting with \`ux-\`,
+     naming the screen and the problem (e.g.
+     \`ux-settings-save-below-fold-on-mobile\`); ≤80 chars total; unique against
+     every existing \`[ux-…]\` slug (re-check before each record).
+   - **The screen/route** you audited and which checklist item (1–7) it failed.
+   - **What the user is trying to do** on that screen.
+   - **Why the current design impedes it** — 1–2 sentences, concrete and
+     observable, referencing what you saw in the snapshot.
+   - **A concrete proposed change** naming the component file(s) in {appName}
+     that would carry it. Describe the BEHAVIOR/layout to change, not a diff.
+   - **\`Scope: small | medium | large\`.**
+
+   A finding that needs a product decision before it can be built (a real
+   problem, but the right answer is a judgment call the user owns) is a
+   **Maybe — needs human call** item: file it the same way and end with the
+   \`**Decision needed:** <one sentence>\` line described in the tracker
+   instructions.
+
+   Be selective — file the findings that would measurably change whether a user
+   succeeds, not every aesthetic preference. A handful of well-argued items
+   beats twenty nitpicks.
+
+6. **Finalize** per the "Finalize" step under "Where to record findings" above.
+   No source edits, no branches, no PRs.
+
+7. Your final assistant message must be a 2–3 sentence summary of: how many
+   routes you audited, how many findings you filed (and their slugs), and which
+   checklist items came up most often.`,
+
   'feature-ideas': `[Improvement: {appName}] Implement Next Planned Feature
 
 Your goal is to implement the next planned item from PLAN.md, or brainstorm a new feature if no plan exists.
