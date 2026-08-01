@@ -57,8 +57,11 @@
  *     a caller that writes `ref.current = false`).
  *   - Aliasing (`const g = mountedRef; g.current = false`), computed access
  *     (`ref['current']`), or assignment funneled through a setter function.
- *   - An assignment that only appears inside a comment or a string (no comment
- *     stripping), which also means a `(` inside one can skew rule 2's brace walk.
+ *   - Anything lexical. There is no comment/string/regex-literal stripping, so an
+ *     assignment written only inside a comment counts, and — the other direction —
+ *     an unbalanced `(` or `)` inside a string, comment, or regex literal skews
+ *     rule 2's paren walk and can truncate the effect it was reading. Both are
+ *     pinned by fixtures below so the boundary is executable rather than a claim.
  *   - Rule 2 requires the raise and the lower in the SAME `useEffect` call. Split
  *     across two effects, or funneled through a helper the effect calls, it reads
  *     as ordinary ref use and only rule 1 applies.
@@ -344,8 +347,8 @@ describe('mounted-guard refs call useMounted() instead of inlining it', () => {
     expect(findInlinedUseMounted(broken)).toEqual([]);
   });
 
-  // The brace/paren walk is the part most likely to be "simplified" into a regex
-  // later, so pin the case that breaks one: an effect body with its own calls.
+  // The paren walk is the part most likely to be "simplified" into a regex later,
+  // so pin the case that breaks one: an effect body with its own nested calls.
   it('reads the whole effect, not up to the first inner close-paren', () => {
     const parensBeforeCleanup = `
       const mountedRef = useRef(true);
@@ -356,6 +359,25 @@ describe('mounted-guard refs call useMounted() instead of inlining it', () => {
       }, []);
     `;
     expect(findInlinedUseMounted(parensBeforeCleanup)).toEqual(['mountedRef']);
+  });
+
+  // The known lexical blind spot, pinned rather than described. The walk counts
+  // every paren, so an unbalanced one inside a string or comment closes the slice
+  // early and the guard reads a truncated effect. Closing this means lexing JS,
+  // which is the AST-pass threshold the file docblock draws; until someone crosses
+  // it, this fixture is what tells the next reader the boundary is known and where
+  // it sits. If a future change DOES make the walk lexical, this test fails —
+  // flip it to `['mountedRef']` and drop the caveat from the docblock.
+  it('is defeated by an unbalanced paren inside a string (known floor)', () => {
+    const evadesTheWalk = `
+      const mountedRef = useRef(true);
+      useEffect(() => {
+        log(')');
+        mountedRef.current = true;
+        return () => { mountedRef.current = false; };
+      }, []);
+    `;
+    expect(findInlinedUseMounted(evadesTheWalk)).toEqual([]);
   });
 
   // The hook itself is the one sanctioned copy — if the exclusion ever stops
