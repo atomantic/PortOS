@@ -49,10 +49,16 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    loadSlashdoFile: vi.fn().mockResolvedValue(null),
     // getAppWorkspace reads data/apps.json through this — mocked so the tilde
     // tests below never touch the real registry.
     readJSONFile: vi.fn(actual.readJSONFile),
+  };
+});
+vi.mock('../lib/slashdoLoader.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    loadSlashdoFile: vi.fn().mockResolvedValue(null),
     // #3110 — staging the resolved copy is real disk I/O; mocked so tests can
     // assert the pointer path without writing under data/.
     writeResolvedSlashdoBody: vi.fn().mockResolvedValue(null),
@@ -73,7 +79,7 @@ import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBull
 import { getCodeReviewDefaults } from './codeReview.js'; // mocked above — control the configured default
 import { isTruthyMeta } from './agentState.js';
 import { buildPrompt } from './promptService.js'; // mocked above — inspect call args
-import { loadSlashdoFile, writeResolvedSlashdoBody } from '../lib/fileUtils.js'; // mocked above — control the inlined body
+import { loadSlashdoFile, writeResolvedSlashdoBody } from '../lib/slashdoLoader.js'; // mocked above — control the inlined body
 import { SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
 
 function makeTask(overrides = {}) {

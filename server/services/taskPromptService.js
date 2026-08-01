@@ -25,7 +25,8 @@
  * so existing importers of taskPromptService are unaffected by the leaf split.
  */
 
-import { loadSlashdoFile, PATHS } from '../lib/fileUtils.js';
+import { PATHS } from '../lib/fileUtils.js';
+import { loadSlashdoFile } from '../lib/slashdoLoader.js';
 import { getTaskInterval } from './taskSchedule.js';
 import {
   DEFAULT_TASK_PROMPTS,

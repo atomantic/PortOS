@@ -12,7 +12,7 @@ import {
   slashdoSkillName,
   unreachableReviewerIncludes,
 } from './slashdoInvocation.js';
-import { loadSlashdoFile } from './fileUtils.js';
+import { loadSlashdoFile } from './slashdoLoader.js';
 
 describe('isValidSlashdoCommand', () => {
   it('accepts bare command names', () => {

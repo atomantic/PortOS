@@ -270,6 +270,7 @@ export * from './shellQuote.js';
 export * from './sidecarProcess.js';
 export * from './slashdoCatalog.js';
 export * from './slashdoInvocation.js';
+export * from './slashdoLoader.js';
 export * from './singleFlight.js';
 export * from './staticImportGraph.js';
 export * from './streamBackpressure.js';

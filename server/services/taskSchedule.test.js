@@ -12,7 +12,6 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn().mockResolvedValue(),
   ensureDirs: vi.fn().mockResolvedValue(),
   readJSONFile: vi.fn(),
-  loadSlashdoFile: vi.fn().mockResolvedValue(''),
   safeJSONParse: (content, fallback) => { try { return JSON.parse(content); } catch { return fallback; } },
   // atomicWrite replaced the raw writeFile(JSON.stringify) schedule-save site (#1837);
   // route it through the mocked fs/promises.writeFile so the tests that read
@@ -26,6 +25,13 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   HOUR: 60 * 60 * 1000,
   DAY: 24 * 60 * 60 * 1000,
   safeDate: (d) => d ? new Date(d).getTime() : 0
+}))
+
+// slashdoLoader mock: taskPromptService.js reads the bundled command body
+// through loadSlashdoFile — stub it the same way the prior fileUtils mock did,
+// now that the slashdo loaders live in their own module (#3110's home moved).
+vi.mock('../lib/slashdoLoader.js', () => ({
+  loadSlashdoFile: vi.fn().mockResolvedValue(''),
 }))
 
 vi.mock('fs/promises', () => ({
@@ -1050,7 +1056,7 @@ describe('taskSchedule', () => {
     })
 
     it('should substitute {slashdoReplan} with the bundled replan command body', async () => {
-      const { loadSlashdoFile } = await import('../lib/fileUtils.js')
+      const { loadSlashdoFile } = await import('../lib/slashdoLoader.js')
       loadSlashdoFile.mockResolvedValueOnce('# Replan Command\n\nSentinel body for substitution test.')
       const prompt = await getTaskPrompt('do-replan')
       expect(prompt).not.toContain('{slashdoReplan}')
