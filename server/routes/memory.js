@@ -9,7 +9,7 @@ import * as embeddings from '../services/memoryEmbeddings.js';
 import * as memorySync from '../services/memorySync.js';
 import { checkHealth } from '../lib/db.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, parsePagination } from '../lib/validation.js';
 import {
   memoryCreateSchema,
   memoryUpdateSchema,
@@ -25,14 +25,15 @@ const router = Router();
 
 // GET /api/memory - List memories with filters
 router.get('/', asyncHandler(async (req, res) => {
+  const { limit, offset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 500 });
   const options = {
     types: req.query.types ? req.query.types.split(',') : undefined,
     categories: req.query.categories ? req.query.categories.split(',') : undefined,
     tags: req.query.tags ? req.query.tags.split(',') : undefined,
     status: req.query.status || 'active',
     appId: req.query.appId || undefined,
-    limit: parseInt(req.query.limit, 10) || 50,
-    offset: parseInt(req.query.offset, 10) || 0,
+    limit,
+    offset,
     sortBy: req.query.sortBy || 'createdAt',
     sortOrder: req.query.sortOrder || 'desc'
   };
@@ -61,11 +62,12 @@ router.get('/tags', asyncHandler(async (req, res) => {
 
 // GET /api/memory/timeline - Get timeline view
 router.get('/timeline', asyncHandler(async (req, res) => {
+  const { limit } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 500 });
   const options = {
     startDate: req.query.startDate,
     endDate: req.query.endDate,
     types: req.query.types ? req.query.types.split(',') : undefined,
-    limit: parseInt(req.query.limit, 10) || 100
+    limit
   };
 
   const timeline = await memory.getTimeline(options);
@@ -92,7 +94,7 @@ router.get('/sync', asyncHandler(async (req, res) => {
     throw new ServerError('Sync requires PostgreSQL backend', { status: 400 });
   }
   const since = /^\d+$/.test(req.query.since) ? req.query.since : '0';
-  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 1000);
+  const { limit } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 1000 });
   const result = await memorySync.getChangesSince(since, limit);
   res.json(result);
 }));
@@ -187,7 +189,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
 // GET /api/memory/:id/related - Get related memories
 router.get('/:id/related', asyncHandler(async (req, res) => {
-  const limit = parseInt(req.query.limit, 10) || 10;
+  const { limit } = parsePagination(req.query, { defaultLimit: 10, maxLimit: 500 });
   const related = await memory.getRelatedMemories(req.params.id, limit);
   res.json(related);
 }));

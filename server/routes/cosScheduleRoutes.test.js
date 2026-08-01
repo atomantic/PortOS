@@ -30,6 +30,13 @@ vi.mock('../lib/validation.js', () => ({
     }
     return result.data;
   }),
+  parsePagination: vi.fn((query, { defaultLimit = 50, maxLimit = 200 } = {}) => {
+    const rawLimit = parseInt(query?.limit, 10);
+    const rawOffset = parseInt(query?.offset, 10);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, maxLimit) : defaultLimit;
+    const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
+    return { limit, offset };
+  }),
 }));
 
 import * as taskSchedule from '../services/taskSchedule.js';

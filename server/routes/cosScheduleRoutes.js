@@ -6,7 +6,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { sanitizeTaskMetadata, validateRequest } from '../lib/validation.js';
+import { sanitizeTaskMetadata, validateRequest, parsePagination } from '../lib/validation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 
 const templateTaskSchema = z.object({
@@ -92,7 +92,7 @@ router.get('/schedule', asyncHandler(async (req, res) => {
 
 // GET /api/cos/upcoming - Get upcoming tasks preview
 router.get('/upcoming', asyncHandler(async (req, res) => {
-  const limit = parseInt(req.query.limit, 10) || 10;
+  const { limit } = parsePagination(req.query, { defaultLimit: 10, maxLimit: 500 });
   const upcoming = await taskSchedule.getUpcomingTasks(limit);
   res.json(upcoming);
 }));

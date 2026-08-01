@@ -12,6 +12,7 @@ import {
   dismissRecommendationSchema,
   restoreRecommendationSchema,
   generateWeeklyDigestSchema,
+  parsePagination,
 } from '../lib/validation.js';
 
 const router = Router();
@@ -89,7 +90,7 @@ router.get('/learning/summary', asyncHandler(async (req, res) => {
 
 // GET /api/cos/learning/insights - Get recent learning insights
 router.get('/learning/insights', asyncHandler(async (req, res) => {
-  const limit = parseInt(req.query.limit, 10) || 10;
+  const { limit } = parsePagination(req.query, { defaultLimit: 10, maxLimit: 500 });
   const insights = await taskLearning.getRecentInsights(limit);
   res.json({
     count: insights.length,

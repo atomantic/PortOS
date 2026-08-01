@@ -11,7 +11,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { deepMerge, isPlainObject } from '../lib/objects.js';
-import { emptyToUndefined, validateRequest, isPaginationRequested, paginateArray } from '../lib/validation.js';
+import { emptyToUndefined, validateRequest, isPaginationRequested, paginateArray, parsePagination } from '../lib/validation.js';
 import {
   deleteLora,
   getLora,
@@ -47,7 +47,7 @@ router.get('/', asyncHandler(async (req, res) => {
 // panel; users can paste a URL for anything specific.
 router.get('/suggestions', asyncHandler(async (req, res) => {
   const force = req.query.force === '1' || req.query.force === 'true';
-  const limit = Math.max(1, Math.min(24, Number(req.query.limit) || 4));
+  const { limit } = parsePagination(req.query, { defaultLimit: 4, maxLimit: 24 });
   const [civitai, video] = await Promise.all([
     getSuggestions({ force, limit }),
     getVideoSuggestions({ force }),

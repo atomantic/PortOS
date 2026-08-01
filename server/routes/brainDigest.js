@@ -7,7 +7,7 @@
 import { Router } from 'express';
 import * as brainService from '../services/brain.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, parsePagination } from '../lib/validation.js';
 import { brainDigestRunSchema } from '../lib/brainValidation.js';
 
 const router = Router();
@@ -26,7 +26,7 @@ router.get('/digest/latest', asyncHandler(async (req, res) => {
  * Get digest history
  */
 router.get('/digests', asyncHandler(async (req, res) => {
-  const limit = parseInt(req.query.limit, 10) || 10;
+  const { limit } = parsePagination(req.query, { defaultLimit: 10, maxLimit: 500 });
   const digests = await brainService.getDigests(limit);
   res.json(digests);
 }));
@@ -55,7 +55,7 @@ router.get('/review/latest', asyncHandler(async (req, res) => {
  * Get review history
  */
 router.get('/reviews', asyncHandler(async (req, res) => {
-  const limit = parseInt(req.query.limit, 10) || 10;
+  const { limit } = parsePagination(req.query, { defaultLimit: 10, maxLimit: 500 });
   const reviews = await brainService.getReviews(limit);
   res.json(reviews);
 }));

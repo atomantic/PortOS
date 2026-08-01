@@ -6,7 +6,7 @@
 import { Router } from 'express';
 import * as feedbackService from '../../services/feedbackLoop.js';
 import { asyncHandler } from '../../lib/errorHandler.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest, parsePagination } from '../../lib/validation.js';
 import { feedbackInputSchema } from '../../lib/digitalTwinValidation.js';
 
 const router = Router();
@@ -45,7 +45,7 @@ router.post('/feedback/recalculate', asyncHandler(async (req, res) => {
  */
 router.get('/feedback/recent', asyncHandler(async (req, res) => {
   const contentType = req.query.contentType || null;
-  const limit = Math.min(parseInt(req.query.limit, 10) || 20, 50);
+  const { limit } = parsePagination(req.query, { defaultLimit: 20, maxLimit: 50 });
   const entries = await feedbackService.getRecentFeedback(contentType, limit);
   res.json(entries);
 }));

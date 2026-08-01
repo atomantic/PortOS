@@ -8,7 +8,7 @@ import { resolveRefs, listDanglingRefs } from '../services/catalogRefResolver.js
 import { projectToCanon } from '../services/catalogCanonProjection.js';
 import { withTransaction } from '../lib/db.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, parsePagination } from '../lib/validation.js';
 import {
   catalogScrapCreateSchema,
   catalogScrapPatchSchema,
@@ -58,8 +58,7 @@ router.get('/stats', asyncHandler(async (req, res) => {
 }));
 
 router.get('/scraps', asyncHandler(async (req, res) => {
-  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
-  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+  const { limit, offset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
   res.json(await catalogDB.listScraps({ limit, offset }));
 }));
 
@@ -713,7 +712,7 @@ router.get('/sync', asyncHandler(async (req, res) => {
       since = (typeof sinceRaw === 'string' && /^\d+$/.test(sinceRaw)) ? sinceRaw : '0';
     }
   }
-  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 1000);
+  const { limit } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 1000 });
   const changes = await catalogSync.getChangesSince(since, limit);
   res.json({
     ...changes,

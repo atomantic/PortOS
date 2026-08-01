@@ -10,6 +10,7 @@ import * as productivity from '../services/productivity.js';
 import * as goalProgress from '../services/goalProgress.js';
 import * as decisionLog from '../services/decisionLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { parsePagination } from '../lib/validation.js';
 
 const router = Router();
 
@@ -179,7 +180,7 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
 
 // GET /api/cos/recent-tasks - Get recent completed tasks for dashboard widget
 router.get('/recent-tasks', asyncHandler(async (req, res) => {
-  const limit = parseInt(req.query.limit, 10) || 10;
+  const { limit } = parsePagination(req.query, { defaultLimit: 10, maxLimit: 500 });
   const recentTasks = await cos.getRecentTasks(limit);
   res.json(recentTasks);
 }));
@@ -273,7 +274,7 @@ router.get('/goal-progress/summary', asyncHandler(async (req, res) => {
 
 // GET /api/cos/decisions - Get recent decisions
 router.get('/decisions', asyncHandler(async (req, res) => {
-  const limit = parseInt(req.query.limit, 10) || 20;
+  const { limit } = parsePagination(req.query, { defaultLimit: 20, maxLimit: 500 });
   const type = req.query.type || null;
   const decisions = await decisionLog.getRecentDecisions(limit, type);
   res.json({ decisions });

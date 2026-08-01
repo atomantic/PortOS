@@ -7,6 +7,7 @@
 import { Router } from 'express';
 import * as cos from '../../services/cos.js';
 import { asyncHandler } from '../../lib/errorHandler.js';
+import { parsePagination } from '../../lib/validation.js';
 import { loadApp } from './shared.js';
 
 const router = Router();
@@ -14,7 +15,7 @@ const router = Router();
 // GET /api/apps/:id/agents - Recent CoS agents for this app
 router.get('/:id/agents', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
-  const limit = parseInt(req.query.limit, 10) || 50;
+  const { limit } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 500 });
 
   // Get running agents filtered by this app
   const runningAgents = await cos.getAgents().catch(() => []);

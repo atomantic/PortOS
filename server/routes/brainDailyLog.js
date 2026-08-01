@@ -6,7 +6,7 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, parsePagination } from '../lib/validation.js';
 import { dailyLogSettingsSchema, activityDigestSettingsSchema } from '../lib/brainValidation.js';
 import * as journal from '../services/brainJournal.js';
 import * as activityDigest from '../services/activityDigest.js';
@@ -33,13 +33,7 @@ const resolveJournalDate = async (date) => {
  * List daily log entries (most recent first)
  */
 router.get('/daily-log', asyncHandler(async (req, res) => {
-  // Clamp pagination: negative or zero limit / negative offset would slice
-  // unpredictably (or from the end of the array). Match the convention used
-  // by other paginated brain routes.
-  const parsedLimit = parseInt(req.query.limit, 10);
-  const parsedOffset = parseInt(req.query.offset, 10);
-  const limit = Math.min(Math.max(Number.isNaN(parsedLimit) ? 50 : parsedLimit, 1), 200);
-  const offset = Math.max(Number.isNaN(parsedOffset) ? 0 : parsedOffset, 0);
+  const { limit, offset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
   // Opt-in to full entries; default is slim summaries (date + segmentCount +
   // obsidianPath) so the sidebar doesn't pull every day's content on load.
   const includeContent = req.query.includeContent === '1' || req.query.includeContent === 'true';

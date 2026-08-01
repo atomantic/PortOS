@@ -7,7 +7,7 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, parsePagination } from '../lib/validation.js';
 import {
   postSessionSubmitSchema,
   postConfigUpdateSchema,
@@ -318,7 +318,7 @@ router.get('/post/training/stats', asyncHandler(async (req, res) => {
  * Recent training entries
  */
 router.get('/post/training/entries', asyncHandler(async (req, res) => {
-  const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+  const { limit } = parsePagination(req.query, { defaultLimit: 20, maxLimit: 100 });
   const entries = await trainingService.getTrainingEntries(limit);
   res.json(entries);
 }));

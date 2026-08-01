@@ -5,7 +5,7 @@
 import { Router } from 'express';
 import * as taskTemplates from '../services/taskTemplates.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, parsePagination } from '../lib/validation.js';
 import {
   createTaskTemplateSchema,
   updateTaskTemplateSchema,
@@ -22,7 +22,7 @@ router.get('/templates', asyncHandler(async (req, res) => {
 
 // GET /api/cos/templates/popular - Get popular templates
 router.get('/templates/popular', asyncHandler(async (req, res) => {
-  const limit = parseInt(req.query.limit, 10) || 5;
+  const { limit } = parsePagination(req.query, { defaultLimit: 5, maxLimit: 500 });
   const templates = await taskTemplates.getPopularTemplates(limit);
   res.json({ templates });
 }));
