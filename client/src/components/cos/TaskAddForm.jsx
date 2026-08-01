@@ -683,7 +683,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
         {screenshots.length > 0 && (
           <div className="flex gap-2 flex-wrap">
             {screenshots.map(s => (
-              <div key={s.id} className="relative group focus-within:opacity-100">
+              <div key={s.id} className="relative group">
                 <img
                   src={s.preview}
                   alt={s.filename}

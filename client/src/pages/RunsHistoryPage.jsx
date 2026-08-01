@@ -227,7 +227,7 @@ export function RunsHistoryPage() {
             {filteredRuns.map(run => (
               <div key={run.id}>
                 <div
-                  className="p-3 sm:p-4 hover:bg-port-border/20 cursor-pointer group focus-within:opacity-100"
+                  className="p-3 sm:p-4 hover:bg-port-border/20 cursor-pointer group"
                   onClick={() => toggleExpand(run.id)}
                   {...clickableProps(() => toggleExpand(run.id))}
                   data-testid={`run-row-${run.id}`}
