@@ -100,6 +100,24 @@ describe('evaluateSuccessCriteria — tracker-filing tasks (#3273)', () => {
     expect(await evaluateSuccessCriteria({ task, workspacePath: '/w' })).toBeNull();
     expect(checkForTaskCommit).not.toHaveBeenCalled();
   });
+
+  it('resolves the archived-agent projection the same way as the live task', async () => {
+    const task = { id: 't3', taskType: 'internal', metadata: { taskAnalysisType: 'ux', worktreeChangesExpected: false } };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w' })).toBeNull();
+    expect(checkForTaskCommit).not.toHaveBeenCalled();
+  });
+
+  it('does NOT let the flag exempt a non-tracker-filing type from its commit criterion', async () => {
+    // `worktreeChangesExpected` is a user-settable per-app taskMetadata override
+    // accepted for EVERY task type — it exists to opt a run out of the TUI
+    // idle-complete clean-tree gate, not to disable success validation. Ungated,
+    // a `security` run that exited 0 having committed nothing would be recorded
+    // as a pass instead of the honest miss it is.
+    checkForTaskCommit.mockResolvedValue(false);
+    const task = { id: 't4', taskType: 'internal', metadata: { analysisType: 'security', worktreeChangesExpected: false } };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w' })).toBe(false);
+    expect(checkForTaskCommit).toHaveBeenCalledWith('t4', '/w');
+  });
 });
 
 /**
