@@ -9,6 +9,7 @@ import {
 } from '../../services/apiWritersRoom';
 import { countWords, formatCountdown } from '../../utils/formatters';
 import { FormField } from '../ui/FormField';
+import useMounted from '../../hooks/useMounted';
 
 const DURATION_PRESETS = [
   { label: '5 min', seconds: 300 },
@@ -26,11 +27,7 @@ export default function ExercisePanel({ activeWork, onClose }) {
   const [text, setText] = useState('');
   const tickRef = useRef(null);
 
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
+  const mountedRef = useMounted();
 
   const refresh = useCallback(async () => {
     // Capture the workId we asked for so a slow response from the previous

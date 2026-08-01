@@ -5,6 +5,7 @@ import * as api from '../services/api';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
+import useMounted from '../hooks/useMounted';
 
 // Mirrors the server-side ID_RE in askConversations.js (9-char base36 ms +
 // 8-char hex suffix) so this regex stays in lockstep with the production
@@ -398,19 +399,16 @@ export default function Ask() {
     }
   }, [conversationId]);
 
+  // Checked from `handleSend`'s post-stream cleanup so it can skip state writes
+  // if we get there after unmount.
+  const mountedRef = useMounted();
+
   // Separately, kill any in-flight stream on real unmount so we don't leak
-  // a fetch + state-update closure into a torn-down tree. `mountedRef` is
-  // checked from `handleSend`'s post-stream cleanup so it can skip state
-  // writes if we get there after unmount.
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      abortRef.current?.abort();
-      abortRef.current = null;
-      streamingConvIdRef.current = null;
-    };
+  // a fetch + state-update closure into a torn-down tree.
+  useEffect(() => () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    streamingConvIdRef.current = null;
   }, []);
 
   const startNew = useCallback(() => {

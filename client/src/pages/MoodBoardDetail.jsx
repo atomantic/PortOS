@@ -26,6 +26,7 @@ import {
 } from '../services/api';
 import { moodBoardItemSrc } from '../lib/moodBoardItemSrc';
 import { timeAgo } from '../utils/formatters';
+import useMounted from '../hooks/useMounted';
 
 export default function MoodBoardDetail() {
   const { id } = useParams();
@@ -55,19 +56,10 @@ export default function MoodBoardDetail() {
   // the fetch is async, an older request can resolve *after* a newer one (the
   // user navigated to a different board) and clobber current state. We bump a
   // sequence counter per call and only apply the result if it's still the latest
-  // — and only if the component is still mounted.
-  //
-  // `mountedRef` is set true on mount (not just left at its initial value) so
-  // that React 18 StrictMode's dev-only mount→cleanup→remount — which preserves
-  // this ref and would otherwise leave it stuck `false` after the simulated
-  // unmount — re-arms the guard for the real mount. The seq counter independently
+  // — and only if the component is still mounted. The seq counter independently
   // drops StrictMode's duplicate first fetch.
-  const mountedRef = useRef(true);
+  const mountedRef = useMounted();
   const loadSeqRef = useRef(0);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
 
   const load = useCallback(async () => {
     const seq = ++loadSeqRef.current;

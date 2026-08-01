@@ -27,6 +27,7 @@ import { narratePipelineProse } from '../../../services/api';
 import { STAGE_LABEL } from './constants';
 import { clickableProps } from '../../../lib/a11yKeyboard';
 import { safeReadStorage, safeWriteStorage } from '../../../lib/safeStorage';
+import useMounted from '../../../hooks/useMounted';
 
 const NARRATOR_VOICE_KEY = 'portos.manuscript.narratorVoice';
 const initialVoice = () => safeReadStorage(NARRATOR_VOICE_KEY) || '';
@@ -42,15 +43,9 @@ export default function ManuscriptReadAloud({ open, onClose, section }) {
   const [elapsedMs, setElapsedMs] = useState(0);
 
   const audioRef = useRef(null);
-  // Set true on (re)mount, false on unmount. The body-set is required because
-  // the app runs under React.StrictMode, which does mount→cleanup→mount on the
-  // initial mount; a cleanup-only guard would be left false and freeze every
-  // later narration at the mounted check.
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
+  // Gates the post-synthesis state writes so a narration that resolves after the
+  // modal is torn down doesn't apply audio/offsets into an unmounted tree.
+  const mountedRef = useMounted();
   // Live mirror of the prose the modal is showing, so an in-flight narration
   // response can detect that the section's text changed (edit, reformat, accepted
   // fix, or a section swap) while it was synthesizing and discard itself rather

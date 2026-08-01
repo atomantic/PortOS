@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import socket from '../services/socket';
 import { getMediaJob } from '../services/apiMediaJobs';
 import { usePreviousSync } from './usePrevious.js';
+import useMounted from './useMounted';
 
 /**
  * Subscribe to live progress for a single mediaJobQueue job. `kind`
@@ -46,18 +47,7 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
   if (prevJobId !== jobId) setState(INITIAL_STATE);
   // Track mount so the initial fetch's setState doesn't fire after unmount
   // (the panel could be removed while the GET is in flight).
-  //
-  // The set-in-effect-setup pattern (NOT relying on `useRef(true)`'s initial
-  // value alone) is required: React 18 StrictMode in dev fires
-  // mount → cleanup → mount, but the ref is preserved across the simulated
-  // remount. Without re-setting `true` in setup, cleanup flips it to false
-  // and it never goes back up — the initial fetch's `.then` permanently
-  // no-ops for every dev render.
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
+  const mountedRef = useMounted();
 
   useEffect(() => {
     if (!jobId) return undefined;

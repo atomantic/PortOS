@@ -21,6 +21,7 @@ import { Music2, Square } from 'lucide-react';
 import toast from '../ui/Toast';
 import { createStreamAnalyser } from '../../lib/audioRecorder.js';
 import { createPitchTracker, tuningQuality } from '../../lib/pitchDetect.js';
+import useMounted from '../../hooks/useMounted';
 
 // Map a tuning-quality level to its readout color token + needle fill.
 const LEVEL_TONE = {
@@ -60,12 +61,7 @@ export default function PitchTuner({ stream = null, a4 = 440 }) {
   const trackerRef = useRef(null);   // active pitch tracker { stop }
   const analyserRef = useRef(null);  // active { close } stream-analyser graph
   const ownStreamRef = useRef(null); // standalone-mode mic stream we own + must stop
-  const mountedRef = useRef(true);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
+  const mountedRef = useMounted();
 
   // Tear down the tracker loop + analyser graph (but not the stream — see attach).
   const teardownTracker = useCallback(() => {

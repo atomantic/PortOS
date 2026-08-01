@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
+import { useMemo, useState, useCallback, useEffect } from 'react';
 import { ListOrdered, Image as ImageIcon, Film, Cpu, X, RefreshCw, ChevronDown, ChevronRight, Trash2, RotateCw, Zap, Pencil } from 'lucide-react';
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
@@ -10,6 +10,7 @@ import { ANTIGRAVITY_CONFIGURED_DEFAULT, CODEX_EFFORT_LEVELS, isConfiguredDefaul
 import { lossSparklineGeometry } from '../../lib/lossSparkline';
 import { useAutoRefetch } from '../../hooks/useAutoRefetch';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
+import useMounted from '../../hooks/useMounted';
 
 const STATUS_BADGE = {
   queued: 'bg-port-border text-port-text-muted',
@@ -240,12 +241,7 @@ function trainingSummary(params) {
 // Re-fetches while the run is live so the curve grows as checkpoints land.
 function TrainingJobDetail({ runId, status }) {
   const [checkpoints, setCheckpoints] = useState(null); // null = loading; [] = none yet
-  const mountedRef = useRef(true);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
+  const mountedRef = useMounted();
 
   const load = useCallback(() => {
     listLoraTrainingCheckpoints(runId)

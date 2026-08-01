@@ -14,12 +14,13 @@
  * keeps just the last step), so it builds up over the session.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ImageOff, Radio } from 'lucide-react';
 import { formatDurationMs } from '../../utils/formatters';
 import { useTimeTick } from '../../hooks/useTimeTick';
 import { lossSparklineGeometry } from '../../lib/lossSparkline';
 import { listLoraTrainingSamples } from '../../services/api';
+import useMounted from '../../hooks/useMounted';
 
 const SPARK_W = 240;
 const SPARK_H = 36;
@@ -52,12 +53,7 @@ export default function LiveSampleGallery({ run, frames, progress, message }) {
   // Seconds-precision tick for the elapsed/ETA labels — shared, visibility-
   // aware timer (pauses when the tab is hidden) instead of a per-mount interval.
   const now = useTimeTick(1000);
-  const mountedRef = useRef(true);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
+  const mountedRef = useMounted();
 
   // One-shot seed of every sample persisted so far (survives a mid-run reload).
   useEffect(() => {

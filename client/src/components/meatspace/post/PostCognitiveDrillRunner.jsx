@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Brain, Check, X, BookOpen, Play } from 'lucide-react';
 import { DRILL_LABELS, nBackBalancedAccuracy } from './constants';
 import { safeReadJsonStorage, safeWriteStorage } from '../../../lib/safeStorage.js';
+import useMounted from '../../../hooks/useMounted';
 
 /**
  * Interactive runner for deterministic cognitive drills (n-back, digit-span,
@@ -430,7 +431,7 @@ function NBackRunner({ drill, drillIndex, drillCount, onComplete, isTraining }) 
   const answersRef = useRef(seq.map(() => ({ answered: null, responseMs: 0 })));
   const stimStartRef = useRef(0);
   const startedAtRef = useRef(Date.now());
-  const mountedRef = useRef(true);
+  const mountedRef = useMounted();
   const timeoutRef = useRef(null);
 
   const finish = useCallback(() => {
@@ -442,7 +443,6 @@ function NBackRunner({ drill, drillIndex, drillCount, onComplete, isTraining }) 
   finishRef.current = finish;
 
   useEffect(() => {
-    mountedRef.current = true;
     let i = 0;
     const step = () => {
       if (!mountedRef.current) return;
@@ -454,7 +454,7 @@ function NBackRunner({ drill, drillIndex, drillCount, onComplete, isTraining }) 
       timeoutRef.current = setTimeout(() => { i = cur + 1; step(); }, stimulusMs);
     };
     timeoutRef.current = setTimeout(step, 800);
-    return () => { mountedRef.current = false; clearTimeout(timeoutRef.current); };
+    return () => clearTimeout(timeoutRef.current);
   }, []);
 
   const registerMatch = useCallback(() => {
@@ -544,7 +544,7 @@ function DigitSpanRunner({ drill, drillIndex, drillCount, onComplete, isTraining
   const answersRef = useRef([]);
   const recallStartRef = useRef(0);
   const startedAtRef = useRef(Date.now());
-  const mountedRef = useRef(true);
+  const mountedRef = useMounted();
   const inputRef = useRef(null);
 
   const finish = useCallback(() => {
@@ -554,8 +554,6 @@ function DigitSpanRunner({ drill, drillIndex, drillCount, onComplete, isTraining
 
   const finishRef = useRef(finish);
   finishRef.current = finish;
-
-  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
 
   // Reveal the current sequence one digit at a time, then switch to recall.
   useEffect(() => {
@@ -1068,7 +1066,7 @@ function ReactionTimeRunner({ drill, drillIndex, drillCount, onComplete, isTrain
   const stimulusShownRef = useRef(false);
   const goStartRef = useRef(0);
   const startedAtRef = useRef(Date.now());
-  const mountedRef = useRef(true);
+  const mountedRef = useMounted();
   // Separate refs: the "reveal the stimulus" timer (armed per trial) and the
   // "advance to the next trial" timer (armed on response) must never share one
   // ref — overwriting a shared ref on response leaves the reveal timer's
@@ -1078,13 +1076,9 @@ function ReactionTimeRunner({ drill, drillIndex, drillCount, onComplete, isTrain
   const advanceTimeoutRef = useRef(null);
   const advancingRef = useRef(false);
 
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      clearTimeout(armTimeoutRef.current);
-      clearTimeout(advanceTimeoutRef.current);
-    };
+  useEffect(() => () => {
+    clearTimeout(armTimeoutRef.current);
+    clearTimeout(advanceTimeoutRef.current);
   }, []);
 
   const finish = useCallback(() => {
