@@ -41,31 +41,38 @@ export default function MediaCard({
 
   return (
     <div className={`bg-port-card border rounded-xl ${selected ? 'border-port-accent' : 'border-port-border'}`}>
-      <button
-        type="button"
-        onClick={() => handleTileClick(item)}
-        disabled={disabled}
-        className="block w-full aspect-square bg-port-bg relative rounded-t-xl overflow-hidden disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        {previewUrl ? (
-          <MediaImage src={previewUrl} alt={prompt} className="w-full h-full object-cover" loading="lazy" />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center text-gray-600">
-            {isVideo ? <Film className="w-10 h-10" /> : <ImageIcon className="w-10 h-10" />}
-          </div>
-        )}
+      {/* The tile is a button, so the star toggle cannot live inside it — a
+          <button> nested in a <button> is invalid HTML and keeps the inner
+          control out of the tab order. Tile and overlays are siblings in this
+          positioned wrapper instead, with the overlays click-through so the
+          tile stays clickable behind them. */}
+      <div className="relative aspect-square rounded-t-xl overflow-hidden bg-port-bg">
+        <button
+          type="button"
+          onClick={() => handleTileClick(item)}
+          disabled={disabled}
+          className="block w-full h-full disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {previewUrl ? (
+            <MediaImage src={previewUrl} alt={prompt} className="w-full h-full object-cover" loading="lazy" />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center text-gray-600">
+              {isVideo ? <Film className="w-10 h-10" /> : <ImageIcon className="w-10 h-10" />}
+            </div>
+          )}
+        </button>
         {selectionLabel != null && (
-          <div className="absolute top-1.5 left-1.5 w-5 h-5 rounded-full bg-port-accent text-white text-[10px] font-bold flex items-center justify-center">
+          <div className="absolute top-1.5 left-1.5 w-5 h-5 rounded-full bg-port-accent text-white text-[10px] font-bold flex items-center justify-center pointer-events-none">
             {selectionLabel}
           </div>
         )}
         {(onToggleStar || starred || hasNote) && (
-          <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1">
+          <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1 pointer-events-none">
             {onToggleStar && (
               <button
                 type="button"
-                onClick={(e) => { e.stopPropagation(); onToggleStar(item); }}
-                className={`p-1 rounded-full ${starred ? 'bg-port-warning/90 text-black' : 'bg-black/50 text-white/70 hover:text-white'}`}
+                onClick={() => onToggleStar(item)}
+                className={`pointer-events-auto p-1 rounded-full ${starred ? 'bg-port-warning/90 text-black' : 'bg-black/50 text-white/70 hover:text-white'}`}
                 title={starred ? 'Unfavorite' : 'Favorite'}
                 aria-label={starred ? 'Unfavorite' : 'Favorite'}
               >
@@ -74,7 +81,7 @@ export default function MediaCard({
             )}
             {hasNote && (
               <span
-                className="p-1 rounded-full bg-port-accent/80 text-white"
+                className="pointer-events-auto p-1 rounded-full bg-port-accent/80 text-white"
                 title="Has note"
                 aria-label="Has note"
               >
@@ -83,16 +90,19 @@ export default function MediaCard({
             )}
           </div>
         )}
-        <div className="absolute top-1.5 right-1.5 flex flex-col items-end gap-0.5">
+        {/* The container is click-through so the tile stays clickable behind it,
+            but each badge takes pointer events back — a `title` tooltip needs
+            them, and these badges are the only thing explaining "frame". */}
+        <div className="absolute top-1.5 right-1.5 flex flex-col items-end gap-0.5 pointer-events-none">
           {[
             item.stitchedFrom && { label: 'stitched', cls: 'bg-port-success/80 text-white' },
             item.upscaledFrom && { label: '2×', cls: 'bg-port-accent/80 text-white' },
             item.extractedFromVideoId && { label: 'frame', cls: 'bg-port-warning/80 text-black', title: 'Extracted from video' },
           ].filter(Boolean).map((b) => (
-            <span key={b.label} title={b.title} className={`text-[9px] px-1 py-0.5 rounded ${b.cls}`}>{b.label}</span>
+            <span key={b.label} title={b.title} className={`pointer-events-auto text-[9px] px-1 py-0.5 rounded ${b.cls}`}>{b.label}</span>
           ))}
         </div>
-      </button>
+      </div>
       <div className="p-2 space-y-1.5">
         <p className="text-[11px] text-gray-300 line-clamp-2" title={prompt}>{prompt}</p>
         <div className="flex flex-wrap gap-1 text-[9px]">

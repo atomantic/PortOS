@@ -41,8 +41,9 @@ export default function PhaseCard({ phase, pendingAction, appId, expanded, onTog
   const actionCfg = pendingAction ? ACTION_CONFIG[pendingAction.nextAction] : null;
   const progressPct = phase.totalTasks > 0 ? (phase.completedTasks / phase.totalTasks) * 100 : 0;
 
-  const handleTriggerAction = async (e) => {
-    e.stopPropagation();
+  // No stopPropagation needed — this button is a sibling of the row toggle, not
+  // a descendant, so its click never reaches the expand handler.
+  const handleTriggerAction = async () => {
     if (!pendingAction) return;
     setTriggeringAction(true);
     const result = await api.triggerGsdPhaseAction(appId, phase.id, pendingAction.nextAction).catch(() => null);
@@ -54,43 +55,49 @@ export default function PhaseCard({ phase, pendingAction, appId, expanded, onTog
 
   return (
     <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-      {/* Collapsed row */}
-      <button
-        onClick={onToggle}
-        className="w-full flex items-center gap-3 p-3 hover:bg-port-border/20 transition-colors text-left"
-      >
-        {expanded ? <ChevronDown size={14} className="text-gray-500 shrink-0" /> : <ChevronRight size={14} className="text-gray-500 shrink-0" />}
-        <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${statusCfg.color}`} title={statusCfg.label} />
-        <span className="text-xs text-gray-500 font-mono w-6 shrink-0">{num}</span>
-        <span className="text-sm text-gray-200 truncate flex-1">{name || phase.id}</span>
+      {/* Collapsed row. The "next action" button is a SIBLING of the toggle,
+          not a child — a <button> nested in a <button> is invalid HTML and left
+          the action unreachable by keyboard. The toggle still fills the rest of
+          the row, so clicking anywhere but the action expands the phase. */}
+      <div className="w-full flex items-center gap-3 p-3 hover:bg-port-border/20 transition-colors">
+        <button
+          onClick={onToggle}
+          className="flex items-center gap-3 flex-1 min-w-0 text-left"
+        >
+          {expanded ? <ChevronDown size={14} className="text-gray-500 shrink-0" /> : <ChevronRight size={14} className="text-gray-500 shrink-0" />}
+          <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${statusCfg.color}`} title={statusCfg.label} />
+          <span className="text-xs text-gray-500 font-mono w-6 shrink-0">{num}</span>
+          <span className="text-sm text-gray-200 truncate flex-1">{name || phase.id}</span>
 
-        {/* Progress bar */}
-        {phase.totalTasks > 0 && (
-          <div className="w-20 flex items-center gap-1.5 shrink-0">
-            <div className="flex-1 h-1 bg-port-bg rounded-full overflow-hidden">
-              <div className="h-full bg-port-success rounded-full" style={{ width: `${progressPct}%` }} />
+          {/* Progress bar */}
+          {phase.totalTasks > 0 && (
+            <div className="w-20 flex items-center gap-1.5 shrink-0">
+              <div className="flex-1 h-1 bg-port-bg rounded-full overflow-hidden">
+                <div className="h-full bg-port-success rounded-full" style={{ width: `${progressPct}%` }} />
+              </div>
+              <span className="text-xs text-gray-500 w-8 text-right">{phase.completedTasks}/{phase.totalTasks}</span>
             </div>
-            <span className="text-xs text-gray-500 w-8 text-right">{phase.completedTasks}/{phase.totalTasks}</span>
-          </div>
-        )}
+          )}
 
-        {/* Plan count badge */}
-        {phase.plans?.length > 0 && (
-          <span className="px-1.5 py-0.5 bg-port-bg border border-port-border rounded text-xs text-gray-400 shrink-0">
-            {phase.plans.length} plan{phase.plans.length > 1 ? 's' : ''}
-          </span>
-        )}
+          {/* Plan count badge */}
+          {phase.plans?.length > 0 && (
+            <span className="px-1.5 py-0.5 bg-port-bg border border-port-border rounded text-xs text-gray-400 shrink-0">
+              {phase.plans.length} plan{phase.plans.length > 1 ? 's' : ''}
+            </span>
+          )}
 
-        {/* Verification badge */}
-        {phase.verification && (
-          <span className={`px-1.5 py-0.5 rounded text-xs shrink-0 ${
-            phase.verification.status === 'passed'
-              ? 'bg-port-success/20 text-port-success'
-              : 'bg-port-warning/20 text-port-warning'
-          }`}>
-            {phase.verification.score != null ? `${phase.verification.score}/10` : phase.verification.status}
-          </span>
-        )}
+          {/* Verification badge */}
+          {phase.verification && (
+            <span className={`px-1.5 py-0.5 rounded text-xs shrink-0 ${
+              phase.verification.status === 'passed'
+                ? 'bg-port-success/20 text-port-success'
+                : 'bg-port-warning/20 text-port-warning'
+            }`}>
+              {phase.verification.score != null ? `${phase.verification.score}/10` : phase.verification.status}
+            </span>
+          )}
+
+        </button>
 
         {/* Next action button */}
         {actionCfg && (
@@ -102,7 +109,7 @@ export default function PhaseCard({ phase, pendingAction, appId, expanded, onTog
             <actionCfg.icon size={12} /> {triggeringAction ? 'Creating...' : actionCfg.label}
           </button>
         )}
-      </button>
+      </div>
 
       {/* Expanded detail */}
       {expanded && (

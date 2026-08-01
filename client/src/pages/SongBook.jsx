@@ -202,20 +202,26 @@ export default function SongBook() {
               key={song.id}
               className="group bg-port-card border border-port-border rounded-lg flex items-start gap-3 px-4 py-3 hover:border-port-accent/50"
             >
-              <Link to={`/songbook/${song.id}`} className="flex-1 min-w-0">
-                <div className="text-white font-medium truncate" title={song.title}>{song.title}</div>
-                <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-500 mt-1">
-                  {song.artist && <span className="text-gray-400">{song.artist}</span>}
-                  {song.instrument && <span>{instrumentLabel(song.instrument)}</span>}
-                  {song.updatedAt && <span>Edited {timeAgo(song.updatedAt)}</span>}
-                </div>
+              {/* The tag filters are buttons, so they sit BESIDE the song link,
+                  not inside it — a <button> inside an <a> is invalid HTML and
+                  left them off the tab order (they relied on preventDefault to
+                  suppress the navigation they shouldn't have triggered). */}
+              <div className="flex-1 min-w-0">
+                <Link to={`/songbook/${song.id}`} className="block">
+                  <div className="text-white font-medium truncate" title={song.title}>{song.title}</div>
+                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-500 mt-1">
+                    {song.artist && <span className="text-gray-400">{song.artist}</span>}
+                    {song.instrument && <span>{instrumentLabel(song.instrument)}</span>}
+                    {song.updatedAt && <span>Edited {timeAgo(song.updatedAt)}</span>}
+                  </div>
+                </Link>
                 {Array.isArray(song.tags) && song.tags.length > 0 && (
                   <div className="flex flex-wrap gap-1 mt-1.5">
                     {song.tags.map((tag) => (
                       <button
                         key={tag}
                         type="button"
-                        onClick={(e) => { e.preventDefault(); setParam('tag', tag); }}
+                        onClick={() => setParam('tag', tag)}
                         className="px-1.5 py-0.5 rounded-full text-[10px] bg-port-bg text-gray-400 border border-port-border hover:text-port-accent hover:border-port-accent/40"
                       >
                         #{tag}
@@ -223,7 +229,7 @@ export default function SongBook() {
                     ))}
                   </div>
                 )}
-              </Link>
+              </div>
               <div className="flex flex-col items-end gap-2 shrink-0">
                 <select
                   value={song.stage || 'new'}

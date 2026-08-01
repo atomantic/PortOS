@@ -32,32 +32,34 @@ export default function GsdProjectCard({ project, onRefresh }) {
 
   return (
     <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-      <button
-        onClick={handleExpand}
-        className="flex items-center justify-between w-full px-4 py-3 text-left hover:bg-white/5 transition-colors"
-      >
-        <div className="flex items-center gap-3 min-w-0">
+      {/* The Dashboard link is a SIBLING of the expand button, not a child: a
+          <Link> renders an <a>, and an <a> inside a <button> is invalid HTML
+          that kept it out of the tab order (it needed stopPropagation to
+          suppress the expand it shouldn't have triggered). The button still
+          covers the rest of the row, so clicking anywhere else expands. */}
+      <div className="flex items-center gap-2 w-full px-4 py-3 hover:bg-white/5 transition-colors">
+        <button
+          onClick={handleExpand}
+          className="flex items-center gap-3 flex-1 min-w-0 text-left"
+        >
           <span className="text-sm font-semibold text-white truncate">{project.appName}</span>
           {project.hasRoadmap && (
             <span className="text-xs text-gray-500 font-mono shrink-0">
               {completedPhases}/{phaseCount} phases
             </span>
           )}
-        </div>
-        <div className="flex items-center gap-2">
-          <Link
-            to={`/apps/${project.appId}/gsd`}
-            onClick={e => e.stopPropagation()}
-            className="text-[10px] px-1.5 py-0.5 rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 flex items-center gap-1"
-          >
-            Dashboard <ExternalLink size={10} />
-          </Link>
-          {project.hasConcerns && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-port-warning/20 text-port-warning">concerns</span>
-          )}
-          {expanded ? <ChevronUp size={16} className="text-gray-500" /> : <ChevronDown size={16} className="text-gray-500" />}
-        </div>
-      </button>
+        </button>
+        <Link
+          to={`/apps/${project.appId}/gsd`}
+          className="text-[10px] px-1.5 py-0.5 rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 flex items-center gap-1 shrink-0"
+        >
+          Dashboard <ExternalLink size={10} />
+        </Link>
+        {project.hasConcerns && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-port-warning/20 text-port-warning shrink-0">concerns</span>
+        )}
+        {expanded ? <ChevronUp size={16} className="text-gray-500 shrink-0" /> : <ChevronDown size={16} className="text-gray-500 shrink-0" />}
+      </div>
 
       {expanded && (
         <div className="px-4 pb-4 border-t border-port-border/50 pt-3 space-y-4">
