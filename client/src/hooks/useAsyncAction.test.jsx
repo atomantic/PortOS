@@ -82,7 +82,8 @@ describe('useAsyncAction', () => {
   // The app runs under <React.StrictMode>, whose dev double-mount reuses the
   // hook's refs — a cleanup-only mounted guard is left false by the simulated
   // unmount, so `setRunning(false)` never fires and EVERY button backed by this
-  // hook stays disabled after one click (#3264). This pins the fix.
+  // hook stays disabled after one click (#3264). The hook carries no guard at
+  // all now (#3267); this fails the moment a broken one is re-added.
   it('clears running under StrictMode so the action can be run again', async () => {
     const { result } = renderHook(() => useAsyncAction(async (x) => x * 2), {
       wrapper: StrictMode,
