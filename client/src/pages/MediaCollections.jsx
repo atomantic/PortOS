@@ -7,6 +7,7 @@ import {
   listVideoHistory, listImageGallery,
 } from '../services/api';
 import { buildUnsortedCollection } from '../lib/unsorted';
+import MediaImage from '../components/MediaImage';
 import SyncBadge from '../components/sync/SyncBadge';
 import { useSyncIntegrity, syncBadgeStatus } from '../hooks/useSyncIntegrity';
 
@@ -158,7 +159,10 @@ export default function MediaCollections() {
                 className="block aspect-square bg-port-bg relative"
               >
                 {c.cover ? (
-                  <img src={c.cover} alt={c.name} className="w-full h-full object-cover" loading="lazy" />
+                  // A cover can point at a pruned video thumbnail or an unpulled
+                  // peer asset; MediaImage degrades to the syncing tile instead
+                  // of the browser's broken-image icon.
+                  <MediaImage src={c.cover} alt={c.name} className="w-full h-full object-cover" loading="lazy" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-gray-600">
                     {c.synthetic ? <Inbox className="w-12 h-12" /> : <FolderOpen className="w-12 h-12" />}
