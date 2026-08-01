@@ -52,6 +52,23 @@ describe('TaskItem task source', () => {
     expect(screen.getByText('~2m')).toBeInTheDocument();
   });
 
+  it('uses its queue source for an untyped raw task ETA', () => {
+    const rawUserTask = {
+      ...task,
+      id: 'user-fix',
+      description: 'Fix the queued task display',
+    };
+    const durations = {
+      'user-task': { avgDurationMin: 3, p80DurationMs: 180000, completed: 4, successRate: 100 },
+      'auto-fix': { avgDurationMin: 1, p80DurationMs: 60000, completed: 9, successRate: 100 },
+    };
+
+    render(<TaskItem task={rawUserTask} onRefresh={vi.fn()} providers={providers} durations={durations} />);
+
+    expect(screen.getByTitle('Based on 4 completed user-task tasks')).toBeInTheDocument();
+    expect(screen.getByText('~3m')).toBeInTheDocument();
+  });
+
   it('updates a system task in the internal queue when saving its model', async () => {
     render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
 

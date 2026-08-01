@@ -83,7 +83,9 @@ export default function TaskItem({ task, isSystem, onRefresh, providers, duratio
   const durationEstimate = useMemo(() => {
     if (!durations || task.status !== 'pending') return null;
 
-    const taskType = extractCosTaskType(task);
+    // Queue reads return raw parsed tasks without taskType. Supply the queue
+    // source so this estimate stays in the same bucket the server records.
+    const taskType = extractCosTaskType({ ...task, taskType: task.taskType || taskSource });
     const typeData = durations[taskType];
     const overallData = durations._overall;
 
