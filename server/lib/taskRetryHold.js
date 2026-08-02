@@ -44,10 +44,16 @@ export const RETRY_HOLD_SINCE_KEY = 'retryPendingSince';
 /**
  * The metadata patch that ARMS the hold, merged into the failure verdict's own
  * `updateTask` so the task never exists in a spawnable-but-pointerless state.
+ *
+ * The marker VALUE is the id of the run that armed it, not a bare `true`, so the
+ * release is owner-scoped: a slow cleanup from attempt A that lands after attempt
+ * B has already failed and armed its own hold must not clear B's hold, overwrite
+ * B's pointer, or make the task spawnable while B's cleanup is still running.
+ * A hold with no id (`true`) is a legacy/unattributed shape any releaser may clear.
  */
-export function retryHoldMetadata(now = Date.now()) {
+export function retryHoldMetadata(agentId, now = Date.now()) {
   return {
-    [RETRY_HOLD_KEY]: true,
+    [RETRY_HOLD_KEY]: agentId || true,
     [RETRY_HOLD_SINCE_KEY]: new Date(now).toISOString(),
   };
 }
@@ -66,12 +72,26 @@ export function clearedRetryHoldMetadata() {
 }
 
 /**
- * Is this task held pending its resume-pointer write? Accepts the markdown
- * round-trip (`true` comes back as the string `'true'`), same as `isTruthyMeta`.
+ * Is this task held pending its resume-pointer write? The marker is an agent id,
+ * or `true` for the legacy/unattributed shape — and the markdown round-trip turns
+ * both booleans into strings, so `'false'`/`'null'` must read as NOT held.
  */
 export function isRetryHeld(metadata) {
   const value = metadata?.[RETRY_HOLD_KEY];
-  return value === true || value === 'true';
+  if (value === true || value === 'true') return true;
+  return typeof value === 'string' && value !== '' && value !== 'false' && value !== 'null' && value !== 'undefined';
+}
+
+/**
+ * May `agentId` release this hold? Only the run that armed it — or anyone, when
+ * the marker carries no id (legacy shape). The orphan sweep deliberately does NOT
+ * consult this: whoever armed the hold is gone by the time it looks.
+ */
+export function isRetryHoldOwner(metadata, agentId) {
+  if (!isRetryHeld(metadata)) return false;
+  const value = metadata[RETRY_HOLD_KEY];
+  if (value === true || value === 'true') return true;
+  return !!agentId && value === agentId;
 }
 
 /**

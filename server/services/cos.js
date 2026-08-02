@@ -597,21 +597,28 @@ async function resetOrphanedTasks({ bootRecovery = false } = {}) {
         }
         continue;
       }
-      // Skip tasks whose agent just completed — updateTask will set them to
-      // completed shortly; treating them as orphaned causes spurious retries
-      if (recentlyCompletedTaskIds.has(task.id)) {
-        emitLog('debug', `Skipping task ${task.id} — agent recently completed, awaiting task status update`, { taskId: task.id });
-        continue;
-      }
       // A failed task held non-spawnable while its worktree cleanup resolves the
       // resume pointer (#3373). While the hold is fresh some in-process cleanup is
       // still expected to release it, so leave it alone — requeueing here would
-      // resolve the pointer against a branch mid-merge. Once the hold is stale (or
-      // this is the boot pass, where nothing can be mid-cleanup) the process that
-      // armed it is gone, and handleOrphanedTask finishes the transition instead
-      // of treating the task as a fresh orphan.
-      if (isRetryHeld(task.metadata) && !bootRecovery && !isStaleRetryHold(task.metadata)) {
+      // resolve the pointer against a branch mid-merge. Once the hold is stale, or
+      // this is the boot pass (nothing can be mid-cleanup in a process that just
+      // started), the process that armed it is gone and `handleOrphanedTask`
+      // finishes the transition instead of treating the task as a fresh orphan.
+      //
+      // Evaluated BEFORE the recently-completed grace below, which it deliberately
+      // bypasses: the hold is armed AFTER `completeAgent`, so a crash-restart
+      // inside that 60s window would otherwise skip the very task the boot pass
+      // exists to recover and strand it until the 15-minute periodic sweep.
+      const held = isRetryHeld(task.metadata);
+      const recoverHold = held && (bootRecovery || isStaleRetryHold(task.metadata));
+      if (held && !recoverHold) {
         emitLog('debug', `Skipping task ${task.id} — retry held while its worktree cleanup finishes`, { taskId: task.id });
+        continue;
+      }
+      // Skip tasks whose agent just completed — updateTask will set them to
+      // completed shortly; treating them as orphaned causes spurious retries
+      if (!recoverHold && recentlyCompletedTaskIds.has(task.id)) {
+        emitLog('debug', `Skipping task ${task.id} — agent recently completed, awaiting task status update`, { taskId: task.id });
         continue;
       }
       // If the agent completed successfully but task wasn't updated (silent updateTask failure),

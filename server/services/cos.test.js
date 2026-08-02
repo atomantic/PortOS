@@ -1119,9 +1119,11 @@ describe('resetOrphanedTasks — retry holds (#3373)', () => {
 
   it('skips a held task until its hold goes stale', () => {
     expect(sweepFn, 'the sweep must consult the retry hold')
-      .toMatch(/isRetryHeld\(task\.metadata\)\s*&&\s*!bootRecovery\s*&&\s*!isStaleRetryHold\(task\.metadata\)/);
-    const guardIdx = sweepFn.indexOf('isRetryHeld(task.metadata)');
+      .toMatch(/const recoverHold = held && \(bootRecovery \|\| isStaleRetryHold\(task\.metadata\)\)/);
+    expect(sweepFn, 'a live hold must skip the task').toMatch(/if \(held && !recoverHold\)/);
+    const guardIdx = sweepFn.indexOf('const held = isRetryHeld(task.metadata)');
     const handlerIdx = sweepFn.indexOf('handleOrphanedTask(');
+    expect(guardIdx, 'the hold guard must run before the orphan handler').toBeGreaterThan(-1);
     expect(guardIdx, 'the hold guard must run before the orphan handler').toBeLessThan(handlerIdx);
   });
 
@@ -1130,6 +1132,16 @@ describe('resetOrphanedTasks — retry holds (#3373)', () => {
   it('recovers a held task immediately on the boot pass', () => {
     expect(COS_SRC).toMatch(/resetOrphanedTasks\(\{\s*bootRecovery:\s*true\s*\}\)/);
     expect(sweepFn).toMatch(/bootRecovery\s*=\s*false/);
+  });
+
+  // The hold is armed AFTER completeAgent, so a crash-restart inside the 60s
+  // recently-completed grace would otherwise skip exactly the task the boot pass
+  // exists to recover, stranding it until the 15-minute periodic sweep.
+  it('lets a recoverable hold bypass the recently-completed grace', () => {
+    const holdIdx = sweepFn.indexOf('const recoverHold =');
+    const graceIdx = sweepFn.indexOf('recentlyCompletedTaskIds.has(task.id)');
+    expect(holdIdx, 'the hold must be evaluated before the recently-completed grace').toBeLessThan(graceIdx);
+    expect(sweepFn).toMatch(/if \(!recoverHold && recentlyCompletedTaskIds\.has\(task\.id\)\)/);
   });
 });
 

@@ -914,7 +914,7 @@ describe('the orphan sweep finishes an interrupted retry transition (#3373)', ()
     id: 'task-1',
     taskType: 'user',
     status: 'in_progress',
-    metadata: { retryPendingCleanup: true, retryPendingSince: new Date().toISOString(), failureCount: 1 },
+    metadata: { retryPendingCleanup: 'agent-dead', retryPendingSince: new Date().toISOString(), failureCount: 1 },
   });
 
   beforeEach(() => {
@@ -976,10 +976,20 @@ describe('the orphan sweep finishes an interrupted retry transition (#3373)', ()
     expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user');
   });
 
+  // The sweep is NOT owner-scoped by design — whoever armed the hold is gone by
+  // the time it looks, so a hold from any agent is recoverable.
+  it('finishes a transition armed by an agent it was not told about', async () => {
+    getTaskById.mockResolvedValue({ ...heldTask(), metadata: { retryPendingCleanup: 'agent-someone-else' } });
+
+    await handleOrphanedTask('task-1', 'unknown-reset', getTaskById, { agentMetadata: null });
+
+    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user');
+  });
+
   // A user-terminated (or budget-exhausted) task is blocked and never held, so the
   // pre-existing guards still win over the hold branch.
   it('still skips a user-terminated task', async () => {
-    getTaskById.mockResolvedValue({ id: 'task-1', taskType: 'user', status: 'blocked', metadata: { blockedCategory: 'user-terminated', retryPendingCleanup: true } });
+    getTaskById.mockResolvedValue({ id: 'task-1', taskType: 'user', status: 'blocked', metadata: { blockedCategory: 'user-terminated', retryPendingCleanup: 'agent-dead' } });
 
     await handleOrphanedTask('task-1', 'agent-dead', getTaskById, { agentMetadata: null });
 

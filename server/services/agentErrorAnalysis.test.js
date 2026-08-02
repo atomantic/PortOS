@@ -269,9 +269,9 @@ describe('resolveFailedTaskDecision', () => {
     // NOT `pending` (#3373): the retry is HELD non-spawnable — `in_progress` plus
     // the hold marker — until `releaseRetryHold` writes its resume pointer.
     it('retries on the first failure (failureCount → 1) with no investigation', () => {
-      const decision = resolveFailedTaskDecision(task(), { actionable: false, category: 'rate-limit', message: 'Rate limited' }, HOLD_NOW);
+      const decision = resolveFailedTaskDecision(task(), { actionable: false, category: 'rate-limit', message: 'Rate limited' }, { agentId: 'agent-x', now: HOLD_NOW });
       expect(decision.status).toBe('in_progress');
-      expect(decision.metadataUpdates.retryPendingCleanup).toBe(true);
+      expect(decision.metadataUpdates.retryPendingCleanup).toBe('agent-x');
       expect(decision.metadataUpdates.retryPendingSince).toBe(new Date(HOLD_NOW).toISOString());
       expect(decision.metadataUpdates.failureCount).toBe(1);
       expect(decision.metadataUpdates.lastErrorCategory).toBe('rate-limit');
@@ -330,7 +330,7 @@ describe('resolveFailedTaskDecision', () => {
 
     it('is excluded from the pending, auto-approved, and approval queues', () => {
       const base = { id: 'task-1', description: 'do a thing', priority: 'HIGH', priorityValue: 3, autoApproved: true, approvalRequired: false, metadata: {} };
-      const held = applyDecision(base, resolveFailedTaskDecision(base, { actionable: false, category: 'rate-limit', message: 'Rate limited' }, HOLD_NOW));
+      const held = applyDecision(base, resolveFailedTaskDecision(base, { actionable: false, category: 'rate-limit', message: 'Rate limited' }, { agentId: 'agent-x', now: HOLD_NOW }));
 
       expect(groupTasksByStatus([held]).pending).toEqual([]);
       expect(groupTasksByStatus([held]).in_progress).toEqual([held]);
@@ -340,7 +340,7 @@ describe('resolveFailedTaskDecision', () => {
 
     // ...and a blocked task gets no hold at all, so nothing has to release it.
     it('a blocked task carries no hold marker', () => {
-      const decision = resolveFailedTaskDecision({ id: 'task-1', metadata: { failureCount: MAX_TASK_RETRIES - 1 } }, { actionable: false, category: 'network-error', message: 'Network failed' }, HOLD_NOW);
+      const decision = resolveFailedTaskDecision({ id: 'task-1', metadata: { failureCount: MAX_TASK_RETRIES - 1 } }, { actionable: false, category: 'network-error', message: 'Network failed' }, { agentId: 'agent-x', now: HOLD_NOW });
       expect(decision.status).toBe('blocked');
       expect(decision.metadataUpdates.retryPendingCleanup).toBeUndefined();
       expect(decision.metadataUpdates.retryPendingSince).toBeUndefined();

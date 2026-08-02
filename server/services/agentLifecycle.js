@@ -31,6 +31,7 @@ import { getConfig, updateTask, getTaskById, getAgent as getAgentRecord } from '
 import { spawnAgentViaRunner, getRunnerHealth } from './cosRunnerClient.js';
 import { MAX_TOTAL_SPAWNS, normalizeReviewers } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
+import { isRetryHeld } from '../lib/taskRetryHold.js';
 import { ensureDir, PATHS, sleep, tryReadFile } from '../lib/fileUtils.js';
 import { createToolExecution, startExecution, completeExecution, errorExecution } from './toolStateMachine.js';
 import { determineLane, acquire, release } from './executionLanes.js';
@@ -229,6 +230,19 @@ async function runAgentSpawn(task) {
   // within one install the `spawningTasks` guard already prevents duplicates.)
   const freshTask = await getTaskById(task.id).catch(() => null);
   if (freshTask) {
+    // A retry held for its resume pointer (#3373) is not spawnable, however this
+    // dispatch reached us. The dequeue tiers can't see it (they select `pending`),
+    // but a `task:ready` emitted before the hold was armed — or a stale generator
+    // snapshot — arrives with a task object from before the failure, and the claim
+    // check below passes because the hold keeps OUR OWN lease. Spawning here is
+    // exactly the race the hold exists to close: the retry would start clean while
+    // the pointer naming its predecessor's branch is still being resolved. The
+    // release re-emits `tasks:changed`, which re-runs the dequeue.
+    if (isRetryHeld(freshTask.metadata)) {
+      console.log(`⏳ Task ${task.id} is held for its retry pointer — not spawning until cleanup releases it`);
+      await cleanupOnError('retry held pending cleanup');
+      return null;
+    }
     // The task is persisted — honor a peer's claim that synced in since dispatch,
     // then take the lease up front.
     if (!isClaimableBy(freshTask.metadata, instanceId)) {

@@ -458,6 +458,19 @@ describe('runAgentSpawn source — instance provenance + claim ordering (#1563)'
     expect(recheckIdx, 'must re-check claimability against the fresh metadata').toBeGreaterThan(rereadIdx);
   });
 
+  // The hold keeps this instance's OWN lease (updateTask only releases it when a
+  // status other than in_progress is written), so the claim re-check above passes
+  // for a held task. A `task:ready` emitted before the failure — or a stale
+  // generator snapshot — would otherwise spawn the retry while the pointer naming
+  // its predecessor's branch is still being resolved (#3373).
+  it('refuses to spawn a task whose retry is held for its resume pointer', () => {
+    const rereadIdx = RUN_SPAWN_BODY.indexOf('await getTaskById(task.id)');
+    const holdIdx = RUN_SPAWN_BODY.indexOf('isRetryHeld(freshTask.metadata)');
+    const registerIdx = RUN_SPAWN_BODY.indexOf('registerAgent(agentId, task.id, {');
+    expect(holdIdx, 'must check the retry hold on the fresh metadata').toBeGreaterThan(rereadIdx);
+    expect(holdIdx, 'the hold guard must run BEFORE registering the agent').toBeLessThan(registerIdx);
+  });
+
   it('releases the claim on a failed-setup early exit (cleanupOnError)', () => {
     const fnStart = AGENT_LIFECYCLE_SRC.indexOf('const cleanupOnError = async');
     const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 1200);

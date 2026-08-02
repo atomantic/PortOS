@@ -22,7 +22,7 @@ import * as git from './git.js';
 import { removeWorktree, classifyWorktreeDirt } from './worktreeManager.js';
 import { isTruthyMeta } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
-import { isRetryHeld, clearedRetryHoldMetadata } from '../lib/taskRetryHold.js';
+import { isRetryHoldOwner, clearedRetryHoldMetadata } from '../lib/taskRetryHold.js';
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { detectForgeCli } from '../lib/gitForge.js';
 import { PR_COMPLETIONS, PR_COMPLETION_VALUES, leavesPrForHuman } from '../lib/prDisposition.js';
@@ -553,8 +553,9 @@ export async function recordTaskResumePointer({ task, agentId, agentMetadata }) 
  * The no-hold fallback (a task we read as plain `pending`) still writes the pointer
  * alone: that is the pre-#3373 shape, and it is also what a task the orphan sweep
  * already recovered mid-cleanup looks like. Anything else we read — `blocked`,
- * `in_progress` without the marker (the retry already spawned), a failed read, a
- * task deleted mid-run — is not evidence of a retry, so we write nothing.
+ * `in_progress` under someone else's hold or none at all (the retry already
+ * spawned), a failed read, a task deleted mid-run — is not evidence of a retry we
+ * own, so we write nothing.
  *
  * `agentMetadata` is optional: pass it when the caller already holds the agent
  * record (the runner path does), omit it and this reads the record itself —
@@ -576,7 +577,13 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
   });
   if (!persisted) return {};
 
-  const held = isRetryHeld(persisted.metadata);
+  // Release only OUR hold, and only while the task is still held `in_progress`.
+  // Both halves matter: a slow cleanup from a previous attempt must not clear the
+  // hold the CURRENT attempt just armed (it would make the task spawnable while
+  // that attempt's cleanup is still running — the very race this exists to close),
+  // and a task that reached `blocked`/`completed` carrying a stale marker must
+  // never be flipped back to `pending` by a late cleanup.
+  const held = isRetryHoldOwner(persisted.metadata, agentId) && persisted.status === 'in_progress';
   // A record with no `status` at all is a legacy shape that predates the field;
   // those are pending.
   if (!held && (persisted.status ?? 'pending') !== 'pending') return {};

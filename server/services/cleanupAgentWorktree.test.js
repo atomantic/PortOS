@@ -1324,7 +1324,7 @@ describe('releaseRetryHold', () => {
   // flip to `pending` and the pointer MUST be the same write, or a dequeue between
   // them claims the retry with no pointer and restarts from scratch.
   describe('a held task (#3373)', () => {
-    const heldTask = { id: 'task-1', status: 'in_progress', metadata: { retryPendingCleanup: true, retryPendingSince: new Date().toISOString() } };
+    const heldTask = { id: 'task-1', status: 'in_progress', metadata: { retryPendingCleanup: 'agent-x', retryPendingSince: new Date().toISOString() } };
 
     it('flips to pending WITH the pointer and the cleared marker in one updateTask', async () => {
       getTaskById.mockResolvedValue(heldTask);
@@ -1358,13 +1358,25 @@ describe('releaseRetryHold', () => {
       }, 'user');
     });
 
-    // The markdown round-trip stores metadata booleans as strings.
-    it('recognizes the hold marker after a markdown round-trip', async () => {
+    // A hold armed before the marker carried an id (legacy shape) is releasable by
+    // whoever finds it, and the markdown round-trip stores booleans as strings.
+    it('recognizes an unattributed hold after a markdown round-trip', async () => {
       getTaskById.mockResolvedValue({ ...heldTask, metadata: { retryPendingCleanup: 'true' } });
 
       await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
 
       expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user');
+    });
+
+    // The whole point of stamping the owner: attempt A's slow cleanup lands after
+    // attempt B failed and armed ITS hold. Releasing here would make the task
+    // spawnable while B's cleanup is still resolving B's pointer.
+    it('does not release a hold armed by a later attempt', async () => {
+      getTaskById.mockResolvedValue({ ...heldTask, metadata: { retryPendingCleanup: 'agent-later' } });
+
+      await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
+
+      expect(updateTask).not.toHaveBeenCalled();
     });
 
     // The orphan sweep got there first and already requeued + cleared the hold, or
@@ -1377,10 +1389,13 @@ describe('releaseRetryHold', () => {
       expect(updateTask).not.toHaveBeenCalled();
     });
 
-    // A blocked task is never held, so it can never be flipped spawnable here.
-    it('never flips a blocked task, even one carrying a stale marker', async () => {
-      getTaskById.mockResolvedValue({ id: 'task-1', status: 'blocked', metadata: {} });
+    // A late release must never REOPEN a task that has since gone terminal —
+    // user-terminated, budget-exhausted, or completed by a recovery path.
+    it('never flips a blocked or completed task, even one carrying a stale marker', async () => {
+      getTaskById.mockResolvedValue({ id: 'task-1', status: 'blocked', metadata: { retryPendingCleanup: 'agent-x' } });
+      await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
 
+      getTaskById.mockResolvedValue({ id: 'task-1', status: 'completed', metadata: { retryPendingCleanup: 'agent-x' } });
       await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
 
       expect(updateTask).not.toHaveBeenCalled();

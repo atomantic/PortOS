@@ -1051,6 +1051,7 @@ export async function maybeCreateInvestigationTask(agentId, task, analysis) {
  *
  * `in_progress` is the RETRY status, not a typo: a retryable failure is held
  * non-spawnable until its resume pointer is resolved (#3373, lib/taskRetryHold.js).
+ * `agentId` is stamped INTO that hold so only the run that armed it can release it.
  *
  * @returns {{
  *   status: 'blocked'|'in_progress',
@@ -1058,7 +1059,7 @@ export async function maybeCreateInvestigationTask(agentId, task, analysis) {
  *   metadataUpdates: { failureCount?: number, lastErrorCategory?: string, [k: string]: unknown }
  * }}
  */
-export function resolveFailedTaskDecision(task, errorAnalysis, now = Date.now()) {
+export function resolveFailedTaskDecision(task, errorAnalysis, { agentId = null, now = Date.now() } = {}) {
   // Actionable errors get blocked immediately. The investigation task (created
   // by the wrapper unless the failure is an API-access error) gets the original
   // analysis verbatim.
@@ -1116,7 +1117,7 @@ export function resolveFailedTaskDecision(task, errorAnalysis, now = Date.now())
     metadataUpdates: {
       failureCount,
       lastErrorCategory,
-      ...retryHoldMetadata(now),
+      ...retryHoldMetadata(agentId, now),
       ...(compaction && { compaction })
     }
   };
@@ -1168,7 +1169,7 @@ export function resolveTypeFailureSignal({ success, terminatedByUser = false, ho
  * spawnable once `releaseRetryHold` writes the resume pointer (#3373).
  */
 export async function resolveFailedTaskUpdate(task, errorAnalysis, agentId, now = Date.now()) {
-  const decision = resolveFailedTaskDecision(task, errorAnalysis, now);
+  const decision = resolveFailedTaskDecision(task, errorAnalysis, { agentId, now });
   const { failureCount, lastErrorCategory } = decision.metadataUpdates;
 
   // Actionable errors get blocked immediately (investigation task created unless API access is denied)

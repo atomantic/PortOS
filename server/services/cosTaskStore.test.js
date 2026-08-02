@@ -387,6 +387,17 @@ describe('cosTaskStore.addTask', () => {
     expect('retryPendingCleanup' in stored.metadata).toBe(false);
   });
 
+  // A hold only means anything on an in_progress task waiting for its cleanup. Any
+  // other status retires it, so a late cleanup (or the orphan sweep) can never act
+  // on a marker left behind on a task that has since gone blocked or completed.
+  it('strips a retry hold when the task leaves in_progress (#3373)', async () => {
+    const task = await addTask({ description: 'hold retired', app: 'portos', id: 'sys-hold' }, 'internal');
+    await updateTask(task.id, { status: 'in_progress', metadata: { retryPendingCleanup: 'agent-x', retryPendingSince: new Date().toISOString() } }, 'internal');
+    const blocked = await updateTask(task.id, { status: 'blocked', metadata: { blockedCategory: 'user-terminated' } }, 'internal');
+    expect(blocked.metadata.retryPendingCleanup).toBeUndefined();
+    expect(blocked.metadata.retryPendingSince).toBeUndefined();
+  });
+
   it('reviveBlockedTask flips to pending with a FRESH retry budget (#2614)', async () => {
     // A revived task must behave like a fresh one: without clearing the
     // spawn/orphan budgets it would immediately re-block on the exhausted

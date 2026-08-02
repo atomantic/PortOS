@@ -18,6 +18,7 @@ import { join } from 'path';
 import { parseTasksMarkdown, groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, generateTasksMarkdown, hasKnownPrefix } from '../lib/taskParser.js';
 import { REVIEW_STOP_MODES, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, normalizeReviewerModels } from '../lib/validation.js';
 import { PR_COMPLETIONS, PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
+import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY } from '../lib/taskRetryHold.js';
 import { loadState, withStateLock, ROOT_DIR } from './cosState.js';
 import { cosEvents } from './cosEvents.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
@@ -465,6 +466,17 @@ export async function updateTask(taskId, updates, taskType = 'user', { now = Dat
     delete updatedMetadata.existingBranch;
     delete updatedMetadata.resumedFromAgentId;
     delete updatedMetadata.resumeWorktreePath;
+  }
+
+  // A retry hold (#3373) only means anything while the task is `in_progress`
+  // waiting on a cleanup to resolve its resume pointer. Any other status the task
+  // reaches — terminal, or a requeue that some other path performed — retires it,
+  // so drop the marker rather than leave a stale one for a late cleanup (or the
+  // orphan sweep) to act on. The release's own write passes these as undefined,
+  // which lands in the same place.
+  if (updates.status && updates.status !== 'in_progress') {
+    delete updatedMetadata[RETRY_HOLD_KEY];
+    delete updatedMetadata[RETRY_HOLD_SINCE_KEY];
   }
 
   // Release the federation claim/lease when a task leaves `in_progress` (issue
