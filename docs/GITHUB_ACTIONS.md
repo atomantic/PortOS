@@ -19,6 +19,12 @@ import-graph-aware `--changed` mode. The planner deliberately chooses full CI
 for shared composition roots, test configuration, dependency manifests,
 workflow changes, unknown artifacts, or wide diffs.
 
+A short always-run list (`ALWAYS_RUN_TESTS` in the planner) is added to every
+plan, so no impact scope can drop it — currently just
+`server/services/taskPromptDefaults.test.js`, which pins the cross-install
+prompt-upgrade contract nothing else in the suite covers. A documentation-only
+PR therefore still runs the server job with that one file selected.
+
 The selected work is split across parallel jobs:
 
 - **Server tests** — full, related, or explicit feature test files.

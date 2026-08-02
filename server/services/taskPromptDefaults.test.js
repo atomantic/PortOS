@@ -1,5 +1,4 @@
-import { describe, it, expect } from 'vitest';
-import { createHash } from 'crypto';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { join, dirname } from 'path';
@@ -9,7 +8,7 @@ import {
   REFERENCE_WATCH_AUDITED_VERSION,
   PREVIOUS_DEFAULT_PROMPTS,
 } from './taskPromptDefaults.js';
-import { PORTOS_API_URL } from '../lib/ports.js';
+import { hashPromptBody, buildPromptIntegritySnapshot } from './taskPromptDefaults/integrityHash.js';
 
 // Hash snapshot of every exported prompt body and version. This pins the
 // cross-install prompt-upgrade contract (see CLAUDE.md "Distribution model"):
@@ -18,37 +17,57 @@ import { PORTOS_API_URL } from '../lib/ports.js';
 // where the rule is: bump PROMPT_VERSIONS, append the outgoing default to
 // PREVIOUS_DEFAULT_PROMPTS, then regenerate the snapshot:
 //
-//   cd server && node --input-type=module -e "
-//   import('./services/taskPromptDefaults.js').then(async (m) => {
-//     const { PORTOS_API_URL } = await import('./lib/ports.js');
-//     const { createHash } = await import('crypto');
-//     const norm = (s) => s.split(PORTOS_API_URL).join('{{PORTOS_API_URL}}');
-//     const md5 = (s) => createHash('md5').update(norm(s), 'utf8').digest('hex');
-//     const out = {
-//       DEFAULT_TASK_PROMPTS: Object.fromEntries(Object.entries(m.DEFAULT_TASK_PROMPTS).map(([k, v]) => [k, md5(v)])),
-//       PROMPT_VERSIONS: m.PROMPT_VERSIONS,
-//       REFERENCE_WATCH_AUDITED_VERSION: m.REFERENCE_WATCH_AUDITED_VERSION,
-//       PREVIOUS_DEFAULT_PROMPTS: Object.fromEntries(Object.entries(m.PREVIOUS_DEFAULT_PROMPTS).map(([k, a]) => [k, a.map(md5)])),
-//     };
-//     (await import('fs')).writeFileSync('services/taskPromptDefaults/integrity.snapshot.json', JSON.stringify(out, null, 2) + '\n');
-//   })"
+//   node scripts/regen-prompt-integrity-snapshot.js
 //
-// PORTOS_API_URL is interpolated into one prompt at module load and varies by
-// env (PORTOS_HOST/PORT), so it's normalized to a placeholder before hashing.
+// Prompt bodies embed the install's API origin, so hashing normalizes it to a
+// placeholder first — see taskPromptDefaults/integrityHash.js, which both this
+// test and that script share so they can't drift apart. Regenerating to silence
+// a failure without the version bump + preserved outgoing default blesses
+// whatever edited a preserved historical body, which is the failure mode this
+// test exists to catch.
 const SNAPSHOT = JSON.parse(readFileSync(
   join(dirname(fileURLToPath(import.meta.url)), 'taskPromptDefaults', 'integrity.snapshot.json'),
   'utf8',
 ));
 
-const normalize = (s) => s.split(PORTOS_API_URL).join('{{PORTOS_API_URL}}');
-const md5 = (s) => createHash('md5').update(normalize(s), 'utf8').digest('hex');
-
 describe('taskPromptDefaults integrity snapshot', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
   it('DEFAULT_TASK_PROMPTS bodies match the snapshot hashes exactly', () => {
     const actual = Object.fromEntries(
-      Object.entries(DEFAULT_TASK_PROMPTS).map(([k, v]) => [k, md5(v)]),
+      Object.entries(DEFAULT_TASK_PROMPTS).map(([k, v]) => [k, hashPromptBody(v)]),
     );
     expect(actual).toEqual(SNAPSHOT.DEFAULT_TASK_PROMPTS);
+  });
+
+  // The snapshot pins prompt BYTES, not the machine that generated it. Hashing
+  // used to normalize only the runtime PORTOS_API_URL, so the historical bodies
+  // that hardcode the legacy `http://localhost:5555` origin only matched on an
+  // install whose own API origin happened to equal it. Anywhere else — a custom
+  // PORTOS_HOST, or merely a shell with PORT set, as inside a CoS agent — five
+  // untouched bodies hashed differently and this suite failed while nothing had
+  // drifted (issue #3359).
+  it('reproduces the snapshot on an install with a non-default API origin', async () => {
+    vi.resetModules();
+    // Cleared so the origin is derived from host/port rather than inherited
+    // from whatever the ambient environment sets — otherwise the assertion
+    // below depends on the machine running the suite, the very bug under test.
+    vi.stubEnv('PORTOS_API_URL', undefined);
+    vi.stubEnv('PORTOS_HOST', 'portos.example.test');
+    vi.stubEnv('PORT', '5558');
+
+    const [freshDefaults, { PORTOS_API_URL }] = await Promise.all([
+      import('./taskPromptDefaults.js'),
+      import('../lib/ports.js'),
+    ]);
+    // Guard the guard: if the stub stopped taking effect this test would pass
+    // vacuously by re-running the ambient-environment assertions above.
+    expect(PORTOS_API_URL).toBe('http://portos.example.test:5558');
+
+    expect(buildPromptIntegritySnapshot(freshDefaults, PORTOS_API_URL)).toEqual(SNAPSHOT);
   });
 
   it('PROMPT_VERSIONS matches the snapshot', () => {
@@ -61,7 +80,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
 
   it('PREVIOUS_DEFAULT_PROMPTS bodies match the snapshot hashes exactly', () => {
     const actual = Object.fromEntries(
-      Object.entries(PREVIOUS_DEFAULT_PROMPTS).map(([k, arr]) => [k, arr.map(md5)]),
+      Object.entries(PREVIOUS_DEFAULT_PROMPTS).map(([k, arr]) => [k, arr.map((p) => hashPromptBody(p))]),
     );
     expect(actual).toEqual(SNAPSHOT.PREVIOUS_DEFAULT_PROMPTS);
   });

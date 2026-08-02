@@ -26,6 +26,19 @@ const FULL_TRIGGER_RULES = [
   { re: /^scripts\/run-ci-(?:lint|tests)\.js$/, reason: 'CI runner changed' },
 ];
 
+// Contract guards that run on EVERY plan, whatever the impact scope selects.
+// `taskPromptDefaults.test.js` pins the cross-install prompt-upgrade contract
+// (CLAUDE.md "Distribution model"): edit a preserved historical default and
+// other installs stop recognizing their stored prompt, so they are treated as
+// having customized it and stay on it forever. Nothing else in the suite
+// notices, and neither can a scoped run that happens not to select this file —
+// so it is never scoped out. The file runs in ~150ms and imports only prompt
+// data, which is cheap enough to pay on every PR including documentation-only
+// ones, where the alternative is reasoning per-scope about what can reach it.
+const ALWAYS_RUN_TESTS = [
+  'server/services/taskPromptDefaults.test.js',
+];
+
 const DB_RISK_RULES = [
   /^server\/lib\/db(?:\/|\.|$)/i,
   /^server\/scripts\/.*db/i,
@@ -151,6 +164,10 @@ const structuralTestsFor = (changedFiles, trackedSet) => {
 
 const uniqueSorted = (values) => [...new Set(values)].sort();
 
+// Guarded by trackedSet like every other selector: an untracked path handed to
+// Vitest as an exact selector makes the run exit non-zero.
+const alwaysRunTests = (trackedSet) => ALWAYS_RUN_TESTS.filter((path) => trackedSet.has(path));
+
 const skippedRunner = () => ({ mode: 'skip', files: [] });
 
 /**
@@ -189,13 +206,15 @@ export function buildCiTestPlan(changedFiles, { trackedFiles = [], forceFull = f
     return fullPlan(changed, `${fullTrigger.reason}: ${fullTrigger.path}`);
   }
 
+  const alwaysRun = alwaysRunTests(trackedSet);
+
   const relevant = changed.filter((path) => !isDocumentationOnly(path));
   if (relevant.length === 0) {
     return {
       full: false,
       reason: changed.length ? 'documentation-only change' : 'no changed files',
       changedFiles: changed,
-      server: skippedRunner(),
+      server: alwaysRun.length > 0 ? { mode: 'files', files: alwaysRun } : skippedRunner(),
       client: skippedRunner(),
       db: false,
       lint: { mode: 'skip', files: [] },
@@ -230,6 +249,7 @@ export function buildCiTestPlan(changedFiles, { trackedFiles = [], forceFull = f
     ...directTests,
     ...sourceFiles.flatMap(siblingTestCandidates).filter((path) => trackedSet.has(path)),
     ...structuralTestsFor(changed, trackedSet),
+    ...alwaysRun,
   ];
 
   for (const testFile of trackedFiles.filter(isTestFile)) {
