@@ -373,6 +373,37 @@ describe('sprites routes', () => {
     expect(reference.forkSprite).toHaveBeenCalledWith('pioneer', expect.objectContaining({ name: 'Pioneer Fork', designPrompt: 'now with a red coat' }));
   });
 
+  // The two bodies ForkSpriteModal.jsx actually builds — full (an id typed and a
+  // backend picked) and minimal (both omitted). The client suite mocks
+  // apiSprites.js, so a schema that rejected or silently stripped one of these
+  // keys would stay invisible behind two green suites; the case above only
+  // proves a HAND-BUILT subset. Keep these in step with the client's
+  // "ForkSpriteModal wire body" cases.
+  it('POST /:id/fork accepts the exact body ForkSpriteModal sends', async () => {
+    const modalBody = {
+      name: 'Example Settler',
+      id: 'example-settler',
+      designPrompt: 'wearing a wide-brim hat',
+      mode: 'grok',
+      initImageStrength: 0.65,
+    };
+    const r = await request(app).post('/api/sprites/pioneer/fork').send(modalBody);
+    expect(r.status).toBe(201);
+    // Exact, not objectContaining: a stripped key must fail here.
+    expect(reference.forkSprite).toHaveBeenCalledWith('pioneer', modalBody);
+  });
+
+  it('POST /:id/fork accepts the modal body with id and mode omitted', async () => {
+    const modalBody = {
+      name: 'Example Settler',
+      designPrompt: 'wearing a wide-brim hat',
+      initImageStrength: 0.65,
+    };
+    const r = await request(app).post('/api/sprites/pioneer/fork').send(modalBody);
+    expect(r.status).toBe(201);
+    expect(reference.forkSprite).toHaveBeenCalledWith('pioneer', modalBody);
+  });
+
   it('POST /:id/fork rejects a missing design prompt at the schema', async () => {
     const bad = await request(app).post('/api/sprites/pioneer/fork').send({ name: 'Pioneer Fork' });
     expect(bad.status).toBe(400);

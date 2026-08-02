@@ -30,4 +30,22 @@ describe('SpritePreview', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Close preview' }));
     expect(screen.queryByRole('button', { name: 'Close preview' })).not.toBeInTheDocument();
   });
+
+  it('opens the lightbox on the SAME asset the thumbnail shows', async () => {
+    // The lightbox resolves its own URL from (recordId, path, version) rather
+    // than reusing the thumbnail's — so a mis-threaded prop would enlarge a
+    // different (or cache-stale) file while the thumbnail still looks right.
+    render(
+      <SpritePreview recordId="field-medic" path="reference/walk-south-v1.png" version="v7" zoomable />,
+    );
+    const expectedSrc = '/data/sprites/field-medic/reference/walk-south-v1.png?v=v7';
+    expect(screen.getByRole('img')).toHaveAttribute('src', expectedSrc);
+
+    await userEvent.click(screen.getByRole('button', { name: /Enlarge/ }));
+
+    // aria-label carries the record-relative path; both images point at it.
+    expect(screen.getByRole('dialog')).toHaveAttribute('aria-label', 'Preview reference/walk-south-v1.png');
+    const srcs = screen.getAllByRole('img').map((img) => img.getAttribute('src'));
+    expect(srcs).toEqual([expectedSrc, expectedSrc]);
+  });
 });
