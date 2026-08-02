@@ -110,6 +110,22 @@ describe('DataManager per-item purge (#3327)', () => {
     await waitFor(() => expect(screen.queryByText('render-0001.png')).not.toBeInTheDocument());
   });
 
+  it('offers no delete for a directory entry — the server refuses those too', async () => {
+    getDataCategory.mockResolvedValue({
+      key: 'images',
+      items: [
+        { name: 'render-0001.png', type: 'file', size: 1200 },
+        { name: '.scratch', type: 'directory', size: 800, fileCount: 3 },
+      ],
+    });
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getAllByText('Images').length).toBeGreaterThan(0));
+
+    expandRow('Images');
+    await screen.findByRole('button', { name: 'Delete render-0001.png from Images' });
+    expect(screen.queryByRole('button', { name: 'Delete .scratch from Images' })).not.toBeInTheDocument();
+  });
+
   it('keeps the category-wide Purge button for category-scoped and legacy rows', async () => {
     render(<DataManager />);
     await waitFor(() => expect(screen.getByText('Messages')).toBeInTheDocument());

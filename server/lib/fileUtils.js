@@ -1308,13 +1308,32 @@ export function assertSafeFilename(filename, { extensions, subject = 'filename',
  * `not-an-imagepng`. Pass a module constant, never a caller-supplied list.
  */
 export function isSafeFilename(filename, extensions) {
-  if (!filename || typeof filename !== 'string') return false;
-  if (filename.includes('\0')) return false;
-  if (filename === '.' || filename === '..') return false;
-  if (filename.includes('/') || filename.includes('\\')) return false;
-  if (basename(filename) !== filename) return false;
+  if (!isTopLevelEntryName(filename)) return false;
   const lower = filename.toLowerCase();
   return extensions.some((ext) => lower.endsWith(String(ext).toLowerCase()));
+}
+
+/**
+ * `isSafeFilename`'s traversal half, without the extension gate: true when
+ * `name` addresses exactly one entry directly inside some directory.
+ *
+ * For callers that legitimately cannot allowlist extensions — an arbitrary
+ * user asset, or a directory entry — but must still refuse traversal. Naming
+ * a single entry is what makes a subsequent `join(dir, name)` safe *in the
+ * filesystem sense* and not just lexically: with no separator there is no
+ * intermediate component left for a symlink to redirect, which a
+ * `resolve`/`relative` containment check cannot see. The Data Manager's
+ * per-item purge (`purgeCategory`) is the reference caller.
+ *
+ * `isSafeFilename` is layered on top of this, so the two can never disagree
+ * about what "a single entry" means.
+ */
+export function isTopLevelEntryName(name) {
+  if (!name || typeof name !== 'string') return false;
+  if (name.includes('\0')) return false;
+  if (name === '.' || name === '..') return false;
+  if (name.includes('/') || name.includes('\\')) return false;
+  return basename(name) === name;
 }
 
 /**

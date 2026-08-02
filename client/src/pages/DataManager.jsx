@@ -238,7 +238,13 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
                         <td className="p-2 pr-3 text-right text-gray-500">{item.type === 'directory' ? item.fileCount?.toLocaleString() : '—'}</td>
                         {itemScoped && (
                           <td className="p-2 pr-3 text-right">
-                            {isConfirming(item.name) ? (
+                            {item.type === 'directory' ? (
+                              // Subdirectories of these categories are another
+                              // feature's working state (in-flight render
+                              // control dirs, scratch), not user assets — the
+                              // server refuses them too.
+                              <span className="text-gray-600" title="Directories here hold working files for other features and are not deletable from this page">—</span>
+                            ) : isConfirming(item.name) ? (
                               <ConfirmButtonPair
                                 className="justify-end"
                                 prompt="Delete?"

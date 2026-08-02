@@ -827,11 +827,19 @@ export const portsAllocateSchema = z.object({
 // DELETE /api/data/:category — purge a category, or one entry inside it.
 // `subPath` names a single top-level entry of the category directory; omitting
 // it asks for the whole-directory wipe, which `purgeCategory` only honors for
-// `purgeScope: 'category'` entries (#3327). Traversal is still rejected in the
-// service by a path.relative containment check — this schema just refuses the
-// obviously-wrong shapes (non-string, empty, absurdly long) before that.
+// `purgeScope: 'category'` entries (#3327). `isTopLevelEntryName` in
+// `fileUtils.js` is the authoritative gate — it runs in `purgeCategory`, which
+// is the boundary a non-HTTP caller crosses too. The separator check is spelled
+// out here rather than imported so this module keeps its narrow import surface
+// (a partial mock of fileUtils in an unrelated suite would break schema
+// construction at module load).
 export const dataPurgeSchema = z.object({
-  subPath: z.string().min(1).max(1024).optional()
+  subPath: z.string().min(1).max(255)
+    .refine(
+      (v) => !v.includes('/') && !v.includes('\\') && v !== '.' && v !== '..',
+      'subPath must name a single entry in the category'
+    )
+    .optional()
 });
 
 // =============================================================================

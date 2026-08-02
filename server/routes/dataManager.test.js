@@ -48,6 +48,15 @@ describe('DELETE /api/data/:category', () => {
     expect(purgeCategory).not.toHaveBeenCalled();
   });
 
+  it.each(['sub/child.png', 'sub\\child.png', '../images/render.png', '..', '.'])(
+    'rejects a subPath that is not a single entry: %s',
+    async (subPath) => {
+      const res = await request(makeApp()).delete('/api/data/images').send({ subPath });
+      expect(res.status).toBe(400);
+      expect(purgeCategory).not.toHaveBeenCalled();
+    }
+  );
+
   // The endpoint stays reachable even when the UI hides the button, so the
   // service's refusal has to surface as a 4xx rather than an opaque 500.
   it('surfaces the service refusal of a category-wide purge on an item-scoped category', async () => {

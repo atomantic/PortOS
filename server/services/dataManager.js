@@ -1,9 +1,9 @@
-import { readdir, stat, rm, writeFile as fsWriteFile } from 'fs/promises';
+import { readdir, stat, lstat, rm, writeFile as fsWriteFile } from 'fs/promises';
 import { join, relative, resolve, isAbsolute } from 'path';
 import { existsSync } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { PATHS, ensureDir } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, isTopLevelEntryName } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 
 const execFileAsync = promisify(execFile);
@@ -282,6 +282,14 @@ export async function purgeCategory(categoryKey, options = {}) {
   }
 
   if (options.subPath) {
+    // `subPath` names ONE top-level entry — exactly what the detail table
+    // lists. Refusing separators outright means no traversal segment can form
+    // and, more importantly, no *intermediate* component can be a symlink for
+    // `rm` to follow out of the category (the lexical containment check below
+    // is blind to that, since it never touches the filesystem).
+    if (!isTopLevelEntryName(options.subPath)) {
+      throw new ServerError('subPath must name a single entry in the category', { status: 400, code: 'VALIDATION_ERROR' });
+    }
     const resolvedRoot = resolve(dirPath);
     const resolvedTarget = resolve(join(dirPath, options.subPath));
     // Boundary-aware containment check: use path.relative so a prefix like
@@ -290,7 +298,26 @@ export async function purgeCategory(categoryKey, options = {}) {
     if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
       throw new ServerError('Invalid subPath', { status: 400, code: 'VALIDATION_ERROR' });
     }
-    await rm(resolvedTarget, { recursive: true, force: true });
+    // Item-scoped categories are flat directories of assets; their only
+    // subdirectories are working state for other features (`data/videos/.detached`
+    // holds the control files of in-flight renders). A one-click recursive
+    // delete next to those on a cleanup page is a foot-gun, so an item purge
+    // removes a single file and never recurses. `lstat`, not `stat`, so a
+    // symlinked entry is judged as the link it is and simply unlinked.
+    const itemScoped = meta.purgeScope === 'items';
+    if (itemScoped) {
+      const entryStat = await lstat(resolvedTarget).catch(() => null);
+      if (!entryStat) {
+        throw new ServerError(`Item not found in "${categoryKey}"`, { status: 404, code: 'NOT_FOUND' });
+      }
+      if (entryStat.isDirectory()) {
+        throw new ServerError(
+          `"${options.subPath}" is a directory — per-item purge in "${categoryKey}" only removes files`,
+          { status: 400, code: 'ITEM_PURGE_FILE_ONLY' }
+        );
+      }
+    }
+    await rm(resolvedTarget, { recursive: !itemScoped, force: true });
     console.log(`🗑️ Purged item from data/${categoryKey}`);
   } else {
     const entries = await readdir(dirPath).catch(() => []);
