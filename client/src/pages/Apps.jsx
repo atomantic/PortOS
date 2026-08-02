@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { ExternalLink, Gamepad2, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download, Hammer, Smartphone, Trash2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -29,6 +29,10 @@ export default function Apps() {
   const [showArchived, setShowArchived] = useState(false);
   const [jiraTickets, setJiraTickets] = useState({});
   const [loadingTickets, setLoadingTickets] = useState({});
+  // Per-row "…" trigger refs, so dismissing a row's delete confirmation hands
+  // focus back to the control that opened it instead of dropping it on <body>.
+  const menuTriggerRefs = useRef({});
+  const menuTriggerRef = (id) => (menuTriggerRefs.current[id] ||= { current: null });
 
   const fetchApps = useCallback(async () => {
     const data = await api.getApps().catch(() => []);
@@ -389,6 +393,7 @@ export default function Apps() {
                       {app.id !== api.PORTOS_APP_ID && (
                         <OverflowMenu
                           label={`More actions for ${app.name}`}
+                          triggerRef={menuTriggerRef(app.id)}
                           items={[
                             {
                               id: 'archive',
@@ -420,7 +425,10 @@ export default function Apps() {
                     cancelText="Cancel"
                     aria-label={`Confirm deletion of ${app.name}`}
                     onConfirm={() => handleDelete(app)}
-                    onCancel={() => setConfirmingDelete(null)}
+                    onCancel={() => {
+                      setConfirmingDelete(null);
+                      menuTriggerRef(app.id).current?.focus();
+                    }}
                   />
                 )}
               </div>

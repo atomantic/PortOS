@@ -101,6 +101,8 @@ describe('Apps row action hierarchy', () => {
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(api.deleteApp).not.toHaveBeenCalled();
     expect(screen.queryByLabelText('Confirm deletion of Example App')).toBeNull();
+    // Dismissing hands focus back to the trigger it came from, not to <body>.
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'More actions for Example App' }));
   });
 
   it('deletes only after the inline confirm is accepted', async () => {

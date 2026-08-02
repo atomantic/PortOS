@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -74,6 +75,23 @@ describe('OverflowMenu', () => {
 
     await user.click(screen.getByRole('menuitem', { name: 'Archive' }));
     expect(list[0].onSelect).not.toHaveBeenCalled();
+  });
+
+  it('exposes the trigger through an external triggerRef so callers can return focus to it', async () => {
+    const user = userEvent.setup();
+    const Harness = () => {
+      const triggerRef = useRef(null);
+      return (
+        <div>
+          <button type="button" onClick={() => triggerRef.current?.focus()}>refocus</button>
+          <OverflowMenu label="More actions" items={items()} triggerRef={triggerRef} />
+        </div>
+      );
+    };
+    render(<Harness />);
+
+    await user.click(screen.getByRole('button', { name: 'refocus' }));
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'More actions' }));
   });
 
   it('closes on an outside click', async () => {

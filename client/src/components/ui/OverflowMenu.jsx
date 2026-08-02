@@ -18,11 +18,14 @@ const TONES = {
 
 const ITEM_SELECTOR = '[role="menuitem"]:not(:disabled)';
 
-export default function OverflowMenu({ label, items = [], className = '' }) {
+export default function OverflowMenu({ label, items = [], className = '', triggerRef: externalTriggerRef }) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef(null);
-  const triggerRef = useRef(null);
+  const internalTriggerRef = useRef(null);
   const menuRef = useRef(null);
+  // Callers that dismiss follow-up UI opened from an item (an inline confirm)
+  // pass `triggerRef` so they can hand focus back to the trigger it came from.
+  const triggerRef = externalTriggerRef || internalTriggerRef;
 
   const close = useCallback((refocus) => {
     setOpen(false);
