@@ -471,18 +471,23 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
 
   const toggleLock = useCallback((field) => {
     if (!WORLD_LOCKABLE_FIELDS.includes(field)) return;
-    setDraft((current) => {
-      const nextLocked = { ...(current.locked || {}) };
-      if (nextLocked[field]) delete nextLocked[field];
-      else nextLocked[field] = true;
-      const next = { ...current, locked: nextLocked };
-      if (selectedId && next.name?.trim()) {
-        updateUniverse(selectedId, { locked: nextLocked }, { silent: true })
-          .catch((error) => toast.error(`Lock save failed: ${error.message}`));
-      }
-      return next;
-    });
-  }, [selectedId]);
+    // The next lock map is derived from the freshest draft OUTSIDE the state
+    // updater, and the PATCH fires from here rather than from inside it. A
+    // state updater must be pure: React is free to invoke it more than once
+    // for a single setState (StrictMode double-invocation, an interrupted
+    // concurrent render), and a request issued from within one is sent once
+    // per invocation — one lock click produced two identical PATCHes. Mirrors
+    // setRenderPin / assignBucketKind, which already patch outside the updater.
+    const current = draftRef.current || draft;
+    const nextLocked = { ...(current.locked || {}) };
+    if (nextLocked[field]) delete nextLocked[field];
+    else nextLocked[field] = true;
+    setDraft((value) => ({ ...value, locked: nextLocked }));
+    if (selectedId && current.name?.trim()) {
+      updateUniverse(selectedId, { locked: nextLocked }, { silent: true })
+        .catch((error) => toast.error(`Lock save failed: ${error.message}`));
+    }
+  }, [draft, selectedId]);
 
   // Per-record render pin (#3231 Phase 3) — this universe's default image
   // backend + cloud model. Mirrors toggleLock: reactive local update plus an
