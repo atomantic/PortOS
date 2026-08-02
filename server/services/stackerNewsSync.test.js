@@ -20,11 +20,12 @@ const executeStackerNewsOperation = vi.fn(async (name, input) => {
   if (name === 'sub') return { sub: { name: 'art', userId: 'owner-1' } };
   return itemsPage(input.cursor);
 });
-const executeStackerNewsBrowserRead = vi.fn(async (name, input = {}) => {
+const browserRead = async (name, input = {}) => {
   if (name === 'me') return { me: { id: 'owner-1', name: 'example_user' } };
   if (name === 'sub') return { sub: { name: 'art', userId: 'owner-1' } };
   return itemsPage(input.cursor);
-});
+};
+const executeStackerNewsBrowserRead = vi.fn(browserRead);
 vi.mock('../lib/db.js', () => ({ query, withTransaction: vi.fn() }));
 vi.mock('../lib/vaultCrypto.js', () => ({ decryptValue: () => 'api-key', encryptValue: vi.fn(), ensureVaultKey: vi.fn() }));
 vi.mock('../integrations/stackerNews/index.js', () => ({ executeStackerNewsOperation, executeStackerNewsBrowserRead, stackerNewsCapabilities: {} }));
@@ -36,7 +37,7 @@ describe('Stacker News sync', () => {
   beforeEach(() => {
     query.mockClear();
     executeStackerNewsOperation.mockClear();
-    executeStackerNewsBrowserRead.mockClear();
+    executeStackerNewsBrowserRead.mockReset().mockImplementation(browserRead);
     accountRow = { ...baseAccount, read_transport: 'api' };
     credentialRows = [{ api_key_enc: 'ciphertext' }];
   });
@@ -64,6 +65,20 @@ describe('Stacker News sync', () => {
     expect(executeStackerNewsOperation).not.toHaveBeenCalled();
     const itemCalls = executeStackerNewsBrowserRead.mock.calls.filter(([name]) => name === 'items');
     expect(itemCalls.map(([, input]) => input.cursor)).toEqual([null, 'page-2']);
+  });
+
+  // The browser identity extractor's profile-link fallback has no user ID, and a
+  // territory page can omit one too — two absences must not certify ownership.
+  it('refuses to verify ownership when either side has no user ID', async () => {
+    accountRow = { ...baseAccount };
+    credentialRows = [];
+    executeStackerNewsBrowserRead.mockImplementation(async (name, input = {}) => {
+      if (name === 'me') return { me: { id: null, name: 'example_user' } };
+      if (name === 'sub') return { sub: { name: 'art', userId: null } };
+      return itemsPage(input.cursor);
+    });
+    await syncAccount(accountId, { force: true });
+    expect(query.mock.calls.some(([sql, params]) => sql.startsWith('UPDATE stacker_news_territories') && params[1].ownershipVerified === false)).toBe(true);
   });
 
   it('still refuses an API-transport account with no key', async () => {

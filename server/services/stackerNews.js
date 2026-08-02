@@ -420,7 +420,11 @@ async function syncAccountUnlocked(accountId, { force = false } = {}) {
     const monitored = territory.monitoringEnabled ?? account.monitoring_enabled;
     if (!force && !monitored) continue;
     const remote = (await read('sub', { name: territory.slug }))?.sub;
-    const ownershipVerified = Boolean(remote && String(remote.userId) === String(me.id));
+    // BOTH IDs must be present: `String(null) === String(null)` would otherwise
+    // certify ownership from two absences, and the browser identity extractor's
+    // profile-link fallback legitimately has no user ID. Ownership evidence
+    // gates territory-settings execution, so it fails closed.
+    const ownershipVerified = Boolean(remote && remote.userId != null && me.id != null && String(remote.userId) === String(me.id));
     await query(
       'UPDATE stacker_news_territories SET remote_settings=$2,remote_refreshed_at=NOW(),updated_at=NOW() WHERE id=$1',
       [territory.id, { ...(remote || {}), ownershipVerified }],
