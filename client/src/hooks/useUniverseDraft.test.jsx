@@ -686,6 +686,25 @@ describe('useUniverseDraft', () => {
       expect(result.current.draft.locked).toEqual({});
     });
 
+    // Two clicks inside one tick: the lock map has to compose across them.
+    // `draftRef` is normally refreshed by a passive effect that runs a commit
+    // later, so a naive read of it would let the second toggle re-send the
+    // first's write and leave the field locked forever.
+    it('composes back-to-back toggles that land before a re-render', async () => {
+      const { result } = renderDraft();
+      await waitFor(() => expect(result.current.draft.id).toBe('u1'));
+
+      act(() => {
+        result.current.toggleLock('logline');
+        result.current.toggleLock('logline');
+      });
+
+      expect(apiMocks.updateUniverse).toHaveBeenCalledTimes(2);
+      expect(apiMocks.updateUniverse.mock.calls.map((call) => call[1]))
+        .toEqual([{ locked: { logline: true } }, { locked: {} }]);
+      expect(result.current.draft.locked).toEqual({});
+    });
+
     it('accepts the per-influence-list lock keys, not just the bible scalars', async () => {
       const { result } = renderDraft();
       await waitFor(() => expect(result.current.draft.id).toBe('u1'));

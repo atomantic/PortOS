@@ -482,6 +482,12 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
     const nextLocked = { ...(current.locked || {}) };
     if (nextLocked[field]) delete nextLocked[field];
     else nextLocked[field] = true;
+    // Advance the mirror synchronously. The effect that syncs `draftRef` runs a
+    // commit later, so two toggles inside one tick would otherwise both read the
+    // pre-toggle map — the second re-sending the first's write instead of
+    // composing on top of it. The functional updater still owns the draft
+    // itself, so a concurrent edit to another field is not clobbered.
+    draftRef.current = { ...current, locked: nextLocked };
     setDraft((value) => ({ ...value, locked: nextLocked }));
     if (selectedId && current.name?.trim()) {
       updateUniverse(selectedId, { locked: nextLocked }, { silent: true })
