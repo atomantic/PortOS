@@ -81,7 +81,43 @@ describe('pickMainFrameHops (SSRF pin — main-frame connection IPs)', () => {
     ]);
     expect(mainRequestIds).toEqual(['R1']);
     expect(finalUrl).toBe('https://ex.com/a');
-    expect(hops).toEqual([{ url: 'https://ex.com/a', remoteIPAddress: '93.184.216.34', status: 200 }]);
+    expect(hops).toEqual([{
+      url: 'https://ex.com/a',
+      remoteIPAddress: '93.184.216.34',
+      status: 200,
+      fromServiceWorker: false,
+      fromDiskCache: false,
+      fromPrefetchCache: false,
+      serviceWorkerResponseSource: null,
+    }]);
+  });
+
+  it('threads the delivery flags of every hop through (redirect AND final response)', () => {
+    // The gate needs to tell "no peer IP, no explanation" from "Chrome reported it
+    // made no connection", so the raw CDP delivery fields ride on each hop.
+    const { hops } = pickMainFrameHops([
+      docRequest('R1', 'https://ex.com/a', ''),
+      {
+        method: 'Network.requestWillBeSent',
+        params: {
+          requestId: 'R1',
+          loaderId: 'R1',
+          type: 'Document',
+          request: { url: 'https://ex.com/b' },
+          redirectResponse: { url: 'https://ex.com/a', remoteIPAddress: '93.184.216.34', status: 302, fromPrefetchCache: true },
+        },
+      },
+      {
+        method: 'Network.responseReceived',
+        params: {
+          requestId: 'R1',
+          type: 'Document',
+          response: { url: 'https://ex.com/b', remoteIPAddress: '', status: 200, fromServiceWorker: true, serviceWorkerResponseSource: 'cache-storage' },
+        },
+      },
+    ]);
+    expect(hops[0]).toMatchObject({ fromPrefetchCache: true, fromServiceWorker: false, serviceWorkerResponseSource: null });
+    expect(hops[1]).toMatchObject({ fromServiceWorker: true, fromDiskCache: false, serviceWorkerResponseSource: 'cache-storage' });
   });
 
   it('captures EVERY redirect hop IP plus the final response (per-hop pin)', () => {
@@ -177,6 +213,28 @@ describe('pickMainFrameHops (SSRF pin — main-frame connection IPs)', () => {
   });
 });
 
+describe('hopMadeNoConnection (no-network delivery classifier)', () => {
+  let hopMadeNoConnection;
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ hopMadeNoConnection } = await import('./browserService.js'));
+  });
+
+  it('classifies only explicitly no-network deliveries', () => {
+    expect(hopMadeNoConnection({ fromDiskCache: true })).toBe(true);
+    expect(hopMadeNoConnection({ fromPrefetchCache: true })).toBe(true);
+    expect(hopMadeNoConnection({ serviceWorkerResponseSource: 'cache-storage' })).toBe(true);
+    expect(hopMadeNoConnection({ serviceWorkerResponseSource: 'http-cache' })).toBe(true);
+    expect(hopMadeNoConnection({ serviceWorkerResponseSource: 'fallback-code' })).toBe(true);
+    // A service worker that passed the request THROUGH to the network did make a
+    // connection — it just isn't annotated with the peer IP. Not exempt.
+    expect(hopMadeNoConnection({ fromServiceWorker: true, serviceWorkerResponseSource: 'network' })).toBe(false);
+    expect(hopMadeNoConnection({ fromServiceWorker: true })).toBe(false);
+    expect(hopMadeNoConnection({})).toBe(false);
+    expect(hopMadeNoConnection(null)).toBe(false);
+  });
+});
+
 describe('ssrfPinRefusalReason (SSRF pin gate)', () => {
   let ssrfPinRefusalReason;
   beforeEach(async () => {
@@ -189,9 +247,9 @@ describe('ssrfPinRefusalReason (SSRF pin gate)', () => {
     method: 'Network.requestWillBeSent',
     params: { requestId, loaderId: requestId, type: 'Document', request: { url }, ...(redirectResponse ? { redirectResponse } : {}) },
   });
-  const docResponse = (requestId, url, remoteIPAddress) => ({
+  const docResponse = (requestId, url, remoteIPAddress, delivery = {}) => ({
     method: 'Network.responseReceived',
-    params: { requestId, type: 'Document', response: { url, remoteIPAddress, status: 200 } },
+    params: { requestId, type: 'Document', response: { url, remoteIPAddress, status: 200, ...delivery } },
   });
 
   it('passes (null) when every main-frame hop dialed an allowed IP', () => {
@@ -229,6 +287,70 @@ describe('ssrfPinRefusalReason (SSRF pin gate)', () => {
       docResponse('R1', 'https://ex.com/a', ''),
     ], allow, 'https://ex.com/a');
     expect(reason).toMatch(/unverifiable address/);
+    // The refusal names the cause so the next occurrence is diagnosable.
+    expect(reason).toMatch(/no remoteIPAddress; fromServiceWorker=false, fromDiskCache=false, fromPrefetchCache=false, serviceWorkerResponseSource=none/);
+  });
+
+  it('refuses a service-worker main document that passed the fetch to the NETWORK (empty IP, no no-network flag)', () => {
+    // The exact shape that broke Stacker News: the SW mediated the document, so
+    // Chrome reports no peer IP even though a real h2 fetch happened. That is NOT
+    // a no-network delivery, so the fail-closed gate must still refuse — the fix
+    // is the `Network.setBypassServiceWorker` in navigateToUrlPinned, not a
+    // relaxation here.
+    const reason = ssrfPinRefusalReason([
+      docRequest('R1', 'https://pwa.example/'),
+      docResponse('R1', 'https://pwa.example/', '', { fromServiceWorker: true, serviceWorkerResponseSource: 'network' }),
+    ], allow, 'https://pwa.example/');
+    expect(reason).toMatch(/unverifiable address/);
+    expect(reason).toMatch(/fromServiceWorker=true/);
+    expect(reason).toMatch(/serviceWorkerResponseSource=network/);
+  });
+
+  it('allows a cache-served main-frame hop when another hop verified a real IP', () => {
+    // R1 loaded from the network and pinned a real address; a client-side nav
+    // (R2) was then answered from the disk cache — no connection was made, so
+    // there is nothing to pin and refusing would be a false positive.
+    const reason = ssrfPinRefusalReason([
+      docRequest('R1', 'https://ex.com/a'),
+      docResponse('R1', 'https://ex.com/a', '93.184.216.34'),
+      docRequest('R2', 'https://ex.com/b'),
+      docResponse('R2', 'https://ex.com/b', '', { fromDiskCache: true }),
+    ], allow, 'https://ex.com/a');
+    expect(reason).toBeNull();
+  });
+
+  it('allows a service-worker hop served from cache-storage when another hop verified a real IP', () => {
+    const reason = ssrfPinRefusalReason([
+      docRequest('R1', 'https://pwa.example/'),
+      docResponse('R1', 'https://pwa.example/', '93.184.216.34'),
+      docRequest('R2', 'https://pwa.example/offline'),
+      docResponse('R2', 'https://pwa.example/offline', '', { fromServiceWorker: true, serviceWorkerResponseSource: 'cache-storage' }),
+    ], allow, 'https://pwa.example/');
+    expect(reason).toBeNull();
+  });
+
+  it('refuses a cache-served main document when NO main-frame hop verified an IP', () => {
+    // A fully cache-served navigation pinned nothing at all — a cache flag can
+    // never stand in for a network check, so this still fails closed.
+    const reason = ssrfPinRefusalReason([
+      docRequest('R1', 'https://pwa.example/'),
+      docResponse('R1', 'https://pwa.example/', '', { fromServiceWorker: true, serviceWorkerResponseSource: 'cache-storage' }),
+    ], allow, 'https://pwa.example/');
+    expect(reason).toMatch(/unverifiable address/);
+    expect(reason).toMatch(/no other main-frame hop verified a network address/);
+  });
+
+  it('still refuses a disallowed sub-resource on a page whose main doc was cache-served', () => {
+    // The no-connection exception covers ONLY the main-frame empty-IP check;
+    // every real connection the page made is still verified by collectConnectedIps.
+    const reason = ssrfPinRefusalReason([
+      docRequest('R1', 'https://pwa.example/'),
+      docResponse('R1', 'https://pwa.example/', '93.184.216.34'),
+      docRequest('R2', 'https://pwa.example/app'),
+      docResponse('R2', 'https://pwa.example/app', '', { fromDiskCache: true }),
+      { method: 'Network.responseReceived', params: { requestId: 'R3', type: 'XHR', response: { url: 'https://pwa.example/latest/meta-data', remoteIPAddress: '169.254.169.254', status: 200 } } },
+    ], allow, 'https://pwa.example/');
+    expect(reason).toMatch(/disallowed address 169\.254\.169\.254/);
   });
 
   it('refuses a SUB-RESOURCE / fetch that dialed a blocked IP (rebind after page load)', () => {

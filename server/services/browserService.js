@@ -281,6 +281,44 @@ export async function navigateToUrl(url) {
 
 // ---------- CDP pinned navigation (SSRF: verify Chrome's ACTUAL connect IP) ----------
 
+// `serviceWorkerResponseSource` values that mean the service worker answered
+// from a local store instead of dialing out: its own Cache Storage, the HTTP
+// cache, or the worker's synthesized fallback response. `'network'` — the SW
+// passed the request THROUGH — is deliberately absent: that hop did make a
+// connection, it just isn't annotated with the peer address.
+const NO_NETWORK_SW_SOURCES = new Set(['cache-storage', 'http-cache', 'fallback-code']);
+
+// One main-frame hop from a CDP `Network.Response` (a `responseReceived`
+// payload or the `redirectResponse` riding on the next request).
+const toHop = (r) => ({
+  url: r.url || null,
+  remoteIPAddress: r.remoteIPAddress || '',
+  status: r.status ?? null,
+  fromServiceWorker: r.fromServiceWorker === true,
+  fromDiskCache: r.fromDiskCache === true,
+  fromPrefetchCache: r.fromPrefetchCache === true,
+  serviceWorkerResponseSource: r.serviceWorkerResponseSource || null,
+});
+
+// True when Chrome explicitly reported that this hop was served WITHOUT opening
+// a connection (disk cache, prefetch cache, or a service worker answering from
+// its own store). Such a hop has no peer IP to pin because there is no peer —
+// distinct from an empty `remoteIPAddress` with no explanation, which stays a
+// refusal. Exported for testing.
+export function hopMadeNoConnection(hop) {
+  if (!hop) return false;
+  return hop.fromDiskCache === true
+    || hop.fromPrefetchCache === true
+    || NO_NETWORK_SW_SOURCES.has(hop.serviceWorkerResponseSource);
+}
+
+// Human-readable cause for an empty-IP refusal, so the next occurrence is
+// diagnosable from the thrown message without a manual CDP replay.
+const describeHopDelivery = (hop) => `no remoteIPAddress; fromServiceWorker=${hop.fromServiceWorker === true}`
+  + `, fromDiskCache=${hop.fromDiskCache === true}`
+  + `, fromPrefetchCache=${hop.fromPrefetchCache === true}`
+  + `, serviceWorkerResponseSource=${hop.serviceWorkerResponseSource || 'none'}`;
+
 /**
  * Extract EVERY main-frame document network hop (each top-level navigation's
  * initial request + every HTTP redirect + final response) from a captured stream
@@ -299,8 +337,11 @@ export async function navigateToUrl(url) {
  * know, because Chrome resolves DNS itself (the rebinding TOCTOU).
  *
  * Pure + exported so the SSRF-pin decision is unit-testable without a live
- * browser. Returns `{ hops: [{ url, remoteIPAddress, status }], finalUrl,
- * mainRequestIds: string[], pendingMainRequestIds: string[] }`.
+ * browser. Returns `{ hops: [{ url, remoteIPAddress, status, fromServiceWorker,
+ * fromDiskCache, fromPrefetchCache, serviceWorkerResponseSource }], finalUrl,
+ * mainRequestIds: string[], pendingMainRequestIds: string[] }`. The delivery
+ * flags ride along so the gate can tell "Chrome dialed somewhere we can't see"
+ * apart from "Chrome made no connection at all" (see `hopMadeNoConnection`).
  * `pendingMainRequestIds` are top-level navigations that STARTED but produced no
  * `responseReceived` in the captured window — i.e. a navigation still in flight
  * whose final connection IP was never observed. The caller must fail closed on a
@@ -334,20 +375,12 @@ export function pickMainFrameHops(messages, topFrameId = null) {
         mainRequestIds.add(p.requestId);
       }
       if (mainRequestIds.has(p.requestId) && p.redirectResponse) {
-        hops.push({
-          url: p.redirectResponse.url || null,
-          remoteIPAddress: p.redirectResponse.remoteIPAddress || '',
-          status: p.redirectResponse.status ?? null,
-        });
+        hops.push(toHop(p.redirectResponse));
       }
     } else if (msg.method === 'Network.responseReceived') {
       if (mainRequestIds.has(p.requestId) && p.response) {
         respondedIds.add(p.requestId);
-        hops.push({
-          url: p.response.url || null,
-          remoteIPAddress: p.response.remoteIPAddress || '',
-          status: p.response.status ?? null,
-        });
+        hops.push(toHop(p.response));
         finalUrl = p.response.url || finalUrl;
       }
     }
@@ -406,9 +439,22 @@ export function ssrfPinRefusalReason(messages, verifyRemoteIp, url, topFrameId =
   const { hops, pendingMainRequestIds } = pickMainFrameHops(messages, topFrameId);
   if (!hops.length) return 'no main-frame document response was observed';
   // The main document must have a verifiable (present) connection IP — an empty
-  // one can't be checked, so fail closed.
+  // one can't be checked, so fail closed. The ONE exception is a hop Chrome
+  // explicitly flagged as served without a connection (disk/prefetch cache, or a
+  // service worker answering from its own store): there is no peer to pin, and
+  // refusing it false-positives every PWA. That exception only applies when
+  // another main-frame hop in the SAME navigation did verify a real IP — a
+  // navigation where nothing was ever verified is still a refusal, so a
+  // cache-flagged response can never stand in for a network check.
+  const anyHopVerified = hops.some((hop) => hop.remoteIPAddress);
   for (const hop of hops) {
-    if (!hop.remoteIPAddress) return `Chrome connected to an unverifiable address for ${hop.url || url}`;
+    if (hop.remoteIPAddress) continue;
+    const noConnection = hopMadeNoConnection(hop);
+    if (noConnection && anyHopVerified) continue;
+    const detail = noConnection
+      ? `${describeHopDelivery(hop)}; no other main-frame hop verified a network address`
+      : describeHopDelivery(hop);
+    return `Chrome connected to an unverifiable address for ${hop.url || url} (${detail})`;
   }
   // A top-level navigation that STARTED but produced no response was never
   // pinned — Chrome could be mid-connect to a private/metadata target.
@@ -448,7 +494,9 @@ export function ssrfPinRefusalReason(messages, verifyRemoteIp, url, topFrameId =
  * pre-navigation `dns.lookup` cannot — Chrome resolves DNS itself, so we open a
  * BLANK tab, subscribe to CDP Network events, THEN drive `Page.navigate`, keep
  * the subscription open across the settle window, and check the
- * `remoteIPAddress` Chrome actually dialed for each hop.
+ * `remoteIPAddress` Chrome actually dialed for each hop. The tab also bypasses
+ * the site's service worker so a PWA's main document is fetched by Chrome
+ * itself and therefore carries a pinnable peer IP.
  *
  * `verifyRemoteIp(ip)` returns false to refuse. On ANY refusal (unverifiable /
  * empty IP, a navigation that never yields a document response, or a top-level
@@ -491,6 +539,7 @@ export async function navigateToUrlPinned(url, {
   }
 
   const READ_ID = 3;
+  const BYPASS_SW_ID = 4;
   const { default: WebSocket } = await import('ws');
   const messages = [];
   const result = await new Promise((resolve) => {
@@ -539,6 +588,16 @@ export async function navigateToUrlPinned(url, {
 
     ws.on('open', () => {
       ws.send(JSON.stringify({ id: 1, method: 'Network.enable' }));
+      // Bypass the site's service worker for THIS tab. A SW-mediated main
+      // document carries no `remoteIPAddress` (Chrome can't annotate a response
+      // the SW handed it, even when the SW passed the fetch straight through to
+      // the network), which the empty-IP gate below rightly refuses — so every
+      // PWA was unreadable. With the SW bypassed Chrome fetches the document
+      // itself and reports the peer IP, and the fail-closed check verifies a real
+      // address instead of being relaxed. The tab is fresh and disposable, so
+      // this has no effect on the user's normal browsing; cookies are unaffected,
+      // so a signed-in session still applies.
+      ws.send(JSON.stringify({ id: BYPASS_SW_ID, method: 'Network.setBypassServiceWorker', params: { bypass: true } }));
       ws.send(JSON.stringify({ id: 2, method: 'Page.navigate', params: { url } }));
     });
     ws.on('message', (data) => {
@@ -549,6 +608,13 @@ export async function navigateToUrlPinned(url, {
       if (msg.id === 2) {
         if (msg.error) return finish({ ok: false, reason: msg.error.message || 'navigate rejected' });
         if (msg.result?.frameId) topFrameId = msg.result.frameId;
+        return;
+      }
+      if (msg.id === BYPASS_SW_ID) {
+        // Non-fatal: a Chrome that rejects the bypass just keeps its service
+        // worker in front of the document, and the empty-IP gate still fails
+        // closed — never under-verifies.
+        if (msg.error) console.warn(`⚠️ CDP setBypassServiceWorker rejected: ${msg.error.message || 'unknown error'}`);
         return;
       }
       if (msg.id === READ_ID) {
