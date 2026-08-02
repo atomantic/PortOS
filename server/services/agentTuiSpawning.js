@@ -690,6 +690,16 @@ export async function spawnTuiAgent({
         originalTask: task
       }).catch(err => emitLog('warn', `TUI worktree cleanup failed for ${agentId}: ${err.message}`, { agentId }));
 
+      // Point this task's retry at whatever the run left behind — the branch (or
+      // whole worktree) `cleanupWorktreeFn` just preserved because the run failed
+      // with commits on it. Without this the retry starts clean and redoes work
+      // that is already sitting on disk (#3368). Imported lazily for the same
+      // reason `cleanupWorktreeFn` is injected: pulling the cleanup graph in at
+      // module top level races this file's own init in the agentLifecycle cycle.
+      await import('./agentWorktreeCleanup.js')
+        .then(({ recordResumePointerIfRetrying }) => recordResumePointerIfRetrying({ agentId, task, success: cleanupSuccess }))
+        .catch(err => emitLog('warn', `TUI resume-pointer record failed for ${agentId}: ${err.message}`, { agentId }));
+
       if (agentData?.pid) unregisterSpawnedAgent(agentData.pid);
       activeAgents.delete(agentId);
       if (sessionId && shellService.getSession(sessionId)) shellService.killSession(sessionId);

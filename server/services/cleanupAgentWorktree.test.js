@@ -212,8 +212,8 @@ vi.mock('./runner.js', () => ({
 import { join } from 'path';
 import { existsSync as existsSyncMock } from 'fs';
 import { cleanupAgentWorktree, spawnMergeRecoveryTask, spawnReviewLoopFollowUp } from './subAgentSpawner.js';
-import { resolveResumePointer, resolveTaskResumePatch, recordTaskResumePointer, resumePointerMetadata } from './agentWorktreeCleanup.js';
-import { getAgent, addTask, updateTask } from './cos.js';
+import { resolveResumePointer, resolveTaskResumePatch, recordTaskResumePointer, recordResumePointerIfRetrying, resumePointerMetadata } from './agentWorktreeCleanup.js';
+import { getAgent, getTaskById, addTask, updateTask } from './cos.js';
 import { removeWorktree } from './worktreeManager.js';
 import { PATHS } from '../lib/fileUtils.js';
 import * as git from './git.js';
@@ -1218,6 +1218,83 @@ describe('resolveTaskResumePatch / recordTaskResumePointer', () => {
 
     await recordTaskResumePointer({ task, agentId: 'agent-x', agentMetadata });
 
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+});
+
+// The shared post-cleanup gate every spawn mode calls (#3368). Direct-CLI and TUI
+// runs used to skip this entirely, so a failed run's preserved branch was never
+// pointed at and its retry redid the work from scratch.
+describe('recordResumePointerIfRetrying', () => {
+  const agentMetadata = {
+    isWorktree: true, sourceWorkspace: '/repo',
+    worktreeBranch: DEAD_BRANCH, workspacePath: DEAD_TREE
+  };
+  const task = () => ({ id: 'task-1', taskType: 'user', metadata: {} });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    git.getDefaultBranch.mockResolvedValue('main');
+    git.getWorktreeBranches.mockResolvedValue(new Set());
+    git.isBranchMergedInto.mockResolvedValue(false);
+    git.getBranchComparison.mockResolvedValue({ ahead: 2, commits: [], stats: {} });
+    existsSyncMock.mockReturnValue(false);
+    getTaskById.mockResolvedValue({ id: 'task-1', status: 'pending' });
+    getAgent.mockResolvedValue({ metadata: agentMetadata });
+  });
+
+  // The direct-CLI / TUI shape: neither spawn path holds the agent record, so the
+  // helper has to read it for the worktree fields.
+  it('records the pointer for a failed run whose task is still pending', async () => {
+    await recordResumePointerIfRetrying({ agentId: 'agent-x', task: task(), success: false });
+
+    expect(getAgent).toHaveBeenCalledWith('agent-x');
+    expect(updateTask).toHaveBeenCalledWith('task-1', {
+      metadata: { existingBranch: DEAD_BRANCH, resumedFromAgentId: 'agent-x', resumeWorktreePath: null }
+    }, 'user');
+  });
+
+  // A task that exhausted its retry budget is waiting on a human — a pointer there
+  // is dead metadata `updateTask` has to strip again on the next terminal write.
+  it('records nothing when the task is already blocked', async () => {
+    getTaskById.mockResolvedValue({ id: 'task-1', status: 'blocked' });
+
+    await recordResumePointerIfRetrying({ agentId: 'agent-x', task: task(), success: false });
+
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('records nothing on a successful run', async () => {
+    await recordResumePointerIfRetrying({ agentId: 'agent-x', task: task(), success: true });
+
+    expect(getTaskById).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  // A task whose record vanished (deleted mid-run) still defaults to pending so the
+  // pointer isn't silently dropped.
+  it('treats an unreadable task record as pending', async () => {
+    getTaskById.mockRejectedValue(new Error('gone'));
+
+    await recordResumePointerIfRetrying({ agentId: 'agent-x', task: task(), success: false });
+
+    expect(updateTask).toHaveBeenCalled();
+  });
+
+  // The runner path already holds the agent record; passing it spares a re-read
+  // that would re-split the whole output.txt transcript.
+  it('uses caller-supplied agent metadata instead of re-reading the record', async () => {
+    await recordResumePointerIfRetrying({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
+
+    expect(getAgent).not.toHaveBeenCalled();
+    expect(updateTask).toHaveBeenCalled();
+  });
+
+  it('is a no-op without an agent id or a task id', async () => {
+    await recordResumePointerIfRetrying({ agentId: '', task: task(), success: false });
+    await recordResumePointerIfRetrying({ agentId: 'agent-x', task: { metadata: {} }, success: false });
+
+    expect(getTaskById).not.toHaveBeenCalled();
     expect(updateTask).not.toHaveBeenCalled();
   });
 });

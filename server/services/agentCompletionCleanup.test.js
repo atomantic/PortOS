@@ -25,13 +25,13 @@ vi.mock('./codeReview.js', () => ({ resolveReviewLoopOptions: vi.fn().mockResolv
 vi.mock('./agentWorktreeCleanup.js', () => ({
   cleanupAgentWorktree: vi.fn().mockResolvedValue([]),
   spawnMergeRecoveryTask: vi.fn(),
-  recordTaskResumePointer: vi.fn().mockResolvedValue(null),
+  recordResumePointerIfRetrying: vi.fn().mockResolvedValue({}),
 }));
 vi.mock('./taskPromptService.js', () => ({ getStagePrompt: vi.fn().mockResolvedValue('do stage work in {appName}') }));
 
 import { handlePipelineProgression, runAgentCompletionCleanup } from './agentCompletionCleanup.js';
-import { updateTask, addTask, reviveBlockedTask } from './cos.js';
-import { cleanupAgentWorktree } from './agentWorktreeCleanup.js';
+import { updateTask, addTask, reviveBlockedTask, getAgent } from './cos.js';
+import { cleanupAgentWorktree, recordResumePointerIfRetrying } from './agentWorktreeCleanup.js';
 
 const runningPipeline = (overrides = {}) => ({
   id: 'p1',
@@ -180,5 +180,40 @@ describe('runAgentCompletionCleanup — agentOwnsPR mirrors the prompt gate', ()
     // assumed for the claude-code ids anyway.
     expect((await cleanupCallFor({ providerId: 'claude-code' })).openPR).toBe(false);
     expect((await cleanupCallFor({ providerId: 'codex-tui' })).openPR).toBe(true);
+  });
+});
+
+// Runner mode shares the resume-pointer gate with the direct-CLI and TUI spawn
+// paths (#3368) — it must call the helper, not keep its own inline copy.
+describe('runAgentCompletionCleanup — resume pointer', () => {
+  const task = { id: 't', taskType: 'user', metadata: {} };
+
+  it('hands the verdict and the already-loaded agent metadata to the shared helper', async () => {
+    getAgent.mockResolvedValue({ metadata: { isWorktree: true, sourceWorkspace: '/repo' } });
+
+    await runAgentCompletionCleanup({
+      agentId: 'a1', task, agent: { providerId: 'codex' }, effectiveSuccess: false, outputBuffer: '',
+    });
+
+    expect(recordResumePointerIfRetrying).toHaveBeenCalledWith({
+      agentId: 'a1', task, success: false,
+      agentMetadata: { isWorktree: true, sourceWorkspace: '/repo' },
+    });
+    // After cleanup, so the pointer reflects what actually survived.
+    expect(cleanupAgentWorktree.mock.invocationCallOrder[0])
+      .toBeLessThan(recordResumePointerIfRetrying.mock.invocationCallOrder[0]);
+  });
+
+  // A missing agent record must reach the helper as an explicit null, not
+  // `undefined` — `undefined` is the helper's "go read it yourself" sentinel, and
+  // re-reading here would re-split the whole output.txt transcript for nothing.
+  it('passes null when the agent record could not be read', async () => {
+    getAgent.mockResolvedValue(null);
+
+    await runAgentCompletionCleanup({
+      agentId: 'a1', task, agent: { providerId: 'codex' }, effectiveSuccess: false, outputBuffer: '',
+    });
+
+    expect(recordResumePointerIfRetrying).toHaveBeenCalledWith(expect.objectContaining({ agentMetadata: null }));
   });
 });

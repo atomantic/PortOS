@@ -482,6 +482,51 @@ export async function recordTaskResumePointer({ task, agentId, agentMetadata }) 
 }
 
 /**
+ * The post-cleanup resume-pointer write, shared by every spawn mode (#3368).
+ *
+ * A failed agent whose branch — or whole worktree — survived cleanup leaves real
+ * work behind (see `preserveBranchWithCommits` above; a dirty tree aborts removal
+ * outright). Recording where it lives on the TASK is what makes its retry RESUME
+ * rather than restart from scratch — the behavior the agent-d2ae0352 incident
+ * exposed, where a run reaped 30s after its PR merged was re-dispatched to a fresh
+ * agent that began the shipped work over.
+ *
+ * Call this AFTER `cleanupAgentWorktree` so it reflects what actually survived, and
+ * from all three spawn sites — `spawnDirectly` (agentCliSpawning.js), the TUI
+ * `finish()` (agentTuiSpawning.js), and `handleAgentCompletion`
+ * (agentCompletionCleanup.js, runner mode). Only the runner path used to do it, so a
+ * failed direct-CLI/TUI run left a branch full of commits nothing would ever point a
+ * retry at.
+ *
+ * Only for a task that is actually going to RETRY. The failure verdict has already
+ * been persisted by `finalizeAgent` at this point, so the task's *persisted* status
+ * distinguishes a `pending` retry (wants the pointer) from a `blocked` task that
+ * exhausted its budget and is waiting on a human — a pointer there would be dead
+ * metadata that `updateTask` has to strip again on the next terminal write.
+ *
+ * `agentMetadata` is optional: pass it when the caller already holds the agent
+ * record (the runner path does, and re-reading it there would re-split the whole
+ * output.txt transcript), omit it and this reads the record itself. `undefined`
+ * means "not supplied" — a caller that genuinely has no metadata still gets the
+ * no-op it deserves, since `resolveTaskResumePatch` bails on a non-worktree run.
+ *
+ * @param {{agentId: string, task: object, success: boolean, agentMetadata?: object}} params
+ * @returns {Promise<object>} the patch that was written (empty when nothing was)
+ */
+export async function recordResumePointerIfRetrying({ agentId, task, success, agentMetadata }) {
+  if (success || !agentId || !task?.id) return {};
+
+  const { getTaskById, getAgent } = await import('./cos.js');
+  const persisted = await getTaskById(task.id).catch(() => null);
+  if ((persisted?.status ?? 'pending') !== 'pending') return {};
+
+  const metadata = agentMetadata === undefined
+    ? (await getAgent(agentId).catch(() => null))?.metadata
+    : agentMetadata;
+  return await recordTaskResumePointer({ task, agentId, agentMetadata: metadata });
+}
+
+/**
  * Spawn an internal follow-up task that drives the ordered multi-reviewer
  * review-and-fix loop on the just-created PR until the configured reviewer chain
  * is satisfied, then merges the PR. This is what makes the user-facing "review

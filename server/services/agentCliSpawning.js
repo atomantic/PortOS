@@ -919,6 +919,16 @@ export async function spawnDirectly({
         originalTask: task
       }).catch(err => console.error(`❌ CLI worktree cleanup failed for ${agentId}: ${err.message}`));
 
+      // Point this task's retry at whatever the run left behind — the branch (or
+      // whole worktree) `cleanupWorktreeFn` just preserved because the run failed
+      // with commits on it. Without this the retry starts clean and redoes work
+      // that is already sitting on disk (#3368). Imported lazily for the same
+      // reason `cleanupWorktreeFn` is injected: pulling the cleanup graph in at
+      // module top level races this file's own init in the agentLifecycle cycle.
+      await import('./agentWorktreeCleanup.js')
+        .then(({ recordResumePointerIfRetrying }) => recordResumePointerIfRetrying({ agentId, task, success: cleanupSuccess }))
+        .catch(err => console.error(`❌ CLI resume-pointer record failed for ${agentId}: ${err.message}`));
+
       unregisterSpawnedAgent(agentData?.pid || claudeProcess.pid);
       activeAgents.delete(agentId);
     }

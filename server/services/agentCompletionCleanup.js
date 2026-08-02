@@ -27,7 +27,7 @@ import * as jiraService from './jira.js';
 import * as git from './git.js';
 import { isTruthyMeta } from './agentState.js';
 import { resolveReviewLoopOptions } from './codeReview.js';
-import { cleanupAgentWorktree, spawnMergeRecoveryTask, recordTaskResumePointer } from './agentWorktreeCleanup.js';
+import { cleanupAgentWorktree, spawnMergeRecoveryTask, recordResumePointerIfRetrying } from './agentWorktreeCleanup.js';
 import { resolvePrCompletion } from '../lib/prDisposition.js';
 import { canTypeSlashCommands } from '../lib/slashdoInvocation.js';
 
@@ -342,32 +342,20 @@ export async function runAgentCompletionCleanup({ agentId, task, agent, effectiv
       originalTask: task
     });
 
-    // A failed agent whose branch — or whole worktree — survived cleanup leaves
-    // real work behind (see `preserveBranchWithCommits` in agentWorktreeCleanup.js;
-    // a dirty tree aborts removal outright). Record where it lives on the TASK so
-    // its retry RESUMES rather than restarting from scratch — the behavior the
-    // agent-d2ae0352 incident exposed, where a run reaped 30s after its PR merged
-    // was re-dispatched to a fresh agent that began the shipped work over.
+    // Point the task's retry at whatever this run left behind (branch and/or
+    // worktree) instead of letting it restart from scratch. Shared with the
+    // direct-CLI and TUI spawn paths — see `recordResumePointerIfRetrying` for why
+    // it runs after cleanup and only for a still-`pending` task.
     //
-    // Written here (not in cleanupAgentWorktree) because this is where the task
-    // record is in hand, and AFTER cleanup so it reflects what actually survived.
-    // `recordTaskResumePointer` no-ops when there's nothing to resume, in which
-    // case the metadata is left untouched and the retry starts clean.
-    // Only for a task that is actually going to RETRY. `finalizeAgent` has already
-    // written the failure verdict by now, so the persisted status distinguishes a
-    // `pending` retry (wants the pointer) from a `blocked` task that exhausted its
-    // budget and is waiting on a human (a pointer there would be dead metadata
-    // that `updateTask` has to strip again on the next terminal write).
-    if (!effectiveSuccess && task?.id) {
-      const { getTaskById } = await import('./cos.js');
-      const persisted = await getTaskById(task.id).catch(() => null);
-      if ((persisted?.status ?? 'pending') === 'pending') {
-        // `agentState` was fetched at the top of this function; its worktree fields
-        // are stamped once at registerAgent and never mutated, so re-reading the
-        // record here would only re-split the whole output.txt transcript.
-        await recordTaskResumePointer({ task, agentId, agentMetadata: agentState?.metadata });
-      }
-    }
+    // `agentState` was fetched at the top of this function; its worktree fields are
+    // stamped once at registerAgent and never mutated, so passing it spares the
+    // helper a re-read that would re-split the whole output.txt transcript.
+    await recordResumePointerIfRetrying({
+      agentId,
+      task,
+      success: effectiveSuccess,
+      agentMetadata: agentState?.metadata ?? null,
+    });
 
     if (cleanupWarnings?.length > 0) {
       const { getAgent: getAgentForResult } = await import('./cos.js');

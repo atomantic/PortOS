@@ -100,6 +100,13 @@ vi.mock('./git.js', () => ({
   resolveForgeTokenEnv: vi.fn().mockResolvedValue({}),
 }));
 
+// Lazily imported by finish()'s cleanup block to record a failed run's resume
+// pointer (#3368). Mocked so the test doesn't pull the real cleanup graph
+// (cos.js, worktreeManager, recoveryTasks) in behind it.
+vi.mock('./agentWorktreeCleanup.js', () => ({
+  recordResumePointerIfRetrying: vi.fn().mockResolvedValue({}),
+}));
+
 vi.mock('fs', () => ({
   // Default: no .agent-done sentinel on disk. The completion-sentinel test
   // overrides this to true. Re-set in beforeEach so it can't leak between tests.
@@ -184,6 +191,7 @@ import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { execFile } from 'child_process';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
+import { recordResumePointerIfRetrying } from './agentWorktreeCleanup.js';
 import { spawnTuiSessionViaRunner } from './cosRunnerClient.js';
 import * as shellService from './shell.js';
 import * as agentLifecycle from './agentFinalization.js';
@@ -621,6 +629,38 @@ describe('spawnTuiAgent runtime', () => {
       prCompletion: 'review-then-merge',
       skipMerge: true,
     }));
+  });
+
+  // A failed TUI run's branch is preserved by cleanup when it holds commits; without
+  // this call nothing ever points the retry at it and the work is redone from
+  // scratch (#3368). Runs after cleanup so it reflects what actually survived.
+  it('records a resume pointer after cleanup when the run failed', async () => {
+    vi.mocked(recordResumePointerIfRetrying).mockClear();
+    const cleanupWorktreeFn = vi.fn().mockResolvedValue(undefined);
+    const task = { id: 'task-1', description: 'do the thing', metadata: {} };
+    const spawnPromise = runSpawn({ task, helpers: { cleanupWorktreeFn, isTruthyMetaFn: (v) => !!v } });
+    await flushMicrotasks();
+
+    await capturedOnExit({ exitCode: 1, killed: false });
+    await spawnPromise;
+
+    expect(recordResumePointerIfRetrying).toHaveBeenCalledWith({ agentId: 'agent-1', task, success: false });
+    expect(cleanupWorktreeFn.mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(recordResumePointerIfRetrying).mock.invocationCallOrder[0]);
+  });
+
+  // The helper no-ops on success (unit-tested in cleanupAgentWorktree.test.js) —
+  // what this pins is that finish() hands it the real verdict, not a hardcoded
+  // false that would stamp pointers on every completed run.
+  it('passes the success verdict through on a clean run', async () => {
+    vi.mocked(recordResumePointerIfRetrying).mockClear();
+    const spawnPromise = runSpawn({ helpers: { cleanupWorktreeFn: vi.fn().mockResolvedValue(undefined), isTruthyMetaFn: (v) => !!v } });
+    await flushMicrotasks();
+
+    await capturedOnExit({ exitCode: 0, killed: false });
+    await spawnPromise;
+
+    expect(recordResumePointerIfRetrying).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
   });
 
   // ── 1. Successful idle-complete path ────────────────────────────────────────
