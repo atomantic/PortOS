@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { clearSettled, retypeSettled, typeSettled } from '../test/settledInput';
 
 const api = {
   getStackerNewsAccounts: vi.fn(),
@@ -102,8 +103,7 @@ describe('StackerNews', () => {
     api.updateStackerNewsAccount.mockResolvedValue({ ...accounts[0], monitoringIntervalMinutes: 20 });
     renderPage('/stacker-news/a1/accounts?snAccount=edit&snAccountTab=monitoring');
     const interval = await screen.findByLabelText('Monitoring interval (minutes)', { selector: '#edit-account-interval' });
-    await user.clear(interval);
-    await user.type(interval, '20');
+    await retypeSettled(user, interval, '20');
     await user.click(screen.getByRole('button', { name: 'Save account' }));
     await waitFor(() => expect(api.updateStackerNewsAccount).toHaveBeenCalledWith('a1', expect.objectContaining({ monitoringIntervalMinutes: 20 }), { silent: true }));
     // A successful save closes the drawer and clears its search params.
@@ -138,7 +138,7 @@ describe('StackerNews', () => {
     const user = userEvent.setup();
     renderPage('/stacker-news/a1/accounts?snAccount=edit&snAccountTab=stewardship');
     const tone = await screen.findByLabelText('Tone', { selector: '#edit-account-tone' });
-    await user.type(tone, 'measured');
+    await typeSettled(user, tone, 'measured');
     await user.click(drawerTab('Budgets'));
     expect(currentUrl()).toContain('snAccountTab=budgets');
     expect(screen.getByLabelText('Max/hour', { selector: '#edit-account-hour-budget' })).toBeInTheDocument();
@@ -149,7 +149,8 @@ describe('StackerNews', () => {
   it('reports an invalid field from an unmounted drawer tab and switches to it', async () => {
     const user = userEvent.setup();
     renderPage('/stacker-news/a1/accounts?snAccount=edit&snAccountTab=monitoring');
-    await user.clear(await screen.findByLabelText('Monitoring interval (minutes)', { selector: '#edit-account-interval' }));
+    const interval = await screen.findByLabelText('Monitoring interval (minutes)', { selector: '#edit-account-interval' });
+    await clearSettled(user, interval);
     await user.click(drawerTab('Budgets'));
     await user.click(screen.getByRole('button', { name: 'Save account' }));
     expect(await screen.findByText(/Monitoring interval \(minutes\) must be a whole number from 5 to 1440/)).toBeInTheDocument();
@@ -198,8 +199,7 @@ describe('StackerNews', () => {
     api.updateStackerNewsAccount.mockReturnValue(save.promise);
     renderPage('/stacker-news/a1/accounts?snAccount=edit&snAccountTab=monitoring');
     const interval = await screen.findByLabelText('Monitoring interval (minutes)', { selector: '#edit-account-interval' });
-    await user.clear(interval);
-    await user.type(interval, '20');
+    await retypeSettled(user, interval, '20');
     expect(screen.getByText(/Unsaved changes to @art_steward/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Check API identity' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Check browser identity' })).toBeDisabled();
@@ -214,8 +214,7 @@ describe('StackerNews', () => {
     const user = userEvent.setup();
     renderPage('/stacker-news/a1/accounts?snAccount=edit&snAccountTab=monitoring');
     const interval = await screen.findByLabelText('Monitoring interval (minutes)', { selector: '#edit-account-interval' });
-    await user.clear(interval);
-    await user.type(interval, '20');
+    await retypeSettled(user, interval, '20');
     // Closing keeps the draft (a 19-field edit should survive a detour), so the
     // dependent actions stay disabled until the draft is saved or discarded.
     await user.click(screen.getByRole('button', { name: 'Close' }));
@@ -274,8 +273,7 @@ describe('StackerNews', () => {
     api.updateStackerNewsAccount.mockReturnValue(save.promise);
     renderPage('/stacker-news/a1/accounts?snAccount=edit&snAccountTab=monitoring');
     const interval = await screen.findByLabelText('Monitoring interval (minutes)', { selector: '#edit-account-interval' });
-    await user.clear(interval);
-    await user.type(interval, '20');
+    await retypeSettled(user, interval, '20');
     await user.click(screen.getByRole('button', { name: 'Save account' }));
     // Selecting another account navigates by path, which drops the drawer params.
     await user.click(screen.getByRole('button', { name: /Personal/ }));

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { retypeSettled } from '../../test/settledInput';
 
 // Mock the media-jobs API so the queue renders a controlled job list without
 // the network. useAutoRefetch calls the fetcher on mount.
@@ -191,8 +192,7 @@ describe('MediaJobsQueue — Agy retry model field', () => {
 
     const input = await screen.findByLabelText('Agy model');
     expect(input.value).toBe('gemini-3.5-flash-high');
-    await user.clear(input);
-    await user.type(input, 'gemini-3.1-pro-high');
+    await retypeSettled(user, input, 'gemini-3.1-pro-high');
     await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
 
     expect(retryMediaJob).toHaveBeenCalledWith(

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ReviewerPicker from './ReviewerPicker';
+import { typeSettled } from '../../test/settledInput';
 
 describe('ReviewerPicker', () => {
   it('renders the selected reviewers in order with numbered badges', () => {
@@ -81,7 +82,7 @@ describe('ReviewerPicker', () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
     render(<ReviewerPicker reviewers={['copilot']} onChange={onChange} />);
-    await user.type(screen.getByLabelText('Add a GitHub reviewer username'), '@CodeReviewbot');
+    await typeSettled(user, screen.getByLabelText('Add a GitHub reviewer username'), '@CodeReviewbot');
     await user.click(screen.getByRole('button', { name: /^Add$/ }));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ usernames: ['CodeReviewbot'] }));
   });

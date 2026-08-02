@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { typeSettled } from '../../test/settledInput';
 
 vi.mock('../../services/apiSprites.js', () => ({
   generateSpriteReference: vi.fn(() => Promise.resolve({ jobId: 'job-1' })),
@@ -201,7 +202,7 @@ describe('ReferenceWorkflow workspace', () => {
     renderWorkflow();
     const turnaround = screen.getByRole('region', { name: 'Turnaround sheet' });
     const note = within(turnaround).getByPlaceholderText(/Correction for this attempt/);
-    await user.type(note, 'add the missing sleeve pocket');
+    await typeSettled(user, note, 'add the missing sleeve pocket');
     await user.click(within(turnaround).getByRole('button', { name: 'Re-process with note' }));
     expect(generateSpriteReference).toHaveBeenCalledWith('example-pioneer', {
       target: 'turnaround',

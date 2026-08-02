@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
+import { typeSettled } from '../../../test/settledInput';
 
 vi.mock('../../../services/api', () => ({
   submitCosAgentFeedback: vi.fn(),
@@ -107,7 +108,7 @@ describe('AgentCard feedback', () => {
     );
 
     await user.click(screen.getByRole('button', { name: 'Add feedback comment' }));
-    await user.type(screen.getByPlaceholderText('What made this work well or poorly?'), updatedAgent.feedback.comment);
+    await typeSettled(user, screen.getByPlaceholderText('What made this work well or poorly?'), updatedAgent.feedback.comment);
     await user.click(screen.getByRole('button', { name: 'Needs work' }));
 
     expect(api.submitCosAgentFeedback).toHaveBeenCalledWith(
@@ -136,7 +137,7 @@ describe('AgentCard feedback', () => {
     );
 
     await user.click(screen.getByRole('button', { name: 'Add feedback detail' }));
-    await user.type(screen.getByPlaceholderText('What made this work well or poorly?'), detailedAgent.feedback.comment);
+    await typeSettled(user, screen.getByPlaceholderText('What made this work well or poorly?'), detailedAgent.feedback.comment);
     await user.click(screen.getByRole('button', { name: 'Save detail' }));
 
     expect(api.submitCosAgentFeedback).toHaveBeenCalledWith(
