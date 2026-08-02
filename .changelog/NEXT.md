@@ -128,6 +128,7 @@
 ## Media Collections
 
 - **[issue-3311] A collection now records who created it instead of the grid guessing from its name.** The "auto-generated" ordering and badge shipped in #3283 reverse-engineered provenance on the client from four independent clues — a name prefix, an `Auto-…` description, a `uc-`/`sc-` id, or a universe/series link — so every new machine-created bucket quietly sorted as if you had made it yourself until someone remembered to extend that list. Collections are now stamped `auto` or `user` when they are created, existing ones were classified once by a migration, and the old clue-matching only runs for a record a peer on an older version has not stamped yet.
+- **[issue-3312] The "file this into a collection" picker got the same treatment as the grid.** The popover you actually use to file an image or video still listed every collection in raw order with the full prefixed name in each row, so filing something meant scrolling a wall of identical `Creative Director: …` entries in a 240px-wide dropdown. Rows now use the same ordering as `/media/collections` — collections holding something sort above the auto-generated empties — and each row lifts the shared creator prefix into a small badge so the part of the name that tells them apart gets the full row width. Search matches its words in any order instead of demanding one contiguous substring. Empty collections are still listed, since filing *into* an empty collection is the whole point.
 
 ## UI Consistency
 

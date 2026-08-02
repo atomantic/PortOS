@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import CollectionPickerShell from './CollectionPickerShell';
+import CollectionRowLabel from './CollectionRowLabel';
 
 // Single-target picker used by MediaCollectionDetail's bulk-action bar.
 // AddToCollectionMenu toggles membership for one item across many collections;
@@ -33,7 +34,7 @@ export default function BulkTargetPicker({
       className="w-full flex items-center gap-2 px-2 py-1.5 text-left text-[12px] text-gray-200 hover:bg-port-border rounded disabled:opacity-50"
       role="menuitem"
     >
-      <span className="break-words min-w-0 flex-1">{c.name}</span>
+      <CollectionRowLabel name={c.name} />
       <span className="text-[10px] text-gray-500 shrink-0">{c.items?.length ?? 0}</span>
     </button>
   ), [busy, onPick]);

@@ -4,6 +4,7 @@ import { Plus, Search } from 'lucide-react';
 import toast from '../ui/Toast';
 import { listMediaCollections, createMediaCollection } from '../../services/api';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosition.js';
+import { applyCollectionView } from '../../lib/mediaCollectionList.js';
 
 // Shared popover shell for the list-pick-or-create pickers:
 //
@@ -120,11 +121,22 @@ export default function CollectionPickerShell({
     return () => { cancelled = true; };
   }, [open, collectionsProp, loadItems]);
 
+  // Search + ordering come from the same helper the /media/collections grid uses
+  // (#3283), so the picker and the grid agree on what a query matches and what
+  // order rows land in — auto-generated empties sink to the bottom instead of
+  // burying the real collections in the raw list order (#3312).
+  //
+  // "Hide empty" is deliberately NOT applied here: filing an item INTO an empty
+  // collection is the picker's main job, so the empties are ordered last, never
+  // removed. The AND-token matcher replaces the old single-substring filter —
+  // it's a strict superset (every token of a query is itself a substring of that
+  // query), so nothing that matched before stops matching, and multi-word
+  // queries now match in any order, which matters once the shared
+  // "Creative Director: " prefix lives in a badge and users type only the tail.
   const filtered = useMemo(() => {
     if (!collectionsState) return null;
     const base = excludeId ? collectionsState.filter((c) => c.id !== excludeId) : collectionsState;
-    const q = query.trim().toLowerCase();
-    return q ? base.filter((c) => c.name.toLowerCase().includes(q)) : base;
+    return applyCollectionView(base, { query });
   }, [collectionsState, query, excludeId]);
 
   // Close on outside-click / Escape — placement and scroll/resize reflow are
@@ -176,7 +188,9 @@ export default function CollectionPickerShell({
   if (!open) return null;
 
   const showSearch = (collectionsState?.length || 0) >= SEARCH_THRESHOLD;
-  const list = filtered ?? collectionsState;
+  // `filtered` is null only while the list is still loading (same sentinel as
+  // `collectionsState`), so it is the single render source once loaded.
+  const list = filtered;
 
   return createPortal(
     <div
