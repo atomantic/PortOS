@@ -29,7 +29,7 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import CollapsibleText from '../components/ui/CollapsibleText';
 import MarkdownOutput from '../components/cos/MarkdownOutput';
 import { timeAgo, formatDateTime } from '../utils/formatters';
-import { markdownToPlainText } from '../utils/markdownText';
+import { markdownToPlainText, dropsMarkupWhenFlattened } from '../utils/markdownText';
 import { coalesce } from '../utils/coalesce';
 import * as api from '../services/api';
 import socket from '../services/socket';
@@ -695,7 +695,10 @@ function ReviewItem({ item, config, idScope, isEditing, onComplete, onDismiss, o
   // The page re-renders on every socket event and on every keystroke in the
   // quick-add input, and a body can be a multi-thousand-word agent prompt —
   // flatten once per description rather than once per render, per card.
-  const bodyPreview = useMemo(() => markdownToPlainText(item.description), [item.description]);
+  const body = useMemo(() => ({
+    preview: markdownToPlainText(item.description),
+    lossy: dropsMarkupWhenFlattened(item.description)
+  }), [item.description]);
 
   useEffect(() => {
     if (isEditing) {
@@ -771,15 +774,16 @@ function ReviewItem({ item, config, idScope, isEditing, onComplete, onDismiss, o
                   <CollapsibleText
                     id={`review-item-body-${idScope}-${item.id}`}
                     lines={3}
-                    text={bodyPreview}
+                    text={body.preview}
                     className="text-xs text-gray-500 mt-0.5"
                     expandedContent={<MarkdownOutput content={item.description} />}
                     expandedClassName="max-h-80 overflow-y-auto pr-1"
                     // Flattening drops links, images and tables, so a body that
                     // fits in three lines still needs a route to its rendered
                     // form — otherwise a short description holding a scan-report
-                    // link becomes permanently inert text.
-                    forceToggle={bodyPreview !== item.description}
+                    // link becomes permanently inert text. Markup loss only:
+                    // a body that merely lost a trailing newline gets no toggle.
+                    forceToggle={body.lossy}
                   />
                 )}
                 {item.metadata?.reportUrl && (

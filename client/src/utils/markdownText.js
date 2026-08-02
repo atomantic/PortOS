@@ -16,6 +16,17 @@
 // Fenced code blocks — keep the code, drop the fence lines (and any info string).
 const FENCE_LINE = /^\s*(?:`{3,}|~{3,}).*$/;
 
+// The whitespace tail both exports share. Kept as one function so the
+// "did the flatten drop markup?" predicate below can subtract exactly the
+// whitespace normalization `markdownToPlainText` performs — no more, no less.
+const collapseWhitespace = (text) => text
+  .replace(/[ \t]+/g, ' ')
+  .replace(/\n{2,}/g, '\n')       // collapse blank-line runs
+  .split('\n')
+  .map(line => line.trim())
+  .filter(Boolean)
+  .join('\n');
+
 /**
  * Flatten markdown source to a single plain-text string suitable for a clamped
  * preview. Returns `''` for anything that isn't a non-empty string.
@@ -38,7 +49,7 @@ export function markdownToPlainText(markdown) {
       .replace(/^\s*[-*+]\s+/, '• ')             // bullet markers
       .replace(/^\s*(\d+)[.)]\s+/, '$1. '));     // ordered-list markers
 
-  return lines
+  const flattened = lines
     .join('\n')
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, (_, alt) => (alt ? `[${alt}]` : '[image]'))
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')     // links → their text
@@ -56,15 +67,34 @@ export function markdownToPlainText(markdown) {
     //    `snakecase`. These bodies are stack traces and user-agent strings, so a
     //    corrupted-but-plausible preview is worse than an unstripped marker.
     //    Intra-word `*` emphasis IS conformant, so `*` needs no such gate.
-    .replace(/\*\*(?=\S)([^*\n]*?\S)\*\*/g, '$1')              // bold  **…**
-    .replace(/(^|\W)__(?=\S)([^_\n]*?\S)__(?!\w)/gm, '$1$2')   // bold  __…__
-    .replace(/\*(?=\S)([^*\n]*?\S)\*/g, '$1')                  // italic *…*
-    .replace(/(^|\W)_(?=\S)([^_\n]*?\S)_(?!\w)/gm, '$1$2')     // italic _…_
-    .replace(/~~(?=\S)([^~\n]*?\S)~~/g, '$1')                  // strikethrough
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n{2,}/g, '\n')                    // collapse blank-line runs
-    .split('\n')
-    .map(line => line.trim())
-    .filter(Boolean)
-    .join('\n');
+    //    `__…__` additionally requires interior whitespace, because the
+    //    word-boundary gate alone still eats the dunder identifiers these
+    //    bodies are full of — `__init__` → `init`, `__proto__` → `proto`. Real
+    //    `__strong__` prose is multi-word, and single-word bold in these bodies
+    //    is written `**…**` anyway, so the trade lands on the safe side: a
+    //    visible `__init__` beats a silently rewritten stack frame.
+    .replace(/\*\*(?=\S)([^*\n]*?\S)\*\*/g, '$1')                      // bold  **…**
+    .replace(/(^|\W)__(?=\S)([^_\n]*?[ \t][^_\n]*?\S)__(?!\w)/gm, '$1$2') // bold  __…__
+    .replace(/\*(?=\S)([^*\n]*?\S)\*/g, '$1')                          // italic *…*
+    .replace(/(^|\W)_(?=\S)([^_\n]*?\S)_(?!\w)/gm, '$1$2')             // italic _…_
+    .replace(/~~(?=\S)([^~\n]*?\S)~~/g, '$1');                         // strikethrough
+
+  return collapseWhitespace(flattened);
+}
+
+/**
+ * Did flattening `markdown` actually drop any markup — links, images, tables,
+ * emphasis, headings — as opposed to merely normalizing whitespace?
+ *
+ * A card previews the flattened text and hides the rendered markdown behind a
+ * disclosure. The disclosure has to appear for a SHORT body that still lost
+ * markup (a one-line description holding a scan-report link would otherwise be
+ * stranded as inert text), but must NOT appear for a body that lost nothing —
+ * comparing raw source to flattened output flags every trailing newline and
+ * double space, putting a "Show more" that reveals nothing on the most common
+ * short-body shape, on a page whose whole purpose is removing queue noise.
+ */
+export function dropsMarkupWhenFlattened(markdown) {
+  if (typeof markdown !== 'string' || !markdown) return false;
+  return markdownToPlainText(markdown) !== collapseWhitespace(markdown.replace(/\r\n?/g, '\n'));
 }
