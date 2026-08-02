@@ -40,9 +40,13 @@ export function markdownToPlainText(markdown) {
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, (_, alt) => (alt ? `[${alt}]` : '[image]'))
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')     // links → their text
     .replace(/`([^`]*)`/g, '$1')                 // inline code
-    .replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, '$2') // bold
-    .replace(/(\*|_)(?=\S)([^*_]*?\S)\1/g, '$2')     // italic
-    .replace(/~~(?=\S)([\s\S]*?\S)~~/g, '$1')        // strikethrough
+    // Emphasis spans are matched within a single line ([^\n], not [\s\S]). Real
+    // markdown emphasis doesn't span paragraphs, and a line-bounded lazy
+    // quantifier means an unclosed `**` in a multi-thousand-word agent body
+    // backtracks over one line instead of the whole document.
+    .replace(/(\*\*|__)(?=\S)([^\n]*?\S)\1/g, '$2')  // bold
+    .replace(/(\*|_)(?=\S)([^*_\n]*?\S)\1/g, '$2')   // italic
+    .replace(/~~(?=\S)([^\n]*?\S)~~/g, '$1')         // strikethrough
     .replace(/[ \t]+/g, ' ')
     .replace(/\n{2,}/g, '\n')                    // collapse blank-line runs
     .split('\n')

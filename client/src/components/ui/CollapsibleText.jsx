@@ -72,7 +72,7 @@ export default function CollapsibleText({
   return (
     <>
       {expanded && expandedContent ? (
-        <div id={id} className={`${className} ${expandedClassName}`}>{expandedContent}</div>
+        <div id={id} className={`break-words ${className} ${expandedClassName}`}>{expandedContent}</div>
       ) : (
         <p
           ref={ref}

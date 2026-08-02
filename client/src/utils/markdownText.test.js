@@ -27,6 +27,14 @@ describe('markdownToPlainText', () => {
       .toBe('see the report');
   });
 
+  it('scopes emphasis to a single line so a stray marker cannot swallow the body', () => {
+    // An unclosed `**` in an agent-authored body must leave the rest of the
+    // document intact (and must not backtrack across it): the marker on the
+    // first line stays, and a genuine pair on a later line still unwraps.
+    expect(markdownToPlainText('open **here\nplain line\n**closed** later'))
+      .toBe('open **here\nplain line\nclosed later');
+  });
+
   it('renders images as a bracketed alt placeholder rather than a URL', () => {
     expect(markdownToPlainText('![a diagram](/img/x.png)')).toBe('[a diagram]');
     expect(markdownToPlainText('![](/img/x.png)')).toBe('[image]');

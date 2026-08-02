@@ -692,6 +692,10 @@ function ReviewItem({ item, config, idScope, isEditing, onComplete, onDismiss, o
   const [editTitle, setEditTitle] = useState(item.title);
   const [editDescription, setEditDescription] = useState(item.description || '');
   const isPending = item.status === 'pending';
+  // The page re-renders on every socket event and on every keystroke in the
+  // quick-add input, and a body can be a multi-thousand-word agent prompt —
+  // flatten once per description rather than once per render, per card.
+  const bodyPreview = useMemo(() => markdownToPlainText(item.description), [item.description]);
 
   useEffect(() => {
     if (isEditing) {
@@ -763,7 +767,7 @@ function ReviewItem({ item, config, idScope, isEditing, onComplete, onDismiss, o
                   <CollapsibleText
                     id={`review-item-body-${idScope}-${item.id}`}
                     lines={3}
-                    text={markdownToPlainText(item.description)}
+                    text={bodyPreview}
                     className="text-xs text-gray-500 mt-0.5"
                     expandedContent={<MarkdownOutput content={item.description} />}
                     expandedClassName="max-h-80 overflow-y-auto pr-1"
