@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { Boxes, CheckCircle2, Download, AlertTriangle, Loader2, ExternalLink, ImagePlus, Sparkles, KeyRound } from 'lucide-react';
 import { getImageTo3dTargets, createImageTo3dModel, getImageTo3dModel, listImageTo3dModels } from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
@@ -10,6 +10,7 @@ import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import GlbViewer from '../components/media/GlbViewer';
 import HfTokenBanner, { GatedModelList, HF_SOURCE_LABEL } from '../components/imageGen/HfTokenBanner';
 import { useHfTokenStatus } from '../hooks/useHfTokenStatus';
+import useUrlParams from '../hooks/useUrlParams';
 import MediaImage from '../components/MediaImage';
 import { imageTo3dStatusMeta } from '../components/media/imageTo3dStatus';
 
@@ -179,7 +180,7 @@ function TargetCard({ target, onInstall }) {
 }
 
 export default function Media3D() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams, updateParams] = useUrlParams();
   // URL is the source of truth for what's open: the source image, the chosen
   // target, and (once the runner lands #2952) the generated mesh to preview.
   const imageFromRoute = searchParams.get('image') || '';
@@ -250,27 +251,16 @@ export default function Media3D() {
   }, [targets, targetFromRoute]);
 
   // Keep the URL honest: if a bare `/3d` resolved a default target, reflect
-  // it so the selection is shareable/reload-safe (URL as source of truth). The
-  // functional updater reads the freshest params, so this effect depends only on
-  // the resolved target — not on every unrelated `?image=`/`?glb=` change.
+  // it so the selection is shareable/reload-safe (URL as source of truth).
+  // `updateParams` reads the freshest params off a ref and is referentially
+  // stable, so this effect depends only on the resolved target — not on every
+  // unrelated `?image=`/`?glb=` change.
   useEffect(() => {
     if (!selectedTarget || targetFromRoute === selectedTarget.id) return;
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      next.set('target', selectedTarget.id);
-      return next;
-    }, { replace: true });
-  }, [selectedTarget, targetFromRoute, setSearchParams]);
+    updateParams({ target: selectedTarget.id }, { replace: true });
+  }, [selectedTarget, targetFromRoute, updateParams]);
 
-  const setParam = useCallback((key, value) => {
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      if (value) next.set(key, value); else next.delete(key);
-      return next;
-    });
-  }, [setSearchParams]);
-
-  const handlePick = (item) => { setParam('image', item.filename); setPickerOpen(false); };
+  const handlePick = (item) => { updateParams({ image: item.filename }); setPickerOpen(false); };
 
   // One poll tick against the in-flight record. Let a transient GET *throw* so
   // useAutoRefetch logs and retries next tick — a multi-minute render must not be
@@ -287,20 +277,20 @@ export default function Media3D() {
     // the fresh row, so re-fetching the whole list would be wasted I/O (the
     // repo's reactive-update convention).
     if (model.status === 'ready' && model.assetPath) {
-      setGenPercent(100); setParam('glb', model.assetPath); setGenerating(false); patchRecord(model);
+      setGenPercent(100); updateParams({ glb: model.assetPath }); setGenerating(false); patchRecord(model);
     } else if (model.status === 'failed' || model.status === 'canceled') {
       // model.error carries the runner's actionable message (e.g. the HF-auth guidance).
       setGenError(model.error || 'The render did not finish.'); setGenerating(false); patchRecord(model);
     }
     // else still draft/generating → the hook re-polls after POLL_INTERVAL_MS.
-  }, [modelId, setParam, mountedRef, patchRecord]);
+  }, [modelId, updateParams, mountedRef, patchRecord]);
 
   useAutoRefetch(pollTick, POLL_INTERVAL_MS, { pollOnly: true, enabled: generating && !!modelId });
 
   const handleGenerate = useCallback(async () => {
     if (!selectedImage || !selectedTarget) return;
     setGenError(null); setGenPercent(0); setModelId(null);
-    setParam('glb', ''); // clear any previously-previewed mesh
+    updateParams({ glb: '' }); // clear any previously-previewed mesh
     const created = await createImageTo3dModel(
       { name: nameFromImageFilename(selectedImage.filename), filename: selectedImage.filename, target: selectedTarget.id },
       { silent: true },
@@ -309,7 +299,7 @@ export default function Media3D() {
       return null;
     });
     if (created && mountedRef.current) { setModelId(created.id); setGenerating(true); patchRecord(created); }
-  }, [selectedImage, selectedTarget, setParam, mountedRef, patchRecord]);
+  }, [selectedImage, selectedTarget, updateParams, mountedRef, patchRecord]);
 
   // Why the Generate action is blocked, or null when it's ready to run. The runner
   // (POST create → on-device render → landed .glb) is wired, so the terminal state
@@ -378,7 +368,7 @@ export default function Media3D() {
                     <button
                       key={t.id}
                       type="button"
-                      onClick={() => setParam('target', t.id)}
+                      onClick={() => updateParams({ target: t.id })}
                       className={`rounded-lg border px-3 py-1.5 text-xs ${active
                         ? 'border-port-accent bg-port-accent/10 text-white'
                         : 'border-port-border bg-port-bg text-gray-300 hover:border-port-accent'}`}

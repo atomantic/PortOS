@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { Plus, FolderOpen, Inbox, Trash2, Image as ImageIcon, Film, Search } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
@@ -15,6 +15,7 @@ import { middleTruncate } from '../utils/formatters';
 import MediaImage from '../components/MediaImage';
 import SyncBadge from '../components/sync/SyncBadge';
 import { useSyncIntegrity, syncBadgeStatus } from '../hooks/useSyncIntegrity';
+import useUrlParams from '../hooks/useUrlParams';
 
 // Cap for the card title AFTER the auto-creator prefix moves to its badge.
 // Middle-truncating at this length keeps the trailing date/qualifier — the only
@@ -62,7 +63,7 @@ const resolveCover = (collection, imagesByName, videosById) => {
 
 export default function MediaCollections() {
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams, updateParams] = useUrlParams();
   const [collections, setCollections] = useState([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -156,22 +157,6 @@ export default function MediaCollections() {
   // auto-created collection has nothing to open.
   const sort = normalizeCollectionSort(searchParams.get('sort'));
   const hideEmpty = searchParams.get('empty') !== '1';
-
-  // react-router's functional `setSearchParams` updater is NOT latest-state: it
-  // hands back the params captured in the closure at render time. A debounced
-  // write armed before a sort/toggle change would therefore navigate with the
-  // pre-change snapshot and silently drop the param the user just set. Read the
-  // live params off a ref instead.
-  const paramsRef = useRef(searchParams);
-  paramsRef.current = searchParams;
-  const updateParams = useCallback((patch, { replace = false } = {}) => {
-    const next = new URLSearchParams(paramsRef.current);
-    for (const [k, v] of Object.entries(patch)) {
-      if (v == null || v === '') next.delete(k);
-      else next.set(k, v);
-    }
-    setSearchParams(next, { replace });
-  }, [setSearchParams]);
 
   // Two-stage search (same shape as Catalog): `query` is what the user is
   // typing and drives the client-side filter instantly; `mirroredQuery` is the

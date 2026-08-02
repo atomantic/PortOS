@@ -15,7 +15,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Sparkles, Plus, Search, FileInput, Loader2, RefreshCw, Wand2, X, LayoutGrid, Library, FolderPlus } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
@@ -33,6 +33,7 @@ import CatalogCard from '../components/catalog/CatalogCard';
 import CatalogAlbum from '../components/catalog/CatalogAlbum';
 import { catalogRefRoleForType } from '../lib/catalogTypes';
 import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
+import useUrlParams from '../hooks/useUrlParams';
 
 // All type-derived UI (chips, badge color, inline-form primary content
 // key/label, snippet fallback) flows from the merged registry (system +
@@ -61,26 +62,14 @@ export default function Catalog() {
   const { types: TYPES, getType } = useCatalogTypes();
 
   // ── URL-synced filter state (linkable routes per CLAUDE.md) ────────────────
-  const [searchParams, setSearchParams] = useSearchParams();
+  // `updateParams` merges a patch and drops keys set to '' so a cleared filter
+  // leaves the URL clean; `replace` avoids history spam while typing.
+  const [searchParams, updateParams] = useUrlParams();
   const selectedType = searchParams.get('type') || '';
   const selectedUniverse = searchParams.get('universe') || '';
   const selectedSeries = searchParams.get('series') || '';
   const selectedTag = searchParams.get('tag') || '';
   const view = searchParams.get('view') === 'albums' ? 'albums' : 'grid';
-
-  // Merge a patch into the URL search params, dropping keys set to '' so a
-  // cleared filter leaves the URL clean. `replace` avoids history spam while
-  // typing; discrete clicks push so Back returns to the prior filter.
-  const updateParams = useCallback((patch, { replace = false } = {}) => {
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      for (const [k, v] of Object.entries(patch)) {
-        if (v == null || v === '') next.delete(k);
-        else next.set(k, v);
-      }
-      return next;
-    }, { replace });
-  }, [setSearchParams]);
 
   // Two-stage search: `searchInput` is what the user is typing; `q` is the
   // debounced value that drives the list fetch (and is mirrored to the URL).
