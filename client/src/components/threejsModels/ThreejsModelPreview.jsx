@@ -26,7 +26,7 @@ const checkerboardStyle = {
   backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0',
 };
 
-function BufferGeometry({ definition }) {
+function SculptBufferGeometry({ definition }) {
   const geometry = useMemo(() => createSculptBufferGeometry(definition), [definition]);
   useEffect(() => () => geometry?.dispose(), [geometry]);
   if (!geometry) return null;
@@ -34,7 +34,7 @@ function BufferGeometry({ definition }) {
 }
 
 function Geometry({ definition }) {
-  if (needsSculptBufferGeometry(definition)) return <BufferGeometry definition={definition} />;
+  if (needsSculptBufferGeometry(definition)) return <SculptBufferGeometry definition={definition} />;
   switch (definition.type) {
     case 'box':
       return <boxGeometry args={[definition.width, definition.height, definition.depth]} />;
