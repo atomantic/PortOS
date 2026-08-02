@@ -33,8 +33,8 @@ describe('OutputTab staleness', () => {
 
     const { rerender } = render(<OutputTab agent={{ id: 'agent-a', currentAgentId: null }} />);
 
-    // Switch to agent B before A's fetch resolves — B's effect cleanup marks
-    // A's in-flight fetch cancelled.
+    // Switch to agent B before A's fetch resolves — B's fetch supersedes A's
+    // in the request sequence, so A's response is no longer allowed to write.
     rerender(<OutputTab agent={{ id: 'agent-b', currentAgentId: null }} />);
     await act(async () => {});
 
