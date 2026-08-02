@@ -74,7 +74,7 @@ export async function createProject(input) {
   const now = new Date().toISOString();
   // Auto-create a media collection scoped to this project. All segment renders
   // + the final stitched output land in here.
-  const collection = await createCollection({ name: `Creative Director: ${input.name}`, description: `Auto-created for project ${id}` });
+  const collection = await createCollection({ name: `Creative Director: ${input.name}`, description: `Auto-created for project ${id}`, source: 'auto' });
   const project = buildProjectRecord(input, { id, now, collectionId: collection.id });
   const all = await loadAll();
   all.push(project);

@@ -210,6 +210,9 @@ export async function ensureWorkMediaCollection(workId) {
   const collection = await createCollection({
     name: `Writers Room: ${manifest.title}`.slice(0, 80),
     description: `Auto-generated images for "${manifest.title}"`,
+    // Machine-provisioned bucket — this work's renders land here without the
+    // user ever asking for a collection (#3311).
+    source: 'auto',
   });
   await saveManifest(workId, { ...manifest, mediaCollectionId: collection.id, updatedAt: nowIso() });
   return collection;

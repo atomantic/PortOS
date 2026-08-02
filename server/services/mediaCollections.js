@@ -111,6 +111,24 @@ const sanitizeItem = (raw) => {
 const UNIVERSE_ID_MAX = 80;
 const SERIES_ID_MAX = 80;
 
+// Provenance stamp (#3311). `'auto'` = minted by a machine flow (Creative
+// Director project, Writers Room work, universe/series render bucket);
+// `'user'` = the person created it through the API. The grid uses it to sort
+// auto-generated empties last and to badge the card.
+//
+// **Absent is a THIRD state, not a synonym for `'user'`.** A record written
+// before this field shipped, or received from a peer still running an older
+// PortOS, carries no stamp at all — the client falls back to its marker
+// heuristic for those rather than mislabeling them user-made. So the sanitizer
+// OMITS the key entirely rather than defaulting it (same posture as
+// `sanitizeItem`'s optional `origin`), which also keeps unstamped records
+// byte-identical on the wire for peers that never learn about the field.
+// `scripts/migrations/220-backfill-media-collection-source.js` backfills
+// `'auto'` on existing local records so the heuristic stops being load-bearing
+// for anything this install already had.
+const COLLECTION_SOURCES = Object.freeze(['auto', 'user']);
+const sanitizeSource = (raw) => (COLLECTION_SOURCES.includes(raw) ? raw : null);
+
 const sanitizeCollection = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
   // Reject ids the store can't persist (path-segment allowlist) so a peer-
@@ -162,7 +180,21 @@ const sanitizeCollection = (raw) => {
   // happened at or after the last edit, so createdAt would make the tombstone
   // look far older than it is and skew LWW merges + the GC cutoff window.
   const deletedAt = deleted && typeof raw.deletedAt === 'string' ? raw.deletedAt : (deleted ? updatedAt : null);
-  return { id: raw.id, name, description, coverKey, universeId, seriesId, items, createdAt, updatedAt, deleted, deletedAt };
+  const source = sanitizeSource(raw.source);
+  return {
+    id: raw.id,
+    name,
+    description,
+    coverKey,
+    universeId,
+    seriesId,
+    ...(source ? { source } : {}),
+    items,
+    createdAt,
+    updatedAt,
+    deleted,
+    deletedAt,
+  };
 };
 
 // Storage-layout (type-level) schema version stamped on
@@ -223,13 +255,20 @@ const announceNewCollection = (id) => {
   autoSubscribeRecordToAllPeers('mediaCollection', id).catch(() => {});
 };
 
-export async function createCollection({ name, description = '' }) {
+// `source` defaults to 'user' because the HTTP POST route is the only caller
+// that doesn't pass it — a person clicking "New collection". Machine flows
+// (Creative Director, Writers Room) pass `source: 'auto'` explicitly. The route
+// schema doesn't accept `source`, so a client can't claim either stamp.
+export async function createCollection({ name, description = '', source = 'user' }) {
   // Service-layer guards mirror sanitizeCollection so a direct caller
   // (tests, future internal usage) can't persist a record that the next
   // listCollections() read would silently drop.
   const trimmedName = typeof name === 'string' ? name.trim() : '';
   if (!trimmedName || trimmedName.length > NAME_MAX_LENGTH) {
     throw makeErr('Collection name is required (1..' + NAME_MAX_LENGTH + ' chars)', ERR_VALIDATION);
+  }
+  if (!COLLECTION_SOURCES.includes(source)) {
+    throw makeErr(`source must be one of ${COLLECTION_SOURCES.join('|')}`, ERR_VALIDATION);
   }
   const trimmedDescription = typeof description === 'string'
     ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
@@ -242,6 +281,7 @@ export async function createCollection({ name, description = '' }) {
       name: trimmedName,
       description: trimmedDescription,
       coverKey: null,
+      source,
       items: [],
       createdAt: now,
       updatedAt: now,
@@ -265,6 +305,11 @@ export async function createCollection({ name, description = '' }) {
 // The legacy `universeId` parameter remains for callers that need the
 // best-effort backfill of an unlinked legacy bucket, but new code should
 // prefer the universeId-first helper.
+//
+// Records this mints are stamped `source: 'auto'` (#3311) like the other
+// provisioners: reaching this helper means a script or hook asked for a bucket,
+// which is not the same as a person creating one in the UI (that path is
+// `createCollection`, which defaults to `'user'`).
 export async function findOrCreateCollectionByName({ name, description = '', universeId = null }) {
   const trimmed = typeof name === 'string' ? name.trim() : '';
   if (!trimmed || trimmed.length > NAME_MAX_LENGTH) {
@@ -332,6 +377,8 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
       description: trimmedDescription,
       coverKey: null,
       universeId: normalizedUniverseId,
+      // Programmatic provisioner — see the docstring above (#3311).
+      source: 'auto',
       items: [],
       createdAt: now,
       updatedAt: now,
@@ -475,6 +522,8 @@ export async function findOrCreateUniverseCollection({ universeId, universeName,
       description: trimmedDescription,
       coverKey: null,
       universeId: normalizedUniverseId,
+      // Machine-provisioned render bucket — never a user-made collection (#3311).
+      source: 'auto',
       items: [],
       createdAt: now,
       updatedAt: now,
@@ -531,6 +580,8 @@ export async function findOrCreateSeriesCollection({ seriesId, seriesName, descr
       description: trimmedDescription,
       coverKey: null,
       seriesId: normalizedSeriesId,
+      // Machine-provisioned render bucket — never a user-made collection (#3311).
+      source: 'auto',
       items: [],
       createdAt: now,
       updatedAt: now,
@@ -1007,10 +1058,23 @@ export async function mergeMediaCollectionsFromSync(remoteCollections, { source 
       const coverKey = !scalarDeleted && scalarSource.coverKey && presentKeys.has(scalarSource.coverKey)
         ? scalarSource.coverKey
         : null;
+      // Provenance is STICKY, not LWW (#3311). A peer running a PortOS that
+      // predates the field strips `source` from the wire entirely, so a
+      // remote-wins scalar overwrite must not erase a stamp we already hold —
+      // that would silently demote a machine-made bucket back to the client's
+      // marker heuristic (or worse, to "user-made") on every sync from an older
+      // machine. Prefer the LWW winner's stamp, then whichever side has one,
+      // then leave it unstamped. `source` is excluded from the conflict
+      // journal's scalar projection (MEDIA_COLLECTION_SCALAR_FIELDS), so
+      // adopting it here can't churn base hashes.
+      const nextSource = sanitizeSource(scalarSource.source)
+        || sanitizeSource(local.source)
+        || sanitizeSource(sanitized.source);
       const next = {
         ...local,
         name: scalarSource.name,
         description: scalarSource.description,
+        ...(nextSource ? { source: nextSource } : {}),
         coverKey: scalarDeleted ? null : coverKey,
         universeId: scalarDeleted ? null : scalarSource.universeId,
         seriesId: scalarDeleted ? null : scalarSource.seriesId,

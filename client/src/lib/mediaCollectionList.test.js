@@ -64,6 +64,25 @@ describe('isAutoCollection', () => {
     expect(isAutoCollection(unsorted)).toBe(false);
     expect(isAutoCollection(null)).toBe(false);
   });
+
+  it('prefers the server-stamped source over the markers in both directions', () => {
+    // source:'auto' classifies a record no marker would have caught — the whole
+    // point of stamping provenance server-side (#3311).
+    expect(isAutoCollection({ id: 'x', name: 'Nightly Renders', source: 'auto' })).toBe(true);
+    // source:'user' wins over a name that merely looks auto-generated.
+    expect(isAutoCollection({ id: 'x', name: 'Universe: My Own Bucket', source: 'user' })).toBe(false);
+    expect(isAutoCollection({ id: 'x', name: 'Foo', universeId: 'u1', source: 'user' })).toBe(false);
+    // Synthetic still short-circuits ahead of any stamp.
+    expect(isAutoCollection({ ...unsorted, source: 'auto' })).toBe(false);
+  });
+
+  it('falls back to the markers when a peer sends no source at all', () => {
+    // An older peer strips the field; absent must NOT read as 'user'.
+    expect(isAutoCollection({ id: 'uc-universe-1', name: 'Universe: Example' })).toBe(true);
+    expect(isAutoCollection({ id: 'x', name: 'Concept Art', source: undefined })).toBe(false);
+    // A garbage value is not a stamp either — fall through to the markers.
+    expect(isAutoCollection({ id: 'x', name: 'Writers Room: The Deep', source: 'nonsense' })).toBe(true);
+  });
 });
 
 describe('collectionItemCount', () => {

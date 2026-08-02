@@ -120,3 +120,7 @@
 ## Creative Director
 
 - **[issue-3287] The developer smoke test no longer leads the Creative Director action bar.** `Run smoke test` sat in the leading position of a four-button header where the eye lands first, named a mechanism rather than an outcome, and consumed one of the seven interactive elements that fit above the fold on a phone — despite spending real render time on every click. It now lives behind a "…" menu beside `Model defaults`, reads `Render a 6s test clip` so the cost is legible before you commit, and asks for an inline confirmation naming what it will spend. The header bar reads `New directive` · `Model defaults` · `New project`.
+
+## Media Collections
+
+- **[issue-3311] A collection now records who created it instead of the grid guessing from its name.** The "auto-generated" ordering and badge shipped in #3283 reverse-engineered provenance on the client from four independent clues — a name prefix, an `Auto-…` description, a `uc-`/`sc-` id, or a universe/series link — so every new machine-created bucket quietly sorted as if you had made it yourself until someone remembered to extend that list. Collections are now stamped `auto` or `user` when they are created, existing ones were classified once by a migration, and the old clue-matching only runs for a record a peer on an older version has not stamped yet.

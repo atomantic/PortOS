@@ -15,7 +15,12 @@ import { tokenizeQuery, matchHaystack } from './mediaSearch.js';
 // make, paired with the badge label the card renders above the title instead
 // of inside it — otherwise every auto-generated card shows the same clipped
 // prefix and the trailing project name/date that tells them apart is what gets
-// cut. Keep in sync with the server-side creators: `universeCollectionNameFor`
+// cut. This list drives PRESENTATION (the badge) plus the provenance fallback
+// for records an older peer sent without a `source` stamp — the classification
+// itself comes from `collection.source` now (#3311), so a new auto-creator only
+// has to stamp `source: 'auto'` server-side, not extend this list (it should
+// still add its prefix here if it wants the badge). Keep in sync with the
+// server-side creators: `universeCollectionNameFor`
 // / `seriesCollectionNameFor` in `server/services/mediaCollections.js`,
 // `server/services/creativeDirector/projects{DB,File}.js`, and
 // `server/services/writersRoom/local.js`.
@@ -59,14 +64,26 @@ export function splitCollectionName(name) {
 
 /**
  * True when a collection was created by an automated flow rather than by the
- * user. Any one of the four independent markers is sufficient — an install can
- * hold records from before a given marker existed, so this must not require
- * all of them to agree.
+ * user.
+ *
+ * The server stamps provenance at mint time (`source: 'auto' | 'user'`, #3311)
+ * and migration 220 backfilled existing records, so the stamp is authoritative
+ * whenever it is present — a new auto-creator no longer has to remember to
+ * extend a client-side list.
+ *
+ * An ABSENT `source` is a third state, NOT a synonym for `'user'`: the record
+ * came from a federated peer still running a PortOS that predates the field (or
+ * was restored from a pre-migration backup). Those fall back to the marker
+ * heuristic below, where any ONE of the four independent markers is sufficient
+ * — an install can hold records from before a given marker existed, so this
+ * must not require all of them to agree.
  * @param {object} collection
  * @returns {boolean}
  */
 export function isAutoCollection(collection) {
   if (!collection || collection.synthetic) return false;
+  if (collection.source === 'auto') return true;
+  if (collection.source === 'user') return false;
   if (splitCollectionName(collection.name).badge) return true;
   const description = typeof collection.description === 'string' ? collection.description : '';
   if (AUTO_DESCRIPTION_PREFIXES.some((p) => description.startsWith(p))) return true;

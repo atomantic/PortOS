@@ -124,7 +124,7 @@ export async function listProjectIds({ includeDeleted = false } = {}) {
 export async function createProject(input) {
   const id = `cd-${randomUUID()}`;
   const now = new Date().toISOString();
-  const collection = await createCollection({ name: `Creative Director: ${input.name}`, description: `Auto-created for project ${id}` });
+  const collection = await createCollection({ name: `Creative Director: ${input.name}`, description: `Auto-created for project ${id}`, source: 'auto' });
   const project = buildProjectRecord(input, { id, now, collectionId: collection.id });
   await persist(query, project);
   console.log(`🎬 Created Creative Director project: ${id} (${input.name})`);
