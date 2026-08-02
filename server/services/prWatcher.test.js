@@ -354,6 +354,18 @@ describe('checkPullRequests', () => {
     expect(r.reason).toBe('pr-list-failed');
   });
 
+  it('reports pr-list-failed for a zero-exit gh that emits a non-array', async () => {
+    // Degrading unreadable output to [] would clear lastError and record a quiet
+    // poll for a page we never parsed.
+    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'o/r' });
+    execGhMock
+      .mockResolvedValueOnce('main')
+      .mockResolvedValueOnce('{"message":"Not Found"}');
+    const r = await checkPullRequests(app, { authorFilter: 'any' });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('pr-list-failed');
+  });
+
   it('bails when the default branch cannot be resolved', async () => {
     getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'o/r' });
     execGhMock.mockResolvedValueOnce(''); // repo view → empty

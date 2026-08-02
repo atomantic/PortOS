@@ -499,16 +499,22 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
  *   and the caller must retry rather than park on it (#3358).
  */
 export async function reconcile(repoPath = PATHS.root, { cleanup = true, activeAgentIds = new Set() } = {}) {
-  // Every classification below depends on PR state, so an unreadable forge makes
-  // the whole pass a guess. Skip with one line rather than report a quiet repo.
-  // Probed against THIS repo's API host (enterprise-correct) — a bare probe
-  // would gate an enterprise checkout on github.com's health. A non-GitHub
-  // origin has no host to probe and falls through to gh's default, which is the
-  // pre-existing behavior for the `new Map()` no-PR-state path below.
+  // On a GitHub repo every classification below depends on PR state, so an
+  // unreadable forge makes the whole pass a guess — skip with one line rather
+  // than report a quiet repo. Probed against THIS repo's API host
+  // (enterprise-correct): a bare probe would gate an enterprise checkout on
+  // github.com's health.
+  //
+  // A NON-GitHub repo (GitLab, no origin) is deliberately not gated: it has no
+  // `gh` PR state to lose — `getOpenPrsByHead` returns an empty Map by design —
+  // and gating it on a `gh` probe that will never pass would permanently block
+  // the git-only merged-branch cleanup those repos still benefit from.
   const origin = await getOriginInfo(repoPath).catch(() => null);
-  const forge = await ensureForgeReachable('branch-reconcile', { hostname: githubApiHost(origin?.host) });
-  if (!forge.ok) {
-    return { defaultBranch: null, cleaned: [], inFlight: [], wip: [], skipped: [], forgeUnavailable: true, forgeStatus: forge.status };
+  if (githubRepoSpec(origin)) {
+    const forge = await ensureForgeReachable('branch-reconcile', { hostname: githubApiHost(origin.host) });
+    if (!forge.ok) {
+      return { defaultBranch: null, cleaned: [], inFlight: [], wip: [], skipped: [], forgeUnavailable: true, forgeStatus: forge.status };
+    }
   }
 
   const defaultBranch = await getDefaultBranch(repoPath).catch(() => 'main') || 'main';

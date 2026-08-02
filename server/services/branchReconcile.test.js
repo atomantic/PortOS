@@ -64,6 +64,12 @@ import { getOriginInfo } from '../lib/gitRemote.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks keeps implementations, so restore the default GitHub origin —
+  // a case that swaps in a GitLab/origin-less remote would otherwise leak into
+  // every test after it.
+  getOriginInfo.mockResolvedValue({
+    hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'atomantic/PortOS'
+  });
   git.getDefaultBranch.mockResolvedValue('main');
   git.deleteBranch.mockResolvedValue({ branch: 'x', results: { local: 'deleted' } });
   wt.forceRemoveWorktreeDir.mockResolvedValue(undefined);
@@ -491,6 +497,22 @@ describe('unreachable forge (#3358)', () => {
     ensureForgeReachableMock.mockResolvedValueOnce({ ok: false, status: 'not-authenticated', detail: null });
     await reconcile('/repo');
     expect(ensureForgeReachableMock).toHaveBeenCalledWith('branch-reconcile', { hostname: 'github.acme-corp.example' });
+  });
+
+  it('does not gate a non-GitHub repo on the gh probe — it has no gh PR state to lose', async () => {
+    // A GitLab or origin-less checkout would otherwise be blocked forever from
+    // the git-only merged-branch cleanup by a probe that can never pass.
+    getOriginInfo.mockResolvedValue({ hasOrigin: true, isGithub: false, host: 'gitlab.example', fullName: 'g/p' });
+    git.getBranches.mockResolvedValue([
+      { name: 'feature/x', isDefault: false, current: false, tracking: 'origin/feature/x', merged: true }
+    ]);
+    wt.listWorktrees.mockResolvedValue([]);
+    git.isBranchMergedInto.mockResolvedValue(true);
+
+    const res = await reconcile('/repo');
+    expect(ensureForgeReachableMock).not.toHaveBeenCalled();
+    expect(res.forgeUnavailable).toBeUndefined();
+    expect(res.cleaned).toEqual(['feature/x']);
   });
 
   it('skips the whole cycle (never touches git) when the gh probe is not ok', async () => {

@@ -27,7 +27,7 @@ import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { registerAgent, updateAgent, completeAgent } from './cosAgents.js';
-import { getConfig, updateTask, getTaskById } from './cos.js';
+import { getConfig, updateTask, getTaskById, getAgent as getAgentRecord } from './cos.js';
 import { spawnAgentViaRunner, getRunnerHealth } from './cosRunnerClient.js';
 import { MAX_TOTAL_SPAWNS, normalizeReviewers } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
@@ -898,10 +898,18 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     // the run that was told to open its own PR is exactly the run we check for
     // one. When PortOS owns it the PR is created by that cleanup, i.e. AFTER
     // finalize, so verifying here would fail every correct run.
+    //
+    // Read off the PERSISTED record, not the in-memory `runnerAgents` entry: the
+    // entry carries only `providerId` (and a post-restart survivor recovered by
+    // syncRunnerAgents carries even less), so a lean `--bare` runner agent would
+    // read as slashdo-capable — and be downgraded for not opening a PR PortOS
+    // was about to open for it. registerAgent writes both fields into metadata
+    // precisely so this question survives a restart.
+    const persistedAgent = await getAgentRecord(agentId).catch(() => null);
     const runnerAgentOwnsPR = isTruthyMeta(task?.metadata?.openPR) && canTypeSlashCommands({
-      providerId: agent.providerId,
-      providerCommand: agent.providerCommand,
-      leanMode: agent.leanMode === true,
+      providerId: persistedAgent?.metadata?.providerId ?? agent.providerId,
+      providerCommand: persistedAgent?.metadata?.providerCommand ?? null,
+      leanMode: persistedAgent?.metadata?.leanMode === true,
     });
 
     // Extract pipeline output summary before completion writes metadata to disk

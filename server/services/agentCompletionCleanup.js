@@ -318,10 +318,14 @@ export async function runAgentCompletionCleanup({ agentId, task, agent, effectiv
     // `leanMode` are persisted on the agent record for this; a pre-upgrade record
     // carries neither, and a blank command reads as `claude` — which is what the
     // old id allowlist effectively assumed for the claude-code ids anyway.
+    // Read off the PERSISTED record first (#3358): the in-memory `runnerAgents`
+    // entry carries only `providerId`, so a lean `--bare` or path-configured
+    // provider would be misjudged here — and finalizeAgent's PR verification
+    // keys on the same question, so the two must resolve it identically.
     const agentOwnsPR = taskOpenPR && canTypeSlashCommands({
-      providerId: agent.providerId,
-      providerCommand: agent.providerCommand,
-      leanMode: agent.leanMode === true,
+      providerId: agentState?.metadata?.providerId ?? agent.providerId,
+      providerCommand: agentState?.metadata?.providerCommand ?? agent.providerCommand ?? null,
+      leanMode: (agentState?.metadata?.leanMode ?? agent.leanMode) === true,
     });
     // Merge per-task reviewer metadata with the user's Code Review Defaults
     // (AI Providers → Code Review Defaults panel). Settings I/O is cached

@@ -22,6 +22,16 @@ vi.mock('./github.js', () => ({
   ensureForgeReachable: vi.fn(async () => ({ ok: true, status: 'ok' })),
 }));
 
+const findMergeRequestForBranchMock = vi.fn();
+vi.mock('./gitlab.js', () => ({
+  findMergeRequestForBranch: (...args) => findMergeRequestForBranchMock(...args),
+}));
+
+const resolveForgeForRepoMock = vi.fn(async () => ({ cli: 'gh' }));
+vi.mock('./git.js', () => ({
+  resolveForgeForRepo: (...args) => resolveForgeForRepoMock(...args),
+}));
+
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
 
 const completeAgentMock = vi.fn();
@@ -88,6 +98,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   execGitMock.mockResolvedValue({ stdout: 'claim/issue-1\n', stderr: '', exitCode: 0 });
   findPullRequestForBranchMock.mockResolvedValue({ status: 'found', number: 7, url: 'https://example.com/pr/7' });
+  findMergeRequestForBranchMock.mockResolvedValue({ status: 'found', number: 12, url: 'https://example.com/mr/12' });
+  resolveForgeForRepoMock.mockResolvedValue({ cli: 'gh' });
 });
 
 describe('verifyPrClaim (#3358)', () => {
@@ -118,6 +130,24 @@ describe('verifyPrClaim (#3358)', () => {
     // The two are deliberately distinct: one is the agent's miss, the other the
     // machine's, and only the latter is treated as environmental by learning.
     expect(verdict.category).not.toBe(PR_MISSING_CATEGORY);
+  });
+
+  it('asks glab on a GitLab repo — asking gh there would fail every correct MR run', async () => {
+    onBranch('claim/issue-1');
+    resolveForgeForRepoMock.mockResolvedValue({ cli: 'glab' });
+    const verdict = await verifyPrClaim({ task: prTask(), workspacePath: '/w', success: true, prExpected: true });
+    expect(verdict.ok).toBe(true);
+    expect(findMergeRequestForBranchMock).toHaveBeenCalledWith('claim/issue-1', '/w');
+    expect(findPullRequestForBranchMock).not.toHaveBeenCalled();
+  });
+
+  it('names the GitLab noun when an MR is missing', async () => {
+    onBranch('claim/issue-1');
+    resolveForgeForRepoMock.mockResolvedValue({ cli: 'glab' });
+    findMergeRequestForBranchMock.mockResolvedValue({ status: 'none', number: null, url: null, detail: null });
+    const verdict = await verifyPrClaim({ task: prTask(), workspacePath: '/w', success: true, prExpected: true });
+    expect(verdict.category).toBe(PR_MISSING_CATEGORY);
+    expect(verdict.message).toMatch(/merge request/);
   });
 
   it('does not check when PortOS (not the agent) owns PR creation', async () => {

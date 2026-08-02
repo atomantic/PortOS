@@ -135,9 +135,14 @@ async function listOpenPullRequests(repoSpec, baseBranch) {
   // otherwise throw a SyntaxError, breaking this module's "never throws"
   // contract and aborting the scheduler tick (the generator calls
   // checkPullRequests with no try/catch). Degrade to the pr-list-failed path.
+  // Anything that isn't an array is output we could not READ, not an empty
+  // repo — degrading it to [] would clear the watcher's lastError and record a
+  // quiet poll for a page we never parsed (#3358).
   const parsed = safeJSONParse(raw, null);
-  if (parsed === null) return null;
-  if (!Array.isArray(parsed)) return [];
+  if (!Array.isArray(parsed)) {
+    console.error(`❌ pr-watcher: gh pr list returned unreadable output for ${repoSpec} — deferring this cycle`);
+    return null;
+  }
   return parsed.map((pr) => ({
     number: pr.number,
     title: pr.title || '',

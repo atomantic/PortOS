@@ -219,6 +219,10 @@ async function resolveWorkspaceBranch(workspacePath) {
  * `cleanupAgentWorktree` AFTER finalize, so checking here would report every
  * correct run as missing.
  *
+ * Forge-aware: a GitLab repo is asked via `glab mr list`, mirroring the `gh`/
+ * `glab` split `createPR` already makes. Asking `gh` about a GitLab remote
+ * would fail and record every correct MR run as `forge-unreachable`.
+ *
  * Three outcomes, never collapsed:
  *   - `ok: true`  — a PR exists, or there was nothing to check
  *   - `ok: false, category: 'pr-missing'` — the forge answered: no PR
@@ -236,22 +240,28 @@ export async function verifyPrClaim({ task, workspacePath, success, prExpected }
     // verified — say nothing rather than invent a failure.
     return { ok: true, branch: null };
   }
-  const { findPullRequestForBranch } = await import('./github.js');
-  const found = await findPullRequestForBranch(branch, { cwd: workspacePath });
+
+  const { resolveForgeForRepo } = await import('./git.js');
+  const { cli } = await resolveForgeForRepo(workspacePath).catch(() => ({ cli: 'gh' }));
+  const found = cli === 'glab'
+    ? await (await import('./gitlab.js')).findMergeRequestForBranch(branch, workspacePath)
+    : await (await import('./github.js')).findPullRequestForBranch(branch, { cwd: workspacePath });
+
+  const noun = cli === 'glab' ? 'merge request' : 'pull request';
   if (found.status === 'found') return { ok: true, branch };
   if (found.status === 'none') {
     return {
       ok: false,
       branch,
       category: PR_MISSING_CATEGORY,
-      message: `Agent reported success but no pull request exists for branch ${branch}`
+      message: `Agent reported success but no ${noun} exists for branch ${branch}`
     };
   }
   return {
     ok: false,
     branch,
     category: FORGE_UNREACHABLE_CATEGORY,
-    message: `Could not confirm a pull request for branch ${branch} — the forge is unreachable${found.detail ? ` (${String(found.detail).split('\n')[0].slice(0, 120)})` : ''}`
+    message: `Could not confirm a ${noun} for branch ${branch} — the forge is unreachable${found.detail ? ` (${String(found.detail).split('\n')[0].slice(0, 120)})` : ''}`
   };
 }
 
@@ -267,8 +277,8 @@ function prVerificationAnalysis(verdict) {
     message: verdict.message,
     actionable: false,
     suggestedFix: verdict.category === PR_MISSING_CATEGORY
-      ? `The branch ${verdict.branch} is pushed but has no pull request. Re-run the task, or open the PR by hand with \`gh pr create --head ${verdict.branch}\`.`
-      : 'Check the forge probe on the System Health page — `gh` could not reach the forge, so the run\'s PR could not be confirmed.'
+      ? `The branch ${verdict.branch} is pushed but has no open change request. Re-run the task, or open it by hand (\`gh pr create --head ${verdict.branch}\` / \`glab mr create --source-branch ${verdict.branch}\`).`
+      : 'Check the forge probe on the System Health page — the forge CLI could not reach the forge, so the run\'s change request could not be confirmed.'
   };
 }
 
