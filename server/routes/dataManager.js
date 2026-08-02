@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { validateRequest, dataPurgeSchema } from '../lib/validation.js';
 import {
   getDataOverview,
   getCategoryDetail,
@@ -47,9 +48,12 @@ router.delete('/backups/:filename', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// DELETE /api/data/:category — purge a category's contents
+// DELETE /api/data/:category — purge a category's contents, or a single entry
+// when `subPath` is given. Categories flagged `purgeScope: 'items'` reject the
+// bodiless (whole-directory) form in `purgeCategory` — hiding the button in the
+// UI is not enough, the endpoint has to refuse it too (#3327).
 router.delete('/:category', asyncHandler(async (req, res) => {
-  const { subPath } = req.body || {};
+  const { subPath } = validateRequest(dataPurgeSchema, req.body || {});
   const result = await purgeCategory(req.params.category, { subPath });
   res.json(result);
 }));

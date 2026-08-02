@@ -127,12 +127,19 @@ function SizeBar({ size, maxSize }) {
   );
 }
 
-function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPurge, onConfirmPurge, onCancelPurge, confirmingPurge, archiving, purging }) {
+function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPurge, onConfirmPurge, onCancelPurge, onDeleteItem, deletingItem, confirmingPurge, archiving, purging }) {
   // Directories with no CATEGORIES entry come back with `classified: false` and
   // no Archive/Purge flags. Say why the buttons are missing in outcome terms so
   // the row reads as a deliberate safety stance, not a broken row (#3285).
   // Older servers omit `classified`; treat only an explicit false as unknown.
   const unclassified = cat.classified === false;
+  // `purgeScope: 'items'` categories hold the only copy of each file, so the
+  // whole-directory Purge button is replaced by a per-row delete in the detail
+  // table (#3327). Older servers omit `purgeScope` entirely — treat that as the
+  // legacy category-wide behavior rather than silently dropping the button.
+  const itemScoped = cat.deletable && cat.purgeScope === 'items';
+  const categoryPurgeable = cat.deletable && !itemScoped;
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   return (
     <div className="border border-port-border rounded-lg overflow-hidden">
       <button
@@ -180,7 +187,7 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
                   {archiving ? 'Archiving...' : 'Archive'}
                 </button>
               )}
-              {cat.deletable && (
+              {categoryPurgeable && (
                 <button
                   onClick={() => onPurge(cat.key)}
                   disabled={purging}
@@ -189,6 +196,11 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
                   <Trash2 size={12} />
                   {purging ? 'Purging...' : 'Purge'}
                 </button>
+              )}
+              {itemScoped && (
+                <span className="text-xs text-gray-500">
+                  These files are the only copy, so there is no whole-category purge — delete individual entries from the list below.
+                </span>
               )}
               {!cat.archivable && !cat.deletable && (
                 <span className="text-xs text-gray-500">
@@ -206,12 +218,13 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
               {detail.items.length === 0 ? (
                 <div className="p-3 text-xs text-gray-500">Empty</div>
               ) : (
-                <table className="w-full text-xs">
+                <table className={`w-full text-xs ${itemScoped ? 'min-w-[420px]' : ''}`}>
                   <thead>
                     <tr className="text-gray-500 border-b border-port-border/30">
                       <th className="text-left p-2 pl-3 font-medium">Name</th>
                       <th className="text-right p-2 font-medium">Size</th>
                       <th className="text-right p-2 pr-3 font-medium">Files</th>
+                      {itemScoped && <th className="text-right p-2 pr-3 font-medium"><span className="sr-only">Delete</span></th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -223,6 +236,29 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
                         </td>
                         <td className="p-2 text-right text-gray-400 font-mono">{formatBytes(item.size)}</td>
                         <td className="p-2 pr-3 text-right text-gray-500">{item.type === 'directory' ? item.fileCount?.toLocaleString() : '—'}</td>
+                        {itemScoped && (
+                          <td className="p-2 pr-3 text-right">
+                            {isConfirming(item.name) ? (
+                              <ConfirmButtonPair
+                                className="justify-end"
+                                prompt="Delete?"
+                                onConfirm={() => confirmDelete(() => onDeleteItem(cat.key, item.name))}
+                                onCancel={cancelDelete}
+                                ariaLabel={`Confirm delete ${item.name} from ${cat.label}`}
+                              />
+                            ) : (
+                              <button
+                                onClick={() => requestDelete(item.name)}
+                                disabled={deletingItem === item.name}
+                                className="text-gray-500 hover:text-port-error transition-colors disabled:opacity-50"
+                                title={`Delete ${item.name}`}
+                                aria-label={`Delete ${item.name} from ${cat.label}`}
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            )}
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -308,6 +344,7 @@ export default function DataManager() {
   const [archiving, setArchiving] = useState(null);
   const [purging, setPurging] = useState(null);
   const [confirmPurge, setConfirmPurge] = useState(null);
+  const [deletingItem, setDeletingItem] = useState(null);
 
   const fetchOverview = useCallback(async () => {
     const [data, bk] = await Promise.all([
@@ -351,6 +388,18 @@ export default function DataManager() {
     await api.purgeDataCategory(key).catch(() => null);
     setPurging(null);
     refreshAfterAction(key);
+  };
+
+  // Per-item purge for `purgeScope: 'items'` categories — the only delete those
+  // categories offer (#3327). Drops the row locally for immediate feedback and
+  // refetches the overview so the size bars and totals catch up.
+  const handleDeleteItem = async (key, name) => {
+    setDeletingItem(name);
+    const result = await api.purgeDataCategory(key, { subPath: name }).catch(() => null);
+    setDeletingItem(null);
+    if (!result) return;
+    setDetail(prev => (prev?.key === key ? { ...prev, items: prev.items.filter(i => i.name !== name) } : prev));
+    fetchOverview();
   };
 
   const handleDeleteBackup = async (filename) => {
@@ -447,6 +496,8 @@ export default function DataManager() {
               onPurge={setConfirmPurge}
               onConfirmPurge={executePurge}
               onCancelPurge={() => setConfirmPurge(null)}
+              onDeleteItem={handleDeleteItem}
+              deletingItem={expandedCat === cat.key ? deletingItem : null}
               confirmingPurge={confirmPurge === cat.key}
               archiving={archiving === cat.key}
               purging={purging === cat.key}

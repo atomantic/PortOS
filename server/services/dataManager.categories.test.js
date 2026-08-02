@@ -25,7 +25,7 @@ import { readdirSync, readFileSync } from 'fs';
 import { join, relative, sep } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { DEFAULT_EXCLUDES } from './backup.js';
-import { CATEGORIES, UNKNOWN_CATEGORY_DESCRIPTION } from './dataManager.js';
+import { CATEGORIES, UNKNOWN_CATEGORY_DESCRIPTION, purgeCategory } from './dataManager.js';
 
 // A path segment that is a file, not a directory (`settings.json`, `TASKS.md`).
 const isFileSegment = (segment) => segment.includes('.');
@@ -119,5 +119,45 @@ describe('dataManager CATEGORIES coverage (#3285)', () => {
       expect(typeof meta.archivable, `${key} archivable`).toBe('boolean');
       expect(typeof meta.deletable, `${key} deletable`).toBe('boolean');
     }
+  });
+});
+
+describe('dataManager purge scope (#3327)', () => {
+  it('gives every purgeable category an explicit purgeScope and none to the protected ones', () => {
+    for (const [key, meta] of Object.entries(CATEGORIES)) {
+      if (meta.deletable) {
+        expect(['items', 'category'], `${key} purgeScope`).toContain(meta.purgeScope);
+      } else {
+        expect(meta.purgeScope, `${key} is protected and must not carry a purgeScope`).toBeUndefined();
+      }
+    }
+  });
+
+  it('keeps the irreplaceable media categories out of the all-or-nothing purge', () => {
+    // LoRA adapters are excluded from backup snapshots and cost hours of GPU
+    // time to retrain — no purge affordance at all.
+    expect(CATEGORIES.loras.deletable).toBe(false);
+    // Uploads and renders that other records point at: reclaimable one at a time.
+    expect(CATEGORIES.images.purgeScope).toBe('items');
+    expect(CATEGORIES.videos.purgeScope).toBe('items');
+    // Drafts live in Postgres; screenshots are task scratch — still wipeable whole.
+    expect(CATEGORIES.messages.purgeScope).toBe('category');
+    expect(CATEGORIES.screenshots.purgeScope).toBe('category');
+  });
+
+  // These only exercise the refusal paths, which all return before purgeCategory
+  // touches the filesystem — no test here may reach `rm` against the real data/.
+  it('refuses a category-wide purge for item-scoped and protected categories', async () => {
+    await expect(purgeCategory('images')).rejects.toThrow(/only supports per-item purge/);
+    await expect(purgeCategory('videos')).rejects.toThrow(/only supports per-item purge/);
+    await expect(purgeCategory('loras')).rejects.toThrow(/is not purgeable/);
+    await expect(purgeCategory('loras', { subPath: 'anything' })).rejects.toThrow(/is not purgeable/);
+  });
+
+  it('fails closed when a deletable category has no recognized purgeScope', async () => {
+    const original = CATEGORIES.messages.purgeScope;
+    CATEGORIES.messages.purgeScope = 'typo';
+    await expect(purgeCategory('messages')).rejects.toThrow(/only supports per-item purge/);
+    CATEGORIES.messages.purgeScope = original;
   });
 });

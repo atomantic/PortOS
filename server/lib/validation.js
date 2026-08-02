@@ -821,6 +821,20 @@ export const portsAllocateSchema = z.object({
 });
 
 // =============================================================================
+// DATA MANAGER
+// =============================================================================
+
+// DELETE /api/data/:category — purge a category, or one entry inside it.
+// `subPath` names a single top-level entry of the category directory; omitting
+// it asks for the whole-directory wipe, which `purgeCategory` only honors for
+// `purgeScope: 'category'` entries (#3327). Traversal is still rejected in the
+// service by a path.relative containment check — this schema just refuses the
+// obviously-wrong shapes (non-string, empty, absurdly long) before that.
+export const dataPurgeSchema = z.object({
+  subPath: z.string().min(1).max(1024).optional()
+});
+
+// =============================================================================
 // DATABASE
 // =============================================================================
 

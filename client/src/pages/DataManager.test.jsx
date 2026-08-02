@@ -7,13 +7,14 @@ import DataManager from './DataManager';
 // missing instead of leaving a dead end on the cleanup page (#3285).
 const getDataOverview = vi.fn();
 const getDataCategory = vi.fn();
+const purgeDataCategory = vi.fn();
 
 vi.mock('../services/api', () => ({
   getDataOverview: (...a) => getDataOverview(...a),
   getDataBackups: vi.fn(() => Promise.resolve([])),
   getDataCategory: (...a) => getDataCategory(...a),
   archiveDataCategory: vi.fn(),
-  purgeDataCategory: vi.fn(),
+  purgeDataCategory: (...a) => purgeDataCategory(...a),
   deleteDataBackup: vi.fn(),
   getTombstoneSweepStatus: vi.fn(() => Promise.resolve({ refused: [] })),
   sweepTombstonesNow: vi.fn(),
@@ -60,5 +61,65 @@ describe('DataManager unclassified rows (#3285)', () => {
 
     expandRow('Prompts');
     await waitFor(() => expect(screen.getByText(/This category is protected/)).toBeInTheDocument());
+  });
+});
+
+// `purgeScope: 'items'` categories hold the only copy of each file, so the row
+// trades the whole-category Purge button for a per-entry delete (#3327).
+const scopedOverview = {
+  totalSize: 3000,
+  dataDir: 'data',
+  categories: [
+    { key: 'images', path: 'data/images', label: 'Images', description: 'Uploaded and generated images', archivable: true, deletable: true, purgeScope: 'items', classified: true, size: 2000, fileCount: 2 },
+    { key: 'messages', path: 'data/messages', label: 'Messages', description: 'Email and messaging data', archivable: true, deletable: true, purgeScope: 'category', classified: true, size: 1000, fileCount: 5 },
+    { key: 'legacy', path: 'data/legacy', label: 'Legacy', description: 'From a server that predates purgeScope', archivable: false, deletable: true, classified: true, size: 500, fileCount: 1 },
+  ],
+};
+
+describe('DataManager per-item purge (#3327)', () => {
+  beforeEach(() => {
+    getDataOverview.mockReset().mockResolvedValue(scopedOverview);
+    getDataCategory.mockReset().mockResolvedValue({
+      key: 'images',
+      items: [{ name: 'render-0001.png', type: 'file', size: 1200 }],
+    });
+    purgeDataCategory.mockReset().mockResolvedValue({ category: 'images', subPath: 'render-0001.png' });
+  });
+
+  it('hides the whole-category Purge button and explains why', async () => {
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getAllByText('Images').length).toBeGreaterThan(0));
+
+    expandRow('Images');
+    await waitFor(() => expect(screen.getByText(/no whole-category purge/)).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Purge' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Archive/ })).toBeInTheDocument();
+  });
+
+  it('deletes a single entry through the subPath purge', async () => {
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getAllByText('Images').length).toBeGreaterThan(0));
+
+    expandRow('Images');
+    const trash = await screen.findByRole('button', { name: 'Delete render-0001.png from Images' });
+    fireEvent.click(trash);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(purgeDataCategory).toHaveBeenCalledWith('images', { subPath: 'render-0001.png' }));
+    // Reactive removal — the row leaves the table without a detail refetch.
+    await waitFor(() => expect(screen.queryByText('render-0001.png')).not.toBeInTheDocument());
+  });
+
+  it('keeps the category-wide Purge button for category-scoped and legacy rows', async () => {
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getByText('Messages')).toBeInTheDocument());
+
+    expandRow('Messages');
+    await waitFor(() => expect(screen.getByRole('button', { name: /Purge/ })).toBeInTheDocument());
+
+    // A server that predates purgeScope omits the field — the button must not
+    // vanish for every deletable category on an older peer.
+    expandRow('Legacy');
+    await waitFor(() => expect(screen.getByRole('button', { name: /Purge/ })).toBeInTheDocument());
   });
 });
