@@ -172,6 +172,11 @@ function makeExec(routes) {
 
 const argsHave = (...needles) => (args) => needles.every(n => args.includes(n))
 
+// The forge-reachability gate (#3358), injected so the suite never spawns the
+// real `gh api rate_limit` probe — a machine whose gh IS blocked (exactly the
+// case this issue is about) would otherwise fail the whole describe block.
+const okForge = async () => ({ ok: true, status: 'ok', detail: null, remedy: null })
+
 describe('findMonitoringIssue', () => {
   it('prefers the issue carrying the diagnostics slug marker', async () => {
     const exec = makeExec([{
@@ -231,13 +236,28 @@ describe('findMonitoringIssue', () => {
 describe('runSelfDiagnostics', () => {
   const loadLearning = async () => ({ byTaskType: sampleMetrics })
 
+  it('skips the forge half entirely when the gh probe is not ok (#3358)', async () => {
+    // The metrics half is local and still runs; the four `gh` calls below it do
+    // not, so a firewalled gh produces one clear skip instead of an ambiguous
+    // "could not read monitoring issues" per cycle.
+    const exec = makeExec([])
+    const res = await runSelfDiagnostics({
+      forgeGate: async () => ({ ok: false, status: 'unreachable' }),
+      loadLearning, exec, now: () => '2026-07-12T00:00:00.000Z'
+    })
+    expect(res.forgeUnavailable).toBe(true)
+    expect(res.failingCount).toBe(3)
+    expect(res.issue).toBeNull()
+    expect(exec).not.toHaveBeenCalled()
+  })
+
   it('creates a new monitoring issue with both labels when none exists and there are failures', async () => {
     const exec = makeExec([
       { match: argsHave('issue', 'list'), result: { code: 0, stdout: '[]' } },
       { match: argsHave('label', 'create'), result: { code: 0, stdout: '' } },
       { match: argsHave('issue', 'create'), result: { code: 0, stdout: 'https://github.com/acme/repo/issues/99\n' } }
     ])
-    const res = await runSelfDiagnostics({ loadLearning, exec, now: () => '2026-07-12T00:00:00.000Z' })
+    const res = await runSelfDiagnostics({ forgeGate: okForge, loadLearning, exec, now: () => '2026-07-12T00:00:00.000Z' })
     expect(res.failingCount).toBe(3)
     expect(res.issue).toMatchObject({ number: 99, created: true })
     const createCall = exec.mock.calls.find(c => c[1].includes('create') && c[1].includes('issue'))
@@ -254,7 +274,7 @@ describe('runSelfDiagnostics', () => {
       { match: argsHave('label', 'create'), result: { code: 0, stdout: '' } },
       { match: argsHave('issue', 'edit'), result: { code: 0, stdout: '' } }
     ])
-    const res = await runSelfDiagnostics({ loadLearning, exec, now: () => '2026-07-12T00:00:00.000Z' })
+    const res = await runSelfDiagnostics({ forgeGate: okForge, loadLearning, exec, now: () => '2026-07-12T00:00:00.000Z' })
     expect(res.issue).toMatchObject({ number: 7, created: false })
     // No create call happened.
     expect(exec.mock.calls.find(c => c[1].includes('issue') && c[1].includes('create'))).toBeUndefined()
@@ -266,7 +286,7 @@ describe('runSelfDiagnostics', () => {
 
   it('does NOT file when the issue read failed (avoids duplicate on a transient gh blip)', async () => {
     const exec = makeExec([{ match: argsHave('issue', 'list'), result: { code: 1, stdout: '', stderr: 'boom' } }])
-    const res = await runSelfDiagnostics({ loadLearning, exec, now: () => '2026-07-12T00:00:00.000Z' })
+    const res = await runSelfDiagnostics({ forgeGate: okForge, loadLearning, exec, now: () => '2026-07-12T00:00:00.000Z' })
     expect(res.issue).toBeNull()
     expect(exec.mock.calls.find(c => c[1].includes('create'))).toBeUndefined()
   })
@@ -276,7 +296,7 @@ describe('runSelfDiagnostics', () => {
     // counts (#2617), so this is "passing" despite the lifetime counter.
     const allGood = async () => ({ byTaskType: { 'self-improve:update': sampleMetrics['self-improve:update'] } })
     const exec = makeExec([{ match: argsHave('issue', 'list'), result: { code: 0, stdout: '[]' } }])
-    const res = await runSelfDiagnostics({ loadLearning: allGood, exec, now: () => '2026-07-12T00:00:00.000Z' })
+    const res = await runSelfDiagnostics({ forgeGate: okForge, loadLearning: allGood, exec, now: () => '2026-07-12T00:00:00.000Z' })
     expect(res.failingCount).toBe(0)
     expect(res.issue).toBeNull()
     expect(exec.mock.calls.find(c => c[1].includes('create') && c[1].includes('issue'))).toBeUndefined()
@@ -293,7 +313,7 @@ describe('runSelfDiagnostics', () => {
       { match: argsHave('label', 'create'), result: { code: 0, stdout: '' } },
       { match: argsHave('issue', 'edit'), result: { code: 0, stdout: '' } }
     ])
-    await runSelfDiagnostics({ loadLearning: allGood, exec, now: () => '2026-07-12T00:00:00.000Z' })
+    await runSelfDiagnostics({ forgeGate: okForge, loadLearning: allGood, exec, now: () => '2026-07-12T00:00:00.000Z' })
     const editCall = exec.mock.calls.find(c => c[1].includes('edit'))
     expect(editCall[1]).toContain('--remove-label')
     expect(editCall[1]).toContain(NEEDS_ATTENTION_LABEL)

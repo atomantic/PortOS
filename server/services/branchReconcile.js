@@ -20,7 +20,7 @@ import { stat } from 'node:fs/promises';
 import { getBranches, getDefaultBranch, isBranchMergedInto, deleteBranch } from './git.js';
 import { execGit } from '../lib/execGit.js';
 import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, isHumanClaimWorktree } from './worktreeManager.js';
-import { execGh } from './github.js';
+import { execGh, ensureForgeReachable } from './github.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { githubRepoSpec } from '../lib/workTracker.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
@@ -104,10 +104,12 @@ const PR_LIST_LIMIT = 200;
  *   NEEDS_PR   — pushed, not merged, no PR, clean     → agent verifies + opens PR
  *   WIP        — local-only or dirty worktree         → skip + report (never touch)
  *
- * @param {{ hasUpstream:boolean, isMerged:boolean, worktreeDirty:boolean, abandonedAgentWorktree?:boolean, openPr:({mergeable?:string}|null) }} input
+ * @param {{ hasUpstream:boolean, isMerged:boolean, worktreeDirty:boolean, abandonedAgentWorktree?:boolean, openPr:({mergeable?:string}|null), prStateUnavailable?:boolean }} input
+ *   `prStateUnavailable` means the forge could not be READ this cycle — distinct
+ *   from `openPr: null` ("the forge answered: no open PR").
  * @returns {'ABANDONED_WIP'|'MERGED'|'CONFLICTED'|'IN_REVIEW'|'NEEDS_PR'|'WIP'}
  */
-export function classifyBranch({ hasUpstream, isMerged, worktreeDirty, abandonedAgentWorktree, openPr }) {
+export function classifyBranch({ hasUpstream, isMerged, worktreeDirty, abandonedAgentWorktree, openPr, prStateUnavailable = false }) {
   // A dead agent's worktree that still holds uncommitted work is the ONE dirty
   // case that must be driven rather than skipped — and it must be caught BEFORE
   // the `isMerged` test, because an agent that exited without committing leaves
@@ -126,6 +128,11 @@ export function classifyBranch({ hasUpstream, isMerged, worktreeDirty, abandoned
   // of PR state; the `cleanupMerged` path applies the same guard for MERGED.
   if (worktreeDirty) return 'WIP';
   if (openPr) return openPr.mergeable === 'CONFLICTING' ? 'CONFLICTED' : 'IN_REVIEW';
+  // The forge was unreadable this cycle, so "no open PR" is not something we
+  // learned — it is something we failed to ask (#3358). Report the branch as WIP
+  // (skip + never touch) rather than dispatching an agent to open a PR that may
+  // already exist. MERGED above is unaffected: that verdict is pure git truth.
+  if (prStateUnavailable) return 'WIP';
   if (hasUpstream) return 'NEEDS_PR';
   return 'WIP';
 }
@@ -141,9 +148,18 @@ export function classifyBranches(inputs) {
 
 /**
  * Resolve the open PRs for a repo, keyed by head branch name.
- * Returns an empty Map on any gh failure (degrade: treat as "no PR").
+ *
+ * Three answers, never two (#3358):
+ *   - a Map (possibly empty) — the forge answered
+ *   - an EMPTY Map for a non-GitHub origin — there is no GitHub PR state to have
+ *   - `null` — we could NOT ask (gh transport/auth failure, unparseable output)
+ *
+ * `null` must never be read as "this branch has no PR": that is what made an
+ * unreachable forge classify every pushed branch as NEEDS_PR and hand the
+ * coordinator agent a list of PRs to re-open on top of the ones that exist.
+ *
  * @param {string} repoPath
- * @returns {Promise<Map<string, {number:number, mergeable:string, isDraft:boolean, url:string}>>}
+ * @returns {Promise<Map<string, {number:number, mergeable:string, isDraft:boolean, url:string}>|null>}
  */
 async function getOpenPrsByHead(repoPath) {
   const origin = await getOriginInfo(repoPath).catch(() => null);
@@ -157,9 +173,16 @@ async function getOpenPrsByHead(repoPath) {
     'pr', 'list', '--repo', repoSpec, '--state', 'open',
     '--limit', String(PR_LIST_LIMIT),
     '--json', 'number,headRefName,mergeable,isDraft,url'
-  ]).catch(() => null);
+  ]).catch((err) => {
+    console.error(`❌ branch-reconcile: gh pr list failed for ${repoSpec}: ${err.message}`);
+    return null;
+  });
+  if (raw === null) return null;
   const parsed = safeJSONParse(raw, null);
-  if (!Array.isArray(parsed)) return new Map();
+  if (!Array.isArray(parsed)) {
+    console.error(`❌ branch-reconcile: gh pr list returned unparseable output for ${repoSpec} — PR state unknown this cycle`);
+    return null;
+  }
   const byHead = new Map();
   for (const pr of parsed) {
     if (pr?.headRefName) {
@@ -350,11 +373,15 @@ async function worktreeAgeMs(worktreePath) {
 export async function gatherBranchState(repoPath, { defaultBranch, activeAgentIds = null }) {
   const protectedSet = new Set([...PROTECTED_BRANCHES, defaultBranch]);
 
-  const [branches, worktrees, prsByHead] = await Promise.all([
+  const [branches, worktrees, prsByHeadOrNull] = await Promise.all([
     getBranches(repoPath),
     listWorktrees(repoPath).catch(() => []),
     getOpenPrsByHead(repoPath)
   ]);
+  // null = the forge could not be read (see getOpenPrsByHead). Carried onto every
+  // input so the classifier can refuse to conclude "no PR" from an unread forge.
+  const prStateUnavailable = prsByHeadOrNull === null;
+  const prsByHead = prsByHeadOrNull || new Map();
 
   // Map local branch name -> worktree record (strip the refs/heads/ prefix).
   const worktreeByBranch = new Map();
@@ -394,7 +421,8 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
       ahead: divergence.ahead,
       collisionPaths: divergence.collisionPaths,
       abandonedAgentWorktree: isAbandonedAgentWorktree({ path: worktreePath, locked: worktreeLocked, activeAgentIds }),
-      openPr: prsByHead.get(b.name) || null
+      openPr: prsByHead.get(b.name) || null,
+      prStateUnavailable
     });
   }
   return inputs;
@@ -464,9 +492,18 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
  * @param {{ cleanup?: boolean, activeAgentIds?: Set<string> }} [opts] - when cleanup
  *   is false, merged branches are reported (in `skipped`, reason `cleanup-disabled`)
  *   but not deleted. `activeAgentIds` protects in-use CoS agent worktrees.
- * @returns {Promise<{ defaultBranch:string, cleaned:string[], inFlight:object[], wip:object[], skipped:{branch:string,reason:string}[] }>}
+ * @returns {Promise<{ defaultBranch:string, cleaned:string[], inFlight:object[], wip:object[], skipped:{branch:string,reason:string}[], forgeUnavailable?:boolean }>}
+ *   `forgeUnavailable: true` means the cycle was SKIPPED because `gh` could not be
+ *   read — an empty `inFlight` there says nothing about the repo (#3358).
  */
 export async function reconcile(repoPath = PATHS.root, { cleanup = true, activeAgentIds = new Set() } = {}) {
+  // Every classification below depends on PR state, so an unreadable forge makes
+  // the whole pass a guess. Skip with one line rather than report a quiet repo.
+  const forge = await ensureForgeReachable('branch-reconcile');
+  if (!forge.ok) {
+    return { defaultBranch: null, cleaned: [], inFlight: [], wip: [], skipped: [], forgeUnavailable: true, forgeStatus: forge.status };
+  }
+
   const defaultBranch = await getDefaultBranch(repoPath).catch(() => 'main') || 'main';
   const inputs = await gatherBranchState(repoPath, { defaultBranch, activeAgentIds });
   const classified = classifyBranches(inputs);

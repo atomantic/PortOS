@@ -238,9 +238,15 @@ export function pickFirstAvailable(items, takenIds = new Set(), options = {}) {
 
 /**
  * Promise-wrapped `gh pr list` — separated from execGit because `gh` is
- * not always installed on every host. Returns an empty array on any failure.
+ * not always installed on every host.
+ *
+ * Sentinel discipline (#3358): `[]` means "gh answered and there are no open
+ * PRs"; `null` means "we could not ask" (gh missing, unauthenticated, network
+ * blocked, timed out). The caller must not read the second as the first.
+ *
+ * @returns {Promise<string[]|null>}
  */
-function listOpenPullRequestHeadRefs(repoPath) {
+export function listOpenPullRequestHeadRefs(repoPath) {
   return new Promise(resolve => {
     const child = spawn('gh', ['pr', 'list', '--state', 'open', '--json', 'headRefName', '-q', '.[].headRefName'], {
       cwd: repoPath,
@@ -248,15 +254,21 @@ function listOpenPullRequestHeadRefs(repoPath) {
       windowsHide: true
     });
     let out = '';
-    let errored = false;
-    child.on('error', () => { errored = true; resolve([]); });
+    let settled = false;
+    // One settle path so the 15s backstop can't resolve a promise the close
+    // handler already settled, and so the timer is always cleared.
+    const done = (value) => { if (!settled) { settled = true; clearTimeout(timer); resolve(value); } };
+    const timer = setTimeout(() => {
+      // setTimeout callback boundary — a kill() throw here would be uncaught.
+      try { child.kill(); } catch { /* already exited */ }
+      done(null);
+    }, 15000);
+    child.on('error', () => done(null));
     child.stdout.on('data', chunk => { out += chunk.toString(); });
     child.on('close', code => {
-      if (errored) return;
-      if (code !== 0) return resolve([]);
-      resolve(out.split('\n').map(s => s.trim()).filter(Boolean));
+      if (code !== 0) return done(null);
+      done(out.split('\n').map(s => s.trim()).filter(Boolean));
     });
-    setTimeout(() => { try { child.kill(); } catch { /* noop */ } resolve([]); }, 15000);
   });
 }
 
@@ -290,8 +302,13 @@ export function extractSlugFromRef(ref) {
  * git branch (local or remote) or open PR with the slug encoded into a
  * documented claim ref pattern (`claim/<slug>` or `cos/<task>/<slug>/<agent>`).
  *
- * `repoPath` is the repository to query. Best-effort: missing git, missing gh,
- * or fetch failure all degrade silently and return what evidence is available.
+ * `repoPath` is the repository to query. Git refs (local + freshly fetched
+ * `origin/*`) are the primary evidence and cover every documented claim pattern;
+ * the open-PR head refs are a secondary net for a claim whose branch was pruned.
+ *
+ * When `gh` cannot be reached the PR net is UNAVAILABLE, not empty (#3358) — the
+ * degradation is logged once so a run that later double-claims an item has a
+ * visible cause, rather than the forge outage passing as "no PRs are open".
  *
  * @param {string} repoPath
  * @param {string[]|Set<string>} knownIds
@@ -313,9 +330,13 @@ export async function findInProgressIds(repoPath, knownIds) {
     listOpenPullRequestHeadRefs(repoPath)
   ]);
 
+  if (prHeadRefs === null) {
+    console.error(`❌ plan claim scan: could not read open PRs from the forge — in-flight detection is running on git refs alone for ${repoPath}`);
+  }
+
   const refs = [
     ...branchOutput.split('\n'),
-    ...prHeadRefs
+    ...(prHeadRefs || [])
   ].map(s => s.trim()).filter(Boolean);
 
   const inFlight = new Set();

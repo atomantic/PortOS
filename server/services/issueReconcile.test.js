@@ -17,7 +17,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../lib/execGit.js', () => ({
   execGit: vi.fn(async () => ({ stdout: '', exitCode: 0 })),
 }));
-vi.mock('./github.js', () => ({ execGh: vi.fn(async () => '[]') }));
+const ensureForgeReachableMock = vi.fn(async () => ({ ok: true, status: 'ok', detail: null, remedy: null }));
+vi.mock('./github.js', () => ({
+  execGh: vi.fn(async () => '[]'),
+  ensureForgeReachable: (...args) => ensureForgeReachableMock(...args),
+}));
 vi.mock('./gitlab.js', () => ({ execGlab: vi.fn(async () => '[]') }));
 vi.mock('./jira.js', () => ({ fetchMyCurrentSprintTickets: vi.fn(async () => []) }));
 vi.mock('../lib/gitRemote.js', () => ({
@@ -543,6 +547,44 @@ describe('gatherIssueState carries labels/assignees for the follow-up', () => {
     const gathered = await gatherIssueState('/repo');
     expect(gathered.issues[0].labels).toContain('area:create');
     expect(gathered.issues[0].assignees).toEqual(['atomantic']);
+  });
+});
+
+// #3358 — "the forge said there is nothing" vs "we could not ask the forge".
+// Collapsing the two here is worse than elsewhere: this reconciler CLOSES issues
+// and strips their `in-progress` label, so an empty answer it never got would
+// unlabel a claim that is live on a peer right now.
+describe('unreachable forge (#3358)', () => {
+  it('skips the scan when the gh probe is not ok, without issuing a single gh call', async () => {
+    ensureForgeReachableMock.mockResolvedValueOnce({ ok: false, status: 'unreachable', detail: 'dial tcp' });
+    const gathered = await gatherIssueState('/repo');
+    expect(gathered).toBeNull();
+    expect(execGh).not.toHaveBeenCalled();
+  });
+
+  it('fails the scan when the merged-PR list is unavailable (never treats it as "nothing shipped")', async () => {
+    execGh.mockImplementation(async (argv) => {
+      if (argv[0] === 'issue') return JSON.stringify([{ number: 1, title: 't', labels: [], assignees: [], url: 'u' }]);
+      if (argv.includes('merged')) throw new Error('connect: bad file descriptor');
+      return '[]';
+    });
+    expect(await gatherIssueState('/repo')).toBeNull();
+  });
+
+  it('fails the scan when the OPEN-PR list is unavailable — an open PR is what proves a claim is live', async () => {
+    execGh.mockImplementation(async (argv) => {
+      if (argv[0] === 'issue') return JSON.stringify([{ number: 1, title: 't', labels: [], assignees: [], url: 'u' }]);
+      if (argv.includes('open')) throw new Error('connect: bad file descriptor');
+      return '[]';
+    });
+    expect(await gatherIssueState('/repo')).toBeNull();
+  });
+
+  it('still scans when every list is ANSWERED but empty', async () => {
+    mockGh({ issues: [], merged: [], open: [] });
+    const gathered = await gatherIssueState('/repo');
+    expect(gathered).not.toBeNull();
+    expect(gathered.issues).toEqual([]);
   });
 });
 

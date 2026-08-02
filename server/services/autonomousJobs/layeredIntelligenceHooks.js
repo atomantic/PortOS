@@ -295,6 +295,16 @@ export async function buildTaskInput({ app } = {}) {
   // burning an agent on a result we couldn't land.
   if (filer === 'jira' && !jira) return skip('skipped', 'jira-not-configured')
 
+  // Same reasoning for an unreachable `gh` (#3358): every downstream guard here
+  // (park check, dedup against existing issues, and the filing itself) reads the
+  // forge, so running the reasoner now would burn a provider call on a proposal
+  // we could neither dedup nor file. Skip with the probe's single log line.
+  if (filer === 'forge' && forgeCli === 'gh') {
+    const { ensureForgeReachable } = await import('../github.js')
+    const forge = await ensureForgeReachable('layered-intelligence')
+    if (!forge.ok) return skip('skipped', 'forge-unreachable')
+  }
+
   // Park check (forge + jira; plan has no issue to block on). A FAILED read is not
   // "no blocking issues" — skip rather than resume work the user parked.
   if (trackerSupportsPause(tracker.resolved)) {

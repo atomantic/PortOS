@@ -6,7 +6,8 @@ vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { root: '/mock', data: '/mock/data' },
   readJSONFile: vi.fn().mockResolvedValue({ repos: {}, secrets: {} }),
   atomicWrite: vi.fn().mockResolvedValue(undefined),
-  ensureDir: vi.fn().mockResolvedValue(undefined)
+  ensureDir: vi.fn().mockResolvedValue(undefined),
+  safeJSONParse: (raw, fallback) => { try { return JSON.parse(raw); } catch { return fallback; } }
 }));
 
 vi.mock('./settings.js', () => ({
@@ -17,7 +18,10 @@ vi.mock('./settings.js', () => ({
 const spawnMock = vi.fn();
 vi.mock('child_process', () => ({ spawn: (...args) => spawnMock(...args) }));
 
-const { classifyGhProbe, ghRemedy, checkGhHealth, __resetGhHealthCache } = await import('./github.js');
+const {
+  classifyGhProbe, ghRemedy, checkGhHealth, __resetGhHealthCache,
+  ensureForgeReachable, findPullRequestForBranch
+} = await import('./github.js');
 
 /** A fake `gh` child that emits the given outcome on the next tick. */
 function fakeChild({ code = 0, stderr = '', spawnError = null } = {}) {
@@ -178,5 +182,75 @@ describe('checkGhHealth', () => {
     expect(hung.kill).toHaveBeenCalledWith('SIGKILL');
     expect(health.status).toBe('unreachable');
     vi.useRealTimers();
+  });
+});
+
+/**
+ * The two helpers the #3358 sweep hangs off: a job-level gate that logs once and
+ * a PR lookup with THREE answers instead of two.
+ */
+describe('ensureForgeReachable (#3358)', () => {
+  beforeEach(() => { __resetGhHealthCache(); spawnMock.mockReset(); });
+
+  it('passes silently when the probe is ok', async () => {
+    spawnMock.mockImplementation(() => fakeChild({ code: 0 }));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(ensureForgeReachable('some-job')).resolves.toMatchObject({ ok: true, status: 'ok' });
+    expect(err).not.toHaveBeenCalled();
+    err.mockRestore();
+  });
+
+  it('logs exactly one line naming the job and the probe status when it is not', async () => {
+    spawnMock.mockImplementation(() => fakeChild({ code: 1, stderr: 'dial tcp: lookup api.github.com' }));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const health = await ensureForgeReachable('pr-watcher');
+    expect(health.ok).toBe(false);
+    expect(err).toHaveBeenCalledTimes(1);
+    expect(err.mock.calls[0][0]).toContain('pr-watcher');
+    expect(err.mock.calls[0][0]).toContain('unreachable');
+    err.mockRestore();
+  });
+});
+
+describe('findPullRequestForBranch (#3358)', () => {
+  beforeEach(() => { spawnMock.mockReset(); });
+
+  /** A fake `gh` child that writes `stdout` then exits with `code`. */
+  const ghChild = ({ code = 0, stdout = '' } = {}) => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = vi.fn();
+    setImmediate(() => {
+      if (stdout) child.stdout.emit('data', Buffer.from(stdout));
+      child.emit('close', code);
+    });
+    return child;
+  };
+
+  it('reports `found` with the PR number', async () => {
+    spawnMock.mockImplementation(() => ghChild({ stdout: '[{"number":7,"url":"https://example.com/pr/7","state":"OPEN"}]' }));
+    await expect(findPullRequestForBranch('claim/issue-1')).resolves.toMatchObject({ status: 'found', number: 7 });
+  });
+
+  it('reports `none` for an ANSWERED empty list', async () => {
+    spawnMock.mockImplementation(() => ghChild({ stdout: '[]' }));
+    await expect(findPullRequestForBranch('claim/issue-1')).resolves.toMatchObject({ status: 'none', number: null });
+  });
+
+  it('reports `unavailable` — never `none` — when gh fails', async () => {
+    spawnMock.mockImplementation(() => ghChild({ code: 1 }));
+    const result = await findPullRequestForBranch('claim/issue-1');
+    expect(result.status).toBe('unavailable');
+  });
+
+  it('reports `unavailable` when a zero-exit gh emits unparseable output', async () => {
+    spawnMock.mockImplementation(() => ghChild({ stdout: 'not json' }));
+    await expect(findPullRequestForBranch('claim/issue-1')).resolves.toMatchObject({ status: 'unavailable' });
+  });
+
+  it('reports `unavailable` with no branch to ask about', async () => {
+    await expect(findPullRequestForBranch('')).resolves.toMatchObject({ status: 'unavailable' });
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 });

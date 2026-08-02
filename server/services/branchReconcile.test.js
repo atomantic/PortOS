@@ -35,7 +35,11 @@ vi.mock('./worktreeManager.js', () => ({
   }),
   isHumanClaimWorktree: vi.fn((id) => typeof id === 'string' && id.startsWith('claim-'))
 }));
-vi.mock('./github.js', () => ({ execGh: vi.fn(async () => '[]') }));
+const ensureForgeReachableMock = vi.fn(async () => ({ ok: true, status: 'ok', detail: null, remedy: null }));
+vi.mock('./github.js', () => ({
+  execGh: vi.fn(async () => '[]'),
+  ensureForgeReachable: (...args) => ensureForgeReachableMock(...args),
+}));
 vi.mock('../lib/gitRemote.js', () => ({
   getOriginInfo: vi.fn(async () => ({
     hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'atomantic/PortOS'
@@ -411,6 +415,61 @@ describe('branchPriorityRank / prioritizeBranches', () => {
     ]);
     // Pure: original order untouched.
     expect(input[0].branch).toBe('zzz-scratch');
+  });
+});
+
+// #3358 — an unreachable forge must read as "we could not ask", never as
+// "this branch has no PR". Concluding the latter is what turned a firewalled
+// `gh` into a NEEDS_PR list the coordinator would act on by opening duplicate
+// PRs on top of the ones that already exist.
+describe('unreachable forge (#3358)', () => {
+  it('classifies a pushed branch as WIP — never NEEDS_PR — when PR state is unknown', () => {
+    const branch = { isMerged: false, worktreeDirty: false, hasUpstream: true, openPr: null };
+    expect(classifyBranch(branch)).toBe('NEEDS_PR');
+    expect(classifyBranch({ ...branch, prStateUnavailable: true })).toBe('WIP');
+  });
+
+  it('still reports MERGED when PR state is unknown — that verdict is pure git truth', () => {
+    expect(classifyBranch({ isMerged: true, hasUpstream: true, openPr: null, prStateUnavailable: true })).toBe('MERGED');
+  });
+
+  it('marks every gathered branch prStateUnavailable when gh pr list fails', async () => {
+    git.getBranches.mockResolvedValue([
+      { name: 'claim/issue-1', isDefault: false, current: false, tracking: 'origin/claim/issue-1', merged: false }
+    ]);
+    wt.listWorktrees.mockResolvedValue([]);
+    execGh.mockRejectedValue(new Error('connect: bad file descriptor'));
+    git.isBranchMergedInto.mockResolvedValue(false);
+
+    const inputs = await gatherBranchState('/repo', { defaultBranch: 'main' });
+    expect(inputs[0].prStateUnavailable).toBe(true);
+    expect(classifyBranches(inputs)[0].state).toBe('WIP');
+  });
+
+  it('leaves prStateUnavailable false when gh answers with an empty list', async () => {
+    git.getBranches.mockResolvedValue([
+      { name: 'claim/issue-1', isDefault: false, current: false, tracking: 'origin/claim/issue-1', merged: false }
+    ]);
+    wt.listWorktrees.mockResolvedValue([]);
+    execGh.mockResolvedValue('[]');
+    git.isBranchMergedInto.mockResolvedValue(false);
+
+    const inputs = await gatherBranchState('/repo', { defaultBranch: 'main' });
+    expect(inputs[0].prStateUnavailable).toBe(false);
+    expect(classifyBranches(inputs)[0].state).toBe('NEEDS_PR');
+  });
+
+  it('skips the whole cycle (never touches git) when the gh probe is not ok', async () => {
+    ensureForgeReachableMock.mockResolvedValueOnce({ ok: false, status: 'unreachable', detail: 'dial tcp' });
+    const res = await reconcile('/repo');
+    expect(res.forgeUnavailable).toBe(true);
+    expect(res.forgeStatus).toBe('unreachable');
+    expect(res.inFlight).toEqual([]);
+    expect(res.cleaned).toEqual([]);
+    // Crucially: no branch enumeration and no deletion happened, so the empty
+    // result can't be mistaken for "the repo is clean".
+    expect(git.getBranches).not.toHaveBeenCalled();
+    expect(git.deleteBranch).not.toHaveBeenCalled();
   });
 });
 

@@ -3,8 +3,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ─── mocks (must precede the import under test) ──────────────────────────────
 
 const execGhMock = vi.fn();
+const ensureForgeReachableMock = vi.fn(async () => ({ ok: true, status: 'ok', detail: null, remedy: null }));
 vi.mock('./github.js', () => ({
   execGh: (...args) => execGhMock(...args),
+  ensureForgeReachable: (...args) => ensureForgeReachableMock(...args),
 }));
 
 const mergePrMock = vi.fn();
@@ -68,6 +70,8 @@ const pr = (number, login, extra = {}) => ({
 
 beforeEach(() => {
   execGhMock.mockReset();
+  ensureForgeReachableMock.mockReset();
+  ensureForgeReachableMock.mockResolvedValue({ ok: true, status: 'ok', detail: null, remedy: null });
   mergePrMock.mockReset();
   addNotificationMock.mockReset();
   spawnReviewLoopFollowUpMock.mockReset();
@@ -320,6 +324,26 @@ describe('checkPullRequests', () => {
     getOriginInfoMock.mockResolvedValue({ hasOrigin: false, isGithub: false, fullName: null });
     const r = await checkPullRequests(app, { authorFilter: 'any' });
     expect(r).toEqual({ ok: false, reason: 'not-a-github-repo' });
+  });
+
+  // #3358 — before this gate, an unreachable gh returned an empty PR page, the
+  // high-water mark stayed put, and the watcher reported a permanently quiet
+  // repo with nothing in the log naming the cause.
+  it('skips the cycle when the gh probe is not ok, without asking gh anything', async () => {
+    ensureForgeReachableMock.mockResolvedValueOnce({ ok: false, status: 'unreachable', detail: 'dial tcp' });
+    const r = await checkPullRequests(app, { authorFilter: 'any' });
+    expect(r).toEqual({ ok: false, reason: 'forge-unreachable', forgeStatus: 'unreachable' });
+    expect(execGhMock).not.toHaveBeenCalled();
+  });
+
+  it('reports pr-list-failed (not "no open PRs") when gh pr list rejects', async () => {
+    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'o/r' });
+    execGhMock
+      .mockResolvedValueOnce('main')                          // repo view → default branch
+      .mockRejectedValueOnce(new Error('connect: bad file descriptor'));
+    const r = await checkPullRequests(app, { authorFilter: 'any' });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('pr-list-failed');
   });
 
   it('bails when the default branch cannot be resolved', async () => {

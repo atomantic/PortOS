@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { join } from 'path';
-import { atomicWrite, readJSONFile, PATHS, ensureDir } from '../lib/fileUtils.js';
+import { atomicWrite, readJSONFile, PATHS, ensureDir, safeJSONParse } from '../lib/fileUtils.js';
+import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getSettings, updateSettings } from './settings.js';
 
@@ -45,9 +46,13 @@ const DEFAULT_EXEC_GH_TIMEOUT_MS = 60000;
  * process. `timeoutMs` kills the child and rejects with a clear error; it's
  * cleared on normal exit so it never fires for a completed run.
  */
-export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS) {
+export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = null } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn('gh', args, { shell: false, windowsHide: true });
+    const child = spawn('gh', args, {
+      shell: false,
+      windowsHide: true,
+      ...(cwd ? { cwd, env: withSpawnCwdEnv(process.env, cwd) } : {})
+    });
     let stdout = '';
     let stderr = '';
     let timedOut = false;
@@ -456,4 +461,61 @@ export async function checkGhHealth({ force = false, timeoutMs = GH_PROBE_TIMEOU
 export function __resetGhHealthCache() {
   ghHealthCache = null;
   ghHealthCheckedAt = 0;
+}
+
+/**
+ * Gate for a forge-dependent scheduled job (#3358). Runs the probe and, when the
+ * forge is NOT usable, emits ONE single-line error naming the job and the probe
+ * status — then the caller skips the cycle instead of executing against a forge
+ * it cannot read and concluding "everything is quiet".
+ *
+ * A probe that itself blows up is reported as `error` rather than silently
+ * passing: "we could not even ask whether we can ask" is still not `ok`.
+ *
+ * @param {string} label - job name for the log line (e.g. 'pr-watcher')
+ * @returns {Promise<{ ok: boolean, status: string, detail: string|null, remedy: string|null }>}
+ */
+export async function ensureForgeReachable(label) {
+  const health = await checkGhHealth().catch(err => ({
+    status: 'error', ok: false, detail: err.message, remedy: ghRemedy('error')
+  }));
+  if (health.ok) return health;
+  const detail = health.detail ? ` — ${String(health.detail).split('\n')[0].slice(0, 160)}` : '';
+  console.error(`❌ ${label}: skipping this cycle, gh is ${health.status}${detail}`);
+  return health;
+}
+
+/**
+ * Does a pull request exist for `branch`? Three answers, never collapsed to two
+ * (#3358): `found` (the forge has one), `none` (the forge answered and has
+ * none), `unavailable` (we could not ask). A caller must never read
+ * `unavailable` as `none` — that is how a run that opened no PR gets recorded as
+ * a success while `gh` is firewalled.
+ *
+ * `--state all` deliberately: a PR that was opened and then closed still proves
+ * the agent DID reach the forge, which is the question being asked.
+ *
+ * @param {string} branch - head branch name
+ * @param {{ cwd?: string }} [opts] - repo dir gh resolves the remote from
+ * @returns {Promise<{ status: 'found'|'none'|'unavailable', number: number|null, url: string|null, detail: string|null }>}
+ */
+export async function findPullRequestForBranch(branch, { cwd = null } = {}) {
+  if (!branch) return { status: 'unavailable', number: null, url: null, detail: 'no branch name' };
+  const raw = await execGh(
+    ['pr', 'list', '--head', branch, '--state', 'all', '--limit', '1', '--json', 'number,url,state'],
+    DEFAULT_EXEC_GH_TIMEOUT_MS,
+    { cwd }
+  ).catch(err => err);
+  if (raw instanceof Error) {
+    return { status: 'unavailable', number: null, url: null, detail: raw.message };
+  }
+  const parsed = safeJSONParse(raw, null);
+  // A zero-exit gh that emitted nothing parseable told us nothing — that is
+  // "could not ask", not "no PR".
+  if (!Array.isArray(parsed)) {
+    return { status: 'unavailable', number: null, url: null, detail: 'gh returned unparseable output' };
+  }
+  const pr = parsed[0];
+  if (!pr) return { status: 'none', number: null, url: null, detail: null };
+  return { status: 'found', number: pr.number ?? null, url: pr.url || null, detail: pr.state || null };
 }

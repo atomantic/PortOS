@@ -23,6 +23,14 @@ vi.mock('../providers.js', () => ({
   getProviderById: vi.fn(async (id) => ({ id, type: 'cli' }))
 }));
 
+// The forge-reachability gate (#3358) — the gh probe LI runs before it burns a
+// provider call on a proposal it could neither dedup nor file. Reachable by
+// default; individual cases override it.
+const ensureForgeReachableMock = vi.fn(async () => ({ ok: true, status: 'ok', detail: null, remedy: null }));
+vi.mock('../github.js', () => ({
+  ensureForgeReachable: (...args) => ensureForgeReachableMock(...args)
+}));
+
 // When no per-app provider is pinned, the guard falls back to the global LI
 // schedule provider via getTaskInterval. Default to no global pin so the
 // no-provider path stays inert.
@@ -162,6 +170,16 @@ describe('buildTaskInput', () => {
   it('skips when a failed blocking read could resume parked work', async () => {
     li.listBlockingIssues.mockResolvedValue({ ok: false, issues: [] });
     expect(await buildTaskInput({ app: APP })).toEqual({ skip: { reason: 'blocking-read-failed' } });
+  });
+
+  it('skips before spawning a reasoner when the gh probe is not ok (#3358)', async () => {
+    // Every downstream guard reads the forge (park check, dedup, filing), so a
+    // run started here would burn a provider call on a proposal it could neither
+    // dedup nor file — and an unreadable tracker would look like "no duplicates".
+    ensureForgeReachableMock.mockResolvedValueOnce({ ok: false, status: 'unreachable', detail: 'dial tcp' });
+    expect(await buildTaskInput({ app: APP })).toEqual({ skip: { reason: 'forge-unreachable' } });
+    expect(li.listBlockingIssues).not.toHaveBeenCalled();
+    expect(li.gatherSources).not.toHaveBeenCalled();
   });
 
   it('skips when the pinned provider is an api-only (harnessless) provider', async () => {

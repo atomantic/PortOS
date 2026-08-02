@@ -230,13 +230,15 @@ export async function ensureDiagnosticsLabels({ cwd = PATHS.root, exec = runCli 
  * @param {(cmd,args,opts)=>Promise<{code,stdout,stderr}>} [deps.exec] - CLI runner
  * @param {string} [deps.cwd] - repo root for `gh`
  * @param {() => string} [deps.now] - ISO clock (test seam)
- * @returns {Promise<{ failingCount, categories, issue }>}
+ * @param {() => Promise<{ok:boolean,status:string}>} [deps.forgeGate] - gh probe (test seam)
+ * @returns {Promise<{ failingCount, categories, issue, forgeUnavailable? }>}
  */
 export async function runSelfDiagnostics({
   loadLearning = loadLearningData,
   exec = runCli,
   cwd = PATHS.root,
-  now = () => new Date().toISOString()
+  now = () => new Date().toISOString(),
+  forgeGate = null
 } = {}) {
   const data = await loadLearning()
   // Window against the injected clock so tests are deterministic (issue #2617).
@@ -247,6 +249,18 @@ export async function runSelfDiagnostics({
   } else {
     console.log(`🩺 Self-diagnostics: ${failing.length} failing categor${failing.length === 1 ? 'y' : 'ies'} (top: ${failing[0].slug} ${failing[0].failed}/${failing[0].total})`)
     for (const c of failing) console.log(formatCategoryLogLine(c))
+  }
+
+  // The metrics half above is local and always worth logging; everything below
+  // reads or writes the forge. Probe once and skip that half rather than issuing
+  // four `gh` calls that each fail into an ambiguous empty result (#3358).
+  const gate = forgeGate || (async () => {
+    const { ensureForgeReachable } = await import('../github.js')
+    return ensureForgeReachable('self-diagnostics')
+  })
+  const forge = await gate()
+  if (!forge?.ok) {
+    return { failingCount: failing.length, categories: failing, issue: null, forgeUnavailable: true }
   }
 
   const generatedAt = now()

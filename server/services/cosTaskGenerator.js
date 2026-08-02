@@ -2059,6 +2059,13 @@ async function resolveBranchReconcileBlock(app, taskType, metadata, taskSchedule
   // A failed scan is treated as transient (git/gh blip) — skip WITHOUT parking
   // so the next tick retries instead of waiting out a full recheck cadence.
   if (!result) return { skip: true };
+  // Same treatment for a cycle the reconciler skipped because `gh` was unreadable
+  // (#3358): its empty in-flight set is "we could not ask", not "nothing to do",
+  // so parking on it would sit out a full recheck cadence over a network blip.
+  if (result.forgeUnavailable) {
+    emitLog('info', `🔀 branch-reconcile skipped for ${app.name}: forge unreachable (gh ${result.forgeStatus || 'error'})`, { appId: app.id, analysisType: taskType });
+    return { skip: true };
+  }
   if (result.cleaned.length) {
     emitLog('info', `🔀 branch-reconcile ${app.name}: cleaned ${result.cleaned.length} merged branch(es)`, { appId: app.id, analysisType: taskType });
   }
