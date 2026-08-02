@@ -27,9 +27,12 @@
  *
  * Deliberately NOT written:
  *   - `source: 'user'` on non-matching records. The client treats an ABSENT
- *     stamp as "fall back to the marker heuristic", which returns false for
- *     exactly these records — identical behavior with no extra writes, and no
- *     risk of freezing a misclassification.
+ *     stamp as "fall back to the marker heuristic" — which is exactly the
+ *     classification those records get today — so stamping them would add
+ *     writes without changing behavior, while freezing an answer the heuristic
+ *     would otherwise re-evaluate (a name-only match is the case that matters:
+ *     it stays auto until the user renames the collection, and then correctly
+ *     stops being auto).
  *   - Tombstones (`deleted: true`). `deleteCollection` clears the owner links
  *     and items; nothing renders a tombstone, and rewriting one only adds sync
  *     noise.
