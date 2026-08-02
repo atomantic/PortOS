@@ -130,7 +130,7 @@ const SERIES_ID_MAX = 80;
 // heuristic for those rather than mislabeling them user-made. So the sanitizer
 // OMITS the key entirely rather than defaulting it (same posture as
 // `sanitizeItem`'s optional `origin`).
-const COLLECTION_SOURCES = Object.freeze(['auto', 'user']);
+export const COLLECTION_SOURCES = Object.freeze(['auto', 'user']);
 const sanitizeSource = (raw) => (COLLECTION_SOURCES.includes(raw) ? raw : null);
 
 const sanitizeCollection = (raw) => {
@@ -688,6 +688,11 @@ export const unlinkCollectionsForUniverse = (universeId) =>
 export const renameCollectionForUniverse = (universeId, newUniverseName) =>
   renameOwnerLinked('universeId', universeId, UNIVERSE_ID_MAX, universeCollectionNameFor, newUniverseName);
 
+// The `updateCollection` patch keys that peers can actually observe. Anything
+// outside this list is local-only and must not advance `updatedAt` (the LWW
+// clock every peer compares against) — see the `source` note below.
+const WIRE_VISIBLE_PATCH_FIELDS = ['name', 'description', 'coverKey'];
+
 export async function updateCollection(id, patch) {
   assertCollectionId(id);
   const merged = await store().queueRecordWrite(id, async () => {
@@ -724,7 +729,19 @@ export async function updateCollection(id, patch) {
       ...('name' in patch ? { name: patch.name } : {}),
       ...('description' in patch ? { description: patch.description } : {}),
       ...('coverKey' in patch ? { coverKey: patch.coverKey } : {}),
-      updatedAt: new Date().toISOString(),
+      // Provenance is correctable (#3311). The migration classifies legacy
+      // records from markers a user could in principle have typed themselves
+      // (a description starting `Auto-created for project …`), so "the stamp is
+      // wrong and I can't fix it" must not be a dead end. Local-only like the
+      // rest of the field — this edit never leaves the install.
+      ...('source' in patch ? { source: patch.source } : {}),
+      // A source-only edit changes nothing a peer can see (the field is
+      // stripped from the wire), so it must NOT advance the shared LWW clock —
+      // same reasoning as migration 220 leaving `updatedAt` alone. Otherwise
+      // correcting a badge locally would out-race a peer's real edit.
+      updatedAt: WIRE_VISIBLE_PATCH_FIELDS.some((k) => k in patch)
+        ? new Date().toISOString()
+        : cur.updatedAt,
     };
     await store().saveOneNow(id, merged);
     return merged;

@@ -2065,6 +2065,37 @@ describe('peerSync', () => {
       expect(captured.linkedCollection.items).toHaveLength(1);
     });
 
+    it('strips the local-only provenance stamp from a bundled linkedCollection', async () => {
+      // #3311: `source` is per-install and must not cross the wire in ANY
+      // transport. The standalone mediaCollection push goes through
+      // sanitizeRecordForWire; the bundled copy has to as well, or the two
+      // forms of the same record disagree and an upgraded peer's collection
+      // checksum drifts from a not-yet-upgraded one's.
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Universe' });
+      vi.mocked(findCollectionByUniverseId).mockResolvedValueOnce({
+        id: 'col-1',
+        name: 'Universe: U',
+        description: '',
+        coverKey: null,
+        universeId: 'u1',
+        seriesId: null,
+        source: 'auto',
+        items: [],
+        createdAt: '2026-05-22T00:00:00Z',
+        updatedAt: '2026-05-22T01:00:00Z',
+      });
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({}) };
+      });
+      await pushRecordToPeer({
+        id: 's', peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+      });
+      expect(captured.linkedCollection.id).toBe('col-1');
+      expect(captured.linkedCollection.source).toBeUndefined();
+    });
+
     it('re-pushes when only the linked collection items change (universe record byte-identical)', async () => {
       vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Universe' });
       vi.mocked(findCollectionByUniverseId)

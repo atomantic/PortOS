@@ -1812,6 +1812,22 @@ describe('source provenance', () => {
     expect('source' in (await svc.getCollection('c-bogus'))).toBe(false);
   });
 
+  it('is correctable via updateCollection WITHOUT advancing the LWW clock', async () => {
+    // The migration classifies from markers a user could in principle have
+    // typed (an `Auto-…` description), so a wrong stamp must be fixable. And
+    // because the field never reaches a peer, fixing it must not bump
+    // `updatedAt` — that would out-race a peer's real edit for a change no peer
+    // can even see.
+    const c = await svc.createCollection({ name: 'Renders', source: 'auto' });
+    const fixed = await svc.updateCollection(c.id, { source: 'user' });
+    expect(fixed.source).toBe('user');
+    expect(fixed.updatedAt).toBe(c.updatedAt);
+    // A patch that DOES touch wire-visible state still bumps it.
+    const renamed = await svc.updateCollection(c.id, { name: 'Renders 2', source: 'auto' });
+    expect(renamed.source).toBe('auto');
+    expect(renamed.updatedAt).not.toBe(c.updatedAt);
+  });
+
   it('survives an edit and rides through the tombstone', async () => {
     const c = await svc.createCollection({ name: 'Writers Room: Example Work', source: 'auto' });
     expect((await svc.updateCollection(c.id, { description: 'edited' })).source).toBe('auto');

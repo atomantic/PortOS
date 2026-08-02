@@ -7,6 +7,8 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 // → response wiring without standing up the real file-backed store.
 const stubs = {
   bulkUpdateCollectionItems: vi.fn(),
+  updateCollection: vi.fn(async (id, patch) => ({ id, ...patch })),
+  createCollection: vi.fn(async (input) => ({ id: 'new', ...input })),
 };
 
 vi.mock('../services/mediaCollections.js', async () => {
@@ -14,6 +16,8 @@ vi.mock('../services/mediaCollections.js', async () => {
   return {
     ...actual,
     bulkUpdateCollectionItems: (...args) => stubs.bulkUpdateCollectionItems(...args),
+    updateCollection: (...args) => stubs.updateCollection(...args),
+    createCollection: (...args) => stubs.createCollection(...args),
   };
 });
 
@@ -97,5 +101,26 @@ describe('mediaCollections routes — POST /:id/items/bulk', () => {
       add: [{ kind: 'image', ref: 'a.png' }],
     });
     expect(r.status).toBe(409);
+  });
+});
+
+describe('mediaCollections routes — provenance (#3311)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('passes a valid source through PATCH and rejects an unknown one', async () => {
+    const ok = await request(makeApp()).patch('/api/media/collections/c1').send({ source: 'user' });
+    expect(ok.status).toBe(200);
+    expect(stubs.updateCollection).toHaveBeenCalledWith('c1', { source: 'user' });
+
+    const bad = await request(makeApp()).patch('/api/media/collections/c1').send({ source: 'robot' });
+    expect(bad.status).toBe(400);
+  });
+
+  it('strips source from a create body so a client cannot claim provenance', async () => {
+    await request(makeApp()).post('/api/media/collections').send({ name: 'Concept Art', source: 'auto' });
+    // Zod drops the unknown key → the service applies its own 'user' default.
+    expect(stubs.createCollection).toHaveBeenCalledWith({ name: 'Concept Art', description: '' });
   });
 });

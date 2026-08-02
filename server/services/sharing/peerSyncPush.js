@@ -630,13 +630,19 @@ export async function buildPushPayload(sub, sourceInstanceId) {
     const catalogBundle = record.deleted === true
       ? null
       : await buildCatalogBundleForRef('universe', sub.recordId);
+    // The bundled collection goes through the SAME wire projection as a
+    // standalone `mediaCollection` push (below) — the raw service record would
+    // otherwise smuggle peer-local fields (the `source` provenance stamp,
+    // #3311) past the receiver's insert path and leave the bundled and
+    // standalone forms of the same record disagreeing byte-for-byte.
+    const bundledCollection = sanitizeRecordForWire('mediaCollection', linkedCollection);
     return {
       kind: 'universe',
       record: sanitized,
       assetManifest,
       sourceInstanceId,
       portosMeta,
-      ...(linkedCollection ? { linkedCollection } : {}),
+      ...(bundledCollection ? { linkedCollection: bundledCollection } : {}),
       ...(catalogBundle ? { catalogBundle } : {}),
     };
   }
@@ -706,6 +712,8 @@ export async function buildPushPayload(sub, sourceInstanceId) {
       : await import('../pipeline/reverseOutline.js')
         .then(({ getStoredOutline }) => getStoredOutline(sub.recordId))
         .catch(() => null);
+    // Same wire projection as the universe branch — see the note there.
+    const bundledCollection = sanitizeRecordForWire('mediaCollection', linkedCollection);
     return {
       kind: 'series',
       record: sanitized,
@@ -713,7 +721,7 @@ export async function buildPushPayload(sub, sourceInstanceId) {
       assetManifest,
       sourceInstanceId,
       portosMeta,
-      ...(linkedCollection ? { linkedCollection } : {}),
+      ...(bundledCollection ? { linkedCollection: bundledCollection } : {}),
       ...(manuscriptReview && manuscriptReview.comments?.length ? { manuscriptReview } : {}),
       ...(reverseOutline && reverseOutline.status === 'complete' ? { reverseOutline } : {}),
     };

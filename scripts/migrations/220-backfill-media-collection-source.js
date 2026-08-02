@@ -58,15 +58,21 @@ import { join } from 'path';
 // The client heuristic has a FOURTH marker this migration deliberately does not
 // use: the `Creative Director: ` / `Writers Room: ` / `Universe: ` / `Series: `
 // NAME prefix. Nothing reserves those prefixes — the create route takes a free
-// name — so a user-made collection called `Universe: Notes` matches it, and
-// stamping is permanent (a stamped record is skipped on every later pass, and
-// there is no API to correct it). Leaving name-only matches unstamped keeps
-// them on the client fallback, which classifies them exactly as it does today
-// and still re-evaluates if the user renames them. Nothing is lost: every real
-// auto-creator also carries one of the markers below — Creative Director and
-// Writers Room stamp an `Auto-…` description (the create form takes a name
-// only, so a user cannot produce one), and universe/series buckets carry the
-// deterministic id and/or the owner link.
+// name — so a user-made collection called `Universe: Notes` matches it, and a
+// stamped record is skipped on every later pass rather than re-evaluated.
+// Leaving name-only matches unstamped keeps them on the client fallback, which
+// classifies them exactly as it does today and still re-evaluates if the user
+// renames them. Nothing is lost: every real auto-creator also carries one of
+// the markers below — Creative Director and Writers Room stamp an `Auto-…`
+// description, and universe/series buckets carry the deterministic id and/or
+// the owner link.
+//
+// The description prefixes are far weaker evidence than the id/link markers
+// (the POST/PATCH routes do accept a free description), but they are the ONLY
+// markers a legacy Creative Director / Writers Room bucket carries — those get
+// a random uuid and no owner link. `PATCH /api/media/collections/:id` accepts
+// `source`, so the rare user collection described as `Auto-created for project
+// …` can be corrected rather than being stuck.
 const AUTO_DESCRIPTION_PREFIXES = ['Auto-created for project ', 'Auto-generated images for '];
 const AUTO_ID_PREFIXES = ['uc-', 'sc-'];
 
