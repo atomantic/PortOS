@@ -27,6 +27,22 @@ describe('markdownToPlainText', () => {
       .toBe('see the report');
   });
 
+  it('leaves intra-word underscores alone so real data is not silently rewritten', () => {
+    // These bodies are stack traces, user-agent strings and env dumps. Treating
+    // an intra-word `_` as emphasis produces a corrupted-but-plausible preview,
+    // which is worse than leaving the marker in — the reader can't tell.
+    expect(markdownToPlainText('UA: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'))
+      .toBe('UA: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)');
+    expect(markdownToPlainText('    at __webpack_require__ (/assets/index.js:1:1)'))
+      .toBe('at __webpack_require__ (/assets/index.js:1:1)');
+    expect(markdownToPlainText('Set NODE_ENV=test and MEMORY_BACKEND=file'))
+      .toBe('Set NODE_ENV=test and MEMORY_BACKEND=file');
+    expect(markdownToPlainText('https://example.com/a_b_c/d')).toBe('https://example.com/a_b_c/d');
+    // The trailing `_` of one identifier must not pair with the leading `_` of
+    // the next and merge two unrelated words.
+    expect(markdownToPlainText('do_work() then snake_case_name')).toBe('do_work() then snake_case_name');
+  });
+
   it('scopes emphasis to a single line so a stray marker cannot swallow the body', () => {
     // An unclosed `**` in an agent-authored body must leave the rest of the
     // document intact (and must not backtrack across it): the marker on the
@@ -54,6 +70,16 @@ describe('markdownToPlainText', () => {
   it('drops thematic breaks and HTML comments', () => {
     expect(markdownToPlainText('before\n\n---\n\nafter')).toBe('before\nafter');
     expect(markdownToPlainText('kept <!-- hidden --> text')).toBe('kept text');
+  });
+
+  it('drops the spaced thematic-break forms instead of promoting them to bullets', () => {
+    // `- - -` and `* * *` also match the bullet rule; if the bullet rule wins,
+    // a divider becomes `• - -` and eats one of only three preview lines.
+    expect(markdownToPlainText('before\n- - -\nafter')).toBe('before\nafter');
+    expect(markdownToPlainText('before\n* * *\nafter')).toBe('before\nafter');
+    expect(markdownToPlainText('before\n___\nafter')).toBe('before\nafter');
+    // A real bullet is still a bullet.
+    expect(markdownToPlainText('- an item')).toBe('• an item');
   });
 
   it('collapses blank-line runs and trailing whitespace so the clamp shows real words', () => {

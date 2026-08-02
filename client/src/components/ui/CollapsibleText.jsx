@@ -24,6 +24,13 @@ const CLAMP_CLASS = {
  * clamp works and foreign headings stay out of the page outline) but renders
  * the real markdown on expand. When omitted, expanding just unclamps `text`.
  *
+ * `forceToggle` shows the toggle even when the preview fits. It exists for the
+ * `expandedContent` case: there, the toggle is the ONLY route to the rich
+ * content, so gating it purely on overflow strands a short-but-lossy body —
+ * a one-line description holding a link or an image would render as inert
+ * flattened text with no way to reach the real markup. Callers pass it when
+ * the preview is lossy, not merely when it is truncated.
+ *
  * The overflow measurement runs against the *clamped* element, so the toggle
  * only appears when the text actually spills. It is recomputed on the collapsed
  * path when the text changes, so an edit that shortens the text clears a stale
@@ -49,7 +56,8 @@ export default function CollapsibleText({
   className = '',
   lines = 2,
   expandedContent = null,
-  expandedClassName = ''
+  expandedClassName = '',
+  forceToggle = false
 }) {
   const [expanded, setExpanded] = useState(false);
   const [isOverflowing, setIsOverflowing] = useState(false);
@@ -82,7 +90,7 @@ export default function CollapsibleText({
           {text}
         </p>
       )}
-      {(isOverflowing || expanded) && (
+      {(isOverflowing || expanded || forceToggle) && (
         <button
           type="button"
           onClick={() => setExpanded(v => !v)}

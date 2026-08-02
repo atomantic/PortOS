@@ -750,12 +750,16 @@ function ReviewItem({ item, config, idScope, isEditing, onComplete, onDismiss, o
           <>
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p
-                  className={`text-sm font-medium break-words line-clamp-2 ${isPending ? 'text-white' : 'text-gray-400 line-through'}`}
-                  title={item.title}
-                >
-                  {item.title}
-                </p>
+                {/* Titles clamp to two lines so cards scan as a uniform list.
+                    They get a real disclosure rather than a `title` tooltip:
+                    an alert title runs to 120 characters and overflows two
+                    lines on a phone, where a hover tooltip never fires. */}
+                <CollapsibleText
+                  id={`review-item-title-${idScope}-${item.id}`}
+                  lines={2}
+                  text={item.title}
+                  className={`text-sm font-medium ${isPending ? 'text-white' : 'text-gray-400 line-through'}`}
+                />
                 {/* Triage is a scanning task, so the body is a fixed 3-line
                     plain-text preview: the raw markdown for a CoS task prompt
                     or a stack trace runs thousands of words, and rendering it
@@ -771,6 +775,11 @@ function ReviewItem({ item, config, idScope, isEditing, onComplete, onDismiss, o
                     className="text-xs text-gray-500 mt-0.5"
                     expandedContent={<MarkdownOutput content={item.description} />}
                     expandedClassName="max-h-80 overflow-y-auto pr-1"
+                    // Flattening drops links, images and tables, so a body that
+                    // fits in three lines still needs a route to its rendered
+                    // form — otherwise a short description holding a scan-report
+                    // link becomes permanently inert text.
+                    forceToggle={bodyPreview !== item.description}
                   />
                 )}
                 {item.metadata?.reportUrl && (

@@ -29,24 +29,38 @@ export function markdownToPlainText(markdown) {
     .split('\n')
     .filter(line => !FENCE_LINE.test(line))
     .map(line => line
+      // Thematic breaks first: the spaced forms (`- - -`, `* * *`) also match
+      // the bullet rule below, and losing the race turns a divider into a
+      // bullet that eats one of only three preview lines.
+      .replace(/^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$/, '')
       .replace(/^\s{0,3}#{1,6}\s+/, '')          // ATX heading markers
       .replace(/^\s{0,3}>\s?/, '')               // blockquote markers
       .replace(/^\s*[-*+]\s+/, '• ')             // bullet markers
-      .replace(/^\s*(\d+)[.)]\s+/, '$1. ')       // ordered-list markers
-      .replace(/^\s*([-*_])(?:\s*\1){2,}\s*$/, '')); // thematic breaks
+      .replace(/^\s*(\d+)[.)]\s+/, '$1. '));     // ordered-list markers
 
   return lines
     .join('\n')
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, (_, alt) => (alt ? `[${alt}]` : '[image]'))
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')     // links → their text
     .replace(/`([^`]*)`/g, '$1')                 // inline code
-    // Emphasis spans are matched within a single line ([^\n], not [\s\S]). Real
-    // markdown emphasis doesn't span paragraphs, and a line-bounded lazy
-    // quantifier means an unclosed `**` in a multi-thousand-word agent body
-    // backtracks over one line instead of the whole document.
-    .replace(/(\*\*|__)(?=\S)([^\n]*?\S)\1/g, '$2')  // bold
-    .replace(/(\*|_)(?=\S)([^*_\n]*?\S)\1/g, '$2')   // italic
-    .replace(/~~(?=\S)([^\n]*?\S)~~/g, '$1')         // strikethrough
+    // Emphasis. Two properties matter more than markdown fidelity here:
+    //
+    // 1. Every content class excludes its own delimiter and `\n`, so each pass
+    //    is linear. An unbounded `[^\n]*?` rescans to end-of-line for every
+    //    unmatched opener, and these bodies are routinely ONE enormous line (a
+    //    pasted transcript, an unwrapped stack dump) — measured at 1.3s for a
+    //    50KB body and ~8s for 112KB, on the main thread, per card.
+    // 2. Underscore emphasis is gated on word boundaries, per CommonMark. Without
+    //    that gate the preview silently rewrites real data: `Mac OS X 10_15_7` →
+    //    `10157`, `__webpack_require__` → `webpackrequire`, `snake_case` →
+    //    `snakecase`. These bodies are stack traces and user-agent strings, so a
+    //    corrupted-but-plausible preview is worse than an unstripped marker.
+    //    Intra-word `*` emphasis IS conformant, so `*` needs no such gate.
+    .replace(/\*\*(?=\S)([^*\n]*?\S)\*\*/g, '$1')              // bold  **…**
+    .replace(/(^|\W)__(?=\S)([^_\n]*?\S)__(?!\w)/gm, '$1$2')   // bold  __…__
+    .replace(/\*(?=\S)([^*\n]*?\S)\*/g, '$1')                  // italic *…*
+    .replace(/(^|\W)_(?=\S)([^_\n]*?\S)_(?!\w)/gm, '$1$2')     // italic _…_
+    .replace(/~~(?=\S)([^~\n]*?\S)~~/g, '$1')                  // strikethrough
     .replace(/[ \t]+/g, ' ')
     .replace(/\n{2,}/g, '\n')                    // collapse blank-line runs
     .split('\n')

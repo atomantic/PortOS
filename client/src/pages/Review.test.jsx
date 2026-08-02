@@ -9,8 +9,8 @@ const LONG_BODY = [
   '',
   'Investigate the **failing** request and file a follow-up.',
   '',
-  '- url: https://example.com/a',
-  '- user-agent: Mozilla/5.0 (X11; Linux x86_64) ExampleBrowser/1.0',
+  '- url: https://example.com/a_b_c/d',
+  '- user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ExampleBrowser/1.0',
   '',
   '### Stack',
   '',
@@ -30,8 +30,20 @@ const ITEM = {
   metadata: {}
 };
 
+// A body short enough to fit the clamp, but whose flattened preview is still
+// lossy — the link survives only in the markdown.
+const SHORT_ITEM = {
+  id: 'item-2',
+  type: 'todo',
+  status: 'pending',
+  title: 'Read the scan report',
+  description: 'See the [scan report](/data/reports/x.html) for details.',
+  createdAt: '2026-08-01T11:00:00.000Z',
+  metadata: {}
+};
+
 vi.mock('../services/api', () => ({
-  getReviewItems: vi.fn(() => Promise.resolve([ITEM])),
+  getReviewItems: vi.fn(() => Promise.resolve([ITEM, SHORT_ITEM])),
   getReviewBriefing: vi.fn(() => Promise.resolve(null)),
   getReviewQueue: vi.fn(() => Promise.resolve({ items: [], sources: {} })),
   createReviewTodo: vi.fn(() => Promise.resolve({})),
@@ -64,6 +76,20 @@ afterEach(() => vi.restoreAllMocks());
 
 const actionQueueBody = () => document.getElementById(`review-item-body-action-queue-${ITEM.id}`);
 
+// Wait for the toggle that controls one specific element. `findAllByRole`
+// alone is not enough: a forceToggle card renders its toggle on the first
+// paint, so the query resolves before the overflow-measuring passive effects
+// that reveal the other cards' toggles have flushed.
+const findToggleFor = async (controlsId) => {
+  let toggle;
+  await waitFor(() => {
+    toggle = screen.getAllByRole('button', { name: /Show more/ })
+      .find(b => b.getAttribute('aria-controls') === controlsId);
+    expect(toggle).toBeTruthy();
+  });
+  return toggle;
+};
+
 describe('Review Hub queue-card triage (#3282)', () => {
   it('previews the body as clamped plain text instead of full markdown', async () => {
     render(<Review />);
@@ -82,6 +108,10 @@ describe('Review Hub queue-card triage (#3282)', () => {
     expect(body.textContent).toContain('Investigate the failing request');
     expect(body.textContent).not.toContain('##');
     expect(body.textContent).not.toContain('**');
+    // Technical payloads survive the flatten byte-for-byte — a preview that
+    // rewrites `10_15_7` to `10157` is worse than one that shows a marker.
+    expect(body.textContent).toContain('Mac OS X 10_15_7');
+    expect(body.textContent).toContain('https://example.com/a_b_c/d');
     // The foreign body contributes no headings to this page's outline.
     expect(screen.queryByRole('heading', { name: 'Task Prompt' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Stack' })).not.toBeInTheDocument();
@@ -102,16 +132,38 @@ describe('Review Hub queue-card triage (#3282)', () => {
     render(<Review />);
     await waitFor(() => expect(actionQueueBody()).toBeTruthy());
 
-    // findAll, not getAll: the overflow measurement lives in a passive effect,
-    // which React may flush a tick after the card itself paints.
-    const toggles = await screen.findAllByRole('button', { name: /Show more/ });
-    const toggle = toggles.find(b => b.getAttribute('aria-controls') === `review-item-body-action-queue-${ITEM.id}`);
-    expect(toggle).toBeTruthy();
-
+    const toggle = await findToggleFor(`review-item-body-action-queue-${ITEM.id}`);
     fireEvent.click(toggle);
 
     expect(screen.getByRole('heading', { name: 'Task Prompt' })).toBeInTheDocument();
     expect(actionQueueBody()).toHaveClass('max-h-80', 'overflow-y-auto');
+  });
+
+  it('still offers Show more when a short body loses markup to the flatten', async () => {
+    // No forced overflow: this body fits the 3-line clamp. Without the lossy
+    // check the link would be stranded as inert text with no way to reach it.
+    render(<Review />);
+    const shortBodyId = `review-item-body-action-queue-${SHORT_ITEM.id}`;
+    await waitFor(() => expect(document.getElementById(shortBodyId)).toBeTruthy());
+
+    expect(document.getElementById(shortBodyId).textContent).toBe('See the scan report for details.');
+    expect(screen.queryByRole('link', { name: 'scan report' })).not.toBeInTheDocument();
+
+    const toggle = await findToggleFor(shortBodyId);
+    fireEvent.click(toggle);
+    expect(screen.getAllByRole('link', { name: 'scan report' }).length).toBeGreaterThan(0);
+  });
+
+  it('gives a clamped title a real disclosure rather than a hover-only tooltip', async () => {
+    // `title` never fires on touch, and the issue measures this page at 375px
+    // wide — a two-line-clamped title needs a control, not a tooltip.
+    forceOverflow();
+    render(<Review />);
+    const titleId = `review-item-title-action-queue-${ITEM.id}`;
+    await waitFor(() => expect(document.getElementById(titleId)).toBeTruthy());
+
+    expect(document.getElementById(titleId)).toHaveClass('line-clamp-2');
+    expect(await findToggleFor(titleId)).toBeTruthy();
   });
 
   it('scopes the body id per placement so the duplicate card is not an id collision', async () => {

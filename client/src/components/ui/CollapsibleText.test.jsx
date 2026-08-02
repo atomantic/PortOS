@@ -107,6 +107,25 @@ describe('CollapsibleText', () => {
     expect(document.getElementById('t9')).toHaveClass('line-clamp-2');
   });
 
+  it('shows the toggle on forceToggle so a fitting-but-lossy preview still reaches its rich content', () => {
+    // No forceOverflow here: the preview fits. With expandedContent the toggle
+    // is the ONLY route to the rich markup, so a short-but-lossy body (a
+    // one-line description holding a link) would otherwise be stranded as
+    // inert flattened text.
+    render(
+      <CollapsibleText id="t11" text="see the report" expandedContent={<a href="/r">the report</a>} forceToggle />
+    );
+
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Show more/ }));
+    expect(screen.getByRole('link', { name: 'the report' })).toBeInTheDocument();
+  });
+
+  it('keeps the toggle hidden without forceToggle when the text fits', () => {
+    render(<CollapsibleText id="t12" text="short" expandedContent={<a href="/r">the report</a>} />);
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
   it('swaps in expandedContent on expand and restores the plain-text clamp on collapse', () => {
     forceOverflow();
     render(
