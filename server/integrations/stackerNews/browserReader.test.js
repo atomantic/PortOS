@@ -77,7 +77,8 @@ describe('Stacker News browser read transport', () => {
   // A failed extraction must never look like a quiet empty page: sync would
   // clear last_error and advance last_sync_at while ingesting nothing.
   it('throws when the page yielded no extractable payload instead of reporting an empty page', async () => {
-    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~example/recent', null));
+    // Echo the requested URL back so only the missing payload can fail the read.
+    navigateToUrlPinned.mockImplementation(async (url) => page(url, null));
     await expect(readItems('example')).rejects.toThrow('Could not read Stacker News data');
     await expect(readSub('example')).rejects.toThrow('Could not read Stacker News data');
     await expect(readMe()).rejects.toThrow('Could not read Stacker News data');
@@ -107,6 +108,35 @@ describe('Stacker News browser read transport', () => {
     navigateToUrlPinned.mockResolvedValue(page('https://example.com/~example/recent', { items: { cursor: null, items: [] } }));
     await expect(readItems('example')).rejects.toThrow('left the fixed origin');
     expect(closeCdpPage).toHaveBeenCalledWith('page-1');
+  });
+
+  // Stacker News redirects a renamed/merged territory to a different same-origin
+  // one; filing that page under the configured slug would store another
+  // territory's owner ID as this territory's ownership evidence.
+  it('refuses a same-origin redirect to a different territory', async () => {
+    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~other/recent', { items: { cursor: null, items: [] } }));
+    await expect(readItems('example')).rejects.toThrow('different page than the one requested');
+    expect(closeCdpPage).toHaveBeenCalledWith('page-1');
+  });
+
+  it('tolerates a trailing-slash or case difference in the landed URL', async () => {
+    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~Example/recent/?nodata=1', { items: { cursor: null, items: [] } }));
+    await expect(readItems('example')).resolves.toEqual({ items: { cursor: null, items: [] } });
+  });
+
+  it('refuses a payload naming a territory other than the one requested', async () => {
+    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~example/recent', { sub: { name: 'other', userId: '42' } }));
+    await expect(readSub('example')).rejects.toThrow('for a different requested territory');
+  });
+
+  it('bounds a page to the caller-requested limit, matching the GraphQL transport', async () => {
+    const items = Array.from({ length: 40 }, (_, index) => ({ id: index + 1, user: { name: 'example_artist' } }));
+    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~example/recent', { items: { cursor: null, items } }));
+    await expect(executeStackerNewsBrowserRead('items', { sub: 'example', limit: 30 })).resolves.toMatchObject({ items: { items: expect.any(Array) } });
+    const bounded = await executeStackerNewsBrowserRead('items', { sub: 'example', limit: 30 });
+    expect(bounded.items.items).toHaveLength(30);
+    const unbounded = await readItems('example');
+    expect(unbounded.items.items).toHaveLength(40);
   });
 
   it('rejects a territory name or cursor the closed registry does not allow', async () => {

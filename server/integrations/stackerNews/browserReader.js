@@ -99,16 +99,31 @@ const ITEMS_EXPRESSION = `(() => {
   };
 })()`;
 
-// Every read: pinned navigation, public-address check, origin verification, then
-// tear the tab down. Read tabs are scratch — a five-page sync would otherwise
-// leave five tabs open in the user's browser per territory.
+const comparablePath = (url) => new URL(url).pathname.replace(/\/+$/, '').toLowerCase();
+
+// Origin alone is not enough for a read: Stacker News redirects a renamed or
+// merged territory to a DIFFERENT same-origin territory, and the caller would
+// then file that territory's settings, owner ID, and items under the configured
+// slug. Refuse anything that did not land on the page we asked for.
+const verifyFinalLocation = (requestedUrl, finalUrl) => {
+  verifyFinalOrigin(finalUrl);
+  if (comparablePath(requestedUrl) !== comparablePath(finalUrl)) {
+    throw new Error('Stacker News browser navigation landed on a different page than the one requested');
+  }
+};
+
+// Every read: pinned navigation, public-address check, location verification,
+// then tear the tab down. Read tabs are scratch — a five-page sync would
+// otherwise leave five tabs open in the user's browser per territory.
 async function readPage(url, evaluateExpression) {
   const page = await navigateToUrlPinned(url, {
     verifyRemoteIp: (ip) => !isPrivateAddress(ip),
     settleMs: SETTLE_MS,
     evaluateExpression,
   });
-  const originError = await Promise.resolve(page.url).then(verifyFinalOrigin).then(() => null, (error) => error);
+  const originError = await Promise.resolve()
+    .then(() => verifyFinalLocation(url, page.url))
+    .then(() => null, (error) => error);
   await closeCdpPage(page.id);
   if (originError) throw originError;
   // Null means the extractor found no server-rendered payload, or `Runtime.evaluate`
@@ -133,10 +148,10 @@ const nullableString = (value, max) => {
 // Re-normalizes what the page returned. The evaluate expression runs inside an
 // untrusted document, so its output is treated as remote data, not as a trusted
 // projection — the shape below is what the rest of PortOS is allowed to see.
-const normalizeItemsPage = (page) => ({
+const normalizeItemsPage = (page, limit) => ({
   cursor: nullableString(page?.cursor, MAX_CURSOR_LENGTH),
   items: (Array.isArray(page?.items) ? page.items : [])
-    .slice(0, MAX_ITEMS_PER_PAGE)
+    .slice(0, Number.isInteger(limit) && limit > 0 ? Math.min(limit, MAX_ITEMS_PER_PAGE) : MAX_ITEMS_PER_PAGE)
     .map((item) => ({
       // `boundedString` rejects anything that is not a string or finite number,
       // so an id of `true` / `{}` normalizes to '' and the item is dropped below
@@ -167,6 +182,12 @@ export async function readSub(slug) {
   const { sub } = await readPage(slugPath(slug), SUB_EXPRESSION);
   const name = boundedString(sub?.name, 120);
   if (!name) return { sub: null };
+  // The stored `userId` becomes this territory's ownership evidence, which gates
+  // the territory-settings handoff — so a payload naming a different territory
+  // is refused rather than filed under the requested slug.
+  if (name.toLowerCase() !== slug.trim().toLowerCase()) {
+    throw new Error(`Stacker News returned territory ~${name} for a different requested territory`);
+  }
   return {
     sub: {
       name,
@@ -181,15 +202,17 @@ export async function readSub(slug) {
   };
 }
 
-export async function readItems(slug, cursor = null) {
+// `limit` mirrors the GraphQL transport's page bound so both transports ingest
+// the same number of items per page, even though the SSR page size is fixed.
+export async function readItems(slug, cursor = null, limit = null) {
   const { items } = await readPage(itemsUrl(slug, cursor), ITEMS_EXPRESSION);
-  return { items: normalizeItemsPage(items) };
+  return { items: normalizeItemsPage(items, limit) };
 }
 
 const BROWSER_READS = Object.freeze({
   me: () => readMe(),
   sub: ({ name }) => readSub(name),
-  items: ({ sub, cursor = null }) => readItems(sub, cursor),
+  items: ({ sub, cursor = null, limit = null }) => readItems(sub, cursor, limit),
 });
 
 /**
