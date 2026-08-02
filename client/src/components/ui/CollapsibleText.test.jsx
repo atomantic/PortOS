@@ -93,4 +93,49 @@ describe('CollapsibleText', () => {
     const p = document.getElementById('t5');
     expect(p).toHaveClass('text-sm', 'text-gray-500', 'mt-1', 'line-clamp-2');
   });
+
+  it('clamps at the requested depth', () => {
+    render(<CollapsibleText id="t8" text="hi" lines={3} />);
+    expect(document.getElementById('t8')).toHaveClass('line-clamp-3');
+  });
+
+  it('falls back to the 2-line clamp for an unsupported depth', () => {
+    // Tailwind only emits the literal class names in CLAMP_CLASS, so an
+    // out-of-range value must degrade to a real clamp rather than to none —
+    // an unclamped "preview" is the exact bug this component exists to prevent.
+    render(<CollapsibleText id="t9" text="hi" lines={99} />);
+    expect(document.getElementById('t9')).toHaveClass('line-clamp-2');
+  });
+
+  it('swaps in expandedContent on expand and restores the plain-text clamp on collapse', () => {
+    forceOverflow();
+    render(
+      <CollapsibleText
+        id="t10"
+        text="flattened preview"
+        lines={3}
+        expandedContent={<h4>Foreign Heading</h4>}
+        expandedClassName="max-h-80 overflow-y-auto"
+      />
+    );
+
+    // Collapsed: plain text only — the rich content (and its heading) is absent
+    // from the document, so it cannot pollute the page outline.
+    expect(document.getElementById('t10')).toHaveClass('line-clamp-3');
+    expect(screen.getByText('flattened preview')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Foreign Heading' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Show more/ }));
+    expect(screen.getByRole('heading', { name: 'Foreign Heading' })).toBeInTheDocument();
+    expect(screen.queryByText('flattened preview')).not.toBeInTheDocument();
+    // The expanded body keeps the id (so aria-controls still resolves) and is
+    // height-capped so one expanded card can't swallow the list.
+    const expandedBody = document.getElementById('t10');
+    expect(expandedBody).toHaveClass('max-h-80', 'overflow-y-auto');
+    expect(expandedBody).not.toHaveClass('line-clamp-3');
+
+    fireEvent.click(screen.getByRole('button', { name: /Show less/ }));
+    expect(screen.getByText('flattened preview')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Foreign Heading' })).not.toBeInTheDocument();
+  });
 });
