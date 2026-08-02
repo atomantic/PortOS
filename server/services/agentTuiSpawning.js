@@ -645,8 +645,14 @@ export async function spawnTuiAgent({
     // cleanup, pid unregister, activeAgents delete, session kill. Without
     // this, a memory-extraction crash would strand the worktree and the
     // shell session on disk.
+    // The verdict finalizeAgent actually persisted. A PR-claim downgrade (#3358)
+    // must reach cleanup too — cleaning up as a success removes the worktree and
+    // deletes the local branch, destroying the state the retry needs. Left at
+    // `finalSuccess` if finalize threw before returning (the pre-existing
+    // best-effort posture).
+    let cleanupSuccess = finalSuccess;
     try {
-      await finalizeAgent({
+      const finalized = await finalizeAgent({
         agentId,
         task,
         runId,
@@ -663,17 +669,18 @@ export async function spawnTuiAgent({
         workspacePath,
         prExpected: agentOwnsPR,
       });
+      if (finalized && typeof finalized.success === 'boolean') cleanupSuccess = finalized.success;
     } finally {
       if (workspacePath) await rm(join(workspacePath, DONE_SENTINEL_NAME)).catch(() => {});
 
-      const reviewOptions = finalSuccess && taskOpenPR && !agentOwnsPR
+      const reviewOptions = cleanupSuccess && taskOpenPR && !agentOwnsPR
         ? await resolveReviewLoopOptions(task.metadata, { normalize: normalizeReviewers, isTruthyMeta: isTruthyMetaFn })
           .catch(err => {
             emitLog('warn', `TUI review options unavailable for ${agentId}: ${err.message}`, { agentId });
             return {};
           })
         : {};
-      await cleanupWorktreeFn(agentId, finalSuccess, {
+      await cleanupWorktreeFn(agentId, cleanupSuccess, {
         openPR: agentOwnsPR ? false : taskOpenPR,
         prCompletion: resolvePrCompletion(task.metadata),
         ...reviewOptions,

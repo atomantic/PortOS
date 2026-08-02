@@ -37,6 +37,7 @@ vi.mock('../lib/workTracker.js', async (importActual) => {
     hostToWorkTracker: actual.hostToWorkTracker,
     hostFromOriginUrl: actual.hostFromOriginUrl,
     githubRepoSpec: actual.githubRepoSpec,
+    githubApiHost: actual.githubApiHost,
   };
 });
 vi.mock('../lib/fileUtils.js', () => ({

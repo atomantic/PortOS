@@ -2066,6 +2066,15 @@ async function resolveBranchReconcileBlock(app, taskType, metadata, taskSchedule
     emitLog('info', `🔀 branch-reconcile skipped for ${app.name}: forge unreachable (gh ${result.forgeStatus || 'error'})`, { appId: app.id, analysisType: taskType });
     return { skip: true };
   }
+  // A gh read that failed AFTER the probe passed leaves PR state unknown, so
+  // every un-merged branch classified WIP and the actionable set below would be
+  // empty for a reason that has nothing to do with the repo. Retry next tick
+  // rather than parking. Merged branches were still cleaned (git truth), so log
+  // that before bailing.
+  if (result.prStateUnavailable) {
+    emitLog('info', `🔀 branch-reconcile deferred for ${app.name}: PR state unreadable this cycle (cleaned ${result.cleaned.length} merged branch(es))`, { appId: app.id, analysisType: taskType });
+    return { skip: true };
+  }
   if (result.cleaned.length) {
     emitLog('info', `🔀 branch-reconcile ${app.name}: cleaned ${result.cleaned.length} merged branch(es)`, { appId: app.id, analysisType: taskType });
   }

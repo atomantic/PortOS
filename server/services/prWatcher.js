@@ -306,13 +306,13 @@ export async function processPendingMergePrs(app) {
   const pending = readPendingMergePrs(app).map(normalizePendingMerge).filter(Boolean);
   if (pending.length === 0) return { ok: true, checked: 0, merged: 0, escalated: 0, timedOut: 0 };
 
-  // Skip rather than poll every pending PR into an `errors` count we can't act on.
-  const forge = await ensureForgeReachable('pr-watcher pending-merge');
-  if (!forge.ok) return { ok: false, reason: 'forge-unreachable', forgeStatus: forge.status };
-
   const origin = await getOriginInfo(app?.repoPath).catch(() => null);
   const repoSpec = githubRepoSpec(origin);
   if (!repoSpec) return { ok: false, reason: 'not-a-github-repo' };
+
+  // Skip rather than poll every pending PR into an `errors` count we can't act on.
+  const forge = await ensureForgeReachable('pr-watcher pending-merge', { hostname: githubApiHost(origin.host) });
+  if (!forge.ok) return { ok: false, reason: 'forge-unreachable', forgeStatus: forge.status };
 
   const outcomes = new Map();
   const result = { ok: true, checked: 0, merged: 0, escalated: 0, timedOut: 0, errors: 0 };
@@ -410,12 +410,6 @@ export async function persistPrWatcherState(appId, patch) {
 export async function checkPullRequests(app, { authorFilter = 'any' } = {}) {
   const filter = PR_AUTHOR_FILTERS.includes(authorFilter) ? authorFilter : 'any';
 
-  // Probe first (#3358). Without this an unreachable gh reads as "no open PRs",
-  // the high-water mark stays put, and the watcher reports a quiet repo forever
-  // with nothing in the log naming the real cause.
-  const forge = await ensureForgeReachable('pr-watcher');
-  if (!forge.ok) return { ok: false, reason: 'forge-unreachable', forgeStatus: forge.status };
-
   const origin = await getOriginInfo(app.repoPath).catch(() => null);
   // Accept any GitHub-family host — github.com AND self-hosted GitHub Enterprise
   // (github.*) — not just github.com. `origin.isGithub` is github.com-only (it
@@ -428,6 +422,14 @@ export async function checkPullRequests(app, { authorFilter = 'any' } = {}) {
     return { ok: false, reason: 'not-a-github-repo' };
   }
   const repoFullName = origin.fullName;
+
+  // Probe before any gh read (#3358). Without this an unreachable gh returns an
+  // empty PR page, the high-water mark stays put, and the watcher reports a
+  // quiet repo forever with nothing in the log naming the real cause. Probed
+  // against THIS repo's API host, not gh's default — an enterprise app must not
+  // be gated on github.com's health (and vice versa).
+  const forge = await ensureForgeReachable('pr-watcher', { hostname: githubApiHost(origin.host) });
+  if (!forge.ok) return { ok: false, reason: 'forge-unreachable', forgeStatus: forge.status, repoFullName };
 
   const defaultBranch = await getDefaultBranch(repoSpec);
   if (!defaultBranch) {

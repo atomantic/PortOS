@@ -254,3 +254,29 @@ describe('findPullRequestForBranch (#3358)', () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 });
+
+describe('checkGhHealth host keying (#3358)', () => {
+  beforeEach(() => { __resetGhHealthCache(); spawnMock.mockReset(); });
+
+  it('targets a named host with --hostname', async () => {
+    spawnMock.mockImplementation(() => fakeChild({ code: 0 }));
+    await checkGhHealth({ hostname: 'github.acme-corp.example' });
+    expect(spawnMock).toHaveBeenCalledWith('gh', ['api', 'rate_limit', '--hostname', 'github.acme-corp.example'], expect.any(Object));
+  });
+
+  it('caches per host — a healthy github.com does not vouch for an enterprise host', async () => {
+    spawnMock.mockImplementation((_cmd, args) => fakeChild(
+      args.includes('github.acme-corp.example')
+        ? { code: 1, stderr: 'HTTP 401: Bad credentials' }
+        : { code: 0 }
+    ));
+    await expect(checkGhHealth()).resolves.toMatchObject({ ok: true });
+    await expect(checkGhHealth({ hostname: 'github.acme-corp.example' }))
+      .resolves.toMatchObject({ ok: false, status: 'not-authenticated' });
+    // Both are memoized independently.
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    await checkGhHealth();
+    await checkGhHealth({ hostname: 'github.acme-corp.example' });
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
+});

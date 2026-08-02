@@ -55,7 +55,7 @@ import { execGh, ensureForgeReachable } from './github.js';
 import { execGlab } from './gitlab.js';
 import { fetchMyCurrentSprintTickets } from './jira.js';
 import { getOriginInfo, readOriginRemoteUrl } from '../lib/gitRemote.js';
-import { hostToWorkTracker, hostFromOriginUrl, githubRepoSpec } from '../lib/workTracker.js';
+import { hostToWorkTracker, hostFromOriginUrl, githubRepoSpec, githubApiHost } from '../lib/workTracker.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 
 // Bound the forge queries (single-user repos never realistically truncate at 200).
@@ -266,10 +266,10 @@ function normalizeGithubIssue(issue) {
  * @param {string} fullName - plain `OWNER/REPO`, returned for display/logging
  * @returns {Promise<{forge:'github', fullName:string, inProgress:object[], mergedPrs:object[], openPrs:object[]}|null>}
  */
-async function getGithubState(repoSpec, fullName) {
+async function getGithubState(repoSpec, fullName, apiHost = null) {
   // Probe before the three list calls (#3358): without it an unreachable gh
   // returns three empty pages that read as "nothing to reconcile" forever.
-  const forge = await ensureForgeReachable('issue-reconcile');
+  const forge = await ensureForgeReachable('issue-reconcile', { hostname: apiHost });
   if (!forge.ok) return null;
 
   const ghList = (args, what) => execGh(args).catch((err) => {
@@ -422,7 +422,7 @@ async function getForgeState(repoPath) {
   // `HOST/OWNER/REPO` --repo selector (deterministic on fork+upstream checkouts),
   // or null when the origin isn't a resolvable GitHub repo.
   const githubSpec = githubRepoSpec(origin);
-  if (githubSpec) return getGithubState(githubSpec, origin.fullName);
+  if (githubSpec) return getGithubState(githubSpec, origin.fullName, githubApiHost(origin.host));
 
   // GitLab: classify off the host (subgroup-safe). `glab` is cwd-based, so a
   // display path is best-effort — prefer getOriginInfo's fullName, else derive the

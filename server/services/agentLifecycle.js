@@ -38,6 +38,7 @@ import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { createAgentRun, checkForTaskCommit } from './agentRunTracking.js';
 import { buildAgentPrompt, getAppWorkspace } from './agentPromptBuilder.js';
 import { isOllamaClaudeProvider, isClaudeCommand, providerSuppliesGithubToken } from '../lib/providerModels.js';
+import { canTypeSlashCommands } from '../lib/slashdoInvocation.js';
 import { composeProviderEnv } from '../lib/cliChildEnv.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { buildCliSpawnConfig, isClaudeCliProvider, isTuiProvider, getClaudeSettingsEnv, spawnDirectly } from './agentCliSpawning.js';
@@ -891,6 +892,18 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     // Analyze failure if applicable
     const errorAnalysis = effectiveSuccess ? null : analyzeAgentFailure(outputBuffer, task, model);
 
+    // Whether the AGENT (not PortOS) owned PR creation — the gate for
+    // finalizeAgent's PR-claim verification (#3358). Derived from the same
+    // `canTypeSlashCommands` predicate `runAgentCompletionCleanup` uses below, so
+    // the run that was told to open its own PR is exactly the run we check for
+    // one. When PortOS owns it the PR is created by that cleanup, i.e. AFTER
+    // finalize, so verifying here would fail every correct run.
+    const runnerAgentOwnsPR = isTruthyMeta(task?.metadata?.openPR) && canTypeSlashCommands({
+      providerId: agent.providerId,
+      providerCommand: agent.providerCommand,
+      leanMode: agent.leanMode === true,
+    });
+
     // Extract pipeline output summary before completion writes metadata to disk
     if (task?.metadata?.pipeline && effectiveSuccess) {
       const workspacePath = agent.workspacePath || ROOT_DIR;
@@ -917,8 +930,12 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     // it (#2727) but both carry their own .catch, so neither throws out —
     // the partial-state cases are best-effort by design).
     let finalizeError = null;
+    // The verdict finalizeAgent persisted — a PR-claim downgrade (#3358) has to
+    // reach the cleanup below, which otherwise removes the worktree, deletes the
+    // local branch, and skips the resume pointer for a run it believes succeeded.
+    let cleanupSuccess = effectiveSuccess;
     try {
-      await finalizeAgent({
+      const finalized = await finalizeAgent({
         agentId,
         task,
         runId,
@@ -930,7 +947,9 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
         errorAnalysis,
         isTruthyMetaFn: isTruthyMeta,
         workspacePath: agent.workspacePath || null,
+        prExpected: runnerAgentOwnsPR,
       });
+      if (finalized && typeof finalized.success === 'boolean') cleanupSuccess = finalized.success;
     } catch (err) {
       finalizeError = err;
       emitLog('error', `finalizeAgent threw for ${agentId} (continuing cleanup): ${err.message}`, { agentId, error: err.message });
@@ -940,7 +959,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     // pipeline progression, the Creative Director chain hook, and worktree
     // cleanup (+ cleanup-warning notification and merge-recovery task). Runs
     // inside this try so a throw still hits the finally below.
-    await runAgentCompletionCleanup({ agentId, task, agent, effectiveSuccess, outputBuffer });
+    await runAgentCompletionCleanup({ agentId, task, agent, effectiveSuccess: cleanupSuccess, outputBuffer });
 
     // Surface a finalizeAgent throw to the caller after best-effort
     // cleanup completed — without this the runner harness would never see

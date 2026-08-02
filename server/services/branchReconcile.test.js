@@ -459,6 +459,40 @@ describe('unreachable forge (#3358)', () => {
     expect(classifyBranches(inputs)[0].state).toBe('NEEDS_PR');
   });
 
+  it('surfaces a mid-cycle gh failure as prStateUnavailable so the caller retries instead of parking', async () => {
+    git.getBranches.mockResolvedValue([
+      { name: 'claim/issue-1', isDefault: false, current: false, tracking: 'origin/claim/issue-1', merged: false }
+    ]);
+    wt.listWorktrees.mockResolvedValue([]);
+    execGh.mockRejectedValue(new Error('connect: bad file descriptor'));
+    git.isBranchMergedInto.mockResolvedValue(false);
+
+    const res = await reconcile('/repo');
+    // The probe passed, so the cycle ran — but the in-flight set is empty for a
+    // reason that says nothing about the repo, and parking on it would sit out a
+    // full recheck cadence.
+    expect(res.forgeUnavailable).toBeUndefined();
+    expect(res.prStateUnavailable).toBe(true);
+    expect(res.inFlight).toEqual([]);
+  });
+
+  it('leaves prStateUnavailable false on a clean cycle', async () => {
+    git.getBranches.mockResolvedValue([
+      { name: 'claim/issue-1', isDefault: false, current: false, tracking: 'origin/claim/issue-1', merged: false }
+    ]);
+    wt.listWorktrees.mockResolvedValue([]);
+    execGh.mockResolvedValue('[]');
+    git.isBranchMergedInto.mockResolvedValue(false);
+    expect((await reconcile('/repo')).prStateUnavailable).toBe(false);
+  });
+
+  it('probes THIS repo\'s API host so an enterprise checkout is not gated on github.com', async () => {
+    getOriginInfo.mockResolvedValue({ hasOrigin: true, isGithub: false, host: 'github.acme-corp.example', fullName: 'o/r' });
+    ensureForgeReachableMock.mockResolvedValueOnce({ ok: false, status: 'not-authenticated', detail: null });
+    await reconcile('/repo');
+    expect(ensureForgeReachableMock).toHaveBeenCalledWith('branch-reconcile', { hostname: 'github.acme-corp.example' });
+  });
+
   it('skips the whole cycle (never touches git) when the gh probe is not ok', async () => {
     ensureForgeReachableMock.mockResolvedValueOnce({ ok: false, status: 'unreachable', detail: 'dial tcp' });
     const res = await reconcile('/repo');

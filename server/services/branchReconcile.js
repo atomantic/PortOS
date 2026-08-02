@@ -22,7 +22,7 @@ import { execGit } from '../lib/execGit.js';
 import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, isHumanClaimWorktree } from './worktreeManager.js';
 import { execGh, ensureForgeReachable } from './github.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
-import { githubRepoSpec } from '../lib/workTracker.js';
+import { githubRepoSpec, githubApiHost } from '../lib/workTracker.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 
@@ -492,20 +492,31 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
  * @param {{ cleanup?: boolean, activeAgentIds?: Set<string> }} [opts] - when cleanup
  *   is false, merged branches are reported (in `skipped`, reason `cleanup-disabled`)
  *   but not deleted. `activeAgentIds` protects in-use CoS agent worktrees.
- * @returns {Promise<{ defaultBranch:string, cleaned:string[], inFlight:object[], wip:object[], skipped:{branch:string,reason:string}[], forgeUnavailable?:boolean }>}
- *   `forgeUnavailable: true` means the cycle was SKIPPED because `gh` could not be
- *   read — an empty `inFlight` there says nothing about the repo (#3358).
+ * @returns {Promise<{ defaultBranch:string, cleaned:string[], inFlight:object[], wip:object[], skipped:{branch:string,reason:string}[], forgeUnavailable?:boolean, prStateUnavailable?:boolean }>}
+ *   `forgeUnavailable: true` means the cycle was SKIPPED before it started because
+ *   the `gh` probe failed; `prStateUnavailable: true` means it ran but a gh read
+ *   failed mid-cycle. Either way an empty `inFlight` says nothing about the repo
+ *   and the caller must retry rather than park on it (#3358).
  */
 export async function reconcile(repoPath = PATHS.root, { cleanup = true, activeAgentIds = new Set() } = {}) {
   // Every classification below depends on PR state, so an unreadable forge makes
   // the whole pass a guess. Skip with one line rather than report a quiet repo.
-  const forge = await ensureForgeReachable('branch-reconcile');
+  // Probed against THIS repo's API host (enterprise-correct) — a bare probe
+  // would gate an enterprise checkout on github.com's health. A non-GitHub
+  // origin has no host to probe and falls through to gh's default, which is the
+  // pre-existing behavior for the `new Map()` no-PR-state path below.
+  const origin = await getOriginInfo(repoPath).catch(() => null);
+  const forge = await ensureForgeReachable('branch-reconcile', { hostname: githubApiHost(origin?.host) });
   if (!forge.ok) {
     return { defaultBranch: null, cleaned: [], inFlight: [], wip: [], skipped: [], forgeUnavailable: true, forgeStatus: forge.status };
   }
 
   const defaultBranch = await getDefaultBranch(repoPath).catch(() => 'main') || 'main';
   const inputs = await gatherBranchState(repoPath, { defaultBranch, activeAgentIds });
+  // A gh failure AFTER a passing probe (a blip mid-cycle, or an unparseable
+  // page) is still "we could not ask" — surface it so the caller retries next
+  // tick instead of parking on an in-flight set built from unknown PR state.
+  const prStateUnavailable = inputs.some((i) => i.prStateUnavailable);
   const classified = classifyBranches(inputs);
 
   const merged = classified.filter((c) => c.state === 'MERGED');
@@ -521,7 +532,7 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, activeA
     ? await cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds })
     : { cleaned: [], skipped: merged.map((m) => ({ branch: m.branch, reason: 'cleanup-disabled' })) };
 
-  return { defaultBranch, cleaned, inFlight, wip, skipped };
+  return { defaultBranch, cleaned, inFlight, wip, skipped, prStateUnavailable };
 }
 
 // ============================================================

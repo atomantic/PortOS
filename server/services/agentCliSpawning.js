@@ -29,11 +29,12 @@ import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/ant
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { isGrokCommand, ensureGrokHeadlessArgs } from '../lib/grok.js';
 import { isKimiCommand, ensureKimiHeadlessArgs } from '../lib/kimi.js';
-import { resolveCliModel, buildEffortArgs, buildCodexStartupArgs, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs, providerSuppliesGithubToken } from '../lib/providerModels.js';
+import { resolveCliModel, buildEffortArgs, buildCodexStartupArgs, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs, providerSuppliesGithubToken, isOllamaClaudeProvider } from '../lib/providerModels.js';
 import { resolveForgeTokenEnv } from './git.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { resolvePrCompletion } from '../lib/prDisposition.js';
+import { canTypeSlashCommands } from '../lib/slashdoInvocation.js';
 import { DONE_SENTINEL_NAME } from '../lib/agentSentinel.js';
 import { isHostShuttingDown, shouldAbandonForHostShutdown, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
 
@@ -859,20 +860,34 @@ export async function spawnDirectly({
     const analysisBuffer = rawStreamBuffer || outputBuffer;
     const errorAnalysis = finalSuccess ? null : (immediateFallbackAnalysis || analyzeAgentFailure(analysisBuffer, task, model));
 
-    // Claude Code CLI agents run `/simplify` + `/do:pr` themselves (see
+    // Slashdo-capable CLI agents run `/simplify` + `/do:pr` themselves (see
     // buildCliCompletionSection in agentPromptBuilder.js) — mirror the TUI
     // cleanup contract so PortOS doesn't double-fire push+PR creation. Resolved
     // BEFORE finalizeAgent because it also gates the PR-claim verification
     // (#3358): a PortOS-owned PR is created by the cleanup below, i.e. AFTER
     // finalize, so only an agent-owned PR can be verified there.
+    //
+    // Uses the SAME `canTypeSlashCommands` predicate the prompt builder and the
+    // runner-mode cleanup already use, not a provider-id allowlist: an allowlist
+    // misses a path-configured `claude` under a custom provider id (told to run
+    // `/do:pr`, then PortOS opens a second PR) and wrongly claims a lean `--bare`
+    // session owns a PR it was never told to open. Whoever the prompt told to
+    // open the PR must be who cleanup and verification believe opened it.
     const directOpenPR = isTruthyMetaFn(task.metadata?.openPR);
-    const directAgentOwnsPR = directOpenPR && (provider?.id === 'claude-code' || provider?.id === 'claude-code-bedrock');
+    const directAgentOwnsPR = directOpenPR && canTypeSlashCommands({
+      providerId: provider?.id,
+      providerCommand: provider?.command,
+      leanMode: isOllamaClaudeProvider(provider),
+    });
 
     // try/finally so a throw from finalizeAgent still runs the local
     // cleanup (worktree, pid unregister, activeAgents delete). Mirrors the
     // TUI path's pattern.
+    // See the TUI path: a PR-claim downgrade must reach cleanup, or a run that
+    // opened no PR is cleaned up as a success and loses its retry state (#3358).
+    let cleanupSuccess = finalSuccess;
     try {
-      await finalizeAgent({
+      const finalized = await finalizeAgent({
         agentId,
         task,
         runId: agentData?.runId || runId,
@@ -889,11 +904,12 @@ export async function spawnDirectly({
         workspacePath,
         prExpected: directAgentOwnsPR,
       });
+      if (finalized && typeof finalized.success === 'boolean') cleanupSuccess = finalized.success;
     } finally {
       const directPrCompletion = resolvePrCompletion(task.metadata);
       const directReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
       const reviewOptions = await resolveReviewLoopOptions(task.metadata, { normalize: normalizeReviewers, isTruthyMeta: isTruthyMetaFn });
-      await cleanupWorktreeFn(agentId, finalSuccess, {
+      await cleanupWorktreeFn(agentId, cleanupSuccess, {
         openPR: directAgentOwnsPR ? false : directOpenPR,
         prCompletion: directPrCompletion,
         ...reviewOptions,

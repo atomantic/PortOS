@@ -222,6 +222,17 @@ describe('finalizeAgent — a PR-shaped run with no PR is not a success (#3358)'
     expect(updateTaskMock).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'blocked' }), 'internal');
   });
 
+  it('hands the corrected verdict back so worktree cleanup runs on the same answer', async () => {
+    // Cleaning up as a success removes the worktree and deletes the local
+    // branch — the exact state a retry needs to open the PR that is missing.
+    onBranch('claim/issue-1');
+    findPullRequestForBranchMock.mockResolvedValue({ status: 'none', number: null, url: null, detail: null });
+    await expect(finalize()).resolves.toMatchObject({ success: false });
+
+    findPullRequestForBranchMock.mockResolvedValue({ status: 'found', number: 7, url: 'u' });
+    await expect(finalize()).resolves.toMatchObject({ success: true });
+  });
+
   it('falls back to the reported outcome when the verification itself throws', async () => {
     onBranch('claim/issue-1');
     findPullRequestForBranchMock.mockRejectedValue(new Error('boom'));

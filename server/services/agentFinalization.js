@@ -648,6 +648,13 @@ export async function finalizeAgent({
   }
 
   await processAgentCompletion(agentId, task, success, outputBuffer);
+
+  // Hand the CORRECTED verdict back so the caller's worktree cleanup runs on the
+  // same answer this function just persisted (#3358). Without it, a run
+  // downgraded to `pr-missing` would still be cleaned up as a success — worktree
+  // removed, local branch deleted, and no resume pointer recorded — destroying
+  // the state the retry needs to open the PR that is missing.
+  return { success, prVerdict };
 }
 
 /**

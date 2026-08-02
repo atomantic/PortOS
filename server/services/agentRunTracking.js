@@ -136,8 +136,10 @@ export async function completeAgentRun(runId, output, exitCode, duration, errorA
   metadata.success = success;
   metadata.outputSize = Buffer.byteLength(output || '');
 
-  // Store error details - extract from output if no analysis provided
-  if (exitCode !== 0) {
+  // Store error details - extract from output if no analysis provided. A clean
+  // exit that was overridden to failure (#3358) also needs its diagnostic
+  // recorded, or the run reads `success: false` with nothing saying why.
+  if (exitCode !== 0 || !success) {
     const errorInfo = errorAnalysis || extractErrorFromOutput(output, exitCode);
     metadata.error = errorInfo.message || `Process exited with code ${exitCode}`;
     metadata.errorDetails = errorInfo.details || metadata.error;

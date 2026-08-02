@@ -330,10 +330,18 @@ describe('checkPullRequests', () => {
   // high-water mark stayed put, and the watcher reported a permanently quiet
   // repo with nothing in the log naming the cause.
   it('skips the cycle when the gh probe is not ok, without asking gh anything', async () => {
+    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'o/r' });
     ensureForgeReachableMock.mockResolvedValueOnce({ ok: false, status: 'unreachable', detail: 'dial tcp' });
     const r = await checkPullRequests(app, { authorFilter: 'any' });
-    expect(r).toEqual({ ok: false, reason: 'forge-unreachable', forgeStatus: 'unreachable' });
+    expect(r).toMatchObject({ ok: false, reason: 'forge-unreachable', forgeStatus: 'unreachable' });
     expect(execGhMock).not.toHaveBeenCalled();
+  });
+
+  it('probes THIS repo\'s API host, not gh\'s default (enterprise-correct)', async () => {
+    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: false, host: 'github.acme-corp.example', fullName: 'o/r' });
+    ensureForgeReachableMock.mockResolvedValueOnce({ ok: false, status: 'not-authenticated', detail: null });
+    await checkPullRequests(app, { authorFilter: 'any' });
+    expect(ensureForgeReachableMock).toHaveBeenCalledWith('pr-watcher', { hostname: 'github.acme-corp.example' });
   });
 
   it('reports pr-list-failed (not "no open PRs") when gh pr list rejects', async () => {
