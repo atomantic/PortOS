@@ -16,6 +16,10 @@
 // Fenced code blocks — keep the code, drop the fence lines (and any info string).
 const FENCE_LINE = /^\s*(?:`{3,}|~{3,}).*$/;
 
+// A pipe-delimited table row, e.g. `| a | b |`. Used only by the
+// markup-loss predicate — see the note on `dropsMarkupWhenFlattened`.
+const TABLE_ROW = /^[ \t]*\|.*\|[ \t]*$/m;
+
 // The whitespace tail both exports share. Kept as one function so the
 // "did the flatten drop markup?" predicate below can subtract exactly the
 // whitespace normalization `markdownToPlainText` performs — no more, no less.
@@ -93,8 +97,14 @@ export function markdownToPlainText(markdown) {
  * comparing raw source to flattened output flags every trailing newline and
  * double space, putting a "Show more" that reveals nothing on the most common
  * short-body shape, on a page whose whole purpose is removing queue noise.
+ *
+ * Tables need their own probe: the flattener leaves pipe rows alone (and the
+ * `| --- |` separator escapes the thematic-break rule because it starts with a
+ * pipe), so a table flattens to itself and the diff below sees no loss — while
+ * the preview shows raw pipe soup with no route to the rendered table.
  */
 export function dropsMarkupWhenFlattened(markdown) {
   if (typeof markdown !== 'string' || !markdown) return false;
+  if (TABLE_ROW.test(markdown)) return true;
   return markdownToPlainText(markdown) !== collapseWhitespace(markdown.replace(/\r\n?/g, '\n'));
 }

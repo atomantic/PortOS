@@ -138,6 +138,15 @@ describe('dropsMarkupWhenFlattened', () => {
     expect(dropsMarkupWhenFlattened('```\ncode\n```')).toBe(true);
   });
 
+  it('is true for a table, which flattens to itself', () => {
+    // The flattener leaves pipe rows alone and the `| --- |` separator escapes
+    // the thematic-break rule, so the whitespace diff sees no loss — yet the
+    // preview is raw pipe soup that needs a route to the rendered table.
+    expect(dropsMarkupWhenFlattened('| a | b |\n| --- | --- |\n| c | d |')).toBe(true);
+    // A sentence that merely contains a pipe is not a table row.
+    expect(dropsMarkupWhenFlattened('run a | b to pipe it')).toBe(false);
+  });
+
   it('is false for non-string / empty input', () => {
     expect(dropsMarkupWhenFlattened(undefined)).toBe(false);
     expect(dropsMarkupWhenFlattened(null)).toBe(false);
