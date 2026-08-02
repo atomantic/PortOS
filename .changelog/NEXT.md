@@ -26,6 +26,7 @@
 ## Universe Builder
 
 - **A failed settings load no longer resets your image-gen mode.** Opening Universe Builder fetched providers, image models, LoRAs and settings together, and treated any request that failed exactly like one that came back empty. A brief network blip therefore rendered the page as if nothing were configured — and worse, the settings read was used to recompute the render backend, so a failed fetch silently reset your saved image-gen mode to Local and the pipeline image config to defaults. Each request now keeps its last known-good value when it fails, while a genuinely empty response still applies.
+- **[issue-3290] Locking a bible field now writes once instead of twice.** Clicking the padlock on the logline, premise, style notes or either influence list sent its save request from inside a React state update, which React is free to run more than once per click — so a single lock toggle fired two identical writes at the server's queue. The save now happens alongside the state change rather than inside it, and eleven previously untested Universe Builder actions — delete, lock, render pin, bucket moves, category add/remove, and the save preflight — are covered by tests that pin the exact request each one sends.
 
 ## Calendar
 
