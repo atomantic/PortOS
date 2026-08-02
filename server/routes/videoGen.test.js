@@ -1268,6 +1268,13 @@ describe('videoGen routes', () => {
       mimetype: 'image/png',
       size: 2048,
     };
+    const lastImageUpload = {
+      fieldname: 'lastImage',
+      path: '/tmp/upload-end-frame.png',
+      originalname: 'end-frame.png',
+      mimetype: 'image/png',
+      size: 3072,
+    };
     const audioUpload = {
       fieldname: 'audioFile',
       path: '/tmp/upload-beats.wav',
@@ -1352,6 +1359,28 @@ describe('videoGen routes', () => {
         expect.stringMatching(/^\/mock\/uploads\/video-ic-ref-[^/]+\.mp4$/),
         sourceUpload.path,
         icUpload.path,
+      ]));
+    });
+
+    it('unlinks both staged frames when an FFLF request mixes legacy inputs with keyframes', async () => {
+      // lastImage is the one upload field with no rollback coverage above —
+      // it stages between the source frame and the audio/IC fields, so a
+      // durable copy that never made it into stagedDurablePaths would leak
+      // here alone while every other case stayed green.
+      setPendingUpload(sourceUpload, lastImageUpload);
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'morph between the anchors',
+        mode: 'fflf',
+        keyframes: [{ file: 'a.png', index: 0 }, { file: 'b.png', index: 24 }],
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('KEYFRAMES_LEGACY_INPUTS_CONFLICT');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      expect(unlinkedPaths()).toEqual(expect.arrayContaining([
+        expect.stringMatching(/^\/mock\/uploads\/video-source-[^/]+\.png$/),
+        expect.stringMatching(/^\/mock\/uploads\/video-last-[^/]+\.png$/),
+        sourceUpload.path,
+        lastImageUpload.path,
       ]));
     });
 
