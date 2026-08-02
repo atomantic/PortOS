@@ -121,6 +121,14 @@ describe('trainingRunsBusy', () => {
     await expect(trainingRunsBusy({ jobs: [], runsDir: join(TEST_ROOT, 'runs-missing') }))
       .resolves.toEqual({ busy: false, reason: null });
   });
+
+  // "Absent" is safe to read as empty; "could not look" is not. The rejection
+  // reaches resolveCategoryBusy, which fails closed.
+  it('rejects rather than reporting idle when the runs directory cannot be read', async () => {
+    const notADir = join(TEST_ROOT, 'runs-not-a-dir');
+    writeFileSync(notADir, 'not a directory');
+    await expect(trainingRunsBusy({ jobs: [], runsDir: notADir })).rejects.toThrow();
+  });
 });
 
 describe('updateDetachedBusy', () => {

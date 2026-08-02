@@ -196,6 +196,27 @@ describe('DataManager busy categories (#3342)', () => {
     expect(screen.queryByRole('button', { name: /Purge/ })).not.toBeInTheDocument();
   });
 
+  // Detail fetches land out of order: a slow response for a row the user has
+  // already collapsed past must not paint its busy state onto the row now open.
+  it('ignores a detail response that a newer expand has superseded', async () => {
+    let resolveSlow;
+    getDataCategory.mockImplementation((key) => (key === 'training-runs'
+      ? new Promise((res) => { resolveSlow = res; })
+      : Promise.resolve({ key, items: [], busy: false, busyReason: null })));
+
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getAllByText('LoRA Training Runs').length).toBeGreaterThan(0));
+
+    expandRow('LoRA Training Runs');
+    expandRow('Messages');
+    await waitFor(() => expect(screen.getByRole('button', { name: /Purge/ })).toBeInTheDocument());
+
+    // The stale training-runs detail arrives last and must be dropped.
+    resolveSlow({ key: 'training-runs', items: [], busy: true, busyReason: BUSY_REASON });
+    await waitFor(() => expect(screen.getByRole('button', { name: /Purge/ })).toBeInTheDocument());
+    expect(screen.queryByText(BUSY_REASON)).not.toBeInTheDocument();
+  });
+
   // Older servers omit `busy` entirely — treating anything but an explicit true
   // as busy would strip the button from every category on an older peer.
   it('treats a missing busy flag as idle', async () => {

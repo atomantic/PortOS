@@ -38,7 +38,14 @@ const IDLE = { busy: false, reason: null };
 // canceled) has no claim on anything under `data/`.
 const IN_FLIGHT_STATUSES = new Set(['queued', 'running']);
 
-const listDirNames = (dir) => readdir(dir, { withFileTypes: true }).catch(() => []);
+// A directory that isn't there has nothing left to lose, so ENOENT reads as
+// empty. Any OTHER failure means we could not look — rethrow so
+// `resolveCategoryBusy` fails closed rather than reporting a locked or
+// unreadable directory as idle and clearing the way for the purge.
+const listDirEntries = (dir) => readdir(dir, { withFileTypes: true }).catch((err) => {
+  if (err?.code === 'ENOENT') return [];
+  throw err;
+});
 
 /**
  * `data/image-clean-tmp` — the pinned set comes from the SAME predicate the
@@ -60,7 +67,7 @@ export async function imageCleanTmpBusy({ jobs = null, entries = null } = {}) {
   const pinned = collectActiveCleanBasenames(jobs || listJobs({ kind: 'image' }));
   if (pinned.size === 0) return IDLE;
   const present = entries
-    || (await listDirNames(join(PATHS.data, 'image-clean-tmp'))).filter(e => e.isFile()).map(e => e.name);
+    || (await listDirEntries(join(PATHS.data, 'image-clean-tmp'))).filter(e => e.isFile()).map(e => e.name);
   const atRisk = present.filter(name => pinned.has(name));
   if (atRisk.length === 0) return IDLE;
   return {
@@ -95,9 +102,11 @@ export async function trainingRunsBusy({ jobs = null, runsDir = null } = {}) {
   }
 
   const dir = runsDir || join(PATHS.data, 'training-runs');
-  const runs = (await listDirNames(dir)).filter(e => e.isDirectory()).map(e => e.name);
+  const runs = (await listDirEntries(dir)).filter(e => e.isDirectory()).map(e => e.name);
+  // Not caught: a probe that cannot answer must reach `resolveCategoryBusy` and
+  // fail closed, not read as "no trainer here".
   const surviving = await Promise.all(
-    runs.map(name => isDetachedRunning(join(dir, name, '.detached')).catch(() => false))
+    runs.map(name => isDetachedRunning(join(dir, name, '.detached')))
   );
   if (!surviving.some(Boolean)) return IDLE;
   return {
