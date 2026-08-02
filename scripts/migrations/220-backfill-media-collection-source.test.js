@@ -107,6 +107,11 @@ describe('migration 220 — backfill media collection source', () => {
     // The same record with a marker the create form cannot produce does qualify.
     expect(isAutoCreated({ id: 'x', name: 'Universe: Example', universeId: 'u1' })).toBe(true);
     expect(isAutoCreated({ id: 'x', description: 'Auto-created for project x' })).toBe(true);
+    // A corrupt owner link is not a marker — `sanitizeCollection` drops a
+    // non-string universeId/seriesId on the next read, so stamping from one
+    // would classify a record that has no machine-owned marker at all.
+    expect(isAutoCreated({ id: 'x', universeId: true })).toBe(false);
+    expect(isAutoCreated({ id: 'x', seriesId: '' })).toBe(false);
     expect(isAutoCreated(null)).toBe(false);
     expect(stampAutoSource('nope')).toBe(null);
   });

@@ -76,6 +76,8 @@ import { join } from 'path';
 const AUTO_DESCRIPTION_PREFIXES = ['Auto-created for project ', 'Auto-generated images for '];
 const AUTO_ID_PREFIXES = ['uc-', 'sc-'];
 
+const isNonEmptyString = (v) => typeof v === 'string' && v !== '';
+
 /**
  * True when a record carries a marker of machine creation that a user could not
  * have produced through the create form. A subset of `isAutoCollection` in
@@ -89,7 +91,11 @@ export function isAutoCreated(record) {
   if (!record || typeof record !== 'object') return false;
   if (typeof record.description === 'string' && AUTO_DESCRIPTION_PREFIXES.some((p) => record.description.startsWith(p))) return true;
   if (typeof record.id === 'string' && AUTO_ID_PREFIXES.some((p) => record.id.startsWith(p))) return true;
-  return Boolean(record.universeId || record.seriesId);
+  // Owner link must be a non-empty STRING, matching `sanitizeCollection` — this
+  // reads raw disk, where the client only ever sees sanitized records. A
+  // hand-edited/corrupt `universeId: true` is dropped to null on the next read,
+  // so treating it as a machine-owned marker would stamp a record that has none.
+  return isNonEmptyString(record.universeId) || isNonEmptyString(record.seriesId);
 }
 
 /**

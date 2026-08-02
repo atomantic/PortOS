@@ -1818,14 +1818,21 @@ describe('source provenance', () => {
     // because the field never reaches a peer, fixing it must not bump
     // `updatedAt` — that would out-race a peer's real edit for a change no peer
     // can even see.
-    const c = await svc.createCollection({ name: 'Renders', source: 'auto' });
-    const fixed = await svc.updateCollection(c.id, { source: 'user' });
+    const seeded = '2026-05-22T00:00:00Z';
+    await seedState({
+      collections: [{
+        id: 'c-fix', name: 'Renders', description: '', coverKey: null,
+        universeId: null, seriesId: null, source: 'auto', items: [],
+        createdAt: seeded, updatedAt: seeded,
+      }],
+    });
+    const fixed = await svc.updateCollection('c-fix', { source: 'user' });
     expect(fixed.source).toBe('user');
-    expect(fixed.updatedAt).toBe(c.updatedAt);
+    expect(fixed.updatedAt).toBe(seeded);
     // A patch that DOES touch wire-visible state still bumps it.
-    const renamed = await svc.updateCollection(c.id, { name: 'Renders 2', source: 'auto' });
+    const renamed = await svc.updateCollection('c-fix', { name: 'Renders 2', source: 'auto' });
     expect(renamed.source).toBe('auto');
-    expect(renamed.updatedAt).not.toBe(c.updatedAt);
+    expect(renamed.updatedAt).not.toBe(seeded);
   });
 
   it('survives an edit and rides through the tombstone', async () => {
