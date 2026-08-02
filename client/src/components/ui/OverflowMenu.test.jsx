@@ -94,6 +94,39 @@ describe('OverflowMenu', () => {
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'More actions' }));
   });
 
+  it('closes on Tab and advances from the trigger rather than dropping focus on the body', async () => {
+    const user = userEvent.setup();
+    render(
+      <div>
+        <OverflowMenu label="More actions" items={items()} />
+        <button type="button">after</button>
+      </div>
+    );
+
+    await user.click(screen.getByRole('button', { name: 'More actions' }));
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Archive' }));
+
+    await user.tab();
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'after' }));
+  });
+
+  it('closes on Shift+Tab and steps back to the control before the trigger', async () => {
+    const user = userEvent.setup();
+    render(
+      <div>
+        <button type="button">before</button>
+        <OverflowMenu label="More actions" items={items()} />
+      </div>
+    );
+
+    await user.click(screen.getByRole('button', { name: 'More actions' }));
+    await user.tab({ shift: true });
+
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'before' }));
+  });
+
   it('closes on an outside click', async () => {
     const user = userEvent.setup();
     render(

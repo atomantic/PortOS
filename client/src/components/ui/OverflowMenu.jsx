@@ -17,6 +17,7 @@ const TONES = {
 };
 
 const ITEM_SELECTOR = '[role="menuitem"]:not(:disabled)';
+const TABBABLE_SELECTOR = 'a[href],button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex]:not([tabindex="-1"])';
 
 export default function OverflowMenu({ label, items = [], className = '', triggerRef: externalTriggerRef }) {
   const [open, setOpen] = useState(false);
@@ -51,6 +52,18 @@ export default function OverflowMenu({ label, items = [], className = '', trigge
     next?.focus();
   };
 
+  // Move focus to the element that would follow (or precede) the trigger in the
+  // document's tab order, ignoring the menu's own items. Falls back to the
+  // trigger when it's at the end of the sequence.
+  const focusPastTrigger = (backwards) => {
+    const trigger = triggerRef.current;
+    const nodes = Array.from(document.querySelectorAll(TABBABLE_SELECTOR))
+      .filter(el => !menuRef.current?.contains(el));
+    const idx = nodes.indexOf(trigger);
+    const next = idx === -1 ? null : nodes[idx + (backwards ? -1 : 1)];
+    (next || trigger)?.focus();
+  };
+
   const handleMenuKeyDown = (e) => {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
@@ -59,6 +72,12 @@ export default function OverflowMenu({ label, items = [], className = '', trigge
       e.preventDefault();
       moveFocus(-1);
     } else if (e.key === 'Tab') {
+      // Tab leaves the menu. The default move can't be relied on — the focused
+      // item unmounts in the same interaction, which strands focus on <body> —
+      // so drive it explicitly: continue the tab sequence from the trigger, as
+      // if the menu had never been open.
+      e.preventDefault();
+      focusPastTrigger(e.shiftKey);
       setOpen(false);
     }
   };
