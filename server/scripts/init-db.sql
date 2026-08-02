@@ -1285,6 +1285,7 @@ CREATE TABLE IF NOT EXISTS stacker_news_accounts (
   vision_model TEXT NOT NULL DEFAULT '',
   rules JSONB NOT NULL DEFAULT '{}'::jsonb,
   policy_version TEXT NOT NULL DEFAULT 'v1',
+  read_transport TEXT NOT NULL DEFAULT 'browser' CHECK (read_transport IN ('browser','api')),
   last_sync_at TIMESTAMPTZ,
   last_error TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ DEFAULT NOW(),

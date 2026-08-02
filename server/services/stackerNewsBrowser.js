@@ -22,7 +22,10 @@ const fixedUrl = (kind, value) => {
   throw new Error('Unsupported Stacker News browser destination');
 };
 
-const verifyFinalOrigin = (url) => {
+// Exported so every Stacker News browser path (handoffs AND the read transport
+// in integrations/stackerNews/browserReader.js) fails closed on the same check —
+// a redirect that leaves the fixed origin must never be treated as SN data.
+export const verifyFinalOrigin = (url) => {
   const parsed = new URL(url);
   if (parsed.origin !== ORIGIN) throw new Error('Stacker News browser navigation left the fixed origin');
 };

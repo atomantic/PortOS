@@ -5,7 +5,9 @@ export const getStackerNewsAccount = (id, options = {}) => request(`/stacker-new
 export const createStackerNewsAccount = (data, options = {}) => request('/stacker-news/accounts', { method: 'POST', body: JSON.stringify(data), ...options });
 export const updateStackerNewsAccount = (id, data, options = {}) => request(`/stacker-news/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(data), ...options });
 export const deleteStackerNewsAccount = (id, options = {}) => request(`/stacker-news/accounts/${id}`, { method: 'DELETE', ...options });
-export const verifyStackerNewsAccount = (id, options = {}) => request(`/stacker-news/accounts/${id}/verify`, { method: 'POST', ...options });
+// `transport` forces which read source answers ('api' | 'browser'); omit it to
+// use the account's configured read transport.
+export const verifyStackerNewsAccount = (id, transport = null, options = {}) => request(`/stacker-news/accounts/${id}/verify`, { method: 'POST', body: JSON.stringify(transport ? { transport } : {}), ...options });
 export const getStackerNewsBrowserIdentity = (id, options = {}) => request(`/stacker-news/accounts/${id}/browser-identity`, { method: 'POST', ...options });
 export const syncStackerNewsAccount = (id, options = {}) => request(`/stacker-news/accounts/${id}/sync`, { method: 'POST', ...options });
 export const getStackerNewsTerritories = (accountId, options = {}) => request(`/stacker-news/accounts/${accountId}/territories`, options);

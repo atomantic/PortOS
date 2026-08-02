@@ -7,13 +7,25 @@ accounts its user explicitly adds.
 
 ## Safety model
 
+- Reads default to the signed-in pinned browser, so no API key is required to
+  verify identity or sync a territory. Stacker News grants API keys on request
+  only — there is no self-serve setting — so the key is optional and needed only
+  for reviewed publishing.
 - API keys are encrypted in dedicated credential records, separate from account
   configuration. They are never returned by the API, logged, placed in model
   prompts, or shared with the browser.
-- The transport exposes a closed registry of named, typed GraphQL operations at
-  the fixed Stacker News endpoint. Callers cannot provide GraphQL, endpoints,
-  headers, or arbitrary variables. Reads may retry transient failures; writes
-  never retry because that could duplicate content.
+- Both read transports are closed registries of named operations. The API
+  transport exposes typed GraphQL operations at the fixed Stacker News endpoint;
+  the browser transport navigates fixed URLs on the fixed origin and runs fixed
+  internal extractors over the page's server-rendered data. Callers name an
+  operation and supply a territory slug or cursor — never GraphQL, an endpoint,
+  a header, a URL, a selector, or a script. API reads may retry transient
+  failures; writes never retry because that could duplicate content.
+- A browser read verifies the final URL is still on `https://stacker.news`,
+  applies the same public-address pin as every other PortOS navigation, closes
+  its scratch tab, and re-normalizes the extracted payload server-side. Browser
+  and API items are indistinguishable downstream: same bounding, same content
+  hash, same untrusted-content screening, same columns.
 - Posts, comments, URLs, images, and browser content are untrusted. Text is
   bounded and screened for instruction-shaped content before optional local
   analysis. A prompt-injection match prevents text and images from reaching an
@@ -57,6 +69,11 @@ Browser work uses PortOS's existing CDP browser and only fixed primitives:
 4. open an internally constructed item or territory-settings URL on the same
    fixed origin.
 
+Browser *reads* use the same primitives with the same constraints: a fixed
+`https://stacker.news/~<slug>/recent` URL (plus an opaque `cursor` parameter for
+later pages) and a fixed internal extractor. A read closes its tab afterwards; a
+handoff leaves its tab open because the open tab is the deliverable.
+
 The API, UI, and models cannot supply a URL, selector, browser script, click, or
 wallet action. Zap, downzap, boost, and territory-setting work stop at a browser
 handoff for the user to complete.
@@ -65,9 +82,9 @@ handoff for the user to complete.
 
 | Capability | Transport | Automation boundary |
 | --- | --- | --- |
-| Verify account identity | Named GraphQL `me` | Read only |
-| Refresh territory settings/ownership | Named GraphQL `sub` | Read only |
-| Monitor recent posts and comments | Named GraphQL `items` | Explicit sync or an effective account/territory opt-in |
+| Verify account identity | Pinned-browser `me` (default) or named GraphQL `me` | Read only |
+| Refresh territory settings/ownership | Pinned-browser `sub` (default) or named GraphQL `sub` | Read only |
+| Monitor recent posts and comments | Pinned-browser `items` (default) or named GraphQL `items` | Explicit sync or an effective account/territory opt-in |
 | Analyze text/images | Local Ollama | Strict schema; no tools, credentials, or write access |
 | Publish a discussion/comment | Named GraphQL mutations | Separate human approval and execution; no write retry |
 | Open an item or territory settings | Fixed-origin CDP handoff | Identity match required; no clicks or DOM supplied by callers |
@@ -80,19 +97,23 @@ handoff for the user to complete.
 1. Open **Comms > Stacker News > Accounts & Safety** and choose **Add account**.
    The account form opens in a drawer grouped into Identity, Monitoring & models,
    Stewardship, and Budgets tabs; the open tab is kept in the URL.
-2. Add an API key if API reads or reviewed publishing are needed, then verify
-   that the returned identity matches the configured username.
-3. Add each territory, mark whether the account owns it, and choose whether it
+2. Sign the pinned PortOS browser into the same Stacker News account and run
+   **Check browser identity**. This is the whole credential step for reads — the
+   account's **Read transport** defaults to the pinned browser.
+3. Add an API key only if reviewed publishing is needed. Stacker News grants
+   keys on request (users post an "[API Key Request]" thread); there is no
+   self-serve setting, so PortOS treats the key as optional. With a key stored,
+   **Check API identity** verifies it, and the account can be switched to the
+   API read transport.
+4. Add each territory, mark whether the account owns it, and choose whether it
    inherits account rules and monitoring. Communities can be edited or removed
    later as ownership and stewardship responsibilities change.
-4. Configure account and territory guidance, themes, escalation cues, and action
+5. Configure account and territory guidance, themes, escalation cues, and action
    budgets. Each account keeps its own effective rules.
-5. Optionally choose installed Ollama text and vision models. Analysis remains
+6. Optionally choose installed Ollama text and vision models. Analysis remains
    off until explicitly enabled or run on demand.
-6. Run **Sync now** once to verify territory ownership and inspect the first
+7. Run **Sync now** once to verify territory ownership and inspect the first
    snapshots. Enable a monitoring schedule only when ready.
-7. If browser handoffs are needed, sign the pinned PortOS browser into the same
-   account and run **Check browser identity**.
 
 Every tab is scoped to one account. The header carries an account switcher that
 keeps the current tab, and each section names the account it operates on, so a

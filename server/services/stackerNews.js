@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'crypto';
 import { query, withTransaction } from '../lib/db.js';
 import { decryptValue, encryptValue, ensureVaultKey } from '../lib/vaultCrypto.js';
-import { executeStackerNewsOperation, stackerNewsCapabilities } from '../integrations/stackerNews/index.js';
+import { executeStackerNewsBrowserRead, executeStackerNewsOperation, stackerNewsCapabilities } from '../integrations/stackerNews/index.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { fetchAndNormalizeStackerNewsImage, hashRemoteMediaUrl } from './stackerNewsMedia.js';
 import { getStackerNewsBrowserIdentity, openStackerNewsHandoff } from './stackerNewsBrowser.js';
@@ -17,6 +17,8 @@ import {
 } from './stackerNewsPolicy.js';
 
 const ACTION_KINDS = new Set(['draft_post', 'draft_comment', 'publish_post', 'publish_comment', 'open_browser', 'territory_setting']);
+const READ_TRANSPORTS = new Set(['browser', 'api']);
+const DEFAULT_READ_TRANSPORT = 'browser';
 const ACTION_STATES = new Set(['draft', 'pending_review', 'approved', 'executing', 'completed', 'failed', 'rejected']);
 const INJECTION_PATTERNS = [
   /ignore (?:all |any |the )?(?:previous|prior|system) instructions/i,
@@ -42,6 +44,11 @@ const normalizedText = (value) => {
 const analysisText = (value) => normalizedText(value).slice(0, MAX_ANALYSIS_CHARS);
 const markdownImages = (body = '') => [...body.matchAll(/!\[[^\]]*\]\((https?:\/\/[^\s)]+)(?:\s+"[^"]*")?\)/gi)].map((match) => match[1]).slice(0, 12);
 
+// Stacker News grants API keys only on request, so reads default to the
+// signed-in pinned browser and the key stays an optional accelerator that only
+// reviewed writes require. An account opts into `'api'` explicitly.
+const normalizeReadTransport = (value) => READ_TRANSPORTS.has(value) ? value : DEFAULT_READ_TRANSPORT;
+
 const accountView = (row) => ({
   id: row.id,
   label: row.label,
@@ -54,6 +61,7 @@ const accountView = (row) => ({
   visionModel: row.vision_model || '',
   rules: row.rules || {},
   policyVersion: row.policy_version || POLICY_VERSION,
+  readTransport: normalizeReadTransport(row.read_transport),
   apiKeyConfigured: Boolean(row.api_key_configured),
   lastSyncAt: row.last_sync_at,
   lastError: row.last_error || '',
@@ -156,14 +164,15 @@ async function saveCredential(client, accountId, apiKey) {
 export async function createAccount({
   label, username, apiKey, enabled = true, monitoringEnabled = false,
   monitoringIntervalMinutes = 30, analysisEnabled = false, textModel = '', visionModel = '', rules = {},
+  readTransport = DEFAULT_READ_TRANSPORT,
 }) {
   const id = randomUUID();
   await withTransaction(async (client) => {
     await client.query(
       `INSERT INTO stacker_news_accounts
-       (id,label,username,enabled,monitoring_enabled,monitoring_interval_minutes,analysis_enabled,text_model,vision_model,rules,policy_version)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-      [id, label, username.toLowerCase(), enabled, monitoringEnabled, monitoringIntervalMinutes, analysisEnabled, textModel, visionModel, normalizeStackerNewsRules(rules), POLICY_VERSION],
+       (id,label,username,enabled,monitoring_enabled,monitoring_interval_minutes,analysis_enabled,text_model,vision_model,rules,policy_version,read_transport)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [id, label, username.toLowerCase(), enabled, monitoringEnabled, monitoringIntervalMinutes, analysisEnabled, textModel, visionModel, normalizeStackerNewsRules(rules), POLICY_VERSION, normalizeReadTransport(readTransport)],
     );
     if (apiKey) await saveCredential(client, id, apiKey);
   });
@@ -177,12 +186,13 @@ export async function updateAccount(id, updates) {
   await withTransaction(async (client) => {
     await client.query(
       `UPDATE stacker_news_accounts SET label=$2,username=$3,enabled=$4,monitoring_enabled=$5,
-       monitoring_interval_minutes=$6,analysis_enabled=$7,text_model=$8,vision_model=$9,rules=$10,policy_version=$11,updated_at=NOW()
+       monitoring_interval_minutes=$6,analysis_enabled=$7,text_model=$8,vision_model=$9,rules=$10,policy_version=$11,read_transport=$12,updated_at=NOW()
        WHERE id=$1`,
       [id, updates.label ?? existing.label, (updates.username ?? existing.username).toLowerCase(), updates.enabled ?? existing.enabled,
         updates.monitoringEnabled ?? existing.monitoring_enabled, updates.monitoringIntervalMinutes ?? existing.monitoring_interval_minutes,
         updates.analysisEnabled ?? existing.analysis_enabled, updates.textModel ?? existing.text_model, updates.visionModel ?? existing.vision_model,
-        updates.rules === undefined ? existing.rules : normalizeStackerNewsRules(updates.rules), POLICY_VERSION],
+        updates.rules === undefined ? existing.rules : normalizeStackerNewsRules(updates.rules), POLICY_VERSION,
+        normalizeReadTransport(updates.readTransport ?? existing.read_transport)],
     );
     if (updates.apiKey !== undefined) await saveCredential(client, id, updates.apiKey);
   });
@@ -232,13 +242,24 @@ export async function deleteTerritory(id) {
   return result.rows[0]?.account_id || null;
 }
 
-export async function verifyConnection(accountId) {
+// Binds one of the two read transports to a `read(name, input)` with the same
+// operation names and envelope, so every caller below stays transport-agnostic.
+// `read` is null only for the API transport with no stored key — the caller
+// decides whether that is a hard failure (sync) or a reportable state (verify).
+async function openReadTransport(accountRow, requested) {
+  const transport = READ_TRANSPORTS.has(requested) ? requested : normalizeReadTransport(accountRow.read_transport);
+  if (transport !== 'api') return { transport, read: executeStackerNewsBrowserRead };
+  const apiKey = await getCredential(accountRow.id);
+  return { transport, read: apiKey ? (name, input) => executeStackerNewsOperation(name, input, apiKey) : null };
+}
+
+export async function verifyConnection(accountId, { transport: requested } = {}) {
   const account = await getAccountRow(accountId);
   if (!account) return null;
-  const apiKey = await getCredential(accountId);
-  if (!apiKey) return { configured: false, connected: false };
-  const data = await executeStackerNewsOperation('me', {}, apiKey);
-  return { configured: true, connected: true, username: data?.me?.name || null, matchesConfigured: data?.me?.name?.toLowerCase() === account.username.toLowerCase() };
+  const { transport, read } = await openReadTransport(account, requested);
+  if (!read) return { configured: false, connected: false, transport };
+  const username = (await read('me', {}))?.me?.name || null;
+  return { configured: true, connected: true, transport, username, matchesConfigured: username?.toLowerCase() === account.username.toLowerCase() };
 }
 
 export async function getBrowserIdentity(accountId) {
@@ -387,16 +408,18 @@ async function syncAccountUnlocked(accountId, { force = false } = {}) {
   const territories = await listTerritories(accountId);
   const hasEffectiveMonitoring = territories.some((territory) => territory.monitoringEnabled ?? account.monitoring_enabled);
   if (!force && !hasEffectiveMonitoring) return { skipped: true, reason: 'monitoring_disabled', account: accountView({ ...account, api_key_configured: false }) };
-  const apiKey = await getCredential(accountId);
-  if (!apiKey) throw new Error('Stacker News API key is not configured');
-  const me = (await executeStackerNewsOperation('me', {}, apiKey))?.me;
-  if (!me?.name || me.name.toLowerCase() !== account.username.toLowerCase()) throw new Error(`API key identity @${me?.name || 'unknown'} does not match configured account`);
+  const { transport, read } = await openReadTransport(account);
+  if (!read) throw new Error('Stacker News API key is not configured');
+  const me = (await read('me', {}))?.me;
+  if (!me?.name || me.name.toLowerCase() !== account.username.toLowerCase()) {
+    throw new Error(`${transport === 'api' ? 'API key' : 'Pinned browser'} identity @${me?.name || 'unknown'} does not match configured account`);
+  }
   let ingested = 0;
   let analyzed = 0;
   for (const territory of territories) {
     const monitored = territory.monitoringEnabled ?? account.monitoring_enabled;
     if (!force && !monitored) continue;
-    const remote = (await executeStackerNewsOperation('sub', { name: territory.slug }, apiKey))?.sub;
+    const remote = (await read('sub', { name: territory.slug }))?.sub;
     const ownershipVerified = Boolean(remote && String(remote.userId) === String(me.id));
     await query(
       'UPDATE stacker_news_territories SET remote_settings=$2,remote_refreshed_at=NOW(),updated_at=NOW() WHERE id=$1',
@@ -405,7 +428,7 @@ async function syncAccountUnlocked(accountId, { force = false } = {}) {
     let cursor = null;
     const seenCursors = new Set();
     for (let pageNumber = 0; pageNumber < 5; pageNumber += 1) {
-      const page = (await executeStackerNewsOperation('items', { sub: territory.slug, cursor, limit: 30 }, apiKey))?.items;
+      const page = (await read('items', { sub: territory.slug, cursor, limit: 30 }))?.items;
       for (const remoteItem of page?.items || []) {
         const nextHash = stableHash(normalizedText({ title: remoteItem.title || '', body: remoteItem.text || '' }));
         const previous = await query('SELECT content_hash FROM stacker_news_items WHERE account_id=$1 AND remote_id=$2', [accountId, String(remoteItem.id)]);
@@ -436,7 +459,7 @@ async function syncAccountUnlocked(accountId, { force = false } = {}) {
     }
   }
   await query("UPDATE stacker_news_accounts SET last_sync_at=NOW(),last_error='',updated_at=NOW() WHERE id=$1", [accountId]);
-  return { skipped: false, username: me.name, territories: territories.length, ingested, analyzed };
+  return { skipped: false, transport, username: me.name, territories: territories.length, ingested, analyzed };
 }
 
 export async function syncAccount(accountId, options = {}) {

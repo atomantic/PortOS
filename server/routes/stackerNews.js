@@ -25,6 +25,7 @@ const accountSchema = z.object({
   label: z.string().trim().min(1).max(120),
   username: z.string().trim().min(1).max(80).regex(/^[a-zA-Z0-9_-]+$/, 'must be a Stacker News username'),
   apiKey: z.string().trim().min(1).max(400).optional(),
+  readTransport: z.enum(['browser', 'api']).optional(),
   enabled: z.boolean().optional(),
   monitoringEnabled: z.boolean().optional(),
   monitoringIntervalMinutes: z.number().int().min(5).max(1_440).optional(),
@@ -70,6 +71,10 @@ const actionSchema = z.discriminatedUnion('kind', [
     ctx.addIssue({ code: 'custom', message: 'territory settings destination requires territoryId' });
   }
 });
+// Optional override so "Check API identity" can test the stored key even while
+// the account reads through the browser; omitted, it uses the account's own
+// configured read transport.
+const verifySchema = z.object({ transport: z.enum(['browser', 'api']).optional() }).strict();
 const reviewSchema = z.object({ state: z.enum(['approved', 'rejected']), reviewNote: z.string().max(2_000).optional() }).strict();
 const feedbackSchema = z.object({ feedback: z.string().trim().min(1).max(4_000) }).strict();
 
@@ -115,7 +120,7 @@ router.delete('/accounts/:id', asyncHandler(async (req, res) => {
 
 router.post('/accounts/:id/verify', asyncHandler(async (req, res) => {
   requireId(req.params.id, 'account ID');
-  const status = await stackerNews.verifyConnection(req.params.id);
+  const status = await stackerNews.verifyConnection(req.params.id, validateRequest(verifySchema, req.body || {}));
   if (!status) throw new ServerError('Stacker News account not found', { status: 404 });
   res.json(status);
 }));

@@ -55,7 +55,7 @@ const validateAccountForm = (form) => {
   });
   return invalid ? { tab: invalid.tab, message: `${invalid.label} must be a whole number from ${invalid.min} to ${invalid.max}.` } : null;
 };
-const emptyAccount = { label: '', username: '', apiKey: '', clearApiKey: false, enabled: true, monitoringEnabled: false, monitoringIntervalMinutes: 30, analysisEnabled: false, textModel: '', visionModel: '', guidance: '', tone: '', allowedThemes: '', disallowedThemes: '', escalationCues: '', desiredEngagement: '', maxPerHour: 3, maxPerDay: 12, minMinutesBetween: 5 };
+const emptyAccount = { label: '', username: '', apiKey: '', clearApiKey: false, readTransport: 'browser', enabled: true, monitoringEnabled: false, monitoringIntervalMinutes: 30, analysisEnabled: false, textModel: '', visionModel: '', guidance: '', tone: '', allowedThemes: '', disallowedThemes: '', escalationCues: '', desiredEngagement: '', maxPerHour: 3, maxPerDay: 12, minMinutesBetween: 5 };
 const emptyTerritory = { slug: '', label: '', isOwned: false, monitoringEnabled: '', inheritAccountRules: true, guidance: '', tone: '', allowedThemes: '', disallowedThemes: '', escalationCues: '' };
 const emptyDraft = { kind: 'publish_comment', itemId: '', territoryId: '', title: '', body: '', destination: 'item' };
 const fieldClass = 'w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white';
@@ -73,7 +73,8 @@ const territoryPayload = (form) => ({
   rules: territoryRules(form),
 });
 const accountToForm = (account) => ({
-  label: account.label, username: account.username, apiKey: '', clearApiKey: false, enabled: account.enabled,
+  label: account.label, username: account.username, apiKey: '', clearApiKey: false,
+  readTransport: account.readTransport || 'browser', enabled: account.enabled,
   monitoringEnabled: account.monitoringEnabled, monitoringIntervalMinutes: account.monitoringIntervalMinutes,
   analysisEnabled: account.analysisEnabled, textModel: account.textModel, visionModel: account.visionModel,
   guidance: account.rules?.guidance || '', tone: account.rules?.tone || '', allowedThemes: (account.rules?.allowedThemes || []).join(', '),
@@ -235,6 +236,7 @@ export default function StackerNews() {
     if (rejectInvalidAccount(newAccount)) return;
     finish('create-account', api.createStackerNewsAccount({
       label: newAccount.label, username: newAccount.username, enabled: newAccount.enabled, ...(newAccount.apiKey ? { apiKey: newAccount.apiKey } : {}),
+      readTransport: newAccount.readTransport,
       monitoringEnabled: newAccount.monitoringEnabled, monitoringIntervalMinutes: Number(newAccount.monitoringIntervalMinutes),
       analysisEnabled: newAccount.analysisEnabled, textModel: newAccount.textModel, visionModel: newAccount.visionModel,
       rules: accountRules(newAccount),
@@ -251,6 +253,7 @@ export default function StackerNews() {
     finish('save-account', api.updateStackerNewsAccount(savedAccountId, {
       label: editAccount.label, username: editAccount.username, enabled: editAccount.enabled,
       ...(editAccount.clearApiKey ? { apiKey: '' } : editAccount.apiKey ? { apiKey: editAccount.apiKey } : {}),
+      readTransport: editAccount.readTransport,
       monitoringEnabled: editAccount.monitoringEnabled, monitoringIntervalMinutes: Number(editAccount.monitoringIntervalMinutes),
       analysisEnabled: editAccount.analysisEnabled, textModel: editAccount.textModel, visionModel: editAccount.visionModel,
       rules: accountRules(editAccount),
@@ -292,14 +295,14 @@ export default function StackerNews() {
     setNotice('Community removed.');
   });
 
-  const checkConnection = () => selected && finish('verify', api.verifyStackerNewsAccount(selected.id, { silent: true }), (result) => {
+  const checkConnection = () => selected && finish('verify', api.verifyStackerNewsAccount(selected.id, 'api', { silent: true }), (result) => {
     setNotice(!result.connected ? 'Add an API key before testing.' : `API identity: @${result.username}. ${result.matchesConfigured ? 'Matches this account.' : 'Mismatch: writes are blocked.'}`);
   });
   const checkBrowser = () => selected && finish('browser', api.getStackerNewsBrowserIdentity(selected.id, { silent: true }), (result) => {
     setNotice(`Pinned browser identity: @${result.username || 'unknown'}. ${result.matchesConfigured ? 'Matches this account.' : 'Mismatch: handoffs are blocked.'}`);
   });
   const syncNow = () => selected && finish('sync', api.syncStackerNewsAccount(selected.id, { silent: true }), async (result) => {
-    setNotice(`Sync complete: ${result.ingested} item(s), ${result.analyzed} analyzed.`); await Promise.all([loadAccounts(), loadSelected()]);
+    setNotice(`Sync complete via ${result.transport === 'api' ? 'the API key' : 'the pinned browser'}: ${result.ingested} item(s), ${result.analyzed} analyzed.`); await Promise.all([loadAccounts(), loadSelected()]);
   });
   const analyze = (item) => finish(`analyze-${item.id}`, api.analyzeStackerNewsItem(item.id, { silent: true }), (result) => {
     setAnalysisResults((previous) => ({ ...previous, [item.id]: result }));
@@ -411,10 +414,13 @@ export default function StackerNews() {
       {selected ? (
         <section className="rounded border border-port-border bg-port-card p-4">
           <h2 className="font-semibold text-white">Settings and safety for {scope}</h2>
-          <p className="mt-1 text-sm text-gray-400">{selected.label} · {selected.monitoringEnabled ? `monitored every ${selected.monitoringIntervalMinutes}m` : 'monitoring off'} · {selected.apiKeyConfigured ? 'API key stored' : 'no API key stored'}</p>
+          <p className="mt-1 text-sm text-gray-400">{selected.label} · {selected.monitoringEnabled ? `monitored every ${selected.monitoringIntervalMinutes}m` : 'monitoring off'} · reads via {selected.readTransport === 'api' ? 'API key' : 'pinned browser'} · {selected.apiKeyConfigured ? 'API key stored' : 'no API key stored'}</p>
           <div className="mt-3 flex flex-wrap gap-2">
             <button type="button" className={buttonClass} onClick={() => openAccountForm('edit')}>Edit account settings</button>
-            <button type="button" className={secondaryButton} disabled={accountActionsDisabled} onClick={checkConnection}>Check API identity</button>
+            {/* The API check is the one action that genuinely needs a stored
+                key; reads and the browser check do not. Disable it with a
+                reason rather than letting it fail with a bare error. */}
+            <button type="button" className={secondaryButton} disabled={accountActionsDisabled || !selected.apiKeyConfigured} title={selected.apiKeyConfigured ? 'Test the stored API key against Stacker News' : 'No API key stored. Reads use the signed-in pinned browser; a key is only needed for reviewed publishing.'} onClick={checkConnection}>Check API identity</button>
             <button type="button" className={secondaryButton} disabled={accountActionsDisabled} onClick={checkBrowser}>Check browser identity</button>
             <button type="button" className={secondaryButton} disabled={accountActionsDisabled} onClick={syncNow}>Sync now</button>
           </div>
@@ -511,7 +517,17 @@ function AccountDrawer({ mode, username, activeTab, onTabChange, onClose, formEr
         {activeTab === 'identity' && <>
           <Field id={`${prefix}-label`} label="Local label"><input id={`${prefix}-label`} required className={fieldClass} value={form.label} onChange={(event) => update('label', event.target.value)} /></Field>
           <Field id={`${prefix}-username`} label="Stacker News username"><input id={`${prefix}-username`} required className={fieldClass} value={form.username} onChange={(event) => update('username', event.target.value)} /></Field>
-          <Field id={`${prefix}-api-key`} label={isNew ? 'API key (optional)' : 'Replace API key (leave blank to keep)'}><input id={`${prefix}-api-key`} type="password" className={fieldClass} disabled={form.clearApiKey} value={form.apiKey} onChange={(event) => update('apiKey', event.target.value)} /></Field>
+          <Field id={`${prefix}-read-transport`} label="Read transport">
+            <select id={`${prefix}-read-transport`} className={fieldClass} value={form.readTransport} onChange={(event) => update('readTransport', event.target.value)}>
+              <option value="browser">Signed-in pinned browser (no key needed)</option>
+              <option value="api">Stacker News API key</option>
+            </select>
+            <p className="mt-1 text-xs text-gray-400">Identity checks and syncs read through the pinned browser by default. Choose the API only if a key is stored.</p>
+          </Field>
+          <Field id={`${prefix}-api-key`} label={isNew ? 'API key (optional)' : 'Replace API key (leave blank to keep)'}>
+            <input id={`${prefix}-api-key`} type="password" className={fieldClass} disabled={form.clearApiKey} value={form.apiKey} onChange={(event) => update('apiKey', event.target.value)} />
+            <p className="mt-1 text-xs text-gray-400">Optional. Stacker News grants API keys on request only — there is no self-serve setting — so PortOS needs one just for reviewed publishing, never for reads.</p>
+          </Field>
           {canClearCredential && checkbox('clearApiKey', 'Remove stored API key when saving')}
           {checkbox('enabled', 'Account enabled')}
         </>}

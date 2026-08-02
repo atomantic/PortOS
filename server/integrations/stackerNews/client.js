@@ -78,6 +78,10 @@ export async function executeStackerNewsOperation(name, input = {}, apiKey) {
 
 export const stackerNewsOperations = Object.freeze(Object.keys(OPERATIONS));
 export const stackerNewsCapabilities = Object.freeze({
+  // `browserReads` is the DEFAULT read transport (see browserReader.js): SN
+  // grants API keys only on request, so the key is an optional accelerator that
+  // only reviewed writes require.
+  browserReads: Object.freeze(['me', 'sub', 'items']),
   api: Object.freeze({ reads: ['me', 'sub', 'items'], reviewedWrites: ['createDiscussion', 'createComment'] }),
   browserHandoff: Object.freeze(['item', 'territory_settings', 'zap', 'downzap', 'boost']),
   unavailable: Object.freeze(['wallet_settlement', 'arbitrary_graphql', 'arbitrary_browser_script']),

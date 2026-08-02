@@ -422,8 +422,11 @@ const PIN_SETUP_ID_BASE = 10;
 
 // Close a CDP tab by target id (best-effort). Used to fail closed after an
 // SSRF-pin refusal so a tab that connected to a disallowed address is torn down
-// rather than left open for the DOM reader.
-async function closeCdpPage(id) {
+// rather than left open for the DOM reader. Also exported for read-only callers
+// (e.g. the Stacker News browser read transport) that scrape one page and must
+// not leave a tab behind per sync page — unlike a handoff, whose tab is the
+// deliverable.
+export async function closeCdpPage(id) {
   if (!id) return;
   await cdpRequest(`/json/close/${id}`, { timeout: HEALTH_TIMEOUT_MS }).catch(() => {});
 }

@@ -40,8 +40,8 @@ const modelSelects = () => ({
 });
 
 const accounts = [
-  { id: 'a1', label: 'Art steward', username: 'art_steward', enabled: true, monitoringEnabled: true, monitoringIntervalMinutes: 15, analysisEnabled: true, textModel: 'example-text', visionModel: '', rules: { guidance: 'Curate visual work' }, apiKeyConfigured: true },
-  { id: 'a2', label: 'Personal', username: 'personal_stacker', enabled: true, monitoringEnabled: false, monitoringIntervalMinutes: 60, analysisEnabled: false, textModel: '', visionModel: '', rules: { guidance: 'Personal rules' }, apiKeyConfigured: false },
+  { id: 'a1', label: 'Art steward', username: 'art_steward', enabled: true, monitoringEnabled: true, monitoringIntervalMinutes: 15, analysisEnabled: true, textModel: 'example-text', visionModel: '', rules: { guidance: 'Curate visual work' }, apiKeyConfigured: true, readTransport: 'api' },
+  { id: 'a2', label: 'Personal', username: 'personal_stacker', enabled: true, monitoringEnabled: false, monitoringIntervalMinutes: 60, analysisEnabled: false, textModel: '', visionModel: '', rules: { guidance: 'Personal rules' }, apiKeyConfigured: false, readTransport: 'browser' },
 ];
 
 // Surfaces the URL so tests can assert the deep-linkable bits — the selected
@@ -227,6 +227,36 @@ describe('StackerNews', () => {
     await user.click(screen.getByRole('button', { name: 'Edit account settings' }));
     await user.click(drawerTab('Monitoring & models'));
     expect(intervalField()).toHaveValue(15);
+  });
+
+  // Stacker News grants API keys on request only, so a keyless account is the
+  // normal case: the browser-backed actions stay usable and only the API check
+  // is disabled — with a reason, not a bare failure.
+  it('disables only the API identity check when no key is stored, and explains why', async () => {
+    renderPage('/stacker-news/a2/accounts');
+    const apiCheck = await screen.findByRole('button', { name: 'Check API identity' });
+    expect(apiCheck).toBeDisabled();
+    expect(apiCheck).toHaveAttribute('title', expect.stringContaining('pinned browser'));
+    expect(screen.getByRole('button', { name: 'Check browser identity' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Sync now' })).toBeEnabled();
+    expect(screen.getByText(/reads via pinned browser/)).toBeInTheDocument();
+  });
+
+  it('forces the API transport from the API identity check', async () => {
+    const user = userEvent.setup();
+    api.verifyStackerNewsAccount.mockResolvedValue({ configured: true, connected: true, transport: 'api', username: 'art_steward', matchesConfigured: true });
+    renderPage('/stacker-news/a1/accounts');
+    await user.click(await screen.findByRole('button', { name: 'Check API identity' }));
+    await waitFor(() => expect(api.verifyStackerNewsAccount).toHaveBeenCalledWith('a1', 'api', { silent: true }));
+  });
+
+  it('saves the chosen read transport with the account', async () => {
+    const user = userEvent.setup();
+    api.updateStackerNewsAccount.mockResolvedValue({ ...accounts[0], readTransport: 'browser' });
+    renderPage('/stacker-news/a1/accounts?snAccount=edit');
+    await user.selectOptions(await screen.findByLabelText('Read transport', { selector: '#edit-account-read-transport' }), 'browser');
+    await user.click(screen.getByRole('button', { name: 'Save account' }));
+    await waitFor(() => expect(api.updateStackerNewsAccount).toHaveBeenCalledWith('a1', expect.objectContaining({ readTransport: 'browser' }), { silent: true }));
   });
 
   it('can explicitly remove a stored API key', async () => {

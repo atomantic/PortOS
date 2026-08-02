@@ -14,6 +14,7 @@ export const stackerNewsDdl = [
     vision_model TEXT NOT NULL DEFAULT '',
     rules JSONB NOT NULL DEFAULT '{}'::jsonb,
     policy_version TEXT NOT NULL DEFAULT 'v1',
+    read_transport TEXT NOT NULL DEFAULT 'browser' CHECK (read_transport IN ('browser','api')),
     last_sync_at TIMESTAMPTZ,
     last_error TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -26,6 +27,10 @@ export const stackerNewsDdl = [
   `ALTER TABLE stacker_news_accounts ADD COLUMN IF NOT EXISTS policy_version TEXT NOT NULL DEFAULT 'v1'`,
   `ALTER TABLE stacker_news_accounts ADD COLUMN IF NOT EXISTS last_sync_at TIMESTAMPTZ`,
   `ALTER TABLE stacker_news_accounts ADD COLUMN IF NOT EXISTS last_error TEXT NOT NULL DEFAULT ''`,
+  // Reads default to the signed-in pinned browser: Stacker News grants API keys
+  // only on request, so a key-gated read path leaves a fresh install unable to
+  // sync at all. Existing installs pick this up with no manual step.
+  `ALTER TABLE stacker_news_accounts ADD COLUMN IF NOT EXISTS read_transport TEXT NOT NULL DEFAULT 'browser' CHECK (read_transport IN ('browser','api'))`,
   `CREATE TABLE IF NOT EXISTS stacker_news_credentials (
     account_id UUID PRIMARY KEY REFERENCES stacker_news_accounts (id) ON DELETE CASCADE,
     api_key_enc TEXT NOT NULL,
