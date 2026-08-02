@@ -36,6 +36,7 @@ export const CATEGORIES = {
   'browser-profile': { label: 'Browser Profile', description: 'Chrome/Chromium browser data', archivable: false, deletable: true },
   'calendar': { label: 'Calendar', description: 'Calendar sync data', archivable: true, deletable: false },
   'certs': { label: 'TLS Certificates', description: 'HTTPS certificate and private key — purging drops the install back to HTTP', archivable: false, deletable: false },
+  'commission-feedback': { label: 'Commission Feedback', description: 'Reactions on creative commissions (file mirror of the Postgres store)', archivable: true, deletable: false },
   'conflict-journal': { label: 'Conflict Journal', description: 'Peer-sync conflict history — diagnostics only, safe to purge', archivable: true, deletable: true },
   'cos': { label: 'Chief of Staff', description: 'Agent data, reports, memories', archivable: true, deletable: false },
   'creative': { label: 'Creative Ledger', description: 'Append-only ledger of creative generation runs', archivable: true, deletable: false },

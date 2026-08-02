@@ -15,7 +15,8 @@
  *   2. `DEFAULT_EXCLUDES` in services/backup.js — anchored rsync filter paths.
  *   3. Source scan of server/ + scripts/ for the ways a data dir is spelled
  *      outside PATHS: `dataPath('name')`, `join(PATHS.data, 'name')`,
- *      `` `${PATHS.data}/name` ``, and `join(root, 'data', 'name')`.
+ *      `` `${PATHS.data}/name` ``, `join(root, 'data', 'name')`, and the
+ *      collection-store idiom `join(PATHS.data, TYPE)` with a const name.
  *   4. `data.reference/` — dirs seeded into `data/` on first install.
  */
 
@@ -38,6 +39,16 @@ const DATA_DIR_PATTERNS = [
   /\$\{PATHS\.data\}\/([a-z0-9._-]+)/g,
   /,\s*'data',\s*'([a-z0-9._-]+)'/g
 ];
+
+// `join(PATHS.data, TYPE)` — the collection-store idiom, where the directory
+// name is a module constant rather than an inline literal. Capture the
+// identifier, then resolve it against its declaration in the same file.
+const INDIRECT_DATA_DIR_PATTERN = /PATHS\.data,\s*([A-Z][A-Z0-9_]*)\s*\)/g;
+
+function resolveConstant(source, identifier) {
+  const declaration = new RegExp(`\\bconst\\s+${identifier}\\s*=\\s*'([a-z0-9._-]+)'`);
+  return source.match(declaration)?.[1] ?? null;
+}
 
 function walkJsFiles(dir, out = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -74,6 +85,9 @@ function discoverDataDirs() {
         for (const match of source.matchAll(pattern)) {
           add(match[1], relative(PATHS.root, file));
         }
+      }
+      for (const match of source.matchAll(INDIRECT_DATA_DIR_PATTERN)) {
+        add(resolveConstant(source, match[1]), relative(PATHS.root, file));
       }
     }
   }
