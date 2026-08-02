@@ -8,9 +8,15 @@ vi.mock('../apps.js', () => ({
   updateAppLayeredIntelligence: vi.fn().mockResolvedValue(undefined)
 }));
 
-vi.mock('../../lib/workTracker.js', () => ({
-  resolveAppWorkTracker: vi.fn().mockResolvedValue({ resolved: 'github', forge: 'gh' })
-}));
+vi.mock('../../lib/workTracker.js', async (importActual) => {
+  const actual = await importActual();
+  return {
+    // Real pure host→API-host mapping so the forge gate is exercised through
+    // the exact enterprise-aware resolution production uses (#3358).
+    githubApiHost: actual.githubApiHost,
+    resolveAppWorkTracker: vi.fn().mockResolvedValue({ resolved: 'github', forge: 'gh', host: 'github.com' })
+  };
+});
 
 vi.mock('../../lib/fileUtils.js', () => ({
   tryReadFile: vi.fn().mockResolvedValue(null)

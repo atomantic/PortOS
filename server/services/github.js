@@ -46,12 +46,13 @@ const DEFAULT_EXEC_GH_TIMEOUT_MS = 60000;
  * process. `timeoutMs` kills the child and rejects with a clear error; it's
  * cleared on normal exit so it never fires for a completed run.
  */
-export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = null } = {}) {
+export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = null, env = null } = {}) {
   return new Promise((resolve, reject) => {
+    const baseEnv = env || process.env;
     const child = spawn('gh', args, {
       shell: false,
       windowsHide: true,
-      ...(cwd ? { cwd, env: withSpawnCwdEnv(process.env, cwd) } : {})
+      ...(cwd ? { cwd, env: withSpawnCwdEnv(baseEnv, cwd) } : (env ? { env } : {}))
     });
     let stdout = '';
     let stderr = '';
@@ -512,15 +513,19 @@ export async function ensureForgeReachable(label, { hostname = null } = {}) {
  * the agent DID reach the forge, which is the question being asked.
  *
  * @param {string} branch - head branch name
- * @param {{ cwd?: string }} [opts] - repo dir gh resolves the remote from
+ * @param {{ cwd?: string, env?: object|null }} [opts] - repo dir gh resolves the
+ *   remote from, and the env overlay to run under. Pass the `env` from
+ *   `resolveForgeForRepo` so the lookup authenticates as the SAME repo-owner-
+ *   pinned account that opened the PR — on a multi-login host the ambient
+ *   account may not even see it, which would read as "no PR".
  * @returns {Promise<{ status: 'found'|'none'|'unavailable', number: number|null, url: string|null, detail: string|null }>}
  */
-export async function findPullRequestForBranch(branch, { cwd = null } = {}) {
+export async function findPullRequestForBranch(branch, { cwd = null, env = null } = {}) {
   if (!branch) return { status: 'unavailable', number: null, url: null, detail: 'no branch name' };
   const raw = await execGh(
     ['pr', 'list', '--head', branch, '--state', 'all', '--limit', '1', '--json', 'number,url,state'],
     DEFAULT_EXEC_GH_TIMEOUT_MS,
-    { cwd }
+    { cwd, env }
   ).catch(err => err);
   if (raw instanceof Error) {
     return { status: 'unavailable', number: null, url: null, detail: raw.message };

@@ -242,10 +242,14 @@ export async function verifyPrClaim({ task, workspacePath, success, prExpected }
   }
 
   const { resolveForgeForRepo } = await import('./git.js');
-  const { cli } = await resolveForgeForRepo(workspacePath).catch(() => ({ cli: 'gh' }));
+  // `env` carries the repo-owner-pinned `GH_TOKEN` the agent's own `gh pr create`
+  // used. Dropping it would query as whatever ambient account `gh` happens to be
+  // on, which on a multi-login host may not even see the PR — reading as
+  // "no PR" for a run that opened one.
+  const { cli, env } = await resolveForgeForRepo(workspacePath).catch(() => ({ cli: 'gh', env: null }));
   const found = cli === 'glab'
     ? await (await import('./gitlab.js')).findMergeRequestForBranch(branch, workspacePath)
-    : await (await import('./github.js')).findPullRequestForBranch(branch, { cwd: workspacePath });
+    : await (await import('./github.js')).findPullRequestForBranch(branch, { cwd: workspacePath, env: env || null });
 
   const noun = cli === 'glab' ? 'merge request' : 'pull request';
   if (found.status === 'found') return { ok: true, branch };

@@ -68,3 +68,26 @@ describe('findMergeRequestForBranch (#3358)', () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 });
+
+describe('execGlab timeout (#3358)', () => {
+  it('kills a stalled glab and resolves null instead of hanging the caller', async () => {
+    // Without this bound, the agent PR-claim verification that awaits an MR
+    // lookup would strand a finishing run forever on a hung keychain/network.
+    vi.useFakeTimers();
+    const hung = new EventEmitter();
+    hung.stdout = new EventEmitter();
+    hung.stderr = new EventEmitter();
+    hung.kill = vi.fn();
+    spawnMock.mockImplementationOnce(() => hung);
+
+    const pending = findMergeRequestForBranch('claim/issue-1', '/repo');
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(hung.kill).toHaveBeenCalledWith('SIGKILL');
+    await expect(pending).resolves.toMatchObject({ status: 'unavailable' });
+
+    // A late close must not flip the already-settled result.
+    hung.emit('close', 0);
+    await expect(pending).resolves.toMatchObject({ status: 'unavailable' });
+    vi.useRealTimers();
+  });
+});

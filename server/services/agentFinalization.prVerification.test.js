@@ -107,7 +107,17 @@ describe('verifyPrClaim (#3358)', () => {
     onBranch('claim/issue-1');
     const verdict = await verifyPrClaim({ task: prTask(), workspacePath: '/w', success: true, prExpected: true });
     expect(verdict.ok).toBe(true);
-    expect(findPullRequestForBranchMock).toHaveBeenCalledWith('claim/issue-1', { cwd: '/w' });
+    expect(findPullRequestForBranchMock).toHaveBeenCalledWith('claim/issue-1', { cwd: '/w', env: null });
+  });
+
+  it('threads the repo-pinned gh credential into the lookup', async () => {
+    // The agent opened its PR as the repo-owner-matched account; querying as the
+    // ambient one may not even see it on a multi-login host.
+    onBranch('claim/issue-1');
+    const env = { GH_TOKEN: 'pinned-token' };
+    resolveForgeForRepoMock.mockResolvedValue({ cli: 'gh', env });
+    await verifyPrClaim({ task: prTask(), workspacePath: '/w', success: true, prExpected: true });
+    expect(findPullRequestForBranchMock).toHaveBeenCalledWith('claim/issue-1', { cwd: '/w', env });
   });
 
   it('fails with pr-missing when the forge answered and has no PR', async () => {

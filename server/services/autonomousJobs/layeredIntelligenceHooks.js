@@ -300,8 +300,14 @@ export async function buildTaskInput({ app } = {}) {
   // forge, so running the reasoner now would burn a provider call on a proposal
   // we could neither dedup nor file. Skip with the probe's single log line.
   if (filer === 'forge' && forgeCli === 'gh') {
-    const { ensureForgeReachable } = await import('../github.js')
-    const forge = await ensureForgeReachable('layered-intelligence')
+    const [{ ensureForgeReachable }, { githubApiHost }] = await Promise.all([
+      import('../github.js'),
+      import('../../lib/workTracker.js')
+    ])
+    // Probed against the app's OWN forge host (`tracker.host`), not gh's
+    // default: a bare probe would skip a healthy GitHub Enterprise app whenever
+    // github.com is unreachable, and run one whose enterprise host is down.
+    const forge = await ensureForgeReachable('layered-intelligence', { hostname: githubApiHost(tracker.host) })
     if (!forge.ok) return skip('skipped', 'forge-unreachable')
   }
 
