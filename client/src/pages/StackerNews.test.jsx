@@ -210,6 +210,25 @@ describe('StackerNews', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Sync now' })).toBeEnabled());
   });
 
+  it('discards an unsaved account draft left behind by closing the drawer', async () => {
+    const user = userEvent.setup();
+    renderPage('/stacker-news/a1/accounts?snAccount=edit&snAccountTab=monitoring');
+    const interval = await screen.findByLabelText('Monitoring interval (minutes)', { selector: '#edit-account-interval' });
+    await user.clear(interval);
+    await user.type(interval, '20');
+    // Closing keeps the draft (a 19-field edit should survive a detour), so the
+    // dependent actions stay disabled until the draft is saved or discarded.
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sync now' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+    expect(screen.queryByText(/Unsaved changes to @art_steward/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sync now' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Edit account settings' }));
+    await user.click(drawerTab('Monitoring & models'));
+    expect(intervalField()).toHaveValue(15);
+  });
+
   it('can explicitly remove a stored API key', async () => {
     const user = userEvent.setup();
     api.updateStackerNewsAccount.mockResolvedValue({ ...accounts[0], apiKeyConfigured: false });
