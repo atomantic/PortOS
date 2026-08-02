@@ -364,6 +364,29 @@ describe('cosTaskStore.addTask', () => {
     expect(mock.events.find(e => e.name === 'tasks:changed').payload.action).toBe('updated');
   });
 
+  it('emits tasks:changed action "requeued" on an in_progress → pending flip (#3373)', async () => {
+    // The retry-hold release and the orphan sweep both requeue this way, long
+    // after the completion dequeue ran — without a wake signal the retry would
+    // idle until an unrelated event or timer fired.
+    const task = await addTask({ description: 'requeue me', app: 'portos', id: 'sys-requeue' }, 'internal');
+    await updateTask(task.id, { status: 'in_progress' }, 'internal');
+    mock.events.length = 0;
+    await updateTask(task.id, { status: 'pending', metadata: { retryPendingCleanup: undefined } }, 'internal');
+    expect(mock.events.find(e => e.name === 'tasks:changed').payload.action).toBe('requeued');
+  });
+
+  // The hold clear has to actually leave the disk: a `null` would serialize as
+  // the string "null" and read back as a live marker on the next boot.
+  it('drops undefined metadata keys entirely rather than persisting them (#3373)', async () => {
+    const task = await addTask({ description: 'clear my marker', app: 'portos', id: 'sys-marker' }, 'internal');
+    await updateTask(task.id, { status: 'in_progress', metadata: { retryPendingCleanup: true } }, 'internal');
+    await updateTask(task.id, { status: 'pending', metadata: { retryPendingCleanup: undefined } }, 'internal');
+    const { tasks } = await getCosTasks();
+    const stored = tasks.find(t => t.id === task.id);
+    expect(stored.status).toBe('pending');
+    expect('retryPendingCleanup' in stored.metadata).toBe(false);
+  });
+
   it('reviveBlockedTask flips to pending with a FRESH retry budget (#2614)', async () => {
     // A revived task must behave like a fresh one: without clearing the
     // spawn/orphan budgets it would immediately re-block on the exhausted

@@ -1097,6 +1097,40 @@ describe('cos.js source — priority + capacity invariants', () => {
     // tryImmediateSpawn is user-task-only, matching the pre-extraction guard.
     expect(handler).toMatch(/data\.type\s*===\s*'user'/);
   });
+
+  // The retry-hold release (#3373) and the orphan sweep both requeue via an
+  // in_progress → pending flip, which cosTaskStore reports as 'requeued'. Without
+  // a wake here the released retry idles until an unrelated event or timer.
+  it('tasks:changed listener re-runs the dequeue on a requeued task', () => {
+    const onIdx = COS_SRC.indexOf("cosEvents.on('tasks:changed'");
+    const handler = COS_SRC.slice(onIdx, COS_SRC.indexOf('});', onIdx) + 3);
+    expect(handler).toMatch(/data\.action\s*===\s*'requeued'/);
+  });
+});
+
+// A failed run's retry is held non-spawnable (`in_progress` + marker) while its
+// worktree cleanup resolves the resume pointer (#3373). The boot/health-check
+// sweep walks in_progress tasks, so it must leave a LIVE hold alone — requeueing
+// there would resolve the pointer against a branch mid-merge — and must hand a
+// STALE one (the process that armed it died) to handleOrphanedTask, which
+// finishes the transition.
+describe('resetOrphanedTasks — retry holds (#3373)', () => {
+  const sweepFn = extractFnBody(COS_SRC, COS_SRC.indexOf('async function resetOrphanedTasks'));
+
+  it('skips a held task until its hold goes stale', () => {
+    expect(sweepFn, 'the sweep must consult the retry hold')
+      .toMatch(/isRetryHeld\(task\.metadata\)\s*&&\s*!bootRecovery\s*&&\s*!isStaleRetryHold\(task\.metadata\)/);
+    const guardIdx = sweepFn.indexOf('isRetryHeld(task.metadata)');
+    const handlerIdx = sweepFn.indexOf('handleOrphanedTask(');
+    expect(guardIdx, 'the hold guard must run before the orphan handler').toBeLessThan(handlerIdx);
+  });
+
+  // Nothing can be mid-cleanup on the startup pass, so a hold left by the process
+  // that died is recovered immediately rather than idling out its grace window.
+  it('recovers a held task immediately on the boot pass', () => {
+    expect(COS_SRC).toMatch(/resetOrphanedTasks\(\{\s*bootRecovery:\s*true\s*\}\)/);
+    expect(sweepFn).toMatch(/bootRecovery\s*=\s*false/);
+  });
 });
 
 describe('forceSpawnTask — pre-validate provider before task:ready', () => {

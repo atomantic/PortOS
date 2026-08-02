@@ -11,6 +11,7 @@ import { cosEvents } from './cosEvents.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { redactOutput } from '../lib/commandSecurity.js';
 import { stripAnsi } from '../lib/ansiStrip.js';
+import { retryHoldMetadata } from '../lib/taskRetryHold.js';
 import { isTruthyMeta } from './agentState.js';
 
 // Max retries before blocking a task
@@ -1036,23 +1037,28 @@ export async function maybeCreateInvestigationTask(agentId, task, analysis) {
 }
 
 /**
- * Pure decision logic for {@link resolveFailedTaskUpdate} — no I/O, no clock.
+ * Pure decision logic for {@link resolveFailedTaskUpdate} — no I/O, and no clock
+ * beyond the injectable `now`.
  *
- * Decides whether a failed task should be blocked or retried, the metadata
- * fields to merge over `task.metadata` (timestamps excluded — they belong to
- * the async wrapper), and the analysis to hand to an investigation task.
- * Extracted so the branching can be unit-tested directly (see
- * `agentErrorAnalysis.test.js`) instead of through a drift-prone inline copy.
- * Whether an investigation task is actually created stays the sole concern of
- * {@link maybeCreateInvestigationTask}.
+ * Decides whether a failed task should be blocked or held for retry, the metadata
+ * fields to merge over `task.metadata` (the failure/blocked timestamps stay with
+ * the async wrapper; the retry hold's own stamp is part of the marker pair, so it
+ * is written here from the injected `now` rather than split across two files), and
+ * the analysis to hand to an investigation task. Extracted so the branching can be
+ * unit-tested directly (see `agentErrorAnalysis.test.js`) instead of through a
+ * drift-prone inline copy. Whether an investigation task is actually created stays
+ * the sole concern of {@link maybeCreateInvestigationTask}.
+ *
+ * `in_progress` is the RETRY status, not a typo: a retryable failure is held
+ * non-spawnable until its resume pointer is resolved (#3373, lib/taskRetryHold.js).
  *
  * @returns {{
- *   status: 'blocked'|'pending',
+ *   status: 'blocked'|'in_progress',
  *   investigationAnalysis: object|null,
  *   metadataUpdates: { failureCount?: number, lastErrorCategory?: string, [k: string]: unknown }
  * }}
  */
-export function resolveFailedTaskDecision(task, errorAnalysis) {
+export function resolveFailedTaskDecision(task, errorAnalysis, now = Date.now()) {
   // Actionable errors get blocked immediately. The investigation task (created
   // by the wrapper unless the failure is an API-access error) gets the original
   // analysis verbatim.
@@ -1093,13 +1099,24 @@ export function resolveFailedTaskDecision(task, errorAnalysis) {
   }
 
   // Retry: propagate compaction hints for retry prompt injection.
+  //
+  // The retry is NOT made spawnable here (#3373). The status stays `in_progress`
+  // and the task carries the retry-hold marker, because the resume pointer that
+  // lets this retry adopt the branch its dead run left behind can only be resolved
+  // after `cleanupAgentWorktree` decides what survived — which happens after this
+  // write lands. Flipping to `pending` now would let the dequeue that
+  // `agent:completed` schedules claim the retry with no pointer and start clean.
+  // `releaseRetryHold` (agentWorktreeCleanup.js) does the flip to `pending`
+  // together with the pointer, in one write; `handleOrphanedTask` finishes the
+  // transition if this process dies in between. See lib/taskRetryHold.js.
   const compaction = errorAnalysis?.compaction || null;
   return {
-    status: 'pending',
+    status: 'in_progress',
     investigationAnalysis: null,
     metadataUpdates: {
       failureCount,
       lastErrorCategory,
+      ...retryHoldMetadata(now),
       ...(compaction && { compaction })
     }
   };
@@ -1146,10 +1163,12 @@ export function resolveTypeFailureSignal({ success, terminatedByUser = false, ho
  * Tracks retry count and blocks the task after MAX_TASK_RETRIES,
  * creating an investigation task instead of retrying endlessly.
  *
- * Returns { status, metadata } to apply to the task.
+ * Returns { status, metadata } to apply to the task. A retry does NOT come back
+ * `pending`: it comes back `in_progress` + the retry-hold marker, and only becomes
+ * spawnable once `releaseRetryHold` writes the resume pointer (#3373).
  */
-export async function resolveFailedTaskUpdate(task, errorAnalysis, agentId) {
-  const decision = resolveFailedTaskDecision(task, errorAnalysis);
+export async function resolveFailedTaskUpdate(task, errorAnalysis, agentId, now = Date.now()) {
+  const decision = resolveFailedTaskDecision(task, errorAnalysis, now);
   const { failureCount, lastErrorCategory } = decision.metadataUpdates;
 
   // Actionable errors get blocked immediately (investigation task created unless API access is denied)
@@ -1160,7 +1179,7 @@ export async function resolveFailedTaskUpdate(task, errorAnalysis, agentId) {
     await maybeCreateInvestigationTask(agentId, task, decision.investigationAnalysis);
     return {
       status: decision.status,
-      metadata: { ...task.metadata, ...decision.metadataUpdates, blockedAt: new Date().toISOString() }
+      metadata: { ...task.metadata, ...decision.metadataUpdates, blockedAt: new Date(now).toISOString() }
     };
   }
 
@@ -1169,18 +1188,18 @@ export async function resolveFailedTaskUpdate(task, errorAnalysis, agentId) {
       taskId: task.id, failureCount, category: lastErrorCategory
     });
     await maybeCreateInvestigationTask(agentId, task, decision.investigationAnalysis);
-    const now = new Date().toISOString();
+    const at = new Date(now).toISOString();
     return {
       status: 'blocked',
-      metadata: { ...task.metadata, ...decision.metadataUpdates, lastFailureAt: now, blockedAt: now }
+      metadata: { ...task.metadata, ...decision.metadataUpdates, lastFailureAt: at, blockedAt: at }
     };
   }
 
-  emitLog('info', `🔄 Task ${task.id} retry ${failureCount}/${MAX_TASK_RETRIES} (${lastErrorCategory})`, {
+  emitLog('info', `🔄 Task ${task.id} retry ${failureCount}/${MAX_TASK_RETRIES} held for cleanup (${lastErrorCategory})`, {
     taskId: task.id, failureCount, maxRetries: MAX_TASK_RETRIES, category: lastErrorCategory
   });
   return {
-    status: 'pending',
-    metadata: { ...task.metadata, ...decision.metadataUpdates, lastFailureAt: new Date().toISOString() }
+    status: decision.status,
+    metadata: { ...task.metadata, ...decision.metadataUpdates, lastFailureAt: new Date(now).toISOString() }
   };
 }

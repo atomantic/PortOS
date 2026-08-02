@@ -25,13 +25,13 @@ vi.mock('./codeReview.js', () => ({ resolveReviewLoopOptions: vi.fn().mockResolv
 vi.mock('./agentWorktreeCleanup.js', () => ({
   cleanupAgentWorktree: vi.fn().mockResolvedValue([]),
   spawnMergeRecoveryTask: vi.fn(),
-  recordResumePointerIfRetrying: vi.fn().mockResolvedValue({}),
+  releaseRetryHold: vi.fn().mockResolvedValue({}),
 }));
 vi.mock('./taskPromptService.js', () => ({ getStagePrompt: vi.fn().mockResolvedValue('do stage work in {appName}') }));
 
 import { handlePipelineProgression, runAgentCompletionCleanup } from './agentCompletionCleanup.js';
 import { updateTask, addTask, reviveBlockedTask, getAgent } from './cos.js';
-import { cleanupAgentWorktree, recordResumePointerIfRetrying } from './agentWorktreeCleanup.js';
+import { cleanupAgentWorktree, releaseRetryHold } from './agentWorktreeCleanup.js';
 
 const runningPipeline = (overrides = {}) => ({
   id: 'p1',
@@ -195,13 +195,13 @@ describe('runAgentCompletionCleanup — resume pointer', () => {
       agentId: 'a1', task, agent: { providerId: 'codex' }, effectiveSuccess: false, outputBuffer: '',
     });
 
-    expect(recordResumePointerIfRetrying).toHaveBeenCalledWith({
+    expect(releaseRetryHold).toHaveBeenCalledWith({
       agentId: 'a1', task, success: false,
       agentMetadata: { isWorktree: true, sourceWorkspace: '/repo' },
     });
     // After cleanup, so the pointer reflects what actually survived.
     expect(cleanupAgentWorktree.mock.invocationCallOrder[0])
-      .toBeLessThan(recordResumePointerIfRetrying.mock.invocationCallOrder[0]);
+      .toBeLessThan(releaseRetryHold.mock.invocationCallOrder[0]);
   });
 
   // A missing agent record must reach the helper as an explicit null, not
@@ -214,6 +214,33 @@ describe('runAgentCompletionCleanup — resume pointer', () => {
       agentId: 'a1', task, agent: { providerId: 'codex' }, effectiveSuccess: false, outputBuffer: '',
     });
 
-    expect(recordResumePointerIfRetrying).toHaveBeenCalledWith(expect.objectContaining({ agentMetadata: null }));
+    expect(releaseRetryHold).toHaveBeenCalledWith(expect.objectContaining({ agentMetadata: null }));
+  });
+
+  // The release is what makes a held task spawnable again (#3373), so it cannot
+  // hang off the worktree-cleanup branch: a JIRA-branch task skips that block
+  // entirely, and previously skipped the pointer with it.
+  it('still releases the hold for a JIRA-branch task, which skips worktree cleanup', async () => {
+    getAgent.mockResolvedValue({ metadata: { isWorktree: true, sourceWorkspace: '/repo' } });
+    const jiraTask = { id: 't', taskType: 'user', metadata: { jiraTicketId: 'ABC-1', jiraBranch: 'feature/ABC-1' } };
+
+    await runAgentCompletionCleanup({
+      agentId: 'a1', task: jiraTask, agent: { providerId: 'codex' }, effectiveSuccess: false, outputBuffer: '',
+    });
+
+    expect(cleanupAgentWorktree).not.toHaveBeenCalled();
+    expect(releaseRetryHold).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1', success: false }));
+  });
+
+  // ...and a throw from any earlier cleanup step must not strand the task held.
+  it('releases the hold even when a cleanup step throws', async () => {
+    getAgent.mockResolvedValue({ metadata: { isWorktree: true } });
+    cleanupAgentWorktree.mockRejectedValueOnce(new Error('git exploded'));
+
+    await expect(runAgentCompletionCleanup({
+      agentId: 'a1', task, agent: { providerId: 'codex' }, effectiveSuccess: false, outputBuffer: '',
+    })).rejects.toThrow('git exploded');
+
+    expect(releaseRetryHold).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1' }));
   });
 });

@@ -27,6 +27,10 @@ import { API_ACCESS_ERROR_CATEGORIES } from './agentErrorAnalysis.js';
 import { ENVIRONMENTAL_ERROR_CATEGORIES } from './taskLearning/metrics.js';
 import { addTask, updateTask, getAllTasks } from './cos.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
+import { groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks } from '../lib/taskParser.js';
+
+// Fixed clock for the retry-hold stamp, so the assertion is exact.
+const HOLD_NOW = Date.parse('2026-08-02T12:00:00.000Z');
 
 // Default store shape for suites that exercise the create path: no existing
 // tasks, so the fingerprint dedup never fires unless a test arranges it.
@@ -262,9 +266,13 @@ describe('resolveFailedTaskDecision', () => {
   });
 
   describe('non-actionable errors with retry tracking', () => {
+    // NOT `pending` (#3373): the retry is HELD non-spawnable — `in_progress` plus
+    // the hold marker — until `releaseRetryHold` writes its resume pointer.
     it('retries on the first failure (failureCount → 1) with no investigation', () => {
-      const decision = resolveFailedTaskDecision(task(), { actionable: false, category: 'rate-limit', message: 'Rate limited' });
-      expect(decision.status).toBe('pending');
+      const decision = resolveFailedTaskDecision(task(), { actionable: false, category: 'rate-limit', message: 'Rate limited' }, HOLD_NOW);
+      expect(decision.status).toBe('in_progress');
+      expect(decision.metadataUpdates.retryPendingCleanup).toBe(true);
+      expect(decision.metadataUpdates.retryPendingSince).toBe(new Date(HOLD_NOW).toISOString());
       expect(decision.metadataUpdates.failureCount).toBe(1);
       expect(decision.metadataUpdates.lastErrorCategory).toBe('rate-limit');
       expect(decision.investigationAnalysis).toBeNull();
@@ -292,7 +300,7 @@ describe('resolveFailedTaskDecision', () => {
     it('propagates compaction hints into the retry metadata (also missed by the inline copy)', () => {
       const compaction = { needed: true, reason: 'context-limit' };
       const decision = resolveFailedTaskDecision(task(), { actionable: false, category: 'context-length', message: 'too big', compaction });
-      expect(decision.status).toBe('pending');
+      expect(decision.status).toBe('in_progress');
       expect(decision.metadataUpdates.compaction).toEqual(compaction);
     });
   });
@@ -300,7 +308,7 @@ describe('resolveFailedTaskDecision', () => {
   describe('missing errorAnalysis', () => {
     it('treats null as a non-actionable unknown error', () => {
       const decision = resolveFailedTaskDecision(task(), null);
-      expect(decision.status).toBe('pending');
+      expect(decision.status).toBe('in_progress');
       expect(decision.metadataUpdates.failureCount).toBe(1);
       expect(decision.metadataUpdates.lastErrorCategory).toBe('unknown');
     });
@@ -309,6 +317,33 @@ describe('resolveFailedTaskDecision', () => {
       const decision = resolveFailedTaskDecision(task({ failureCount: MAX_TASK_RETRIES - 1 }), null);
       expect(decision.status).toBe('blocked');
       expect(decision.metadataUpdates.failureCount).toBe(MAX_TASK_RETRIES);
+    });
+  });
+
+  // Acceptance criterion (#3373): a dequeue that runs during the cleanup window
+  // must not claim the retry. Every dequeue tier selects candidates through these
+  // two taskParser helpers (`grouped.pending` for user tasks, `autoApproved` for
+  // system tasks), so asserting against the REAL helpers — rather than restating
+  // "status !== pending" — is what proves no tier can see the held task.
+  describe('a held retry is not a dequeue candidate', () => {
+    const applyDecision = (base, decision) => ({ ...base, status: decision.status, metadata: { ...base.metadata, ...decision.metadataUpdates } });
+
+    it('is excluded from the pending, auto-approved, and approval queues', () => {
+      const base = { id: 'task-1', description: 'do a thing', priority: 'HIGH', priorityValue: 3, autoApproved: true, approvalRequired: false, metadata: {} };
+      const held = applyDecision(base, resolveFailedTaskDecision(base, { actionable: false, category: 'rate-limit', message: 'Rate limited' }, HOLD_NOW));
+
+      expect(groupTasksByStatus([held]).pending).toEqual([]);
+      expect(groupTasksByStatus([held]).in_progress).toEqual([held]);
+      expect(getAutoApprovedTasks([held])).toEqual([]);
+      expect(getAwaitingApprovalTasks([{ ...held, approvalRequired: true, autoApproved: false }])).toEqual([]);
+    });
+
+    // ...and a blocked task gets no hold at all, so nothing has to release it.
+    it('a blocked task carries no hold marker', () => {
+      const decision = resolveFailedTaskDecision({ id: 'task-1', metadata: { failureCount: MAX_TASK_RETRIES - 1 } }, { actionable: false, category: 'network-error', message: 'Network failed' }, HOLD_NOW);
+      expect(decision.status).toBe('blocked');
+      expect(decision.metadataUpdates.retryPendingCleanup).toBeUndefined();
+      expect(decision.metadataUpdates.retryPendingSince).toBeUndefined();
     });
   });
 });

@@ -317,7 +317,7 @@ export async function getAgents() {
  * worktree/provider metadata, the status) don't pay to read and line-split a
  * completed agent's entire output.txt — which for a long TUI run is megabytes,
  * and whose read failing would otherwise take the whole lookup down with it.
- * `recordResumePointerIfRetrying` is the motivating caller (#3368).
+ * `releaseRetryHold` is the motivating caller (#3368).
  */
 export async function getAgentRecord(agentId) {
   const state = await loadState();

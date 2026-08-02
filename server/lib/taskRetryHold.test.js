@@ -1,0 +1,70 @@
+import { describe, expect, it } from 'vitest';
+import {
+  RETRY_HOLD_GRACE_MS,
+  retryHoldMetadata,
+  clearedRetryHoldMetadata,
+  isRetryHeld,
+  isStaleRetryHold,
+} from './taskRetryHold.js';
+
+const NOW = Date.parse('2026-08-02T12:00:00.000Z');
+
+describe('retryHoldMetadata / clearedRetryHoldMetadata', () => {
+  it('arms the marker with an ISO stamp', () => {
+    expect(retryHoldMetadata(NOW)).toEqual({
+      retryPendingCleanup: true,
+      retryPendingSince: '2026-08-02T12:00:00.000Z',
+    });
+  });
+
+  // `undefined` — not null: updateTask DELETES undefined keys from the merged
+  // metadata, while a null survives and TASKS.md serializes it as the string
+  // "null", which would read back as a live marker on the next boot.
+  it('clears with undefined so updateTask drops the keys entirely', () => {
+    const cleared = clearedRetryHoldMetadata();
+    expect(cleared.retryPendingCleanup).toBeUndefined();
+    expect(cleared.retryPendingSince).toBeUndefined();
+    expect(Object.keys(cleared)).toEqual(['retryPendingCleanup', 'retryPendingSince']);
+    expect(isRetryHeld({ ...retryHoldMetadata(NOW), ...cleared })).toBe(false);
+  });
+});
+
+describe('isRetryHeld', () => {
+  it('reads the boolean and its markdown round-trip string', () => {
+    expect(isRetryHeld({ retryPendingCleanup: true })).toBe(true);
+    expect(isRetryHeld({ retryPendingCleanup: 'true' })).toBe(true);
+  });
+
+  it('is false for anything else', () => {
+    expect(isRetryHeld({ retryPendingCleanup: false })).toBe(false);
+    expect(isRetryHeld({ retryPendingCleanup: 'false' })).toBe(false);
+    expect(isRetryHeld({ retryPendingCleanup: 'null' })).toBe(false);
+    expect(isRetryHeld({})).toBe(false);
+    expect(isRetryHeld(null)).toBe(false);
+    expect(isRetryHeld(undefined)).toBe(false);
+  });
+});
+
+describe('isStaleRetryHold', () => {
+  // A fresh hold means some in-process cleanup is still expected to release it;
+  // the sweep must leave it alone or it resolves the pointer mid-merge.
+  it('is not stale inside the grace window', () => {
+    expect(isStaleRetryHold(retryHoldMetadata(NOW), NOW + RETRY_HOLD_GRACE_MS - 1)).toBe(false);
+  });
+
+  it('is stale once the grace window elapses', () => {
+    expect(isStaleRetryHold(retryHoldMetadata(NOW), NOW + RETRY_HOLD_GRACE_MS)).toBe(true);
+  });
+
+  // The marker is the evidence; the stamp is only the liveness hint. A hold we
+  // cannot date must not strand the task forever.
+  it('treats a missing or unparseable stamp as stale', () => {
+    expect(isStaleRetryHold({ retryPendingCleanup: true }, NOW)).toBe(true);
+    expect(isStaleRetryHold({ retryPendingCleanup: true, retryPendingSince: 'not-a-date' }, NOW)).toBe(true);
+  });
+
+  it('is false for a task that is not held at all, however old', () => {
+    expect(isStaleRetryHold({ retryPendingSince: new Date(0).toISOString() }, NOW)).toBe(false);
+    expect(isStaleRetryHold({}, NOW)).toBe(false);
+  });
+});

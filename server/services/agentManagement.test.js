@@ -905,6 +905,88 @@ describe('orphan retries resume what the dead run left behind', () => {
   });
 });
 
+// The crash-recovery half of the retry hold (#3373). finalizeAgent left the task
+// `in_progress` + held so nothing could dequeue its retry before the resume pointer
+// landed; if the process dies before `releaseRetryHold` runs, the marker on disk is
+// what stops the task being stranded non-spawnable forever.
+describe('the orphan sweep finishes an interrupted retry transition (#3373)', () => {
+  const heldTask = () => ({
+    id: 'task-1',
+    taskType: 'user',
+    status: 'in_progress',
+    metadata: { retryPendingCleanup: true, retryPendingSince: new Date().toISOString(), failureCount: 1 },
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getAgents.mockResolvedValue([]);
+    resolveTaskResumePatch.mockResolvedValue({});
+    checkForTaskCommit.mockResolvedValue(false);
+    activeAgents.clear();
+    runnerAgents.clear();
+  });
+
+  // `clearAllMocks` keeps implementations, so hand the commit check back in the
+  // state the suites after this one expect (no queued verdict).
+  afterEach(() => {
+    checkForTaskCommit.mockReset();
+  });
+
+  it('flips the held task to pending with the resume pointer and drops the marker', async () => {
+    getTaskById.mockResolvedValue(heldTask());
+    resolveTaskResumePatch.mockResolvedValue({ existingBranch: 'cos/task-1/agent-dead', resumedFromAgentId: 'agent-dead', resumeWorktreePath: null });
+
+    await handleOrphanedTask('task-1', 'agent-dead', getTaskById, {
+      agentMetadata: { isWorktree: true, sourceWorkspace: '/repo', worktreeBranch: 'cos/task-1/agent-dead' },
+    });
+
+    expect(updateTask).toHaveBeenCalledWith('task-1', {
+      status: 'pending',
+      metadata: {
+        existingBranch: 'cos/task-1/agent-dead',
+        resumedFromAgentId: 'agent-dead',
+        resumeWorktreePath: null,
+        retryPendingCleanup: undefined,
+        retryPendingSince: undefined,
+      },
+    }, 'user');
+  });
+
+  // The verdict was already reached and already budgeted a retry — this is not a
+  // fresh orphan, so it costs no orphan-retry budget and arms no cooldown.
+  it('charges no orphan-retry budget for finishing the transition', async () => {
+    getTaskById.mockResolvedValue(heldTask());
+
+    await handleOrphanedTask('task-1', 'agent-dead', getTaskById, { agentMetadata: null });
+
+    const [, update] = updateTask.mock.calls[0];
+    expect(update.metadata.orphanRetryCount).toBeUndefined();
+    expect(update.metadata.lastOrphanedAt).toBeUndefined();
+  });
+
+  // A failed run that committed is exactly what the resume pointer is FOR —
+  // completing the task on that evidence would discard the granted retry.
+  it('does not let the commit check complete a held task', async () => {
+    getTaskById.mockResolvedValue(heldTask());
+    checkForTaskCommit.mockResolvedValue(true);
+
+    await handleOrphanedTask('task-1', 'agent-dead', getTaskById, { agentMetadata: null });
+
+    expect(checkForTaskCommit).not.toHaveBeenCalled();
+    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user');
+  });
+
+  // A user-terminated (or budget-exhausted) task is blocked and never held, so the
+  // pre-existing guards still win over the hold branch.
+  it('still skips a user-terminated task', async () => {
+    getTaskById.mockResolvedValue({ id: 'task-1', taskType: 'user', status: 'blocked', metadata: { blockedCategory: 'user-terminated', retryPendingCleanup: true } });
+
+    await handleOrphanedTask('task-1', 'agent-dead', getTaskById, { agentMetadata: null });
+
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+});
+
 // A PortOS restart kills every server-owned agent. Charging those runs the same
 // retry budget as a self-inflicted crash meant three routine restarts blocked the
 // task outright — and the second restart in the reported reproduction landed it in

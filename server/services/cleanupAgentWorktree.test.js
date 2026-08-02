@@ -213,7 +213,7 @@ vi.mock('./runner.js', () => ({
 import { join } from 'path';
 import { existsSync as existsSyncMock } from 'fs';
 import { cleanupAgentWorktree, spawnMergeRecoveryTask, spawnReviewLoopFollowUp } from './subAgentSpawner.js';
-import { resolveResumePointer, resolveTaskResumePatch, recordTaskResumePointer, recordResumePointerIfRetrying, resumePointerMetadata } from './agentWorktreeCleanup.js';
+import { resolveResumePointer, resolveTaskResumePatch, recordTaskResumePointer, releaseRetryHold, resumePointerMetadata } from './agentWorktreeCleanup.js';
 import { getAgent, getAgentRecord, getTaskById, addTask, updateTask } from './cos.js';
 import { removeWorktree } from './worktreeManager.js';
 import { PATHS } from '../lib/fileUtils.js';
@@ -1188,7 +1188,7 @@ describe('resolveTaskResumePatch / recordTaskResumePointer', () => {
     await recordTaskResumePointer({ task, agentId: 'agent-x', agentMetadata });
 
     expect(updateTask).toHaveBeenCalledWith('task-1', {
-      metadata: { existingBranch: null, resumedFromAgentId: null, resumeWorktreePath: null }
+      metadata: { existingBranch: undefined, resumedFromAgentId: undefined, resumeWorktreePath: undefined }
     }, 'user');
   });
 
@@ -1223,10 +1223,12 @@ describe('resolveTaskResumePatch / recordTaskResumePointer', () => {
   });
 });
 
-// The shared post-cleanup gate every spawn mode calls (#3368). Direct-CLI and TUI
-// runs used to skip this entirely, so a failed run's preserved branch was never
-// pointed at and its retry redid the work from scratch.
-describe('recordResumePointerIfRetrying', () => {
+// The shared post-cleanup gate every spawn mode calls (#3368, #3373). Direct-CLI
+// and TUI runs used to skip this entirely, so a failed run's preserved branch was
+// never pointed at and its retry redid the work from scratch. It now also RELEASES
+// the retry hold the failure verdict armed, so the task becomes spawnable and
+// pointed in one write.
+describe('releaseRetryHold', () => {
   const agentMetadata = {
     isWorktree: true, sourceWorkspace: '/repo',
     worktreeBranch: DEAD_BRANCH, workspacePath: DEAD_TREE
@@ -1248,7 +1250,7 @@ describe('recordResumePointerIfRetrying', () => {
   // helper has to read it for the worktree fields — via the transcript-free
   // `getAgentRecord`, since a long TUI run's output.txt is megabytes.
   it('records the pointer for a failed run whose task is still pending', async () => {
-    await recordResumePointerIfRetrying({ agentId: 'agent-x', task: task(), success: false });
+    await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false });
 
     expect(getAgentRecord).toHaveBeenCalledWith('agent-x');
     expect(getAgent).not.toHaveBeenCalled();
@@ -1262,13 +1264,13 @@ describe('recordResumePointerIfRetrying', () => {
   it('records nothing when the task is already blocked', async () => {
     getTaskById.mockResolvedValue({ id: 'task-1', status: 'blocked' });
 
-    await recordResumePointerIfRetrying({ agentId: 'agent-x', task: task(), success: false });
+    await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false });
 
     expect(updateTask).not.toHaveBeenCalled();
   });
 
   it('records nothing on a successful run', async () => {
-    await recordResumePointerIfRetrying({ agentId: 'agent-x', task: task(), success: true });
+    await releaseRetryHold({ agentId: 'agent-x', task: task(), success: true });
 
     expect(getTaskById).not.toHaveBeenCalled();
     expect(updateTask).not.toHaveBeenCalled();
@@ -1280,7 +1282,7 @@ describe('recordResumePointerIfRetrying', () => {
   it('records nothing when the task status is unreadable', async () => {
     getTaskById.mockRejectedValue(new Error('read failed'));
 
-    await recordResumePointerIfRetrying({ agentId: 'agent-x', task: task(), success: false });
+    await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false });
 
     expect(updateTask).not.toHaveBeenCalled();
   });
@@ -1288,7 +1290,7 @@ describe('recordResumePointerIfRetrying', () => {
   it('records nothing when the task was deleted mid-run', async () => {
     getTaskById.mockResolvedValue(null);
 
-    await recordResumePointerIfRetrying({ agentId: 'agent-x', task: task(), success: false });
+    await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false });
 
     expect(updateTask).not.toHaveBeenCalled();
   });
@@ -1297,25 +1299,101 @@ describe('recordResumePointerIfRetrying', () => {
   it('treats a status-less legacy task record as pending', async () => {
     getTaskById.mockResolvedValue({ id: 'task-1' });
 
-    await recordResumePointerIfRetrying({ agentId: 'agent-x', task: task(), success: false });
+    await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false });
 
     expect(updateTask).toHaveBeenCalled();
   });
 
   // The runner path already holds the agent record; passing it spares a re-read.
   it('uses caller-supplied agent metadata instead of re-reading the record', async () => {
-    await recordResumePointerIfRetrying({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
+    await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
 
     expect(getAgentRecord).not.toHaveBeenCalled();
     expect(updateTask).toHaveBeenCalled();
   });
 
   it('is a no-op without an agent id or a task id', async () => {
-    await recordResumePointerIfRetrying({ agentId: '', task: task(), success: false });
-    await recordResumePointerIfRetrying({ agentId: 'agent-x', task: { metadata: {} }, success: false });
+    await releaseRetryHold({ agentId: '', task: task(), success: false });
+    await releaseRetryHold({ agentId: 'agent-x', task: { metadata: {} }, success: false });
 
     expect(getTaskById).not.toHaveBeenCalled();
     expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  // The #3373 shape. The failure verdict left the task `in_progress` + held; the
+  // flip to `pending` and the pointer MUST be the same write, or a dequeue between
+  // them claims the retry with no pointer and restarts from scratch.
+  describe('a held task (#3373)', () => {
+    const heldTask = { id: 'task-1', status: 'in_progress', metadata: { retryPendingCleanup: true, retryPendingSince: new Date().toISOString() } };
+
+    it('flips to pending WITH the pointer and the cleared marker in one updateTask', async () => {
+      getTaskById.mockResolvedValue(heldTask);
+
+      await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
+
+      expect(updateTask).toHaveBeenCalledTimes(1);
+      expect(updateTask).toHaveBeenCalledWith('task-1', {
+        status: 'pending',
+        metadata: {
+          existingBranch: DEAD_BRANCH,
+          resumedFromAgentId: 'agent-x',
+          resumeWorktreePath: null,
+          retryPendingCleanup: undefined,
+          retryPendingSince: undefined,
+        }
+      }, 'user');
+    });
+
+    // Nothing survived cleanup — the task still has to become spawnable, it just
+    // starts clean. Releasing the hold is NOT conditional on having a pointer.
+    it('still releases the hold when there is nothing left to resume', async () => {
+      getTaskById.mockResolvedValue(heldTask);
+      git.getBranchComparison.mockResolvedValue({ ahead: 0, commits: [], stats: {} });
+
+      await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
+
+      expect(updateTask).toHaveBeenCalledWith('task-1', {
+        status: 'pending',
+        metadata: { retryPendingCleanup: undefined, retryPendingSince: undefined }
+      }, 'user');
+    });
+
+    // The markdown round-trip stores metadata booleans as strings.
+    it('recognizes the hold marker after a markdown round-trip', async () => {
+      getTaskById.mockResolvedValue({ ...heldTask, metadata: { retryPendingCleanup: 'true' } });
+
+      await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
+
+      expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user');
+    });
+
+    // The orphan sweep got there first and already requeued + cleared the hold, or
+    // the retry has since spawned. Either way this run no longer owns the task.
+    it('writes nothing when the hold is gone and the task is in_progress again', async () => {
+      getTaskById.mockResolvedValue({ id: 'task-1', status: 'in_progress', metadata: {} });
+
+      await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
+
+      expect(updateTask).not.toHaveBeenCalled();
+    });
+
+    // A blocked task is never held, so it can never be flipped spawnable here.
+    it('never flips a blocked task, even one carrying a stale marker', async () => {
+      getTaskById.mockResolvedValue({ id: 'task-1', status: 'blocked', metadata: {} });
+
+      await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
+
+      expect(updateTask).not.toHaveBeenCalled();
+    });
+
+    // The hold stays on disk, so the orphan sweep can finish the transition.
+    it('leaves the task held when the release write fails', async () => {
+      getTaskById.mockResolvedValue(heldTask);
+      updateTask.mockResolvedValueOnce({ error: 'Task file not found' });
+
+      await expect(releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata }))
+        .resolves.toEqual({});
+    });
   });
 });
 
@@ -1330,7 +1408,7 @@ describe('resumePointerMetadata', () => {
   // pointer would attach attempt 3 to already-merged work.
   it('clears a pointer this mechanism wrote once there is nothing left to resume', () => {
     expect(resumePointerMetadata(null, 'agent-y', { metadata: { resumedFromAgentId: 'agent-x' } })).toEqual({
-      existingBranch: null, resumedFromAgentId: null, resumeWorktreePath: null
+      existingBranch: undefined, resumedFromAgentId: undefined, resumeWorktreePath: undefined
     });
   });
 

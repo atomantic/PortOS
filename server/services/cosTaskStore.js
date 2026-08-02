@@ -518,7 +518,15 @@ export async function updateTask(taskId, updates, taskType = 'user', { now = Dat
   // like an approval. Emit a distinct action so cos.init's listener re-runs the
   // dequeue (#2614) — the generic 'updated' action doesn't wake the scheduler,
   // which left revived tasks stranded until an unrelated event or timer fired.
-  const action = previousStatus === 'blocked' && updatedTask.status === 'pending' ? 'unblocked' : 'updated';
+  //
+  // An in_progress → pending flip is a requeue and needs the same wake (#3373):
+  // a failed run's retry is released from its hold by exactly this transition,
+  // and by then the `agent:completed` dequeue has long since run — without a
+  // signal the retry would idle until the next timer. Same for the orphan sweep's
+  // requeue, which previously depended on its caller remembering to evaluate.
+  const action = updatedTask.status === 'pending' && previousStatus === 'blocked'
+    ? 'unblocked'
+    : (updatedTask.status === 'pending' && previousStatus === 'in_progress' ? 'requeued' : 'updated');
   cosEvents.emit('tasks:changed', { type: taskType, action, task: updatedTask });
   return updatedTask;
   });

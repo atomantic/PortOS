@@ -20,6 +20,7 @@ import { activeAgents, runnerAgents, userTerminatedAgents, pausedAgents, useRunn
 // for handleOrphanedTask. Importing them from their own leaf modules is what
 // lets that edge be a plain static import instead of a dynamic-import dodge.
 import { cleanupAgentWorktree, resolveTaskResumePatch } from './agentWorktreeCleanup.js';
+import { isRetryHeld, clearedRetryHoldMetadata } from '../lib/taskRetryHold.js';
 import { syncRunnerAgents } from './agentRunnerSync.js';
 import { flushRunnerOutputBatcher } from './agentRunnerOutputBatchers.js';
 import { checkForTaskCommit, completeAgentRun } from './agentRunTracking.js';
@@ -792,6 +793,29 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
   // Skip tasks already completed
   if (task.status === 'completed') {
     emitLog('debug', `⏭️ Skipping orphaned task ${taskId} — already completed`, { taskId, agentId });
+    return;
+  }
+
+  // A retry hold whose process died mid-transition (#3373). The run's verdict is
+  // already persisted — it failed, and was budgeted a retry — so this is not a
+  // fresh orphan: finish the transition the dead process started (resolve the
+  // pointer, flip to `pending`, drop the marker) rather than charging it orphan
+  // budget for a decision that was already made. Runs BEFORE the commit check
+  // below: a failed run that committed is exactly the case the resume pointer
+  // exists for, and completing the task on that evidence would discard the retry
+  // finalizeAgent already granted.
+  if (isRetryHeld(task.metadata)) {
+    const resumePatch = await resolveTaskResumePatch({ task, agentId, agentMetadata }).catch(err => {
+      emitLog('warn', `Resume pointer for held task ${taskId} could not be resolved: ${err.message}`, { taskId, agentId });
+      return {};
+    });
+    emitLog('info', `🔓 Completing interrupted retry transition for task ${taskId}${resumePatch.existingBranch ? ` — resuming ${resumePatch.existingBranch}` : ''}`, {
+      taskId, agentId, branchName: resumePatch.existingBranch || null
+    });
+    await updateTask(taskId, {
+      status: 'pending',
+      metadata: { ...resumePatch, ...clearedRetryHoldMetadata() }
+    }, task.taskType || 'user');
     return;
   }
 

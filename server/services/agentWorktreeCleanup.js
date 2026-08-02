@@ -22,6 +22,7 @@ import * as git from './git.js';
 import { removeWorktree, classifyWorktreeDirt } from './worktreeManager.js';
 import { isTruthyMeta } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { isRetryHeld, clearedRetryHoldMetadata } from '../lib/taskRetryHold.js';
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { detectForgeCli } from '../lib/gitForge.js';
 import { PR_COMPLETIONS, PR_COMPLETION_VALUES, leavesPrForHuman } from '../lib/prDisposition.js';
@@ -491,7 +492,12 @@ export function resumePointerMetadata(pointer, agentId, task) {
     };
   }
   if (!task?.metadata?.resumedFromAgentId) return {};
-  return { existingBranch: null, resumedFromAgentId: null, resumeWorktreePath: null };
+  // `undefined`, not `null`: `updateTask` DELETES undefined keys from the merged
+  // metadata, while a null survives the merge and TASKS.md serializes it as the
+  // literal string `"null"` — which reads back as a truthy `existingBranch` and
+  // sends the next attempt looking for a branch named "null". The keys are still
+  // present on the returned patch, so callers can tell a clear from a no-op.
+  return { existingBranch: undefined, resumedFromAgentId: undefined, resumeWorktreePath: undefined };
 }
 
 /**
@@ -516,7 +522,8 @@ export async function recordTaskResumePointer({ task, agentId, agentMetadata }) 
 }
 
 /**
- * The post-cleanup resume-pointer write, shared by every spawn mode (#3368).
+ * The post-cleanup write that RELEASES a failed task's retry hold, shared by every
+ * spawn mode (#3368, #3373).
  *
  * A failed agent whose branch — or whole worktree — survived cleanup leaves real
  * work behind (see `preserveBranchWithCommits` above; a dirty tree aborts removal
@@ -533,13 +540,21 @@ export async function recordTaskResumePointer({ task, agentId, agentMetadata }) 
  * retry at.
  *
  * Only for a task that is actually going to RETRY. The failure verdict has already
- * been persisted by `finalizeAgent` at this point, so the task's *persisted* status
- * distinguishes a `pending` retry (wants the pointer) from a `blocked` task that
- * exhausted its budget and is waiting on a human — a pointer there would be dead
- * metadata that `updateTask` has to strip again on the next terminal write, and
- * that a later `reviveBlockedTask` would resurrect as a live pointer to a branch
- * nobody vetted. So the pointer needs a task record we actually READ saying
- * `pending`; a failed read or a task deleted mid-run is not evidence of a retry.
+ * been persisted by `finalizeAgent` at this point, and a retryable failure leaves
+ * the task HELD — `in_progress` plus the retry-hold marker (#3373,
+ * lib/taskRetryHold.js) — precisely so nothing can dequeue it during the cleanup
+ * this call follows. Releasing the hold and writing the pointer is therefore ONE
+ * `updateTask`: the task becomes spawnable and pointed in the same write, never
+ * spawnable-then-pointed. A `blocked` task that exhausted its budget carries no
+ * hold and gets no pointer — dead metadata `updateTask` would strip again on the
+ * next terminal write, and that a later `reviveBlockedTask` would resurrect as a
+ * live pointer to a branch nobody vetted.
+ *
+ * The no-hold fallback (a task we read as plain `pending`) still writes the pointer
+ * alone: that is the pre-#3373 shape, and it is also what a task the orphan sweep
+ * already recovered mid-cleanup looks like. Anything else we read — `blocked`,
+ * `in_progress` without the marker (the retry already spawned), a failed read, a
+ * task deleted mid-run — is not evidence of a retry, so we write nothing.
  *
  * `agentMetadata` is optional: pass it when the caller already holds the agent
  * record (the runner path does), omit it and this reads the record itself —
@@ -549,9 +564,9 @@ export async function recordTaskResumePointer({ task, agentId, agentMetadata }) 
  * `resolveTaskResumePatch` bails on a non-worktree run.
  *
  * @param {{agentId: string, task: object, success: boolean, agentMetadata?: object}} params
- * @returns {Promise<object>} the patch that was written (empty when nothing was)
+ * @returns {Promise<object>} the metadata patch that was written (empty when nothing was)
  */
-export async function recordResumePointerIfRetrying({ agentId, task, success, agentMetadata }) {
+export async function releaseRetryHold({ agentId, task, success, agentMetadata }) {
   if (success || !agentId || !task?.id) return {};
 
   const { getTaskById, getAgentRecord } = await import('./cos.js');
@@ -559,14 +574,44 @@ export async function recordResumePointerIfRetrying({ agentId, task, success, ag
     emitLog('warn', `Skipping resume pointer for task ${task.id} — status unreadable: ${err.message}`, { taskId: task.id, agentId });
     return null;
   });
+  if (!persisted) return {};
+
+  const held = isRetryHeld(persisted.metadata);
   // A record with no `status` at all is a legacy shape that predates the field;
-  // those are pending. A record we couldn't read, or that is gone, is neither.
-  if (!persisted || (persisted.status ?? 'pending') !== 'pending') return {};
+  // those are pending.
+  if (!held && (persisted.status ?? 'pending') !== 'pending') return {};
 
   const metadata = agentMetadata === undefined
     ? (await getAgentRecord(agentId).catch(() => null))?.metadata
     : agentMetadata;
-  return await recordTaskResumePointer({ task, agentId, agentMetadata: metadata });
+
+  if (!held) return await recordTaskResumePointer({ task, agentId, agentMetadata: metadata });
+
+  // Fails open to "start clean" for the same reason `handleOrphanedTask` does:
+  // requeueing the task matters far more than resuming it, and a throw here would
+  // leave it held until the orphan sweep.
+  const patch = await resolveTaskResumePatch({ task, agentId, agentMetadata: metadata }).catch(err => {
+    emitLog('warn', `Resume pointer for task ${task.id} could not be resolved: ${err.message}`, { taskId: task.id, agentId });
+    return {};
+  });
+  const taskType = task.taskType || persisted.taskType || 'user';
+  const result = await updateTask(task.id, {
+    status: 'pending',
+    metadata: { ...patch, ...clearedRetryHoldMetadata() }
+  }, taskType).catch(err => {
+    emitLog('warn', `Failed to release retry hold on task ${task.id}: ${err.message}`, { taskId: task.id, agentId });
+    return { error: err.message };
+  });
+  if (result?.error) {
+    // The hold is still on disk, so the orphan sweep finishes the transition —
+    // the task is delayed, never stranded.
+    emitLog('warn', `⏳ Task ${task.id} still held after a failed release — the orphan sweep will requeue it`, { taskId: task.id, agentId });
+    return {};
+  }
+  emitLog('info', patch.existingBranch
+    ? `🔁 Task ${task.id} requeued pointing at ${patch.existingBranch}`
+    : `🔓 Task ${task.id} requeued for retry`, { taskId: task.id, agentId, branchName: patch.existingBranch || null });
+  return patch;
 }
 
 /**

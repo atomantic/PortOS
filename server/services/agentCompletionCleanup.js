@@ -27,7 +27,7 @@ import * as jiraService from './jira.js';
 import * as git from './git.js';
 import { isTruthyMeta } from './agentState.js';
 import { resolveReviewLoopOptions } from './codeReview.js';
-import { cleanupAgentWorktree, spawnMergeRecoveryTask, recordResumePointerIfRetrying } from './agentWorktreeCleanup.js';
+import { cleanupAgentWorktree, spawnMergeRecoveryTask, releaseRetryHold } from './agentWorktreeCleanup.js';
 import { resolvePrCompletion } from '../lib/prDisposition.js';
 import { canTypeSlashCommands } from '../lib/slashdoInvocation.js';
 
@@ -175,13 +175,39 @@ export async function handlePipelineProgression(task, agentId, success) {
  * Called from `handleAgentCompletion` after `finalizeAgent`, inside its
  * try/finally so `runnerAgents.delete(agentId)` still fires on a throw here.
  *
+ * The retry hold is released in a `finally` (#3373): a failed task is left
+ * `in_progress` + held by `finalizeAgent` so nothing can dequeue its retry before
+ * the resume pointer is resolved, and ONLY this release makes it spawnable again.
+ * So it cannot hang off the `if (!jiraBranch)` worktree branch below, and it cannot
+ * be skipped by a throw from the JIRA/pipeline/Creative Director steps — either
+ * would leave the task held until the orphan sweep noticed.
+ *
  * @param {{ agentId: string, task: object, agent: object, effectiveSuccess: boolean, outputBuffer: string }} params
  */
 export async function runAgentCompletionCleanup({ agentId, task, agent, effectiveSuccess, outputBuffer }) {
-  // Fetch agent state once for JIRA and plan-question blocks
+  // Fetch agent state once for JIRA, plan-question, and the resume pointer. Its
+  // worktree fields are stamped once at registerAgent and never mutated, so passing
+  // it to the release spares a re-read that would re-split the whole output.txt.
   const { getAgent: getAgentState } = await import('./cos.js');
   const agentState = await getAgentState(agentId).catch(() => null);
 
+  try {
+    await runCompletionCleanupSteps({ agentId, task, agent, agentState, effectiveSuccess, outputBuffer });
+  } finally {
+    await releaseRetryHold({
+      agentId,
+      task,
+      success: effectiveSuccess,
+      agentMetadata: agentState?.metadata ?? null,
+    }).catch(err => emitLog('warn', `Retry-hold release failed for ${agentId}: ${err.message}`, { agentId, taskId: task?.id }));
+  }
+}
+
+/**
+ * The cleanup steps themselves. Split from the public entry point above only so
+ * the retry-hold release can wrap them in a `finally` without re-indenting them.
+ */
+async function runCompletionCleanupSteps({ agentId, task, agent, agentState, effectiveSuccess, outputBuffer }) {
   // JIRA integration: push branch, create PR, comment on ticket
   const jiraTicketId = task?.metadata?.jiraTicketId;
   const jiraBranch = task?.metadata?.jiraBranch;
@@ -340,21 +366,6 @@ export async function runAgentCompletionCleanup({ agentId, task, agent, effectiv
       description: task?.description,
       agentOutput: outputBuffer,
       originalTask: task
-    });
-
-    // Point the task's retry at whatever this run left behind (branch and/or
-    // worktree) instead of letting it restart from scratch. Shared with the
-    // direct-CLI and TUI spawn paths — see `recordResumePointerIfRetrying` for why
-    // it runs after cleanup and only for a still-`pending` task.
-    //
-    // `agentState` was fetched at the top of this function; its worktree fields are
-    // stamped once at registerAgent and never mutated, so passing it spares the
-    // helper a re-read that would re-split the whole output.txt transcript.
-    await recordResumePointerIfRetrying({
-      agentId,
-      task,
-      success: effectiveSuccess,
-      agentMetadata: agentState?.metadata ?? null,
     });
 
     if (cleanupWarnings?.length > 0) {
