@@ -1819,9 +1819,10 @@ describe('source provenance', () => {
     expect((await svc.getCollection(c.id, { includeDeleted: true })).source).toBe('auto');
   });
 
-  it('merge keeps a local stamp when an older peer sends the record without one', async () => {
-    // The cross-install case: a peer predating #3311 strips `source` from the
-    // wire. Its (newer) scalars win LWW, but they must not erase provenance.
+  it('merge keeps the local stamp when a peer sends the record without one', async () => {
+    // The cross-install case: `source` never crosses the wire (sanitizeRecordForWire
+    // strips it), so every remote record arrives unstamped. Its (newer) scalars
+    // win LWW, but they must not erase local provenance.
     const c = await svc.createCollection({ name: 'Writers Room: Example Work', source: 'auto' });
     const result = await svc.mergeMediaCollectionsFromSync([{
       id: c.id, name: 'Writers Room: Renamed', description: '', coverKey: null,
@@ -1834,26 +1835,9 @@ describe('source provenance', () => {
     expect(merged.source).toBe('auto');
   });
 
-  it('merge adopts a remote stamp onto an unstamped local record even when local wins LWW', async () => {
-    await seedState({
-      collections: [{
-        id: 'c-legacy', name: 'Universe: Example Universe', description: '', coverKey: null,
-        universeId: null, seriesId: null, items: [],
-        createdAt: '2026-05-22T00:00:00Z', updatedAt: '2099-01-01T00:00:00Z',
-      }],
-    });
-    const result = await svc.mergeMediaCollectionsFromSync([{
-      id: 'c-legacy', name: 'Universe: Stale Name', description: '', coverKey: null,
-      universeId: null, seriesId: null, items: [], source: 'auto',
-      createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T00:00:00Z',
-    }]);
-    expect(result.applied).toBe(true);
-    const merged = await svc.getCollection('c-legacy');
-    expect(merged.name).toBe('Universe: Example Universe'); // local still wins LWW
-    expect(merged.source).toBe('auto');
-  });
-
-  it('merge inserts a new remote record carrying its stamp', async () => {
+  it('merge inserts a stamp that an offline export/import bundle legitimately carries', async () => {
+    // Peer sync always strips `source`, but the merge also backs the import
+    // path — a record that does arrive stamped is inserted verbatim.
     await svc.mergeMediaCollectionsFromSync([{
       id: 'c-remote', name: 'Concept Art', description: '', coverKey: null,
       universeId: null, seriesId: null, items: [], source: 'user',

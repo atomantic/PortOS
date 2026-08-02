@@ -71,10 +71,13 @@ export function splitCollectionName(name) {
  * whenever it is present — a new auto-creator no longer has to remember to
  * extend a client-side list.
  *
- * An ABSENT `source` is a third state, NOT a synonym for `'user'`: the record
- * came from a federated peer still running a PortOS that predates the field (or
- * was restored from a pre-migration backup). Those fall back to the marker
- * heuristic below, where any ONE of the four independent markers is sufficient
+ * An ABSENT `source` is a third state, NOT a synonym for `'user'`. The stamp is
+ * local to each install (it is stripped from the sync wire — see
+ * `sanitizeRecordForWire`), so an unstamped record is one this install received
+ * from a peer after its own migration ran, or restored from a pre-migration
+ * backup. Those fall back to the marker heuristic below, which is what
+ * classified every collection before #3311 — so the fallback is never worse
+ * than the old behavior. Any ONE of the four independent markers is sufficient
  * — an install can hold records from before a given marker existed, so this
  * must not require all of them to agree.
  * @param {object} collection

@@ -16,8 +16,10 @@
  *   load-bearing for anything this install already had.
  *
  * What it writes:
- *   `source: 'auto'` on each live record matching a marker and carrying no
- *   `source` yet. Nothing else — in particular `updatedAt` is deliberately NOT
+ *   `source: 'auto'` on each live record matching a non-forgeable marker and
+ *   carrying no `source` yet (see the marker note below — a bare name prefix is
+ *   deliberately NOT enough, since the create route lets a user pick one).
+ *   Nothing else — in particular `updatedAt` is deliberately NOT
  *   bumped: this is a derived classification, not a user edit, and advancing
  *   the LWW clock would make every collection look freshly edited to peers and
  *   out-race real remote edits. `source` is not part of the conflict journal's
@@ -32,11 +34,11 @@
  *     and items; nothing renders a tombstone, and rewriting one only adds sync
  *     noise.
  *
- * Cross-install: `source` is additive and rides the wire's `.passthrough()`
- * record schema, so no `schemaVersions` bump is needed. Peers upgrade and run
- * this independently; because the markers are deterministic, two peers classify
- * the same record identically, and `mergeMediaCollectionsFromSync` keeps a stamp
- * sticky rather than letting an older peer's unstamped copy erase it.
+ * Cross-install: `source` is LOCAL-ONLY — `sanitizeRecordForWire` strips it, so
+ * no `schemaVersions` bump is needed and no peer's checksum moves. Each peer
+ * upgrades and runs this independently over ITS OWN copy of the shared
+ * collections; because the markers are deterministic, they classify the same
+ * record identically.
  *
  * The legacy monolithic `data/media-collections.json` is not read — migration
  * 059 split it into `data/media-collections/<id>/index.json` and runs first.
@@ -52,31 +54,34 @@ import { join } from 'path';
 // from `client/src/lib/mediaCollectionList.js` / `services/mediaCollections.js`
 // on purpose: a migration is a point-in-time transform and must not shift if
 // those lists later evolve.
-const AUTO_NAME_PREFIXES = ['Creative Director: ', 'Writers Room: ', 'Universe: ', 'Series: '];
+//
+// The client heuristic has a FOURTH marker this migration deliberately does not
+// use: the `Creative Director: ` / `Writers Room: ` / `Universe: ` / `Series: `
+// NAME prefix. Nothing reserves those prefixes — the create route takes a free
+// name — so a user-made collection called `Universe: Notes` matches it, and
+// stamping is permanent (a stamped record is skipped on every later pass, and
+// there is no API to correct it). Leaving name-only matches unstamped keeps
+// them on the client fallback, which classifies them exactly as it does today
+// and still re-evaluates if the user renames them. Nothing is lost: every real
+// auto-creator also carries one of the markers below — Creative Director and
+// Writers Room stamp an `Auto-…` description (the create form takes a name
+// only, so a user cannot produce one), and universe/series buckets carry the
+// deterministic id and/or the owner link.
 const AUTO_DESCRIPTION_PREFIXES = ['Auto-created for project ', 'Auto-generated images for '];
 const AUTO_ID_PREFIXES = ['uc-', 'sc-'];
 
-// The name check requires a non-empty remainder (`splitCollectionName` only
-// yields a badge when the title survives the prefix), while the description
-// check is a bare prefix match — mirroring the two client predicates exactly so
-// this migration and the fallback heuristic can never disagree on a record.
-const hasAutoName = (value) =>
-  typeof value === 'string' && AUTO_NAME_PREFIXES.some((p) => value.startsWith(p) && value.length > p.length);
-const hasAutoDescription = (value) =>
-  typeof value === 'string' && AUTO_DESCRIPTION_PREFIXES.some((p) => value.startsWith(p));
-
 /**
- * True when a record carries any marker of machine creation. Mirrors
- * `isAutoCollection` in `client/src/lib/mediaCollectionList.js` — ANY one
- * marker suffices, because an install can hold records from before a given
- * marker existed.
+ * True when a record carries a marker of machine creation that a user could not
+ * have produced through the create form. A subset of `isAutoCollection` in
+ * `client/src/lib/mediaCollectionList.js` — see the note above on why the name
+ * prefix is excluded. ANY one marker suffices, because an install can hold
+ * records from before a given marker existed.
  * @param {object} record
  * @returns {boolean}
  */
 export function isAutoCreated(record) {
   if (!record || typeof record !== 'object') return false;
-  if (hasAutoName(record.name)) return true;
-  if (hasAutoDescription(record.description)) return true;
+  if (typeof record.description === 'string' && AUTO_DESCRIPTION_PREFIXES.some((p) => record.description.startsWith(p))) return true;
   if (typeof record.id === 'string' && AUTO_ID_PREFIXES.some((p) => record.id.startsWith(p))) return true;
   return Boolean(record.universeId || record.seriesId);
 }

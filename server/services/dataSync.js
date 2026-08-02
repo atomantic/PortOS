@@ -554,7 +554,15 @@ async function getMediaCollectionsSnapshot({ exclude } = {}) {
   // forever. Sort collections by id (stable, unique) and each collection's
   // items by `<kind>:<ref>` (the same key used for set membership in
   // `mergeCollectionItems`).
-  const canonical = filtered
+  // Project through the SHARED wire sanitizer before canonicalizing, so this
+  // snapshot and the per-record push agree on which fields cross the wire
+  // instead of each deciding for itself (see `sanitizeRecordForWire` — it
+  // normalizes the soft-delete pair to tail position, which service-sanitized
+  // records already satisfy, and drops the local-only `source` provenance stamp
+  // added in #3311 so an upgraded peer's checksum stays byte-stable against a
+  // not-yet-upgraded one).
+  const { data: wire } = sanitizeStateForWire('mediaCollections', { collections: filtered });
+  const canonical = wire.collections
     .map((c) => ({
       ...c,
       items: [...(c.items || [])].sort((a, b) => itemKey(a).localeCompare(itemKey(b))),

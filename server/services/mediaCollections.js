@@ -116,16 +116,20 @@ const SERIES_ID_MAX = 80;
 // `'user'` = the person created it through the API. The grid uses it to sort
 // auto-generated empties last and to badge the card.
 //
+// **LOCAL-ONLY.** `sanitizeRecordForWire` strips it, so provenance never
+// crosses to a peer — see the rationale there (an emitted field would leave an
+// upgraded peer permanently checksum-mismatched against an older one, and
+// gating it behind a `schemaVersions` bump would pause all collection sync).
+// Every install derives its own: the creators below stamp at mint time and
+// `scripts/migrations/220-backfill-media-collection-source.js` classifies
+// whatever was already on disk when the install upgraded.
+//
 // **Absent is a THIRD state, not a synonym for `'user'`.** A record written
-// before this field shipped, or received from a peer still running an older
-// PortOS, carries no stamp at all — the client falls back to its marker
+// before this field shipped, or received from a peer after this install's
+// migration ran, carries no stamp at all — the client falls back to its marker
 // heuristic for those rather than mislabeling them user-made. So the sanitizer
 // OMITS the key entirely rather than defaulting it (same posture as
-// `sanitizeItem`'s optional `origin`), which also keeps unstamped records
-// byte-identical on the wire for peers that never learn about the field.
-// `scripts/migrations/220-backfill-media-collection-source.js` backfills
-// `'auto'` on existing local records so the heuristic stops being load-bearing
-// for anything this install already had.
+// `sanitizeItem`'s optional `origin`).
 const COLLECTION_SOURCES = Object.freeze(['auto', 'user']);
 const sanitizeSource = (raw) => (COLLECTION_SOURCES.includes(raw) ? raw : null);
 
@@ -1058,23 +1062,18 @@ export async function mergeMediaCollectionsFromSync(remoteCollections, { source 
       const coverKey = !scalarDeleted && scalarSource.coverKey && presentKeys.has(scalarSource.coverKey)
         ? scalarSource.coverKey
         : null;
-      // Provenance is STICKY, not LWW (#3311). A peer running a PortOS that
-      // predates the field strips `source` from the wire entirely, so a
-      // remote-wins scalar overwrite must not erase a stamp we already hold —
-      // that would silently demote a machine-made bucket back to the client's
-      // marker heuristic (or worse, to "user-made") on every sync from an older
-      // machine. Prefer the LWW winner's stamp, then whichever side has one,
-      // then leave it unstamped. `source` is excluded from the conflict
-      // journal's scalar projection (MEDIA_COLLECTION_SCALAR_FIELDS), so
-      // adopting it here can't churn base hashes.
-      const nextSource = sanitizeSource(scalarSource.source)
-        || sanitizeSource(local.source)
-        || sanitizeSource(sanitized.source);
+      // NOTE — `source` (#3311) is deliberately absent from the scalar list
+      // below. It is a LOCAL-ONLY provenance stamp that `sanitizeRecordForWire`
+      // strips before sending, so a remote record never carries one and a
+      // remote-wins overwrite must not be able to clear ours. The `...local`
+      // spread preserves it; a brand-new record inserted above keeps whatever
+      // the sanitizer accepted (an offline export/import bundle can legitimately
+      // carry it). Do NOT add it to the LWW scalars without also un-stripping it
+      // on the wire — and that needs a schemaVersions bump.
       const next = {
         ...local,
         name: scalarSource.name,
         description: scalarSource.description,
-        ...(nextSource ? { source: nextSource } : {}),
         coverKey: scalarDeleted ? null : coverKey,
         universeId: scalarDeleted ? null : scalarSource.universeId,
         seriesId: scalarDeleted ? null : scalarSource.seriesId,

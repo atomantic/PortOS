@@ -184,7 +184,23 @@ export function sanitizeRecordForWire(kind, record) {
       // Collections have no `ephemeral` field — unlike universe/series,
       // they are always wire-syncable when non-ephemeral (there is no
       // collection-level ephemeral flag), so no ephemeral minimization path.
-      const { deleted: _d, deletedAt: _da, ...rest } = record;
+      //
+      // `source` (#3311 provenance: 'auto' vs 'user') is LOCAL-ONLY, stripped
+      // here for the same reason as `ephemeral`/`importDraft` above. It drives
+      // the grid's card ordering + badge, not record content, and every install
+      // derives its own: the creators stamp at mint time and migration 220
+      // classifies whatever was already on disk. Emitting it would give an
+      // upgraded peer a permanently different `mediaCollections` checksum from a
+      // not-yet-upgraded one (whose sanitizer drops the unknown field), which
+      // the UI reads as "behind" forever and the 60s snapshot loop re-exchanges
+      // every cycle for a merge that can never converge. The alternative —
+      // bumping `schemaVersions.mediaCollections` — would pause ALL collection
+      // sync between version-mismatched peers over a card-ordering flag. A peer
+      // that receives an unstamped record falls back to the marker heuristic in
+      // `client/src/lib/mediaCollectionList.js`, exactly as it did before #3311.
+      // If provenance ever needs to federate, it needs a schemaVersions bump —
+      // do NOT simply stop stripping it here.
+      const { deleted: _d, deletedAt: _da, source: _source, ...rest } = record;
       return { ...rest, ...sanitizeSoftDeleteFields(record) };
     }
     case 'author':

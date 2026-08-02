@@ -49,9 +49,9 @@ afterEach(() => {
 });
 
 describe('migration 220 — backfill media collection source', () => {
-  it('stamps every auto marker and leaves user-made, stamped, and tombstoned records alone', async () => {
-    await writeRecord('cd-1', { name: 'Creative Director: Example Project' });
-    await writeRecord('wr-1', { name: 'Writers Room: Example Work' });
+  it('stamps every non-forgeable marker and leaves user-made, stamped, and tombstoned records alone', async () => {
+    await writeRecord('cd-1', { name: 'Creative Director: Example Project', description: 'Auto-created for project cd-1' });
+    await writeRecord('wr-1', { name: 'Writers Room: Example Work', description: 'Auto-generated images for "Example Work"' });
     await writeRecord('desc-1', { description: 'Auto-created for project abc' });
     await writeRecord('desc-2', { description: 'Auto-generated images for "Example Work"' });
     await writeRecord('uc-universe-1', { name: 'Universe: Example Universe', universeId: 'universe-1' });
@@ -59,9 +59,13 @@ describe('migration 220 — backfill media collection source', () => {
     await writeRecord('linked-legacy', { name: 'Renamed Bucket', universeId: 'universe-2' });
     // Left alone:
     await writeRecord('user-1', {});
+    // A user is free to NAME a collection with an auto-creator's prefix — the
+    // create route reserves nothing — so a bare name match must never freeze a
+    // permanent 'auto' stamp. It keeps flowing through the client fallback.
+    await writeRecord('name-only-1', { name: 'Universe: Notes I Made Myself' });
     await writeRecord('user-2', { source: 'user', name: 'Universe: Named Like An Auto One' });
     await writeRecord('already-auto', { source: 'auto', name: 'Creative Director: Example Project' });
-    await writeRecord('tombstone-1', { name: 'Universe: Deleted One', deleted: true, deletedAt: STAMP });
+    await writeRecord('tombstone-1', { name: 'Universe: Deleted One', universeId: 'universe-3', deleted: true, deletedAt: STAMP });
     // Unparseable record — skipped without failing the run.
     await mkdir(join(typeDir(), 'broken-1'), { recursive: true });
     await writeFile(join(typeDir(), 'broken-1', 'index.json'), '{ not json');
@@ -78,6 +82,7 @@ describe('migration 220 — backfill media collection source', () => {
       expect(rec.updatedAt, id).toBe(STAMP);
     }
     expect((await readRecord('user-1')).source).toBeUndefined();
+    expect((await readRecord('name-only-1')).source).toBeUndefined();
     expect((await readRecord('user-2')).source).toBe('user');
     expect((await readRecord('already-auto')).source).toBe('auto');
     expect((await readRecord('tombstone-1')).source).toBeUndefined();
@@ -96,10 +101,12 @@ describe('migration 220 — backfill media collection source', () => {
     expect(await migration.up({ rootDir: ROOT })).toMatchObject({ ok: true, reason: 'no-collections' });
   });
 
-  it('mirrors the client heuristic on prefix-only names and non-record input', () => {
-    // A bare prefix with no title yields no badge client-side, so it is not a marker.
-    expect(isAutoCreated({ id: 'x', name: 'Universe: ' })).toBe(false);
-    expect(isAutoCreated({ id: 'x', name: 'Universe: Example' })).toBe(true);
+  it('ignores the user-forgeable name prefix and tolerates non-record input', () => {
+    // The create route takes a free name, so a prefix alone proves nothing.
+    expect(isAutoCreated({ id: 'x', name: 'Universe: Example' })).toBe(false);
+    // The same record with a marker the create form cannot produce does qualify.
+    expect(isAutoCreated({ id: 'x', name: 'Universe: Example', universeId: 'u1' })).toBe(true);
+    expect(isAutoCreated({ id: 'x', description: 'Auto-created for project x' })).toBe(true);
     expect(isAutoCreated(null)).toBe(false);
     expect(stampAutoSource('nope')).toBe(null);
   });

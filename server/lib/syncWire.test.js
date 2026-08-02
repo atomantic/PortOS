@@ -255,6 +255,27 @@ describe('syncWire', () => {
         expect(sanitizeRecordForWire('author', { name: 'no id' })).toBeNull();
       });
     });
+
+    describe('mediaCollection kind', () => {
+      it('strips the local-only provenance stamp so an upgraded peer stays checksum-stable', () => {
+        // #3311: `source` drives the grid's ordering/badge on THIS install only.
+        // A peer that predates the field would sanitize it away, leaving the two
+        // installs permanently checksum-mismatched on the mediaCollections
+        // category — so it must not cross the wire at all.
+        const stamped = { id: 'c1', name: 'Universe: Example', source: 'auto', items: [] };
+        const unstamped = { id: 'c1', name: 'Universe: Example', items: [] };
+        expect(sanitizeRecordForWire('mediaCollection', stamped).source).toBeUndefined();
+        expect(JSON.stringify(sanitizeRecordForWire('mediaCollection', stamped)))
+          .toBe(JSON.stringify(sanitizeRecordForWire('mediaCollection', unstamped)));
+      });
+
+      it('strips the stamp from the snapshot-category projection too', () => {
+        const { data } = sanitizeStateForWire('mediaCollections', {
+          collections: [{ id: 'c1', name: 'Concept Art', source: 'user', items: [] }],
+        });
+        expect(data.collections[0].source).toBeUndefined();
+      });
+    });
   });
 
   describe('sanitizeStateForWire', () => {
