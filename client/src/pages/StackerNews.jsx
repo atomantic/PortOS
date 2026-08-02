@@ -422,8 +422,10 @@ export default function StackerNews() {
               silently not apply — say why they are disabled instead of leaving
               the user to guess (the checks are also disabled mid-save). Closing
               the drawer deliberately keeps the draft so a half-finished 19-field
-              edit survives a detour, which means the only way back out of the
-              disabled state has to be an explicit discard. */}
+              edit survives reopening it, which means the only way back out of
+              the disabled state has to be an explicit discard. (Selecting a
+              different account still loads that account's saved form — there is
+              one draft slot, not one per account.) */}
           {accountFormDirty && <div className="mt-3 flex flex-wrap items-center gap-2"><p className="text-sm text-port-warning">Unsaved changes to {scope}. Save the account before running these checks.</p><button type="button" className={secondaryButton} disabled={Boolean(busy)} onClick={() => { setEditAccount(savedAccount); setAccountFormError(''); }}>Discard changes</button></div>}
         </section>
       ) : <div className="rounded border border-port-border bg-port-card p-4 text-sm text-gray-400">Choose an account to edit its independent rules, models, and monitoring schedule.</div>}
