@@ -701,10 +701,16 @@ async function spawnPriority0OnDemand(ctx) {
   // Track apps already marked review-started this cycle so multiple on-demand
   // requests for the same app don't each rewrite its activity record.
   const reviewStartedApps = new Set();
-  if (onDemandRequests.length > 0 && tasksToSpawn.length < availableSlots) {
-    // The app registry can't change mid-loop, so read it once per cycle rather
-    // than once per request (getActiveApps' 2s cache can miss at a boundary).
-    const apps = await getActiveApps().catch(() => []);
+  // The app registry can't change mid-loop, so read it once per cycle rather
+  // than once per request (getActiveApps' 2s cache can miss at a boundary).
+  // `null` means the read FAILED, which is not the same as "no active apps":
+  // an empty list would make every app-targeted request below look like it
+  // names an unknown app and get cleared, silently dropping user-initiated
+  // work. On a failure we leave the requests queued for the next cycle.
+  const apps = onDemandRequests.length > 0 ? await getActiveApps().catch(() => null) : [];
+  if (!apps) {
+    emitLog('warn', `On-demand requests deferred — the app registry could not be read this cycle`);
+  } else if (onDemandRequests.length > 0 && tasksToSpawn.length < availableSlots) {
     for (const request of onDemandRequests) {
       if (tasksToSpawn.length >= availableSlots) break;
 
