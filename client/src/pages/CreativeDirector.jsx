@@ -1,7 +1,9 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus, Film, Trash2, Play, Pause, FlaskConical, Sparkles, Wand2, SlidersHorizontal } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import InlineConfirmRow from '../components/ui/InlineConfirmRow';
+import OverflowMenu from '../components/ui/OverflowMenu';
 import {
   listCreativeDirectorProjects,
   createCreativeDirectorProject,
@@ -60,6 +62,12 @@ export default function CreativeDirector() {
   // them into the project cast + links catalog_ingredient_refs.
   const [remixIds, setRemixIds] = useState([]);
   const [remixIngredients, setRemixIngredients] = useState([]);
+  // The smoke test renders three real video clips, so it is NOT a header button
+  // (#3287): it lives in the "…" menu beside Model defaults and routes through
+  // an inline confirm, so a stray tap can never spend render budget.
+  const [confirmingSmokeTest, setConfirmingSmokeTest] = useState(false);
+  const [startingSmokeTest, setStartingSmokeTest] = useState(false);
+  const smokeMenuTriggerRef = useRef(null);
   const [form, setForm] = useState({
     name: '',
     aspectRatio: '16:9',
@@ -234,6 +242,22 @@ export default function CreativeDirector() {
     }
   };
 
+  const handleSmokeTest = async () => {
+    setConfirmingSmokeTest(false);
+    setStartingSmokeTest(true);
+    // Hand focus back to the "…" trigger before the confirm row unmounts, or a
+    // keyboard user is stranded on <body> while the render kicks off.
+    smokeMenuTriggerRef.current?.focus();
+    const created = await createSmokeTestCreativeDirectorProject({ silent: true }).catch((e) => {
+      toast.error(e?.message || 'Smoke test failed to start');
+      return null;
+    });
+    setStartingSmokeTest(false);
+    if (!created) return;
+    toast.success('Test clip render started');
+    setProjects((prev) => [created, ...prev]);
+  };
+
   if (loading) {
     return <div className="p-6 text-port-text-muted">Loading projects…</div>;
   }
@@ -246,22 +270,6 @@ export default function CreativeDirector() {
         subtitle="Long-form video projects driven by an autonomous CoS agent"
         actions={
           <>
-            <button
-              onClick={async () => {
-                const created = await createSmokeTestCreativeDirectorProject({ silent: true }).catch((e) => {
-                  toast.error(e?.message || 'Smoke test failed to start');
-                  return null;
-                });
-                if (!created) return;
-                toast.success('Smoke test project started');
-                setProjects((prev) => [created, ...prev]);
-              }}
-              className="flex items-center gap-2 bg-port-card border border-port-border hover:bg-port-card/60 text-port-text px-3 py-2 rounded text-sm"
-              title="Create + start a deterministic 3-scene colored-ball project (auto-accept, no audio)"
-            >
-              <FlaskConical className="w-4 h-4" />
-              Run smoke test
-            </button>
             <button
               onClick={openDirective}
               className="flex items-center gap-2 bg-port-card border border-port-border hover:bg-port-card/60 text-port-text px-3 py-2 rounded text-sm"
@@ -278,6 +286,19 @@ export default function CreativeDirector() {
               <SlidersHorizontal className="w-4 h-4" />
               Model defaults
             </button>
+            <OverflowMenu
+              label="More Creative Director actions"
+              triggerRef={smokeMenuTriggerRef}
+              items={[
+                {
+                  id: 'smoke-test',
+                  label: startingSmokeTest ? 'Starting…' : 'Render a 6s test clip',
+                  icon: FlaskConical,
+                  disabled: startingSmokeTest,
+                  onSelect: () => setConfirmingSmokeTest(true),
+                },
+              ]}
+            />
             <button
               onClick={() => { setShowForm((s) => !s); clearRemix(); }}
               className="flex items-center gap-2 bg-port-accent hover:bg-port-accent/80 text-white px-3 py-2 rounded text-sm"
@@ -288,6 +309,24 @@ export default function CreativeDirector() {
           </>
         }
       />
+
+      {confirmingSmokeTest && (
+        <InlineConfirmRow
+          className="shrink-0"
+          variant="separator"
+          tone="warning"
+          autoFocus
+          question="Render a 6s test clip? This sends three 2-second scenes to your default video model and spends real render time."
+          confirmText="Render test clip"
+          confirmTitle="Create + start a deterministic 3-scene colored-ball project (auto-accept, no audio)"
+          aria-label="Confirm rendering a 6 second Creative Director test clip"
+          onConfirm={handleSmokeTest}
+          onCancel={() => {
+            setConfirmingSmokeTest(false);
+            smokeMenuTriggerRef.current?.focus();
+          }}
+        />
+      )}
 
       {showForm && (
         <form onSubmit={handleCreate} className="shrink-0 p-6 border-b border-port-border bg-port-card/40 space-y-3">
