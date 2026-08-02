@@ -49,29 +49,37 @@ export const REGENERATE_COMMAND = 'node scripts/generate-prompt-stage-call-sites
  * lookup table, a `const STAGE = '…'` module constant, …).
  */
 const LITERAL_CALL_RE =
-  /\b(?:getStage|getStageTemplate|buildPrompt|runStage|runStagedLLM|previewPrompt|resolveStageContext|resolveJudgeForStage)\(\s*(['"])([^'"\n]+)\1/g;
+  /\b(?:getStage|getStageTemplate|buildPrompt|runStage|runStagedLLM|runStageScopedInlineLLM|previewPrompt|resolveStageContext|resolveJudgeForStage)\(\s*(['"])([^'"\n]+)\1/g;
 
 /**
- * Every quoted string literal in a JS source. Stage keys are plain
- * `[a-z0-9-]` words, so a literal containing an escape, a newline, or a `${`
- * interpolation is never one — excluding those keeps the match cheap and
- * avoids mis-parsing multi-line template bodies.
+ * One pass over a JS source, in precedence order: block comment, line comment,
+ * single-quoted, double-quoted, template literal.
+ *
+ * Comments are in the alternation only so they can be SKIPPED — a stage key
+ * named in a `//` note or a JSDoc block is prose, not a call site, and listing
+ * that file under "Referenced in" in the delete dialog would be a lie.
+ * Matching them here rather than pre-stripping is what keeps a `'http://…'`
+ * literal from being mistaken for the start of a comment.
+ *
+ * A regex literal containing a quote could still desync the scan. That would
+ * be stable, not flaky (the drift test compares two runs of the same scanner),
+ * and no `server/` source does it today.
  */
-const STRING_LITERAL_RE = /'([^'\\\n]*)'|"([^"\\\n]*)"|`([^`\\\n$]*)`/g;
+const TOKEN_RE = /\/\*[\s\S]*?\*\/|\/\/[^\n]*|'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\[\s\S])*`/g;
 
 /**
- * A template literal with a static hyphenated prefix followed by an
+ * A static hyphenated prefix inside a template literal, followed by an
  * interpolation — `` `pipeline-panel-${personaId}` ``. Stages reached this way
  * (the reader-panel personas) have NO literal key anywhere in source, so a
  * literal-only scan would leave them unprotected. Every known key under the
  * prefix counts as referenced by that file.
  *
- * This deliberately over-matches: a `source: `writers-room-${kind}`` telemetry
- * tag counts too. Over-protection is the safe failure mode here — the cost is
- * an extra path in the delete-confirm dialog, versus a silently deletable
- * stage that breaks a feature.
+ * This deliberately over-matches: a `` source: `writers-room-${kind}` ``
+ * telemetry tag counts too. Over-protection is the safe failure mode here —
+ * the cost is an extra path in the delete-confirm dialog, versus a silently
+ * deletable stage that breaks a feature.
  */
-const TEMPLATE_PREFIX_RE = /`([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+-)\$\{/g;
+const TEMPLATE_PREFIX_RE = /(?:^|[^A-Za-z0-9_-])([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+-)\$\{/g;
 
 /**
  * Files excluded from the scan. `promptSystemStages.js` is the curated
@@ -130,14 +138,19 @@ export function buildStageCallSites({ shippedStageKeys, sources }) {
   };
 
   for (const { path, source } of sources) {
-    for (const match of source.matchAll(STRING_LITERAL_RE)) {
-      const literal = match[1] ?? match[2] ?? match[3];
-      if (keys.has(literal)) record(literal, path);
-    }
-    for (const [, prefix] of source.matchAll(TEMPLATE_PREFIX_RE)) {
-      for (const key of keys) {
-        if (key.length > prefix.length && key.startsWith(prefix)) record(key, path);
+    for (const [token] of source.matchAll(TOKEN_RE)) {
+      if (token.startsWith('/')) continue; // comment — prose, not a call site
+      if (token.startsWith('`')) {
+        for (const [, prefix] of token.matchAll(TEMPLATE_PREFIX_RE)) {
+          for (const key of keys) {
+            if (key.length > prefix.length && key.startsWith(prefix)) record(key, path);
+          }
+        }
       }
+      // An interpolated or escaped literal is never a bare stage key, so the
+      // same unwrap covers all three quote styles.
+      const literal = token.slice(1, -1);
+      if (keys.has(literal)) record(literal, path);
     }
   }
 

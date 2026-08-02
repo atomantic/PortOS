@@ -108,9 +108,11 @@ export function stageHaystack(key, config) {
  * Groups sort alphabetically with `Other` pinned last, stages by display name.
  *
  * `systemStageKeys` is the `systemStages` list `GET /api/prompts` ships — the
- * server's own table (`server/lib/promptSystemStages.js`), not a client mirror,
- * so the "System only" filter can never disagree with the stages the server
- * actually protects from deletion (#3314).
+ * server's own CURATED table (`server/lib/promptSystemStages.js`), not a client
+ * mirror, so the "System only" filter can never disagree with what the server
+ * badges (#3314). Deletion protection is deliberately WIDER than this list
+ * (every stage `server/` names by literal key, #3335) — the filter intentionally
+ * does not surface that set, since ~100 of 127 rows would match.
  *
  * An empty query and `systemOnly: false` return everything, so the same call
  * drives both the unfiltered and the filtered render.

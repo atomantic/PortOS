@@ -18,9 +18,7 @@
     "server/lib/creativeDirectorPrompts.js"
   ],
   "cd-plan": [
-    "server/lib/creativeDirectorPrompts.js",
-    "server/lib/creativeDirectorValidation.js",
-    "server/lib/schemaVersions.js"
+    "server/lib/creativeDirectorPrompts.js"
   ],
   "cd-treatment": [
     "server/lib/creativeDirectorPrompts.js"
@@ -228,9 +226,7 @@
     "server/lib/editorial/checkInfra/structureStages.js"
   ],
   "pipeline-extract-scenes": [
-    "server/lib/sceneExtractor.js",
-    "server/routes/pipeline/issues.js",
-    "server/services/importer.js"
+    "server/lib/sceneExtractor.js"
   ],
   "pipeline-idea-expansion": [
     "server/services/pipeline/textStages.js"
@@ -245,7 +241,6 @@
     "server/services/pipeline/pipelineJudge.js"
   ],
   "pipeline-manuscript-completeness": [
-    "server/lib/promptRunner.js",
     "server/services/pipeline/arcPlanner/completenessPass.js"
   ],
   "pipeline-manuscript-fix": [
@@ -277,8 +272,7 @@
     "server/services/pipeline/reverseOutline.js"
   ],
   "pipeline-script-verify": [
-    "server/services/pipeline/scriptVerify.js",
-    "server/services/pipeline/seriesAutopilot.js"
+    "server/services/pipeline/scriptVerify.js"
   ],
   "pipeline-season-episodes": [
     "server/services/pipeline/arcPlanner/episodeSeedPass.js"
@@ -290,7 +284,6 @@
     "server/services/pipeline/seriesGenerate.js"
   ],
   "pipeline-series-title-logo": [
-    "server/routes/pipeline/series.js",
     "server/services/pipeline/seriesTitleLogo.js"
   ],
   "pipeline-series-voice-discover": [
@@ -364,7 +357,6 @@
     "server/services/digital-twin-values-testing.js"
   ],
   "writers-room-cd-bridge": [
-    "server/services/creativeDirector/bridgeFromIssue.js",
     "server/services/writersRoom/evaluator.js",
     "server/services/writersRoom/liveDirector.js"
   ],
@@ -380,7 +372,6 @@
     "server/services/writersRoom/evaluator.js"
   ],
   "writers-room-evaluate": [
-    "server/lib/stageRunner.js",
     "server/services/writersRoom/evaluator.js"
   ],
   "writers-room-format": [
@@ -399,7 +390,6 @@
   ],
   "writers-room-script": [
     "server/lib/sceneExtractor.js",
-    "server/routes/pipeline/issues.js",
     "server/services/writersRoom/evaluator.js"
   ]
 }

@@ -52,10 +52,11 @@ export default function PromptManager() {
   const setSelectedStage = (name) => setParam('stage', name);
   const setSelectedVar = (key) => setParam('var', key);
   const [stages, setStages] = useState({});
-  // Which stage keys PortOS features call by name. Served by GET /api/prompts
+  // The CURATED system-stage keys. Served by GET /api/prompts
   // (`server/lib/promptSystemStages.js`) rather than mirrored client-side, so
   // the SYSTEM badge and the "System only" filter can never disagree with the
-  // stages the server actually force-guards on delete (#3314).
+  // server's own table (#3314). This is NOT the full delete-protected set —
+  // that one is wider and per-stage, and only `/usage` reports it (#3335).
   const [systemStageKeys, setSystemStageKeys] = useState([]);
   const [variables, setVariables] = useState({});
   const [loading, setLoading] = useState(true);

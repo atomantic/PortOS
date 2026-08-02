@@ -40,9 +40,11 @@ Templates use Mustache-like syntax:
 
 | Route | Description |
 |-------|-------------|
-| GET /api/prompts | List all prompt stages — `{ stages, systemStages }`, where `systemStages` is the key list from `server/lib/promptSystemStages.js` (the stages PortOS features call by name, which the client badges and DELETE force-guards) |
+| GET /api/prompts | List all prompt stages — `{ stages, systemStages }`, where `systemStages` is the CURATED key list from `server/lib/promptSystemStages.js` that the client badges `SYSTEM` and filters on. It is NOT the delete-protected set, which is wider (see below) |
 | GET /api/prompts/:stage | Get stage template |
 | PUT /api/prompts/:stage | Update stage/template |
+| GET /api/prompts/:stage/usage | Delete-safety report — `{ isSystemStage, usedBy, referencedBy, canDelete, warning }`. `isSystemStage`/`usedBy` come from the curated table; `referencedBy` lists the `server/` sources that name the stage, from the generated `server/lib/promptStageCallSites.generated.json`; `canDelete` is false for either (#3335) |
+| DELETE /api/prompts/:stage | Delete a stage. Returns 400 `SYSTEM_STAGE_PROTECTED` without `?force=true` when the stage is curated OR referenced by source |
 | POST /api/prompts/:stage/preview | Preview compiled prompt |
 | GET /api/prompts/variables | List all variables |
 | PUT /api/prompts/variables/:key | Update variable |

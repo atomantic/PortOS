@@ -30,11 +30,36 @@ describe('prompt stage call-site scanner', () => {
         src('server/services/b.js', 'await buildPrompt("demo-beta", {});'),
         src('server/services/c.js', "await runStage('demo-alpha', {});"),
         src('server/services/d.js', "await runStagedLLM('demo-beta', {});"),
+        src('server/services/e.js', "await runStageScopedInlineLLM('demo-alpha', body);"),
       ],
     });
 
-    expect(index['demo-alpha']).toEqual(['server/services/a.js', 'server/services/c.js']);
+    expect(index['demo-alpha']).toEqual(['server/services/a.js', 'server/services/c.js', 'server/services/e.js']);
     expect(index['demo-beta']).toEqual(['server/services/b.js', 'server/services/d.js']);
+  });
+
+  it('ignores a stage key that only appears in a comment', () => {
+    // A JSDoc block naming `cd-plan` is prose, not a call site — listing that
+    // file under "Referenced in" in the delete dialog would be a lie.
+    const index = buildStageCallSites({
+      shippedStageKeys,
+      sources: [
+        src('server/lib/note.js', "/**\n * The planner ('demo-alpha') writes this.\n */\nexport const x = 1;"),
+        src('server/lib/line.js', "// falls back to 'demo-alpha' when unset\nexport const y = 2;"),
+        src('server/lib/real.js', "getStage('demo-alpha');"),
+      ],
+    });
+
+    expect(index['demo-alpha']).toEqual(['server/lib/real.js']);
+  });
+
+  it('does not mistake a URL inside a literal for the start of a comment', () => {
+    const index = buildStageCallSites({
+      shippedStageKeys,
+      sources: [src('server/services/a.js', "const url = 'https://example.com/x';\ngetStage('demo-alpha');")],
+    });
+
+    expect(index['demo-alpha']).toEqual(['server/services/a.js']);
   });
 
   it('catches keys reached indirectly through a lookup table or module constant', () => {
@@ -66,6 +91,24 @@ describe('prompt stage call-site scanner', () => {
     // The prefix itself is not a key, and unrelated stages stay untouched.
     expect(index['demo-panel-']).toBeUndefined();
     expect(index['demo-alpha']).toBeUndefined();
+  });
+
+  it('finds an interpolated prefix that is not at the start of the template', () => {
+    const index = buildStageCallSites({
+      shippedStageKeys,
+      sources: [src('server/services/panel.js', 'const stage = `${scope}:demo-panel-${id}`;')],
+    });
+
+    expect(index['demo-panel-one']).toEqual(['server/services/panel.js']);
+  });
+
+  it('ignores an interpolated prefix inside a comment', () => {
+    const index = buildStageCallSites({
+      shippedStageKeys,
+      sources: [src('server/services/panel.js', '// resolves `demo-panel-${id}` at runtime\nexport const x = 1;')],
+    });
+
+    expect(index['demo-panel-one']).toBeUndefined();
   });
 
   it('does not match a longer key that merely starts with a shorter one', () => {
