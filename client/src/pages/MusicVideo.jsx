@@ -1317,13 +1317,17 @@ export default function MusicVideo() {
                     {finalVideo.src && (
                       // aspect-video reserves the box before the video's
                       // intrinsic dimensions resolve, so the actions above it
-                      // don't jump — same as the scene thumbnails below.
+                      // don't jump — same as the scene thumbnails below. The
+                      // render inherits its first scene clip's dimensions, which
+                      // are not always 16:9, so object-contain is explicit: a
+                      // 3:2 cut letterboxes inside the reserved box (against the
+                      // player's own black) instead of being stretched to fill it.
                       <video
                         src={finalVideo.src}
                         controls
                         playsInline
                         preload="metadata"
-                        className="w-full aspect-video max-h-[65vh] rounded bg-black border border-port-border"
+                        className="w-full aspect-video max-h-[65vh] object-contain rounded bg-black border border-port-border"
                         aria-label="Play final music video"
                       />
                     )}
