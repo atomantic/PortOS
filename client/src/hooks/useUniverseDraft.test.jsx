@@ -667,7 +667,7 @@ describe('useUniverseDraft', () => {
       const { result } = renderDraft();
       await waitFor(() => expect(result.current.draft.id).toBe('u1'));
 
-      act(() => result.current.toggleLock('logline'));
+      await act(async () => { result.current.toggleLock('logline'); });
       expect(apiMocks.updateUniverse).toHaveBeenLastCalledWith(
         'u1',
         { locked: { logline: true } },
@@ -677,7 +677,7 @@ describe('useUniverseDraft', () => {
 
       // Unlocking DELETES the key rather than writing `false` — the stored map
       // is sparse, and lockedSchema is strict about nothing else riding along.
-      act(() => result.current.toggleLock('logline'));
+      await act(async () => { result.current.toggleLock('logline'); });
       expect(apiMocks.updateUniverse).toHaveBeenLastCalledWith(
         'u1',
         { locked: {} },
@@ -694,22 +694,49 @@ describe('useUniverseDraft', () => {
       const { result } = renderDraft();
       await waitFor(() => expect(result.current.draft.id).toBe('u1'));
 
-      act(() => {
+      await act(async () => {
         result.current.toggleLock('logline');
         result.current.toggleLock('logline');
       });
 
-      expect(apiMocks.updateUniverse).toHaveBeenCalledTimes(2);
       expect(apiMocks.updateUniverse.mock.calls.map((call) => call[1]))
         .toEqual([{ locked: { logline: true } }, { locked: {} }]);
       expect(result.current.draft.locked).toEqual({});
+    });
+
+    // The server replaces `locked` wholesale per PATCH, so if those two writes
+    // reached it reversed the record would persist the lock the user just
+    // cleared. Holding the first request open proves the second is not even
+    // issued until it settles.
+    it('holds the second lock write until the first has settled', async () => {
+      const { result } = renderDraft();
+      await waitFor(() => expect(result.current.draft.id).toBe('u1'));
+      let releaseFirst;
+      apiMocks.updateUniverse.mockImplementationOnce(
+        () => new Promise((resolve) => { releaseFirst = resolve; }),
+      );
+
+      await act(async () => {
+        result.current.toggleLock('logline');
+        result.current.toggleLock('logline');
+      });
+      expect(apiMocks.updateUniverse).toHaveBeenCalledTimes(1);
+
+      await act(async () => { releaseFirst({ ...universe, locked: { logline: true } }); });
+
+      expect(apiMocks.updateUniverse).toHaveBeenCalledTimes(2);
+      expect(apiMocks.updateUniverse).toHaveBeenLastCalledWith(
+        'u1',
+        { locked: {} },
+        { silent: true },
+      );
     });
 
     it('accepts the per-influence-list lock keys, not just the bible scalars', async () => {
       const { result } = renderDraft();
       await waitFor(() => expect(result.current.draft.id).toBe('u1'));
 
-      act(() => result.current.toggleLock('influencesEmbrace'));
+      await act(async () => { result.current.toggleLock('influencesEmbrace'); });
 
       // `influencesEmbrace` / `influencesAvoid` are real LOCKABLE_FIELDS keys;
       // the legacy whole-block `influences` key is not what the UI writes.
@@ -724,7 +751,7 @@ describe('useUniverseDraft', () => {
       const { result } = renderDraft();
       await waitFor(() => expect(result.current.draft.id).toBe('u1'));
 
-      act(() => result.current.toggleLock('categories'));
+      await act(async () => { result.current.toggleLock('categories'); });
 
       expect(apiMocks.updateUniverse).not.toHaveBeenCalled();
       expect(result.current.draft.locked).toEqual({});
@@ -734,7 +761,7 @@ describe('useUniverseDraft', () => {
       const { result } = renderUnsaved();
       await waitFor(() => expect(result.current.loading).toBe(false));
 
-      act(() => result.current.toggleLock('premise'));
+      await act(async () => { result.current.toggleLock('premise'); });
 
       expect(result.current.draft.locked).toEqual({ premise: true });
       expect(apiMocks.updateUniverse).not.toHaveBeenCalled();
@@ -749,7 +776,7 @@ describe('useUniverseDraft', () => {
       const { result } = renderDraft({ wrapper: StrictMode });
       await waitFor(() => expect(result.current.draft.id).toBe('u1'));
 
-      act(() => result.current.toggleLock('logline'));
+      await act(async () => { result.current.toggleLock('logline'); });
 
       expect(apiMocks.updateUniverse).toHaveBeenCalledTimes(1);
       expect(result.current.draft.locked).toEqual({ logline: true });

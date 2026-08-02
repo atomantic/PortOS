@@ -469,6 +469,16 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
     });
   }, [canonDirty]);
 
+  // Serializes lock PATCHes. The server replaces the stored `locked` map
+  // wholesale on every arrival, so ORDER is load-bearing: two toggles fired
+  // back-to-back that land reversed persist the older map, leaving a field
+  // locked on disk while the UI shows it unlocked. Chaining them means the
+  // second is not even sent until the first settles. The style-reference
+  // mutators need no such tail — they send deltas the server applies in any
+  // order (#3109) — which is exactly the difference that makes one necessary
+  // here.
+  const lockWriteTailRef = useRef(Promise.resolve());
+
   const toggleLock = useCallback((field) => {
     if (!WORLD_LOCKABLE_FIELDS.includes(field)) return;
     // The next lock map is derived from the freshest draft OUTSIDE the state
@@ -490,7 +500,8 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
     draftRef.current = { ...current, locked: nextLocked };
     setDraft((value) => ({ ...value, locked: nextLocked }));
     if (selectedId && current.name?.trim()) {
-      updateUniverse(selectedId, { locked: nextLocked }, { silent: true })
+      lockWriteTailRef.current = lockWriteTailRef.current
+        .then(() => updateUniverse(selectedId, { locked: nextLocked }, { silent: true }))
         .catch((error) => toast.error(`Lock save failed: ${error.message}`));
     }
   }, [draft, selectedId]);
