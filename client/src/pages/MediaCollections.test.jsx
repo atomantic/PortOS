@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
+import { typeSettled } from '../test/settledInput';
 
 // ── Mock API calls ───────────────────────────────────────────────────────────
 vi.mock('../services/api', () => ({
@@ -217,8 +218,11 @@ describe('MediaCollections', () => {
     // swallowed and the create would look like it failed.
     renderPage('/media/collections?q=alpha');
     await waitFor(() => screen.getByText('Alpha'));
-    await user.type(screen.getByLabelText('New collection name'), 'Fresh Bucket');
+    await typeSettled(user, screen.getByLabelText('New collection name'), 'Fresh Bucket');
     await user.click(screen.getByRole('button', { name: /create/i }));
+    // The mocked response fixes the id, so the navigation assertion alone would
+    // pass on a half-typed name — assert what was actually sent.
+    await waitFor(() => expect(createMediaCollection).toHaveBeenCalledWith({ name: 'Fresh Bucket' }, { silent: true }));
     await waitFor(() => expect(screen.getByTestId('pathname')).toHaveTextContent('/media/collections/col-4'));
   });
 
