@@ -41,6 +41,15 @@ const stampMs = (task, key) => {
  * older peer behaves exactly as it does today.
  *
  * Depends only on the pair, so both peers compute the same answer.
+ *
+ * Both stamps are wall-clock, but the comparison that matters is not cross-peer:
+ * a machine only ever requeues a run of its OWN (`releaseRetryHold` is scoped to
+ * this instance's agent, and the orphan sweep leaves a task alone while a peer
+ * holds a live lease — `isHeldByOther`), so the spawn and the requeue it must
+ * outrank were written by the same clock. The peer's copy is a replica of that
+ * record, stamps included. Clock skew between peers therefore does not enter, and
+ * the failure mode if it somehow did is the benign one: fall back to the rank, and
+ * the next orphan sweep requeues the task again.
  */
 export function isPostSpawnRequeue(pendingTask, inProgressTask) {
   if (pendingTask?.status !== 'pending' || inProgressTask?.status !== 'in_progress') return false;
