@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { retypeSettled } from '../../test/settledInput';
 
 vi.mock('../../services/api', () => ({
   listUniverseDuplicates: vi.fn(),
@@ -94,8 +95,7 @@ describe('DuplicatesTab', () => {
     // automatically switches to the "AI merged" choice.
     const ta = await screen.findByLabelText('AI-merged starterPrompt');
     expect(ta.value).toBe('Unified A+B');
-    await user.clear(ta);
-    await user.type(ta, 'Hand-tweaked unified');
+    await retypeSettled(user, ta, 'Hand-tweaked unified');
 
     // Execute — survivor/loser choice is dropped (server's enum doesn't accept 'ai'),
     // override is sent as fieldOverrides.
@@ -115,8 +115,7 @@ describe('DuplicatesTab', () => {
     const renameButtons = screen.getAllByTitle('Rename');
     await user.click(renameButtons[0]);
     const input = screen.getByDisplayValue('Clandestiny');
-    await user.clear(input);
-    await user.type(input, 'Clandestiny (v2)');
+    await retypeSettled(user, input, 'Clandestiny (v2)');
     await user.keyboard('{Enter}');
     await waitFor(() => expect(api.updateUniverse).toHaveBeenCalledWith('u-new', { name: 'Clandestiny (v2)' }, expect.anything()));
   });
