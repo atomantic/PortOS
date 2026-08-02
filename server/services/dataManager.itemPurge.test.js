@@ -103,6 +103,13 @@ describe('purgeCategory — category-scoped categories keep their behavior', () 
     expect(existsSync(dataPath('messages', 'index.json'))).toBe(true);
   });
 
+  // A caller that meant to name an entry and produced an empty string must not
+  // land in the branch that empties the whole directory.
+  it('400s an empty subPath instead of widening it into a whole-category wipe', async () => {
+    await expect(purgeCategory('messages', { subPath: '' })).rejects.toThrow(/single entry/);
+    expect(existsSync(dataPath('messages', 'index.json'))).toBe(true);
+  });
+
   it('still refuses a nested subPath', async () => {
     await expect(purgeCategory('messages', { subPath: '../images/render-0001.png' })).rejects.toThrow(/single entry/);
     expect(existsSync(dataPath('images', 'render-0001.png'))).toBe(true);

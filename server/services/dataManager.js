@@ -266,10 +266,22 @@ export async function purgeCategory(categoryKey, options = {}) {
   if (!meta?.deletable) {
     throw new ServerError(`Category "${categoryKey}" is not purgeable`, { status: 403, code: 'CATEGORY_NOT_PURGEABLE' });
   }
+  // "Caller asked for one entry" is keyed on the option being PRESENT, not on
+  // it being truthy: `{ subPath: '' }` is a caller that meant to name something
+  // and produced nothing, and must 400 — not fall through to the branch that
+  // empties the whole directory (#3327).
+  const wantsItem = options.subPath !== undefined && options.subPath !== null;
+  if (wantsItem && !isTopLevelEntryName(options.subPath)) {
+    // Refusing separators outright means no traversal segment can form and, more
+    // importantly, no *intermediate* component can be a symlink for `rm` to
+    // follow out of the category — the lexical containment check below never
+    // touches the filesystem, so it cannot see that.
+    throw new ServerError('subPath must name a single entry in the category', { status: 400, code: 'VALIDATION_ERROR' });
+  }
   // Item-scoped categories only ever lose one entry at a time. Written as
   // "must be exactly 'category'" so an absent or misspelled scope refuses the
   // wipe instead of inheriting the old all-or-nothing behavior (#3327).
-  if (!options.subPath && meta.purgeScope !== 'category') {
+  if (!wantsItem && meta.purgeScope !== 'category') {
     throw new ServerError(
       `Category "${categoryKey}" only supports per-item purge — pass a subPath`,
       { status: 400, code: 'CATEGORY_ITEM_PURGE_ONLY' }
@@ -281,15 +293,7 @@ export async function purgeCategory(categoryKey, options = {}) {
     throw new ServerError(`Category directory not found: ${categoryKey}`, { status: 404, code: 'NOT_FOUND' });
   }
 
-  if (options.subPath) {
-    // `subPath` names ONE top-level entry — exactly what the detail table
-    // lists. Refusing separators outright means no traversal segment can form
-    // and, more importantly, no *intermediate* component can be a symlink for
-    // `rm` to follow out of the category (the lexical containment check below
-    // is blind to that, since it never touches the filesystem).
-    if (!isTopLevelEntryName(options.subPath)) {
-      throw new ServerError('subPath must name a single entry in the category', { status: 400, code: 'VALIDATION_ERROR' });
-    }
+  if (wantsItem) {
     const resolvedRoot = resolve(dirPath);
     const resolvedTarget = resolve(join(dirPath, options.subPath));
     // Boundary-aware containment check: use path.relative so a prefix like
@@ -325,7 +329,7 @@ export async function purgeCategory(categoryKey, options = {}) {
     console.log(`🗑️ Purged all ${entries.length} entries from data/${categoryKey}`);
   }
 
-  return { category: categoryKey, subPath: options.subPath || null };
+  return { category: categoryKey, subPath: wantsItem ? options.subPath : null };
 }
 
 export async function getBackups() {
