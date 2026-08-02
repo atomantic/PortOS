@@ -18,6 +18,16 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    ignore:
+      # The client is plain JS/JSX — `typescript` is here only to satisfy the
+      # peer dep of @eslint-react/eslint-plugin, which pulls typescript-eslint
+      # and ts-api-utils. Neither supports TypeScript 7 yet
+      # (@typescript-eslint/type-utils@8.65.0 peers `>=4.8.4 <6.1.0`,
+      # ts-api-utils@3.0.0-rc.1 peers `<7`), and installing it crashes eslint
+      # with `Cannot read properties of undefined (reading 'Intrinsic')`.
+      # Drop this ignore once typescript-eslint ships TS7 support (see #3351).
+      - dependency-name: typescript
+        versions: ['>=7.0.0']
   - package-ecosystem: github-actions
     directory: /
     schedule:
