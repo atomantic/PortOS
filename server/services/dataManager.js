@@ -30,6 +30,8 @@ export const CATEGORIES = {
   'avatar': { label: 'Avatar', description: 'Uploaded avatar images', archivable: true, deletable: false },
   'backup': { label: 'Backups', description: 'Data backup archives', archivable: false, deletable: true },
   'brain': { label: 'Brain', description: 'Brain items and sync log', archivable: true, deletable: false },
+  // Legacy location — current installs download to ~/Downloads (PATHS.browserDownloads),
+  // but installs that predate that move still carry the dir, and backup still excludes it.
   'browser-downloads': { label: 'Browser Downloads', description: 'Files the agent browser downloaded — re-downloadable, safe to purge', archivable: false, deletable: true },
   'browser-profile': { label: 'Browser Profile', description: 'Chrome/Chromium browser data', archivable: false, deletable: true },
   'calendar': { label: 'Calendar', description: 'Calendar sync data', archivable: true, deletable: false },
@@ -77,6 +79,7 @@ export const CATEGORIES = {
   'screenshots': { label: 'Screenshots', description: 'Task-related screenshots', archivable: true, deletable: true },
   'settings': { label: 'Settings', description: 'Per-feature settings files', archivable: true, deletable: false },
   'sharing': { label: 'Peer Sync State', description: 'Peer-sync bookkeeping — purging forces a full resync and can resurrect deleted records', archivable: true, deletable: false },
+  'spotify': { label: 'Spotify Sync', description: 'Machine-local Spotify sync cursor and cache — purging resets the cursor and can leave a gap in imported history', archivable: true, deletable: false },
   'sprites': { label: 'Sprites', description: 'Sprite reference art, walk frames, and runtime atlases — the only copy of the generated art; records live in Postgres', archivable: false, deletable: false },
   'story-builder': { label: 'Story Builder', description: 'Story Builder project records', archivable: true, deletable: false },
   'telegram': { label: 'Telegram', description: 'Telegram bot data', archivable: true, deletable: true },
@@ -88,7 +91,8 @@ export const CATEGORIES = {
   'uploads': { label: 'Uploads', description: 'Files uploaded through the UI and referenced by records', archivable: true, deletable: false },
   'video-thumbnails': { label: 'Video Thumbnails', description: 'JPEG thumbnails for generated videos', archivable: false, deletable: true },
   'videos': { label: 'Videos', description: 'Locally generated videos', archivable: true, deletable: true },
-  'writers-room': { label: 'Writers Room', description: 'Writers Room works and story bibles', archivable: true, deletable: false }
+  'writers-room': { label: 'Writers Room', description: 'Writers Room works and story bibles', archivable: true, deletable: false },
+  'youtube': { label: 'YouTube Sync', description: 'Machine-local YouTube sync state — purging resets the cursor and can leave a gap in imported history', archivable: true, deletable: false }
 };
 
 // Shown for a directory with no CATEGORIES entry. Phrased as an outcome ("we

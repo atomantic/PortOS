@@ -13,8 +13,9 @@
  *
  *   1. `PATHS` in lib/fileUtils.js — every value under `PATHS.data`.
  *   2. `DEFAULT_EXCLUDES` in services/backup.js — anchored rsync filter paths.
- *   3. Source scan of server/ + scripts/ for the two ways a data dir is spelled
- *      outside PATHS: `join(PATHS.data, 'name')` and `join(root, 'data', 'name')`.
+ *   3. Source scan of server/ + scripts/ for the ways a data dir is spelled
+ *      outside PATHS: `dataPath('name')`, `join(PATHS.data, 'name')`,
+ *      `` `${PATHS.data}/name` ``, and `join(root, 'data', 'name')`.
  *   4. `data.reference/` — dirs seeded into `data/` on first install.
  */
 
@@ -28,8 +29,11 @@ import { CATEGORIES, UNKNOWN_CATEGORY_DESCRIPTION } from './dataManager.js';
 // A path segment that is a file, not a directory (`settings.json`, `TASKS.md`).
 const isFileSegment = (segment) => segment.includes('.');
 
-// `join(PATHS.data, 'name')` / `` `${PATHS.data}/name` `` / `join(x, 'data', 'name')`
+// Every spelling of "a path under data/" that appears in the codebase. Missing
+// one means a whole family of directories escapes the guard — `dataPath('x')`
+// was the gap that let `data/spotify` and `data/youtube` slip through.
 const DATA_DIR_PATTERNS = [
+  /\bdataPath\(\s*'([a-z0-9._-]+)'/g,
   /PATHS\.data,\s*'([a-z0-9._-]+)'/g,
   /\$\{PATHS\.data\}\/([a-z0-9._-]+)/g,
   /,\s*'data',\s*'([a-z0-9._-]+)'/g
