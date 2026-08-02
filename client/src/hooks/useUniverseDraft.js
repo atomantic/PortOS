@@ -469,15 +469,20 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
     });
   }, [canonDirty]);
 
-  // Serializes lock PATCHes. The server replaces the stored `locked` map
-  // wholesale on every arrival, so ORDER is load-bearing: two toggles fired
-  // back-to-back that land reversed persist the older map, leaving a field
-  // locked on disk while the UI shows it unlocked. Chaining them means the
-  // second is not even sent until the first settles. The style-reference
-  // mutators need no such tail — they send deltas the server applies in any
-  // order (#3109) — which is exactly the difference that makes one necessary
-  // here.
-  const lockWriteTailRef = useRef(Promise.resolve());
+  // Serializes lock PATCHes, PER UNIVERSE. The server replaces the stored
+  // `locked` map wholesale on every arrival, so ORDER is load-bearing: two
+  // toggles fired back-to-back that land reversed persist the older map,
+  // leaving a field locked on disk while the UI shows it unlocked. Chaining
+  // them means the second is not even sent until the first settles. The
+  // style-reference mutators need no such tail — they send deltas the server
+  // applies in any order (#3109) — which is exactly the difference that makes
+  // one necessary here.
+  //
+  // Keyed by id rather than held as one tail for the hook, because a request
+  // has no timeout: a stalled write for the universe the user just left would
+  // otherwise block every lock on the one they navigated to, indefinitely and
+  // silently (the draft still updates optimistically, so nothing surfaces it).
+  const lockWriteTailsRef = useRef(new Map());
 
   const toggleLock = useCallback((field) => {
     if (!WORLD_LOCKABLE_FIELDS.includes(field)) return;
@@ -500,9 +505,10 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
     draftRef.current = { ...current, locked: nextLocked };
     setDraft((value) => ({ ...value, locked: nextLocked }));
     if (selectedId && current.name?.trim()) {
-      lockWriteTailRef.current = lockWriteTailRef.current
+      const tail = lockWriteTailsRef.current.get(selectedId) || Promise.resolve();
+      lockWriteTailsRef.current.set(selectedId, tail
         .then(() => updateUniverse(selectedId, { locked: nextLocked }, { silent: true }))
-        .catch((error) => toast.error(`Lock save failed: ${error.message}`));
+        .catch((error) => toast.error(`Lock save failed: ${error.message}`)));
     }
   }, [draft, selectedId]);
 

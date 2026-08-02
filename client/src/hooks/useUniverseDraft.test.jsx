@@ -732,6 +732,32 @@ describe('useUniverseDraft', () => {
       );
     });
 
+    // The tail is per universe, not per hook. A request has no timeout, so one
+    // stalled write for the universe the user just left must not block every
+    // lock on the one they navigated to — silently, since the draft still
+    // updates optimistically either way.
+    it('does not let a stalled lock write for one universe block another', async () => {
+      apiMocks.getUniverse.mockImplementation(async (id) => (id === 'u2' ? universeTwo : universe));
+      const { result, rerender } = renderSelectable();
+      await waitFor(() => expect(result.current.draft.id).toBe('u1'));
+
+      // u1's lock write never settles.
+      apiMocks.updateUniverse.mockImplementationOnce(() => new Promise(() => {}));
+      await act(async () => { result.current.toggleLock('logline'); });
+      expect(apiMocks.updateUniverse).toHaveBeenCalledTimes(1);
+
+      await act(async () => { rerender({ selectedId: 'u2' }); });
+      await waitFor(() => expect(result.current.draft.id).toBe('u2'));
+      await act(async () => { result.current.toggleLock('premise'); });
+
+      expect(apiMocks.updateUniverse).toHaveBeenCalledTimes(2);
+      expect(apiMocks.updateUniverse).toHaveBeenLastCalledWith(
+        'u2',
+        { locked: { premise: true } },
+        { silent: true },
+      );
+    });
+
     it('accepts the per-influence-list lock keys, not just the bible scalars', async () => {
       const { result } = renderDraft();
       await waitFor(() => expect(result.current.draft.id).toBe('u1'));
