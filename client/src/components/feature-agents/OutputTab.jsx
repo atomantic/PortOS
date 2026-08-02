@@ -7,14 +7,18 @@ export default function OutputTab({ agent }) {
   const [output, setOutput] = useState('');
   const [agentId, setAgentId] = useState(null);
   const bottomRef = useRef(null);
-  // Always holds the currently-selected agent so a response can be matched
-  // against it. The refresh button fires outside the fetch effect, so an
-  // effect-local `cancelled` flag would not cover it.
-  const selectedIdRef = useRef(agent.id);
+  // Monotonic request counter: only the most recently issued fetch may write
+  // state. An effect-local `cancelled` flag can't cover this, because the
+  // refresh button fires outside the effect — and comparing agent ids alone
+  // wouldn't either, since two fetches for the *same* agent (a run starting,
+  // or a second refresh click) can still resolve out of order and repaint an
+  // older run's output.
+  const requestSeqRef = useRef(0);
 
   const loadOutput = useCallback((id) => {
+    const seq = ++requestSeqRef.current;
     api.getFeatureAgentOutput(id).then(data => {
-      if (selectedIdRef.current !== id || !data) return;
+      if (seq !== requestSeqRef.current || !data) return;
       setOutput(data.output || '');
       setAgentId(data.agentId);
     }).catch(() => {});
@@ -25,7 +29,6 @@ export default function OutputTab({ agent }) {
   // newly selected agent had already produced it. Keyed on `agent.id` alone so
   // a run starting (`currentAgentId` change) doesn't wipe streamed output.
   useEffect(() => {
-    selectedIdRef.current = agent.id;
     setOutput('');
     setAgentId(null);
   }, [agent.id]);

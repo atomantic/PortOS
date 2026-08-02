@@ -77,6 +77,30 @@ describe('OutputTab staleness', () => {
     expect(screen.getByText(/B output/)).toBeInTheDocument();
   });
 
+  it('drops an out-of-order response for the same agent when a new run starts', async () => {
+    // Same feature agent, two runs — so an agent-id comparison alone would let
+    // the slow first response repaint over the newer run's output.
+    let resolveFirst;
+    const responses = [
+      new Promise((res) => { resolveFirst = res; }),
+      Promise.resolve({ output: 'run-2 output', agentId: 'run-2' }),
+    ];
+    getFeatureAgentOutput.mockImplementation(() => responses.shift());
+
+    const { rerender } = render(<OutputTab agent={{ id: 'agent-a', currentAgentId: 'run-1' }} />);
+    rerender(<OutputTab agent={{ id: 'agent-a', currentAgentId: 'run-2' }} />);
+    await act(async () => {});
+    expect(screen.getByText(/run-2 output/)).toBeInTheDocument();
+
+    await act(async () => {
+      resolveFirst({ output: 'run-1 output', agentId: 'run-1' });
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText(/run-1 output/)).not.toBeInTheDocument();
+    expect(screen.getByText(/run-2 output/)).toBeInTheDocument();
+  });
+
   it('clears the prior agent output while the new agent fetch is still in flight', async () => {
     let resolveB;
     getFeatureAgentOutput.mockImplementation((agentId) => {
