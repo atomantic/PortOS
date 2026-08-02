@@ -82,6 +82,12 @@ describe('Stacker News browser read transport', () => {
     await expect(readItems('example')).rejects.toThrow('Could not read Stacker News data');
     await expect(readSub('example')).rejects.toThrow('Could not read Stacker News data');
     await expect(readMe()).rejects.toThrow('Could not read Stacker News data');
+
+    // Same for a payload that is not the envelope our own extractor returns.
+    navigateToUrlPinned.mockImplementation(async (url) => page(url, 'unexpected'));
+    await expect(readItems('example')).rejects.toThrow('Could not read Stacker News data');
+    navigateToUrlPinned.mockImplementation(async (url) => page(url, { items: { cursor: null } }));
+    await expect(readItems('example')).rejects.toThrow('Could not read Stacker News data');
   });
 
   it('re-normalizes whatever the untrusted page returned instead of trusting its projection', async () => {

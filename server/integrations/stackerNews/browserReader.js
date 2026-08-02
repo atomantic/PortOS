@@ -121,15 +121,16 @@ async function readPage(url, evaluateExpression) {
     settleMs: SETTLE_MS,
     evaluateExpression,
   });
-  const originError = await Promise.resolve()
+  const locationError = await Promise.resolve()
     .then(() => verifyFinalLocation(url, page.url))
     .then(() => null, (error) => error);
   await closeCdpPage(page.id);
-  if (originError) throw originError;
-  // Null means the extractor found no server-rendered payload, or `Runtime.evaluate`
-  // itself threw. Fail loudly: a swallowed extraction failure would look like a
-  // clean empty sync and quietly stop monitoring.
-  if (page.evalResult == null) throw new Error('Could not read Stacker News data from the pinned browser page');
+  if (locationError) throw locationError;
+  // Anything but the envelope our own expression returns means the extractor
+  // found no server-rendered payload, or `Runtime.evaluate` itself threw. Fail
+  // loudly: a swallowed extraction failure would look like a clean empty sync
+  // and quietly stop monitoring.
+  if (!page.evalResult || typeof page.evalResult !== 'object') throw new Error('Could not read Stacker News data from the pinned browser page');
   return page.evalResult;
 }
 
@@ -206,6 +207,9 @@ export async function readSub(slug) {
 // the same number of items per page, even though the SSR page size is fixed.
 export async function readItems(slug, cursor = null, limit = null) {
   const { items } = await readPage(itemsUrl(slug, cursor), ITEMS_EXPRESSION);
+  // A page without a list is an extraction failure, not an empty territory — an
+  // empty territory arrives as `items: []`.
+  if (!Array.isArray(items?.items)) throw new Error('Could not read Stacker News data from the pinned browser page');
   return { items: normalizeItemsPage(items, limit) };
 }
 
