@@ -10,6 +10,19 @@ vi.mock('../../scripts/run-migrations.js', () => ({
   listPendingMigrations: vi.fn(async () => [])
 }));
 
+// Pin the data install root the default wiring reads (#3372). The real
+// PATHS.installRoot follows the executing checkout, so when this suite runs
+// from a CoS/claim worktree it IS a `data/cos/worktrees/…` path — which the
+// default `listPending` correctly short-circuits (#1947), leaving the
+// default-wiring assertion below with nothing to observe. Pinning a fixed
+// non-worktree value also makes it distinct from PATHS.root, so the assertion
+// genuinely proves the ledger is read from the DATA root, not the code checkout.
+const { INSTALL_ROOT } = vi.hoisted(() => ({ INSTALL_ROOT: '/data-install-root' }));
+vi.mock('../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, PATHS: { ...actual.PATHS, installRoot: INSTALL_ROOT } };
+});
+
 import {
   getInstallState,
   captureBootCommit,
@@ -205,6 +218,7 @@ describe('getInstallState — pending migrations', () => {
     listPendingMigrations.mockClear();
     const { listPending, ...optsWithoutInjectedPending } = syncedOpts();
     await getInstallState(optsWithoutInjectedPending);
+    expect(PATHS.installRoot).not.toBe(PATHS.root); // the two diverge, so this is a real check
     expect(listPendingMigrations).toHaveBeenCalledWith({ rootDir: PATHS.installRoot });
   });
 
