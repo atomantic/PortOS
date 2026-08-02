@@ -16,7 +16,7 @@
 // same hashing, same `inspectUntrustedContent` treatment, same columns.
 import { isPrivateAddress } from '../../lib/safeUrlFetch.js';
 import { closeCdpPage, navigateToUrlPinned } from '../../services/browserService.js';
-import { stackerNewsBrowserOrigin as ORIGIN, verifyFinalOrigin } from '../../services/stackerNewsBrowser.js';
+import { STACKER_NEWS_IDENTITY_EXPRESSION, stackerNewsBrowserOrigin as ORIGIN, verifyFinalOrigin } from '../../services/stackerNewsBrowser.js';
 
 const SETTLE_MS = 1_500;
 const MAX_ITEMS_PER_PAGE = 100;
@@ -43,30 +43,30 @@ const itemsUrl = (slug, cursor) => {
   return url.toString();
 };
 
-const ME_EXPRESSION = `(() => {
-  const raw = document.querySelector('#__NEXT_DATA__')?.textContent;
-  if (!raw) return null;
-  const props = JSON.parse(raw)?.props;
-  const me = props?.pageProps?.me || props?.me;
-  if (!me || typeof me.name !== 'string') return null;
-  return { id: me.id == null ? null : String(me.id), name: me.name };
-})()`;
-
+// Every expression returns `null` ONLY when extraction itself failed (no
+// `#__NEXT_DATA__`, or Stacker News moved the server-rendered payload) so
+// `readPage` can throw. A successful extraction that simply found no territory
+// returns `{ sub: null }` — "nothing there" must never look like "we could not
+// look", or a sync would clear `last_error` and advance `last_sync_at` after
+// silently ingesting nothing.
 const SUB_EXPRESSION = `(() => {
   const raw = document.querySelector('#__NEXT_DATA__')?.textContent;
   if (!raw) return null;
   const props = JSON.parse(raw)?.props?.pageProps;
-  const sub = props?.ssrData?.sub || props?.sub;
-  if (!sub || typeof sub.name !== 'string') return null;
+  if (!props) return null;
+  const sub = props.ssrData?.sub || props.sub;
+  if (!sub || typeof sub.name !== 'string') return { sub: null };
   return {
-    name: sub.name,
-    userId: sub.userId == null ? null : String(sub.userId),
-    baseCost: sub.baseCost ?? null,
-    postsSatsFilter: sub.postsSatsFilter ?? null,
-    replyCost: sub.replyCost ?? null,
-    postTypes: Array.isArray(sub.postTypes) ? sub.postTypes.map((type) => String(type)) : [],
-    status: sub.status == null ? null : String(sub.status),
-    nsfw: Boolean(sub.nsfw),
+    sub: {
+      name: sub.name,
+      userId: sub.userId == null ? null : String(sub.userId),
+      baseCost: sub.baseCost ?? null,
+      postsSatsFilter: sub.postsSatsFilter ?? null,
+      replyCost: sub.replyCost ?? null,
+      postTypes: Array.isArray(sub.postTypes) ? sub.postTypes.map((type) => String(type)) : [],
+      status: sub.status == null ? null : String(sub.status),
+      nsfw: Boolean(sub.nsfw),
+    },
   };
 })()`;
 
@@ -77,21 +77,25 @@ const ITEMS_EXPRESSION = `(() => {
   const raw = document.querySelector('#__NEXT_DATA__')?.textContent;
   if (!raw) return null;
   const page = JSON.parse(raw)?.props?.pageProps?.ssrData?.items;
-  if (!page) return null;
+  // The /recent page always server-renders this list, so its absence means the
+  // extraction failed rather than that the territory is empty.
+  if (!page || !Array.isArray(page.items)) return null;
   const str = (value, max) => typeof value === 'string' ? value.slice(0, max) : '';
   return {
-    cursor: typeof page.cursor === 'string' ? page.cursor.slice(0, ${MAX_CURSOR_LENGTH}) : null,
-    items: (Array.isArray(page.items) ? page.items : []).slice(0, ${MAX_ITEMS_PER_PAGE}).map((item) => ({
-      id: item?.id == null ? null : String(item.id),
-      createdAt: str(item?.createdAt, 64) || null,
-      updatedAt: str(item?.updatedAt, 64) || null,
-      title: str(item?.title, ${MAX_TITLE_LENGTH}),
-      text: str(item?.text, ${MAX_TEXT_LENGTH}),
-      url: str(item?.url, 2000),
-      parentId: item?.parentId == null ? null : String(item.parentId),
-      user: { name: str(item?.user?.name, 120) },
-      subName: str(item?.subName, 120),
-    })),
+    items: {
+      cursor: typeof page.cursor === 'string' ? page.cursor.slice(0, ${MAX_CURSOR_LENGTH}) : null,
+      items: page.items.slice(0, ${MAX_ITEMS_PER_PAGE}).map((item) => ({
+        id: item?.id ?? null,
+        createdAt: str(item?.createdAt, 64) || null,
+        updatedAt: str(item?.updatedAt, 64) || null,
+        title: str(item?.title, ${MAX_TITLE_LENGTH}),
+        text: str(item?.text, ${MAX_TEXT_LENGTH}),
+        url: str(item?.url, 2000),
+        parentId: item?.parentId ?? null,
+        user: { name: str(item?.user?.name, 120) },
+        subName: str(item?.subName, 120),
+      })),
+    },
   };
 })()`;
 
@@ -107,7 +111,11 @@ async function readPage(url, evaluateExpression) {
   const originError = await Promise.resolve(page.url).then(verifyFinalOrigin).then(() => null, (error) => error);
   await closeCdpPage(page.id);
   if (originError) throw originError;
-  return page.evalResult ?? null;
+  // Null means the extractor found no server-rendered payload, or `Runtime.evaluate`
+  // itself threw. Fail loudly: a swallowed extraction failure would look like a
+  // clean empty sync and quietly stop monitoring.
+  if (page.evalResult == null) throw new Error('Could not read Stacker News data from the pinned browser page');
+  return page.evalResult;
 }
 
 // Numbers are accepted and stringified because Stacker News serves numeric IDs
@@ -129,32 +137,39 @@ const normalizeItemsPage = (page) => ({
   cursor: nullableString(page?.cursor, MAX_CURSOR_LENGTH),
   items: (Array.isArray(page?.items) ? page.items : [])
     .slice(0, MAX_ITEMS_PER_PAGE)
-    .filter((item) => item?.id != null && String(item.id).length)
     .map((item) => ({
-      id: boundedString(String(item.id), 200),
-      createdAt: nullableString(item.createdAt, 64),
-      updatedAt: nullableString(item.updatedAt, 64),
-      title: boundedString(item.title, MAX_TITLE_LENGTH),
-      text: boundedString(item.text, MAX_TEXT_LENGTH),
-      url: boundedString(item.url, 2_000),
-      parentId: nullableString(item.parentId, 200),
-      user: { name: boundedString(item.user?.name, 120) },
-      subName: boundedString(item.subName, 120),
-    })),
+      // `boundedString` rejects anything that is not a string or finite number,
+      // so an id of `true` / `{}` normalizes to '' and the item is dropped below
+      // rather than ingested as "true" / "[object Object]".
+      id: boundedString(item?.id, 200),
+      createdAt: nullableString(item?.createdAt, 64),
+      updatedAt: nullableString(item?.updatedAt, 64),
+      title: boundedString(item?.title, MAX_TITLE_LENGTH),
+      text: boundedString(item?.text, MAX_TEXT_LENGTH),
+      url: boundedString(item?.url, 2_000),
+      parentId: nullableString(item?.parentId, 200),
+      user: { name: boundedString(item?.user?.name, 120) },
+      subName: boundedString(item?.subName, 120),
+    }))
+    .filter((item) => item.id),
 });
 
 export async function readMe() {
-  const me = await readPage(ORIGIN, ME_EXPRESSION);
-  if (!me?.name) throw new Error('The pinned browser is not signed in to Stacker News');
-  return { me: { id: nullableString(me.id, 200), name: boundedString(me.name, 120) } };
+  // Shares the handoff's identity extractor, so "Check browser identity" and a
+  // keyless sync can never disagree about who is signed in.
+  const identity = await readPage(ORIGIN, STACKER_NEWS_IDENTITY_EXPRESSION);
+  const name = boundedString(identity?.username, 120);
+  if (!name) throw new Error('The pinned browser is not signed in to Stacker News');
+  return { me: { id: nullableString(identity.id, 200), name } };
 }
 
 export async function readSub(slug) {
-  const sub = await readPage(slugPath(slug), SUB_EXPRESSION);
-  if (!sub?.name) return { sub: null };
+  const { sub } = await readPage(slugPath(slug), SUB_EXPRESSION);
+  const name = boundedString(sub?.name, 120);
+  if (!name) return { sub: null };
   return {
     sub: {
-      name: boundedString(sub.name, 120),
+      name,
       userId: nullableString(sub.userId, 200),
       baseCost: Number.isFinite(sub.baseCost) ? sub.baseCost : null,
       postsSatsFilter: Number.isFinite(sub.postsSatsFilter) ? sub.postsSatsFilter : null,
@@ -167,8 +182,8 @@ export async function readSub(slug) {
 }
 
 export async function readItems(slug, cursor = null) {
-  const page = await readPage(itemsUrl(slug, cursor), ITEMS_EXPRESSION);
-  return { items: normalizeItemsPage(page) };
+  const { items } = await readPage(itemsUrl(slug, cursor), ITEMS_EXPRESSION);
+  return { items: normalizeItemsPage(items) };
 }
 
 const BROWSER_READS = Object.freeze({

@@ -2,18 +2,23 @@ import { isPrivateAddress } from '../lib/safeUrlFetch.js';
 import { navigateToUrlPinned } from './browserService.js';
 
 const ORIGIN = 'https://stacker.news';
-const IDENTITY_EXPRESSION = `(() => {
+// The ONE signed-in-identity extractor. Both the handoff identity check and the
+// browser read transport (integrations/stackerNews/browserReader.js) run it, so
+// they can never disagree about who the pinned browser is signed in as. `id` is
+// null on the profile-link fallback — ownership verification then fails closed
+// rather than matching a territory owner it could not confirm.
+export const STACKER_NEWS_IDENTITY_EXPRESSION = `(() => {
   const data = document.querySelector('#__NEXT_DATA__')?.textContent;
   if (data) {
     const parsed = JSON.parse(data);
     const me = parsed?.props?.pageProps?.me || parsed?.props?.me;
-    if (typeof me?.name === 'string') return { username: me.name };
+    if (typeof me?.name === 'string') return { username: me.name, id: me.id == null ? null : String(me.id) };
   }
   const link = [...document.querySelectorAll('a[href]')].find((node) => {
     const href = node.getAttribute('href') || '';
     return node.getAttribute('aria-label')?.toLowerCase().includes('profile') && /^\\\/[a-zA-Z0-9_-]+$/.test(href);
   });
-  return { username: link ? link.getAttribute('href').slice(1) : null };
+  return { username: link ? link.getAttribute('href').slice(1) : null, id: null };
 })()`;
 
 const fixedUrl = (kind, value) => {
@@ -34,7 +39,7 @@ export async function getStackerNewsBrowserIdentity() {
   const page = await navigateToUrlPinned(ORIGIN, {
     verifyRemoteIp: (ip) => !isPrivateAddress(ip),
     settleMs: 1_000,
-    evaluateExpression: IDENTITY_EXPRESSION,
+    evaluateExpression: STACKER_NEWS_IDENTITY_EXPRESSION,
   });
   verifyFinalOrigin(page.url);
   return { username: page.evalResult?.username || null, pageId: page.id, url: page.url };
