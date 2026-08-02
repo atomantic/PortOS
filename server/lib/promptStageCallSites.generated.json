@@ -1,0 +1,405 @@
+{
+  "adversarial-boundary-scorer": [
+    "server/services/digital-twin-adversarial-testing.js"
+  ],
+  "brain-classifier": [
+    "server/services/brain.js"
+  ],
+  "brain-daily-digest": [
+    "server/services/brain.js"
+  ],
+  "brain-weekly-review": [
+    "server/services/brain.js"
+  ],
+  "catalog-ideas-scenes-concepts": [
+    "server/services/catalogExtraction.js"
+  ],
+  "cd-evaluate": [
+    "server/lib/creativeDirectorPrompts.js"
+  ],
+  "cd-plan": [
+    "server/lib/creativeDirectorPrompts.js",
+    "server/lib/creativeDirectorValidation.js",
+    "server/lib/schemaVersions.js"
+  ],
+  "cd-treatment": [
+    "server/lib/creativeDirectorPrompts.js"
+  ],
+  "cos-agent-briefing": [
+    "server/services/agentPromptBuilder.js"
+  ],
+  "cos-task-enhance": [
+    "server/services/taskEnhancer.js"
+  ],
+  "importer-arc-extract": [
+    "server/services/importer.js",
+    "server/services/pipeline/arcPlanner/manuscriptDerive.js"
+  ],
+  "importer-canon-extract": [
+    "server/services/importer.js"
+  ],
+  "importer-classify": [
+    "server/services/importer.js"
+  ],
+  "importer-issue-proposal": [
+    "server/services/importer.js"
+  ],
+  "manuscript-reformat": [
+    "server/services/pipeline/manuscriptFix.js"
+  ],
+  "memory-evaluate": [
+    "server/services/memoryClassifier.js"
+  ],
+  "model-personality-alignment-scorer": [
+    "server/services/modelPersonality.js"
+  ],
+  "model-personality-profile": [
+    "server/services/modelPersonality.js"
+  ],
+  "multi-turn-consistency-scorer": [
+    "server/services/digital-twin-multi-turn-testing.js"
+  ],
+  "pipeline-arc-overview": [
+    "server/services/pipeline/arcPlanner/arcCore.js",
+    "server/services/pipeline/foundationJudge.js",
+    "server/services/pipeline/seriesReview.js"
+  ],
+  "pipeline-arc-resolve": [
+    "server/services/pipeline/arcPlanner/arcCore.js"
+  ],
+  "pipeline-arc-verify": [
+    "server/services/pipeline/arcPlanner/arcCore.js"
+  ],
+  "pipeline-audio-cues": [
+    "server/services/pipeline/audioCues.js"
+  ],
+  "pipeline-beat-continuity": [
+    "server/services/pipeline/arcPlanner/beatContinuity.js"
+  ],
+  "pipeline-beat-continuity-resolve": [
+    "server/services/pipeline/arcPlanner/beatContinuity.js"
+  ],
+  "pipeline-canon-describe-from-prose": [
+    "server/services/universeCanon.js"
+  ],
+  "pipeline-character-differentiate-cast": [
+    "server/services/universeCanon.js"
+  ],
+  "pipeline-comic-cover-concepts": [
+    "server/services/pipeline/arcPlanner/coverConcepts.js"
+  ],
+  "pipeline-comic-page-refine-render": [
+    "server/services/pipeline/comicPages.js"
+  ],
+  "pipeline-comic-panel-image-prompt": [
+    "server/services/pipeline/comicPages.js"
+  ],
+  "pipeline-comic-script": [
+    "server/services/pipeline/pipelineJudge.js",
+    "server/services/pipeline/textStages.js"
+  ],
+  "pipeline-continuity-bible": [
+    "server/services/pipeline/continuityBible.js"
+  ],
+  "pipeline-editorial-adversarial-cuts": [
+    "server/lib/editorial/checkInfra/craftStages.js"
+  ],
+  "pipeline-editorial-analysis": [
+    "server/services/pipeline/editorialAnalysis.js"
+  ],
+  "pipeline-editorial-appearance-continuity": [
+    "server/lib/editorial/checkInfra/structureStages.js"
+  ],
+  "pipeline-editorial-arc-regression": [
+    "server/lib/editorial/checkInfra/craftStages.js"
+  ],
+  "pipeline-editorial-arc-transitions": [
+    "server/lib/editorial/checkInfra/craftStages.js"
+  ],
+  "pipeline-editorial-character-consistency": [
+    "server/lib/editorial/checkInfra/structureStages.js"
+  ],
+  "pipeline-editorial-chekhov": [
+    "server/lib/editorial/checkInfra/revealForeshadowing.js"
+  ],
+  "pipeline-editorial-climax-agency": [
+    "server/lib/editorial/checkInfra/structureStages.js"
+  ],
+  "pipeline-editorial-comic-page-turn": [
+    "server/lib/editorial/checkInfra/structureStages.js"
+  ],
+  "pipeline-editorial-comic-prose-sync": [
+    "server/lib/editorial/checkInfra/structureStages.js"
+  ],
+  "pipeline-editorial-dead-metaphor": [
+    "server/lib/editorial/checkInfra/craftStages.js"
+  ],
+  "pipeline-editorial-dialogue-pleasantries": [
+    "server/lib/editorial/checkInfra/craftStages.js"
+  ],
+  "pipeline-editorial-endings-cliffhanger": [
+    "server/lib/editorial/checkInfra/revealForeshadowing.js"
+  ],
+  "pipeline-editorial-eyeline-match": [
+    "server/lib/editorial/checkInfra/structureStages.js"
+  ],
+  "pipeline-editorial-fact-accuracy": [
+    "server/lib/editorial/checkInfra/structureStages.js"
+  ],
+  "pipeline-editorial-head-hopping": [
+    "server/lib/editorial/checkInfra/structureStages.js"
+  ],
+  "pipeline-editorial-info-dumping": [
+    "server/lib/editorial/checkInfra/revealForeshadowing.js"
+  ],
+  "pipeline-editorial-interiority": [
+    "server/lib/editorial/checkInfra/revealForeshadowing.js"
+  ],
+  "pipeline-editorial-interiority-balance": [
+    "server/lib/editorial/checkInfra/craftStages.js"
+  ],
+  "pipeline-editorial-kill-your-darlings": [
+    "server/lib/editorial/checkInfra/craftStages.js"
+  ],
+  "pipeline-editorial-mirror-description": [
+    "server/lib/editorial/checkInfra/craftStages.js"
+  ],
+  "pipeline-editorial-object-backstory": [
+    "server/lib/editorial/checkInfra/revealForeshadowing.js"
+  ],
+  "pipeline-editorial-object-motivation": [
+    "server/lib/editorial/checkInfra/revealForeshadowing.js"
+  ],
+  "pipeline-editorial-object-weight-proportionality": [
+    "server/lib/editorial/checkInfra/revealForeshadowing.js"
+  ],
+  "pipeline-editorial-on-the-nose": [
+    "server/lib/editorial/checkInfra/craftStages.js"
+  ],
+  "pipeline-editorial-opening-start": [
+    "server/lib/editorial/checkInfra/craftStages.js"
+  ],
+  "pipeline-editorial-pacing-escalation-curve": [
+    "server/lib/editorial/checkInfra/structureStages.js"
+  ],
+  "pipeline-editorial-plot-structure": [
+    "server/lib/editorial/checkInfra/structureStages.js"
+  ],
+  "pipeline-editorial-premature-reveal": [
+    "server/lib/editorial/checkInfra/revealForeshadowing.js"
+  ],
+  "pipeline-editorial-reaction-proportionality": [
+    "server/lib/editorial/checkInfra/structureStages.js"
+  ],
+  "pipeline-editorial-secondary-arc": [
+    "server/lib/editorial/checkInfra/structureStages.js"
+  ],
+  "pipeline-editorial-sensory-balance": [
+    "server/lib/editorial/checkInfra/craftStages.js"
+  ],
+  "pipeline-editorial-style-conformance": [
+    "server/lib/editorial/checkInfra/revealForeshadowing.js"
+  ],
+  "pipeline-editorial-telling-emotion": [
+    "server/lib/editorial/checkInfra/craftStages.js"
+  ],
+  "pipeline-editorial-theme-coherence": [
+    "server/lib/editorial/checkInfra/structureStages.js"
+  ],
+  "pipeline-editorial-timeline-contradiction": [
+    "server/lib/editorial/checkInfra/structureStages.js"
+  ],
+  "pipeline-editorial-unmodeled-names": [
+    "server/lib/editorial/checkInfra/structureStages.js"
+  ],
+  "pipeline-editorial-voice-consistency": [
+    "server/lib/editorial/checkInfra/voiceCanon.js"
+  ],
+  "pipeline-editorial-voice-distinctiveness": [
+    "server/lib/editorial/checkInfra/craftStages.js"
+  ],
+  "pipeline-editorial-white-room": [
+    "server/lib/editorial/checkInfra/craftStages.js"
+  ],
+  "pipeline-editorial-world-cost-free-power": [
+    "server/lib/editorial/checkInfra/structureStages.js"
+  ],
+  "pipeline-editorial-world-unforeshadowed-solution": [
+    "server/lib/editorial/checkInfra/structureStages.js"
+  ],
+  "pipeline-extract-scenes": [
+    "server/lib/sceneExtractor.js",
+    "server/routes/pipeline/issues.js",
+    "server/services/importer.js"
+  ],
+  "pipeline-idea-expansion": [
+    "server/services/pipeline/textStages.js"
+  ],
+  "pipeline-judge-compare": [
+    "server/services/pipeline/editorial/comparativeRank.js"
+  ],
+  "pipeline-judge-foundation": [
+    "server/services/pipeline/foundationJudge.js"
+  ],
+  "pipeline-judge-issue": [
+    "server/services/pipeline/pipelineJudge.js"
+  ],
+  "pipeline-manuscript-completeness": [
+    "server/lib/promptRunner.js",
+    "server/services/pipeline/arcPlanner/completenessPass.js"
+  ],
+  "pipeline-manuscript-fix": [
+    "server/services/pipeline/manuscriptFix.js"
+  ],
+  "pipeline-panel-editor": [
+    "server/services/pipeline/readerPanel.js"
+  ],
+  "pipeline-panel-first-reader": [
+    "server/services/pipeline/readerPanel.js"
+  ],
+  "pipeline-panel-genre-reader": [
+    "server/services/pipeline/readerPanel.js"
+  ],
+  "pipeline-panel-writer": [
+    "server/services/pipeline/readerPanel.js"
+  ],
+  "pipeline-pov-analysis": [
+    "server/services/pipeline/perspectiveRewrite.js"
+  ],
+  "pipeline-pov-rewrite": [
+    "server/services/pipeline/perspectiveRewrite.js"
+  ],
+  "pipeline-prose": [
+    "server/services/pipeline/pipelineJudge.js",
+    "server/services/pipeline/textStages.js"
+  ],
+  "pipeline-reverse-outline": [
+    "server/services/pipeline/reverseOutline.js"
+  ],
+  "pipeline-script-verify": [
+    "server/services/pipeline/scriptVerify.js",
+    "server/services/pipeline/seriesAutopilot.js"
+  ],
+  "pipeline-season-episodes": [
+    "server/services/pipeline/arcPlanner/episodeSeedPass.js"
+  ],
+  "pipeline-series-concept-judge": [
+    "server/services/pipeline/seriesGenerate.js"
+  ],
+  "pipeline-series-generate": [
+    "server/services/pipeline/seriesGenerate.js"
+  ],
+  "pipeline-series-title-logo": [
+    "server/routes/pipeline/series.js",
+    "server/services/pipeline/seriesTitleLogo.js"
+  ],
+  "pipeline-series-voice-discover": [
+    "server/services/pipeline/seriesVoiceDiscover.js"
+  ],
+  "pipeline-storyboard-image-prompt": [
+    "server/services/pipeline/storyboards.js"
+  ],
+  "pipeline-teleplay": [
+    "server/services/pipeline/pipelineJudge.js",
+    "server/services/pipeline/textStages.js"
+  ],
+  "pipeline-volume-cover-concepts": [
+    "server/services/pipeline/arcPlanner/coverConcepts.js"
+  ],
+  "pipeline-volume-verify": [
+    "server/services/pipeline/arcPlanner/arcCore.js"
+  ],
+  "soul-contradiction-detector": [
+    "server/services/digital-twin-analysis.js"
+  ],
+  "soul-enrichment": [
+    "server/services/digital-twin-enrichment.js"
+  ],
+  "soul-enrichment-process": [
+    "server/services/digital-twin-enrichment.js"
+  ],
+  "soul-test-generator": [
+    "server/services/digital-twin-analysis.js"
+  ],
+  "soul-test-scorer": [
+    "server/services/digital-twin-testing.js"
+  ],
+  "soul-writing-analyzer": [
+    "server/services/digital-twin-analysis.js"
+  ],
+  "story-builder-arc-refine": [
+    "server/services/pipeline/arcPlanner/arcCore.js"
+  ],
+  "story-builder-idea-expand": [
+    "server/services/storyBuilder.js"
+  ],
+  "story-builder-reader-map": [
+    "server/services/pipeline/arcPlanner/arcCore.js"
+  ],
+  "story-builder-reader-map-refine": [
+    "server/services/pipeline/arcPlanner/arcCore.js"
+  ],
+  "twin-confidence-analyzer": [
+    "server/services/digital-twin-analysis.js"
+  ],
+  "twin-image-identity-analyze": [
+    "server/services/digital-twin-image-identity.js"
+  ],
+  "twin-import-analyzer": [
+    "server/services/digital-twin-import.js"
+  ],
+  "twin-interview-analyze": [
+    "server/services/digital-twin-import.js"
+  ],
+  "twin-spoken-written-compare": [
+    "server/services/digital-twin-style-comparison.js"
+  ],
+  "twin-trait-extractor": [
+    "server/services/digital-twin-analysis.js"
+  ],
+  "universe-character-expand": [
+    "server/services/universeCharacterExpand.js"
+  ],
+  "values-alignment-scorer": [
+    "server/services/digital-twin-values-testing.js"
+  ],
+  "writers-room-cd-bridge": [
+    "server/services/creativeDirector/bridgeFromIssue.js",
+    "server/services/writersRoom/evaluator.js",
+    "server/services/writersRoom/liveDirector.js"
+  ],
+  "writers-room-characters": [
+    "server/lib/bibleExtractor.js",
+    "server/services/writersRoom/evaluator.js"
+  ],
+  "writers-room-continue": [
+    "server/services/writersRoom/evaluator.js",
+    "server/services/writersRoom/liveDirector.js"
+  ],
+  "writers-room-cuts": [
+    "server/services/writersRoom/evaluator.js"
+  ],
+  "writers-room-evaluate": [
+    "server/lib/stageRunner.js",
+    "server/services/writersRoom/evaluator.js"
+  ],
+  "writers-room-format": [
+    "server/services/writersRoom/evaluator.js"
+  ],
+  "writers-room-objects": [
+    "server/lib/bibleExtractor.js",
+    "server/services/writersRoom/evaluator.js"
+  ],
+  "writers-room-places": [
+    "server/lib/bibleExtractor.js",
+    "server/services/writersRoom/evaluator.js"
+  ],
+  "writers-room-revise": [
+    "server/services/writersRoom/evaluator.js"
+  ],
+  "writers-room-script": [
+    "server/lib/sceneExtractor.js",
+    "server/routes/pipeline/issues.js",
+    "server/services/writersRoom/evaluator.js"
+  ]
+}

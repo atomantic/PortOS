@@ -250,18 +250,24 @@ export default function PromptManager() {
   };
 
   const requestDeleteStage = async (stageName) => {
-    // Check if stage is in use
+    // Check if stage is in use. On failure fall back to "deletable" rather
+    // than "protected" — a false `canDelete: false` would silently force-delete
+    // a user stage, while a false `true` just lets the server's own guard
+    // return SYSTEM_STAGE_PROTECTED, which the toast surfaces.
     const usageRes = await getPromptUsage(stageName, { silent: true })
-      .catch(() => ({ isSystemStage: false, usedBy: [] }));
+      .catch(() => ({ isSystemStage: false, usedBy: [], referencedBy: [], canDelete: true }));
 
     setDeleteConfirm({ stageName, ...usageRes });
   };
 
   const confirmDeleteStage = async () => {
-    const { stageName, isSystemStage } = deleteConfirm;
+    const { stageName, canDelete } = deleteConfirm;
     setDeleteConfirm(null);
 
-    const ok = await deletePrompt(stageName, { force: isSystemStage }, { silent: true })
+    // The server refuses without ?force=true for BOTH the curated system set
+    // and any stage its source references by name (#3335), so gate on
+    // `canDelete` — `isSystemStage` alone would 400 on a pipeline stage.
+    const ok = await deletePrompt(stageName, { force: canDelete === false }, { silent: true })
       .then(() => true)
       .catch((err) => { toast.error(`Failed to delete: ${err.message || 'Unknown error'}`); return false; });
 
@@ -1038,15 +1044,29 @@ export default function PromptManager() {
       >
         <div className="bg-port-card border border-port-border rounded-xl p-6">
           <h3 id="delete-stage-title" className="text-lg font-medium text-white mb-3">
-            {deleteConfirm?.isSystemStage ? 'Delete System Stage?' : 'Delete Stage?'}
+            {deleteConfirm?.canDelete === false
+              ? (deleteConfirm.isSystemStage ? 'Delete System Stage?' : 'Delete Referenced Stage?')
+              : 'Delete Stage?'}
           </h3>
-          {deleteConfirm?.isSystemStage ? (
+          {/* Protected covers both the curated SYSTEM set and any stage the
+              server's source references by name — the latter is badge-less but
+              just as breakable, so it gets the same warning plus the files
+              that name it (#3335). */}
+          {deleteConfirm?.canDelete === false ? (
             <div className="space-y-2 mb-6">
               <p className="text-port-warning text-sm font-medium">
-                "{deleteConfirm.stageName}" is a system stage.
+                "{deleteConfirm.stageName}" is {deleteConfirm.isSystemStage ? 'a system stage' : 'referenced by PortOS source'}.
               </p>
               {deleteConfirm.usedBy?.length > 0 && (
                 <p className="text-gray-400 text-sm">Used by: {deleteConfirm.usedBy.join(', ')}</p>
+              )}
+              {deleteConfirm.referencedBy?.length > 0 && (
+                <div className="text-gray-400 text-sm">
+                  <p className="mb-1">Referenced in:</p>
+                  <ul className="max-h-32 overflow-y-auto space-y-0.5 font-mono text-xs break-all">
+                    {deleteConfirm.referencedBy.map((path) => <li key={path}>{path}</li>)}
+                  </ul>
+                </div>
               )}
               <p className="text-gray-400 text-sm">Deleting this will break PortOS functionality.</p>
             </div>

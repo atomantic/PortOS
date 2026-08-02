@@ -1,7 +1,13 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { stageConfigUpdateSchema, validateRequest } from '../lib/validation.js';
-import { SYSTEM_STAGE_KEYS, isSystemStage, systemStageUsedBy } from '../lib/promptSystemStages.js';
+import {
+  SYSTEM_STAGE_KEYS,
+  isProtectedStage,
+  isSystemStage,
+  stageReferencedBy,
+  systemStageUsedBy
+} from '../lib/promptSystemStages.js';
 import {
   listJobSkillTemplates,
   loadJobSkillTemplate,
@@ -162,16 +168,28 @@ export function createPortOSPromptsRoutes(aiToolkit) {
     res.json({ success: true });
   }));
 
-  // GET /api/prompts/:stage/usage - Check if stage is in use
+  // GET /api/prompts/:stage/usage - Check if stage is in use.
+  //
+  // `isSystemStage` stays the CURATED answer so the UI's SYSTEM copy/badge
+  // stays accurate, while `canDelete` reflects the WIDER protected set — a
+  // pipeline stage nothing badges is still undeletable because source names it
+  // (#3335). `referencedBy` is what the delete-confirm dialog lists.
   router.get('/:stage/usage', asyncHandler(async (req, res) => {
     const stageName = req.params.stage;
     const isSystem = isSystemStage(stageName);
+    const referencedBy = stageReferencedBy(stageName);
+    const isProtected = isProtectedStage(stageName);
 
     res.json({
       isSystemStage: isSystem,
       usedBy: systemStageUsedBy(stageName),
-      canDelete: !isSystem,
-      warning: isSystem ? 'This is a system stage used by PortOS features. Deleting it may break functionality.' : null
+      referencedBy,
+      canDelete: !isProtected,
+      warning: isProtected
+        ? (isSystem
+          ? 'This is a system stage used by PortOS features. Deleting it may break functionality.'
+          : `PortOS resolves this stage by name in ${referencedBy.length} source file${referencedBy.length === 1 ? '' : 's'}. Deleting it will break the feature that calls it.`)
+        : null
     });
   }));
 
@@ -179,9 +197,9 @@ export function createPortOSPromptsRoutes(aiToolkit) {
   router.delete('/:stage', asyncHandler(async (req, res) => {
     const stageName = req.params.stage;
 
-    if (isSystemStage(stageName) && req.query.force !== 'true') {
+    if (isProtectedStage(stageName) && req.query.force !== 'true') {
       throw new ServerError(
-        'Cannot delete system stage. This stage is used by PortOS features. Add ?force=true to delete anyway.',
+        'Cannot delete protected stage. PortOS resolves this stage by name. Add ?force=true to delete anyway.',
         { status: 400, code: 'SYSTEM_STAGE_PROTECTED' }
       );
     }

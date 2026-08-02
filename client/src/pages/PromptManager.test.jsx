@@ -9,13 +9,14 @@ import PromptManager from './PromptManager';
 const getPrompts = vi.fn();
 const getPrompt = vi.fn();
 const getPromptUsage = vi.fn();
+const deletePrompt = vi.fn();
 
 vi.mock('../services/apiPrompts', () => ({
   getPrompts: (...a) => getPrompts(...a),
   getPrompt: (...a) => getPrompt(...a),
   createPrompt: vi.fn(),
   savePrompt: vi.fn(),
-  deletePrompt: vi.fn(),
+  deletePrompt: (...a) => deletePrompt(...a),
   previewPrompt: vi.fn(),
   getPromptUsage: (...a) => getPromptUsage(...a),
   getPromptVariables: vi.fn(() => Promise.resolve({ variables: {} })),
@@ -60,7 +61,9 @@ describe('PromptManager stage list', () => {
   beforeEach(() => {
     getPrompts.mockReset().mockResolvedValue({ stages: STAGES, systemStages: SYSTEM_STAGES });
     getPrompt.mockReset().mockResolvedValue({ name: 'Pipeline — Prose Draft', template: 'body', variables: [] });
-    getPromptUsage.mockReset().mockResolvedValue({ isSystemStage: false, usedBy: [] });
+    getPromptUsage.mockReset().mockResolvedValue({
+      isSystemStage: false, usedBy: [], referencedBy: [], canDelete: true,
+    });
   });
 
   it('shows collapsed groups and a stage count instead of a flat 100-row list', async () => {
@@ -277,7 +280,15 @@ describe('PromptManager delete demotion', () => {
   beforeEach(() => {
     getPrompts.mockReset().mockResolvedValue({ stages: STAGES, systemStages: SYSTEM_STAGES });
     getPrompt.mockReset().mockResolvedValue({ name: 'Brain Classifier', template: 'body', variables: [] });
-    getPromptUsage.mockReset().mockResolvedValue({ isSystemStage: true, usedBy: ['Brain thought classification'] });
+    // Mirrors the exact wire body of GET /api/prompts/:stage/usage — pinned
+    // server-side in server/routes/prompts.test.js.
+    getPromptUsage.mockReset().mockResolvedValue({
+      isSystemStage: true,
+      usedBy: ['Brain thought classification'],
+      referencedBy: ['server/services/brain.js'],
+      canDelete: false,
+    });
+    deletePrompt.mockReset().mockResolvedValue({ success: true });
   });
 
   it('keeps delete — or any other control — out of the list rows entirely', async () => {
@@ -301,5 +312,46 @@ describe('PromptManager delete demotion', () => {
 
     await waitFor(() => expect(getPromptUsage).toHaveBeenCalledWith('brain-classifier', { silent: true }));
     expect(await screen.findByText('Delete System Stage?')).toBeTruthy();
+  });
+
+  // #3335: protection is wider than the SYSTEM badge. A pipeline stage carries
+  // no badge but is still undeletable without ?force=true, so the dialog has to
+  // warn AND the confirm has to send force — otherwise every delete 400s.
+  it('warns and names the source files for a referenced non-system stage', async () => {
+    getPromptUsage.mockResolvedValue({
+      isSystemStage: false,
+      usedBy: [],
+      referencedBy: ['server/services/pipeline/textStages.js', 'server/services/pipeline/pipelineJudge.js'],
+      canDelete: false,
+    });
+    renderPage('/prompts?stage=pipeline-comic-script');
+    await screen.findByText('Prompt Stages');
+
+    fireEvent.click(await screen.findByRole('button', { name: /^delete$/i }));
+
+    expect(await screen.findByText('Delete Referenced Stage?')).toBeTruthy();
+    expect(screen.getByText('server/services/pipeline/textStages.js')).toBeTruthy();
+    expect(screen.getByText('server/services/pipeline/pipelineJudge.js')).toBeTruthy();
+
+    // The modal's confirm is the last "Delete" in the tree (the detail pane
+    // keeps its own trigger mounted behind the backdrop).
+    fireEvent.click(screen.getAllByRole('button', { name: /^delete$/i }).at(-1));
+    await waitFor(() => expect(deletePrompt).toHaveBeenCalledWith(
+      'pipeline-comic-script', { force: true }, { silent: true },
+    ));
+  });
+
+  it('deletes a user-authored stage without force', async () => {
+    getPromptUsage.mockResolvedValue({ isSystemStage: false, usedBy: [], referencedBy: [], canDelete: true });
+    renderPage('/prompts?stage=pipeline-comic-script');
+    await screen.findByText('Prompt Stages');
+
+    fireEvent.click(await screen.findByRole('button', { name: /^delete$/i }));
+    expect(await screen.findByText('Delete Stage?')).toBeTruthy();
+
+    fireEvent.click(screen.getAllByRole('button', { name: /^delete$/i }).at(-1));
+    await waitFor(() => expect(deletePrompt).toHaveBeenCalledWith(
+      'pipeline-comic-script', { force: false }, { silent: true },
+    ));
   });
 });

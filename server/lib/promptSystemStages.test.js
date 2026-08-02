@@ -4,9 +4,13 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  PROTECTED_STAGE_KEYS,
+  STAGE_CALL_SITES,
   SYSTEM_STAGE_USAGE,
   SYSTEM_STAGE_KEYS,
+  isProtectedStage,
   isSystemStage,
+  stageReferencedBy,
   systemStageUsedBy,
 } from './promptSystemStages.js';
 
@@ -59,5 +63,53 @@ describe('shipped stage catalog parity', () => {
   it('ships a stage-config entry for every system stage', () => {
     const missing = SYSTEM_STAGE_KEYS.filter((key) => !shipped[key]);
     expect(missing).toEqual([]);
+  });
+});
+
+// #3335 split deletion protection from the SYSTEM badge. The two sets must
+// stay distinguishable: widening protection is safe, widening the badge is a
+// product regression (it would badge ~100 of 127 rows and make the
+// "System only" filter useless).
+describe('derived call-site protection', () => {
+  const REFERENCED_NOT_CURATED = 'pipeline-series-concept-judge';
+
+  it('keeps the curated badge set to the ten hand-picked stages', () => {
+    expect(SYSTEM_STAGE_KEYS).toHaveLength(10);
+    expect(isSystemStage(REFERENCED_NOT_CURATED)).toBe(false);
+    expect(systemStageUsedBy(REFERENCED_NOT_CURATED)).toEqual([]);
+  });
+
+  it('protects a referenced stage the curated set never mentions', () => {
+    expect(stageReferencedBy(REFERENCED_NOT_CURATED).length).toBeGreaterThan(0);
+    expect(isProtectedStage(REFERENCED_NOT_CURATED)).toBe(true);
+  });
+
+  it('protects every curated stage even when no source references it by name', () => {
+    // Four curated keys (`cos-evaluate`, `app-detection`, …) have no literal
+    // call site in `server/` today; the union is what keeps them guarded.
+    for (const key of SYSTEM_STAGE_KEYS) expect(isProtectedStage(key)).toBe(true);
+  });
+
+  it('leaves user-authored stages deletable', () => {
+    expect(isProtectedStage('my-own-stage')).toBe(false);
+    expect(stageReferencedBy('my-own-stage')).toEqual([]);
+    expect(isProtectedStage(undefined)).toBe(false);
+    expect(isProtectedStage('')).toBe(false);
+    // Prototype keys must not resolve through Object.prototype here either.
+    expect(isProtectedStage('toString')).toBe(false);
+    expect(stageReferencedBy('constructor')).toEqual([]);
+  });
+
+  it('unions the curated and derived sets into PROTECTED_STAGE_KEYS', () => {
+    const expected = [...new Set([...SYSTEM_STAGE_KEYS, ...Object.keys(STAGE_CALL_SITES)])].sort();
+    expect(PROTECTED_STAGE_KEYS).toEqual(expected);
+    expect(PROTECTED_STAGE_KEYS.length).toBeGreaterThan(SYSTEM_STAGE_KEYS.length);
+    for (const key of PROTECTED_STAGE_KEYS) expect(isProtectedStage(key)).toBe(true);
+  });
+
+  it('reports call sites as repo-relative server paths', () => {
+    for (const path of stageReferencedBy(REFERENCED_NOT_CURATED)) {
+      expect(path).toMatch(/^server\//);
+    }
   });
 });
