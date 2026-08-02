@@ -14,13 +14,14 @@
 
 import { getSettings } from '../settings.js';
 import { resolveCleanersFromConfig } from '../../lib/imageClean.js';
-import { ServerError } from '../../lib/errorHandler.js';
 import * as external from './external.js';
 import * as local from './local.js';
 import * as codex from './codex.js';
 import * as grok from './grok.js';
 import * as agy from './agy.js';
-import { IMAGE_GEN_MODE, IMAGE_GEN_MODES, CLOUD_IMAGE_GEN_MODES } from './modes.js';
+import {
+  IMAGE_GEN_MODE, IMAGE_GEN_MODES, CLOUD_IMAGE_GEN_MODES, editIncapableModeError, isEditCapableMode,
+} from './modes.js';
 import { resolveCloudProviderConfig } from './cloudProviderConfig.js';
 
 // Cloud-CLI provider modules keyed by mode, so the shared gate in
@@ -120,11 +121,8 @@ export async function generateImage(params) {
   const cloud = resolveCloudProviderConfig(s, mode, { model: cloudModel });
   if (cloud) {
     if (!cloud.enabled) throw cloud.disabledError;
-    if (mode === IMAGE_GEN_MODE.AGY && (normalized.initImagePath || normalized.referenceImagePaths?.length)) {
-      throw new ServerError('Agy Imagegen supports text-to-image only', {
-        status: 400,
-        code: 'AGY_IMAGE_EDIT_UNSUPPORTED',
-      });
+    if (!isEditCapableMode(mode) && (normalized.initImagePath || normalized.referenceImagePaths?.length)) {
+      throw editIncapableModeError(mode);
     }
     return CLOUD_PROVIDERS[mode].generateImage({ ...cloud.providerParams, cleanC2PA, denoise, ...normalized });
   }

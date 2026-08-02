@@ -8,7 +8,13 @@
  * `IMAGE_GEN_MODE.X` is the preferred form at branching/tagging sites.
  * `IMAGE_GEN_MODES` is the alphabet for Zod / OpenAI tool-spec enums.
  * Single source of truth: derive the array from `Object.values(...)`.
+ *
+ * The lone import is the error type — `errorHandler.js` pulls in nothing but
+ * node's `events`, so it cannot reintroduce the provider cycle this module was
+ * split out to avoid.
  */
+
+import { ServerError } from '../../lib/errorHandler.js';
 
 export const IMAGE_GEN_MODE = Object.freeze({
   EXTERNAL: 'external',
@@ -74,6 +80,24 @@ export const EDIT_INCAPABLE_IMAGE_MODES = Object.freeze([IMAGE_GEN_MODE.AGY]);
 
 /** Can `mode` accept an input image (i2i / edit)? */
 export const isEditCapableMode = (mode) => !EDIT_INCAPABLE_IMAGE_MODES.includes(mode);
+
+/**
+ * The one 400 for "this backend was handed an input image and cannot take one".
+ *
+ * Four verbatim copies of this throw existed — `agy.js`, the dispatcher,
+ * `prepareParams.js` and the imageGen route — before the sprite reference paths
+ * needed a fifth (#3331), so it now lives beside the predicate that decides it.
+ * Every caller gates on `isEditCapableMode`, so adding a backend to
+ * EDIT_INCAPABLE_IMAGE_MODES still stays a one-line change.
+ *
+ * The `AGY_IMAGE_EDIT_UNSUPPORTED` code keeps the name it shipped under (it is
+ * the only edit-incapable backend today) so existing clients and docs still
+ * match; the message names whichever backend was actually asked for.
+ */
+export const editIncapableModeError = (mode) => new ServerError(
+  `${mode ? mode[0].toUpperCase() + mode.slice(1) : 'This'} Imagegen supports text-to-image only`,
+  { status: 400, code: 'AGY_IMAGE_EDIT_UNSUPPORTED' },
+);
 
 // Cloud-CLI providers expose no numeric i2i denoise knob, so map the
 // local-runner-style strength (0..1, lower = more faithful to the source)

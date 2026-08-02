@@ -26,7 +26,9 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { imageGenEvents } from '../imageGenEvents.js';
 import { buildNoImageReason } from './noImageReason.js';
 import { checkFabrication, noFabricationClause } from './fabricationGuard.js';
-import { AGY_IMAGEGEN_IMAGE_MODEL, IMAGE_GEN_MODE, IMAGE_TOOL_NAMES, nearestAgyAspectRatio } from './modes.js';
+import {
+  AGY_IMAGEGEN_IMAGE_MODEL, IMAGE_GEN_MODE, IMAGE_TOOL_NAMES, editIncapableModeError, nearestAgyAspectRatio,
+} from './modes.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
 
 const AGY_TIMEOUT_MS = (() => {
@@ -177,12 +179,7 @@ export async function generateImage({
   cleanC2PA = false,
   denoise = false,
 }) {
-  if (initImagePath || referenceImagePaths?.length) {
-    throw new ServerError('Agy Imagegen supports text-to-image only', {
-      status: 400,
-      code: 'AGY_IMAGE_EDIT_UNSUPPORTED',
-    });
-  }
+  if (initImagePath || referenceImagePaths?.length) throw editIncapableModeError(IMAGE_GEN_MODE.AGY);
   if (!prompt.trim()) {
     throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   }

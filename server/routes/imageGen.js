@@ -19,6 +19,7 @@ import {
 import { optionalUploadFields } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
+import { editIncapableModeError, isEditCapableMode } from '../services/imageGen/modes.js';
 import { resolveCloudProviderConfig } from '../services/imageGen/cloudProviderConfig.js';
 import setupRouter from './imageGenSetup.js';
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
@@ -415,11 +416,8 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     // gated behind an explicit toggle each (not every Codex account has access
     // to the image_gen tool, and grok spends the user's Grok quota).
     if (!cloud.enabled) throw cloud.disabledError;
-    if (mode === IMAGE_GEN_MODE.AGY && (params.initImagePath || params.referenceImagePaths?.length)) {
-      throw new ServerError('Agy Imagegen supports text-to-image only', {
-        status: 400,
-        code: 'AGY_IMAGE_EDIT_UNSUPPORTED',
-      });
+    if (!isEditCapableMode(mode) && (params.initImagePath || params.referenceImagePaths?.length)) {
+      throw editIncapableModeError(mode);
     }
     // `mode` inside jobParams is the queue's discriminator — laneForJob()
     // routes cloud jobs to the parallel cloud lane, and runJob's image branch

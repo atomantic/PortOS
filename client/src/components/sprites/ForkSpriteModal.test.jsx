@@ -123,10 +123,45 @@ describe('ForkSpriteModal submit gating', () => {
   it('drops the backend requirement (and warns) when no backend is configured', async () => {
     renderModal({ backends: [], mode: '' });
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
-    expect(screen.getByText(/No image backend configured/)).toBeInTheDocument();
+    expect(screen.getByText(/No image-to-image backend configured/)).toBeInTheDocument();
 
     await userEvent.type(promptBox(), 'now with a red coat');
     expect(forkButton()).toBeEnabled();
+  });
+});
+
+/**
+ * #3331 — the fork's first render is unconditionally image+text→image, but the
+ * `backends` list is the page's, shared with the reference workflow whose
+ * from-scratch turnaround legitimately runs text-to-image. So a backend that
+ * cannot take an input image reaches this modal and must be dropped here; the
+ * server refuses such a `mode` outright, so offering it is a guaranteed 400.
+ */
+describe('ForkSpriteModal backend filtering', () => {
+  const WITH_AGY = [...BACKENDS, { id: 'agy', label: 'Agy' }];
+
+  it('omits a text-to-image-only backend from the picker', () => {
+    renderModal({ backends: WITH_AGY });
+    const options = [...screen.getByRole('combobox').options].map((o) => o.value);
+    expect(options).toEqual(['codex', 'grok']);
+  });
+
+  it('ignores a text-to-image-only page mode instead of adopting it', async () => {
+    renderModal({ backends: WITH_AGY, mode: 'agy' });
+    await userEvent.type(promptBox(), 'now with a red coat');
+    // An adopted mode satisfies the backend half of the submit gate, so a still
+    // disabled button with a written prompt is exactly "agy was not adopted".
+    expect(forkButton()).toBeDisabled();
+
+    await userEvent.selectOptions(screen.getByRole('combobox'), 'grok');
+    await userEvent.click(forkButton());
+    expect(forkSpriteRecord.mock.calls[0][1].mode).toBe('grok');
+  });
+
+  it('warns instead of offering a picker when every backend is text-to-image-only', () => {
+    renderModal({ backends: [{ id: 'agy', label: 'Agy' }], mode: 'agy' });
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(screen.getByText(/No image-to-image backend configured/)).toBeInTheDocument();
   });
 });
 

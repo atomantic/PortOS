@@ -16,12 +16,14 @@
 
 import { describe, it, expect } from 'vitest';
 import { RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
+import { EDIT_INCAPABLE_IMAGE_MODES } from '../services/imageGen/modes.js';
 // Import the node-safe leaf, NOT imageGenBackends.js — that module imports
 // lucide-react, which is not installed in the server CI job (this exact import
 // broke main's CI when Phase 2 landed pointing at imageGenBackends).
 import {
   RENDER_TARGET_OPTIONS as CLIENT_OPTIONS,
   RENDER_TARGET_BACKEND_AUTO as CLIENT_AUTO,
+  I2I_CAPABLE_MODES as CLIENT_I2I_CAPABLE,
 } from '../../client/src/lib/imageGenModes.js';
 
 // Targets the Settings UI deliberately does NOT list — a pin nobody's
@@ -47,5 +49,26 @@ describe('render-target client mirror parity (#3231)', () => {
 
   it('the auto sentinel matches across packages', () => {
     expect(CLIENT_AUTO).toBe(RENDER_TARGET_BACKEND_AUTO);
+  });
+});
+
+/**
+ * The client's `I2I_CAPABLE_MODES` is what the i2i-only pickers (the sprite fork
+ * modal, #3331) filter their backend options through, and the server's
+ * `EDIT_INCAPABLE_IMAGE_MODES` is what rejects such a mode at request time. If a
+ * future edit-incapable backend were added server-side and not removed from the
+ * client list, every i2i picker would go back to offering a backend the server
+ * 400s — the exact bug #3331 fixed, re-introduced silently.
+ *
+ * Only one direction is asserted: the client list ALSO omits `external`, which is
+ * edit-capable server-side but isn't queueable and has no i2i UI, so an equality
+ * check would be wrong.
+ */
+describe('edit-capability client mirror parity (#3331)', () => {
+  it('no server edit-incapable backend appears in the client i2i-capable list', () => {
+    for (const mode of EDIT_INCAPABLE_IMAGE_MODES) {
+      expect(CLIENT_I2I_CAPABLE.includes(mode),
+        `"${mode}" is edit-incapable server-side but still listed in the client I2I_CAPABLE_MODES`).toBe(false);
+    }
   });
 });

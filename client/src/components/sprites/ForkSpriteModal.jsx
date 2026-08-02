@@ -6,29 +6,41 @@
 // forkSpriteRecord → the server creates the record and queues that render;
 // on success we hand the new record back so the page can navigate to it.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { GitFork, RefreshCw, X } from 'lucide-react';
 import Modal from '../ui/Modal';
 import toast from '../ui/Toast';
 import SpritePreview from './SpritePreview.jsx';
 import { forkSpriteRecord } from '../../services/apiSprites.js';
+import { isI2iCapableMode } from '../../lib/imageGenBackends';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 
 export default function ForkSpriteModal({ open, onClose, source, referencePath, fromTurnaround = false, backends, mode, onForked }) {
   const [name, setName] = useState(`${source?.name || ''} fork`);
   const [id, setId] = useState('');
   const [designPrompt, setDesignPrompt] = useState('');
-  const [forkMode, setForkMode] = useState(mode || '');
+  const [forkMode, setForkMode] = useState(isI2iCapableMode(mode) ? mode : '');
   const [strength, setStrength] = useState(0.65);
+
+  // The fork's first render is ALWAYS image+text→image, so a backend that cannot
+  // take an input image (Agy) must never be offered here — the page's list is
+  // shared with the reference workflow, whose from-scratch turnaround legitimately
+  // can run text-to-image (#3331). The server refuses such a mode outright; this
+  // filter keeps the picker from putting the user in that position at all.
+  const i2iBackends = useMemo(
+    () => (Array.isArray(backends) ? backends.filter((b) => isI2iCapableMode(b.id)) : []),
+    [backends],
+  );
 
   // The page's image `mode` can resolve AFTER this modal mounts (settings fetch
   // lands after the locked-main detail renders, and the modal is mounted
   // eagerly while `mainLocked`). Backfill an empty selection when it arrives so
   // the Backend select — and the canSubmit gate that requires it — aren't
-  // stuck empty; a user's explicit pick (non-empty) is preserved.
-  useEffect(() => { setForkMode((m) => m || mode || ''); }, [mode]);
+  // stuck empty; a user's explicit pick (non-empty) is preserved. A page mode
+  // that can't do i2i is ignored for the same reason it isn't listed.
+  useEffect(() => { setForkMode((m) => m || (isI2iCapableMode(mode) ? mode : '')); }, [mode]);
 
-  const hasBackends = Array.isArray(backends) && backends.length > 0;
+  const hasBackends = i2iBackends.length > 0;
 
   const [submit, submitting] = useAsyncAction(async () => {
     const { record } = await forkSpriteRecord(source.id, {
@@ -126,7 +138,7 @@ export default function ForkSpriteModal({ open, onClose, source, referencePath, 
                 onChange={(e) => setForkMode(e.target.value)}
                 className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
               >
-                {backends.map((b) => <option key={b.id} value={b.id}>{b.label || b.id}</option>)}
+                {i2iBackends.map((b) => <option key={b.id} value={b.id}>{b.label || b.id}</option>)}
               </select>
             </label>
           )}
@@ -146,7 +158,8 @@ export default function ForkSpriteModal({ open, onClose, source, referencePath, 
         </div>
         {!hasBackends && (
           <p className="text-xs text-port-warning">
-            No image backend configured — enable Codex or Grok, or set a local Python path, in Settings → Image Gen.
+            No image-to-image backend configured — enable Codex or Grok, or set a local Python path, in
+            Settings → Image Gen. A fork redraws this reference, which text-to-image-only backends cannot do.
           </p>
         )}
       </div>

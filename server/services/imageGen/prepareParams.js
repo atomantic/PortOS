@@ -28,6 +28,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir, resolveGalleryImage } from '../../lib/fileUtils.js';
 import { getSettings } from '../settings.js';
 import { IMAGE_GEN_MODE, CLOUD_IMAGE_GEN_MODES, resolveImageCleaners } from './index.js';
+import { editIncapableModeError, isEditCapableMode } from './modes.js';
 import { resolveRenderTargetConfig } from './cloudProviderConfig.js';
 import { RENDER_TARGET, recordRenderPin } from '../../lib/renderTargets.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
@@ -103,12 +104,9 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
     mode = resolved.mode;
     if (!data.cloudModel && resolved.cloud?.modelId) data.cloudModel = resolved.cloud.modelId;
   }
-  if (mode === IMAGE_GEN_MODE.AGY && (initUpload || data.initImageFile)) {
+  if (!isEditCapableMode(mode) && (initUpload || data.initImageFile)) {
     cleanupReqFilesTemp();
-    throw new ServerError('Agy Imagegen supports text-to-image only', {
-      status: 400,
-      code: 'AGY_IMAGE_EDIT_UNSUPPORTED',
-    });
+    throw editIncapableModeError(mode);
   }
 
   // Resolve cleaners ONCE at the route layer so all three dispatch paths

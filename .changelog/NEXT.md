@@ -36,6 +36,7 @@
 ## Sprites
 
 - **The panel close buttons and the Lock/Approve controls are now big enough to tap.** The close buttons on the import and new-sprite panels were a bare 16px icon with no padding, and the reference/walk workflow's Lock, Unlock and Approve confirmations were roughly 18-26px tall — well under the 44px target the rest of the interface uses. On a phone these are the controls that dismiss a blocking panel and commit a candidate, so a mis-tap mattered.
+- **[issue-3331] Forking a sprite no longer offers a backend that cannot redraw an image.** A fork is always image+text→image — it seeds the new character from the source's locked reference — but the Backend picker listed every configured image backend, including Agy, which renders text-to-image only. Picking it was accepted, saved as the new character's render pin, and then quietly rendered somewhere else. The fork picker now lists only backends that can take an input image, and the server refuses an explicitly chosen text-to-image-only backend on any seeded sprite render up front, before a record is created, instead of diverging silently. A backend inherited from a saved pin still degrades gracefully to a capable one, the way a pin whose backend was switched off already does.
 
 ## Internal
 

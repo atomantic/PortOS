@@ -33,7 +33,7 @@ import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import {
   IMAGE_GEN_MODE, resolveQueueImageMode, resolveQueueImageEditMode,
-  LOCAL_IMAGEGEN_DEFAULT_MODEL,
+  LOCAL_IMAGEGEN_DEFAULT_MODEL, editIncapableModeError, isEditCapableMode,
 } from '../imageGen/modes.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
 import { pickUsableMode, renderTargetDefaults, resolveRenderTargetConfig } from '../imageGen/cloudProviderConfig.js';
@@ -549,7 +549,21 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
     // pipeline i2i renders on that platform. Cloud modes are unaffected.
   }
 
-  if (mode === IMAGE_GEN_MODE.AGY && initImagePath) {
+  // An edit-incapable backend cannot run an i2i render at all (#3243/#3331), and
+  // every reference render but a from-scratch turnaround carries a seed. How that
+  // backend was chosen decides what happens:
+  //   • an explicit request-level `body.mode` is a REQUEST — fail it here, with a
+  //     message naming the backend, rather than silently rendering somewhere else
+  //     (the picker that sent it would otherwise show one backend and get another,
+  //     and #3231 persists the choice as the record's render pin);
+  //   • a record/target/settings pin is a PREFERENCE — fall through to an
+  //     edit-capable backend, exactly as pickUsableMode's contract degrades a pin
+  //     whose backend is disabled.
+  // `mode === body.mode` is what distinguishes the two: resolveQueueImageMode
+  // drops an explicit-but-disabled body.mode to the ladder, and that ladder result
+  // is a preference again.
+  if (initImagePath && !isEditCapableMode(mode)) {
+    if (body.mode === mode) throw editIncapableModeError(mode);
     mode = resolveQueueImageEditMode(undefined, settings);
   }
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, mode);
@@ -764,6 +778,12 @@ export async function listSpriteThumbnails() {
  * behind. User-triggered only.
  */
 export async function forkSprite(sourceId, body) {
+  // A fork is unconditionally image+text→image, so a backend that cannot take an
+  // input image can never run one (#3331). Refuse before `createCharacter` for the
+  // same reason the source is resolved first — a 400 must not leave an orphan
+  // record behind, and the doomed backend would be persisted as the new record's
+  // render pin (#3231 Phase 3) on the way past.
+  if (body.mode && !isEditCapableMode(body.mode)) throw editIncapableModeError(body.mode);
   await resolveSourceReference(sourceId); // fail fast before creating a record
   // The fork's chosen backend/model seeds the NEW record's render pin
   // (#3231 Phase 3) in the create itself, so re-rolls keep rendering where

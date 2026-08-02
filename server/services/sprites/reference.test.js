@@ -45,6 +45,9 @@ const settings = {
     mode: 'codex',
     codex: { enabled: true, codexPath: '/usr/local/bin/codex', model: 'gpt-5.6-luna', effort: 'low' },
     grok: { enabled: true, grokPath: '/usr/local/bin/grok', aspectRatio: '1:1' },
+    // Enabled so the edit-incapable-backend suite (#3331) can ask for it; the
+    // saved `mode` is still codex, so no other test's resolution changes.
+    agy: { enabled: true, agyPath: '/usr/local/bin/agy', model: 'gemini-3.5-flash-low' },
     local: { pythonPath: '/usr/bin/python3', modelId: 'flux-dev-4bit' },
   },
 };
@@ -1126,6 +1129,45 @@ describe('listSpriteThumbnails', () => {
   });
 });
 
+/**
+ * #3331 — a backend that cannot take an input image (agy) may still render a
+ * from-scratch turnaround, but nothing downstream of it. The distinction the
+ * service draws is not "which target" but "where did the mode come from":
+ * an explicit request-level pick fails loudly, a pin degrades quietly.
+ */
+describe('edit-incapable backends on the seeded reference paths (#3331)', () => {
+  it('400s an explicitly requested edit-incapable mode on a seeded render', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await lockTurnaround(id);
+    enqueueJob.mockClear();
+    // The main always derives from the locked sheet, so this render is i2i.
+    await expect(startReferenceGeneration(id, { target: 'main', mode: 'agy' }))
+      .rejects.toMatchObject({ code: 'AGY_IMAGE_EDIT_UNSUPPORTED', status: 400 });
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it('still runs an explicitly requested edit-incapable mode for a from-scratch turnaround', async () => {
+    const id = newId();
+    await createCharacter(id);
+    const result = await startReferenceGeneration(id, { target: 'turnaround', designPrompt: 'a wiry ranger', mode: 'agy' });
+    expect(result.mode).toBe('agy');
+    expect(enqueueJob.mock.calls.at(-1)[0].params.mode).toBe('agy');
+  });
+
+  it('degrades a record PIN to an edit-capable backend rather than failing the render', async () => {
+    const id = newId();
+    await createCharacter(id, { imageMode: 'agy' });
+    await lockTurnaround(id);
+    enqueueJob.mockClear();
+    const { mode } = await startReferenceGeneration(id, { target: 'main' });
+    // A pin is a preference — the same way pickUsableMode degrades a pin whose
+    // backend was switched off, rather than 400ing a request the user didn't make.
+    expect(mode).toBe('codex');
+    expect(enqueueJob.mock.calls.at(-1)[0].params.mode).toBe('codex');
+  });
+});
+
 describe('forkSprite', () => {
   it('creates a new character and queues its turnaround seeded from the source sheet', async () => {
     const source = newId();
@@ -1148,6 +1190,22 @@ describe('forkSprite', () => {
     const call = enqueueJob.mock.calls[0][0];
     expect(call.params.spriteRef.recordId).toBe(record.id);
     expect(call.params.initImagePath).toBe(join(TEST_ROOT, 'sprites', source, `reference/${source}-turnaround-v1.png`));
+  });
+
+  it('400s a fork onto a text-to-image-only backend and creates no orphan record', async () => {
+    const source = newId();
+    await createCharacter(source, { name: 'Origin' });
+    await lockMain(source);
+    enqueueJob.mockClear();
+    const before = (await records.listRecords()).length;
+    // A fork ALWAYS seeds from the source reference, so agy can never run one —
+    // and the picker used to offer it, accept the request, and only diverge
+    // later (#3331). The refusal must land before createCharacter, or the doomed
+    // backend is persisted as the new record's render pin on the way past.
+    await expect(forkSprite(source, { name: 'Agy Fork', designPrompt: 'x', mode: 'agy' }))
+      .rejects.toMatchObject({ code: 'AGY_IMAGE_EDIT_UNSUPPORTED', status: 400 });
+    expect((await records.listRecords()).length).toBe(before);
+    expect(enqueueJob).not.toHaveBeenCalled();
   });
 
   it('400s forking a source with no locked main and creates no orphan record', async () => {
