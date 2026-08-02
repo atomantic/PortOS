@@ -400,6 +400,26 @@ export function pickMainFrameHops(messages, topFrameId = null) {
   return { hops, finalUrl, mainRequestIds: [...mainRequestIds], pendingMainRequestIds };
 }
 
+// Session-scoped CDP commands the pinned tab issues after `Network.enable` and
+// BEFORE `Page.navigate`, so that the main document arrives with a peer address
+// the SSRF pin can actually verify. Both remove a delivery path that hands
+// Chrome a response it cannot annotate with a `remoteIPAddress`:
+//   - `setBypassServiceWorker`: a SW-mediated document carries no peer address
+//     even when the worker passed the fetch straight through to the network,
+//     which made every PWA unreadable behind the fail-closed empty-IP gate.
+//   - `setCacheDisabled`: a document served from the HTTP/prefetch cache made no
+//     connection at all, so nothing about the *current* resolution of its host
+//     was verified — a body cached earlier from a since-blocked address would be
+//     ingested unpinned. Forcing a real fetch is what the pin is for.
+// Both are scoped to this fresh, disposable tab, so the user's normal browsing
+// is unaffected; cookies are untouched, so a signed-in session still applies.
+// Ids are offset well past the navigate (2) / read (3) request ids.
+const PIN_SETUP_COMMANDS = [
+  { method: 'Network.setBypassServiceWorker', params: { bypass: true } },
+  { method: 'Network.setCacheDisabled', params: { cacheDisabled: true } },
+];
+const PIN_SETUP_ID_BASE = 10;
+
 // Close a CDP tab by target id (best-effort). Used to fail closed after an
 // SSRF-pin refusal so a tab that connected to a disallowed address is torn down
 // rather than left open for the DOM reader.
@@ -512,8 +532,9 @@ export function ssrfPinRefusalReason(messages, verifyRemoteIp, url, topFrameId =
  * BLANK tab, subscribe to CDP Network events, THEN drive `Page.navigate`, keep
  * the subscription open across the settle window, and check the
  * `remoteIPAddress` Chrome actually dialed for each hop. The tab also bypasses
- * the site's service worker so a PWA's main document is fetched by Chrome
- * itself and therefore carries a pinnable peer IP.
+ * the site's service worker and disables its cache (`PIN_SETUP_COMMANDS`), so
+ * the main document is fetched by Chrome itself and therefore carries a
+ * pinnable peer IP instead of arriving from a store we can't verify.
  *
  * `verifyRemoteIp(ip)` returns false to refuse. On ANY refusal (unverifiable /
  * empty IP, a navigation that never yields a document response, or a top-level
@@ -556,7 +577,6 @@ export async function navigateToUrlPinned(url, {
   }
 
   const READ_ID = 3;
-  const BYPASS_SW_ID = 4;
   const { default: WebSocket } = await import('ws');
   const messages = [];
   const result = await new Promise((resolve) => {
@@ -605,16 +625,7 @@ export async function navigateToUrlPinned(url, {
 
     ws.on('open', () => {
       ws.send(JSON.stringify({ id: 1, method: 'Network.enable' }));
-      // Bypass the site's service worker for THIS tab. A SW-mediated main
-      // document carries no `remoteIPAddress` (Chrome can't annotate a response
-      // the SW handed it, even when the SW passed the fetch straight through to
-      // the network), which the empty-IP gate below rightly refuses — so every
-      // PWA was unreadable. With the SW bypassed Chrome fetches the document
-      // itself and reports the peer IP, and the fail-closed check verifies a real
-      // address instead of being relaxed. The tab is fresh and disposable, so
-      // this has no effect on the user's normal browsing; cookies are unaffected,
-      // so a signed-in session still applies.
-      ws.send(JSON.stringify({ id: BYPASS_SW_ID, method: 'Network.setBypassServiceWorker', params: { bypass: true } }));
+      PIN_SETUP_COMMANDS.forEach((cmd, i) => ws.send(JSON.stringify({ id: PIN_SETUP_ID_BASE + i, ...cmd })));
       ws.send(JSON.stringify({ id: 2, method: 'Page.navigate', params: { url } }));
     });
     ws.on('message', (data) => {
@@ -627,11 +638,12 @@ export async function navigateToUrlPinned(url, {
         if (msg.result?.frameId) topFrameId = msg.result.frameId;
         return;
       }
-      if (msg.id === BYPASS_SW_ID) {
-        // Non-fatal: a Chrome that rejects the bypass just keeps its service
-        // worker in front of the document, and the empty-IP gate still fails
-        // closed — never under-verifies.
-        if (msg.error) console.warn(`⚠️ CDP setBypassServiceWorker rejected: ${msg.error.message || 'unknown error'}`);
+      const setupIndex = msg.id - PIN_SETUP_ID_BASE;
+      if (setupIndex >= 0 && setupIndex < PIN_SETUP_COMMANDS.length) {
+        // Non-fatal: a Chrome that rejects one of these just keeps its service
+        // worker / cache in front of the document, and the empty-IP gate still
+        // fails closed on the unpinnable response — never under-verifies.
+        if (msg.error) console.warn(`⚠️ CDP ${PIN_SETUP_COMMANDS[setupIndex].method} rejected: ${msg.error.message || 'unknown error'}`);
         return;
       }
       if (msg.id === READ_ID) {
