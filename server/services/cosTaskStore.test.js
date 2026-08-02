@@ -563,6 +563,26 @@ describe('cosTaskStore.updateTask', () => {
     expect(done.metadata.leaseExpiresAt).toBeUndefined();
   });
 
+  it('stamps lastRequeuedAt only on in_progress → pending, and clears it on the next spawn (#3376)', async () => {
+    await addTask({ description: 'requeue', id: 'task-requeue' }, 'user');
+    // A plain content edit on a pending task is not a requeue.
+    const edited = await updateTask('task-requeue', { description: 'requeue edited' }, 'user');
+    expect(edited.metadata.lastRequeuedAt).toBeUndefined();
+
+    await updateTask('task-requeue', { status: 'in_progress' }, 'user');
+    // The orphan sweep / retry-hold release transition — this one IS a requeue.
+    const requeued = await updateTask('task-requeue', { status: 'pending' }, 'user');
+    expect(typeof requeued.metadata.lastRequeuedAt).toBe('string');
+
+    // An edit while pending carries the stamp forward untouched…
+    const stamp = requeued.metadata.lastRequeuedAt;
+    const edit = await updateTask('task-requeue', { description: 'requeue again' }, 'user');
+    expect(edit.metadata.lastRequeuedAt).toBe(stamp);
+    // …and the next spawn retires it, so a peer's pre-spawn copy can't win on it.
+    const respawned = await updateTask('task-requeue', { status: 'in_progress' }, 'user');
+    expect(respawned.metadata.lastRequeuedAt).toBeUndefined();
+  });
+
   it('keeps the claim while the task stays in_progress (lease renewal, no status change) (#1563)', async () => {
     await addTask({ description: 'renew', id: 'task-renew' }, 'user');
     await updateTask('task-renew', {

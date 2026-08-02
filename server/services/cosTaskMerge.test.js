@@ -298,22 +298,29 @@ describe('mergeTaskLists', () => {
   });
 
   describe('in_progress → pending requeue merge (#3376)', () => {
+    // The requeue is identified CAUSALLY, not by recency: `lastRequeuedAt` (stamped
+    // by cosTaskStore on in_progress → pending) must postdate the `lastSpawnedAt`
+    // the other side is reporting. `requeued`/`running` build that pair.
     const stamped = (id, status, updatedAt, extra = {}) =>
       task(id, status, { metadata: { updatedAt, ...extra } });
+    const requeued = (updatedAt, requeuedAt, extra = {}) =>
+      stamped('task-r', 'pending', updatedAt, { lastRequeuedAt: requeuedAt, ...extra });
+    const running = (updatedAt, spawnedAt, extra = {}) =>
+      stamped('task-r', 'in_progress', updatedAt, { lastSpawnedAt: spawnedAt, ...extra });
 
-    it('a newer requeue survives a peer\'s stale in_progress snapshot, keeping its resume pointer', () => {
+    it('a requeue that postdates the peer\'s spawn survives its stale in_progress snapshot, keeping the resume pointer', () => {
       // The orphan sweep (handleOrphanedTask) / retry-hold release (releaseRetryHold)
       // move in_progress → pending and stamp the resume pointer they just resolved.
       // A pure status-rank merge would let rank-2 `in_progress` revert rank-1
       // `pending` and discard that metadata.
-      const requeued = [stamped('task-r', 'pending', future(1000), {
+      const local = [requeued(future(1000), future(900), {
         existingBranch: 'cos/task-x/agent-y',
         resumeWorktreePath: '/data/cos/worktrees/task-x',
       })];
-      const stale = [stamped('task-r', 'in_progress', past(1000))];
+      const stale = [running(past(1000), past(1000))];
       for (const merged of [
-        mergeTaskLists(requeued, stale, { now: NOW })[0],
-        mergeTaskLists(stale, requeued, { now: NOW })[0],
+        mergeTaskLists(local, stale, { now: NOW })[0],
+        mergeTaskLists(stale, local, { now: NOW })[0],
       ]) {
         expect(merged.status).toBe('pending');
         expect(merged.metadata.existingBranch).toBe('cos/task-x/agent-y');
@@ -321,8 +328,34 @@ describe('mergeTaskLists', () => {
       }
     });
 
+    it('a NEWER edit on a stale pending copy does NOT revert a running task', () => {
+      // The hole a pure recency rule would open: peer B edits its stale `pending`
+      // copy (priority/description), which bumps `updatedAt` past the running
+      // peer's — but no requeue happened, so `in_progress` must stand. Reverting
+      // here would strip the live lease and invite a second agent onto the task.
+      const edited = [stamped('task-r', 'pending', future(1000), { priority: 'HIGH' })];
+      const live = [running(past(1000), past(1000), { ...liveClaim('peer-A') })];
+      for (const merged of [
+        mergeTaskLists(edited, live, { now: NOW })[0],
+        mergeTaskLists(live, edited, { now: NOW })[0],
+      ]) {
+        expect(merged.status).toBe('in_progress');
+        expect(merged.metadata.claimedBy).toBe('peer-A');
+      }
+    });
+
+    it('a requeue stamp from a PREVIOUS cycle does not beat a later spawn', () => {
+      // Requeued, then re-spawned. A peer still holding the pre-spawn `pending`
+      // copy carries the old `lastRequeuedAt`; it predates this spawn, so the
+      // running record wins. (cosTaskStore also clears the stamp on spawn.)
+      const old = [requeued(future(1000), past(2000))];
+      const respawned = [running(past(1000), past(500))];
+      expect(mergeTaskLists(old, respawned, { now: NOW })[0].status).toBe('in_progress');
+      expect(mergeTaskLists(respawned, old, { now: NOW })[0].status).toBe('in_progress');
+    });
+
     it('a genuinely newer in_progress (a peer that just spawned) still wins over an older pending', () => {
-      const spawned = [stamped('task-r', 'in_progress', future(1000))];
+      const spawned = [running(future(1000), future(1000))];
       const older = [stamped('task-r', 'pending', past(1000))];
       expect(mergeTaskLists(older, spawned, { now: NOW })[0].status).toBe('in_progress');
       expect(mergeTaskLists(spawned, older, { now: NOW })[0].status).toBe('in_progress');
@@ -331,25 +364,23 @@ describe('mergeTaskLists', () => {
     it('completed still wins outright over a newer pending or in_progress', () => {
       const completed = [stamped('task-r', 'completed', past(1000))];
       for (const newer of [
-        [stamped('task-r', 'pending', future(1000))],
-        [stamped('task-r', 'in_progress', future(1000))],
+        [requeued(future(1000), future(1000))],
+        [running(future(1000), future(1000))],
       ]) {
         expect(mergeTaskLists(completed, newer, { now: NOW })[0].status).toBe('completed');
         expect(mergeTaskLists(newer, completed, { now: NOW })[0].status).toBe('completed');
       }
     });
 
-    it('does NOT re-impose the stale in_progress side\'s lease on the adopted requeue', () => {
+    it('does NOT re-impose the retired run\'s lease on the adopted requeue', () => {
       // The requeue write releases the claim (#1563) so the retry is freely
       // claimable; rule 3 would otherwise re-attach the peer's pre-release lease
       // and block that retry for a full lease window.
-      const requeued = [stamped('task-r', 'pending', future(1000))];
-      const stale = [task('task-r', 'in_progress', {
-        metadata: { updatedAt: past(1000), ...liveClaim('peer-A') },
-      })];
+      const local = [requeued(future(1000), future(900))];
+      const stale = [running(past(1000), past(1000), { ...liveClaim('peer-A') })];
       for (const merged of [
-        mergeTaskLists(requeued, stale, { now: NOW })[0],
-        mergeTaskLists(stale, requeued, { now: NOW })[0],
+        mergeTaskLists(local, stale, { now: NOW })[0],
+        mergeTaskLists(stale, local, { now: NOW })[0],
       ]) {
         expect(merged.status).toBe('pending');
         expect(merged.metadata.claimedBy).toBeUndefined();
@@ -360,33 +391,42 @@ describe('mergeTaskLists', () => {
     it('keeps a live claim the winning pending side holds (dispatch claims before it flips to in_progress)', () => {
       // agentLifecycle takes the lease first and only then writes in_progress, so
       // `pending` + live claim is a real in-flight shape the peer must keep seeing.
-      const claimed = [task('task-r', 'pending', {
-        metadata: { updatedAt: future(1000), ...liveClaim('peer-B') },
-      })];
-      const stale = [task('task-r', 'in_progress', {
-        metadata: { updatedAt: past(1000), ...liveClaim('peer-A') },
-      })];
+      const local = [requeued(future(1000), future(900), { ...liveClaim('peer-B') })];
+      const stale = [running(past(1000), past(1000), { ...liveClaim('peer-A') })];
       for (const merged of [
-        mergeTaskLists(claimed, stale, { now: NOW })[0],
-        mergeTaskLists(stale, claimed, { now: NOW })[0],
+        mergeTaskLists(local, stale, { now: NOW })[0],
+        mergeTaskLists(stale, local, { now: NOW })[0],
       ]) {
         expect(merged.status).toBe('pending');
         expect(merged.metadata.claimedBy).toBe('peer-B');
       }
     });
 
-    it('on equal/absent stamps, keeps today\'s rank behavior (in_progress wins)', () => {
+    it('an un-stamped peer keeps today\'s rank behavior (in_progress wins)', () => {
+      // A peer too old to stamp `lastRequeuedAt` — or a spawn too old to stamp
+      // `lastSpawnedAt` — can't establish the ordering, so nothing changes for it.
       const inProgress = [task('task-r', 'in_progress')];
       const pending = [task('task-r', 'pending')];
       expect(mergeTaskLists(inProgress, pending, { now: NOW })[0].status).toBe('in_progress');
       expect(mergeTaskLists(pending, inProgress, { now: NOW })[0].status).toBe('in_progress');
-      // Equal (not merely absent) stamps take the same fallback.
-      const sameStamp = past(500);
-      expect(mergeTaskLists(
-        [stamped('task-r', 'pending', sameStamp)],
-        [stamped('task-r', 'in_progress', sameStamp)],
-        { now: NOW },
-      )[0].status).toBe('in_progress');
+      // Requeue stamped, but the peer's spawn is not — still no ordering.
+      const halfStamped = [requeued(future(1000), future(900))];
+      const unstampedSpawn = [stamped('task-r', 'in_progress', past(1000))];
+      expect(mergeTaskLists(halfStamped, unstampedSpawn, { now: NOW })[0].status).toBe('in_progress');
+      expect(mergeTaskLists(unstampedSpawn, halfStamped, { now: NOW })[0].status).toBe('in_progress');
+    });
+
+    it('two live claims with the same owner and expiry converge on one claimedAt', () => {
+      // Same claim seen from both sides with a differing `claimedAt` (a re-claim of
+      // a task this instance already held) — the deterministic lease tiebreak must
+      // cover that field too, or each peer keeps its own copy forever.
+      const withClaimedAt = (claimedAt) => [task('task-r', 'in_progress', {
+        metadata: { ...liveClaim('peer-A'), claimedAt },
+      })];
+      const early = withClaimedAt(past(2000));
+      const late = withClaimedAt(past(500));
+      expect(mergeTaskLists(early, late, { now: NOW })[0].metadata.claimedAt)
+        .toBe(mergeTaskLists(late, early, { now: NOW })[0].metadata.claimedAt);
     });
   });
 

@@ -19,6 +19,7 @@ import { parseTasksMarkdown, groupTasksByStatus, getAutoApprovedTasks, getAwaiti
 import { REVIEW_STOP_MODES, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, normalizeReviewerModels } from '../lib/validation.js';
 import { PR_COMPLETIONS, PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
 import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY } from '../lib/taskRetryHold.js';
+import { REQUEUED_AT_KEY } from '../lib/taskRequeue.js';
 import { loadState, withStateLock, ROOT_DIR } from './cosState.js';
 import { cosEvents } from './cosEvents.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
@@ -491,6 +492,24 @@ export async function updateTask(taskId, updates, taskType = 'user', { now = Dat
       delete updatedMetadata[key];
     }
   }
+
+  // Stamp the moment a RUNNING task is requeued (#3376). `in_progress → pending`
+  // is the one backward transition in the lifecycle (the orphan sweep and the
+  // retry-hold release both perform it), and the federated merge has to be able to
+  // tell that requeue apart from an ordinary content edit that merely happens to
+  // land on a peer's stale `pending` copy — the first must beat a stale
+  // `in_progress` snapshot, the second must NOT revert a genuinely running task.
+  // `updatedAt` alone can't distinguish them; this stamp, compared against the
+  // other side's `lastSpawnedAt`, says the requeue came AFTER that spawn. Only the
+  // real transition sets it, so a later edit carries it forward untouched, and the
+  // next spawn clears it below.
+  if (updates.status === 'pending' && tasks[taskIndex].status === 'in_progress') {
+    updatedMetadata[REQUEUED_AT_KEY] = new Date(now).toISOString();
+  }
+  // A fresh spawn retires the marker — from here on THIS run's `lastSpawnedAt` is
+  // what a future requeue must beat, and a leftover stamp from the previous cycle
+  // would let a peer's pre-spawn `pending` copy win on a stale requeue.
+  if (updates.status === 'in_progress') delete updatedMetadata[REQUEUED_AT_KEY];
 
   // Bump the content-edit stamp (#1714) on a genuine content change so the peer's
   // claim-aware merge can resolve a same-status edit by newest-edit-wins. Compared
