@@ -99,3 +99,7 @@
 ## Goals
 
 - **[issue-3280] The goal tree now names every goal instead of showing bare dots.** The Tree view rendered a dozen unlabelled coloured spheres whose identity was only revealed on hover — which doesn't exist on a touch device — so it conveyed strictly less than the list view beside it. Each node now carries its title on a camera-facing label sized by goal type, fading out as you pull back so a zoomed-out graph doesn't turn into a wall of words, with a Labels toggle (on by default) to quiet a dense tree. The camera also frames itself to the whole graph on open and whenever a filter or search reshapes it, so no goal starts off-screen with its edges running into empty space.
+
+## Review Hub
+
+- **[issue-3282] Queue cards now preview their body in three lines instead of printing it whole** — Every card rendered its full untruncated body, so a queue of 59 pending items ran roughly 56 screenfuls on desktop and 197 on a phone, and one error card alone printed a URL, a full browser user-agent string and a stack trace inline. Card bodies are now a fixed three-line plain-text preview with a per-card "Show more" that expands the full formatted text in place, titles clamp to two lines so the queue scans as a uniform list, and Accept/Reject/Complete/Dismiss/Delete stay on the collapsed card so a decision never requires expanding. Long agent-authored bodies also no longer inject their own headings into the page's outline.
