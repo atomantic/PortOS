@@ -1362,7 +1362,21 @@ describe('videoGen routes', () => {
         mode: 'image',
       });
       expect(r.status).toBe(200);
-      expect(mediaJobQueue.enqueueJob).toHaveBeenCalled();
+      // Pin the durable copy as actually having happened, and to the exact
+      // destination the job was handed. Asserting only "nothing under
+      // /mock/uploads was unlinked" would pass just as well if staging were
+      // skipped altogether — there'd be no durable path to unlink.
+      expect(copyFile).toHaveBeenCalledWith(
+        sourceUpload.path,
+        expect.stringMatching(/^\/mock\/uploads\/video-source-[^/]+\.png$/),
+      );
+      const [, durableDest] = copyFile.mock.calls[0];
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        params: expect.objectContaining({
+          sourceImagePath: durableDest,
+          uploadedTempPath: durableDest,
+        }),
+      }));
       expect(unlinkedPaths()).toContain(sourceUpload.path);
       // The queue worker owns the durable copy's lifetime — unlinking it here
       // would hand the worker a path that no longer exists.
