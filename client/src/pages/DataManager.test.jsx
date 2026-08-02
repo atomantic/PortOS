@@ -179,6 +179,23 @@ describe('DataManager busy categories (#3342)', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /Purge/ })).toBeInTheDocument());
   });
 
+  // The detail fetch re-runs the probe on expand, so a job that started after
+  // the overview loaded must still take the button away before the click.
+  it('prefers the fresher busy state from the category detail', async () => {
+    getDataOverview.mockResolvedValue({
+      ...busyOverview,
+      categories: [{ ...busyOverview.categories[0], busy: false, busyReason: null }],
+    });
+    getDataCategory.mockResolvedValue({ key: 'training-runs', items: [], busy: true, busyReason: BUSY_REASON });
+
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getAllByText('LoRA Training Runs').length).toBeGreaterThan(0));
+
+    expandRow('LoRA Training Runs');
+    await waitFor(() => expect(screen.getByText(BUSY_REASON)).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /Purge/ })).not.toBeInTheDocument();
+  });
+
   // Older servers omit `busy` entirely — treating anything but an explicit true
   // as busy would strip the button from every category on an older peer.
   it('treats a missing busy flag as idle', async () => {

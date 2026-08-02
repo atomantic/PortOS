@@ -142,10 +142,13 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
   // Some reproducible-scratch categories hold the working state of a job that is
   // running right now — the server refuses the whole-directory purge while that
   // is true (409 CATEGORY_BUSY). Say why in place of the button so the page
-  // explains itself instead of failing on click (#3342). Older servers omit
-  // `busy`; only an explicit true withholds the button.
-  const busy = cat.busy === true;
-  const busyReason = cat.busyReason || 'A job is using this directory right now — purge once it finishes.';
+  // explains itself instead of failing on click (#3342). The detail fetch runs
+  // the same probe on expand, so prefer it: a job that started after the
+  // overview loaded would otherwise still be offered a Purge button. Older
+  // servers omit `busy` from both — only an explicit true withholds the button.
+  const busy = (detail?.busy ?? cat.busy) === true;
+  const busyReason = detail?.busyReason || cat.busyReason
+    || 'A job is using this directory right now — purge once it finishes.';
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   return (
     <div className="border border-port-border rounded-lg overflow-hidden">
