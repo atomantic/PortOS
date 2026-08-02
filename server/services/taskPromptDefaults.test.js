@@ -50,22 +50,30 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // PORTOS_HOST, or merely a shell with PORT set, as inside a CoS agent — five
   // untouched bodies hashed differently and this suite failed while nothing had
   // drifted (issue #3359).
-  it('reproduces the snapshot on an install with a non-default API origin', async () => {
+  it.each([
+    // PORTOS_API_URL cleared so the origin is derived from host/port — and so
+    // the expectation can't inherit whatever the ambient environment sets,
+    // which is the very bug under test.
+    [
+      { PORTOS_API_URL: undefined, PORTOS_HOST: 'portos.example.test', PORT: '5558' },
+      'http://portos.example.test:5558',
+    ],
+    // An origin that is a PREFIX of the legacy literal (port 80). Normalizing
+    // the shorter one first would rewrite `http://localhost:5555` into
+    // `{{PORTOS_API_URL}}:5555`, which the legacy pass can no longer match.
+    [{ PORTOS_API_URL: 'http://localhost' }, 'http://localhost'],
+    [{ PORTOS_API_URL: 'https://portos.example.test:8443' }, 'https://portos.example.test:8443'],
+  ])('reproduces the snapshot on an install whose API origin is %j', async (env, expectedOrigin) => {
     vi.resetModules();
-    // Cleared so the origin is derived from host/port rather than inherited
-    // from whatever the ambient environment sets — otherwise the assertion
-    // below depends on the machine running the suite, the very bug under test.
-    vi.stubEnv('PORTOS_API_URL', undefined);
-    vi.stubEnv('PORTOS_HOST', 'portos.example.test');
-    vi.stubEnv('PORT', '5558');
+    Object.entries(env).forEach(([key, value]) => vi.stubEnv(key, value));
 
     const [freshDefaults, { PORTOS_API_URL }] = await Promise.all([
       import('./taskPromptDefaults.js'),
       import('../lib/ports.js'),
     ]);
-    // Guard the guard: if the stub stopped taking effect this test would pass
+    // Guard the guard: if the stub stopped taking effect this case would pass
     // vacuously by re-running the ambient-environment assertions above.
-    expect(PORTOS_API_URL).toBe('http://portos.example.test:5558');
+    expect(PORTOS_API_URL).toBe(expectedOrigin);
 
     expect(buildPromptIntegritySnapshot(freshDefaults, PORTOS_API_URL)).toEqual(SNAPSHOT);
   });

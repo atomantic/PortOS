@@ -30,12 +30,16 @@ const API_URL_PLACEHOLDER = '{{PORTOS_API_URL}}';
 // integrity test failed while nothing had actually drifted (issue #3359).
 const LEGACY_API_ORIGIN = 'http://localhost:5555';
 
-const replaceAll = (value, needle) => (
-  needle ? value.split(needle).join(API_URL_PLACEHOLDER) : value
-);
-
+// Longest first: the two origins can overlap — `PORTOS_API_URL=http://localhost`
+// (port 80) is a prefix of the legacy literal, and replacing it first would turn
+// `http://localhost:5555` into `{{PORTOS_API_URL}}:5555`, which the legacy pass
+// can then no longer match. Replacing the longer candidate first leaves only
+// standalone occurrences of the shorter one.
 export const normalizePromptForHash = (body, apiUrl = PORTOS_API_URL) => (
-  replaceAll(replaceAll(String(body), apiUrl), LEGACY_API_ORIGIN)
+  [apiUrl, LEGACY_API_ORIGIN]
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length)
+    .reduce((out, origin) => out.split(origin).join(API_URL_PLACEHOLDER), String(body))
 );
 
 export const hashPromptBody = (body, apiUrl = PORTOS_API_URL) => createHash('md5')
