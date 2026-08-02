@@ -94,6 +94,20 @@ describe('useUrlParams', () => {
     expect(result.current.location.search).toBe('');
   });
 
+  it('composes two patches fired back-to-back in one tick', () => {
+    // The router has not re-rendered between the two calls, so the second must
+    // not clone a pre-first-patch snapshot and drop the key the first just set.
+    const { result } = renderWithRouter('/x?a=1');
+    act(() => {
+      result.current.pair[1]({ b: '2' });
+      result.current.pair[1]({ c: '3' });
+    });
+    const p = params(result);
+    expect(p.get('a')).toBe('1');
+    expect(p.get('b')).toBe('2');
+    expect(p.get('c')).toBe('3');
+  });
+
   it('keeps updateParams referentially stable across param changes', () => {
     // Effects that list `updateParams` as a dependency (the debounced `?q=`
     // mirrors in Catalog/MediaCollections) must not re-arm every time an

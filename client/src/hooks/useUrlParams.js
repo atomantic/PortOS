@@ -37,6 +37,12 @@ export default function useUrlParams() {
       if (v == null || v === '') next.delete(k);
       else next.set(k, v);
     }
+    // Advance the ref before navigating so two patches fired back-to-back in
+    // one tick compose instead of the second clobbering the first — the router
+    // hasn't re-rendered yet, so `paramsRef.current` would still be pre-patch.
+    // The next render reassigns it from the router, so an optimistic value can
+    // never persist past the navigation it anticipates.
+    paramsRef.current = next;
     setParamsRef.current(next, { replace });
   }, []);
 
