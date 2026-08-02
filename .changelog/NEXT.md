@@ -103,6 +103,7 @@
 
 ## Stacker News stewardship
 
+- **[issue-3315] The Stacker News vision-model picker now only offers models that can actually see an image.** It listed every installed Ollama model — coder and embedding models included — and picking one was silently accepted, so a model that cannot read an image still produced a confident-looking "vision" verdict that fed the safety policy gating the account's actions. The picker now shows the same vision-capable list the rest of PortOS uses (the server's per-model capability report unioned with the id heuristic, so a brand-new multimodal family still shows up), the text picker is untouched, a model you configured earlier is preserved even if it no longer qualifies, and the form now says whether it is still checking capabilities or has confirmed you have no vision model installed.
 - **[issue-3302] Safe Stacker News community stewardship** — Add independent account rules and effective account/territory schedules, editable ownership-aware communities, removable encrypted credentials, constrained GraphQL reads and reviewed publishing, conservative local text/vision analysis with safe image normalization, fixed-origin identity-verified browser handoffs, target-bound Review Hub approvals, and an auditable action ledger in Comms.
 
 ## Goals
