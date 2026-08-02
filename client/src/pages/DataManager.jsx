@@ -376,32 +376,40 @@ export default function DataManager() {
 
   useEffect(() => { fetchOverview(); }, [fetchOverview]);
 
-  // Detail fetches are per-row and can land out of order — expanding A then B
-  // could leave A's items (and, since #3342, A's busy state) rendered under B.
-  // Every fetch takes a token and only the newest one is allowed to write.
+  // Detail fetches are per-row and can land out of order — expanding A then B,
+  // or an archive/purge on A finishing after the user moved to B, could leave
+  // A's items (and, since #3342, A's busy state) rendered under B. Two guards:
+  // a token so only the newest fetch writes, and a ref mirroring the open row so
+  // a handler holding a stale `expandedCat` closure can't fetch for a row that
+  // is no longer open.
   const detailRequestRef = useRef(0);
+  const expandedCatRef = useRef(null);
+
+  const openCategory = (key) => {
+    expandedCatRef.current = key;
+    setExpandedCat(key);
+    setDetail(null);
+  };
 
   const loadDetail = async (key) => {
     const token = (detailRequestRef.current += 1);
     const d = await api.getDataCategory(key).catch(() => null);
-    if (detailRequestRef.current === token) setDetail(d);
+    if (detailRequestRef.current !== token || expandedCatRef.current !== key) return;
+    setDetail(d);
   };
 
   const handleExpand = async (key) => {
-    if (expandedCat === key) {
-      detailRequestRef.current += 1;
-      setExpandedCat(null);
-      setDetail(null);
+    if (expandedCatRef.current === key) {
+      openCategory(null);
       return;
     }
-    setExpandedCat(key);
-    setDetail(null);
+    openCategory(key);
     await loadDetail(key);
   };
 
   const refreshAfterAction = async (key) => {
     fetchOverview();
-    if (expandedCat === key) await loadDetail(key);
+    if (expandedCatRef.current === key) await loadDetail(key);
   };
 
   const handleArchive = async (key) => {

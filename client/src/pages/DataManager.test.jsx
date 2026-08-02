@@ -217,6 +217,37 @@ describe('DataManager busy categories (#3342)', () => {
     expect(screen.queryByText(BUSY_REASON)).not.toBeInTheDocument();
   });
 
+  // A purge started on one row finishes after the user has moved to another. Its
+  // post-action refresh holds a stale `expandedCat` closure and must not repaint
+  // the row that is open now.
+  it('drops the post-action detail refresh for a row the user has since left', async () => {
+    getDataOverview.mockResolvedValue({
+      ...busyOverview,
+      categories: [{ ...busyOverview.categories[0], busy: false, busyReason: null }, busyOverview.categories[1]],
+    });
+    getDataCategory.mockImplementation((key) => Promise.resolve(key === 'training-runs'
+      ? { key, items: [], busy: true, busyReason: BUSY_REASON }
+      : { key, items: [], busy: false, busyReason: null }));
+    let resolvePurge;
+    purgeDataCategory.mockImplementation(() => new Promise((res) => { resolvePurge = res; }));
+
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getByText('Messages')).toBeInTheDocument());
+
+    expandRow('Messages');
+    await waitFor(() => expect(screen.getByRole('button', { name: /Purge/ })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Purge/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Purge' }));
+
+    expandRow('LoRA Training Runs');
+    await waitFor(() => expect(screen.getByText(BUSY_REASON)).toBeInTheDocument());
+
+    resolvePurge({ category: 'messages', subPath: null });
+    await waitFor(() => expect(getDataOverview).toHaveBeenCalledTimes(2));
+    expect(screen.getByText(BUSY_REASON)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Purge/ })).not.toBeInTheDocument();
+  });
+
   // Older servers omit `busy` entirely — treating anything but an explicit true
   // as busy would strip the button from every category on an older peer.
   it('treats a missing busy flag as idle', async () => {

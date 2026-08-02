@@ -446,14 +446,25 @@ export async function reattachDetached(controlDir, { pollMs = DEFAULT_POLL_MS, c
  * the NEW tailer's sentinel check and prematurely close the new handle with
  * the old job's status (the stale-late-write race reapDetached guards against).
  *
+ * Both callers read a `false` as permission to act — start a second update
+ * (updateExecutor), or purge the directory the job is writing into
+ * (dataManagerBusy, #3342). So an ABSENT control file reads as "never launched",
+ * but any other read failure is rethrown rather than silently synthesized into
+ * "not running": "we could not look" must not answer as "nothing is there".
+ *
  * @param {string} controlDir - the job's spawnDetached control dir
  * @returns {Promise<boolean>}
  */
+const readControlFile = (path) => readFile(path, 'utf8').catch((err) => {
+  if (err?.code === 'ENOENT') return '';
+  throw err;
+});
+
 export async function isDetachedRunning(controlDir) {
-  const pidRaw = await readFile(join(controlDir, 'pid'), 'utf8').catch(() => '');
+  const pidRaw = await readControlFile(join(controlDir, 'pid'));
   const pid = Number.parseInt(pidRaw, 10);
   if (!Number.isFinite(pid) || pid <= 0) return false;
-  const exitWritten = (await readFile(join(controlDir, 'exit'), 'utf8').catch(() => '')).length > 0;
+  const exitWritten = (await readControlFile(join(controlDir, 'exit'))).length > 0;
   return !exitWritten && isAlive(pid);
 }
 

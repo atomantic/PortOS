@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtemp, rm, stat, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execFile } from 'child_process';
@@ -293,6 +293,17 @@ describe('isDetachedRunning', () => {
     const controlDir = await tmpControlDir();
     await writeFile(join(controlDir, 'pid'), '2147483647');
     expect(await isDetachedRunning(controlDir)).toBe(false);
+  });
+
+  // Callers treat `false` as permission to act (spawn a second update, purge the
+  // job's directory), so an unreadable control file must surface rather than
+  // masquerade as "never launched" (#3342).
+  it('rejects when a control file exists but cannot be read', async () => {
+    const controlDir = await tmpControlDir();
+    // A directory where the file belongs reads back EISDIR, not ENOENT — and
+    // unlike chmod it behaves the same when the suite runs as root.
+    await mkdir(join(controlDir, 'pid'), { recursive: true });
+    await expect(isDetachedRunning(controlDir)).rejects.toThrow();
   });
 });
 
