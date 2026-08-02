@@ -29,7 +29,10 @@
  *     higher-ranked status is the newer truth and wins. This makes completion
  *     converge: once either peer marks a task done, the other adopts it instead
  *     of holding it `in_progress` forever (a live claim alone can't carry that
- *     signal — the owner strips the claim when it completes).
+ *     signal — the owner strips the claim when it completes). Two pairings are
+ *     exempt because their transitions run BACKWARD in rank and would otherwise
+ *     never converge — anything-vs-`challenged` (#2441) and `in_progress`-vs-
+ *     `pending` (#3376) are decided by newest `updatedAt`; see pickContentBase.
  *
  *  3. Resolve the CLAIM metadata independently of content via the live lease:
  *     a side holding an unexpired lease is authoritative (the other peer must
@@ -87,6 +90,10 @@ import { PRIORITY_VALUES } from '../lib/taskParser.js';
 // that never actually arise (both-challenged goes to the same-status path). It is
 // NOT terminal (the dispute resolves back to pending or forward to blocked), so it
 // keeps a live claim the same way in_progress does.
+//
+// The `in_progress`/`pending` pair carries the same caveat (#3376): a requeue moves
+// a task backward, so `pickContentBase` resolves that pair by newest `updatedAt`
+// too, falling back to this rank only when the stamps tie.
 const STATUS_RANK = Object.freeze({ completed: 5, blocked: 4, challenged: 3, in_progress: 2, pending: 1 });
 const statusRank = (status) => STATUS_RANK[status] || 0;
 const isTerminalStatus = (status) => status === 'completed' || status === 'blocked';
@@ -185,6 +192,26 @@ function pickContentBase(local, remote) {
     // Equal/absent stamps (legacy un-stamped peer): prefer the RESOLVED
     // (non-challenged) side so an overturn still converges deterministically.
     return lChallenged ? remote : local;
+  }
+  // `in_progress` → `pending` is the OTHER non-monotonic transition (#3376): a
+  // requeue moves a task BACKWARD in rank, so a pure rank comparison lets a peer's
+  // stale pre-requeue `in_progress` snapshot revert it — discarding the resume
+  // pointer (`existingBranch` / `resumeWorktreePath`) that write just resolved, so
+  // the eventual retry restarts from scratch. Two live paths requeue this way:
+  // the orphan sweep (`handleOrphanedTask`, agentManagement.js) and the retry-hold
+  // release (`releaseRetryHold`, agentWorktreeCleanup.js, #3373). So when EXACTLY
+  // one side is `in_progress` and the other is `pending`, decide by newest edit —
+  // both transitions bump `updatedAt`, so a genuinely newer spawn still wins over
+  // an older `pending`. Symmetric (depends only on the pair), so both peers
+  // converge. Scoped to this pair only: `completed` (rule 2) is never involved.
+  const isRequeuePair = (local.status === 'in_progress' && remote.status === 'pending')
+    || (local.status === 'pending' && remote.status === 'in_progress');
+  if (isRequeuePair) {
+    const lq = updatedAtMs(local);
+    const rq = updatedAtMs(remote);
+    // Equal/absent stamps (legacy un-stamped peer) fall through to the rank
+    // comparison below, preserving today's `in_progress`-wins behavior.
+    if (lq !== rq) return rq > lq ? remote : local;
   }
   const lr = statusRank(local.status);
   const rr = statusRank(remote.status);

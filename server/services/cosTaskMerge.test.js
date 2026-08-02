@@ -297,6 +297,63 @@ describe('mergeTaskLists', () => {
     });
   });
 
+  describe('in_progress → pending requeue merge (#3376)', () => {
+    const stamped = (id, status, updatedAt, extra = {}) =>
+      task(id, status, { metadata: { updatedAt, ...extra } });
+
+    it('a newer requeue survives a peer\'s stale in_progress snapshot, keeping its resume pointer', () => {
+      // The orphan sweep (handleOrphanedTask) / retry-hold release (releaseRetryHold)
+      // move in_progress → pending and stamp the resume pointer they just resolved.
+      // A pure status-rank merge would let rank-2 `in_progress` revert rank-1
+      // `pending` and discard that metadata.
+      const requeued = [stamped('task-r', 'pending', future(1000), {
+        existingBranch: 'cos/task-x/agent-y',
+        resumeWorktreePath: '/data/cos/worktrees/task-x',
+      })];
+      const stale = [stamped('task-r', 'in_progress', past(1000))];
+      for (const merged of [
+        mergeTaskLists(requeued, stale, { now: NOW })[0],
+        mergeTaskLists(stale, requeued, { now: NOW })[0],
+      ]) {
+        expect(merged.status).toBe('pending');
+        expect(merged.metadata.existingBranch).toBe('cos/task-x/agent-y');
+        expect(merged.metadata.resumeWorktreePath).toBe('/data/cos/worktrees/task-x');
+      }
+    });
+
+    it('a genuinely newer in_progress (a peer that just spawned) still wins over an older pending', () => {
+      const spawned = [stamped('task-r', 'in_progress', future(1000))];
+      const older = [stamped('task-r', 'pending', past(1000))];
+      expect(mergeTaskLists(older, spawned, { now: NOW })[0].status).toBe('in_progress');
+      expect(mergeTaskLists(spawned, older, { now: NOW })[0].status).toBe('in_progress');
+    });
+
+    it('completed still wins outright over a newer pending or in_progress', () => {
+      const completed = [stamped('task-r', 'completed', past(1000))];
+      for (const newer of [
+        [stamped('task-r', 'pending', future(1000))],
+        [stamped('task-r', 'in_progress', future(1000))],
+      ]) {
+        expect(mergeTaskLists(completed, newer, { now: NOW })[0].status).toBe('completed');
+        expect(mergeTaskLists(newer, completed, { now: NOW })[0].status).toBe('completed');
+      }
+    });
+
+    it('on equal/absent stamps, keeps today\'s rank behavior (in_progress wins)', () => {
+      const inProgress = [task('task-r', 'in_progress')];
+      const pending = [task('task-r', 'pending')];
+      expect(mergeTaskLists(inProgress, pending, { now: NOW })[0].status).toBe('in_progress');
+      expect(mergeTaskLists(pending, inProgress, { now: NOW })[0].status).toBe('in_progress');
+      // Equal (not merely absent) stamps take the same fallback.
+      const sameStamp = past(500);
+      expect(mergeTaskLists(
+        [stamped('task-r', 'pending', sameStamp)],
+        [stamped('task-r', 'in_progress', sameStamp)],
+        { now: NOW },
+      )[0].status).toBe('in_progress');
+    });
+  });
+
   describe('cross-peer investigation fingerprint dedup (#2628)', () => {
     // An investigation task carries a durable fingerprint marker (#2615). Two
     // federated peers can each mint one for the SAME failure cause before syncing;
