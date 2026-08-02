@@ -8,11 +8,16 @@ import { splitCollectionName } from '../../lib/mediaCollectionList.js';
 // "<Creator>: <the part that actually differs>". Rendered flat in a ~240px
 // popover row those all read as the same clipped prefix, so `splitCollectionName`
 // lifts the prefix into a small badge above the title and the distinguishing
-// tail gets the full row width. User-named collections (and mood boards) have no
-// prefix and render as a plain title, exactly as before.
+// tail gets the full row width. A name without one of those prefixes renders as
+// a plain title, exactly as before.
 //
-// The full original name stays reachable as the `title` tooltip, matching the
-// card.
+// The split keys on the NAME ALONE, not on `source`/`isAutoCollection` — same as
+// the card. It is presentation, not classification: a user who genuinely names a
+// collection "Universe: Refs" gets the same badge treatment, which is legible
+// rather than wrong, and the full original name stays reachable as the `title`
+// tooltip either way. Gating it on provenance would make the picker render a
+// record differently from the card for the same name, which is the divergence
+// this component exists to remove.
 export default function CollectionRowLabel({ name }) {
   const { badge, title } = splitCollectionName(name);
   return (
