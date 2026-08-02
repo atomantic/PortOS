@@ -1,7 +1,9 @@
 /**
  * Music track routes.
  *
- *   GET    /api/tracks                 → Track[]   (live, creation order)
+ *   GET    /api/tracks                 → Track[]   (live, creation order; `?limit`/`?offset`
+ *                                                   switch it to the bounded
+ *                                                   `{ items, total, limit, offset }` envelope)
  *   POST   /api/tracks                 → Track
  *   GET    /api/tracks/library         → { tracks } (shared music library list)
  *   POST   /api/tracks/import/youtube  → { jobId }  (download + extract audio from a YouTube URL)
@@ -28,7 +30,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, isPaginationRequested, paginateArray } from '../lib/validation.js';
 import { uploadSingle } from '../lib/multipart.js';
 import * as tracks from '../services/tracks/index.js';
 import * as albums from '../services/albums/index.js';
@@ -176,8 +178,13 @@ async function reconcileTrackAlbum(trackId, prevAlbumId, nextAlbumId) {
   }
 }
 
-router.get('/', asyncHandler(async (_req, res) => {
-  res.json(await tracks.listTracks());
+// Backward-compatible by default: returns the full tracks array. When a client
+// passes `limit`/`offset`, the response becomes the bounded
+// `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
+router.get('/', asyncHandler(async (req, res) => {
+  const list = await tracks.listTracks();
+  if (!isPaginationRequested(req.query)) return res.json(list);
+  res.json(paginateArray(list, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 // Shared music library — every uploaded/generated track sits here. The studio

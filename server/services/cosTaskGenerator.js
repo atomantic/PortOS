@@ -702,6 +702,9 @@ async function spawnPriority0OnDemand(ctx) {
   // requests for the same app don't each rewrite its activity record.
   const reviewStartedApps = new Set();
   if (onDemandRequests.length > 0 && tasksToSpawn.length < availableSlots) {
+    // The app registry can't change mid-loop, so read it once per cycle rather
+    // than once per request (getActiveApps' 2s cache can miss at a boundary).
+    const apps = await getActiveApps().catch(() => []);
     for (const request of onDemandRequests) {
       if (tasksToSpawn.length >= availableSlots) break;
 
@@ -720,7 +723,6 @@ async function spawnPriority0OnDemand(ctx) {
 
       let task = null;
       // Determine target app (if any)
-      const apps = await getActiveApps().catch(() => []);
       let targetApp = null;
 
       if (request.appId) {

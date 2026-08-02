@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Terminal, RefreshCw } from 'lucide-react';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
@@ -7,19 +7,31 @@ export default function OutputTab({ agent }) {
   const [output, setOutput] = useState('');
   const [agentId, setAgentId] = useState(null);
   const bottomRef = useRef(null);
+  // Always holds the currently-selected agent so a response can be matched
+  // against it. The refresh button fires outside the fetch effect, so an
+  // effect-local `cancelled` flag would not cover it.
+  const selectedIdRef = useRef(agent.id);
+
+  const loadOutput = useCallback((id) => {
+    api.getFeatureAgentOutput(id).then(data => {
+      if (selectedIdRef.current !== id || !data) return;
+      setOutput(data.output || '');
+      setAgentId(data.agentId);
+    }).catch(() => {});
+  }, []);
+
+  // Drop the previous agent's output the moment the selection changes —
+  // otherwise it lingers until the new fetch lands and reads as though the
+  // newly selected agent had already produced it. Keyed on `agent.id` alone so
+  // a run starting (`currentAgentId` change) doesn't wipe streamed output.
+  useEffect(() => {
+    selectedIdRef.current = agent.id;
+    setOutput('');
+    setAgentId(null);
+  }, [agent.id]);
 
   useEffect(() => {
-    let cancelled = false;
-    const fetch = () => {
-      api.getFeatureAgentOutput(agent.id).then(data => {
-        if (cancelled) return;
-        if (data) {
-          setOutput(data.output || '');
-          setAgentId(data.agentId);
-        }
-      }).catch(() => {});
-    };
-    fetch();
+    loadOutput(agent.id);
 
     const handler = (data) => {
       if (data.agentId === agent.currentAgentId || data.featureAgentId === agent.id) {
@@ -30,11 +42,10 @@ export default function OutputTab({ agent }) {
     socket.on('cos:feature-agent:output', handler);
 
     return () => {
-      cancelled = true;
       socket.off('cos:agent:output', handler);
       socket.off('cos:feature-agent:output', handler);
     };
-  }, [agent.id, agent.currentAgentId]);
+  }, [agent.id, agent.currentAgentId, loadOutput]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -61,7 +72,7 @@ export default function OutputTab({ agent }) {
           )}
         </div>
         <button
-          onClick={() => api.getFeatureAgentOutput(agent.id).then(d => d && setOutput(d.output || '')).catch(() => {})}
+          onClick={() => loadOutput(agent.id)}
           aria-label="Refresh output"
           className="p-1.5 text-gray-400 hover:text-white hover:bg-port-border/50 rounded transition-colors"
         >

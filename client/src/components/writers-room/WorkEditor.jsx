@@ -46,7 +46,7 @@ import {
 import { listCatalogIngredientsForRef } from '../../services/apiCatalog';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 import { STATUS_LABELS } from './labels';
-import { countWords } from '../../utils/formatters';
+import { countWords, formatDurationSec } from '../../utils/formatters';
 import StoryboardPanel, { STORYBOARD_TAB, STORYBOARD_TAB_VALUES } from './StoryboardPanel';
 import LiveContinuationPanel from './LiveContinuationPanel';
 import LiveRenderPanel from './LiveRenderPanel';
@@ -1232,9 +1232,7 @@ function AnalysisRunBanner({ kind, label, startedAt }) {
     return () => clearInterval(id);
   }, [startedAt]);
 
-  const mm = Math.floor(elapsed / 60);
-  const ss = elapsed % 60;
-  const timeStr = `${mm}:${ss.toString().padStart(2, '0')}`;
+  const timeStr = formatDurationSec(elapsed);
 
   // Reassurance ladder — escalating context so the user can tell the
   // difference between "normal" and "this is taking unusually long."

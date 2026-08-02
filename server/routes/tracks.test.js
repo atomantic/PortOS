@@ -83,6 +83,32 @@ describe('tracks routes', () => {
     expect(r.body).toEqual([{ id: 'track-1', title: 'Intro' }]);
   });
 
+  // Regression guard: every client caller (apiTracks.listTracks) calls this
+  // with no query params. If it ever returns an envelope instead of a bare
+  // array, those lists silently render empty.
+  it('GET / without pagination params returns the unbounded bare array', async () => {
+    tracks.listTracks.mockResolvedValueOnce(
+      Array.from({ length: 120 }, (_, i) => ({ id: `track-${i}`, title: `T${i}` }))
+    );
+    const r = await request(app).get('/api/tracks');
+    expect(r.status).toBe(200);
+    expect(Array.isArray(r.body)).toBe(true);
+    expect(r.body).toHaveLength(120);
+  });
+
+  it('GET / returns a bounded envelope when pagination is requested', async () => {
+    tracks.listTracks.mockResolvedValueOnce(
+      Array.from({ length: 5 }, (_, i) => ({ id: `track-${i}`, title: `T${i}` }))
+    );
+    const r = await request(app).get('/api/tracks?limit=2&offset=1');
+    expect(r.status).toBe(200);
+    expect(r.body.items).toHaveLength(2);
+    expect(r.body.items[0].id).toBe('track-1');
+    expect(r.body.total).toBe(5);
+    expect(r.body.limit).toBe(2);
+    expect(r.body.offset).toBe(1);
+  });
+
   it('GET /library returns the shared music library (not read as an id)', async () => {
     const r = await request(app).get('/api/tracks/library');
     expect(r.status).toBe(200);

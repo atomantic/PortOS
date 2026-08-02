@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 
 const getFeatureAgentOutput = vi.fn();
 
@@ -50,5 +50,49 @@ describe('OutputTab staleness', () => {
     expect(screen.getByText(/B output/)).toBeInTheDocument();
     expect(screen.getByText(/run-b/)).toBeInTheDocument();
     expect(screen.queryByText(/A output/)).not.toBeInTheDocument();
+  });
+
+  it('drops a refresh-button response that lands after the user switched agents', async () => {
+    const aResolvers = [];
+    getFeatureAgentOutput.mockImplementation((agentId) => {
+      if (agentId === 'agent-a') return new Promise((res) => { aResolvers.push(res); });
+      return Promise.resolve({ output: 'B output', agentId: 'run-b' });
+    });
+
+    const { rerender } = render(<OutputTab agent={{ id: 'agent-a', currentAgentId: 'run-a' }} />);
+    // Refresh fires outside the fetch effect, so it is not covered by the
+    // effect cleanup — the guard has to key on the current selection.
+    await act(async () => { fireEvent.click(screen.getByLabelText('Refresh output')); });
+
+    rerender(<OutputTab agent={{ id: 'agent-b', currentAgentId: null }} />);
+    await act(async () => {});
+    expect(screen.getByText(/B output/)).toBeInTheDocument();
+
+    await act(async () => {
+      aResolvers.forEach((res) => res({ output: 'A output', agentId: 'run-a' }));
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText(/A output/)).not.toBeInTheDocument();
+    expect(screen.getByText(/B output/)).toBeInTheDocument();
+  });
+
+  it('clears the prior agent output while the new agent fetch is still in flight', async () => {
+    let resolveB;
+    getFeatureAgentOutput.mockImplementation((agentId) => {
+      if (agentId === 'agent-a') return Promise.resolve({ output: 'A output', agentId: 'run-a' });
+      return new Promise((res) => { resolveB = res; });
+    });
+
+    const { rerender } = render(<OutputTab agent={{ id: 'agent-a', currentAgentId: 'run-a' }} />);
+    await act(async () => {});
+    expect(screen.getByText(/A output/)).toBeInTheDocument();
+
+    rerender(<OutputTab agent={{ id: 'agent-b', currentAgentId: 'run-b' }} />);
+    await act(async () => {});
+    expect(screen.queryByText(/A output/)).not.toBeInTheDocument();
+
+    await act(async () => { resolveB({ output: 'B output', agentId: 'run-b' }); });
+    expect(screen.getByText(/B output/)).toBeInTheDocument();
   });
 });

@@ -1,5 +1,6 @@
 /**
- *   GET    /api/media/collections                  → Collection[]
+ *   GET    /api/media/collections                  → Collection[]       (`?limit`/`?offset` switch it to
+ *                                                                       `{ items, total, limit, offset }`)
  *   POST   /api/media/collections                  → Collection         (body: { name, description? })
  *   GET    /api/media/collections/:id              → Collection
  *   PATCH  /api/media/collections/:id              → Collection         (body: { name?, description?, coverKey?, source? })
@@ -13,7 +14,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError, createServiceErrorMapper } from '../lib/errorHandler.js';
-import { validateRequest, mediaCollectionBulkItemsSchema } from '../lib/validation.js';
+import { validateRequest, mediaCollectionBulkItemsSchema, isPaginationRequested, paginateArray } from '../lib/validation.js';
 import * as svc from '../services/mediaCollections.js';
 
 const router = Router();
@@ -56,8 +57,13 @@ const itemSchema = z.object({
   ref: refSchema,
 });
 
-router.get('/', asyncHandler(async (_req, res) => {
-  res.json(await svc.listCollections());
+// Backward-compatible by default: returns the full collections array. When a
+// client passes `limit`/`offset`, the response becomes the bounded
+// `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
+router.get('/', asyncHandler(async (req, res) => {
+  const list = await svc.listCollections();
+  if (!isPaginationRequested(req.query)) return res.json(list);
+  res.json(paginateArray(list, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.post('/', asyncHandler(async (req, res) => {

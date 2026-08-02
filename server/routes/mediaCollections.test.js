@@ -9,6 +9,7 @@ const stubs = {
   bulkUpdateCollectionItems: vi.fn(),
   updateCollection: vi.fn(async (id, patch) => ({ id, ...patch })),
   createCollection: vi.fn(async (input) => ({ id: 'new', ...input })),
+  listCollections: vi.fn(async () => []),
 };
 
 vi.mock('../services/mediaCollections.js', async () => {
@@ -18,6 +19,7 @@ vi.mock('../services/mediaCollections.js', async () => {
     bulkUpdateCollectionItems: (...args) => stubs.bulkUpdateCollectionItems(...args),
     updateCollection: (...args) => stubs.updateCollection(...args),
     createCollection: (...args) => stubs.createCollection(...args),
+    listCollections: (...args) => stubs.listCollections(...args),
   };
 });
 
@@ -122,5 +124,37 @@ describe('mediaCollections routes — provenance (#3311)', () => {
     await request(makeApp()).post('/api/media/collections').send({ name: 'Concept Art', source: 'auto' });
     // Zod drops the unknown key → the service applies its own 'user' default.
     expect(stubs.createCollection).toHaveBeenCalledWith({ name: 'Concept Art', description: '' });
+  });
+});
+
+describe('mediaCollections routes — GET / pagination', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Regression guard: every client caller (apiImageVideo.listMediaCollections)
+  // calls this with no query params. If it ever returns an envelope instead of
+  // a bare array, those pickers silently render empty.
+  it('without pagination params returns the unbounded bare array', async () => {
+    stubs.listCollections.mockResolvedValueOnce(
+      Array.from({ length: 120 }, (_, i) => ({ id: `c-${i}`, name: `C${i}` }))
+    );
+    const r = await request(makeApp()).get('/api/media/collections');
+    expect(r.status).toBe(200);
+    expect(Array.isArray(r.body)).toBe(true);
+    expect(r.body).toHaveLength(120);
+  });
+
+  it('returns a bounded envelope when pagination is requested', async () => {
+    stubs.listCollections.mockResolvedValueOnce(
+      Array.from({ length: 5 }, (_, i) => ({ id: `c-${i}`, name: `C${i}` }))
+    );
+    const r = await request(makeApp()).get('/api/media/collections?limit=2&offset=1');
+    expect(r.status).toBe(200);
+    expect(r.body.items).toHaveLength(2);
+    expect(r.body.items[0].id).toBe('c-1');
+    expect(r.body.total).toBe(5);
+    expect(r.body.limit).toBe(2);
+    expect(r.body.offset).toBe(1);
   });
 });

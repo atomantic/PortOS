@@ -11,6 +11,10 @@ export default function RunsTab({ agent }) {
 
   useEffect(() => {
     let cancelled = false;
+    // Clear the previous agent's runs while the new fetch is in flight —
+    // otherwise they stay on screen as though they belonged to this agent.
+    setRuns([]);
+    setLoading(true);
     api.getFeatureAgentRuns(agent.id, 50).then(data => {
       if (cancelled) return;
       setRuns(data || []);
