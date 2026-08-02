@@ -2,11 +2,20 @@
  * The prompt stages PortOS features call by name — the single source of truth
  * for "which stage keys are system stages" (#3314).
  *
- * These are the stages a feature resolves by literal key (`getStage('cos-evaluate')`,
- * `runStage('brain-classifier')`, …) rather than ones the user authored in the
+ * These stages are resolved by literal key (`getStage('cos-evaluate')`,
+ * `runStage('brain-classifier')`, …) rather than authored by the user in the
  * Prompt Manager. Deleting one silently breaks the feature that names it, so
  * `DELETE /api/prompts/:stage` refuses without `?force=true`, and the Prompt
  * Manager badges + filters them.
+ *
+ * SCOPE: this is the CURATED protected set — the CoS / Brain / Memory /
+ * app-detection stages the delete guard has always covered — not an exhaustive
+ * index of every literal-key call site. Plenty of shipped stages are resolved
+ * by literal key too (`pipeline-series-concept-judge`, `catalog-ideas-scenes-concepts`,
+ * …) and are deliberately NOT here: force-guarding and badging ~100 pipeline
+ * stages is a product decision, not a refactor, and is tracked separately.
+ * Adding a row here means "this stage is now protected from deletion and
+ * badged SYSTEM", which is a deliberate choice per stage.
  *
  * The map was previously restated three times — the usage handler's
  * `key -> usedBy[]` table, the DELETE guard's bare key array, and a client-side
