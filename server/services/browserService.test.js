@@ -82,6 +82,7 @@ describe('pickMainFrameHops (SSRF pin — main-frame connection IPs)', () => {
     expect(mainRequestIds).toEqual(['R1']);
     expect(finalUrl).toBe('https://ex.com/a');
     expect(hops).toEqual([{
+      requestId: 'R1',
       url: 'https://ex.com/a',
       remoteIPAddress: '93.184.216.34',
       status: 200,
@@ -306,30 +307,54 @@ describe('ssrfPinRefusalReason (SSRF pin gate)', () => {
     expect(reason).toMatch(/serviceWorkerResponseSource=network/);
   });
 
-  it('allows a cache-served main-frame hop when another hop verified a real IP', () => {
-    // R1 loaded from the network and pinned a real address; a client-side nav
-    // (R2) was then answered from the disk cache — no connection was made, so
-    // there is nothing to pin and refusing would be a false positive.
+  it('allows a cache-served hop when an EARLIER hop of the SAME navigation verified a real IP', () => {
+    // R1 redirected through a network hop that pinned a real address; the final
+    // hop of that same chain was answered from the disk cache — no connection was
+    // made, so there is nothing to pin and refusing would be a false positive.
     const reason = ssrfPinRefusalReason([
       docRequest('R1', 'https://ex.com/a'),
-      docResponse('R1', 'https://ex.com/a', '93.184.216.34'),
-      docRequest('R2', 'https://ex.com/b'),
-      docResponse('R2', 'https://ex.com/b', '', { fromDiskCache: true }),
+      docRequest('R1', 'https://ex.com/b', { url: 'https://ex.com/a', remoteIPAddress: '93.184.216.34', status: 302 }),
+      docResponse('R1', 'https://ex.com/b', '', { fromDiskCache: true }),
     ], allow, 'https://ex.com/a');
     expect(reason).toBeNull();
   });
 
-  it('allows a service-worker hop served from cache-storage when another hop verified a real IP', () => {
+  it('allows a service-worker hop served from cache-storage on a chain that verified a real IP', () => {
     const reason = ssrfPinRefusalReason([
       docRequest('R1', 'https://pwa.example/'),
-      docResponse('R1', 'https://pwa.example/', '93.184.216.34'),
-      docRequest('R2', 'https://pwa.example/offline'),
-      docResponse('R2', 'https://pwa.example/offline', '', { fromServiceWorker: true, serviceWorkerResponseSource: 'cache-storage' }),
+      docRequest('R1', 'https://pwa.example/offline', { url: 'https://pwa.example/', remoteIPAddress: '93.184.216.34', status: 302 }),
+      docResponse('R1', 'https://pwa.example/offline', '', { fromServiceWorker: true, serviceWorkerResponseSource: 'cache-storage' }),
     ], allow, 'https://pwa.example/');
     expect(reason).toBeNull();
   });
 
-  it('refuses a cache-served main document when NO main-frame hop verified an IP', () => {
+  it('refuses a cache-served navigation that a DIFFERENT navigation verified (cross-nav borrow)', () => {
+    // R1 loaded clean from public, then the page client-side-navigated to a
+    // cached document. R1's verified IP says nothing about R2's origin — a
+    // previously cached loopback/private document would otherwise be admitted
+    // unpinned, so the exemption must not cross navigations.
+    const reason = ssrfPinRefusalReason([
+      docRequest('R1', 'https://ex.com/a'),
+      docResponse('R1', 'https://ex.com/a', '93.184.216.34'),
+      docRequest('R2', 'http://127.0.0.1/secret'),
+      docResponse('R2', 'http://127.0.0.1/secret', '', { fromDiskCache: true }),
+    ], allow, 'https://ex.com/a');
+    expect(reason).toMatch(/unverifiable address/);
+    expect(reason).toMatch(/no verified network address for this navigation/);
+  });
+
+  it('refuses a cache-served hop whose URL host is blocked, even on a verified chain', () => {
+    // A connectionless hop carries one address signal — its own URL. A redirect
+    // from a verified public hop into a cached loopback document must still fail.
+    const reason = ssrfPinRefusalReason([
+      docRequest('R1', 'https://ex.com/a'),
+      docRequest('R1', 'http://127.0.0.1/secret', { url: 'https://ex.com/a', remoteIPAddress: '93.184.216.34', status: 302 }),
+      docResponse('R1', 'http://127.0.0.1/secret', '', { fromDiskCache: true }),
+    ], allow, 'https://ex.com/a');
+    expect(reason).toMatch(/unverifiable address/);
+  });
+
+  it('refuses a cache-served main document when NO hop of that navigation verified an IP', () => {
     // A fully cache-served navigation pinned nothing at all — a cache flag can
     // never stand in for a network check, so this still fails closed.
     const reason = ssrfPinRefusalReason([
@@ -337,7 +362,7 @@ describe('ssrfPinRefusalReason (SSRF pin gate)', () => {
       docResponse('R1', 'https://pwa.example/', '', { fromServiceWorker: true, serviceWorkerResponseSource: 'cache-storage' }),
     ], allow, 'https://pwa.example/');
     expect(reason).toMatch(/unverifiable address/);
-    expect(reason).toMatch(/no other main-frame hop verified a network address/);
+    expect(reason).toMatch(/no verified network address for this navigation/);
   });
 
   it('still refuses a disallowed sub-resource on a page whose main doc was cache-served', () => {
@@ -345,9 +370,8 @@ describe('ssrfPinRefusalReason (SSRF pin gate)', () => {
     // every real connection the page made is still verified by collectConnectedIps.
     const reason = ssrfPinRefusalReason([
       docRequest('R1', 'https://pwa.example/'),
-      docResponse('R1', 'https://pwa.example/', '93.184.216.34'),
-      docRequest('R2', 'https://pwa.example/app'),
-      docResponse('R2', 'https://pwa.example/app', '', { fromDiskCache: true }),
+      docRequest('R1', 'https://pwa.example/app', { url: 'https://pwa.example/', remoteIPAddress: '93.184.216.34', status: 302 }),
+      docResponse('R1', 'https://pwa.example/app', '', { fromDiskCache: true }),
       { method: 'Network.responseReceived', params: { requestId: 'R3', type: 'XHR', response: { url: 'https://pwa.example/latest/meta-data', remoteIPAddress: '169.254.169.254', status: 200 } } },
     ], allow, 'https://pwa.example/');
     expect(reason).toMatch(/disallowed address 169\.254\.169\.254/);

@@ -288,9 +288,18 @@ export async function navigateToUrl(url) {
 // connection, it just isn't annotated with the peer address.
 const NO_NETWORK_SW_SOURCES = new Set(['cache-storage', 'http-cache', 'fallback-code']);
 
+// Hostname of a URL, or null when it isn't parseable. Used wherever the only
+// address signal available is the URL itself (WebSockets and connectionless
+// hops), never as a substitute for a verified peer IP.
+const hostOf = (raw) => {
+  if (typeof raw !== 'string') return null;
+  try { return new URL(raw).hostname; } catch { return null; }
+};
+
 // One main-frame hop from a CDP `Network.Response` (a `responseReceived`
 // payload or the `redirectResponse` riding on the next request).
-const toHop = (r) => ({
+const toHop = (r, requestId) => ({
+  requestId,
   url: r.url || null,
   remoteIPAddress: r.remoteIPAddress || '',
   status: r.status ?? null,
@@ -337,11 +346,13 @@ const describeHopDelivery = (hop) => `no remoteIPAddress; fromServiceWorker=${ho
  * know, because Chrome resolves DNS itself (the rebinding TOCTOU).
  *
  * Pure + exported so the SSRF-pin decision is unit-testable without a live
- * browser. Returns `{ hops: [{ url, remoteIPAddress, status, fromServiceWorker,
- * fromDiskCache, fromPrefetchCache, serviceWorkerResponseSource }], finalUrl,
- * mainRequestIds: string[], pendingMainRequestIds: string[] }`. The delivery
- * flags ride along so the gate can tell "Chrome dialed somewhere we can't see"
- * apart from "Chrome made no connection at all" (see `hopMadeNoConnection`).
+ * browser. Returns `{ hops: [{ requestId, url, remoteIPAddress, status,
+ * fromServiceWorker, fromDiskCache, fromPrefetchCache,
+ * serviceWorkerResponseSource }], finalUrl, mainRequestIds: string[],
+ * pendingMainRequestIds: string[] }`. The delivery flags ride along so the gate
+ * can tell "Chrome dialed somewhere we can't see" apart from "Chrome made no
+ * connection at all" (see `hopMadeNoConnection`), and `requestId` keeps the hops
+ * of ONE top-level navigation distinguishable from another's.
  * `pendingMainRequestIds` are top-level navigations that STARTED but produced no
  * `responseReceived` in the captured window — i.e. a navigation still in flight
  * whose final connection IP was never observed. The caller must fail closed on a
@@ -375,12 +386,12 @@ export function pickMainFrameHops(messages, topFrameId = null) {
         mainRequestIds.add(p.requestId);
       }
       if (mainRequestIds.has(p.requestId) && p.redirectResponse) {
-        hops.push(toHop(p.redirectResponse));
+        hops.push(toHop(p.redirectResponse, p.requestId));
       }
     } else if (msg.method === 'Network.responseReceived') {
       if (mainRequestIds.has(p.requestId) && p.response) {
         respondedIds.add(p.requestId);
-        hops.push(toHop(p.response));
+        hops.push(toHop(p.response, p.requestId));
         finalUrl = p.response.url || finalUrl;
       }
     }
@@ -426,9 +437,7 @@ export function collectWebSocketHosts(messages) {
     if (msg?.method !== 'Network.webSocketCreated') continue;
     const raw = msg.params?.url;
     if (typeof raw !== 'string') continue;
-    let host = null;
-    try { host = new URL(raw).hostname; } catch { host = null; }
-    out.push({ url: raw, host });
+    out.push({ url: raw, host: hostOf(raw) });
   }
   return out;
 }
@@ -442,17 +451,25 @@ export function ssrfPinRefusalReason(messages, verifyRemoteIp, url, topFrameId =
   // one can't be checked, so fail closed. The ONE exception is a hop Chrome
   // explicitly flagged as served without a connection (disk/prefetch cache, or a
   // service worker answering from its own store): there is no peer to pin, and
-  // refusing it false-positives every PWA. That exception only applies when
-  // another main-frame hop in the SAME navigation did verify a real IP — a
-  // navigation where nothing was ever verified is still a refusal, so a
-  // cache-flagged response can never stand in for a network check.
-  const anyHopVerified = hops.some((hop) => hop.remoteIPAddress);
+  // refusing it false-positives every PWA. Two conditions bound that exception so
+  // it can never stand in for a network check:
+  //   1. Another hop of the SAME top-level navigation (same requestId — i.e. an
+  //      earlier link in this redirect chain) must have verified a real IP. A
+  //      verified IP from a DIFFERENT navigation proves nothing about this one:
+  //      a page that loads clean from public and then client-side-navigates to a
+  //      cached `http://127.0.0.1/…` document would otherwise be admitted.
+  //   2. The hop's own URL host must still pass `verifyRemoteIp` — that catches a
+  //      cached document whose URL is a blocked literal (loopback/metadata),
+  //      which is the only address signal a connectionless hop carries. (Same
+  //      host-level fallback the WebSocket gate uses.)
+  const verifiedRequestIds = new Set(hops.filter((h) => h.remoteIPAddress).map((h) => h.requestId));
   for (const hop of hops) {
     if (hop.remoteIPAddress) continue;
     const noConnection = hopMadeNoConnection(hop);
-    if (noConnection && anyHopVerified) continue;
+    const host = hostOf(hop.url);
+    if (noConnection && verifiedRequestIds.has(hop.requestId) && host && verifyRemoteIp(host)) continue;
     const detail = noConnection
-      ? `${describeHopDelivery(hop)}; no other main-frame hop verified a network address`
+      ? `${describeHopDelivery(hop)}; no verified network address for this navigation`
       : describeHopDelivery(hop);
     return `Chrome connected to an unverifiable address for ${hop.url || url} (${detail})`;
   }
