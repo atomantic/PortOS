@@ -421,11 +421,17 @@ function DirectionCard({
           )}
           {candidate && (
             confirming ? (
-              <div className="flex items-center gap-1 text-xs">
-                <span className="text-port-warning">Approve?</span>
-                <button onClick={() => { setConfirming(false); onApprove(direction, candidate.id); }} className="min-h-[36px] px-1.5 py-0.5 bg-port-accent text-white rounded">Yes</button>
-                <button onClick={() => setConfirming(false)} className="min-h-[36px] px-1.5 py-0.5 text-gray-400 hover:text-white">No</button>
-              </div>
+              <ConfirmButtonPair
+                className="flex-wrap"
+                prompt="Approve?"
+                confirmText="Yes"
+                cancelText="No"
+                confirmIcon={Check}
+                tone="success"
+                ariaLabel={`Confirm approve ${direction}`}
+                onConfirm={() => { setConfirming(false); onApprove(direction, candidate.id); }}
+                onCancel={() => setConfirming(false)}
+              />
             ) : (
               // Approval is where a direction's geometry gets frozen into the
               // set the atlas compiles, so a drifted candidate can't be approved

@@ -97,7 +97,10 @@ export default function Ambient() {
   }, [data?.events]);
 
   return (
-    <div className={`fixed inset-0 bg-[#050505] text-white z-[9999] overflow-hidden flex flex-col ${idle ? 'cursor-none' : ''}`}>
+    // Ambient mode is a full-screen always-on display for a dim room, so it
+    // stays black rather than following the theme — every layer below is white
+    // text on black, and a day theme's light surface would leave it unreadable.
+    <div className={`fixed inset-0 bg-black text-white z-[9999] overflow-hidden flex flex-col ${idle ? 'cursor-none' : ''}`}>
       <div className={`absolute top-4 left-4 right-4 flex justify-between items-center z-10 transition-opacity duration-500 ${
         idle ? 'opacity-0 pointer-events-none' : 'opacity-100'
       }`}>

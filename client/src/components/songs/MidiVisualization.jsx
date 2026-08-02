@@ -4,7 +4,7 @@ import useMidiNotes from '../../hooks/useMidiNotes';
 import useMidiPlayer from '../../hooks/useMidiPlayer';
 import { detectChordWindows } from '../../lib/midiChords';
 import { midiNoteName } from '../../lib/pianoKeyboard';
-import { layerColor } from '../../lib/canvasRoll.js';
+import { layerColor, ROLL_BG } from '../../lib/canvasRoll.js';
 import { formatTimecode } from '../../utils/formatters';
 import MidiPianoRoll, { MIN_ZOOM, ZOOM_STEP, clampZoom } from './MidiPianoRoll.jsx';
 
@@ -121,9 +121,12 @@ export default function MidiVisualization({ url, filename, model }) {
       {open && (
         <div className="px-2 pb-2">
           {(status === 'loading' || status === 'error') && (
+            // Placeholder for the roll that is about to mount here, so it
+            // carries the roll's own ROLL_BG rather than a theme token —
+            // otherwise the panel changes color as the canvas swaps in.
             <div
-              className={`flex items-center justify-center gap-2 rounded-lg bg-[#0c0c0e] text-xs ${status === 'error' ? 'text-port-error' : 'text-gray-400'}`}
-              style={{ height: COMPACT_H }}
+              className={`flex items-center justify-center gap-2 rounded-lg text-xs ${status === 'error' ? 'text-port-error' : 'text-gray-400'}`}
+              style={{ height: COMPACT_H, backgroundColor: ROLL_BG }}
             >
               {status === 'loading' ? (
                 <><Loader2 size={14} className="animate-spin" /> Parsing MIDI…</>

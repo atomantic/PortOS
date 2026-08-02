@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { midiNoteName, isBlackKey } from '../../lib/pianoKeyboard';
 import { chordNoteNames } from '../../lib/midiChords';
-import { roundRect, layerColor } from '../../lib/canvasRoll.js';
+import { roundRect, layerColor, ROLL_BG } from '../../lib/canvasRoll.js';
 import { formatTimecode, formatDurationSec } from '../../utils/formatters';
 import useCanvasDprSize from '../../hooks/useCanvasDprSize.js';
 import useCanvasRollPalette from '../../hooks/useCanvasRollPalette.js';
@@ -718,9 +718,11 @@ export default function MidiPianoRoll({
 
   return (
     <div ref={wrapRef} className="relative w-full">
+      {/* Background comes from ROLL_BG, not a theme token — see canvasRoll.js. */}
       <canvas
         ref={canvasRef}
-        className="block w-full rounded-lg bg-[#0c0c0e] touch-none cursor-crosshair focus:outline-none focus:ring-1 focus:ring-port-accent"
+        style={{ backgroundColor: ROLL_BG }}
+        className="block w-full rounded-lg touch-none cursor-crosshair focus:outline-none focus:ring-1 focus:ring-port-accent"
         tabIndex={0}
         role="img"
         aria-label={`MIDI piano roll: ${data?.notes?.length || 0} notes, ${midiNoteName(data?.minMidi ?? 60)} to ${midiNoteName(data?.maxMidi ?? 71)}, ${formatTimecode(duration)} long. Use plus and minus to zoom, arrow keys to move the playhead, shift plus arrows to pan${onTogglePlay ? ', space to play or pause' : ''}.`}

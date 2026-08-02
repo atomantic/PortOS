@@ -4,14 +4,19 @@ import { Loader2 } from 'lucide-react';
 // live in a dense action area (a card's button row, a list-row's trailing
 // controls) — the sibling of <InlineConfirmRow> for when there's no room for a
 // full question row. The question, if any, is a short inline word ("Delete?").
+// Both buttons keep a 36px minimum height so the pair stays a usable touch
+// target on mobile even at this text-xs density.
 //
 // Tones pre-compose full Tailwind class names — the JIT scans for complete
 // tokens, so `bg-port-${tone}/20` would NOT generate the utility. Spell it out.
 // `error` for destructive confirms; `warning` for expensive-but-safe confirms
-// (e.g. unlocking a frozen walk set) where the action isn't destructive.
+// (e.g. unlocking a frozen walk set) where the action isn't destructive;
+// `success` for the positive commits that move a workflow forward but are still
+// worth confirming (approving a walk candidate, freezing a reference version).
 const TONES = {
   error: 'bg-port-error/20 text-port-error hover:bg-port-error/30',
   warning: 'bg-port-warning/20 text-port-warning hover:bg-port-warning/30',
+  success: 'bg-port-success/20 text-port-success hover:bg-port-success/30',
 };
 
 export default function ConfirmButtonPair({
@@ -44,7 +49,7 @@ export default function ConfirmButtonPair({
         type="button"
         onClick={onConfirm}
         disabled={busy}
-        className={`inline-flex items-center gap-1 px-2 py-1 text-xs rounded transition-colors disabled:opacity-50 ${confirmTone}`}
+        className={`inline-flex min-h-[36px] items-center gap-1 px-2 py-1 text-xs rounded transition-colors disabled:opacity-50 ${confirmTone}`}
       >
         {busy ? (
           <Loader2 size={12} className="animate-spin" />
@@ -57,7 +62,7 @@ export default function ConfirmButtonPair({
         type="button"
         onClick={onCancel}
         disabled={busy}
-        className="px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors disabled:opacity-50"
+        className="min-h-[36px] px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors disabled:opacity-50"
       >
         {cancelText}
       </button>

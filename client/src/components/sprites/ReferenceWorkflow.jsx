@@ -16,6 +16,7 @@ import ForkSpriteModal from './ForkSpriteModal.jsx';
 import CorrectionNote, {
   CorrectionNoteToggle, correctionPromptPayload, anchorCorrectionKey, MAIN_CORRECTION_KEY,
 } from './CorrectionNote.jsx';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import FilePickerButton from '../ui/FilePickerButton';
 import { IMAGE_ACCEPT } from '../../utils/fileUpload';
 import RecordRenderPinRow from '../imageGen/RecordRenderPinRow.jsx';
@@ -94,11 +95,18 @@ function CandidateTile({ recordId, candidate, locking, onLock, clipRisk, correct
           </button>
         </div>
       ) : confirming ? (
-        <div className="mt-auto flex flex-wrap items-center gap-1 text-xs">
-          <span className="text-port-warning">Freeze this version?</span>
-          <button onClick={() => { setConfirming(false); onLock(candidate); }} disabled={locking} className="min-h-[36px] px-1.5 py-0.5 bg-port-accent text-white rounded disabled:opacity-50">Lock</button>
-          <button onClick={() => setConfirming(false)} className="min-h-[36px] px-1.5 py-0.5 text-gray-400 hover:text-white">Cancel</button>
-        </div>
+        <ConfirmButtonPair
+          className="mt-auto flex-wrap"
+          prompt="Freeze this version?"
+          confirmText="Lock"
+          confirmIcon={Lock}
+          tone="success"
+          busy={locking}
+          busyText="Locking…"
+          ariaLabel={`Confirm lock ${candidate.target || 'candidate'}`}
+          onConfirm={() => { setConfirming(false); onLock(candidate); }}
+          onCancel={() => setConfirming(false)}
+        />
       ) : (
         <button
           onClick={() => setConfirming(true)}
@@ -129,25 +137,17 @@ function LockedAnchor({ recordId, anchor, canUnlock, unlocking, onUnlock }) {
       {canUnlock && (confirming ? (
         <div className="rounded border border-port-warning/40 bg-port-warning/10 p-1.5 text-[10px]">
           <p className="mb-1.5 text-port-warning">Regenerate {direction} from turnaround?</p>
-          <div className="flex gap-1">
-            <button
-              type="button"
-              aria-label={`Confirm unlock ${direction} anchor`}
-              onClick={() => { setConfirming(false); onUnlock(direction); }}
-              disabled={unlocking}
-              className="min-h-[36px] flex-1 rounded bg-port-warning px-1.5 py-1 font-medium text-black disabled:opacity-50"
-            >
-              Unlock
-            </button>
-            <button
-              type="button"
-              onClick={() => setConfirming(false)}
-              disabled={unlocking}
-              className="min-h-[36px] rounded px-1.5 py-1 text-gray-400 hover:text-white disabled:opacity-50"
-            >
-              Cancel
-            </button>
-          </div>
+          <ConfirmButtonPair
+            className="flex-wrap"
+            confirmText="Unlock"
+            confirmIcon={Unlock}
+            tone="warning"
+            busy={unlocking}
+            busyText="Unlocking…"
+            ariaLabel={`Confirm unlock ${direction} anchor`}
+            onConfirm={() => { setConfirming(false); onUnlock(direction); }}
+            onCancel={() => setConfirming(false)}
+          />
         </div>
       ) : (
         <button
@@ -579,25 +579,17 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
                     <p className="text-port-warning">
                       Reopen the turnaround, main, all 8 anchors, and every approved {anchorSeededPhrase}? Existing versioned files stay in history.
                     </p>
-                    <div className="mt-2 flex gap-2">
-                      <button
-                        type="button"
-                        aria-label="Confirm unlock turnaround"
-                        onClick={unlockTurnaround}
-                        disabled={turnaroundUnlocking}
-                        className="flex-1 rounded bg-port-warning px-2 py-1.5 font-medium text-black disabled:opacity-50"
-                      >
-                        {turnaroundUnlocking ? 'Unlocking…' : 'Unlock for regeneration'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setTurnaroundUnlockConfirming(false)}
-                        disabled={turnaroundUnlocking}
-                        className="rounded px-2 py-1.5 text-gray-400 hover:text-white disabled:opacity-50"
-                      >
-                        Cancel
-                      </button>
-                    </div>
+                    <ConfirmButtonPair
+                      className="mt-2 flex-wrap"
+                      confirmText="Unlock for regeneration"
+                      confirmIcon={Unlock}
+                      tone="warning"
+                      busy={turnaroundUnlocking}
+                      busyText="Unlocking…"
+                      ariaLabel="Confirm unlock turnaround"
+                      onConfirm={unlockTurnaround}
+                      onCancel={() => setTurnaroundUnlockConfirming(false)}
+                    />
                   </div>
                 ) : (
                   <button
@@ -788,25 +780,17 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
                     <p className="text-port-warning">
                       Reopen the main reference and its south {anchorSeededPhrase}? The turnaround and other directions stay locked; existing files remain in history.
                     </p>
-                    <div className="mt-2 flex gap-2">
-                      <button
-                        type="button"
-                        aria-label="Confirm unlock main reference"
-                        onClick={unlockMain}
-                        disabled={mainUnlocking}
-                        className="flex-1 rounded bg-port-warning px-2 py-1.5 font-medium text-black disabled:opacity-50"
-                      >
-                        {mainUnlocking ? 'Unlocking…' : 'Unlock for regeneration'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setMainUnlockConfirming(false)}
-                        disabled={mainUnlocking}
-                        className="rounded px-2 py-1.5 text-gray-400 hover:text-white disabled:opacity-50"
-                      >
-                        Cancel
-                      </button>
-                    </div>
+                    <ConfirmButtonPair
+                      className="mt-2 flex-wrap"
+                      confirmText="Unlock for regeneration"
+                      confirmIcon={Unlock}
+                      tone="warning"
+                      busy={mainUnlocking}
+                      busyText="Unlocking…"
+                      ariaLabel="Confirm unlock main reference"
+                      onConfirm={unlockMain}
+                      onCancel={() => setMainUnlockConfirming(false)}
+                    />
                   </div>
                 ) : (
                   <button

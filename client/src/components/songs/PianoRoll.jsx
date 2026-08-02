@@ -7,7 +7,7 @@ import {
   midiNoteName,
   BLACK_KEY_HEIGHT_RATIO,
 } from '../../lib/pianoKeyboard';
-import { roundRect } from '../../lib/canvasRoll.js';
+import { roundRect, ROLL_BG } from '../../lib/canvasRoll.js';
 import useCanvasDprSize from '../../hooks/useCanvasDprSize.js';
 import useCanvasRollPalette from '../../hooks/useCanvasRollPalette.js';
 
@@ -185,7 +185,8 @@ export default function PianoRoll({ parts, tempo, getPosition, playing, height =
 
   return (
     <div ref={wrapRef} className="w-full">
-      <canvas ref={canvasRef} className="block w-full rounded-lg bg-[#0c0c0e]" aria-hidden="true" />
+      {/* Background comes from ROLL_BG, not a theme token — see canvasRoll.js. */}
+      <canvas ref={canvasRef} className="block w-full rounded-lg" style={{ backgroundColor: ROLL_BG }} aria-hidden="true" />
       <p className="sr-only">
         Piano-roll visualization of the selected song layers falling onto a piano keyboard.
       </p>

@@ -8,8 +8,11 @@ const LAYER_COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ec4899', '#a855f7', '#0
 export const layerColor = (index) => LAYER_COLORS[((index % LAYER_COLORS.length) + LAYER_COLORS.length) % LAYER_COLORS.length];
 
 // Roll canvas background — a near-black intentionally darker than `--port-bg`
-// (#0f0f0f) so the note bars pop. Single source for the literal both rolls
-// (and their wrapper `bg-[#0c0c0e]` fallback) previously duplicated inline.
+// (#0f0f0f) so the note bars pop, and deliberately NOT theme-following: the
+// layer palette above is tuned for a near-black roll, so a day theme would wash
+// the bars out. Single source for the literal — the canvases paint it via
+// fillStyle and set the same value as their CSS background (which shows before
+// the first paint), so it must never be re-typed as a Tailwind arbitrary value.
 export const ROLL_BG = '#0c0c0e';
 const ACCENT_FALLBACK_RGB = '59 130 246'; // Classic Midnight --port-accent
 

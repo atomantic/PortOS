@@ -14,6 +14,19 @@ describe('ConfirmButtonPair', () => {
     expect(screen.queryByText('Delete?')).toBeNull();
   });
 
+  it.each([
+    ['warning', 'bg-port-warning/20'],
+    ['success', 'bg-port-success/20'],
+  ])('applies the %s tone to the confirm button', (tone, expected) => {
+    render(<ConfirmButtonPair tone={tone} />);
+    expect(screen.getByRole('button', { name: 'Delete' }).className).toContain(expected);
+  });
+
+  it('falls back to the error tone for an unknown tone', () => {
+    render(<ConfirmButtonPair tone="nope" />);
+    expect(screen.getByRole('button', { name: 'Delete' }).className).toContain('bg-port-error/20');
+  });
+
   it('renders a short inline prompt when supplied', () => {
     render(<ConfirmButtonPair prompt="Delete?" />);
     expect(screen.getByText('Delete?')).toBeTruthy();

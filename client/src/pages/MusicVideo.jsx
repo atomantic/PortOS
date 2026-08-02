@@ -1315,12 +1315,15 @@ export default function MusicVideo() {
                     </div>
                     {finalVideo.resolving && <p className="text-xs text-port-text-muted">Loading final video…</p>}
                     {finalVideo.src && (
+                      // aspect-video reserves the box before the video's
+                      // intrinsic dimensions resolve, so the actions above it
+                      // don't jump — same as the scene thumbnails below.
                       <video
                         src={finalVideo.src}
                         controls
                         playsInline
                         preload="metadata"
-                        className="w-full max-h-[65vh] rounded bg-black border border-port-border"
+                        className="w-full aspect-video max-h-[65vh] rounded bg-black border border-port-border"
                         aria-label="Play final music video"
                       />
                     )}
