@@ -859,6 +859,15 @@ export async function spawnDirectly({
     const analysisBuffer = rawStreamBuffer || outputBuffer;
     const errorAnalysis = finalSuccess ? null : (immediateFallbackAnalysis || analyzeAgentFailure(analysisBuffer, task, model));
 
+    // Claude Code CLI agents run `/simplify` + `/do:pr` themselves (see
+    // buildCliCompletionSection in agentPromptBuilder.js) — mirror the TUI
+    // cleanup contract so PortOS doesn't double-fire push+PR creation. Resolved
+    // BEFORE finalizeAgent because it also gates the PR-claim verification
+    // (#3358): a PortOS-owned PR is created by the cleanup below, i.e. AFTER
+    // finalize, so only an agent-owned PR can be verified there.
+    const directOpenPR = isTruthyMetaFn(task.metadata?.openPR);
+    const directAgentOwnsPR = directOpenPR && (provider?.id === 'claude-code' || provider?.id === 'claude-code-bedrock');
+
     // try/finally so a throw from finalizeAgent still runs the local
     // cleanup (worktree, pid unregister, activeAgents delete). Mirrors the
     // TUI path's pattern.
@@ -878,16 +887,11 @@ export async function spawnDirectly({
         error: finalError || undefined,
         completionReason: terminatedByUser ? 'user-terminated' : undefined,
         workspacePath,
+        prExpected: directAgentOwnsPR,
       });
     } finally {
-      // Clean up worktree if agent was using one. Claude Code CLI agents run
-      // `/simplify` + `/do:pr` themselves (see buildCliCompletionSection in
-      // agentPromptBuilder.js) — mirror the TUI cleanup contract so PortOS
-      // doesn't double-fire push+PR creation.
-      const directOpenPR = isTruthyMetaFn(task.metadata?.openPR);
       const directPrCompletion = resolvePrCompletion(task.metadata);
       const directReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
-      const directAgentOwnsPR = directOpenPR && (provider?.id === 'claude-code' || provider?.id === 'claude-code-bedrock');
       const reviewOptions = await resolveReviewLoopOptions(task.metadata, { normalize: normalizeReviewers, isTruthyMeta: isTruthyMetaFn });
       await cleanupWorktreeFn(agentId, finalSuccess, {
         openPR: directAgentOwnsPR ? false : directOpenPR,

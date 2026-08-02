@@ -469,6 +469,9 @@ describe('ENVIRONMENTAL_ERROR_CATEGORIES (issue #2618)', () => {
       'claude-error',
       'connection',
       'forbidden',
+      // #3358: a PR-shaped run we could not verify because `gh` couldn't reach
+      // the forge. The agent's own miss (`pr-missing`) is deliberately NOT here.
+      'forge-unreachable',
       'model-not-available',
       'model-not-found',
       'model-not-supported',

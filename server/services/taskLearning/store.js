@@ -226,6 +226,11 @@ export const ENVIRONMENTAL_ERROR_CATEGORIES = new Set([
   'billing-error',
   'connection',
   'network-error',
+  // #3358: a PR-shaped run finalized while `gh` could not reach the forge. The
+  // run itself may have been perfect — we simply could not confirm its PR — so
+  // it must not dent the type's success rate the way `pr-missing` (the agent's
+  // own miss, deliberately NOT listed here) should.
+  'forge-unreachable',
   'claude-error',
   'startup-failure',
   'model-not-available',

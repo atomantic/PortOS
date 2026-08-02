@@ -18,6 +18,7 @@
  */
 
 import { join } from 'path';
+import { execGit } from '../lib/execGit.js';
 import { emitLog } from './cosEvents.js';
 import { getAgent, updateAgent, completeAgent } from './cosAgents.js';
 import { updateTask } from './cos.js';
@@ -176,6 +177,100 @@ export function resolveProgrammaticIoVerdict({ success, hookResult }) {
 // Output-hook outcomes that mean "the hook returned before validating the agent's
 // output at all" — distinct from both a rejection and an acceptance.
 const HOOK_ABORTED_BEFORE_EVALUATION = new Set(['no-app', 'app-not-found']);
+
+/**
+ * Error categories for the two ways a PR-shaped run can finish without a PR
+ * (#3358). Distinct from each other AND from a generic failure, because the
+ * remedies are opposite: `pr-missing` is the agent's miss, `forge-unreachable`
+ * is the machine's — the run may have been perfect and simply had no way to
+ * reach the forge. `forge-unreachable` is registered in
+ * `taskLearning/store.js#ENVIRONMENTAL_ERROR_CATEGORIES` so a firewalled `gh`
+ * can't drag a task type's measured success rate down (or auto-park it).
+ */
+export const PR_MISSING_CATEGORY = 'pr-missing';
+export const FORGE_UNREACHABLE_CATEGORY = 'forge-unreachable';
+
+/**
+ * The branch a finished agent's workspace is sitting on, or null when the
+ * workspace is gone / not a repo / detached. Read at finalize time, while the
+ * worktree still exists (cleanup runs after finalizeAgent in every spawn path).
+ */
+async function resolveWorkspaceBranch(workspacePath) {
+  if (!workspacePath) return null;
+  const result = await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], workspacePath, { ignoreExitCode: true })
+    .catch(() => null);
+  const branch = (result?.stdout || '').trim();
+  return branch && branch !== 'HEAD' ? branch : null;
+}
+
+/**
+ * Verify that a run whose task shape PROMISED a pull request actually produced
+ * one (#3358).
+ *
+ * The failure this closes: an agent that owns its own `/do:pr` step commits,
+ * pushes over SSH (unaffected by an outbound block on `gh`), fails to create the
+ * PR, writes its `.agent-done` sentinel anyway, and PortOS records "Completed
+ * successfully" against a branch no one will ever review. Nothing else in the
+ * completion path asks the forge whether the PR exists — `agentWorktreeCleanup`
+ * only composes advisory prose SUGGESTING `gh pr list --head <branch>`.
+ *
+ * Only runs when `prExpected` — i.e. the AGENT owned PR creation. When PortOS
+ * owns it (slashdo-free TUIs, runner mode) the PR is created by
+ * `cleanupAgentWorktree` AFTER finalize, so checking here would report every
+ * correct run as missing.
+ *
+ * Three outcomes, never collapsed:
+ *   - `ok: true`  — a PR exists, or there was nothing to check
+ *   - `ok: false, category: 'pr-missing'` — the forge answered: no PR
+ *   - `ok: false, category: 'forge-unreachable'` — we could not ask
+ *
+ * @returns {Promise<{ ok: boolean, category?: string, message?: string, branch?: string|null }>}
+ */
+export async function verifyPrClaim({ task, workspacePath, success, prExpected }) {
+  // Only a run that CLAIMED success has a claim to verify; a failed run is
+  // already recorded as failed.
+  if (!prExpected || !success || !workspacePath) return { ok: true };
+  const branch = await resolveWorkspaceBranch(workspacePath);
+  if (!branch) {
+    // No branch to ask about (detached HEAD, non-repo workspace). Nothing was
+    // verified — say nothing rather than invent a failure.
+    return { ok: true, branch: null };
+  }
+  const { findPullRequestForBranch } = await import('./github.js');
+  const found = await findPullRequestForBranch(branch, { cwd: workspacePath });
+  if (found.status === 'found') return { ok: true, branch };
+  if (found.status === 'none') {
+    return {
+      ok: false,
+      branch,
+      category: PR_MISSING_CATEGORY,
+      message: `Agent reported success but no pull request exists for branch ${branch}`
+    };
+  }
+  return {
+    ok: false,
+    branch,
+    category: FORGE_UNREACHABLE_CATEGORY,
+    message: `Could not confirm a pull request for branch ${branch} — the forge is unreachable${found.detail ? ` (${String(found.detail).split('\n')[0].slice(0, 120)})` : ''}`
+  };
+}
+
+/**
+ * The `errorAnalysis` shape for a failed PR verification. Non-actionable so the
+ * task RETRIES (a re-run can open the missing PR, or find the forge back) rather
+ * than blocking on a first miss — `resolveFailedTaskDecision` still blocks it
+ * once it has burned its retry budget.
+ */
+function prVerificationAnalysis(verdict) {
+  return {
+    category: verdict.category,
+    message: verdict.message,
+    actionable: false,
+    suggestedFix: verdict.category === PR_MISSING_CATEGORY
+      ? `The branch ${verdict.branch} is pushed but has no pull request. Re-run the task, or open the PR by hand with \`gh pr create --head ${verdict.branch}\`.`
+      : 'Check the forge probe on the System Health page — `gh` could not reach the forge, so the run\'s PR could not be confirmed.'
+  };
+}
 
 /**
  * Hard bound on output-hook dispatch (#2727). The hook is only awaited BEFORE
@@ -372,17 +467,40 @@ export async function finalizeAgent({
   task,
   runId,
   providerId,
-  success,
+  success: reportedSuccess,
   exitCode,
   duration,
   outputBuffer,
-  errorAnalysis,
+  errorAnalysis: reportedErrorAnalysis,
   terminatedByUser = false,
   isTruthyMetaFn,
   error,
   completionReason,
   workspacePath = null,
+  prExpected = false,
 }) {
+  // #3358: a run whose task shape promised a PR is not successful until the
+  // forge confirms one exists. Runs BEFORE the completion verdict is derived so
+  // every downstream write (task status, learning telemetry, the "Completed
+  // successfully" the UI renders off `result.success`) sees the corrected value.
+  // A THROW here is not a verdict — fall back to the reported outcome rather
+  // than manufacturing a failure out of a check that never ran.
+  const prVerdict = terminatedByUser
+    ? { ok: true }
+    : await verifyPrClaim({ task, workspacePath, success: reportedSuccess, prExpected })
+      .catch(err => {
+        emitLog('warn', `⚠️ PR verification failed for ${agentId}: ${err.message}`, { agentId });
+        return { ok: true };
+      });
+
+  const success = reportedSuccess && prVerdict.ok;
+  const errorAnalysis = prVerdict.ok ? reportedErrorAnalysis : prVerificationAnalysis(prVerdict);
+  if (!prVerdict.ok) {
+    emitLog('warn', `⚠️ ${prVerdict.message} — recording ${agentId} as needs-attention (${prVerdict.category}) rather than complete`, {
+      agentId, taskId: task?.id, branch: prVerdict.branch, category: prVerdict.category
+    });
+  }
+
   if (success && isTruthyMetaFn) {
     await persistSimplifySummaries(agentId, task, outputBuffer, isTruthyMetaFn);
   }
@@ -443,6 +561,12 @@ export async function finalizeAgent({
   // completeAgentRun writes its own runs/<id>/metadata.json (separate lock),
   // so its place in the chain is purely about progress reporting on partial
   // failure.
+  // A PR-verification downgrade carries its own error text + reason: without
+  // them the agent card would render a bare "Failed" for a run that actually
+  // did everything but land its PR (or simply couldn't reach the forge).
+  const finalError = prVerdict.ok ? error : prVerdict.message;
+  const finalCompletionReason = prVerdict.ok ? completionReason : prVerdict.category;
+
   await completeAgent(agentId, {
     success,
     validationPassed,
@@ -450,12 +574,15 @@ export async function finalizeAgent({
     duration,
     outputLength: outputBuffer?.length ?? 0,
     errorAnalysis,
-    ...(error !== undefined ? { error } : {}),
-    ...(completionReason !== undefined ? { completionReason } : {}),
+    ...(finalError !== undefined ? { error: finalError } : {}),
+    ...(finalCompletionReason !== undefined ? { completionReason: finalCompletionReason } : {}),
   });
 
   if (runId) {
-    await completeAgentRun(runId, outputBuffer, exitCode, duration, errorAnalysis);
+    // Pass the downgrade explicitly: this run exited 0, so the run record would
+    // otherwise keep saying "success" for the one run we just concluded did not
+    // land its PR (#3358).
+    await completeAgentRun(runId, outputBuffer, exitCode, duration, errorAnalysis, prVerdict.ok ? null : false);
   }
 
   // LI hand-off execution verdict (#2779): stamp the per-proposal execution outcome into

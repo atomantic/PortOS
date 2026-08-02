@@ -624,6 +624,22 @@ export async function spawnTuiAgent({
       completionError: finalError,
     });
 
+    // A slashdo-capable Claude TUI owns /do:pr itself. Slashdo-free TUIs
+    // (Codex, Antigravity, OpenCode, lean Claude) only commit and signal;
+    // PortOS must own their push + PR + reviewer/merge follow-up. Derive this
+    // from the same predicate used by the prompt builder so neither side can
+    // believe the other owns the PR.
+    //
+    // Resolved BEFORE finalizeAgent (not just in the cleanup below) because it is
+    // also the gate for the PR-claim verification (#3358): only a run that owned
+    // its own PR creation can be expected to have produced one by finalize time.
+    const taskOpenPR = isTruthyMetaFn(task.metadata?.openPR);
+    const agentOwnsPR = taskOpenPR && canTypeSlashCommands({
+      providerId: provider?.id,
+      providerCommand: provider?.command,
+      leanMode,
+    });
+
     // try/finally so a throw from finalizeAgent (e.g. processAgentCompletion
     // hook crash) still runs the local cleanup — sentinel removal, worktree
     // cleanup, pid unregister, activeAgents delete, session kill. Without
@@ -645,21 +661,11 @@ export async function spawnTuiAgent({
         error: finalError || undefined,
         completionReason: reason,
         workspacePath,
+        prExpected: agentOwnsPR,
       });
     } finally {
       if (workspacePath) await rm(join(workspacePath, DONE_SENTINEL_NAME)).catch(() => {});
 
-      // A slashdo-capable Claude TUI owns /do:pr itself. Slashdo-free TUIs
-      // (Codex, Antigravity, OpenCode, lean Claude) only commit and signal;
-      // PortOS must own their push + PR + reviewer/merge follow-up. Derive this
-      // from the same predicate used by the prompt builder so neither side can
-      // believe the other owns the PR.
-      const taskOpenPR = isTruthyMetaFn(task.metadata?.openPR);
-      const agentOwnsPR = taskOpenPR && canTypeSlashCommands({
-        providerId: provider?.id,
-        providerCommand: provider?.command,
-        leanMode,
-      });
       const reviewOptions = finalSuccess && taskOpenPR && !agentOwnsPR
         ? await resolveReviewLoopOptions(task.metadata, { normalize: normalizeReviewers, isTruthyMeta: isTruthyMetaFn })
           .catch(err => {

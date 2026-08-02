@@ -100,8 +100,13 @@ export async function checkForTaskCommit(taskId, workspacePath) {
 
 /**
  * Complete a run entry with final results.
+ *
+ * `successOverride` (#3358) lets finalizeAgent record a run that exited 0 but
+ * failed its PR-claim verification as the failure it is. Without it the run
+ * history would keep saying "success" for exactly the run the agent record and
+ * the task status now agree did NOT land its deliverable.
  */
-export async function completeAgentRun(runId, output, exitCode, duration, errorAnalysis = null) {
+export async function completeAgentRun(runId, output, exitCode, duration, errorAnalysis = null, successOverride = null) {
   if (!runId) return; // Skip if no runId (e.g., agent recovered after restart)
 
   const runDir = join(RUNS_DIR, runId);
@@ -124,6 +129,9 @@ export async function completeAgentRun(runId, output, exitCode, duration, errorA
       success = true;
     }
   }
+  // An explicit false from the caller is authoritative and outranks both the
+  // exit code and the commit rescue above; null (the default) means "no opinion".
+  if (successOverride === false) success = false;
 
   metadata.success = success;
   metadata.outputSize = Buffer.byteLength(output || '');
