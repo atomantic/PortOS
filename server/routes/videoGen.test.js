@@ -80,9 +80,11 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
 // this via `setPendingUpload({ fieldname, ... })` before issuing the request;
 // the mocked uploadFields middleware reads it off the holder, attaches it as
 // req.files keyed by fieldname, and clears it. Mutable wrapper avoids
-// reaching into vi mock internals.
+// reaching into vi mock internals. Several files may be staged in one request
+// (`setPendingUpload(a, b)`) — the rollback cases need more than one durable
+// copy in flight to prove a later failure unwinds the earlier ones.
 const pendingUpload = { current: null };
-const setPendingUpload = (file) => { pendingUpload.current = file; };
+const setPendingUpload = (...files) => { pendingUpload.current = files.flat(); };
 
 vi.mock('../lib/multipart.js', () => ({
   // Bypass the streaming parser. If a test set a pending upload via
@@ -90,8 +92,7 @@ vi.mock('../lib/multipart.js', () => ({
   // route exercises the upload-staging path; otherwise pass through.
   uploadFields: () => (req, _res, next) => {
     if (pendingUpload.current) {
-      const f = pendingUpload.current;
-      req.files = { [f.fieldname]: f };
+      req.files = Object.fromEntries(pendingUpload.current.map((f) => [f.fieldname, f]));
       pendingUpload.current = null;
     }
     next();
@@ -134,6 +135,7 @@ vi.mock('fs/promises', () => ({
   copyFile: vi.fn(async () => {}),
 }));
 
+import { copyFile, unlink } from 'fs/promises';
 import * as videoGenService from '../services/videoGen/local.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
 import { getProject as getMusicVideoProject } from '../services/musicVideo/projects.js';
@@ -1249,6 +1251,122 @@ describe('videoGen routes', () => {
           expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
         });
       });
+    });
+  });
+
+  // Every throw path in POST / runs cleanupAllStaged()/cleanupTempUploads()
+  // before it rethrows, and stageUploadDurable rolls its own half-written
+  // destination back when copyFile rejects. None of that was asserted anywhere
+  // — a regression that dropped the cleanup entirely would still return the
+  // same status/body while leaking a 100MB durable copy under data/uploads on
+  // every rejected request (#3289).
+  describe('POST / — upload staging rollback (#3289)', () => {
+    const sourceUpload = {
+      fieldname: 'sourceImage',
+      path: '/tmp/upload-frame.png',
+      originalname: 'frame.png',
+      mimetype: 'image/png',
+      size: 2048,
+    };
+    const audioUpload = {
+      fieldname: 'audioFile',
+      path: '/tmp/upload-beats.wav',
+      originalname: 'beats.wav',
+      mimetype: 'audio/wav',
+      size: 1234,
+    };
+    const icUpload = {
+      fieldname: 'icReference',
+      path: '/tmp/upload-depth.mp4',
+      originalname: 'depth.mp4',
+      mimetype: 'video/mp4',
+      size: 4321,
+    };
+    const unlinkedPaths = () => unlink.mock.calls.map(([p]) => p);
+    // Durable copies live under PATHS.uploads (mocked to /mock/uploads); the
+    // multipart temp files live under /tmp. Splitting them keeps the
+    // "durable survives" assertion below from being satisfied by a temp unlink.
+    const durableUnlinks = () => unlinkedPaths().filter((p) => p.startsWith('/mock/uploads/'));
+
+    it('unlinks the half-written destination AND every earlier staged copy when copyFile rejects', async () => {
+      // sourceImage stages fine, audioFile's copy blows up — the failure has
+      // to take BOTH the destination it was writing and the already-staged
+      // sourceImage copy with it, since the job is never enqueued and the
+      // worker's cleanup therefore never runs.
+      copyFile
+        .mockImplementationOnce(async () => {})
+        .mockRejectedValueOnce(new Error('ENOSPC: no space left on device'));
+      setPendingUpload(sourceUpload, audioUpload);
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'beat-synced dancer',
+        mode: 'a2v',
+      });
+      expect(r.status).toBe(500);
+      expect(r.body.code).toBe('VIDEO_GEN_UPLOAD_STAGE_FAILED');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      const unlinked = unlinkedPaths();
+      expect(unlinked).toEqual(expect.arrayContaining([
+        // the destination the failed copy may have partially written
+        expect.stringMatching(/^\/mock\/uploads\/video-audio-[^/]+\.wav$/),
+        // …and the durable copy staged before it (stagedDurablePaths)
+        expect.stringMatching(/^\/mock\/uploads\/video-source-[^/]+\.png$/),
+        // …and both multipart temp files
+        sourceUpload.path,
+        audioUpload.path,
+      ]));
+    });
+
+    it('unlinks the pre-staged reference frame when the music-video scene lookup 404s', async () => {
+      // Late-stage throw: the scene lookup runs AFTER the source frame has
+      // already been copied into data/uploads.
+      getMusicVideoProject.mockResolvedValueOnce(null);
+      setPendingUpload(sourceUpload);
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'rain pulses with the percussion',
+        mode: 'a2v',
+        musicVideo: { projectId: 'mv-example', sceneId: 'scene-missing' },
+      });
+      expect(r.status).toBe(404);
+      expect(r.body.code).toBe('NOT_FOUND');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      expect(unlinkedPaths()).toEqual(expect.arrayContaining([
+        expect.stringMatching(/^\/mock\/uploads\/video-source-[^/]+\.png$/),
+        sourceUpload.path,
+      ]));
+    });
+
+    it('unlinks the pre-staged IC reference and source frame when a later validation throws', async () => {
+      // keyframes are rejected for any non-fflf mode — by then both the source
+      // frame and the IC reference clip are staged under data/uploads.
+      setPendingUpload(sourceUpload, icUpload);
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'follow the depth clip',
+        mode: 'ic-control',
+        keyframes: [{ file: 'a.png', index: 0 }, { file: 'b.png', index: 24 }],
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('KEYFRAMES_MODE_MISMATCH');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      expect(unlinkedPaths()).toEqual(expect.arrayContaining([
+        expect.stringMatching(/^\/mock\/uploads\/video-source-[^/]+\.png$/),
+        expect.stringMatching(/^\/mock\/uploads\/video-ic-ref-[^/]+\.mp4$/),
+        sourceUpload.path,
+        icUpload.path,
+      ]));
+    });
+
+    it('drops only the OS temp file on the happy path — the durable copy survives for the worker', async () => {
+      setPendingUpload(sourceUpload);
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'a fox running through snow',
+        mode: 'image',
+      });
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalled();
+      expect(unlinkedPaths()).toContain(sourceUpload.path);
+      // The queue worker owns the durable copy's lifetime — unlinking it here
+      // would hand the worker a path that no longer exists.
+      expect(durableUnlinks()).toEqual([]);
     });
   });
 
