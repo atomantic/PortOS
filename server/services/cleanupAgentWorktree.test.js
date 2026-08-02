@@ -39,7 +39,8 @@ vi.mock('./cos.js', () => ({
   addTask: vi.fn().mockResolvedValue(undefined),
   emitLog: vi.fn(),
   getTaskById: vi.fn().mockResolvedValue(null),
-  getAgent: vi.fn().mockResolvedValue(null)
+  getAgent: vi.fn().mockResolvedValue(null),
+  getAgentRecord: vi.fn().mockResolvedValue(null)
 }));
 
 vi.mock('./appActivity.js', () => ({
@@ -213,7 +214,7 @@ import { join } from 'path';
 import { existsSync as existsSyncMock } from 'fs';
 import { cleanupAgentWorktree, spawnMergeRecoveryTask, spawnReviewLoopFollowUp } from './subAgentSpawner.js';
 import { resolveResumePointer, resolveTaskResumePatch, recordTaskResumePointer, recordResumePointerIfRetrying, resumePointerMetadata } from './agentWorktreeCleanup.js';
-import { getAgent, getTaskById, addTask, updateTask } from './cos.js';
+import { getAgent, getAgentRecord, getTaskById, addTask, updateTask } from './cos.js';
 import { removeWorktree } from './worktreeManager.js';
 import { PATHS } from '../lib/fileUtils.js';
 import * as git from './git.js';
@@ -1240,15 +1241,17 @@ describe('recordResumePointerIfRetrying', () => {
     git.getBranchComparison.mockResolvedValue({ ahead: 2, commits: [], stats: {} });
     existsSyncMock.mockReturnValue(false);
     getTaskById.mockResolvedValue({ id: 'task-1', status: 'pending' });
-    getAgent.mockResolvedValue({ metadata: agentMetadata });
+    getAgentRecord.mockResolvedValue({ metadata: agentMetadata });
   });
 
   // The direct-CLI / TUI shape: neither spawn path holds the agent record, so the
-  // helper has to read it for the worktree fields.
+  // helper has to read it for the worktree fields — via the transcript-free
+  // `getAgentRecord`, since a long TUI run's output.txt is megabytes.
   it('records the pointer for a failed run whose task is still pending', async () => {
     await recordResumePointerIfRetrying({ agentId: 'agent-x', task: task(), success: false });
 
-    expect(getAgent).toHaveBeenCalledWith('agent-x');
+    expect(getAgentRecord).toHaveBeenCalledWith('agent-x');
+    expect(getAgent).not.toHaveBeenCalled();
     expect(updateTask).toHaveBeenCalledWith('task-1', {
       metadata: { existingBranch: DEAD_BRANCH, resumedFromAgentId: 'agent-x', resumeWorktreePath: null }
     }, 'user');
@@ -1271,22 +1274,39 @@ describe('recordResumePointerIfRetrying', () => {
     expect(updateTask).not.toHaveBeenCalled();
   });
 
-  // A task whose record vanished (deleted mid-run) still defaults to pending so the
-  // pointer isn't silently dropped.
-  it('treats an unreadable task record as pending', async () => {
-    getTaskById.mockRejectedValue(new Error('gone'));
+  // "I couldn't read the status" is not "the status is pending" — guessing would
+  // stamp a pointer on a blocked task, which a later reviveBlockedTask would then
+  // resurrect as a live pointer to a branch nobody vetted.
+  it('records nothing when the task status is unreadable', async () => {
+    getTaskById.mockRejectedValue(new Error('read failed'));
+
+    await recordResumePointerIfRetrying({ agentId: 'agent-x', task: task(), success: false });
+
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('records nothing when the task was deleted mid-run', async () => {
+    getTaskById.mockResolvedValue(null);
+
+    await recordResumePointerIfRetrying({ agentId: 'agent-x', task: task(), success: false });
+
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  // Records written before the status field existed read as pending.
+  it('treats a status-less legacy task record as pending', async () => {
+    getTaskById.mockResolvedValue({ id: 'task-1' });
 
     await recordResumePointerIfRetrying({ agentId: 'agent-x', task: task(), success: false });
 
     expect(updateTask).toHaveBeenCalled();
   });
 
-  // The runner path already holds the agent record; passing it spares a re-read
-  // that would re-split the whole output.txt transcript.
+  // The runner path already holds the agent record; passing it spares a re-read.
   it('uses caller-supplied agent metadata instead of re-reading the record', async () => {
     await recordResumePointerIfRetrying({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
 
-    expect(getAgent).not.toHaveBeenCalled();
+    expect(getAgentRecord).not.toHaveBeenCalled();
     expect(updateTask).toHaveBeenCalled();
   });
 

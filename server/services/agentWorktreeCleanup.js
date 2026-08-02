@@ -502,13 +502,17 @@ export async function recordTaskResumePointer({ task, agentId, agentMetadata }) 
  * been persisted by `finalizeAgent` at this point, so the task's *persisted* status
  * distinguishes a `pending` retry (wants the pointer) from a `blocked` task that
  * exhausted its budget and is waiting on a human — a pointer there would be dead
- * metadata that `updateTask` has to strip again on the next terminal write.
+ * metadata that `updateTask` has to strip again on the next terminal write, and
+ * that a later `reviveBlockedTask` would resurrect as a live pointer to a branch
+ * nobody vetted. So the pointer needs a task record we actually READ saying
+ * `pending`; a failed read or a task deleted mid-run is not evidence of a retry.
  *
  * `agentMetadata` is optional: pass it when the caller already holds the agent
- * record (the runner path does, and re-reading it there would re-split the whole
- * output.txt transcript), omit it and this reads the record itself. `undefined`
- * means "not supplied" — a caller that genuinely has no metadata still gets the
- * no-op it deserves, since `resolveTaskResumePatch` bails on a non-worktree run.
+ * record (the runner path does), omit it and this reads the record itself —
+ * `getAgentRecord`, not `getAgent`, so it doesn't read and line-split the run's
+ * whole output.txt for three metadata fields. `undefined` means "not supplied" —
+ * a caller that genuinely has no metadata still gets the no-op it deserves, since
+ * `resolveTaskResumePatch` bails on a non-worktree run.
  *
  * @param {{agentId: string, task: object, success: boolean, agentMetadata?: object}} params
  * @returns {Promise<object>} the patch that was written (empty when nothing was)
@@ -516,12 +520,17 @@ export async function recordTaskResumePointer({ task, agentId, agentMetadata }) 
 export async function recordResumePointerIfRetrying({ agentId, task, success, agentMetadata }) {
   if (success || !agentId || !task?.id) return {};
 
-  const { getTaskById, getAgent } = await import('./cos.js');
-  const persisted = await getTaskById(task.id).catch(() => null);
-  if ((persisted?.status ?? 'pending') !== 'pending') return {};
+  const { getTaskById, getAgentRecord } = await import('./cos.js');
+  const persisted = await getTaskById(task.id).catch(err => {
+    emitLog('warn', `Skipping resume pointer for task ${task.id} — status unreadable: ${err.message}`, { taskId: task.id, agentId });
+    return null;
+  });
+  // A record with no `status` at all is a legacy shape that predates the field;
+  // those are pending. A record we couldn't read, or that is gone, is neither.
+  if (!persisted || (persisted.status ?? 'pending') !== 'pending') return {};
 
   const metadata = agentMetadata === undefined
-    ? (await getAgent(agentId).catch(() => null))?.metadata
+    ? (await getAgentRecord(agentId).catch(() => null))?.metadata
     : agentMetadata;
   return await recordTaskResumePointer({ task, agentId, agentMetadata: metadata });
 }

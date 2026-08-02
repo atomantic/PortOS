@@ -309,26 +309,35 @@ export async function getAgents() {
 }
 
 // Get agent by ID with full output from file
-export async function getAgent(agentId) {
+/**
+ * The agent record WITHOUT its transcript — in-memory state first, falling back
+ * to the on-disk `metadata.json` the index points at.
+ *
+ * Split out of `getAgent` so callers that only need the record's fields (the
+ * worktree/provider metadata, the status) don't pay to read and line-split a
+ * completed agent's entire output.txt — which for a long TUI run is megabytes,
+ * and whose read failing would otherwise take the whole lookup down with it.
+ * `recordResumePointerIfRetrying` is the motivating caller (#3368).
+ */
+export async function getAgentRecord(agentId) {
   const state = await loadState();
-  let agent = state.agents[agentId];
+  const agent = state.agents[agentId];
+  if (agent) return agent;
 
   // Fall back to disk metadata via index if not in state
-  if (!agent) {
-    const idx = await loadAgentIndex();
-    const dateStr = idx.get(agentId);
-    if (dateStr) {
-      const metaPath = join(AGENTS_DIR, dateStr, agentId, 'metadata.json');
-      const content = await tryReadFile(metaPath);
-      if (content) {
-        const raw = safeJSONParse(content, null);
-        if (raw) {
-          const { output, ...rest } = raw;
-          agent = { ...rest, id: raw.id || raw.agentId || agentId, status: raw.status || 'completed' };
-        }
-      }
-    }
-  }
+  const idx = await loadAgentIndex();
+  const dateStr = idx.get(agentId);
+  if (!dateStr) return null;
+  const content = await tryReadFile(join(AGENTS_DIR, dateStr, agentId, 'metadata.json'));
+  if (!content) return null;
+  const raw = safeJSONParse(content, null);
+  if (!raw) return null;
+  const { output, ...rest } = raw;
+  return { ...rest, id: raw.id || raw.agentId || agentId, status: raw.status || 'completed' };
+}
+
+export async function getAgent(agentId) {
+  let agent = await getAgentRecord(agentId);
   if (!agent) return null;
 
   // Completed agents live in date buckets; paused agents remain in the flat
