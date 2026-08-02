@@ -269,8 +269,22 @@ function mergeOne(local, remote, now) {
   const base = pickContentBase(local, remote);
 
   // (rule 3) claim metadata resolved separately so a live claim propagates even
-  // when content came from the other side.
-  const claim = resolveClaim(local, remote, now);
+  // when content came from the other side — EXCEPT when the winner is a requeue
+  // (#3376). `cosTaskStore.updateTask` releases the claim in the very write that
+  // moves a task out of `in_progress` (#1563), precisely so a stale lease can't
+  // block the retry for a full lease window. So when a newer `pending` beats the
+  // counterpart's stale `in_progress` snapshot, that snapshot's lease is a
+  // pre-release leftover: re-applying it would re-impose the lease the requeue
+  // just dropped and undo half of what adopting the requeue bought us. Only this
+  // exact pairing is excluded — a claim held by the WINNING `pending` side is
+  // still honored, because dispatch takes the lease BEFORE flipping the status to
+  // `in_progress` (agentLifecycle.js), so `pending` + live claim is a legitimate
+  // in-flight shape a peer must keep seeing. Both peers reach the same `base` and
+  // counterpart, so this stays symmetric.
+  const counterpart = base === local ? remote : local;
+  const claim = (base.status === 'pending' && counterpart.status === 'in_progress')
+    ? (isLeaseLive(base.metadata, now) ? claimTriple(base) : null)
+    : resolveClaim(local, remote, now);
 
   // Strip any claim keys from the base's metadata, then re-apply the resolved
   // live claim — unless the merged status is terminal, where a claim must never

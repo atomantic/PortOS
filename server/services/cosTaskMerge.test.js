@@ -339,6 +339,42 @@ describe('mergeTaskLists', () => {
       }
     });
 
+    it('does NOT re-impose the stale in_progress side\'s lease on the adopted requeue', () => {
+      // The requeue write releases the claim (#1563) so the retry is freely
+      // claimable; rule 3 would otherwise re-attach the peer's pre-release lease
+      // and block that retry for a full lease window.
+      const requeued = [stamped('task-r', 'pending', future(1000))];
+      const stale = [task('task-r', 'in_progress', {
+        metadata: { updatedAt: past(1000), ...liveClaim('peer-A') },
+      })];
+      for (const merged of [
+        mergeTaskLists(requeued, stale, { now: NOW })[0],
+        mergeTaskLists(stale, requeued, { now: NOW })[0],
+      ]) {
+        expect(merged.status).toBe('pending');
+        expect(merged.metadata.claimedBy).toBeUndefined();
+        expect(merged.metadata.leaseExpiresAt).toBeUndefined();
+      }
+    });
+
+    it('keeps a live claim the winning pending side holds (dispatch claims before it flips to in_progress)', () => {
+      // agentLifecycle takes the lease first and only then writes in_progress, so
+      // `pending` + live claim is a real in-flight shape the peer must keep seeing.
+      const claimed = [task('task-r', 'pending', {
+        metadata: { updatedAt: future(1000), ...liveClaim('peer-B') },
+      })];
+      const stale = [task('task-r', 'in_progress', {
+        metadata: { updatedAt: past(1000), ...liveClaim('peer-A') },
+      })];
+      for (const merged of [
+        mergeTaskLists(claimed, stale, { now: NOW })[0],
+        mergeTaskLists(stale, claimed, { now: NOW })[0],
+      ]) {
+        expect(merged.status).toBe('pending');
+        expect(merged.metadata.claimedBy).toBe('peer-B');
+      }
+    });
+
     it('on equal/absent stamps, keeps today\'s rank behavior (in_progress wins)', () => {
       const inProgress = [task('task-r', 'in_progress')];
       const pending = [task('task-r', 'pending')];
