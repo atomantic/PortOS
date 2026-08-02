@@ -139,6 +139,13 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
   // legacy category-wide behavior rather than silently dropping the button.
   const itemScoped = cat.deletable && cat.purgeScope === 'items';
   const categoryPurgeable = cat.deletable && !itemScoped;
+  // Some reproducible-scratch categories hold the working state of a job that is
+  // running right now — the server refuses the whole-directory purge while that
+  // is true (409 CATEGORY_BUSY). Say why in place of the button so the page
+  // explains itself instead of failing on click (#3342). Older servers omit
+  // `busy`; only an explicit true withholds the button.
+  const busy = cat.busy === true;
+  const busyReason = cat.busyReason || 'A job is using this directory right now — purge once it finishes.';
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   return (
     <div className="border border-port-border rounded-lg overflow-hidden">
@@ -165,7 +172,7 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
       {expanded && (
         <div className="border-t border-port-border bg-port-bg/50">
           {/* Actions */}
-          {confirmingPurge ? (
+          {confirmingPurge && !busy ? (
             <InlineConfirmRow
               variant="separator"
               question={`Purge all ${cat.fileCount.toLocaleString()} files (${formatBytes(cat.size)}) in ${cat.label}? This permanently deletes the data and cannot be undone.`}
@@ -187,7 +194,9 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
                   {archiving ? 'Archiving...' : 'Archive'}
                 </button>
               )}
-              {categoryPurgeable && (
+              {categoryPurgeable && (busy ? (
+                <span className="text-xs text-port-warning">{busyReason}</span>
+              ) : (
                 <button
                   onClick={() => onPurge(cat.key)}
                   disabled={purging}
@@ -196,7 +205,7 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
                   <Trash2 size={12} />
                   {purging ? 'Purging...' : 'Purge'}
                 </button>
-              )}
+              ))}
               {itemScoped && (
                 <span className="text-xs text-gray-500">
                   These files are the only copy, so there is no whole-category purge — delete individual entries from the list below.

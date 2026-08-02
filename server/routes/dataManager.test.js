@@ -68,4 +68,16 @@ describe('DELETE /api/data/:category', () => {
     expect(res.status).toBe(400);
     expect(res.body.error?.code ?? res.body.code).toBe('CATEGORY_ITEM_PURGE_ONLY');
   });
+
+  // The disabled button is a hint; this is the backstop. The reason has to reach
+  // the client verbatim — it is the only thing that tells the user what to wait
+  // for (#3342).
+  it('surfaces a busy-category refusal as 409 with the reason intact', async () => {
+    const reason = '1 LoRA training run(s) queued or running — purge once training finishes.';
+    purgeCategory.mockRejectedValue(new ServerError(reason, { status: 409, code: 'CATEGORY_BUSY' }));
+    const res = await request(makeApp()).delete('/api/data/training-runs').send({});
+    expect(res.status).toBe(409);
+    expect(res.body.error?.code ?? res.body.code).toBe('CATEGORY_BUSY');
+    expect(JSON.stringify(res.body)).toContain(reason);
+  });
 });

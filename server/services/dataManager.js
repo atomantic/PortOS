@@ -5,6 +5,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { PATHS, ensureDir, isTopLevelEntryName } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { imageCleanTmpBusy, trainingRunsBusy, updateDetachedBusy } from './dataManagerBusy.js';
 
 const execFileAsync = promisify(execFile);
 const DATA_DIR = PATHS.data;
@@ -33,6 +34,14 @@ const DATA_DIR = PATHS.data;
 //     `purgeCategory` fails closed: anything other than an explicit 'category'
 //     refuses the directory-wide purge, so a missing or misspelled scope can
 //     never widen a delete.
+//   busyCheck — optional `() => Promise<{ busy, reason }>`. Some directories are
+//     genuinely reproducible scratch, yet only while nothing is USING them: a
+//     category-wide purge mid-job destroys the working state of a render, a
+//     trainer, or a self-update. A category carrying a `busyCheck` refuses the
+//     directory-wide purge with 409 CATEGORY_BUSY while its probe says busy;
+//     per-item purges (the user named one entry) and categories with no
+//     `busyCheck` are unaffected (issue #3342). Probes live in
+//     `dataManagerBusy.js`.
 export const CATEGORIES = {
   'agents': { label: 'Agents', description: 'Agent personality data', archivable: false, deletable: false },
   'ask-conversations': { label: 'Ask Conversations', description: 'Saved Ask chat transcripts', archivable: true, deletable: false },
@@ -56,7 +65,7 @@ export const CATEGORIES = {
   'digital-twin': { label: 'Digital Twin', description: 'Identity, goals, character data', archivable: true, deletable: false },
   'games': { label: 'Games', description: 'Game project records and assets', archivable: true, deletable: false },
   'health': { label: 'Apple Health', description: 'Daily health JSON snapshots', archivable: true, deletable: false },
-  'image-clean-tmp': { label: 'Image Cleaner Scratch', description: 'Ephemeral working files for Image Cleaner renders — swept automatically, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
+  'image-clean-tmp': { label: 'Image Cleaner Scratch', description: 'Ephemeral working files for Image Cleaner renders — swept automatically, safe to purge when no render is in flight', archivable: false, deletable: true, purgeScope: 'category', busyCheck: imageCleanTmpBusy },
   'image-refs': { label: 'Image References', description: 'Reference images uploaded for multi-reference edits — still served to existing renders', archivable: true, deletable: false },
   'image-to-3d': { label: 'Image to 3D', description: 'Generated GLB meshes — the only copy; records live in Postgres', archivable: false, deletable: false },
   'images': { label: 'Images', description: 'Uploaded and generated images — delete individually; gallery, pipeline, and collection records point at these files', archivable: true, deletable: true, purgeScope: 'items' },
@@ -97,9 +106,9 @@ export const CATEGORIES = {
   'telegram': { label: 'Telegram', description: 'Telegram bot data', archivable: true, deletable: true, purgeScope: 'category' },
   'templates': { label: 'Visual Templates', description: 'Shipped layout assets used as render anchors', archivable: false, deletable: false },
   'tools': { label: 'Tools', description: 'Tool execution data', archivable: true, deletable: true, purgeScope: 'category' },
-  'training-runs': { label: 'LoRA Training Runs', description: 'Training checkpoints, caches, and sample previews — the finished adapters live in LoRAs and survive a purge; run history in Postgres will point at missing artifacts', archivable: false, deletable: true, purgeScope: 'category' },
+  'training-runs': { label: 'LoRA Training Runs', description: 'Training checkpoints, caches, and sample previews — the finished adapters live in LoRAs and survive a purge; run history in Postgres will point at missing artifacts', archivable: false, deletable: true, purgeScope: 'category', busyCheck: trainingRunsBusy },
   'universes': { label: 'Universes', description: 'Universe Builder records — bibles, canon, and style references', archivable: true, deletable: false },
-  'update-detached': { label: 'Update Control', description: 'Control files for a detached self-update run — safe to purge when no update is running', archivable: false, deletable: true, purgeScope: 'category' },
+  'update-detached': { label: 'Update Control', description: 'Control files for a detached self-update run — safe to purge when no update is running', archivable: false, deletable: true, purgeScope: 'category', busyCheck: updateDetachedBusy },
   'uploads': { label: 'Uploads', description: 'Files uploaded through the UI and referenced by records', archivable: true, deletable: false },
   'video-thumbnails': { label: 'Video Thumbnails', description: 'JPEG thumbnails for generated videos', archivable: false, deletable: true, purgeScope: 'category' },
   'videos': { label: 'Videos', description: 'Locally generated videos — delete individually; the render is the only copy and re-rendering costs provider spend', archivable: true, deletable: true, purgeScope: 'items' },
@@ -119,11 +128,38 @@ export const UNKNOWN_CATEGORY_DESCRIPTION = "Not classified — PortOS doesn't k
  * the row as "deliberately unactionable" instead of guessing from the copy.
  * `purgeScope` is always present in the payload (null on protected categories)
  * so the client never has to distinguish "absent" from "not purgeable".
+ * `busyCheck` is stripped — it is server-side behavior, not payload.
  */
 function categoryMeta(name) {
   const known = CATEGORIES[name];
-  if (known) return { purgeScope: null, ...known, classified: true };
+  if (known) {
+    const { busyCheck: _busyCheck, ...serializable } = known;
+    return { purgeScope: null, ...serializable, classified: true };
+  }
   return { label: name, description: UNKNOWN_CATEGORY_DESCRIPTION, archivable: false, deletable: false, purgeScope: null, classified: false };
+}
+
+/**
+ * Run a category's `busyCheck`, if it has one, and shape the answer for both
+ * the API payload (`busy` / `busyReason`) and the purge gate (issue #3342).
+ * A category with no probe is always `{ busy: false }` — today's behavior.
+ *
+ * Fails CLOSED. A probe that throws, or hands back a shape we can't read,
+ * reports busy: "we could not verify" and "nothing is running" must not
+ * collapse into the same answer on a page whose buttons are irreversible.
+ */
+export async function resolveCategoryBusy(categoryKey) {
+  const check = CATEGORIES[categoryKey]?.busyCheck;
+  if (typeof check !== 'function') return { busy: false, busyReason: null };
+  const result = await check().catch((err) => {
+    console.error(`❌ Busy check failed for data/${categoryKey}: ${err.message}`);
+    return null;
+  });
+  if (typeof result?.busy !== 'boolean') {
+    return { busy: true, busyReason: `PortOS could not confirm whether anything is using data/${categoryKey} right now, so the purge is withheld.` };
+  }
+  if (!result.busy) return { busy: false, busyReason: null };
+  return { busy: true, busyReason: result.reason || `Something is using data/${categoryKey} right now — purge once it finishes.` };
 }
 
 // Validate category key contains only safe characters
@@ -154,15 +190,18 @@ export async function getDataOverview() {
     ...dirs.map(d => getDirSizeAndCount(join(DATA_DIR, d.name)))
   ]);
 
-  const categories = dirs.map((d, i) => {
-    const meta = categoryMeta(d.name);
-    return {
-      key: d.name,
-      path: `data/${d.name}`,
-      ...meta,
-      ...dirResults[i]
-    };
-  });
+  // Busy state ships with the overview so the Data Manager can drop the Purge
+  // button before the user commits, rather than failing on click (#3342). Only
+  // the handful of categories carrying a `busyCheck` cost anything here.
+  const busyStates = await Promise.all(dirs.map(d => resolveCategoryBusy(d.name)));
+
+  const categories = dirs.map((d, i) => ({
+    key: d.name,
+    path: `data/${d.name}`,
+    ...categoryMeta(d.name),
+    ...busyStates[i],
+    ...dirResults[i]
+  }));
 
   categories.sort((a, b) => b.size - a.size);
 
@@ -200,9 +239,9 @@ export async function getCategoryDetail(categoryKey) {
   items.sort((a, b) => b.size - a.size);
 
   const totalSize = items.reduce((sum, item) => sum + item.size, 0);
-  const meta = categoryMeta(categoryKey);
+  const busy = await resolveCategoryBusy(categoryKey);
 
-  return { key: categoryKey, ...meta, totalSize, items };
+  return { key: categoryKey, ...categoryMeta(categoryKey), ...busy, totalSize, items };
 }
 
 export async function archiveCategory(categoryKey, options = {}) {
@@ -291,6 +330,18 @@ export async function purgeCategory(categoryKey, options = {}) {
   const dirPath = join(DATA_DIR, categoryKey);
   if (!existsSync(dirPath)) {
     throw new ServerError(`Category directory not found: ${categoryKey}`, { status: 404, code: 'NOT_FOUND' });
+  }
+
+  // A category-wide purge empties the directory in one action, so a job that is
+  // mid-flight loses its working state with no warning. Refuse outright while a
+  // category's `busyCheck` reports live work, rather than filtering "the busy
+  // files" out of the wipe — a partial purge is harder to reason about, and the
+  // user can retry in seconds once the job finishes (#3342). A per-item purge
+  // is exempt: the user named the one entry they meant. This runs before any
+  // `rm` below.
+  if (!wantsItem) {
+    const { busy, busyReason } = await resolveCategoryBusy(categoryKey);
+    if (busy) throw new ServerError(busyReason, { status: 409, code: 'CATEGORY_BUSY' });
   }
 
   if (wantsItem) {

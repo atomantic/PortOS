@@ -139,3 +139,57 @@ describe('DataManager per-item purge (#3327)', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /Purge/ })).toBeInTheDocument());
   });
 });
+
+// A reproducible-scratch category whose files a running job still needs: the
+// server refuses the whole-directory purge, and the row says why instead of
+// offering a button that fails on click (#3342).
+const BUSY_REASON = '1 LoRA training run(s) queued or running — purging now would delete checkpoints out from under a live trainer.';
+
+const busyOverview = {
+  totalSize: 3000,
+  dataDir: 'data',
+  categories: [
+    { key: 'training-runs', path: 'data/training-runs', label: 'LoRA Training Runs', description: 'Training checkpoints', archivable: false, deletable: true, purgeScope: 'category', classified: true, busy: true, busyReason: BUSY_REASON, size: 2000, fileCount: 9 },
+    { key: 'messages', path: 'data/messages', label: 'Messages', description: 'Email and messaging data', archivable: true, deletable: true, purgeScope: 'category', classified: true, busy: false, busyReason: null, size: 1000, fileCount: 5 },
+  ],
+};
+
+describe('DataManager busy categories (#3342)', () => {
+  beforeEach(() => {
+    getDataOverview.mockReset().mockResolvedValue(busyOverview);
+    getDataCategory.mockReset().mockResolvedValue({ key: 'training-runs', items: [] });
+    purgeDataCategory.mockReset();
+  });
+
+  it('replaces the Purge button with the server reason while the category is busy', async () => {
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getAllByText('LoRA Training Runs').length).toBeGreaterThan(0));
+
+    expandRow('LoRA Training Runs');
+    await waitFor(() => expect(screen.getByText(BUSY_REASON)).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /Purge/ })).not.toBeInTheDocument();
+    expect(purgeDataCategory).not.toHaveBeenCalled();
+  });
+
+  it('keeps the Purge button for an idle category in the same list', async () => {
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getByText('Messages')).toBeInTheDocument());
+
+    expandRow('Messages');
+    await waitFor(() => expect(screen.getByRole('button', { name: /Purge/ })).toBeInTheDocument());
+  });
+
+  // Older servers omit `busy` entirely — treating anything but an explicit true
+  // as busy would strip the button from every category on an older peer.
+  it('treats a missing busy flag as idle', async () => {
+    getDataOverview.mockResolvedValue({
+      ...busyOverview,
+      categories: [{ ...busyOverview.categories[0], busy: undefined, busyReason: undefined }],
+    });
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getAllByText('LoRA Training Runs').length).toBeGreaterThan(0));
+
+    expandRow('LoRA Training Runs');
+    await waitFor(() => expect(screen.getByRole('button', { name: /Purge/ })).toBeInTheDocument());
+  });
+});
