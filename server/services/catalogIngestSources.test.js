@@ -119,8 +119,10 @@ describe('fetchUrlMainText', () => {
       expect.objectContaining({ verifyRemoteIp: expect.any(Function), evaluateExpression: expect.any(String) }),
     );
     // The read ran on that session, so the tab is scratch — every ingested URL
-    // would otherwise leave one open in the user's browser.
-    expect(browserService.closeCdpPage).toHaveBeenCalledWith('p1');
+    // would otherwise leave one open in the user's browser. Passing
+    // `evaluateExpression` IS the request for that teardown (#3365), so this
+    // service must not close the tab itself; `navigateToUrlPinned` already did.
+    expect(browserService.closeCdpPage).not.toHaveBeenCalled();
   });
 
   it('throws when the page extracts no readable text', async () => {

@@ -462,12 +462,13 @@ const PIN_SETUP_COMMANDS = [
 ];
 const PIN_SETUP_ID_BASE = 10;
 
-// Close a CDP tab by target id (best-effort). Used to fail closed after an
-// SSRF-pin refusal so a tab that connected to a disallowed address is torn down
-// rather than left open for the DOM reader. Also exported for read-only callers
-// (e.g. the Stacker News browser read transport) that scrape one page and must
-// not leave a tab behind per sync page — unlike a handoff, whose tab is the
-// deliverable.
+// Close a CDP tab by target id (best-effort). Used by `navigateToUrlPinned` to
+// fail closed after an SSRF-pin refusal (a tab that connected to a disallowed
+// address is torn down rather than left open for the DOM reader) AND to tear
+// down a tab it read from itself (`closeAfterRead`). Read callers should NOT
+// call this for a tab whose read `navigateToUrlPinned` performed — that tab is
+// already closed. It stays exported for callers that own a tab outright: a
+// handoff, or `POST /api/browser/navigate`, whose tab IS the deliverable.
 export async function closeCdpPage(id) {
   if (!id) return;
   await cdpRequest(`/json/close/${id}`, { timeout: HEALTH_TIMEOUT_MS }).catch(() => {});
@@ -597,6 +598,22 @@ export function ssrfPinRefusalReason(messages, verifyRemoteIp, url, topFrameId =
  * through. The evaluated value is returned as `evalResult` (or null). Without
  * `evaluateExpression` the caller gets a page handle to read separately.
  *
+ * TAB OWNERSHIP follows the read, and is NOT the caller's to remember:
+ * `closeAfterRead` defaults to true exactly when `evaluateExpression` was
+ * supplied, because a tab we already read from is scratch — leaving it open
+ * litters the user's browser one tab per navigation (which is precisely how the
+ * catalog URL ingest and the Stacker News identity check each leaked). So the
+ * teardown happens HERE, on both the refusal path and the success path. Only a
+ * caller that omits `evaluateExpression` — one for whom the TAB is the
+ * deliverable (a browser handoff, `POST /api/browser/navigate`) — gets a tab
+ * back to close on its own schedule. Pass `closeAfterRead: false` to read AND
+ * keep the tab; passing it explicitly decides teardown either way.
+ *
+ * Because of that, `id` / `webSocketDebuggerUrl` in the return value name a
+ * CLOSED tab whenever this function performed the read. They are still returned
+ * (for logging and for the `closeAfterRead: false` case) but must NOT be used to
+ * re-derive a handoff URL, re-evaluate on the session, or close the tab again.
+ *
  * The caller does NOT sleep — the settle wait happens HERE, so the DOM has had
  * `settleMs` to render (and every navigation in that window is pinned) by the
  * time this resolves. Returns `{ id, url, title, webSocketDebuggerUrl, evalResult }`.
@@ -607,6 +624,7 @@ export async function navigateToUrlPinned(url, {
   navigateTimeoutMs = NAVIGATE_TIMEOUT_MS,
   evaluateExpression = null,
   evaluateTimeoutMs = CDP_EVALUATE_TIMEOUT_MS,
+  closeAfterRead = Boolean(evaluateExpression),
 } = {}) {
   if (typeof verifyRemoteIp !== 'function') {
     throw new Error('navigateToUrlPinned requires a verifyRemoteIp(ip) predicate');
@@ -722,6 +740,10 @@ export async function navigateToUrlPinned(url, {
     await closeCdpPage(target.id);
     throw new Error(`refusing to ingest: ${result.reason}`);
   }
+
+  // The read (if any) already happened on this session, so the tab has served
+  // its purpose — tear it down here rather than trusting every call site to.
+  if (closeAfterRead) await closeCdpPage(target.id);
 
   return {
     id: target.id,

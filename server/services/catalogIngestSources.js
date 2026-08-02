@@ -30,10 +30,7 @@ import * as catalogDB from './catalogDB.js';
 import * as brainStorage from './brainStorage.js';
 import { extractIngredientsForScrap } from './catalogExtraction.js';
 import { transcribe } from './voice/stt.js';
-import {
-  closeCdpPage,
-  navigateToUrlPinned,
-} from './browserService.js';
+import { navigateToUrlPinned } from './browserService.js';
 import { lookup } from 'dns/promises';
 import { PATHS, ensureDir, safeJSONParse } from '../lib/fileUtils.js';
 import { isSafeIngestUrl, isBlockedIngestHost } from '../lib/catalogValidation.js';
@@ -132,16 +129,15 @@ export async function fetchUrlMainText(url, { settleMs = PAGE_SETTLE_MS } = {}) 
   // own resolution. The DOM read runs on the SAME pinned CDP session (via
   // evaluateExpression), re-verified after the read, so no late navigation slips
   // between "stop monitoring" and "read". Fails closed (tab torn down, throws)
-  // on any disallowed hop.
+  // on any disallowed hop. Supplying `evaluateExpression` also makes it tear the
+  // tab down on SUCCESS — the read already happened on that CDP session, so the
+  // tab is scratch and `page.id` names a closed tab by the time we get here.
+  // Every ingested URL would otherwise leave one open in the user's browser.
   const page = await navigateToUrlPinned(url, {
     verifyRemoteIp: (ip) => !isBlockedIngestHost(ip),
     settleMs,
     evaluateExpression: expression,
   });
-
-  // The read already happened on that CDP session, so this tab is scratch —
-  // every ingested URL would otherwise leave one open in the user's browser.
-  await closeCdpPage(page.id);
 
   const parsed = page.evalResult ? safeJSONParse(page.evalResult, null) : null;
   const text = clampText(parsed?.text || '');

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, readFile, rm, utimes, writeFile } from 'fs/promises';
+import { createServer } from 'http';
 import { join } from 'path';
+import { WebSocketServer } from 'ws';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 // Shape captured from Chrome 150 when a second top-level navigation supersedes
@@ -547,5 +549,143 @@ describe('ssrfPinRefusalReason (SSRF pin gate)', () => {
     expect(ssrfPinRefusalReason(msgs, allow, 'https://ex.com/article', 'F1')).toBeNull();
     // Sanity: the legacy classifier (no frameId) over-refuses the same stream.
     expect(ssrfPinRefusalReason(msgs, allow, 'https://ex.com/article')).toMatch(/still in flight/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tab ownership (#3365). `navigateToUrlPinned` opens the tab, so it — not each
+// caller — decides when the tab dies. These drive the real function against a
+// FAKE CDP endpoint (a local HTTP + WebSocket server speaking just enough of the
+// protocol) because the behaviour under test is which `/json/close/<id>` calls
+// the function itself makes. NOTE: this is a protocol-level fake, not a live
+// Chrome; it asserts the close request is issued, not that Chrome honored it.
+// ---------------------------------------------------------------------------
+describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
+  let fake;
+  let tempRoot;
+
+  // Minimal CDP: PUT /json/new hands out a blank tab, /json/close/<id> is
+  // recorded, and the socket answers Page.navigate with a frameId + a pinned
+  // main-frame Document response, then Runtime.evaluate with `evalValue`.
+  async function startFakeCdp({ evalValue = null, remoteIPAddress = '93.184.216.34' } = {}) {
+    const opened = [];
+    const closed = [];
+    let port = 0;
+    const server = createServer((req, res) => {
+      const path = req.url || '';
+      if (req.method === 'PUT' && path.startsWith('/json/new')) {
+        const id = `tab-${opened.length + 1}`;
+        opened.push(id);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ id, webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/${id}` }));
+        return;
+      }
+      if (path.startsWith('/json/close/')) {
+        closed.push(decodeURIComponent(path.slice('/json/close/'.length)));
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end('Target is closing');
+        return;
+      }
+      res.writeHead(404);
+      res.end('');
+    });
+    const wss = new WebSocketServer({ server });
+    wss.on('connection', (ws) => {
+      ws.on('message', (raw) => {
+        const msg = JSON.parse(raw.toString());
+        if (msg.method === 'Page.navigate') {
+          const url = msg.params.url;
+          ws.send(JSON.stringify({ id: msg.id, result: { frameId: 'F1' } }));
+          ws.send(JSON.stringify({
+            method: 'Network.requestWillBeSent',
+            params: { requestId: 'R1', loaderId: 'R1', frameId: 'F1', type: 'Document', request: { url } },
+          }));
+          ws.send(JSON.stringify({
+            method: 'Network.responseReceived',
+            params: { requestId: 'R1', loaderId: 'R1', frameId: 'F1', type: 'Document', response: { url, remoteIPAddress, status: 200 } },
+          }));
+          return;
+        }
+        if (msg.method === 'Runtime.evaluate') {
+          ws.send(JSON.stringify({ id: msg.id, result: { result: { value: evalValue } } }));
+          return;
+        }
+        ws.send(JSON.stringify({ id: msg.id, result: {} }));
+      });
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    port = server.address().port;
+    return {
+      port,
+      opened,
+      closed,
+      stop: () => new Promise((resolve) => { wss.close(() => server.close(resolve)); }),
+    };
+  }
+
+  async function importServicePointedAtFake() {
+    vi.doMock('../lib/fileUtils.js', async (importOriginal) => {
+      const actual = await importOriginal();
+      return makePathsProxy(actual, { dataRoot: tempRoot });
+    });
+    const service = await import('./browserService.js');
+    await service.saveConfig({ cdpHost: '127.0.0.1', cdpPort: fake.port });
+    return service;
+  }
+
+  beforeEach(async () => {
+    vi.resetModules();
+    tempRoot = createTempDataRoot('portos-browser-pin-');
+  });
+
+  afterEach(async () => {
+    vi.doUnmock('../lib/fileUtils.js');
+    await fake?.stop();
+    fake = null;
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  it('tears down the tab it read from when evaluateExpression was supplied', async () => {
+    fake = await startFakeCdp({ evalValue: 'read-body' });
+    const service = await importServicePointedAtFake();
+    const page = await service.navigateToUrlPinned('https://ex.com/a', {
+      verifyRemoteIp: () => true,
+      evaluateExpression: 'document.body.innerText',
+    });
+    expect(page.evalResult).toBe('read-body');
+    expect(fake.closed).toEqual(fake.opened);
+  });
+
+  it('leaves the tab open when no evaluateExpression is given — that tab IS the deliverable', async () => {
+    fake = await startFakeCdp();
+    const service = await importServicePointedAtFake();
+    const page = await service.navigateToUrlPinned('https://ex.com/a', { verifyRemoteIp: () => true });
+    expect(page.id).toBe(fake.opened[0]);
+    expect(fake.closed).toEqual([]);
+  });
+
+  // The escape hatch: a future caller that wants to read AND keep the tab.
+  it('honors closeAfterRead:false to read the DOM and still hand back a live tab', async () => {
+    fake = await startFakeCdp({ evalValue: 'read-body' });
+    const service = await importServicePointedAtFake();
+    const page = await service.navigateToUrlPinned('https://ex.com/a', {
+      verifyRemoteIp: () => true,
+      evaluateExpression: 'document.body.innerText',
+      closeAfterRead: false,
+    });
+    expect(page.evalResult).toBe('read-body');
+    expect(fake.closed).toEqual([]);
+  });
+
+  // The refusal path already tore the tab down; `closeAfterRead` must not turn
+  // that into a second close (it returns before the success-path teardown).
+  it('tears the tab down exactly once when the pin refuses', async () => {
+    fake = await startFakeCdp({ evalValue: 'read-body', remoteIPAddress: '127.0.0.1' });
+    const service = await importServicePointedAtFake();
+    await expect(service.navigateToUrlPinned('https://ex.com/a', {
+      verifyRemoteIp: (ip) => ip !== '127.0.0.1',
+      evaluateExpression: 'document.body.innerText',
+    })).rejects.toThrow(/refusing to ingest/);
+    expect(fake.closed).toEqual(fake.opened);
   });
 });

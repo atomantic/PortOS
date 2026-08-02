@@ -15,7 +15,7 @@
 // browser-sourced item is indistinguishable downstream from an API-sourced one:
 // same hashing, same `inspectUntrustedContent` treatment, same columns.
 import { isPrivateAddress } from '../../lib/safeUrlFetch.js';
-import { closeCdpPage, navigateToUrlPinned } from '../../services/browserService.js';
+import { navigateToUrlPinned } from '../../services/browserService.js';
 import { STACKER_NEWS_IDENTITY_EXPRESSION, stackerNewsBrowserOrigin as ORIGIN, verifyFinalOrigin } from '../../services/stackerNewsBrowser.js';
 
 const SETTLE_MS = 1_500;
@@ -112,20 +112,18 @@ const verifyFinalLocation = (requestedUrl, finalUrl) => {
   }
 };
 
-// Every read: pinned navigation, public-address check, location verification,
-// then tear the tab down. Read tabs are scratch — a five-page sync would
-// otherwise leave five tabs open in the user's browser per territory.
+// Every read: pinned navigation, public-address check, location verification.
+// Read tabs are scratch — a five-page sync would otherwise leave five tabs open
+// in the user's browser per territory — and supplying `evaluateExpression` is
+// what makes `navigateToUrlPinned` tear the tab down itself, on the throwing
+// paths too. `page.id` therefore names a closed tab; do not reuse it.
 async function readPage(url, evaluateExpression) {
   const page = await navigateToUrlPinned(url, {
     verifyRemoteIp: (ip) => !isPrivateAddress(ip),
     settleMs: SETTLE_MS,
     evaluateExpression,
   });
-  const locationError = await Promise.resolve()
-    .then(() => verifyFinalLocation(url, page.url))
-    .then(() => null, (error) => error);
-  await closeCdpPage(page.id);
-  if (locationError) throw locationError;
+  verifyFinalLocation(url, page.url);
   // Anything but the envelope our own expression returns means the extractor
   // found no server-rendered payload, or `Runtime.evaluate` itself threw. Fail
   // loudly: a swallowed extraction failure would look like a clean empty sync

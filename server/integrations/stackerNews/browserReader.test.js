@@ -18,7 +18,10 @@ describe('Stacker News browser read transport', () => {
     await expect(readMe()).resolves.toEqual({ me: { id: '77', name: 'example_user' } });
     expect(navigateToUrlPinned.mock.calls[0][0]).toBe('https://stacker.news');
     expect(navigateToUrlPinned.mock.calls[0][1].evaluateExpression).toContain('__NEXT_DATA__');
-    expect(closeCdpPage).toHaveBeenCalledWith('page-1');
+    // Teardown of a read tab belongs to `navigateToUrlPinned` (#3365): passing
+    // `evaluateExpression` IS the request for it, so this transport must not
+    // close anything itself — the tab is already gone when it returns.
+    expect(closeCdpPage).not.toHaveBeenCalled();
   });
 
   // The identity extractor is shared with the handoff's "Check browser identity"
@@ -110,10 +113,13 @@ describe('Stacker News browser read transport', () => {
     });
   });
 
-  it('refuses a navigation that landed off the fixed origin, and still closes the tab', async () => {
+  // The off-origin refusal used to have to close the tab BEFORE throwing. The
+  // tab is now already torn down by the time the pinned navigation returns, so
+  // the throw can be direct and this module still leaks nothing.
+  it('refuses a navigation that landed off the fixed origin, without owning the tab', async () => {
     navigateToUrlPinned.mockResolvedValue(page('https://example.com/~example/recent', { items: { cursor: null, items: [] } }));
     await expect(readItems('example')).rejects.toThrow('left the fixed origin');
-    expect(closeCdpPage).toHaveBeenCalledWith('page-1');
+    expect(closeCdpPage).not.toHaveBeenCalled();
   });
 
   // Stacker News redirects a renamed/merged territory to a different same-origin
@@ -122,7 +128,7 @@ describe('Stacker News browser read transport', () => {
   it('refuses a same-origin redirect to a different territory', async () => {
     navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~other/recent', { items: { cursor: null, items: [] } }));
     await expect(readItems('example')).rejects.toThrow('different page than the one requested');
-    expect(closeCdpPage).toHaveBeenCalledWith('page-1');
+    expect(closeCdpPage).not.toHaveBeenCalled();
   });
 
   it('tolerates a trailing-slash or case difference in the landed URL', async () => {

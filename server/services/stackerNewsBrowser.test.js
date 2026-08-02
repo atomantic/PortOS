@@ -26,18 +26,25 @@ describe('Stacker News CDP handoff', () => {
   });
 
   // The identity read is scratch: without teardown every check (and every
-  // handoff, which checks first) leaves another stacker.news tab behind.
-  it('tears the identity tab down and leaves ONLY the handoff tab open', async () => {
+  // handoff, which checks first) leaves another stacker.news tab behind. That
+  // teardown is `navigateToUrlPinned`'s job now — supplying `evaluateExpression`
+  // IS the request for it (#3365) — so what this asserts is the delegation:
+  // the identity nav opts in, the handoff nav (the tab the user keeps) does not,
+  // and this module closes nothing itself.
+  it('delegates identity-tab teardown to the pinned navigation and leaves ONLY the handoff tab open', async () => {
     navigateToUrlPinned
       .mockResolvedValueOnce({ id: 'identity', url: 'https://stacker.news', evalResult: { username: 'example_user' } })
       .mockResolvedValueOnce({ id: 'item', url: 'https://stacker.news/items/42' });
     await openStackerNewsHandoff({ kind: 'item', value: '42', expectedUsername: 'example_user' });
-    expect(closeCdpPage.mock.calls).toEqual([['identity']]);
+    expect(navigateToUrlPinned.mock.calls[0][1].evaluateExpression).toBeTruthy();
+    expect(navigateToUrlPinned.mock.calls[1][1]).not.toHaveProperty('evaluateExpression');
+    expect(closeCdpPage).not.toHaveBeenCalled();
   });
 
-  it('closes the identity tab on a standalone identity check', async () => {
+  it('delegates identity-tab teardown on a standalone identity check', async () => {
     navigateToUrlPinned.mockResolvedValue({ id: 'identity', url: 'https://stacker.news', evalResult: { username: 'example_user' } });
     await expect(getStackerNewsBrowserIdentity()).resolves.toEqual({ username: 'example_user', url: 'https://stacker.news' });
-    expect(closeCdpPage).toHaveBeenCalledWith('identity');
+    expect(navigateToUrlPinned.mock.calls[0][1].evaluateExpression).toBeTruthy();
+    expect(closeCdpPage).not.toHaveBeenCalled();
   });
 });
