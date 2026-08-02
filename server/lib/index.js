@@ -105,6 +105,7 @@ export * from './kimi.js';
 export * from './mediaModels.js';
 export * from './promptPartials.js';
 export * from './promptRunner.js';
+export * from './promptSystemStages.js';
 export * from './promptTemplate.js';
 export * from './providerModels.js';
 export * from './providerTranscriptUsage.js';

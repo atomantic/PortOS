@@ -43,6 +43,10 @@ const STAGES = {
   'brain-classifier': { name: 'Brain Classifier', description: 'Classify a thought' },
 };
 
+// The system-stage list is served, not mirrored client-side (#3314) — the page
+// badges and filters exactly what GET /api/prompts names in `systemStages`.
+const SYSTEM_STAGES = ['brain-classifier'];
+
 const renderPage = (entry = '/prompts') => render(
   <MemoryRouter initialEntries={[entry]}>
     <PromptManager />
@@ -54,7 +58,7 @@ const groupHeader = (label) => screen.getByRole('button', { name: new RegExp(`^$
 
 describe('PromptManager stage list', () => {
   beforeEach(() => {
-    getPrompts.mockReset().mockResolvedValue({ stages: STAGES });
+    getPrompts.mockReset().mockResolvedValue({ stages: STAGES, systemStages: SYSTEM_STAGES });
     getPrompt.mockReset().mockResolvedValue({ name: 'Pipeline — Prose Draft', template: 'body', variables: [] });
     getPromptUsage.mockReset().mockResolvedValue({ isSystemStage: false, usedBy: [] });
   });
@@ -165,6 +169,7 @@ describe('PromptManager stage list', () => {
         ...STAGES,
         'pipeline-lowercase': { name: 'pipeline — hand typed', description: 'user made' },
       },
+      systemStages: SYSTEM_STAGES,
     });
     renderPage();
     await screen.findByText('Prompt Stages');
@@ -220,6 +225,33 @@ describe('PromptManager stage list', () => {
     expect(screen.getByText('1 of 4')).toBeTruthy();
   });
 
+  // The badge and the filter follow the SERVED list, not a client-side copy of
+  // it (#3314) — a stage the server names is reachable even though no hardcoded
+  // client array ever mentioned it.
+  it('badges and filters whatever the server names in systemStages', async () => {
+    getPrompts.mockResolvedValue({ stages: STAGES, systemStages: ['creative-director-treatment'] });
+    renderPage();
+    await screen.findByText('Prompt Stages');
+
+    fireEvent.click(screen.getByRole('button', { name: /system only/i }));
+    expect(screen.getByText('Creative Director — Treatment')).toBeTruthy();
+    expect(screen.queryByText('Brain Classifier')).toBeNull();
+    expect(screen.getByText('1 of 4')).toBeTruthy();
+    expect(screen.getAllByText('System')).toHaveLength(1);
+  });
+
+  // An older server (or a failed load) sends no list: badge nothing, filter to
+  // nothing — never crash on a missing key.
+  it('degrades to no system stages when the server omits the list', async () => {
+    getPrompts.mockResolvedValue({ stages: STAGES });
+    renderPage();
+    await screen.findByText('Prompt Stages');
+
+    fireEvent.click(screen.getByRole('button', { name: /system only/i }));
+    expect(screen.getByText('No stages match that search')).toBeTruthy();
+    expect(screen.getByText('0 of 4')).toBeTruthy();
+  });
+
   it('selects a stage into the URL from a filtered row', async () => {
     renderPage();
     await screen.findByText('Prompt Stages');
@@ -243,7 +275,7 @@ describe('PromptManager stage list', () => {
 
 describe('PromptManager delete demotion', () => {
   beforeEach(() => {
-    getPrompts.mockReset().mockResolvedValue({ stages: STAGES });
+    getPrompts.mockReset().mockResolvedValue({ stages: STAGES, systemStages: SYSTEM_STAGES });
     getPrompt.mockReset().mockResolvedValue({ name: 'Brain Classifier', template: 'body', variables: [] });
     getPromptUsage.mockReset().mockResolvedValue({ isSystemStage: true, usedBy: ['Brain thought classification'] });
   });

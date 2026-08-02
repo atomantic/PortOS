@@ -23,9 +23,7 @@ import {
 } from '../services/apiPrompts';
 import { getProviders } from '../services/apiProviders';
 import Pill from '../components/ui/Pill';
-// Aliased: `confirmDeleteStage` destructures an `isSystemStage` field off the
-// pending-delete record, which would otherwise shadow this import.
-import { buildStageGroups, stageGroupKeyFor, isSystemStage as isSystemStageKey } from '../lib/promptStageGroups';
+import { buildStageGroups, stageGroupKeyFor } from '../lib/promptStageGroups';
 
 const VALID_PROMPT_TABS = ['stages', 'variables', 'job-skills'];
 
@@ -54,6 +52,11 @@ export default function PromptManager() {
   const setSelectedStage = (name) => setParam('stage', name);
   const setSelectedVar = (key) => setParam('var', key);
   const [stages, setStages] = useState({});
+  // Which stage keys PortOS features call by name. Served by GET /api/prompts
+  // (`server/lib/promptSystemStages.js`) rather than mirrored client-side, so
+  // the SYSTEM badge and the "System only" filter can never disagree with the
+  // stages the server actually force-guards on delete (#3314).
+  const [systemStageKeys, setSystemStageKeys] = useState([]);
   const [variables, setVariables] = useState({});
   const [loading, setLoading] = useState(true);
 
@@ -109,12 +112,16 @@ export default function PromptManager() {
   const loadData = async () => {
     setLoading(true);
     const [stagesRes, varsRes, jobSkillsRes, providersRes] = await Promise.all([
-      getPrompts({ silent: true }).catch(() => ({ stages: {} })),
+      getPrompts({ silent: true }).catch(() => ({ stages: {}, systemStages: [] })),
       getPromptVariables({ silent: true }).catch(() => ({ variables: {} })),
       getJobSkills({ silent: true }).catch(() => ({ skills: [] })),
       getProviders({ silent: true }).catch(() => ({ providers: [] }))
     ]);
     setStages(stagesRes.stages || {});
+    // `Array.isArray` rather than `|| []`: an older server that predates the
+    // `systemStages` key sends nothing, which must read as "no system stages
+    // known" (no badges, empty System-only filter) — never as a crash.
+    setSystemStageKeys(Array.isArray(stagesRes.systemStages) ? stagesRes.systemStages : []);
     setVariables(varsRes.variables || {});
     setJobSkills(jobSkillsRes.skills || []);
     setProviders((providersRes.providers || []).filter(p => p.enabled));
@@ -295,9 +302,12 @@ export default function PromptManager() {
 
   const stageFilterActive = stageQuery.trim() !== '' || systemOnly;
   const { groups: stageGroups, matchCount: stageMatchCount, totalCount: stageTotalCount } = useMemo(
-    () => buildStageGroups(stages, { query: stageQuery, systemOnly }),
-    [stages, stageQuery, systemOnly],
+    () => buildStageGroups(stages, { query: stageQuery, systemOnly, systemStageKeys }),
+    [stages, stageQuery, systemOnly, systemStageKeys],
   );
+  // Badge lookup for the row render — a Set so the O(n) list render doesn't
+  // re-scan the key array per row.
+  const systemStageSet = useMemo(() => new Set(systemStageKeys), [systemStageKeys]);
 
   // The group holding the open stage expands itself so a deep link / reload
   // lands with its row visible. Seeding STATE (rather than forcing it open at
@@ -490,7 +500,7 @@ export default function PromptManager() {
                           >
                             <div className="flex items-center gap-1">
                               <span className="font-medium truncate">{config.name || name}</span>
-                              {isSystemStageKey(name) && (
+                              {systemStageSet.has(name) && (
                                 <Pill tone="bare" size="xs" bordered={false} className="shrink-0 bg-port-accent/20 text-port-accent uppercase font-semibold">
                                   System
                                 </Pill>

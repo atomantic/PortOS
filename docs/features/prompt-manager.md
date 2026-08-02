@@ -40,7 +40,7 @@ Templates use Mustache-like syntax:
 
 | Route | Description |
 |-------|-------------|
-| GET /api/prompts | List all prompt stages |
+| GET /api/prompts | List all prompt stages — `{ stages, systemStages }`, where `systemStages` is the key list from `server/lib/promptSystemStages.js` (the stages PortOS features call by name, which the client badges and DELETE force-guards) |
 | GET /api/prompts/:stage | Get stage template |
 | PUT /api/prompts/:stage | Update stage/template |
 | POST /api/prompts/:stage/preview | Preview compiled prompt |

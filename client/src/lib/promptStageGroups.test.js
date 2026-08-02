@@ -8,8 +8,6 @@ import {
   stageGroupLabelFor,
   stageGroupKeyFor,
   stageHaystack,
-  isSystemStage,
-  SYSTEM_STAGE_KEYS,
   OTHER_GROUP_LABEL,
 } from './promptStageGroups.js';
 
@@ -59,16 +57,6 @@ describe('stageGroupLabel', () => {
     expect(stageGroupLabel('')).toBe(OTHER_GROUP_LABEL);
     expect(stageGroupLabel(null)).toBe(OTHER_GROUP_LABEL);
     expect(stageGroupLabel('Wholly Novel Thing')).toBe(OTHER_GROUP_LABEL);
-  });
-});
-
-describe('isSystemStage', () => {
-  it('recognizes the mirrored server list', () => {
-    for (const key of SYSTEM_STAGE_KEYS) expect(isSystemStage(key)).toBe(true);
-  });
-  it('is false for user stages', () => {
-    expect(isSystemStage('pipeline-prose-draft')).toBe(false);
-    expect(isSystemStage(undefined)).toBe(false);
   });
 });
 
@@ -145,17 +133,31 @@ describe('buildStageGroups', () => {
     expect(buildStageGroups(stages, { query: '   ' }).matchCount).toBe(6);
   });
 
+  // The list the server ships as `systemStages` on GET /api/prompts.
+  const systemStageKeys = ['cos-evaluate', 'brain-classifier'];
+
   it('narrows to system stages when systemOnly is set', () => {
-    const { groups, matchCount, totalCount } = buildStageGroups(stages, { systemOnly: true });
+    const { groups, matchCount, totalCount } = buildStageGroups(stages, { systemOnly: true, systemStageKeys });
     expect(totalCount).toBe(6);
     expect(matchCount).toBe(2);
     expect(groups.flatMap(g => g.stages.map(([k]) => k)).sort()).toEqual(['brain-classifier', 'cos-evaluate']);
   });
 
   it('composes systemOnly with a query', () => {
-    const { matchCount } = buildStageGroups(stages, { query: 'classify', systemOnly: true });
+    const { matchCount } = buildStageGroups(stages, { query: 'classify', systemOnly: true, systemStageKeys });
     expect(matchCount).toBe(1);
-    expect(buildStageGroups(stages, { query: 'prose', systemOnly: true }).matchCount).toBe(0);
+    expect(buildStageGroups(stages, { query: 'prose', systemOnly: true, systemStageKeys }).matchCount).toBe(0);
+  });
+
+  // A server that predates the `systemStages` key (or a failed load) leaves the
+  // list empty — System-only must then read as "nothing known", never throw.
+  it('matches nothing under systemOnly when no keys were served', () => {
+    expect(buildStageGroups(stages, { systemOnly: true }).matchCount).toBe(0);
+    expect(buildStageGroups(stages, { systemOnly: true, systemStageKeys: [] }).groups).toEqual([]);
+  });
+
+  it('ignores systemStageKeys when systemOnly is off', () => {
+    expect(buildStageGroups(stages, { systemStageKeys }).matchCount).toBe(6);
   });
 
   it('returns no groups but a real total when nothing matches', () => {

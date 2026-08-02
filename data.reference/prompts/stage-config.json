@@ -145,6 +145,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "cos-task-enhance": {
+      "name": "CoS Task Enhancement",
+      "description": "Research the codebase and expand a brief task description into an executable agent prompt",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
+    },
     "memory-evaluate": {
       "name": "Memory Evaluation",
       "description": "Evaluate agent output to extract useful memories",

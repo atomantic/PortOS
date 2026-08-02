@@ -97,6 +97,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `tuiHandshake.js` | Shared TUI invocation + paste-handshake constants. |
 | `tuiUsageScrape.js` | `scrapeTuiUsage({ command, slashCommand, … })` + `USAGE_SANDBOX_DIR` — drive an agy/grok TUI in a sandbox PTY, send a slash command, return the ANSI-stripped screen (for quota panels `--print` can't reach). |
 | `stageRunner.js` | Shared staged-LLM runner. |
+| `promptSystemStages.js` | Single source of truth for the prompt stages PortOS features resolve by literal key — `SYSTEM_STAGE_USAGE` (`key -> usedBy[]` feature-name copy), the derived `SYSTEM_STAGE_KEYS`, `isSystemStage(key)`, `systemStageUsedBy(key)`. Read by `GET /api/prompts` (ships the key list to the client), `GET /api/prompts/:stage/usage`, and the `DELETE /api/prompts/:stage` force-guard. Adding a feature that names a stage by literal key means adding a row here. |
 | `promptTemplate.js` | Mustache-flavored, dot-notation-aware prompt template engine. |
 | `promptPartials.js` | Mustache-style partial expansion. |
 | `mediaModels.js` | Single source of truth for image/video model metadata. |

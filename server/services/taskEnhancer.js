@@ -10,6 +10,7 @@
 import { getActiveProvider, getProviderById } from './providers.js';
 import { getStage, buildPrompt } from './promptService.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { resolveModel } from '../lib/stageRunner.js';
 
 const STAGE_NAME = 'cos-task-enhance';
 
@@ -70,20 +71,28 @@ export async function enhanceTaskPrompt(description, context = '') {
   // Get prompt stage configuration for cos-task-enhance
   const stage = getStage(STAGE_NAME);
 
-  // Determine provider and model from stage config or fallback
+  // Determine provider and model from stage config or fallback.
+  // `stage.model` is usually a TIER name (`default`/`quick`/`coding`/`heavy`)
+  // rather than a model id — that is what the Prompt Manager's model dropdown
+  // writes — so it has to go through `resolveModel`, which maps the tier onto
+  // the provider's per-tier model field and falls back to defaultModel /
+  // models[0]. Passing the raw value straight through would send the literal
+  // string `default` to the provider as a model name (#3314: shipping the
+  // `cos-task-enhance` stage-config entry is what first made stage.model
+  // non-null here).
   let provider;
   let model;
 
   if (stage?.provider) {
     // Use stage-configured provider
     provider = await getProviderById(stage.provider).catch(() => null);
-    model = stage.model || provider?.defaultModel;
+    if (provider) model = resolveModel(provider, stage.model);
   }
 
   // Fallback to active provider if stage provider not available
   if (!provider) {
     provider = await getActiveProvider();
-    model = stage?.model || provider?.defaultModel || provider?.models?.[0];
+    if (provider) model = resolveModel(provider, stage?.model);
   }
 
   if (!provider) {

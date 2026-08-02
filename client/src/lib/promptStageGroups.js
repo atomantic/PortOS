@@ -16,22 +16,6 @@
 
 import { tokenizeQuery, matchHaystack } from './mediaSearch.js';
 
-// Stages PortOS features call by name. Mirror of the `systemStages` table in
-// `server/routes/prompts.js` — the server is authoritative for *deletion*
-// (it force-guards on its own copy); this copy only drives the SYSTEM badge and
-// the SYSTEM-only filter, so a drift here is cosmetic, never destructive.
-export const SYSTEM_STAGE_KEYS = [
-  'cos-agent-briefing', 'cos-evaluate', 'cos-report-summary', 'cos-self-improvement',
-  'cos-task-enhance', 'brain-classifier', 'brain-daily-digest', 'brain-weekly-review',
-  'memory-evaluate', 'app-detection',
-];
-
-const SYSTEM_STAGE_SET = new Set(SYSTEM_STAGE_KEYS);
-
-export function isSystemStage(key) {
-  return SYSTEM_STAGE_SET.has(key);
-}
-
 // Bucket for names that carry neither a dash prefix nor a known leading word.
 export const OTHER_GROUP_LABEL = 'Other';
 
@@ -123,15 +107,21 @@ export function stageHaystack(key, config) {
  * identity to store open/closed state under, `label` the first spelling seen.
  * Groups sort alphabetically with `Other` pinned last, stages by display name.
  *
+ * `systemStageKeys` is the `systemStages` list `GET /api/prompts` ships — the
+ * server's own table (`server/lib/promptSystemStages.js`), not a client mirror,
+ * so the "System only" filter can never disagree with the stages the server
+ * actually protects from deletion (#3314).
+ *
  * An empty query and `systemOnly: false` return everything, so the same call
  * drives both the unfiltered and the filtered render.
  */
-export function buildStageGroups(stages, { query = '', systemOnly = false } = {}) {
+export function buildStageGroups(stages, { query = '', systemOnly = false, systemStageKeys = [] } = {}) {
   const entries = Object.entries(stages || {});
   const tokens = tokenizeQuery(query);
+  const systemSet = new Set(systemStageKeys);
 
   const matched = entries.filter(([key, config]) => {
-    if (systemOnly && !isSystemStage(key)) return false;
+    if (systemOnly && !systemSet.has(key)) return false;
     if (tokens.length === 0) return true;
     return matchHaystack(stageHaystack(key, config), tokens);
   });
