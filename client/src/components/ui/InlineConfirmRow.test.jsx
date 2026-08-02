@@ -89,6 +89,21 @@ describe('InlineConfirmRow', () => {
     expect(screen.getByRole('button', { name: 'Cancel' }).className).toContain('hover:text-white');
   });
 
+  it('is not focusable by default', () => {
+    render(<InlineConfirmRow question="x" />);
+    const wrapper = screen.getByText('x').closest('div');
+    expect(wrapper.hasAttribute('tabindex')).toBe(false);
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('focuses the row (never the destructive button) when autoFocus is set', () => {
+    render(<InlineConfirmRow question="x" autoFocus aria-label="Confirm deletion of Thing" />);
+    const wrapper = screen.getByText('x').closest('div');
+    expect(wrapper.getAttribute('tabindex')).toBe('-1');
+    expect(document.activeElement).toBe(wrapper);
+    expect(document.activeElement).not.toBe(screen.getByRole('button', { name: 'Delete' }));
+  });
+
   it('falls back to the box variant for an unknown variant value', () => {
     render(<InlineConfirmRow question="x" variant="bogus" />);
     const wrapper = screen.getByText('x').closest('div');

@@ -1,3 +1,5 @@
+import { useEffect, useRef } from 'react';
+
 // Inline "question + confirm + cancel" row for destructive actions — the
 // inline-confirmation pattern PortOS prefers over a two-click-arm button or a
 // window.confirm() modal. Shaped for confirm/cancel prompts, which is why these
@@ -38,13 +40,30 @@ export default function InlineConfirmRow({
   tone = 'error',
   variant = 'box',
   className = '',
+  autoFocus = false,
   ...rest
 }) {
   const t = TONES[tone] || TONES.error;
   const v = VARIANTS[variant] || VARIANTS.box;
+  const rowRef = useRef(null);
+
+  // `autoFocus` moves focus to the row itself (not to the destructive button —
+  // a stray Enter must not delete anything). Callers that reveal this row from
+  // another control (a "…" menu item, a toolbar button) should set it so
+  // keyboard/screen-reader users land on, and hear, the question instead of
+  // being left on a trigger whose menu just vanished. Pair it with an
+  // `aria-label` naming the record so the focus move announces something.
+  useEffect(() => {
+    if (autoFocus) rowRef.current?.focus();
+  }, [autoFocus]);
 
   return (
-    <div className={`flex items-center gap-2 ${v.frame} ${t.wrapper} ${className}`.trim()} {...rest}>
+    <div
+      ref={rowRef}
+      tabIndex={autoFocus ? -1 : undefined}
+      className={`flex items-center gap-2 ${v.frame} ${t.wrapper} focus:outline-hidden focus:ring-2 focus:ring-port-accent ${className}`.trim()}
+      {...rest}
+    >
       <span className={`${v.question} text-white flex-1`}>{question}</span>
       <button
         type="button"

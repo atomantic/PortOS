@@ -414,6 +414,7 @@ export default function Apps() {
                 {confirmingDelete === app.id && (
                   <InlineConfirmRow
                     className="mt-3"
+                    autoFocus
                     question={`Delete ${app.name}? This removes it from PortOS and cannot be undone.`}
                     confirmText="Delete"
                     cancelText="Cancel"

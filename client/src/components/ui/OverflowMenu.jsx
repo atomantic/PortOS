@@ -89,6 +89,9 @@ export default function OverflowMenu({ label, items = [], className = '' }) {
               type="button"
               role="menuitem"
               disabled={item.disabled}
+              // Close first so focus lands somewhere real; an item that reveals
+              // follow-up UI (an inline confirm) owns moving focus onward from
+              // there — its mount effect runs after this commit and wins.
               onClick={() => { close(true); item.onSelect?.(); }}
               className={`w-full px-3 py-2 min-h-[40px] text-left text-xs flex items-center gap-2 transition-colors disabled:opacity-50 focus:outline-hidden focus:bg-port-border/70 ${TONES[item.tone] || TONES.default}`}
             >

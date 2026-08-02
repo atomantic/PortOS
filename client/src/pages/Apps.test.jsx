@@ -94,6 +94,10 @@ describe('Apps row action hierarchy', () => {
     const confirm = screen.getByLabelText('Confirm deletion of Example App');
     expect(confirm.textContent).toContain('cannot be undone');
 
+    // Focus follows the revealed confirmation instead of being stranded on the
+    // "…" trigger whose menu just closed.
+    expect(document.activeElement).toBe(confirm);
+
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(api.deleteApp).not.toHaveBeenCalled();
     expect(screen.queryByLabelText('Confirm deletion of Example App')).toBeNull();
