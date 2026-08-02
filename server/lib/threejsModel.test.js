@@ -162,6 +162,58 @@ describe('threejsGeometrySchema extrude/tube validation', () => {
     expect(result.error.issues.some((issue) => issue.message.includes('falls outside the outline'))).toBe(true);
   });
 
+  it('rejects overlapping and nested holes', () => {
+    const overlapping = threejsGeometrySchema.safeParse({
+      ...validExtrude(),
+      holes: [
+        [[-0.6, -0.4], [0.1, -0.4], [0.1, 0.4], [-0.6, 0.4]],
+        [[-0.1, -0.4], [0.6, -0.4], [0.6, 0.4], [-0.1, 0.4]],
+      ],
+    });
+    expect(overlapping.success).toBe(false);
+    expect(overlapping.error.issues.some((issue) => issue.message.includes('overlaps hole 0'))).toBe(true);
+
+    const nested = threejsGeometrySchema.safeParse({
+      ...validExtrude(),
+      holes: [
+        [[-0.6, -0.6], [0.6, -0.6], [0.6, 0.6], [-0.6, 0.6]],
+        [[-0.2, -0.2], [0.2, -0.2], [0.2, 0.2], [-0.2, 0.2]],
+      ],
+    });
+    expect(nested.success).toBe(false);
+    expect(nested.error.issues.some((issue) => issue.message.includes('overlaps hole 0'))).toBe(true);
+  });
+
+  it('accepts disjoint holes inside the outline', () => {
+    expect(threejsGeometrySchema.safeParse({
+      ...validExtrude(),
+      holes: [
+        [[-0.7, -0.3], [-0.3, -0.3], [-0.3, 0.3], [-0.7, 0.3]],
+        [[0.3, -0.3], [0.7, -0.3], [0.7, 0.3], [0.3, 0.3]],
+      ],
+    }).success).toBe(true);
+  });
+
+  it('rejects a closed tube that cannot enclose a loop', () => {
+    const twoPoint = threejsGeometrySchema.safeParse({
+      type: 'tube', radius: 0.1, closed: true, path: [[0, 0, 0], [1, 0, 0]],
+    });
+    expect(twoPoint.success).toBe(false);
+    expect(twoPoint.error.issues.some((issue) => issue.message.includes('three non-collinear points'))).toBe(true);
+
+    const collinear = threejsGeometrySchema.safeParse({
+      type: 'tube', radius: 0.1, closed: true, path: [[0, 0, 0], [1, 1, 1], [3, 3, 3]],
+    });
+    expect(collinear.success).toBe(false);
+    expect(collinear.error.issues.some((issue) => issue.message.includes('three non-collinear points'))).toBe(true);
+  });
+
+  it('accepts a two-point open tube path', () => {
+    expect(threejsGeometrySchema.safeParse({
+      type: 'tube', radius: 0.1, path: [[0, 0, 0], [1, 0, 0]],
+    }).success).toBe(true);
+  });
+
   it('accepts a hole fully inside a concave outline', () => {
     const result = threejsGeometrySchema.safeParse({
       ...validExtrude(),

@@ -120,6 +120,12 @@ const ringsCross = (outer, inner) => {
 const ringContainsRing = (outer, inner) =>
   inner.every((point) => pointInRing(outer, point)) && !ringsCross(outer, inner);
 
+// Two holes that touch, cross, or nest are one cutout described twice; the
+// triangulator resolves the doubled winding by leaving material inside them.
+const ringsOverlap = (a, b) => ringsCross(a, b)
+  || b.every((point) => pointInRing(a, point))
+  || a.every((point) => pointInRing(b, point));
+
 const outlineRingSchema = z.array(z.tuple([finite, finite])).min(3).max(160)
   .refine((ring) => ringArea(ring) > MIN_RING_AREA, 'outline must enclose a non-zero area');
 
@@ -141,8 +147,31 @@ const extrudeGeometrySchema = z.object({
     if (!ringContainsRing(definition.outline, hole)) {
       ctx.addIssue({ code: 'custom', message: `extrude hole ${index} falls outside the outline`, path: ['holes', index] });
     }
+    for (let other = 0; other < index; other += 1) {
+      if (ringsOverlap(definition.holes[other], hole)) {
+        ctx.addIssue({ code: 'custom', message: `extrude hole ${index} overlaps hole ${other}`, path: ['holes', index] });
+      }
+    }
   });
 });
+
+// Exact collinearity only — the epsilon guards float noise, never near-straight
+// paths, which sweep a perfectly good tube.
+const isCollinearPath = (points) => {
+  const [origin] = points;
+  const spread = points.find((point) => point.some((value, axis) => value !== origin[axis]));
+  if (!spread) return true;
+  const direction = spread.map((value, axis) => value - origin[axis]);
+  return points.every((point) => {
+    const offset = point.map((value, axis) => value - origin[axis]);
+    const cross = [
+      (direction[1] * offset[2]) - (direction[2] * offset[1]),
+      (direction[2] * offset[0]) - (direction[0] * offset[2]),
+      (direction[0] * offset[1]) - (direction[1] * offset[0]),
+    ];
+    return cross.every((component) => Math.abs(component) < 1e-9);
+  });
+};
 
 const tubeGeometrySchema = z.object({
   type: z.literal('tube'),
@@ -158,12 +187,18 @@ const tubeGeometrySchema = z.object({
   curveType: z.enum(['centripetal', 'chordal', 'catmullrom']).default('centripetal'),
   tension: z.number().finite().min(0).max(1).default(0.5),
 }).superRefine((definition, ctx) => {
+  if (!definition.closed) return;
   const first = definition.path[0];
   const last = definition.path[definition.path.length - 1];
   // A closed curve already joins the endpoints; repeating the seam point yields a
   // zero-length segment and NaN frames in the centripetal/chordal parameterizations.
-  if (definition.closed && first.every((value, axis) => value === last[axis])) {
+  if (first.every((value, axis) => value === last[axis])) {
     ctx.addIssue({ code: 'custom', message: 'a closed tube path must not repeat its first point at the end', path: ['path'] });
+  }
+  // Fewer than three points — or any number of collinear ones — closes into a
+  // curve that runs out and retraces itself, so the tube overlaps its own surface.
+  if (definition.path.length < 3 || isCollinearPath(definition.path)) {
+    ctx.addIssue({ code: 'custom', message: 'a closed tube path needs at least three non-collinear points', path: ['path'] });
   }
 });
 

@@ -36,13 +36,18 @@ and the bounded `custom` triangle mesh, the schema carries two constructive
 forms so silhouette-defining shapes don't have to degrade into a coarse mesh:
 
 - `extrude` — a closed 2D outline (3–160 points) with optional hole rings,
-  swept to `depth` with optional bevel. Every ring must enclose real area and
-  each hole must lie inside the outline, so a degenerate or stray ring is
-  rejected instead of rendering as an empty or disjoint face.
+  swept to `depth` with optional bevel. Every ring must enclose real area; each
+  hole must lie strictly inside the outline (point-in-polygon on every vertex
+  plus an edge sweep, since a concave outline's bounding box covers empty space
+  its notch does not); and holes may not touch, cross, or nest. Each of those
+  cases triangulates into an empty face, a disjoint face, or solid material
+  inside a requested cutout rather than failing, so they are rejected up front.
 - `tube` — a round profile of `radius` swept along a 2–96 point Catmull-Rom
   path. Consecutive points must differ and a `closed` path must not repeat its
   first point, because either produces NaN frames in the centripetal/chordal
-  parameterizations.
+  parameterizations. A `closed` path also needs three non-collinear points —
+  fewer, or a straight line, closes into a curve that runs out and retraces
+  itself, overlapping the tube with its own surface.
 
 `type: "physical"` materials additionally carry bounded `ior`, `transmission`,
 `thickness`, `sheen`, `iridescence`, and `anisotropy` for glass, cloth,

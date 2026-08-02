@@ -14,8 +14,8 @@ Allowed geometry definitions:
 - {"type":"torus","radius":n,"tube":n,"radialSegments":3..64,"tubularSegments":6..128,"arcDegrees":1..360}
 - {"type":"capsule","radius":n,"length":n,"capSegments":2..32,"radialSegments":3..64}
 - {"type":"lathe","points":[[x,y],...],"segments":3..96}
-- {"type":"extrude","outline":[[x,y],...],"holes":[[[x,y],...],...],"depth":n,"bevelEnabled":false,"bevelThickness":n,"bevelSize":n,"bevelSegments":0..8,"curveSegments":1..24,"steps":1..32} (a closed 2D outline of 3..160 points swept along +Z; \`holes\` are closed rings cut out of it. Every ring must enclose real area and every hole must lie inside the outline.)
-- {"type":"tube","path":[[x,y,z],...],"radius":n,"tubularSegments":2..256,"radialSegments":3..32,"closed":false,"curveType":"centripetal"|"chordal"|"catmullrom","tension":0..1} (a round profile swept along a smooth 2..96 point curve. Consecutive path points must differ, and a closed path must not repeat its first point at the end.)
+- {"type":"extrude","outline":[[x,y],...],"holes":[[[x,y],...],...],"depth":n,"bevelEnabled":false,"bevelThickness":n,"bevelSize":n,"bevelSegments":0..8,"curveSegments":1..24,"steps":1..32} (a closed 2D outline of 3..160 points swept along +Z; \`holes\` are closed rings cut out of it. Every ring must enclose real area, every hole must lie strictly inside the outline, and holes must not touch, overlap, or nest inside each other.)
+- {"type":"tube","path":[[x,y,z],...],"radius":n,"tubularSegments":2..256,"radialSegments":3..32,"closed":false,"curveType":"centripetal"|"chordal"|"catmullrom","tension":0..1} (a round profile swept along a smooth 2..96 point curve. Consecutive path points must differ; a closed path must not repeat its first point at the end and needs at least three non-collinear points.)
 - {"type":"custom","vertices":[x,y,z,...],"indices":[a,b,c,...]} (triangle mesh; use only when primitives cannot express an identity-defining silhouette)
 
 Choosing between them:
@@ -104,7 +104,7 @@ WORKFLOW:
 6. Use physically coherent PBR material channels. Reach for "physical" with ior/transmission/thickness for glass, gems, liquid, and clear plastic, sheen for cloth and velvet, iridescence for oil-slick/soap-film/pearlescent finishes, and anisotropy for brushed metal or spun discs. Do not use textures, external meshes, URLs, downloaded assets, or JavaScript.
 7. Center the subject near the origin, keep dimensions internally consistent, and choose a camera that frames the whole model.
 8. Be honest about unseen sides in limitations. Infer conservatively; never claim exact hidden geometry.
-9. Ensure every detailInventory item points to real part ids, every material reference exists, every socket parent exists, all ids are unique, custom indices are in range, extrude rings enclose real area with holes inside the outline, and tube paths never repeat a point.
+9. Ensure every detailInventory item points to real part ids, every material reference exists, every socket parent exists, all ids are unique, custom indices are in range, extrude rings enclose real area with non-overlapping holes inside the outline, and tube paths never repeat a point.
 
 QUALITY GATE:
 - A compound subject must not collapse into one primitive.
