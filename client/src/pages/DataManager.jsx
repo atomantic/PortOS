@@ -128,6 +128,11 @@ function SizeBar({ size, maxSize }) {
 }
 
 function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPurge, onConfirmPurge, onCancelPurge, confirmingPurge, archiving, purging }) {
+  // Directories with no CATEGORIES entry come back with `classified: false` and
+  // no Archive/Purge flags. Say why the buttons are missing in outcome terms so
+  // the row reads as a deliberate safety stance, not a broken row (#3285).
+  // Older servers omit `classified`; treat only an explicit false as unknown.
+  const unclassified = cat.classified === false;
   return (
     <div className="border border-port-border rounded-lg overflow-hidden">
       <button
@@ -138,7 +143,7 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium text-white">{cat.label}</span>
-            <span className="text-xs text-gray-500">{cat.description}</span>
+            <span className={`text-xs ${unclassified ? 'text-port-warning' : 'text-gray-500'}`}>{cat.description}</span>
           </div>
           <div className="mt-1">
             <SizeBar size={cat.size} maxSize={maxSize} />
@@ -186,7 +191,11 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
                 </button>
               )}
               {!cat.archivable && !cat.deletable && (
-                <span className="text-xs text-gray-500">This category is protected and cannot be archived or deleted</span>
+                <span className="text-xs text-gray-500">
+                  {unclassified
+                    ? 'PortOS has no classification for this directory, so it withholds Archive and Purge rather than risk deleting something irreplaceable. Inspect the contents below and remove it from a terminal if you know it is safe.'
+                    : 'This category is protected and cannot be archived or deleted'}
+                </span>
               )}
             </div>
           )}
