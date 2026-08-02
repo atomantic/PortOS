@@ -113,6 +113,21 @@ const ringsCross = (outer, inner) => {
   return false;
 };
 
+// A ring that crosses itself has no defined interior — the shoelace area stays
+// non-zero (the lobes partly cancel) but the triangulator picks an arbitrary
+// filling, so require a simple polygon: no two non-adjacent edges may meet.
+const isSimpleRing = (ring) => {
+  for (let i = 0; i < ring.length; i += 1) {
+    for (let j = i + 1; j < ring.length; j += 1) {
+      const adjacent = j === i + 1 || (i === 0 && j === ring.length - 1);
+      if (!adjacent && segmentsCross(ring[i], ring[(i + 1) % ring.length], ring[j], ring[(j + 1) % ring.length])) {
+        return false;
+      }
+    }
+  }
+  return true;
+};
+
 // Vertex containment alone is not enough: a concave outline can hold every hole
 // vertex while an edge between two of them leaves through the notch. Bounded by
 // the ring caps (160 outline points × 12 holes × 160 hole points), so the O(n·m)
@@ -127,7 +142,8 @@ const ringsOverlap = (a, b) => ringsCross(a, b)
   || a.every((point) => pointInRing(b, point));
 
 const outlineRingSchema = z.array(z.tuple([finite, finite])).min(3).max(160)
-  .refine((ring) => ringArea(ring) > MIN_RING_AREA, 'outline must enclose a non-zero area');
+  .refine((ring) => ringArea(ring) > MIN_RING_AREA, 'outline must enclose a non-zero area')
+  .refine(isSimpleRing, 'outline must not cross itself');
 
 const extrudeGeometrySchema = z.object({
   type: z.literal('extrude'),

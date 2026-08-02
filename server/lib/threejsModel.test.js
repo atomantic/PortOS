@@ -125,6 +125,15 @@ describe('threejsGeometrySchema extrude/tube validation', () => {
     expect(threejsGeometrySchema.safeParse({ ...validExtrude(), holes: [collinear] }).success).toBe(false);
   });
 
+  it('rejects a self-crossing outline or hole', () => {
+    // Non-zero shoelace area, but the lobes cross so the interior is undefined.
+    const crossing = [[0, 0], [2, 4], [4, 0], [0, 3], [4, 3]];
+    const result = threejsGeometrySchema.safeParse({ ...validExtrude(), outline: crossing });
+    expect(result.success).toBe(false);
+    expect(result.error.issues.some((issue) => issue.message.includes('must not cross itself'))).toBe(true);
+    expect(threejsGeometrySchema.safeParse({ ...validExtrude(), holes: [crossing] }).success).toBe(false);
+  });
+
   it('rejects an outline with fewer than three points', () => {
     expect(threejsGeometrySchema.safeParse({ ...validExtrude(), outline: [[0, 0], [1, 1]] }).success).toBe(false);
   });

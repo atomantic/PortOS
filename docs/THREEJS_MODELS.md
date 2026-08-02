@@ -36,8 +36,10 @@ and the bounded `custom` triangle mesh, the schema carries two constructive
 forms so silhouette-defining shapes don't have to degrade into a coarse mesh:
 
 - `extrude` — a closed 2D outline (3–160 points) with optional hole rings,
-  swept to `depth` with optional bevel. Every ring must enclose real area; each
-  hole must lie strictly inside the outline (point-in-polygon on every vertex
+  swept to `depth` with optional bevel. Every ring must enclose real area and
+  be simple (a self-crossing ring has no defined interior, and its lobes partly
+  cancel so the area test alone does not catch it); each hole must lie strictly
+  inside the outline (point-in-polygon on every vertex
   plus an edge sweep, since a concave outline's bounding box covers empty space
   its notch does not); and holes may not touch, cross, or nest. Each of those
   cases triangulates into an empty face, a disjoint face, or solid material

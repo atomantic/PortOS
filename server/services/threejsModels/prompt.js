@@ -14,7 +14,7 @@ Allowed geometry definitions:
 - {"type":"torus","radius":n,"tube":n,"radialSegments":3..64,"tubularSegments":6..128,"arcDegrees":1..360}
 - {"type":"capsule","radius":n,"length":n,"capSegments":2..32,"radialSegments":3..64}
 - {"type":"lathe","points":[[x,y],...],"segments":3..96}
-- {"type":"extrude","outline":[[x,y],...],"holes":[[[x,y],...],...],"depth":n,"bevelEnabled":false,"bevelThickness":n,"bevelSize":n,"bevelSegments":0..8,"curveSegments":1..24,"steps":1..32} (a closed 2D outline of 3..160 points swept along +Z; \`holes\` are closed rings cut out of it. Every ring must enclose real area, every hole must lie strictly inside the outline, and holes must not touch, overlap, or nest inside each other.)
+- {"type":"extrude","outline":[[x,y],...],"holes":[[[x,y],...],...],"depth":n,"bevelEnabled":false,"bevelThickness":n,"bevelSize":n,"bevelSegments":0..8,"curveSegments":1..24,"steps":1..32} (a closed 2D outline of 3..160 points swept along +Z; \`holes\` are closed rings cut out of it. Every ring must enclose real area and must not cross itself, every hole must lie strictly inside the outline, and holes must not touch, overlap, or nest inside each other.)
 - {"type":"tube","path":[[x,y,z],...],"radius":n,"tubularSegments":2..256,"radialSegments":3..32,"closed":false,"curveType":"centripetal"|"chordal"|"catmullrom","tension":0..1} (a round profile swept along a smooth 2..96 point curve. Consecutive path points must differ; a closed path must not repeat its first point at the end and needs at least three non-collinear points.)
 - {"type":"custom","vertices":[x,y,z,...],"indices":[a,b,c,...]} (triangle mesh; use only when primitives cannot express an identity-defining silhouette)
 
