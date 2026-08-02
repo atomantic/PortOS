@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { ExternalLink, Gamepad2, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download, Hammer, Smartphone } from 'lucide-react';
+import { ExternalLink, Gamepad2, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download, Hammer, Smartphone, Trash2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
-import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
+import InlineConfirmRow from '../components/ui/InlineConfirmRow';
+import OverflowMenu from '../components/ui/OverflowMenu';
 import AppIcon from '../components/AppIcon';
 import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -228,7 +229,16 @@ export default function Apps() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <Link to={`/apps/${app.id}`} className={`font-medium hover:underline ${app.archived ? 'text-gray-400' : 'text-white'}`}>{app.name}</Link>
+                        <Link
+                          to={`/apps/${app.id}`}
+                          className={`font-medium underline decoration-dotted underline-offset-4 hover:decoration-solid transition-colors ${
+                            app.archived
+                              ? 'text-gray-400 decoration-gray-600 hover:text-gray-200'
+                              : 'text-port-accent decoration-port-accent/50 hover:text-white'
+                          }`}
+                        >
+                          {app.name}
+                        </Link>
                         {app.archived && (
                           <span className="px-1.5 py-0.5 bg-port-warning/20 text-port-warning text-xs rounded">
                             Archived
@@ -364,56 +374,54 @@ export default function Apps() {
                       </div>
                     )}
 
-                    {/* Edit/Delete Actions */}
-                    {confirmingDelete === app.id ? (
-                      <ConfirmButtonPair
-                        prompt="Remove?"
-                        confirmText="Yes"
-                        cancelText="No"
-                        ariaLabel={`Confirm deletion of ${app.name}`}
-                        onConfirm={() => handleDelete(app)}
-                        onCancel={() => setConfirmingDelete(null)}
-                      />
-                    ) : (
-                      <div className="flex items-center gap-2">
-                        {/* Archive/Unarchive button (hidden for PortOS baseline) */}
-                        {app.id !== api.PORTOS_APP_ID && (
-                          <button
-                            onClick={() => app.archived ? handleUnarchive(app) : handleArchive(app)}
-                            disabled={archiving[app.id]}
-                            className={`px-3 py-1.5 min-h-[40px] sm:min-h-0 rounded-lg text-xs flex items-center gap-1 transition-colors disabled:opacity-50 border ${
-                              app.archived
-                                ? 'bg-port-success/20 text-port-success border-port-success/30 hover:bg-port-success/30'
-                                : 'bg-port-border text-gray-400 border-port-border hover:text-white hover:bg-port-border/80'
-                            }`}
-                            aria-label={app.archived ? `Unarchive ${app.name}` : `Archive ${app.name}`}
-                          >
-                            {app.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
-                            {archiving[app.id] ? '...' : app.archived ? 'Unarchive' : 'Archive'}
-                          </button>
-                        )}
-                        <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
-                          <Link
-                            to={`/apps/${app.id}/overview`}
-                            className="px-3 py-1.5 min-h-[40px] sm:min-h-0 inline-flex items-center bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors text-xs focus:outline-hidden focus:ring-2 focus:ring-port-accent"
-                            aria-label={`Manage ${app.name}`}
-                          >
-                            Manage
-                          </Link>
-                          {app.id !== api.PORTOS_APP_ID && (
-                            <button
-                              onClick={() => setConfirmingDelete(app.id)}
-                              className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-error/10 text-port-error hover:bg-port-error/20 transition-colors text-xs border-l border-port-border focus:outline-hidden focus:ring-2 focus:ring-port-error"
-                              aria-label={`Delete ${app.name}`}
-                            >
-                              Delete
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    )}
+                    {/* Manage is the row's single primary action; the rare and
+                        destructive ones (Archive/Delete) live behind the "…"
+                        menu so Delete isn't the loudest control on the card. */}
+                    <div className="flex items-center gap-2">
+                      <Link
+                        to={`/apps/${app.id}/overview`}
+                        className="px-4 py-1.5 min-h-[40px] sm:min-h-0 inline-flex items-center rounded-lg bg-port-accent text-white hover:bg-port-accent/80 transition-colors text-xs font-medium focus:outline-hidden focus:ring-2 focus:ring-port-accent"
+                        aria-label={`Manage ${app.name}`}
+                      >
+                        Manage
+                      </Link>
+                      {/* Archive + Delete are withheld for the PortOS baseline app */}
+                      {app.id !== api.PORTOS_APP_ID && (
+                        <OverflowMenu
+                          label={`More actions for ${app.name}`}
+                          items={[
+                            {
+                              id: 'archive',
+                              label: archiving[app.id] ? 'Working…' : app.archived ? 'Unarchive' : 'Archive',
+                              icon: app.archived ? ArchiveRestore : Archive,
+                              disabled: !!archiving[app.id],
+                              onSelect: () => (app.archived ? handleUnarchive(app) : handleArchive(app)),
+                            },
+                            {
+                              id: 'delete',
+                              label: 'Delete',
+                              icon: Trash2,
+                              tone: 'danger',
+                              onSelect: () => setConfirmingDelete(app.id),
+                            },
+                          ]}
+                        />
+                      )}
+                    </div>
                   </div>
                 </div>
+
+                {confirmingDelete === app.id && (
+                  <InlineConfirmRow
+                    className="mt-3"
+                    question={`Delete ${app.name}? This removes it from PortOS and cannot be undone.`}
+                    confirmText="Delete"
+                    cancelText="Cancel"
+                    aria-label={`Confirm deletion of ${app.name}`}
+                    onConfirm={() => handleDelete(app)}
+                    onCancel={() => setConfirmingDelete(null)}
+                  />
+                )}
               </div>
 
               {/* Expanded Details */}
