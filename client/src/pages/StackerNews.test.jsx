@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 
 const api = {
   getStackerNewsAccounts: vi.fn(),
@@ -44,9 +44,21 @@ const accounts = [
   { id: 'a2', label: 'Personal', username: 'personal_stacker', enabled: true, monitoringEnabled: false, monitoringIntervalMinutes: 60, analysisEnabled: false, textModel: '', visionModel: '', rules: { guidance: 'Personal rules' }, apiKeyConfigured: false },
 ];
 
-function renderPage(path) {
-  return render(<MemoryRouter initialEntries={[path]}><Routes><Route path="/stacker-news" element={<StackerNews />} /><Route path="/stacker-news/:accountId/:tab" element={<StackerNews />} /></Routes></MemoryRouter>);
+// Surfaces the URL so tests can assert the deep-linkable bits — the selected
+// account/tab path and the drawer's `snAccount` / `snAccountTab` search params.
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location">{`${location.pathname}${location.search}`}</div>;
 }
+
+function renderPage(path) {
+  return render(<MemoryRouter initialEntries={[path]}><Routes><Route path="/stacker-news" element={<StackerNews />} /><Route path="/stacker-news/:accountId/:tab" element={<StackerNews />} /></Routes><LocationProbe /></MemoryRouter>);
+}
+
+const currentUrl = () => screen.getByTestId('location').textContent;
+const accountSwitcher = () => screen.getByLabelText('Stacker News account in scope');
+const drawerTab = (name) => screen.getByRole('tab', { name });
+const intervalField = (prefix = 'edit') => screen.getByLabelText('Monitoring interval (minutes)', { selector: `#${prefix}-account-interval` });
 
 function deferred() {
   let resolve;
@@ -66,28 +78,83 @@ describe('StackerNews', () => {
   });
 
   it('deep-links to one account and shows its independent schedule and rules', async () => {
+    const user = userEvent.setup();
     renderPage('/stacker-news/a1/accounts');
     expect(await screen.findByText('@art_steward · every 15m')).toBeInTheDocument();
-    expect(await screen.findByDisplayValue('Curate visual work')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('15')).toBeInTheDocument();
     expect(screen.getByText('@personal_stacker · monitoring off')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Edit account settings' }));
+    await user.click(drawerTab('Monitoring & models'));
+    expect(intervalField()).toHaveValue(15);
+    await user.click(drawerTab('Stewardship'));
+    expect(screen.getByDisplayValue('Curate visual work')).toBeInTheDocument();
   });
 
   it('opens account setup on the bare route so a first-time install is usable', async () => {
+    const user = userEvent.setup();
     renderPage('/stacker-news');
-    expect(await screen.findByRole('heading', { name: 'Add account' })).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Add account' }));
+    expect(await screen.findByRole('dialog', { name: 'Add account' })).toBeInTheDocument();
+    expect(currentUrl()).toContain('snAccount=new');
   });
 
   it('saves only the selected account configuration', async () => {
     const user = userEvent.setup();
     api.updateStackerNewsAccount.mockResolvedValue({ ...accounts[0], monitoringIntervalMinutes: 20 });
-    renderPage('/stacker-news/a1/accounts');
-    await screen.findByDisplayValue('Curate visual work');
-    const interval = screen.getByLabelText('Monitoring interval (minutes)', { selector: '#edit-account-interval' });
+    renderPage('/stacker-news/a1/accounts?snAccount=edit&snAccountTab=monitoring');
+    const interval = await screen.findByLabelText('Monitoring interval (minutes)', { selector: '#edit-account-interval' });
     await user.clear(interval);
     await user.type(interval, '20');
     await user.click(screen.getByRole('button', { name: 'Save account' }));
     await waitFor(() => expect(api.updateStackerNewsAccount).toHaveBeenCalledWith('a1', expect.objectContaining({ monitoringIntervalMinutes: 20 }), { silent: true }));
+    // A successful save closes the drawer and clears its search params.
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(currentUrl()).not.toContain('snAccount');
+  });
+
+  it('switches the account in scope from a non-account tab without leaving it', async () => {
+    const user = userEvent.setup();
+    renderPage('/stacker-news/a1/territory');
+    expect(await screen.findByRole('heading', { name: 'Communities for @art_steward' })).toBeInTheDocument();
+    await user.selectOptions(accountSwitcher(), 'a2');
+    expect(await screen.findByRole('heading', { name: 'Communities for @personal_stacker' })).toBeInTheDocument();
+    expect(currentUrl()).toBe('/stacker-news/a2/territory');
+    expect(screen.getByRole('tab', { name: 'Territory' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('names the account in scope on every scoped section', async () => {
+    const user = userEvent.setup();
+    renderPage('/stacker-news/a1/review');
+    expect(await screen.findByRole('heading', { name: 'Approval queue for @art_steward' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Monitored content for @art_steward' })).toBeInTheDocument();
+    expect(screen.getByText(/No actions are waiting for @art_steward/)).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: 'Territory' }));
+    expect(await screen.findByRole('heading', { name: 'Add community to @art_steward' })).toBeInTheDocument();
+    expect(screen.getByText(/Add communities @art_steward monitors or owns/)).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: 'Activity' }));
+    expect(await screen.findByRole('heading', { name: 'Action ledger for @art_steward' })).toBeInTheDocument();
+  });
+
+  it('keeps entered account values across drawer tab switches and deep-links the open tab', async () => {
+    const user = userEvent.setup();
+    renderPage('/stacker-news/a1/accounts?snAccount=edit&snAccountTab=stewardship');
+    const tone = await screen.findByLabelText('Tone', { selector: '#edit-account-tone' });
+    await user.type(tone, 'measured');
+    await user.click(drawerTab('Budgets'));
+    expect(currentUrl()).toContain('snAccountTab=budgets');
+    expect(screen.getByLabelText('Max/hour', { selector: '#edit-account-hour-budget' })).toBeInTheDocument();
+    await user.click(drawerTab('Stewardship'));
+    expect(screen.getByLabelText('Tone', { selector: '#edit-account-tone' })).toHaveValue('measured');
+  });
+
+  it('reports an invalid field from an unmounted drawer tab and switches to it', async () => {
+    const user = userEvent.setup();
+    renderPage('/stacker-news/a1/accounts?snAccount=edit&snAccountTab=monitoring');
+    await user.clear(await screen.findByLabelText('Monitoring interval (minutes)', { selector: '#edit-account-interval' }));
+    await user.click(drawerTab('Budgets'));
+    await user.click(screen.getByRole('button', { name: 'Save account' }));
+    expect(await screen.findByText(/Monitoring interval \(minutes\) must be a whole number from 5 to 1440/)).toBeInTheDocument();
+    expect(intervalField()).toBeInTheDocument();
+    expect(api.updateStackerNewsAccount).not.toHaveBeenCalled();
   });
 
   it('renders a recovery path for a stale account URL', async () => {
@@ -129,10 +196,11 @@ describe('StackerNews', () => {
     const user = userEvent.setup();
     const save = deferred();
     api.updateStackerNewsAccount.mockReturnValue(save.promise);
-    renderPage('/stacker-news/a1/accounts');
+    renderPage('/stacker-news/a1/accounts?snAccount=edit&snAccountTab=monitoring');
     const interval = await screen.findByLabelText('Monitoring interval (minutes)', { selector: '#edit-account-interval' });
     await user.clear(interval);
     await user.type(interval, '20');
+    expect(screen.getByText(/Unsaved changes to @art_steward/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Check API identity' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Check browser identity' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Sync now' })).toBeDisabled();
@@ -145,7 +213,7 @@ describe('StackerNews', () => {
   it('can explicitly remove a stored API key', async () => {
     const user = userEvent.setup();
     api.updateStackerNewsAccount.mockResolvedValue({ ...accounts[0], apiKeyConfigured: false });
-    renderPage('/stacker-news/a1/accounts');
+    renderPage('/stacker-news/a1/accounts?snAccount=edit');
     await user.click(await screen.findByRole('checkbox', { name: 'Remove stored API key when saving' }));
     await user.click(screen.getByRole('button', { name: 'Save account' }));
     await waitFor(() => expect(api.updateStackerNewsAccount).toHaveBeenCalledWith('a1', expect.objectContaining({ apiKey: '' }), { silent: true }));
@@ -155,21 +223,24 @@ describe('StackerNews', () => {
     const user = userEvent.setup();
     const save = deferred();
     api.updateStackerNewsAccount.mockReturnValue(save.promise);
-    renderPage('/stacker-news/a1/accounts');
+    renderPage('/stacker-news/a1/accounts?snAccount=edit&snAccountTab=monitoring');
     const interval = await screen.findByLabelText('Monitoring interval (minutes)', { selector: '#edit-account-interval' });
     await user.clear(interval);
     await user.type(interval, '20');
     await user.click(screen.getByRole('button', { name: 'Save account' }));
+    // Selecting another account navigates by path, which drops the drawer params.
     await user.click(screen.getByRole('button', { name: /Personal/ }));
-    expect(await screen.findByDisplayValue('personal_stacker')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Settings and safety for @personal_stacker' })).toBeInTheDocument();
     await act(async () => save.resolve({ ...accounts[0], monitoringIntervalMinutes: 20 }));
-    expect(screen.getByDisplayValue('personal_stacker')).toBeInTheDocument();
-    expect(screen.getByLabelText('Monitoring interval (minutes)', { selector: '#edit-account-interval' })).toHaveValue(60);
+    expect(screen.getByRole('heading', { name: 'Settings and safety for @personal_stacker' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Edit account settings' }));
+    await user.click(drawerTab('Monitoring & models'));
+    expect(intervalField()).toHaveValue(60);
   });
 
   it('offers only vision-capable models for the vision stage and every model for text', async () => {
-    renderPage('/stacker-news');
-    await screen.findByRole('heading', { name: 'Add account' });
+    renderPage('/stacker-news?snAccount=new&snAccountTab=monitoring');
+    await screen.findByRole('dialog', { name: 'Add account' });
     const { text, vision } = modelSelects();
     expect(optionsOf(text)).toEqual(['Disabled', 'example-text', 'example-embed', 'example-vision', 'futuremodel:9b']);
     // Subset of the text list, with the text-only and embedding ids dropped.
@@ -181,8 +252,8 @@ describe('StackerNews', () => {
 
   it('offers a server-classified vision model the id regex does not recognize', async () => {
     local.vision = { idsByProvider: { ollama: new Set() }, loaded: true };
-    renderPage('/stacker-news');
-    await screen.findByRole('heading', { name: 'Add account' });
+    renderPage('/stacker-news?snAccount=new&snAccountTab=monitoring');
+    await screen.findByRole('dialog', { name: 'Add account' });
     // Without the server map only the regex-recognizable id survives.
     expect(optionsOf(modelSelects().vision)).toEqual(['Disabled', 'example-vision']);
   });
@@ -192,11 +263,10 @@ describe('StackerNews', () => {
     const retired = { ...accounts[0], visionModel: 'retired-multimodal:7b' };
     api.getStackerNewsAccounts.mockResolvedValue({ accounts: [retired, accounts[1]] });
     api.updateStackerNewsAccount.mockResolvedValue(retired);
-    renderPage('/stacker-news/a1/accounts');
-    await screen.findByDisplayValue('Curate visual work');
-    const vision = screen.getByLabelText('Ollama vision model', { selector: '#edit-account-vision-model' });
+    renderPage('/stacker-news/a1/accounts?snAccount=edit&snAccountTab=monitoring');
+    const vision = await screen.findByLabelText('Ollama vision model', { selector: '#edit-account-vision-model' });
+    await waitFor(() => expect(vision).toHaveValue('retired-multimodal:7b'));
     expect(optionsOf(vision)).toContain('retired-multimodal:7b (configured)');
-    expect(vision).toHaveValue('retired-multimodal:7b');
     await user.click(screen.getByRole('button', { name: 'Save account' }));
     await waitFor(() => expect(api.updateStackerNewsAccount).toHaveBeenCalledWith('a1', expect.objectContaining({ visionModel: 'retired-multimodal:7b' }), { silent: true }));
   });
@@ -204,8 +274,8 @@ describe('StackerNews', () => {
   it('does not claim there is no vision model while the capability fetch is in flight', async () => {
     local.models = { ollama: ['example-text'], loading: false };
     local.vision = { idsByProvider: null, loaded: false };
-    renderPage('/stacker-news');
-    await screen.findByRole('heading', { name: 'Add account' });
+    renderPage('/stacker-news?snAccount=new&snAccountTab=monitoring');
+    await screen.findByRole('dialog', { name: 'Add account' });
     expect(screen.getByText(/Checking which installed Ollama models can read an image/)).toBeInTheDocument();
     expect(screen.queryByText(/No vision-capable Ollama model installed/)).not.toBeInTheDocument();
   });
@@ -213,8 +283,8 @@ describe('StackerNews', () => {
   it('says so explicitly once the capability fetch settles with no vision model installed', async () => {
     local.models = { ollama: ['example-text'], loading: false };
     local.vision = { idsByProvider: { ollama: new Set() }, loaded: true };
-    renderPage('/stacker-news');
-    await screen.findByRole('heading', { name: 'Add account' });
+    renderPage('/stacker-news?snAccount=new&snAccountTab=monitoring');
+    await screen.findByRole('dialog', { name: 'Add account' });
     expect(screen.getByText(/No vision-capable Ollama model installed/)).toBeInTheDocument();
     expect(optionsOf(modelSelects().vision)).toEqual(['Disabled']);
   });

@@ -77,7 +77,9 @@ handoff for the user to complete.
 
 ## Setup
 
-1. Open **Comms > Stacker News > Accounts & Safety** and add an account.
+1. Open **Comms > Stacker News > Accounts & Safety** and choose **Add account**.
+   The account form opens in a drawer grouped into Identity, Monitoring & models,
+   Stewardship, and Budgets tabs; the open tab is kept in the URL.
 2. Add an API key if API reads or reviewed publishing are needed, then verify
    that the returned identity matches the configured username.
 3. Add each territory, mark whether the account owns it, and choose whether it
@@ -91,6 +93,10 @@ handoff for the user to complete.
    snapshots. Enable a monitoring schedule only when ready.
 7. If browser handoffs are needed, sign the pinned PortOS browser into the same
    account and run **Check browser identity**.
+
+Every tab is scoped to one account. The header carries an account switcher that
+keeps the current tab, and each section names the account it operates on, so a
+Territory, Review, Drafts, or Activity list is never mistaken for a global one.
 
 Monitoring is off by default. Boot may arm a schedule the user already enabled,
 including a territory override on an otherwise quiet account, but it never
