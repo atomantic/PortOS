@@ -48,3 +48,59 @@ describe('UsagePage historical reconciliation', () => {
     expect(await screen.findByText('Corrected 2 runs.')).toBeInTheDocument();
   });
 });
+
+describe('UsagePage breakdown visualization and responsiveness', () => {
+  it('renders top providers and top models with visual percentage badges and cost metrics', async () => {
+    const richUsage = {
+      ...usage,
+      topProviders: [
+        { id: 'claude', name: 'Claude Code', sessions: 10, tokens: 8000 }
+      ],
+      topModels: [
+        { model: 'claude-3-7-sonnet', sessions: 10, tokens: 8000 }
+      ],
+      report: {
+        pricingAsOf: '2026-07-01',
+        providers: [
+          {
+            id: 'claude',
+            name: 'Claude Code',
+            sessions: 10,
+            tokensIn: 5000,
+            tokensOut: 3000,
+            cacheReadTokens: 1000,
+            cacheWriteTokens: 200,
+            estimatedCost: 1.5,
+            source: 'measured',
+            models: [
+              {
+                model: 'claude-3-7-sonnet',
+                sessions: 10,
+                tokensIn: 5000,
+                tokensOut: 3000,
+                cacheReadTokens: 1000,
+                cacheWriteTokens: 200,
+                estimatedCost: 1.5
+              }
+            ]
+          }
+        ],
+        totals: { estimatedCost: 1.5, source: 'measured' }
+      }
+    };
+    api.getUsage.mockResolvedValue(richUsage);
+
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+
+    expect(await screen.findByText('Top Providers')).toBeInTheDocument();
+    expect(screen.getByText('Top Models')).toBeInTheDocument();
+
+    // Check percentage share badges and cost
+    const percentBadges = screen.getAllByText('100%');
+    expect(percentBadges.length).toBeGreaterThan(0);
+
+    const costDisplays = screen.getAllByText('$1.50');
+    expect(costDisplays.length).toBeGreaterThan(0);
+  });
+});
+

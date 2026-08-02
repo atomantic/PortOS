@@ -240,39 +240,103 @@ function CostReportTable({ report }) {
     return <div className="text-gray-500 text-sm py-4">No per-provider usage recorded in this period.</div>;
   }
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm min-w-[680px]">
-        <thead>
-          <tr className="text-left text-xs text-gray-500 border-b border-port-border">
-            <th className="py-2 pr-2 font-medium">Provider / Model</th>
-            <th className="py-2 px-2 font-medium text-right">Sessions</th>
-            <th className="py-2 px-2 font-medium text-right">Tokens In</th>
-            {/* Cache columns collapse below md — the mobile-responsive rule; the
-                per-row title attributes keep the numbers reachable there. */}
-            <th className="py-2 px-2 font-medium text-right hidden md:table-cell">Cache Read</th>
-            <th className="py-2 px-2 font-medium text-right hidden md:table-cell">Cache Write</th>
-            <th className="py-2 px-2 font-medium text-right">Tokens Out</th>
-            <th className="py-2 pl-2 font-medium text-right">Est. API Cost</th>
-          </tr>
-        </thead>
-        <tbody>
-          {report.providers.map((provider) => (
-            <ProviderCostRows key={provider.id} provider={provider} />
-          ))}
-        </tbody>
-        <tfoot>
-          <tr className="border-t border-port-border font-semibold text-white">
-            <td className="py-2 pr-2">Total</td>
-            <td className="py-2 px-2 text-right">{formatNumber(report.totals.sessions)}</td>
-            <td className="py-2 px-2 text-right">{formatNumber(report.totals.tokensIn)}</td>
-            <td className="py-2 px-2 text-right hidden md:table-cell">{formatNumber(report.totals.cacheReadTokens)}</td>
-            <td className="py-2 px-2 text-right hidden md:table-cell">{formatNumber(report.totals.cacheWriteTokens)}</td>
-            <td className="py-2 px-2 text-right">{formatNumber(report.totals.tokensOut)}</td>
-            <td className="py-2 pl-2 text-right text-port-success">{formatCost(report.totals.estimatedCost)}</td>
-          </tr>
-        </tfoot>
-      </table>
-    </div>
+    <>
+      {/* Mobile view (< sm): Card list for easy mobile reading without horizontal scroll */}
+      <div className="block sm:hidden space-y-3">
+        {report.providers.map((provider) => (
+          <div key={provider.id} className="bg-port-bg border border-port-border rounded-lg p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="font-medium text-white text-sm truncate">{provider.name}</span>
+                {provider.free && (
+                  <Pill tone="success" size="xs" className="uppercase tracking-wide shrink-0">Local</Pill>
+                )}
+                {!provider.free && <SourcePill source={provider.source} className="shrink-0" />}
+              </div>
+              <span className="text-sm font-semibold text-port-success shrink-0" title={approxMark(provider.rateMatch) ? 'Approximate pricing' : undefined}>
+                {approxMark(provider.rateMatch)}{formatCost(provider.estimatedCost)}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-xs text-gray-400 bg-port-card/50 p-2 rounded border border-port-border/50">
+              <div>
+                <span className="text-gray-500 block text-[10px]">Sessions</span>
+                <span className="text-white font-medium">{formatNumber(provider.sessions)}</span>
+              </div>
+              <div>
+                <span className="text-gray-500 block text-[10px]">Tokens (In / Out)</span>
+                <span className="text-white font-medium">{formatNumber(provider.tokensIn)} / {formatNumber(provider.tokensOut)}</span>
+              </div>
+              <div>
+                <span className="text-gray-500 block text-[10px]">Cache Read</span>
+                <span className="text-gray-300">{formatNumber(provider.cacheReadTokens)}</span>
+              </div>
+              <div>
+                <span className="text-gray-500 block text-[10px]">Cache Write</span>
+                <span className="text-gray-300">{formatNumber(provider.cacheWriteTokens)}</span>
+              </div>
+            </div>
+
+            {provider.models?.length > 0 && (
+              <div className="space-y-1.5 pt-1.5 border-t border-port-border/40">
+                <div className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Models</div>
+                {provider.models.map((m) => (
+                  <div key={m.model} className="bg-port-card/30 p-2 rounded text-xs space-y-1">
+                    <div className="flex items-center justify-between font-mono text-gray-300 text-[11px]">
+                      <span className="truncate pr-2" title={m.model}>{m.model}</span>
+                      <span className="text-gray-400 shrink-0 font-sans font-medium">{approxMark(m.rateMatch)}{formatCost(m.estimatedCost)}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] text-gray-400">
+                      <span>{formatNumber(m.sessions)} sess</span>
+                      <span>{formatNumber(m.tokensIn)} in · {formatNumber(m.tokensOut)} out</span>
+                      <span>Cache: {formatNumber((m.cacheReadTokens ?? 0) + (m.cacheWriteTokens ?? 0))}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+
+        <div className="bg-port-bg border border-port-border rounded-lg p-3 flex items-center justify-between text-xs font-semibold text-white">
+          <span>Total ({formatNumber(report.totals.sessions)} sessions)</span>
+          <span className="text-port-success text-sm">{formatCost(report.totals.estimatedCost)}</span>
+        </div>
+      </div>
+
+      {/* Desktop view (>= sm): Table layout */}
+      <div className="hidden sm:block overflow-x-auto">
+        <table className="w-full text-sm min-w-[680px]">
+          <thead>
+            <tr className="text-left text-xs text-gray-500 border-b border-port-border">
+              <th className="py-2 pr-2 font-medium">Provider / Model</th>
+              <th className="py-2 px-2 font-medium text-right">Sessions</th>
+              <th className="py-2 px-2 font-medium text-right">Tokens In</th>
+              <th className="py-2 px-2 font-medium text-right hidden md:table-cell">Cache Read</th>
+              <th className="py-2 px-2 font-medium text-right hidden md:table-cell">Cache Write</th>
+              <th className="py-2 px-2 font-medium text-right">Tokens Out</th>
+              <th className="py-2 pl-2 font-medium text-right">Est. API Cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            {report.providers.map((provider) => (
+              <ProviderCostRows key={provider.id} provider={provider} />
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className="border-t border-port-border font-semibold text-white">
+              <td className="py-2 pr-2">Total</td>
+              <td className="py-2 px-2 text-right">{formatNumber(report.totals.sessions)}</td>
+              <td className="py-2 px-2 text-right">{formatNumber(report.totals.tokensIn)}</td>
+              <td className="py-2 px-2 text-right hidden md:table-cell">{formatNumber(report.totals.cacheReadTokens)}</td>
+              <td className="py-2 px-2 text-right hidden md:table-cell">{formatNumber(report.totals.cacheWriteTokens)}</td>
+              <td className="py-2 px-2 text-right">{formatNumber(report.totals.tokensOut)}</td>
+              <td className="py-2 pl-2 text-right text-port-success">{formatCost(report.totals.estimatedCost)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </>
   );
 }
 
@@ -364,6 +428,95 @@ function CostReportFilters({ period, from, to, isCustom, onPeriod, onRange }) {
       </div>
     </div>
   );
+}
+
+// Derive top providers for the active period (or fallback to usage.topProviders)
+function getPeriodTopProviders(usage) {
+  if (usage?.report?.providers?.length) {
+    const totalTokens = usage.report.providers.reduce(
+      (sum, p) => sum + (p.tokensIn || 0) + (p.tokensOut || 0),
+      0
+    ) || usage.report.providers.reduce((sum, p) => sum + (p.sessions || 0), 0) || 1;
+
+    return usage.report.providers
+      .map((p) => {
+        const tokens = (p.tokensIn || 0) + (p.tokensOut || 0);
+        return {
+          id: p.id,
+          name: p.name,
+          sessions: p.sessions || 0,
+          tokens: tokens || (p.tokens ?? 0),
+          tokensIn: p.tokensIn,
+          tokensOut: p.tokensOut,
+          cacheReadTokens: p.cacheReadTokens,
+          cacheWriteTokens: p.cacheWriteTokens,
+          estimatedCost: p.estimatedCost,
+          free: p.free,
+          source: p.source,
+          rateMatch: p.rateMatch,
+          percent: Math.min(100, Math.round(((tokens || p.sessions || 0) / totalTokens) * 100))
+        };
+      })
+      .sort((a, b) => b.tokens - a.tokens || b.sessions - a.sessions)
+      .slice(0, 5);
+  }
+
+  const totalTokens = usage?.topProviders?.reduce((sum, p) => sum + (p.tokens || 0), 0)
+    || usage?.topProviders?.reduce((sum, p) => sum + (p.sessions || 0), 0) || 1;
+
+  return (usage?.topProviders || []).map((p) => ({
+    id: p.id || p.name,
+    name: p.name,
+    sessions: p.sessions || 0,
+    tokens: p.tokens || 0,
+    percent: Math.min(100, Math.round(((p.tokens || p.sessions || 0) / totalTokens) * 100))
+  }));
+}
+
+// Derive top models for the active period (or fallback to usage.topModels)
+function getPeriodTopModels(usage) {
+  if (usage?.report?.providers?.length) {
+    const allModels = [];
+    for (const p of usage.report.providers) {
+      for (const m of (p.models || [])) {
+        const tokens = (m.tokensIn || 0) + (m.tokensOut || 0);
+        allModels.push({
+          model: m.model,
+          providerName: p.name,
+          sessions: m.sessions || 0,
+          tokens: tokens || (m.tokens ?? 0),
+          tokensIn: m.tokensIn,
+          tokensOut: m.tokensOut,
+          cacheReadTokens: m.cacheReadTokens,
+          cacheWriteTokens: m.cacheWriteTokens,
+          estimatedCost: m.estimatedCost,
+          rateMatch: m.rateMatch
+        });
+      }
+    }
+    if (allModels.length > 0) {
+      const totalTokens = allModels.reduce((sum, m) => sum + m.tokens, 0)
+        || allModels.reduce((sum, m) => sum + m.sessions, 0) || 1;
+
+      return allModels
+        .map((m) => ({
+          ...m,
+          percent: Math.min(100, Math.round(((m.tokens || m.sessions || 0) / totalTokens) * 100))
+        }))
+        .sort((a, b) => b.tokens - a.tokens || b.sessions - a.sessions)
+        .slice(0, 5);
+    }
+  }
+
+  const totalTokens = usage?.topModels?.reduce((sum, m) => sum + (m.tokens || 0), 0)
+    || usage?.topModels?.reduce((sum, m) => sum + (m.sessions || 0), 0) || 1;
+
+  return (usage?.topModels || []).map((m) => ({
+    model: m.model,
+    sessions: m.sessions || 0,
+    tokens: m.tokens || 0,
+    percent: Math.min(100, Math.round(((m.tokens || m.sessions || 0) / totalTokens) * 100))
+  }));
 }
 
 function InternalUsageMetrics() {
@@ -473,6 +626,9 @@ function InternalUsageMetrics() {
 
   const maxActivity = Math.max(1, ...(usage.last7Days?.map(d => d.sessions) || []));
   const report = usage.report;
+
+  const topProvidersList = getPeriodTopProviders(usage);
+  const topModelsList = getPeriodTopModels(usage);
 
   return (
     <div className="space-y-6">
@@ -606,19 +762,56 @@ function InternalUsageMetrics() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
         {/* Top Providers */}
         <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-2 sm:mb-3">Top Providers</h3>
-          <div className="space-y-1 sm:space-y-2">
-            {usage.topProviders?.map((provider, i) => (
-              <div key={i} className="flex flex-col sm:flex-row sm:items-center sm:justify-between py-2 border-b border-port-border last:border-0 gap-1 sm:gap-0">
-                <span className="text-white text-sm sm:text-base">{provider.name}</span>
-                <div className="text-xs sm:text-sm text-gray-400">
-                  <span>{provider.sessions} sessions</span>
-                  <span className="mx-1 sm:mx-2">•</span>
-                  <span>{formatNumber(provider.tokens)} tokens</span>
+          <h3 className="text-sm font-medium text-gray-400 mb-2 sm:mb-3 flex items-center justify-between">
+            <span>Top Providers</span>
+            <span className="text-xs text-gray-500 font-normal">By usage volume</span>
+          </h3>
+          <div className="space-y-3">
+            {topProvidersList.map((provider, i) => (
+              <div key={i} className="py-1.5 border-b border-port-border last:border-0 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="text-white text-sm sm:text-base font-medium truncate">{provider.name}</span>
+                    {provider.free && (
+                      <Pill tone="success" size="xs" className="uppercase tracking-wide shrink-0">Local</Pill>
+                    )}
+                    {!provider.free && provider.source && (
+                      <SourcePill source={provider.source} className="shrink-0" />
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 text-xs">
+                    {provider.estimatedCost != null && provider.estimatedCost > 0 && (
+                      <span className="text-port-success font-semibold">{formatCost(provider.estimatedCost)}</span>
+                    )}
+                    <span className="text-gray-400 bg-port-bg border border-port-border px-1.5 py-0.5 rounded text-[10px] sm:text-xs font-mono">
+                      {provider.percent}%
+                    </span>
+                  </div>
+                </div>
+
+                {/* Visual Usage Bar */}
+                <div className="h-1.5 rounded-full bg-port-bg overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-port-accent to-blue-400 transition-all duration-300"
+                    style={{ width: `${Math.max(2, provider.percent)}%` }}
+                  />
+                </div>
+
+                {/* Detailed Breakdown stats */}
+                <div className="flex items-center justify-between text-xs text-gray-400">
+                  <span>{provider.sessions} session{provider.sessions === 1 ? '' : 's'}</span>
+                  <div className="flex items-center gap-1 sm:gap-2">
+                    <span>{formatNumber(provider.tokens)} tokens</span>
+                    {provider.tokensIn != null && provider.tokensOut != null && (
+                      <span className="text-[10px] text-gray-500 hidden sm:inline">
+                        ({formatNumber(provider.tokensIn)} in / {formatNumber(provider.tokensOut)} out)
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}
-            {(!usage.topProviders || usage.topProviders.length === 0) && (
+            {topProvidersList.length === 0 && (
               <div className="text-gray-500 text-sm">No provider data</div>
             )}
           </div>
@@ -626,19 +819,53 @@ function InternalUsageMetrics() {
 
         {/* Top Models */}
         <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-2 sm:mb-3">Top Models</h3>
-          <div className="space-y-1 sm:space-y-2">
-            {usage.topModels?.map((model, i) => (
-              <div key={i} className="flex flex-col sm:flex-row sm:items-center sm:justify-between py-2 border-b border-port-border last:border-0 gap-1 sm:gap-0">
-                <span className="text-white font-mono text-xs sm:text-sm truncate max-w-[200px] sm:max-w-none">{model.model}</span>
-                <div className="text-xs sm:text-sm text-gray-400">
-                  <span>{model.sessions} sessions</span>
-                  <span className="mx-1 sm:mx-2">•</span>
-                  <span>{formatNumber(model.tokens)} tokens</span>
+          <h3 className="text-sm font-medium text-gray-400 mb-2 sm:mb-3 flex items-center justify-between">
+            <span>Top Models</span>
+            <span className="text-xs text-gray-500 font-normal">By token output & volume</span>
+          </h3>
+          <div className="space-y-3">
+            {topModelsList.map((model, i) => (
+              <div key={i} className="py-1.5 border-b border-port-border last:border-0 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="text-white font-mono text-xs sm:text-sm truncate">{model.model}</span>
+                    {model.providerName && (
+                      <span className="text-[10px] text-gray-500 truncate hidden sm:inline">({model.providerName})</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 text-xs">
+                    {model.estimatedCost != null && model.estimatedCost > 0 && (
+                      <span className="text-port-success font-semibold">{formatCost(model.estimatedCost)}</span>
+                    )}
+                    <span className="text-gray-400 bg-port-bg border border-port-border px-1.5 py-0.5 rounded text-[10px] sm:text-xs font-mono">
+                      {model.percent}%
+                    </span>
+                  </div>
+                </div>
+
+                {/* Visual Usage Bar */}
+                <div className="h-1.5 rounded-full bg-port-bg overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-teal-400 transition-all duration-300"
+                    style={{ width: `${Math.max(2, model.percent)}%` }}
+                  />
+                </div>
+
+                {/* Detailed Breakdown stats */}
+                <div className="flex items-center justify-between text-xs text-gray-400">
+                  <span>{model.sessions} session{model.sessions === 1 ? '' : 's'}</span>
+                  <div className="flex items-center gap-1 sm:gap-2">
+                    <span>{formatNumber(model.tokens)} tokens</span>
+                    {model.tokensIn != null && model.tokensOut != null && (
+                      <span className="text-[10px] text-gray-500 hidden sm:inline">
+                        ({formatNumber(model.tokensIn)} in / {formatNumber(model.tokensOut)} out)
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}
-            {(!usage.topModels || usage.topModels.length === 0) && (
+            {topModelsList.length === 0 && (
               <div className="text-gray-500 text-sm">No model data</div>
             )}
           </div>
