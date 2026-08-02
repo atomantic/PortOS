@@ -315,3 +315,145 @@ export async function getStatus() {
     secretCount: Object.keys(data.secrets).length
   };
 }
+
+// --- Forge (gh CLI) reachability -------------------------------------------
+//
+// Roughly thirty call sites across PortOS run `gh` and swallow the failure into
+// an empty result (`.catch(() => [])`). That collapses "the forge said there is
+// nothing" into "we could not ask the forge" — the exact conflation the root
+// CLAUDE.md's sentinel-and-validate rule exists to prevent. In practice it means
+// a `gh` that cannot reach api.github.com is indistinguishable from a quiet
+// repo: prWatcher sees no PRs, branchReconcile sees no branches, and an agent
+// told to open a PR reports success having opened nothing.
+//
+// This probe answers the question those call sites cannot: is `gh` actually
+// usable right now, and if not, which of the three failure modes is it? Callers
+// stay unchanged — the value is that the state is *reportable* (see the `forge`
+// block on GET /api/system/health/details) instead of silently absent.
+
+const GH_PROBE_TIMEOUT_MS = 10000;
+const GH_HEALTH_TTL_MS = 60000;
+
+// Matched against `gh`'s stderr. Auth is checked first: an unauthenticated `gh`
+// can still reach the network, and its message is the more actionable one.
+const GH_AUTH_MARKERS = [
+  'not logged in',
+  'authentication required',
+  'requires authentication',
+  'bad credentials',
+  'gh auth login',
+  'no such host: authentication'
+];
+
+// A blocked or broken transport. `bad file descriptor` belongs here because an
+// outbound-filtering firewall (Little Snitch and friends) denies the connect()
+// rather than refusing it, and Go surfaces that as EBADF — which reads like a
+// local bug unless it is named as a network failure.
+const GH_NETWORK_MARKERS = [
+  'dial tcp',
+  'bad file descriptor',
+  'no such host',
+  'connection refused',
+  'connection reset',
+  'network is unreachable',
+  'i/o timeout',
+  'timed out',
+  'tls handshake',
+  'certificate'
+];
+
+const includesAny = (haystack, needles) => needles.some(n => haystack.includes(n));
+
+/**
+ * Classify a `gh` probe result. Split out from the spawn so the mapping from
+ * failure text to status is testable without a network or a `gh` binary.
+ *
+ * @param {{ code?: number|null, stderr?: string, spawnError?: Error|null }} probe
+ * @returns {{ status: 'ok'|'not-installed'|'not-authenticated'|'unreachable'|'error', detail: string|null }}
+ */
+export function classifyGhProbe({ code = null, stderr = '', spawnError = null } = {}) {
+  if (spawnError) {
+    // ENOENT is the only spawn error that reliably means "no binary on PATH";
+    // anything else (EACCES, EPERM) is a real local fault worth reporting as-is.
+    const status = spawnError.code === 'ENOENT' ? 'not-installed' : 'error';
+    return { status, detail: spawnError.message || String(spawnError) };
+  }
+  if (code === 0) return { status: 'ok', detail: null };
+
+  const text = String(stderr || '').trim();
+  const lower = text.toLowerCase();
+  if (includesAny(lower, GH_AUTH_MARKERS)) return { status: 'not-authenticated', detail: text || null };
+  if (includesAny(lower, GH_NETWORK_MARKERS)) return { status: 'unreachable', detail: text || null };
+  return { status: 'error', detail: text || `gh exited with code ${code}` };
+}
+
+/**
+ * Human-readable remedy for a given probe status. Kept beside the classifier so
+ * the message and the state it describes cannot drift apart.
+ */
+export function ghRemedy(status) {
+  switch (status) {
+    case 'not-installed':
+      return 'Install the GitHub CLI (brew install gh) to let PortOS read pull requests and issues.';
+    case 'not-authenticated':
+      return 'Run `gh auth login` — PortOS can reach GitHub but has no usable credential.';
+    case 'unreachable':
+      return 'gh cannot open an outbound connection. If an outbound firewall (e.g. Little Snitch) is installed, allow the gh binary to reach api.github.com — a denied connect surfaces as "bad file descriptor".';
+    case 'error':
+      return 'gh failed for an unrecognised reason — run `gh api rate_limit` in a terminal to see the full output.';
+    default:
+      return null;
+  }
+}
+
+let ghHealthCache = null;
+let ghHealthCheckedAt = 0;
+
+function probeGh(timeoutMs) {
+  return new Promise((resolve) => {
+    // `rate_limit` is authenticated, cheap, and — unlike every other endpoint —
+    // does not itself consume quota, so polling this probe is free.
+    const child = spawn('gh', ['api', 'rate_limit'], { shell: false, windowsHide: true });
+    let stderr = '';
+    let settled = false;
+    const done = (result) => { if (!settled) { settled = true; clearTimeout(timer); resolve(result); } };
+    const timer = setTimeout(() => {
+      // setTimeout callback boundary — a kill() throw here would be uncaught.
+      try { child.kill('SIGKILL'); } catch (err) { console.error(`❌ gh health probe: failed to kill child: ${err.message}`); }
+      done({ code: null, stderr: `gh api rate_limit timed out after ${timeoutMs}ms`, spawnError: null });
+    }, timeoutMs);
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
+    child.on('error', (err) => done({ code: null, stderr, spawnError: err }));
+    child.on('close', (code) => done({ code, stderr, spawnError: null }));
+  });
+}
+
+/**
+ * Probe whether `gh` can actually talk to the forge right now.
+ *
+ * Result is cached for a minute — /api/system/health/details is polled, and the
+ * probe spawns a process. Pass `{ force: true }` to bypass the cache.
+ *
+ * @returns {Promise<{ status: string, ok: boolean, detail: string|null, remedy: string|null, checkedAt: string }>}
+ */
+export async function checkGhHealth({ force = false, timeoutMs = GH_PROBE_TIMEOUT_MS } = {}) {
+  const now = Date.now();
+  if (!force && ghHealthCache && (now - ghHealthCheckedAt) < GH_HEALTH_TTL_MS) return ghHealthCache;
+
+  const { status, detail } = classifyGhProbe(await probeGh(timeoutMs));
+  ghHealthCache = {
+    status,
+    ok: status === 'ok',
+    detail,
+    remedy: ghRemedy(status),
+    checkedAt: new Date(now).toISOString()
+  };
+  ghHealthCheckedAt = now;
+  return ghHealthCache;
+}
+
+/** Test seam — drops the memoized probe result. */
+export function __resetGhHealthCache() {
+  ghHealthCache = null;
+  ghHealthCheckedAt = 0;
+}

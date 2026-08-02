@@ -6,6 +6,7 @@ import systemHealthRoutes from './systemHealth.js';
 import { listProcesses } from '../services/pm2.js';
 import { getSelf } from '../services/instances.js';
 import { isAuthEnabled } from '../services/auth.js';
+import { checkGhHealth } from '../services/github.js';
 
 vi.mock('../services/pm2.js', () => ({
   listProcesses: vi.fn().mockResolvedValue([])
@@ -48,6 +49,14 @@ vi.mock('../services/cos.js', () => ({
 
 vi.mock('../lib/db.js', () => ({
   checkHealth: vi.fn().mockResolvedValue({ connected: false, hasSchema: false })
+}));
+
+// The real probe spawns `gh` and hits the network — mock it, and default to a
+// healthy forge so the existing cases keep their warning counts.
+vi.mock('../services/github.js', () => ({
+  checkGhHealth: vi.fn().mockResolvedValue({
+    status: 'ok', ok: true, detail: null, remedy: null, checkedAt: '2026-01-01T00:00:00.000Z'
+  })
 }));
 
 vi.mock('../services/settings.js', () => ({
@@ -146,6 +155,73 @@ describe('System Health Routes', () => {
       diskCritical: expect.any(Number)
     });
     expect(response.body.topProcesses.map(p => p.name)).toEqual(['big', 'mid', 'small']);
+  });
+
+  describe('GET /health/details — forge (gh CLI) reachability', () => {
+    it('reports a healthy forge without raising a warning', async () => {
+      const response = await request(app).get('/api/system/health/details');
+      expect(response.body.forge).toMatchObject({ status: 'ok', ok: true });
+      expect((response.body.warnings || []).filter(w => w.type === 'forge')).toHaveLength(0);
+    });
+
+    it('warns, with the remedy, when gh is installed but cannot reach the forge', async () => {
+      // The failure this exists for: every `gh` call site swallows the error
+      // into an empty list, so a blocked CLI looks like a repo with nothing
+      // open. Without this warning the only symptom is agents silently not
+      // filing PRs.
+      checkGhHealth.mockResolvedValueOnce({
+        status: 'unreachable',
+        ok: false,
+        detail: 'dial tcp 140.82.116.6:443: connect: bad file descriptor',
+        remedy: 'allow the gh binary to reach api.github.com',
+        checkedAt: '2026-01-01T00:00:00.000Z'
+      });
+      const response = await request(app).get('/api/system/health/details');
+
+      expect(response.body.forge).toMatchObject({ status: 'unreachable', ok: false });
+      const forgeWarnings = (response.body.warnings || []).filter(w => w.type === 'forge');
+      expect(forgeWarnings).toHaveLength(1);
+      expect(forgeWarnings[0].message).toContain('unreachable');
+      expect(forgeWarnings[0].message).toContain('allow the gh binary');
+      expect(response.body.overallHealth).toBe('warning');
+    });
+
+    it('warns when gh is present but unauthenticated', async () => {
+      checkGhHealth.mockResolvedValueOnce({
+        status: 'not-authenticated', ok: false, detail: 'gh auth login', remedy: 'Run `gh auth login`', checkedAt: null
+      });
+      const response = await request(app).get('/api/system/health/details');
+      expect((response.body.warnings || []).filter(w => w.type === 'forge')).toHaveLength(1);
+    });
+
+    it('stays quiet when gh was never installed — that is opting out, not a fault', async () => {
+      checkGhHealth.mockResolvedValueOnce({
+        status: 'not-installed', ok: false, detail: 'spawn gh ENOENT', remedy: 'Install the GitHub CLI', checkedAt: null
+      });
+      const response = await request(app).get('/api/system/health/details');
+
+      expect(response.body.forge).toMatchObject({ status: 'not-installed' });
+      expect((response.body.warnings || []).filter(w => w.type === 'forge')).toHaveLength(0);
+    });
+
+    it('does not downgrade an already-critical verdict to warning', async () => {
+      listProcesses.mockResolvedValueOnce([
+        { name: 'broken', status: 'errored', restarts: 1, unstableRestarts: 0, cpu: 0, memory: 0 }
+      ]);
+      checkGhHealth.mockResolvedValueOnce({
+        status: 'unreachable', ok: false, detail: null, remedy: null, checkedAt: null
+      });
+      const response = await request(app).get('/api/system/health/details');
+      expect(response.body.overallHealth).toBe('critical');
+    });
+
+    it('degrades to an error verdict rather than 500ing when the probe itself throws', async () => {
+      checkGhHealth.mockRejectedValueOnce(new Error('probe blew up'));
+      const response = await request(app).get('/api/system/health/details');
+
+      expect(response.status).toBe(200);
+      expect(response.body.forge).toMatchObject({ status: 'error', ok: false });
+    });
   });
 
   describe('PUT /health/thresholds', () => {

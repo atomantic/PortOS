@@ -11,6 +11,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { getMemoryStats } from '../lib/memoryStats.js';
 import { formatBytes } from '../lib/fileUtils.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
+import { checkGhHealth } from '../services/github.js';
 import { isAuthEnabled } from '../services/auth.js';
 import { getHttpsEnabledAtBoot } from '../lib/httpsState.js';
 
@@ -76,7 +77,7 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   const startTime = Date.now();
 
   // Gather data in parallel
-  const [pm2Processes, appStatusSummary, cosStatus, self, dbHealth, version, diskStats, memStats, thresholds] = await Promise.all([
+  const [pm2Processes, appStatusSummary, cosStatus, self, dbHealth, version, diskStats, memStats, thresholds, forgeHealth] = await Promise.all([
     listProcesses().catch(() => []),
     apps.getAppStatusSummary().catch(() => ({ total: 0, online: 0, stopped: 0, notStarted: 0, unknown: 0, degraded: false, unmanaged: 0 })),
     cos.getStatus().catch(() => null),
@@ -85,7 +86,8 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     getCurrentVersion().catch(() => null),
     statfs('/').catch(() => null),
     getMemoryStats(),
-    loadThresholds()
+    loadThresholds(),
+    checkGhHealth().catch(() => ({ status: 'error', ok: false, detail: 'Health check failed', remedy: null, checkedAt: null }))
   ]);
 
   const memUsagePercent = Math.round((memStats.used / memStats.total) * 100);
@@ -204,6 +206,20 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     warnings.push({ type: 'database', message: 'PostgreSQL connected but schema missing' });
   }
 
+  // A `gh` that cannot reach the forge does not fail loudly anywhere else: the
+  // call sites that read pull requests and issues swallow the error into an
+  // empty list, so a blocked or unauthenticated CLI looks exactly like a repo
+  // with nothing open — and an agent asked to file a PR reports success having
+  // filed none. Warn only when gh is present but unusable; an install that
+  // never had gh has opted out of those features rather than broken them.
+  if (!forgeHealth.ok && forgeHealth.status !== 'not-installed') {
+    if (overallHealth !== 'critical') overallHealth = 'warning';
+    warnings.push({
+      type: 'forge',
+      message: `GitHub CLI unusable (${forgeHealth.status})${forgeHealth.remedy ? ` — ${forgeHealth.remedy}` : ''}`
+    });
+  }
+
   // CoS status
   const cosInfo = cosStatus ? {
     running: cosStatus.running,
@@ -266,6 +282,7 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     apps: appStats,
     cos: cosInfo,
     database: dbHealth,
+    forge: forgeHealth,
     thresholds,
     topProcesses: [...pm2Processes]
       .sort((a, b) => (b.memory || 0) - (a.memory || 0))
