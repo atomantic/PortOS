@@ -8,30 +8,22 @@
 
 import { Router } from 'express';
 import { existsSync } from 'fs';
-import { copyFile, unlink } from 'fs/promises';
-import { randomUUID } from 'crypto';
-import { join, extname, basename } from 'path';
+import { join, basename } from 'path';
 import { spawn } from 'child_process';
 import os from 'os';
 import { z } from 'zod';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { uploadFields } from '../lib/multipart.js';
-import { PATHS, ensureDir, resolveGalleryImage } from '../lib/fileUtils.js';
-import { safeUnder } from '../lib/ffmpeg.js';
+import { PATHS } from '../lib/fileUtils.js';
 import { grokVideoDurationSchema } from '../lib/validation.js';
 import { IMAGE_GEN_MODE } from '../services/imageGen/modes.js';
-import { VIDEO_GEN_MODE, resolveVideoMode } from '../services/videoGen/modes.js';
-import { RENDER_TARGET } from '../lib/renderTargets.js';
 import { getSettings } from '../services/settings.js';
-import { getProject as getMusicVideoProject } from '../services/musicVideo/projects.js';
-import { getTrack } from '../services/tracks/index.js';
 import { checkPackages, isAllowedPython } from '../lib/pythonSetup.js';
 import { safeChildProcessEnv } from '../lib/processEnv.js';
 import { createLineReader } from '../lib/streamLines.js';
 import {
   listVideoModels,
   defaultVideoModelId,
-  BYOV_VIDEO_RUNTIMES,
   BYOV_RUNTIME_INFO,
   isByovRuntimeInstalled,
   isByovRuntimeReady,
@@ -44,15 +36,13 @@ import {
   extractLastFrame,
   stitchVideos,
   upscaleHistoryItem,
-  DEFAULT_NUM_FRAMES,
   resolveFflfLtx2PixelBudget,
 } from '../services/videoGen/local.js';
+import { prepareVideoGenParams, cleanupMultipartTemp, withStagedRollback } from '../services/videoGen/prepareParams.js';
 import { enqueueJob, attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { repoForModel, getTextEncoderRepo, isHfRepoId } from '../lib/mediaModels.js';
-import { videoLoraFamily } from '../lib/runners.js';
 import {
   IC_LORA_MODE_VALUES, icLoraSpecForMode, icLoraRepos, listIcLoraWeights,
-  assertIcReferenceCount, describeIcReferenceRange,
   icLoraWeightCandidates, findCachedIcLoraWeight,
 } from '../lib/icLoraWeights.js';
 import { inspectModelCache, verifyModelCache, repairModelCache, repairCachedFile, summarizeVerify } from '../lib/hfCache.js';
@@ -743,648 +733,106 @@ router.get('/text-encoder/download', asyncHandler(async (req, res) => {
 }));
 
 router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
-  // Pre-enqueue cleanup hook: every throw path below MUST drop ALL multipart
-  // temp uploads (the parser wrote them before this handler ran). Without
-  // this a configuration/validation error leaks files in the OS temp dir.
+  // The multipart parser already wrote every upload to the OS temp dir before
+  // this handler ran, so a rejected body must drop them explicitly or they
+  // leak. Past this point the service owns cleanup for both temp and durable
+  // copies.
   const uploads = req.files || {};
-  const cleanupTempUploads = async () => {
-    for (const f of Object.values(uploads)) {
-      if (f?.path) await unlink(f.path).catch(() => {});
-    }
-  };
   const parsed = generateBodySchema.safeParse(req.body);
   if (!parsed.success) {
-    await cleanupTempUploads();
+    await cleanupMultipartTemp(uploads);
     failValidation(parsed);
   }
   const body = parsed.data;
-  const s = await getSettings();
-  // #3231 Phase 4 — the video pin ladder. An explicit `body.backend` always
-  // wins (the VideoGen page and the MV director board both send one); when
-  // absent, consult the music-video target pin (for director-board renders)
-  // and the install-wide `settings.videoGen.mode` via resolveVideoMode. A pin
-  // is honored only for a grok-DELIVERABLE request shape — the grok lane reads
-  // only prompt/dims/source-image/duration, so a request carrying local-only
-  // machinery (a semantic mode beyond text/image, keyframes, audio, IC refs,
-  // extend, LoRAs, a last frame, chunked renders) stays local rather than
-  // silently dropping those inputs. A pin degrades; only an explicit backend
-  // request errors.
-  const grokDeliverable = (!body.mode || body.mode === 'text' || body.mode === 'image')
-    // A named local model is local-only machinery in the same sense as the
-    // fields below — grok has no model knob, so honoring a grok pin here
-    // would silently discard the model the caller asked for (e.g. a media
-    // requeue rebuilding a local render's config without a backend field).
-    && !body.modelId
-    && !Object.keys(LOCAL_ONLY_VIDEO_PARAMS).some((param) => body[param] !== undefined)
-    && !uploads.lastImage && !body.lastImageFile
-    && !uploads.audioFile
-    && !uploads.icReference && !body.icReferenceVideoIds?.length && !body.icReferenceImageFiles?.length
-    && !body.extendFromVideoId
-    && !body.keyframes?.length
-    && !body.loraFilenames?.length
-    && !(body.chunks != null && Number(body.chunks) > 1);
-  const backend = body.backend
-    || (grokDeliverable
-      ? resolveVideoMode(null, s, { target: body.musicVideo ? RENDER_TARGET.MUSIC_VIDEO : null })
-      : VIDEO_GEN_MODE.LOCAL);
-  const pythonPath = s.imageGen?.local?.pythonPath || null;
-  // Resolve the effective model up front — both the modelId-exists check
-  // below AND the a2v runtime guard further down need the model entry,
-  // and listVideoModels() is the kind of thing test mocks easily get out
-  // of sync if called twice.
-  const knownModels = listVideoModels();
-  const effectiveModelId = body.modelId || defaultVideoModelId();
-  const effectiveModel = knownModels.find((m) => m.id === effectiveModelId);
-  // Validate modelId synchronously (when supplied). Without this the queue
-  // would happily accept a typo'd modelId and fail asynchronously inside
-  // the worker — leaving a persisted, doomed queue entry.
-  if (body.modelId && !effectiveModel) {
-    await cleanupTempUploads();
-    throw new ServerError(
-      `Unknown modelId: ${body.modelId}`,
-      { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
-    );
-  }
-  // Reject up-front when the local python isn't configured AND the model's
-  // runtime needs it. ltx2/wan22/hunyuan bring their own venv (resolved
-  // inside buildArgs), so they must NOT be blocked by the legacy mlx_video
-  // pythonPath setting. Without this gate, the queue would happily accept
-  // a job that's known to fail and only surface it asynchronously on SSE,
-  // polluting the persisted queue with a doomed entry. The allowlist is
-  // shared with services/videoGen/local.js so the route and worker stay
-  // in sync.
-  const runtimeBringsOwnVenv = effectiveModel && BYOV_VIDEO_RUNTIMES.has(effectiveModel.runtime);
-  if (!pythonPath && !runtimeBringsOwnVenv && backend !== 'grok') {
-    await cleanupTempUploads();
-    throw new ServerError(
-      'Local video generation is not configured (settings.imageGen.local.pythonPath is missing).',
-      { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' },
-    );
-  }
+  // Everything between validation and enqueue — backend resolution, upload
+  // staging with rollback, mode/reference validation, history lookups — lives
+  // in the service (#3288), mirroring imageGen's prepareGenerateParams. It
+  // throws ServerError (after unwinding every staged file) on any rejection.
+  const prepared = await prepareVideoGenParams({
+    body,
+    uploads,
+    localOnlyParamKeys: Object.keys(LOCAL_ONLY_VIDEO_PARAMS),
+  });
+  const { backend, cleanupStaged } = prepared;
 
-  // Track every durable file we've already copied into PATHS.uploads so a
-  // *later* staging failure can roll them back. Without this, staging
-  // sourceImage successfully then failing on lastImage would leave the
-  // sourceImage durable copy orphaned (the job is never enqueued, so the
-  // worker's cleanup never runs).
-  const stagedDurablePaths = [];
-  const cleanupAllStaged = async () => {
-    for (const p of stagedDurablePaths) await unlink(p).catch(() => {});
-    await cleanupTempUploads();
-  };
+  // #3326 — `enqueueJob` is the last place a throw can strand the durable
+  // copies the service staged (the job never exists, so the worker's cleanup
+  // never runs). Release them, then rethrow untouched for the error middleware.
+  const enqueue = (params) => withStagedRollback(cleanupStaged, () => enqueueJob({ kind: 'video', params }));
 
-  // Stage a multipart upload into data/uploads so the queue worker can find
-  // it after a server restart — the OS temp dir gets reaped on reboot, and a
-  // persisted `queued` job may replay long after the original POST. Worker
-  // unlinks the durable file when the job completes or cancels. Throws
-  // ServerError on copy failure (and cleans up every staged file + multipart
-  // temp upload so a mid-flight failure doesn't leak under /tmp + data/uploads).
-  const stageUploadDurable = async (file, kind) => {
-    const ext = extname(file.originalname || file.path) || '.bin';
-    const durablePath = join(PATHS.uploads, `video-${kind}-${randomUUID()}${ext}`);
-    try {
-      await copyFile(file.path, durablePath);
-    } catch (err) {
-      await unlink(durablePath).catch(() => {});
-      await cleanupAllStaged();
-      throw new ServerError(
-        `Failed to stage upload to durable location: ${err.message}`,
-        { status: 500, code: 'VIDEO_GEN_UPLOAD_STAGE_FAILED' },
-      );
-    }
-    await unlink(file.path).catch(() => {});
-    stagedDurablePaths.push(durablePath);
-    return durablePath;
-  };
-
-  // Music-video a2v jobs reuse an existing library track rather than uploading
-  // the same song for every cut. Copy it into the queue-owned uploads area so
-  // the worker may safely delete its input on completion without ever touching
-  // the source track under data/music.
-  const stageExistingAudioDurable = async (sourcePath) => {
-    const ext = extname(sourcePath) || '.bin';
-    const durablePath = join(PATHS.uploads, `video-audio-${randomUUID()}${ext}`);
-    await copyFile(sourcePath, durablePath).catch(async (err) => {
-      await unlink(durablePath).catch(() => {});
-      await cleanupAllStaged();
-      throw new ServerError(
-        `Failed to stage project audio: ${err.message}`,
-        { status: 500, code: 'VIDEO_GEN_AUDIO_STAGE_FAILED' },
-      );
-    });
-    stagedDurablePaths.push(durablePath);
-    return durablePath;
-  };
-
-  // Resolution precedence on each frame side: a fresh upload always wins over
-  // a gallery filename so users can override a stale gallery pick by dropping
-  // in a new file without first clearing the picker.
-  //
-  // Cleanup plumbing: `uploadedTempPath` (single, legacy) is RESERVED for the
-  // start-frame upload — that field shape is what already-persisted jobs from
-  // before this route change carry, so keeping its semantics stable means
-  // those replays still clean up correctly. Every additional upload (today:
-  // just `lastImage`) flows through `uploadedTempPaths` as an array. The
-  // worker walks both fields when unlinking on terminal events.
-  // Mode/upload pairing checks BEFORE staging so a rejected request only
-  // unlinks the OS temp file (cheap) instead of also unlinking a freshly-
-  // copied 100MB durable file under data/uploads (wasted disk I/O on every
-  // bad request).
-  if (body.mode === 'a2v' && !uploads.audioFile && !body.musicVideo) {
-    await cleanupAllStaged();
-    throw new ServerError(
-      'a2v mode requires an audioFile upload or a music-video project audio source.',
-      { status: 400, code: 'VIDEO_GEN_AUDIO_REQUIRED' },
-    );
-  }
-  if (uploads.audioFile && body.mode !== 'a2v') {
-    await cleanupAllStaged();
-    throw new ServerError(
-      `audioFile upload is only valid with mode='a2v' (got mode='${body.mode || 'unset'}').`,
-      { status: 400, code: 'VIDEO_GEN_AUDIO_MODE_MISMATCH' },
-    );
-  }
-  // IC-LoRA remix (mode='ic-control', …). Mirrors the a2v pairing checks: the
-  // reference channel is what makes the mode meaningful, and an IC upload
-  // outside an IC mode would be silently dropped by the worker.
-  const icSpec = icLoraSpecForMode(body.mode);
-  if (icSpec) {
-    // The grok backend short-circuits below this point (it only reads
-    // prompt/dims/source-image), so an IC request routed there would enqueue a
-    // plain grok render with the reference clip silently dropped. The client's
-    // mode bar snaps grok back to text/image, but reject explicitly so a direct
-    // caller gets an error instead of a wrong-looking clip.
-    if (body.backend === 'grok') {
-      await cleanupAllStaged();
-      throw new ServerError(
-        `${icSpec.label} mode runs on the local ltx2 runtime — it isn't available on the Grok backend.`,
-        { status: 400, code: 'IC_LORA_REQUIRES_LOCAL_BACKEND' },
-      );
-    }
-    // Each weight takes exactly ONE kind of reference. An image-kind weight fed a
-    // clip (or vice versa) doesn't error inside the pipeline — it produces
-    // plausible-looking garbage — so reject the cross-kind fields explicitly
-    // rather than silently dropping them.
-    const wantsImages = icSpec.referenceKind === 'image';
-    const videoShapePresent = !!uploads.icReference || !!body.icReferenceVideoIds?.length;
-    if (wantsImages && videoShapePresent) {
-      await cleanupAllStaged();
-      throw new ServerError(
-        `${icSpec.label} mode conditions on still images — pass gallery filenames as icReferenceImageFiles, not icReference / icReferenceVideoIds.`,
-        { status: 400, code: 'IC_LORA_REFERENCE_KIND_MISMATCH' },
-      );
-    }
-    if (!wantsImages && body.icReferenceImageFiles?.length) {
-      await cleanupAllStaged();
-      throw new ServerError(
-        `${icSpec.label} mode conditions on a reference clip — pass icReference / icReferenceVideoIds, not icReferenceImageFiles.`,
-        { status: 400, code: 'IC_LORA_REFERENCE_KIND_MISMATCH' },
-      );
-    }
-    // The upload wins over gallery picks, so a request carrying both would
-    // silently drop the picks. Force one shape per request instead. Checked
-    // BEFORE the count bounds below, which would otherwise report a misleading
-    // "needs exactly 1, got 2" for what is really a mixed-shape request.
-    if (uploads.icReference && body.icReferenceVideoIds?.length) {
-      await cleanupAllStaged();
-      throw new ServerError(
-        'icReference upload cannot be combined with icReferenceVideoIds — pass one reference shape per request.',
-        { status: 400, code: 'IC_LORA_REFERENCE_CONFLICT' },
-      );
-    }
-    // Reference count is the weight's contract, asserted once here against the
-    // registry that owns the bounds. Checked before staging so a bad request only
-    // unlinks the cheap OS temp file, and resolution below can't change the
-    // count: an upload is exactly 1, every history id resolves 1:1 or throws, and
-    // every gallery filename resolves 1:1 or throws.
-    const refCount = wantsImages
-      ? (body.icReferenceImageFiles?.length || 0)
-      : (uploads.icReference ? 1 : 0) + (body.icReferenceVideoIds?.length || 0);
-    if (refCount === 0) {
-      // Special-cased ahead of the bounds assertion purely for actionability —
-      // "needs exactly 1; got 0" doesn't tell the caller HOW to supply one.
-      await cleanupAllStaged();
-      throw new ServerError(
-        wantsImages
-          ? `${icSpec.label} mode requires ${describeIcReferenceRange(icSpec)} reference images — pick them from your gallery (icReferenceImageFiles).`
-          : `${icSpec.label} mode requires a reference ${icSpec.referenceKind} — upload one (multipart field: icReference) or pick a prior render (icReferenceVideoIds).`,
-        { status: 400, code: 'IC_LORA_REFERENCE_REQUIRED' },
-      );
-    }
-    if (refCount < icSpec.minReferences || refCount > icSpec.maxReferences) {
-      await cleanupAllStaged();
-      assertIcReferenceCount(icSpec, refCount, (msg) => new ServerError(msg, {
-        status: 400, code: 'IC_LORA_REFERENCE_COUNT',
-      }));
-    }
-    // IC-LoRA remix is an LTX-2 primitive (ICLoraPipeline). Fail before enqueue
-    // so a bad modelId can't pollute the persisted queue with a doomed job.
-    if (effectiveModel && effectiveModel.runtime !== 'ltx2') {
-      await cleanupAllStaged();
-      throw new ServerError(
-        `${icSpec.label} mode requires an ltx2-runtime model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
-        { status: 400, code: 'IC_LORA_REQUIRES_LTX2' },
-      );
-    }
-    // Chained renders re-seed each chunk from the previous chunk's last frame;
-    // an IC render is conditioned on a whole reference clip instead, so there's
-    // no defined semantic for chunk 2+ and it would silently ignore the mode.
-    if (body.chunks != null && Number(body.chunks) > 1) {
-      await cleanupAllStaged();
-      throw new ServerError(
-        `${icSpec.label} mode cannot be combined with chunks > 1 — the reference clip anchors a single render.`,
-        { status: 400, code: 'IC_LORA_CHUNKS_CONFLICT' },
-      );
-    }
-  } else if (uploads.icReference || body.icReferenceVideoIds?.length || body.icReferenceImageFiles?.length) {
-    await cleanupAllStaged();
-    throw new ServerError(
-      `IC-LoRA reference inputs are only valid with an IC remix mode (${IC_LORA_MODE_VALUES.join(', ')}); got mode='${body.mode || 'unset'}'.`,
-      { status: 400, code: 'IC_LORA_MODE_MISMATCH' },
-    );
-  }
-  // a2v needs the dgrauet runtime — the legacy mlx_video pipeline has no
-  // audio-conditioned mode. The worker also catches this in buildArgs (with
-  // A2V_REQUIRES_LTX2), but checking here keeps the route's "fail fast
-  // before enqueue" contract so a bad modelId can't pollute the persisted
-  // queue with a doomed entry.
-  if (body.mode === 'a2v' && effectiveModel && effectiveModel.runtime !== 'ltx2') {
-    await cleanupAllStaged();
-    throw new ServerError(
-      `a2v mode requires an ltx2-runtime model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
-      { status: 400, code: 'A2V_REQUIRES_LTX2' },
-    );
-  }
-
-  let sourceImagePath = null;
-  let lastImagePath = null;
-  let audioFilePath = null;
-  let icReferenceUploadPath = null;
-  let uploadedTempPath = null;
-  const extraUploadedTempPaths = [];
-  if (uploads.sourceImage || uploads.lastImage || uploads.audioFile || uploads.icReference) {
-    // Ensure the durable uploads dir exists before staging. Wrapped in
-    // try/catch so a permission/disk failure here still cleans up the
-    // multipart temp uploads instead of leaking them in the OS temp dir.
-    try {
-      await ensureDir(PATHS.uploads);
-    } catch (err) {
-      await cleanupAllStaged();
-      throw new ServerError(
-        `Failed to prepare uploads directory: ${err.message}`,
-        { status: 500, code: 'VIDEO_GEN_UPLOADS_DIR_FAILED' },
-      );
-    }
-  }
-  if (uploads.sourceImage) {
-    sourceImagePath = await stageUploadDurable(uploads.sourceImage, 'source');
-    uploadedTempPath = sourceImagePath;
-  } else if (body.sourceImageFile) {
-    sourceImagePath = resolveGalleryImage(body.sourceImageFile);
-  }
-  // Music Video director-board renders are always i2v FROM the scene's reference
-  // frame (#1760 Phase 1). resolveGalleryImage returns null for a missing/invalid
-  // gallery file (mustExist defaults true), and an unresolved source would
-  // otherwise fall through to a text-to-video render — silently attaching a clip
-  // that ignores the frame the director chose. Reject instead, so a stale/deleted
-  // reference frame surfaces as a clear error rather than a wrong-looking clip.
-  if (body.musicVideo && !sourceImagePath) {
-    await cleanupAllStaged();
-    throw new ServerError(
-      'Music Video scene render needs a resolvable reference frame (sourceImageFile) — the scene\'s frame is missing or could not be resolved.',
-      { status: 400, code: 'MUSIC_VIDEO_SOURCE_REQUIRED' },
-    );
-  }
-  // Grok backend short-circuit (#2859 phase 2): everything past this point —
-  // last-frame/keyframe staging, extend resolution, LoRA gating — is
-  // local-runtime machinery grok doesn't use. sourceImagePath (upload or
-  // gallery pick) is already resolved above, so an i2v render animates that
-  // frame and a plain prompt runs the image-first image_gen → image_to_video
-  // flow inside the provider. `backend` (not `body.backend`) so the #3231
-  // pin ladder routes an unpinned-request grok default through here too.
   if (backend === 'grok') {
-    const g = s.imageGen?.grok || {};
-    if (!g.enabled) {
-      await cleanupAllStaged();
-      throw new ServerError(
-        'Grok Imagegen is disabled — enable it in Settings → Image Gen first',
-        { status: 400, code: 'GROK_IMAGEGEN_DISABLED' },
-      );
-    }
-    const { jobId, position, status } = enqueueJob({
-      kind: 'video',
-      params: {
-        // `mode: 'grok'` is the queue's discriminator — the cloud lane and
-        // getGenModuleForJob route on it. Local video jobs use `mode` for
-        // the t2v/i2v semantic (text/image/fflf/…), which never collides
-        // with the literal 'grok'.
-        mode: IMAGE_GEN_MODE.GROK,
-        // Semantic t2v/i2v mode, kept separate from the discriminator so a
-        // client restoring form state from /active never feeds 'grok' back
-        // into its mode selector.
-        videoMode: sourceImagePath ? 'image' : 'text',
-        grokPath: g.grokPath,
-        aspectRatio: g.aspectRatio,
-        prompt: body.prompt,
-        negativePrompt: body.negativePrompt || '',
-        width: body.width,
-        height: body.height,
-        duration: body.grokDuration,
-        sourceImagePath,
-        uploadedTempPath,
-        ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
-      },
+    const { grok: g, sourceImagePath, uploadedTempPath } = prepared;
+    const { jobId, position, status } = await enqueue({
+      // `mode: 'grok'` is the queue's discriminator — the cloud lane and
+      // getGenModuleForJob route on it. Local video jobs use `mode` for
+      // the t2v/i2v semantic (text/image/fflf/…), which never collides
+      // with the literal 'grok'.
+      mode: IMAGE_GEN_MODE.GROK,
+      // Semantic t2v/i2v mode, kept separate from the discriminator so a
+      // client restoring form state from /active never feeds 'grok' back
+      // into its mode selector.
+      videoMode: sourceImagePath ? 'image' : 'text',
+      grokPath: g.grokPath,
+      aspectRatio: g.aspectRatio,
+      prompt: body.prompt,
+      negativePrompt: body.negativePrompt || '',
+      width: body.width,
+      height: body.height,
+      duration: body.grokDuration,
+      sourceImagePath,
+      uploadedTempPath,
+      ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
     });
     return res.json({ jobId, generationId: jobId, filename: `${jobId}.mp4`, model: 'grok', mode: 'grok', status, position });
   }
 
-  if (uploads.lastImage) {
-    lastImagePath = await stageUploadDurable(uploads.lastImage, 'last');
-    extraUploadedTempPaths.push(lastImagePath);
-  } else if (body.lastImageFile) {
-    // Same path-traversal guard as the start frame.
-    lastImagePath = resolveGalleryImage(body.lastImageFile);
-  }
-  if (uploads.audioFile) {
-    // a2v: audio file rides through the same durable-staging path as the
-    // image uploads. Cleanup tracking via extraUploadedTempPaths so the
-    // worker drops it on terminal events the same way it drops lastImage.
-    audioFilePath = await stageUploadDurable(uploads.audioFile, 'audio');
-    extraUploadedTempPaths.push(audioFilePath);
-  } else if (body.mode === 'a2v' && body.musicVideo) {
-    const project = await getMusicVideoProject(body.musicVideo.projectId);
-    const sceneExists = project?.scenes?.some((scene) => scene.sceneId === body.musicVideo.sceneId);
-    if (!project || !sceneExists) {
-      await cleanupAllStaged();
-      throw new ServerError('Music-video project or scene not found', { status: 404, code: 'NOT_FOUND' });
-    }
-    const track = project.trackId ? await getTrack(project.trackId) : null;
-    const filename = track?.audioFilename || project.uploadedAudioFilename;
-    const sourceAudioPath = filename ? safeUnder(PATHS.music, filename) : null;
-    if (!sourceAudioPath || !existsSync(sourceAudioPath)) {
-      await cleanupAllStaged();
-      throw new ServerError('Music-video project audio is unavailable', { status: 400, code: 'VIDEO_GEN_PROJECT_AUDIO_MISSING' });
-    }
-    audioFilePath = await stageExistingAudioDurable(sourceAudioPath);
-    extraUploadedTempPaths.push(audioFilePath);
-  }
-  if (uploads.icReference) {
-    // IC-LoRA reference clip — same durable staging + cleanup tracking as the
-    // audio upload above. A history-picked reference needs neither (it already
-    // lives under data/videos/ and must survive the render).
-    icReferenceUploadPath = await stageUploadDurable(uploads.icReference, 'ic-ref');
-    extraUploadedTempPaths.push(icReferenceUploadPath);
-  }
-
-  // Multi-keyframe interpolation: resolve each gallery filename to an
-  // absolute path under PATHS.images via the same path-traversal guard as
-  // sourceImageFile. Reject up-front when any reference can't be resolved
-  // so the queue doesn't accept a doomed job. Only valid for fflf mode +
-  // single-chunk renders (the chain orchestrator pins keyframes only on
-  // chunk 0; chaining ≥2 chunks with N keyframes has no defined semantic).
-  let resolvedKeyframes = null;
-  if (body.keyframes && body.keyframes.length >= 2) {
-    if (body.mode && body.mode !== 'fflf') {
-      await cleanupAllStaged();
-      throw new ServerError(
-        `keyframes is only valid with mode='fflf' (got mode='${body.mode}').`,
-        { status: 400, code: 'KEYFRAMES_MODE_MISMATCH' },
-      );
-    }
-    // Reject mixing keyframes with the legacy 2-keyframe inputs — the
-    // worker would silently ignore sourceImage/lastImage when keyframes is
-    // present, but staging/resizing them anyway is wasted work and the
-    // ambiguity (which one wins?) bites callers later. Force the user to
-    // pick one shape per request. Covers both upload paths and the
-    // gallery-resolved file fields.
-    if (sourceImagePath || lastImagePath || body.sourceImageFile || body.lastImageFile) {
-      await cleanupAllStaged();
-      throw new ServerError(
-        'keyframes cannot be combined with sourceImage / lastImage inputs — pass each anchor frame as a keyframes[] entry instead.',
-        { status: 400, code: 'KEYFRAMES_LEGACY_INPUTS_CONFLICT' },
-      );
-    }
-    // Multi-keyframe FFLF is an LTX-2 primitive — the legacy mlx_video
-    // pipeline has no equivalent. Mirror the a2v guard above so a bad
-    // modelId can't enqueue a doomed job that will only fail in the
-    // worker (with KEYFRAMES_REQUIRE_LTX2).
-    if (effectiveModel && effectiveModel.runtime !== 'ltx2') {
-      await cleanupAllStaged();
-      throw new ServerError(
-        `keyframes mode requires an ltx2-runtime model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
-        { status: 400, code: 'KEYFRAMES_REQUIRE_LTX2' },
-      );
-    }
-    // Default mode to 'fflf' when keyframes is set without an explicit mode —
-    // otherwise local.js#buildLtx2Args resolves helperMode to 'text' and the
-    // keyframes silently disappear.
-    if (!body.mode) body.mode = 'fflf';
-    if (body.chunks != null && Number(body.chunks) > 1) {
-      await cleanupAllStaged();
-      throw new ServerError(
-        'keyframes cannot be combined with chunks > 1 — keyframes anchor a single clip.',
-        { status: 400, code: 'KEYFRAMES_CHUNKS_CONFLICT' },
-      );
-    }
-    // Validate keyframe indices against the *effective* numFrames so a
-    // request with no explicit `numFrames` (which falls back to the
-    // generateVideo default of 121) still rejects out-of-range indices
-    // up-front instead of failing late inside the worker / Python helper.
-    // Keep this in sync with the default in services/videoGen/local.js.
-    const effectiveNumFrames = body.numFrames != null ? Number(body.numFrames) : DEFAULT_NUM_FRAMES;
-    resolvedKeyframes = [];
-    let prevIndex = -1;
-    for (let i = 0; i < body.keyframes.length; i++) {
-      const kf = body.keyframes[i];
-      const path = resolveGalleryImage(kf.file);
-      if (!path) {
-        await cleanupAllStaged();
-        throw new ServerError(
-          `keyframes[${i}].file not found in gallery: ${kf.file}`,
-          { status: 400, code: 'KEYFRAME_GALLERY_MISS' },
-        );
-      }
-      if (kf.index <= prevIndex) {
-        await cleanupAllStaged();
-        throw new ServerError(
-          `keyframes indices must be strictly ascending; got ${prevIndex} then ${kf.index}`,
-          { status: 400, code: 'KEYFRAME_INDICES_NOT_ASCENDING' },
-        );
-      }
-      if (kf.index > effectiveNumFrames - 1) {
-        await cleanupAllStaged();
-        const numFramesLabel = body.numFrames != null
-          ? `numFrames ${body.numFrames}`
-          : `default numFrames ${DEFAULT_NUM_FRAMES}`;
-        throw new ServerError(
-          `keyframes[${i}].index ${kf.index} >= ${numFramesLabel}`,
-          { status: 400, code: 'KEYFRAME_INDEX_OUT_OF_RANGE' },
-        );
-      }
-      resolvedKeyframes.push({ path, index: kf.index });
-      prevIndex = kf.index;
-    }
-  }
-
-  // Resolve a render-history id to its on-disk video under data/videos/.
-  // Shared by native extend and the IC-LoRA reference channel: both let the
-  // user point at a prior render, and both must reject a missing/tampered id
-  // rather than silently degrading to a text render (which would produce
-  // wrong-looking content with no error). `label` names the field in the error
-  // so the two callers stay distinguishable.
-  const resolveHistoryVideoPath = async (id, { history, label, notFoundCode, missingFileCode }) => {
-    const videoEntry = history.find((h) => h.id === id);
-    if (!videoEntry) {
-      // cleanupAllStaged covers durable copies that may have been written
-      // before this validation point — these modes and image uploads are
-      // mutually exclusive in the UI but the route doesn't enforce that,
-      // so be defensive.
-      await cleanupAllStaged();
-      throw new ServerError(`${label} not found in history: ${id}`, { status: 404, code: notFoundCode });
-    }
-    const candidate = safeUnder(PATHS.videos, videoEntry.filename);
-    if (!candidate || !existsSync(candidate)) {
-      await cleanupAllStaged();
-      throw new ServerError(
-        `${label} resolved to a missing file: ${videoEntry.filename}`,
-        { status: 404, code: missingFileCode },
-      );
-    }
-    return candidate;
-  };
-
-  // Render history is read by both the extend and IC reference paths. Load it
-  // lazily and at most once — the file grows with every render, so a request
-  // carrying both would otherwise re-read and re-parse megabytes.
-  let historyCache = null;
-  const getHistory = async () => (historyCache ??= await loadHistory());
-
-  // Native extend (ltx2 runtime): forward the resolved path as
-  // extendFromVideoPath.
-  let extendFromVideoPath = null;
-  if (body.extendFromVideoId) {
-    extendFromVideoPath = await resolveHistoryVideoPath(body.extendFromVideoId, {
-      history: await getHistory(),
-      label: 'extendFromVideoId',
-      notFoundCode: 'EXTEND_SOURCE_NOT_FOUND',
-      missingFileCode: 'EXTEND_SOURCE_FILE_MISSING',
-    });
-  }
-
-  // IC-LoRA reference channel: gallery stills for an image-kind weight, else the
-  // staged upload or the picked prior render(s). The route already rejected the
-  // cross-kind and both-present cases (and asserted the count against the weight's
-  // bounds) above, so exactly one branch contributes and each entry resolves 1:1
-  // or throws.
-  let icReferencePaths = null;
-  if (icSpec) {
-    if (icSpec.referenceKind === 'image') {
-      // Gallery-only, exactly like `keyframes` — same path-traversal guard, same
-      // "reject up-front so the queue never accepts a doomed job" contract. The
-      // service materializes each still into a VAE-compatible clip at render
-      // resolution (the IC reference channel is a video encoder end-to-end).
-      icReferencePaths = [];
-      for (let i = 0; i < body.icReferenceImageFiles.length; i++) {
-        const file = body.icReferenceImageFiles[i];
-        const path = resolveGalleryImage(file);
-        if (!path) {
-          await cleanupAllStaged();
-          throw new ServerError(
-            `icReferenceImageFiles[${i}] not found in gallery: ${file}`,
-            { status: 400, code: 'IC_LORA_REFERENCE_GALLERY_MISS' },
-          );
-        }
-        icReferencePaths.push(path);
-      }
-    } else if (icReferenceUploadPath) {
-      icReferencePaths = [icReferenceUploadPath];
-    } else {
-      const history = await getHistory();
-      icReferencePaths = [];
-      for (const id of body.icReferenceVideoIds || []) {
-        icReferencePaths.push(await resolveHistoryVideoPath(id, {
-          history,
-          label: 'icReferenceVideoIds entry',
-          notFoundCode: 'IC_LORA_REFERENCE_NOT_FOUND',
-          missingFileCode: 'IC_LORA_REFERENCE_FILE_MISSING',
-        }));
-      }
-    }
-  }
-
-  // Collapse the parallel loraFilenames/loraScales arrays into the internal
-  // `[{ filename, scale }]` shape the service (resolveVideoLoras) and the
-  // resume param echo consume. A defaulted scale keeps the worker contract
-  // simple. Empty (picker cleared) → undefined.
-  const loras = Array.isArray(body.loraFilenames) && body.loraFilenames.length
-    ? body.loraFilenames.map((filename, i) => ({
-        filename,
-        scale: typeof body.loraScales?.[i] === 'number' ? body.loraScales[i] : 1.0,
-      }))
-    : undefined;
-
-  // Video LoRAs fuse on two runtimes: dgrauet's `ltx2` (via the pipeline's
-  // _pending_loras hook, see scripts/generate_ltx2.py) and non-quantized
-  // LTX-2.x `mlx_video` models (merged offline by scripts/generate_av_lora.py).
-  // videoLoraFamily() returns null for everything else (wan22 / hunyuan /
-  // quantized mlx_video) — reject up-front so a bad modelId can't enqueue a
-  // doomed job that only fails in the worker.
-  if (loras && effectiveModel && !videoLoraFamily(effectiveModel)) {
-    await cleanupAllStaged();
-    throw new ServerError(
-      `LoRAs aren't supported on this model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}" — use an LTX-2.x model (dgrauet ltx2, or the bf16 Unified Beta).`,
-      { status: 400, code: 'LORAS_REQUIRE_LTX2' },
-    );
-  }
-
-  // a2v and the IC remix modes both anchor a single render (audio track /
-  // reference clip), so chaining is meaningless — pin to 1 chunk. The IC path
-  // also hard-rejects an explicit chunks>1 above; this covers the default.
-  const effectiveChunks = (body.mode === 'a2v' || icSpec) ? 1 : (body.chunks ?? 1);
+  const {
+    pythonPath, effectiveModelId, mode,
+    sourceImagePath, lastImagePath, audioFilePath, icReferencePaths,
+    resolvedKeyframes, extendFromVideoPath,
+    uploadedTempPath, uploadedTempPaths, loras, effectiveChunks,
+  } = prepared;
 
   // Enqueue rather than spawn synchronously — the mediaJobQueue worker will
   // run this when no other render is in flight. Caller never sees BUSY.
-  const { jobId, position, status } = enqueueJob({
-    kind: 'video',
-    params: {
-      pythonPath,
-      prompt: body.prompt,
-      negativePrompt: body.negativePrompt || '',
-      modelId: body.modelId,
-      width: body.width,
-      height: body.height,
-      numFrames: body.numFrames,
-      fps: body.fps,
-      steps: body.steps,
-      guidanceScale: body.guidanceScale,
-      seed: body.seed,
-      tiling: body.tiling || 'auto',
-      disableAudio: body.disableAudio === true || body.disableAudio === 'true',
-      sourceImagePath,
-      audioFilePath,
-      audioStartSec: body.audioStartSec,
-      uploadedTempPath,
-      uploadedTempPaths: extraUploadedTempPaths,
-      lastImagePath,
-      keyframes: resolvedKeyframes,
-      extendFromVideoPath,
-      mode: body.mode,
-      imageStrength: body.imageStrength,
-      chunks: effectiveChunks,
-      loras,
-      icReferencePaths,
-      icStrength: body.icStrength,
-      icAttentionStrength: body.icAttentionStrength,
-      icSkipStage2: body.icSkipStage2 === true || body.icSkipStage2 === 'true',
-      // Director-board attach tag (#1760 Phase 1). Rides into persisted
-      // job.params so the completion hook can file the clip onto the scene even
-      // if the board unmounted; absent for ordinary VideoGen-page renders.
-      ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
-    },
+  const { jobId, position, status } = await enqueue({
+    pythonPath,
+    prompt: body.prompt,
+    negativePrompt: body.negativePrompt || '',
+    modelId: body.modelId,
+    width: body.width,
+    height: body.height,
+    numFrames: body.numFrames,
+    fps: body.fps,
+    steps: body.steps,
+    guidanceScale: body.guidanceScale,
+    seed: body.seed,
+    tiling: body.tiling || 'auto',
+    disableAudio: body.disableAudio === true || body.disableAudio === 'true',
+    sourceImagePath,
+    audioFilePath,
+    audioStartSec: body.audioStartSec,
+    uploadedTempPath,
+    uploadedTempPaths,
+    lastImagePath,
+    keyframes: resolvedKeyframes,
+    extendFromVideoPath,
+    mode,
+    imageStrength: body.imageStrength,
+    chunks: effectiveChunks,
+    loras,
+    icReferencePaths,
+    icStrength: body.icStrength,
+    icAttentionStrength: body.icAttentionStrength,
+    icSkipStage2: body.icSkipStage2 === true || body.icSkipStage2 === 'true',
+    // Director-board attach tag (#1760 Phase 1). Rides into persisted
+    // job.params so the completion hook can file the clip onto the scene even
+    // if the board unmounted; absent for ordinary VideoGen-page renders.
+    ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
   });
   // Match the legacy response shape (jobId, generationId, filename, model,
   // mode) so existing client code keeps working; add status+position for
-  // the queue. effectiveModelId was resolved at the top of the handler.
+  // the queue. effectiveModelId was resolved by the service.
   res.json({ jobId, generationId: jobId, filename: `${jobId}.mp4`, model: effectiveModelId, mode: 'local', status, position });
 }));
 
