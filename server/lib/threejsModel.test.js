@@ -138,6 +138,39 @@ describe('threejsGeometrySchema extrude/tube validation', () => {
     expect(result.error.issues.some((issue) => issue.message.includes('falls outside the outline'))).toBe(true);
   });
 
+  // An L-shape: the bounding box covers the notch, so a bounds-only containment
+  // check would accept a hole floating in empty space outside the outline.
+  const lShapedOutline = [[0, 0], [3, 0], [3, 1], [1, 1], [1, 3], [0, 3]];
+
+  it('rejects a hole sitting in the notch of a concave outline', () => {
+    const result = threejsGeometrySchema.safeParse({
+      ...validExtrude(),
+      outline: lShapedOutline,
+      holes: [[[1.5, 1.5], [2.5, 1.5], [2.5, 2.5], [1.5, 2.5]]],
+    });
+    expect(result.success).toBe(false);
+    expect(result.error.issues.some((issue) => issue.message.includes('falls outside the outline'))).toBe(true);
+  });
+
+  it('rejects a hole whose vertices are inside but whose edge leaves the outline', () => {
+    const result = threejsGeometrySchema.safeParse({
+      ...validExtrude(),
+      outline: lShapedOutline,
+      holes: [[[0.5, 0.5], [2.5, 0.5], [0.5, 2.5]]],
+    });
+    expect(result.success).toBe(false);
+    expect(result.error.issues.some((issue) => issue.message.includes('falls outside the outline'))).toBe(true);
+  });
+
+  it('accepts a hole fully inside a concave outline', () => {
+    const result = threejsGeometrySchema.safeParse({
+      ...validExtrude(),
+      outline: lShapedOutline,
+      holes: [[[0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8]]],
+    });
+    expect(result.success).toBe(true);
+  });
+
   it('rejects a tube path that repeats a point consecutively', () => {
     const result = threejsGeometrySchema.safeParse({
       ...validTube(),

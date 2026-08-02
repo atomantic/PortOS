@@ -80,12 +80,45 @@ const ringArea = (ring) => {
   return Math.abs(doubled) / 2;
 };
 
-const ringBounds = (ring) => ring.reduce((bounds, [x, y]) => ({
-  minX: Math.min(bounds.minX, x),
-  maxX: Math.max(bounds.maxX, x),
-  minY: Math.min(bounds.minY, y),
-  maxY: Math.max(bounds.maxY, y),
-}), { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
+// Even-odd ray cast. A point exactly on an edge reads as outside, which is what
+// we want: a hole touching the outline is a malformed cutout, not a cutout.
+const pointInRing = (ring, [px, py]) => {
+  let inside = false;
+  for (let index = 0, previous = ring.length - 1; index < ring.length; previous = index, index += 1) {
+    const [xi, yi] = ring[index];
+    const [xj, yj] = ring[previous];
+    const straddles = (yi > py) !== (yj > py);
+    if (straddles && px < (((xj - xi) * (py - yi)) / (yj - yi)) + xi) inside = !inside;
+  }
+  return inside;
+};
+
+const turn = (a, b, c) => Math.sign(((b[0] - a[0]) * (c[1] - a[1])) - ((b[1] - a[1]) * (c[0] - a[0])));
+const onSegment = (a, b, p) => turn(a, b, p) === 0
+  && p[0] >= Math.min(a[0], b[0]) && p[0] <= Math.max(a[0], b[0])
+  && p[1] >= Math.min(a[1], b[1]) && p[1] <= Math.max(a[1], b[1]);
+const segmentsCross = (a, b, c, d) => {
+  if (turn(a, b, c) !== turn(a, b, d) && turn(c, d, a) !== turn(c, d, b)) return true;
+  return onSegment(a, b, c) || onSegment(a, b, d) || onSegment(c, d, a) || onSegment(c, d, b);
+};
+
+const ringsCross = (outer, inner) => {
+  for (let i = 0; i < outer.length; i += 1) {
+    const a = outer[i];
+    const b = outer[(i + 1) % outer.length];
+    for (let j = 0; j < inner.length; j += 1) {
+      if (segmentsCross(a, b, inner[j], inner[(j + 1) % inner.length])) return true;
+    }
+  }
+  return false;
+};
+
+// Vertex containment alone is not enough: a concave outline can hold every hole
+// vertex while an edge between two of them leaves through the notch. Bounded by
+// the ring caps (160 outline points × 12 holes × 160 hole points), so the O(n·m)
+// edge sweep only runs against provider output that already passed the caps.
+const ringContainsRing = (outer, inner) =>
+  inner.every((point) => pointInRing(outer, point)) && !ringsCross(outer, inner);
 
 const outlineRingSchema = z.array(z.tuple([finite, finite])).min(3).max(160)
   .refine((ring) => ringArea(ring) > MIN_RING_AREA, 'outline must enclose a non-zero area');
@@ -102,12 +135,10 @@ const extrudeGeometrySchema = z.object({
   curveSegments: z.number().int().min(1).max(24).default(8),
   steps: z.number().int().min(1).max(32).default(1),
 }).superRefine((definition, ctx) => {
-  const bounds = ringBounds(definition.outline);
-  // A hole outside the outline is not a cutout — Three.js would silently emit a
-  // second disjoint face, so treat it as a malformed outline instead.
+  // A hole that is not strictly inside the outline is not a cutout — Three.js
+  // silently emits a disjoint or self-intersecting face instead of failing.
   definition.holes.forEach((hole, index) => {
-    const outside = hole.some(([x, y]) => x < bounds.minX || x > bounds.maxX || y < bounds.minY || y > bounds.maxY);
-    if (outside) {
+    if (!ringContainsRing(definition.outline, hole)) {
       ctx.addIssue({ code: 'custom', message: `extrude hole ${index} falls outside the outline`, path: ['holes', index] });
     }
   });
