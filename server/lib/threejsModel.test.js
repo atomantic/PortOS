@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { buildThreejsFactorySource, threejsSculptSpecSchema } from './threejsModel.js';
+import { buildThreejsFactorySource, threejsGeometrySchema, threejsSculptSpecSchema } from './threejsModel.js';
+
+const squareOutline = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+const validExtrude = () => ({
+  type: 'extrude',
+  outline: squareOutline,
+  holes: [[[-0.3, -0.3], [0.3, -0.3], [0.3, 0.3], [-0.3, 0.3]]],
+  depth: 0.4,
+});
+const validTube = () => ({
+  type: 'tube',
+  path: [[0, 0, 0], [0, 1, 0.5], [0.6, 1.6, 0]],
+  radius: 0.08,
+});
 
 const validSpec = () => ({
   schemaVersion: 1,
@@ -76,6 +89,78 @@ describe('threejsSculptSpecSchema', () => {
     expect(result.success).toBe(false);
     expect(result.error.issues.some((issue) => issue.message.includes('exceeds vertex count'))).toBe(true);
   });
+
+  it('accepts extrude and tube parts and fills their construction defaults', () => {
+    const spec = validSpec();
+    spec.parts[0].geometry = validExtrude();
+    spec.parts[0].children[0].geometry = validTube();
+    const parsed = threejsSculptSpecSchema.parse(spec);
+    expect(parsed.parts[0].geometry).toMatchObject({
+      bevelEnabled: false, bevelSegments: 2, curveSegments: 8, steps: 1,
+    });
+    expect(parsed.parts[0].children[0].geometry).toMatchObject({
+      tubularSegments: 64, radialSegments: 12, closed: false, curveType: 'centripetal', tension: 0.5,
+    });
+  });
+
+  it('fills physical material channel defaults', () => {
+    const parsed = threejsSculptSpecSchema.parse(validSpec());
+    expect(parsed.materials.trim).toMatchObject({
+      ior: 1.5, transmission: 0, thickness: 0, sheen: 0, iridescence: 0, anisotropy: 0,
+    });
+  });
+
+  it('rejects out-of-range physical material channels', () => {
+    const spec = validSpec();
+    spec.materials.trim.ior = 4;
+    spec.materials.trim.transmission = 1.5;
+    expect(threejsSculptSpecSchema.safeParse(spec).success).toBe(false);
+  });
+});
+
+describe('threejsGeometrySchema extrude/tube validation', () => {
+  it('rejects an outline or hole that encloses no area', () => {
+    const collinear = [[0, 0], [1, 0], [2, 0], [3, 0]];
+    expect(threejsGeometrySchema.safeParse({ ...validExtrude(), outline: collinear }).success).toBe(false);
+    expect(threejsGeometrySchema.safeParse({ ...validExtrude(), holes: [collinear] }).success).toBe(false);
+  });
+
+  it('rejects an outline with fewer than three points', () => {
+    expect(threejsGeometrySchema.safeParse({ ...validExtrude(), outline: [[0, 0], [1, 1]] }).success).toBe(false);
+  });
+
+  it('rejects a hole that falls outside the outline', () => {
+    const result = threejsGeometrySchema.safeParse({
+      ...validExtrude(),
+      holes: [[[5, 5], [6, 5], [6, 6], [5, 6]]],
+    });
+    expect(result.success).toBe(false);
+    expect(result.error.issues.some((issue) => issue.message.includes('falls outside the outline'))).toBe(true);
+  });
+
+  it('rejects a tube path that repeats a point consecutively', () => {
+    const result = threejsGeometrySchema.safeParse({
+      ...validTube(),
+      path: [[0, 0, 0], [0, 0, 0], [1, 0, 0]],
+    });
+    expect(result.success).toBe(false);
+    expect(result.error.issues.some((issue) => issue.message.includes('repeat the same point consecutively'))).toBe(true);
+  });
+
+  it('rejects a closed tube path that repeats its first point at the end', () => {
+    const result = threejsGeometrySchema.safeParse({
+      type: 'tube',
+      radius: 0.1,
+      closed: true,
+      path: [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 0, 0]],
+    });
+    expect(result.success).toBe(false);
+    expect(result.error.issues.some((issue) => issue.message.includes('must not repeat its first point'))).toBe(true);
+  });
+
+  it('accepts a closed tube path with distinct endpoints', () => {
+    expect(threejsGeometrySchema.safeParse({ ...validTube(), closed: true }).success).toBe(true);
+  });
 });
 describe('buildThreejsFactorySource', () => {
   it('exports a deterministic Group factory from validated data', () => {
@@ -85,5 +170,19 @@ describe('buildThreejsFactorySource', () => {
     expect(source).toContain('root.userData.sculptRuntime');
     expect(source).toContain("case 'custom'");
     expect(source).toContain('new THREE.MeshBasicMaterial(unlit)');
+  });
+
+  it('emits extrude, tube, and physical-channel construction', () => {
+    const spec = validSpec();
+    spec.parts[0].geometry = validExtrude();
+    spec.parts[0].children[0].geometry = validTube();
+    const source = buildThreejsFactorySource(spec);
+    expect(source).toContain('new THREE.ExtrudeGeometry(shape');
+    expect(source).toContain('shape.holes.push(new THREE.Path(');
+    expect(source).toContain('new THREE.CatmullRomCurve3(');
+    expect(source).toContain('new THREE.TubeGeometry(curve');
+    for (const channel of ['ior', 'transmission', 'thickness', 'sheen', 'iridescence', 'anisotropy']) {
+      expect(source).toContain(`${channel}: definition.${channel},`);
+    }
   });
 });

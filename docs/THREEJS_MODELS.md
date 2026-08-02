@@ -29,6 +29,29 @@ rendering it. The client maps that allowlist to Three.js primitives and bounded
 `BufferGeometry`; it never evaluates provider-written JavaScript. Exported
 source is produced deterministically from the validated spec.
 
+## Geometry vocabulary
+
+Alongside the primitives (box, sphere, cylinder, cone, torus, capsule, lathe)
+and the bounded `custom` triangle mesh, the schema carries two constructive
+forms so silhouette-defining shapes don't have to degrade into a coarse mesh:
+
+- `extrude` — a closed 2D outline (3–160 points) with optional hole rings,
+  swept to `depth` with optional bevel. Every ring must enclose real area and
+  each hole must lie inside the outline, so a degenerate or stray ring is
+  rejected instead of rendering as an empty or disjoint face.
+- `tube` — a round profile of `radius` swept along a 2–96 point Catmull-Rom
+  path. Consecutive points must differ and a `closed` path must not repeat its
+  first point, because either produces NaN frames in the centripetal/chordal
+  parameterizations.
+
+`type: "physical"` materials additionally carry bounded `ior`, `transmission`,
+`thickness`, `sheen`, `iridescence`, and `anisotropy` for glass, cloth,
+pearlescent, and brushed-metal finishes. Those channels are parsed for every
+material type so a spec round-trips unchanged, but only forwarded to Three.js
+for physical materials. `client/src/lib/threejsSculpt.js` mirrors the geometry
+and material construction the exported factory emits, so the preview and the
+downloaded source render the same scene.
+
 ## Provider behavior
 
 API providers receive the gallery image as a multimodal image attachment. CLI

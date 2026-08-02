@@ -67,6 +67,75 @@ const latheGeometrySchema = z.object({
   segments: z.number().int().min(3).max(96).default(32),
 });
 
+// Shoelace area — a closed outline whose points are coincident or collinear
+// extrudes to nothing, so it is rejected rather than rendered as an empty mesh.
+const MIN_RING_AREA = 1e-6;
+const ringArea = (ring) => {
+  let doubled = 0;
+  for (let index = 0; index < ring.length; index += 1) {
+    const [x1, y1] = ring[index];
+    const [x2, y2] = ring[(index + 1) % ring.length];
+    doubled += (x1 * y2) - (x2 * y1);
+  }
+  return Math.abs(doubled) / 2;
+};
+
+const ringBounds = (ring) => ring.reduce((bounds, [x, y]) => ({
+  minX: Math.min(bounds.minX, x),
+  maxX: Math.max(bounds.maxX, x),
+  minY: Math.min(bounds.minY, y),
+  maxY: Math.max(bounds.maxY, y),
+}), { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
+
+const outlineRingSchema = z.array(z.tuple([finite, finite])).min(3).max(160)
+  .refine((ring) => ringArea(ring) > MIN_RING_AREA, 'outline must enclose a non-zero area');
+
+const extrudeGeometrySchema = z.object({
+  type: z.literal('extrude'),
+  outline: outlineRingSchema,
+  holes: z.array(outlineRingSchema).max(12).default([]),
+  depth: positive,
+  bevelEnabled: z.boolean().default(false),
+  bevelThickness: z.number().finite().min(0).max(1_000).default(0.1),
+  bevelSize: z.number().finite().min(0).max(1_000).default(0.1),
+  bevelSegments: z.number().int().min(0).max(8).default(2),
+  curveSegments: z.number().int().min(1).max(24).default(8),
+  steps: z.number().int().min(1).max(32).default(1),
+}).superRefine((definition, ctx) => {
+  const bounds = ringBounds(definition.outline);
+  // A hole outside the outline is not a cutout — Three.js would silently emit a
+  // second disjoint face, so treat it as a malformed outline instead.
+  definition.holes.forEach((hole, index) => {
+    const outside = hole.some(([x, y]) => x < bounds.minX || x > bounds.maxX || y < bounds.minY || y > bounds.maxY);
+    if (outside) {
+      ctx.addIssue({ code: 'custom', message: `extrude hole ${index} falls outside the outline`, path: ['holes', index] });
+    }
+  });
+});
+
+const tubeGeometrySchema = z.object({
+  type: z.literal('tube'),
+  path: z.array(vec3Schema).min(2).max(96)
+    .refine(
+      (points) => points.every((point, index) => index === 0 || point.some((value, axis) => value !== points[index - 1][axis])),
+      'tube path cannot repeat the same point consecutively',
+    ),
+  radius: positive,
+  tubularSegments: z.number().int().min(2).max(256).default(64),
+  radialSegments: z.number().int().min(3).max(32).default(12),
+  closed: z.boolean().default(false),
+  curveType: z.enum(['centripetal', 'chordal', 'catmullrom']).default('centripetal'),
+  tension: z.number().finite().min(0).max(1).default(0.5),
+}).superRefine((definition, ctx) => {
+  const first = definition.path[0];
+  const last = definition.path[definition.path.length - 1];
+  // A closed curve already joins the endpoints; repeating the seam point yields a
+  // zero-length segment and NaN frames in the centripetal/chordal parameterizations.
+  if (definition.closed && first.every((value, axis) => value === last[axis])) {
+    ctx.addIssue({ code: 'custom', message: 'a closed tube path must not repeat its first point at the end', path: ['path'] });
+  }
+});
+
 const customGeometrySchema = z.object({
   type: z.literal('custom'),
   // 900 vertices / 2,700 coordinates is deliberately generous for a
@@ -85,6 +154,8 @@ export const threejsGeometrySchema = z.discriminatedUnion('type', [
   torusGeometrySchema,
   capsuleGeometrySchema,
   latheGeometrySchema,
+  extrudeGeometrySchema,
+  tubeGeometrySchema,
   customGeometrySchema,
 ]);
 
@@ -100,6 +171,15 @@ export const threejsMaterialSchema = z.object({
   wireframe: z.boolean().default(false),
   clearcoat: z.number().finite().min(0).max(1).default(0),
   clearcoatRoughness: z.number().finite().min(0).max(1).default(0),
+  // Physical-only channels. They are parsed for every material type so a spec
+  // round-trips unchanged, but only `type: 'physical'` forwards them to Three.js.
+  // `ior` is bounded to the range MeshPhysicalMaterial itself clamps to.
+  ior: z.number().finite().min(1).max(2.333).default(1.5),
+  transmission: z.number().finite().min(0).max(1).default(0),
+  thickness: z.number().finite().min(0).max(1_000).default(0),
+  sheen: z.number().finite().min(0).max(1).default(0),
+  iridescence: z.number().finite().min(0).max(1).default(0),
+  anisotropy: z.number().finite().min(0).max(1).default(0),
 });
 
 let partSchema;
@@ -247,6 +327,30 @@ function createGeometry(definition) {
       return new THREE.CapsuleGeometry(definition.radius, definition.length, definition.capSegments, definition.radialSegments);
     case 'lathe':
       return new THREE.LatheGeometry(definition.points.map(([x, y]) => new THREE.Vector2(x, y)), definition.segments);
+    case 'extrude': {
+      const shape = new THREE.Shape(definition.outline.map(([x, y]) => new THREE.Vector2(x, y)));
+      for (const hole of definition.holes) {
+        shape.holes.push(new THREE.Path(hole.map(([x, y]) => new THREE.Vector2(x, y))));
+      }
+      return new THREE.ExtrudeGeometry(shape, {
+        depth: definition.depth,
+        bevelEnabled: definition.bevelEnabled,
+        bevelThickness: definition.bevelThickness,
+        bevelSize: definition.bevelSize,
+        bevelSegments: definition.bevelSegments,
+        curveSegments: definition.curveSegments,
+        steps: definition.steps,
+      });
+    }
+    case 'tube': {
+      const curve = new THREE.CatmullRomCurve3(
+        definition.path.map(([x, y, z]) => new THREE.Vector3(x, y, z)),
+        definition.closed,
+        definition.curveType,
+        definition.tension
+      );
+      return new THREE.TubeGeometry(curve, definition.tubularSegments, definition.radius, definition.radialSegments, definition.closed);
+    }
     case 'custom': {
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute('position', new THREE.Float32BufferAttribute(definition.vertices, 3));
@@ -282,6 +386,12 @@ function createMaterial(definition) {
       ...lit,
       clearcoat: definition.clearcoat,
       clearcoatRoughness: definition.clearcoatRoughness,
+      ior: definition.ior,
+      transmission: definition.transmission,
+      thickness: definition.thickness,
+      sheen: definition.sheen,
+      iridescence: definition.iridescence,
+      anisotropy: definition.anisotropy,
     });
   }
   return new THREE.MeshStandardMaterial(lit);

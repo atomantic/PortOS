@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { Bounds, OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
+import { createSculptBufferGeometry, needsSculptBufferGeometry, sculptMaterialProps } from '../../lib/threejsSculpt';
 
 const radians = (degrees = 0) => THREE.MathUtils.degToRad(degrees);
 const rotation = (degrees = [0, 0, 0]) => degrees.map(radians);
@@ -25,20 +26,15 @@ const checkerboardStyle = {
   backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0',
 };
 
-function CustomGeometry({ definition }) {
-  const geometry = useMemo(() => {
-    const next = new THREE.BufferGeometry();
-    next.setAttribute('position', new THREE.Float32BufferAttribute(definition.vertices, 3));
-    next.setIndex(definition.indices);
-    next.computeVertexNormals();
-    next.computeBoundingSphere();
-    return next;
-  }, [definition]);
-  useEffect(() => () => geometry.dispose(), [geometry]);
+function BufferGeometry({ definition }) {
+  const geometry = useMemo(() => createSculptBufferGeometry(definition), [definition]);
+  useEffect(() => () => geometry?.dispose(), [geometry]);
+  if (!geometry) return null;
   return <primitive object={geometry} attach="geometry" />;
 }
 
 function Geometry({ definition }) {
+  if (needsSculptBufferGeometry(definition)) return <BufferGeometry definition={definition} />;
   switch (definition.type) {
     case 'box':
       return <boxGeometry args={[definition.width, definition.height, definition.depth]} />;
@@ -54,44 +50,16 @@ function Geometry({ definition }) {
       return <capsuleGeometry args={[definition.radius, definition.length, definition.capSegments, definition.radialSegments]} />;
     case 'lathe':
       return <latheGeometry args={[definition.points.map(([x, y]) => new THREE.Vector2(x, y)), definition.segments]} />;
-    case 'custom':
-      return <CustomGeometry definition={definition} />;
     default:
       return null;
   }
 }
 
 function Material({ definition }) {
-  const unlit = {
-    color: definition.color,
-    opacity: definition.opacity,
-    transparent: definition.transparent,
-    wireframe: definition.wireframe,
-  };
-  if (definition.type === 'basic') return <meshBasicMaterial {...unlit} />;
-  const lit = {
-    ...unlit,
-    emissive: definition.emissive,
-    emissiveIntensity: definition.emissiveIntensity,
-  };
-  if (definition.type === 'physical') {
-    return (
-      <meshPhysicalMaterial
-        {...lit}
-        metalness={definition.metalness}
-        roughness={definition.roughness}
-        clearcoat={definition.clearcoat}
-        clearcoatRoughness={definition.clearcoatRoughness}
-      />
-    );
-  }
-  return (
-    <meshStandardMaterial
-      {...lit}
-      metalness={definition.metalness}
-      roughness={definition.roughness}
-    />
-  );
+  const props = sculptMaterialProps(definition);
+  if (definition.type === 'basic') return <meshBasicMaterial {...props} />;
+  if (definition.type === 'physical') return <meshPhysicalMaterial {...props} />;
+  return <meshStandardMaterial {...props} />;
 }
 function Part({ part, materials }) {
   const transform = {

@@ -14,7 +14,15 @@ Allowed geometry definitions:
 - {"type":"torus","radius":n,"tube":n,"radialSegments":3..64,"tubularSegments":6..128,"arcDegrees":1..360}
 - {"type":"capsule","radius":n,"length":n,"capSegments":2..32,"radialSegments":3..64}
 - {"type":"lathe","points":[[x,y],...],"segments":3..96}
+- {"type":"extrude","outline":[[x,y],...],"holes":[[[x,y],...],...],"depth":n,"bevelEnabled":false,"bevelThickness":n,"bevelSize":n,"bevelSegments":0..8,"curveSegments":1..24,"steps":1..32} (a closed 2D outline of 3..160 points swept along +Z; \`holes\` are closed rings cut out of it. Every ring must enclose real area and every hole must lie inside the outline.)
+- {"type":"tube","path":[[x,y,z],...],"radius":n,"tubularSegments":2..256,"radialSegments":3..32,"closed":false,"curveType":"centripetal"|"chordal"|"catmullrom","tension":0..1} (a round profile swept along a smooth 2..96 point curve. Consecutive path points must differ, and a closed path must not repeat its first point at the end.)
 - {"type":"custom","vertices":[x,y,z,...],"indices":[a,b,c,...]} (triangle mesh; use only when primitives cannot express an identity-defining silhouette)
+
+Choosing between them:
+- extrude — flat or plate-like parts whose identity is their silhouette: badges, logos, letters, signs, panels with cutouts, keyholes, vents, window frames, gears, brackets, star/cross/gem profiles.
+- tube — anything sweeping a constant round section along a path: cables, hoses, wires, handles, pipes, straps, springs, antennae, bent rods, rope, rims.
+- lathe — profiles that are rotationally symmetric about the Y axis.
+- custom triangles — a last resort, only after none of the above can express the silhouette.
 `;
 
 const outputContract = `
@@ -33,7 +41,9 @@ Return one raw JSON object and nothing else. It must have exactly this top-level
       "color":"#RRGGBB","metalness":0..1,"roughness":0..1,
       "emissive":"#RRGGBB","emissiveIntensity":0..20,
       "opacity":0..1,"transparent":false,"wireframe":false,
-      "clearcoat":0..1,"clearcoatRoughness":0..1
+      "clearcoat":0..1,"clearcoatRoughness":0..1,
+      "ior":1..2.333,"transmission":0..1,"thickness":n,
+      "sheen":0..1,"iridescence":0..1,"anisotropy":0..1
     }
   },
   "lights": [{
@@ -90,16 +100,17 @@ WORKFLOW:
 2. Classify the subject as object, character, or hybrid.
 3. Inventory every identity-defining visible detail: silhouette, proportions, bevels/rounding, seams, trim, controls, fasteners, facial landmarks, limbs, wear, gloss, emissive regions, and attachment points.
 4. Build from a clear parent/child hierarchy. Put moving or attachable pieces in their own named parts. Add sockets for meaningful pivots/attachments.
-5. Use primitive composition first. Use custom triangles only for silhouettes primitives cannot reproduce.
-6. Use physically coherent PBR material channels. Do not use textures, external meshes, URLs, downloaded assets, or JavaScript.
+5. Use primitive composition first, then the schema-backed extrude/tube/lathe forms for silhouettes, cutouts, and swept details. Use custom triangles only when no other allowed form can reproduce the shape.
+6. Use physically coherent PBR material channels. Reach for "physical" with ior/transmission/thickness for glass, gems, liquid, and clear plastic, sheen for cloth and velvet, iridescence for oil-slick/soap-film/pearlescent finishes, and anisotropy for brushed metal or spun discs. Do not use textures, external meshes, URLs, downloaded assets, or JavaScript.
 7. Center the subject near the origin, keep dimensions internally consistent, and choose a camera that frames the whole model.
 8. Be honest about unseen sides in limitations. Infer conservatively; never claim exact hidden geometry.
-9. Ensure every detailInventory item points to real part ids, every material reference exists, every socket parent exists, all ids are unique, and custom indices are in range.
+9. Ensure every detailInventory item points to real part ids, every material reference exists, every socket parent exists, all ids are unique, custom indices are in range, extrude rings enclose real area with holes inside the outline, and tube paths never repeat a point.
 
 QUALITY GATE:
 - A compound subject must not collapse into one primitive.
 - Major visible attachments may not float or be omitted.
 - Identity-priority details must be represented by actual geometry/material choices.
+- Do not spend custom triangles on a shape extrude, tube, or lathe already expresses.
 - Include useful ambient/hemisphere fill plus at least one directional/key light.
 - Keep the full hierarchy at 160 parts or fewer.
 
