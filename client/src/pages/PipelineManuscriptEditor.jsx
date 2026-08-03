@@ -387,9 +387,20 @@ export default function PipelineManuscriptEditor() {
     return reviewing ? 'Running editorial review…' : 'Run editorial review';
   }, [reviewActive, reviewLatest, reviewing]);
 
+  // Switching formats replaces `sections` (and their baselines) wholesale, so an
+  // unsaved edit in the outgoing format would be dropped on the floor — the
+  // refetch on switching back returns the server's older text. Flush first and
+  // bail out if that save failed, leaving the text (and its tab dot) on screen.
+  // `flushPendingSectionSaves` is declared below; this only runs on click, long
+  // after the component body has evaluated.
   const changeView = async (type) => {
     if (type === viewType || switching) return;
     setSwitching(true);
+    if (!(await flushPendingSectionSaves())) {
+      setSwitching(false);
+      toast('Kept this format open — your unsaved edit could not be saved');
+      return;
+    }
     const manuscript = await getPipelineManuscript(seriesId, type, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to load that format');
       return null;
@@ -419,11 +430,21 @@ export default function PipelineManuscriptEditor() {
 
   const setSectionContent = (issueId, content) => patchSection(issueId, { content });
 
+  // Saves in flight, keyed by section. Two paths can target the same section at
+  // once — the onBlur save and the flush below (clicking the format switcher
+  // blurs the textarea, then immediately asks to swap formats) — and firing both
+  // PATCHes would snapshot a redundant version. Queuing behind the in-flight
+  // save lets the second call re-read the baseline and no-op once the first
+  // persisted that same text.
+  const pendingSaves = useRef(new Map());
+
   const saveSectionContent = async (section, content) => {
     const key = baselineKey(section);
+    const prior = pendingSaves.current.get(key);
+    if (prior) await prior;
     if (baselineRef.current.get(key) === content) return;
     setSaveState((prev) => ({ ...prev, [section.issueId]: 'saving' }));
-    const result = await savePipelineManuscriptSection(
+    const run = savePipelineManuscriptSection(
       seriesId,
       section.issueId,
       { stageId: section.stageId, output: content },
@@ -432,12 +453,26 @@ export default function PipelineManuscriptEditor() {
       toast.error(err.message || 'Failed to save manuscript edit');
       return null;
     });
+    pendingSaves.current.set(key, run);
+    const result = await run;
+    if (pendingSaves.current.get(key) === run) pendingSaves.current.delete(key);
     if (result?.section) {
       setBaseline(key, result.section.content);
       patchSection(section.issueId, { versions: result.section.versions });
     }
     setSaveState((prev) => ({ ...prev, [section.issueId]: result ? 'saved' : undefined }));
     return result;
+  };
+
+  // Persist every pending onBlur edit before an action that swaps `sections`
+  // out from under them. Returns false when a save FAILED, so the caller aborts
+  // rather than discarding the user's text — `undefined` means the save was a
+  // no-op (an in-flight save already persisted it), which is not a failure.
+  const flushPendingSectionSaves = async () => {
+    const dirty = liveSectionsRef.current.filter((s) => isSectionDirty(baselineRef.current, s));
+    if (dirty.length === 0) return true;
+    const results = await Promise.all(dirty.map((s) => saveSectionContent(s, s.content)));
+    return results.every((r) => r !== null);
   };
 
   const saveSection = (section) => saveSectionContent(section, section.content);
