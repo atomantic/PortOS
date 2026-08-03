@@ -274,7 +274,8 @@ describe('TextStagePanel', () => {
     it('drops a result that lands after the panel moved to another record', async () => {
       let resolveGenerate;
       generatePipelineStage.mockReturnValue(new Promise((r) => { resolveGenerate = r; }));
-      const { rerender } = renderPanel(makeIssue({ status: 'ready', output: 'Saved idea text.' }));
+      const onStageUpdate = vi.fn();
+      const { rerender } = renderPanel(makeIssue({ status: 'ready', output: 'Saved idea text.' }), { onStageUpdate });
 
       await userEvent.click(screen.getByRole('button', { name: 'Generate' }));
 
@@ -289,7 +290,7 @@ describe('TextStagePanel', () => {
           stageId="idea"
           seedPlaceholder="seed…"
           outputPlaceholder="output…"
-          onStageUpdate={() => {}}
+          onStageUpdate={onStageUpdate}
         />,
       );
 
@@ -299,6 +300,20 @@ describe('TextStagePanel', () => {
 
       expect(screen.queryByRole('button', { name: /Use new version/i })).not.toBeInTheDocument();
       expect(screen.getByPlaceholderText('output…')).toHaveValue('Another idea entirely.');
+      // Lifting it would patch whichever record is on screen now.
+      expect(onStageUpdate).not.toHaveBeenCalled();
+    });
+
+    it('gates Generate on an in-flight save of the same stage record', async () => {
+      updatePipelineIssue.mockReturnValue(new Promise(() => {}));
+      renderPanel(makeIssue({ status: 'ready', output: 'Saved idea text.' }));
+
+      // Seed-only edit: the output stays clean, so Generate is otherwise live.
+      await userEvent.type(screen.getByPlaceholderText('seed…'), 'A seed.');
+      await userEvent.click(screen.getByRole('button', { name: /Save edits/i }));
+
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Generate' })).toBeDisabled());
+      expect(generatePipelineStage).not.toHaveBeenCalled();
     });
 
     it('lifts the generated stage to the parent even while the review is open', async () => {

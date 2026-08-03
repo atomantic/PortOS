@@ -179,7 +179,13 @@ export default function TextStagePanel({
     // started from, or when the result already matches what's in the editor.
     // A result that lands after the panel moved to another issue/stage is never
     // reviewed against the record now on screen.
-    if (activeKeyRef.current === requestKey && latestDraft !== baseline && latestDraft !== incoming) {
+    if (activeKeyRef.current !== requestKey) {
+      // The panel moved on while this ran. The run is persisted server-side, so
+      // say so — but lifting it would patch whichever record is on screen NOW.
+      toast.success(`${PIPELINE_STAGE_LABELS[stageId]} generated`);
+      return;
+    }
+    if (latestDraft !== baseline && latestDraft !== incoming) {
       setPending({ key: requestKey, incoming });
     }
     onStageUpdate?.(stageId, result.stage);
@@ -287,7 +293,9 @@ export default function TextStagePanel({
           <button
             type="button"
             onClick={outputDirty ? () => setConfirmRegenerate(true) : handleGenerate}
-            disabled={generating || actionsGated || !!activeDiff}
+            // `saving` too: an in-flight save PATCH writes the same stage record
+            // this run will overwrite when it lands.
+            disabled={generating || actionsGated || saving || !!activeDiff}
             title={actionsGated
               ? 'Saving settings…'
               : (outputDirty ? 'You have unsaved edits — you’ll compare them against the new version first' : undefined)}
