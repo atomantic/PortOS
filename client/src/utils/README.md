@@ -97,7 +97,7 @@ its tunable constants and placement helpers.
 | `cityRooftops` | Deterministic rooftop fixture kits (antenna/tank/AC/dish) per app name (`computeRooftopKit`). |
 | `cityProductivity` | Productivity monument from streak/velocity tiers (`computeProductivityMonument`). |
 | `citySeasonalDecor` | Season/holiday resolution → seasonal decoration placements (`computeSeasonalDecor`). |
-| `citySoundscape` | Ambient soundscape: mood/energy classification and chord selection (`computeSoundscape`). |
+| `citySoundscape` | Ambient soundscape: mood/energy classification, chord selection (`computeSoundscape`), and the manual mood override (`applyMoodOverride`). |
 | `cityTaskFlowRiver` | Task-flow river width/speed from backlog & throughput (`computeTaskFlowRiver`). |
 | `cityTaskQueue` | Task-queue state/color from status counts (`computeTaskQueue`). |
 | `cityTimeline` | Activity-log density bins and timeline buckets (`computeActivityDensity`, `buildTimelineBuckets`). |

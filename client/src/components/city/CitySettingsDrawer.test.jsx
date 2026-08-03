@@ -73,6 +73,28 @@ describe('CitySettingsDrawer', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('offers a soundscape override with Auto plus every mood, and persists the choice', () => {
+    window.localStorage.clear();
+    renderDrawer('?cityTab=audio');
+    // The override rides with the music controls, so it appears once music is on.
+    expect(screen.queryByLabelText('SOUNDSCAPE')).toBeNull();
+    fireEvent.click(screen.getByRole('switch', { name: 'SYNTHWAVE' }));
+
+    const select = screen.getByLabelText('SOUNDSCAPE');
+    expect([...select.options].map(o => o.textContent)).toEqual(['AUTO', 'BRIGHT', 'NEUTRAL', 'TENSE']);
+    expect(select.value).toBe('');
+
+    fireEvent.change(select, { target: { value: 'tense' } });
+    expect(screen.getByLabelText('SOUNDSCAPE').value).toBe('tense');
+    expect(JSON.parse(window.localStorage.getItem('portos-city-settings')).soundscapeOverride).toBe('tense');
+
+    // Back to Auto — stored as the explicit null sentinel, not an empty string.
+    fireEvent.change(screen.getByLabelText('SOUNDSCAPE'), { target: { value: '' } });
+    expect(screen.getByLabelText('SOUNDSCAPE').value).toBe('');
+    expect(JSON.parse(window.localStorage.getItem('portos-city-settings')).soundscapeOverride).toBeNull();
+    window.localStorage.clear();
+  });
+
   it('renders nothing when closed', () => {
     const { container } = render(
       <MemoryRouter initialEntries={['/city']}>

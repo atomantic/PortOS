@@ -42,6 +42,9 @@ const DEFAULT_SETTINGS = {
   musicVolume: 0.3,
   sfxEnabled: true,
   sfxVolume: 0.5,
+  // Manual soundscape override (issue #3395). `null` is the explicit "auto" sentinel: the music's
+  // mood follows live system state. A mood name from SOUNDSCAPE_MOODS pins it instead.
+  soundscapeOverride: null,
   // Auto quality (issue #2592): new installs adapt at runtime, always beginning at High
   // (see CyberCity's autoStartTier). `qualityPreset` names the *Manual* preset only.
   qualityMode: 'auto', // 'auto' = adaptive render budget; 'manual' = fixed preset

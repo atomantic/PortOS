@@ -2,6 +2,16 @@ import Drawer from '../Drawer';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { useCitySettingsContext } from './CitySettingsContext';
 import { QUALITY_PRESETS } from '../../hooks/useCitySettings';
+import { SOUNDSCAPE_MOODS, isSoundscapeMood } from '../../utils/citySoundscape';
+
+// The soundscape override's "no override" option. A `<select>` can't carry `null`, so the
+// auto choice rides as the empty string and the change handler maps it back to the `null`
+// sentinel — keeping "following live state" distinct from "pinned to a mood".
+const SOUNDSCAPE_AUTO = '';
+const SOUNDSCAPE_OPTIONS = [
+  { value: SOUNDSCAPE_AUTO, label: 'AUTO' },
+  ...SOUNDSCAPE_MOODS.map(mood => ({ value: mood, label: mood.toUpperCase() })),
+];
 
 // City settings migrated onto the shared tabbed <Drawer> (issue #2591) — replaces
 // the old bespoke bottom-right 19rem page-length scroller. Grouped into
@@ -57,6 +67,27 @@ function SettingSlider({ id, label, value, onChange, min = 0, max = 1, step = 0.
           background: `linear-gradient(to right, #06b6d4 0%, #06b6d4 ${(value - min) / (max - min) * 100}%, #374151 ${(value - min) / (max - min) * 100}%, #374151 100%)`,
         }}
       />
+    </div>
+  );
+}
+
+// Dropdown enum picker, for enums with too many options to read as a segmented row.
+// `options` is [{ value, label }]; values are plain strings (the caller maps any sentinel).
+function SettingSelect({ id, label, value, onChange, options, hint, description }) {
+  return (
+    <div className="py-2" title={description}>
+      <label htmlFor={id} className="block font-pixel text-[11px] text-gray-300 tracking-wide mb-1.5">{label}</label>
+      <select
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full font-pixel text-[10px] min-h-[44px] px-2 rounded border border-gray-700/40 bg-gray-800/40 text-gray-300 tracking-wide focus:border-cyan-500/50 focus:outline-none"
+      >
+        {options.map(({ value: optionValue, label: optionLabel }) => (
+          <option key={optionValue} value={optionValue}>{optionLabel}</option>
+        ))}
+      </select>
+      {hint && <div className="font-pixel text-[8px] text-gray-500 tracking-wide mt-1.5">{hint}</div>}
     </div>
   );
 }
@@ -214,13 +245,26 @@ export default function CitySettingsDrawer({ open, onClose, qualityMode = 'manua
               description="Enable ambient synthwave music"
             />
             {settings.musicEnabled && (
-              <SettingSlider
-                id="city-music-volume"
-                label="VOLUME"
-                value={settings.musicVolume}
-                onChange={(v) => updateSetting('musicVolume', v)}
-                description="Music playback volume"
-              />
+              <>
+                <SettingSlider
+                  id="city-music-volume"
+                  label="VOLUME"
+                  value={settings.musicVolume}
+                  onChange={(v) => updateSetting('musicVolume', v)}
+                  description="Music playback volume"
+                />
+                {/* Manual mood override (#3395). AUTO is the empty-string option, mapped back to
+                    the `null` sentinel — distinct from a pinned mood, never conflated with one. */}
+                <SettingSelect
+                  id="city-soundscape-override"
+                  label="SOUNDSCAPE"
+                  value={isSoundscapeMood(settings.soundscapeOverride) ? settings.soundscapeOverride : SOUNDSCAPE_AUTO}
+                  onChange={(v) => updateSetting('soundscapeOverride', v === SOUNDSCAPE_AUTO ? null : v)}
+                  options={SOUNDSCAPE_OPTIONS}
+                  hint="AUTO FOLLOWS SYSTEM HEALTH AND AGENT ACTIVITY"
+                  description="Pin the ambient music's mood, or follow live system state"
+                />
+              </>
             )}
           </div>
           <div>

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { initAudio, setMusicVolume, setSfxVolume, scheduleCleanup as scheduleAudioCleanup } from '../components/city/audio/cityAudioEngine';
 import { startMusic, stopMusic, setSoundscape } from '../components/city/audio/citySynthMusic';
 import { playSfx as playSfxFn } from '../components/city/audio/citySoundEffects';
+import { applyMoodOverride } from '../utils/citySoundscape';
 
 // `soundscape` is the computeSoundscape() view-model (roadmap 3.4): the live mood/energy the
 // ambient music should reflect. Optional — when omitted the music plays its default progression.
@@ -10,10 +11,15 @@ export default function useCityAudio(settings, soundscape) {
   const initedRef = useRef(false);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+  // A manual soundscape override (#3395) pins the mood, overriding the live classification; the
+  // `null` sentinel (auto) passes the computed soundscape straight through. Everything below
+  // works off this effective view-model, so the forced mood reaches every apply path — the
+  // gesture-init start, the music-toggle start, and the live-state effect alike.
+  const effectiveSoundscape = applyMoodOverride(soundscape, settings?.soundscapeOverride);
   // Mirror the latest soundscape so deferred starts (gesture-init, music-toggle) apply it without
   // depending on render timing.
-  const soundscapeRef = useRef(soundscape);
-  soundscapeRef.current = soundscape;
+  const soundscapeRef = useRef(effectiveSoundscape);
+  soundscapeRef.current = effectiveSoundscape;
   const musicEnabled = settings?.musicEnabled;
   const musicVolume = settings?.musicVolume;
   const sfxVolume = settings?.sfxVolume;
@@ -56,19 +62,22 @@ export default function useCityAudio(settings, soundscape) {
     }
   }, [isAudioReady, musicEnabled]);
 
-  // Drive the ambient soundscape from live system state. The deps are the individual field
-  // values (not the `soundscape` object), so a poll that recomputes an equal snapshot — a new
-  // object with identical fields — doesn't re-ramp the graph; only an actual mood/energy change
-  // does. The effect reads the freshest snapshot from the ref at run time.
-  const chordSet = soundscape?.chordSet;
-  const filterBase = soundscape?.filterBase;
-  const arpGain = soundscape?.arpGain;
-  const padDetune = soundscape?.padDetune;
+  // Drive the ambient soundscape from live system state (or the manual override). The deps are
+  // the individual field values (not the `soundscape` object), so a poll that recomputes an equal
+  // snapshot — a new object with identical fields — doesn't re-ramp the graph; only an actual
+  // mood/energy change does. Setting or clearing the override changes these same fields, so the
+  // music re-ramps the moment it flips rather than waiting for the next live mood change. The
+  // effect reads the freshest snapshot from the ref at run time.
+  const mood = effectiveSoundscape?.mood;
+  const chordSet = effectiveSoundscape?.chordSet;
+  const filterBase = effectiveSoundscape?.filterBase;
+  const arpGain = effectiveSoundscape?.arpGain;
+  const padDetune = effectiveSoundscape?.padDetune;
   useEffect(() => {
     const s = soundscapeRef.current;
     if (!isAudioReady || !musicEnabled || !s) return;
     setSoundscape(s);
-  }, [isAudioReady, musicEnabled, chordSet, filterBase, arpGain, padDetune]);
+  }, [isAudioReady, musicEnabled, mood, chordSet, filterBase, arpGain, padDetune]);
 
   // Update music volume
   useEffect(() => {

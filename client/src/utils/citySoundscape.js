@@ -23,6 +23,17 @@ export const CHORD_SETS = {
   ],
 };
 
+// The moods the soundscape can be in, in brightening→darkening order. Also the set of values a
+// manual override (#3395) may pin the music to — anything outside this list is not a mood.
+export const SOUNDSCAPE_MOODS = ['bright', 'neutral', 'tense'];
+
+// Validate an override value. `null`/`undefined` is the "auto" sentinel (follow live system
+// state); an unknown string (a stale or hand-edited stored setting) is also treated as auto
+// rather than silently pinning the music to a mood that no longer exists.
+export function isSoundscapeMood(mood) {
+  return SOUNDSCAPE_MOODS.includes(mood);
+}
+
 // Classify overall system stress into a mood. Driven primarily by the health verdict, with a
 // CPU/memory fallback so a system that's hammered but not yet "warning" still tenses up.
 // `health` is the /system/health/details payload (or null); `agentCount` is live agents.
@@ -50,9 +61,13 @@ export function computeActivityEnergy(agentCount) {
 // widens the pads as tension rises for an uneasy shimmer. Deterministic for a given snapshot.
 export function computeSoundscape(snapshot = {}) {
   const { systemHealth, agentCount } = snapshot;
-  const mood = classifyMood(systemHealth);
-  const energy = computeActivityEnergy(agentCount);
+  return soundscapeForMood(classifyMood(systemHealth), computeActivityEnergy(agentCount));
+}
 
+// Build the view-model for an explicit (mood, energy) pair. Split out of computeSoundscape so a
+// manual mood override re-derives every mood-driven field — chord table, filter, pad detune —
+// instead of swapping the chord set alone and leaving a bright filter over a tense progression.
+export function soundscapeForMood(mood, energy) {
   // Brighter (higher) filter cutoff when healthy; clamped low when tense for a muffled, anxious
   // tone. Energy nudges it up a touch so a busy-but-healthy city sparkles.
   const filterBase = (mood === 'bright' ? 320 : mood === 'neutral' ? 220 : 150) + energy * 80;
@@ -69,4 +84,18 @@ export function computeSoundscape(snapshot = {}) {
     // the running intervals mid-stream would race; modulating the voice is equivalent + safe).
     pulse: energy,
   };
+}
+
+// Pin a computed soundscape to a manually chosen mood (#3395). `mood` is the persisted override:
+// `null`/`undefined` (or any non-mood value) means auto, in which case the live soundscape passes
+// through untouched. The activity-driven half stays live even under an override — the listener is
+// choosing a mood, not freezing the city's energy — so `energy`/`arpGain`/`pulse` still follow the
+// running agent count. With no live soundscape yet, the override still yields a playable
+// view-model at the resting energy floor so the forced mood applies immediately.
+export function applyMoodOverride(soundscape, mood) {
+  if (!isSoundscapeMood(mood)) return soundscape;
+  const energy = typeof soundscape?.energy === 'number' && Number.isFinite(soundscape.energy)
+    ? soundscape.energy
+    : computeActivityEnergy(0);
+  return soundscapeForMood(mood, energy);
 }

@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   CHORD_SETS,
+  SOUNDSCAPE_MOODS,
+  applyMoodOverride,
   classifyMood,
   computeActivityEnergy,
   computeSoundscape,
+  isSoundscapeMood,
 } from './citySoundscape';
 
 describe('CHORD_SETS', () => {
@@ -87,5 +90,55 @@ describe('computeSoundscape', () => {
     const s = computeSoundscape();
     expect(s.mood).toBe('bright');
     expect(Number.isFinite(s.filterBase)).toBe(true);
+  });
+});
+
+describe('isSoundscapeMood', () => {
+  it('accepts every listed mood and rejects the auto sentinel or junk', () => {
+    SOUNDSCAPE_MOODS.forEach(mood => expect(isSoundscapeMood(mood)).toBe(true));
+    [null, undefined, '', 'auto', 'BRIGHT', 0, {}].forEach(value => {
+      expect(isSoundscapeMood(value)).toBe(false);
+    });
+  });
+});
+
+describe('applyMoodOverride', () => {
+  const live = computeSoundscape({ systemHealth: { overallHealth: 'healthy' }, agentCount: 4 });
+
+  it('pins the forced mood, re-deriving chord set, filter and detune', () => {
+    expect(live.mood).toBe('bright');
+    const forced = applyMoodOverride(live, 'tense');
+    expect(forced.mood).toBe('tense');
+    expect(forced.chordSet).toBe('tense');
+    expect(forced.filterBase).toBeLessThan(live.filterBase);
+    expect(forced.padDetune).toBeGreaterThan(live.padDetune);
+  });
+
+  it('keeps the activity-driven half live under an override', () => {
+    const forced = applyMoodOverride(live, 'tense');
+    expect(forced.energy).toBe(live.energy);
+    expect(forced.arpGain).toBe(live.arpGain);
+    expect(forced.pulse).toBe(live.pulse);
+  });
+
+  it('forces the neutral mood onto the bright table with a darker filter', () => {
+    const forced = applyMoodOverride(live, 'neutral');
+    expect(forced.chordSet).toBe('bright');
+    expect(forced.filterBase).toBeLessThan(live.filterBase);
+  });
+
+  it('passes the live soundscape through untouched for auto or an unknown value', () => {
+    expect(applyMoodOverride(live, null)).toBe(live);
+    expect(applyMoodOverride(live, undefined)).toBe(live);
+    expect(applyMoodOverride(live, '')).toBe(live);
+    expect(applyMoodOverride(live, 'stale-mood')).toBe(live);
+  });
+
+  it('still yields a playable view-model when there is no live soundscape yet', () => {
+    const forced = applyMoodOverride(null, 'tense');
+    expect(forced.chordSet).toBe('tense');
+    expect(forced.energy).toBeCloseTo(computeActivityEnergy(0), 5);
+    expect(Number.isFinite(forced.filterBase)).toBe(true);
+    expect(applyMoodOverride(null, null)).toBe(null);
   });
 });
