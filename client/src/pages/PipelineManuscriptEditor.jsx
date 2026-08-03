@@ -430,21 +430,18 @@ export default function PipelineManuscriptEditor() {
 
   const setSectionContent = (issueId, content) => patchSection(issueId, { content });
 
-  // Saves in flight, keyed by section. Two paths can target the same section at
-  // once — the onBlur save and the flush below (clicking the format switcher
-  // blurs the textarea, then immediately asks to swap formats) — and firing both
-  // PATCHes would snapshot a redundant version. Queuing behind the in-flight
-  // save lets the second call re-read the baseline and no-op once the first
-  // persisted that same text.
+  // Tail of each section's save chain, keyed by section. Two paths can target
+  // the same section at once — the onBlur save and the flush below (clicking the
+  // format switcher blurs the textarea, then immediately asks to swap formats) —
+  // and firing both PATCHes would snapshot a redundant version.
   const pendingSaves = useRef(new Map());
 
-  const saveSectionContent = async (section, content) => {
-    const key = baselineKey(section);
-    const prior = pendingSaves.current.get(key);
-    if (prior) await prior;
+  const persistSection = async (section, key, content) => {
+    // Re-checked HERE, not before queueing: by the time this link runs, the save
+    // ahead of it may have already persisted this exact text.
     if (baselineRef.current.get(key) === content) return;
     setSaveState((prev) => ({ ...prev, [section.issueId]: 'saving' }));
-    const run = savePipelineManuscriptSection(
+    const result = await savePipelineManuscriptSection(
       seriesId,
       section.issueId,
       { stageId: section.stageId, output: content },
@@ -453,15 +450,29 @@ export default function PipelineManuscriptEditor() {
       toast.error(err.message || 'Failed to save manuscript edit');
       return null;
     });
-    pendingSaves.current.set(key, run);
-    const result = await run;
-    if (pendingSaves.current.get(key) === run) pendingSaves.current.delete(key);
     if (result?.section) {
       setBaseline(key, result.section.content);
       patchSection(section.issueId, { versions: result.section.versions });
     }
     setSaveState((prev) => ({ ...prev, [section.issueId]: result ? 'saved' : undefined }));
     return result;
+  };
+
+  // Chain onto the section's tail rather than awaiting the in-flight save: two
+  // callers that both wait on the SAME in-flight save would each wake up seeing
+  // a stale baseline and fire their own PATCH for identical text. Each call
+  // extends the chain, so every link re-checks against what the link before it
+  // persisted. `link` swallows rejections so one failure can't poison the tail.
+  const saveSectionContent = (section, content) => {
+    const key = baselineKey(section);
+    const prior = pendingSaves.current.get(key) || Promise.resolve();
+    const run = prior.then(() => persistSection(section, key, content));
+    const link = run.catch(() => null);
+    pendingSaves.current.set(key, link);
+    link.then(() => {
+      if (pendingSaves.current.get(key) === link) pendingSaves.current.delete(key);
+    });
+    return run;
   };
 
   // Persist every pending onBlur edit before an action that swaps `sections`

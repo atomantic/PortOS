@@ -308,6 +308,38 @@ describe('PipelineManuscriptEditor', () => {
     expect(api.savePipelineManuscriptSection).toHaveBeenCalledTimes(1);
   });
 
+  it('does not double-PATCH text edited while an earlier save is still in flight (#3399)', async () => {
+    mockBothFormats();
+    let resolveFirst;
+    const echoSave = (_s, _i, body) => Promise.resolve({
+      section: { issueId: 'iss-1', number: 1, title: 'One', stageId: 'prose', content: body.output, versions: [] },
+    });
+    api.savePipelineManuscriptSection
+      .mockImplementationOnce(() => new Promise((res) => { resolveFirst = res; }))
+      .mockImplementation(echoSave);
+    renderEditor();
+    const ta = await screen.findByDisplayValue('The hero walked in. She left.');
+
+    // Save A goes out and stays in flight…
+    fireEvent.change(ta, { target: { value: 'first edit' } });
+    fireEvent.blur(ta);
+    await waitFor(() => expect(api.savePipelineManuscriptSection).toHaveBeenCalledTimes(1));
+
+    // …while the user types more and then switches formats. Both the blur save
+    // and the switch's flush queue behind A with the SAME text — waiting on A
+    // instead of chaining would wake both with a stale baseline and PATCH twice.
+    fireEvent.change(ta, { target: { value: 'second edit' } });
+    fireEvent.blur(ta);
+    fireEvent.click(screen.getByText('Teleplay'));
+
+    await act(async () => { resolveFirst(await echoSave(null, null, { output: 'first edit' })); });
+    expect(await screen.findByDisplayValue('INT. ROOM - DAY')).toBeInTheDocument();
+    expect(api.savePipelineManuscriptSection).toHaveBeenCalledTimes(2); // A, then one for 'second edit'
+    expect(api.savePipelineManuscriptSection).toHaveBeenLastCalledWith(
+      'ser-1', 'iss-1', { stageId: 'prose', output: 'second edit' }, { silent: true },
+    );
+  });
+
   it('aborts a format switch when the pending edit fails to save (#3399)', async () => {
     api.savePipelineManuscriptSection.mockResolvedValue(null);
     renderEditor();
