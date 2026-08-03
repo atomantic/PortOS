@@ -51,6 +51,24 @@ export async function listRaw() {
 }
 
 /**
+ * Live universes projected down to `{ id, name }`, unordered — the rows behind
+ * `listUniverseNames`, for pickers that need a label and nothing else.
+ *
+ * Same reasoning as `listStyles` below and `countUniverses` further down: both
+ * columns are exact mirrors of the JSONB (every `writeRaw` binds them from the
+ * same record), and `deleted = FALSE` hits the `idx_universes_live` partial
+ * index. Skips the bibles, the composite sheets, the whole `universe_runs`
+ * table, and the per-record sanitize that make `listUniverses()` a
+ * multi-megabyte read.
+ */
+export async function listNames() {
+  const { rows } = await query(
+    `SELECT id, name, data->>'createdAt' AS "createdAt" FROM universes WHERE deleted = FALSE`,
+  );
+  return rows;
+}
+
+/**
  * Live universes projected down to the style-bearing fields, unordered — the
  * raw input `listUniverseStyles` derives its token lists from. See that
  * function for what the projection is for and which fields feed it.

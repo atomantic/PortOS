@@ -85,3 +85,19 @@ describe('renderBurnPrompt', () => {
     expect(prompt.endsWith('Ship the backlog')).toBe(true);
   });
 });
+
+describe('probe → run passthrough', () => {
+  it('reuses the probe\'s lookups instead of resolving twice', async () => {
+    const { getAppById } = await import('../apps.js');
+    const probe = await countPending({ params: { appId: 'app-1', prompt: 'x' }, family });
+    getAppById.mockClear();
+    await run({ params: { appId: 'app-1', prompt: 'x' }, job: { id: 'j1' }, family, candidate, context: probe.context });
+    expect(getAppById).not.toHaveBeenCalled();
+    expect(state.added).toHaveLength(1);
+  });
+
+  it('still resolves on its own when called with no probe (the force path)', async () => {
+    await run({ params: { appId: 'app-1', prompt: 'x' }, job: { id: 'j1' }, family, candidate });
+    expect(state.added).toHaveLength(1);
+  });
+});

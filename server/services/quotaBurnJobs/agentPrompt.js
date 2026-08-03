@@ -50,7 +50,9 @@ export async function countPending({ params, job, family } = {}) {
   const resolved = await resolve({ params, job, family });
   return resolved.error
     ? { count: 0, detail: resolved.error }
-    : { count: 1, detail: `ready to queue an agent in ${resolved.app.name}` };
+    // Handed back to run() by the runner so the app + provider lookups happen
+    // once per dispatch instead of twice — see the registry's hook contract.
+    : { count: 1, context: resolved, detail: `ready to queue an agent in ${resolved.app.name}` };
 }
 
 /** The burn context the agent sees above the user's own prompt. */
@@ -69,8 +71,10 @@ export function renderBurnPrompt({ family, candidate, prompt }) {
   ].join('\n');
 }
 
-export async function run({ params, job, family, candidate } = {}) {
-  const resolved = await resolve({ params, job, family });
+export async function run({ params, job, family, candidate, context } = {}) {
+  // Reuse the probe's lookups when the runner supplied them; the page's force
+  // path calls run() with no probe, so fall back to resolving here.
+  const resolved = context ?? await resolve({ params, job, family });
   if (resolved.error) return { dispatched: false, reason: resolved.error };
   const { app, prompt, provider } = resolved;
 

@@ -18,13 +18,14 @@
 import { join } from 'path';
 import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { isPlainObject } from '../lib/objects.js';
 import { normalizeQuotaBurnConfig } from '../lib/quotaBurnConfig.js';
 
 const configFile = () => join(PATHS.cos, 'quota-burn.json');
 const runLogFile = () => join(PATHS.cos, 'quota-burn-runs.json');
 
 /** Keep the run log skimmable and bounded — it is a UI feed, not an audit trail. */
-export const QUOTA_BURN_RUN_LOG_LIMIT = 50;
+const RUN_LOG_LIMIT = 50;
 
 // One tail per file. The config's read-modify-write races with itself when the
 // page saves twice quickly; the run log's races between the scheduler tick and
@@ -47,20 +48,15 @@ export async function getQuotaBurnConfig() {
 export async function saveQuotaBurnConfig(patch) {
   return configWriteQueue(async () => {
     const current = normalizeQuotaBurnConfig(await readJSONFile(configFile(), null));
-    const patchFamilies = patch?.families && typeof patch.families === 'object' ? patch.families : {};
-    const merged = {
-      ...current,
-      ...patch,
-      families: Object.fromEntries(
-        Object.entries(current.families).map(([id, family]) => [
-          id,
-          Object.prototype.hasOwnProperty.call(patchFamilies, id)
-            ? { ...family, ...patchFamilies[id] }
-            : family,
-        ]),
-      ),
-    };
-    const next = normalizeQuotaBurnConfig(merged);
+    // Written to match `client/src/lib/quotaBurnPatch.js#mergeQuotaBurnPatch`
+    // line for line — the client applies the same merge optimistically while the
+    // PUT is debounced, and the two only stay honest if the claim is checkable
+    // at a glance. `normalizeQuotaBurnConfig` below drops any unknown family id.
+    const families = { ...current.families };
+    for (const [id, familyPatch] of Object.entries(isPlainObject(patch?.families) ? patch.families : {})) {
+      families[id] = { ...(families[id] || {}), ...familyPatch };
+    }
+    const next = normalizeQuotaBurnConfig({ ...current, ...patch, families });
     await atomicWrite(configFile(), next);
     return next;
   });
@@ -80,7 +76,7 @@ export async function recordQuotaBurnRun(entry) {
   return runLogWriteQueue(async () => {
     const loaded = await readJSONFile(runLogFile(), null);
     const runs = Array.isArray(loaded?.runs) ? loaded.runs : [];
-    const next = [{ at: new Date().toISOString(), ...entry }, ...runs].slice(0, QUOTA_BURN_RUN_LOG_LIMIT);
+    const next = [{ at: new Date().toISOString(), ...entry }, ...runs].slice(0, RUN_LOG_LIMIT);
     await atomicWrite(runLogFile(), { runs: next });
     return next;
   });

@@ -22,8 +22,36 @@
  * the wrong burn job spends real quota on work nobody asked for).
  */
 
+import { isPlainObject, POLLUTING_KEYS } from './objects.js';
+
 /** Provider quota families a burn plan may target. Mirrors `providerUsage.js`'s card ids. */
 export const QUOTA_BURN_FAMILIES = Object.freeze(['claude', 'codex', 'agy', 'grok']);
+
+/**
+ * Every numeric/length bound in the plan, in ONE place.
+ *
+ * Three consumers read these and must agree: the normalizer below (which
+ * CLAMPS, so an older on-disk plan still loads), `quotaBurnValidation.js`
+ * (which REJECTS with a 400, so a bad request is not silently reshaped), and
+ * the job catalog's param descriptors (which the client renders as `min`/`max`
+ * on the input). When they were three sets of literals, raising a cap in one
+ * meant the PUT 400'd on a plan the normalizer would happily have accepted —
+ * a split-brain invisible from inside any single file.
+ */
+export const QUOTA_BURN_BOUNDS = Object.freeze({
+  checkIntervalMinutes: { min: 5, max: 720, default: 30 },
+  resetWithinHours: { min: 0, max: 168, default: 24 },
+  reservePercent: { min: 0, max: 100, default: 0 },
+  maxDispatchesPerWindow: { min: 1, max: 50, default: 5 },
+  priority: { min: 0, max: 100, default: 0 },
+  maxEntries: { min: 1, max: 50, default: 10 },
+  jobsPerFamily: { max: 25 },
+  idLength: { max: 64 },
+  labelLength: { max: 120 },
+  scopeLength: { max: 60 },
+  paramLength: { max: 8000 },
+});
+const BOUNDS = QUOTA_BURN_BOUNDS;
 
 /**
  * Burn job types. `agent-prompt` is the original behavior (spawn a CoS agent in
@@ -62,38 +90,34 @@ export const QUOTA_BURN_JOB_CATALOG = Object.freeze([
     description: 'Render images for universe bible entries that have none yet. No agent — PortOS enqueues the renders itself.',
     programmatic: true,
     params: Object.freeze([
-      { key: 'universeId', kind: 'universe', label: 'Universe', default: 'all' },
+      { key: 'universeId', kind: 'universe', label: 'Universe', default: 'all', emptyLabel: 'All universes', emptyValue: 'all' },
       { key: 'scope', kind: 'enum', label: 'Entries', options: ['all', 'variations', 'canon', 'sheets'], default: 'all' },
-      { key: 'maxEntries', kind: 'number', label: 'Max entries per run', min: 1, max: 50, default: 10 },
-      { key: 'mode', kind: 'imageMode', label: 'Render backend', default: null },
+      { key: 'maxEntries', kind: 'number', label: 'Max entries per run', min: BOUNDS.maxEntries.min, max: BOUNDS.maxEntries.max, default: BOUNDS.maxEntries.default },
+      { key: 'mode', kind: 'imageMode', label: 'Render backend', default: null, emptyLabel: 'Match the burning provider', emptyValue: '' },
     ]),
   },
 ]);
 
-export const DEFAULT_QUOTA_BURN_FAMILY = Object.freeze({
+const DEFAULT_QUOTA_BURN_FAMILY = Object.freeze({
   enabled: false,
   providerId: null,
   scope: null,
-  resetWithinHours: 24,
-  reservePercent: 0,
-  maxDispatchesPerWindow: 5,
-  priority: 0,
+  resetWithinHours: BOUNDS.resetWithinHours.default,
+  reservePercent: BOUNDS.reservePercent.default,
+  maxDispatchesPerWindow: BOUNDS.maxDispatchesPerWindow.default,
+  priority: BOUNDS.priority.default,
   jobs: Object.freeze([]),
 });
 
-/** How often the runner re-reads quota. Bounded so a typo can't hammer the CLIs. */
-export const CHECK_INTERVAL_MINUTES_MIN = 5;
-export const CHECK_INTERVAL_MINUTES_MAX = 720;
-export const DEFAULT_CHECK_INTERVAL_MINUTES = 30;
-
-const clampNumber = (value, fallback, min, max) => {
+// Clamp against one QUOTA_BURN_BOUNDS entry, falling back to its documented
+// default when the value is missing or non-numeric.
+const clamp = ({ min, max, default: fallback }, value) => {
   const num = Number(value);
   if (!Number.isFinite(num)) return fallback;
   return Math.min(max, Math.max(min, num));
 };
 
-const clampInt = (value, fallback, min, max) =>
-  Math.round(clampNumber(value, fallback, min, max));
+const clampInt = (bounds, value) => Math.round(clamp(bounds, value));
 
 const trimString = (value, max) =>
   (typeof value === 'string' ? value.trim().slice(0, max) : '');
@@ -110,11 +134,11 @@ const nullableString = (value, max) => {
  * hand-edited config file can't smuggle a prototype or a nested blob into it.
  */
 function normalizeParams(raw) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  if (!isPlainObject(raw)) return {};
   const clean = {};
   for (const [key, value] of Object.entries(raw)) {
-    if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
-    if (typeof value === 'string') clean[key] = value.slice(0, 8000);
+    if (POLLUTING_KEYS.has(key)) continue;
+    if (typeof value === 'string') clean[key] = value.slice(0, BOUNDS.paramLength.max);
     else if (typeof value === 'number' && Number.isFinite(value)) clean[key] = value;
     else if (typeof value === 'boolean' || value === null) clean[key] = value;
   }
@@ -132,16 +156,16 @@ function normalizeParams(raw) {
  * something to key on.
  */
 export function normalizeQuotaBurnJob(raw, index = 0) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (!isPlainObject(raw)) return null;
   const jobType = typeof raw.jobType === 'string' ? raw.jobType : '';
   if (!QUOTA_BURN_JOB_TYPES.includes(jobType)) return null;
   return {
-    id: trimString(raw.id, 64) || `job-${index + 1}`,
+    id: trimString(raw.id, BOUNDS.idLength.max) || `job-${index + 1}`,
     enabled: raw.enabled !== false,
-    label: trimString(raw.label, 120),
+    label: trimString(raw.label, BOUNDS.labelLength.max),
     jobType,
-    model: nullableString(raw.model, 120),
-    providerId: nullableString(raw.providerId, 120),
+    model: nullableString(raw.model, BOUNDS.labelLength.max),
+    providerId: nullableString(raw.providerId, BOUNDS.labelLength.max),
     params: normalizeParams(raw.params),
   };
 }
@@ -152,19 +176,19 @@ export function normalizeQuotaBurnJob(raw, index = 0) {
  * a week, reserve 0–100%, 1–50 dispatches per window.
  */
 export function normalizeQuotaBurnFamily(raw) {
-  const value = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const value = isPlainObject(raw) ? raw : {};
   const jobs = (Array.isArray(value.jobs) ? value.jobs : [])
-    .slice(0, 25)
+    .slice(0, BOUNDS.jobsPerFamily.max)
     .map((job, index) => normalizeQuotaBurnJob(job, index))
     .filter(Boolean);
   return {
     enabled: value.enabled === true,
-    providerId: nullableString(value.providerId, 120),
-    scope: nullableString(value.scope, 60),
-    resetWithinHours: clampNumber(value.resetWithinHours, DEFAULT_QUOTA_BURN_FAMILY.resetWithinHours, 0, 168),
-    reservePercent: clampNumber(value.reservePercent, DEFAULT_QUOTA_BURN_FAMILY.reservePercent, 0, 100),
-    maxDispatchesPerWindow: clampInt(value.maxDispatchesPerWindow, DEFAULT_QUOTA_BURN_FAMILY.maxDispatchesPerWindow, 1, 50),
-    priority: clampInt(value.priority, 0, 0, 100),
+    providerId: nullableString(value.providerId, BOUNDS.labelLength.max),
+    scope: nullableString(value.scope, BOUNDS.scopeLength.max),
+    resetWithinHours: clamp(BOUNDS.resetWithinHours, value.resetWithinHours),
+    reservePercent: clamp(BOUNDS.reservePercent, value.reservePercent),
+    maxDispatchesPerWindow: clampInt(BOUNDS.maxDispatchesPerWindow, value.maxDispatchesPerWindow),
+    priority: clampInt(BOUNDS.priority, value.priority),
     jobs,
   };
 }
@@ -176,20 +200,17 @@ export function normalizeQuotaBurnFamily(raw) {
  * dropped — a card id the quota adapters don't produce could never be selected.
  */
 export function normalizeQuotaBurnConfig(raw) {
-  const value = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-  const families = value.families && typeof value.families === 'object' && !Array.isArray(value.families)
-    ? value.families
-    : {};
+  const value = isPlainObject(raw) ? raw : {};
+  const families = isPlainObject(value.families) ? value.families : {};
   return {
     enabled: value.enabled === true,
-    checkIntervalMinutes: clampInt(
-      value.checkIntervalMinutes,
-      DEFAULT_CHECK_INTERVAL_MINUTES,
-      CHECK_INTERVAL_MINUTES_MIN,
-      CHECK_INTERVAL_MINUTES_MAX,
-    ),
+    checkIntervalMinutes: clampInt(BOUNDS.checkIntervalMinutes, value.checkIntervalMinutes),
+    // Each family carries its own `id`. Every consumer needs it (selection sorts
+    // and keys on it, the runner logs it, a job pins its render backend to it),
+    // and stamping it here is what lets them read `config.families[x]` straight
+    // instead of re-attaching `{ id, ...normalize(...) }` at four call sites.
     families: Object.fromEntries(
-      QUOTA_BURN_FAMILIES.map((id) => [id, normalizeQuotaBurnFamily(families[id])]),
+      QUOTA_BURN_FAMILIES.map((id) => [id, { id, ...normalizeQuotaBurnFamily(families[id]) }]),
     ),
   };
 }

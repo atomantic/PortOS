@@ -17,9 +17,13 @@ import { getUniverse, listUniverses } from '../universeBuilder.js';
 import { getWorldCategoryKeys } from '../universeBuilder/sanitize.js';
 import { renderUniverseJobs } from '../universeBuilderRender.js';
 import { CLOUD_IMAGE_GEN_MODES } from '../imageGen/modes.js';
+import { QUOTA_BURN_BOUNDS } from '../../lib/quotaBurnConfig.js';
 
 const CANON_TRUNKS = ['characters', 'places', 'objects'];
-const DEFAULT_MAX_ENTRIES = 10;
+// Bounds come from the catalog descriptor the client renders its min/max from —
+// hardcoding them here would let a raised cap change the accepted range in the
+// form without changing what the job actually runs.
+const ENTRY_BOUNDS = QUOTA_BURN_BOUNDS.maxEntries;
 
 const hasNoImage = (entry) => !Array.isArray(entry?.imageRefs) || entry.imageRefs.length === 0;
 
@@ -92,7 +96,7 @@ async function loadUniverses(params) {
  * backlog so the page can show "10 of 143".
  */
 async function collect(params) {
-  const max = Math.min(50, Math.max(1, Number(params?.maxEntries) || DEFAULT_MAX_ENTRIES));
+  const max = Math.min(ENTRY_BOUNDS.max, Math.max(ENTRY_BOUNDS.min, Number(params?.maxEntries) || ENTRY_BOUNDS.default));
   const scope = typeof params?.scope === 'string' ? params.scope : 'all';
   const universes = await loadUniverses(params);
   const batches = [];
@@ -118,10 +122,14 @@ async function collect(params) {
 }
 
 export async function countPending({ params } = {}) {
-  const { picked, total } = await collect(params);
+  const collected = await collect(params);
+  const { picked, total } = collected;
   const universeCount = picked.length;
   return {
     count: total,
+    // Handed back to run() by the runner so the bible scan happens once per
+    // dispatch instead of twice — see the registry's hook contract.
+    context: collected,
     detail: total
       ? `${total} bible ${total === 1 ? 'entry has' : 'entries have'} no image (${universeCount} universe${universeCount === 1 ? '' : 's'} queued next)`
       : 'every bible entry already has an image',
@@ -136,8 +144,10 @@ export async function countPending({ params } = {}) {
  * CODEX's image quota, not silently fall through to the install default and
  * burn a different provider's.
  */
-export async function run({ params, job, family } = {}) {
-  const { picked, total, max } = await collect(params);
+export async function run({ params, job, family, context } = {}) {
+  // Reuse the probe's scan when the runner supplied it; the page's force path
+  // calls run() with no probe, so fall back to scanning here.
+  const { picked, total, max } = context ?? await collect(params);
   if (!picked.length) return { dispatched: false, reason: 'no bible entries are missing images' };
 
   const familyMode = CLOUD_IMAGE_GEN_MODES.includes(family?.id) ? family.id : undefined;

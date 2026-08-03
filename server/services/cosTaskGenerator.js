@@ -1862,8 +1862,8 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
   // blocked by an outbound firewall fails EVERY tick forever, so that advice sends
   // the user in circles. Ask the CLI the detector actually ran (recorded by the
   // work gate moments ago — the task-type NAME can't answer this: `claim-work`
-  // resolves its forge internally, and branch-reconcile/quota-burn go transient
-  // over git/provider faults with no forge involved) whether it is broken in a
+  // resolves its forge internally, and branch-reconcile goes transient over
+  // git/provider faults with no forge involved) whether it is broken in a
   // way that won't self-clear, and pass the remedy through. No verdict, an
   // unprobeable CLI, or a healthy one all leave `forge` null and keep the
   // generic copy — the failure really was a blip, or at least not one we can name.
@@ -2441,7 +2441,7 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   // provider/model block below, so the per-app choice wins.
   // `ignoreTaskId` reaches the hook because a drain-on-completion refill runs
   // while the completing task is still `in_progress` on disk — a hook that
-  // counts in-flight tasks (quota-burn) must not count the run that just
+  // counts in-flight tasks against a budget must not count the run that just
   // finished and already recorded itself (#3179).
   const inputHook = await resolveTaskInputHook(app, taskType, taskSchedule, { ignoreTaskId });
   if (inputHook.skip) return null;
@@ -2554,8 +2554,10 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   // intentionally leaves all three untouched.
   //
   // The hook bag lands HERE, below the last gate, precisely so a hook can defer a
-  // side effect keyed on it until the task is certain to exist (rationale in
-  // autonomousJobs/quotaBurnHooks.js#buildTaskInput, #3179).
+  // side effect keyed on it until the task is certain to exist. Several gates
+  // below `resolveTaskInputHook` can still `return null` with no agent ever
+  // spawned, so a hook that charged a spend ledger from `buildTaskInput` would
+  // burn budget on a dispatch that never happened (#3179).
   //
   // Generator-computed keys always win. Stamping last would otherwise let a hook
   // silently clobber a decision made a few lines earlier — `analysisType` is the

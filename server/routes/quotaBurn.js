@@ -7,12 +7,12 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, quotaBurnConfigUpdateSchema, quotaBurnRunSchema } from '../lib/validation.js';
-import { QUOTA_BURN_FAMILIES, QUOTA_BURN_JOB_CATALOG } from '../lib/quotaBurnConfig.js';
-import { CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE } from '../services/imageGen/modes.js';
-import { getQuotaBurnConfig, saveQuotaBurnConfig } from '../services/quotaBurnStore.js';
+import { QUOTA_BURN_JOB_CATALOG } from '../lib/quotaBurnConfig.js';
+import { QUEUEABLE_IMAGE_MODES } from '../services/imageGen/modes.js';
+import { saveQuotaBurnConfig } from '../services/quotaBurnStore.js';
 import { getQuotaBurnStatus, runQuotaBurnCycle } from '../services/quotaBurnRunner.js';
 import { getActiveApps } from '../services/apps.js';
-import { listUniverses } from '../services/universeBuilder.js';
+import { listUniverseNames } from '../services/universeBuilder.js';
 
 const router = Router();
 
@@ -21,8 +21,9 @@ const router = Router();
 // provider usage; the default read is cached so opening the page is free.
 router.get('/', asyncHandler(async (req, res) => {
   const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
-  const [config, status] = await Promise.all([getQuotaBurnConfig(), getQuotaBurnStatus({ refresh })]);
-  res.json({ config, status });
+  // getQuotaBurnStatus returns the config it already loaded — reading the file a
+  // second time here would just normalize the same bytes twice per page load.
+  res.json(await getQuotaBurnStatus({ refresh }));
 }));
 
 // GET /api/quota-burn/catalog — everything the config form needs to build its
@@ -31,16 +32,18 @@ router.get('/', asyncHandler(async (req, res) => {
 router.get('/catalog', asyncHandler(async (_req, res) => {
   const [apps, universes] = await Promise.all([
     getActiveApps(),
-    // A missing/empty universe store must not 500 the config page — the
-    // universe job simply has nothing to pick from.
-    listUniverses().catch(() => []),
+    // The `{ id, name }` projection, NOT listUniverses() — the picker needs a
+    // label, not every bible on the install. A missing/empty universe store must
+    // not 500 the config page either; the universe job just has nothing to pick.
+    listUniverseNames().catch(() => []),
   ]);
   res.json({
-    families: QUOTA_BURN_FAMILIES,
     jobTypes: QUOTA_BURN_JOB_CATALOG,
     apps: (apps || []).map((app) => ({ id: app.id, name: app.name })),
-    universes: universes.map((universe) => ({ id: universe.id, name: universe.name })),
-    imageModes: [...CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE.LOCAL],
+    universes,
+    // Exactly the modes the media job queue can dispatch — the burn job enqueues
+    // through it, so a backend added there appears in this picker for free.
+    imageModes: QUEUEABLE_IMAGE_MODES,
   });
 }));
 

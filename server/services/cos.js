@@ -1083,7 +1083,7 @@ async function spawnDequeuePriority4IdleReview(ctx) {
  * `ignoreTaskId` names a task that just completed but may still read
  * `pending`/`in_progress` on disk — `agent:completed` fires from `completeAgent`,
  * before the completion flow's `updateTask` settles it. Generators that count
- * in-flight work (quota-burn's dispatch tally, #3179) must exclude it or they
+ * in-flight work against a spend budget (#3179) must exclude it or they
  * charge the finished run twice. Only the completion continuation passes it; every
  * other caller runs outside that window and correctly leaves it null.
  */

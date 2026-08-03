@@ -11,6 +11,7 @@ const state = {
   recorded: [],
   pending: {},
   ran: [],
+  contexts: [],
 };
 
 vi.mock('./providerUsage.js', () => ({
@@ -25,15 +26,16 @@ vi.mock('./quotaBurnStore.js', () => ({
 
 vi.mock('./quotaBurnJobs/index.js', () => ({
   countJobPending: vi.fn(async ({ job }) => state.pending[job.id] ?? { count: 0, detail: 'nothing' }),
-  runBurnJob: vi.fn(async ({ job, family, candidate }) => {
-    state.ran.push({ jobId: job.id, familyId: family.id, hasWindow: Boolean(candidate.dispatchKey) });
+  runBurnJob: vi.fn(async ({ job, family, candidate, context }) => {
+    state.ran.push({ jobId: job.id, familyId: family.id, charge: candidate.charge });
+    state.contexts.push(context);
     return state.jobResult ?? { dispatched: true, summary: `ran ${job.id}` };
   }),
 }));
 
 // Only the two ledger functions are stubbed — `selectBurnCandidates` and
-// `explainFamilySkip` stay REAL so this suite exercises the actual gates rather
-// than a second copy of them. Stubbing the ledger keeps the suite off the
+// `evaluateFamilies` stay REAL so this suite exercises the actual gate ladder
+// rather than a second copy of it. Stubbing the ledger keeps the suite off the
 // install's real `data/cos/` files.
 vi.mock('./quotaBurn.js', async (importActual) => ({
   ...(await importActual()),
@@ -70,6 +72,7 @@ beforeEach(() => {
   state.runs = [];
   state.pending = {};
   state.ran = [];
+  state.contexts = [];
   state.dispatches = {};
   state.recorded = [];
   state.jobResult = undefined;
@@ -86,14 +89,35 @@ describe('runQuotaBurnCycle', () => {
     expect(state.ran).toHaveLength(0);
   });
 
+  it('never scrapes provider quota when no family could burn', async () => {
+    // getProviderQuotas({ refresh: true }) spawns a multi-second TUI scrape per
+    // enabled family. With nothing actionable configured it could not produce a
+    // dispatch, and it would otherwise run on every tick forever.
+    const { getProviderQuotas } = await import('./providerUsage.js');
+    state.config = plan({ families: { grok: { enabled: true, jobs: [] } } });
+    const result = await runQuotaBurnCycle();
+    expect(getProviderQuotas).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ dispatched: false, reason: 'no families enabled' });
+  });
+
   it('runs the FIRST job in the plan that has pending work', async () => {
     // Order is the whole point of the plan: "generate the missing bible images
     // first, then fall through to agent work" must not be reordered by the runner.
     state.pending = { first: { count: 0, detail: 'all rendered' }, second: { count: 1, detail: 'ready' } };
     const result = await runQuotaBurnCycle();
     expect(result.dispatched).toBe(true);
-    expect(state.ran).toEqual([{ jobId: 'second', familyId: 'grok', hasWindow: true }]);
+    expect(state.ran).toEqual([{ jobId: 'second', familyId: 'grok', charge: true }]);
     expect(state.recorded).toEqual([result.dispatchKey]);
+  });
+
+  it('hands the probe\'s work to run() instead of making it recompute', async () => {
+    // A universe-bible-images probe reads every bible to produce its count, and
+    // run() needs the same scan to know what to render — without the passthrough
+    // that multi-megabyte read happened twice per dispatch.
+    const scan = { picked: ['batch'], total: 4 };
+    state.pending = { first: { count: 4, context: scan } };
+    await runQuotaBurnCycle();
+    expect(state.contexts).toEqual([scan]);
   });
 
   it('prefers an earlier job when both have work', async () => {
@@ -133,8 +157,10 @@ describe('runQuotaBurnCycle', () => {
     state.pending = { second: { count: 1 } };
     const result = await runQuotaBurnCycle({ trigger: 'manual', familyId: 'grok', jobId: 'second', force: true });
     expect(result.dispatched).toBe(true);
-    expect(state.ran).toEqual([{ jobId: 'second', familyId: 'grok', hasWindow: false }]);
-    // A forced run carries no window key, so it never eats the automatic budget.
+    // A forced candidate still carries the family's REAL card and window — it is
+    // only marked uncharged, so the run log and the agent brief stay truthful.
+    expect(state.ran).toEqual([{ jobId: 'second', familyId: 'grok', charge: false }]);
+    expect(result.percentRemaining).toBe(50);
     expect(state.recorded).toEqual([]);
   });
 
@@ -158,9 +184,14 @@ describe('runQuotaBurnCycle', () => {
 });
 
 describe('getQuotaBurnStatus', () => {
+  it('returns the config it loaded so the route need not re-read it', async () => {
+    const { config } = await getQuotaBurnStatus();
+    expect(config).toBe(state.config);
+  });
+
   it('reports the live window and the reason a family would not burn', async () => {
     state.pending = { first: { count: 2, detail: '2 entries' }, second: { count: 0, detail: 'no app' } };
-    const status = await getQuotaBurnStatus();
+    const { status } = await getQuotaBurnStatus();
     const grok = status.families.find((family) => family.id === 'grok');
     expect(grok.willBurn).toBe(true);
     expect(grok.skipReason).toBeNull();

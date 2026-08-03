@@ -8,14 +8,13 @@
 
 import { ArrowDown, ArrowUp, Play, Trash2 } from 'lucide-react';
 import JobParamField from './JobParamField';
-
-const inputClass = 'w-full mt-1 bg-port-bg border border-port-border rounded p-2 text-white text-xs';
+import { inputClass } from './fields';
 
 export default function JobRow({
-  job, index, total, jobTypes, catalog, actionsBusy,
+  job, index, total, catalog, pending, actionsBusy,
   onChange, onMove, onRemove, onRun,
 }) {
-  const spec = jobTypes.find((type) => type.id === job.jobType);
+  const spec = catalog.jobTypes.find((type) => type.id === job.jobType);
   const idPrefix = `burn-job-${job.id}`;
   const setParam = (key, value) => onChange({ ...job, params: { ...job.params, [key]: value } });
   const optionsFor = (descriptor) => ({
@@ -23,8 +22,6 @@ export default function JobRow({
     universe: catalog.universes,
     imageMode: catalog.imageModes,
   })[descriptor.kind];
-
-  const pending = job.pending;
 
   return (
     <div className="rounded border border-port-border/70 bg-port-bg/40 p-3 space-y-3">
@@ -37,7 +34,7 @@ export default function JobRow({
         />
         <label htmlFor={`${idPrefix}-enabled`} className="text-xs text-gray-400">Step {index + 1}</label>
         <input
-          className="flex-1 min-w-40 bg-port-bg border border-port-border rounded p-2 text-white text-xs"
+          className={`${inputClass} flex-1 min-w-40 mt-0`}
           value={job.label || ''}
           placeholder={spec?.label || 'Job name'}
           aria-label={`Name for step ${index + 1}`}
@@ -60,7 +57,7 @@ export default function JobRow({
             value={job.jobType}
             onChange={(event) => onChange({ ...job, jobType: event.target.value, params: {} })}
           >
-            {jobTypes.map((type) => <option key={type.id} value={type.id}>{type.label}</option>)}
+            {catalog.jobTypes.map((type) => <option key={type.id} value={type.id}>{type.label}</option>)}
           </select>
         </label>
         <label htmlFor={`${idPrefix}-model`} className="block text-xs text-gray-400">

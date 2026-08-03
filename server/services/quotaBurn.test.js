@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { burnBudgetRemaining, explainFamilySkip, selectBurnCandidates } from './quotaBurn.js';
+import { burnBudgetRemaining, evaluateFamilies, selectBurnCandidates } from './quotaBurn.js';
 import { normalizeQuotaBurnConfig } from '../lib/quotaBurnConfig.js';
 
 const NOW = Date.parse('2026-07-26T12:00:00.000Z');
@@ -67,32 +67,72 @@ describe('selectBurnCandidates', () => {
 });
 
 /**
- * The page renders `explainFamilySkip`'s answer verbatim, so it has to mirror
- * `selectBurnCandidates`'s gates exactly — a card that says "ready" while the
- * runner skips (or vice versa) is worse than no explanation at all.
+ * The page renders `evaluateFamilies`' answer verbatim, and the runner selects
+ * from the SAME ladder — a card that says "ready" while the runner skips (or
+ * vice versa) is worse than no explanation at all, so the two must be one
+ * function, not two that mirror each other.
  */
-describe('explainFamilySkip', () => {
+describe('evaluateFamilies', () => {
   const family = { enabled: true, resetWithinHours: 24, reservePercent: 20, maxDispatchesPerWindow: 2, jobs: [job()] };
+  const reasonFor = (rawFamily, quotas, opts = {}) =>
+    evaluateFamilies(quotas, { families: { grok: rawFamily } }, { now: NOW, ...opts })[0].skipReason;
 
-  it('returns null exactly when the family is a candidate', () => {
+  it('yields a candidate exactly when selectBurnCandidates does', () => {
     const quotas = [quota('grok', '2026-07-26T18:00:00.000Z')];
-    expect(explainFamilySkip('grok', family, quotas, { now: NOW })).toBeNull();
+    const [verdict] = evaluateFamilies(quotas, { families: { grok: family } }, { now: NOW });
+    expect(verdict.skipReason).toBeUndefined();
+    expect(verdict.candidate).toBeTruthy();
     expect(selectBurnCandidates(quotas, { families: { grok: family } }, { now: NOW })).toHaveLength(1);
   });
 
   it('names the specific gate that closed', () => {
-    expect(explainFamilySkip('grok', { ...family, enabled: false }, [], { now: NOW })).toBe('disabled');
-    expect(explainFamilySkip('grok', { ...family, jobs: [] }, [], { now: NOW })).toBe('no enabled jobs configured');
-    expect(explainFamilySkip('grok', family, [], { now: NOW })).toBe('no enabled provider in this family');
-    expect(explainFamilySkip('grok', family, [quota('grok', null)], { now: NOW })).toBe('no window states a reset time');
-    expect(explainFamilySkip('grok', family, [quota('grok', '2026-07-28T12:00:00.000Z')], { now: NOW }))
-      .toMatch(/outside the 24h window/);
-    expect(explainFamilySkip('grok', family, [quota('grok', '2026-07-26T18:00:00.000Z', 20)], { now: NOW }))
+    expect(reasonFor({ ...family, enabled: false }, [])).toBe('disabled');
+    expect(reasonFor({ ...family, jobs: [] }, [])).toBe('no enabled jobs configured');
+    expect(reasonFor(family, [])).toBe('no enabled provider in this family');
+    expect(reasonFor(family, [quota('grok', null)])).toBe('no window states a reset time');
+    expect(reasonFor(family, [quota('grok', '2026-07-28T12:00:00.000Z')])).toMatch(/outside the 24h window/);
+    expect(reasonFor(family, [quota('grok', '2026-07-26T18:00:00.000Z', 20)]))
       .toMatch(/20% left is at or below the 20% reserve/);
     const selected = selectBurnCandidates([quota('grok', '2026-07-26T18:00:00.000Z')], { families: { grok: family } }, { now: NOW })[0];
-    expect(explainFamilySkip('grok', family, [quota('grok', '2026-07-26T18:00:00.000Z')], {
-      now: NOW, dispatches: { [selected.dispatchKey]: 2 },
-    })).toBe('dispatch cap reached (2/2)');
+    expect(reasonFor(family, [quota('grok', '2026-07-26T18:00:00.000Z')], { dispatches: { [selected.dispatchKey]: 2 } }))
+      .toBe('dispatch cap reached (2/2)');
+  });
+});
+
+describe('selectBurnCandidates bypassGatesFor', () => {
+  const closed = normalizeQuotaBurnConfig({
+    families: { grok: { enabled: true, resetWithinHours: 0, reservePercent: 99, maxDispatchesPerWindow: 1, jobs: [job()] } },
+  });
+  const quotas = [quota('grok', '2026-07-27T18:00:00.000Z', 10)];
+
+  it('still reports the family\'s REAL window when the gates are bypassed', () => {
+    // The forced candidate must not be a fabricated stand-in: the agent prompt
+    // renders `percentRemaining` and the reset hours into its brief, and the run
+    // log records them, so a synthesized zero would lie in both places.
+    expect(selectBurnCandidates(quotas, closed, { now: NOW })).toEqual([]);
+    const [forced] = selectBurnCandidates(quotas, closed, { now: NOW, bypassGatesFor: 'grok' });
+    expect(forced.limit.percentRemaining).toBe(10);
+    expect(forced.hoursUntilReset).toBeCloseTo(30, 0);
+    expect(forced.dispatchKey).toMatch(/^grok:/);
+  });
+
+  it('marks a forced candidate uncharged and an ordinary one charged', () => {
+    // `charge`, not a null dispatchKey: keyed on WHY it ran, so a force whose
+    // gates happen to pass is still uncharged instead of silently billing the
+    // window.
+    expect(selectBurnCandidates(quotas, closed, { now: NOW, bypassGatesFor: 'grok' })[0].charge).toBe(false);
+    const open = normalizeQuotaBurnConfig({ families: { grok: { enabled: true, jobs: [job()] } } });
+    expect(selectBurnCandidates([quota('grok', '2026-07-26T18:00:00.000Z')], open, { now: NOW })[0].charge).toBe(true);
+    expect(selectBurnCandidates([quota('grok', '2026-07-26T18:00:00.000Z')], open, { now: NOW, bypassGatesFor: 'grok' })[0].charge).toBe(false);
+  });
+
+  it('does not bypass gates for a family it was not named for', () => {
+    expect(selectBurnCandidates(quotas, closed, { now: NOW, bypassGatesFor: 'codex' })).toEqual([]);
+  });
+
+  it('still refuses a window with no readable reset time', () => {
+    // Unknowable, not merely closed — a forced run can't invent a reset either.
+    expect(selectBurnCandidates([quota('grok', null)], closed, { now: NOW, bypassGatesFor: 'grok' })).toEqual([]);
   });
 });
 

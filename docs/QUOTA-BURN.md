@@ -43,10 +43,18 @@ one line in that directory's `JOB_MODULES`. The config page builds its form from
 the catalog, so no client change is needed unless the job introduces a param kind
 the form doesn't render yet.
 
-Each job module exports `countPending` (cheap, side-effect free — the page calls
-it on every load) and `run` (the only thing that may spend quota). A job that
-declines reports `dispatched: false` with a reason and is **not** charged against
-the window's cap.
+Each job module exports `countPending` (side-effect free — the page calls it on
+every load) and `run` (the only thing that may spend quota). `countPending` may
+return an opaque `context` that the runner hands straight to `run`, so a probe
+that scanned every universe bible to produce its count doesn't make `run` repeat
+the scan; `run` must still work without it, because the force path calls it with
+no probe. A job that declines reports `dispatched: false` with a reason and is
+**not** charged against the window's cap.
+
+Every numeric bound (windows, reserve, caps, entry limits) lives in
+`QUOTA_BURN_BOUNDS` in `server/lib/quotaBurnConfig.js`, read by the normalizer
+(which clamps an older on-disk plan), the Zod schemas (which reject a bad
+request), and the catalog descriptors the client renders as `min`/`max`.
 
 ## Manual runs
 
@@ -54,8 +62,9 @@ the window's cap.
   respecting every quota gate.
 - **Burn now** on a family card scopes that cycle to one family.
 - The ▶ on a job row **forces** that one job past the window/reserve/cap gates.
-  A forced run carries no window key and is deliberately not charged against the
-  family's automatic budget.
+  It goes through the same selection, so the run still reports the family's real
+  remaining percentage and reset time — it is only marked `charge: false`, so it
+  never eats the family's automatic budget.
 
 ## Storage
 
@@ -79,7 +88,7 @@ folds those overrides into the single plan (each app's family prompt becomes an
 | --- | --- |
 | `server/lib/quotaBurnConfig.js` | Plan shape, job-type catalog, total normalization |
 | `server/services/quotaBurnStore.js` | `data/cos/quota-burn.json` + the run log |
-| `server/services/quotaBurn.js` | Candidate selection + the dispatch ledger |
+| `server/services/quotaBurn.js` | `evaluateFamily` — the one gate ladder both selection and the page's skip reasons read — plus the dispatch ledger |
 | `server/services/quotaBurnJobs/` | The job registry and its modules |
 | `server/services/quotaBurnRunner.js` | The loop, the cycle, and the status feed |
 | `server/routes/quotaBurn.js` | `/api/quota-burn` |

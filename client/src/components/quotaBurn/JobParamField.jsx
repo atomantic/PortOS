@@ -5,7 +5,7 @@
  * needs to know the param KINDS, not any particular job's fields.
  */
 
-const inputClass = 'w-full mt-1 bg-port-bg border border-port-border rounded p-2 text-white text-xs';
+import { inputClass } from './fields';
 
 export default function JobParamField({ descriptor, value, onChange, options, idPrefix }) {
   const id = `${idPrefix}-${descriptor.key}`;
@@ -58,14 +58,17 @@ export default function JobParamField({ descriptor, value, onChange, options, id
   }
 
   // Everything else is a select over a list the page supplied (apps, universes,
-  // image modes) or the descriptor's own enum. An `all`/`default` sentinel row
-  // is emitted for the kinds whose default is "no pin".
+  // image modes) or the descriptor's own enum. The "no pin" row, when a kind has
+  // one, is DESCRIBED BY THE SERVER (`emptyLabel`/`emptyValue`) rather than
+  // switched on `kind` here — otherwise every new job type with an optional
+  // param would need a client change, which is the thing the catalog exists to
+  // avoid.
   const rows = descriptor.kind === 'enum'
     ? (descriptor.options || []).map((option) => ({ value: option, label: option }))
     : (options || []).map((option) => ({ value: option.id ?? option, label: option.name ?? option }));
-  const sentinel = descriptor.kind === 'universe'
-    ? { value: 'all', label: 'All universes' }
-    : (descriptor.kind === 'imageMode' ? { value: '', label: 'Match the burning provider' } : null);
+  const sentinel = descriptor.emptyLabel
+    ? { value: descriptor.emptyValue ?? '', label: descriptor.emptyLabel }
+    : null;
 
   return (
     <label htmlFor={id} className="block text-xs text-gray-400">

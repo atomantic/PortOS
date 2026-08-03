@@ -80,6 +80,31 @@ export async function listUniverses({ includeDeleted = false } = {}) {
 }
 
 /**
+ * Every live universe as `{ id, name }` — a label and nothing else.
+ *
+ * Backs pickers that only need to name a universe (the Quota Burn job form).
+ * Same motivation as `listUniverseStyles` below: the PG backend projects in SQL,
+ * so this never ships the bibles / categories / composite sheets / run history
+ * that make `listUniverses()` a multi-megabyte read. Reach for this instead of
+ * `(await listUniverses()).map(u => ({ id: u.id, name: u.name }))`.
+ *
+ * Nameless records are dropped — an unlabeled row in a picker is unselectable.
+ * Newest-first, matching `listUniverses()`; ordering lives here rather than in
+ * either backend so the two can't drift.
+ */
+export async function listUniverseNames() {
+  const rows = await store().listNames();
+  return rows
+    .flatMap((r) => {
+      const name = trimTo(r?.name, NAME_MAX_LENGTH);
+      if (!isStr(r?.id) || !r.id || !name) return [];
+      return [{ id: r.id, name, createdAt: r.createdAt || '' }];
+    })
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
+    .map((r) => ({ id: r.id, name: r.name }));
+}
+
+/**
  * Every live universe as `{ id, name, influences: { embrace[], avoid[] } }` —
  * the style tokens and nothing else.
  *

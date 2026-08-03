@@ -21,6 +21,7 @@ import { join } from 'path';
 import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { familyIsActionable, normalizeQuotaBurnFamily } from '../lib/quotaBurnConfig.js';
+import { isPlainObject } from '../lib/objects.js';
 import { hoursUntilReset, normalizeResetAt } from '../lib/quotaReset.js';
 
 const LEDGER_FILE = () => join(PATHS.cos, 'quota-burn-dispatches.json');
@@ -31,14 +32,10 @@ const LEDGER_FILE = () => join(PATHS.cos, 'quota-burn-dispatches.json');
 // install.
 const LEDGER_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
-async function readQuotaBurnLedger() {
-  const loaded = await readJSONFile(LEDGER_FILE(), {});
-  return loaded && typeof loaded === 'object' && !Array.isArray(loaded) ? loaded : {};
-}
-
 /** Dispatch counts per `<family>:<resetEpochMs>` window key. */
 export async function getQuotaBurnDispatches() {
-  return readQuotaBurnLedger();
+  const loaded = await readJSONFile(LEDGER_FILE(), {});
+  return isPlainObject(loaded) ? loaded : {};
 }
 
 const windowEpoch = (key) => Number(String(key).split(':').pop());
@@ -62,7 +59,7 @@ const ledgerWriteQueue = createFileWriteQueue();
 
 export async function recordQuotaBurnDispatch(key, { now = Date.now() } = {}) {
   return ledgerWriteQueue(async () => {
-    const ledger = pruneLedger(await readQuotaBurnLedger(), now);
+    const ledger = pruneLedger(await getQuotaBurnDispatches(), now);
     const next = { ...ledger, [key]: Number(ledger[key] || 0) + 1 };
     await atomicWrite(LEDGER_FILE(), next);
     return next;
@@ -87,68 +84,103 @@ export function burnBudgetRemaining(limit, family) {
 }
 
 /**
+ * THE gate ladder. Evaluates one family against its live quota card and returns
+ * either a burn candidate or the reason it isn't one — never both, never
+ * neither.
+ *
+ * Deliberately one function rather than a selector plus a matching explainer.
+ * Those were written twice, and the status page renders the explanation
+ * verbatim: a gate added to one and not the other makes the page confidently
+ * report "will burn" for a family the runner then skips forever, which is
+ * exactly the question the page exists to answer.
+ *
+ * `bypassGates` is the page's per-job "Run now": the user named a family and
+ * clicked, which is a direct instruction to spend that quota. The window /
+ * reserve / cap gates bound UNATTENDED burns, so they are skipped — but the card
+ * and limit are still read, so a forced run reports its real remaining
+ * percentage and reset time instead of a fabricated one. It comes back
+ * `charge: false` so it never eats the automatic budget.
+ */
+export function evaluateFamily(family, card, { now = Date.now(), dispatches = {}, bypassGates = false } = {}) {
+  if (!family.enabled) return { skipReason: 'disabled' };
+  if (!familyIsActionable(family)) return { skipReason: 'no enabled jobs configured' };
+  if (!card) return { skipReason: 'no enabled provider in this family' };
+  if (card.supported === false) return { skipReason: 'provider has no queryable quota surface' };
+  if (card.error) return { skipReason: `quota read failed: ${card.error}` };
+  // A card can declare it carries no spendable headroom (`burnable: false`) —
+  // e.g. the Image Gen card, whose 0%-left meter is an OBSERVED refusal, not a
+  // measured allowance. Burning against it would dispatch work to a backend that
+  // just refused. Opt-out only: absent means burnable.
+  if (card.burnable === false) return { skipReason: 'provider reports no spendable headroom' };
+
+  const selected = selectLimit(card, family, now);
+  // A window with no readable reset time is unknowable, not merely closed — a
+  // forced run can't invent one either, so this gate holds even under bypass.
+  if (!selected) return { skipReason: 'no window states a reset time' };
+
+  const dispatchKey = `${family.id}:${normalizeResetAt(selected.limit, { now }).epochMs}`;
+  const dispatchesUsed = Number(dispatches[dispatchKey] || 0);
+
+  // The three gates a forced run is allowed past. Evaluated regardless so the
+  // ordering (and the wording) stays in one place; only the return is skipped.
+  if (!bypassGates) {
+    if (selected.hours < 0) return { skipReason: 'window already reset' };
+    if (selected.hours > family.resetWithinHours) {
+      return { skipReason: `resets in ${Math.ceil(selected.hours)}h — outside the ${family.resetWithinHours}h window` };
+    }
+    if (dispatchesUsed >= family.maxDispatchesPerWindow) {
+      return { skipReason: `dispatch cap reached (${dispatchesUsed}/${family.maxDispatchesPerWindow})` };
+    }
+    if (burnBudgetRemaining(selected.limit, family) <= 0) {
+      return { skipReason: `${selected.limit.percentRemaining}% left is at or below the ${family.reservePercent}% reserve` };
+    }
+  }
+
+  return {
+    candidate: {
+      family,
+      card,
+      limit: selected.limit,
+      hoursUntilReset: selected.hours,
+      dispatchKey,
+      dispatchesUsed,
+      // Only an unforced burn is charged against the window's automatic budget.
+      charge: !bypassGates,
+    },
+  };
+}
+
+/** The family entries of a config, normalized and id-stamped. */
+const familiesOf = (config) => Object.entries(config?.families || {})
+  .map(([id, value]) => ({ id, ...normalizeQuotaBurnFamily(value) }));
+
+/**
  * Select only safely-known, still-burnable provider windows, soonest reset
  * first (ties broken by the family's `priority`).
  *
  * `config` is a normalized quota-burn config; `quotas` the provider cards from
- * `providerUsage.getProviderQuotas()`.
+ * `providerUsage.getProviderQuotas()`. `bypassGatesFor` names one family whose
+ * window/reserve/cap gates are skipped (see `evaluateFamily`).
  */
-export function selectBurnCandidates(quotas, config, { now = Date.now(), dispatches = {} } = {}) {
+export function selectBurnCandidates(quotas, config, { now = Date.now(), dispatches = {}, bypassGatesFor = null } = {}) {
   const cards = new Map((quotas || []).map((card) => [card.family, card]));
-  return Object.entries(config?.families || {})
-    .map(([id, value]) => ({ id, ...normalizeQuotaBurnFamily(value) }))
-    .filter(familyIsActionable)
-    .map((family) => {
-      const card = cards.get(family.id);
-      if (!card || card.supported === false || card.error) return null;
-      // A card can declare it carries no spendable headroom (`burnable: false`)
-      // — e.g. the Image Gen card, whose 0%-left meter is an OBSERVED refusal,
-      // not a measured allowance. Burning against it would dispatch work to a
-      // backend that just refused. Opt-out only: absent means burnable.
-      if (card.burnable === false) return null;
-      const selected = selectLimit(card, family, now);
-      if (!selected || selected.hours < 0 || selected.hours > family.resetWithinHours) return null;
-      const dispatchKey = `${family.id}:${normalizeResetAt(selected.limit, { now }).epochMs}`;
-      if (Number(dispatches[dispatchKey] || 0) >= family.maxDispatchesPerWindow) return null;
-      if (burnBudgetRemaining(selected.limit, family) <= 0) return null;
-      return {
-        family,
-        card,
-        limit: selected.limit,
-        hoursUntilReset: selected.hours,
-        dispatchKey,
-        dispatchesUsed: Number(dispatches[dispatchKey] || 0),
-      };
-    })
+  return familiesOf(config)
+    .map((family) => evaluateFamily(family, cards.get(family.id), {
+      now, dispatches, bypassGates: bypassGatesFor === family.id,
+    }).candidate)
     .filter(Boolean)
     .sort((a, b) => a.hoursUntilReset - b.hoursUntilReset || a.family.priority - b.family.priority);
 }
 
 /**
- * Why a configured family is NOT a candidate right now, for the status page.
- * Mirrors `selectBurnCandidates`'s gates one-for-one so the page can never
- * disagree with the runner about what would happen on the next tick.
+ * Per-family verdicts for the status page: the candidate when the family would
+ * burn on the next tick, otherwise the exact gate that closed. One pass over the
+ * SAME ladder the runner uses, so the two can't disagree.
  */
-export function explainFamilySkip(familyId, rawFamily, quotas, { now = Date.now(), dispatches = {} } = {}) {
-  const family = { id: familyId, ...normalizeQuotaBurnFamily(rawFamily) };
-  if (!family.enabled) return 'disabled';
-  if (!familyIsActionable(family)) return 'no enabled jobs configured';
-  const card = (quotas || []).find((entry) => entry.family === familyId);
-  if (!card) return 'no enabled provider in this family';
-  if (card.supported === false) return 'provider has no queryable quota surface';
-  if (card.error) return `quota read failed: ${card.error}`;
-  if (card.burnable === false) return 'provider reports no spendable headroom';
-  const selected = selectLimit(card, family, now);
-  if (!selected) return 'no window states a reset time';
-  if (selected.hours < 0) return 'window already reset';
-  if (selected.hours > family.resetWithinHours) {
-    return `resets in ${Math.ceil(selected.hours)}h — outside the ${family.resetWithinHours}h window`;
-  }
-  const dispatchKey = `${family.id}:${normalizeResetAt(selected.limit, { now }).epochMs}`;
-  const used = Number(dispatches[dispatchKey] || 0);
-  if (used >= family.maxDispatchesPerWindow) return `dispatch cap reached (${used}/${family.maxDispatchesPerWindow})`;
-  if (burnBudgetRemaining(selected.limit, family) <= 0) {
-    return `${selected.limit.percentRemaining}% left is at or below the ${family.reservePercent}% reserve`;
-  }
-  return null;
+export function evaluateFamilies(quotas, config, { now = Date.now(), dispatches = {} } = {}) {
+  const cards = new Map((quotas || []).map((card) => [card.family, card]));
+  return familiesOf(config).map((family) => ({
+    family,
+    ...evaluateFamily(family, cards.get(family.id), { now, dispatches }),
+  }));
 }

@@ -29,7 +29,7 @@ import { timeAgo } from '../utils/formatters';
 // every universe bible — one full scan per character typed.
 const SAVE_DEBOUNCE_MS = 500;
 
-const EMPTY_CATALOG = { families: [], jobTypes: [], apps: [], universes: [], imageModes: [] };
+const EMPTY_CATALOG = { jobTypes: [], apps: [], universes: [], imageModes: [] };
 
 export default function QuotaBurn() {
   // Which family is expanded lives in the URL, not local state, so a specific
@@ -177,7 +177,6 @@ export default function QuotaBurn() {
             catalog={catalog}
             expanded={expanded === familyId}
             actionsBusy={unsaved || running}
-            running={running}
             onToggleExpand={(id) => navigate(expanded === id ? '/devtools/quota-burn' : `/devtools/quota-burn/${id}`)}
             onPatch={(patch) => patchFamily(familyId, patch)}
             onRunFamily={(id) => run({ familyId: id }, 'Burn')}

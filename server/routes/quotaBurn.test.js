@@ -12,12 +12,12 @@ vi.mock('../services/quotaBurnRunner.js', () => ({
   runQuotaBurnCycle: vi.fn(),
 }));
 vi.mock('../services/apps.js', () => ({ getActiveApps: vi.fn() }));
-vi.mock('../services/universeBuilder.js', () => ({ listUniverses: vi.fn() }));
+vi.mock('../services/universeBuilder.js', () => ({ listUniverseNames: vi.fn() }));
 
 import { getQuotaBurnConfig, saveQuotaBurnConfig } from '../services/quotaBurnStore.js';
 import { getQuotaBurnStatus, runQuotaBurnCycle } from '../services/quotaBurnRunner.js';
 import { getActiveApps } from '../services/apps.js';
-import { listUniverses } from '../services/universeBuilder.js';
+import { listUniverseNames } from '../services/universeBuilder.js';
 import quotaBurnRoutes from './quotaBurn.js';
 
 const buildApp = () => {
@@ -30,10 +30,12 @@ const buildApp = () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  getQuotaBurnConfig.mockResolvedValue({ enabled: false, checkIntervalMinutes: 30, families: {} });
-  getQuotaBurnStatus.mockResolvedValue({ families: [], runs: [] });
+  getQuotaBurnStatus.mockResolvedValue({
+    config: { enabled: false, checkIntervalMinutes: 30, families: {} },
+    status: { running: false, families: [], runs: [] },
+  });
   getActiveApps.mockResolvedValue([{ id: 'a1', name: 'App One', secret: 'do-not-leak' }]);
-  listUniverses.mockResolvedValue([{ id: 'u1', name: 'Example Universe' }]);
+  listUniverseNames.mockResolvedValue([{ id: 'u1', name: 'Example Universe' }]);
 });
 
 describe('GET /api/quota-burn', () => {
@@ -42,8 +44,10 @@ describe('GET /api/quota-burn', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       config: { enabled: false, checkIntervalMinutes: 30, families: {} },
-      status: { families: [], runs: [] },
+      status: { running: false, families: [], runs: [] },
     });
+    // The status read carries the config, so the route must NOT read the file again.
+    expect(getQuotaBurnConfig).not.toHaveBeenCalled();
     expect(getQuotaBurnStatus).toHaveBeenCalledWith({ refresh: false });
   });
 
@@ -65,7 +69,7 @@ describe('GET /api/quota-burn/catalog', () => {
   it('still renders when the universe store is unavailable', async () => {
     // The universe job simply has nothing to pick from — that must not 500 the
     // whole config page.
-    listUniverses.mockRejectedValue(new Error('store down'));
+    listUniverseNames.mockRejectedValue(new Error('store down'));
     const res = await request(buildApp()).get('/api/quota-burn/catalog');
     expect(res.status).toBe(200);
     expect(res.body.universes).toEqual([]);

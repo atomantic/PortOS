@@ -20,10 +20,10 @@
  */
 
 import { getProviderQuotas } from './providerUsage.js';
-import { getQuotaBurnDispatches, explainFamilySkip, recordQuotaBurnDispatch, selectBurnCandidates } from './quotaBurn.js';
+import { getQuotaBurnDispatches, evaluateFamilies, recordQuotaBurnDispatch, selectBurnCandidates } from './quotaBurn.js';
 import { getQuotaBurnConfig, getQuotaBurnRuns, recordQuotaBurnRun } from './quotaBurnStore.js';
 import { countJobPending, runBurnJob } from './quotaBurnJobs/index.js';
-import { normalizeQuotaBurnFamily } from '../lib/quotaBurnConfig.js';
+import { familyIsActionable } from '../lib/quotaBurnConfig.js';
 
 const TICK_MS = 60_000;
 
@@ -38,6 +38,11 @@ const enabledJobs = (family, jobId = null) =>
  * Walk a candidate's plan in order and run the first job with pending work.
  * Returns the dispatch outcome plus the per-job reasons, so a cycle that
  * dispatched nothing still explains itself in the run log.
+ *
+ * The probe's `context` is handed to `run` rather than thrown away: a
+ * `universe-bible-images` probe reads every universe bible to count the backlog,
+ * and `run` needs the very same scan to know what to render. Without the
+ * passthrough that multi-megabyte read happened twice per dispatch.
  */
 async function dispatchFromCandidate(candidate, { jobId = null } = {}) {
   const attempts = [];
@@ -47,7 +52,7 @@ async function dispatchFromCandidate(candidate, { jobId = null } = {}) {
       attempts.push({ jobId: job.id, jobType: job.jobType, skipped: pending.detail || 'no pending work' });
       continue;
     }
-    const result = await runBurnJob({ job, family: candidate.family, candidate });
+    const result = await runBurnJob({ job, family: candidate.family, candidate, context: pending.context });
     if (!result.dispatched) {
       attempts.push({ jobId: job.id, jobType: job.jobType, skipped: result.reason || 'declined' });
       continue;
@@ -94,6 +99,14 @@ async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, 
   // the log with "disabled" rows and bury the last real run.
   if (!config.enabled && trigger === 'scheduled') return { skipped: 'disabled' };
 
+  // Check the plan BEFORE the quota read. `getProviderQuotas({ refresh: true })`
+  // spawns a multi-second TUI scrape per enabled family; with no actionable
+  // family configured that scrape could never produce a dispatch, and it would
+  // otherwise run every `checkIntervalMinutes` forever.
+  if (!Object.values(config.families).some(familyIsActionable)) {
+    return finish({ dispatched: false, reason: 'no families enabled' });
+  }
+
   const quotas = await getProviderQuotas({ refresh: true }).catch((err) => {
     console.error(`❌ Quota-burn could not read provider quota: ${err.message}`);
     return null;
@@ -101,23 +114,18 @@ async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, 
   if (!quotas) return finish({ dispatched: false, reason: 'provider quota read failed' });
 
   const dispatches = await getQuotaBurnDispatches();
-  let candidates = selectBurnCandidates(quotas, config, { dispatches })
-    .filter((candidate) => !familyId || candidate.family.id === familyId);
-
-  // `force` is the page's per-job "Run now": the user named a family and a job
-  // and clicked, which is a direct instruction to spend that quota now — so the
-  // reset-window / reserve / cap gates (which exist to bound UNATTENDED burns)
-  // don't apply. It carries NO dispatchKey, so the run is also not charged
-  // against the window's automatic budget.
-  if (force && familyId && !candidates.length) {
-    const family = { id: familyId, ...normalizeQuotaBurnFamily(config.families[familyId]) };
-    candidates = [{ family, card: quotas.find((entry) => entry.family === familyId) || null, limit: null, hoursUntilReset: 0, dispatchKey: null }];
-  }
+  // `force` is the page's per-job "Run now" — the window/reserve/cap gates that
+  // bound UNATTENDED burns don't apply to a run the user just asked for. It goes
+  // through the same selection, so the candidate still carries the family's real
+  // card and limit; it only comes back `charge: false`.
+  const candidates = selectBurnCandidates(quotas, config, {
+    dispatches, bypassGatesFor: force ? familyId : null,
+  }).filter((candidate) => !familyId || candidate.family.id === familyId);
 
   if (!candidates.length) {
-    const reasons = Object.entries(config.families)
-      .filter(([, family]) => family.enabled)
-      .map(([id, family]) => `${id}: ${explainFamilySkip(id, family, quotas, { dispatches }) || 'ready'}`);
+    const reasons = evaluateFamilies(quotas, config, { dispatches })
+      .filter(({ family }) => family.enabled)
+      .map(({ family, skipReason }) => `${family.id}: ${skipReason || 'ready'}`);
     return finish({
       dispatched: false,
       reason: reasons.length ? `no burnable window — ${reasons.join('; ')}` : 'no families enabled',
@@ -129,15 +137,16 @@ async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, 
     if (!outcome.dispatched) continue;
     // Charge the window only once work actually started. `runBurnJob` reports a
     // decline rather than throwing, and a declined job never reaches here — so
-    // the cap bounds real burns, not attempts. A forced run has no window key
-    // and is deliberately not charged (see the `force` block above).
-    if (candidate.dispatchKey) await recordQuotaBurnDispatch(candidate.dispatchKey);
+    // the cap bounds real burns, not attempts. `charge` is false for a forced
+    // run, which the user asked for outside the automatic budget.
+    if (candidate.charge) await recordQuotaBurnDispatch(candidate.dispatchKey);
     return finish({
       dispatched: true,
       familyId: candidate.family.id,
       jobId: outcome.job.id,
       jobType: outcome.job.jobType,
       dispatchKey: candidate.dispatchKey,
+      charged: candidate.charge,
       hoursUntilReset: Math.round(candidate.hoursUntilReset * 10) / 10,
       percentRemaining: candidate.limit?.percentRemaining ?? null,
       summary: outcome.result.summary || 'dispatched',
@@ -153,54 +162,47 @@ async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, 
 }
 
 /**
- * Per-family view for the config page: the live quota card, whether the family
- * would burn on the next tick (and if not, exactly why), and each job's pending
- * count. Reads quota from cache by default — the page's explicit Refresh passes
- * `refresh: true` — so opening the page doesn't spawn a TUI scrape per family.
+ * The config page's whole payload: the plan plus, per family, whether it would
+ * burn on the next tick (and if not, exactly why) and each job's pending count.
+ *
+ * Returns the config it loaded so the route doesn't read and normalize the same
+ * file a second time. Reads quota from cache by default — the page's explicit
+ * Refresh passes `refresh: true` — so opening the page doesn't spawn a TUI
+ * scrape per family.
  */
 export async function getQuotaBurnStatus({ refresh = false } = {}) {
-  const config = await getQuotaBurnConfig();
-  const quotas = await getProviderQuotas({ refresh }).catch((err) => {
-    console.error(`❌ Quota-burn status could not read provider quota: ${err.message}`);
-    return [];
-  });
-  const dispatches = await getQuotaBurnDispatches();
-  const candidates = selectBurnCandidates(quotas, config, { dispatches });
-  const byFamily = new Map(candidates.map((candidate) => [candidate.family.id, candidate]));
+  // Independent reads: only `quotas` is slow (a PTY scrape on the Refresh path),
+  // and nothing else waits on it.
+  const [config, quotas, dispatches, runs] = await Promise.all([
+    getQuotaBurnConfig(),
+    getProviderQuotas({ refresh }).catch((err) => {
+      console.error(`❌ Quota-burn status could not read provider quota: ${err.message}`);
+      return [];
+    }),
+    getQuotaBurnDispatches(),
+    getQuotaBurnRuns(),
+  ]);
 
-  const families = await Promise.all(Object.entries(config.families).map(async ([id, raw]) => {
-    const family = { id, ...normalizeQuotaBurnFamily(raw) };
-    const card = quotas.find((entry) => entry.family === id) || null;
-    const candidate = byFamily.get(id) || null;
-    // Probe pending work only for families the user actually enabled — a probe
-    // is cheap but not free (the universe job reads every bible), and a disabled
-    // family's counts are never acted on.
-    const jobs = family.enabled
-      ? await Promise.all(family.jobs.map(async (job) => ({ ...job, pending: await countJobPending({ job, family }) })))
-      : family.jobs.map((job) => ({ ...job, pending: null }));
-    return {
-      id,
-      label: card?.label || id,
-      supported: card ? card.supported !== false : null,
-      error: card?.error || null,
+  // ONE pass over the gate ladder the runner uses — the page's "will burn" and
+  // its reason come from the same verdict, so they can't contradict each other.
+  const families = await Promise.all(evaluateFamilies(quotas, config, { dispatches })
+    .map(async ({ family, candidate, skipReason }) => ({
+      id: family.id,
+      label: candidate?.card?.label || quotas.find((entry) => entry.family === family.id)?.label || family.id,
       percentRemaining: candidate?.limit?.percentRemaining ?? null,
-      limitLabel: candidate?.limit?.label || candidate?.limit?.scope || null,
       hoursUntilReset: candidate ? Math.round(candidate.hoursUntilReset * 10) / 10 : null,
       dispatchesUsed: candidate?.dispatchesUsed ?? null,
       willBurn: Boolean(candidate),
-      skipReason: candidate ? null : explainFamilySkip(id, raw, quotas, { dispatches }),
-      jobs,
-    };
-  }));
+      skipReason: skipReason || null,
+      // Probe pending work only for families the user actually enabled — a probe
+      // is not free (the universe job reads every bible), and a disabled
+      // family's counts are never acted on.
+      jobs: family.enabled
+        ? await Promise.all(family.jobs.map(async (job) => ({ id: job.id, pending: await countJobPending({ job, family }) })))
+        : family.jobs.map((job) => ({ id: job.id, pending: null })),
+    })));
 
-  return {
-    enabled: config.enabled,
-    checkIntervalMinutes: config.checkIntervalMinutes,
-    running,
-    lastRunAt: lastRunAt ? new Date(lastRunAt).toISOString() : null,
-    families,
-    runs: await getQuotaBurnRuns(),
-  };
+  return { config, status: { running, families, runs } };
 }
 
 async function tick() {
@@ -229,14 +231,10 @@ export function startQuotaBurnScheduler() {
   console.log('🔥 Quota-burn loop armed (off unless enabled in Quota Burn settings)');
 }
 
-export function stopQuotaBurnScheduler() {
+/** Test seam — disarms the timer and clears the in-process cycle state. */
+export function __resetQuotaBurnRunner() {
   if (tickTimer) clearInterval(tickTimer);
   tickTimer = null;
-}
-
-/** Test seam — clears the in-process cycle state between cases. */
-export function __resetQuotaBurnRunner() {
-  stopQuotaBurnScheduler();
   running = false;
   lastRunAt = null;
 }

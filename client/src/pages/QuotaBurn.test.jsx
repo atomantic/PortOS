@@ -96,8 +96,10 @@ describe('QuotaBurn page', () => {
     ));
   });
 
-  it('strips the display-only pending field before persisting a job edit', async () => {
-    // The PUT schema is strict — a grafted status field would 400 the save.
+  it('never persists a status field alongside the job config', async () => {
+    // Pending counts live on the STATUS side and reach JobRow as their own prop.
+    // If they were merged into the job objects they would have to be stripped
+    // back off before every save — the PUT schema is strict and would 400.
     const user = userEvent.setup();
     renderPage('/devtools/quota-burn/grok');
     await user.click(await screen.findByLabelText('Name for step 1'));
