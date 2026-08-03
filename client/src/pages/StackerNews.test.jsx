@@ -85,7 +85,10 @@ describe('StackerNews', () => {
     expect(screen.getByText('@personal_stacker · monitoring off')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Edit account settings' }));
     await user.click(drawerTab('Monitoring & models'));
-    expect(intervalField()).toHaveValue(15);
+    // The drawer remounts its panel per tab (`key={currentTab}`), so the field
+    // is briefly present with no value before the account's stored one lands.
+    // Assert on the settled value, as the retired-vision-model case below does.
+    await waitFor(() => expect(intervalField()).toHaveValue(15));
     await user.click(drawerTab('Stewardship'));
     expect(screen.getByDisplayValue('Curate visual work')).toBeInTheDocument();
   });
@@ -225,7 +228,7 @@ describe('StackerNews', () => {
     expect(screen.getByRole('button', { name: 'Sync now' })).toBeEnabled();
     await user.click(screen.getByRole('button', { name: 'Edit account settings' }));
     await user.click(drawerTab('Monitoring & models'));
-    expect(intervalField()).toHaveValue(15);
+    await waitFor(() => expect(intervalField()).toHaveValue(15));
   });
 
   // Stacker News grants API keys on request only, so a keyless account is the
@@ -282,7 +285,7 @@ describe('StackerNews', () => {
     expect(screen.getByRole('heading', { name: 'Settings and safety for @personal_stacker' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Edit account settings' }));
     await user.click(drawerTab('Monitoring & models'));
-    expect(intervalField()).toHaveValue(60);
+    await waitFor(() => expect(intervalField()).toHaveValue(60));
   });
 
   it('offers only vision-capable models for the vision stage and every model for text', async () => {
