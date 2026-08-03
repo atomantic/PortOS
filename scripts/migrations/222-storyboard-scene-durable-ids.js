@@ -29,8 +29,9 @@
  * writes nothing.
  */
 
-import { readFile, writeFile, readdir, stat } from 'fs/promises';
+import { readFile, readdir, stat } from 'fs/promises';
 import { join } from 'path';
+import { atomicWrite } from '../../server/lib/fileUtils.js';
 import { ensureStoryboardIds } from '../../server/lib/storyboardScenes.js';
 
 const readJsonOrNull = async (path) => {
@@ -87,7 +88,12 @@ export default {
       const issue = await readJsonOrNull(recordPath);
       if (!issue) continue;
       if (stampIssue(issue)) {
-        await writeFile(recordPath, `${JSON.stringify(issue, null, 2)}\n`);
+        // atomicWrite (temp file + rename), never a truncating writeFile: an
+        // interrupted rewrite of a live issue record would otherwise leave
+        // unparseable JSON that the next pass silently skips — permanent data
+        // loss for that issue, since the migration would already be marked
+        // applied.
+        await atomicWrite(recordPath, `${JSON.stringify(issue, null, 2)}\n`);
         touched += 1;
       }
     }

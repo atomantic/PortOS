@@ -29,7 +29,10 @@
  *
  * A deterministic base that is already taken gets a `-2`, `-3`, … suffix, so
  * an array that already holds `scene-01` never gets a duplicate stamped onto
- * it (duplicate ids would make id resolution ambiguous).
+ * it — and an array that ALREADY carries duplicate ids (a duplicated scene, or
+ * the scene extractor's tolerated duplicate shot ids) has the later copies
+ * re-stamped. Duplicate ids would make id resolution ambiguous, which is the
+ * mis-target this module exists to prevent.
  */
 
 const ID_MAX = 80;
@@ -47,19 +50,35 @@ const uniqueId = (base, taken) => {
   return `${base}-${n}`;
 };
 
-// Stamp `id` on every entry that lacks one. Returns the ORIGINAL array
-// reference when nothing changed so callers can cheaply detect a no-op.
+// Stamp `id` on every entry that lacks one, and re-stamp any entry whose id
+// DUPLICATES an earlier entry's. A duplicate id is as bad as no id: the
+// resolver tie-breaks on the captured index, so once two same-id entries are
+// reordered the write lands on the wrong one — exactly the mis-target this
+// module exists to prevent. First occurrence keeps the id (matching
+// `sanitizeShots`' first-wins resolution of `continuityFromShotId`), later
+// ones are re-stamped.
+//
+// Returns the ORIGINAL array reference when nothing changed so callers can
+// cheaply detect a no-op.
 const stampIds = (list, idFor) => {
   if (!Array.isArray(list) || list.length === 0) return list;
-  const taken = new Set(
-    list.filter((r) => r && typeof r === 'object' && isNonEmptyStr(r.id)).map((r) => r.id),
-  );
+  // Only ids that survive as-is (the FIRST occurrence of each) count as taken;
+  // a duplicate is about to be replaced, so it must not reserve its own id.
+  const taken = new Set();
+  for (const rec of list) {
+    if (rec && typeof rec === 'object' && isNonEmptyStr(rec.id)) taken.add(rec.id);
+  }
+  const seen = new Set();
   let changed = false;
   const out = list.map((rec, i) => {
     if (!rec || typeof rec !== 'object' || Array.isArray(rec)) return rec;
-    if (isNonEmptyStr(rec.id)) return rec;
+    if (isNonEmptyStr(rec.id) && !seen.has(rec.id)) {
+      seen.add(rec.id);
+      return rec;
+    }
     const id = uniqueId(idFor(i).slice(0, ID_MAX), taken);
     taken.add(id);
+    seen.add(id);
     changed = true;
     return { ...rec, id };
   });

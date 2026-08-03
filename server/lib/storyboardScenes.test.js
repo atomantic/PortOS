@@ -28,6 +28,36 @@ describe('ensureStoryboardIds', () => {
     expect(out[1].id).toBe('scene-01');
   });
 
+  it('re-stamps a DUPLICATE id, keeping the first occurrence', () => {
+    // A duplicated scene is as ambiguous as an id-less one: after a reorder the
+    // captured-index tiebreak would land the write on the wrong copy.
+    const out = ensureStoryboardIds([
+      { id: 'scene-01', description: 'original' },
+      { id: 'scene-01', description: 'duplicate' },
+    ]);
+    expect(out[0].id).toBe('scene-01');
+    expect(out[0].description).toBe('original');
+    expect(out[1].id).toBe('scene-02');
+    expect(new Set(out.map((s) => s.id)).size).toBe(2);
+  });
+
+  it('re-stamps duplicate SHOT ids too (the scene extractor tolerates them)', () => {
+    const out = ensureStoryboardIds([{
+      id: 'scene-01',
+      shots: [{ id: 'shot-01' }, { id: 'shot-01' }, { id: 'shot-01' }],
+    }]);
+    expect(out[0].shots.map((s) => s.id)).toEqual(['shot-01', 'shot-02', 'shot-03']);
+  });
+
+  it('escapes when the deterministic replacement for a duplicate is itself taken', () => {
+    const out = ensureStoryboardIds([
+      { id: 'dup' },
+      { id: 'dup' },
+      { id: 'scene-02' },
+    ]);
+    expect(out.map((s) => s.id)).toEqual(['dup', 'scene-02-2', 'scene-02']);
+  });
+
   it('passes non-array / empty input straight through', () => {
     expect(ensureStoryboardIds(null)).toBe(null);
     expect(ensureStoryboardIds(undefined)).toBe(undefined);
