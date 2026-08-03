@@ -68,33 +68,6 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix }) {
   // Stop playback when the selected track changes or the panel unmounts.
   useEffect(() => () => { playerRef.current?.stop(); setPlaying(false); }, [track?.id]);
 
-  // Preview playhead — painted straight into the DOM by the rAF loop below, so
-  // the bar tracks at frame rate without re-rendering the panel 60x a second.
-  const progressRef = useRef(null);
-  const elapsedRef = useRef(null);
-
-  // rAF clock, mirroring PianoRoll's: animate while playing, paint one idle
-  // frame otherwise. Cancelled on stop (the effect re-runs) and on unmount.
-  useEffect(() => {
-    const paint = (fraction, sec) => {
-      if (progressRef.current) progressRef.current.style.transform = `scaleX(${fraction})`;
-      if (elapsedRef.current) elapsedRef.current.textContent = formatTimecode(sec);
-    };
-    if (!playing) { paint(0, 0); return undefined; }
-    let raf = 0;
-    const loop = () => {
-      const player = playerRef.current;
-      const loopSec = player.loopSec();
-      // position() is monotonic across loop passes and NEGATIVE during the
-      // transport's lead-in — clamp, then modulo onto the current pass.
-      const within = loopSec > 0 ? Math.max(0, player.position()) % loopSec : 0;
-      paint(loopSec > 0 ? within / loopSec : 0, within);
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, [playing]);
-
   // Reseed the prompt + publish slug from the newly-selected track.
   useEffect(() => {
     setPrompt(track?.chiptunePrompt || '');
@@ -159,6 +132,41 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix }) {
       totalSec,
     };
   }, [score]);
+
+  // Preview playhead — painted straight into the DOM by the rAF loop below, so
+  // the bar tracks at frame rate without re-rendering the panel 60x a second.
+  const progressRef = useRef(null);
+  const elapsedRef = useRef(null);
+  const totalRef = useRef(null);
+  // Idle loop length — the CURRENT score's, shown before playback starts and
+  // again once it stops.
+  const idleTotalSec = summary?.totalSec || 0;
+
+  // rAF clock, mirroring PianoRoll's: animate while playing, paint one idle
+  // frame otherwise. Cancelled on stop (the effect re-runs) and on unmount.
+  useEffect(() => {
+    const paint = (fraction, sec, totalSec) => {
+      if (progressRef.current) progressRef.current.style.transform = `scaleX(${fraction})`;
+      if (elapsedRef.current) elapsedRef.current.textContent = formatTimecode(sec);
+      if (totalRef.current) totalRef.current.textContent = formatTimecode(totalSec);
+    };
+    if (!playing) { paint(0, 0, idleTotalSec); return undefined; }
+    let raf = 0;
+    const loop = () => {
+      const player = playerRef.current;
+      // The SOUNDING schedule's length, not the current score's — a
+      // regeneration mid-preview must not re-scale the bar (or the readout)
+      // against a loop nobody is hearing yet.
+      const loopSec = player.loopSec();
+      // position() is monotonic across loop passes and NEGATIVE during the
+      // transport's lead-in — clamp, then modulo onto the current pass.
+      const within = loopSec > 0 ? Math.max(0, player.position()) % loopSec : 0;
+      paint(loopSec > 0 ? within / loopSec : 0, within, loopSec > 0 ? loopSec : idleTotalSec);
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [playing, idleTotalSec]);
 
   const persistChiptunePrefs = (patch) => {
     const music = musicSettingsRef.current;
@@ -354,7 +362,8 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix }) {
             </div>
             <span className="text-[11px] font-mono text-gray-500 tabular-nums whitespace-nowrap">
               <span ref={elapsedRef} data-testid="chiptune-progress-time">0:00.00</span>
-              {' / '}{formatTimecode(summary.totalSec)}
+              {' / '}
+              <span ref={totalRef} data-testid="chiptune-progress-total">{formatTimecode(summary.totalSec)}</span>
             </span>
           </div>
 

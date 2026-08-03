@@ -194,6 +194,25 @@ describe('ChiptunePanel', () => {
       expect(screen.getByTestId('chiptune-progress-time')).toHaveTextContent('0:05.00');
     });
 
+    it('reads the total off the sounding schedule, not a score regenerated mid-preview', async () => {
+      // The fixture score is a 2s loop; the player is sounding a 20s one (as it
+      // would be after a mid-preview regeneration, since the schedule is built
+      // at play()). Idle shows the score's length, playback the sounding one —
+      // otherwise elapsed/total disagree about which loop is running.
+      audio.loopSec = 20;
+      render(<ChiptunePanel track={TRACK} onTrackUpdate={vi.fn()} />);
+      const playBtn = await screen.findByRole('button', { name: /preview loop/i });
+      expect(screen.getByTestId('chiptune-progress-total')).toHaveTextContent('0:02.00');
+
+      await act(async () => { fireEvent.click(playBtn); });
+      await screen.findByRole('button', { name: /^stop$/i });
+      frame();
+      expect(screen.getByTestId('chiptune-progress-total')).toHaveTextContent('0:20.00');
+
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^stop$/i })); });
+      expect(screen.getByTestId('chiptune-progress-total')).toHaveTextContent('0:02.00');
+    });
+
     it('clamps the transport lead-in (negative position) to the start of the bar', async () => {
       audio.loopSec = 20;
       await startPreview();
