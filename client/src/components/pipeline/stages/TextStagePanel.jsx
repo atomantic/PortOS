@@ -156,8 +156,8 @@ export default function TextStagePanel({
           <button
             type="button"
             onClick={handleGenerate}
-            disabled={generating || actionsGated}
-            title={actionsGated ? 'Saving settings…' : undefined}
+            disabled={generating || actionsGated || dirty}
+            title={actionsGated ? 'Saving settings…' : (dirty ? 'Save or discard your edits first' : undefined)}
             className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-50"
           >
             {generating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}

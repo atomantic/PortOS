@@ -71,6 +71,7 @@ export default function StoryboardPanel({
   onSceneRenderStart,
   tab,
   onTabChange,
+  dirty = false,
 }) {
   const setTab = onTabChange;
   const [searchParams, setSearchParams] = useSearchParams();
@@ -386,6 +387,7 @@ export default function StoryboardPanel({
             hotRef={hotRef}
             onSceneHover={onSceneHover}
             onSceneRenderStart={onSceneRenderStart}
+            dirty={dirty}
           />
         )}
         {tab === TAB.CONFIG && (

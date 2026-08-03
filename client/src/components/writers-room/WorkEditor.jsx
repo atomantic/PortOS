@@ -421,6 +421,15 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // Warn on tab close/navigation away while there are unsaved draft edits —
+  // otherwise the body reset in the effect above silently discards them.
+  useEffect(() => {
+    if (!dirty) return undefined;
+    const onBeforeUnload = (e) => { e.preventDefault(); };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [dirty]);
+
   useClickOutside(overflowRef, overflowOpen, () => setOverflowOpen(false));
 
   const handleSnapshot = async () => {
@@ -914,11 +923,11 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
           {overflowOpen && (
             <div className="absolute right-0 top-full mt-1 z-30 w-60 rounded-md border border-port-border bg-port-card shadow-xl py-1 text-xs">
               <MenuSection label="AI">
-                <MenuItem icon={Clapperboard} label="Run Adapt (rebuild storyboard)" running={runningKind === ANALYSIS_KIND.SCRIPT} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.SCRIPT))} />
-                <MenuItem icon={Users} label="Refresh characters" running={runningKind === ANALYSIS_KIND.CHARACTERS} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.CHARACTERS))} />
-                <MenuItem icon={MapPin} label="Refresh places" running={runningKind === ANALYSIS_KIND.PLACES} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.PLACES))} />
-                <MenuItem icon={Sparkles} label="Editorial pass" running={runningKind === ANALYSIS_KIND.EVALUATE} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.EVALUATE))} />
-                <MenuItem icon={FileSignature} label="Format pass" running={runningKind === ANALYSIS_KIND.FORMAT} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.FORMAT))} />
+                <MenuItem icon={Clapperboard} label="Run Adapt (rebuild storyboard)" running={runningKind === ANALYSIS_KIND.SCRIPT} disabled={dirty} title={dirty ? 'Save first' : undefined} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.SCRIPT))} />
+                <MenuItem icon={Users} label="Refresh characters" running={runningKind === ANALYSIS_KIND.CHARACTERS} disabled={dirty} title={dirty ? 'Save first' : undefined} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.CHARACTERS))} />
+                <MenuItem icon={MapPin} label="Refresh places" running={runningKind === ANALYSIS_KIND.PLACES} disabled={dirty} title={dirty ? 'Save first' : undefined} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.PLACES))} />
+                <MenuItem icon={Sparkles} label="Editorial pass" running={runningKind === ANALYSIS_KIND.EVALUATE} disabled={dirty} title={dirty ? 'Save first' : undefined} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.EVALUATE))} />
+                <MenuItem icon={FileSignature} label="Format pass" running={runningKind === ANALYSIS_KIND.FORMAT} disabled={dirty} title={dirty ? 'Save first' : undefined} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.FORMAT))} />
                 <MenuItem icon={Wand2} label="Polish (cut → revise)" onClick={closeOverflowAnd(() => setDrawer(DRAWER.POLISH))} />
                 <MenuItem icon={Quote} label="Voice exemplars" onClick={closeOverflowAnd(() => setDrawer(DRAWER.VOICE))} />
                 <MenuItem icon={Zap} label={liveEnabled ? 'Disable live director' : 'Enable live director'} active={liveEnabled} onClick={closeOverflowAnd(toggleLiveMode)} />
@@ -1112,6 +1121,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
             onSceneRenderStart={queueRegister}
             tab={sidebarTab}
             onTabChange={setSidebarTab}
+            dirty={dirty}
           />
         </aside>
         )}
@@ -1197,12 +1207,13 @@ function MenuSection({ label, children }) {
   );
 }
 
-function MenuItem({ icon: Icon, label, onClick, running = false, active = false, badge = null }) {
+function MenuItem({ icon: Icon, label, onClick, running = false, active = false, badge = null, disabled = false, title }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      disabled={running}
+      disabled={running || disabled}
+      title={title}
       className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-[11px] hover:bg-port-bg disabled:opacity-50 ${
         active ? 'text-port-accent' : 'text-gray-300'
       }`}
@@ -1264,7 +1275,7 @@ function MobileTab({ active, onClick, icon: Icon, label }) {
   return (
     <button
       onClick={onClick}
-      className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-[12px] border-b-2 ${
+      className={`flex-1 flex items-center justify-center gap-1.5 py-2 min-h-[44px] text-[12px] border-b-2 ${
         active ? 'border-port-accent text-white' : 'border-transparent text-gray-500 hover:text-gray-300'
       }`}
     >

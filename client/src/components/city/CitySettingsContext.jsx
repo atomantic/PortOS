@@ -1,4 +1,4 @@
-import { createContext, useContext } from 'react';
+import { createContext, useContext, useMemo } from 'react';
 import useCitySettings from '../../hooks/useCitySettings';
 
 const CitySettingsContext = createContext(null);
@@ -6,8 +6,13 @@ const CitySettingsContext = createContext(null);
 export function CitySettingsProvider({ children }) {
   const [settings, updateSetting, resetSettings, resetNonce] = useCitySettings();
 
+  const value = useMemo(
+    () => ({ settings, updateSetting, resetSettings, resetNonce }),
+    [settings, updateSetting, resetSettings, resetNonce]
+  );
+
   return (
-    <CitySettingsContext.Provider value={{ settings, updateSetting, resetSettings, resetNonce }}>
+    <CitySettingsContext.Provider value={value}>
       {children}
     </CitySettingsContext.Provider>
   );

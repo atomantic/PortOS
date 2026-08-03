@@ -47,6 +47,8 @@ function LightBeam({ position, color, height = 15, radius = 2, intensity = 1, ph
     return geom;
   }, [radius, height]);
 
+  useEffect(() => () => coneGeom.dispose(), [coneGeom]);
+
   useFrame(({ clock }) => {
     if (!matRef.current) return;
     matRef.current.uniforms.uTime.value = clock.getElapsedTime() + phase;

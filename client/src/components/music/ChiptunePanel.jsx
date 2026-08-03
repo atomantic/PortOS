@@ -223,7 +223,11 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix }) {
     }
   };
 
-  const canGenerate = !!track?.id && !!prompt.trim() && !!selectedProviderId && !generating;
+  // Generate/render/publish all mutate the same track record via RMW writes —
+  // letting two fire concurrently races those writes, so gate all three on
+  // any one being in flight rather than just their own flag.
+  const busy = generating || rendering || publishing;
+  const canGenerate = !!track?.id && !!prompt.trim() && !!selectedProviderId && !busy;
 
   return (
     <div className="space-y-2 border border-port-border rounded-lg p-3 bg-port-bg/40">
@@ -291,7 +295,7 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix }) {
             <button
               type="button"
               onClick={handleRender}
-              disabled={rendering}
+              disabled={busy}
               title="Render the loop to audio and add it to this track's renders"
               className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent disabled:opacity-50"
             >
@@ -301,7 +305,8 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix }) {
             <button
               type="button"
               onClick={openPublish}
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent"
+              disabled={busy}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent disabled:opacity-50"
             >
               <Gamepad2 size={14} /> Publish to app…
             </button>
@@ -347,7 +352,7 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix }) {
                   <button
                     type="button"
                     onClick={handlePublish}
-                    disabled={publishing || !publishAppId}
+                    disabled={busy || !publishAppId}
                     className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-50"
                   >
                     {publishing ? <Loader2 size={14} className="animate-spin" /> : <Gamepad2 size={14} />}

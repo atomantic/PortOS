@@ -54,12 +54,15 @@ const DATA_RAIN_FRAG = `
   }
 `;
 
-export default function CityDataRain() {
+export default function CityDataRain({ settings }) {
   const pointsRef = useRef();
   const matRef = useRef();
+  // Follow CityParticles' quality-dial pattern: scale column count down under the
+  // adaptive-quality low tier instead of paying for a fixed 480-point system always.
+  const density = settings?.particleDensity ?? 1;
 
   const { positions, charIndices, columnPhases, speeds, brightnesses, count } = useMemo(() => {
-    const columns = 40;
+    const columns = Math.max(4, Math.round(40 * density));
     const charsPerColumn = 12;
     const total = columns * charsPerColumn;
 
@@ -100,7 +103,7 @@ export default function CityDataRain() {
       brightnesses: bright,
       count: total,
     };
-  }, []);
+  }, [density]);
 
   useFrame(({ clock }) => {
     if (matRef.current) {

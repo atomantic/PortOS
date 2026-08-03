@@ -127,6 +127,21 @@ export default function PipelineManuscriptEditor() {
   liveSectionsRef.current = sections;
   const liveContentFor = (issueId) => liveSectionsRef.current.find((s) => s.issueId === issueId)?.content ?? '';
 
+  // Sections only persist onBlur, so a tab close/navigation right after typing
+  // (before the field blurs) would silently drop the edit. Warn on unload
+  // whenever any section's live content has drifted from its saved baseline.
+  useEffect(() => {
+    const onBeforeUnload = (e) => {
+      const dirty = liveSectionsRef.current.some((s) => {
+        const key = `${s.issueId}:${s.stageId}`;
+        return baselineRef.current.get(key) !== s.content;
+      });
+      if (dirty) e.preventDefault();
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
+
   useEffect(() => {
     safeWriteStorage(VIEW_MODE_KEY, viewMode);
   }, [viewMode]);

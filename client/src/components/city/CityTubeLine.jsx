@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useEffect } from 'react';
 import * as THREE from 'three';
 
 // A thin glowing connector rendered as a native-three tube along a curve through `points`.
@@ -16,6 +16,8 @@ export default function CityTubeLine({ points, color, radius = 0.08, opacity = 0
     // Tubular segments scale with point count so a multi-point arc stays smooth.
     return new THREE.TubeGeometry(curve, Math.max(segments, pts.length * 8), radius, 6, false);
   }, [points, radius, segments]);
+
+  useEffect(() => () => geometry?.dispose(), [geometry]);
 
   if (!geometry) return null;
 

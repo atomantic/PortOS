@@ -19,7 +19,7 @@ import { getStage } from '../promptService.js';
 import { getSeries } from './series.js';
 import { extractCanonFromProse, summarizeCanonExtraction } from '../universeCanon.js';
 import { getIssue, listIssues, updateStage, assertStageUnlocked, TEXT_STAGE_IDS } from './issues.js';
-import { getSeriesCanon } from './seriesCanon.js';
+import { pickCanon } from './seriesCanon.js';
 import { getUniverse } from '../universeBuilder.js';
 import { compareIssuesByPosition, NO_LINKED_UNIVERSE_PLACEHOLDER } from './arcPlanner.js';
 import { computeIssueTargets, assessSynopsisScope } from '../../lib/issueLength.js';
@@ -854,11 +854,11 @@ export async function generateStage(issueId, stageId, options = {}) {
   const series = await getSeries(issue.seriesId);
   // Universe canon is best-effort — an orphaned series (no universeId) or a
   // missing universe record just skips the entities summary instead of
-  // failing the run.
-  const [canon, world] = await Promise.all([
-    getSeriesCanon(series),
-    series.universeId ? getUniverse(series.universeId).catch(() => null) : Promise.resolve(null),
-  ]);
+  // failing the run. Single fetch (mirrors visualStageHelpers.loadBibleContext)
+  // — canon is derived from the same `world` read rather than re-fetching the
+  // universe a second time via getSeriesCanon.
+  const world = series.universeId ? await getUniverse(series.universeId).catch(() => null) : null;
+  const canon = pickCanon(world);
 
   // Per-stage editorial lock — refuse before touching the stage record so a
   // locked stage doesn't get bumped to 'generating' status only to be reset.

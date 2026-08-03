@@ -117,6 +117,8 @@ function Billboard({ position, rotation, messages, color, width = 3.5, height = 
     return new THREE.ShapeGeometry(shape);
   }, [width, height]);
 
+  useEffect(() => () => borderGeom.dispose(), [borderGeom]);
+
   return (
     <group ref={groupRef} position={position} rotation={rotation}>
       {/* Billboard background panel (front face only) */}

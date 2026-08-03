@@ -1,4 +1,4 @@
-import { useRef, useMemo } from 'react';
+import { useRef, useMemo, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { CITY_COLORS, getTimeOfDayPreset } from './cityConstants';
@@ -20,6 +20,7 @@ function OrbitalRing({ radius, tilt, color, opacity = 0.15, nightFactorRef }) {
   }, [radius]);
 
   const geometry = useMemo(() => new THREE.BufferGeometry().setFromPoints(points), [points]);
+  useEffect(() => () => geometry.dispose(), [geometry]);
   const matRef = useRef();
 
   useFrame(() => {

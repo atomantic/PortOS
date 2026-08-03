@@ -47,6 +47,7 @@ export default function StoryboardBoardsTab({
   hotRef = null,
   onSceneHover,
   onSceneRenderStart,
+  dirty = false,
 }) {
   return (
     <div className="px-3 py-3 space-y-2">
@@ -81,6 +82,7 @@ export default function StoryboardBoardsTab({
           runningAdapt={runningAdapt}
           onOpenConfig={onOpenConfig}
           hasPriorScript={!!latestScript}
+          dirty={dirty}
         />
       )}
 
@@ -93,11 +95,12 @@ export default function StoryboardBoardsTab({
           onRunAdapt={onRunAdapt}
           onRunFullPipeline={onRunFullPipeline}
           runningKind={runningKind}
+          dirty={dirty}
         />
       )}
 
       {!loading && latestScript && isStale && !latestFailure && (
-        <StaleBanner onRunAdapt={onRunAdapt} runningAdapt={runningAdapt} />
+        <StaleBanner onRunAdapt={onRunAdapt} runningAdapt={runningAdapt} dirty={dirty} />
       )}
 
       {!loading && latestScript && !isStale && !latestFailure && (charactersCount === 0 || placesCount === 0) && (
@@ -107,6 +110,7 @@ export default function StoryboardBoardsTab({
           onRunCharacters={onRunCharacters}
           onRunPlaces={onRunPlaces}
           runningKind={runningKind}
+          dirty={dirty}
         />
       )}
 

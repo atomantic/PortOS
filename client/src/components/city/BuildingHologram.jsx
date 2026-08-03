@@ -1,18 +1,43 @@
-import { useRef, useMemo } from 'react';
+import { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 
 const HOLOGRAM_TYPES = ['diamond', 'invertedPyramid', 'saturn', 'rings', 'cube', 'beacon'];
 
+// Every Holo* shape's geometry below has fixed parameters — `color`/`seed` only
+// drive material/animation, never geometry — so each is a module-scope singleton
+// shared by every hologram instance, mirroring Building.jsx's ROOF_GEOMS pattern.
+// A per-instance useMemo would otherwise allocate fresh, never-disposed GPU
+// geometry on every mount, and holograms mount/unmount on every dim/undim.
+const DIAMOND_GEOM = new THREE.OctahedronGeometry(0.5, 0);
+const DIAMOND_EDGES = new THREE.EdgesGeometry(DIAMOND_GEOM);
+
+const PYRAMID_GEOM = new THREE.ConeGeometry(0.5, 0.8, 4);
+const PYRAMID_EDGES = new THREE.EdgesGeometry(PYRAMID_GEOM);
+
+const SATURN_SPHERE_GEOM = new THREE.IcosahedronGeometry(0.25, 1);
+const SATURN_RING_GEOM = new THREE.TorusGeometry(0.5, 0.025, 8, 32);
+const SATURN_SPHERE_EDGES = new THREE.EdgesGeometry(SATURN_SPHERE_GEOM);
+
+const RINGS_GEOMS = [
+  new THREE.TorusGeometry(0.45, 0.02, 8, 24),
+  new THREE.TorusGeometry(0.3, 0.02, 8, 24),
+  new THREE.TorusGeometry(0.38, 0.02, 8, 24),
+];
+
+const CUBE_GEOM = new THREE.BoxGeometry(0.45, 0.45, 0.45);
+const CUBE_EDGES = new THREE.EdgesGeometry(CUBE_GEOM);
+
+const BEACON_CYL_GEOM = new THREE.CylinderGeometry(0.025, 0.025, 0.5, 6);
+const BEACON_SPHERE_GEOM = new THREE.SphereGeometry(0.15, 8, 8);
+
 function HoloDiamond({ color }) {
-  const geom = useMemo(() => new THREE.OctahedronGeometry(0.5, 0), []);
-  const edges = useMemo(() => new THREE.EdgesGeometry(geom), [geom]);
   return (
     <group>
-      <mesh geometry={geom}>
+      <mesh geometry={DIAMOND_GEOM}>
         <meshBasicMaterial color={color} transparent opacity={0.12} side={THREE.DoubleSide} />
       </mesh>
-      <lineSegments geometry={edges}>
+      <lineSegments geometry={DIAMOND_EDGES}>
         <lineBasicMaterial color={color} transparent opacity={0.85} />
       </lineSegments>
     </group>
@@ -20,14 +45,12 @@ function HoloDiamond({ color }) {
 }
 
 function HoloPyramid({ color }) {
-  const geom = useMemo(() => new THREE.ConeGeometry(0.5, 0.8, 4), []);
-  const edges = useMemo(() => new THREE.EdgesGeometry(geom), [geom]);
   return (
     <group rotation={[Math.PI, 0, Math.PI / 4]}>
-      <mesh geometry={geom}>
+      <mesh geometry={PYRAMID_GEOM}>
         <meshBasicMaterial color={color} transparent opacity={0.12} side={THREE.DoubleSide} />
       </mesh>
-      <lineSegments geometry={edges}>
+      <lineSegments geometry={PYRAMID_EDGES}>
         <lineBasicMaterial color={color} transparent opacity={0.85} />
       </lineSegments>
     </group>
@@ -35,18 +58,15 @@ function HoloPyramid({ color }) {
 }
 
 function HoloSaturn({ color }) {
-  const sphereGeom = useMemo(() => new THREE.IcosahedronGeometry(0.25, 1), []);
-  const ringGeom = useMemo(() => new THREE.TorusGeometry(0.5, 0.025, 8, 32), []);
-  const sphereEdges = useMemo(() => new THREE.EdgesGeometry(sphereGeom), [sphereGeom]);
   return (
     <group>
-      <mesh geometry={sphereGeom}>
+      <mesh geometry={SATURN_SPHERE_GEOM}>
         <meshBasicMaterial color={color} transparent opacity={0.15} />
       </mesh>
-      <lineSegments geometry={sphereEdges}>
+      <lineSegments geometry={SATURN_SPHERE_EDGES}>
         <lineBasicMaterial color={color} transparent opacity={0.7} />
       </lineSegments>
-      <mesh geometry={ringGeom} rotation={[Math.PI / 3, 0.3, 0]}>
+      <mesh geometry={SATURN_RING_GEOM} rotation={[Math.PI / 3, 0.3, 0]}>
         <meshBasicMaterial color={color} transparent opacity={0.35} side={THREE.DoubleSide} />
       </mesh>
     </group>
@@ -54,14 +74,9 @@ function HoloSaturn({ color }) {
 }
 
 function HoloRings({ color }) {
-  const geoms = useMemo(() => [
-    new THREE.TorusGeometry(0.45, 0.02, 8, 24),
-    new THREE.TorusGeometry(0.3, 0.02, 8, 24),
-    new THREE.TorusGeometry(0.38, 0.02, 8, 24),
-  ], []);
   return (
     <group>
-      {geoms.map((geom, i) => (
+      {RINGS_GEOMS.map((geom, i) => (
         <mesh key={i} geometry={geom} position={[0, (i - 1) * 0.22, 0]} rotation={[Math.PI / 2, 0, 0]}>
           <meshBasicMaterial color={color} transparent opacity={0.45 + i * 0.15} side={THREE.DoubleSide} />
         </mesh>
@@ -71,14 +86,12 @@ function HoloRings({ color }) {
 }
 
 function HoloCube({ color }) {
-  const geom = useMemo(() => new THREE.BoxGeometry(0.45, 0.45, 0.45), []);
-  const edges = useMemo(() => new THREE.EdgesGeometry(geom), [geom]);
   return (
     <group rotation={[Math.PI / 6, Math.PI / 4, 0]}>
-      <mesh geometry={geom}>
+      <mesh geometry={CUBE_GEOM}>
         <meshBasicMaterial color={color} transparent opacity={0.08} />
       </mesh>
-      <lineSegments geometry={edges}>
+      <lineSegments geometry={CUBE_EDGES}>
         <lineBasicMaterial color={color} transparent opacity={0.85} />
       </lineSegments>
     </group>
@@ -86,14 +99,12 @@ function HoloCube({ color }) {
 }
 
 function HoloBeacon({ color }) {
-  const cylGeom = useMemo(() => new THREE.CylinderGeometry(0.025, 0.025, 0.5, 6), []);
-  const sphereGeom = useMemo(() => new THREE.SphereGeometry(0.15, 8, 8), []);
   return (
     <group>
-      <mesh geometry={cylGeom}>
+      <mesh geometry={BEACON_CYL_GEOM}>
         <meshBasicMaterial color={color} transparent opacity={0.5} />
       </mesh>
-      <mesh geometry={sphereGeom} position={[0, 0.32, 0]}>
+      <mesh geometry={BEACON_SPHERE_GEOM} position={[0, 0.32, 0]}>
         <meshBasicMaterial color={color} transparent opacity={0.75} />
       </mesh>
     </group>

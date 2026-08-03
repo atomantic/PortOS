@@ -1,4 +1,4 @@
-import { useRef, useMemo } from 'react';
+import { useRef, useMemo, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { PROCESS_BUILDING_PARAMS, PIXEL_FONT_URL, mixHex } from './cityConstants';
@@ -44,6 +44,18 @@ export default function ProcessBuilding({ process, pm2Status, position, seed, di
 
   const boxGeom = useMemo(() => new THREE.BoxGeometry(width, height, depth), [width, height, depth]);
   const edgesGeom = useMemo(() => new THREE.EdgesGeometry(boxGeom), [boxGeom]);
+
+  // edgesGeom is handed to <lineSegments> via a `geometry` prop, so R3F does not
+  // manage its disposal the way it would a JSX <edgesGeometry> child. `height`
+  // (and thus this geometry) is keyed on `status` — an online process is taller
+  // than a stopped/errored one — so every status flip would otherwise strand the
+  // previous geometry's GPU buffers, same leak class as Building.jsx's windowTexture.
+  useEffect(() => {
+    return () => {
+      boxGeom.dispose();
+      edgesGeom.dispose();
+    };
+  }, [boxGeom, edgesGeom]);
 
   const displayName = useMemo(() => {
     return (process.name || '').replace(/[-_.]/g, ' ').toUpperCase();

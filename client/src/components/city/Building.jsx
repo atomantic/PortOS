@@ -452,6 +452,17 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
 
   const boxGeom = useMemo(() => new THREE.BoxGeometry(width, height, depth), [width, height, depth]);
   const edgesGeom = useMemo(() => new THREE.EdgesGeometry(boxGeom), [boxGeom]);
+  useEffect(() => () => boxGeom.dispose(), [boxGeom]);
+  useEffect(() => () => edgesGeom.dispose(), [edgesGeom]);
+
+  // Night-only glow halo: memoized so re-renders don't force R3F to rebuild the
+  // edges geometry (an inline `new THREE.BoxGeometry` in args changes identity
+  // every render), and disposed on replace + unmount like the geometries above.
+  const haloEdgesGeom = useMemo(
+    () => new THREE.EdgesGeometry(new THREE.BoxGeometry(width + 0.15, height + 0.15, depth + 0.15)),
+    [width, height, depth]
+  );
+  useEffect(() => () => haloEdgesGeom.dispose(), [haloEdgesGeom]);
 
   // Window texture with pixel art icon
   const windowTexture = useMemo(
@@ -609,8 +620,7 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
 
       {/* Glow halo wireframe - slightly larger than building (night only) */}
       {!app.archived && !daytime && (
-        <lineSegments ref={haloRef} position={[0, height / 2, 0]}>
-          <edgesGeometry args={[new THREE.BoxGeometry(width + 0.15, height + 0.15, depth + 0.15)]} />
+        <lineSegments ref={haloRef} position={[0, height / 2, 0]} geometry={haloEdgesGeom}>
           <lineBasicMaterial
             color={accentColor}
             transparent

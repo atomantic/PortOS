@@ -3,12 +3,19 @@ let audioCtx = null;
 let masterGain = null;
 let musicGain = null;
 let sfxGain = null;
+let pendingCleanup = null;
 
 export const getAudioContext = () => audioCtx;
 export const getMusicGain = () => musicGain;
 export const getSfxGain = () => sfxGain;
 
 export const initAudio = () => {
+  // A remount can re-init while a delayed close (scheduleCleanup) is pending;
+  // cancel it so the shared context isn't yanked out from under the new mount.
+  if (pendingCleanup) {
+    clearTimeout(pendingCleanup);
+    pendingCleanup = null;
+  }
   if (audioCtx) return audioCtx;
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
@@ -36,6 +43,10 @@ export const setSfxVolume = (v) => {
 };
 
 export const cleanup = () => {
+  if (pendingCleanup) {
+    clearTimeout(pendingCleanup);
+    pendingCleanup = null;
+  }
   if (audioCtx && audioCtx.state !== 'closed') {
     audioCtx.close();
   }
@@ -43,4 +54,20 @@ export const cleanup = () => {
   masterGain = null;
   musicGain = null;
   sfxGain = null;
+};
+
+// Close after `delayMs` (e.g. once a stop-ramp settles) unless initAudio runs
+// again first — an immediate close would cut the ramp short, but an
+// uncancelled one would kill a remounted consumer's freshly built graph.
+export const scheduleCleanup = (delayMs) => {
+  if (pendingCleanup) clearTimeout(pendingCleanup);
+  if (!delayMs || delayMs <= 0) {
+    pendingCleanup = null;
+    cleanup();
+    return;
+  }
+  pendingCleanup = setTimeout(() => {
+    pendingCleanup = null;
+    cleanup();
+  }, delayMs);
 };

@@ -310,8 +310,8 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
       <CityVolumetricLights positions={positions} settings={renderSettings} />
       <CityNeonSigns positions={positions} />
       <CityWeather stoppedCount={stoppedCount} totalCount={totalCount} playSfx={playSfx} />
-      <CityDataRain />
-      <CityEmbers />
+      <CityDataRain settings={renderSettings} />
+      <CityEmbers settings={renderSettings} />
       <CityParticles settings={renderSettings} />
       {explorationMode && (
         <PlayerController

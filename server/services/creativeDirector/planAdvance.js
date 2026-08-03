@@ -457,6 +457,10 @@ async function handlePlanStepFailure(projectId, step) {
 // Register a one-shot listener that settles a long-running plan step when its
 // media job reaches a terminal state. Idempotent teardown; closes the race where
 // the job already settled between dispatch returning and the listener attaching.
+// No local backstop timer needed here (unlike armAutopilotListener below): every
+// media job carries its own per-job idle watchdog (mediaJobQueue/index.js) that
+// unconditionally forces a 'completed'/'failed'/'canceled' emit within a bounded
+// window regardless of job kind, so this listener can never wait forever.
 function armPlanJobListener(projectId, stepId, jobId, runId) {
   const key = `${projectId}:${stepId}`;
   let fired = false;
@@ -563,6 +567,20 @@ async function readAutopilotMarker(seriesId) {
   return null; // 'running' or unknown — not terminal.
 }
 
+// Backstop for an autopilot run that goes fully silent after this listener
+// attaches — a bug in a step runner, an unbounded internal await, or an
+// event-bus mismatch would otherwise leave this listener (and the plan step)
+// wedged in `running` forever, since unlike armPlanJobListener's media job
+// (always terminated by mediaJobQueue's own per-job idle watchdog,
+// server/services/mediaJobQueue/index.js) a whole autopilot run has no
+// underlying watchdog of its own. Modeled as IDLE time, not a fixed wall-clock
+// cap (mirrors mediaJobQueue's own idle-vs-wall-time choice) because a healthy
+// run can legitimately drive many steps for hours — every step:start/
+// step:complete/note frame the orchestrator broadcasts (seriesAutopilot/
+// orchestrator.js) counts as activity and re-arms the window; only a run that
+// stops emitting anything at all trips it.
+const AUTOPILOT_LISTENER_IDLE_MS = 45 * 60 * 1000;
+
 // Attach a listener to the in-process autopilot event bus for `seriesId`, settling
 // the plan step on the first terminal frame. Idempotent teardown (reuses the
 // shared planJobCleanups map so __resetPlanInflightState drops it too). Closes the
@@ -570,12 +588,36 @@ async function readAutopilotMarker(seriesId) {
 function armAutopilotListener(projectId, stepId, seriesId, runId, apResult) {
   const key = `${projectId}:${stepId}`;
   let fired = false;
+  let idleTimer;
   const teardown = () => {
     autopilotEvents.off(seriesId, handler);
+    clearTimeout(idleTimer);
     planJobCleanups.delete(key);
   };
+  const armIdleTimer = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      if (fired) return;
+      fired = true;
+      teardown();
+      console.log(`⏱️ CD plan ${projectId}: step "${stepId}" autopilot run for series ${String(seriesId).slice(0, 8)} went silent for ${AUTOPILOT_LISTENER_IDLE_MS}ms — settling failed`);
+      // Runs outside the request lifecycle (in-process event bus) — never throw out.
+      (async () => {
+        await finishRun(projectId, runId, 'failed', `autopilot run stalled — no activity for ${Math.round(AUTOPILOT_LISTENER_IDLE_MS / 60000)}m`);
+        await updatePlanStep(projectId, stepId, { status: 'failed', result: { error: 'autopilot run stalled (idle backstop)' } });
+        await handlePlanStepFailure(projectId, { stepId, toolName: '(series autopilot)', retryCount: 0 });
+      })().catch((e) => console.log(`⚠️ CD plan ${projectId} autopilot idle-backstop settle for ${stepId} failed: ${e.message}`));
+    }, AUTOPILOT_LISTENER_IDLE_MS);
+    idleTimer.unref?.();
+  };
   function handler(payload) {
-    if (fired || !payload || !AUTOPILOT_TERMINAL_TYPES.has(payload.type)) return;
+    if (fired || !payload) return;
+    if (!AUTOPILOT_TERMINAL_TYPES.has(payload.type)) {
+      // Non-terminal frame (step:start, step:complete, note, …) — the run is
+      // alive and making progress; re-arm the idle window rather than settling.
+      armIdleTimer();
+      return;
+    }
     fired = true;
     teardown();
     settleAutopilotStep(projectId, stepId, runId, payload)
@@ -583,6 +625,7 @@ function armAutopilotListener(projectId, stepId, seriesId, runId, apResult) {
   }
   autopilotEvents.on(seriesId, handler);
   planJobCleanups.set(key, teardown);
+  armIdleTimer();
   console.log(`⏳ CD plan ${projectId}: step "${stepId}" attached to autopilot run for series ${String(seriesId).slice(0, 8)}${apResult?.alreadyRunning ? ' (already running)' : ''}`);
   // The run may already have reached a terminal state (settled between dispatch
   // returning and this attach) — its event fired and won't repeat. Re-check via

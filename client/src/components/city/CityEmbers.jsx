@@ -51,12 +51,15 @@ const EMBER_FRAG = `
   }
 `;
 
-export default function CityEmbers() {
+export default function CityEmbers({ settings }) {
   const pointsRef = useRef();
   const matRef = useRef();
+  // Follow CityParticles' quality-dial pattern: scale ember count down under the
+  // adaptive-quality low tier instead of paying for a fixed 120-point system always.
+  const density = settings?.particleDensity ?? 1;
 
   const { positions, sizes, speeds, phases, colors, count } = useMemo(() => {
-    const n = 120;
+    const n = Math.max(8, Math.round(120 * density));
     const pos = new Float32Array(n * 3);
     const sz = new Float32Array(n);
     const spd = new Float32Array(n);
@@ -88,7 +91,7 @@ export default function CityEmbers() {
     }
 
     return { positions: pos, sizes: sz, speeds: spd, phases: ph, colors: col, count: n };
-  }, []);
+  }, [density]);
 
   useFrame(({ clock }) => {
     if (matRef.current) {

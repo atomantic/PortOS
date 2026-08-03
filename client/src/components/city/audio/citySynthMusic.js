@@ -20,6 +20,12 @@ let liveBassFilter = null;
 let livePadOscs = [];
 let liveArpPeak = 0.06; // peak gain the arp pluck opens to; raised/lowered by energy
 
+// Layer gain nodes, captured in startMusic() so stopMusic() can ramp each audible
+// layer to silence before the hard oscillator stop (see stopMusic() below).
+let liveBassGain = null;
+let livePadGain = null;
+let liveArpGain = null;
+
 // Arp note patterns (scale degrees relative to chord root)
 const ARP_PATTERN = [0, 2, 4, 7, 12, 7, 4, 2];
 
@@ -183,23 +189,68 @@ export const startMusic = () => {
   // Expose the modulatable nodes so setSoundscape() can ramp them in real time.
   liveBassFilter = bassFilter;
   livePadOscs = padOscs;
+  liveBassGain = bassGain;
+  livePadGain = padGain;
+  liveArpGain = arpGain;
 
   nodesCleanup.push(reverb, reverbGain, delay, delayFeedback, bassFilter, bassGain, padGain, arpFilter, arpGain);
 };
 
+// Fade time constant for the pre-stop ramp (setTargetAtTime never truly reaches
+// zero, so REST settles ~3 time-constants in — audibly silent well under 100ms).
+const STOP_RAMP_TC = 0.02;
+// Oscillators are hard-stopped this long after the ramp starts, once the layers
+// have settled toward silence, instead of mid-waveform (the audible pop this fixes).
+const STOP_SETTLE = 0.08;
+
+// Stops the running music graph. Ramps each audible layer to silence first — an
+// abrupt osc.stop() while a waveform is mid-cycle truncates it at a non-zero
+// sample, which reads as an audible click/pop on mute toggle or CyberCity unmount.
+// Mirrors citySoundEffects.js's envelope-before-stop pattern (setTargetAtTime /
+// exponentialRampToValueAtTime before every osc.stop() there).
+//
+// Returns the settle time in milliseconds so a caller that needs to tear down the
+// AudioContext right after (useCityAudio's unmount cleanup) can delay the close
+// until the ramp has actually finished, instead of cutting it off immediately.
 export const stopMusic = () => {
+  if (!isPlaying) return 0;
   isPlaying = false;
-  oscillators.forEach(osc => {
-    osc.stop();
-    osc.disconnect();
+  const ctx = getAudioContext();
+  const now = ctx ? ctx.currentTime : 0;
+
+  if (ctx) {
+    [liveBassGain, livePadGain, liveArpGain].forEach(gainNode => {
+      if (gainNode) gainNode.gain.setTargetAtTime(0, now, STOP_RAMP_TC);
+    });
+  }
+
+  const stopAt = ctx ? now + STOP_SETTLE : 0;
+  const pendingOscillators = oscillators;
+  const pendingNodes = nodesCleanup;
+  pendingOscillators.forEach(osc => {
+    if (ctx) osc.stop(stopAt);
+    else osc.stop();
   });
+
   oscillators = [];
   intervals.forEach(clearInterval);
   intervals = [];
-  nodesCleanup.forEach(node => node.disconnect());
   nodesCleanup = [];
-  // Drop references to the now-disconnected nodes so a stray setSoundscape() can't ramp a
+  // Drop references to the now-stopping nodes so a stray setSoundscape() can't ramp a
   // dead graph. The next startMusic() re-captures fresh ones.
   liveBassFilter = null;
   livePadOscs = [];
+  liveBassGain = null;
+  livePadGain = null;
+  liveArpGain = null;
+
+  // Disconnect after the ramp/stop settles instead of instantly — an immediate
+  // disconnect() would cut the fade above short, defeating the point of it.
+  const settleMs = ctx ? (STOP_SETTLE + STOP_RAMP_TC) * 1000 : 0;
+  setTimeout(() => {
+    pendingOscillators.forEach(osc => osc.disconnect());
+    pendingNodes.forEach(node => node.disconnect());
+  }, settleMs);
+
+  return settleMs;
 };

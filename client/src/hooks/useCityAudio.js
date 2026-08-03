@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { initAudio, setMusicVolume, setSfxVolume, cleanup as cleanupAudio } from '../components/city/audio/cityAudioEngine';
+import { initAudio, setMusicVolume, setSfxVolume, scheduleCleanup as scheduleAudioCleanup } from '../components/city/audio/cityAudioEngine';
 import { startMusic, stopMusic, setSoundscape } from '../components/city/audio/citySynthMusic';
 import { playSfx as playSfxFn } from '../components/city/audio/citySoundEffects';
 
@@ -82,11 +82,13 @@ export default function useCityAudio(settings, soundscape) {
     setSfxVolume(sfxVolume);
   }, [isAudioReady, sfxVolume]);
 
-  // Cleanup on unmount
+  // Cleanup on unmount. stopMusic() ramps the music layers to silence and returns
+  // how long that ramp takes (ms) — closing the AudioContext immediately would cut
+  // the ramp short and reintroduce the pop it exists to avoid, so delay the close
+  // until the ramp has actually settled.
   useEffect(() => {
     return () => {
-      stopMusic();
-      cleanupAudio();
+      scheduleAudioCleanup(stopMusic());
     };
   }, []);
 

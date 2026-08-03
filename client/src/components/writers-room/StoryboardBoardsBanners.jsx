@@ -16,6 +16,7 @@ export function StoryboardSetup({
   onRunAdapt,
   onRunFullPipeline,
   runningKind,
+  dirty = false,
 }) {
   const isRunning = !!runningKind;
   const charDone = charactersCount > 0;
@@ -23,6 +24,10 @@ export function StoryboardSetup({
 
   const Step = ({ n, kind, done, label, sublabel, hint, onClick, primary = false }) => {
     const running = runningKind === kind;
+    // Every step runs server-side against the persisted draft body (the
+    // character/place extractions consume the same getWorkWithBody corpus as
+    // Adapt), so unsaved edits would be silently skipped — block until saved.
+    const blockedByDirty = dirty;
     const Icon = done ? Check : kind === 'characters' ? Users : kind === 'places' ? MapPinIcon : Clapperboard;
     return (
       <div className={`flex items-start gap-2.5 p-2.5 border rounded ${
@@ -49,7 +54,8 @@ export function StoryboardSetup({
           <button
             type="button"
             onClick={onClick}
-            disabled={isRunning || !onClick}
+            disabled={isRunning || !onClick || blockedByDirty}
+            title={blockedByDirty ? 'Save first' : undefined}
             className={`mt-1.5 inline-flex items-center gap-1 px-2 py-1 text-[10px] rounded disabled:opacity-50 ${
               primary
                 ? 'bg-port-accent text-white hover:bg-port-accent/80'
@@ -108,9 +114,9 @@ export function StoryboardSetup({
       <button
         type="button"
         onClick={onRunFullPipeline}
-        disabled={isRunning || !onRunFullPipeline}
+        disabled={isRunning || !onRunFullPipeline || dirty}
         className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-port-accent text-white text-[11px] rounded hover:bg-port-accent/80 disabled:opacity-50"
-        title="Runs all three steps sequentially: characters → settings → Adapt. Skip if you want to run them individually."
+        title={dirty ? 'Save first' : 'Runs all three steps sequentially: characters → settings → Adapt. Skip if you want to run them individually.'}
       >
         {isRunning ? <Loader2 size={12} className="animate-spin" /> : <ArrowRight size={12} />}
         {isRunning ? `Running ${runningKind}…` : 'Run all in order →'}
@@ -125,7 +131,7 @@ export function StoryboardSetup({
   );
 }
 
-export function FailedAdaptBanner({ failure, onRunAdapt, runningAdapt, onOpenConfig, hasPriorScript }) {
+export function FailedAdaptBanner({ failure, onRunAdapt, runningAdapt, onOpenConfig, hasPriorScript, dirty = false }) {
   const error = failure?.error || 'Adapt failed for an unknown reason';
   const isTimeout = /timed out/i.test(error);
   return (
@@ -157,7 +163,8 @@ export function FailedAdaptBanner({ failure, onRunAdapt, runningAdapt, onOpenCon
         </button>
         <button
           onClick={onRunAdapt}
-          disabled={runningAdapt || !onRunAdapt}
+          disabled={runningAdapt || !onRunAdapt || dirty}
+          title={dirty ? 'Save first' : undefined}
           className="flex items-center gap-1 px-2 py-1 bg-port-error/20 border border-port-error/40 text-port-error rounded text-[10px] hover:bg-port-error/30 disabled:opacity-50"
         >
           {runningAdapt ? <Loader2 size={10} className="animate-spin" /> : <RefreshCcw size={10} />}
@@ -173,7 +180,7 @@ export function FailedAdaptBanner({ failure, onRunAdapt, runningAdapt, onOpenCon
 // the user gets visual drift across scenes. Inline run buttons let them
 // fix it without leaving the panel; re-running Adapt afterwards picks up
 // the populated bibles.
-export function BiblesMissingNotice({ charactersMissing, placesMissing, onRunCharacters, onRunPlaces, runningKind }) {
+export function BiblesMissingNotice({ charactersMissing, placesMissing, onRunCharacters, onRunPlaces, runningKind, dirty = false }) {
   const isRunning = !!runningKind;
   const missing = [
     charactersMissing && 'character bible',
@@ -193,7 +200,8 @@ export function BiblesMissingNotice({ charactersMissing, placesMissing, onRunCha
           {charactersMissing && (
             <button
               onClick={onRunCharacters}
-              disabled={isRunning || !onRunCharacters}
+              disabled={isRunning || !onRunCharacters || dirty}
+              title={dirty ? 'Save first' : undefined}
               className="flex items-center gap-1 px-2 py-1 border border-port-border text-gray-300 rounded text-[10px] hover:bg-port-border/40 disabled:opacity-50"
             >
               {runningKind === 'characters' ? <Loader2 size={10} className="animate-spin" /> : <Users size={10} />}
@@ -203,7 +211,8 @@ export function BiblesMissingNotice({ charactersMissing, placesMissing, onRunCha
           {placesMissing && (
             <button
               onClick={onRunPlaces}
-              disabled={isRunning || !onRunPlaces}
+              disabled={isRunning || !onRunPlaces || dirty}
+              title={dirty ? 'Save first' : undefined}
               className="flex items-center gap-1 px-2 py-1 border border-port-border text-gray-300 rounded text-[10px] hover:bg-port-border/40 disabled:opacity-50"
             >
               {runningKind === 'places' ? <Loader2 size={10} className="animate-spin" /> : <MapPinIcon size={10} />}
@@ -216,7 +225,7 @@ export function BiblesMissingNotice({ charactersMissing, placesMissing, onRunCha
   );
 }
 
-export function StaleBanner({ onRunAdapt, runningAdapt }) {
+export function StaleBanner({ onRunAdapt, runningAdapt, dirty = false }) {
   return (
     <div className="flex items-start gap-2 p-2 mb-1 border border-port-warning/40 bg-port-warning/5 rounded text-[11px]">
       <AlertTriangle size={12} className="text-port-warning mt-0.5 shrink-0" />
@@ -226,7 +235,8 @@ export function StaleBanner({ onRunAdapt, runningAdapt }) {
       </div>
       <button
         onClick={onRunAdapt}
-        disabled={runningAdapt || !onRunAdapt}
+        disabled={runningAdapt || !onRunAdapt || dirty}
+        title={dirty ? 'Save first' : undefined}
         className="flex items-center gap-1 px-2 py-1 bg-port-warning/20 border border-port-warning/40 text-port-warning rounded text-[10px] hover:bg-port-warning/30 disabled:opacity-50"
       >
         {runningAdapt ? <Loader2 size={10} className="animate-spin" /> : <RefreshCcw size={10} />}
