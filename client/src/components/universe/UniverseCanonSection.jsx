@@ -38,6 +38,8 @@ import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useMounted from '../../hooks/useMounted';
 import { useCanonPatch } from '../../hooks/useCanonPatch';
 import CanonCard from '../pipeline/CanonCard';
+import CanonAddEntryForm from './CanonAddEntryForm';
+import { KindSectionProvider, useKindSection } from './KindSectionContext';
 import { pipelineImageCfgToRenderOpts } from '../../lib/pipelineImageDefaults';
 import { buildUniverseSectionRenderTag } from '../../lib/universeRunTag';
 import { universeStylePreset } from '../../lib/universeStylePreset';
@@ -657,6 +659,85 @@ export default function UniverseCanonSection({
 
   const charCount = (universe.characters || []).length;
 
+  // Everything one canon trunk needs, published through KindSectionContext so
+  // the call site stays a bare `<KindSection />` instead of a ~30-prop bag.
+  // Rebuilt per render (same as the inline arrows it replaces) — see the
+  // identity note in KindSectionContext.jsx.
+  const buildKindSectionContext = (kind) => ({
+    kind,
+    universeId,
+    all: filteredByKind[kind.key] || [],
+    totalCount: (universe[kind.key] || []).length,
+    filtered: !!seriesFilter,
+    usage: usage?.[kind.key] || null,
+    renderingJobs,
+    onRender: (entry) => handleRenderRef(kind, entry),
+    onJobCompleted: (entryId, filename, completedJobId) => {
+      // Discriminate by which pending map owns the completed jobId.
+      // As of #1395 BOTH paths are persisted server-side by the
+      // `appendEntryImageRef` completion hook (section-local renders now
+      // carry a durable `universeRun.entryRef` tag too), so neither
+      // client path PATCHes — they only mirror the ref into the draft:
+      //   - section-local renders (`generateImage`) populate
+      //     `renderingJobs[entryId]`; `handleRefCompleted` clears the
+      //     spinner + stamps the draft optimistically.
+      //   - external batch renders flow through the page-level
+      //     `externalPendingByEntryId`; `handleExternalCanonRefCompleted`
+      //     stamps the draft + clears the pending queue.
+      const isExternal = completedJobId
+        && externalPendingByEntryId?.[entryId] === completedJobId;
+      if (isExternal) {
+        handleExternalCanonRefCompleted(kind.key, entryId, filename);
+        onExternalCanonJobSettled?.(entryId, completedJobId);
+      } else {
+        handleRefCompleted(kind.key, entryId, filename);
+      }
+    },
+    onJobFailed: (entryId, errMsg, failedJobId) => {
+      const isExternal = failedJobId
+        && externalPendingByEntryId?.[entryId] === failedJobId;
+      if (isExternal) {
+        onExternalCanonJobSettled?.(entryId, failedJobId);
+        if (errMsg) toast.error(`Render failed: ${errMsg}`);
+      } else {
+        handleRefFailed(entryId, errMsg);
+      }
+    },
+    onPreview: openPreview,
+    onRefine: handleRefineCharacter,
+    refiningId,
+    onExpandCharacter: handleExpandCharacter,
+    expandingId,
+    onSheetCompleted: handleSheetCompleted,
+    onSheetDeleted: handleSheetDeleted,
+    onToggleLock: (entryId, nextLocked) => handleToggleLock(kind, entryId, nextLocked),
+    togglingLockId,
+    onPatchEntry: (entryId, patch) => handlePatchEntry(kind, entryId, patch),
+    onRenderCleanPlate: (entry) => handleRenderCleanPlate(kind, entry),
+    onDescribeImages: (entry) => setDescribeTarget({ kind, entry }),
+    onCorrectFromImage: (entry) => setCorrectTarget({ kind, entry }),
+    seriesNameMap: usage?.seriesNameMap || null,
+    onBulkLock: (nextLocked) => handleBulkLockKind(kind, nextLocked),
+    bulkLocking: bulkLockingKindKey === kind.key,
+    fullList: Array.isArray(universe[kind.key]) ? universe[kind.key] : [],
+    // The universe-wide character list — feeds the attachment target
+    // picker in ObjectAttachmentsEditor for the objects kind (#1288).
+    castList: Array.isArray(universe.characters) ? universe.characters : [],
+    externalPendingByEntryId,
+    // Single-kind view (`?kind=places`, sidebar deep-links) — the
+    // outer canon section already supplies the h2 + description + card
+    // chrome, so KindSection drops its own bordered wrapper + duplicate
+    // header. Multi-kind view keeps the chrome so Characters / Places /
+    // Objects stay visually separated.
+    compact: !!kindFilter,
+    onRenderAll: () => handleRenderAll(kind),
+    renderingAll: renderAllKindKey === kind.key,
+    onPickFromCatalog: () => setCatalogPickerKind(kind),
+    catalogLinking,
+    onAddEntry: (payload) => handleCreateEntry(kind, payload),
+    creating: creatingKindKey === kind.key,
+  });
+
   return (
     // `id="canon"` is the scroll target for `/universes/:id#canon`
     // deep-links (legacy `/canon` route redirect + PipelineSeries "Manage
@@ -763,81 +844,9 @@ export default function UniverseCanonSection({
       ) : null}
 
       {KINDS.filter((kind) => !kindFilter || kind.key === kindFilter).map((kind) => (
-        <KindSection
-          key={kind.key}
-          kind={kind}
-          universeId={universeId}
-          all={filteredByKind[kind.key] || []}
-          totalCount={(universe[kind.key] || []).length}
-          filtered={!!seriesFilter}
-          usage={usage?.[kind.key] || null}
-          renderingJobs={renderingJobs}
-          onRender={(entry) => handleRenderRef(kind, entry)}
-          onJobCompleted={(entryId, filename, completedJobId) => {
-            // Discriminate by which pending map owns the completed jobId.
-            // As of #1395 BOTH paths are persisted server-side by the
-            // `appendEntryImageRef` completion hook (section-local renders now
-            // carry a durable `universeRun.entryRef` tag too), so neither
-            // client path PATCHes — they only mirror the ref into the draft:
-            //   - section-local renders (`generateImage`) populate
-            //     `renderingJobs[entryId]`; `handleRefCompleted` clears the
-            //     spinner + stamps the draft optimistically.
-            //   - external batch renders flow through the page-level
-            //     `externalPendingByEntryId`; `handleExternalCanonRefCompleted`
-            //     stamps the draft + clears the pending queue.
-            const isExternal = completedJobId
-              && externalPendingByEntryId?.[entryId] === completedJobId;
-            if (isExternal) {
-              handleExternalCanonRefCompleted(kind.key, entryId, filename);
-              onExternalCanonJobSettled?.(entryId, completedJobId);
-            } else {
-              handleRefCompleted(kind.key, entryId, filename);
-            }
-          }}
-          onJobFailed={(entryId, errMsg, failedJobId) => {
-            const isExternal = failedJobId
-              && externalPendingByEntryId?.[entryId] === failedJobId;
-            if (isExternal) {
-              onExternalCanonJobSettled?.(entryId, failedJobId);
-              if (errMsg) toast.error(`Render failed: ${errMsg}`);
-            } else {
-              handleRefFailed(entryId, errMsg);
-            }
-          }}
-          onPreview={openPreview}
-          onRefine={handleRefineCharacter}
-          refiningId={refiningId}
-          onExpandCharacter={handleExpandCharacter}
-          expandingId={expandingId}
-          onSheetCompleted={handleSheetCompleted}
-          onSheetDeleted={handleSheetDeleted}
-          onToggleLock={(entryId, nextLocked) => handleToggleLock(kind, entryId, nextLocked)}
-          togglingLockId={togglingLockId}
-          onPatchEntry={(entryId, patch) => handlePatchEntry(kind, entryId, patch)}
-          onRenderCleanPlate={(entry) => handleRenderCleanPlate(kind, entry)}
-          onDescribeImages={(entry) => setDescribeTarget({ kind, entry })}
-          onCorrectFromImage={(entry) => setCorrectTarget({ kind, entry })}
-          seriesNameMap={usage?.seriesNameMap || null}
-          onBulkLock={(nextLocked) => handleBulkLockKind(kind, nextLocked)}
-          bulkLocking={bulkLockingKindKey === kind.key}
-          fullList={Array.isArray(universe[kind.key]) ? universe[kind.key] : []}
-          // The universe-wide character list — feeds the attachment target
-          // picker in ObjectAttachmentsEditor for the objects kind (#1288).
-          castList={Array.isArray(universe.characters) ? universe.characters : []}
-          externalPendingByEntryId={externalPendingByEntryId}
-          // Single-kind view (`?kind=places`, sidebar deep-links) — the
-          // outer canon section already supplies the h2 + description + card
-          // chrome, so KindSection drops its own bordered wrapper + duplicate
-          // header. Multi-kind view keeps the chrome so Characters / Places /
-          // Objects stay visually separated.
-          compact={!!kindFilter}
-          onRenderAll={() => handleRenderAll(kind)}
-          renderingAll={renderAllKindKey === kind.key}
-          onPickFromCatalog={() => setCatalogPickerKind(kind)}
-          catalogLinking={catalogLinking}
-          onAddEntry={(payload) => handleCreateEntry(kind, payload)}
-          creating={creatingKindKey === kind.key}
-        />
+        <KindSectionProvider key={kind.key} value={buildKindSectionContext(kind)}>
+          <KindSection />
+        </KindSectionProvider>
       ))}
 
       {/* Single shared picker — `catalogPickerKind` carries the KINDS entry
@@ -898,7 +907,21 @@ export default function UniverseCanonSection({
   );
 }
 
-function KindSection({ kind, universeId, all, totalCount, filtered, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onExpandCharacter, expandingId, onSheetCompleted, onSheetDeleted, onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate, onDescribeImages = null, onCorrectFromImage = null, seriesNameMap, onBulkLock, bulkLocking, fullList, castList = [], externalPendingByEntryId = null, compact = false, onRenderAll = null, renderingAll = false, onPickFromCatalog = null, catalogLinking = false, onAddEntry = null, creating = false }) {
+// One canon trunk (Characters / Places / Objects). Every input arrives through
+// KindSectionContext — see that module for the published shape and why the bag
+// isn't prop-threaded any more.
+function KindSection() {
+  const {
+    kind, universeId, all, totalCount, filtered, usage, renderingJobs,
+    onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId,
+    onExpandCharacter, expandingId, onSheetCompleted, onSheetDeleted,
+    onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate,
+    onDescribeImages = null, onCorrectFromImage = null, seriesNameMap,
+    onBulkLock, bulkLocking, fullList, castList = [],
+    externalPendingByEntryId = null, compact = false, onRenderAll = null,
+    renderingAll = false, onPickFromCatalog = null, catalogLinking = false,
+    onAddEntry = null, creating = false,
+  } = useKindSection();
   // Universe-only character wiring — `null` for non-character kinds so
   // CanonCard's gate stays `kind === 'characters' && characterExtensions`.
   // Memoized so the BASE object is stable across re-renders that aren't
@@ -926,23 +949,11 @@ function KindSection({ kind, universeId, all, totalCount, filtered, usage, rende
   );
   const Icon = kind.icon;
 
-  // Manual-add form state — local to the section (mirrors CategoryEditor's
-  // `adding`/`newLabel` bucket-add form). Persistence is the parent's job via
-  // `onAddEntry`; this just collects a name + optional description and resets
-  // on a successful save.
+  // Whether the manual-add mini-form is open. The form owns its own name/desc
+  // draft (CanonAddEntryForm) and unmounts when closed, so cancel/save reset
+  // the fields for free; only the disclosure bit lives here because the "Add"
+  // button in the controls strip toggles it.
   const [adding, setAdding] = useState(false);
-  const [newName, setNewName] = useState('');
-  const [newDesc, setNewDesc] = useState('');
-  const submitAdd = async () => {
-    if (!newName.trim() || !onAddEntry || creating) return;
-    const ok = await onAddEntry({ name: newName, description: newDesc });
-    if (ok) {
-      setNewName('');
-      setNewDesc('');
-      setAdding(false);
-    }
-  };
-  const cancelAdd = () => { setAdding(false); setNewName(''); setNewDesc(''); };
 
   // Bulk lock-state summary computed off the FULL list (not the series-filtered
   // view) so the buttons reflect the universe-wide state the bulk action will
@@ -1037,45 +1048,12 @@ function KindSection({ kind, universeId, all, totalCount, filtered, usage, rende
   );
 
   const addForm = adding ? (
-    <div className="bg-port-bg border border-port-border rounded p-2 mb-2 flex flex-col gap-2">
-      <input
-        value={newName}
-        onChange={(e) => setNewName(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') submitAdd(); }}
-        placeholder={`${kind.singular[0].toUpperCase()}${kind.singular.slice(1)} name`}
-        className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
-        maxLength={BIBLE_LIMITS.NAME_MAX}
-        autoFocus
-        aria-label={`New ${kind.singular} name`}
-      />
-      <textarea
-        value={newDesc}
-        onChange={(e) => setNewDesc(e.target.value)}
-        placeholder={`Describe this ${kind.singular} (optional — image-gen-ready prose)`}
-        className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
-        rows={2}
-        maxLength={kind.descFieldMax}
-        aria-label={`New ${kind.singular} description`}
-      />
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={submitAdd}
-          disabled={!newName.trim() || creating}
-          className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white rounded"
-        >
-          {creating ? <Loader2 size={12} className="animate-spin" /> : null}
-          Save
-        </button>
-        <button
-          type="button"
-          onClick={cancelAdd}
-          className="text-xs px-2 py-1 bg-port-bg hover:bg-port-border text-gray-300 rounded"
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
+    <CanonAddEntryForm
+      kind={kind}
+      creating={creating}
+      onAddEntry={onAddEntry}
+      onClose={() => setAdding(false)}
+    />
   ) : null;
 
   const list = all.length === 0 ? (
