@@ -1695,3 +1695,4 @@ export * from './agentValidation.js';
 export * from './cosValidation.js';
 export * from './mediaValidation.js';
 export * from './pipelineValidation.js';
+export * from './quotaBurnValidation.js';

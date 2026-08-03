@@ -131,6 +131,7 @@ export * from './tabNotation.js';
 export * from './terminalTheme.js';
 export * from './threejsSculpt.js';
 export * from './tribe.js';
+export * from './quotaBurnPatch.js';
 export * from './tribeCadence.js';
 export * from './universeBuilderExpand.js';
 export * from './uuid.js';

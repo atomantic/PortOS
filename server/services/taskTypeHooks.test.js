@@ -17,7 +17,9 @@ describe('taskTypeHooks registry', () => {
   });
 
   it('declares only payload-independent hooks safe for sentinel-less recovery', () => {
-    expect(canRunTaskOutputHookWithoutPayload('quota-burn')).toBe(true);
+    // No registered type is payload-independent today (quota-burn was, until it
+    // stopped being a scheduled task type entirely — see quotaBurnRunner.js).
+    // The predicate must still fail CLOSED for everything else.
     expect(canRunTaskOutputHookWithoutPayload('layered-intelligence')).toBe(false);
     expect(canRunTaskOutputHookWithoutPayload('does-not-exist')).toBe(false);
   });

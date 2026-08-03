@@ -223,9 +223,11 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // buildTaskInput hook renders the prompt. See taskTypeHooks.js +
   // autonomousJobs/layeredIntelligenceHooks.js.
   'layered-intelligence',
-  // An opt-in perpetual task that runs a zero-token quota probe before it
-  // ever dispatches an agent. The hook owns its provider-specific prompt.
-  'quota-burn'
+  // NOTE: `quota-burn` used to live here as a per-app perpetual task type. It is
+  // now ONE install-level loop (services/quotaBurnRunner.js) configured on the
+  // Quota Burn page — the burn plan is machine-local, and its jobs name which
+  // managed app (if any) the work targets. Migration 221 moves existing per-app
+  // overrides across; do not re-add it as a scheduled type.
 ];
 
 // Shared config for code-reviewer-a and code-reviewer-b (two instances for independent provider/model configuration)
@@ -369,8 +371,7 @@ export const DEFAULT_TASK_INTERVALS = {
   // agent runs in a worktree that is discarded without a commit/merge/PR
   // (discardWorktree), so it can't land code — its `.agent-done` payload is the
   // only sanctioned output (consumed by the processTaskOutput hook).
-  'layered-intelligence': { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: false, discardWorktree: true } },
-  'quota-burn': { type: INTERVAL_TYPES.PERPETUAL, enabled: false, providerId: null, model: null, prompt: null, recheckCron: '0 */12 * * *', taskMetadata: { useWorktree: true, openPR: true, simplify: true, families: {} } }
+  'layered-intelligence': { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: false, discardWorktree: true } }
 };
 
 // Agent-options that a task manages internally — UI locks the toggle, and
@@ -1894,8 +1895,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'reference-watch': 'Watch reference repos and append PLAN.md items for new upstream work',
   'ux': 'UX/design audit — files issues, no code changes',
   'refresh-local-llm-catalog': "Refresh PortOS's bundled suggested local-model catalog + editorial ranking (PortOS repo only)",
-  'layered-intelligence': "Read this app's goals + telemetry, ask a reasoning model for one improvement, and file one deduplicated tracker issue — no code, no agent",
-  'quota-burn': 'When enabled, spend configured provider subscription quota only near its reset window using that provider family\'s prompt'
+  'layered-intelligence': "Read this app's goals + telemetry, ask a reasoning model for one improvement, and file one deduplicated tracker issue — no code, no agent"
 };
 
 function getTaskTypeDescription(taskType) {

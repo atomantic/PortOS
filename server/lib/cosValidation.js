@@ -943,31 +943,6 @@ export const ISSUE_AUTHOR_FILTERS = ['self', 'owner', 'any'];
 export const SWARM_COUNT_MIN = 2;
 export const SWARM_COUNT_MAX = 6;
 
-const QUOTA_BURN_FAMILIES = new Set(['claude', 'codex', 'agy', 'grok']);
-
-function sanitizeQuotaBurnFamilies(raw) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const clean = Object.create(null);
-  for (const [id, value] of Object.entries(raw)) {
-    if (!QUOTA_BURN_FAMILIES.has(id) || !value || typeof value !== 'object' || Array.isArray(value)) return null;
-    const enabled = value.enabled === true;
-    const prompt = typeof value.prompt === 'string' ? value.prompt.slice(0, 8000) : '';
-    const resetWithinHours = Number(value.resetWithinHours ?? 24);
-    const reservePercent = Number(value.reservePercent ?? 0);
-    const maxDispatchesPerWindow = Number(value.maxDispatchesPerWindow ?? 5);
-    const priority = Number(value.priority ?? 0);
-    if (!Number.isFinite(resetWithinHours) || resetWithinHours < 0 || resetWithinHours > 168
-      || !Number.isFinite(reservePercent) || reservePercent < 0 || reservePercent > 100
-      || !Number.isInteger(maxDispatchesPerWindow) || maxDispatchesPerWindow < 1 || maxDispatchesPerWindow > 50
-      || !Number.isInteger(priority) || priority < 0 || priority > 100
-      || (value.providerId != null && typeof value.providerId !== 'string')
-      || (value.model != null && typeof value.model !== 'string')) return null;
-    clean[id] = { enabled, prompt, providerId: value.providerId || null, model: value.model || null,
-      scope: typeof value.scope === 'string' ? value.scope : null, resetWithinHours, reservePercent, maxDispatchesPerWindow, priority };
-  }
-  return clean;
-}
-
 // POST /api/cos/tasks/slashdo — a `/do:*` button click from an app's Agent
 // Operations panel. The run-settings fields are PICKED from createCosTaskSchema
 // rather than restated, so the drawer's provider/model/effort/simplify/reviewer
@@ -1006,12 +981,6 @@ export function sanitizeTaskMetadata(raw) {
       clean[key] = raw[key];
       hasKeys = true;
     }
-  }
-  if (Object.prototype.hasOwnProperty.call(raw, 'families')) {
-    const families = sanitizeQuotaBurnFamilies(raw.families);
-    if (!families) return null;
-    clean.families = families;
-    hasKeys = true;
   }
   if (Object.prototype.hasOwnProperty.call(raw, 'prCompletion') && PR_COMPLETION_VALUES.includes(raw.prCompletion)) {
     clean.prCompletion = raw.prCompletion;

@@ -1,14 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { detectQuotaBurn, selectBurnCandidates } from './quotaBurn.js';
-import { sanitizeTaskMetadata } from '../lib/validation.js';
+import { burnBudgetRemaining, explainFamilySkip, selectBurnCandidates } from './quotaBurn.js';
+import { normalizeQuotaBurnConfig } from '../lib/quotaBurnConfig.js';
 
 const NOW = Date.parse('2026-07-26T12:00:00.000Z');
-const config = {
+const job = (jobType = 'agent-prompt') => ({ id: 'j1', enabled: true, jobType, params: {} });
+const config = normalizeQuotaBurnConfig({
+  enabled: true,
   families: {
-    grok: { enabled: true, prompt: 'Animate eligible sprites.', resetWithinHours: 24, reservePercent: 20, maxDispatchesPerWindow: 2 },
-    codex: { enabled: true, prompt: 'Prepare assets.', resetWithinHours: 24, reservePercent: 0, priority: 1 },
+    grok: { enabled: true, resetWithinHours: 24, reservePercent: 20, maxDispatchesPerWindow: 2, jobs: [job()] },
+    codex: { enabled: true, resetWithinHours: 24, reservePercent: 0, priority: 1, jobs: [job()] },
   },
-};
+});
 const quota = (family, resetsAt, percentRemaining = 50, extras = {}) => ({
   family, supported: true, limits: [{ key: 'week', scope: 'week', label: 'Weekly', resetsAt, percentRemaining }], ...extras,
 });
@@ -46,105 +48,66 @@ describe('selectBurnCandidates', () => {
       now: NOW, dispatches: { [selected.dispatchKey]: 2 },
     })).toEqual([]);
   });
-});
 
-describe('detectQuotaBurn', () => {
-  it('parks an empty configuration without reading provider usage', async () => {
-    const getQuotas = vi.fn();
-    await expect(detectQuotaBurn({ taskTypeOverrides: {} }, { getQuotas, now: NOW }))
-      .resolves.toMatchObject({ actionable: false, reason: 'no-enabled-families' });
-    expect(getQuotas).not.toHaveBeenCalled();
+  it('skips an enabled family whose plan has no enabled job', () => {
+    // An enabled family with nothing to run is a half-finished setup, not a burn
+    // plan — selecting it would surface as "chosen, then skipped" every cycle.
+    const empty = normalizeQuotaBurnConfig({ families: { grok: { enabled: true, jobs: [] } } });
+    expect(selectBurnCandidates([quota('grok', '2026-07-26T18:00:00.000Z')], empty, { now: NOW })).toEqual([]);
+    const disabledJob = normalizeQuotaBurnConfig({
+      families: { grok: { enabled: true, jobs: [{ ...job(), enabled: false }] } },
+    });
+    expect(selectBurnCandidates([quota('grok', '2026-07-26T18:00:00.000Z')], disabledJob, { now: NOW })).toEqual([]);
   });
 
-  it('reports a transient result when every configured quota probe failed', async () => {
-    await expect(detectQuotaBurn({ taskTypeOverrides: { 'quota-burn': { taskMetadata: config } } }, {
-      getQuotas: async () => [quota('grok', null, 0, { error: 'signed out' })], now: NOW,
-    })).resolves.toMatchObject({ actionable: false, transient: true });
-  });
-});
-
-describe('quota-burn metadata validation', () => {
-  it('keeps valid family configuration and rejects unknown families or unsafe reserves', () => {
-    expect(sanitizeTaskMetadata({ families: { grok: { enabled: true, reservePercent: 20 } } }))
-      .toMatchObject({ families: { grok: { enabled: true, reservePercent: 20 } } });
-    expect(sanitizeTaskMetadata({ families: { unknown: { enabled: true } } })).toBeNull();
-    expect(sanitizeTaskMetadata({ families: { grok: { reservePercent: 101 } } })).toBeNull();
+  it('reports how much of the window the family is willing to spend', () => {
+    expect(burnBudgetRemaining({ percentRemaining: 50 }, { reservePercent: 20 })).toBe(30);
+    expect(burnBudgetRemaining({ percentRemaining: 10 }, { reservePercent: 20 })).toBe(0);
   });
 });
 
 /**
- * The window cap is only honest if a burn that has been QUEUED but whose agent
- * has not finalized yet still holds its slot. The ledger write moved post-agent
- * (#3179), so the raw ledger no longer covers that gap on its own.
+ * The page renders `explainFamilySkip`'s answer verbatim, so it has to mirror
+ * `selectBurnCandidates`'s gates exactly — a card that says "ready" while the
+ * runner skips (or vice versa) is worse than no explanation at all.
  */
-describe('getEffectiveQuotaBurnDispatches', () => {
-  const loadStore = async (tasks, { fail = false } = {}) => {
-    vi.resetModules();
-    vi.doMock('./cosTaskStore.js', () => ({
-      getCosTasks: fail ? async () => { throw new Error('unreadable'); } : async () => ({ tasks }),
-    }));
-    vi.doMock('../lib/fileUtils.js', async (importActual) => ({
-      ...(await importActual()),
-      readJSONFile: async () => ({ 'grok:1': 1 }),
-    }));
-    return import('./quotaBurn.js');
-  };
+describe('explainFamilySkip', () => {
+  const family = { enabled: true, resetWithinHours: 24, reservePercent: 20, maxDispatchesPerWindow: 2, jobs: [job()] };
 
-  const burnTask = (status, key) => ({ id: `sys-${status}`, status, metadata: { quotaBurnDispatchKey: key } });
-
-  afterEach(() => { vi.doUnmock('./cosTaskStore.js'); vi.doUnmock('../lib/fileUtils.js'); vi.resetModules(); });
-
-  it('adds pending and in_progress burns on top of the persisted ledger', async () => {
-    const { getEffectiveQuotaBurnDispatches } = await loadStore([
-      burnTask('pending', 'grok:1'),
-      burnTask('in_progress', 'codex:2'),
-    ]);
-    // grok:1 = 1 persisted + 1 queued; codex:2 = 0 persisted + 1 running.
-    await expect(getEffectiveQuotaBurnDispatches()).resolves.toEqual({ 'grok:1': 2, 'codex:2': 1 });
+  it('returns null exactly when the family is a candidate', () => {
+    const quotas = [quota('grok', '2026-07-26T18:00:00.000Z')];
+    expect(explainFamilySkip('grok', family, quotas, { now: NOW })).toBeNull();
+    expect(selectBurnCandidates(quotas, { families: { grok: family } }, { now: NOW })).toHaveLength(1);
   });
 
-  it('ignores terminal tasks and tasks carrying no dispatch key', async () => {
-    const { getEffectiveQuotaBurnDispatches } = await loadStore([
-      burnTask('completed', 'grok:1'),
-      burnTask('blocked', 'grok:1'),
-      { id: 'sys-other', status: 'pending', metadata: { analysisType: 'performance' } },
-      { id: 'sys-empty', status: 'pending', metadata: { quotaBurnDispatchKey: '' } },
-    ]);
-    // A completed burn already wrote its ledger entry — counting it would
-    // double-charge the window; a blocked one never dispatched.
-    await expect(getEffectiveQuotaBurnDispatches()).resolves.toEqual({ 'grok:1': 1 });
-  });
-
-  it('degrades to the ledger alone when the task file cannot be read', async () => {
-    const { getEffectiveQuotaBurnDispatches } = await loadStore([], { fail: true });
-    await expect(getEffectiveQuotaBurnDispatches()).resolves.toEqual({ 'grok:1': 1 });
-  });
-
-  it('excludes ignoreTaskId so a completing burn is not counted twice', async () => {
-    // The drain-on-completion refill runs between the output hook's ledger write
-    // and the completion flow's updateTask, so the finished burn is BOTH in the
-    // ledger and still `in_progress`. Counting both would consume two slots for
-    // one run — a family capped at 2 would stop after one and miss its window.
-    const tasks = [{ id: 'sys-finishing', status: 'in_progress', metadata: { quotaBurnDispatchKey: 'grok:1' } }];
-    const { getEffectiveQuotaBurnDispatches } = await loadStore(tasks);
-
-    await expect(getEffectiveQuotaBurnDispatches()).resolves.toEqual({ 'grok:1': 2 });
-    await expect(getEffectiveQuotaBurnDispatches({ ignoreTaskId: 'sys-finishing' })).resolves.toEqual({ 'grok:1': 1 });
+  it('names the specific gate that closed', () => {
+    expect(explainFamilySkip('grok', { ...family, enabled: false }, [], { now: NOW })).toBe('disabled');
+    expect(explainFamilySkip('grok', { ...family, jobs: [] }, [], { now: NOW })).toBe('no enabled jobs configured');
+    expect(explainFamilySkip('grok', family, [], { now: NOW })).toBe('no enabled provider in this family');
+    expect(explainFamilySkip('grok', family, [quota('grok', null)], { now: NOW })).toBe('no window states a reset time');
+    expect(explainFamilySkip('grok', family, [quota('grok', '2026-07-28T12:00:00.000Z')], { now: NOW }))
+      .toMatch(/outside the 24h window/);
+    expect(explainFamilySkip('grok', family, [quota('grok', '2026-07-26T18:00:00.000Z', 20)], { now: NOW }))
+      .toMatch(/20% left is at or below the 20% reserve/);
+    const selected = selectBurnCandidates([quota('grok', '2026-07-26T18:00:00.000Z')], { families: { grok: family } }, { now: NOW })[0];
+    expect(explainFamilySkip('grok', family, [quota('grok', '2026-07-26T18:00:00.000Z')], {
+      now: NOW, dispatches: { [selected.dispatchKey]: 2 },
+    })).toBe('dispatch cap reached (2/2)');
   });
 });
 
 /**
- * Two quota-burn agents (one per app) can finalize concurrently, and each
- * finalization records a dispatch. The ledger update is a read-modify-write, so
- * without serialization both would read the same count and write the same
- * increment — losing a burn and letting the window overspend its cap.
+ * The scheduler tick and an on-demand "Run now" can both land a dispatch at
+ * once. The ledger update is a read-modify-write, so without serialization both
+ * would read the same count and write the same increment — losing a burn and
+ * letting the window overspend its cap.
  */
-describe('recordQuotaBurnDispatch serialization', () => {
+describe('recordQuotaBurnDispatch', () => {
   afterEach(() => { vi.doUnmock('../lib/fileUtils.js'); vi.resetModules(); });
 
-  it('does not lose an increment when two completions race', async () => {
+  const withLedger = async (initial = {}) => {
     vi.resetModules();
-    let stored = {};
+    let stored = { ...initial };
     vi.doMock('../lib/fileUtils.js', async (importActual) => ({
       ...(await importActual()),
       readJSONFile: async () => ({ ...stored }),
@@ -155,35 +118,29 @@ describe('recordQuotaBurnDispatch serialization', () => {
       // and the test would pass even unserialized.)
       atomicWrite: async (_file, data) => { await new Promise((r) => setTimeout(r, 5)); stored = { ...data }; },
     }));
-    const { recordQuotaBurnDispatch, getQuotaBurnDispatches } = await import('./quotaBurn.js');
+    return import('./quotaBurn.js');
+  };
 
+  it('does not lose an increment when two dispatches race', async () => {
+    const { recordQuotaBurnDispatch, getQuotaBurnDispatches } = await withLedger();
+    // Live window keys, not `grok:1` — the retention prune reads the epoch out
+    // of the key, and a 1970 epoch would be dropped by the very write under test.
+    const grok = `grok:${Date.now() + 3_600_000}`;
+    const codex = `codex:${Date.now() + 7_200_000}`;
     await Promise.all([
-      recordQuotaBurnDispatch('grok:1'),
-      recordQuotaBurnDispatch('grok:1'),
-      recordQuotaBurnDispatch('codex:2'),
+      recordQuotaBurnDispatch(grok),
+      recordQuotaBurnDispatch(grok),
+      recordQuotaBurnDispatch(codex),
     ]);
-
-    await expect(getQuotaBurnDispatches()).resolves.toEqual({ 'grok:1': 2, 'codex:2': 1 });
+    await expect(getQuotaBurnDispatches()).resolves.toEqual({ [grok]: 2, [codex]: 1 });
   });
 
-  it('deduplicates an agent replay in the same atomic ledger write as the increment', async () => {
-    vi.resetModules();
-    let stored = {};
-    vi.doMock('../lib/fileUtils.js', async (importActual) => ({
-      ...(await importActual()),
-      readJSONFile: async () => ({ ...stored }),
-      atomicWrite: async (_file, data) => { stored = structuredClone(data); },
-    }));
-    const { recordQuotaBurnDispatch, getQuotaBurnDispatches } = await import('./quotaBurn.js');
-
-    await recordQuotaBurnDispatch('grok:1', { agentId: 'agent-1' });
-    await recordQuotaBurnDispatch('grok:1', { agentId: 'agent-1' });
-    await recordQuotaBurnDispatch('grok:1', { agentId: 'agent-2' });
-
-    await expect(getQuotaBurnDispatches()).resolves.toEqual({ 'grok:1': 2 });
-    expect(stored.__agentDispatches).toEqual({
-      'agent-1': 'grok:1',
-      'agent-2': 'grok:1',
-    });
+  it('prunes windows that reset over a month ago', async () => {
+    // A key is `<family>:<resetEpochMs>`; a passed window can never be selected
+    // again, so its count is dead weight that would grow the file forever.
+    const stale = NOW - 40 * 24 * 60 * 60 * 1000;
+    const { recordQuotaBurnDispatch } = await withLedger({ [`grok:${stale}`]: 3, 'grok:not-a-number': 1 });
+    const next = await recordQuotaBurnDispatch(`grok:${NOW}`, { now: NOW });
+    expect(next).toEqual({ 'grok:not-a-number': 1, [`grok:${NOW}`]: 1 });
   });
 });

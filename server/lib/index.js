@@ -110,6 +110,8 @@ export * from './promptSystemStages.js';
 export * from './promptTemplate.js';
 export * from './providerModels.js';
 export * from './providerTranscriptUsage.js';
+export * from './quotaBurnConfig.js';
+export * from './quotaBurnValidation.js';
 export * from './quotaReset.js';
 export * from './opencodeConfig.js';
 // `runners.js` re-defines `isFlux2`/`isZImage`/`isErnie` that also live in

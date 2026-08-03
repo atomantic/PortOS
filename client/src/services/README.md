@@ -58,6 +58,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiRuns.js` | Agent run history. |
 | `apiScaffold.js` | App scaffolding templates. |
 | `apiSchedules.js` | Automation schedules. |
+| `apiQuotaBurn.js` | Quota Burn plan + live status, the job-type catalog its config form renders, and manual runs (`getQuotaBurn`/`getQuotaBurnCatalog`/`saveQuotaBurn`/`runQuotaBurn`). |
 | `apiSystem.js` | System info (CPU/memory/ports/alerts) + D&D-style character sheet getter, plus the usage cost report and explicit historical reconciliation (`getUsage`/`getUsageRaw`/`resetUsage`, `getProviderUsage`, `getUsageBackfillStatus`/`startUsageBackfill`). |
 | `apiAuth.js` | Optional login password — status, login/logout, set/clear password. |
 | `apiLoops.js` | Scheduled loops. |

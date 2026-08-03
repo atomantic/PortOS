@@ -5,7 +5,6 @@ import { AGENT_OPTIONS, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TY
 import { isCronExpression, describeCron } from '../../../../utils/cronHelpers';
 import ToggleSwitch from '../../../ToggleSwitch';
 import { INTERVAL_LABELS } from './scheduleConstants';
-import QuotaBurnFamilyEditor from './QuotaBurnFamilyEditor';
 
 const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalIntervalType, globalTaskMetadata, managedAgentOptions, override, onUpdate }) {
   const [updating, setUpdating] = useState(false);
@@ -192,17 +191,6 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
           />
         </div>
 
-        {taskType === 'quota-burn' && (
-          <QuotaBurnFamilyEditor
-            metadata={override?.taskMetadata}
-            disabled={updating}
-            onSave={async (taskMetadata) => {
-              setUpdating(true);
-              await onUpdate(app.id, taskType, { taskMetadata }).catch(() => {});
-              setUpdating(false);
-            }}
-          />
-        )}
       </div>
     </div>
   );

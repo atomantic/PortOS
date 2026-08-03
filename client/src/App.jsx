@@ -38,6 +38,7 @@ const Goals = lazyWithReload(() => import('./pages/Goals'));
 const OpenClawPage = lazyWithReload(() => import('./pages/OpenClaw'));
 const Submodules = lazyWithReload(() => import('./pages/Submodules'));
 const ImageClean = lazyWithReload(() => import('./pages/ImageClean'));
+const QuotaBurn = lazyWithReload(() => import('./pages/QuotaBurn'));
 const VideoDownloaderPage = lazyWithReload(() => import('./pages/VideoDownloaderPage'));
 const ChiefOfStaff = lazyWithReload(() => import('./pages/ChiefOfStaff'));
 const Ask = lazyWithReload(() => import('./pages/Ask'));
@@ -251,6 +252,8 @@ export default function App() {
           <Route path="devtools/github" element={<GitHub />} />
           <Route path="devtools/history" element={<HistoryPage />} />
           <Route path="devtools/image-clean" element={<ImageClean />} />
+          <Route path="devtools/quota-burn" element={<QuotaBurn />} />
+          <Route path="devtools/quota-burn/:familyId" element={<QuotaBurn />} />
           <Route path="devtools/runs" element={<RunsHistoryPage />} />
           <Route path="devtools/runner" element={<RunnerPage />} />
           <Route path="devtools/submodules" element={<Submodules />} />

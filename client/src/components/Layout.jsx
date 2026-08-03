@@ -267,6 +267,7 @@ const navItems = [
       { to: '/devtools/jira/reports', label: 'JIRA Reports', icon: FileText },
       { to: '/loops', label: 'Loops', icon: RefreshCw },
       { to: '/devtools/processes', label: 'Processes', icon: Activity },
+      { to: '/devtools/quota-burn', label: 'Quota Burn', icon: Flame },
       { to: '/security', label: 'Security', icon: Camera },
       { to: '/shell', label: 'Shell', icon: SquareTerminal },
       { to: '/devtools/submodules', label: 'Submodules', icon: GitBranch },

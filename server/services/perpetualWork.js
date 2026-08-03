@@ -488,14 +488,6 @@ export function hasWorkDetector(taskType) {
 registerWorkDetector('claim-issue', detectGithubIssues);
 registerWorkDetector('claim-issue-gitlab', detectGitlabIssues);
 registerWorkDetector('plan-task', detectPlanTask);
-registerWorkDetector('quota-burn', async (app, opts) => {
-  const { detectQuotaBurn } = await import('./quotaBurn.js');
-  // Forward `ignoreTaskId`: on the drain-on-completion refill the just-finished
-  // burn has already written its ledger entry but still reads `in_progress`, so
-  // without this the detector counts it twice and parks a family that still has
-  // window budget left (#3179).
-  return detectQuotaBurn(app, { ignoreTaskId: opts?.ignoreTaskId || null });
-});
 
 /**
  * Probe whether `taskType` has actionable work for `app`. Always resolves to a

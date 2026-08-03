@@ -61,6 +61,7 @@ import { reconcile as reconcileVoice } from './voice/bootstrap.js';
 import { initVoiceTimers } from './voice/timers.js';
 import { startBackupScheduler } from './backupScheduler.js';
 import { startPrivacyRecheckScheduler } from './privacyRecheckScheduler.js';
+import { startQuotaBurnScheduler } from './quotaBurnRunner.js';
 import { startSeriesAutopilotScheduler } from './seriesAutopilotScheduler.js';
 import { startCommissionScheduler } from './creativeCommissions/scheduler.js';
 import { startCitySnapshotScheduler } from './citySnapshotScheduler.js';
@@ -343,6 +344,12 @@ const startBackgroundServices = ({ spawnerReady }) => {
   // re-runs the broker scan + opt-out pass when the user opts in via
   // Settings → Privacy (sanctioned scheduled-automation exception) (#2145).
   startPrivacyRecheckScheduler().catch(err => console.error(`❌ Privacy recheck scheduler init failed: ${err.message}`));
+  // Quota-burn loop — ONE install-level loop that spends subscription quota that
+  // would otherwise expire. OFF by default: the tick returns before touching a
+  // provider unless the user enabled it on the Quota Burn page, where the
+  // family, provider, model, and work are all named first (sanctioned
+  // scheduled-automation exception).
+  startQuotaBurnScheduler();
   // Initialize Series Autopilot scheduler — OFF by default; registers a cron per
   // series only when the user configured + enabled one via Settings → Series
   // Autopilot. Each scheduled run still passes through the cos autonomy gate +
