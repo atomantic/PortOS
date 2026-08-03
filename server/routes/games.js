@@ -13,6 +13,8 @@ import {
   gameMusicBindingSchema,
   gameSpriteBindingSchema,
   gameUpdateSchema,
+  isPaginationRequested,
+  paginateArray,
   validateRequest,
 } from '../lib/validation.js';
 import {
@@ -36,8 +38,15 @@ import {
 
 const router = Router();
 
-router.get('/', asyncHandler(async (_req, res) => {
-  res.json(await listGames());
+// Backward-compatible by default: returns the full games array. When a client
+// passes `limit`/`offset`, the response becomes the bounded
+// `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
+router.get('/', asyncHandler(async (req, res) => {
+  const games = await listGames();
+  if (!isPaginationRequested(req.query)) {
+    return res.json(games);
+  }
+  res.json(paginateArray(games, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.post('/', asyncHandler(async (req, res) => {

@@ -8,7 +8,7 @@ import { request } from './apiCore.js';
 // Server contract notes (server/routes/brainSongbook.js):
 // - POST / and POST /:id/attachments return 201 with the created record /
 //   `{ attachment }` in the body.
-// - PUT is a defaults-free partial, BUT a nested `content` object fills inner
+// - PATCH is a defaults-free partial, BUT a nested `content` object fills inner
 //   defaults — callers must always send the WHOLE content object
 //   ({ format, text }), never `{ content: { text } }` alone (format would
 //   reset to 'tab'). Never send `attachments` (server-managed; stripped).
@@ -27,10 +27,10 @@ export const getSong = (id, options) => request(`/brain/songbook/${enc(id)}`, op
 export const createSong = (body = {}, options) =>
   request('/brain/songbook', { method: 'POST', body: JSON.stringify(body), ...options });
 
-// Defaults-free partial PUT — also the stage chip-flip path
+// Defaults-free partial PATCH — also the stage chip-flip path
 // (`updateSong(id, { stage })`).
 export const updateSong = (id, patch, options) =>
-  request(`/brain/songbook/${enc(id)}`, { method: 'PUT', body: JSON.stringify(patch), ...options });
+  request(`/brain/songbook/${enc(id)}`, { method: 'PATCH', body: JSON.stringify(patch), ...options });
 
 export const deleteSong = (id, options) =>
   request(`/brain/songbook/${enc(id)}`, { method: 'DELETE', ...options });

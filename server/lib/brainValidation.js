@@ -628,7 +628,7 @@ export const songInputSchema = z.object({
   notes: z.string().max(5000).optional().default('')
 });
 
-// PUT /api/brain/songbook/:id — defaults-free partial. partialWithoutDefaults
+// PATCH /api/brain/songbook/:id — defaults-free partial. partialWithoutDefaults
 // only strips top-level defaults (see the zodCompat docstring): a
 // present-but-partial `content` object would still inflate its inner defaults
 // — `{ content: { text } }` resetting format to 'tab', `{ content: { format } }`

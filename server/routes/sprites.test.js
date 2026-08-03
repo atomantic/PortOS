@@ -145,6 +145,19 @@ describe('sprites routes', () => {
     expect(r.body).toEqual([{ id: 'pioneer', kind: 'character', name: 'Pioneer' }]);
   });
 
+  it('GET / returns a bounded envelope when pagination is requested', async () => {
+    records.listRecords.mockResolvedValueOnce(
+      Array.from({ length: 5 }, (_, i) => ({ id: `sprite-${i}`, kind: 'character', name: `S${i}` }))
+    );
+    const r = await request(app).get('/api/sprites?limit=2&offset=1');
+    expect(r.status).toBe(200);
+    expect(r.body.items).toHaveLength(2);
+    expect(r.body.items[0].id).toBe('sprite-1');
+    expect(r.body.total).toBe(5);
+    expect(r.body.limit).toBe(2);
+    expect(r.body.offset).toBe(1);
+  });
+
   it('POST / validates and delegates to createCharacter', async () => {
     const r = await request(app).post('/api/sprites').send({ name: 'Trail Hand #2' });
     expect(r.status).toBe(201);

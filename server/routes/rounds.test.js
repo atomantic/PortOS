@@ -81,14 +81,14 @@ describe('rounds route', () => {
     expect(res.body.code).toBe('NOT_FOUND');
   });
 
-  it('PUT /:id forwards ONLY the keys the client sent — omitted fields are not clobbered', async () => {
+  it('PATCH /:id forwards ONLY the keys the client sent — omitted fields are not clobbered', async () => {
     // Regression guard: a `.default('')` on the schema fields would make
-    // .partial() materialize defaults for omitted keys, so a title-only PUT
+    // .partial() materialize defaults for omitted keys, so a title-only PATCH
     // would wipe artist/key/notation/notes via updateRound's `key in patch`
     // merge. The route must forward a patch containing ONLY `title`.
     mocks.updateRound.mockResolvedValue({ id: 'song-1', title: 'Renamed' });
     const res = await request(makeApp())
-      .put('/api/rounds/song-1')
+      .patch('/api/rounds/song-1')
       .send({ title: 'Renamed' });
     expect(res.status).toBe(200);
     expect(mocks.updateRound).toHaveBeenCalledTimes(1);
@@ -99,17 +99,17 @@ describe('rounds route', () => {
     expect('notation' in patch).toBe(false);
   });
 
-  it('PUT /:id preserves an explicit empty-string clear (present, not absent)', async () => {
+  it('PATCH /:id preserves an explicit empty-string clear (present, not absent)', async () => {
     mocks.updateRound.mockResolvedValue({ id: 'song-1', key: '' });
-    await request(makeApp()).put('/api/rounds/song-1').send({ key: '' });
+    await request(makeApp()).patch('/api/rounds/song-1').send({ key: '' });
     const [, patch] = mocks.updateRound.mock.calls[0];
     expect('key' in patch).toBe(true);
     expect(patch.key).toBe('');
   });
 
-  it('PUT /:id maps a service NOT_FOUND to a 404', async () => {
+  it('PATCH /:id maps a service NOT_FOUND to a 404', async () => {
     mocks.updateRound.mockRejectedValue(Object.assign(new Error('nope'), { code: 'NOT_FOUND' }));
-    const res = await request(makeApp()).put('/api/rounds/song-x').send({ title: 'x' });
+    const res = await request(makeApp()).patch('/api/rounds/song-x').send({ title: 'x' });
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('NOT_FOUND');
   });
@@ -134,9 +134,9 @@ describe('rounds route', () => {
     expect(res.body.id).toBe('song-1');
   });
 
-  it('PUT /:id accepts a recordings array', async () => {
+  it('PATCH /:id accepts a recordings array', async () => {
     mocks.updateRound.mockResolvedValue({ id: 'song-1' });
-    const res = await request(makeApp()).put('/api/rounds/song-1').send({
+    const res = await request(makeApp()).patch('/api/rounds/song-1').send({
       recordings: [{ layerId: 'lead', filename: 'abc-vocal.wav', durationMs: 1200, peak: 0.4 }],
     });
     expect(res.status).toBe(200);
@@ -144,17 +144,17 @@ describe('rounds route', () => {
     expect(patch.recordings[0].filename).toBe('abc-vocal.wav');
   });
 
-  it('PUT /:id rejects a recording with a peak outside 0–1', async () => {
-    const res = await request(makeApp()).put('/api/rounds/song-1').send({
+  it('PATCH /:id rejects a recording with a peak outside 0–1', async () => {
+    const res = await request(makeApp()).patch('/api/rounds/song-1').send({
       recordings: [{ filename: 'x.wav', peak: 5 }],
     });
     expect(res.status).toBe(400);
     expect(mocks.updateRound).not.toHaveBeenCalled();
   });
 
-  it('PUT /:id accepts a recording with pitchTrack + accuracy analysis (#1027)', async () => {
+  it('PATCH /:id accepts a recording with pitchTrack + accuracy analysis (#1027)', async () => {
     mocks.updateRound.mockResolvedValue({ id: 'song-1' });
-    const res = await request(makeApp()).put('/api/rounds/song-1').send({
+    const res = await request(makeApp()).patch('/api/rounds/song-1').send({
       recordings: [{
         filename: 'take.wav',
         pitchTrack: [{ tMs: 0, hz: 220, cents: -3, clarity: 0.9 }, { tMs: 50, hz: null }],
@@ -167,9 +167,9 @@ describe('rounds route', () => {
     expect(patch.recordings[0].accuracy.percentInTune).toBe(80);
   });
 
-  it('PUT /:id accepts a legacy recording with no pitch analysis (absent-tolerant)', async () => {
+  it('PATCH /:id accepts a legacy recording with no pitch analysis (absent-tolerant)', async () => {
     mocks.updateRound.mockResolvedValue({ id: 'song-1' });
-    const res = await request(makeApp()).put('/api/rounds/song-1').send({
+    const res = await request(makeApp()).patch('/api/rounds/song-1').send({
       recordings: [{ filename: 'legacy.wav', durationMs: 500 }],
     });
     expect(res.status).toBe(200);
@@ -177,18 +177,18 @@ describe('rounds route', () => {
     expect(patch.recordings[0]).not.toHaveProperty('pitchTrack');
   });
 
-  it('PUT /:id rejects a pitchTrack exceeding the bound', async () => {
+  it('PATCH /:id rejects a pitchTrack exceeding the bound', async () => {
     const tooMany = Array.from({ length: 4001 }, (_, i) => ({ tMs: i }));
-    const res = await request(makeApp()).put('/api/rounds/song-1').send({
+    const res = await request(makeApp()).patch('/api/rounds/song-1').send({
       recordings: [{ filename: 'x.wav', pitchTrack: tooMany }],
     });
     expect(res.status).toBe(400);
     expect(mocks.updateRound).not.toHaveBeenCalled();
   });
 
-  it('PUT /:id accepts a references array', async () => {
+  it('PATCH /:id accepts a references array', async () => {
     mocks.updateRound.mockResolvedValue({ id: 'song-1' });
-    const res = await request(makeApp()).put('/api/rounds/song-1').send({
+    const res = await request(makeApp()).patch('/api/rounds/song-1').send({
       references: [{ url: 'https://www.tiktok.com/@u/video/123', label: 'TikTok' }],
     });
     expect(res.status).toBe(200);
@@ -196,11 +196,11 @@ describe('rounds route', () => {
     expect(patch.references[0].url).toBe('https://www.tiktok.com/@u/video/123');
   });
 
-  it('PUT /:id passes a segment stacked-mix backing window through validation (#2121)', async () => {
+  it('PATCH /:id passes a segment stacked-mix backing window through validation (#2121)', async () => {
     // The Zod schema strips unknown keys, so bgStartMs/bgEndMs must be typed on
     // refSegmentSchema or they'd never reach the service sanitizer.
     mocks.updateRound.mockResolvedValue({ id: 'song-1' });
-    const res = await request(makeApp()).put('/api/rounds/song-1').send({
+    const res = await request(makeApp()).patch('/api/rounds/song-1').send({
       references: [{
         url: 'https://www.tiktok.com/@u/video/123',
         audioFilename: 'ref.wav',
@@ -212,28 +212,28 @@ describe('rounds route', () => {
     expect(patch.references[0].segments[0]).toMatchObject({ bgStartMs: 4000, bgEndMs: 8000 });
   });
 
-  it('PUT /:id rejects a reference without a url', async () => {
-    const res = await request(makeApp()).put('/api/rounds/song-1').send({
+  it('PATCH /:id rejects a reference without a url', async () => {
+    const res = await request(makeApp()).patch('/api/rounds/song-1').send({
       references: [{ label: 'no url' }],
     });
     expect(res.status).toBe(400);
     expect(mocks.updateRound).not.toHaveBeenCalled();
   });
 
-  it('PUT /:id accepts an empty-url reference (a blank row is dropped server-side, not rejected)', async () => {
+  it('PATCH /:id accepts an empty-url reference (a blank row is dropped server-side, not rejected)', async () => {
     // The editor seeds new reference rows as { url: '' }; saving must not 400 —
     // the service drops the blank row. Guards against a future `.min(1)` that
     // would reject in-progress rows on save.
     mocks.updateRound.mockResolvedValue({ id: 'song-1' });
-    const res = await request(makeApp()).put('/api/rounds/song-1').send({
+    const res = await request(makeApp()).patch('/api/rounds/song-1').send({
       references: [{ url: '' }],
     });
     expect(res.status).toBe(200);
   });
 
-  it('PUT /:id accepts a partnerRoundIds array', async () => {
+  it('PATCH /:id accepts a partnerRoundIds array', async () => {
     mocks.updateRound.mockResolvedValue({ id: 'song-1' });
-    const res = await request(makeApp()).put('/api/rounds/song-1').send({
+    const res = await request(makeApp()).patch('/api/rounds/song-1').send({
       partnerRoundIds: ['seed-ah-poor-bird', 'seed-rose-rose-rose-red'],
     });
     expect(res.status).toBe(200);
@@ -241,9 +241,9 @@ describe('rounds route', () => {
     expect(patch.partnerRoundIds).toEqual(['seed-ah-poor-bird', 'seed-rose-rose-rose-red']);
   });
 
-  it('PUT /:id rejects more than PARTNERS_MAX partner ids', async () => {
+  it('PATCH /:id rejects more than PARTNERS_MAX partner ids', async () => {
     const tooMany = Array.from({ length: 20 }, (_, i) => `seed-${i}`);
-    const res = await request(makeApp()).put('/api/rounds/song-1').send({ partnerRoundIds: tooMany });
+    const res = await request(makeApp()).patch('/api/rounds/song-1').send({ partnerRoundIds: tooMany });
     expect(res.status).toBe(400);
     expect(mocks.updateRound).not.toHaveBeenCalled();
   });
@@ -310,10 +310,10 @@ describe('rounds route', () => {
     expect(aiMocks.evaluateRound).not.toHaveBeenCalled();
   });
 
-  it('PUT /:id accepts a scoreParts array', async () => {
+  it('PATCH /:id accepts a scoreParts array', async () => {
     mocks.updateRound.mockResolvedValue({ id: 'song-1' });
     const res = await request(makeApp())
-      .put('/api/rounds/song-1')
+      .patch('/api/rounds/song-1')
       .send({ scoreParts: [{ label: 'Bass', role: 'bass', score: '| G2w(x) |' }] });
     expect(res.status).toBe(200);
     const [, patch] = mocks.updateRound.mock.calls[0];
@@ -321,9 +321,9 @@ describe('rounds route', () => {
     expect(patch.scoreParts[0].score).toBe('| G2w(x) |');
   });
 
-  it('PUT /:id rejects a scorePart without a score', async () => {
+  it('PATCH /:id rejects a scorePart without a score', async () => {
     const res = await request(makeApp())
-      .put('/api/rounds/song-1')
+      .patch('/api/rounds/song-1')
       .send({ scoreParts: [{ label: 'Bass', role: 'bass' }] });
     expect(res.status).toBe(400);
     expect(mocks.updateRound).not.toHaveBeenCalled();

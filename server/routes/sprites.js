@@ -40,6 +40,8 @@ import {
   spriteAtlasCompileSchema,
   spriteAtlasPublishSchema,
   spriteAssetDeleteSchema,
+  isPaginationRequested,
+  paginateArray,
 } from '../lib/validation.js';
 import { z } from 'zod';
 import { optionalUploadFields } from '../lib/multipart.js';
@@ -145,8 +147,15 @@ const referenceUpload = optionalUploadFields(['referenceImage'], {
   fileFilter: (_req, file, cb) => cb(null, ACCEPTED_REFERENCE_MIME.has((file.mimetype || '').toLowerCase())),
 });
 
-router.get('/', asyncHandler(async (_req, res) => {
-  res.json(await listRecords());
+// Backward-compatible by default: returns the full records array. When a client
+// passes `limit`/`offset`, the response becomes the bounded
+// `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
+router.get('/', asyncHandler(async (req, res) => {
+  const records = await listRecords();
+  if (!isPaginationRequested(req.query)) {
+    return res.json(records);
+  }
+  res.json(paginateArray(records, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 // Characters with a locked main reference — the pool that can seed a new main

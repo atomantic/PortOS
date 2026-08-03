@@ -443,7 +443,7 @@ K:  o - - - - - o -`;
     await waitFor(() => expect(api.updateSong).toHaveBeenCalled());
     const [, patch] = api.updateSong.mock.calls[0];
     expect(patch.title).toBe('Renamed Song');
-    // The WHOLE content object goes in the PUT (format would otherwise reset).
+    // The WHOLE content object goes in the PATCH (format would otherwise reset).
     expect(patch.content).toEqual({ format: 'tab', text: SHEET });
     // attachments is server-managed — never sent.
     expect('attachments' in patch).toBe(false);

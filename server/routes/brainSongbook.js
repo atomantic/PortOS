@@ -110,7 +110,7 @@ router.post('/', asyncHandler(async (req, res) => {
   res.status(201).json(song);
 }));
 
-router.put('/:id', asyncHandler(async (req, res) => {
+router.patch('/:id', asyncHandler(async (req, res) => {
   // songUpdateSchema is defaults-free down to the nested `content` object, so
   // an omitted field (or omitted content.format/text) is genuinely absent
   // instead of resetting to its default (see brainValidation.js / zodCompat.js).

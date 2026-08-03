@@ -18,7 +18,7 @@
  *   source link — plus the attachments section (synced meta, machine-local
  *   bytes → "not on this machine" when absent).
  * - EDIT (?mode=edit): metadata form + font-mono content textarea with format
- *   select and live preview. Saves are explicit (single PUT). The whole
+ *   select and live preview. Saves are explicit (single PATCH). The whole
  *   `content` object is always sent — the server fills nested content
  *   defaults, so `{ content: { text } }` alone would reset format to 'tab'.
  *
@@ -116,7 +116,7 @@ export default function SongBookViewer() {
 
   const [song, setSong] = useState(null);
   // URL-backed instrument view (?view=guitar|ukulele|piano). Render-only —
-  // never PUT back to the record. Defaults to the song's own instrument
+  // never PATCHed back to the record. Defaults to the song's own instrument
   // (bass/voice/other map to guitar), so the param stays off the URL for the
   // song's natural view and deep links like ?view=piano stay shareable.
   const [instrumentView, setInstrumentView] = useDrawerTab(
@@ -279,7 +279,7 @@ export default function SongBookViewer() {
 
   // --- Mutations
   const onStageChange = useCallback((stage) => {
-    // PUT just the stage (defaults-free partial). Helper toast owns the error
+    // PATCH just the stage (defaults-free partial). Helper toast owns the error
     // UI (no custom catch toast → no silent).
     updateSong(id, { stage })
       .then((updated) => {

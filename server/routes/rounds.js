@@ -4,7 +4,7 @@
  *   GET    /api/rounds        → { rounds }
  *   GET    /api/rounds/:id    → { round }
  *   POST   /api/rounds        → { round }   (body: roundInputSchema)
- *   PUT    /api/rounds/:id    → { round }   (body: roundInputSchema.partial())
+ *   PATCH  /api/rounds/:id    → { round }   (body: roundInputSchema.partial())
  *   DELETE /api/rounds/:id    → { id }
  *
  * The a cappella round workbench: write/arrange rounds and track which voice
@@ -76,7 +76,7 @@ const accuracySchema = z.object({
 });
 
 // A saved vocal take. `filename` is the /api/uploads file the audio is served
-// from (the client uploads the WAV first, then PUTs the round with the returned
+// from (the client uploads the WAV first, then PATCHes the round with the returned
 // filename). Numbers are accepted for the mixer; the service clamps them.
 // `pitchTrack`/`accuracy` are optional per-take pitch analysis (#1027) — absent
 // on legacy/unscored takes, persisted so the tuner history isn't recomputed.
@@ -152,8 +152,8 @@ const referenceSchema = z.object({
   midiFilename: str(svc.URL_MAX_LENGTH).optional(),
 });
 
-// No `.default('')` on these fields: `.partial()` (used for PUT) materializes a
-// default for an *omitted* key, which would turn a single-field PUT into a
+// No `.default('')` on these fields: `.partial()` (used for PATCH) materializes a
+// default for an *omitted* key, which would turn a single-field PATCH into a
 // wipe of every other field via updateRound's `'key' in patch` merge. Leaving
 // them plain-optional keeps omitted keys absent (preserve) vs present-empty
 // (clear); the service's `trimField` coerces a present `undefined`/'' anyway.
@@ -240,7 +240,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
 // Two-segment `reference-audio/...` paths are registered before `/:id` so the
 // literal segment can't be read as a round id. The kickoff returns 202 + a
 // jobId; progress streams over SSE; the client persists the returned filename
-// on the reference via the normal PUT on Save.
+// on the reference via the normal PATCH on Save.
 const referenceAudioImportSchema = z.object({ url: str(2048).min(1) });
 
 router.post('/reference-audio/import', asyncHandler(async (req, res) => {
@@ -263,7 +263,7 @@ router.post('/reference-audio/import/:jobId/cancel', (req, res) => {
 // into a .mid via the local MuScriptor sidecar. Same job/SSE shape as the import
 // above: kickoff returns 202 + a jobId (503 with the install hint when the venv
 // isn't provisioned); progress streams over SSE; the client persists the
-// returned midiFilename on the reference via the normal PUT on Save.
+// returned midiFilename on the reference via the normal PATCH on Save.
 const transcribeMidiSchema = z.object({
   filename: str(svc.URL_MAX_LENGTH).min(1),
   model: z.enum(MUSCRIPTOR_MODELS).optional(),
@@ -295,7 +295,7 @@ router.post('/', asyncHandler(async (req, res) => {
   res.json({ round });
 }));
 
-router.put('/:id', asyncHandler(async (req, res) => {
+router.patch('/:id', asyncHandler(async (req, res) => {
   const patch = validateRequest(roundInputSchema.partial(), req.body || {});
   const round = await svc.updateRound(req.params.id, patch).catch(rethrowRoundError);
   res.json({ round });

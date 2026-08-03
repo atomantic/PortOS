@@ -7,7 +7,7 @@
  * the play/edit viewer lives at /songbook/:id and import at /songbook/import.
  *
  * Filters live in URL search params (?stage=&instrument=&tag=&q=) so a
- * filtered view is linkable (Catalog.jsx pattern). Stage flips PUT just the
+ * filtered view is linkable (Catalog.jsx pattern). Stage flips PATCH just the
  * stage field and update local state reactively — no refetch.
  */
 
@@ -70,7 +70,7 @@ export default function SongBook() {
       .catch((err) => toast.error(err?.message || 'Failed to delete song')),
   ), [confirmDelete]);
 
-  // Stage flip: PUT just the stage (defaults-free partial) then merge the
+  // Stage flip: PATCH just the stage (defaults-free partial) then merge the
   // server record into local state. No custom catch toast — the request
   // helper owns the error toast (single layer).
   const onStageChange = useCallback((id, stage) => {

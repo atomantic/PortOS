@@ -48,6 +48,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `pipelineValidation.js` | Creative-production pipeline schemas (Writers Room works/folders/live-mode/drafts, story-bible character/place/object, editorial checks, storyboard shots/scenes, prompt-stage config, issue-list query). |
 | `postValidation.js` | MeatSpace POST (Power On Self Test) schemas — drill config (incl. adaptive toggle), drill generation/scoring, sessions, memory builder, training log. |
 | `privacyValidation.js` | Privacy Center schemas — PII Vault (issue #2140): vault record create/update (partial PUT), list query, UUID params; the vault type/status vocabularies + the sensitive-type (`ssn`/`passport`/`drivers_license`/`financial_account`) `useForScans` hard-false rule and per-type scan defaults. Trusted Organizations registry (issue #2141): org create/update (partial PUT), list query, UUID params, and the replace-set holdings schema. Data-broker database + case ledger (issue #2144): broker list/case-list query filters, the scan-start + refresh action bodies, and the `PRIVACY_BROKER_CASE_STATES` vocabulary. |
+| `roundsValidation.js` | Rounds workbench shape bounds + pure record sanitizers (sections, layers, recordings, pitch analysis, references, progress) — `sanitizeRound(raw, builtinIds)` and the length/count limits shared with routes/rounds.js. |
 | `socketValidation.js` | Socket event payload schemas. |
 | `storyBuilderValidation.js` | Unified Story Builder session/step schemas. |
 | `telegramValidation.js` | Telegram bot config + test schemas. |

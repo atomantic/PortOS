@@ -12,6 +12,7 @@
  */
 
 import { ServerError } from "../lib/errorHandler.js";
+import { findBalancedBlocks, tryParseWithRepair } from "../lib/jsonExtract.js";
 import { assertProvider, resolveProviderAndModel, resolveEffectiveModel, runPromptThroughProvider, assertVisionRunUsedImages } from "../lib/promptRunner.js";
 import { resolveAPIProvider } from "../lib/aiProvider.js";
 import {
@@ -54,11 +55,12 @@ const cleanChanges = (changes) =>
         .slice(0, MAX_CHANGES)
     : [];
 
-// Same brace-walker as mediaPromptRefiner: Codex CLI echoes the prompt to
+// Same extractor shape as mediaPromptRefiner: Codex CLI echoes the prompt to
 // stdout before the model response, and the prompt itself contains a JSON
 // schema example whose braces balance but whose contents are placeholder
-// text. Walk every brace-balanced block in order and return the first that
-// looks like a refinement payload (object with a `starterPrompt` string).
+// text. Walk every brace-balanced block in order (lib/jsonExtract.js) and
+// return the first that looks like a refinement payload (object with a
+// `starterPrompt` string).
 const isPlaceholder = (s) => typeof s === "string" && /^\s*<.+>\s*$/.test(s);
 
 function extractRefinementJson(raw) {
@@ -68,54 +70,32 @@ function extractRefinementJson(raw) {
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fence) s = fence[1].trim();
 
-  let i = 0;
-  let lastErr;
+  const candidates = findBalancedBlocks(s);
+  if (!candidates.length) candidates.push(s);
+
+  // Walk every balanced block ourselves rather than calling the shared
+  // extractJson — we need a tri-state outcome (real refinement, placeholder
+  // echo, or parse error) to surface the "schema placeholder" error message
+  // that helps users pick a stronger model. extractJson's shape predicate
+  // collapses placeholder-vs-real into a single fallback path.
   let placeholderSeen = false;
-  while (i < s.length) {
-    const start = s.indexOf("{", i);
-    if (start === -1) break;
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    let end = -1;
-    for (let j = start; j < s.length; j += 1) {
-      const ch = s[j];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (ch === "\\") escaped = true;
-        else if (ch === '"') inString = false;
-        continue;
-      }
-      if (ch === '"') {
-        inString = true;
-        continue;
-      }
-      if (ch === "{") depth += 1;
-      else if (ch === "}") {
-        depth -= 1;
-        if (depth === 0) {
-          end = j;
-          break;
-        }
-      }
+  let lastErr;
+  for (const block of candidates) {
+    const result = tryParseWithRepair(block);
+    if (result.error) {
+      lastErr = result.error;
+      continue;
     }
-    if (end === -1) break;
-    const block = s.slice(start, end + 1);
-    try {
-      const value = JSON.parse(block);
-      if (
-        value &&
-        typeof value === "object" &&
-        typeof value.starterPrompt === "string"
-      ) {
-        if (isPlaceholder(value.starterPrompt)) {
-          placeholderSeen = true;
-        } else return value;
-      }
-    } catch (e) {
-      lastErr = e;
+    const { value } = result;
+    if (
+      value &&
+      typeof value === "object" &&
+      typeof value.starterPrompt === "string"
+    ) {
+      if (isPlaceholder(value.starterPrompt)) {
+        placeholderSeen = true;
+      } else return value;
     }
-    i = end + 1;
   }
   if (placeholderSeen) {
     throw new Error(

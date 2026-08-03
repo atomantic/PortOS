@@ -1,21 +1,11 @@
 /**
- * Universe Builder Routes
+ * Universe Builder Routes — /api/universe-builder
  *
- *   GET    /api/universe-builder                        → Universe[]
- *   POST   /api/universe-builder                        → Universe
- *   GET    /api/universe-builder/:id                    → Universe
- *   PATCH  /api/universe-builder/:id                    → Universe
- *   DELETE /api/universe-builder/:id                    → { id }
- *   POST   /api/universe-builder/expand                 → { logline, premise, styleNotes, influences, categories, compositeSheets, characters, places, objects, llm }
- *   POST   /api/universe-builder/describe-from-images   → { description, llm }
- *   POST   /api/universe-builder/analyze-style-reference → { reference, proposed, diff, rationale, llm }
- *   POST   /api/universe-builder/:id/characters/:entryId/expand-from-images → { fields, updatedFields, llm }
- *   POST   /api/universe-builder/:id/canon/:kind/:entryId/correct-from-image → { descField, currentDescription, proposedDescription, llm } | { locked, entryName }
- *   POST   /api/universe-builder/:id/canon/:kind/:entryId/apply-image-correction → { universe, entry }
- *   POST   /api/universe-builder/:id/render             → { runId, collectionId, jobIds, promptCount }
- *   GET    /api/universe-builder/:id/runs               → Run[]
- *   POST   /api/universe-builder/:id/style-references                 → Universe
- *   DELETE /api/universe-builder/:id/style-references/:referenceId    → Universe
+ * Universe CRUD plus the AI-assisted workflows that operate on a universe:
+ * expand/refine, image-based description + canon correction, reference-sheet
+ * and canon-entry rendering, run history, style references, and canon
+ * entry management. Each endpoint carries its own doc comment below — this
+ * header intentionally doesn't enumerate them (it drifted stale when it did).
  */
 
 import { Router } from 'express';

@@ -36,6 +36,26 @@ const makeApp = () => {
 describe('Game routes', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('GET / returns the plain array by default', async () => {
+    games.listGames.mockResolvedValueOnce([{ id: 'game-1', name: 'Example Game' }]);
+    const response = await request(makeApp()).get('/api/games');
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([{ id: 'game-1', name: 'Example Game' }]);
+  });
+
+  it('GET / returns a bounded envelope when pagination is requested', async () => {
+    games.listGames.mockResolvedValueOnce(
+      Array.from({ length: 5 }, (_, i) => ({ id: `game-${i}`, name: `G${i}` }))
+    );
+    const response = await request(makeApp()).get('/api/games?limit=2&offset=1');
+    expect(response.status).toBe(200);
+    expect(response.body.items).toHaveLength(2);
+    expect(response.body.items[0].id).toBe('game-1');
+    expect(response.body.total).toBe(5);
+    expect(response.body.limit).toBe(2);
+    expect(response.body.offset).toBe(1);
+  });
+
   it('creates a managed-app-bound Game', async () => {
     games.createGame.mockResolvedValueOnce({ id: 'game-1', appId: 'app-1', name: 'Example Game' });
     const response = await request(makeApp())
@@ -51,6 +71,61 @@ describe('Game routes', () => {
       .send({ spriteId: '' });
     expect(response.status).toBe(400);
     expect(games.bindSprite).not.toHaveBeenCalled();
+  });
+
+  it('updates a Game name via PATCH', async () => {
+    games.updateGame.mockResolvedValueOnce({ id: 'game-1', appId: 'app-1', name: 'Renamed Game' });
+    const response = await request(makeApp())
+      .patch('/api/games/game-1')
+      .send({ name: 'Renamed Game' });
+    expect(response.status).toBe(200);
+    expect(response.body.name).toBe('Renamed Game');
+    expect(games.updateGame).toHaveBeenCalledWith('game-1', { name: 'Renamed Game' });
+  });
+
+  it('rejects a PATCH with no fields', async () => {
+    const response = await request(makeApp()).patch('/api/games/game-1').send({});
+    expect(response.status).toBe(400);
+    expect(games.updateGame).not.toHaveBeenCalled();
+  });
+
+  it('deletes a Game', async () => {
+    games.deleteGame.mockResolvedValueOnce({ ok: true });
+    const response = await request(makeApp()).delete('/api/games/game-1');
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ ok: true });
+    expect(games.deleteGame).toHaveBeenCalledWith('game-1');
+  });
+
+  it('unbinds a sprite from a Game', async () => {
+    games.unbindSprite.mockResolvedValueOnce({ id: 'game-1', spriteBindings: [] });
+    const response = await request(makeApp()).delete('/api/games/game-1/sprites/sprite-1');
+    expect(response.status).toBe(200);
+    expect(games.unbindSprite).toHaveBeenCalledWith('game-1', 'sprite-1');
+  });
+
+  it('binds music to a Game', async () => {
+    games.bindMusic.mockResolvedValueOnce({ id: 'game-1', musicBindings: [{ id: 'music-1', trackId: 'track-1' }] });
+    const response = await request(makeApp())
+      .post('/api/games/game-1/music')
+      .send({ trackId: 'track-1' });
+    expect(response.status).toBe(201);
+    expect(games.bindMusic).toHaveBeenCalledWith('game-1', { trackId: 'track-1' });
+  });
+
+  it('rejects a music binding missing trackId', async () => {
+    const response = await request(makeApp())
+      .post('/api/games/game-1/music')
+      .send({ trackId: '' });
+    expect(response.status).toBe(400);
+    expect(games.bindMusic).not.toHaveBeenCalled();
+  });
+
+  it('unbinds music from a Game', async () => {
+    games.unbindMusic.mockResolvedValueOnce({ id: 'game-1', musicBindings: [] });
+    const response = await request(makeApp()).delete('/api/games/game-1/music/music-1');
+    expect(response.status).toBe(200);
+    expect(games.unbindMusic).toHaveBeenCalledWith('game-1', 'music-1');
   });
 
   it('binds and publishes role-specific gallery artwork', async () => {

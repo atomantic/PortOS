@@ -37,6 +37,13 @@ vi.mock('../services/writersRoom/places.js', () => ({
   deletePlace: vi.fn(async () => ({ ok: true })),
 }));
 
+vi.mock('../services/writersRoom/objects.js', () => ({
+  listObjects: vi.fn(async () => [{ id: 'wr-object-1', name: 'The Locket' }]),
+  createObject: vi.fn(async (workId, data) => ({ id: 'wr-object-new', ...data })),
+  updateObject: vi.fn(async (workId, objectId, data) => ({ id: objectId, ...data })),
+  deleteObject: vi.fn(async () => ({ ok: true })),
+}));
+
 vi.mock('../services/writersRoom/evaluator.js', () => ({
   runAnalysis: vi.fn(),
   listAnalyses: vi.fn(async () => []),
@@ -91,6 +98,7 @@ import * as svc from '../services/writersRoom/local.js';
 import * as catalogExtraction from '../services/catalogExtraction.js';
 import * as charSvc from '../services/writersRoom/characters.js';
 import * as placesSvc from '../services/writersRoom/places.js';
+import * as objectsSvc from '../services/writersRoom/objects.js';
 import * as liveSvc from '../services/writersRoom/liveDirector.js';
 import writersRoomRoutes from './writersRoom.js';
 
@@ -133,6 +141,25 @@ describe('writersRoom routes', () => {
   });
 
   describe('works', () => {
+    it('GET /works returns the plain array by default', async () => {
+      const r = await request(app).get('/api/writers-room/works');
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual([{ id: 'wr-work-1', title: 'A' }]);
+    });
+
+    it('GET /works returns a bounded envelope when pagination is requested', async () => {
+      svc.listWorks.mockResolvedValueOnce(
+        Array.from({ length: 5 }, (_, i) => ({ id: `wr-work-${i}`, title: `W${i}` }))
+      );
+      const r = await request(app).get('/api/writers-room/works?limit=2&offset=1');
+      expect(r.status).toBe(200);
+      expect(r.body.items).toHaveLength(2);
+      expect(r.body.items[0].id).toBe('wr-work-1');
+      expect(r.body.total).toBe(5);
+      expect(r.body.limit).toBe(2);
+      expect(r.body.offset).toBe(1);
+    });
+
     it('POST /works rejects unknown kind', async () => {
       const r = await request(app).post('/api/writers-room/works').send({ title: 'X', kind: 'manifesto' });
       expect(r.status).toBe(400);
@@ -337,6 +364,62 @@ describe('writersRoom routes', () => {
       const r = await request(app).delete('/api/writers-room/works/wr-work-1/places/wr-place-1');
       expect(r.status).toBe(200);
       expect(placesSvc.deletePlace).toHaveBeenCalledWith('wr-work-1', 'wr-place-1');
+    });
+  });
+
+  describe('objects', () => {
+    it('GET /works/:id/objects returns the bible', async () => {
+      const r = await request(app).get('/api/writers-room/works/wr-work-1/objects');
+      expect(r.status).toBe(200);
+      expect(r.body[0].id).toBe('wr-object-1');
+      expect(objectsSvc.listObjects).toHaveBeenCalledWith('wr-work-1');
+    });
+
+    it('POST /works/:id/objects rejects empty name (schema validation)', async () => {
+      const r = await request(app).post('/api/writers-room/works/wr-work-1/objects').send({ name: '' });
+      expect(r.status).toBe(400);
+      expect(objectsSvc.createObject).not.toHaveBeenCalled();
+    });
+
+    it('POST /works/:id/objects rejects extra/unknown fields (strict schema)', async () => {
+      const r = await request(app)
+        .post('/api/writers-room/works/wr-work-1/objects')
+        .send({ name: 'The Locket', wat: 'not allowed' });
+      expect(r.status).toBe(400);
+    });
+
+    it('POST /works/:id/objects accepts a valid payload', async () => {
+      const r = await request(app)
+        .post('/api/writers-room/works/wr-work-1/objects')
+        .send({ name: 'The Locket', significance: 'A family heirloom' });
+      expect(r.status).toBe(201);
+      expect(objectsSvc.createObject).toHaveBeenCalledWith('wr-work-1', {
+        name: 'The Locket',
+        significance: 'A family heirloom',
+      });
+    });
+
+    it('PATCH /works/:id/objects/:objectId forwards a partial update', async () => {
+      const r = await request(app)
+        .patch('/api/writers-room/works/wr-work-1/objects/wr-object-1')
+        .send({ description: 'Tarnished silver, engraved initials' });
+      expect(r.status).toBe(200);
+      expect(objectsSvc.updateObject).toHaveBeenCalledWith('wr-work-1', 'wr-object-1', {
+        description: 'Tarnished silver, engraved initials',
+      });
+    });
+
+    it('PATCH /works/:id/objects/:objectId rejects empty name', async () => {
+      const r = await request(app)
+        .patch('/api/writers-room/works/wr-work-1/objects/wr-object-1')
+        .send({ name: '   ' });
+      expect(r.status).toBe(400);
+    });
+
+    it('DELETE /works/:id/objects/:objectId forwards to the service', async () => {
+      const r = await request(app).delete('/api/writers-room/works/wr-work-1/objects/wr-object-1');
+      expect(r.status).toBe(200);
+      expect(objectsSvc.deleteObject).toHaveBeenCalledWith('wr-work-1', 'wr-object-1');
     });
   });
 

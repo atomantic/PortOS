@@ -28,6 +28,8 @@ import {
   writersRoomPlaceUpdateSchema,
   writersRoomObjectCreateSchema,
   writersRoomObjectUpdateSchema,
+  isPaginationRequested,
+  paginateArray,
 } from '../lib/validation.js';
 import {
   listFolders, createFolder, deleteFolder,
@@ -77,8 +79,15 @@ router.delete('/folders/:id', asyncHandler(async (req, res) => {
 
 // ---------- works ----------
 
-router.get('/works', asyncHandler(async (_req, res) => {
-  res.json(await listWorks());
+// Backward-compatible by default: returns the full works array. When a client
+// passes `limit`/`offset`, the response becomes the bounded
+// `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
+router.get('/works', asyncHandler(async (req, res) => {
+  const works = await listWorks();
+  if (!isPaginationRequested(req.query)) {
+    return res.json(works);
+  }
+  res.json(paginateArray(works, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.post('/works', asyncHandler(async (req, res) => {

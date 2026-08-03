@@ -15,7 +15,7 @@ export const createRound = (body = {}, options) =>
   request('/rounds', { method: 'POST', body: JSON.stringify(body), ...options });
 
 export const updateRound = (id, patch, options) =>
-  request(`/rounds/${enc(id)}`, { method: 'PUT', body: JSON.stringify(patch), ...options });
+  request(`/rounds/${enc(id)}`, { method: 'PATCH', body: JSON.stringify(patch), ...options });
 
 export const deleteRound = (id, options) =>
   request(`/rounds/${enc(id)}`, { method: 'DELETE', ...options });
@@ -66,7 +66,7 @@ export const cancelReferenceAudioImport = (jobId, options = {}) =>
 // MuScriptor sidecar. Kickoff returns { jobId, model } (503 with an install
 // hint when the runtime isn't provisioned); progress streams over SSE; the
 // terminal `complete` frame carries the { filename } the caller persists on the
-// reference (via the normal PUT on Save, same as the audio import above).
+// reference (via the normal PATCH on Save, same as the audio import above).
 export const transcribeReferenceMidi = (filename, model, options = {}) =>
   request('/rounds/reference-audio/transcribe-midi', {
     method: 'POST', body: JSON.stringify(model ? { filename, model } : { filename }), ...options,

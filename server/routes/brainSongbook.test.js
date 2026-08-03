@@ -177,12 +177,12 @@ describe('Brain SongBook routes', () => {
     });
   });
 
-  describe('PUT /api/brain/songbook/:id', () => {
+  describe('PATCH /api/brain/songbook/:id', () => {
     it('updates only the sent fields (no default injection) — the stage-flip path', async () => {
       const stored = baseSong({ capo: 5, key: 'Em', content: { format: 'chordpro', text: '{t: Example Song}' } });
       const seen = mockUpdateWith(stored);
       const res = await request(app)
-        .put(`/api/brain/songbook/${SONG_ID}`)
+        .patch(`/api/brain/songbook/${SONG_ID}`)
         .send({ stage: 'learning' });
       expect(res.status).toBe(200);
       expect(res.body.stage).toBe('learning');
@@ -196,7 +196,7 @@ describe('Brain SongBook routes', () => {
       const stored = baseSong({ content: { format: 'chordpro', text: '{t: Old}' } });
       const seen = mockUpdateWith(stored);
       const res = await request(app)
-        .put(`/api/brain/songbook/${SONG_ID}`)
+        .patch(`/api/brain/songbook/${SONG_ID}`)
         .send({ content: { text: 'new text' } });
       expect(res.status).toBe(200);
       expect(seen.updates.content).toEqual({ format: 'chordpro', text: 'new text' });
@@ -207,7 +207,7 @@ describe('Brain SongBook routes', () => {
       const stored = baseSong({ content: { format: 'chordpro', text: '{t: Keep me}' } });
       const seen = mockUpdateWith(stored);
       const res = await request(app)
-        .put(`/api/brain/songbook/${SONG_ID}`)
+        .patch(`/api/brain/songbook/${SONG_ID}`)
         .send({ content: { format: 'plain' } });
       expect(res.status).toBe(200);
       expect(seen.updates.content).toEqual({ format: 'plain', text: '{t: Keep me}' });
@@ -215,7 +215,7 @@ describe('Brain SongBook routes', () => {
 
     it('400s on an invalid stage', async () => {
       const res = await request(app)
-        .put(`/api/brain/songbook/${SONG_ID}`)
+        .patch(`/api/brain/songbook/${SONG_ID}`)
         .send({ stage: 'perfected' });
       expect(res.status).toBe(400);
       expect(brainStorage.updateWith).not.toHaveBeenCalled();
@@ -224,7 +224,7 @@ describe('Brain SongBook routes', () => {
     it('strips client-supplied attachments', async () => {
       const seen = mockUpdateWith(baseSong());
       await request(app)
-        .put(`/api/brain/songbook/${SONG_ID}`)
+        .patch(`/api/brain/songbook/${SONG_ID}`)
         .send({ title: 'New Title', attachments: [{ filename: 'forged.pdf', mime: 'application/pdf', size: 1, sha256: 'x'.repeat(64) }] });
       expect(seen.updates).toEqual({ title: 'New Title' });
     });
@@ -232,7 +232,7 @@ describe('Brain SongBook routes', () => {
     it('404s when the song is missing', async () => {
       brainStorage.updateWith.mockResolvedValue(null);
       const res = await request(app)
-        .put(`/api/brain/songbook/${SONG_ID}`)
+        .patch(`/api/brain/songbook/${SONG_ID}`)
         .send({ title: 'X' });
       expect(res.status).toBe(404);
     });

@@ -22,6 +22,8 @@ import {
   musicVideoManualAnalysisSchema,
   musicVideoTranscribeMidiRequestSchema,
   recordRenderPinFields,
+  isPaginationRequested,
+  paginateArray,
 } from '../lib/validation.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { safeUnder } from '../lib/ffmpeg.js';
@@ -60,8 +62,15 @@ const router = Router();
 const projectCreateSchema = musicVideoProjectCreateSchema.extend(recordRenderPinFields);
 const projectUpdateSchema = musicVideoProjectUpdateSchema.extend(recordRenderPinFields);
 
-router.get('/', asyncHandler(async (_req, res) => {
-  res.json(await listProjects());
+// Backward-compatible by default: returns the full projects array. When a client
+// passes `limit`/`offset`, the response becomes the bounded
+// `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
+router.get('/', asyncHandler(async (req, res) => {
+  const projects = await listProjects();
+  if (!isPaginationRequested(req.query)) {
+    return res.json(projects);
+  }
+  res.json(paginateArray(projects, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
