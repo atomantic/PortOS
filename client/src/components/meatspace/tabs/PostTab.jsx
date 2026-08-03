@@ -41,6 +41,13 @@ export const MEMORY_SUBROUTES = [
 ];
 const MEMORY_SUBROUTE_IDS = MEMORY_SUBROUTES.map((s) => s.id);
 
+// A recommendation's deepLink may carry its own query string / hash; only the
+// PATH decides whether it points at a different surface than the one in view.
+const deepLinkPath = (deepLink) => String(deepLink || '').split(/[?#]/)[0];
+
+// Query param carrying the restart nonce (see `restartInPlace` below).
+const RUN_PARAM = 'run';
+
 export default function PostTab({ tab = 'launcher', subtab, mode }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -83,6 +90,19 @@ export default function PostTab({ tab = 'launcher', subtab, mode }) {
     if (started) navigate('/post/session/run');
   }
 
+  // The top recommendation deep-links to the page already in view — which a
+  // sub-50% run legitimately produces, since the drill just missed is the very
+  // item the scheduler resurfaces first. `navigate()` to the current URL is a
+  // no-op, so bump a `run` nonce instead: it flows into each practice surface's
+  // key below and remounts the drill for a fresh run. Unrelated params survive
+  // (Morse threads its `?ref=` reference tab through the URL).
+  function restartInPlace() {
+    const params = new URLSearchParams(location.search);
+    const current = Number(params.get(RUN_PARAM));
+    params.set(RUN_PARAM, String(Number.isFinite(current) ? current + 1 : 1));
+    navigate(`${location.pathname}?${params}`);
+  }
+
   // Save success either continues the daily recommendation chain or opens the
   // deep-linkable saved result. The run id === session id.
   async function continueDailyRoutine() {
@@ -92,8 +112,10 @@ export default function PostTab({ tab = 'launcher', subtab, mode }) {
       navigate('/post/launcher');
       return;
     }
-    if (recommendation.deepLink && recommendation.deepLink !== '/post/launcher') {
-      navigate(recommendation.deepLink);
+    const target = deepLinkPath(recommendation.deepLink);
+    if (target && target !== '/post/launcher') {
+      if (target === location.pathname) restartInPlace();
+      else navigate(recommendation.deepLink);
       return;
     }
     navigate(`/post/launcher?continue=${encodeURIComponent(recommendation.id)}`);
@@ -118,6 +140,11 @@ export default function PostTab({ tab = 'launcher', subtab, mode }) {
       navigate('/post/launcher');
     }
   }
+
+  // Restart nonce set by `restartInPlace`. Folded into the key of every surface
+  // `continueDailyRoutine` can target, so a same-page "continue" remounts the
+  // drill instead of leaving its completion screen on screen.
+  const runNonce = new URLSearchParams(location.search).get(RUN_PARAM) || '';
 
   const currentDrillConfig = session.drills[session.currentDrillIndex];
   const activeType = currentDrillConfig?.type || session.currentDrill?.type;
@@ -242,6 +269,7 @@ export default function PostTab({ tab = 'launcher', subtab, mode }) {
       // mirroring the Morse trainer's `:mode` routing.
       return (
         <WordplayTrainer
+          key={`run:${runNonce}`}
           config={config}
           onConfigUpdate={setConfig}
           mode={subtab}
@@ -261,6 +289,7 @@ export default function PostTab({ tab = 'launcher', subtab, mode }) {
       // must not silently reset the other back to its default.
       return (
         <MorseTrainer
+          key={`run:${runNonce}`}
           mode={morseMode}
           onSelectMode={(id) => navigate(`/post/morse/${id}${location.search}`)}
           onExitMode={() => navigate(`/post/morse${location.search}`)}
@@ -294,6 +323,7 @@ export default function PostTab({ tab = 'launcher', subtab, mode }) {
         const elementsMode = ELEMENTS_MODE_IDS.includes(mode) ? mode : null;
         return (
           <ElementsSong
+            key={`run:${runNonce}`}
             item={elementsItem}
             mode={elementsMode}
             onSelectMode={(id) => navigate(`/post/memory/elements/${id}`)}
@@ -311,7 +341,7 @@ export default function PostTab({ tab = 'launcher', subtab, mode }) {
       // from clean state without a manual reset.
       return (
         <MemoryPractice
-          key={`${subtab}:${practiceMode || 'picker'}`}
+          key={`${subtab}:${practiceMode || 'picker'}:${runNonce}`}
           itemId={subtab}
           item={memoryItem?.id === subtab ? memoryItem : null}
           mode={practiceMode}

@@ -229,4 +229,36 @@ describe('PostTab memory deep-linking (issue #3249)', () => {
     expect(getPostRecommendations).toHaveBeenCalledWith(1);
     expect(screen.getByTestId('loc').textContent).toBe('/post/morse/copy');
   });
+
+  // Issue #3428: a sub-50% run legitimately makes the drill just finished the
+  // top recommendation again, so its deepLink is the page already in view.
+  // Navigating there is a no-op — Continue must restart the drill instead of
+  // leaving the completion panel on screen.
+  it('restarts the drill in place when the next recommendation deep-links to the current page', async () => {
+    getPostRecommendations.mockResolvedValueOnce({ recommendations: [{
+      id: 'memory-due:elements-song',
+      kind: 'memory-due',
+      title: 'Elements: due for review',
+      deepLink: '/post/memory/elements/element-flash',
+      priority: 0,
+    }] });
+    renderMemory('/post/memory/elements/element-flash?ref=list', { subtab: 'elements', mode: 'element-flash' });
+    await settle();
+
+    // Skip the only question (ELEMENTS_ITEM has a single-element map) to land on
+    // the completion panel with a sub-50% score.
+    fireEvent.click(screen.getByLabelText('Skip'));
+    fireEvent.click(screen.getByText('Next'));
+    await settle();
+    expect(screen.getByText('Element Flash Complete')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Continue Today's Routine"));
+    await settle();
+
+    // Fresh run: progress back at the first question, completion panel gone —
+    // and the unrelated ?ref= param survives the restart.
+    expect(screen.getByText('1 / 1')).toBeInTheDocument();
+    expect(screen.queryByText('Element Flash Complete')).not.toBeInTheDocument();
+    expect(screen.getByTestId('loc').textContent).toBe('/post/memory/elements/element-flash?ref=list&run=1');
+  });
 });
