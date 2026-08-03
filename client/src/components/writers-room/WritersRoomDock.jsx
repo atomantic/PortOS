@@ -94,7 +94,7 @@ function DockItem({ item, onStop }) {
         <button
           type="button"
           onClick={() => onStop?.(item.jobId)}
-          className="ml-1 text-gray-500 hover:text-port-error"
+          className="ml-1 p-3 -my-1 -mr-1 flex items-center justify-center text-gray-500 hover:text-port-error"
           title="Cancel this render"
           aria-label={`Cancel ${sceneLabel}`}
         >

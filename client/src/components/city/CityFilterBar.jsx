@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { STATUS_FILTERS } from '../../utils/cityFilter';
 
-export default function CityFilterBar({ filter, onChange, matchCount, onJumpToFirst }) {
+export default function CityFilterBar({ filter, onChange, matchCount, onJumpToFirst, compact = false }) {
   const inputRef = useRef(null);
   const filterRef = useRef(filter);
   const onChangeRef = useRef(onChange);
@@ -36,7 +36,11 @@ export default function CityFilterBar({ filter, onChange, matchCount, onJumpToFi
     onJumpToFirst?.();
   };
 
-  const chipBaseClass = 'font-pixel text-[9px] tracking-wider px-2 py-1 rounded border transition-colors';
+  // Compact/mobile context (rendered inside the CityHudCompact filter sheet) needs a real
+  // ≥44px touch target; the dense desktop bar keeps its small px-2 py-1 chips.
+  const chipBaseClass = compact
+    ? 'font-pixel text-[10px] tracking-wider px-3 min-h-[44px] flex items-center rounded border transition-colors'
+    : 'font-pixel text-[9px] tracking-wider px-2 py-1 rounded border transition-colors';
 
   return (
     <div className="pointer-events-auto bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg px-2 py-2 flex items-center gap-2 flex-wrap">
@@ -86,7 +90,8 @@ export default function CityFilterBar({ filter, onChange, matchCount, onJumpToFi
             onChange={(e) => onChange({ ...filter, search: e.target.value })}
             onBlur={() => { if (!filter.search) setOpen(false); }}
             placeholder="search apps…"
-            className="font-pixel text-[10px] tracking-wide bg-black/60 border border-cyan-500/30 rounded px-2 py-1 text-cyan-300 placeholder:text-cyan-500/30 focus:outline-none focus:border-cyan-400/70 w-32"
+            aria-label="Search apps"
+            className={`font-pixel text-[10px] tracking-wide bg-black/60 border border-cyan-500/30 rounded px-2 text-cyan-300 placeholder:text-cyan-500/30 focus:outline-none focus:border-cyan-400/70 w-32 ${compact ? 'min-h-[44px]' : 'py-1'}`}
           />
           {filter.search && (
             <span className="font-pixel text-[8px] text-cyan-500/50 tracking-wider">

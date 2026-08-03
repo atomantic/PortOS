@@ -10,11 +10,12 @@
  * tab is deep-linkable and survives reload. `tab` defaults to `artists`.
  */
 
-import { useParams, Navigate, Link } from 'react-router';
+import { useParams, useNavigate, Navigate } from 'react-router';
 import { Music as MusicIcon, Mic, Disc3, AudioLines } from 'lucide-react';
 import ArtistsManager from '../components/music/ArtistsManager';
 import AlbumsManager from '../components/music/AlbumsManager';
 import TracksManager from '../components/music/TracksManager';
+import TabPills from '../components/ui/TabPills';
 
 const TABS = [
   { id: 'artists', label: 'Artists', icon: Mic },
@@ -26,6 +27,7 @@ const VALID = new Set(TABS.map((t) => t.id));
 
 export default function Music() {
   const { tab } = useParams();
+  const navigate = useNavigate();
   const active = tab || 'artists';
   // Unknown tab → redirect to the default rather than render an empty shell.
   if (!VALID.has(active)) return <Navigate to="/music/artists" replace />;
@@ -37,26 +39,16 @@ export default function Music() {
         <h1 className="text-2xl font-bold text-white">Music</h1>
       </div>
 
-      <div className="flex items-center gap-1 mb-6 border-b border-port-border">
-        {TABS.map((t) => {
-          const Icon = t.icon;
-          const isActive = t.id === active;
-          return (
-            <Link
-              key={t.id}
-              to={`/music/${t.id}`}
-              className={`inline-flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px ${
-                isActive
-                  ? 'border-port-accent text-white'
-                  : 'border-transparent text-gray-400 hover:text-white'
-              }`}
-            >
-              <Icon size={15} aria-hidden="true" />
-              {t.label}
-            </Link>
-          );
-        })}
-      </div>
+      {/* Selection lives in the URL (`/music/:tab`) — TabPills drives onChange
+          callbacks rather than links, so we navigate() to keep the route canonical
+          and deep-linkable. */}
+      <TabPills
+        tabs={TABS}
+        activeTab={active}
+        onChange={(id) => navigate(`/music/${id}`)}
+        ariaLabel="Music sections"
+        className="mb-6"
+      />
 
       {active === 'artists' && <ArtistsManager />}
       {active === 'albums' && <AlbumsManager />}

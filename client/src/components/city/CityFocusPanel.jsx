@@ -100,7 +100,7 @@ export default function CityFocusPanel({ app, notFound = false, agents = [], onC
             onClick={onClose}
             aria-label="Close focus and return to overview"
             title="Close (return to overview)"
-            className="shrink-0 w-8 h-8 flex items-center justify-center text-gray-400 hover:text-cyan-400 transition-colors font-pixel text-[13px]"
+            className="shrink-0 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-cyan-400 transition-colors font-pixel text-[13px]"
           >
             ✕
           </button>
@@ -159,7 +159,7 @@ export default function CityFocusPanel({ app, notFound = false, agents = [], onC
           <button
             type="button"
             onClick={() => onOpenApp?.(app.id)}
-            className="flex-1 font-pixel text-[10px] text-cyan-400 tracking-wider border border-cyan-500/40 rounded px-2 py-2 hover:bg-cyan-500/10 transition-colors"
+            className="flex-1 min-h-[44px] font-pixel text-[10px] text-cyan-400 tracking-wider border border-cyan-500/40 rounded px-2 py-2 hover:bg-cyan-500/10 transition-colors"
             title="Open the app detail page"
           >
             OPEN APP {'>'}
@@ -167,7 +167,7 @@ export default function CityFocusPanel({ app, notFound = false, agents = [], onC
           <button
             type="button"
             onClick={onClose}
-            className="font-pixel text-[10px] text-gray-400 tracking-wider border border-cyan-500/20 rounded px-2 py-2 hover:text-cyan-400 hover:border-cyan-500/40 transition-colors"
+            className="min-h-[44px] font-pixel text-[10px] text-gray-400 tracking-wider border border-cyan-500/20 rounded px-2 py-2 hover:text-cyan-400 hover:border-cyan-500/40 transition-colors"
             title="Return to the city overview"
           >
             BACK

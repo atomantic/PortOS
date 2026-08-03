@@ -125,7 +125,7 @@ export default function CityHudCompact({
     if (activePane === 'filter') {
       return (
         <div className="p-3">
-          <CityFilterBar filter={filter} onChange={onFilterChange} onJumpToFirst={onJumpToFirst} matchCount={matchCount} />
+          <CityFilterBar filter={filter} onChange={onFilterChange} onJumpToFirst={onJumpToFirst} matchCount={matchCount} compact />
         </div>
       );
     }

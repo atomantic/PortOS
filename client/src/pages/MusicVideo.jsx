@@ -70,7 +70,7 @@ const STATUS_COLORS = {
 function YoutubeImportControls({ id, url, onUrlChange, job, onStart, compact = false, disabled = false }) {
   const size = compact ? 12 : 13;
   const py = compact ? 'py-1' : 'py-1.5';
-  const btnExtra = compact ? '' : 'text-xs whitespace-nowrap min-h-[40px] sm:min-h-0';
+  const btnExtra = compact ? '' : 'text-xs whitespace-nowrap min-h-[44px] sm:min-h-0';
   return (
     <>
       <input
@@ -902,7 +902,7 @@ export default function MusicVideo() {
               <p className="text-xs text-port-text-muted">Track set: {trackName(form.trackId)}</p>
             )}
             <button type="submit" disabled={ytImportCreate.active}
-              className="w-full flex items-center justify-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0 disabled:opacity-50">
+              className="w-full flex items-center justify-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
               <Plus size={16} /> Create
             </button>
         </form>
@@ -937,7 +937,7 @@ export default function MusicVideo() {
         <button
           type="button"
           onClick={() => setCreateOpen(true)}
-          className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-1.5 text-sm min-h-[40px] sm:min-h-0"
+          className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0"
         >
           <Plus size={15} /> New project
         </button>
@@ -963,12 +963,12 @@ export default function MusicVideo() {
                   <div className="min-w-0 flex flex-1 flex-wrap items-center justify-end gap-2">
                     <button onClick={handleAnalyze} disabled={analyzing || (!selected.trackId && !selected.uploadedAudioFilename)}
                       title={!selected.trackId && !selected.uploadedAudioFilename ? 'Link a track first' : 'Analyze beat grid'}
-                      className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0 disabled:opacity-50">
+                      className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
                       <Activity size={15} /> {analyzing ? 'Analyzing…' : 'Analyze'}
                     </button>
                     {midiTargetsSelected ? (
                       <button onClick={midiJob.cancel} title="Cancel MIDI transcription"
-                        className="flex items-center gap-1 bg-port-warning/20 text-port-warning border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0">
+                        className="flex items-center gap-1 bg-port-warning/20 text-port-warning border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0">
                         <Activity size={15} className="animate-spin" /> {midiJob.stageLabel} · Cancel
                       </button>
                     ) : (
@@ -985,14 +985,14 @@ export default function MusicVideo() {
                           title={!selected.trackId && !selected.uploadedAudioFilename
                             ? 'Link a track first'
                             : `Transcribe the track to MIDI with MuScriptor (${midiModel} model, local — installs automatically on first use)`}
-                          className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0 disabled:opacity-50">
+                          className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
                           <Music size={15} /> MIDI
                         </button>
                       </>
                     )}
                     <button onClick={handlePlan} disabled={planning || !selected.audioAnalysis}
                       title={!selected.audioAnalysis ? 'Analyze the track first' : 'AI-propose a scene per song section'}
-                      className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0 disabled:opacity-50">
+                      className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
                       <Wand2 size={15} /> {planning ? 'Planning…' : 'AI Plan'}
                     </button>
                     <button onClick={handleAutoArrange}
@@ -1002,7 +1002,7 @@ export default function MusicVideo() {
                         : (selected.scenes || []).length === 0
                           ? 'Add scenes first'
                           : 'Distribute scenes across song sections by energy'}
-                      className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0 disabled:opacity-50">
+                      className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
                       <Wand2 size={15} /> {arranging ? 'Arranging…' : 'Auto-arrange'}
                     </button>
                     <RecordRenderPinRow
@@ -1138,7 +1138,7 @@ export default function MusicVideo() {
                       onClick={handleGenerateMissingFrames}
                       disabled={sceneCount === 0 || missingFrameCount === 0 || Object.keys(genScenes).length > 0}
                       title={missingFrameCount > 0 ? `Generate ${missingFrameCount} missing reference frame${missingFrameCount === 1 ? '' : 's'}` : 'Every scene has a reference frame'}
-                      className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0 disabled:opacity-50"
+                      className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50"
                     >
                       <ImageIcon size={15} /> Frames {referenceFrameCount}/{sceneCount}
                     </button>
@@ -1148,7 +1148,7 @@ export default function MusicVideo() {
                       title={referenceFrameCount !== sceneCount
                         ? 'Generate every reference frame first'
                         : (missingVideoCount > 0 ? `Generate ${missingVideoCount} missing scene video${missingVideoCount === 1 ? '' : 's'}` : 'Every scene has a video')}
-                      className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0 disabled:opacity-50"
+                      className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50"
                     >
                       <Video size={15} /> Videos {renderableSceneCount}/{sceneCount}
                     </button>
@@ -1164,13 +1164,13 @@ export default function MusicVideo() {
                       onClick={handleClone}
                       disabled={cloning}
                       title={`Create an editable v${(selected.version || 1) + 1}; keep scene media attached and clear the final render`}
-                      className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0 disabled:opacity-50"
+                      className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50"
                     >
                       <Copy size={15} /> {cloning ? 'Forking…' : `Fork v${(selected.version || 1) + 1}`}
                     </button>
                     {render ? (
                       <button onClick={handleCancelRender} title="Cancel render"
-                        className="flex items-center gap-1 bg-port-warning/20 text-port-warning border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0">
+                        className="flex items-center gap-1 bg-port-warning/20 text-port-warning border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0">
                         <Activity size={15} className="animate-spin" /> {renderProgress}% · Cancel
                       </button>
                     ) : (
@@ -1180,12 +1180,12 @@ export default function MusicVideo() {
                           : renderableSceneCount !== sceneCount
                             ? `Generate videos for all ${sceneCount} scenes first`
                             : 'Render the complete music video over the track'}
-                        className="flex items-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0 disabled:opacity-50">
+                        className="flex items-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
                         <Film size={15} /> Render final
                       </button>
                     )}
                     <button onClick={() => handleDelete(selected.id)} title="Delete project"
-                      className="flex items-center gap-1 text-port-error border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0">
+                      className="flex items-center gap-1 text-port-error border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0">
                       <Trash2 size={15} />
                     </button>
                   </div>
@@ -1381,7 +1381,7 @@ export default function MusicVideo() {
 
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-medium">Scene board</h3>
-                <button onClick={handleAddScene} className="flex items-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0">
+                <button onClick={handleAddScene} className="flex items-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0">
                   <Plus size={15} /> Add scene
                 </button>
               </div>
@@ -1449,7 +1449,7 @@ export default function MusicVideo() {
                             className="w-32 aspect-video object-cover rounded border border-port-border" />
                         )}
                         <button onClick={() => handleGenerateFrame(scene)} disabled={!!genScenes[scene.sceneId]}
-                          className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[40px] sm:min-h-0 whitespace-nowrap"
+                          className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
                           title="Generate a still reference frame for this scene">
                           {genScenes[scene.sceneId] ? <Activity size={14} className="animate-spin" /> : <ImageIcon size={14} />}
                           {genScenes[scene.sceneId] ? 'Generating frame…' : (scene.referenceImageId ? 'Regenerate frame' : 'Generate frame')}
@@ -1465,7 +1465,7 @@ export default function MusicVideo() {
                       )}
                       <button onClick={() => handleGenerateVideo(scene)}
                         disabled={videoSettingsSaving || !scene.referenceImageId || !!genVideoScenes[scene.sceneId] || (audioReactiveSelected && !audioReactiveReady)}
-                        className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[40px] sm:min-h-0 whitespace-nowrap"
+                        className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
                         title={scene.referenceImageId ? "Generate this scene's video from its reference frame (i2v)" : 'Generate a reference frame first'}>
                         {genVideoScenes[scene.sceneId] ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
                         {genVideoScenes[scene.sceneId] ? 'Generating video…' : (scene.videoHistoryId ? 'Regenerate video' : 'Generate video')}
@@ -1474,7 +1474,7 @@ export default function MusicVideo() {
                         <button
                           onClick={() => handleContinueVideo(scene)}
                           disabled={videoSettingsSaving || !!genVideoScenes[scene.sceneId]}
-                          className="flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[40px] sm:min-h-0 whitespace-nowrap"
+                          className="flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
                           title="Native-extend this clip from its final latent frames and attach the longer result to this scene"
                         >
                           <Video size={14} /> Continue shot
