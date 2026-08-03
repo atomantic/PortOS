@@ -252,6 +252,55 @@ describe('TextStagePanel', () => {
       expect(output).toHaveValue('My unsaved edits.');
     });
 
+    it('reviews edits typed while the generation was in flight', async () => {
+      let resolveGenerate;
+      generatePipelineStage.mockReturnValue(new Promise((r) => { resolveGenerate = r; }));
+      renderPanel(makeIssue({ status: 'ready', output: 'Saved idea text.' }));
+
+      // Clean editor at kickoff, so Generate fires without the confirm row.
+      await userEvent.click(screen.getByRole('button', { name: 'Generate' }));
+      const output = screen.getByPlaceholderText('output…');
+      await userEvent.clear(output);
+      await userEvent.type(output, 'Typed mid-run.');
+
+      await act(async () => resolveGenerate({
+        stage: { status: 'ready', input: '', output: 'Freshly generated text.', runHistory: [] },
+      }));
+
+      expect(await screen.findByRole('button', { name: /Use new version/i })).toBeInTheDocument();
+      expect(output).toHaveValue('Typed mid-run.');
+    });
+
+    it('drops a result that lands after the panel moved to another record', async () => {
+      let resolveGenerate;
+      generatePipelineStage.mockReturnValue(new Promise((r) => { resolveGenerate = r; }));
+      const { rerender } = renderPanel(makeIssue({ status: 'ready', output: 'Saved idea text.' }));
+
+      await userEvent.click(screen.getByRole('button', { name: 'Generate' }));
+
+      // The panel is reused across issues — swap the record mid-run.
+      const otherIssue = {
+        id: 'iss-2',
+        stages: { idea: { status: 'ready', input: '', output: 'Another idea entirely.', runHistory: [] } },
+      };
+      rerender(
+        <TextStagePanel
+          issue={otherIssue}
+          stageId="idea"
+          seedPlaceholder="seed…"
+          outputPlaceholder="output…"
+          onStageUpdate={() => {}}
+        />,
+      );
+
+      await act(async () => resolveGenerate({
+        stage: { status: 'ready', input: '', output: 'Freshly generated text.', runHistory: [] },
+      }));
+
+      expect(screen.queryByRole('button', { name: /Use new version/i })).not.toBeInTheDocument();
+      expect(screen.getByPlaceholderText('output…')).toHaveValue('Another idea entirely.');
+    });
+
     it('lifts the generated stage to the parent even while the review is open', async () => {
       const onStageUpdate = vi.fn();
       await generateOverEdits({ incoming: 'Freshly generated text.', onStageUpdate });

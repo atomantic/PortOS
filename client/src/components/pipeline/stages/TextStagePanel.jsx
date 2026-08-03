@@ -85,6 +85,10 @@ export default function TextStagePanel({
     pendingDiffRef.current = next;
     setPendingDiff(next);
   };
+  // Read at generation-resolve time: a run that takes minutes can land after the
+  // user typed into the editor, or after the panel moved to another record.
+  const draftOutputRef = useRef(draftOutput);
+  useEffect(() => { draftOutputRef.current = draftOutput; }, [draftOutput]);
 
   // Live generation progress (#3393). The URL is set for the duration of one
   // generate call; the server opens the channel when we attach, so subscribing
@@ -96,6 +100,8 @@ export default function TextStagePanel({
   const [progressFor, setProgressFor] = useState(null);
   const { frames } = useSseProgress(progressUrl, { enabled: !!progressUrl });
   const progressKey = `${issue.id}:${stageId}`;
+  const activeKeyRef = useRef(progressKey);
+  useEffect(() => { activeKeyRef.current = progressKey; }, [progressKey]);
 
   // Other text stages that currently have content — the candidate source
   // material for this generation. Excludes the target stage itself. Lets you
@@ -149,11 +155,12 @@ export default function TextStagePanel({
 
   const handleGenerate = async () => {
     setConfirmRegenerate(false);
-    // Captured at kickoff: if the editor already held unsaved output edits, the
-    // incoming result goes to the diff review instead of straight into the
-    // textarea.
-    const priorDraft = draftOutput;
-    const reviewIncoming = outputDirty;
+    // Captured at kickoff: the persisted text this run started from, and which
+    // record it belongs to. Anything the editor holds that differs from the
+    // baseline once the result lands is an unsaved edit worth reviewing —
+    // whether it was typed before the run or while it was in flight.
+    const baseline = stage.output || '';
+    const requestKey = progressKey;
     // Subscribe to the progress stream first. It is purely advisory — an
     // environment without EventSource (or a channel that never opens) just
     // falls back to the spinner; generation itself is unaffected.
@@ -167,18 +174,27 @@ export default function TextStagePanel({
     setProgressUrl(null);
     if (!result) return;
     const incoming = result.stage?.output || '';
-    // Identical text needs no decision — let the normal reset path apply it.
-    if (reviewIncoming && incoming !== priorDraft) {
-      setPending({ key: progressKey, incoming });
+    const latestDraft = draftOutputRef.current;
+    // Nothing to decide when the editor never diverged from what this run
+    // started from, or when the result already matches what's in the editor.
+    // A result that lands after the panel moved to another issue/stage is never
+    // reviewed against the record now on screen.
+    if (activeKeyRef.current === requestKey && latestDraft !== baseline && latestDraft !== incoming) {
+      setPending({ key: requestKey, incoming });
     }
     onStageUpdate?.(stageId, result.stage);
     toast.success(`${PIPELINE_STAGE_LABELS[stageId]} generated`);
   };
 
+  // A review only ever belongs to the record it was generated against — a
+  // lingering one from another issue/stage is inert, never rendered or applied.
+  const activeDiff = pendingDiff?.key === progressKey ? pendingDiff : null;
+
   // Apply the reviewed generation: the server already persisted it, so this is
   // purely "stop holding my unsaved text over it."
   const applyPendingDiff = () => {
-    const incoming = pendingDiff?.incoming ?? '';
+    if (!activeDiff) return;
+    const { incoming } = activeDiff;
     setPending(null);
     setDraftOutput(incoming);
   };
@@ -261,8 +277,8 @@ export default function TextStagePanel({
           <button
             type="button"
             onClick={handleSave}
-            disabled={!dirty || saving || !!pendingDiff}
-            title={pendingDiff ? 'Resolve the new-version comparison first' : undefined}
+            disabled={!dirty || saving || !!activeDiff}
+            title={activeDiff ? 'Resolve the new-version comparison first' : undefined}
             className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-card border border-port-border text-white text-sm hover:border-port-accent/50 disabled:opacity-40"
           >
             {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
@@ -271,7 +287,7 @@ export default function TextStagePanel({
           <button
             type="button"
             onClick={outputDirty ? () => setConfirmRegenerate(true) : handleGenerate}
-            disabled={generating || actionsGated || !!pendingDiff}
+            disabled={generating || actionsGated || !!activeDiff}
             title={actionsGated
               ? 'Saving settings…'
               : (outputDirty ? 'You have unsaved edits — you’ll compare them against the new version first' : undefined)}
@@ -283,7 +299,7 @@ export default function TextStagePanel({
         </div>
       </div>
 
-      {confirmRegenerate ? (
+      {confirmRegenerate && outputDirty ? (
         <div className="flex items-center justify-between gap-3 flex-wrap border border-port-warning/40 rounded p-3 bg-port-warning/5">
           <span className="text-xs text-gray-300">
             You have unsaved edits. Generating won’t replace them — you’ll see the new version diffed against your text and choose.
@@ -292,7 +308,10 @@ export default function TextStagePanel({
             <button
               type="button"
               onClick={handleGenerate}
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-accent text-white text-sm font-medium"
+              // Same gates as the Generate button it stands in for — the confirm
+              // row can sit open while a save or a settings write starts.
+              disabled={generating || actionsGated || saving}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-50"
             >
               <GitCompare size={14} />
               Generate & compare
@@ -308,7 +327,7 @@ export default function TextStagePanel({
         </div>
       ) : null}
 
-      {pendingDiff ? (
+      {activeDiff ? (
         <div className="border border-port-accent/50 rounded bg-port-bg/40 overflow-hidden">
           <div className="flex items-center justify-between gap-3 flex-wrap p-3">
             <span className="text-xs text-gray-300">
@@ -337,7 +356,7 @@ export default function TextStagePanel({
           <div className="max-h-72 overflow-y-auto">
             {/* Diffed against the live editor text, not a kickoff snapshot, so
                 typing while the review is open keeps the comparison honest. */}
-            <InlineDiff oldText={draftOutput} newText={pendingDiff.incoming} />
+            <InlineDiff oldText={draftOutput} newText={activeDiff.incoming} />
           </div>
         </div>
       ) : null}
