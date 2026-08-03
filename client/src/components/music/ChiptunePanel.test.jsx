@@ -1,7 +1,23 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import ChiptunePanel from './ChiptunePanel';
 import * as api from '../../services/api';
+
+// The panel drives the real chiptune player, which needs WebAudio (absent in
+// jsdom). Stub only the PLAYER — the pure schedule build stays real, since the
+// summary line and the loop-length readout are derived from it — with a
+// hand-driven transport so the preview playhead is assertable.
+const audio = vi.hoisted(() => ({ playing: false, position: 0, loopSec: 0 }));
+vi.mock('../../lib/chiptunePlayback.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  createChiptunePlayer: () => ({
+    play: async () => { audio.playing = true; },
+    stop: () => { audio.playing = false; },
+    isPlaying: () => audio.playing,
+    position: () => audio.position,
+    loopSec: () => audio.loopSec,
+  }),
+}));
 
 vi.mock('../../services/api', () => ({
   generateTrackChiptune: vi.fn(),
@@ -44,6 +60,9 @@ const pending = () => new Promise(() => {});
 describe('ChiptunePanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    audio.playing = false;
+    audio.position = 0;
+    audio.loopSec = 0;
     api.getSettings.mockResolvedValue({ music: {} });
     api.getApps.mockResolvedValue([GAME_APP]);
     api.updateSettings.mockResolvedValue({});
@@ -126,6 +145,84 @@ describe('ChiptunePanel', () => {
         { appId: 'game-app', subdir: 'game/assets/music', slug: 'my-test-song' },
         { silent: true },
       );
+    });
+  });
+
+  // The preview playhead is painted by a rAF loop straight into the DOM (no
+  // per-frame setState) — stub requestAnimationFrame to a manual queue so each
+  // frame() runs exactly one frame and the assertions read the painted nodes.
+  describe('preview progress bar', () => {
+    let rafQueue;
+    let cancelSpy;
+    const frame = () => {
+      const q = rafQueue;
+      rafQueue = [];
+      act(() => { q.forEach((cb) => cb()); });
+    };
+
+    beforeEach(() => {
+      rafQueue = [];
+      cancelSpy = vi.fn();
+      vi.stubGlobal('requestAnimationFrame', (cb) => { rafQueue.push(cb); return rafQueue.length; });
+      vi.stubGlobal('cancelAnimationFrame', cancelSpy);
+    });
+    afterEach(() => { vi.unstubAllGlobals(); });
+
+    const startPreview = async () => {
+      const result = render(<ChiptunePanel track={TRACK} onTrackUpdate={vi.fn()} />);
+      const playBtn = await screen.findByRole('button', { name: /preview loop/i });
+      await act(async () => { fireEvent.click(playBtn); });
+      await screen.findByRole('button', { name: /^stop$/i });
+      return result;
+    };
+
+    it('tracks the playhead across a loop pass and wraps on the next one', async () => {
+      audio.loopSec = 20;
+      await startPreview();
+      const bar = screen.getByTestId('chiptune-progress-bar');
+
+      audio.position = 5;
+      frame();
+      expect(bar.style.transform).toBe('scaleX(0.25)');
+      expect(screen.getByTestId('chiptune-progress-time')).toHaveTextContent('0:05.00');
+
+      // Second pass: position() keeps climbing (the player re-bases its cursor
+      // rather than restarting), so the bar must wrap, not run off the end.
+      audio.position = 25;
+      frame();
+      expect(bar.style.transform).toBe('scaleX(0.25)');
+      expect(screen.getByTestId('chiptune-progress-time')).toHaveTextContent('0:05.00');
+    });
+
+    it('clamps the transport lead-in (negative position) to the start of the bar', async () => {
+      audio.loopSec = 20;
+      await startPreview();
+
+      audio.position = -0.08;
+      frame();
+      expect(screen.getByTestId('chiptune-progress-bar').style.transform).toBe('scaleX(0)');
+    });
+
+    it('cancels the frame loop and resets the bar on stop', async () => {
+      audio.loopSec = 20;
+      await startPreview();
+      audio.position = 10;
+      frame();
+      expect(screen.getByTestId('chiptune-progress-bar').style.transform).toBe('scaleX(0.5)');
+
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^stop$/i })); });
+      expect(cancelSpy).toHaveBeenCalled();
+      expect(screen.getByTestId('chiptune-progress-bar').style.transform).toBe('scaleX(0)');
+      expect(screen.getByTestId('chiptune-progress-time')).toHaveTextContent('0:00.00');
+    });
+
+    it('cancels the frame loop on unmount while playing', async () => {
+      audio.loopSec = 20;
+      const { unmount } = await startPreview();
+      frame();
+      cancelSpy.mockClear();
+      unmount();
+      expect(cancelSpy).toHaveBeenCalled();
     });
   });
 });

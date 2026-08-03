@@ -165,7 +165,10 @@ function scheduleChipVoice(c, ev, startAt, destination, waveCache) {
  *
  * @param {() => object|null} getScore — returns the current score (or null)
  * @param {{ onLoop?: (loopCount:number) => void }} [callbacks]
- * @returns {{ play, stop, isPlaying }}
+ * @returns {{ play, stop, isPlaying, position, loopSec }} — `position()` is the
+ *   elapsed preview time in seconds, MONOTONIC across loop passes (the cursor
+ *   re-bases rather than restarting), and `loopSec()` the exact length of one
+ *   pass, so a UI renders the per-pass playhead as `position() % loopSec()`.
  */
 export function createChiptunePlayer(getScore, { onLoop } = {}) {
   let schedule = null;
@@ -213,5 +216,15 @@ export function createChiptunePlayer(getScore, { onLoop } = {}) {
     },
   });
 
-  return { play: transport.play, stop: transport.stop, isPlaying: transport.isPlaying };
+  return {
+    play: transport.play,
+    stop: transport.stop,
+    isPlaying: transport.isPlaying,
+    position: transport.position,
+    // The length of the schedule that is actually SOUNDING (built at play()),
+    // not of the caller's current score — a regeneration mid-preview must not
+    // re-scale a playhead against a loop nobody is hearing yet. 0 before the
+    // first play.
+    loopSec: () => (schedule ? schedule.totalSec : 0),
+  };
 }

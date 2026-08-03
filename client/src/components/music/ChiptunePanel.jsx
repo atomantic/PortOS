@@ -18,6 +18,7 @@ import useProviderModels from '../../hooks/useProviderModels';
 import useMounted from '../../hooks/useMounted';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { buildChiptuneSchedule, createChiptunePlayer } from '../../lib/chiptunePlayback.js';
+import { formatTimecode } from '../../utils/formatters';
 import {
   generateTrackChiptune, renderTrackChiptune, publishTrackChiptune,
   getApps, getSettings, updateSettings,
@@ -66,6 +67,33 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix }) {
 
   // Stop playback when the selected track changes or the panel unmounts.
   useEffect(() => () => { playerRef.current?.stop(); setPlaying(false); }, [track?.id]);
+
+  // Preview playhead — painted straight into the DOM by the rAF loop below, so
+  // the bar tracks at frame rate without re-rendering the panel 60x a second.
+  const progressRef = useRef(null);
+  const elapsedRef = useRef(null);
+
+  // rAF clock, mirroring PianoRoll's: animate while playing, paint one idle
+  // frame otherwise. Cancelled on stop (the effect re-runs) and on unmount.
+  useEffect(() => {
+    const paint = (fraction, sec) => {
+      if (progressRef.current) progressRef.current.style.transform = `scaleX(${fraction})`;
+      if (elapsedRef.current) elapsedRef.current.textContent = formatTimecode(sec);
+    };
+    if (!playing) { paint(0, 0); return undefined; }
+    let raf = 0;
+    const loop = () => {
+      const player = playerRef.current;
+      const loopSec = player.loopSec();
+      // position() is monotonic across loop passes and NEGATIVE during the
+      // transport's lead-in — clamp, then modulo onto the current pass.
+      const within = loopSec > 0 ? Math.max(0, player.position()) % loopSec : 0;
+      paint(loopSec > 0 ? within / loopSec : 0, within);
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [playing]);
 
   // Reseed the prompt + publish slug from the newly-selected track.
   useEffect(() => {
@@ -128,6 +156,7 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix }) {
       patterns: Object.keys(score.patterns || {}).length,
       order: (score.order || []).join(' '),
       seconds: Math.round(totalSec * 10) / 10,
+      totalSec,
     };
   }, [score]);
 
@@ -310,6 +339,23 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix }) {
             >
               <Gamepad2 size={14} /> Publish to app…
             </button>
+          </div>
+
+          {/* Preview position. The bar is decorative (aria-hidden) — the
+              timecode beside it carries the same information as text. */}
+          <div className="flex items-center gap-2">
+            <div className="flex-1 h-1.5 rounded-full bg-port-border overflow-hidden" aria-hidden="true">
+              <div
+                ref={progressRef}
+                data-testid="chiptune-progress-bar"
+                className="h-full w-full origin-left bg-port-accent"
+                style={{ transform: 'scaleX(0)' }}
+              />
+            </div>
+            <span className="text-[11px] font-mono text-gray-500 tabular-nums whitespace-nowrap">
+              <span ref={elapsedRef} data-testid="chiptune-progress-time">0:00.00</span>
+              {' / '}{formatTimecode(summary.totalSec)}
+            </span>
           </div>
 
           {publishOpen ? (
