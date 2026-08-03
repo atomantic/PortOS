@@ -76,6 +76,9 @@ export { default as useMidiNotes } from './useMidiNotes.js';
 export { default as useMidiPlayer } from './useMidiPlayer.js';
 export { default as useCanvasDprSize } from './useCanvasDprSize.js';
 export { default as useCanvasRollPalette } from './useCanvasRollPalette.js';
+export { default as useLiveSuggest } from './useLiveSuggest.js';
+export { default as useSidebarResize } from './useSidebarResize.js';
+export { default as useTokenPopover } from './useTokenPopover.js';
 
 // === Mixed (both default and named) — surface both ===
 export { default as useAsyncAction } from './useAsyncAction.js';

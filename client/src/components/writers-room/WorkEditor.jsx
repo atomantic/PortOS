@@ -15,7 +15,6 @@ import {
   History,
   Timer,
   PenLine,
-  Check,
   Loader2,
   BookOpen,
   Pencil,
@@ -43,7 +42,6 @@ import {
   listWritersRoomObjects,
   promoteWritersRoomWorkToPipeline,
 } from '../../services/apiWritersRoom';
-import { listCatalogIngredientsForRef } from '../../services/apiCatalog';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 import { STATUS_LABELS } from './labels';
 import { countWords, formatDurationSec } from '../../utils/formatters';
@@ -57,8 +55,12 @@ import ProseReader from './ProseReader';
 import SyncedReview from './SyncedReview';
 import ProseTokenPopover from './ProseTokenPopover';
 import WritersRoomDock from './WritersRoomDock';
-import VoiceExemplarEditor, { VOICE_EXEMPLARS_MAX } from '../VoiceExemplarEditor';
+import WorkEditorVersions from './WorkEditorVersions';
+import WorkEditorVoicePanel from './WorkEditorVoicePanel';
 import useImageGenQueue from '../../hooks/useImageGenQueue';
+import useLiveSuggest from '../../hooks/useLiveSuggest';
+import useSidebarResize from '../../hooks/useSidebarResize';
+import useTokenPopover from '../../hooks/useTokenPopover';
 
 const ANALYSIS_KIND = { SCRIPT: 'script', CHARACTERS: 'characters', PLACES: 'places', OBJECTS: 'objects', EVALUATE: 'evaluate', FORMAT: 'format' };
 const DRAWER = { VERSIONS: 'versions', HISTORY: 'history', POLISH: 'polish', VOICE: 'voice' };
@@ -82,16 +84,6 @@ const SIDEBAR_TAB_KEY = 'wr.sidebarTab';
 
 function readReadingTheme() {
   return safeReadStorage(READING_THEME_KEY) === 'light' ? 'light' : 'dark';
-}
-
-function readSidebarWidth() {
-  const raw = safeReadStorage(SIDEBAR_WIDTH_KEY);
-  const n = raw ? parseInt(raw, 10) : NaN;
-  return Number.isFinite(n) && n >= SIDEBAR_MIN ? n : SIDEBAR_DEFAULT;
-}
-
-function persistSidebarWidth(width) {
-  safeWriteStorage(SIDEBAR_WIDTH_KEY, String(Math.round(width)));
 }
 
 function readSidebarTab() {
@@ -123,17 +115,19 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // Scenes from the latest script analysis — populated by StoryboardPanel via
   // onScenesChange so ProseReader can mark scene boundaries in Read view.
   const [latestScenes, setLatestScenes] = useState([]);
-  // Token popover state. `pop.kind`/`pop.refId` identify the hovered token,
-  // `pop.anchorEl` is the DOM ELEMENT (not a frozen DOMRect) — the popover
-  // re-reads getBoundingClientRect on each reflow so it tracks the token
-  // through scrolling and viewport resizes. `pinned` keeps the popover
-  // open after click so the user can move into it (e.g. to click
-  // "Open profile") without it dismissing.
-  const [pop, setPop] = useState(null);
-  // Cross-link hot states: `hotRef` ({kind,refId}) ties prose tokens to
-  // SceneCard chips and to bible rows; `hotScene` ties SceneCard hover to
-  // the matching ProseReader section. Both are nullable.
-  const [hotRef, setHotRef] = useState(null);
+  // Prose-token popover state machine (hover/click/pin + the cross-link
+  // `hotRef` that lights SceneCard chips and bible rows). See useTokenPopover.
+  const {
+    pop,
+    hotRef,
+    onTokenEnter: handleTokenEnter,
+    onTokenLeave: handleTokenLeave,
+    onTokenClick: handleTokenClick,
+    onPopoverEnter: handlePopoverEnter,
+    onPopoverLeave: handlePopoverLeave,
+    closePopover,
+  } = useTokenPopover();
+  // `hotScene` ties SceneCard hover to the matching ProseReader section.
   const [hotScene, setHotScene] = useState(null);
   // Live image-gen queue scoped to this page. SceneCard calls
   // queueRegister({jobId, sceneId, sceneLabel}) on render kickoff so the dock
@@ -150,8 +144,8 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
 
   // Phase 5 live mode — opt-in, per-work Creative Director continuation
   // suggestions. Optimistic mirror of work.liveMode so the toggle flips
-  // instantly; re-synced from the prop. `liveTriggerRef` holds the panel's
-  // imperative suggest fn; `liveTimerRef` is the post-typing debounce.
+  // instantly; re-synced from the prop. The panel's imperative suggest fn and
+  // the post-typing debounce live in useLiveSuggest (below).
   const [liveMode, setLiveMode] = useState(work.liveMode || null);
   useEffect(() => { setLiveMode(work.liveMode || null); }, [work.liveMode]);
   // Shared live text-suggest usage counter. The continuation panel and the CD
@@ -173,9 +167,6 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const [savingVoice, setSavingVoice] = useState(false);
   useEffect(() => { setVoiceExemplars(work.voiceExemplars || []); }, [work.id, work.voiceExemplars]);
   useEffect(() => { setVoiceAntiExemplars(work.voiceAntiExemplars || []); }, [work.id, work.voiceAntiExemplars]);
-  const liveTriggerRef = useRef(null);
-  const liveTimerRef = useRef(null);
-  const registerLiveTrigger = useCallback((fn) => { liveTriggerRef.current = fn; }, []);
   // Phase 5 live render preview — the scene/analysis/image context the storyboard
   // surfaces, fed into LiveRenderPanel so it can render the scene at the cursor
   // using the existing image-gen route + the shared render queue (queueRegister).
@@ -210,120 +201,16 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const readerRef = useRef(null);
   const overflowRef = useRef(null);
   const scrollAnimRef = useRef(null);
-  // Hover-delay timers for the prose-token popover. 200ms open, 150ms close
-  // so the popover doesn't flicker when the cursor crosses a token.
-  const popOpenTimerRef = useRef(null);
-  const popCloseTimerRef = useRef(null);
-  // Mirror of `pop?.pinned` so callbacks can read pinned state without
-  // re-binding (and so setPop updaters stay pure — StrictMode replays the
-  // updater and would emit duplicate setHotRef side effects otherwise).
-  const popPinnedRef = useRef(false);
-  useEffect(() => { popPinnedRef.current = !!pop?.pinned; }, [pop?.pinned]);
-
-  // Pass the anchor ELEMENT down (not a frozen DOMRect) so the popover can
-  // re-read getBoundingClientRect on scroll/resize and stay attached to its
-  // token. A captured rect goes stale the moment the user scrolls.
-  // While pinned, hover-driven opens are ignored — the user explicitly
-  // pinned the popover and shouldn't see it ripped out from under them as
-  // the cursor crosses other tokens. They have to click the X (or press
-  // Escape) before another token can open a new popover.
-  const handleTokenEnter = useCallback(({ kind, refId, anchor }) => {
-    if (popPinnedRef.current) return;
-    if (popCloseTimerRef.current) {
-      clearTimeout(popCloseTimerRef.current);
-      popCloseTimerRef.current = null;
-    }
-    if (popOpenTimerRef.current) clearTimeout(popOpenTimerRef.current);
-    setHotRef({ kind, refId });
-    popOpenTimerRef.current = setTimeout(() => {
-      setPop({ kind, refId, anchorEl: anchor, pinned: false });
-    }, 200);
-  }, []);
-  // Schedule the 150ms grace close. Idempotent: clears any existing close
-  // timer first so rapid enter/leave events can't pile up multiple pending
-  // timeouts that fire later and clear pop/hotRef unexpectedly. The timer
-  // also nulls its own ref after firing so external clearTimeouts on a stale
-  // id are a no-op.
-  //
-  // hotRef is only cleared when the popover actually closes (i.e. it wasn't
-  // pinned). When pinned, the popover stays visible and the cross-link
-  // highlights (SceneCard chips / bible rows) must stay lit too — clearing
-  // hotRef there would leave the popover orphaned from its visual targets.
-  const scheduleClose = useCallback(() => {
-    if (popCloseTimerRef.current) {
-      clearTimeout(popCloseTimerRef.current);
-      popCloseTimerRef.current = null;
-    }
-    popCloseTimerRef.current = setTimeout(() => {
-      popCloseTimerRef.current = null;
-      const isPinned = popPinnedRef.current;
-      if (isPinned) return;
-      setPop(null);
-      setHotRef(null);
-    }, 150);
-  }, []);
-  const handleTokenLeave = useCallback(() => {
-    if (popOpenTimerRef.current) {
-      clearTimeout(popOpenTimerRef.current);
-      popOpenTimerRef.current = null;
-    }
-    scheduleClose();
-  }, [scheduleClose]);
-  // Cursor crossed from token onto the popover itself: cancel the pending
-  // close so the user can click links inside without it dismissing on them.
-  const handlePopoverEnter = useCallback(() => {
-    if (popCloseTimerRef.current) {
-      clearTimeout(popCloseTimerRef.current);
-      popCloseTimerRef.current = null;
-    }
-    if (popOpenTimerRef.current) {
-      clearTimeout(popOpenTimerRef.current);
-      popOpenTimerRef.current = null;
-    }
-  }, []);
-  // Cursor left the popover (and didn't go back to a token): schedule the
-  // same 150ms grace close as token-leave.
-  const handlePopoverLeave = useCallback(() => {
-    scheduleClose();
-  }, [scheduleClose]);
-  const handleTokenClick = useCallback(({ kind, refId, anchor }) => {
-    if (popOpenTimerRef.current) clearTimeout(popOpenTimerRef.current);
-    if (popCloseTimerRef.current) clearTimeout(popCloseTimerRef.current);
-    setPop({ kind, refId, anchorEl: anchor, pinned: true });
-  }, []);
-  // Closing the popover (whether by Escape, X click, or auto-leave) must also
-  // drop the hot-state and any pending hover timers; otherwise SceneCard chips
-  // and bible rows can stay highlighted indefinitely after the cursor has
-  // moved on.
-  const clearPopTimers = useCallback(() => {
-    if (popOpenTimerRef.current) {
-      clearTimeout(popOpenTimerRef.current);
-      popOpenTimerRef.current = null;
-    }
-    if (popCloseTimerRef.current) {
-      clearTimeout(popCloseTimerRef.current);
-      popCloseTimerRef.current = null;
-    }
-  }, []);
-  const handlePopClose = useCallback(() => {
-    clearPopTimers();
-    setPop(null);
-    setHotRef(null);
-  }, [clearPopTimers]);
+  // Popover open/close callbacks come from useTokenPopover above.
+  // `handleOpenProfile` is the one that isn't purely popover-local: it closes
+  // the popover AND swings the sidebar/mobile tab to the matching bible section.
   const handleOpenProfile = useCallback(({ kind }) => {
-    clearPopTimers();
-    setPop(null);
-    setHotRef(null);
+    closePopover();
     if (kind === 'char') setSidebarTab(STORYBOARD_TAB.CHARACTERS);
     else if (kind === 'place') setSidebarTab(STORYBOARD_TAB.WORLD);
     else if (kind === 'object' && STORYBOARD_TAB.OBJECTS) setSidebarTab(STORYBOARD_TAB.OBJECTS);
     setMobileTab(MOBILE_TAB.STORYBOARD);
-  }, [clearPopTimers]);
-
-  useEffect(() => () => {
-    if (popOpenTimerRef.current) clearTimeout(popOpenTimerRef.current);
-    if (popCloseTimerRef.current) clearTimeout(popCloseTimerRef.current);
-  }, []);
+  }, [closePopover]);
 
   const smoothScrollTextarea = useCallback((ta, targetTop, ms = 220) => {
     if (!ta) return;
@@ -385,6 +272,17 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
 
   const dirty = body !== savedBody;
   const wordCount = useMemo(() => countWords(body), [body]);
+
+  // Live mirror of `body` for callbacks that only READ the prose (#3387).
+  // Typing is the hot path here: `setBody` re-renders WorkEditor on every
+  // keystroke, and any handler with `body` in its useCallback deps would get a
+  // fresh identity each time — which defeats the memo boundary on the heavy
+  // <StoryboardPanel> sibling and re-renders the whole storyboard tree per
+  // character. Reading through the ref keeps those handlers referentially
+  // stable. Assigned during render (same pattern as `handleSaveRef` below) so
+  // the value is current before any child effect or event handler runs.
+  const bodyRef = useRef(body);
+  bodyRef.current = body;
 
   const mountedRef = useMounted();
 
@@ -487,16 +385,18 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     onChange?.({ ...updated, activeDraftBody: body });
   };
 
-  const commitImageStyle = async (next) => {
+  // useCallback + bodyRef: this is a StoryboardPanel prop, and the panel is
+  // memoized — a fresh identity per keystroke would defeat the memo boundary.
+  const commitImageStyle = useCallback(async (next) => {
     const updated = await updateWritersRoomWork(work.id, { imageStyle: next }, { silent: true }).catch((err) => {
       if (mountedRef.current) toast.error(`Style save failed: ${err.message}`);
       return null;
     });
     if (updated && mountedRef.current) {
-      onChange?.({ ...updated, activeDraftBody: body });
+      onChange?.({ ...updated, activeDraftBody: bodyRef.current });
       toast.success(next.presetId === 'none' ? 'World style cleared' : 'World style saved');
     }
-  };
+  }, [work.id, onChange, mountedRef]);
 
   // Persist the voice exemplars (#2179). Drop rows with a blank passage before
   // sending (the server prunes them too, but this keeps the round-tripped state
@@ -536,25 +436,26 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const getCursorContext = useCallback(() => {
     const ta = textareaRef.current;
     if (!ta) return null;
-    const start = ta.selectionStart ?? body.length;
+    const text = bodyRef.current;
+    const start = ta.selectionStart ?? text.length;
     const end = ta.selectionEnd ?? start;
     const WINDOW = 4000;
     // Clamp each slice to the server's per-field caps (before/after 12k,
     // selection 8k) so a huge selection can't 400 the request — the schema
     // would reject it and surface as a red toast instead of a graceful notice.
     return {
-      before: body.slice(Math.max(0, start - WINDOW), start),
-      after: body.slice(end, end + WINDOW),
-      selection: body.slice(start, end).slice(0, 8000),
+      before: text.slice(Math.max(0, start - WINDOW), start),
+      after: text.slice(end, end + WINDOW),
+      selection: text.slice(start, end).slice(0, 8000),
     };
-  }, [body]);
+  }, []);
 
   // Caret offset into the body for the live render preview's scene resolution.
   // Falls back to end-of-body when the textarea isn't mounted (e.g. Read view).
   const getCursorOffset = useCallback(() => {
     const ta = textareaRef.current;
-    return ta?.selectionStart ?? body.length;
-  }, [body]);
+    return ta?.selectionStart ?? bodyRef.current.length;
+  }, []);
 
   // Insert a suggested snippet at the caret (replacing any selection), then
   // restore focus + caret after the inserted text so the writer keeps flowing.
@@ -562,12 +463,13 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     const ta = textareaRef.current;
     const snippet = opt?.text || '';
     if (!snippet) return;
-    const start = ta?.selectionStart ?? body.length;
+    const text = bodyRef.current;
+    const start = ta?.selectionStart ?? text.length;
     const end = ta?.selectionEnd ?? start;
     // Space-pad so an inserted snippet doesn't weld onto the preceding word.
-    const needsLeadingSpace = start > 0 && !/\s$/.test(body.slice(0, start));
+    const needsLeadingSpace = start > 0 && !/\s$/.test(text.slice(0, start));
     const piece = (needsLeadingSpace ? ' ' : '') + snippet;
-    const next = body.slice(0, start) + piece + body.slice(end);
+    const next = text.slice(0, start) + piece + text.slice(end);
     setBody(next);
     const caret = start + piece.length;
     requestAnimationFrame(() => {
@@ -577,21 +479,15 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
       el.setSelectionRange(caret, caret);
     });
     toast('Inserted — save to persist', { icon: '✍️' });
-  }, [body]);
+  }, []);
 
   // Debounce a suggest after the writer pauses typing. Only arms while live
   // mode is on and we're in the edit textarea; cleared on every keystroke and
   // on unmount so a deferred fire can't hit a dead/closed editor.
-  const scheduleLiveSuggest = useCallback(() => {
-    if (!liveEnabled || viewMode !== 'edit') return;
-    if (liveTimerRef.current) clearTimeout(liveTimerRef.current);
-    liveTimerRef.current = setTimeout(() => {
-      liveTimerRef.current = null;
-      if (mountedRef.current) liveTriggerRef.current?.();
-    }, liveDebounceMs);
-  }, [liveEnabled, viewMode, liveDebounceMs, mountedRef]);
-
-  useEffect(() => () => { if (liveTimerRef.current) clearTimeout(liveTimerRef.current); }, []);
+  const { registerTrigger: registerLiveTrigger, scheduleSuggest: scheduleLiveSuggest } = useLiveSuggest({
+    enabled: liveEnabled && viewMode === 'edit',
+    debounceMs: liveDebounceMs,
+  });
 
   const toggleLiveMode = useCallback(async () => {
     const nextEnabled = !liveEnabled;
@@ -737,12 +633,13 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     }
 
     const ta = textareaRef.current;
-    if (!ta || !body) return;
+    const text = bodyRef.current;
+    if (!ta || !text) return;
     const heading = scene.heading || '';
     let idx = -1;
     for (const prefix of ['## ', '### ', '# ', '']) {
       if (!heading) break;
-      idx = body.indexOf(prefix + heading);
+      idx = text.indexOf(prefix + heading);
       if (idx >= 0) break;
     }
     if (idx < 0) {
@@ -750,7 +647,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         if (!candidate) continue;
         const snippet = String(candidate).trim().slice(0, 40);
         if (!snippet) continue;
-        idx = body.indexOf(snippet);
+        idx = text.indexOf(snippet);
         if (idx >= 0) break;
       }
     }
@@ -758,7 +655,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     if (idx >= 0) {
       ta.focus();
       ta.setSelectionRange(idx, idx);
-      const fraction = idx / body.length;
+      const fraction = idx / text.length;
       target = Math.max(0, fraction * (ta.scrollHeight - ta.clientHeight));
     } else if (totalScenes > 0 && sceneIndex >= 0) {
       const fraction = sceneIndex / totalScenes;
@@ -767,7 +664,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
       return;
     }
     smoothScrollTextarea(ta, target);
-  }, [body, viewMode, smoothScrollTextarea]);
+  }, [viewMode, smoothScrollTextarea]);
 
   // Per-scene Debug menu actions — until scoped tools land, route to the
   // most relevant tab/drawer.
@@ -781,48 +678,19 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     else if (kind === 'why-image') setDrawer(DRAWER.HISTORY);
   }, []);
 
-  // Drag-to-resize sidebar (desktop only).
-  const splitRef = useRef(null);
-  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
-  const sidebarWidthRef = useRef(sidebarWidth);
-  useEffect(() => { sidebarWidthRef.current = sidebarWidth; }, [sidebarWidth]);
-  const dragStartRef = useRef(null);
-
-  const onSplitMouseDown = useCallback((e) => {
-    e.preventDefault();
-    const containerWidth = splitRef.current?.getBoundingClientRect().width ?? 0;
-    dragStartRef.current = { startX: e.clientX, startWidth: sidebarWidthRef.current, containerWidth };
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-  }, []);
-
-  useEffect(() => {
-    const onMove = (e) => {
-      if (!dragStartRef.current) return;
-      const { startX, startWidth, containerWidth } = dragStartRef.current;
-      const max = Math.max(SIDEBAR_MIN + 1, containerWidth * SIDEBAR_MAX_FRACTION);
-      const next = Math.min(max, Math.max(SIDEBAR_MIN, startWidth - (e.clientX - startX)));
-      setSidebarWidth(next);
-    };
-    const onUp = () => {
-      if (!dragStartRef.current) return;
-      dragStartRef.current = null;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      persistSidebarWidth(sidebarWidthRef.current);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      if (dragStartRef.current) {
-        document.body.style.cursor = '';
-        document.body.style.userSelect = '';
-        dragStartRef.current = null;
-      }
-    };
-  }, []);
+  // Drag-to-resize sidebar (desktop only). `splitRef` goes on the flex
+  // container so the drag can cap the sidebar at SIDEBAR_MAX_FRACTION of it.
+  const {
+    containerRef: splitRef,
+    width: sidebarWidth,
+    onMouseDown: onSplitMouseDown,
+    reset: resetSidebarWidth,
+  } = useSidebarResize({
+    storageKey: SIDEBAR_WIDTH_KEY,
+    defaultWidth: SIDEBAR_DEFAULT,
+    minWidth: SIDEBAR_MIN,
+    maxFraction: SIDEBAR_MAX_FRACTION,
+  });
 
   const toggleReadingTheme = useCallback(() => {
     setReadingTheme((prev) => {
@@ -833,6 +701,16 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   }, []);
 
   const closeOverflowAnd = (fn) => () => { setOverflowOpen(false); fn?.(); };
+
+  // StoryboardPanel is memoized (#3387) — it only skips a re-render while every
+  // prop it receives is referentially stable, so its handlers cannot be inline
+  // arrows. These four are the ones that used to be recreated per render (and
+  // therefore per keystroke); the rest are state setters, refs, or callbacks
+  // already keyed on non-typing deps.
+  const runAdapt = useCallback(() => runAnalysis(ANALYSIS_KIND.SCRIPT), [runAnalysis]);
+  const runCharacters = useCallback(() => runAnalysis(ANALYSIS_KIND.CHARACTERS), [runAnalysis]);
+  const runPlaces = useCallback(() => runAnalysis(ANALYSIS_KIND.PLACES), [runAnalysis]);
+  const runObjects = useCallback(() => runAnalysis(ANALYSIS_KIND.OBJECTS), [runAnalysis]);
 
   return (
     <div className="flex flex-col h-full">
@@ -1041,10 +919,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         {viewMode !== 'review' && (
         <div
           onMouseDown={onSplitMouseDown}
-          onDoubleClick={() => {
-            setSidebarWidth(SIDEBAR_DEFAULT);
-            persistSidebarWidth(SIDEBAR_DEFAULT);
-          }}
+          onDoubleClick={resetSidebarWidth}
           role="separator"
           aria-label="Resize storyboard sidebar"
           aria-orientation="vertical"
@@ -1101,15 +976,15 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
             onCharactersChange={setCharacters}
             onPlacesChange={setPlaces}
             onObjectsChange={setObjects}
-            onRunObjects={() => runAnalysis(ANALYSIS_KIND.OBJECTS)}
+            onRunObjects={runObjects}
             onScenesChange={setLatestScenes}
             onLiveRenderContextChange={setLiveRenderContext}
             registerSceneImageMerge={registerSceneImageMerge}
             onJumpToScene={jumpToScene}
             onDebug={handleDebug}
-            onRunAdapt={() => runAnalysis(ANALYSIS_KIND.SCRIPT)}
-            onRunCharacters={() => runAnalysis(ANALYSIS_KIND.CHARACTERS)}
-            onRunPlaces={() => runAnalysis(ANALYSIS_KIND.PLACES)}
+            onRunAdapt={runAdapt}
+            onRunCharacters={runCharacters}
+            onRunPlaces={runPlaces}
             onRunFullPipeline={runFullPipeline}
             runningAdapt={runningKind === ANALYSIS_KIND.SCRIPT}
             runningKind={runningKind}
@@ -1137,7 +1012,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         places={places}
         objects={objects}
         onOpenProfile={handleOpenProfile}
-        onClose={handlePopClose}
+        onClose={closePopover}
         onPopoverEnter={handlePopoverEnter}
         onPopoverLeave={handlePopoverLeave}
       />
@@ -1152,7 +1027,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
       />
 
       <Drawer open={drawer === DRAWER.VERSIONS} onClose={() => setDrawer(null)} title="Versions">
-        <VersionsList work={work} dirty={dirty} onSwitch={(id) => { switchToDraft(id); setDrawer(null); }} />
+        <WorkEditorVersions work={work} dirty={dirty} onSwitch={(id) => { switchToDraft(id); setDrawer(null); }} />
       </Drawer>
       <Drawer open={drawer === DRAWER.HISTORY} onClose={() => setDrawer(null)} title="Analysis history">
         <AnalysisHistory work={work} activeHash={activeHash} onApplyFormat={applyFormatText} />
@@ -1161,38 +1036,14 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         <PolishPanel work={work} dirty={dirty} onBodyChanged={reloadBodyFromServer} />
       </Drawer>
       <Drawer open={drawer === DRAWER.VOICE} onClose={() => setDrawer(null)} title="Voice exemplars" size="md">
-        <div className="p-3">
-          <p className="text-[11px] text-gray-500 mb-2">
-            Concrete prose passages anchor this work&rsquo;s voice far better than adjectives. Exemplars are injected into live continuation suggestions and the Polish revision brief as &ldquo;MATCH this voice&rdquo;; anti-exemplars as &ldquo;NEVER drift toward this.&rdquo; Up to {VOICE_EXEMPLARS_MAX} of each.
-          </p>
-          <VoiceExemplarEditor
-            idPrefix="wr-voice-exemplar"
-            title="Voice exemplars (the tuning fork)"
-            hint="1–3 short passages (~150–300 words) that nail this work's voice. Injected as “MATCH this voice.”"
-            notePlaceholder="what this demonstrates (e.g. spare, close-psychic)"
-            entries={voiceExemplars}
-            onChange={setVoiceExemplars}
-          />
-          <VoiceExemplarEditor
-            idPrefix="wr-voice-anti"
-            title="Anti-exemplars (never drift toward this)"
-            hint="Passages in the wrong register, kept as negative examples. Injected as “NEVER drift toward this.”"
-            notePlaceholder="what's wrong (e.g. too ornate, wrong temperature)"
-            entries={voiceAntiExemplars}
-            onChange={setVoiceAntiExemplars}
-          />
-          <div className="mt-4 flex justify-end">
-            <button
-              type="button"
-              onClick={saveVoice}
-              disabled={savingVoice}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/90 disabled:opacity-50"
-            >
-              {savingVoice ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-              {savingVoice ? 'Saving…' : 'Save voice'}
-            </button>
-          </div>
-        </div>
+        <WorkEditorVoicePanel
+          exemplars={voiceExemplars}
+          antiExemplars={voiceAntiExemplars}
+          onExemplarsChange={setVoiceExemplars}
+          onAntiExemplarsChange={setVoiceAntiExemplars}
+          saving={savingVoice}
+          onSave={saveVoice}
+        />
       </Drawer>
     </div>
   );
@@ -1281,82 +1132,5 @@ function MobileTab({ active, onClick, icon: Icon, label }) {
     >
       <Icon size={13} /> {label}
     </button>
-  );
-}
-
-function VersionsList({ work, dirty, onSwitch }) {
-  const drafts = (work.drafts || []).slice().reverse();
-
-  // Resolve referenced ingredient ids (stored per draft version) into display
-  // names from the work's linked catalog cast. Only fetch when at least one
-  // version actually carries refs — most works have none and we shouldn't hit
-  // the catalog for them. The map is id → name; ids that no longer resolve
-  // (unlinked since the version was saved) fall back to a short id chip.
-  const hasRefs = drafts.some((d) => Array.isArray(d.referencedIngredientIds) && d.referencedIngredientIds.length > 0);
-  const [nameById, setNameById] = useState({});
-  useEffect(() => {
-    if (!hasRefs || !work.id) return undefined;
-    let cancelled = false;
-    listCatalogIngredientsForRef('work', work.id, { silent: true })
-      .then((rows) => {
-        if (cancelled) return;
-        const map = {};
-        for (const row of rows || []) {
-          const ing = row?.ingredient;
-          if (ing?.id) map[ing.id] = ing.name || ing.id;
-        }
-        setNameById(map);
-      })
-      .catch(() => { if (!cancelled) setNameById({}); });
-    return () => { cancelled = true; };
-  }, [hasRefs, work.id]);
-
-  if (drafts.length === 0) {
-    return <div className="text-xs text-gray-500 italic">No versions yet. Click Snapshot in the header to create one.</div>;
-  }
-  return (
-    <>
-      {dirty && (
-        <div className="mb-2 px-2 py-1.5 text-[11px] border border-port-warning/40 bg-port-warning/5 text-port-warning rounded">
-          Save or snapshot before switching versions — unsaved edits will be lost.
-        </div>
-      )}
-      <ul className="space-y-1 text-xs">
-        {drafts.map((draft) => {
-          const isActive = draft.id === work.activeDraftVersionId;
-          const refIds = Array.isArray(draft.referencedIngredientIds) ? draft.referencedIngredientIds : [];
-          return (
-            <li key={draft.id}>
-              <button
-                onClick={() => onSwitch(draft.id)}
-                disabled={isActive}
-                className={`w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded text-left ${
-                  isActive ? 'bg-port-accent/20 text-port-accent cursor-default' : 'text-gray-400 hover:bg-port-bg hover:text-white'
-                }`}
-              >
-                <span className="flex items-center gap-2 truncate">
-                  {isActive ? <Check size={11} /> : <Clock size={11} />}
-                  {draft.label}
-                </span>
-                <span className="text-[10px] text-gray-500">{draft.wordCount}w</span>
-              </button>
-              {refIds.length > 0 && (
-                <div className="flex flex-wrap gap-1 px-2 pt-1 pb-0.5">
-                  {refIds.map((id) => (
-                    <span
-                      key={id}
-                      className="px-1.5 py-0.5 rounded bg-port-bg border border-port-border text-[10px] text-gray-400 truncate max-w-[10rem]"
-                      title={nameById[id] || id}
-                    >
-                      {nameById[id] || `${id.slice(0, 12)}…`}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-    </>
   );
 }
