@@ -87,35 +87,37 @@ async function copyDirContents(fromDir, toDir) {
 
 /**
  * Move a completed agent's directory into its `YYYY-MM-DD` bucket and index it.
- * Split out of `completeAgent` so the duplicate-completion path can finish an
- * archive a prior call left half-done (an fs failure between the state write and
- * the move) without touching the recorded verdict — every step is a no-op when
- * the destination already exists.
+ * Split out of `completeAgent` and made idempotent so the duplicate-completion
+ * path can re-run it to finish an archive a prior call left half-done (an fs
+ * failure anywhere after the state write) without touching the recorded verdict.
  */
 async function archiveCompletedAgent(agentId, agent) {
   // Determine date bucket from completedAt
   const dateStr = agent.completedAt.slice(0, 10);
-  const bucketDir = join(AGENTS_DIR, dateStr);
-  await ensureDir(bucketDir);
+  const targetDir = join(AGENTS_DIR, dateStr, agentId);
 
-  // Write metadata to flat dir first (may already have output.txt/prompt.txt there)
-  const flatDir = join(AGENTS_DIR, agentId);
-  if (!existsSync(flatDir)) {
-    await ensureDir(flatDir);
-  }
-  const { output: _output, ...agentWithoutOutput } = agent;
-  await atomicWrite(join(flatDir, 'metadata.json'), agentWithoutOutput);
-
-  // Move entire agent dir into date bucket (atomic on same filesystem)
-  const targetDir = join(bucketDir, agentId);
+  // Skipped once the bucket dir exists — a prior completion already moved it.
+  // Rewriting metadata into a recreated flat dir would both litter and let a
+  // later caller's verdict reach the archive the state record no longer accepts.
   if (!existsSync(targetDir)) {
+    await ensureDir(join(AGENTS_DIR, dateStr));
+
+    // Write metadata to flat dir first (may already have output.txt/prompt.txt there)
+    const flatDir = join(AGENTS_DIR, agentId);
+    if (!existsSync(flatDir)) {
+      await ensureDir(flatDir);
+    }
+    const { output: _output, ...agentWithoutOutput } = agent;
+    await atomicWrite(join(flatDir, 'metadata.json'), agentWithoutOutput);
+
+    // Move entire agent dir into date bucket (atomic on same filesystem)
     await rename(flatDir, targetDir).catch(async () => {
       // Fallback for cross-filesystem: copy files then remove
       await ensureDir(targetDir);
       await copyDirContents(flatDir, targetDir).catch(async (err) => {
         // Roll the half-copied target back. `existsSync(targetDir)` is what every
-        // later archive attempt (including the duplicate-completion repair above)
-        // reads as "already archived", so leaving a partial directory behind would
+        // later archive attempt (including the duplicate-completion repair) reads
+        // as "already archived", so leaving a partial directory behind would
         // strand the rest of the run's output.txt/prompt.txt permanently.
         await rm(targetDir, { recursive: true, force: true })
           .catch(rmErr => console.error(`❌ Failed to roll back partial archive for ${agentId}: ${rmErr.message}`));
@@ -125,7 +127,11 @@ async function archiveCompletedAgent(agentId, agent) {
     });
   }
 
-  // Update index
+  // Update index — deliberately NOT gated on the in-memory map already holding
+  // this entry. `saveAgentIndex` swallows its own write errors, so a failed write
+  // leaves the map correct while index.json on disk is missing the agent; after a
+  // restart the archive would be unreachable from history. Re-running the write
+  // is cheap (a small map, atomically written) and repairs exactly that.
   const idx = await loadAgentIndex();
   idx.set(agentId, dateStr);
   await saveAgentIndex();
@@ -153,13 +159,12 @@ export async function completeAgent(agentId, result = {}) {
     // are legitimately completed on resume.
     if (state.agents[agentId].status === 'completed') {
       alreadyCompleted = true;
-      // One exception to "do nothing": if a prior completion threw between its
-      // state write and the archive move, the record says completed but its
-      // directory never made it into the date bucket. Finish that with the
-      // ALREADY-RECORDED result, so the retry repairs the archive without
-      // adopting the second caller's (typically bogus) verdict.
-      const { completedAt } = state.agents[agentId];
-      if (completedAt && !existsSync(join(AGENTS_DIR, completedAt.slice(0, 10), agentId))) {
+      // One exception to "do nothing": if a prior completion threw partway
+      // through archiving, the record says completed but its directory never
+      // reached the date bucket (or never got indexed). `archiveCompletedAgent`
+      // is idempotent, so re-running it finishes the job with the ALREADY-
+      // RECORDED result rather than the second caller's (typically bogus) one.
+      if (state.agents[agentId].completedAt) {
         await archiveCompletedAgent(agentId, state.agents[agentId]);
       }
       return state.agents[agentId];

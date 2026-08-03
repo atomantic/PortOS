@@ -341,6 +341,35 @@ describe('completeAgent idempotence (#3384)', () => {
     expect(emittedCompletions).toEqual([]);
   });
 
+  it('re-persists a missing index entry for an already-archived agent', async () => {
+    // `saveAgentIndex` swallows its own write errors, so a failed write leaves
+    // the in-memory map right and index.json wrong — the archive would be
+    // unreachable from history after a restart. A duplicate completion repairs
+    // the index even though the directory move itself is already done.
+    const agentId = 'agent-unindexed';
+    const completedAt = '2026-05-25T12:00:00.000Z';
+    mockCosState.state.agents[agentId] = {
+      id: agentId,
+      status: 'completed',
+      completedAt,
+      result: { validationPassed: null, success: true, exitCode: 0 },
+      metadata: { taskType: 'scheduled' },
+      output: []
+    };
+    const archiveDir = join(mockCosState.agentsDir, '2026-05-25', agentId);
+    await mkdir(archiveDir, { recursive: true });
+    await writeFile(join(archiveDir, 'metadata.json'), JSON.stringify({ id: agentId, result: { success: true } }));
+
+    await completeAgent(agentId, { success: false, exitCode: 143 });
+
+    const index = JSON.parse(await readFile(join(mockCosState.agentsDir, 'index.json'), 'utf8'));
+    expect(index[agentId]).toBe('2026-05-25');
+    // Repairing the index must not rewrite the archived verdict.
+    const archived = JSON.parse(await readFile(join(archiveDir, 'metadata.json'), 'utf8'));
+    expect(archived.result.success).toBe(true);
+    expect(existsSync(join(mockCosState.agentsDir, agentId))).toBe(false);
+  });
+
   it('completes a still-paused agent (the guard is completed-only, not running-only)', async () => {
     const agentId = 'agent-paused-completion';
     mockCosState.state.agents[agentId] = {
