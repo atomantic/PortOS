@@ -1,32 +1,28 @@
 /**
  * Universe Builder editor composition (Media Gen → Universe Builder).
  *
- * Stateful record, expansion, gallery, and render concerns live in hooks.
- * Tab-specific presentation lives in the sibling panel modules.
+ * Stateful record, expansion, gallery, render, URL tab/bucket, and bucket-
+ * mutation concerns live in hooks (useUniverseDraft / useUniverseExpand /
+ * useUniverseGallery / useUniverseRender / useUniverseTabs /
+ * useUniverseBucketActions). Tab-specific presentation lives in the sibling
+ * panel modules.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useLocation, useParams, useSearchParams } from 'react-router';
+import { useCallback, useEffect, useMemo } from 'react';
+import { Link, useLocation, useParams } from 'react-router';
 import {
   ArrowLeft, BookOpen, FolderTree, ImagePlus, Layers, Loader2,
   MapPin, Package, Plus, Save, Trash2, Users,
 } from 'lucide-react';
-import toast from '../ui/Toast';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
-import {
-  WORLD_CATEGORY_KEY_MAX,
-  autoSortBuckets,
-  ensureInfluences,
-  generateCategoryVariations,
-  promoteVariationToCanon,
-  updateUniverse,
-} from '../../services/api';
-import useUniverseAction from '../../hooks/useUniverseAction';
+import { WORLD_CATEGORY_KEY_MAX } from '../../services/api';
+import useUniverseBucketActions from '../../hooks/useUniverseBucketActions';
 import useUniverseDraft from '../../hooks/useUniverseDraft';
 import useUniverseExpand from '../../hooks/useUniverseExpand';
 import useUniverseGallery from '../../hooks/useUniverseGallery';
 import { useUniverseNav } from '../../hooks/useUniverseNav';
 import useUniverseRender from '../../hooks/useUniverseRender';
+import useUniverseTabs from '../../hooks/useUniverseTabs';
 import EntityCombobox from '../EntityCombobox';
 import MediaPreview from '../media/MediaPreview';
 import OriginBadge from '../sharing/OriginBadge';
@@ -38,11 +34,8 @@ import RenderTab from './RenderTab';
 import UniverseBibleTab from './UniverseBibleTab';
 import { OtherTab, TrunkView } from './UniverseTrunkPanels';
 import { capImageRefs } from '../../lib/bibleLimits';
-import { upsertByIdPrepend } from '../../lib/upsertByIdPrepend';
-import { mergeVariations } from '../../lib/universeBuilderExpand';
 import { totalVariationCount } from '../../lib/universeBuilderCounts';
 import {
-  BUCKET_CANON,
   TAB_BIBLE,
   TAB_CAST,
   TAB_COMPOSITES,
@@ -50,11 +43,8 @@ import {
   TAB_OTHER,
   TAB_PLACES,
   TAB_RENDER,
-  TRUNK_BY_ID,
   TRUNK_TABS,
   getCategoryKeys,
-  groupBucketsByKind,
-  humanizeCategory,
 } from '../../lib/universeBuilderShared';
 
 export { CategoryEditor } from './UniverseCategoryEditor';
@@ -202,20 +192,27 @@ export default function UniverseBuilder() {
     clearPendingCanonAdditions,
     setRenderOpts,
   });
-  // Page-level in-flight gate for the promote action. Ref + state pair so
-  // the disable check stays synchronous (ref) while still triggering renders
-  // (state). Promote writes to `universe[bibleField]` and `categories[key]`
-  // as wholesale replacements from a stale snapshot — letting two run in
-  // parallel against the same universe would let the second clobber the
-  // first's canon append.
-  const [promoting, setPromoting] = useState(false);
-  const promotingRef = useRef(false);
-  const [autoSorting, setAutoSorting] = useState(false);
-  const autoSortingRef = useRef(false);
-  // Scaffolding shared by handlePromoteVariation + handleAutoSort:
-  // selectedId guard, ref re-entrancy, capturedId + toast lifecycle,
-  // setWorlds always-update, stale-write detection. See the hook header.
-  const runUniverseAction = useUniverseAction({ selectedId, mountedRef, setWorlds });
+  // URL-driven tab + bucket state (per CLAUDE.md "Linkable routes for all
+  // views"), including the self-healing effects that strip a `?tab=`/`?bucket=`
+  // the current categories no longer support.
+  const {
+    activeBucket, activeTab, bucketsByKind, hasOtherBuckets, setBucket, setTab,
+  } = useUniverseTabs(draft.categories);
+  // Generate-in-bucket / promote-to-canon / auto-sort, each with its own
+  // in-flight gate so two writes built from the same stale snapshot can't
+  // clobber each other's canon append.
+  const {
+    autoSorting, handleAutoSort, handleGenerateInCategory, handlePromoteVariation, promoting,
+  } = useUniverseBucketActions({
+    selectedId,
+    draft,
+    draftRef,
+    setDraft,
+    setWorlds,
+    markDraftSaved,
+    mountedRef,
+    flushDraftIfDirty,
+  });
 
   // Page-level lightbox + gallery-metadata concern. A single MediaPreview at
   // this level covers EVERY thumb on the page: variations, composite sheets,
@@ -251,225 +248,35 @@ export default function UniverseBuilder() {
     return () => clearTimeout(t);
   }, [location.hash, selectedId, draft.id]);
 
-  // Auto-sort with AI — one LLM call classifies every Other-tab bucket into
-  // characters/places/objects. Each bucket's `kind` is reassigned via a
-  // single atomic patch server-side so the universe ends up consistent or
-  // unchanged. Renames the LLM suggests are surfaced in the toast but not
-  // auto-applied (the user can rename manually if they want it).
-  const handleAutoSort = () => runUniverseAction({
-    ref: autoSortingRef,
-    setBusy: setAutoSorting,
-    loadingMessage: 'Auto-sorting buckets with AI…',
-    errorPrefix: 'Auto-sort failed',
-    notSavedMessage: 'Save the universe first — auto-sort needs the persisted record',
-    preflight: flushDraftIfDirty,
-    action: (capturedId) => autoSortBuckets(capturedId, {
-      providerId: draft.llm?.provider || undefined,
-      model: draft.llm?.model || undefined,
-    }, { silent: true }),
-    onFreshResult: (result) => {
-      const updated = result.universe;
-      // Merge only the reclassified buckets into the draft — wholesale-
-      // replacing `categories` with the server snapshot would discard any
-      // user edits to OTHER buckets made while the LLM call was in flight.
-      // Compute the merge from draftRef so React strict-mode's double-fire
-      // of state updaters doesn't double-stringify the dirty baseline.
-      const sortedKeys = new Set((result.results || []).map((r) => r.sourceKey));
-      const baseDraft = draftRef.current || draft;
-      const nextCategories = { ...(baseDraft.categories || {}) };
-      for (const key of sortedKeys) {
-        if (updated.categories?.[key]) nextCategories[key] = updated.categories[key];
-      }
-      const newDraft = {
-        ...baseDraft,
-        categories: nextCategories,
-        schemaVersion: updated.schemaVersion,
-        updatedAt: updated.updatedAt,
-      };
-      setDraft(newDraft);
-      markDraftSaved(newDraft);
-      const sortedCount = result.results?.length || 0;
-      const renames = (result.results || []).filter((r) => r.suggestedKey);
-      const summary = sortedCount
-        ? `Sorted ${sortedCount} bucket${sortedCount === 1 ? '' : 's'} into canon trunks`
-        : 'No buckets were classified';
-      const renameHint = renames.length
-        ? ` — ${renames.length} rename suggestion${renames.length === 1 ? '' : 's'} available`
-        : '';
-      return `${summary}${renameHint}`;
-    },
-  });
-
-  const handleGenerateInCategory = async (cat, count) => {
-    // Match the runUniverseAction-based handlers — flush dirty draft so the
-    // subsequent auto-save can't clobber unrelated fields with a stale spread.
-    const flushed = await flushDraftIfDirty();
-    if (!flushed) return;
-    const current = draft.categories?.[cat]?.variations || [];
-    const existingLabels = current.map((v) => v.label).filter(Boolean);
-    const result = await generateCategoryVariations({
-      category: cat,
-      count,
-      existingLabels,
-      influences: ensureInfluences(draft.influences),
-      logline: draft.logline || '',
-      premise: draft.premise || '',
-      styleNotes: draft.styleNotes || '',
-      providerId: draft.llm?.provider || undefined,
-      model: draft.llm?.model || undefined,
-    }, { silent: true }).catch((e) => { toast.error(`Generate failed: ${e.message}`); return null; });
-    if (!result) return;
-    const fresh = Array.isArray(result.variations) ? result.variations : [];
-    const merged = mergeVariations(current, fresh);
-    const additionCount = merged.length - current.length;
-    if (additionCount === 0) {
-      toast.error('LLM returned no new variations — try again or adjust the universe context');
-      return;
-    }
-    const nextDraft = {
-      ...draft,
-      // Preserve the bucket's `kind` (mirror of updateCategory's behavior;
-      // see comment there). Generate-more is the second write path that
-      // could silently reset the trunk to default/other.
-      categories: { ...draft.categories, [cat]: { ...(draft.categories?.[cat] || {}), variations: merged } },
-    };
-    setDraft(nextDraft);
-    if (selectedId && nextDraft.name?.trim()) {
-      const updated = await updateUniverse(selectedId, { categories: nextDraft.categories }, { silent: true })
-        .catch((e) => { toast.error(`Auto-save after generate failed: ${e.message}`); return null; });
-      if (updated) {
-        setWorlds((prev) => upsertByIdPrepend(prev, updated));
-        markDraftSaved(nextDraft);
-        toast.success(`Added ${additionCount} variation${additionCount === 1 ? '' : 's'} to ${humanizeCategory(cat)} — saved`);
-        return;
-      }
-    }
-    toast.success(`Added ${additionCount} variation${additionCount === 1 ? '' : 's'} to ${humanizeCategory(cat)} — review then Save`);
-  };
-  // Requires `selectedId` — the server action reads the persisted record,
-  // so an unsaved draft can't be promoted from. The page-level `promoting`
-  // gate prevents two promotes (across buckets or trunks) from racing each
-  // other to stale-snapshot writes against the same universe.
-  const handlePromoteVariation = (category, variation, { targetKind } = {}) => {
-    if (!variation?.label) return Promise.resolve(null);
-    return runUniverseAction({
-      ref: promotingRef,
-      setBusy: setPromoting,
-      loadingMessage: `Promoting "${variation.label}" to canon…`,
-      errorPrefix: 'Promote failed',
-      notSavedMessage: 'Save the universe first — promote needs the persisted record',
-      preflight: flushDraftIfDirty,
-      action: (capturedId) => promoteVariationToCanon(capturedId, {
-        category,
-        label: variation.label,
-        targetKind,
-        providerId: draft.llm?.provider || undefined,
-        model: draft.llm?.model || undefined,
-      }, { silent: true }),
-      onFreshResult: (result) => {
-        const updated = result.universe;
-        // Selective merge: only the canon array + the affected category bucket
-        // changed server-side. Preserve every other draft field (the user may
-        // have typed into logline/premise/influences during the LLM call).
-        // Compute outside setDraft so strict-mode's double-invoke doesn't
-        // re-stringify the dirty baseline.
-        const baseDraft = draftRef.current || draft;
-        const newDraft = {
-          ...baseDraft,
-          characters: updated.characters,
-          places: updated.places,
-          objects: updated.objects,
-          categories: { ...baseDraft.categories, [result.removed.category]: updated.categories?.[result.removed.category] },
-          schemaVersion: updated.schemaVersion,
-          updatedAt: updated.updatedAt,
-        };
-        setDraft(newDraft);
-        markDraftSaved(newDraft);
-        return `Promoted "${variation.label}" → ${result.targetKind} canon`;
-      },
-    });
-  };
   const categoryKeys = getCategoryKeys(draft.categories);
   const totalVariations = totalVariationCount(draft);
   const totalSheets = draft.compositeSheets?.length || 0;
 
-  // URL-driven tab + bucket state (per CLAUDE.md "Linkable routes for all
-  // views"). `?tab=cast&bucket=heroes` deep-links into a sub-bucket; both fall
-  // back to bible / "" (All) on first load. We also forward existing params
-  // (e.g. `?series=` on the embedded Canon section) untouched.
-  const [searchParams, setSearchParams] = useSearchParams();
-  const bucketsByKind = useMemo(() => groupBucketsByKind(draft.categories), [draft.categories]);
-  const hasOtherBuckets = bucketsByKind.other.length > 0;
-  const requestedTab = searchParams.get('tab');
-  const isValidTab = (tab) => (
-    tab === TAB_BIBLE || tab === TAB_CAST || tab === TAB_PLACES || tab === TAB_OBJECTS
-    || tab === TAB_COMPOSITES || tab === TAB_RENDER
-    || (tab === TAB_OTHER && hasOtherBuckets)
-  );
-  const activeTab = isValidTab(requestedTab) ? requestedTab : TAB_BIBLE;
-  const activeBucket = searchParams.get('bucket') || '';
-  const setTab = useCallback((tab, opts = {}) => {
-    const currentTab = searchParams.get('tab') || TAB_BIBLE;
-    const isSameTab = tab === currentTab;
-    const next = new URLSearchParams(searchParams);
-    if (tab === TAB_BIBLE) next.delete('tab');
-    else next.set('tab', tab);
-    // Bucket behavior:
-    //   - explicit `opts.bucket` value (string) → set
-    //   - explicit `opts.bucket: null` → clear (callers that want to drop the
-    //     filter on the same tab pass null intentionally)
-    //   - omitted + same tab → preserve current bucket (re-clicking the
-    //     active tab shouldn't drop the user's chip/canon filter)
-    //   - omitted + tab transition → clear (the old bucket is meaningless on
-    //     the new tab's bucket namespace)
-    if (opts.bucket === null) next.delete('bucket');
-    else if (opts.bucket) next.set('bucket', opts.bucket);
-    else if (!isSameTab) next.delete('bucket');
-    setSearchParams(next, { replace: !!opts.replace });
-  }, [searchParams, setSearchParams]);
-  // Explicit user bucket clicks push a history entry so back/forward actually
-  // walks tab+bucket navigation (the PR's headline deep-link promise). The
-  // stale-bucket-cleanup effect below uses `replace: true` directly so an
-  // implicit URL fix-up doesn't fork the history stack.
-  const setBucket = useCallback((bucket, opts = {}) => {
-    const next = new URLSearchParams(searchParams);
-    if (bucket) next.set('bucket', bucket);
-    else next.delete('bucket');
-    setSearchParams(next, { replace: !!opts.replace });
-  }, [searchParams, setSearchParams]);
-
-  // Drop a stale `?tab=` if it points to an unknown value or `tab=other`
-  // when the user has emptied the Other bucket bin. Without this, the URL
-  // and UI disagree: `activeTab` silently falls back to Bible but the param
-  // stays in the address bar — breaking the deep-link promise and confusing
-  // back/forward.
-  useEffect(() => {
-    if (!requestedTab) return;
-    if (isValidTab(requestedTab)) return;
-    const next = new URLSearchParams(searchParams);
-    next.delete('tab');
-    setSearchParams(next, { replace: true });
-  }, [requestedTab, hasOtherBuckets]);
-
-  // Drop a stale `?bucket=` if the bucket no longer exists under the current
-  // tab (e.g. user deleted the bucket, or auto-sort moved it to another kind).
-  // `BUCKET_CANON` is a valid pseudo-bucket on every trunk tab — without an
-  // explicit allow, the chip's `setBucket(BUCKET_CANON)` flashed in the URL
-  // then immediately got stripped by this effect, hiding the canon-only view.
-  // Other tab buckets must validate against `bucketsByKind.other`; non-trunk
-  // non-Other tabs (Bible / Composites / Render) have no valid bucket scope.
-  useEffect(() => {
-    if (!activeBucket) return;
-    const trunk = TRUNK_BY_ID[activeTab];
-    if (trunk && activeBucket === BUCKET_CANON) return;
-    const validBuckets = trunk
-      ? (bucketsByKind[trunk.kind] || [])
-      : (activeTab === TAB_OTHER ? bucketsByKind.other : []);
-    if (validBuckets.includes(activeBucket)) return;
-    const next = new URLSearchParams(searchParams);
-    next.delete('bucket');
-    setSearchParams(next, { replace: true });
-  }, [activeTab, activeBucket, bucketsByKind, searchParams, setSearchParams]);
+  // Shared by every bucket grid (trunk tabs + Other). Optimistically append the
+  // new filename to the variation's imageRefs[] so the row swaps from spinner →
+  // rendered image without a roundtrip. Server already stamped this via the
+  // collection hook; the next universe refetch will agree. Then pull the fresh
+  // sidecar into galleryByFilename so the lightbox opens with the real
+  // prompt/settings rather than label-only metadata.
+  const handleEntryJobCompleted = useCallback((entryId, filename, bucket, completedJobId = null) => {
+    if (!filename || !bucket) {
+      clearPendingForEntry(entryId, completedJobId);
+      return;
+    }
+    setDraft((d) => {
+      const cat = d.categories?.[bucket];
+      if (!cat?.variations) return d;
+      const variations = cat.variations.map((v) => {
+        if (v.id !== entryId) return v;
+        const refs = Array.isArray(v.imageRefs) ? v.imageRefs : [];
+        if (refs.includes(filename)) return v;
+        return { ...v, imageRefs: capImageRefs([...refs, filename]) };
+      });
+      return { ...d, categories: { ...d.categories, [bucket]: { ...cat, variations } } };
+    });
+    clearPendingForEntry(entryId, completedJobId);
+    bumpGalleryRefresh();
+  }, [clearPendingForEntry, setDraft, bumpGalleryRefresh]);
 
   return (
     <div className="flex flex-col h-full">
@@ -599,32 +406,7 @@ export default function UniverseBuilder() {
               pendingByEntryId={pendingHeadByEntryId}
               externalPendingByEntryId={pendingHeadByEntryId}
               onPendingCleared={clearPendingForEntry}
-              onJobCompletedForEntry={(entryId, filename, bucket, completedJobId = null) => {
-                if (!filename || !bucket) {
-                  clearPendingForEntry(entryId, completedJobId);
-                  return;
-                }
-                // Optimistically append the new filename to the variation's
-                // imageRefs[] so the row swaps from spinner → rendered image
-                // without a roundtrip. Server already stamped this via the
-                // collection hook; the next universe refetch will agree.
-                setDraft((d) => {
-                  const cat = d.categories?.[bucket];
-                  if (!cat?.variations) return d;
-                  const variations = cat.variations.map((v) => {
-                    if (v.id !== entryId) return v;
-                    const refs = Array.isArray(v.imageRefs) ? v.imageRefs : [];
-                    if (refs.includes(filename)) return v;
-                    return { ...v, imageRefs: capImageRefs([...refs, filename]) };
-                  });
-                  return { ...d, categories: { ...d.categories, [bucket]: { ...cat, variations } } };
-                });
-                clearPendingForEntry(entryId, completedJobId);
-                // The new sidecar exists now — pull it into galleryByFilename
-                // so the lightbox opens with the real prompt/settings rather
-                // than label-only metadata.
-                bumpGalleryRefresh();
-              }}
+              onJobCompletedForEntry={handleEntryJobCompleted}
               onBulkRenderTrunk={() => {
                 const selection = Object.fromEntries(
                   (bucketsByKind[trunk.kind] || []).map((b) => [b, 'all']),
@@ -666,28 +448,7 @@ export default function UniverseBuilder() {
             autoSorting={autoSorting}
             pendingByEntryId={pendingHeadByEntryId}
             onPendingCleared={clearPendingForEntry}
-            onJobCompletedForEntry={(entryId, filename, bucket, completedJobId = null) => {
-              if (!filename || !bucket) {
-                clearPendingForEntry(entryId, completedJobId);
-                return;
-              }
-              setDraft((d) => {
-                const cat = d.categories?.[bucket];
-                if (!cat?.variations) return d;
-                const variations = cat.variations.map((v) => {
-                  if (v.id !== entryId) return v;
-                  const refs = Array.isArray(v.imageRefs) ? v.imageRefs : [];
-                  if (refs.includes(filename)) return v;
-                  return { ...v, imageRefs: capImageRefs([...refs, filename]) };
-                });
-                return { ...d, categories: { ...d.categories, [bucket]: { ...cat, variations } } };
-              });
-              clearPendingForEntry(entryId, completedJobId);
-              // Pull the new sidecar into galleryByFilename so the lightbox
-              // opens with the real prompt/settings (mirrors the Cast/Places
-              // path's onJobCompletedForEntry above).
-              bumpGalleryRefresh();
-            }}
+            onJobCompletedForEntry={handleEntryJobCompleted}
           />
         )}
 
