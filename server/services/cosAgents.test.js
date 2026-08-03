@@ -24,6 +24,28 @@ vi.mock('./domainUsage.js', () => ({
   recordDomainUsage: vi.fn(async () => {})
 }));
 
+// Pass-through fs shim with opt-in failure injection, so one test can force the
+// archive's cross-filesystem fallback AND a failure partway through its copy.
+// Scoped to paths inside a `YYYY-MM-DD` bucket so the flat-dir writes that
+// precede the move still succeed. Off for every other test in this file.
+const fsFailures = vi.hoisted(() => ({ dateBucketWritesFail: false }));
+
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal();
+  const failsFor = (p) => fsFailures.dateBucketWritesFail && /\/\d{4}-\d{2}-\d{2}\//.test(String(p));
+  return {
+    ...actual,
+    rename: async (from, to, ...rest) => {
+      if (failsFor(to)) throw Object.assign(new Error('EXDEV: cross-device link'), { code: 'EXDEV' });
+      return actual.rename(from, to, ...rest);
+    },
+    writeFile: async (path, ...rest) => {
+      if (failsFor(path)) throw new Error('simulated copy failure');
+      return actual.writeFile(path, ...rest);
+    }
+  };
+});
+
 import { getAgent, createAgentOutputBatcher, completeAgent, updateAgent, registerAgent } from './cosAgents.js';
 import { saveState } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
@@ -165,6 +187,7 @@ describe('completeAgent idempotence (#3384)', () => {
   });
 
   afterEach(async () => {
+    fsFailures.dateBucketWritesFail = false;
     await rm(mockCosState.agentsDir, { recursive: true, force: true });
     cosEvents.removeAllListeners('agent:completed');
   });
@@ -271,6 +294,51 @@ describe('completeAgent idempotence (#3384)', () => {
     expect(recordDomainUsage).not.toHaveBeenCalled();
     expect(emittedCompletions).toEqual([]);
     expect(mockCosState.state.stats).toEqual({ tasksCompleted: 0, errors: 0 });
+  });
+
+  it('rolls back a half-copied archive so the next completion can repair it', async () => {
+    // `existsSync(targetDir)` is what every later archive attempt reads as
+    // "already archived" — so a cross-filesystem copy that dies partway must not
+    // leave the destination behind, or the rest of the run's files are stranded.
+    const agentId = 'agent-partial-copy';
+    mockCosState.state.agents[agentId] = {
+      id: agentId,
+      status: 'running',
+      metadata: { taskType: 'scheduled' },
+      output: []
+    };
+    const flatDir = join(mockCosState.agentsDir, agentId);
+    await mkdir(flatDir, { recursive: true });
+    await writeFile(join(flatDir, 'output.txt'), 'the run that finished\n');
+
+    // The move into the bucket fails as if cross-filesystem, then the copy
+    // fallback dies partway through writing the files it created the dir for.
+    fsFailures.dateBucketWritesFail = true;
+
+    await expect(completeAgent(agentId, { success: true, exitCode: 0 }))
+      .rejects.toThrow('simulated copy failure');
+
+    const archiveDir = join(
+      mockCosState.agentsDir,
+      mockCosState.state.agents[agentId].completedAt.slice(0, 10),
+      agentId
+    );
+    expect(existsSync(archiveDir)).toBe(false);
+
+    fsFailures.dateBucketWritesFail = false;
+    recordDomainUsage.mockClear();
+    emittedCompletions.length = 0;
+
+    // The retry is a duplicate completion (the verdict was persisted before the
+    // copy blew up), so it repairs the archive with the FIRST verdict.
+    await completeAgent(agentId, { success: false, exitCode: 143 });
+
+    const archived = JSON.parse(await readFile(join(archiveDir, 'metadata.json'), 'utf8'));
+    expect(archived.result.success).toBe(true);
+    expect(existsSync(join(archiveDir, 'output.txt'))).toBe(true);
+    expect(existsSync(flatDir)).toBe(false);
+    expect(recordDomainUsage).not.toHaveBeenCalled();
+    expect(emittedCompletions).toEqual([]);
   });
 
   it('completes a still-paused agent (the guard is completed-only, not running-only)', async () => {

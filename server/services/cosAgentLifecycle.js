@@ -77,6 +77,14 @@ export async function updateAgent(agentId, updates) {
   });
 }
 
+async function copyDirContents(fromDir, toDir) {
+  const files = await readdir(fromDir);
+  for (const file of files) {
+    const content = await readFile(join(fromDir, file));
+    await writeFile(join(toDir, file), content);
+  }
+}
+
 /**
  * Move a completed agent's directory into its `YYYY-MM-DD` bucket and index it.
  * Split out of `completeAgent` so the duplicate-completion path can finish an
@@ -104,11 +112,15 @@ async function archiveCompletedAgent(agentId, agent) {
     await rename(flatDir, targetDir).catch(async () => {
       // Fallback for cross-filesystem: copy files then remove
       await ensureDir(targetDir);
-      const files = await readdir(flatDir);
-      for (const file of files) {
-        const content = await readFile(join(flatDir, file));
-        await writeFile(join(targetDir, file), content);
-      }
+      await copyDirContents(flatDir, targetDir).catch(async (err) => {
+        // Roll the half-copied target back. `existsSync(targetDir)` is what every
+        // later archive attempt (including the duplicate-completion repair above)
+        // reads as "already archived", so leaving a partial directory behind would
+        // strand the rest of the run's output.txt/prompt.txt permanently.
+        await rm(targetDir, { recursive: true, force: true })
+          .catch(rmErr => console.error(`❌ Failed to roll back partial archive for ${agentId}: ${rmErr.message}`));
+        throw err;
+      });
       await rm(flatDir, { recursive: true });
     });
   }
