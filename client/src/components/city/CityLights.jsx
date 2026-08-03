@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { getTimeOfDayPreset } from './cityConstants';
+import { cityShowDetail, getTimeOfDayPreset } from './cityConstants';
 import { useCityPalette } from './CityPaletteContext';
 
 // Animated accent light that slowly shifts color, with reactive brightness
@@ -90,6 +90,10 @@ export default function CityLights({ settings }) {
   const preset = getTimeOfDayPreset(timeOfDay, skyTheme);
   const nightGlow = 1 - Math.min(1, preset.daylightFactor ?? 0);
 
+  // Medium tier and up — the same gate the rest of the optional set dressing uses, so the
+  // low tier sheds light count along with the props those lights were there to accent.
+  const showAccentLights = cityShowDetail(settings);
+
   // Neon scale: dim neon point lights during daytime (30% at noon, 100% at night)
   const neonScaleRef = useRef(1);
   const targetNeonScale = 1.0 - (preset.daylightFactor ?? 0) * 0.7;
@@ -151,10 +155,21 @@ export default function CityLights({ settings }) {
       <ReactivePointLight position={[0, 15, -25]} baseIntensity={0.5} color="#8b5cf6" distance={60} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
       {/* Warm orange ground level accent */}
       <ReactivePointLight position={[10, 3, 5]} baseIntensity={0.35} color="#f97316" distance={35} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
-      {/* Additional green accent - ground level from opposite side */}
-      <ReactivePointLight position={[-12, 3, 8]} baseIntensity={0.2} color="#22c55e" distance={25} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
-      {/* Red warning accent from below-right */}
-      <ReactivePointLight position={[15, 2, -10]} baseIntensity={0.15} color="#f43f5e" distance={22} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
+      {/* Ground-level small-radius accents (green + red warning). Culled on the low tier:
+          every mounted light costs a per-fragment iteration in the lighting loop of every
+          MeshStandardMaterial in the scene, whatever its intensity — so dimming them saves
+          nothing and only unmounting does (#3397). These two are the least visually
+          significant of the set: lowest intensity (0.2 / 0.15) and smallest radius (25 / 22
+          units), so they only tint a small patch of street the low tier already renders
+          without its set dressing. */}
+      {showAccentLights && (
+        <>
+          {/* Additional green accent - ground level from opposite side */}
+          <ReactivePointLight position={[-12, 3, 8]} baseIntensity={0.2} color="#22c55e" distance={25} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
+          {/* Red warning accent from below-right */}
+          <ReactivePointLight position={[15, 2, -10]} baseIntensity={0.15} color="#f43f5e" distance={22} brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
+        </>
+      )}
       {/* Sweeping searchlight */}
       <Searchlight brightnessRef={brightnessRef} neonScaleRef={neonScaleRef} />
     </>
