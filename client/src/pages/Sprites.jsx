@@ -1,16 +1,13 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
-import { PersonStanding, Download, X, RefreshCw, Plus, LayoutGrid, Search, Images, Scissors, Film } from 'lucide-react';
+import { PersonStanding, LayoutGrid, Images, Scissors, Film } from 'lucide-react';
 import toast from '../components/ui/Toast';
-import Modal from '../components/ui/Modal.jsx';
 import {
-  listSpriteRecords, getSpriteRecord, importSprites, createSpriteRecord,
+  listSpriteRecords, getSpriteRecord,
   generateSpriteWalk, generateSpriteTrack, generateSpriteReference, listSpriteThumbnails,
 } from '../services/apiSprites.js';
-import { getApps } from '../services/apiApps.js';
 import { getSettings } from '../services/apiSystem.js';
 import { deriveAvailableBackends } from '../lib/imageGenBackends.js';
-import AppContextPicker from '../components/AppContextPicker.jsx';
 import ReferenceWorkflow from '../components/sprites/ReferenceWorkflow.jsx';
 import WalkWorkflow from '../components/sprites/WalkWorkflow.jsx';
 import TrackWorkflow from '../components/sprites/TrackWorkflow.jsx';
@@ -26,14 +23,13 @@ import {
 } from '../components/sprites/CorrectionNote.jsx';
 import SpriteCatalog from '../components/sprites/SpriteCatalog.jsx';
 import SpriteDetailHeader from '../components/sprites/SpriteDetailHeader.jsx';
+import ImportPanel from '../components/sprites/ImportPanel.jsx';
+import NewSpritePanel from '../components/sprites/NewSpritePanel.jsx';
+import SpriteSearch from '../components/sprites/SpriteSearch.jsx';
 import TabPills from '../components/ui/TabPills.jsx';
 import useDrawerTab from '../hooks/useDrawerTab.js';
-import useClickOutside from '../hooks/useClickOutside.js';
-import { useAsyncAction } from '../hooks/useAsyncAction.js';
 import { useSpritePendingRenders } from '../hooks/useSpritePendingRenders.js';
 import { buildCollectionActions } from '../lib/spriteCollectionActions.js';
-import { filterSpriteRecords, NEW_SPRITE_KINDS } from '../lib/spriteRecordGroups.js';
-import { groupIconForKind } from '../components/sprites/spriteGroupIcons.js';
 
 // Sprite Manager: library over imported production sprites — characters
 // (reference sets, walk strips, runtime atlases) and props atlas families —
@@ -42,300 +38,6 @@ import { groupIconForKind } from '../components/sprites/spriteGroupIcons.js';
 // the 8 directional anchors — #2896), and the phase-3 walk workflow (one
 // grok i2v clip per anchor, deterministic packaging, per-direction approval
 // into the finalized walk set — #2897). Publish lands in phase 4.
-
-function ImportPanel({ onImported }) {
-  const [open, setOpen] = useState(false);
-  const [apps, setApps] = useState([]);
-  const [appId, setAppId] = useState('');
-  const [includeProps, setIncludeProps] = useState(true);
-  const [importing, setImporting] = useState(false);
-  const [importErrors, setImportErrors] = useState([]);
-
-  // Sprite sources are managed apps (we import/sync from an app's checkout),
-  // so the picker is the source of truth for the path — no free-text root.
-  // Archived apps and apps with no repoPath can't be a source.
-  useEffect(() => {
-    if (!open) return;
-    getApps({ silent: true })
-      .then((list) => setApps((list || []).filter((a) => a.repoPath && !a.archived)))
-      .catch(() => setApps([]));
-  }, [open]);
-
-  const sourceRoot = apps.find((a) => a.id === appId)?.repoPath || '';
-
-  const runImport = async () => {
-    setImporting(true);
-    setImportErrors([]);
-    try {
-      const { results, totals } = await importSprites({ sourceRoot, includeProps });
-      if (totals.errors > 0) {
-        // Keep the panel open and show WHICH files failed — a count alone
-        // gives the user nothing to repair.
-        setImportErrors(results.flatMap((r) => r.errors.map((e) => `${r.id}: ${e}`)));
-        toast.error(`Import finished with ${totals.errors} error${totals.errors === 1 ? '' : 's'} — details below`);
-      } else {
-        toast.success(`Imported ${totals.subjects} subjects (${totals.files} files, ${totals.verified} hash-verified)`);
-        setOpen(false);
-      }
-      onImported();
-    } catch {
-      // request() already toasted the failure — keep the panel open for a retry.
-    } finally {
-      setImporting(false);
-    }
-  };
-
-  return (
-    <>
-      <button
-        onClick={() => setOpen(true)}
-        className="flex items-center gap-2 px-3 py-1.5 bg-port-accent hover:bg-blue-600 text-white rounded text-sm"
-      >
-        <Download className="w-4 h-4" /> Import
-      </button>
-      <Modal open={open} onClose={() => setOpen(false)} size="md" ariaLabel="Import production sprites" closeOnBackdrop={false}>
-        <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-white">Import production sprites</h3>
-        <button onClick={() => setOpen(false)} aria-label="Close import panel" className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-400 hover:text-white">
-          <X className="w-4 h-4" />
-        </button>
-      </div>
-      <p className="text-xs text-gray-400">
-        Pick the managed app holding the sprite pipeline (expects <code>art-pipeline/characters/</code> and/or <code>game/assets/sprites/</code>
-        in its repo). Only approved/final assets import — reference candidates and raw run intermediates stay behind.
-      </p>
-      <AppContextPicker
-        apps={apps}
-        value={appId}
-        onChange={setAppId}
-        label="Source app"
-        placeholder="Select an app…"
-        ariaLabel="Sprite source app"
-        repoLabel="Source root"
-        emptyRepoText="pick an app to import from"
-        selectClassName="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white min-h-[44px]"
-      />
-      <label htmlFor="sprite-import-props" className="flex items-center gap-2 text-sm text-gray-300">
-        <input
-          id="sprite-import-props"
-          type="checkbox"
-          checked={includeProps}
-          onChange={(e) => setIncludeProps(e.target.checked)}
-        />
-        Include props atlas families from the game tree
-      </label>
-      <button
-        onClick={runImport}
-        disabled={importing || !sourceRoot}
-        className="flex items-center gap-2 px-3 py-1.5 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white rounded text-sm"
-      >
-        {importing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-        {importing ? 'Importing…' : 'Run Import'}
-      </button>
-      {importErrors.length > 0 && (
-        <ul className="max-h-40 overflow-y-auto space-y-1 text-xs text-port-error border border-port-border rounded p-2">
-          {importErrors.map((e) => <li key={e}>{e}</li>)}
-        </ul>
-      )}
-        </div>
-      </Modal>
-    </>
-  );
-}
-
-function NewSpritePanel({ onCreated }) {
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState('');
-  const [id, setId] = useState('');
-  const [kind, setKind] = useState('character');
-
-  const [create, creating] = useAsyncAction(async () => {
-    const record = await createSpriteRecord({
-      name: name.trim(),
-      kind,
-      ...(id.trim() ? { id: id.trim() } : {}),
-    }, { silent: true });
-    setOpen(false);
-    setName('');
-    setId('');
-    setKind('character');
-    onCreated(record);
-  }, { errorMessage: 'Failed to create sprite' });
-
-  return (
-    <>
-      <button
-        onClick={() => setOpen(true)}
-        className="flex items-center gap-2 px-3 py-1.5 bg-port-card border border-port-border hover:border-port-accent text-gray-300 rounded text-sm"
-      >
-        <Plus className="w-4 h-4" /> New Sprite
-      </button>
-      <Modal open={open} onClose={() => setOpen(false)} size="sm" ariaLabel="New sprite" closeOnBackdrop={false}>
-        <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-white">New sprite</h3>
-        <button onClick={() => setOpen(false)} aria-label="Close new sprite panel" className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-400 hover:text-white">
-          <X className="w-4 h-4" />
-        </button>
-      </div>
-      <div>
-        <label htmlFor="sprite-new-kind" className="block text-xs text-gray-400 mb-1">Kind</label>
-        <select
-          id="sprite-new-kind"
-          value={kind}
-          onChange={(e) => setKind(e.target.value)}
-          className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white"
-        >
-          {NEW_SPRITE_KINDS.map((k) => (
-            <option key={k.value} value={k.value}>{k.label}</option>
-          ))}
-        </select>
-        {kind !== 'character' && (
-          <p className="mt-1 text-xs text-gray-600">
-            Reference, walk, and publish workflows are character-only — a {kind} holds imported/uploaded assets.
-          </p>
-        )}
-      </div>
-      <div>
-        <label htmlFor="sprite-new-name" className="block text-xs text-gray-400 mb-1">Name</label>
-        <input
-          id="sprite-new-name"
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && name.trim()) create(); }}
-          placeholder="Trail Hand"
-          className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white"
-        />
-      </div>
-      <div>
-        <label htmlFor="sprite-new-id" className="block text-xs text-gray-400 mb-1">
-          Id <span className="text-gray-600">(optional — derived from the name; required for names with no a–z/0–9 characters)</span>
-        </label>
-        <input
-          id="sprite-new-id"
-          type="text"
-          value={id}
-          onChange={(e) => setId(e.target.value)}
-          placeholder="trail-hand"
-          className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white"
-        />
-      </div>
-      <button
-        onClick={create}
-        disabled={creating || !name.trim()}
-        className="flex items-center gap-2 px-3 py-1.5 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white rounded text-sm"
-      >
-        {creating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-        Create
-      </button>
-        </div>
-      </Modal>
-    </>
-  );
-}
-
-// Header autocomplete (#2932, reworked): a compact combobox that filters the
-// library by name/id/kind and navigates on Enter/click. It lives in the page
-// header rather than a sidebar, so it renders only the search field + its
-// suggestion popover — full browsing lives in the Library catalog (the bare
-// `/sprites` route), which scales past a scannable sidebar list.
-function SpriteSearch({ records, onSelect }) {
-  const [query, setQuery] = useState('');
-  const [activeIndex, setActiveIndex] = useState(-1);
-  const wrapRef = useRef(null);
-  const inputId = 'sprite-search';
-  const listId = 'sprite-search-listbox';
-
-  const suggestions = useMemo(() => filterSpriteRecords(records, query), [records, query]);
-  const showSuggestions = query.trim().length > 0;
-
-  // Clicking outside dismisses the suggestion popover (clearing the query is the
-  // same close path as Escape) instead of leaving a stale list floating open.
-  const dismiss = useCallback(() => setQuery(''), []);
-  useClickOutside(wrapRef, showSuggestions, dismiss);
-
-  // A changed query invalidates the highlighted row's index.
-  useEffect(() => { setActiveIndex(-1); }, [query]);
-
-  const commit = (record) => {
-    if (!record) return;
-    onSelect(record.id);
-    setQuery('');
-    setActiveIndex(-1);
-  };
-
-  const onKeyDown = (e) => {
-    if (!showSuggestions) return;
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setActiveIndex((i) => Math.min(i + 1, suggestions.length - 1));
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setActiveIndex((i) => Math.max(i - 1, 0));
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
-      commit(activeIndex >= 0 ? suggestions[activeIndex] : suggestions[0]);
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      setQuery('');
-      setActiveIndex(-1);
-    }
-  };
-
-  const activeId = activeIndex >= 0 && suggestions[activeIndex]
-    ? `sprite-opt-${suggestions[activeIndex].id}` : undefined;
-
-  return (
-    <div ref={wrapRef} className="relative w-full sm:w-64">
-      <label htmlFor={inputId} className="sr-only">Search sprites</label>
-      <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
-      <input
-        id={inputId}
-        type="search"
-        role="combobox"
-        aria-expanded={showSuggestions}
-        aria-controls={listId}
-        aria-autocomplete="list"
-        aria-activedescendant={activeId}
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        onKeyDown={onKeyDown}
-        placeholder="Search sprites…"
-        className="w-full bg-port-bg border border-port-border rounded pl-8 pr-3 py-1.5 text-sm text-white"
-      />
-      {showSuggestions && (
-        <ul
-          id={listId}
-          role="listbox"
-          aria-label="Matching sprites"
-          className="absolute z-30 mt-1 w-full max-h-72 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-lg"
-        >
-          {suggestions.length === 0 ? (
-            <li className="px-3 py-2 text-xs text-gray-500">No matches</li>
-          ) : suggestions.map((r, i) => {
-            const Icon = groupIconForKind(r.kind);
-            return (
-              <li key={r.id} id={`sprite-opt-${r.id}`} role="option" aria-selected={i === activeIndex}>
-                <button
-                  type="button"
-                  onClick={() => commit(r)}
-                  onMouseEnter={() => setActiveIndex(i)}
-                  className={`w-full flex items-center gap-2 text-left px-3 py-2 text-sm ${i === activeIndex ? 'bg-port-accent/20 text-white' : 'text-gray-300 hover:bg-port-bg'}`}
-                >
-                  <Icon className="w-3.5 h-3.5 shrink-0 text-gray-500" />
-                  <span className="font-medium truncate">{r.name}</span>
-                  <span className="ml-auto text-xs text-gray-500 shrink-0">{r.kind}</span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </div>
-  );
-}
 
 export default function Sprites() {
   const { id } = useParams();
