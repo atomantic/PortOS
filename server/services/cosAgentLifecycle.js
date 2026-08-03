@@ -200,8 +200,8 @@ export async function completeAgent(agentId, result = {}) {
     return state.agents[agentId];
   });
 
-  // A duplicate completion is a total no-op: re-recording the domain-usage
-  // action would double-charge the daily budget, and re-emitting
+  // A duplicate completion never runs the completion tail: re-recording the
+  // domain-usage action would double-charge the daily budget, and re-emitting
   // `agent:completed` would re-run the scheduler hand-off for an agent that
   // already finished (#3384). The existing record still comes back to the caller.
   if (alreadyCompleted) {
