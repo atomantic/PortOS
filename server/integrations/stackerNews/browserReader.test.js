@@ -38,7 +38,7 @@ describe('Stacker News browser read transport', () => {
   });
 
   it('builds only the fixed territory URL and normalizes the sub selection', async () => {
-    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~example/recent', {
+    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~example/new', {
       sub: {
         name: 'example', userId: 42, baseCost: 1, replyCost: 1, postsSatsFilter: 0,
         postTypes: ['LINK', 'DISCUSSION'], status: 'ACTIVE', nsfw: false,
@@ -47,16 +47,16 @@ describe('Stacker News browser read transport', () => {
     await expect(readSub('example')).resolves.toEqual({
       sub: { name: 'example', userId: '42', baseCost: 1, postsSatsFilter: 0, replyCost: 1, postTypes: ['LINK', 'DISCUSSION'], status: 'ACTIVE', nsfw: false },
     });
-    expect(navigateToUrlPinned.mock.calls[0][0]).toBe('https://stacker.news/~example/recent');
+    expect(navigateToUrlPinned.mock.calls[0][0]).toBe('https://stacker.news/~example/new');
   });
 
   it('reports a territory the page does not know about as a null sub rather than throwing', async () => {
-    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~ghost/recent', { sub: null }));
+    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~ghost/new', { sub: null }));
     await expect(readSub('ghost')).resolves.toEqual({ sub: null });
   });
 
   it('carries the cursor into the fixed URL and back out of the items page', async () => {
-    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~example/recent?cursor=page-2', {
+    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~example/new?cursor=page-2', {
       items: {
         cursor: 'page-3',
         items: [{ id: 42, createdAt: '2026-01-01T00:00:00Z', updatedAt: null, title: 'Example work', text: 'A post', url: '', parentId: null, user: { name: 'example_artist' }, subName: 'example' }],
@@ -68,13 +68,13 @@ describe('Stacker News browser read transport', () => {
         items: [{ id: '42', createdAt: '2026-01-01T00:00:00Z', updatedAt: null, title: 'Example work', text: 'A post', url: '', parentId: null, user: { name: 'example_artist' }, subName: 'example' }],
       },
     });
-    expect(navigateToUrlPinned.mock.calls[0][0]).toBe('https://stacker.news/~example/recent?cursor=page-2');
+    expect(navigateToUrlPinned.mock.calls[0][0]).toBe('https://stacker.news/~example/new?cursor=page-2');
   });
 
   it('omits the cursor parameter on the first page', async () => {
-    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~example/recent', { items: { cursor: null, items: [] } }));
+    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~example/new', { items: { cursor: null, items: [] } }));
     await expect(readItems('example')).resolves.toEqual({ items: { cursor: null, items: [] } });
-    expect(navigateToUrlPinned.mock.calls[0][0]).toBe('https://stacker.news/~example/recent');
+    expect(navigateToUrlPinned.mock.calls[0][0]).toBe('https://stacker.news/~example/new');
   });
 
   // A failed extraction must never look like a quiet empty page: sync would
@@ -94,7 +94,7 @@ describe('Stacker News browser read transport', () => {
   });
 
   it('re-normalizes whatever the untrusted page returned instead of trusting its projection', async () => {
-    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~example/recent', {
+    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~example/new', {
       items: {
         cursor: { evil: true },
         items: [
@@ -117,7 +117,7 @@ describe('Stacker News browser read transport', () => {
   // tab is now already torn down by the time the pinned navigation returns, so
   // the throw can be direct and this module still leaks nothing.
   it('refuses a navigation that landed off the fixed origin, without owning the tab', async () => {
-    navigateToUrlPinned.mockResolvedValue(page('https://example.com/~example/recent', { items: { cursor: null, items: [] } }));
+    navigateToUrlPinned.mockResolvedValue(page('https://example.com/~example/new', { items: { cursor: null, items: [] } }));
     await expect(readItems('example')).rejects.toThrow('left the fixed origin');
     expect(closeCdpPage).not.toHaveBeenCalled();
   });
@@ -126,24 +126,24 @@ describe('Stacker News browser read transport', () => {
   // one; filing that page under the configured slug would store another
   // territory's owner ID as this territory's ownership evidence.
   it('refuses a same-origin redirect to a different territory', async () => {
-    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~other/recent', { items: { cursor: null, items: [] } }));
+    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~other/new', { items: { cursor: null, items: [] } }));
     await expect(readItems('example')).rejects.toThrow('different page than the one requested');
     expect(closeCdpPage).not.toHaveBeenCalled();
   });
 
   it('tolerates a trailing-slash or case difference in the landed URL', async () => {
-    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~Example/recent/?nodata=1', { items: { cursor: null, items: [] } }));
+    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~Example/new/?nodata=1', { items: { cursor: null, items: [] } }));
     await expect(readItems('example')).resolves.toEqual({ items: { cursor: null, items: [] } });
   });
 
   it('refuses a payload naming a territory other than the one requested', async () => {
-    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~example/recent', { sub: { name: 'other', userId: '42' } }));
+    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~example/new', { sub: { name: 'other', userId: '42' } }));
     await expect(readSub('example')).rejects.toThrow('for a different requested territory');
   });
 
   it('bounds a page to the caller-requested limit, matching the GraphQL transport', async () => {
     const items = Array.from({ length: 40 }, (_, index) => ({ id: index + 1, user: { name: 'example_artist' } }));
-    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~example/recent', { items: { cursor: null, items } }));
+    navigateToUrlPinned.mockResolvedValue(page('https://stacker.news/~example/new', { items: { cursor: null, items } }));
     await expect(executeStackerNewsBrowserRead('items', { sub: 'example', limit: 30 })).resolves.toMatchObject({ items: { items: expect.any(Array) } });
     const bounded = await executeStackerNewsBrowserRead('items', { sub: 'example', limit: 30 });
     expect(bounded.items.items).toHaveLength(30);

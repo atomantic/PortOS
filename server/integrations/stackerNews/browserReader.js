@@ -28,7 +28,7 @@ const slugPath = (slug) => {
   if (typeof slug !== 'string' || !slug.trim() || !/^[a-zA-Z0-9_-]{1,120}$/.test(slug.trim())) {
     throw new Error('Invalid Stacker News territory name');
   }
-  return `${ORIGIN}/~${encodeURIComponent(slug.trim())}/recent`;
+  return `${ORIGIN}/~${encodeURIComponent(slug.trim())}/new`;
 };
 
 const itemsUrl = (slug, cursor) => {
@@ -77,7 +77,7 @@ const ITEMS_EXPRESSION = `(() => {
   const raw = document.querySelector('#__NEXT_DATA__')?.textContent;
   if (!raw) return null;
   const page = JSON.parse(raw)?.props?.pageProps?.ssrData?.items;
-  // The /recent page always server-renders this list, so its absence means the
+  // The /new page always server-renders this list, so its absence means the
   // extraction failed rather than that the territory is empty.
   if (!page || !Array.isArray(page.items)) return null;
   const str = (value, max) => typeof value === 'string' ? value.slice(0, max) : '';
