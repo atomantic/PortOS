@@ -70,7 +70,7 @@ Browser work uses PortOS's existing CDP browser and only fixed primitives:
    fixed origin.
 
 Browser *reads* use the same primitives with the same constraints: a fixed
-`https://stacker.news/~<slug>/recent` URL (plus an opaque `cursor` parameter for
+`https://stacker.news/~<slug>/new` URL (plus an opaque `cursor` parameter for
 later pages) and a fixed internal extractor. A read closes its tab afterwards; a
 handoff leaves its tab open because the open tab is the deliverable.
 
