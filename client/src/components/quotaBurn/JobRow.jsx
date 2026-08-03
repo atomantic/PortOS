@@ -6,7 +6,8 @@
  * work — so the move controls are part of the configuration, not a convenience.
  */
 
-import { ArrowDown, ArrowUp, Play, Trash2 } from 'lucide-react';
+import { useState } from 'react';
+import { ArrowDown, ArrowUp, Check, Play, Trash2 } from 'lucide-react';
 import JobParamField from './JobParamField';
 import { inputClass } from './fields';
 
@@ -14,6 +15,11 @@ export default function JobRow({
   job, index, total, catalog, pending, actionsBusy,
   onChange, onMove, onRemove, onRun,
 }) {
+  // Two-click arm on delete (the repo's inline-confirm convention). A job holds
+  // the family's whole free-text work prompt and nothing else stores it — a
+  // stray click on the trash icon would drop it from the persisted plan with no
+  // undo.
+  const [armed, setArmed] = useState(false);
   const spec = catalog.jobTypes.find((type) => type.id === job.jobType);
   const idPrefix = `burn-job-${job.id}`;
   const setParam = (key, value) => onChange({ ...job, params: { ...job.params, [key]: value } });
@@ -44,7 +50,14 @@ export default function JobRow({
           <button type="button" className="p-1 text-gray-400 hover:text-white disabled:opacity-30" disabled={index === 0} onClick={() => onMove(index, -1)} aria-label={`Move step ${index + 1} earlier`}><ArrowUp size={14} /></button>
           <button type="button" className="p-1 text-gray-400 hover:text-white disabled:opacity-30" disabled={index === total - 1} onClick={() => onMove(index, 1)} aria-label={`Move step ${index + 1} later`}><ArrowDown size={14} /></button>
           <button type="button" className="p-1 text-port-accent hover:text-white disabled:opacity-30" disabled={actionsBusy} onClick={() => onRun(job)} aria-label={`Run step ${index + 1} now`} title="Run this job now, ignoring the reset window"><Play size={14} /></button>
-          <button type="button" className="p-1 text-red-400 hover:text-red-300 disabled:opacity-30" onClick={() => onRemove(index)} aria-label={`Remove step ${index + 1}`}><Trash2 size={14} /></button>
+          {armed ? (
+            <>
+              <button type="button" className="p-1 text-red-400 hover:text-red-300" onClick={() => onRemove(index)} aria-label={`Confirm removing step ${index + 1}`} title="Click to confirm — this discards the job's prompt"><Check size={14} /></button>
+              <button type="button" className="text-[11px] text-gray-400 hover:text-white px-1" onClick={() => setArmed(false)}>Cancel</button>
+            </>
+          ) : (
+            <button type="button" className="p-1 text-red-400 hover:text-red-300 disabled:opacity-30" onClick={() => setArmed(true)} aria-label={`Remove step ${index + 1}`}><Trash2 size={14} /></button>
+          )}
         </div>
       </div>
 

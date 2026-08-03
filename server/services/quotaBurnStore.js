@@ -62,6 +62,42 @@ export async function saveQuotaBurnConfig(patch) {
   });
 }
 
+const inFlightFile = () => join(PATHS.cos, 'quota-burn-inflight.json');
+const inFlightWriteQueue = createFileWriteQueue();
+
+/**
+ * How long an enqueued render keeps its entry out of the next cycle's pick.
+ *
+ * A cloud image render commonly takes minutes and `imageRefs` only fills in
+ * when it COMPLETES, so without a cooldown every tick re-selects the same
+ * entries. Long enough to outlast a queued render, short enough that a render
+ * which silently failed is retried the same day rather than being stranded.
+ */
+const IN_FLIGHT_TTL_MS = 6 * 60 * 60 * 1000;
+
+/** Keys enqueued within the TTL, as a Set. Expired keys are simply not returned. */
+export async function getQuotaBurnInFlight({ now = Date.now() } = {}) {
+  const loaded = await readJSONFile(inFlightFile(), null);
+  const entries = loaded && typeof loaded === 'object' && !Array.isArray(loaded) ? loaded : {};
+  return new Set(Object.entries(entries)
+    .filter(([, at]) => Number.isFinite(Number(at)) && now - Number(at) < IN_FLIGHT_TTL_MS)
+    .map(([key]) => key));
+}
+
+/** Stamp keys as just-enqueued, dropping any that have aged out of the TTL. */
+export async function recordQuotaBurnInFlight(keys, { now = Date.now() } = {}) {
+  if (!keys?.length) return;
+  return inFlightWriteQueue(async () => {
+    const loaded = await readJSONFile(inFlightFile(), null);
+    const entries = loaded && typeof loaded === 'object' && !Array.isArray(loaded) ? loaded : {};
+    const next = Object.fromEntries(Object.entries(entries)
+      .filter(([, at]) => Number.isFinite(Number(at)) && now - Number(at) < IN_FLIGHT_TTL_MS));
+    for (const key of keys) next[key] = now;
+    await atomicWrite(inFlightFile(), next);
+    return next;
+  });
+}
+
 export async function getQuotaBurnRuns() {
   const loaded = await readJSONFile(runLogFile(), null);
   return Array.isArray(loaded?.runs) ? loaded.runs : [];

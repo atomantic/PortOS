@@ -76,8 +76,16 @@ export function buildGlobalPlan(apps) {
     touchedAppIds.push(app.id);
     const configured = override.taskMetadata?.families;
     if (!configured || typeof configured !== 'object') continue;
+    // The OLD shape had TWO independent switches: the task type had to be
+    // enabled for the app (`isTaskTypeEnabledForApp` reads `override.enabled`)
+    // AND the family had to be enabled inside `taskMetadata.families`. Reading
+    // only the family flag would arm a burn on an install that configured a
+    // family, tried it, then switched the whole task type off — unrequested
+    // provider spend on upgrade. Both must be true.
+    const appArmed = override.enabled === true;
     for (const [familyId, value] of Object.entries(configured)) {
       if (!FAMILIES.includes(familyId) || !value || typeof value !== 'object') continue;
+      const armed = appArmed && value.enabled === true;
       const existing = families[familyId];
       const jobs = existing?.jobs || [];
       const prompt = typeof value.prompt === 'string' ? value.prompt.trim() : '';
@@ -85,7 +93,10 @@ export function buildGlobalPlan(apps) {
         jobSeq += 1;
         jobs.push({
           id: `migrated-${jobSeq}`,
-          enabled: true,
+          // A job carried over from an app whose burn was OFF stays off, so a
+          // family armed by a different app doesn't start running this app's
+          // prompt as a side effect of the merge.
+          enabled: armed,
           label: `${app.name || app.id} burn work`,
           jobType: 'agent-prompt',
           // The family-level `model` was the agent's model in the old shape;
@@ -101,16 +112,27 @@ export function buildGlobalPlan(apps) {
           },
         });
       }
-      // First app in file order owns the window settings — see the conflict
-      // note above. Later apps contribute only their jobs.
-      families[familyId] = existing ? { ...existing, jobs } : {
-        enabled: value.enabled === true,
+      const windowSettings = {
         providerId: value.providerId || null,
         scope: typeof value.scope === 'string' ? value.scope : null,
         resetWithinHours: Number.isFinite(Number(value.resetWithinHours)) ? Number(value.resetWithinHours) : 24,
         reservePercent: Number.isFinite(Number(value.reservePercent)) ? Number(value.reservePercent) : 0,
         maxDispatchesPerWindow: Number.isFinite(Number(value.maxDispatchesPerWindow)) ? Number(value.maxDispatchesPerWindow) : 5,
         priority: Number.isFinite(Number(value.priority)) ? Number(value.priority) : 0,
+      };
+      if (!existing) {
+        families[familyId] = { enabled: armed, ...windowSettings, jobs };
+        continue;
+      }
+      // Two apps configured the same family. `enabled` is OR'd — an install
+      // that had this family burning keeps burning it, regardless of which app
+      // happens to come first in apps.json. The window settings come from the
+      // first ARMED contributor (falling back to the first contributor at all),
+      // so a stale disabled config can't quietly halve a live cap.
+      families[familyId] = {
+        ...existing,
+        ...(armed && !existing.enabled ? windowSettings : {}),
+        enabled: existing.enabled || armed,
         jobs,
       };
     }
@@ -118,10 +140,14 @@ export function buildGlobalPlan(apps) {
   if (!Object.keys(families).length) return { config: null, touchedAppIds };
   return {
     config: {
-      // Master switch on only when at least one family was actually enabled —
-      // an install that configured but never enabled a family stays silent.
+      // Master switch on only when at least one family was actually armed — an
+      // install that configured but never enabled a family stays silent.
       enabled: Object.values(families).some((family) => family.enabled === true),
-      checkIntervalMinutes: 30,
+      // The old shape re-probed on `recheckCron: '0 */12 * * *'`. Carrying that
+      // cadence across (rather than the new 30-minute default) keeps an
+      // upgraded install at ~2 provider scrapes a day instead of 48 — each of
+      // which spawns a multi-second TUI child per enabled family.
+      checkIntervalMinutes: 720,
       families,
     },
     touchedAppIds,

@@ -5,7 +5,7 @@
  * needs to know the param KINDS, not any particular job's fields.
  */
 
-import { inputClass } from './fields';
+import { NumberField, inputClass } from './fields';
 
 export default function JobParamField({ descriptor, value, onChange, options, idPrefix }) {
   const id = `${idPrefix}-${descriptor.key}`;
@@ -41,19 +41,17 @@ export default function JobParamField({ descriptor, value, onChange, options, id
   }
 
   if (descriptor.kind === 'number') {
+    // NumberField, not a bare input: an emptied box must not commit `0` (below
+    // several server minimums) and 400 the whole coalesced save.
     return (
-      <label htmlFor={id} className="block text-xs text-gray-400">
-        {descriptor.label}
-        <input
-          id={id}
-          type="number"
-          min={descriptor.min}
-          max={descriptor.max}
-          className={inputClass}
-          value={current}
-          onChange={(event) => onChange(descriptor.key, Number(event.target.value))}
-        />
-      </label>
+      <NumberField
+        id={id}
+        label={descriptor.label}
+        value={current}
+        min={descriptor.min}
+        max={descriptor.max}
+        onChange={(next) => onChange(descriptor.key, next)}
+      />
     );
   }
 

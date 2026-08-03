@@ -44,7 +44,7 @@ vi.mock('./quotaBurn.js', async (importActual) => ({
 }));
 
 const { normalizeQuotaBurnConfig } = await import('../lib/quotaBurnConfig.js');
-const { getQuotaBurnStatus, runQuotaBurnCycle, __resetQuotaBurnRunner } = await import('./quotaBurnRunner.js');
+const { getQuotaBurnStatus, runQuotaBurnCycle, __tickQuotaBurn, __resetQuotaBurnRunner } = await import('./quotaBurnRunner.js');
 
 const card = (family, percentRemaining = 50) => ({
   family, label: family, supported: true,
@@ -130,7 +130,10 @@ describe('runQuotaBurnCycle', () => {
     state.pending = { first: { count: 0, detail: 'all rendered' }, second: { count: 0, detail: 'no app' } };
     const result = await runQuotaBurnCycle();
     expect(result.dispatched).toBe(false);
-    expect(result.reason).toMatch(/no job in the grok plan had pending work/);
+    // The per-job reasons are the actionable part — collapsing them to one
+    // fixed string asserted something usually false.
+    expect(result.reason).toMatch(/first: all rendered/);
+    expect(result.reason).toMatch(/second: no app/);
     expect(state.runs[0]).toMatchObject({ trigger: 'scheduled', dispatched: false });
   });
 
@@ -202,5 +205,100 @@ describe('getQuotaBurnStatus', () => {
     expect(codex.skipReason).toBe('disabled');
     // A disabled family's jobs are not probed — the counts would never be acted on.
     expect(codex.jobs.every((job) => job.pending === null)).toBe(true);
+  });
+});
+
+describe('run-now targeting', () => {
+  it('force-runs a job whose enabled checkbox is off', async () => {
+    // Clicking ▶ on a paused job is a more specific instruction than the
+    // checkbox set earlier; filtering it out made the click a silent no-op
+    // reported as "no pending work".
+    state.config = plan({ families: { grok: { enabled: true, jobs: [{ id: 'paused', enabled: false, jobType: 'agent-prompt' }] } } });
+    state.pending = { paused: { count: 1 } };
+    const result = await runQuotaBurnCycle({ trigger: 'manual', familyId: 'grok', jobId: 'paused', force: true });
+    expect(result.dispatched).toBe(true);
+    expect(state.ran.map((entry) => entry.jobId)).toEqual(['paused']);
+  });
+
+  it('still skips a disabled job on an ordinary scheduled cycle', async () => {
+    state.config = plan({ families: { grok: { enabled: true, jobs: [{ id: 'paused', enabled: false, jobType: 'agent-prompt' }] } } });
+    state.pending = { paused: { count: 1 } };
+    // Nothing enabled to run ⇒ not actionable ⇒ no quota scrape at all.
+    await expect(runQuotaBurnCycle()).resolves.toMatchObject({ dispatched: false });
+    expect(state.ran).toEqual([]);
+  });
+
+  it('force-runs a job in a family whose own checkbox is off', async () => {
+    // Both 'switched off' gates govern the UNATTENDED loop; an explicit click on
+    // one row outranks them, exactly as it outranks the window/reserve/cap gates.
+    state.config = normalizeQuotaBurnConfig({
+      enabled: true,
+      families: { grok: { enabled: false, jobs: [{ id: 'j', enabled: true, jobType: 'agent-prompt' }] } },
+    });
+    state.pending = { j: { count: 1 } };
+    const result = await runQuotaBurnCycle({ trigger: 'manual', familyId: 'grok', jobId: 'j', force: true });
+    expect(result.dispatched).toBe(true);
+    expect(state.recorded).toEqual([]);
+  });
+
+  it('reports the REQUESTED family\'s verdict, not another family\'s', async () => {
+    // Reporting a different (enabled) family's verdict left the user with no
+    // path to the control they actually needed.
+    state.config = normalizeQuotaBurnConfig({
+      enabled: true,
+      families: {
+        grok: { enabled: true, jobs: [{ id: 'j', enabled: true, jobType: 'agent-prompt' }] },
+        claude: { enabled: true, jobs: [{ id: 'k', enabled: true, jobType: 'agent-prompt' }] },
+      },
+    });
+    // grok has NO provider card — a fact about the world, so force can't pass it.
+    state.quotas = [card('claude')];
+    const result = await runQuotaBurnCycle({ trigger: 'manual', familyId: 'grok', jobId: 'j', force: true });
+    expect(result.reason).toMatch(/grok: no enabled provider in this family/);
+    expect(result.reason).not.toMatch(/claude/);
+  });
+});
+
+describe('interval clock', () => {
+  it('does not let a manual run defer the next scheduled cycle', async () => {
+    // finish() used to stamp lastRunAt for every trigger, so one "Evaluate now"
+    // pushed the automatic cycle a full interval out — on a 12-hour interval
+    // that can skip the reset the feature exists to spend.
+    state.pending = { first: { count: 1 } };
+    await runQuotaBurnCycle({ trigger: 'manual' });
+    const { getProviderQuotas } = await import('./providerUsage.js');
+    getProviderQuotas.mockClear();
+    // A scheduled tick immediately after must still be due.
+    await runQuotaBurnCycle({ trigger: 'scheduled' });
+    expect(getProviderQuotas).toHaveBeenCalled();
+  });
+
+  it('seeds the interval clock from the persisted run log after a restart', async () => {
+    // lastRunAt is in-process; on a bare null the first tick after every boot is
+    // "due", so a PM2 restart loop paces a 12-hourly plan into minutes — a full
+    // TUI scrape per family ~60s after every boot.
+    const { getProviderQuotas } = await import('./providerUsage.js');
+    state.config = plan({ checkIntervalMinutes: 720 });
+    state.runs = [{ at: new Date(Date.now() - 60_000).toISOString(), trigger: 'scheduled', dispatched: false }];
+    await __tickQuotaBurn();
+    expect(getProviderQuotas).not.toHaveBeenCalled();
+
+    // A run log whose newest SCHEDULED entry is older than the interval is due.
+    __resetQuotaBurnRunner();
+    state.runs = [{ at: new Date(Date.now() - 13 * 3600_000).toISOString(), trigger: 'scheduled', dispatched: false }];
+    state.pending = { first: { count: 1 } };
+    await __tickQuotaBurn();
+    expect(getProviderQuotas).toHaveBeenCalled();
+  });
+
+  it('ignores manual entries when seeding the clock', async () => {
+    // Only a scheduled cycle advances the interval; a manual "Evaluate now"
+    // recorded moments ago must not defer the automatic one across a restart.
+    const { getProviderQuotas } = await import('./providerUsage.js');
+    state.config = plan({ checkIntervalMinutes: 720 });
+    state.runs = [{ at: new Date().toISOString(), trigger: 'manual', dispatched: false }];
+    state.pending = { first: { count: 1 } };
+    await __tickQuotaBurn();
+    expect(getProviderQuotas).toHaveBeenCalled();
   });
 });

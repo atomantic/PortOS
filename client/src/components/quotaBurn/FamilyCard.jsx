@@ -30,11 +30,17 @@ export default function FamilyCard({
     next.splice(index + delta, 0, moved);
     patchJobs(next);
   };
+  // Without a catalog there is no job type to mint, and a job with
+  // `jobType: undefined` is dropped by JSON.stringify and rejected by the
+  // strict PUT schema — poisoning every later save for this family until the
+  // page is reloaded. The catalog fetch is best-effort (the page still renders
+  // without it), so gate on it rather than minting an unsavable row.
+  const canAddJob = catalog.jobTypes.length > 0;
   const addJob = () => patchJobs([...jobs, {
     id: `job-${Date.now().toString(36)}`,
     enabled: true,
     label: '',
-    jobType: catalog.jobTypes[0]?.id,
+    jobType: catalog.jobTypes[0].id,
     model: null,
     providerId: null,
     params: {},
@@ -100,7 +106,13 @@ export default function FamilyCard({
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="text-xs uppercase tracking-wide text-gray-400">Burn plan — runs in order</h3>
-              <button type="button" className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline" onClick={addJob}>
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline disabled:opacity-40"
+                disabled={!canAddJob}
+                title={canAddJob ? 'Add a job to this plan' : 'Job catalog unavailable — reload the page'}
+                onClick={addJob}
+              >
                 <Plus size={13} /> Add job
               </button>
             </div>

@@ -4,10 +4,13 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import migration, { buildGlobalPlan } from './221-quota-burn-global-config.js';
 
-const app = (id, families, extras = {}) => ({
+// `enabled: true` on the OVERRIDE is the old shape's task-type switch — the one
+// `isTaskTypeEnabledForApp` read. It is independent of the per-family flag, and
+// the migration requires both.
+const app = (id, families, extras = {}, overrideExtras = { enabled: true }) => ({
   id,
   name: `App ${id}`,
-  taskTypeOverrides: { 'quota-burn': { taskMetadata: { families, ...extras } } },
+  taskTypeOverrides: { 'quota-burn': { ...overrideExtras, taskMetadata: { families, ...extras } } },
 });
 
 describe('buildGlobalPlan', () => {
@@ -126,5 +129,45 @@ describe('migration 221 up()', () => {
     await migration.up({ rootDir });
     const plan = await readJson('data', 'cos', 'quota-burn.json');
     expect(plan.families.grok.jobs).toEqual([]);
+  });
+});
+
+describe('buildGlobalPlan enabled semantics', () => {
+  it('does not arm a family whose TASK TYPE was switched off', async () => {
+    // The old shape had two independent switches: `override.enabled` (read by
+    // isTaskTypeEnabledForApp) and the per-family flag. Reading only the family
+    // flag arms a burn the user had explicitly turned off — unrequested
+    // provider spend on upgrade.
+    const { config } = buildGlobalPlan([
+      app('a1', { grok: { enabled: true, prompt: 'Refactor X' } }, {}, { enabled: false }),
+    ]);
+    expect(config.enabled).toBe(false);
+    expect(config.families.grok.enabled).toBe(false);
+    expect(config.families.grok.jobs[0].enabled).toBe(false);
+  });
+
+  it('ORs enabled across apps so a live burn survives regardless of file order', () => {
+    // First-app-wins on `enabled` silently stopped a running burn when a stale
+    // disabled config happened to sort first.
+    const disabled = app('a1', { codex: { enabled: false, prompt: 'old', maxDispatchesPerWindow: 2 } }, {}, { enabled: false });
+    const live = app('a2', { codex: { enabled: true, prompt: 'current', maxDispatchesPerWindow: 20 } });
+    for (const apps of [[disabled, live], [live, disabled]]) {
+      const { config } = buildGlobalPlan(apps);
+      expect(config.families.codex.enabled).toBe(true);
+      expect(config.enabled).toBe(true);
+      // Window settings come from the ARMED contributor, so a stale disabled
+      // config can't quietly halve a live cap.
+      expect(config.families.codex.maxDispatchesPerWindow).toBe(20);
+      // Both prompts survive, but only the armed app's job is enabled.
+      expect(config.families.codex.jobs.map((job) => job.enabled).sort()).toEqual([false, true]);
+    }
+  });
+
+  it('carries the old 12-hourly recheck cadence, not the new 30-minute default', () => {
+    // The old recheckCron was '0 */12 * * *'. Defaulting a migrated install to
+    // 30 minutes takes it from ~2 provider scrapes a day to 48, each spawning a
+    // multi-second TUI child per enabled family.
+    const { config } = buildGlobalPlan([app('a1', { grok: { enabled: true, prompt: 'x' } })]);
+    expect(config.checkIntervalMinutes).toBe(720);
   });
 });

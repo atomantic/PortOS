@@ -102,8 +102,15 @@ export function burnBudgetRemaining(limit, family) {
  * `charge: false` so it never eats the automatic budget.
  */
 export function evaluateFamily(family, card, { now = Date.now(), dispatches = {}, bypassGates = false } = {}) {
-  if (!family.enabled) return { skipReason: 'disabled' };
-  if (!familyIsActionable(family)) return { skipReason: 'no enabled jobs configured' };
+  // The two "switched off" gates. A forced run passes both: `enabled` on the
+  // family and on a job governs the UNATTENDED loop, and the user clicking ▶ on
+  // a specific row is a more specific instruction than a checkbox they set
+  // earlier. Everything below — no provider, unreadable quota, unburnable card
+  // — is a fact about the world and holds even under force.
+  if (!bypassGates) {
+    if (!family.enabled) return { skipReason: 'disabled' };
+    if (!familyIsActionable(family)) return { skipReason: 'no enabled jobs configured' };
+  }
   if (!card) return { skipReason: 'no enabled provider in this family' };
   if (card.supported === false) return { skipReason: 'provider has no queryable quota surface' };
   if (card.error) return { skipReason: `quota read failed: ${card.error}` };
@@ -113,6 +120,14 @@ export function evaluateFamily(family, card, { now = Date.now(), dispatches = {}
   // just refused. Opt-out only: absent means burnable.
   if (card.burnable === false) return { skipReason: 'provider reports no spendable headroom' };
 
+  // Distinguish "your scope filter matched nothing" from "the provider states
+  // no reset time". `scope` is a free-text field on the page, so a typo (`weekly`
+  // against a card whose windows are `week`/`month`) otherwise reads as a fault
+  // in the quota adapter and the family silently never burns.
+  if (family.scope && !(card.limits || []).some((limit) => limit.scope === family.scope)) {
+    const available = [...new Set((card.limits || []).map((limit) => limit.scope).filter(Boolean))];
+    return { skipReason: `no window matches scope "${family.scope}"${available.length ? ` (this provider has: ${available.join(', ')})` : ''}` };
+  }
   const selected = selectLimit(card, family, now);
   // A window with no readable reset time is unknowable, not merely closed — a
   // forced run can't invent one either, so this gate holds even under bypass.

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import QuotaBurn from './QuotaBurn';
@@ -129,5 +129,85 @@ describe('QuotaBurn save debounce', () => {
     await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1));
     expect(api.saveQuotaBurn.mock.calls[0][0].families.grok.jobs[0].label).toBe('Bible imagesabc');
     await waitFor(() => expect(screen.getByRole('button', { name: /Evaluate now/ })).not.toBeDisabled());
+  });
+});
+
+describe('QuotaBurn save races', () => {
+  const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
+
+  it('does not let a slow response revert a keystroke typed while it was in flight', async () => {
+    // The status read walks every universe bible, so the round-trip is long.
+    // Without a sequence guard, `setConfig(result.config)` rewinds the
+    // controlled input mid-typing and the character is silently lost.
+    const gate = deferred();
+    api.saveQuotaBurn.mockReturnValueOnce(gate.promise);
+    const user = userEvent.setup();
+    renderPage('/devtools/quota-burn/grok');
+    const nameInput = await screen.findByLabelText('Name for step 1');
+    await user.clear(nameInput);
+    await user.type(nameInput, 'AB');
+    await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1));
+
+    // Type again while the first PUT is still open, then let it land carrying
+    // the OLD value the server normalized.
+    await user.type(nameInput, 'C');
+    gate.resolve({ config });
+    await waitFor(() => expect(nameInput).toHaveValue('ABC'));
+  });
+
+  it('keeps the run gate closed when a newer edit is still pending', async () => {
+    // Clearing `unsaved` unconditionally re-opened "Burn now" against config
+    // the server does not have — dispatching a real quota-spending task with
+    // the previous model.
+    const gate = deferred();
+    api.saveQuotaBurn.mockReturnValueOnce(gate.promise);
+    const user = userEvent.setup();
+    renderPage('/devtools/quota-burn/grok');
+    const nameInput = await screen.findByLabelText('Name for step 1');
+    await user.type(nameInput, 'X');
+    await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1));
+    await user.type(nameInput, 'Y');
+    gate.resolve({ config });
+
+    // Let the resolved save settle, but stay inside the second edit's debounce.
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(screen.getByRole('button', { name: /Evaluate now/ })).toBeDisabled();
+  });
+
+  it('retains the patch when the save fails so one bad field cannot eat the rest', async () => {
+    // `pendingRef` was cleared before the request, so a 400 discarded every
+    // edit coalesced into that body, unrecoverably.
+    api.saveQuotaBurn.mockRejectedValueOnce(new Error('400'));
+    const user = userEvent.setup();
+    renderPage('/devtools/quota-burn/grok');
+    await user.type(await screen.findByLabelText('Name for step 1'), 'Z');
+    await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1));
+
+    // Still unsaved, and the next flush re-sends the retained edit.
+    await waitFor(() => expect(screen.getByRole('button', { name: /Evaluate now/ })).toBeDisabled());
+    await user.type(screen.getByLabelText('Name for step 1'), '!');
+    await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalledTimes(2));
+    expect(api.saveQuotaBurn.mock.calls[1][0].families.grok.jobs[0].label).toContain('Z!');
+  });
+
+  it('flushes a pending edit on unmount instead of dropping it', async () => {
+    // cancel() alone discards everything typed in the last debounce window —
+    // navigating away 200ms after pasting a prompt lost it with no indicator.
+    const user = userEvent.setup();
+    const { unmount } = renderPage('/devtools/quota-burn/grok');
+    await user.type(await screen.findByLabelText('Name for step 1'), 'Q');
+    unmount();
+    await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1));
+    expect(api.saveQuotaBurn.mock.calls[0][0].families.grok.jobs[0].label).toContain('Q');
+  });
+
+  it('does not commit 0 when a number field is cleared to be retyped', async () => {
+    // Number('') === 0, which is below the server minimum for the interval and
+    // the dispatch cap — a 400 that also discards every co-pending edit.
+    const user = userEvent.setup();
+    renderPage('/devtools/quota-burn/grok');
+    await user.clear(await screen.findByLabelText(/Dispatch cap per window/));
+    await act(async () => { await new Promise((r) => setTimeout(r, 700)); });
+    expect(api.saveQuotaBurn).not.toHaveBeenCalled();
   });
 });

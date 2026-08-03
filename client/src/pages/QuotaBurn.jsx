@@ -48,12 +48,22 @@ export default function QuotaBurn() {
   const [unsaved, setUnsaved] = useState(false);
   const [running, setRunning] = useState(false);
   const pendingRef = useRef(null);
+  // Monotonic counter over local edits. Every server response records the value
+  // it was sent at; a response is only allowed to overwrite `config` when the
+  // counter hasn't moved since. Without it, a slow round-trip (the status read
+  // walks every universe bible) reverts keystrokes typed while it was in
+  // flight, and two overlapping saves can land out of order and leave the page
+  // showing a value the server does not hold.
+  const editSeqRef = useRef(0);
 
   const load = useCallback(async (refresh = false) => {
+    const seq = editSeqRef.current;
     const data = await api.getQuotaBurn(refresh, { silent: true }).catch(() => null);
     if (!data) return;
-    setConfig(data.config);
+    // `status` is derived server-side and never edited here, so it is always
+    // safe to adopt; `config` is the form's own state and must not be rewound.
     setStatus(data.status);
+    if (editSeqRef.current === seq) setConfig(data.config);
   }, []);
 
   useEffect(() => {
@@ -70,18 +80,40 @@ export default function QuotaBurn() {
     const patch = pendingRef.current;
     pendingRef.current = null;
     if (!patch) return;
+    const seq = editSeqRef.current;
     const result = await api.saveQuotaBurn(patch, { silent: true })
       .catch((err) => { toast.error(`Could not save: ${err.message}`); return null; });
-    // The server's normalization is authoritative — adopt what it stored, then
-    // re-read status so pending counts and skip reasons match the saved plan.
-    if (result) setConfig(result.config);
+
+    if (!result) {
+      // Put the patch BACK rather than dropping it. One rejected field (a 400
+      // from an out-of-range value) would otherwise take every other edit
+      // coalesced into the same body down with it, unrecoverably — and
+      // `unsaved` must stay true so the run buttons keep reflecting that the
+      // server does not have these values.
+      pendingRef.current = mergeQuotaBurnPatch(patch, pendingRef.current);
+      return;
+    }
+    // The server's normalization is authoritative — adopt what it stored, but
+    // only while no newer keystroke has landed. Then re-read status so pending
+    // counts and skip reasons match the saved plan.
+    if (editSeqRef.current === seq) setConfig(result.config);
     await load();
-    setUnsaved(false);
+    // A newer edit armed during the round-trip is still unsaved — clearing the
+    // flag here would re-open "Burn now" against config the server doesn't have
+    // yet, which is the exact failure the flag exists to prevent.
+    if (!pendingRef.current) setUnsaved(false);
   }, SAVE_DEBOUNCE_MS), [load]);
 
-  useEffect(() => () => persist.cancel(), [persist]);
+  useEffect(() => () => {
+    persist.cancel();
+    // Flush, don't drop. `cancel()` alone discards everything typed in the last
+    // debounce window — navigating away 200ms after pasting a work prompt would
+    // lose it silently, with nothing on screen having said it was unsaved.
+    if (pendingRef.current) api.saveQuotaBurn(pendingRef.current, { silent: true }).catch(() => {});
+  }, [persist]);
 
   const save = (patch) => {
+    editSeqRef.current += 1;
     setUnsaved(true);
     setConfig((prev) => mergeQuotaBurnPatch(prev, patch));
     pendingRef.current = mergeQuotaBurnPatch(pendingRef.current, patch);

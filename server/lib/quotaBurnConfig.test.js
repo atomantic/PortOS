@@ -49,11 +49,14 @@ describe('normalizeQuotaBurnJob', () => {
   });
 
   it('keeps scalar params and strips nested blobs and prototype keys', () => {
-    const job = normalizeQuotaBurnJob({
-      jobType: 'agent-prompt',
-      params: { appId: 'a1', maxEntries: 5, openPR: false, mode: null, nested: { a: 1 }, __proto__: { polluted: true } },
-    });
+    // `JSON.parse`, not an object literal: `{ __proto__: … }` in a literal sets
+    // [[Prototype]] rather than creating an own property, so Object.entries
+    // never sees it and the assertion would pass with the guard deleted. This
+    // is the shape the config file actually arrives in.
+    const params = JSON.parse('{"appId":"a1","maxEntries":5,"openPR":false,"mode":null,"__proto__":"x","constructor":"y","prototype":"z","nested":{"a":1}}');
+    const job = normalizeQuotaBurnJob({ jobType: 'agent-prompt', params });
     expect(job.params).toEqual({ appId: 'a1', maxEntries: 5, openPR: false, mode: null });
+    expect(Object.prototype.polluted).toBeUndefined();
   });
 });
 

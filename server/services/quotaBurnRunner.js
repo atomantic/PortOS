@@ -31,8 +31,18 @@ let tickTimer = null;
 let running = false;
 let lastRunAt = null;
 
-const enabledJobs = (family, jobId = null) =>
-  (family.jobs || []).filter((job) => job?.enabled !== false && (!jobId || job.id === jobId));
+/**
+ * The jobs a cycle will consider, in plan order.
+ *
+ * `jobId` scopes to one named job. When it is named AND the run was forced, the
+ * job's own `enabled` checkbox is ignored: the user just clicked ▶ on that
+ * exact row, which is a more specific instruction than the checkbox they set
+ * earlier. Without this, clicking ▶ on a paused job is a silent no-op reported
+ * as "no pending work".
+ */
+const selectJobs = (family, { jobId = null, force = false } = {}) =>
+  (family.jobs || []).filter((job) =>
+    (!jobId || job.id === jobId) && (job?.enabled !== false || (jobId && force)));
 
 /**
  * Walk a candidate's plan in order and run the first job with pending work.
@@ -44,9 +54,9 @@ const enabledJobs = (family, jobId = null) =>
  * and `run` needs the very same scan to know what to render. Without the
  * passthrough that multi-megabyte read happened twice per dispatch.
  */
-async function dispatchFromCandidate(candidate, { jobId = null } = {}) {
+async function dispatchFromCandidate(candidate, { jobId = null, force = false } = {}) {
   const attempts = [];
-  for (const job of enabledJobs(candidate.family, jobId)) {
+  for (const job of selectJobs(candidate.family, { jobId, force })) {
     const pending = await countJobPending({ job, family: candidate.family });
     if (!(pending.count > 0)) {
       attempts.push({ jobId: job.id, jobType: job.jobType, skipped: pending.detail || 'no pending work' });
@@ -85,7 +95,11 @@ export async function runQuotaBurnCycle(options = {}) {
 
 async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, force = false }) {
   const finish = async (entry) => {
-    lastRunAt = Date.now();
+    // Only a SCHEDULED cycle advances the interval clock. A manual "Evaluate
+    // now" that reports "no burnable window" would otherwise push the next
+    // automatic cycle a full interval out — on a 12-hour interval, one curiosity
+    // click can defer the tick past the reset the feature exists to spend.
+    if (trigger === 'scheduled') lastRunAt = Date.now();
     await recordQuotaBurnRun({ trigger, ...entry });
     return entry;
   };
@@ -103,7 +117,13 @@ async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, 
   // spawns a multi-second TUI scrape per enabled family; with no actionable
   // family configured that scrape could never produce a dispatch, and it would
   // otherwise run every `checkIntervalMinutes` forever.
-  if (!Object.values(config.families).some(familyIsActionable)) {
+  //
+  // A forced run of a NAMED job is exempt: `familyIsActionable` requires an
+  // enabled family with an enabled job, but ▶ on a paused job (or a paused
+  // family) is exactly the case the force path exists to serve — gating it here
+  // would make the click a silent no-op before selection ever ran.
+  const targeted = force && familyId;
+  if (!targeted && !Object.values(config.families).some(familyIsActionable)) {
     return finish({ dispatched: false, reason: 'no families enabled' });
   }
 
@@ -123,8 +143,13 @@ async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, 
   }).filter((candidate) => !familyId || candidate.family.id === familyId);
 
   if (!candidates.length) {
+    // Scoped to the family the user asked about, and NOT filtered to enabled
+    // families: when someone force-runs a job on a family whose checkbox is
+    // off, "disabled" IS the answer — reporting a different family's verdict
+    // instead (or claiming it is "ready" when it did not run) leaves them with
+    // no path to the control they need.
     const reasons = evaluateFamilies(quotas, config, { dispatches })
-      .filter(({ family }) => family.enabled)
+      .filter(({ family }) => (familyId ? family.id === familyId : family.enabled))
       .map(({ family, skipReason }) => `${family.id}: ${skipReason || 'ready'}`);
     return finish({
       dispatched: false,
@@ -132,8 +157,10 @@ async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, 
     });
   }
 
+  const attempts = [];
   for (const candidate of candidates) {
-    const outcome = await dispatchFromCandidate(candidate, { jobId });
+    const outcome = await dispatchFromCandidate(candidate, { jobId, force });
+    attempts.push(...outcome.attempts.map((entry) => ({ familyId: candidate.family.id, ...entry })));
     if (!outcome.dispatched) continue;
     // Charge the window only once work actually started. `runBurnJob` reports a
     // decline rather than throwing, and a declined job never reaches here — so
@@ -154,10 +181,18 @@ async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, 
     });
   }
 
+  // Report what each job actually said. Collapsing every non-dispatch to "no
+  // job had pending work" asserts something usually false — a job that DID have
+  // work and declined ("an identical burn task is already running", "managed
+  // app app-x no longer exists", "no enabled CLI/TUI provider in the grok
+  // family") is the actionable case, and it was the one being thrown away.
+  const detail = attempts.map((entry) => `${entry.jobId}: ${entry.skipped}`).join('; ');
   return finish({
     dispatched: false,
     familyId: candidates[0].family.id,
-    reason: `no job in the ${candidates[0].family.id} plan had pending work`,
+    reason: detail
+      ? `nothing dispatched — ${detail}`
+      : `no enabled job in the ${candidates[0].family.id} plan`,
   });
 }
 
@@ -205,10 +240,33 @@ export async function getQuotaBurnStatus({ refresh = false } = {}) {
   return { config, status: { running, families, runs } };
 }
 
+/**
+ * When the last SCHEDULED cycle ran, in ms — from memory once this process has
+ * run one, otherwise from the persisted run log.
+ *
+ * Reading the log is what makes `checkIntervalMinutes` mean anything across a
+ * restart. `lastRunAt` is in-process, so on a bare `null` the very first tick
+ * after boot is always "due": a PM2 restart, a self-update, or a crash-loop
+ * would each fire a full cycle (a multi-second TUI scrape per family, plus a
+ * possible dispatch) ~60s later, no matter how long the configured interval is
+ * — pacing a 12-hourly plan into minutes, bounded only by the window cap.
+ */
+async function lastScheduledRunAt() {
+  if (lastRunAt) return lastRunAt;
+  const runs = await getQuotaBurnRuns().catch(() => []);
+  const previous = runs.find((entry) => entry?.trigger === 'scheduled' && entry.at);
+  const parsed = previous ? Date.parse(previous.at) : NaN;
+  // Cache it so a restart pays the log read once, not every minute. An
+  // unreadable/absent log leaves it null and the next tick runs — the correct
+  // fail-open for "we have no idea when we last ran".
+  if (Number.isFinite(parsed)) lastRunAt = parsed;
+  return lastRunAt;
+}
+
 async function tick() {
   const config = await getQuotaBurnConfig().catch(() => null);
   if (!config?.enabled) return;
-  const dueAt = (lastRunAt || 0) + config.checkIntervalMinutes * 60_000;
+  const dueAt = (await lastScheduledRunAt() || 0) + config.checkIntervalMinutes * 60_000;
   if (Date.now() < dueAt) return;
   await runQuotaBurnCycle({ trigger: 'scheduled' });
 }
@@ -230,6 +288,9 @@ export function startQuotaBurnScheduler() {
   tickTimer.unref?.();
   console.log('🔥 Quota-burn loop armed (off unless enabled in Quota Burn settings)');
 }
+
+/** Test seam — one interval tick, without waiting on the timer. */
+export const __tickQuotaBurn = tick;
 
 /** Test seam — disarms the timer and clears the in-process cycle state. */
 export function __resetQuotaBurnRunner() {
