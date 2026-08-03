@@ -148,24 +148,28 @@ describe('TextStagePanel', () => {
     expect(screen.getByRole('button', { name: 'Generate' })).not.toBeDisabled();
   });
 
-  it('dirty-gate: disables Generate with the "Save or discard" title once the draft diverges, and re-enables once the saved stage is lifted back in', async () => {
+  it('dirty-gate: routes Generate through the confirm row once the draft diverges, and straight through once the saved stage is lifted back in', async () => {
     const issue = makeIssue({ status: 'ready', output: 'Saved idea text.' });
     const savedStage = { status: 'edited', input: '', output: 'Edited idea text.' };
     const savedIssue = { ...issue, stages: { idea: savedStage } };
     updatePipelineIssue.mockResolvedValue(savedIssue);
+    generatePipelineStage.mockResolvedValue({ stage: savedStage });
 
     const { rerender } = renderPanel(issue);
     const generateBtn = screen.getByRole('button', { name: 'Generate' });
     expect(generateBtn).not.toBeDisabled();
-    expect(generateBtn).not.toHaveAttribute('title', 'Save or discard your edits first');
 
     const output = screen.getByPlaceholderText('output…');
     await userEvent.clear(output);
     await userEvent.type(output, 'Edited idea text.');
 
-    expect(generateBtn).toBeDisabled();
-    expect(generateBtn).toHaveAttribute('title', 'Save or discard your edits first');
+    // Still clickable — but it asks first instead of firing the generate.
+    expect(generateBtn).not.toBeDisabled();
+    await userEvent.click(generateBtn);
+    expect(await screen.findByRole('button', { name: /Generate & compare/i })).toBeInTheDocument();
+    expect(generatePipelineStage).not.toHaveBeenCalled();
 
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     await userEvent.click(screen.getByRole('button', { name: /Save edits/i }));
     await waitFor(() => expect(updatePipelineIssue).toHaveBeenCalled());
 
@@ -181,7 +185,83 @@ describe('TextStagePanel', () => {
         onStageUpdate={() => {}}
       />,
     );
-    expect(generateBtn).not.toBeDisabled();
+    await userEvent.click(generateBtn);
+    await waitFor(() => expect(generatePipelineStage).toHaveBeenCalled());
+    expect(screen.queryByRole('button', { name: /Generate & compare/i })).not.toBeInTheDocument();
+  });
+
+  describe('regenerate-over-unsaved-edits review (#3398)', () => {
+    // Dirties the output editor, then drives the confirm row through to the
+    // generate call so the diff review is on screen.
+    const generateOverEdits = async ({ incoming, onStageUpdate = () => {} }) => {
+      const issue = makeIssue({ status: 'ready', output: 'Saved idea text.' });
+      generatePipelineStage.mockResolvedValue({
+        stage: { status: 'ready', input: '', output: incoming, runHistory: [] },
+      });
+      renderPanel(issue, { onStageUpdate });
+
+      const output = screen.getByPlaceholderText('output…');
+      await userEvent.clear(output);
+      await userEvent.type(output, 'My unsaved edits.');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Generate' }));
+      await userEvent.click(screen.getByRole('button', { name: /Generate & compare/i }));
+      await waitFor(() => expect(generatePipelineStage).toHaveBeenCalled());
+      return output;
+    };
+
+    it('holds the incoming result in an inline diff instead of replacing the unsaved text', async () => {
+      const output = await generateOverEdits({ incoming: 'Freshly generated text.' });
+
+      expect(await screen.findByRole('button', { name: /Use new version/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Keep my edits/i })).toBeInTheDocument();
+      // The editor still shows what the user typed, and the diff highlights both
+      // sides (word-level runs, so assert on the changed words).
+      expect(output).toHaveValue('My unsaved edits.');
+      expect(screen.getByText('unsaved')).toBeInTheDocument();
+      expect(screen.getByText('Freshly')).toBeInTheDocument();
+      // Save is parked until the comparison is resolved.
+      expect(screen.getByRole('button', { name: /Save edits/i })).toBeDisabled();
+    });
+
+    it('applying the new version replaces the editor text and dismisses the diff', async () => {
+      const output = await generateOverEdits({ incoming: 'Freshly generated text.' });
+
+      await userEvent.click(await screen.findByRole('button', { name: /Use new version/i }));
+
+      expect(output).toHaveValue('Freshly generated text.');
+      expect(screen.queryByRole('button', { name: /Use new version/i })).not.toBeInTheDocument();
+    });
+
+    it('canceling preserves the unsaved edits untouched', async () => {
+      const output = await generateOverEdits({ incoming: 'Freshly generated text.' });
+
+      await userEvent.click(await screen.findByRole('button', { name: /Keep my edits/i }));
+
+      expect(output).toHaveValue('My unsaved edits.');
+      expect(screen.queryByRole('button', { name: /Keep my edits/i })).not.toBeInTheDocument();
+      // Still dirty against the newly persisted output, so Save is live again.
+      expect(screen.getByRole('button', { name: /Save edits/i })).not.toBeDisabled();
+    });
+
+    it('skips the review when the generated text matches the unsaved edits', async () => {
+      const output = await generateOverEdits({ incoming: 'My unsaved edits.' });
+
+      await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Idea generated'));
+      expect(screen.queryByRole('button', { name: /Use new version/i })).not.toBeInTheDocument();
+      expect(output).toHaveValue('My unsaved edits.');
+    });
+
+    it('lifts the generated stage to the parent even while the review is open', async () => {
+      const onStageUpdate = vi.fn();
+      await generateOverEdits({ incoming: 'Freshly generated text.', onStageUpdate });
+
+      await waitFor(() => expect(onStageUpdate).toHaveBeenCalledWith(
+        'idea',
+        expect.objectContaining({ output: 'Freshly generated text.' }),
+      ));
+      expect(await screen.findByRole('button', { name: /Use new version/i })).toBeInTheDocument();
+    });
   });
 
   describe('live generation progress (#3393)', () => {
