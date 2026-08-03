@@ -73,25 +73,57 @@ export function parseSeasonCoverOwner(owner) {
   return { seriesId, seasonId, target, variant };
 }
 
-// Per-shot start-frame renders inside the storyboards stage. Scene-level
-// owners (`pipeline:<id>:storyboards:scene<N>`) still exist for legacy
-// scene-image renders that don't decompose into shots — that string is
-// produced inline by `enqueueVisualImage` and intentionally falls outside
-// this parser (no filename hook needed for the scene-level path).
-export function buildStoryboardsShotOwner({ issueId, sceneIndex, shotIndex }) {
-  return `${PREFIX}:${issueId}:storyboards:scene${sceneIndex}:shot${shotIndex}`;
+// Per-shot start-frame renders inside the storyboards stage.
+//
+// Owners carry BOTH the durable scene/shot ids (#3413) and the indexes:
+// `pipeline:<id>:storyboards:scene<N>:shot<M>:sid<sceneId>:tid<shotId>`. The
+// completion hook resolves by id (so a reorder between enqueue and completion
+// still lands the render on the right shot) and falls back to the index for
+// LEGACY owners already sitting in the queue at upgrade time, which carry no
+// `:sid`/`:tid` suffix. Ids are percent-encoded so a `:` inside an id can't
+// break the parse.
+const encodeOwnerId = (id) => (typeof id === 'string' && id ? encodeURIComponent(id) : '');
+const decodeOwnerId = (raw) => {
+  if (!raw) return null;
+  // A malformed percent-escape would throw out of decodeURIComponent; a job
+  // owner is never worth crashing a completion handler over, so fall back to
+  // the raw token (which then simply fails to match any scene id and drops
+  // through to the index fallback).
+  try { return decodeURIComponent(raw); } catch { return raw; }
+};
+
+export function buildStoryboardsShotOwner({ issueId, sceneIndex, shotIndex, sceneId = null, shotId = null }) {
+  const base = `${PREFIX}:${issueId}:storyboards:scene${sceneIndex}:shot${shotIndex}`;
+  if (!sceneId && !shotId) return base;
+  return `${base}:sid${encodeOwnerId(sceneId)}:tid${encodeOwnerId(shotId)}`;
 }
 
-const STORYBOARDS_SHOT_RE = /^pipeline:([^:]+):storyboards:scene(\d+):shot(\d+)$/;
+// Scene-level owners (`pipeline:<id>:storyboards:scene<N>[:sid<sceneId>]`) are
+// used by the single-scene VIDEO render (no shot decomposition). Nothing parses
+// them today — the render is tracked by the `sceneVideoJobId` stamped on the
+// scene — but the id rides along so `listJobs({ owner })` and the queue UI
+// identify the target unambiguously after a reorder.
+export function buildStoryboardsSceneOwner({ issueId, sceneIndex, sceneId = null }) {
+  const base = `${PREFIX}:${issueId}:storyboards:scene${sceneIndex}`;
+  return sceneId ? `${base}:sid${encodeOwnerId(sceneId)}` : base;
+}
+
+const STORYBOARDS_SHOT_RE = /^pipeline:([^:]+):storyboards:scene(\d+):shot(\d+)(?::sid([^:]*):tid([^:]*))?$/;
 
 export function parseStoryboardsShotOwner(owner) {
   if (typeof owner !== 'string') return null;
   const m = owner.match(STORYBOARDS_SHOT_RE);
   if (!m) return null;
-  const [, issueId, sceneIdxStr, shotIdxStr] = m;
+  const [, issueId, sceneIdxStr, shotIdxStr, sceneIdRaw, shotIdRaw] = m;
   const sceneIndex = Number(sceneIdxStr);
   const shotIndex = Number(shotIdxStr);
   if (!Number.isInteger(sceneIndex) || sceneIndex < 0) return null;
   if (!Number.isInteger(shotIndex) || shotIndex < 0) return null;
-  return { issueId, sceneIndex, shotIndex };
+  return {
+    issueId,
+    sceneIndex,
+    shotIndex,
+    sceneId: decodeOwnerId(sceneIdRaw),
+    shotId: decodeOwnerId(shotIdRaw),
+  };
 }

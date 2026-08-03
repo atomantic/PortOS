@@ -8,45 +8,65 @@
 
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { updateStageWithLatest, assertStageUnlocked } from './issues.js';
-import { buildStoryboardsShotOwner } from './owners.js';
+import { buildStoryboardsSceneOwner, buildStoryboardsShotOwner } from './owners.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { resolveStoryboardTarget } from '../../lib/storyboardScenes.js';
 import { matchCharactersInText } from '../../lib/scenePrompt.js';
 import { getDefaultVideoModelId, getVideoModels } from '../../lib/mediaModels.js';
 import { ASPECT_PRESETS } from '../../lib/creativeDirectorPresets.js';
 import { runPromptRefine, runImagePromptCandidates } from './refineHelpers.js';
 import {
   composeVisualPrompt, resolveMode, enqueueImageJob, loadBibleContext,
-  seriesBibleCtx, issueCtx, neighborText, loadRefineContext,
+  seriesBibleCtx, issueCtx, neighborText, loadRefineContext, persistRenderOrCancel,
 } from './visualStageHelpers.js';
 
 /**
  * Splice ONE storyboard scene through `updateStageWithLatest` (the serialized
  * issue write tail) so the write merges against the freshest persisted
- * `scenes` array (#3400).
+ * `scenes` array (#3400) AND lands on the scene the caller actually read
+ * (#3413).
  *
  * `updateStage` serializes, but it shallow-merges whatever `scenes` value the
  * caller computed *outside* the lock. Two enqueues for different scenes that
  * both read the stage before either wrote would therefore clobber each other's
  * freshly-stamped job id, leaving the losing job running untracked. Passing a
  * mutator instead keeps the read-modify-write of `scenes` inside the lock, so
- * only the targeted index is replaced.
+ * only the targeted scene is replaced.
  *
- * `mutate(scene) → nextScene` runs against the freshest scene at `index`.
- * Returns `{ issue, stage }` from the write tail.
+ * The target is `{ id, index }` captured during the caller's read. Inside the
+ * lock the id is re-resolved against the FRESH array, so a reorder that keeps
+ * `index` in range can no longer retarget the write onto a different scene. A
+ * captured id that is gone is a 409 (the scene was removed mid-flight), which
+ * is deliberately distinct from the 404 for an index that never existed. The
+ * index is used only when no id was captured — a record that predates the
+ * scene-id backfill.
+ *
+ * `mutate(scene) → nextScene` runs against the freshest matching scene.
+ * Returns `{ issue, stage, index }` — `index` is where the write LANDED, which
+ * is not necessarily the index the caller read.
  */
-function patchStoryboardScene(issueId, index, mutate) {
-  return updateStageWithLatest(issueId, 'storyboards', (currentStage) => {
+async function patchStoryboardScene(issueId, target, mutate) {
+  let landedIndex = -1;
+  const { issue, stage } = await updateStageWithLatest(issueId, 'storyboards', (currentStage) => {
     const currentScenes = Array.isArray(currentStage?.scenes) ? currentStage.scenes : [];
-    const current = currentScenes[index];
-    if (!current) {
-      throw new ServerError(`sceneIndex ${index} out of range (have ${currentScenes.length})`, {
+    const { index, record, stale } = resolveStoryboardTarget(currentScenes, target);
+    if (stale) {
+      throw new ServerError(
+        `storyboard scene "${target.id}" no longer exists — it was removed or replaced while this render was being prepared`,
+        { status: 409, code: 'PIPELINE_SCENE_STALE_TARGET' },
+      );
+    }
+    if (!record) {
+      throw new ServerError(`sceneIndex ${target.index} out of range (have ${currentScenes.length})`, {
         status: 404, code: 'PIPELINE_SCENE_NOT_FOUND',
       });
     }
+    landedIndex = index;
     const nextScenes = [...currentScenes];
-    nextScenes[index] = mutate(current);
+    nextScenes[index] = mutate(record);
     return { status: 'edited', scenes: nextScenes };
   });
+  return { issue, stage, index: landedIndex };
 }
 
 /**
@@ -134,14 +154,20 @@ export async function enqueueStoryboardSceneVideo(issueId, sceneIndex, options =
       tiling: 'auto',
       chunks: 1,
     },
-    owner: `pipeline:${issueId}:storyboards:scene${idx}`,
+    owner: buildStoryboardsSceneOwner({ issueId, sceneIndex: idx, sceneId: scene.id || null }),
   });
 
-  const { issue: updatedIssue, stage } = await patchStoryboardScene(
-    issueId, idx, (current) => ({ ...current, sceneVideoJobId: jobId }),
+  const { issue: updatedIssue, stage, index: landedIndex } = await persistRenderOrCancel(
+    jobId,
+    () => patchStoryboardScene(
+      issueId,
+      { id: scene.id || null, index: idx },
+      (current) => ({ ...current, sceneVideoJobId: jobId }),
+    ),
+    'storyboard scene video',
   );
-  console.log(`🎥 Pipeline scene video — issue=${issueId.slice(0, 8)} scene=${idx + 1} jobId=${jobId.slice(0, 8)}`);
-  return { jobId, prompt, sceneIndex: idx, issue: updatedIssue, stage };
+  console.log(`🎥 Pipeline scene video — issue=${issueId.slice(0, 8)} scene=${landedIndex + 1} jobId=${jobId.slice(0, 8)}`);
+  return { jobId, prompt, sceneIndex: landedIndex, issue: updatedIssue, stage };
 }
 
 /**
@@ -205,21 +231,43 @@ export async function enqueueStoryboardShotStartFrame(issueId, sceneIndex, shotI
 
   const jobId = enqueueImageJob({
     prompt, world, settings, options, mode, series,
-    owner: buildStoryboardsShotOwner({ issueId, sceneIndex: sIdx, shotIndex: tIdx }),
+    owner: buildStoryboardsShotOwner({
+      issueId, sceneIndex: sIdx, shotIndex: tIdx,
+      sceneId: scene.id || null, shotId: shot.id || null,
+    }),
     logLine: `🎞️ Pipeline shot start-frame — issue=${issueId.slice(0, 8)} scene=${sIdx + 1} shot=${tIdx + 1}`,
   });
 
-  const { issue: updatedIssue, stage } = await patchStoryboardScene(issueId, sIdx, (current) => {
-    const currentShots = Array.isArray(current.shots) ? [...current.shots] : [];
-    if (!currentShots[tIdx]) {
-      throw new ServerError(`shotIndex ${tIdx} out of range (have ${currentShots.length})`, {
-        status: 404, code: 'PIPELINE_SHOT_NOT_FOUND',
-      });
-    }
-    currentShots[tIdx] = { ...currentShots[tIdx], startFrameJobId: jobId };
-    return { ...current, shots: currentShots };
-  });
-  return { jobId, mode, prompt, sceneIndex: sIdx, shotIndex: tIdx, issue: updatedIssue, stage };
+  // Both the scene AND the shot are re-resolved by their captured ids inside
+  // the write region — a reorder of either level must not move this job id
+  // onto a different shot.
+  let landedShotIndex = tIdx;
+  const { issue: updatedIssue, stage, index: landedSceneIndex } = await persistRenderOrCancel(
+    jobId,
+    () => patchStoryboardScene(issueId, { id: scene.id || null, index: sIdx }, (current) => {
+      const currentShots = Array.isArray(current.shots) ? [...current.shots] : [];
+      const resolved = resolveStoryboardTarget(currentShots, { id: shot.id || null, index: tIdx });
+      if (resolved.stale) {
+        throw new ServerError(
+          `storyboard shot "${shot.id}" no longer exists — it was removed or replaced while this render was being prepared`,
+          { status: 409, code: 'PIPELINE_SHOT_STALE_TARGET' },
+        );
+      }
+      if (!resolved.record) {
+        throw new ServerError(`shotIndex ${tIdx} out of range (have ${currentShots.length})`, {
+          status: 404, code: 'PIPELINE_SHOT_NOT_FOUND',
+        });
+      }
+      landedShotIndex = resolved.index;
+      currentShots[resolved.index] = { ...resolved.record, startFrameJobId: jobId };
+      return { ...current, shots: currentShots };
+    }),
+    'storyboard shot start-frame',
+  );
+  return {
+    jobId, mode, prompt, sceneIndex: landedSceneIndex, shotIndex: landedShotIndex,
+    issue: updatedIssue, stage,
+  };
 }
 
 // Validate the scene index, lock, and non-empty description, then build the
@@ -272,7 +320,7 @@ async function loadStoryboardScenePromptContext(issueId, sceneIndex) {
  * description on the scene. Returns { scene, issue, stage, runId, changes, providerId }.
  */
 export async function refineStoryboardScenePrompt(issueId, sceneIndex, options = {}) {
-  const { idx, variables } = await loadStoryboardScenePromptContext(issueId, sceneIndex);
+  const { idx, scene, variables } = await loadStoryboardScenePromptContext(issueId, sceneIndex);
 
   const { refined, changes, runId, providerId } = await runPromptRefine({
     templateName: 'pipeline-storyboard-image-prompt',
@@ -284,11 +332,13 @@ export async function refineStoryboardScenePrompt(issueId, sceneIndex, options =
 
   // Same freshest-scenes merge as the enqueue paths — the LLM round-trip above
   // is the widest read→write window in this file, so a sibling scene's render
-  // enqueue landing mid-refine must not be reverted by this write.
-  const { issue: updatedIssue, stage } = await patchStoryboardScene(
-    issueId, idx, (current) => ({ ...current, description: refined }),
+  // enqueue landing mid-refine must not be reverted by this write, and a
+  // reorder during that window must not park the refined description on a
+  // different scene.
+  const { issue: updatedIssue, stage, index: landedIndex } = await patchStoryboardScene(
+    issueId, { id: scene.id || null, index: idx }, (current) => ({ ...current, description: refined }),
   );
-  return { scene: stage.scenes[idx], issue: updatedIssue, stage, runId, changes, providerId };
+  return { scene: stage.scenes[landedIndex], issue: updatedIssue, stage, runId, changes, providerId };
 }
 
 /**

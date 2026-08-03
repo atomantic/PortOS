@@ -17,6 +17,7 @@ import {
   stackStyle, buildMastheadClause, buildAuthorClause, applyWorldStyle,
   loadBibleContext, resolveMode, resolveVariant, resolveProofInitImage,
   PROOF_AS_BASE_DEFAULT_STRENGTH, enqueueImageJob, buildRenderSlot,
+  persistRenderOrCancel,
 } from './visualStageHelpers.js';
 
 /**
@@ -233,12 +234,17 @@ async function renderComicCoverLike(issueId, target, options = {}) {
     slotKey, jobId: rest.jobId, prompt: rest.prompt,
     width: options.width, height: options.height, fromProof: rest.fromProof,
   });
-  const { issue, stage } = await updateStageWithLatest(issueId, 'comicPages', (current) => {
-    const currentSlot = current?.[target] || {};
-    const nextSlot = { ...currentSlot, [slotKey]: slotRecord };
-    if (typeof options[scriptField] === 'string') nextSlot.script = options[scriptField];
-    return { [target]: nextSlot };
-  });
+  // The job is already queued; a rejected slot write would orphan it (#3413).
+  const { issue, stage } = await persistRenderOrCancel(
+    rest.jobId,
+    () => updateStageWithLatest(issueId, 'comicPages', (current) => {
+      const currentSlot = current?.[target] || {};
+      const nextSlot = { ...currentSlot, [slotKey]: slotRecord };
+      if (typeof options[scriptField] === 'string') nextSlot.script = options[scriptField];
+      return { [target]: nextSlot };
+    }),
+    `comic ${target}`,
+  );
   return { ...rest, [scriptField]: script, issue, stage };
 }
 
@@ -400,12 +406,18 @@ async function renderVolumeCoverLike(seriesId, seasonId, target, options = {}) {
     slotKey, jobId: rest.jobId, prompt: rest.prompt,
     width: options.width, height: options.height, fromProof: rest.fromProof,
   });
-  const series = await updateSeasonOnSeries(seriesId, seasonId, (current) => {
-    const currentSlot = current?.[target] || {};
-    const nextSlot = { ...currentSlot, [slotKey]: slotRecord };
-    if (typeof options[scriptField] === 'string') nextSlot.script = options[scriptField];
-    return { [target]: nextSlot };
-  });
+  // Same orphan-cancel treatment as the issue-cover path (#3413) — a season
+  // deleted mid-render must not leave a queued job nothing points at.
+  const series = await persistRenderOrCancel(
+    rest.jobId,
+    () => updateSeasonOnSeries(seriesId, seasonId, (current) => {
+      const currentSlot = current?.[target] || {};
+      const nextSlot = { ...currentSlot, [slotKey]: slotRecord };
+      if (typeof options[scriptField] === 'string') nextSlot.script = options[scriptField];
+      return { [target]: nextSlot };
+    }),
+    `volume ${target}`,
+  );
   const season = (series.seasons || []).find((s) => s.id === seasonId);
   return { ...rest, [scriptField]: script, season, series };
 }

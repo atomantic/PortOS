@@ -31,6 +31,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { ARC_ROLES } from '../../lib/storyArc.js';
 import { isStr, trimTo } from '../../lib/storyBible.js';
 import { sanitizeCoverLike } from '../../lib/renderSlot.js';
+import { ensureStoryboardIds } from '../../lib/storyboardScenes.js';
 import { applyVolumeOrderedNumbers } from '../../lib/pipelineIssueOrder.js';
 import * as seriesSvc from './series.js';
 
@@ -392,7 +393,20 @@ const sanitizeVisualStage = (raw, stageId = null) => {
   return {
     ...base,
     pages: Array.isArray(raw?.pages) ? raw.pages.slice(0, 200) : [],
-    scenes: Array.isArray(raw?.scenes) ? raw.scenes.slice(0, 200) : [],
+    // Storyboard scenes (and their shots) carry a DURABLE `id` (#3413) so a
+    // render enqueue, its stage write, and the completion hook all address the
+    // same scene even when a concurrent reorder/delete shifts the indexes. The
+    // stamp is deterministic (`scene-01`, …) so two concurrent readers of an
+    // un-migrated record — and two federated peers running the backfill
+    // independently — derive identical ids. `stageId === null` is the legacy
+    // context-free sanitize; stamping there too keeps a load-time normalize
+    // from dropping the field back off. Migrations 222 / db-007 backfill the
+    // records already on disk.
+    scenes: Array.isArray(raw?.scenes)
+      ? (stageId === null || stageId === 'storyboards'
+        ? ensureStoryboardIds(raw.scenes.slice(0, 200))
+        : raw.scenes.slice(0, 200))
+      : [],
     cdProjectId: isStr(raw?.cdProjectId) && raw.cdProjectId ? raw.cdProjectId : null,
     videoPath: isStr(raw?.videoPath) && raw.videoPath ? raw.videoPath : null,
     aspectRatio: ASPECT_RATIO_VALUES.has(raw?.aspectRatio) ? raw.aspectRatio : null,

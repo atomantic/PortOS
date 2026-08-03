@@ -25,6 +25,7 @@ import {
   REFINE_RENDER_DEFAULT_STRENGTH, applyCharacterLorasToRender, loraRenderOptions,
   enqueueImageJob, buildRenderSlot, composeVisualPrompt, seriesBibleCtx,
   issueCtx, neighborText, loadRefineContext, assertCharacterAppearancesResolve,
+  persistRenderOrCancel,
 } from './visualStageHelpers.js';
 
 // Resolve the `referencePage` option ('prior' | 'next' | <0-based index>) to a
@@ -322,12 +323,17 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
  * image when the target slot already carries the returned jobId (the reason
  * this write must live behind the shared entry points, not only in the route).
  *
+ * The job is enqueued BEFORE this write, so a rejected write (the page was
+ * deleted between the caller's read and here) would leave the job queued with
+ * nothing referencing it — `persistRenderOrCancel` cancels that orphan and
+ * rethrows (#3413).
+ *
  * Returns { issue, stage } from the write tail.
  */
 async function persistComicPageSlot(issueId, pageIndex, { variant, jobId, prompt, width, height, fromProof }) {
   const slotKey = slotKeyForVariant(variant);
   const slotRecord = buildRenderSlot({ slotKey, jobId, prompt, width, height, fromProof });
-  return updateStageWithLatest(issueId, 'comicPages', (currentStage) => {
+  return persistRenderOrCancel(jobId, () => updateStageWithLatest(issueId, 'comicPages', (currentStage) => {
     const currentPages = Array.isArray(currentStage?.pages) ? currentStage.pages : [];
     if (!currentPages[pageIndex]) {
       throw new ServerError(
@@ -338,7 +344,7 @@ async function persistComicPageSlot(issueId, pageIndex, { variant, jobId, prompt
     const nextPages = [...currentPages];
     nextPages[pageIndex] = { ...currentPages[pageIndex], [slotKey]: slotRecord };
     return { status: 'edited', pages: nextPages };
-  });
+  }), 'comic page slot');
 }
 
 /**

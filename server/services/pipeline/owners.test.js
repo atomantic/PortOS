@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildComicPagesOwner, parseComicPagesOwner,
-  buildStoryboardsShotOwner, parseStoryboardsShotOwner,
+  buildStoryboardsShotOwner, parseStoryboardsShotOwner, buildStoryboardsSceneOwner,
   buildSeasonCoverOwner, parseSeasonCoverOwner,
 } from './owners.js';
 
@@ -61,10 +61,38 @@ describe('pipeline owner strings', () => {
     expect(parseComicPagesOwner('pipeline:iss:comicPages:cover:sketch')).toBeNull();
   });
 
-  it('round-trips a storyboards shot owner', () => {
-    const owner = buildStoryboardsShotOwner({ issueId: 'iss-789', sceneIndex: 2, shotIndex: 5 });
-    expect(owner).toBe('pipeline:iss-789:storyboards:scene2:shot5');
-    expect(parseStoryboardsShotOwner(owner)).toEqual({ issueId: 'iss-789', sceneIndex: 2, shotIndex: 5 });
+  it('round-trips a storyboards shot owner carrying durable ids', () => {
+    const owner = buildStoryboardsShotOwner({
+      issueId: 'iss-789', sceneIndex: 2, shotIndex: 5, sceneId: 'scene-03', shotId: 'shot-06',
+    });
+    expect(owner).toBe('pipeline:iss-789:storyboards:scene2:shot5:sidscene-03:tidshot-06');
+    expect(parseStoryboardsShotOwner(owner)).toEqual({
+      issueId: 'iss-789', sceneIndex: 2, shotIndex: 5, sceneId: 'scene-03', shotId: 'shot-06',
+    });
+  });
+
+  it('percent-encodes ids so a colon inside one cannot break the parse', () => {
+    const owner = buildStoryboardsShotOwner({
+      issueId: 'iss-789', sceneIndex: 0, shotIndex: 0, sceneId: 'a:b c', shotId: 'x:y',
+    });
+    expect(owner).toBe('pipeline:iss-789:storyboards:scene0:shot0:sida%3Ab%20c:tidx%3Ay');
+    expect(parseStoryboardsShotOwner(owner)).toMatchObject({ sceneId: 'a:b c', shotId: 'x:y' });
+  });
+
+  it('parses a LEGACY index-only shot owner with null ids (jobs queued pre-#3413)', () => {
+    expect(parseStoryboardsShotOwner('pipeline:iss-789:storyboards:scene2:shot5')).toEqual({
+      issueId: 'iss-789', sceneIndex: 2, shotIndex: 5, sceneId: null, shotId: null,
+    });
+    // A build with no ids available (an un-migrated record) emits the legacy shape.
+    expect(buildStoryboardsShotOwner({ issueId: 'iss-789', sceneIndex: 2, shotIndex: 5 }))
+      .toBe('pipeline:iss-789:storyboards:scene2:shot5');
+  });
+
+  it('round-trips a storyboards scene owner (scene-level video render)', () => {
+    expect(buildStoryboardsSceneOwner({ issueId: 'iss-789', sceneIndex: 1, sceneId: 'scene-02' }))
+      .toBe('pipeline:iss-789:storyboards:scene1:sidscene-02');
+    expect(buildStoryboardsSceneOwner({ issueId: 'iss-789', sceneIndex: 1 }))
+      .toBe('pipeline:iss-789:storyboards:scene1');
   });
 
   it('shot parser rejects non-shot owners and malformed indices', () => {
@@ -72,6 +100,8 @@ describe('pipeline owner strings', () => {
     expect(parseStoryboardsShotOwner('pipeline:iss:comicPages:cover')).toBeNull();
     expect(parseStoryboardsShotOwner('pipeline:iss:storyboards:scene0')).toBeNull();
     expect(parseStoryboardsShotOwner('pipeline:iss:storyboards:scene1:shotNaN')).toBeNull();
+    // A scene-level owner (with or without its id) is never a shot owner.
+    expect(parseStoryboardsShotOwner('pipeline:iss:storyboards:scene0:sidscene-01')).toBeNull();
   });
 
   it('comic parser does not match shot owners and vice versa', () => {

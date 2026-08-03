@@ -8,7 +8,7 @@
  * the LLM-refine context loaders. Pure move — no behavior change.
  */
 
-import { enqueueJob } from '../mediaJobQueue/index.js';
+import { enqueueJob, cancelJob } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
 import { getSeries, STYLE_PROMPT_OVERRIDE_MODE_DEFAULT } from './series.js';
 import { getIssue } from './issues.js';
@@ -462,7 +462,30 @@ async function loadRefineContext(issueId) {
   return { issue, series };
 }
 
-
+/**
+ * Every render surface here follows the same two-step shape: enqueue the media
+ * job FIRST (so the job id exists), then persist that id onto the record the
+ * completion hook will read. When step two rejects — the page/scene/shot
+ * vanished between the caller's read and the serialized write — the job is
+ * already queued and nothing references it: it burns GPU time and leaves an
+ * untracked artifact (#3413).
+ *
+ * `persistRenderOrCancel` wraps step two so a rejected write cancels the job it
+ * just enqueued and then rethrows the ORIGINAL error (the caller's 404/409 is
+ * what the user needs to see; a cancel failure must not mask it). Cancel
+ * failures are logged, never thrown — cleanup is best-effort bookkeeping.
+ */
+const persistRenderOrCancel = (jobId, persist, label = 'render') =>
+  Promise.resolve().then(persist).catch(async (err) => {
+    const short = String(jobId || '').slice(0, 8);
+    const outcome = await cancelJob(jobId).catch((cancelErr) => ({ ok: false, error: cancelErr.message }));
+    if (outcome?.ok) {
+      console.log(`🧹 Canceled orphaned media-job [${short}] — ${label} write rejected: ${err.message}`);
+    } else {
+      console.error(`❌ Could not cancel orphaned media-job [${short}] after ${label} write rejected: ${outcome?.error || outcome?.code || 'unknown'}`);
+    }
+    throw err;
+  });
 
 // Shared helpers consumed by covers / comicPages / storyboards. Exported here
 // (rather than inline) so the split feature modules reach one implementation.
@@ -472,5 +495,5 @@ export {
   PROOF_AS_BASE_DEFAULT_STRENGTH, enqueueImageJob, formatBalloon,
   resolvePageReferenceImage, REFERENCE_PAGE_DEFAULT_STRENGTH,
   REFINE_RENDER_DEFAULT_STRENGTH, applyCharacterLorasToRender, loraRenderOptions,
-  seriesBibleCtx, issueCtx, neighborText, loadRefineContext,
+  seriesBibleCtx, issueCtx, neighborText, loadRefineContext, persistRenderOrCancel,
 };

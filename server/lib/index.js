@@ -63,6 +63,7 @@ export * from './sceneExtractor.js';
 export * from './scenePrompt.js';
 export * from './proseExportSettings.js';
 export * from './shotGrammar.js';
+export * from './storyboardScenes.js';
 export * from './seasonStructure.js';
 export * from './seriesCharacterArc.js';
 export * from './seriesLlmOverride.js';

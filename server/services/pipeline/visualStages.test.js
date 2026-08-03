@@ -83,7 +83,28 @@ vi.mock('../universeBuilder.js', () => ({
 }));
 
 const enqueueJobMock = vi.fn(() => ({ jobId: 'job-fake-1234' }));
-vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob: (...a) => enqueueJobMock(...a) }));
+// A tiny stand-in queue so the orphan-cancel tests (#3413) can assert that a
+// rejected stage write leaves NO queued job behind for that owner — the real
+// `listJobs({ owner })` contract, without the real worker.
+const fakeQueue = [];
+const enqueueIntoFakeQueue = (args) => {
+  const result = enqueueJobMock(args);
+  fakeQueue.push({ id: result.jobId, owner: args.owner, status: 'queued' });
+  return result;
+};
+const listFakeJobs = ({ owner, status } = {}) => fakeQueue.filter(
+  (j) => (!owner || j.owner === owner) && (!status || j.status === status),
+);
+const cancelJobMock = vi.fn(async (jobId) => {
+  const job = fakeQueue.find((j) => j.id === jobId && j.status === 'queued');
+  if (!job) return { ok: false, code: 'NOT_FOUND' };
+  job.status = 'canceled';
+  return { ok: true, status: 'canceled' };
+});
+vi.mock('../mediaJobQueue/index.js', () => ({
+  enqueueJob: (...a) => enqueueIntoFakeQueue(...a),
+  cancelJob: (...a) => cancelJobMock(...a),
+}));
 
 const DEFAULT_RUN_STAGED_LLM = async () => ({
   content: { prompt: 'refined prompt body', changes: ['tightened the framing'] },
@@ -161,6 +182,8 @@ beforeEach(() => {
   updateStageWithLatestMock.mockImplementation(DEFAULT_UPDATE_STAGE_WITH_LATEST);
   enqueueJobMock.mockReset();
   enqueueJobMock.mockImplementation(() => ({ jobId: 'job-fake-1234' }));
+  fakeQueue.length = 0;
+  cancelJobMock.mockClear();
   updateSeasonOnSeriesMock.mockClear();
   assertStageUnlockedMock.mockClear();
   // Restore the default implementation — several #904 tests install a
@@ -634,7 +657,9 @@ describe('enqueueStoryboardShotStartFrame', () => {
     expect(result.shotIndex).toBe(0);
     expect(enqueueJobMock).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'image',
-      owner: 'pipeline:iss-test:storyboards:scene0:shot0',
+      // scene carries no id in this fixture (pre-migration record) — the owner
+      // still stamps the shot's durable id (#3413).
+      owner: 'pipeline:iss-test:storyboards:scene0:shot0:sid:tids1',
     }));
     expect(updateStageWithLatestMock).toHaveBeenCalledWith('iss-test', 'storyboards', expect.any(Function));
     expect(result.stage.scenes[0].shots[0].startFrameJobId).toBe('job-fake-1234');
@@ -744,6 +769,161 @@ describe('concurrent storyboard scene enqueues (#3400)', () => {
     });
     await expect(enqueueStoryboardSceneVideo('iss-test', 2, {}))
       .rejects.toThrow(/out of range/);
+  });
+});
+
+// #3413 — index addressing survived #3400: a reorder/delete that kept `index`
+// IN RANGE still retargeted the write onto whatever scene now sat in that slot,
+// and a rejected write left the already-enqueued job orphaned in the queue.
+// Scenes now carry a durable `id`; the write region resolves by it.
+describe('storyboard scene durable-id addressing (#3413)', () => {
+  // Same serialized write tail as the #3400 block, but the persisted array can
+  // differ from what the caller read — that IS the race being modeled.
+  const installWriteTail = (persistedScenes) => {
+    const persisted = { storyboards: { scenes: structuredClone(persistedScenes) } };
+    let tail = Promise.resolve();
+    updateStageWithLatestMock.mockImplementation((issueId, stageId, computeFn) => {
+      tail = tail.then(async () => {
+        await Promise.resolve();
+        const current = structuredClone(persisted[stageId] || {});
+        const patch = computeFn(current);
+        persisted[stageId] = { ...current, ...patch };
+        return { issue: { ...mockIssue, stages: structuredClone(persisted) }, stage: structuredClone(persisted[stageId]) };
+      });
+      return tail;
+    });
+    return persisted;
+  };
+
+  // What the CALLER read (which may no longer match what is persisted).
+  const readScenes = (scenes) => {
+    getIssueMock.mockResolvedValue({
+      ...structuredClone(mockIssue),
+      stages: { ...structuredClone(mockIssue.stages), storyboards: { scenes: structuredClone(scenes) } },
+    });
+  };
+
+  const SCENE_A = { id: 'scene-01', slugline: 'A', description: 'Scene A.' };
+  const SCENE_B = { id: 'scene-02', slugline: 'B', description: 'Scene B.' };
+
+  it('a reorder that keeps the index in range does NOT move the job id onto the wrong scene', async () => {
+    // Persisted order is B, A — the caller read A, B and asked for index 0 (A).
+    const persisted = installWriteTail([SCENE_B, SCENE_A]);
+    readScenes([SCENE_A, SCENE_B]);
+    enqueueJobMock.mockReturnValue({ jobId: 'job-scene-a' });
+
+    const result = await enqueueStoryboardSceneVideo('iss-test', 0, {});
+
+    expect(persisted.storyboards.scenes[1].id).toBe('scene-01');
+    expect(persisted.storyboards.scenes[1].sceneVideoJobId).toBe('job-scene-a');
+    expect(persisted.storyboards.scenes[0].sceneVideoJobId).toBeUndefined();
+    // The response reports where the write LANDED, not the stale read index.
+    expect(result.sceneIndex).toBe(1);
+  });
+
+  it('409s (not a mis-targeted write) when the scene was removed between read and write', async () => {
+    const persisted = installWriteTail([SCENE_A, SCENE_B]);
+    // Caller read a third scene that is already gone by write time — its index
+    // (1) is still in range, so index addressing would have hit SCENE_B.
+    readScenes([SCENE_A, { id: 'scene-99', slugline: 'gone', description: 'Deleted scene.' }, SCENE_B]);
+    enqueueJobMock.mockReturnValue({ jobId: 'job-doomed' });
+
+    await expect(enqueueStoryboardSceneVideo('iss-test', 1, {}))
+      .rejects.toMatchObject({ status: 409, code: 'PIPELINE_SCENE_STALE_TARGET' });
+    expect(persisted.storyboards.scenes.every((s) => !s.sceneVideoJobId)).toBe(true);
+  });
+
+  it('cancels the orphaned job when the stage write rejects — no queued job left for that owner', async () => {
+    installWriteTail([SCENE_A, SCENE_B]);
+    readScenes([SCENE_A, { id: 'scene-99', description: 'Deleted scene.' }, SCENE_B]);
+    enqueueJobMock.mockReturnValue({ jobId: 'job-doomed' });
+
+    await expect(enqueueStoryboardSceneVideo('iss-test', 1, {})).rejects.toThrow(/no longer exists/);
+
+    const owner = 'pipeline:iss-test:storyboards:scene1:sidscene-99';
+    expect(cancelJobMock).toHaveBeenCalledWith('job-doomed');
+    expect(listFakeJobs({ owner, status: 'queued' })).toEqual([]);
+    expect(listFakeJobs({ owner })).toEqual([{ id: 'job-doomed', owner, status: 'canceled' }]);
+  });
+
+  it('resolves the SHOT by id too, so a shot reorder cannot move the start-frame job', async () => {
+    const shotOne = { id: 'shot-01', description: 'shot one' };
+    const shotTwo = { id: 'shot-02', description: 'shot two' };
+    const persisted = installWriteTail([{ ...SCENE_A, shots: [shotTwo, shotOne] }]);
+    readScenes([{ ...SCENE_A, shots: [shotOne, shotTwo] }]);
+    enqueueJobMock.mockReturnValue({ jobId: 'job-shot-one' });
+
+    const result = await enqueueStoryboardShotStartFrame('iss-test', 0, 0);
+
+    expect(enqueueJobMock).toHaveBeenCalledWith(expect.objectContaining({
+      owner: 'pipeline:iss-test:storyboards:scene0:shot0:sidscene-01:tidshot-01',
+    }));
+    const shots = persisted.storyboards.scenes[0].shots;
+    expect(shots[1].id).toBe('shot-01');
+    expect(shots[1].startFrameJobId).toBe('job-shot-one');
+    expect(shots[0].startFrameJobId).toBeUndefined();
+    expect(result.shotIndex).toBe(1);
+  });
+
+  it('409s + cancels when the SHOT vanished between read and write', async () => {
+    installWriteTail([{ ...SCENE_A, shots: [{ id: 'shot-01', description: 'shot one' }] }]);
+    readScenes([{
+      ...SCENE_A,
+      shots: [{ id: 'shot-01', description: 'shot one' }, { id: 'shot-99', description: 'deleted shot' }],
+    }]);
+    enqueueJobMock.mockReturnValue({ jobId: 'job-shot-doomed' });
+
+    await expect(enqueueStoryboardShotStartFrame('iss-test', 0, 1))
+      .rejects.toMatchObject({ status: 409, code: 'PIPELINE_SHOT_STALE_TARGET' });
+    expect(cancelJobMock).toHaveBeenCalledWith('job-shot-doomed');
+    expect(listFakeJobs({ status: 'queued' })).toEqual([]);
+  });
+
+  it('falls back to the index for a PRE-MIGRATION record whose scenes carry no ids', async () => {
+    const legacy = [{ description: 'Scene 1.' }, { description: 'Scene 2.' }];
+    const persisted = installWriteTail(legacy);
+    readScenes(legacy);
+    enqueueJobMock.mockReturnValue({ jobId: 'job-legacy' });
+
+    const result = await enqueueStoryboardSceneVideo('iss-test', 1, {});
+
+    expect(persisted.storyboards.scenes[1].sceneVideoJobId).toBe('job-legacy');
+    expect(result.sceneIndex).toBe(1);
+    // No ids anywhere → the owner keeps the legacy index-only shape.
+    expect(enqueueJobMock).toHaveBeenCalledWith(expect.objectContaining({
+      owner: 'pipeline:iss-test:storyboards:scene1',
+    }));
+  });
+
+  it('a scene-prompt refine lands on the scene it read, not the slot it read', async () => {
+    const persisted = installWriteTail([SCENE_B, SCENE_A]);
+    readScenes([SCENE_A, SCENE_B]);
+
+    const result = await refineStoryboardScenePrompt('iss-test', 0);
+
+    expect(persisted.storyboards.scenes[1].description).toBe('refined prompt body');
+    expect(persisted.storyboards.scenes[0].description).toBe('Scene B.');
+    expect(result.scene.id).toBe('scene-01');
+  });
+
+  it('a rejected COMIC PAGE slot write cancels its orphaned job too', async () => {
+    updateStageWithLatestMock.mockRejectedValue(
+      Object.assign(new Error('pageIndex 0 out of range'), { status: 404 }),
+    );
+    enqueueJobMock.mockReturnValue({ jobId: 'job-page-doomed' });
+
+    await expect(renderComicPage('iss-test', { pageIndex: 0 })).rejects.toThrow(/out of range/);
+    expect(cancelJobMock).toHaveBeenCalledWith('job-page-doomed');
+    expect(listFakeJobs({ status: 'queued' })).toEqual([]);
+  });
+
+  it('a rejected COVER slot write cancels its orphaned job too', async () => {
+    updateStageWithLatestMock.mockRejectedValue(new Error('issue vanished'));
+    enqueueJobMock.mockReturnValue({ jobId: 'job-cover-doomed' });
+
+    await expect(renderComicCover('iss-test', {})).rejects.toThrow(/issue vanished/);
+    expect(cancelJobMock).toHaveBeenCalledWith('job-cover-doomed');
+    expect(listFakeJobs({ status: 'queued' })).toEqual([]);
   });
 });
 
