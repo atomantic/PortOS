@@ -78,11 +78,28 @@ export async function updateAgent(agentId, updates) {
 }
 
 export async function completeAgent(agentId, result = {}) {
+  // Set inside the lock when the record is already terminal, so the post-lock
+  // tail below (budget ledger + `agent:completed`) is skipped too — see #3384.
+  let alreadyCompleted = false;
+
   const completed = await withStateLock(async () => {
     const state = await loadState();
 
     if (!state.agents[agentId]) {
       return null;
+    }
+
+    // Idempotence (#3384): six call sites funnel here and each carries the
+    // "I might be second" assumption. A duplicate completion used to overwrite
+    // the recorded verdict — a stray runner `agent:completed` once replaced a
+    // real success with `success: false, exitCode: 143`, flipping the card to
+    // Failed and requeueing a finished task. Caller-level guards read the record
+    // outside this lock, so they narrow the window rather than closing it.
+    // Guard on `completed` specifically, NOT `!== 'running'`: `paused` records
+    // are legitimately completed on resume.
+    if (state.agents[agentId].status === 'completed') {
+      alreadyCompleted = true;
+      return state.agents[agentId];
     }
 
     state.agents[agentId] = {
@@ -145,6 +162,14 @@ export async function completeAgent(agentId, result = {}) {
 
     return state.agents[agentId];
   });
+
+  // A duplicate completion is a total no-op: re-recording the domain-usage
+  // action would double-charge the daily budget, and re-emitting
+  // `agent:completed` would re-run the scheduler hand-off for an agent that
+  // already finished (#3384). The existing record still comes back to the caller.
+  if (alreadyCompleted) {
+    return completed;
+  }
 
   // Daily CoS budget accounting (#711): count only AUTONOMOUS runs (non-user
   // tasks) — the same set the CoS auto-run gate withholds when over budget —

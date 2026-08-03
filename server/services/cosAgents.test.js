@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, rm, writeFile, readFile } from 'fs/promises';
+import { existsSync } from 'fs';
 import { join } from 'path';
 
 const mockCosState = vi.hoisted(() => ({
@@ -23,7 +24,7 @@ vi.mock('./domainUsage.js', () => ({
   recordDomainUsage: vi.fn(async () => {})
 }));
 
-import { getAgent, createAgentOutputBatcher, completeAgent, updateAgent } from './cosAgents.js';
+import { getAgent, createAgentOutputBatcher, completeAgent, updateAgent, registerAgent } from './cosAgents.js';
 import { saveState } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
@@ -147,6 +148,151 @@ describe('completeAgent budget-ledger ordering (#1683)', () => {
 
     expect(recordDomainUsage).not.toHaveBeenCalled();
     expect(emitted).toBe(true);
+  });
+});
+
+describe('completeAgent idempotence (#3384)', () => {
+  const emittedCompletions = [];
+
+  beforeEach(async () => {
+    await rm(mockCosState.agentsDir, { recursive: true, force: true });
+    await mkdir(mockCosState.agentsDir, { recursive: true });
+    mockCosState.state = { agents: {}, stats: { tasksCompleted: 0, errors: 0 } };
+    emittedCompletions.length = 0;
+    recordDomainUsage.mockClear();
+    recordDomainUsage.mockImplementation(async () => {});
+    cosEvents.on('agent:completed', (agent) => emittedCompletions.push(agent));
+  });
+
+  afterEach(async () => {
+    await rm(mockCosState.agentsDir, { recursive: true, force: true });
+    cosEvents.removeAllListeners('agent:completed');
+  });
+
+  it('keeps the first verdict when a duplicate completion arrives', async () => {
+    // Regression: a stray runner `agent:completed` for an agent that had already
+    // finalized on its own sentinel replaced a recorded success with
+    // `success: false, exitCode: 143`, flipping the card to Failed and requeueing
+    // a finished task.
+    const agentId = 'agent-duplicate-completion';
+    mockCosState.state.agents[agentId] = {
+      id: agentId,
+      status: 'running',
+      metadata: { taskType: 'scheduled' },
+      output: []
+    };
+
+    const first = await completeAgent(agentId, { success: true, exitCode: 0, duration: 1000 });
+    expect(first.result.success).toBe(true);
+
+    saveState.mockClear();
+    recordDomainUsage.mockClear();
+    emittedCompletions.length = 0;
+
+    const second = await completeAgent(agentId, {
+      success: false,
+      exitCode: 143,
+      errorAnalysis: { category: 'startup-failure' }
+    });
+
+    expect(second.result).toEqual(first.result);
+    expect(second.result.success).toBe(true);
+    expect(second.result.errorAnalysis).toBeUndefined();
+    expect(second.completedAt).toBe(first.completedAt);
+    expect(mockCosState.state.agents[agentId].result.success).toBe(true);
+
+    // A no-op all the way out: no state write, no double budget charge, and no
+    // second `agent:completed` (whose handler schedules the next task).
+    expect(saveState).not.toHaveBeenCalled();
+    expect(recordDomainUsage).not.toHaveBeenCalled();
+    expect(emittedCompletions).toEqual([]);
+    expect(mockCosState.state.stats).toEqual({ tasksCompleted: 1, errors: 0 });
+  });
+
+  it('does not re-run the completed-agent directory move on a duplicate', async () => {
+    const agentId = 'agent-duplicate-archive';
+    mockCosState.state.agents[agentId] = {
+      id: agentId,
+      status: 'running',
+      metadata: { taskType: 'scheduled' },
+      output: []
+    };
+
+    const first = await completeAgent(agentId, { success: true, exitCode: 0 });
+    const archivedMetadata = join(
+      mockCosState.agentsDir, first.completedAt.slice(0, 10), agentId, 'metadata.json'
+    );
+    expect(existsSync(archivedMetadata)).toBe(true);
+
+    // Late output can land back in the flat dir after the archive move. A second
+    // completion must leave it alone rather than sweeping it into the bucket.
+    const flatDir = join(mockCosState.agentsDir, agentId);
+    await mkdir(flatDir, { recursive: true });
+    await writeFile(join(flatDir, 'output.txt'), 'post-archive line\n');
+
+    await completeAgent(agentId, { success: false, exitCode: 143 });
+
+    expect(existsSync(join(flatDir, 'output.txt'))).toBe(true);
+    const archived = JSON.parse(await readFile(archivedMetadata, 'utf8'));
+    expect(archived.result.success).toBe(true);
+    expect(archived.result.exitCode).toBe(0);
+  });
+
+  it('completes a still-paused agent (the guard is completed-only, not running-only)', async () => {
+    const agentId = 'agent-paused-completion';
+    mockCosState.state.agents[agentId] = {
+      id: agentId,
+      status: 'paused',
+      pausedAt: '2026-05-25T12:00:00.000Z',
+      metadata: { taskType: 'scheduled' },
+      output: []
+    };
+
+    const done = await completeAgent(agentId, { success: true, exitCode: 0 });
+
+    expect(done.status).toBe('completed');
+    expect(done.result.success).toBe(true);
+  });
+
+  it('completes a paused agent that resumed back to running', async () => {
+    const agentId = 'agent-resumed-completion';
+    mockCosState.state.agents[agentId] = {
+      id: agentId,
+      status: 'running',
+      metadata: { taskType: 'scheduled' },
+      output: []
+    };
+
+    const paused = await updateAgent(agentId, { status: 'paused', pausedAt: '2026-05-25T12:00:00.000Z' });
+    expect(paused.status).toBe('paused');
+
+    const resumed = await updateAgent(agentId, { status: 'running' });
+    expect(resumed.status).toBe('running');
+
+    const done = await completeAgent(agentId, { success: true, exitCode: 0 });
+
+    expect(done.status).toBe('completed');
+    expect(done.result.success).toBe(true);
+    expect(emittedCompletions).toHaveLength(1);
+  });
+
+  it('re-registering an id resets it to running so a retry can complete again', async () => {
+    // Spawns mint a fresh `agent-<uuid>` id, so this only matters if one ever
+    // collides — registerAgent must still hand back a completable record.
+    const agentId = 'agent-reregistered';
+    mockCosState.state.agents[agentId] = {
+      id: agentId,
+      status: 'running',
+      metadata: { taskType: 'scheduled' },
+      output: []
+    };
+    await completeAgent(agentId, { success: false, exitCode: 1 });
+
+    const reregistered = await registerAgent(agentId, 'task-retry', { taskType: 'scheduled' });
+    expect(reregistered.status).toBe('running');
+
+    const done = await completeAgent(agentId, { success: true, exitCode: 0 });
+    expect(done.result.success).toBe(true);
   });
 });
 
