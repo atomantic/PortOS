@@ -25,6 +25,16 @@ import {
 // suite is competing for CI's event loop.
 const GENERATED_DRILL_TIMEOUT = 5_000;
 
+// Vitest's default per-test timeout is also 5s, so a `waitFor` bounded at
+// GENERATED_DRILL_TIMEOUT was allowed to consume the entire test budget: the
+// inner bound could never actually report its own failure, and a test with work
+// left after that wait had nothing left to spend on it. The premature-submit
+// test has eight awaited transitions after its drill wait and died on CI at
+// 5011ms with a bare "Test timed out" pointing at the `it(` line rather than the
+// step that stalled. Derive the per-test budget from the inner bound so the two
+// can't drift back into equality.
+vi.setConfig({ testTimeout: GENERATED_DRILL_TIMEOUT * 3 });
+
 // The selected mode now lives in the URL (`/post/wordplay/:mode`) — PostTab
 // owns that param and passes it down. This harness stands in for that routing:
 // clicking a mode button calls onSelectMode, which sets the `mode` prop, and the
