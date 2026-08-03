@@ -1,9 +1,8 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router';
-import { Plus, Film, Trash2, Music, Activity, ArrowUp, ArrowDown, Image as ImageIcon, Video, Wand2, Download, Copy } from 'lucide-react';
+import { Plus, Film } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import PageHeader from '../components/PageHeader';
-import Drawer from '../components/Drawer.jsx';
 import {
   listMusicVideoProjects,
   createMusicVideoProject,
@@ -11,49 +10,30 @@ import {
   updateMusicVideoProject,
   deleteMusicVideoProject,
   analyzeMusicVideoProject,
-  setMusicVideoManualTempo,
   planMusicVideoProject,
   addMusicVideoScene,
   updateMusicVideoScene,
   deleteMusicVideoScene,
   reorderMusicVideoScenes,
-  renderMusicVideoProject,
-  musicVideoRenderEventsUrl,
-  cancelMusicVideoRender,
-  transcribeMusicVideoMidi,
-  musicVideoMidiEventsUrl,
-  cancelMusicVideoMidiTranscription,
 } from '../services/apiMusicVideo.js';
-import useMidiTranscription from '../hooks/useMidiTranscription.js';
 import useFieldDraft from '../hooks/useFieldDraft.js';
+import useMusicVideoYoutubeImport from '../hooks/useMusicVideoYoutubeImport.js';
+import useMusicVideoMidiJob from '../hooks/useMusicVideoMidiJob.js';
+import useMusicVideoRenderJob from '../hooks/useMusicVideoRenderJob.js';
+import useMusicVideoModelSettings from '../hooks/useMusicVideoModelSettings.js';
+import useMusicVideoManualTempo from '../hooks/useMusicVideoManualTempo.js';
+import useMusicVideoSceneMedia from '../hooks/useMusicVideoSceneMedia.js';
 import MidiInstallModal from '../components/install/MidiInstallModal.jsx';
 import MidiGatedModal from '../components/install/MidiGatedModal.jsx';
-import MidiVisualization from '../components/songs/MidiVisualization.jsx';
-import { generateImage } from '../services/apiSystem.js';
-import { generateVideo, getVideoGenStatus, listLorasFull } from '../services/apiImageVideo.js';
-import { listTracks, trackAudioUrl } from '../services/apiTracks.js';
+import { listTracks } from '../services/apiTracks.js';
 import BeatTimeline from '../components/musicVideo/BeatTimeline.jsx';
-import RecordRenderPinRow from '../components/imageGen/RecordRenderPinRow.jsx';
+import CreateProjectDrawer from '../components/musicVideo/CreateProjectDrawer.jsx';
+import ProjectToolbar from '../components/musicVideo/ProjectToolbar.jsx';
+import TrackPanel from '../components/musicVideo/TrackPanel.jsx';
+import RenderStatusPanel from '../components/musicVideo/RenderStatusPanel.jsx';
+import AnalysisPanel from '../components/musicVideo/AnalysisPanel.jsx';
+import SceneCard from '../components/musicVideo/SceneCard.jsx';
 import { autoArrangeScenes } from '../lib/beatGrid.js';
-import useSceneRenderLifecycle from '../hooks/useSceneRenderLifecycle.js';
-import { useVideoFileSrc } from '../hooks/useVideoFileSrc.js';
-import useYoutubeTrackImport from '../hooks/useYoutubeTrackImport.js';
-import { useSseProgress, isTerminalSseFrame } from '../hooks/useSseProgress.js';
-import { formatDurationSec } from '../utils/formatters.js';
-import { MUSCRIPTOR_MODELS, DEFAULT_MUSCRIPTOR_MODEL } from '../lib/muscriptorModels.js';
-import { GROK_VIDEO_DURATIONS } from '../lib/grokVideoClip.js';
-import { clampBpm } from '../lib/metronome.js';
-
-// Matches musicVideoManualAnalysisSchema's `bpm.max` on the server —
-// clampBpm's own ceiling (320, metronome-focused) is looser than what the
-// manual-tempo endpoint accepts.
-const MUSIC_VIDEO_MANUAL_BPM_MAX = 300;
-const AUDIO_REACTIVE_PERFORMANCE_GUARD = 'The music drives only environmental motion, lighting, particles, reflections, fabric, and subtle camera accents. No singing, lip-sync, speaking, mouth movement, dancing, instruments, performers, or musical performance.';
-
-const MODES = ['director', 'autonomous'];
-
-// The two timeline-bound scene fields rendered as identical number inputs.
-const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
 
 const STATUS_COLORS = {
   draft: 'bg-port-border text-port-text',
@@ -63,42 +43,6 @@ const STATUS_COLORS = {
   complete: 'bg-port-success/30 text-port-success',
   failed: 'bg-port-error/30 text-port-error',
 };
-
-// The URL input + Import/Cancel button pairing for a useYoutubeTrackImport
-// slot — shared by the create form (full-size) and the detail view's
-// track-change row (compact, inline in a flex-wrap toolbar). #1945
-function YoutubeImportControls({ id, url, onUrlChange, job, onStart, compact = false, disabled = false }) {
-  const size = compact ? 12 : 13;
-  const py = compact ? 'py-1' : 'py-1.5';
-  const btnExtra = compact ? '' : 'text-xs whitespace-nowrap min-h-[44px] sm:min-h-0';
-  return (
-    <>
-      <input
-        id={id} type="url" value={url} onChange={onUrlChange} disabled={job.active || disabled}
-        // The create form's usage sits inside a <form onSubmit={handleCreate}>
-        // — without this, Enter (the natural gesture after pasting a URL)
-        // submits the form (creating a track-less project) instead of
-        // starting the import. Harmless on the detail view's usage, which
-        // isn't inside a <form>.
-        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); if (url.trim()) onStart(); } }}
-        placeholder="Import audio from a YouTube URL…" aria-label="Import audio from a YouTube URL"
-        className={`${compact ? 'flex-1 min-w-[160px]' : 'flex-1 min-w-0'} bg-port-bg border border-port-border rounded px-2 ${py} text-sm disabled:opacity-50`}
-      />
-      {job.active ? (
-        <button type="button" onClick={job.cancel}
-          className={`flex items-center gap-1 bg-port-warning/20 text-port-warning border border-port-border rounded px-2 ${py} ${btnExtra}`}>
-          <Activity size={size} className="animate-spin" /> {job.percent}%
-        </button>
-      ) : (
-        <button type="button" onClick={onStart} disabled={!url.trim() || disabled}
-          title="Download and extract this video's audio as a track"
-          className={`flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 ${py} ${btnExtra} disabled:opacity-50`}>
-          <Download size={size} /> Import
-        </button>
-      )}
-    </>
-  );
-}
 
 export default function MusicVideo() {
   // Deep-linkable project selection: the selected project lives in the URL
@@ -117,138 +61,77 @@ export default function MusicVideo() {
   const [planning, setPlanning] = useState(false);
   const [cloning, setCloning] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
-  const [videoModels, setVideoModels] = useState([]);
-  const [videoModelsLoading, setVideoModelsLoading] = useState(true);
-  const [videoLoras, setVideoLoras] = useState([]);
-  const [defaultVideoModel, setDefaultVideoModel] = useState('');
-  const [videoSettingsSaving, setVideoSettingsSaving] = useState(false);
   const [form, setForm] = useState({ name: '', mode: 'director', trackId: '' });
-  // The project a detail-view YouTube import is bound to (captured at kickoff).
-  // The import's shared UI slot (progress button + disabled track controls)
-  // belongs to this project; it backstops the URL-nav guard below so a deep
-  // link / Back / ⌘K can't strand that slot's UI against another project.
-  const [ytEditProjectId, setYtEditProjectId] = useState(null);
   const selected = projects.find((p) => p.id === selectedId) || null;
 
-  // YouTube audio import (#1945): paste a URL, PortOS downloads + extracts the
-  // track via yt-dlp and lands it in the shared library. Two independent job
-  // slots — one per surface that can kick off an import — so starting one
-  // doesn't orphan the other's in-flight job (see useYoutubeTrackImport).
-  const [ytUrlCreate, setYtUrlCreate] = useState('');
-  const [ytUrlEdit, setYtUrlEdit] = useState('');
-  const attachImportedTrack = (track) => setTracks((prev) => [...prev, track]);
-  const ytImportCreate = useYoutubeTrackImport({
-    onComplete: (track) => {
-      attachImportedTrack(track);
-      setForm((f) => ({ ...f, trackId: track.id }));
-      setYtUrlCreate('');
-    },
-  });
-  const ytImportEdit = useYoutubeTrackImport({
-    onComplete: (track, projectId) => {
-      attachImportedTrack(track);
-      updateMusicVideoProject(projectId, { trackId: track.id }, { silent: true })
-        .then((proj) => replaceProject(proj))
-        .catch((err) => toast.error(err?.message || 'Imported the track but failed to attach it to the project'));
-      setYtUrlEdit('');
-    },
-  });
   const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
-  // `ytImportEdit` is one shared job slot for the whole detail view (not
+  // Functional merges keyed on the captured projectId/sceneId so an async result
+  // that resolves after the user edited the board can't clobber those edits with
+  // a stale project snapshot. `patch` may be a function of the current record
+  // when the merge has to read a field it is also writing.
+  const patchProject = (projectId, patch) =>
+    setProjects((prev) => prev.map((p) => (p.id === projectId
+      ? { ...p, ...(typeof patch === 'function' ? patch(p) : patch) }
+      : p)));
+  const patchScene = (projectId, sceneId, patch) =>
+    setProjects((prev) => prev.map((p) => (p.id === projectId
+      ? { ...p, scenes: (p.scenes || []).map((s) => (s.sceneId === sceneId ? { ...s, ...patch } : s)) }
+      : p)));
+
+  const youtube = useMusicVideoYoutubeImport({
+    routeProjectId,
+    navigate,
+    onTrackImported: (track) => setTracks((prev) => [...prev, track]),
+    onCreateComplete: (track) => setForm((f) => ({ ...f, trackId: track.id })),
+    onProjectUpdated: replaceProject,
+  });
+  const midi = useMusicVideoMidiJob({
+    onTranscribed: (projectId, midiTranscription) => patchProject(projectId, { midiTranscription }),
+  });
+  const renderJob = useMusicVideoRenderJob({
+    onRendered: (projectId, result) => patchProject(projectId, (project) => ({
+      renderHistoryId: result.id || project.renderHistoryId,
+      status: 'complete',
+    })),
+    onFailed: (projectId) => patchProject(projectId, { status: 'failed' }),
+  });
+  const videoSettings = useMusicVideoModelSettings({ project: selected, onProjectPatch: patchProject });
+  const tempo = useMusicVideoManualTempo({ project: selected, onUpdated: replaceProject });
+  const sceneMedia = useMusicVideoSceneMedia({
+    project: selected,
+    videoSettings,
+    applyScenePatch: patchScene,
+  });
+
+  // The in-flight render already resolved the project's audio at kickoff;
+  // relinking the track now would leave the project pointing at a NEW track
+  // while the video that finishes rendering was produced from the OLD one.
+  const renderTargetsSelected = !!(renderJob.job && selected && renderJob.job.projectId === selected.id);
+  // `midiTargetsSelected` gates the track-change controls, since the .mid being
+  // produced is of the CURRENT audio (mirrors renderTargetsSelected).
+  const midiTargetsSelected = !!(midi.active && selected && midi.context === selected.id);
+
+  // `youtube.editJob` is one shared job slot for the whole detail view (not
   // per-project) — switching the selected project while it has an import in
   // flight would silently orphan that job's SSE subscription (the finished
   // track would land in the library but never get attached, since the
   // completion handler's onComplete never fires for a target nobody is
   // listening for anymore) and misattribute its progress UI to whichever
-  // project is now selected. Block switching until that import settles.
+  // project is now selected. Block switching until that import settles. (The
+  // hook re-asserts the same invariant against URL-driven navigation.)
   const selectProject = (id) => {
-    if (ytImportEdit.active && id !== selectedId) {
-      toast.error('Finish or cancel the in-progress YouTube import before switching projects');
+    if (youtube.editJob.active && id !== selectedId) {
+      toast.error(youtube.switchBlockedMessage);
       return;
     }
     navigate(id ? `/music-video/${id}` : '/music-video');
   };
-  // Drop the binding once the import settles (or is cancelled) so the backstop
-  // below stops guarding a project the user is free to leave again.
-  useEffect(() => { if (!ytImportEdit.active) setYtEditProjectId(null); }, [ytImportEdit.active]);
-  // `selectProject` blocks project switches from the list buttons while an
-  // import is in flight, but URL-driven selection (deep link, browser Back/
-  // Forward, ⌘K / voice nav) changes `selectedId` without going through it. Re-
-  // assert the same invariant here: while a detail-view import runs, bounce any
-  // navigation away from its bound project back (replace, so history isn't
-  // polluted). The import itself keeps running and still attaches to its bound
-  // project (useYoutubeTrackImport captures the target at kickoff) — this only
-  // keeps the shared progress UI from misattributing to another project.
-  useEffect(() => {
-    if (!ytImportEdit.active || !ytEditProjectId) return;
-    if (routeProjectId !== ytEditProjectId) {
-      toast.error('Finish or cancel the in-progress YouTube import before switching projects');
-      navigate(`/music-video/${ytEditProjectId}`, { replace: true });
-    }
-  }, [routeProjectId, ytImportEdit.active, ytEditProjectId, navigate]);
-  // Merge ONLY a scene's referenceImageId via a functional update so a render
-  // that resolves after the user edited the board can't clobber those edits with
-  // a stale project snapshot. Shared by the socket handler and the synchronous
-  // external-lane attach below.
-  const applyReferenceImage = (projectId, sceneId, referenceImageId) =>
-    setProjects((prev) => prev.map((p) => (p.id === projectId
-      ? { ...p, scenes: (p.scenes || []).map((s) => (s.sceneId === sceneId ? { ...s, referenceImageId } : s)) }
-      : p)));
-  // Merge ONLY a scene's videoHistoryId via a functional update (same stale-
-  // snapshot guard as applyReferenceImage above).
-  const applySceneVideo = (projectId, sceneId, videoHistoryId) =>
-    setProjects((prev) => prev.map((p) => (p.id === projectId
-      ? { ...p, scenes: (p.scenes || []).map((s) => (s.sceneId === sceneId ? { ...s, videoHistoryId } : s)) }
-      : p)));
-
-  // Per-scene async-render lifecycle for each lane (#1798). One hook call owns a
-  // lane's spinner state, job-id correlation, orphan-terminal reconcile, and
-  // socket subscription — the client-side analog of the server's #1791
-  // image/video hook unification. The reference-frame lane attaches the finished
-  // still durably via music-video:scene-image; the i2v lane attaches the clip via
-  // music-video:scene-video. Both ride the media-job queue, so the spinner is
-  // cleared by the job-id-correlated *-gen:completed/failed/canceled events.
-  const frameLane = useSceneRenderLifecycle({
-    attachEvent: 'music-video:scene-image',
-    completedEvent: 'image-gen:completed',
-    failedEvent: 'image-gen:failed',
-    canceledEvent: 'image-gen:canceled',
-    apply: ({ projectId, sceneId, referenceImageId }) => applyReferenceImage(projectId, sceneId, referenceImageId),
-    failMessage: 'Frame render failed',
-  });
-  const videoLane = useSceneRenderLifecycle({
-    attachEvent: 'music-video:scene-video',
-    completedEvent: 'video-gen:completed',
-    failedEvent: 'video-gen:failed',
-    canceledEvent: 'video-gen:canceled',
-    apply: ({ projectId, sceneId, videoHistoryId }) => applySceneVideo(projectId, sceneId, videoHistoryId),
-    failMessage: 'Scene video render failed',
-  });
-  const genScenes = frameLane.genScenes;
-  const genVideoScenes = videoLane.genScenes;
 
   useEffect(() => {
     listMusicVideoProjects({ silent: true })
       .then((data) => { setProjects(data || []); setLoading(false); })
       .catch((err) => { toast.error(err?.message || 'Failed to load music video projects'); setLoading(false); });
     listTracks({ silent: true }).then((t) => setTracks(t || [])).catch(() => setTracks([]));
-    getVideoGenStatus({ silent: true })
-      .then((status) => {
-        // Music-video scenes always start from a reference frame. Hide
-        // explicitly text-only models, while retaining general LTX models
-        // whose runtime supports both text and image conditioning.
-        setVideoModels((status?.models || []).filter((model) => model.mode !== 't2v' && !model.deprecated));
-        setDefaultVideoModel(status?.defaultModel || '');
-        setVideoModelsLoading(false);
-      })
-      .catch(() => {
-        setVideoModels([]);
-        setDefaultVideoModel('');
-        setVideoModelsLoading(false);
-      });
-    listLorasFull({ silent: true })
-      .then((loras) => setVideoLoras(Array.isArray(loras) ? loras : []))
-      .catch(() => setVideoLoras([]));
   }, []);
 
   const trackName = useCallback((id) => tracks.find((t) => t.id === id)?.title || id || '—', [tracks]);
@@ -270,7 +153,7 @@ export default function MusicVideo() {
     // would make a track-less project, and the import's later completion
     // would only fill in the (already-reset) form's trackId instead of
     // attaching to the project the user just created.
-    if (ytImportCreate.active) {
+    if (youtube.createJob.active) {
       toast.error('Finish or cancel the in-progress YouTube import before creating the project');
       return;
     }
@@ -289,7 +172,7 @@ export default function MusicVideo() {
     // Same hazard selectProject guards against: deleting the project an
     // in-flight edit-surface import targets would still finish server-side
     // and try to PATCH a now-deleted project.
-    if (ytImportEdit.active && id === selectedId) {
+    if (youtube.editJob.active && id === selectedId) {
       toast.error('Finish or cancel the in-progress YouTube import before deleting this project');
       return;
     }
@@ -314,35 +197,6 @@ export default function MusicVideo() {
       .finally(() => setCloning(false));
   };
 
-  // Audio → MIDI transcription (MuScriptor): turn the project's source audio
-  // into a .mid. The server persists the pointer on the project at completion;
-  // the terminal frame carries it, merged here keyed on the captured projectId
-  // (the hook's `context`) so a project switch mid-transcription can't
-  // misattribute the result. `midiTargetsSelected` gates the track-change
-  // controls, since the .mid being produced is of the CURRENT audio (mirrors
-  // renderTargetsSelected).
-  // MuScriptor model size for the next transcription (default balances
-  // quality/speed). Read fresh inside startRequest — useSseJobSlot invokes the
-  // latest closure each kickoff, so a change here applies to the next run.
-  const [midiModel, setMidiModel] = useState(DEFAULT_MUSCRIPTOR_MODEL);
-  const midiJob = useMidiTranscription({
-    startRequest: (projectId) => transcribeMusicVideoMidi(projectId, { model: midiModel }, { silent: true }),
-    eventsUrl: musicVideoMidiEventsUrl,
-    cancelRequest: cancelMusicVideoMidiTranscription,
-    onComplete: (frame, projectId) => {
-      if (frame.discarded) {
-        toast.info('The track changed during transcription — MIDI result discarded');
-        return;
-      }
-      if (frame.midiTranscription) {
-        setProjects((prev) => prev.map((p) => (p.id === projectId
-          ? { ...p, midiTranscription: frame.midiTranscription } : p)));
-      }
-      toast.success('MIDI transcription ready');
-    },
-  });
-  const midiTargetsSelected = !!(midiJob.active && selected && midiJob.context === selected.id);
-
   const handleAnalyze = () => {
     if (!selected) return;
     setAnalyzing(true);
@@ -350,48 +204,6 @@ export default function MusicVideo() {
       .then((proj) => { replaceProject(proj); toast.success(`Analyzed — ${proj.audioAnalysis?.bpm ? `${proj.audioAnalysis.bpm} BPM` : 'no tempo detected'}`); })
       .catch((err) => toast.error(err?.message || 'Analysis failed'))
       .finally(() => setAnalyzing(false));
-  };
-
-  // Manual-tempo fallback: shown when the auto-detector caches `bpm: null`
-  // (see server/services/musicVideo/audioAnalysis.js for why). "Tap tempo"
-  // estimates BPM from the average interval between clicks (resets if the gap
-  // since the last tap exceeds 2s, i.e. the director paused/restarted).
-  const [manualBpm, setManualBpm] = useState('');
-  const [manualOffset, setManualOffset] = useState('0');
-  const [settingManualTempo, setSettingManualTempo] = useState(false);
-  const tapTimesRef = useRef([]);
-
-  useEffect(() => {
-    setManualBpm('');
-    setManualOffset('0');
-    tapTimesRef.current = [];
-  }, [selected?.id]);
-
-  const handleTapTempo = () => {
-    const now = Date.now();
-    const taps = tapTimesRef.current;
-    if (taps.length && now - taps[taps.length - 1] > 2000) taps.length = 0;
-    taps.push(now);
-    if (taps.length > 8) taps.shift();
-    if (taps.length >= 2) {
-      const intervals = [];
-      for (let i = 1; i < taps.length; i++) intervals.push(taps[i] - taps[i - 1]);
-      const avgMs = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-      setManualBpm(String(Math.round(60000 / avgMs)));
-    }
-  };
-
-  const handleSetManualTempo = () => {
-    if (!selected) return;
-    const bpm = clampBpm(manualBpm);
-    if (bpm == null) { toast.error('Enter a BPM'); return; }
-    const boundedBpm = Math.min(bpm, MUSIC_VIDEO_MANUAL_BPM_MAX);
-    const offsetSec = Number(manualOffset) || 0;
-    setSettingManualTempo(true);
-    setMusicVideoManualTempo(selected.id, { bpm: boundedBpm, offsetSec }, { silent: true })
-      .then((proj) => { replaceProject(proj); toast.success(`Tempo set — ${proj.audioAnalysis?.bpm} BPM`); tapTimesRef.current = []; })
-      .catch((err) => toast.error(err?.message || 'Could not set tempo'))
-      .finally(() => setSettingManualTempo(false));
   };
 
   // Autonomous shot planner (#1855): propose one scene per analyzed audio
@@ -462,120 +274,6 @@ export default function MusicVideo() {
       .finally(() => setArranging(false));
   };
 
-  // --- Render (#1760, Phase 2): assemble scene clips over the master audio bed.
-  // The kickoff returns a jobId; progress streams over SSE via useSseProgress.
-  const [render, setRender] = useState(null); // { jobId, projectId } while in flight
-  const renderSse = useSseProgress(render ? musicVideoRenderEventsUrl(render.jobId) : null);
-  const renderProgress = render ? Math.round((renderSse.latest?.progress ?? 0) * 100) : 0;
-  // The in-flight render already resolved the project's audio at kickoff;
-  // relinking the track now would leave the project pointing at a NEW track
-  // while the video that finishes rendering was produced from the OLD one.
-  const renderTargetsSelected = !!(render && selected && render.projectId === selected.id);
-  // The number of scenes that already have a generated clip — the render's inputs.
-  const renderableSceneCount = (selected?.scenes || []).filter((s) => s.videoHistoryId).length;
-  const sceneCount = selected?.scenes?.length || 0;
-  const referenceFrameCount = (selected?.scenes || []).filter((s) => s.referenceImageId).length;
-  const uniqueReferenceFrameCount = new Set(
-    (selected?.scenes || []).map((scene) => scene.referenceImageId).filter(Boolean),
-  ).size;
-  const uniqueVideoCount = new Set(
-    (selected?.scenes || []).map((scene) => scene.videoHistoryId).filter(Boolean),
-  ).size;
-  const missingFrameCount = sceneCount - referenceFrameCount;
-  const missingVideoCount = sceneCount - renderableSceneCount;
-  const finalVideo = useVideoFileSrc(selected?.renderHistoryId, { enabled: !!selected?.renderHistoryId });
-  const savedVideoSettings = {
-    // Empty means this peer resolves its own configured Video Gen default.
-    // Synced projects intentionally arrive without another install's backend
-    // pin, so do not turn that absence into an explicit local override.
-    backend: selected?.videoSettings?.backend || '',
-    // Empty is an intentional "follow the local Video Gen default" choice,
-    // distinct from pinning the model that happens to be default today.
-    modelId: selected?.videoSettings?.modelId || '',
-    grokDuration: selected?.videoSettings?.grokDuration || 10,
-    generationMode: selected?.videoSettings?.generationMode || 'image',
-    audioReactiveLora: selected?.videoSettings?.audioReactiveLora || '',
-    audioReactiveScale: selected?.videoSettings?.audioReactiveScale ?? 1.2,
-  };
-  const effectiveVideoModelId = savedVideoSettings.modelId || defaultVideoModel;
-  const activeVideoModel = videoModels.find((model) => model.id === effectiveVideoModelId) || null;
-  const audioReactiveModels = videoModels.filter((model) =>
-    model.runtime === 'ltx2' && /ltx.?2\.3|ltx23/i.test(`${model.id} ${model.name || ''} ${model.repo || ''}`));
-  const audioReactiveLoras = videoLoras.filter((lora) =>
-    /audio-reactive/i.test(`${lora.filename} ${lora.name || ''}`)
-    && (lora.loraCompatKey || lora.runnerFamily) === 'ltx-video');
-  const detectedAudioReactiveLora = videoLoras.find((lora) =>
-    lora.filename === savedVideoSettings.audioReactiveLora)
-    || audioReactiveLoras.find((lora) =>
-      /(?:^|[-_.\s])v2(?:[-_.\s]|$)/i.test(`${lora.filename} ${lora.name || ''}`))
-    || audioReactiveLoras[0]
-    || null;
-  const audioReactiveReady = !!(activeVideoModel?.runtime === 'ltx2'
-    && /ltx.?2\.3|ltx23/i.test(`${activeVideoModel.id} ${activeVideoModel.name || ''} ${activeVideoModel.repo || ''}`)
-    && detectedAudioReactiveLora);
-  const audioReactiveSelected = savedVideoSettings.backend === 'local'
-    && savedVideoSettings.generationMode === 'audioReactive';
-  const authoredCutDurations = (selected?.scenes || [])
-    .filter((scene) => typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec)
-    .map((scene) => scene.endSec - scene.startSec);
-  const averageCutSec = authoredCutDurations.length > 0
-    ? authoredCutDurations.reduce((sum, duration) => sum + duration, 0) / authoredCutDurations.length
-    : null;
-  const longCutCount = authoredCutDurations.filter((duration) => duration > 10).length;
-
-  // React to terminal SSE frames: record the render on the project, surface the
-  // outcome, and clear the in-flight job. Functional update keys on the captured
-  // projectId so a project switch mid-render can't misattribute the result.
-  useEffect(() => {
-    const frame = renderSse.latest;
-    if (!render || !frame) return;
-    if (frame.type === 'complete') {
-      const result = frame.result || {};
-      setProjects((prev) => prev.map((p) => (p.id === render.projectId
-        ? { ...p, renderHistoryId: result.id || p.renderHistoryId, status: 'complete' } : p)));
-      toast.success('Music video rendered');
-      setRender(null);
-    } else if (frame.type === 'error') {
-      toast.error(frame.error || 'Render failed');
-      setProjects((prev) => prev.map((p) => (p.id === render.projectId ? { ...p, status: 'failed' } : p)));
-      setRender(null);
-    } else if (frame.type === 'canceled' || frame.type === 'cancelled') {
-      toast.info('Render cancelled');
-      setRender(null);
-    }
-  }, [renderSse.latest]);
-  // Stream closed on a NON-terminal frame (server restart mid-render, or the job
-  // was pruned before/after attach so the 404 closes the stream) — recover so the
-  // spinner can't hang. Gating on `!latest` is wrong: `latest` holds the last
-  // *progress* frame once any progress streamed, so it would never fire. Mirror
-  // VideoTimelineEditor: recover whenever the final frame isn't terminal.
-  useEffect(() => {
-    if (render && renderSse.closed && !isTerminalSseFrame(renderSse.latest)) {
-      setRender(null);
-      toast.info('Lost connection to the render — check Media History for the result');
-    }
-  }, [renderSse.closed]);
-
-  const handleRender = () => {
-    if (!selected) return;
-    const projectId = selected.id;
-    renderMusicVideoProject(projectId, { silent: true })
-      .then(({ jobId }) => setRender({ jobId, projectId }))
-      .catch((err) => {
-        // 409 → a render is already in flight for this project; attach to it.
-        if (err?.status === 409 && err?.context?.jobId) {
-          setRender({ jobId: err.context.jobId, projectId });
-          return;
-        }
-        toast.error(err?.message || 'Failed to start render');
-      });
-  };
-
-  const handleCancelRender = () => {
-    if (!render) return;
-    cancelMusicVideoRender(render.jobId, { silent: true }).catch(() => {});
-  };
-
   // Re-point the selected project at a different library track (the detail
   // view's "Change track" picker — previously there was no way to relink a
   // project's audio after creation at all).
@@ -603,55 +301,6 @@ export default function MusicVideo() {
   const saveScene = (sceneId, patch) => {
     updateMusicVideoScene(selected.id, sceneId, patch, { silent: true })
       .catch((err) => toast.error(err?.message || 'Failed to save scene'));
-  };
-
-  // Renderer/model is a project-level production decision, not a transient
-  // browser preference. Save each change before allowing new video jobs so the
-  // job payload and the board's displayed setting cannot disagree.
-  const handleVideoSettingsChange = (patch) => {
-    if (!selected || videoSettingsSaving) return;
-    const projectId = selected.id;
-    const previous = selected.videoSettings;
-    const next = { ...savedVideoSettings, ...patch };
-    setProjects((prev) => prev.map((project) => (project.id === projectId
-      ? { ...project, videoSettings: next }
-      : project)));
-    setVideoSettingsSaving(true);
-    updateMusicVideoProject(projectId, { videoSettings: patch }, { silent: true })
-      .then((project) => {
-        setProjects((prev) => prev.map((current) => (current.id === projectId
-          ? { ...current, videoSettings: project.videoSettings, updatedAt: project.updatedAt }
-          : current)));
-      })
-      .catch((err) => {
-        setProjects((prev) => prev.map((project) => (project.id === projectId
-          ? { ...project, videoSettings: previous }
-          : project)));
-        toast.error(err?.message || 'Failed to save video renderer');
-      })
-      .finally(() => setVideoSettingsSaving(false));
-  };
-
-  // #3231 Phase 4 — per-project frame-render pin (`imageMode`/`imageModelId`),
-  // the image-side sibling of the video renderer select above. Scene
-  // reference-frame renders send no explicit mode, so the server resolves this
-  // record pin directly (imageGen/prepareParams) — no client seeding needed.
-  // Optimistic-local + silent PATCH, rollback + toast on failure.
-  const handleFramePinChange = ({ imageMode, imageModelId }) => {
-    if (!selected) return;
-    const projectId = selected.id;
-    const previous = { imageMode: selected.imageMode ?? null, imageModelId: selected.imageModelId ?? null };
-    setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, imageMode, imageModelId } : p)));
-    updateMusicVideoProject(projectId, { imageMode, imageModelId }, { silent: true })
-      .then((project) => {
-        setProjects((prev) => prev.map((current) => (current.id === projectId
-          ? { ...current, imageMode: project.imageMode ?? null, imageModelId: project.imageModelId ?? null, updatedAt: project.updatedAt }
-          : current)));
-      })
-      .catch((err) => {
-        setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, ...previous } : p)));
-        toast.error(err?.message || 'Failed to save frame renderer');
-      });
   };
 
   // Project-level concept/style (issue #3168) — optimistic-local + silent-PATCH on
@@ -700,213 +349,27 @@ export default function MusicVideo() {
       .catch((err) => toast.error(err?.message || 'Failed to reorder'));
   };
 
-  // The image prompt for a scene's reference frame: its frame prompt (or the
-  // shot prompt as a fallback) suffixed with the project's global concept style.
-  const buildFramePrompt = (scene) => {
-    const base = (scene.framePrompt?.trim() || scene.prompt?.trim() || '');
-    const style = selected?.concept?.style?.trim();
-    return [base, style].filter(Boolean).join(', ');
-  };
-
-  // Render a still reference frame for one scene from its frame prompt. The
-  // async local/Codex lanes ride the media-job queue and are attached durably
-  // server-side (musicVideoSceneImageHook → music-video:scene-image); we record
-  // the job id and let the terminal image-gen:completed/failed event clear the
-  // spinner (so a failed render doesn't strand the button). The synchronous
-  // external SD-API lane returns a finished filename inline — attach it here.
-  const handleGenerateFrame = (scene) => {
-    const prompt = buildFramePrompt(scene);
-    if (!prompt) { toast.error('Add a frame prompt or shot prompt first'); return; }
-    frameLane.startScene(scene.sceneId);
-    generateImage({ prompt, musicVideo: { projectId: selected.id, sceneId: scene.sceneId } }, { silent: true })
-      .then((res) => {
-        const stillRunning = res?.status === 'queued' || res?.status === 'running';
-        if (stillRunning) {
-          // async lane: correlate the job so its terminal event clears the spinner
-          // (and the durable scene-image event lands the generated frame). trackJob
-          // reconciles a terminal event that raced ahead of this .then (fast fail).
-          const jobId = res?.jobId || res?.generationId;
-          if (!jobId) { frameLane.clearScene(scene.sceneId); return; } // no id to track → don't strand the button
-          frameLane.trackJob(jobId, scene.sceneId);
-          return;
-        }
-        const filename = res?.filename;
-        if (filename) {
-          applyReferenceImage(selected.id, scene.sceneId, filename);
-          updateMusicVideoScene(selected.id, scene.sceneId, { referenceImageId: filename }, { silent: true })
-            .catch((err) => toast.error(err?.message || 'Failed to attach frame'));
-        }
-        frameLane.clearScene(scene.sceneId);
-      })
-      .catch((err) => {
-        toast.error(err?.message || 'Frame generation failed');
-        frameLane.clearScene(scene.sceneId);
-      });
-  };
-
-  // The i2v prompt for a scene's clip: its shot prompt (or the frame prompt as a
-  // fallback) suffixed with the project's global concept style. The reference
-  // frame already fixes the look; this prompt guides the motion.
-  const buildShotPrompt = (scene) => {
-    const base = (scene.prompt?.trim() || scene.framePrompt?.trim() || '');
-    const style = selected?.concept?.style?.trim();
-    return [base, style].filter(Boolean).join(', ');
-  };
-
-  // Generate this scene's video from its chosen reference frame via the video
-  // route's image (i2v) mode. The render always rides the media-job queue, so we
-  // correlate the returned job id and let the terminal video-gen:completed/failed
-  // event clear the spinner; the finished clip's history id lands durably via
-  // music-video:scene-video (musicVideoSceneVideoHook). generateVideo() throws on
-  // a non-OK response, so the catch owns the only error toast (no double-toast).
-  const handleGenerateVideo = (scene) => {
-    if (!scene.referenceImageId) { toast.error('Generate a reference frame first'); return; }
-    const basePrompt = buildShotPrompt(scene);
-    if (!basePrompt) { toast.error('Add a shot prompt first'); return; }
-    const audioReactive = audioReactiveSelected;
-    if (audioReactive && !audioReactiveReady) {
-      toast.error('Audio-reactive generation requires an installed LTX-2.3 audio-reactive LoRA and an LTX-2.3 local model');
-      return;
-    }
-    const prompt = audioReactive
-      ? `${basePrompt}. ${AUDIO_REACTIVE_PERFORMANCE_GUARD}`
-      : basePrompt;
-    videoLane.startScene(scene.sceneId);
-    generateVideo({
-      prompt,
-      ...(savedVideoSettings.backend ? { backend: savedVideoSettings.backend } : {}),
-      ...(savedVideoSettings.backend === 'grok'
-        ? { grokDuration: savedVideoSettings.grokDuration }
-        : savedVideoSettings.backend === 'local'
-          ? { modelId: savedVideoSettings.modelId || undefined, disableAudio: true }
-          // A named model is local-only machinery at the server boundary and
-          // would force the resolver off a Grok install default. Keep the
-          // shared pin saved, but omit it until this peer chooses Local.
-          : { grokDuration: savedVideoSettings.grokDuration, disableAudio: true }),
-      mode: audioReactive ? 'a2v' : 'image',
-      sourceImageFile: scene.referenceImageId,
-      ...(audioReactive ? {
-        audioStartSec: scene.startSec || 0,
-        loraFilenames: [detectedAudioReactiveLora.filename],
-        loraScales: [savedVideoSettings.audioReactiveScale],
-      } : {}),
-      musicVideo: JSON.stringify({ projectId: selected.id, sceneId: scene.sceneId }),
-    })
-      .then((res) => {
-        const jobId = res?.jobId || res?.generationId;
-        if (!jobId) { videoLane.clearScene(scene.sceneId); return; } // no id to track → don't strand the button
-        // trackJob reconciles a terminal event that raced ahead of this .then.
-        videoLane.trackJob(jobId, scene.sceneId);
-      })
-      .catch((err) => {
-        toast.error(err?.message || 'Scene video generation failed');
-        videoLane.clearScene(scene.sceneId);
-      });
-  };
-
-  // Selective native continuation for ltx2 models. It replaces only this
-  // scene's attached clip when the continuation finishes, preserving the
-  // reference frame and authored timeline span. Passing sourceImageFile keeps
-  // the music-video route's fail-closed reference-frame contract intact while
-  // extendFromVideoId supplies the actual native continuation source.
-  const handleContinueVideo = (scene) => {
-    if (!scene.videoHistoryId || !scene.referenceImageId) return;
-    if (savedVideoSettings.backend !== 'local' || activeVideoModel?.runtime !== 'ltx2') {
-      toast.error('Choose an LTX local model with native continuation support');
-      return;
-    }
-    const prompt = buildShotPrompt(scene);
-    videoLane.startScene(scene.sceneId);
-    generateVideo({
-      prompt,
-      backend: 'local',
-      modelId: effectiveVideoModelId || undefined,
-      disableAudio: true,
-      mode: 'extend',
-      extendFromVideoId: scene.videoHistoryId,
-      sourceImageFile: scene.referenceImageId,
-      musicVideo: JSON.stringify({ projectId: selected.id, sceneId: scene.sceneId }),
-    })
-      .then((res) => {
-        const jobId = res?.jobId || res?.generationId;
-        if (!jobId) { videoLane.clearScene(scene.sceneId); return; }
-        videoLane.trackJob(jobId, scene.sceneId);
-      })
-      .catch((err) => {
-        toast.error(err?.message || 'Shot continuation failed');
-        videoLane.clearScene(scene.sceneId);
-      });
-  };
-
-  const handleGenerateMissingFrames = () => {
-    const scenes = (selected?.scenes || []).filter((scene) =>
-      !scene.referenceImageId && !genScenes[scene.sceneId] && buildFramePrompt(scene));
-    if (scenes.length === 0) {
-      toast.info('Every scene already has a reference frame');
-      return;
-    }
-    scenes.forEach(handleGenerateFrame);
-  };
-
-  const handleGenerateMissingVideos = () => {
-    const scenes = (selected?.scenes || []).filter((scene) =>
-      scene.referenceImageId && !scene.videoHistoryId && !genVideoScenes[scene.sceneId] && buildShotPrompt(scene));
-    if (scenes.length === 0) {
-      toast.info(referenceFrameCount < sceneCount
-        ? 'Generate every reference frame before generating the remaining videos'
-        : 'Every scene already has a video');
-      return;
-    }
-    scenes.forEach(handleGenerateVideo);
-  };
+  const canContinueShot = videoSettings.settings.backend === 'local'
+    && videoSettings.settings.generationMode === 'image'
+    && videoSettings.activeModel?.runtime === 'ltx2';
+  const videoBlocked = videoSettings.audioReactiveSelected && !videoSettings.audioReactiveReady;
 
   return (
     <div className="space-y-4">
-      <MidiInstallModal {...midiJob.installGate} />
-      <MidiGatedModal {...midiJob.gatedGate} />
+      <MidiInstallModal {...midi.installGate} />
+      <MidiGatedModal {...midi.gatedGate} />
       <PageHeader icon={Film} title="Music Video" subtitle="Director-controlled, beat-aware music videos" />
 
-      <Drawer
+      <CreateProjectDrawer
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        title="New music video"
-        subtitle="Choose the audio now or attach it later"
-      >
-        <form onSubmit={handleCreate} className="space-y-3">
-            <label htmlFor="mv-name" className="block text-sm font-medium">New project</label>
-            <input
-              id="mv-name" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              placeholder="Project name" autoFocus
-              className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
-            />
-            <label htmlFor="mv-mode" className="block text-xs text-port-text-muted">Mode</label>
-            <select id="mv-mode" value={form.mode} onChange={(e) => setForm((f) => ({ ...f, mode: e.target.value }))}
-              className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm">
-              {MODES.map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
-            <label htmlFor="mv-track" className="block text-xs text-port-text-muted">Track (optional)</label>
-            <select id="mv-track" value={form.trackId} onChange={(e) => setForm((f) => ({ ...f, trackId: e.target.value }))}
-              disabled={ytImportCreate.active}
-              className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm disabled:opacity-50">
-              <option value="">— no track —</option>
-              {tracks.map((t) => <option key={t.id} value={t.id}>{t.title || t.id}</option>)}
-            </select>
-            <label htmlFor="mv-yt-create" className="block text-xs text-port-text-muted">…or import audio from YouTube</label>
-            <div className="flex gap-1">
-              <YoutubeImportControls
-                id="mv-yt-create" url={ytUrlCreate} onUrlChange={(e) => setYtUrlCreate(e.target.value)}
-                job={ytImportCreate} onStart={() => ytImportCreate.start(ytUrlCreate)}
-              />
-            </div>
-            {form.trackId && !ytImportCreate.active && (
-              <p className="text-xs text-port-text-muted">Track set: {trackName(form.trackId)}</p>
-            )}
-            <button type="submit" disabled={ytImportCreate.active}
-              className="w-full flex items-center justify-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
-              <Plus size={16} /> Create
-            </button>
-        </form>
-      </Drawer>
+        form={form}
+        onFormChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
+        tracks={tracks}
+        trackName={trackName}
+        youtube={youtube}
+        onSubmit={handleCreate}
+      />
 
       <div className="bg-port-card border border-port-border rounded-lg p-3 flex flex-wrap items-center gap-2">
         <label htmlFor="mv-project-picker" className="text-xs text-port-text-muted">Project</label>
@@ -914,7 +377,7 @@ export default function MusicVideo() {
           id="mv-project-picker"
           value={selectedId || ''}
           onChange={(e) => selectProject(e.target.value || null)}
-          disabled={loading || ytImportEdit.active}
+          disabled={loading || youtube.editJob.active}
           className="min-w-0 flex-1 sm:max-w-md bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm disabled:opacity-50"
         >
           <option value="">{loading ? 'Loading projects…' : 'Select a project…'}</option>
@@ -944,549 +407,123 @@ export default function MusicVideo() {
       </div>
 
       <div>
-          {!selected && !loading && routeProjectId && (
-            <p className="text-sm text-port-text-muted">
-              Project not found — it may have been deleted.{' '}
-              <button onClick={() => navigate('/music-video')} className="text-port-accent underline">Back to projects</button>
-            </p>
-          )}
-          {!selected && (loading || !routeProjectId) && (
-            <div className="bg-port-card border border-port-border rounded-lg p-6 text-center">
-              <p className="text-sm text-port-text-muted">Select a project above or create one to open its scene board.</p>
-            </div>
-          )}
-          {selected && (
-            <div className="space-y-3">
-              <div className="bg-port-card border border-port-border rounded-lg p-3">
-                <div className="flex items-start justify-between gap-2 flex-wrap">
-                  <h2 className="text-lg font-semibold shrink-0">{selected.name}</h2>
-                  <div className="min-w-0 flex flex-1 flex-wrap items-center justify-end gap-2">
-                    <button onClick={handleAnalyze} disabled={analyzing || (!selected.trackId && !selected.uploadedAudioFilename)}
-                      title={!selected.trackId && !selected.uploadedAudioFilename ? 'Link a track first' : 'Analyze beat grid'}
-                      className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
-                      <Activity size={15} /> {analyzing ? 'Analyzing…' : 'Analyze'}
-                    </button>
-                    {midiTargetsSelected ? (
-                      <button onClick={midiJob.cancel} title="Cancel MIDI transcription"
-                        className="flex items-center gap-1 bg-port-warning/20 text-port-warning border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0">
-                        <Activity size={15} className="animate-spin" /> {midiJob.stageLabel} · Cancel
-                      </button>
-                    ) : (
-                      <>
-                        <select value={midiModel} onChange={(e) => setMidiModel(e.target.value)}
-                          disabled={midiJob.active}
-                          aria-label="MuScriptor model size"
-                          title="MuScriptor model size — larger is higher quality but slower and a bigger first-use download"
-                          className="bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm capitalize disabled:opacity-50">
-                          {MUSCRIPTOR_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
-                        </select>
-                        <button onClick={() => midiJob.start(selected.id)}
-                          disabled={midiJob.active || (!selected.trackId && !selected.uploadedAudioFilename)}
-                          title={!selected.trackId && !selected.uploadedAudioFilename
-                            ? 'Link a track first'
-                            : `Transcribe the track to MIDI with MuScriptor (${midiModel} model, local — installs automatically on first use)`}
-                          className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
-                          <Music size={15} /> MIDI
-                        </button>
-                      </>
-                    )}
-                    <button onClick={handlePlan} disabled={planning || !selected.audioAnalysis}
-                      title={!selected.audioAnalysis ? 'Analyze the track first' : 'AI-propose a scene per song section'}
-                      className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
-                      <Wand2 size={15} /> {planning ? 'Planning…' : 'AI Plan'}
-                    </button>
-                    <button onClick={handleAutoArrange}
-                      disabled={arranging || !selected.audioAnalysis || (selected.scenes || []).length === 0}
-                      title={!selected.audioAnalysis
-                        ? 'Analyze the track first'
-                        : (selected.scenes || []).length === 0
-                          ? 'Add scenes first'
-                          : 'Distribute scenes across song sections by energy'}
-                      className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
-                      <Wand2 size={15} /> {arranging ? 'Arranging…' : 'Auto-arrange'}
-                    </button>
-                    <RecordRenderPinRow
-                      idPrefix="mv-frame-pin"
-                      label="Frames"
-                      imageMode={selected.imageMode ?? null}
-                      imageModelId={selected.imageModelId ?? null}
-                      onChange={handleFramePinChange}
-                    />
-                    <label htmlFor="mv-video-backend" className="sr-only">Scene video renderer</label>
-                    <select
-                      id="mv-video-backend"
-                      value={savedVideoSettings.backend}
-                      onChange={(e) => handleVideoSettingsChange({ backend: e.target.value || null })}
-                      disabled={videoSettingsSaving || Object.keys(genVideoScenes).length > 0}
-                      title="Saved renderer for this project's scene videos"
-                      className="bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50"
-                    >
-                      <option value="">Install default</option>
-                      <option value="local">Local video</option>
-                      <option value="grok">Grok video</option>
-                    </select>
-                    {savedVideoSettings.backend === 'local' && (
-                      <>
-                        <label htmlFor="mv-generation-mode" className="sr-only">Scene generation mode</label>
-                        <select
-                          id="mv-generation-mode"
-                          value={savedVideoSettings.generationMode}
-                          onChange={(e) => {
-                            const generationMode = e.target.value;
-                            const compatibleModel = audioReactiveModels.find((model) => model.id === effectiveVideoModelId)
-                              || audioReactiveModels[0];
-                            handleVideoSettingsChange({
-                              generationMode,
-                              ...(generationMode === 'audioReactive' && detectedAudioReactiveLora
-                                ? { audioReactiveLora: detectedAudioReactiveLora.filename }
-                                : {}),
-                              ...(generationMode === 'audioReactive' && compatibleModel
-                                ? { modelId: compatibleModel.id }
-                                : {}),
-                            });
-                          }}
-                          disabled={videoSettingsSaving || Object.keys(genVideoScenes).length > 0}
-                          title="Prompt motion uses the reference frame; audio reactive also conditions motion on this scene's song segment"
-                          className="bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50"
-                        >
-                          <option value="image">Prompt motion</option>
-                          <option value="audioReactive" disabled={!detectedAudioReactiveLora}>Audio reactive</option>
-                        </select>
-                        <label htmlFor="mv-video-model" className="sr-only">Local video model</label>
-                        <select
-                          id="mv-video-model"
-                          value={savedVideoSettings.modelId}
-                          onChange={(e) => handleVideoSettingsChange({ modelId: e.target.value })}
-                          disabled={videoSettingsSaving || Object.keys(genVideoScenes).length > 0 || videoModels.length === 0}
-                          title="Saved local image-to-video model for this project"
-                          className="max-w-[240px] bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50"
-                        >
-                          <option value="">
-                            {defaultVideoModel
-                              ? `Local default · ${videoModels.find((model) => model.id === defaultVideoModel)?.name || defaultVideoModel}`
-                              : 'Local default model'}
-                          </option>
-                          {(audioReactiveSelected ? audioReactiveModels : videoModels).map((model) => (
-                            <option key={model.id} value={model.id}>{model.name || model.id}</option>
-                          ))}
-                        </select>
-                        {audioReactiveSelected && (
-                          <>
-                            <label htmlFor="mv-audio-reactive-lora" className="sr-only">Audio reactive LoRA</label>
-                            <select
-                              id="mv-audio-reactive-lora"
-                              value={savedVideoSettings.audioReactiveLora || detectedAudioReactiveLora?.filename || ''}
-                              onChange={(e) => handleVideoSettingsChange({ audioReactiveLora: e.target.value })}
-                              disabled={videoSettingsSaving || Object.keys(genVideoScenes).length > 0 || audioReactiveLoras.length === 0}
-                              title="Saved audio-reactive LoRA version for this project"
-                              className="max-w-[220px] bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50"
-                            >
-                              {audioReactiveLoras.length === 0 && <option value="">No audio-reactive LoRA installed</option>}
-                              {audioReactiveLoras.map((lora) => (
-                                <option key={lora.filename} value={lora.filename}>
-                                  {lora.name || lora.filename}
-                                </option>
-                              ))}
-                            </select>
-                            <label htmlFor="mv-audio-reactive-scale" className="sr-only">Audio reactive LoRA strength</label>
-                            <select
-                              id="mv-audio-reactive-scale"
-                              value={savedVideoSettings.audioReactiveScale}
-                              onChange={(e) => handleVideoSettingsChange({ audioReactiveScale: Number(e.target.value) })}
-                              disabled={videoSettingsSaving || Object.keys(genVideoScenes).length > 0}
-                              title="How strongly the song drives visible motion"
-                              className="bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50"
-                            >
-                              <option value={1}>Reactive 1.0×</option>
-                              <option value={1.2}>Reactive 1.2×</option>
-                              <option value={1.5}>Reactive 1.5×</option>
-                            </select>
-                            <span
-                              className={`text-[10px] px-1.5 py-0.5 rounded ${
-                                audioReactiveReady
-                                  ? 'bg-port-success/20 text-port-success'
-                                  : (videoModelsLoading ? 'bg-port-warning/20 text-port-warning' : 'bg-port-error/20 text-port-error')
-                              }`}
-                              title={detectedAudioReactiveLora?.filename || 'Audio-reactive LoRA not installed'}
-                            >
-                              {audioReactiveReady
-                                ? 'song-conditioned · no vocals'
-                                : (videoModelsLoading ? 'checking local runtime…' : 'audio-reactive unavailable')}
-                            </span>
-                          </>
-                        )}
-                      </>
-                    )}
-                    {savedVideoSettings.backend === 'grok' && (
-                      <>
-                        <label htmlFor="mv-grok-duration" className="sr-only">Grok scene clip duration</label>
-                        <select
-                          id="mv-grok-duration"
-                          value={savedVideoSettings.grokDuration}
-                          onChange={(e) => handleVideoSettingsChange({ grokDuration: Number(e.target.value) })}
-                          disabled={videoSettingsSaving || Object.keys(genVideoScenes).length > 0}
-                          title="Native duration for each Grok scene clip"
-                          className="bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50"
-                        >
-                          {GROK_VIDEO_DURATIONS.map((duration) => (
-                            <option key={duration} value={duration}>{duration}s clips</option>
-                          ))}
-                        </select>
-                      </>
-                    )}
-                    <button
-                      onClick={handleGenerateMissingFrames}
-                      disabled={sceneCount === 0 || missingFrameCount === 0 || Object.keys(genScenes).length > 0}
-                      title={missingFrameCount > 0 ? `Generate ${missingFrameCount} missing reference frame${missingFrameCount === 1 ? '' : 's'}` : 'Every scene has a reference frame'}
-                      className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50"
-                    >
-                      <ImageIcon size={15} /> Frames {referenceFrameCount}/{sceneCount}
-                    </button>
-                    <button
-                      onClick={handleGenerateMissingVideos}
-                      disabled={videoSettingsSaving || sceneCount === 0 || missingVideoCount === 0 || referenceFrameCount !== sceneCount || Object.keys(genVideoScenes).length > 0 || (audioReactiveSelected && !audioReactiveReady)}
-                      title={referenceFrameCount !== sceneCount
-                        ? 'Generate every reference frame first'
-                        : (missingVideoCount > 0 ? `Generate ${missingVideoCount} missing scene video${missingVideoCount === 1 ? '' : 's'}` : 'Every scene has a video')}
-                      className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50"
-                    >
-                      <Video size={15} /> Videos {renderableSceneCount}/{sceneCount}
-                    </button>
-                    {(uniqueReferenceFrameCount < referenceFrameCount || uniqueVideoCount < renderableSceneCount) && (
-                      <span
-                        className="text-[10px] px-2 py-1.5 rounded border border-port-warning/40 bg-port-warning/10 text-port-warning"
-                        title={`${referenceFrameCount - uniqueReferenceFrameCount} scene${referenceFrameCount - uniqueReferenceFrameCount === 1 ? '' : 's'} reuse a reference frame; ${renderableSceneCount - uniqueVideoCount} reuse a video clip`}
-                      >
-                        Repetition: {uniqueReferenceFrameCount} unique frames · {uniqueVideoCount} unique clips
-                      </span>
-                    )}
-                    <button
-                      onClick={handleClone}
-                      disabled={cloning}
-                      title={`Create an editable v${(selected.version || 1) + 1}; keep scene media attached and clear the final render`}
-                      className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50"
-                    >
-                      <Copy size={15} /> {cloning ? 'Forking…' : `Fork v${(selected.version || 1) + 1}`}
-                    </button>
-                    {render ? (
-                      <button onClick={handleCancelRender} title="Cancel render"
-                        className="flex items-center gap-1 bg-port-warning/20 text-port-warning border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0">
-                        <Activity size={15} className="animate-spin" /> {renderProgress}% · Cancel
-                      </button>
-                    ) : (
-                      <button onClick={handleRender} disabled={sceneCount === 0 || renderableSceneCount !== sceneCount}
-                        title={sceneCount === 0
-                          ? 'Add scenes first'
-                          : renderableSceneCount !== sceneCount
-                            ? `Generate videos for all ${sceneCount} scenes first`
-                            : 'Render the complete music video over the track'}
-                        className="flex items-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
-                        <Film size={15} /> Render final
-                      </button>
-                    )}
-                    <button onClick={() => handleDelete(selected.id)} title="Delete project"
-                      className="flex items-center gap-1 text-port-error border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0">
-                      <Trash2 size={15} />
-                    </button>
-                  </div>
-                </div>
-                {/* Concept & style — optional global direction for the whole video,
-                    set before "AI Plan" (see commitConcept above for what reads it). */}
-                <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <div>
-                    <label htmlFor="mv-concept" className="block text-xs text-port-text-muted mb-1">Concept</label>
-                    <textarea
-                      id="mv-concept"
-                      value={conceptDraft.value}
-                      rows={2}
-                      maxLength={8000}
-                      onChange={conceptDraft.onChange}
-                      onBlur={conceptDraft.onBlur}
-                      placeholder="What is this video about — story, theme, or narrative thread for the AI plan to build on."
-                      className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="mv-style" className="block text-xs text-port-text-muted mb-1">Visual style</label>
-                    <textarea
-                      id="mv-style"
-                      value={styleDraft.value}
-                      rows={2}
-                      maxLength={2000}
-                      onChange={styleDraft.onChange}
-                      onBlur={styleDraft.onBlur}
-                      placeholder="Art style, references, palette, mood — appended to every generated frame and shot prompt."
-                      className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
-                    />
-                  </div>
-                </div>
-                {/* Track picker — pick an existing library track or import fresh audio
-                    from YouTube. Re-selecting either PATCHes the project's trackId. */}
-                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                  <span className="text-port-text-muted flex items-center gap-1"><Music size={12} /> {trackName(selected.trackId)}</span>
-                  <select value={selected.trackId || ''} aria-label="Change track"
-                    onChange={(e) => e.target.value && handleChangeTrack(e.target.value)}
-                    disabled={ytImportEdit.active || renderTargetsSelected || midiTargetsSelected}
-                    title={renderTargetsSelected
-                      ? 'Wait for the current render to finish before changing the track'
-                      : midiTargetsSelected
-                        ? 'Wait for the MIDI transcription to finish before changing the track'
-                        : undefined}
-                    className="bg-port-bg border border-port-border rounded px-1.5 py-1 disabled:opacity-50">
-                    <option value="">Change track…</option>
-                    {tracks.map((t) => <option key={t.id} value={t.id}>{t.title || t.id}</option>)}
-                  </select>
-                  <YoutubeImportControls
-                    url={ytUrlEdit} onUrlChange={(e) => setYtUrlEdit(e.target.value)}
-                    job={ytImportEdit} disabled={renderTargetsSelected || midiTargetsSelected}
-                    onStart={() => {
-                      if (renderTargetsSelected) {
-                        toast.error('Wait for the current render to finish before changing the track');
-                        return;
-                      }
-                      if (midiTargetsSelected) {
-                        toast.error('Wait for the MIDI transcription to finish before changing the track');
-                        return;
-                      }
-                      setYtEditProjectId(selected.id);
-                      ytImportEdit.start(ytUrlEdit, selected.id);
-                    }}
-                    compact
+        {!selected && !loading && routeProjectId && (
+          <p className="text-sm text-port-text-muted">
+            Project not found — it may have been deleted.{' '}
+            <button onClick={() => navigate('/music-video')} className="text-port-accent underline">Back to projects</button>
+          </p>
+        )}
+        {!selected && (loading || !routeProjectId) && (
+          <div className="bg-port-card border border-port-border rounded-lg p-6 text-center">
+            <p className="text-sm text-port-text-muted">Select a project above or create one to open its scene board.</p>
+          </div>
+        )}
+        {selected && (
+          <div className="space-y-3">
+            <div className="bg-port-card border border-port-border rounded-lg p-3">
+              <ProjectToolbar
+                project={selected}
+                midi={midi}
+                midiBound={midiTargetsSelected}
+                videoSettings={videoSettings}
+                sceneMedia={sceneMedia}
+                renderJob={renderJob}
+                busy={{ analyzing, planning, arranging, cloning }}
+                onAnalyze={handleAnalyze}
+                onPlan={handlePlan}
+                onAutoArrange={handleAutoArrange}
+                onClone={handleClone}
+                onDelete={() => handleDelete(selected.id)}
+              />
+              {/* Concept & style — optional global direction for the whole video,
+                  set before "AI Plan" (see commitConcept above for what reads it). */}
+              <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label htmlFor="mv-concept" className="block text-xs text-port-text-muted mb-1">Concept</label>
+                  <textarea
+                    id="mv-concept"
+                    value={conceptDraft.value}
+                    rows={2}
+                    maxLength={8000}
+                    onChange={conceptDraft.onChange}
+                    onBlur={conceptDraft.onBlur}
+                    placeholder="What is this video about — story, theme, or narrative thread for the AI plan to build on."
+                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
                   />
                 </div>
-                {/* Preview + download the project's master audio track. Both act on
-                    the resolved data/music/ file (linked track or uploaded audio). */}
-                {(() => {
-                  const audioFile = projectAudioFilename(selected);
-                  if (!audioFile) return null;
-                  const audioUrl = trackAudioUrl(audioFile);
-                  const midiFile = selected.midiTranscription?.filename;
-                  return (
-                    <div className="mt-2 flex flex-col gap-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <audio src={audioUrl} controls preload="metadata" className="h-8 max-w-full" aria-label="Preview track audio" />
-                        <a href={audioUrl} download={audioFile}
-                          title="Download the audio track"
-                          className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs hover:bg-port-border/40">
-                          <Download size={13} /> Download audio
-                        </a>
-                      </div>
-                      {/* The visualization panel owns the MIDI download button, so no
-                          separate Download-MIDI anchor here (#2477). Served from the
-                          music dir (same static route as the master audio) so the
-                          federated .mid resolves on peers too. */}
-                      {midiFile && (
-                        <MidiVisualization
-                          url={trackAudioUrl(midiFile)}
-                          filename={midiFile}
-                          model={selected.midiTranscription.model}
-                        />
-                      )}
-                    </div>
-                  );
-                })()}
-                {render && (
-                  <div className="mt-2">
-                    <div className="h-1.5 bg-port-bg rounded overflow-hidden">
-                      <div className="h-full bg-port-accent transition-all" style={{ width: `${renderProgress}%` }} />
-                    </div>
-                    <p className="text-xs text-port-text-muted mt-1">Rendering music video — {renderProgress}%</p>
-                  </div>
-                )}
-                {!render && selected.renderHistoryId && (
-                  <div className="mt-3 border border-port-success/40 bg-port-success/5 rounded-lg p-3 space-y-2">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-sm font-medium flex items-center gap-1.5">
-                        <Film size={15} className="text-port-success" /> Final music video
-                      </span>
-                      <div className="flex items-center gap-2 text-xs">
-                        {finalVideo.src && (
-                          <a
-                            href={finalVideo.src}
-                            download
-                            className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 hover:bg-port-border/40"
-                          >
-                            <Download size={13} /> Download MP4
-                          </a>
-                        )}
-                        <a href={`/media/history?preview=${encodeURIComponent(`video:${selected.renderHistoryId}`)}`}
-                          className="text-port-accent">Open in Media History →</a>
-                      </div>
-                    </div>
-                    {finalVideo.resolving && <p className="text-xs text-port-text-muted">Loading final video…</p>}
-                    {finalVideo.src && (
-                      // aspect-video reserves the box before the video's
-                      // intrinsic dimensions resolve, so the actions above it
-                      // don't jump — same as the scene thumbnails below. The
-                      // render inherits its first scene clip's dimensions, which
-                      // are not always 16:9, so object-contain is explicit: a
-                      // 3:2 cut letterboxes inside the reserved box (against the
-                      // player's own black) instead of being stretched to fill it.
-                      <video
-                        src={finalVideo.src}
-                        controls
-                        playsInline
-                        preload="metadata"
-                        className="w-full aspect-video max-h-[65vh] object-contain rounded bg-black border border-port-border"
-                        aria-label="Play final music video"
-                      />
-                    )}
-                  </div>
-                )}
-                {selected.audioAnalysis && (
-                  <div className="text-xs text-port-text-muted mt-2 flex flex-wrap gap-x-4 gap-y-1">
-                    <span>Tempo: {selected.audioAnalysis.bpm ? `${selected.audioAnalysis.bpm} BPM` : '—'}</span>
-                    <span>Duration: {formatDurationSec(selected.audioAnalysis.durationSec)}</span>
-                    <span>Beats: {selected.audioAnalysis.beats?.length || 0}</span>
-                    <span>Sections: {selected.audioAnalysis.sections?.length || 0}</span>
-                    {averageCutSec != null && <span>Average cut: {averageCutSec.toFixed(1)}s</span>}
-                  </div>
-                )}
-                {longCutCount > 0 && (
-                  <p className="mt-2 rounded border border-port-warning/40 bg-port-warning/10 px-2 py-1.5 text-xs text-port-warning">
-                    {longCutCount} authored cut{longCutCount === 1 ? ' is' : 's are'} longer than 10s.
-                    Add more shots, then Auto-arrange: higher-energy sections receive shorter cuts and every boundary stays music-led.
-                  </p>
-                )}
-                {selected.audioAnalysis && !selected.audioAnalysis.bpm && (
-                  <div className="mt-2 flex flex-wrap items-end gap-2 text-xs bg-port-bg border border-port-border rounded-lg p-2">
-                    <span className="text-port-text-muted w-full">No tempo detected — set it by ear to unlock the beat grid:</span>
-                    <div>
-                      <label htmlFor="mv-manual-bpm" className="block text-port-text-muted mb-1">BPM</label>
-                      <input id="mv-manual-bpm" type="number" min={20} max={300} step={1} value={manualBpm}
-                        onChange={(e) => setManualBpm(e.target.value)} placeholder="120"
-                        className="w-16 bg-port-card border border-port-border rounded px-1.5 py-1" />
-                    </div>
-                    <button onClick={handleTapTempo} type="button"
-                      className="bg-port-card border border-port-border rounded px-2 py-1.5 min-h-[32px] hover:bg-port-border/40">
-                      Tap tempo
-                    </button>
-                    <div>
-                      <label htmlFor="mv-manual-offset" className="block text-port-text-muted mb-1">First downbeat (s)</label>
-                      <input id="mv-manual-offset" type="number" min={0} max={600} step={0.1} value={manualOffset}
-                        onChange={(e) => setManualOffset(e.target.value)}
-                        className="w-20 bg-port-card border border-port-border rounded px-1.5 py-1" />
-                    </div>
-                    <button onClick={handleSetManualTempo} disabled={settingManualTempo || !manualBpm}
-                      className="bg-port-accent text-white rounded px-2 py-1.5 min-h-[32px] disabled:opacity-50">
-                      {settingManualTempo ? 'Setting…' : 'Set tempo'}
-                    </button>
-                  </div>
-                )}
+                <div>
+                  <label htmlFor="mv-style" className="block text-xs text-port-text-muted mb-1">Visual style</label>
+                  <textarea
+                    id="mv-style"
+                    value={styleDraft.value}
+                    rows={2}
+                    maxLength={2000}
+                    onChange={styleDraft.onChange}
+                    onBlur={styleDraft.onBlur}
+                    placeholder="Art style, references, palette, mood — appended to every generated frame and shot prompt."
+                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
+                  />
+                </div>
               </div>
-
-              {selected.audioAnalysis && (selected.scenes || []).length > 0 && (
-                <BeatTimeline audioAnalysis={selected.audioAnalysis} scenes={selected.scenes} onCommit={commitSceneTiming} />
-              )}
-
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-medium">Scene board</h3>
-                <button onClick={handleAddScene} className="flex items-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0">
-                  <Plus size={15} /> Add scene
-                </button>
-              </div>
-
-              {(selected.scenes || []).length === 0 && <p className="text-sm text-port-text-muted">No scenes yet — add one to start the board.</p>}
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                {(selected.scenes || []).map((scene, idx) => (
-                  <div key={scene.sceneId} className="bg-port-card border border-port-border rounded-lg p-3 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="text-sm font-medium truncate">
-                          {scene.sectionLabel || scene.label || `Scene ${scene.order + 1}`}
-                        </div>
-                        <div className="text-[11px] text-port-text-muted">
-                          #{scene.order + 1}
-                          {typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
-                            ? ` · ${formatDurationSec(scene.endSec - scene.startSec)} · ${formatDurationSec(scene.startSec)}–${formatDurationSec(scene.endSec)}`
-                            : ''}
-                          {scene.referenceImageId ? ' · frame ready' : ''}
-                          {scene.videoHistoryId ? ' · video ready' : ''}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <button onClick={() => moveScene(idx, -1)} disabled={idx === 0} aria-label="Move up" className="p-1 disabled:opacity-30" title="Move up"><ArrowUp size={14} /></button>
-                        <button onClick={() => moveScene(idx, 1)} disabled={idx === selected.scenes.length - 1} aria-label="Move down" className="p-1 disabled:opacity-30" title="Move down"><ArrowDown size={14} /></button>
-                        <button onClick={() => handleDeleteScene(scene.sceneId)} aria-label="Delete scene" className="p-1 text-port-error" title="Delete scene"><Trash2 size={14} /></button>
-                      </div>
-                    </div>
-                    <textarea
-                      value={scene.prompt || ''} rows={2}
-                      onChange={(e) => editSceneLocal(scene.sceneId, { prompt: e.target.value })}
-                      onBlur={(e) => saveScene(scene.sceneId, { prompt: e.target.value })}
-                      placeholder="Shot prompt — what this scene's video should show"
-                      className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
-                    />
-                    <div className="flex flex-wrap gap-2 items-center text-xs">
-                      {SCENE_TIME_FIELDS.map(([labelText, key]) => {
-                        const toValue = (v) => (v === '' ? null : Number(v));
-                        return (
-                          <label key={key} className="flex items-center gap-1">{labelText}
-                            <input type="number" min="0" step="0.1" value={scene[key] ?? ''} className="w-16 bg-port-bg border border-port-border rounded px-1 py-1"
-                              onChange={(e) => editSceneLocal(scene.sceneId, { [key]: toValue(e.target.value) })}
-                              onBlur={(e) => saveScene(scene.sceneId, { [key]: toValue(e.target.value) })} />
-                          </label>
-                        );
-                      })}
-                      <label className="flex items-center gap-1">
-                        <input type="checkbox" checked={!!scene.beatAligned}
-                          onChange={(e) => { editSceneLocal(scene.sceneId, { beatAligned: e.target.checked }); saveScene(scene.sceneId, { beatAligned: e.target.checked }); }} />
-                        Beat-aligned
-                      </label>
-                    </div>
-                    {/* Reference frame — the still image that seeds this shot (Phase 1b) */}
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
-                      <textarea
-                        value={scene.framePrompt || ''} rows={2}
-                        onChange={(e) => editSceneLocal(scene.sceneId, { framePrompt: e.target.value })}
-                        onBlur={(e) => saveScene(scene.sceneId, { framePrompt: e.target.value || null })}
-                        placeholder="Reference frame prompt — the still that seeds this shot (defaults to the shot prompt)"
-                        className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
-                      />
-                      <div className="flex items-center gap-2">
-                        {scene.referenceImageId && (
-                          <img src={`/data/images/${scene.referenceImageId}`} alt="Reference frame"
-                            className="w-32 aspect-video object-cover rounded border border-port-border" />
-                        )}
-                        <button onClick={() => handleGenerateFrame(scene)} disabled={!!genScenes[scene.sceneId]}
-                          className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
-                          title="Generate a still reference frame for this scene">
-                          {genScenes[scene.sceneId] ? <Activity size={14} className="animate-spin" /> : <ImageIcon size={14} />}
-                          {genScenes[scene.sceneId] ? 'Generating frame…' : (scene.referenceImageId ? 'Regenerate frame' : 'Generate frame')}
-                        </button>
-                      </div>
-                    </div>
-                    {/* Scene clip — i2v video generated from the reference frame (Phase 1) */}
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {scene.videoHistoryId && (
-                        <video src={`/data/videos/${scene.videoHistoryId}.mp4`}
-                          className="w-40 aspect-video object-cover rounded border border-port-border bg-black"
-                          muted playsInline preload="metadata" controls />
-                      )}
-                      <button onClick={() => handleGenerateVideo(scene)}
-                        disabled={videoSettingsSaving || !scene.referenceImageId || !!genVideoScenes[scene.sceneId] || (audioReactiveSelected && !audioReactiveReady)}
-                        className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
-                        title={scene.referenceImageId ? "Generate this scene's video from its reference frame (i2v)" : 'Generate a reference frame first'}>
-                        {genVideoScenes[scene.sceneId] ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
-                        {genVideoScenes[scene.sceneId] ? 'Generating video…' : (scene.videoHistoryId ? 'Regenerate video' : 'Generate video')}
-                      </button>
-                      {scene.videoHistoryId && savedVideoSettings.backend === 'local' && savedVideoSettings.generationMode === 'image' && activeVideoModel?.runtime === 'ltx2' && (
-                        <button
-                          onClick={() => handleContinueVideo(scene)}
-                          disabled={videoSettingsSaving || !!genVideoScenes[scene.sceneId]}
-                          className="flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
-                          title="Native-extend this clip from its final latent frames and attach the longer result to this scene"
-                        >
-                          <Video size={14} /> Continue shot
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <TrackPanel
+                project={selected}
+                tracks={tracks}
+                trackName={trackName}
+                audioFilename={projectAudioFilename(selected)}
+                youtube={youtube}
+                renderBound={renderTargetsSelected}
+                midiBound={midiTargetsSelected}
+                onChangeTrack={handleChangeTrack}
+              />
+              <RenderStatusPanel
+                rendering={!!renderJob.job}
+                progress={renderJob.progress}
+                renderHistoryId={selected.renderHistoryId}
+              />
+              <AnalysisPanel
+                audioAnalysis={selected.audioAnalysis}
+                scenes={selected.scenes || []}
+                tempo={tempo}
+              />
             </div>
-          )}
-        </div>
+
+            {selected.audioAnalysis && (selected.scenes || []).length > 0 && (
+              <BeatTimeline audioAnalysis={selected.audioAnalysis} scenes={selected.scenes} onCommit={commitSceneTiming} />
+            )}
+
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-medium">Scene board</h3>
+              <button onClick={handleAddScene} className="flex items-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0">
+                <Plus size={15} /> Add scene
+              </button>
+            </div>
+
+            {(selected.scenes || []).length === 0 && <p className="text-sm text-port-text-muted">No scenes yet — add one to start the board.</p>}
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+              {(selected.scenes || []).map((scene, idx) => (
+                <SceneCard
+                  key={scene.sceneId}
+                  scene={scene}
+                  index={idx}
+                  isLast={idx === selected.scenes.length - 1}
+                  generatingFrame={sceneMedia.genScenes[scene.sceneId]}
+                  generatingVideo={sceneMedia.genVideoScenes[scene.sceneId]}
+                  settingsSaving={videoSettings.saving}
+                  videoBlocked={videoBlocked}
+                  canContinueShot={canContinueShot}
+                  onMove={moveScene}
+                  onDelete={handleDeleteScene}
+                  onEditLocal={editSceneLocal}
+                  onSave={saveScene}
+                  onGenerateFrame={sceneMedia.generateFrame}
+                  onGenerateVideo={sceneMedia.generateSceneVideo}
+                  onContinueVideo={sceneMedia.continueSceneVideo}
+                />
+              ))}
+            </div>
+          </div>
+        )}
       </div>
+    </div>
   );
 }
