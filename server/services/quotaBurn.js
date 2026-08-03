@@ -78,9 +78,50 @@ function selectLimit(card, family, now) {
     .sort((a, b) => a.hours - b.hours)[0] || null;
 }
 
-/** Headroom the family is willing to spend: what's left, minus its reserve. */
+/** Headroom the family is willing to spend on ONE window: what's left, minus its reserve. */
 export function burnBudgetRemaining(limit, family) {
   return Math.max(0, Number(limit?.percentRemaining) - family.reservePercent);
+}
+
+/**
+ * The window with the LEAST headroom among everything in scope — what the
+ * reserve is actually protecting.
+ *
+ * Checking only the soonest-resetting window (which is what selection keys on)
+ * makes the reserve inert for every provider that reports two: claude, codex and
+ * agy each expose a short rolling window AND a weekly one on the same card, and
+ * the short one is always the soonest. A card at `session: 100%` / `week: 2%`
+ * with a 40% reserve would pass the gate on the session number and drain a
+ * weekly allowance already far below the floor the user set — while the field's
+ * own hint reads "Never spend below this much headroom".
+ */
+function tightestBudget(card, family) {
+  const scoped = (card.limits || []).filter((limit) =>
+    (!family.scope || limit.scope === family.scope) && Number.isFinite(Number(limit?.percentRemaining)));
+  if (!scoped.length) return null;
+  return scoped.reduce((tightest, limit) =>
+    (burnBudgetRemaining(limit, family) < burnBudgetRemaining(tightest, family) ? limit : tightest));
+}
+
+/**
+ * The ledger key for one window: `<family>:<resetEpoch rounded to the hour>`.
+ *
+ * The rounding is load-bearing. Antigravity states its reset only as a RELATIVE
+ * string ("Refreshes in 4h 57m"), which `parseAgyUsage` turns into
+ * `now + duration` — so an exact-epoch key drifts by a minute or two on every
+ * scrape and each cycle mints a FRESH key with a count of zero. The per-window
+ * cap then never engages: an agy family would burn once per tick forever
+ * (~48/day at the default interval) while the page's "1/5 used" badge showed
+ * 0/5, and the ledger accumulated a dead key per cycle. Rounding to the hour
+ * collapses that drift into one bucket. The residual cost is a window whose true
+ * reset sits within a scrape's drift of a half-hour boundary, which can straddle
+ * two buckets and allow one extra dispatch — a bounded overshoot, versus an
+ * unbounded one.
+ */
+const HOUR_MS = 60 * 60 * 1000;
+export function windowKey(familyId, limit, { now = Date.now() } = {}) {
+  const epoch = normalizeResetAt(limit, { now }).epochMs;
+  return `${familyId}:${Math.round(epoch / HOUR_MS) * HOUR_MS}`;
 }
 
 /**
@@ -133,8 +174,11 @@ export function evaluateFamily(family, card, { now = Date.now(), dispatches = {}
   // forced run can't invent one either, so this gate holds even under bypass.
   if (!selected) return { skipReason: 'no window states a reset time' };
 
-  const dispatchKey = `${family.id}:${normalizeResetAt(selected.limit, { now }).epochMs}`;
+  const dispatchKey = windowKey(family.id, selected.limit, { now });
   const dispatchesUsed = Number(dispatches[dispatchKey] || 0);
+  // The reserve guards the TIGHTEST window in scope, not the one selection
+  // happens to key on (see `tightestBudget`).
+  const tightest = tightestBudget(card, family) || selected.limit;
 
   // The three gates a forced run is allowed past. Evaluated regardless so the
   // ordering (and the wording) stays in one place; only the return is skipped.
@@ -146,8 +190,9 @@ export function evaluateFamily(family, card, { now = Date.now(), dispatches = {}
     if (dispatchesUsed >= family.maxDispatchesPerWindow) {
       return { skipReason: `dispatch cap reached (${dispatchesUsed}/${family.maxDispatchesPerWindow})` };
     }
-    if (burnBudgetRemaining(selected.limit, family) <= 0) {
-      return { skipReason: `${selected.limit.percentRemaining}% left is at or below the ${family.reservePercent}% reserve` };
+    if (burnBudgetRemaining(tightest, family) <= 0) {
+      const which = tightest.label || tightest.scope || 'window';
+      return { skipReason: `${which} at ${tightest.percentRemaining}% left is at or below the ${family.reservePercent}% reserve` };
     }
   }
 

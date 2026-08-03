@@ -19,6 +19,7 @@ import { Flame, RefreshCw } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import FamilyCard from '../components/quotaBurn/FamilyCard';
+import { NumberField } from '../components/quotaBurn/fields';
 import * as api from '../services/api';
 import { mergeQuotaBurnPatch } from '../lib/quotaBurnPatch';
 import { coalesce } from '../utils/coalesce';
@@ -55,6 +56,10 @@ export default function QuotaBurn() {
   // flight, and two overlapping saves can land out of order and leave the page
   // showing a value the server does not hold.
   const editSeqRef = useRef(0);
+  // One retry per failed patch, and a self-reference so the failure branch can
+  // re-arm the debounce it lives inside.
+  const retriedRef = useRef(false);
+  const persistRef = useRef(null);
 
   const load = useCallback(async (refresh = false) => {
     const seq = editSeqRef.current;
@@ -91,8 +96,21 @@ export default function QuotaBurn() {
       // `unsaved` must stay true so the run buttons keep reflecting that the
       // server does not have these values.
       pendingRef.current = mergeQuotaBurnPatch(patch, pendingRef.current);
+      // Retry ONCE. Without it a single transient blip latches every run
+      // control off for the life of the page (nothing else re-arms the
+      // debounce, and the only hint is a title tooltip that touch never shows).
+      // Bounded at one because a rejected patch will just be rejected again —
+      // past that, tell the user plainly and let their next edit re-arm it.
+      if (!retriedRef.current) {
+        retriedRef.current = true;
+        persistRef.current?.();
+      } else {
+        retriedRef.current = false;
+        toast.error('Changes are still unsaved — edit a field to retry.');
+      }
       return;
     }
+    retriedRef.current = false;
     // The server's normalization is authoritative — adopt what it stored, but
     // only while no newer keystroke has landed. Then re-read status so pending
     // counts and skip reasons match the saved plan.
@@ -103,6 +121,8 @@ export default function QuotaBurn() {
     // yet, which is the exact failure the flag exists to prevent.
     if (!pendingRef.current) setUnsaved(false);
   }, SAVE_DEBOUNCE_MS), [load]);
+
+  persistRef.current = persist;
 
   useEffect(() => () => {
     persist.cancel();
@@ -173,19 +193,19 @@ export default function QuotaBurn() {
           <label htmlFor="quota-burn-enabled" className="text-sm text-white">
             Run the quota-burn loop automatically
           </label>
-          <label htmlFor="quota-burn-interval" className="text-xs text-gray-400 ml-auto flex items-center gap-2">
-            Check every
-            <input
+          {/* NumberField, not a bare input — an emptied box must not commit
+              `Number('') === 0`, which is below this field's server minimum of
+              5 and 400s the whole coalesced save. */}
+          <div className="ml-auto flex items-end gap-2 text-xs text-gray-400">
+            <NumberField
               id="quota-burn-interval"
-              type="number"
-              min="5"
-              max="720"
-              className="w-20 bg-port-bg border border-port-border rounded p-1.5 text-white text-xs"
+              label="Check every (minutes)"
               value={config.checkIntervalMinutes}
-              onChange={(event) => save({ checkIntervalMinutes: Number(event.target.value) })}
+              min={5}
+              max={720}
+              onChange={(next) => save({ checkIntervalMinutes: next })}
             />
-            minutes
-          </label>
+          </div>
         </div>
         <p className="text-xs text-gray-400">
           One loop for this install. Each provider family burns only inside its reset window, above its reserve, and within its

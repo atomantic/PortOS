@@ -56,13 +56,22 @@ const selectJobs = (family, { jobId = null, force = false } = {}) =>
  */
 async function dispatchFromCandidate(candidate, { jobId = null, force = false } = {}) {
   const attempts = [];
+  // A forced run of a NAMED job skips the pending probe entirely and calls the
+  // job directly. The probe exists to pick which job in the plan to run; when
+  // the user has already picked one, letting it veto the click reproduces the
+  // silent no-op the force path exists to fix — one gate later. It bites hardest
+  // on `universe-bible-images`, whose 6-hour in-flight cooldown makes the probe
+  // report zero for entries that are merely already queued, with no way to
+  // override it from the page. `force` is threaded into the job so it can relax
+  // its own cooldown too.
+  const targeted = force && jobId;
   for (const job of selectJobs(candidate.family, { jobId, force })) {
-    const pending = await countJobPending({ job, family: candidate.family });
-    if (!(pending.count > 0)) {
+    const pending = targeted ? null : await countJobPending({ job, family: candidate.family });
+    if (pending && !(pending.count > 0)) {
       attempts.push({ jobId: job.id, jobType: job.jobType, skipped: pending.detail || 'no pending work' });
       continue;
     }
-    const result = await runBurnJob({ job, family: candidate.family, candidate, context: pending.context });
+    const result = await runBurnJob({ job, family: candidate.family, candidate, context: pending?.context, force });
     if (!result.dispatched) {
       attempts.push({ jobId: job.id, jobType: job.jobType, skipped: result.reason || 'declined' });
       continue;

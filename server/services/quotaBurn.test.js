@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { burnBudgetRemaining, evaluateFamilies, selectBurnCandidates } from './quotaBurn.js';
+import { burnBudgetRemaining, evaluateFamilies, selectBurnCandidates, windowKey } from './quotaBurn.js';
 import { normalizeQuotaBurnConfig } from '../lib/quotaBurnConfig.js';
 
 const NOW = Date.parse('2026-07-26T12:00:00.000Z');
@@ -182,5 +182,50 @@ describe('recordQuotaBurnDispatch', () => {
     const { recordQuotaBurnDispatch } = await withLedger({ [`grok:${stale}`]: 3, 'grok:not-a-number': 1 });
     const next = await recordQuotaBurnDispatch(`grok:${NOW}`, { now: NOW });
     expect(next).toEqual({ 'grok:not-a-number': 1, [`grok:${NOW}`]: 1 });
+  });
+});
+
+describe('windowKey', () => {
+  it('collapses a provider that reports its reset only as a relative duration', () => {
+    // Antigravity states "Refreshes in 4h 57m", which parseAgyUsage turns into
+    // `now + duration` — so an exact-epoch key drifts a minute or two on every
+    // scrape and each cycle mints a FRESH key with a count of zero. The cap
+    // would never engage: ~48 burns/day against a maxDispatchesPerWindow of 5,
+    // with the page's badge stuck at 0/5.
+    const base = Date.parse('2026-07-26T16:57:00.000Z');
+    const drifted = Date.parse('2026-07-26T16:56:20.500Z');
+    expect(windowKey('agy', { resetsAt: new Date(base).toISOString() }, { now: NOW }))
+      .toBe(windowKey('agy', { resetsAt: new Date(drifted).toISOString() }, { now: NOW }));
+  });
+
+  it('still separates genuinely different windows', () => {
+    expect(windowKey('grok', { resetsAt: '2026-07-26T18:00:00.000Z' }, { now: NOW }))
+      .not.toBe(windowKey('grok', { resetsAt: '2026-07-27T18:00:00.000Z' }, { now: NOW }));
+  });
+});
+
+describe('reserve across every window', () => {
+  const twoWindow = (sessionLeft, weekLeft) => ({
+    family: 'claude', supported: true,
+    limits: [
+      { key: 'session', scope: 'session', label: '5-hour', resetsAt: '2026-07-26T15:00:00.000Z', percentRemaining: sessionLeft },
+      { key: 'week', scope: 'week', label: 'Weekly', resetsAt: '2026-08-01T00:00:00.000Z', percentRemaining: weekLeft },
+    ],
+  });
+  const family = normalizeQuotaBurnConfig({
+    families: { claude: { enabled: true, resetWithinHours: 24, reservePercent: 40, jobs: [job()] } },
+  });
+
+  it('refuses to drain the WEEKLY window just because the session window is full', () => {
+    // Claude/codex/agy all expose a short window AND a weekly one, and the short
+    // one is always the soonest — so checking only the selected limit made the
+    // reserve inert for every provider that has two.
+    const verdict = evaluateFamilies([twoWindow(100, 2)], family, { now: NOW })[0];
+    expect(verdict.candidate).toBeUndefined();
+    expect(verdict.skipReason).toMatch(/Weekly at 2% left is at or below the 40% reserve/);
+  });
+
+  it('burns when EVERY in-scope window is above the reserve', () => {
+    expect(evaluateFamilies([twoWindow(100, 90)], family, { now: NOW })[0].candidate).toBeTruthy();
   });
 });

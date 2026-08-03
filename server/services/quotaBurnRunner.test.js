@@ -302,3 +302,25 @@ describe('interval clock', () => {
     expect(getProviderQuotas).toHaveBeenCalled();
   });
 });
+
+describe('forced run bypasses the pending probe', () => {
+  it('calls the job directly instead of letting its own probe veto the click', async () => {
+    // The probe exists to PICK a job. When the user already picked one, letting
+    // it veto reproduces the silent no-op the force path exists to fix, one
+    // gate later — it bites hardest on universe-bible-images, whose 6h
+    // in-flight cooldown reports zero for entries that are merely queued.
+    const { countJobPending } = await import('./quotaBurnJobs/index.js');
+    state.pending = { second: { count: 0, detail: 'already queued' } };
+    const result = await runQuotaBurnCycle({ trigger: 'manual', familyId: 'grok', jobId: 'second', force: true });
+    expect(countJobPending).not.toHaveBeenCalled();
+    expect(result.dispatched).toBe(true);
+    expect(state.ran.map((entry) => entry.jobId)).toEqual(['second']);
+  });
+
+  it('still probes on an unforced cycle', async () => {
+    const { countJobPending } = await import('./quotaBurnJobs/index.js');
+    state.pending = { first: { count: 1 } };
+    await runQuotaBurnCycle();
+    expect(countJobPending).toHaveBeenCalled();
+  });
+});

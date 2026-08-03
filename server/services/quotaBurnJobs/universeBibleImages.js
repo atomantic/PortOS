@@ -120,7 +120,7 @@ async function collect(params, inFlight = new Set()) {
     // (nothing dedupes them on write), so a case-insensitive dedupe here keeps
     // one row from expanding into several renders and blowing past the cap.
     const rows = dedupeByLabel(findMissingImageEntries(universe, { scope }))
-      .filter((row) => !inFlight.has(inFlightKey(universe.id, row.label)));
+      .filter((row) => !inFlight.has(inFlightKey(universe.id, row)));
     total += rows.length;
     if (!rows.length || picked) continue;
     picked = { universe, rows: rows.slice(0, max) };
@@ -128,7 +128,11 @@ async function collect(params, inFlight = new Set()) {
   return { picked, total, max };
 }
 
-export const inFlightKey = (universeId, label) => `${universeId}:${String(label).toLowerCase()}`;
+// Keyed on the same identity `dedupeByLabel` uses. Label alone would let one
+// enqueued variation hide an unrelated canon entry that happens to share its
+// name for six hours — dropping it from both the pick AND the backlog count.
+export const inFlightKey = (universeId, row) =>
+  `${universeId}:${row.kind}:${row.categoryKey || ''}:${String(row.label).toLowerCase()}`;
 
 /**
  * One row per case-insensitive label within a category/trunk. `compilePrompts`
@@ -190,13 +194,15 @@ export async function countPending({ params, family } = {}) {
  * CODEX's image quota, not silently fall through to the install default and
  * burn a different provider's.
  */
-export async function run({ params, job, family, context } = {}) {
+export async function run({ params, job, family, context, force = false } = {}) {
   const mode = resolveRenderMode({ params, family });
   if (!mode) return { dispatched: false, reason: `${family?.id} renders no images — pick a render backend on this job` };
 
   // Reuse the probe's scan when the runner supplied it; the page's force path
   // calls run() with no probe, so fall back to scanning here.
-  const { picked, total, max } = context ?? await collect(params, await getQuotaBurnInFlight());
+  // A forced run ignores the cooldown: the user clicked ▶ on this exact job, and
+  // 'already queued' is the state they are most likely trying to push past.
+  const { picked, total, max } = context ?? await collect(params, force ? new Set() : await getQuotaBurnInFlight());
   if (!picked) return { dispatched: false, reason: 'no bible entries are missing images' };
 
   const { selection, canonSelection, sheetSelection } = buildRenderSelection(picked.rows);
@@ -215,7 +221,7 @@ export async function run({ params, job, family, context } = {}) {
   // fills in when the render completes, so this cooldown is the only thing
   // stopping the next cycle from re-selecting the same entries and spending the
   // window's whole cap re-rendering them.
-  await recordQuotaBurnInFlight(picked.rows.map((row) => inFlightKey(picked.universe.id, row.label)));
+  await recordQuotaBurnInFlight(picked.rows.map((row) => inFlightKey(picked.universe.id, row)));
 
   console.log(`🔥 Quota-burn rendered ${result.promptCount} bible image(s) for "${picked.universe.name}" via ${result.mode}`);
   return {

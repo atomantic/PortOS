@@ -66,7 +66,7 @@ const writeJsonAtomic = async (abs, value) => {
  * @returns {{ config: object|null, touchedAppIds: string[] }} `config` is null
  *   when no app configured a family (nothing to migrate).
  */
-export function buildGlobalPlan(apps) {
+export function buildGlobalPlan(apps, { scheduleArmed = true } = {}) {
   const families = {};
   const touchedAppIds = [];
   let jobSeq = 0;
@@ -76,13 +76,19 @@ export function buildGlobalPlan(apps) {
     touchedAppIds.push(app.id);
     const configured = override.taskMetadata?.families;
     if (!configured || typeof configured !== 'object') continue;
-    // The OLD shape had TWO independent switches: the task type had to be
-    // enabled for the app (`isTaskTypeEnabledForApp` reads `override.enabled`)
-    // AND the family had to be enabled inside `taskMetadata.families`. Reading
-    // only the family flag would arm a burn on an install that configured a
-    // family, tried it, then switched the whole task type off — unrequested
-    // provider spend on upgrade. Both must be true.
-    const appArmed = override.enabled === true;
+    // The OLD shape had THREE independent switches, all of which had to be on
+    // for a single token to be spent:
+    //   1. the install-wide schedule — `shouldRunTask` returns
+    //      `{ shouldRun: false, reason: 'disabled' }` unless
+    //      `task-schedule.json`'s `tasks['quota-burn'].enabled` is true, and the
+    //      shipped default was FALSE (`scheduleArmed`)
+    //   2. the per-app task-type override (`isTaskTypeEnabledForApp` reads
+    //      `override.enabled`)
+    //   3. the per-family flag inside `taskMetadata.families`
+    // Reading fewer than all three arms a burn on an install that configured a
+    // family and never turned the feature on — unrequested provider spend on
+    // upgrade, which CLAUDE.md's AI Provider Usage Policy forbids outright.
+    const appArmed = scheduleArmed && override.enabled === true;
     for (const [familyId, value] of Object.entries(configured)) {
       if (!FAMILIES.includes(familyId) || !value || typeof value !== 'object') continue;
       const armed = appArmed && value.enabled === true;
@@ -155,23 +161,30 @@ export function buildGlobalPlan(apps) {
 }
 
 /**
- * Drop the dead `quota-burn` entry from the install-wide schedule file. Runs
- * even when no app carried an override — an install could have flipped the type
- * on globally and never scoped it to an app.
+ * Read the install-wide schedule switch, then drop the dead `quota-burn` entry
+ * from the schedule file. Returns `{ armed, pruned }`.
+ *
+ * `armed` MUST be read before the prune — it is switch #1 of the three the old
+ * shape required, and pruning first would delete the only record of whether
+ * this install had ever turned quota-burn on. An ABSENT entry reads as armed:
+ * `loadSchedule` merges `DEFAULT_TASK_INTERVALS` over what's on disk, so a file
+ * predating the type simply inherited the default — the per-app switches are
+ * then the deciding vote, exactly as they were at runtime.
  */
-async function pruneScheduleFile(rootDir) {
+async function readAndPruneSchedule(rootDir) {
   const scheduleFile = join(rootDir, 'data', 'cos', 'task-schedule.json');
   const schedule = await readJson(scheduleFile);
-  if (!schedule?.tasks || !Object.hasOwn(schedule.tasks, 'quota-burn')) return false;
+  if (!schedule?.tasks || !Object.hasOwn(schedule.tasks, 'quota-burn')) return { armed: true, pruned: false };
+  const armed = schedule.tasks['quota-burn']?.enabled === true;
   const { 'quota-burn': _dropped, ...tasks } = schedule.tasks;
   await writeJsonAtomic(scheduleFile, { ...schedule, tasks });
-  console.log('🔥 migration 221: removed the dead quota-burn entry from the CoS schedule');
-  return true;
+  console.log(`🔥 migration 221: removed the dead quota-burn entry from the CoS schedule (was ${armed ? 'enabled' : 'disabled'})`);
+  return { armed, pruned: true };
 }
 
 export default {
   async up({ rootDir }) {
-    const prunedSchedule = await pruneScheduleFile(rootDir);
+    const { armed: scheduleArmed, pruned: prunedSchedule } = await readAndPruneSchedule(rootDir);
     const appsFile = join(rootDir, 'data', 'apps.json');
     const data = await readJson(appsFile);
     const appsMap = data?.apps && typeof data.apps === 'object' ? data.apps : null;
@@ -181,7 +194,7 @@ export default {
     }
 
     const apps = Object.entries(appsMap).map(([id, app]) => ({ id, ...app }));
-    const { config, touchedAppIds } = buildGlobalPlan(apps);
+    const { config, touchedAppIds } = buildGlobalPlan(apps, { scheduleArmed });
     if (!touchedAppIds.length) {
       console.log('🔥 migration 221: no app carries a quota-burn override — nothing to migrate');
       return { ok: true, reason: 'no-overrides', prunedSchedule };

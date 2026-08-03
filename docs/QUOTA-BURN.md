@@ -68,8 +68,7 @@ request), and the catalog descriptors the client renders as `min`/`max`.
 
 ## Storage
 
-The plan, the dispatch ledger, and the run log all live machine-locally under
-`data/cos/` and are intentionally **not federated**: quota belongs to a
+Four files under `data/cos/`, all machine-local and intentionally **not federated**: the plan (`quota-burn.json`), the per-window dispatch ledger (`quota-burn-dispatches.json`), the run log (`quota-burn-runs.json`), and the in-flight set (`quota-burn-inflight.json` — entries a job enqueued whose renders have not landed yet, so the next cycle does not re-queue them; 6-hour TTL). They are not federated: quota belongs to a
 particular machine and provider account, and the "which managed app" targets
 differ per machine.
 

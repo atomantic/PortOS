@@ -171,3 +171,56 @@ describe('buildGlobalPlan enabled semantics', () => {
     expect(config.checkIntervalMinutes).toBe(720);
   });
 });
+
+describe('buildGlobalPlan install-wide schedule switch', () => {
+  it('stays silent when the task type was never enabled install-wide', () => {
+    // The old shape needed THREE switches on: the install-wide schedule
+    // (shipped default FALSE), the per-app override, and the per-family flag.
+    // Reading only the last two arms a burn on an install that configured a
+    // family in the per-app panel and never turned the feature on — spending
+    // provider quota on upgrade with no user action.
+    const { config } = buildGlobalPlan(
+      [app('a1', { grok: { enabled: true, prompt: 'Refactor X' } })],
+      { scheduleArmed: false },
+    );
+    expect(config.enabled).toBe(false);
+    expect(config.families.grok.enabled).toBe(false);
+    expect(config.families.grok.jobs[0].enabled).toBe(false);
+  });
+});
+
+describe('migration 221 reads the schedule switch before pruning it', () => {
+  let rootDir;
+  beforeEach(async () => {
+    rootDir = await mkdtemp(join(tmpdir(), 'portos-221b-'));
+    await mkdir(join(rootDir, 'data', 'cos'), { recursive: true });
+  });
+  afterEach(async () => { await rm(rootDir, { recursive: true, force: true }); });
+
+  const write = (rel, value) => writeFile(join(rootDir, ...rel), JSON.stringify(value));
+
+  it('does not arm a plan whose schedule entry was disabled', async () => {
+    // pruneScheduleFile runs first and DELETES the entry — reading `armed`
+    // after it would lose the only record of whether this install ever ran.
+    await write(['data', 'apps.json'], {
+      apps: { a1: { taskTypeOverrides: { 'quota-burn': { enabled: true, taskMetadata: { families: { grok: { enabled: true, prompt: 'x' } } } } } } },
+    });
+    await write(['data', 'cos', 'task-schedule.json'], { version: 2, tasks: { 'quota-burn': { enabled: false } } });
+
+    await migration.up({ rootDir });
+    const plan = JSON.parse(await readFile(join(rootDir, 'data', 'cos', 'quota-burn.json'), 'utf-8'));
+    expect(plan.enabled).toBe(false);
+    expect(plan.families.grok.enabled).toBe(false);
+  });
+
+  it('arms a plan whose schedule entry WAS enabled', async () => {
+    await write(['data', 'apps.json'], {
+      apps: { a1: { taskTypeOverrides: { 'quota-burn': { enabled: true, taskMetadata: { families: { grok: { enabled: true, prompt: 'x' } } } } } } },
+    });
+    await write(['data', 'cos', 'task-schedule.json'], { version: 2, tasks: { 'quota-burn': { enabled: true } } });
+
+    await migration.up({ rootDir });
+    const plan = JSON.parse(await readFile(join(rootDir, 'data', 'cos', 'quota-burn.json'), 'utf-8'));
+    expect(plan.enabled).toBe(true);
+  });
+});

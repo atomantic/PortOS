@@ -59,9 +59,9 @@ export async function countJobPending({ job, family }) {
  * treats it as "this job declined", moves on, and logs the reason — a burn that
  * failed to start must not charge the window's cap.
  */
-export async function runBurnJob({ job, family, candidate, context }) {
+export async function runBurnJob({ job, family, candidate, context, force = false }) {
   const mod = await load(job?.jobType);
   if (!mod) return { dispatched: false, reason: `unknown job type: ${job?.jobType}` };
-  return mod.run({ params: job.params, job, family, candidate, context })
+  return mod.run({ params: job.params, job, family, candidate, context, force })
     .catch((err) => ({ dispatched: false, reason: `job failed: ${err.message}` }));
 }
