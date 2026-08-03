@@ -340,6 +340,31 @@ describe('PipelineManuscriptEditor', () => {
     );
   });
 
+  it('waits out an in-flight save whose text was typed back to the baseline (#3399)', async () => {
+    mockBothFormats();
+    const original = 'The hero walked in. She left.';
+    let resolveFirst;
+    api.savePipelineManuscriptSection.mockImplementationOnce(() => new Promise((res) => { resolveFirst = res; }));
+    renderEditor();
+    const ta = await screen.findByDisplayValue(original);
+    fireEvent.change(ta, { target: { value: 'edited' } });
+    fireEvent.blur(ta);
+    await waitFor(() => expect(api.savePipelineManuscriptSection).toHaveBeenCalledTimes(1));
+
+    // Typed back to the saved text: the section now reads CLEAN, but its save is
+    // still in flight — switching formats here would swap `sections` out from
+    // under it and land its result on the incoming format.
+    fireEvent.change(ta, { target: { value: original } });
+    fireEvent.click(screen.getByText('Teleplay'));
+    await act(async () => {});
+    expect(api.getPipelineManuscript).not.toHaveBeenCalledWith('ser-1', 'teleplay', { silent: true });
+
+    await act(async () => {
+      resolveFirst({ section: { issueId: 'iss-1', number: 1, title: 'One', stageId: 'prose', content: 'edited', versions: [] } });
+    });
+    expect(await screen.findByDisplayValue('INT. ROOM - DAY')).toBeInTheDocument();
+  });
+
   it('aborts a format switch when the pending edit fails to save (#3399)', async () => {
     api.savePipelineManuscriptSection.mockResolvedValue(null);
     renderEditor();

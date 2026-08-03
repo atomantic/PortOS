@@ -480,6 +480,14 @@ export default function PipelineManuscriptEditor() {
   // rather than discarding the user's text — `undefined` means the save was a
   // no-op (an in-flight save already persisted it), which is not a failure.
   const flushPendingSectionSaves = async () => {
+    // Drain what's already queued first: a section can be mid-save while its
+    // live text happens to match the baseline (typed, blurred, then typed back),
+    // which reads as "clean" — switching formats under that in-flight save would
+    // swap `sections` out from under it and land its result on the new format's
+    // badge. Re-derive dirty afterwards, so a queued save that FAILED shows up
+    // here and gets retried rather than silently passing the gate.
+    const queued = [...pendingSaves.current.values()];
+    if (queued.length) await Promise.all(queued);
     const dirty = liveSectionsRef.current.filter((s) => isSectionDirty(baselineRef.current, s));
     if (dirty.length === 0) return true;
     const results = await Promise.all(dirty.map((s) => saveSectionContent(s, s.content)));
