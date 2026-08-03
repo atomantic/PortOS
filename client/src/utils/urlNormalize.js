@@ -25,6 +25,31 @@ const DOMAIN_PATTERN = /^\S+\.\S+$/;
 export const isHttpUrl = (url) => /^https?:\/\//i.test(url || '');
 
 /**
+ * Extract a TikTok video id from a share/watch URL so a reference can render
+ * TikTok's documented iframe Embed Player instead of loading their embed.js.
+ * Returns null for anything that isn't a TikTok video URL — those references
+ * render as plain links.
+ *
+ * The host is ANCHORED so look-alikes (nottiktok.com, evil.com/#tiktok.com/…)
+ * don't match — `tiktok.com` must be preceded by start, `//`, or a subdomain dot.
+ *
+ * @param {string} url
+ * @returns {string|null}
+ */
+export const tiktokVideoId = (url) => {
+  const m = /(?:^|\/\/|\.)tiktok\.com\/(?:@[\w.-]+\/video|v|embed(?:\/v2)?|player\/v1)\/(\d+)/.exec(url || '');
+  return m ? m[1] : null;
+};
+
+/**
+ * The TikTok Embed Player URL for a video id (from `tiktokVideoId`).
+ *
+ * @param {string} id
+ * @returns {string}
+ */
+export const tiktokEmbedSrc = (id) => `https://www.tiktok.com/player/v1/${id}`;
+
+/**
  * Detect whether a raw string should be treated as a URL/link rather than
  * free text. Mirrors QuickBrainCapture's detection: an explicit scheme
  * (http/https/git@) OR a domain-like single token (`foo.bar`).

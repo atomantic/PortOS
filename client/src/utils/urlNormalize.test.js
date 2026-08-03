@@ -1,5 +1,31 @@
 import { describe, it, expect } from 'vitest';
-import { isUrl, normalizeUrl } from './urlNormalize';
+import { isUrl, normalizeUrl, tiktokEmbedSrc, tiktokVideoId } from './urlNormalize';
+
+describe('tiktokVideoId', () => {
+  it('extracts the id from the share/watch, short, and embed forms', () => {
+    expect(tiktokVideoId('https://www.tiktok.com/@some.user/video/1234567890')).toBe('1234567890');
+    expect(tiktokVideoId('https://tiktok.com/v/1234567890')).toBe('1234567890');
+    expect(tiktokVideoId('https://www.tiktok.com/embed/v2/1234567890')).toBe('1234567890');
+    expect(tiktokVideoId('https://www.tiktok.com/player/v1/1234567890')).toBe('1234567890');
+  });
+
+  it('anchors the host so look-alikes do not match', () => {
+    expect(tiktokVideoId('https://nottiktok.com/@u/video/1234567890')).toBe(null);
+    expect(tiktokVideoId('https://example.com/#tiktok.com/@u/video/1234567890')).toBe(null);
+  });
+
+  it('returns null for non-TikTok and empty input', () => {
+    expect(tiktokVideoId('https://example.com/watch?v=abc')).toBe(null);
+    expect(tiktokVideoId('')).toBe(null);
+    expect(tiktokVideoId(null)).toBe(null);
+  });
+});
+
+describe('tiktokEmbedSrc', () => {
+  it('builds the Embed Player URL for an id', () => {
+    expect(tiktokEmbedSrc('1234567890')).toBe('https://www.tiktok.com/player/v1/1234567890');
+  });
+});
 
 describe('isUrl', () => {
   it('detects explicit http/https schemes', () => {
