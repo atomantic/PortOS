@@ -388,12 +388,17 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // useCallback + bodyRef: this is a StoryboardPanel prop, and the panel is
   // memoized — a fresh identity per keystroke would defeat the memo boundary.
   const commitImageStyle = useCallback(async (next) => {
+    // Snapshot the buffer BEFORE awaiting: `updated` is this work's manifest, so
+    // the body folded back into it must be the one that was on screen when the
+    // style was committed. Reading bodyRef after the round-trip would splice a
+    // different work's prose in if the user swapped works mid-flight.
+    const bodyAtCommit = bodyRef.current;
     const updated = await updateWritersRoomWork(work.id, { imageStyle: next }, { silent: true }).catch((err) => {
       if (mountedRef.current) toast.error(`Style save failed: ${err.message}`);
       return null;
     });
     if (updated && mountedRef.current) {
-      onChange?.({ ...updated, activeDraftBody: bodyRef.current });
+      onChange?.({ ...updated, activeDraftBody: bodyAtCommit });
       toast.success(next.presetId === 'none' ? 'World style cleared' : 'World style saved');
     }
   }, [work.id, onChange, mountedRef]);
