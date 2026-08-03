@@ -5,17 +5,17 @@
  * owns persistence (optimistic append → `updateUniverse` → revert on failure).
  * Mirrors CategoryEditor's `adding`/`newLabel` bucket-add shape.
  *
- * Draft state lives here and the component is unmounted by its owner whenever
- * the form is closed, so cancel/save both reset the fields for free — the same
- * net behavior as the previous inline version, which cleared them by hand.
+ * The `{ name, description }` draft is CONTROLLED by the owner rather than held
+ * here, because the owner's toolbar "Add" button is a toggle: collapsing the
+ * form and reopening it must bring the typed draft back. Only Cancel and a
+ * successful Save clear it (both route through `onClose`).
  */
-import { useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { BIBLE_LIMITS } from '../../lib/bibleLimits';
 
-export default function CanonAddEntryForm({ kind, creating = false, onAddEntry = null, onClose }) {
-  const [newName, setNewName] = useState('');
-  const [newDesc, setNewDesc] = useState('');
+export default function CanonAddEntryForm({ kind, creating = false, draft, onDraftChange, onAddEntry = null, onClose }) {
+  const newName = draft?.name || '';
+  const newDesc = draft?.description || '';
 
   const submitAdd = async () => {
     if (!newName.trim() || !onAddEntry || creating) return;
@@ -29,7 +29,7 @@ export default function CanonAddEntryForm({ kind, creating = false, onAddEntry =
     <div className="bg-port-bg border border-port-border rounded p-2 mb-2 flex flex-col gap-2">
       <input
         value={newName}
-        onChange={(e) => setNewName(e.target.value)}
+        onChange={(e) => onDraftChange({ name: e.target.value, description: newDesc })}
         onKeyDown={(e) => { if (e.key === 'Enter') submitAdd(); }}
         placeholder={`${kind.singular[0].toUpperCase()}${kind.singular.slice(1)} name`}
         className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
@@ -39,7 +39,7 @@ export default function CanonAddEntryForm({ kind, creating = false, onAddEntry =
       />
       <textarea
         value={newDesc}
-        onChange={(e) => setNewDesc(e.target.value)}
+        onChange={(e) => onDraftChange({ name: newName, description: e.target.value })}
         placeholder={`Describe this ${kind.singular} (optional — image-gen-ready prose)`}
         className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
         rows={2}

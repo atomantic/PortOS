@@ -949,11 +949,15 @@ function KindSection() {
   );
   const Icon = kind.icon;
 
-  // Whether the manual-add mini-form is open. The form owns its own name/desc
-  // draft (CanonAddEntryForm) and unmounts when closed, so cancel/save reset
-  // the fields for free; only the disclosure bit lives here because the "Add"
-  // button in the controls strip toggles it.
+  // Manual-add form state — the disclosure bit plus the typed draft (mirrors
+  // CategoryEditor's `adding`/`newLabel` bucket-add form). Persistence is the
+  // parent's job via `onAddEntry`; the form (CanonAddEntryForm) is a controlled
+  // leaf. The draft lives HERE, not in the form, because the "Add" button is a
+  // toggle: collapsing the form and reopening it must bring the draft back.
+  // Only Cancel and a successful Save clear it.
   const [adding, setAdding] = useState(false);
+  const [addDraft, setAddDraft] = useState({ name: '', description: '' });
+  const closeAddForm = () => { setAdding(false); setAddDraft({ name: '', description: '' }); };
 
   // Bulk lock-state summary computed off the FULL list (not the series-filtered
   // view) so the buttons reflect the universe-wide state the bulk action will
@@ -1051,8 +1055,10 @@ function KindSection() {
     <CanonAddEntryForm
       kind={kind}
       creating={creating}
+      draft={addDraft}
+      onDraftChange={setAddDraft}
       onAddEntry={onAddEntry}
-      onClose={() => setAdding(false)}
+      onClose={closeAddForm}
     />
   ) : null;
 

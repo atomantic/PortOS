@@ -10,7 +10,7 @@
  * places/objects).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../../services/apiCatalog', () => ({
@@ -139,6 +139,32 @@ describe('UniverseCanonSection — manual Add', () => {
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/already in this universe/i)));
     expect(updateUniverse).not.toHaveBeenCalled();
+  });
+
+  it('keeps the typed draft when the Add toggle collapses the form, and clears it on Cancel', async () => {
+    // The toolbar "Add" button is a toggle, so collapsing mid-typing must not
+    // throw the draft away — this is why the draft is owned by the section and
+    // CanonAddEntryForm is a controlled leaf. Cancel, by contrast, discards.
+    renderSection({ onUniverseChange: vi.fn() });
+    // Settle the mount-time usage fetch before driving the form.
+    await act(async () => {});
+
+    const toggle = screen.getByRole('button', { name: /add character/i });
+    fireEvent.click(toggle);
+    fireEvent.change(screen.getByLabelText(/new character name/i), { target: { value: 'Half Typed' } });
+    fireEvent.change(screen.getByLabelText(/new character description/i), { target: { value: 'wip' } });
+
+    fireEvent.click(toggle); // collapse
+    expect(screen.queryByLabelText(/new character name/i)).toBeNull();
+
+    fireEvent.click(toggle); // reopen — draft survives
+    expect(screen.getByLabelText(/new character name/i).value).toBe('Half Typed');
+    expect(screen.getByLabelText(/new character description/i).value).toBe('wip');
+
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    fireEvent.click(toggle);
+    expect(screen.getByLabelText(/new character name/i).value).toBe('');
+    expect(screen.getByLabelText(/new character description/i).value).toBe('');
   });
 
   it('reverts the optimistic append when the save fails', async () => {
