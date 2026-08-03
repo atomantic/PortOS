@@ -101,7 +101,10 @@ export default function CityEmbers({ settings }) {
 
   return (
     <points ref={pointsRef}>
-      <bufferGeometry>
+      {/* key remounts the geometry when density changes — three.js cannot resize
+          a live BufferAttribute in place, and the warm-up clamp restores density
+          ~1.2s after every mount. */}
+      <bufferGeometry key={count}>
         <bufferAttribute attach="attributes-position" count={count} array={positions} itemSize={3} />
         <bufferAttribute attach="attributes-size" count={count} array={sizes} itemSize={1} />
         <bufferAttribute attach="attributes-speed" count={count} array={speeds} itemSize={1} />

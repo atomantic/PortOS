@@ -147,6 +147,25 @@ describe('citySynthMusic', () => {
     expect(settleMs).toBe((STOP_SETTLE + STOP_RAMP_TC) * 1000);
   });
 
+  it('defers node disconnects until the ramp settles (the pop-fix contract)', () => {
+    vi.useFakeTimers();
+    try {
+      synth.startMusic();
+      const settleMs = synth.stopMusic();
+
+      // An immediate disconnect would cut the fade short — nothing may
+      // disconnect at stopMusic() return time.
+      const disconnects = () =>
+        fakeCtx.oscillators.filter(o => o.disconnect.mock.calls.length > 0).length;
+      expect(disconnects()).toBe(0);
+
+      vi.advanceTimersByTime(settleMs + 1);
+      expect(disconnects()).toBe(fakeCtx.oscillators.length);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('clears is-playing state so a later startMusic creates fresh nodes', () => {
     synth.startMusic();
     const firstOscCount = fakeCtx.oscillators.length;

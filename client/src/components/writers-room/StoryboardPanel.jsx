@@ -323,6 +323,7 @@ export default function StoryboardPanel({
             onRefresh={onRunCharacters}
             running={runningKind === 'characters'}
             anyRunning={!!runningKind}
+            dirty={dirty}
             readingTheme={readingTheme}
             hotRefId={hotRef?.kind === 'char' ? hotRef.refId : null}
           />
@@ -336,6 +337,7 @@ export default function StoryboardPanel({
             onRefresh={onRunPlaces}
             running={runningKind === 'places'}
             anyRunning={!!runningKind}
+            dirty={dirty}
             readingTheme={readingTheme}
             hotRefId={hotRef?.kind === 'place' ? hotRef.refId : null}
           />
@@ -349,6 +351,7 @@ export default function StoryboardPanel({
             onRefresh={onRunObjects}
             running={runningKind === 'objects'}
             anyRunning={!!runningKind}
+            dirty={dirty}
             readingTheme={readingTheme}
             hotRefId={hotRef?.kind === 'object' ? hotRef.refId : null}
           />

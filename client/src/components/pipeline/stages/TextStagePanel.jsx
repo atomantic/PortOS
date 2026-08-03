@@ -99,6 +99,10 @@ export default function TextStagePanel({
   };
 
   const dirty = draftOutput !== (stage.output || '') || draftInput !== (stage.input || '');
+  // Generate gates on OUTPUT drift only: the seed input is sent live with the
+  // request (seedInput: draftInput), so unsaved seed edits are consumed, not
+  // skipped — only an unsaved output edit would be clobbered by the result.
+  const outputDirty = draftOutput !== (stage.output || '');
 
   const [runSave, saving] = useAsyncAction(
     () => updatePipelineIssue(issue.id, {
@@ -133,7 +137,7 @@ export default function TextStagePanel({
           ) : null}
         </div>
         <div className="flex items-center gap-2">
-          {extraActions}
+          {typeof extraActions === 'function' ? extraActions({ dirty: outputDirty }) : extraActions}
           <button
             type="button"
             onClick={() => setHistoryOpen(true)}
@@ -156,8 +160,8 @@ export default function TextStagePanel({
           <button
             type="button"
             onClick={handleGenerate}
-            disabled={generating || actionsGated || dirty}
-            title={actionsGated ? 'Saving settings…' : (dirty ? 'Save or discard your edits first' : undefined)}
+            disabled={generating || actionsGated || outputDirty}
+            title={actionsGated ? 'Saving settings…' : (outputDirty ? 'Save or discard your edits first' : undefined)}
             className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-50"
           >
             {generating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}

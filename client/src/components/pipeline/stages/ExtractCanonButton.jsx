@@ -7,22 +7,23 @@ import { extractPipelineCanonFromScript, PIPELINE_STAGE_LABELS } from '../../../
 // Auto-extract runs only after `prose` (server/services/pipeline/textStages.js),
 // so characters/places/objects introduced only in panel directions or
 // dialogue cues never make it into the bible until the writer clicks this.
-function getTooltip({ gated, hasContent, hasUniverse, busy, stageLabel }) {
+function getTooltip({ gated, dirty, hasContent, hasUniverse, busy, stageLabel }) {
   if (gated) return 'Saving settings…';
+  if (dirty) return 'Save or discard your edits first — extraction reads the saved script.';
   if (!hasContent) return `Generate the ${stageLabel} stage first`;
   if (!hasUniverse) return 'Link a universe to the series first — extraction needs a target bible.';
   if (busy) return 'Extraction in progress…';
   return 'Extract characters / places / objects from this script and merge into the linked universe.';
 }
 
-export default function ExtractCanonButton({ issue, series, stageId, gated = false }) {
+export default function ExtractCanonButton({ issue, series, stageId, gated = false, dirty = false }) {
   const [busy, setBusy] = useState(false);
   const hintId = useId();
   const hasContent = !!(issue.stages?.[stageId]?.output || '').trim();
   const hasUniverse = !!series?.universeId;
-  const disabled = busy || gated || !hasContent || !hasUniverse;
+  const disabled = busy || gated || dirty || !hasContent || !hasUniverse;
   const stageLabel = PIPELINE_STAGE_LABELS[stageId] || stageId;
-  const tooltip = getTooltip({ gated, hasContent, hasUniverse, busy, stageLabel });
+  const tooltip = getTooltip({ gated, dirty, hasContent, hasUniverse, busy, stageLabel });
 
   const handleClick = async () => {
     setBusy(true);

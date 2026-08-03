@@ -113,7 +113,10 @@ export default function CityDataRain({ settings }) {
 
   return (
     <points ref={pointsRef}>
-      <bufferGeometry>
+      {/* key remounts the geometry when density changes — three.js cannot resize
+          a live BufferAttribute in place, and the warm-up clamp restores density
+          ~1.2s after every mount. */}
+      <bufferGeometry key={count}>
         <bufferAttribute attach="attributes-position" count={count} array={positions} itemSize={3} />
         <bufferAttribute attach="attributes-charIndex" count={count} array={charIndices} itemSize={1} />
         <bufferAttribute attach="attributes-columnPhase" count={count} array={columnPhases} itemSize={1} />

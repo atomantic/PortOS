@@ -30,7 +30,7 @@ const BIBLE_KINDS = {
   },
 };
 
-function RefreshHeader({ noun, label, sub, running, anyRunning, onRefresh, empty }) {
+function RefreshHeader({ noun, label, sub, running, anyRunning, onRefresh, empty, dirty = false }) {
   return (
     <div className="flex items-start justify-between gap-2 pb-2 border-b border-port-border">
       <div className="min-w-0">
@@ -40,9 +40,9 @@ function RefreshHeader({ noun, label, sub, running, anyRunning, onRefresh, empty
       <button
         type="button"
         onClick={onRefresh}
-        disabled={anyRunning || !onRefresh}
+        disabled={anyRunning || !onRefresh || dirty}
         className="shrink-0 flex items-center gap-1 px-2 py-1 text-[10px] rounded bg-port-bg border border-port-border text-gray-300 hover:bg-port-card hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
-        title={empty ? `Extract ${noun} from prose` : `Re-extract ${noun} from prose (merges into existing)`}
+        title={dirty ? 'Save your draft first — extraction reads the saved prose.' : (empty ? `Extract ${noun} from prose` : `Re-extract ${noun} from prose (merges into existing)`)}
       >
         {running
           ? <Loader2 size={10} className="animate-spin text-port-accent" />
@@ -64,6 +64,7 @@ export default function StoryboardBibleTab({
   anyRunning,
   readingTheme,
   hotRefId = null,
+  dirty = false,
 }) {
   const meta = BIBLE_KINDS[kind];
   const Bible = meta.Component;
@@ -84,6 +85,7 @@ export default function StoryboardBibleTab({
         anyRunning={anyRunning}
         onRefresh={onRefresh}
         empty={items.length === 0}
+        dirty={dirty}
       />
       <Bible {...bibleProps} />
     </div>
