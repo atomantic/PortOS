@@ -1,11 +1,44 @@
-// Procedural ambient synthwave using Web Audio oscillators
+// Procedural ambient synthwave using Web Audio oscillators.
+//
+// Scheduling follows the "two clocks" pattern the sibling synth players use (see
+// lib/metronome.js:3-6 and lib/lookaheadTransport.js): a coarse setInterval
+// *lookahead* timer wakes every LOOKAHEAD_MS and hands every note event falling
+// inside the next SCHEDULE_AHEAD window to the AudioContext clock at an ABSOLUTE
+// time. Previously the chord changes (2400ms) and arp plucks (150ms) rode two
+// independent setIntervals that read ctx.currentTime at fire time, so both
+// drifted under main-thread load and drifted apart from each other.
+//
+// It does NOT reuse createLookaheadTransport, deliberately: that transport reads
+// its clock from the shared lib/audioContext.js singleton with no injection
+// point, while cityAudioEngine is a documented holdout that owns its own
+// AudioContext (and close()s it on unmount). Driving this graph from the shared
+// context's currentTime would mean scheduling against a clock the graph doesn't
+// run on. The transport also models a finite piece (total length, pause/seek/
+// position, per-note node teardown) — none of which an endless drone built from
+// long-lived oscillators has. What IS shared is the timing feel: SYNTH_TIMING.
 import { getAudioContext, getMusicGain } from './cityAudioEngine';
 import { CHORD_SETS } from '../../../utils/citySoundscape';
+import { SYNTH_TIMING } from '../../../lib/lookaheadTransport';
+
+const { LOOKAHEAD_MS, SCHEDULE_AHEAD } = SYNTH_TIMING;
+
+// The note grid: one 16th note every ARP_SEC (150ms at 100BPM), with a chord
+// change every CHORD_STEPS sixteenths (2.4s = 4 beats). Deriving both from ONE
+// step counter is what keeps the arp phase-locked to the chords — the previous
+// pair of independent timers could only stay aligned by luck.
+const ARP_SEC = 0.15;
+const CHORD_STEPS = 16;
 
 let isPlaying = false;
 let oscillators = [];
-let intervals = [];
 let nodesCleanup = [];
+
+// Lookahead scheduler state. `gridOrigin` is the ctx time of step 0; every event
+// time is gridOrigin + step * ARP_SEC, so the grid can never accumulate drift.
+let schedulerTimer = null;
+let gridOrigin = 0;
+let nextStep = 1;
+let currentChordIdx = 0;
 
 // Default chord progression (Am -> Em -> F -> C). The soundscape layer (roadmap 3.4) can swap
 // this for the darker `tense` set via setSoundscape(); we keep a mutable pointer so the running
@@ -26,6 +59,10 @@ let liveBassGain = null;
 let livePadGain = null;
 let liveArpGain = null;
 
+// Oscillators the scheduler retunes each step. Null while stopped.
+let liveBassOsc = null;
+let liveArpOsc = null;
+
 // Arp note patterns (scale degrees relative to chord root)
 const ARP_PATTERN = [0, 2, 4, 7, 12, 7, 4, 2];
 
@@ -45,6 +82,59 @@ export const setSoundscape = (params) => {
     livePadOscs.forEach((osc, i) => {
       osc.detune.setTargetAtTime((i - 1) * (params.padDetune ?? 8), ctx.currentTime, 0.5);
     });
+  }
+};
+
+// Advance to the next chord and glide the bass + pad onto it AT `when`. Reads
+// `activeChords` live so a soundscape mood-swap (bright↔tense) takes effect on
+// the next chord; the walk is incremental (not derived from the step index) so
+// swapping to a set of a different length can't jump the progression.
+const scheduleChordChange = (when) => {
+  const chords = activeChords;
+  currentChordIdx = (currentChordIdx + 1) % chords.length;
+  const chord = chords[currentChordIdx];
+  liveBassOsc.frequency.setTargetAtTime(chord[0], when, 0.3);
+  livePadOscs.forEach((osc, i) => {
+    osc.frequency.setTargetAtTime(chord[i] * 2, when, 0.3);
+  });
+};
+
+// One arp 16th note AT `when`. The pluck peaks at `liveArpPeak`, which the
+// soundscape raises with system energy (more active agents → a louder lead).
+const scheduleArpPluck = (step, when) => {
+  const chords = activeChords;
+  const chord = chords[currentChordIdx % chords.length];
+  const rootFreq = chord[0] * 4; // two octaves up
+  const semitone = ARP_PATTERN[(step - 1) % ARP_PATTERN.length];
+  const freq = rootFreq * Math.pow(2, semitone / 12);
+
+  liveArpOsc.frequency.setTargetAtTime(freq, when, 0.01);
+  // Short percussive envelope
+  liveArpGain.gain.setTargetAtTime(liveArpPeak, when, 0.005);
+  liveArpGain.gain.setTargetAtTime(0.0, when + 0.06, 0.04);
+};
+
+// One lookahead tick: schedule every step due inside the next SCHEDULE_AHEAD
+// window. Chord-first at a shared step so the pluck landing on the downbeat
+// already sounds the new chord.
+const scheduleWindow = () => {
+  const ctx = getAudioContext();
+  if (!isPlaying || !ctx) return;
+
+  // A backgrounded tab throttles this timer to once a second or worse. Without
+  // this, catching up would schedule every missed step at a time already in the
+  // past — Web Audio clamps those to "now", firing them as one burst. Re-anchor
+  // to whole steps instead, which keeps the grid phase (and so the arp/chord
+  // lock) while dropping the steps nobody was there to hear.
+  const behind = ctx.currentTime - (gridOrigin + nextStep * ARP_SEC);
+  if (behind > ARP_SEC) nextStep += Math.floor(behind / ARP_SEC);
+
+  const horizon = ctx.currentTime + SCHEDULE_AHEAD;
+  while (gridOrigin + nextStep * ARP_SEC < horizon) {
+    const when = gridOrigin + nextStep * ARP_SEC;
+    if (nextStep % CHORD_STEPS === 0) scheduleChordChange(when);
+    scheduleArpPluck(nextStep, when);
+    nextStep += 1;
   }
 };
 
@@ -91,7 +181,6 @@ export const startMusic = () => {
   bassFilter.connect(output);
   bassFilter.connect(reverb);
 
-  let currentChordIdx = 0;
   const bassOsc = ctx.createOscillator();
   bassOsc.type = 'sawtooth';
   bassOsc.frequency.value = activeChords[0][0];
@@ -151,49 +240,25 @@ export const startMusic = () => {
   arpOsc.start();
   oscillators.push(arpOsc);
 
-  let arpStep = 0;
-  // Chord change every 2.4s (4 beats at 100BPM). Reads `activeChords` live so a soundscape
-  // mood-swap (bright↔tense) takes effect on the next chord without re-scheduling the interval.
-  const chordInterval = setInterval(() => {
-    if (!isPlaying) return;
-    const chords = activeChords;
-    currentChordIdx = (currentChordIdx + 1) % chords.length;
-    const chord = chords[currentChordIdx];
-    const now = ctx.currentTime;
-    bassOsc.frequency.setTargetAtTime(chord[0], now, 0.3);
-    padOscs.forEach((osc, i) => {
-      osc.frequency.setTargetAtTime(chord[i] * 2, now, 0.3);
-    });
-  }, 2400);
-  intervals.push(chordInterval);
-
-  // Arp sixteenth notes at 100BPM = 150ms per step. The pluck peaks at `liveArpPeak`, which the
-  // soundscape raises with system energy (more active agents → a louder, livelier lead).
-  const arpInterval = setInterval(() => {
-    if (!isPlaying) return;
-    const chord = activeChords[currentChordIdx % activeChords.length];
-    const rootFreq = chord[0] * 4; // two octaves up
-    const semitone = ARP_PATTERN[arpStep % ARP_PATTERN.length];
-    const freq = rootFreq * Math.pow(2, semitone / 12);
-    const now = ctx.currentTime;
-
-    arpOsc.frequency.setTargetAtTime(freq, now, 0.01);
-    // Short percussive envelope
-    arpGain.gain.setTargetAtTime(liveArpPeak, now, 0.005);
-    arpGain.gain.setTargetAtTime(0.0, now + 0.06, 0.04);
-
-    arpStep++;
-  }, 150);
-  intervals.push(arpInterval);
-
-  // Expose the modulatable nodes so setSoundscape() can ramp them in real time.
+  // Expose the modulatable nodes so setSoundscape() and the scheduler can reach them.
   liveBassFilter = bassFilter;
   livePadOscs = padOscs;
   liveBassGain = bassGain;
   livePadGain = padGain;
   liveArpGain = arpGain;
+  liveBassOsc = bassOsc;
+  liveArpOsc = arpOsc;
 
   nodesCleanup.push(reverb, reverbGain, delay, delayFeedback, bassFilter, bassGain, padGain, arpFilter, arpGain);
+
+  // Anchor the note grid to the audio clock and start the lookahead timer. Chord
+  // index 0 is already sounding from the oscillator frequencies above, so the
+  // grid starts at step 1 — the first chord CHANGE lands on step CHORD_STEPS.
+  gridOrigin = ctx.currentTime;
+  nextStep = 1;
+  currentChordIdx = 0;
+  scheduleWindow();
+  schedulerTimer = setInterval(scheduleWindow, LOOKAHEAD_MS);
 };
 
 // Fade time constant for the pre-stop ramp (setTargetAtTime never truly reaches
@@ -215,6 +280,12 @@ const STOP_SETTLE = 0.08;
 export const stopMusic = () => {
   if (!isPlaying) return 0;
   isPlaying = false;
+  // Stop the lookahead timer before the ramps below, so no further note events
+  // get scheduled onto a graph that is already fading out.
+  if (schedulerTimer != null) {
+    clearInterval(schedulerTimer);
+    schedulerTimer = null;
+  }
   const ctx = getAudioContext();
   const now = ctx ? ctx.currentTime : 0;
 
@@ -233,8 +304,6 @@ export const stopMusic = () => {
   });
 
   oscillators = [];
-  intervals.forEach(clearInterval);
-  intervals = [];
   nodesCleanup = [];
   // Drop references to the now-stopping nodes so a stray setSoundscape() can't ramp a
   // dead graph. The next startMusic() re-captures fresh ones.
@@ -243,6 +312,8 @@ export const stopMusic = () => {
   liveBassGain = null;
   livePadGain = null;
   liveArpGain = null;
+  liveBassOsc = null;
+  liveArpOsc = null;
 
   // Disconnect after the ramp/stop settles instead of instantly — an immediate
   // disconnect() would cut the fade above short, defeating the point of it.
