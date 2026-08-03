@@ -234,6 +234,34 @@ describe('PipelineManuscriptEditor', () => {
     expect(await screen.findByTitle('Show prior saved versions')).toBeInTheDocument();
   });
 
+  it('marks the issue tab while an edit is unsaved and clears it once the save lands (#3399)', async () => {
+    api.savePipelineManuscriptSection.mockResolvedValue({
+      section: { issueId: 'iss-1', number: 1, title: 'One', stageId: 'prose', content: 'The hero walked in. She stayed.', versions: [] },
+    });
+    renderEditor();
+    const ta = await screen.findByDisplayValue('The hero walked in. She left.');
+    // Loaded and untouched — no dirty dot.
+    expect(screen.queryByLabelText('Issue 1 has unsaved edits')).not.toBeInTheDocument();
+
+    // Sections persist onBlur, so typing alone leaves the edit pending — the tab
+    // must say so, since the user can navigate away before the field blurs.
+    fireEvent.change(ta, { target: { value: 'The hero walked in. She stayed.' } });
+    expect(await screen.findByLabelText('Issue 1 has unsaved edits')).toBeInTheDocument();
+
+    fireEvent.blur(ta);
+    await waitFor(() => expect(screen.queryByLabelText('Issue 1 has unsaved edits')).not.toBeInTheDocument());
+  });
+
+  it('keeps the tab marked when a save fails, so the pending edit stays visible (#3399)', async () => {
+    api.savePipelineManuscriptSection.mockResolvedValue(null); // service rejected → caller toasts + resolves null
+    renderEditor();
+    const ta = await screen.findByDisplayValue('The hero walked in. She left.');
+    fireEvent.change(ta, { target: { value: 'The hero walked in. She stayed.' } });
+    fireEvent.blur(ta);
+    await waitFor(() => expect(api.savePipelineManuscriptSection).toHaveBeenCalled());
+    expect(screen.getByLabelText('Issue 1 has unsaved edits')).toBeInTheDocument();
+  });
+
   it('Review mode renders annotated prose with an Edit toggle that swaps in the textarea', async () => {
     renderEditor();
     await screen.findByText('My Series');

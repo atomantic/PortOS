@@ -62,6 +62,19 @@ const EMPTY = [];
 const VIEW_MODE_KEY = 'portos.manuscript.viewMode';
 const initialViewMode = () => (safeReadStorage(VIEW_MODE_KEY) === 'review' ? 'review' : 'live');
 
+// A section's saved-content key. Includes the stage so switching formats can't
+// compare a teleplay draft against the prose baseline.
+const baselineKey = (section) => `${section.issueId}:${section.stageId}`;
+
+// Has this section drifted from what the server last confirmed? `has` first:
+// an un-seeded key means "we don't know the saved text yet", NOT "unsaved" —
+// without that gate every section reads dirty in the frame before the load
+// resolves, flashing the tab badges on.
+const isSectionDirty = (baselines, section) => {
+  const key = baselineKey(section);
+  return baselines.has(key) && baselines.get(key) !== section.content;
+};
+
 export default function PipelineManuscriptEditor() {
   const params = useParams();
   const { seriesId } = params;
@@ -112,9 +125,24 @@ export default function PipelineManuscriptEditor() {
     setFixDrafts((prev) => ({ ...prev, [commentId]: entry }));
   // textarea elements keyed by issue number, for reveal-to-section scroll/focus.
   const sectionRefs = useRef(new Map());
-  const baselineRef = useRef(new Map());
-  const seedBaselines = (list) => {
-    baselineRef.current = new Map((list || []).map((s) => [`${s.issueId}:${s.stageId}`, s.content]));
+  // Last server-confirmed content per section, as STATE so the issue tabs can
+  // subscribe to unsaved-edit state (sections only persist onBlur, so a tab
+  // switch away from a pending edit needs a visible cue). `baselineRef` mirrors
+  // it for the handlers that read it outside the render cycle (the unload guard,
+  // and the save path's synchronous no-op check) — every write goes through
+  // `commitBaselines` so the ref never trails the state.
+  const [baselines, setBaselines] = useState(() => new Map());
+  const baselineRef = useRef(baselines);
+  const commitBaselines = (next) => {
+    baselineRef.current = next;
+    setBaselines(next);
+  };
+  const seedBaselines = (list) =>
+    commitBaselines(new Map((list || []).map((s) => [baselineKey(s), s.content])));
+  const setBaseline = (key, content) => {
+    const next = new Map(baselineRef.current);
+    next.set(key, content);
+    commitBaselines(next);
   };
 
   const patchSection = (issueId, fields) =>
@@ -132,10 +160,7 @@ export default function PipelineManuscriptEditor() {
   // whenever any section's live content has drifted from its saved baseline.
   useEffect(() => {
     const onBeforeUnload = (e) => {
-      const dirty = liveSectionsRef.current.some((s) => {
-        const key = `${s.issueId}:${s.stageId}`;
-        return baselineRef.current.get(key) !== s.content;
-      });
+      const dirty = liveSectionsRef.current.some((s) => isSectionDirty(baselineRef.current, s));
       if (dirty) e.preventDefault();
     };
     window.addEventListener('beforeunload', onBeforeUnload);
@@ -395,7 +420,7 @@ export default function PipelineManuscriptEditor() {
   const setSectionContent = (issueId, content) => patchSection(issueId, { content });
 
   const saveSectionContent = async (section, content) => {
-    const key = `${section.issueId}:${section.stageId}`;
+    const key = baselineKey(section);
     if (baselineRef.current.get(key) === content) return;
     setSaveState((prev) => ({ ...prev, [section.issueId]: 'saving' }));
     const result = await savePipelineManuscriptSection(
@@ -408,7 +433,7 @@ export default function PipelineManuscriptEditor() {
       return null;
     });
     if (result?.section) {
-      baselineRef.current.set(key, result.section.content);
+      setBaseline(key, result.section.content);
       patchSection(section.issueId, { versions: result.section.versions });
     }
     setSaveState((prev) => ({ ...prev, [section.issueId]: result ? 'saved' : undefined }));
@@ -477,7 +502,7 @@ export default function PipelineManuscriptEditor() {
     if (!result?.stage) return null;
     const content = result.stage.output || '';
     const versions = (result.stage.runHistory || []).map((h) => ({ runId: h.runId, createdAt: h.createdAt }));
-    baselineRef.current.set(`${section.issueId}:${section.stageId}`, content);
+    setBaseline(baselineKey(section), content);
     patchSection(section.issueId, { content, versions });
     setSaveState((prev) => ({ ...prev, [section.issueId]: 'saved' }));
     toast.success('Reverted to the selected version');
@@ -527,7 +552,7 @@ export default function PipelineManuscriptEditor() {
     list.forEach((changed) => {
       if (changed?.issueId && changed.stageId === viewType) {
         patchSection(changed.issueId, { content: changed.content, versions: changed.versions });
-        baselineRef.current.set(`${changed.issueId}:${changed.stageId}`, changed.content);
+        setBaseline(baselineKey(changed), changed.content);
         setSaveState((prev) => ({ ...prev, [changed.issueId]: 'saved' }));
       }
     });
@@ -564,6 +589,15 @@ export default function PipelineManuscriptEditor() {
     sectionSpans.forEach((spans) => spans.forEach((span) => set.add(span.commentId)));
     return set;
   }, [sectionSpans]);
+
+  // Issue numbers holding an unsaved edit, for the tab dirty dots. Sections save
+  // onBlur, so tabbing away from a pending edit leaves it unsaved with no cue
+  // unless the tab itself carries one (#3399).
+  const dirtyNumbers = useMemo(() => {
+    const set = new Set();
+    sections.forEach((s) => { if (isSectionDirty(baselines, s)) set.add(s.number); });
+    return set;
+  }, [sections, baselines]);
 
   // Open-note count per issue, for the tab badges.
   const openCountByNumber = useMemo(() => {
@@ -740,6 +774,7 @@ export default function PipelineManuscriptEditor() {
                 sections={sections}
                 activeNumber={activeNumber}
                 openCountByNumber={openCountByNumber}
+                dirtyNumbers={dirtyNumbers}
               />
               {activeSection ? (() => {
                 const section = activeSection;
