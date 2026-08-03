@@ -1,4 +1,4 @@
-import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -31,7 +31,7 @@ vi.mock('../../services/api', () => ({
 vi.mock('../../services/apiMusicVideo.js', () => ({ listMusicVideoProjects: vi.fn() }));
 
 import TracksManager from './TracksManager.jsx';
-import { listTracks, listAlbums, createTrack } from '../../services/api';
+import { listTracks, listAlbums, createTrack, deleteTrack, updateTrack } from '../../services/api';
 import { listMusicVideoProjects } from '../../services/apiMusicVideo.js';
 
 const TRACK = { id: 'track-1', title: 'Example Song', audioFilename: 'example.mp3', renders: [] };
@@ -157,5 +157,81 @@ describe('<TracksManager> generator mode toggle', () => {
 
     expect(await screen.findByTestId('gen-panel')).toBeInTheDocument();
     expect(screen.queryByTestId('chiptune-panel')).toBeNull();
+  });
+});
+
+// ConfirmButtonPair delete wiring (via useConfirmDelete) and the field-edit
+// save path. The hook's own arm/disarm mechanics are unit-tested in
+// useConfirmDelete.test.jsx; this covers TracksManager's INTEGRATION of it —
+// that the trash button arms without calling the API, that the confirm/cancel
+// buttons it renders drive deleteTrack with the exact track id (or not at
+// all), and that a field edit reaches updateTrack with the exact payload.
+describe('<TracksManager> delete confirm + save wiring', () => {
+  beforeEach(() => {
+    listTracks.mockResolvedValue([TRACK]);
+    listAlbums.mockResolvedValue([]);
+    listMusicVideoProjects.mockResolvedValue([]);
+  });
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it('arms on the first click with no API call, then confirms with the exact track id', async () => {
+    deleteTrack.mockResolvedValue({});
+    renderAt('track-1');
+    await screen.findByDisplayValue('Example Song');
+
+    fireEvent.click(screen.getByRole('button', { name: /delete/i }));
+
+    // Armed: the confirm pair replaces the trash button; no delete fired yet.
+    const confirmGroup = await screen.findByRole('group', { name: 'Confirm delete track' });
+    expect(within(confirmGroup).getByText('Delete this track?')).toBeInTheDocument();
+    expect(deleteTrack).not.toHaveBeenCalled();
+
+    fireEvent.click(within(confirmGroup).getByRole('button', { name: 'Yes, delete' }));
+
+    expect(deleteTrack).toHaveBeenCalledTimes(1);
+    expect(deleteTrack).toHaveBeenCalledWith('track-1', { silent: true });
+  });
+
+  it('disarms on Cancel without ever calling deleteTrack', async () => {
+    renderAt('track-1');
+    await screen.findByDisplayValue('Example Song');
+
+    fireEvent.click(screen.getByRole('button', { name: /delete/i }));
+    const confirmGroup = await screen.findByRole('group', { name: 'Confirm delete track' });
+
+    fireEvent.click(within(confirmGroup).getByRole('button', { name: 'Cancel' }));
+
+    // Disarmed: back to the plain trash button, confirm pair gone.
+    expect(screen.queryByRole('group', { name: 'Confirm delete track' })).toBeNull();
+    expect(screen.getByRole('button', { name: /delete/i })).toBeInTheDocument();
+    expect(deleteTrack).not.toHaveBeenCalled();
+  });
+
+  it('saves an edited title with the exact update payload', async () => {
+    updateTrack.mockResolvedValue({ ...TRACK, title: 'Example Song Updated' });
+    renderAt('track-1');
+    const titleInput = await screen.findByDisplayValue('Example Song');
+
+    fireEvent.change(titleInput, { target: { value: 'Example Song Updated' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(updateTrack).toHaveBeenCalledTimes(1));
+    // `albumId` is dropped when unchanged from the loaded track (see
+    // TracksManager's handleSave) — the exact-shape assertion pins that too.
+    expect(updateTrack).toHaveBeenCalledWith(
+      'track-1',
+      {
+        title: 'Example Song Updated',
+        artistId: '',
+        artist: '',
+        lyrics: '',
+        prompt: '',
+        audioFilename: 'example.mp3',
+      },
+      { silent: true },
+    );
   });
 });

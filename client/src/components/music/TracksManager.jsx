@@ -17,6 +17,8 @@ import { Link, useNavigate, useParams } from 'react-router';
 import { Plus, Loader2, Trash2, Save, Upload, Music2, Library } from 'lucide-react';
 import toast from '../ui/Toast';
 import FilePickerButton from '../ui/FilePickerButton';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair';
+import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { formatTimecode } from '../../utils/formatters';
 import ArtistPicker from './ArtistPicker';
 import MusicGenPanel from './MusicGenPanel';
@@ -69,7 +71,7 @@ export default function TracksManager() {
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const { isConfirming: isConfirmingDelete, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const [uploading, setUploading] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [library, setLibrary] = useState([]);
@@ -123,7 +125,7 @@ export default function TracksManager() {
   // NEWLY selected track (the action handlers read persisted?.id), sending the
   // old render's id to the wrong track.
   const resetTrackViewState = () => {
-    setConfirmDelete(false);
+    cancelDelete();
     setLibraryOpen(false);
     setModalRender(null);
     setRemix(null);
@@ -616,14 +618,17 @@ export default function TracksManager() {
                   {isCreate ? 'Create' : 'Save'}
                 </button>
                 {!isCreate && selected ? (
-                  confirmDelete ? (
-                    <span className="inline-flex items-center gap-2 text-sm">
-                      <span className="text-port-error">Delete this track?</span>
-                      <button type="button" onClick={handleDelete} className="px-2 py-1 rounded bg-port-error/20 text-port-error hover:bg-port-error/30">Yes, delete</button>
-                      <button type="button" onClick={() => setConfirmDelete(false)} className="px-2 py-1 rounded text-gray-400 hover:text-white">Cancel</button>
-                    </span>
+                  isConfirmingDelete(selected.id) ? (
+                    <ConfirmButtonPair
+                      prompt="Delete this track?"
+                      confirmText="Yes, delete"
+                      ariaLabel="Confirm delete track"
+                      tone="error"
+                      onConfirm={() => confirmDelete(handleDelete)}
+                      onCancel={cancelDelete}
+                    />
                   ) : (
-                    <button type="button" onClick={() => setConfirmDelete(true)} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-gray-400 hover:text-port-error text-sm">
+                    <button type="button" onClick={() => requestDelete(selected.id)} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-gray-400 hover:text-port-error text-sm">
                       <Trash2 size={14} /> Delete
                     </button>
                   )

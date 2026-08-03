@@ -13,7 +13,9 @@ import { Plus, Loader2, Trash2, Save, Upload, ImageIcon, Sparkles, X } from 'luc
 import toast from '../ui/Toast';
 import FilePickerButton from '../ui/FilePickerButton';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
+import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { DEFAULT_NEGATIVE_PROMPT } from '../../lib/imageGenDefaults';
 import { readFileAsBase64 } from '../../utils/fileUpload';
 import {
@@ -69,7 +71,7 @@ export default function ArtistsManager() {
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const { isConfirming: isConfirmingDelete, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [uploadingPortrait, setUploadingPortrait] = useState(false);
   const [startingGen, setStartingGen] = useState(false);
@@ -188,7 +190,7 @@ export default function ArtistsManager() {
     if (loading) return;
     if (hydratedRef.current === selectionKey) return;
     hydratedRef.current = selectionKey;
-    setConfirmDelete(false);
+    cancelDelete();
     clearGeneration();
     if (isCreate) setForm(emptyForm());
     else if (selected) setForm(formFromArtist(selected));
@@ -227,7 +229,6 @@ export default function ArtistsManager() {
     if (!selected) return;
     const prior = artists;
     setArtists((prev) => prev.filter((a) => a.id !== selected.id));
-    setConfirmDelete(false);
     navigate('/music/artists');
     await deleteArtist(selected.id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Delete failed');
@@ -445,20 +446,19 @@ export default function ArtistsManager() {
                   {isCreate ? 'Create' : 'Save'}
                 </button>
                 {!isCreate && selected ? (
-                  confirmDelete ? (
-                    <span className="inline-flex items-center gap-2 text-sm">
-                      <span className="text-port-error">Delete this artist?</span>
-                      <button type="button" onClick={handleDelete} className="px-2 py-1 rounded bg-port-error/20 text-port-error hover:bg-port-error/30">
-                        Yes, delete
-                      </button>
-                      <button type="button" onClick={() => setConfirmDelete(false)} className="px-2 py-1 rounded text-gray-400 hover:text-white">
-                        Cancel
-                      </button>
-                    </span>
+                  isConfirmingDelete(selected.id) ? (
+                    <ConfirmButtonPair
+                      prompt="Delete this artist?"
+                      confirmText="Yes, delete"
+                      ariaLabel="Confirm delete artist"
+                      tone="error"
+                      onConfirm={() => confirmDelete(handleDelete)}
+                      onCancel={cancelDelete}
+                    />
                   ) : (
                     <button
                       type="button"
-                      onClick={() => setConfirmDelete(true)}
+                      onClick={() => requestDelete(selected.id)}
                       className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-gray-400 hover:text-port-error text-sm"
                     >
                       <Trash2 size={14} /> Delete
