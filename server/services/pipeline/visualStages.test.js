@@ -26,7 +26,14 @@ const mockIssue = {
   },
 };
 
-const getIssueMock = vi.fn(async () => structuredClone(mockIssue));
+// The stage state the serialized write tail sees. Kept separate from
+// `mockIssue` so a test can point the outer `getIssue` read AND the write-tail
+// mock at the same overridden stage (see `useStoryboardScenes`) — a mutator
+// that patches the freshest persisted array must see what the caller read.
+let persistedStages = structuredClone(mockIssue.stages);
+
+const DEFAULT_GET_ISSUE = async () => structuredClone(mockIssue);
+const getIssueMock = vi.fn(DEFAULT_GET_ISSUE);
 const updateStageMock = vi.fn(async (issueId, stageId, patch) => ({
   issue: { ...mockIssue, stages: { ...mockIssue.stages, [stageId]: { ...mockIssue.stages[stageId], ...patch } } },
   stage: { ...mockIssue.stages[stageId], ...patch },
@@ -35,12 +42,13 @@ const assertStageUnlockedMock = vi.fn(() => undefined);
 // updateStageWithLatest runs the caller's computeFn against the latest comicPages
 // stage (mirrors the real serialized-write behavior) so the render+persist tests
 // can assert the exact slot the route/tool would write.
-const updateStageWithLatestMock = vi.fn(async (issueId, stageId, computeFn) => {
-  const current = structuredClone(mockIssue.stages[stageId] || {});
+const DEFAULT_UPDATE_STAGE_WITH_LATEST = async (issueId, stageId, computeFn) => {
+  const current = structuredClone(persistedStages[stageId] || {});
   const patch = computeFn(current);
   const stage = { ...current, ...patch };
   return { issue: { ...mockIssue, stages: { ...mockIssue.stages, [stageId]: stage } }, stage };
-});
+};
+const updateStageWithLatestMock = vi.fn(DEFAULT_UPDATE_STAGE_WITH_LATEST);
 vi.mock('./issues.js', () => ({
   getIssue: (...a) => getIssueMock(...a),
   updateStage: (...a) => updateStageMock(...a),
@@ -130,13 +138,31 @@ const {
 // tests can feed enqueueVisualImage a canon (pickCanon reads universe.characters).
 const { getUniverse } = await import('../universeBuilder.js');
 
+// Point BOTH the outer `getIssue` read and the serialized write tail at the
+// same storyboards scenes, so a mutator computed inside the write region sees
+// the array the caller validated against.
+const useStoryboardScenes = (scenes) => {
+  persistedStages.storyboards = { scenes: structuredClone(scenes) };
+  getIssueMock.mockResolvedValueOnce({
+    ...structuredClone(mockIssue),
+    stages: { ...structuredClone(mockIssue.stages), storyboards: { scenes: structuredClone(scenes) } },
+  });
+};
+
 beforeEach(() => {
-  getIssueMock.mockClear();
+  persistedStages = structuredClone(mockIssue.stages);
+  // Restore implementations, not just call logs — tests that install a
+  // stateful write tail (#3400) or a describe-level getIssue would otherwise
+  // leak into every later test in this 1500-line file.
+  getIssueMock.mockReset();
+  getIssueMock.mockImplementation(DEFAULT_GET_ISSUE);
   updateStageMock.mockClear();
-  updateStageWithLatestMock.mockClear();
+  updateStageWithLatestMock.mockReset();
+  updateStageWithLatestMock.mockImplementation(DEFAULT_UPDATE_STAGE_WITH_LATEST);
+  enqueueJobMock.mockReset();
+  enqueueJobMock.mockImplementation(() => ({ jobId: 'job-fake-1234' }));
   updateSeasonOnSeriesMock.mockClear();
   assertStageUnlockedMock.mockClear();
-  enqueueJobMock.mockClear();
   // Restore the default implementation — several #904 tests install a
   // per-test mockImplementation/mockRejectedValue that would otherwise leak
   // into the next test (mockClear resets calls, not the implementation).
@@ -568,12 +594,9 @@ describe('enqueueStoryboardSceneVideo', () => {
       kind: 'video',
       params: expect.objectContaining({ mode: 't2v', disableAudio: true, width: 432, height: 768 }),
     }));
-    expect(updateStageMock).toHaveBeenCalledWith('iss-test', 'storyboards', expect.objectContaining({
-      status: 'edited',
-      scenes: expect.arrayContaining([
-        expect.objectContaining({ sceneVideoJobId: 'job-fake-1234' }),
-      ]),
-    }));
+    expect(updateStageWithLatestMock).toHaveBeenCalledWith('iss-test', 'storyboards', expect.any(Function));
+    expect(result.stage.scenes[0].sceneVideoJobId).toBe('job-fake-1234');
+    expect(result.stage.status).toBe('edited');
   });
 });
 
@@ -604,10 +627,7 @@ describe('enqueueStoryboardShotStartFrame', () => {
   });
 
   it('happy path: enqueues image job, stamps startFrameJobId on the shot', async () => {
-    getIssueMock.mockResolvedValueOnce({
-      ...structuredClone(mockIssue),
-      stages: { ...mockIssue.stages, storyboards: { scenes: [{ description: 'wide', shots: [{ id: 's1', description: 'close on the lock' }] }] } },
-    });
+    useStoryboardScenes([{ description: 'wide', shots: [{ id: 's1', description: 'close on the lock' }] }]);
     const result = await enqueueStoryboardShotStartFrame('iss-test', 0, 0);
     expect(result.jobId).toBe('job-fake-1234');
     expect(result.sceneIndex).toBe(0);
@@ -616,25 +636,114 @@ describe('enqueueStoryboardShotStartFrame', () => {
       kind: 'image',
       owner: 'pipeline:iss-test:storyboards:scene0:shot0',
     }));
-    expect(updateStageMock).toHaveBeenCalledWith('iss-test', 'storyboards', expect.objectContaining({
-      status: 'edited',
-      scenes: expect.arrayContaining([
-        expect.objectContaining({
-          shots: expect.arrayContaining([
-            expect.objectContaining({ startFrameJobId: 'job-fake-1234' }),
-          ]),
-        }),
-      ]),
-    }));
+    expect(updateStageWithLatestMock).toHaveBeenCalledWith('iss-test', 'storyboards', expect.any(Function));
+    expect(result.stage.scenes[0].shots[0].startFrameJobId).toBe('job-fake-1234');
+    expect(result.stage.status).toBe('edited');
   });
 
   it('falls back to the parent scene description when the shot description is empty', async () => {
-    getIssueMock.mockResolvedValueOnce({
-      ...structuredClone(mockIssue),
-      stages: { ...mockIssue.stages, storyboards: { scenes: [{ description: 'wide shot of the bridge at dawn', shots: [{ id: 's1', description: '' }] }] } },
-    });
+    useStoryboardScenes([{ description: 'wide shot of the bridge at dawn', shots: [{ id: 's1', description: '' }] }]);
     const result = await enqueueStoryboardShotStartFrame('iss-test', 0, 0);
     expect(result.prompt).toMatch(/bridge at dawn/i);
+  });
+});
+
+// #3400 — two enqueues for DIFFERENT scenes on the same issue used to clobber
+// each other: both read `scenes` up front, then each wrote the whole pre-read
+// array back through `updateStage`, so the second write reverted the first
+// scene's freshly-stamped job id and left that job running untracked.
+// `updateStage` serializing the writes never helped — the array being written
+// was computed outside the lock. These tests drive both enqueues concurrently
+// against a genuinely stateful store and assert BOTH job ids survive.
+describe('concurrent storyboard scene enqueues (#3400)', () => {
+  // A real serialized write tail: one shared persisted stage, one mutex, and
+  // the caller's computeFn evaluated INSIDE the lock against fresh state.
+  const installSerializedWriteTail = (initialScenes) => {
+    const persisted = { storyboards: { scenes: structuredClone(initialScenes) } };
+    let tail = Promise.resolve();
+    getIssueMock.mockImplementation(async () => ({
+      ...structuredClone(mockIssue),
+      stages: { ...structuredClone(mockIssue.stages), storyboards: structuredClone(persisted.storyboards) },
+    }));
+    updateStageWithLatestMock.mockImplementation((issueId, stageId, computeFn) => {
+      tail = tail.then(async () => {
+        // yield once inside the lock so an unserialized implementation would
+        // definitely interleave here
+        await Promise.resolve();
+        const current = structuredClone(persisted[stageId] || {});
+        const patch = computeFn(current);
+        persisted[stageId] = { ...current, ...patch };
+        return { issue: { ...mockIssue, stages: structuredClone(persisted) }, stage: structuredClone(persisted[stageId]) };
+      });
+      return tail;
+    });
+    return persisted;
+  };
+
+  it('keeps both sceneVideoJobIds when two scene-video enqueues interleave', async () => {
+    const persisted = installSerializedWriteTail([
+      { slugline: 'A', description: 'Scene 1.' },
+      { slugline: 'B', description: 'Scene 2.' },
+    ]);
+    enqueueJobMock
+      .mockReturnValueOnce({ jobId: 'job-scene-0' })
+      .mockReturnValueOnce({ jobId: 'job-scene-1' });
+
+    await Promise.all([
+      enqueueStoryboardSceneVideo('iss-test', 0, {}),
+      enqueueStoryboardSceneVideo('iss-test', 1, {}),
+    ]);
+
+    expect(persisted.storyboards.scenes[0].sceneVideoJobId).toBe('job-scene-0');
+    expect(persisted.storyboards.scenes[1].sceneVideoJobId).toBe('job-scene-1');
+  });
+
+  it('keeps both startFrameJobIds when two shot enqueues on different scenes interleave', async () => {
+    const persisted = installSerializedWriteTail([
+      { description: 'Scene 1.', shots: [{ id: 's1', description: 'shot one' }] },
+      { description: 'Scene 2.', shots: [{ id: 's2', description: 'shot two' }] },
+    ]);
+    enqueueJobMock
+      .mockReturnValueOnce({ jobId: 'job-shot-0' })
+      .mockReturnValueOnce({ jobId: 'job-shot-1' });
+
+    await Promise.all([
+      enqueueStoryboardShotStartFrame('iss-test', 0, 0),
+      enqueueStoryboardShotStartFrame('iss-test', 1, 0),
+    ]);
+
+    expect(persisted.storyboards.scenes[0].shots[0].startFrameJobId).toBe('job-shot-0');
+    expect(persisted.storyboards.scenes[1].shots[0].startFrameJobId).toBe('job-shot-1');
+  });
+
+  it('a scene-video enqueue does not revert a concurrent sibling-scene prompt refine', async () => {
+    const persisted = installSerializedWriteTail([
+      { description: 'Scene 1.' },
+      { description: 'Scene 2.' },
+    ]);
+    enqueueJobMock.mockReturnValueOnce({ jobId: 'job-scene-0' });
+
+    await Promise.all([
+      enqueueStoryboardSceneVideo('iss-test', 0, {}),
+      refineStoryboardScenePrompt('iss-test', 1),
+    ]);
+
+    expect(persisted.storyboards.scenes[0].sceneVideoJobId).toBe('job-scene-0');
+    expect(persisted.storyboards.scenes[1].description).toBe('refined prompt body');
+  });
+
+  it('404s when the target scene disappeared before the write landed', async () => {
+    installSerializedWriteTail([{ description: 'Scene 1.' }, { description: 'Scene 2.' }]);
+    getIssueMock.mockResolvedValueOnce({
+      ...structuredClone(mockIssue),
+      stages: {
+        ...structuredClone(mockIssue.stages),
+        // the caller reads 3 scenes, but only 2 are persisted by write time
+        storyboards: { scenes: [{ description: 'a' }, { description: 'b' }, { description: 'c' }] },
+      },
+    });
+    await expect(enqueueStoryboardSceneVideo('iss-test', 2, {}))
+      .rejects.toThrow(/out of range/);
   });
 });
 
@@ -1314,12 +1423,11 @@ describe('refineStoryboardScenePrompt', () => {
       }),
       expect.objectContaining({ returnsJson: true }),
     );
-    expect(updateStageMock).toHaveBeenCalledWith('iss-test', 'storyboards', expect.objectContaining({
-      status: 'edited',
-      scenes: expect.arrayContaining([
-        expect.objectContaining({ description: 'refined prompt body' }),
-      ]),
-    }));
+    expect(updateStageWithLatestMock).toHaveBeenCalledWith('iss-test', 'storyboards', expect.any(Function));
+    expect(result.stage.scenes[1].description).toBe('refined prompt body');
+    // the sibling scene this call never touched is preserved verbatim
+    expect(result.stage.scenes[0].description).toBe('Scene 1 baseline.');
+    expect(result.scene.description).toBe('refined prompt body');
   });
 });
 
