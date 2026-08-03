@@ -6,11 +6,12 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, Sparkles, Save, History } from 'lucide-react';
+import { Loader2, Sparkles, Save, History, Check, X } from 'lucide-react';
 import toast from '../../ui/Toast';
 import ProseEditor from '../../ui/ProseEditor';
 import {
   generatePipelineStage, updatePipelineIssue,
+  pipelineStageProgressUrl,
   PIPELINE_STAGE_LABELS,
   PIPELINE_TEXT_STAGES,
   PIPELINE_DEFAULT_FORWARD_SOURCE as DEFAULT_FORWARD_SOURCE,
@@ -18,9 +19,28 @@ import {
   PIPELINE_STAGE_STATUS_COLOR as STATUS_COLOR,
 } from '../../../services/api';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
+import { useSseProgress, isTerminalSseFrame } from '../../../hooks/useSseProgress';
+import { formatDurationMs } from '../../../utils/formatters';
 import StageHistoryModal from './StageHistoryModal';
 
 const stageHasContent = (stage) => Boolean(stage?.input?.trim() || stage?.output?.trim());
+
+// Human-readable labels for the live progress line, mirroring PolishPanel's
+// phase-label pattern. The server's own `label` is the fallback so a new phase
+// still reads sensibly before this map catches up.
+const PHASE_LABEL = {
+  context: 'Building prompt context…',
+  generate: 'Drafting…',
+  judge: 'Judging the draft…',
+  restore: 'Restoring the best draft…',
+  budget: 'Budget spent — keeping the best draft…',
+  canon: 'Extracting canon…',
+};
+
+// null/undefined = the judge never scored this attempt, which is NOT the same as
+// a legitimate score of 0 — render the two differently rather than gating on
+// truthiness.
+const fmtScore = (v) => (Number.isFinite(v) ? (Math.round(v * 10) / 10).toString() : '—');
 
 export default function TextStagePanel({
   issue,
@@ -46,6 +66,17 @@ export default function TextStagePanel({
   const [serverGenerating, setServerGenerating] = useState(stage.status === 'generating');
   const [historyOpen, setHistoryOpen] = useState(false);
   const runHistory = stage.runHistory || [];
+
+  // Live generation progress (#3393). The URL is set for the duration of one
+  // generate call; the server opens the channel when we attach, so subscribing
+  // just before the POST can't race it. Frames survive the teardown so the
+  // attempt scorecard stays on screen after the run finishes.
+  const [progressUrl, setProgressUrl] = useState(null);
+  // Which issue+stage the retained frames describe — the panel is reused across
+  // issues, and a stale scorecard from a different record must not linger.
+  const [progressFor, setProgressFor] = useState(null);
+  const { frames } = useSseProgress(progressUrl, { enabled: !!progressUrl });
+  const progressKey = `${issue.id}:${stageId}`;
 
   // Other text stages that currently have content — the candidate source
   // material for this generation. Excludes the target stage itself. Lets you
@@ -92,11 +123,41 @@ export default function TextStagePanel({
   const generating = localGenerating || serverGenerating;
 
   const handleGenerate = async () => {
+    // Subscribe to the progress stream first. It is purely advisory — an
+    // environment without EventSource (or a channel that never opens) just
+    // falls back to the spinner; generation itself is unaffected.
+    setProgressFor(progressKey);
+    if (typeof EventSource !== 'undefined') {
+      setProgressUrl(pipelineStageProgressUrl(issue.id, stageId));
+    }
     const result = await runGenerate();
+    // Close the stream once the POST has settled — the terminal frame has
+    // already landed, and the frames stay rendered after the teardown.
+    setProgressUrl(null);
     if (!result) return;
     onStageUpdate?.(stageId, result.stage);
     toast.success(`${PIPELINE_STAGE_LABELS[stageId]} generated`);
   };
+
+  // Derived progress view. `activePhase` is the most recent phase frame that
+  // hasn't been superseded by a terminal frame — same walk PolishPanel does.
+  const showProgress = progressFor === progressKey;
+  const attemptFrames = useMemo(
+    () => (showProgress ? frames.filter((f) => f.type === 'attempt') : []),
+    [frames, showProgress],
+  );
+  const gateFrame = useMemo(
+    () => (showProgress ? frames.find((f) => f.type === 'gate') || null : null),
+    [frames, showProgress],
+  );
+  const activePhase = useMemo(() => {
+    if (!generating || !showProgress) return null;
+    for (let i = frames.length - 1; i >= 0; i -= 1) {
+      if (isTerminalSseFrame(frames[i])) return null;
+      if (frames[i].type === 'phase') return frames[i];
+    }
+    return null;
+  }, [frames, generating, showProgress]);
 
   const dirty = draftOutput !== (stage.output || '') || draftInput !== (stage.input || '');
   // Generate gates on OUTPUT drift only: the seed input is sent live with the
@@ -191,6 +252,57 @@ export default function TextStagePanel({
               </button>
             );
           })}
+        </div>
+      ) : null}
+
+      {(activePhase || attemptFrames.length > 0) ? (
+        <div className="border border-port-border rounded p-3 space-y-2 bg-port-bg/40">
+          <div className="flex items-center justify-between gap-2 text-[11px] flex-wrap">
+            <span className="uppercase tracking-wider text-gray-500">Generation progress</span>
+            {activePhase ? (
+              <span className="flex items-center gap-1.5 text-port-accent">
+                <Loader2 size={11} className="animate-spin" />
+                {PHASE_LABEL[activePhase.phase] || activePhase.label || activePhase.phase}
+                {activePhase.attempts > 1 ? (
+                  <span className="text-gray-500">· attempt {activePhase.attempt} of {activePhase.attempts}</span>
+                ) : null}
+              </span>
+            ) : null}
+          </div>
+          {attemptFrames.length > 0 ? (
+            <ul className="space-y-1">
+              {attemptFrames.map((f) => {
+                // Before the gate frame lands nothing is decided yet — don't
+                // pre-label an attempt as rejected mid-run.
+                const decided = !!gateFrame;
+                const won = decided && f.runId === gateFrame.winner;
+                return (
+                  <li key={f.runId || f.attempt} className="flex items-center gap-2 text-[12px]">
+                    <span className="text-gray-500 w-20 shrink-0">Attempt {f.attempt}</span>
+                    <span className="px-1.5 py-0.5 rounded border border-port-border bg-port-card text-[11px] tabular-nums shrink-0">
+                      {fmtScore(f.qualityScore)}
+                    </span>
+                    {decided ? (
+                      won ? (
+                        <span className="flex items-center gap-1 text-port-success text-[11px]"><Check size={11} /> kept</span>
+                      ) : (
+                        <span className="flex items-center gap-1 text-gray-500 text-[11px]"><X size={11} /> rejected</span>
+                      )
+                    ) : null}
+                    <span className="text-gray-600 text-[10px] tabular-nums ml-auto">
+                      {Number.isFinite(f.outputLength) ? `${f.outputLength.toLocaleString()} chars · ` : ''}
+                      {formatDurationMs(f.ms)}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+          {gateFrame?.stoppedEarly ? (
+            <div className="text-[11px] text-gray-500 italic">
+              Stopped early after {gateFrame.ran} of {gateFrame.attempts} attempts.
+            </div>
+          ) : null}
         </div>
       ) : null}
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -83,6 +83,8 @@ const universeSvc = await import('../universeBuilder.js');
 const promptSvc = await import('../promptService.js');
 const pipelineJudge = await import('./pipelineJudge.js');
 const textStages = await import('./textStages.js');
+const textStageProgress = await import('./textStageProgress.js');
+const runnerSvc = await import('../runner.js');
 
 // Strip the `RENDERED:<stage>:` prefix that the mocked buildPrompt prepends
 // so the asserted-against context is the bare JSON tree.
@@ -1257,5 +1259,109 @@ describe('multi-candidate draft gate (#2169, CWQE Phase 5)', () => {
     expect(llmCalls).toHaveLength(1);
     expect(pipelineJudge.judgeIssue).not.toHaveBeenCalled();
     expect(result.stage.draftGate).toBeNull();
+  });
+});
+
+describe('text-stage generation progress frames (#3393)', () => {
+  // Minimal Express `res` stand-in for the SSE channel — see
+  // textStageProgress.test.js for the channel's own lifecycle coverage.
+  function fakeRes() {
+    return {
+      written: [],
+      writeHead() {},
+      write(chunk) { this.written.push(chunk); },
+      end() {},
+      req: { on: () => {} },
+    };
+  }
+  const framesOf = (res) => res.written.map((c) => JSON.parse(c.replace(/^data: /, '').trim()));
+
+  beforeEach(() => {
+    fileStore.clear();
+    uuidCounter = 0;
+    llmCalls.length = 0;
+    vi.clearAllMocks();
+    promptSvc.getStage.mockReturnValue(null);
+    pipelineJudge.judgeIssue.mockResolvedValue({ status: 'no-content' });
+    textStageProgress.__testing.reset();
+  });
+  afterEach(() => textStageProgress.__testing.reset());
+
+  async function seedProse() {
+    const series = await seriesSvc.createSeries({ name: 'Stream', logline: 'L', premise: 'P' });
+    const issue = await issuesSvc.createIssue({ seriesId: series.id, title: 'One' });
+    return { series, issue };
+  }
+
+  it('generates normally with nobody subscribed (the channel is never a dependency)', async () => {
+    const { issue } = await seedProse();
+    const result = await textStages.generateStage(issue.id, 'prose', {});
+    expect(result.stage.status).toBe('ready');
+    expect(textStageProgress.isChannelOpen(issue.id, 'prose')).toBe(false);
+  });
+
+  it('streams start → context → generate → complete on the single-shot path', async () => {
+    const { issue } = await seedProse();
+    const res = fakeRes();
+    textStageProgress.attachClient(issue.id, 'prose', res);
+    await textStages.generateStage(issue.id, 'prose', {});
+
+    const frames = framesOf(res);
+    expect(frames.map((f) => f.type)).toEqual(['start', 'phase', 'phase', 'complete']);
+    expect(frames[1].phase).toBe('context');
+    expect(frames[2]).toMatchObject({ phase: 'generate', attempt: 1, attempts: 1 });
+    expect(frames[3]).toMatchObject({ type: 'complete', stageId: 'prose' });
+    expect(frames[3].outputLength).toBeGreaterThan(0);
+  });
+
+  it('streams per-attempt draft-gate progress with the judge score', async () => {
+    promptSvc.getStage.mockReturnValue({ draftAttempts: 2 });
+    let i = 0;
+    pipelineJudge.judgeIssue.mockImplementation(async () => {
+      const q = [5, 8][Math.min(i++, 1)];
+      return { status: 'complete', qualityScore: q, overall: q, slopPenalty: 0 };
+    });
+    const { issue } = await seedProse();
+    const res = fakeRes();
+    textStageProgress.attachClient(issue.id, 'prose', res);
+    await textStages.generateStage(issue.id, 'prose', {});
+
+    const frames = framesOf(res);
+    const generatePhases = frames.filter((f) => f.type === 'phase' && f.phase === 'generate');
+    expect(generatePhases.map((f) => f.attempt)).toEqual([1, 2]);
+    expect(generatePhases.every((f) => f.attempts === 2)).toBe(true);
+    expect(frames.filter((f) => f.type === 'phase' && f.phase === 'judge')).toHaveLength(2);
+
+    const attempts = frames.filter((f) => f.type === 'attempt');
+    expect(attempts.map((f) => f.qualityScore)).toEqual([5, 8]);
+    const gate = frames.find((f) => f.type === 'gate');
+    expect(gate).toMatchObject({ keptScore: 8, ran: 2, attempts: 2, stoppedEarly: false });
+    expect(gate.winner).toBe(attempts[1].runId);
+    expect(frames.at(-1).type).toBe('complete');
+  });
+
+  it('reports an unscored attempt as null rather than 0', async () => {
+    promptSvc.getStage.mockReturnValue({ draftAttempts: 2 });
+    pipelineJudge.judgeIssue.mockResolvedValue({ status: 'no-content' });
+    const { issue } = await seedProse();
+    const res = fakeRes();
+    textStageProgress.attachClient(issue.id, 'prose', res);
+    await textStages.generateStage(issue.id, 'prose', {});
+
+    const attempts = framesOf(res).filter((f) => f.type === 'attempt');
+    expect(attempts).toHaveLength(2);
+    expect(attempts.every((f) => f.qualityScore === null)).toBe(true);
+  });
+
+  it('ships a terminal error frame when generation throws, then rethrows', async () => {
+    const { issue } = await seedProse();
+    const res = fakeRes();
+    textStageProgress.attachClient(issue.id, 'prose', res);
+    runnerSvc.executeApiRun.mockImplementationOnce(async ({ onComplete }) => { onComplete({ error: 'provider exploded' }); });
+
+    await expect(textStages.generateStage(issue.id, 'prose', {})).rejects.toThrow(/provider exploded/);
+    const frames = framesOf(res);
+    expect(frames.at(-1)).toMatchObject({ type: 'error', stageId: 'prose' });
+    expect(frames.at(-1).error).toMatch(/provider exploded/);
   });
 });

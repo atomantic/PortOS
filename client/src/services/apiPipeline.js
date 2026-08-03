@@ -164,6 +164,12 @@ export const generatePipelineStage = (issueId, stageId, opts = {}, options = {})
     ...options,
   });
 
+// SSE progress stream for the generate call above (#3393). Attaching OPENS the
+// channel server-side, so the caller can subscribe before (or alongside) the
+// POST without racing it. Path only — feed it to `useSseProgress`.
+export const pipelineStageProgressUrl = (issueId, stageId) =>
+  `/api/pipeline/issues/${encodeURIComponent(issueId)}/stages/${encodeURIComponent(stageId)}/generate/progress`;
+
 export const generatePipelineVisualImage = (issueId, stageId, opts, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/${encodeURIComponent(stageId)}/visual`, {
     method: 'POST',

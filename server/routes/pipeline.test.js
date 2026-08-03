@@ -666,6 +666,15 @@ describe('pipeline routes', () => {
     expect(r.body.code || r.body.error).toBeTruthy();
   });
 
+  // The happy path holds the SSE response open by design, so assert the guard
+  // instead — the channel's own lifecycle is covered by
+  // services/pipeline/textStageProgress.test.js.
+  it('GET /issues/:id/stages/:stageId/generate/progress rejects a non-text stage', async () => {
+    const app = makeApp();
+    const r = await request(app).get('/api/pipeline/issues/iss-1/stages/comicPages/generate/progress');
+    expect(r.status).toBe(400);
+  });
+
   describe('POST /issues/:id/stages/:stageId/restore', () => {
     it('restores a prior runHistory snapshot and snapshots the displaced current state', async () => {
       const app = makeApp();

@@ -18,6 +18,7 @@ import {
 import * as seriesSvc from '../../services/pipeline/series.js';
 import * as issuesSvc from '../../services/pipeline/issues.js';
 import { generateStage } from '../../services/pipeline/textStages.js';
+import * as textStageProgress from '../../services/pipeline/textStageProgress.js';
 import * as autoRunner from '../../services/pipeline/autoRunner.js';
 import {
   enqueueVisualImage,
@@ -184,6 +185,13 @@ const generateSchema = z.object({
   // any stage FROM any other populated stage). Omit for the conventional
   // forward source. The service drops the target itself and empty stages.
   sourceStageIds: z.array(z.enum(issuesSvc.TEXT_STAGE_IDS)).optional(),
+});
+
+// Path params for the text-stage progress stream. The stage must be a text
+// stage — a visual/audio stage has no text-generation channel to attach to.
+const stageProgressParamsSchema = z.object({
+  id: z.string().trim().min(1).max(200),
+  stageId: z.enum(issuesSvc.TEXT_STAGE_IDS),
 });
 
 const visualGenerateSchema = z.object({
@@ -432,6 +440,15 @@ router.post('/issues/:id/stages/:stageId/generate', asyncHandler(async (req, res
   const result = await generateStage(id, stageId, body).catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));
+
+// Live progress for the POST above (#3393). Subscribe-then-trigger: attaching
+// OPENS the channel, so the client can connect before (or concurrently with)
+// the generate POST without racing it — and generation runs unchanged when
+// nobody is listening. See services/pipeline/textStageProgress.js.
+router.get('/issues/:id/stages/:stageId/generate/progress', (req, res) => {
+  const { id, stageId } = validateRequest(stageProgressParamsSchema, req.params);
+  textStageProgress.attachClient(id, stageId, res);
+});
 
 // Restore a prior text-stage version from history. See
 // issuesSvc.restoreStageFromHistory for the reversibility semantics.

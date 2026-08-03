@@ -12,10 +12,16 @@
  *
  * Errors bubble (per project convention — no try/catch) except at the SSE
  * boundary in autoRunner.js, which routes failures through a finalizer.
+ *
+ * Progress (#3393): every phase of a run is broadcast through
+ * `textStageProgress.js` so the UI shows attempt/judge progress instead of a
+ * blind spinner. The channel is advisory — when nobody is subscribed every
+ * emit is a no-op and generation is byte-for-byte the un-streamed path.
  */
 
 import { runStagedLLM, resolveStageContext } from '../../lib/stageRunner.js';
 import { getStage } from '../promptService.js';
+import { emitStageProgress, finishStageProgress } from './textStageProgress.js';
 import { getSeries } from './series.js';
 import { extractCanonFromProse, summarizeCanonExtraction } from '../universeCanon.js';
 import { getIssue, listIssues, updateStage, assertStageUnlocked, TEXT_STAGE_IDS } from './issues.js';
@@ -704,7 +710,7 @@ async function runStageLLMOnce(issueId, stageId, template, ctx, options) {
  * budget exhausted) and keep the best attempt so far. Route callers pass no
  * chargeAction, so a manual regenerate is never cos-billed.
  */
-async function runDraftGate({ issueId, stageId, template, ctx, options, gate }) {
+async function runDraftGate({ issueId, stageId, template, ctx, options, gate, emit = () => {} }) {
   // Dynamic import breaks the textStages ↔ pipelineJudge require cycle (the judge
   // imports scopeCharactersForIssue/stageContentOf from here) and keeps the judge
   // out of the module-eval graph for callers that never gate.
@@ -720,16 +726,19 @@ async function runDraftGate({ issueId, stageId, template, ctx, options, gate }) 
       const ok = await options.chargeAction({ attempt: i + 1 });
       if (ok === false) {
         console.log(`💸 Pipeline draft-gate — issue=${issueId.slice(0, 8)} stage=${stageId} budget exhausted after ${i} attempt(s)`);
+        emit({ type: 'phase', phase: 'budget', label: 'Budget spent — keeping the best draft so far', attempt: i + 1, attempts: gate.attempts });
         break;
       }
     }
     const started = Date.now();
+    emit({ type: 'phase', phase: 'generate', label: `Drafting attempt ${i + 1} of ${gate.attempts}`, attempt: i + 1, attempts: gate.attempts });
     const res = await runStageLLMOnce(issueId, stageId, template, ctx, options);
     last = res;
     let qualityScore = null;
     let overall = null;
     let slopPenalty = null;
     if (res.output) {
+      emit({ type: 'phase', phase: 'judge', label: `Judging attempt ${i + 1} of ${gate.attempts}`, attempt: i + 1, attempts: gate.attempts });
       const snap = await judgeIssue(issueId, { stageId, force: true }).catch((err) => {
         console.warn(`⚠️ Pipeline draft-gate judge failed — issue=${issueId.slice(0, 8)} attempt=${i + 1}: ${err.message}`);
         return null;
@@ -742,6 +751,20 @@ async function runDraftGate({ issueId, stageId, template, ctx, options, gate }) 
     }
     attempts.push({ runId: res.runId, output: res.output, input: res.stage?.input || '', qualityScore, overall, slopPenalty });
     console.log(`🎲 Pipeline draft-gate — issue=${issueId.slice(0, 8)} stage=${stageId} attempt=${i + 1}/${gate.attempts} quality=${qualityScore ?? 'n/a'} in ${Date.now() - started}ms`);
+    emit({
+      type: 'attempt',
+      attempt: i + 1,
+      attempts: gate.attempts,
+      runId: res.runId,
+      // null (not 0) when the judge was unavailable — an unscored attempt is not
+      // a zero-scoring one, and the UI renders the two differently.
+      qualityScore,
+      overall,
+      slopPenalty,
+      threshold: gate.threshold,
+      outputLength: res.output.length,
+      ms: Date.now() - started,
+    });
     // Early-stop once a draft clears the configured bar — no point re-rolling.
     if (gate.threshold != null && qualityScore != null && qualityScore >= gate.threshold) break;
   }
@@ -756,6 +779,7 @@ async function runDraftGate({ issueId, stageId, template, ctx, options, gate }) 
   // restoreStageFromHistory) survives a runHistory cap eviction and keeps the
   // 'ready' status. The displaced last attempt is snapshotted back into history.
   if (best && last && best.runId !== last.runId) {
+    emit({ type: 'phase', phase: 'restore', label: 'Restoring the best-scoring draft', attempt: attempts.length, attempts: gate.attempts });
     const restored = await updateStage(issueId, stageId, {
       status: best.output ? 'ready' : 'error',
       input: best.input,
@@ -792,6 +816,15 @@ async function runDraftGate({ issueId, stageId, template, ctx, options, gate }) 
   if (stamped && final) final = { issue: stamped.issue, stage: stamped.stage, runId: final.runId, output: final.output };
 
   console.log(`🏁 Pipeline draft-gate — issue=${issueId.slice(0, 8)} stage=${stageId} kept=${best?.qualityScore ?? 'n/a'} from ${attempts.length} attempt(s)${stoppedEarly ? ' (stopped early)' : ''}`);
+  emit({
+    type: 'gate',
+    winner: winnerRunId,
+    keptScore: best?.qualityScore ?? null,
+    ran: attempts.length,
+    attempts: gate.attempts,
+    threshold: gate.threshold,
+    stoppedEarly,
+  });
   return final;
 }
 
@@ -800,8 +833,9 @@ async function runDraftGate({ issueId, stageId, template, ctx, options, gate }) 
 // extract usefully. Non-fatal — prose succeeded, and a noisy extract shouldn't
 // roll back the user's accepted draft. An orphan series (no universeId) skips
 // extraction entirely. Returns the stamped { issue, stage } or null (unchanged).
-async function maybeExtractCanon(issueId, stageId, output, series, options) {
+async function maybeExtractCanon(issueId, stageId, output, series, options, emit = () => {}) {
   if (stageId !== 'prose' || !output || !series.universeId) return null;
+  emit({ type: 'phase', phase: 'canon', label: 'Extracting canon from the draft' });
   // Canon extraction follows whichever provider/model drove this prose stage —
   // the manual route's hard `providerId`/`model` OR Series Autopilot's soft run
   // defaults (#1514/#1558). Record only the provider actually forwarded so the
@@ -849,6 +883,37 @@ export async function generateStage(issueId, stageId, options = {}) {
   if (!TEXT_STAGE_IDS.includes(stageId)) {
     throw new Error(`generateStage: unsupported stageId "${stageId}"`);
   }
+  const emit = (payload) => emitStageProgress(issueId, stageId, payload);
+  emit({ type: 'start', issueId, stageId, at: new Date().toISOString() });
+  // Settle to an outcome object rather than try/catch so the terminal frame
+  // ships on BOTH paths before the error resumes bubbling to the caller.
+  const outcome = await runTextStage(issueId, stageId, options, emit)
+    .then((result) => ({ result }), (error) => ({ error }));
+  if (outcome.error) {
+    finishStageProgress(issueId, stageId, {
+      type: 'error',
+      issueId,
+      stageId,
+      error: (outcome.error?.message || String(outcome.error)).slice(0, 1000),
+      failedAt: new Date().toISOString(),
+    });
+    throw outcome.error;
+  }
+  finishStageProgress(issueId, stageId, {
+    type: 'complete',
+    issueId,
+    stageId,
+    runId: outcome.result.runId,
+    outputLength: (outcome.result.stage?.output || '').length,
+    completedAt: new Date().toISOString(),
+  });
+  return outcome.result;
+}
+
+// The generation itself — everything between the `start` and terminal progress
+// frames. Split out of generateStage so the frames wrap the whole run (context
+// build included) without a try/catch around it.
+async function runTextStage(issueId, stageId, options, emit) {
   const template = STAGE_TO_TEMPLATE[stageId];
   const issue = await getIssue(issueId);
   const series = await getSeries(issue.seriesId);
@@ -868,19 +933,24 @@ export async function generateStage(issueId, stageId, options = {}) {
 
   await updateStage(issueId, stageId, { status: 'generating', errorMessage: '' });
 
+  emit({ type: 'phase', phase: 'context', label: 'Building the prompt context' });
   const ctx = await buildGenerationContext({ series, canon, world, issue, stageId, options });
   const gate = resolveDraftGate(stageId, template, options);
 
   // Draft gate (opt-in, default off) vs the single-shot path. The single-shot
   // path is byte-for-byte the pre-#2169 behavior so a stage with draftAttempts=1
   // (the default) is unchanged.
-  const result = gate.attempts > 1
-    ? await runDraftGate({ issueId, stageId, template, ctx, options, gate })
-    : await runStageLLMOnce(issueId, stageId, template, ctx, options);
+  let result;
+  if (gate.attempts > 1) {
+    result = await runDraftGate({ issueId, stageId, template, ctx, options, gate, emit });
+  } else {
+    emit({ type: 'phase', phase: 'generate', label: 'Drafting', attempt: 1, attempts: 1 });
+    result = await runStageLLMOnce(issueId, stageId, template, ctx, options);
+  }
 
   let { issue: updatedIssue, stage } = result;
   // Prose canon extraction on the FINAL (winning) output — once, not per attempt.
-  const stamped = await maybeExtractCanon(issueId, stageId, result.output, series, options);
+  const stamped = await maybeExtractCanon(issueId, stageId, result.output, series, options, emit);
   if (stamped) ({ issue: updatedIssue, stage } = stamped);
 
   return { issue: updatedIssue, stage, runId: result.runId };

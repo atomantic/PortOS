@@ -16,6 +16,7 @@
  *   PATCH  /issues/:id                          → Issue
  *   DELETE /issues/:id                          → { id }
  *   POST   /issues/:id/stages/:stageId/generate → { issue, stage, runId }
+ *   GET    /issues/:id/stages/:stageId/generate/progress → SSE (text/event-stream)
  *   POST   /issues/:id/stages/:stageId/visual   → { jobId, mode, prompt }
  *   POST   /issues/:id/auto-run-text            → { runId, alreadyRunning, sseUrl }
  *   GET    /issues/:id/auto-run-text/progress   → SSE (text/event-stream)
