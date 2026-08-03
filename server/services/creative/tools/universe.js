@@ -66,7 +66,7 @@ export const UNIVERSE_TOOLS = [
       },
       required: ['universeId'],
     },
-    // Mirror the render route's preflight (routes/universeBuilder.js): for a
+    // Mirror the render route's preflight (routes/universeBuilder/render.js): for a
     // non-canon render of a legacy universe, persist the transient
     // variation/sheet entry ids first (a no-op `updateUniverse` write) so they
     // stay stable across enqueue → completion and the filename hook can attach

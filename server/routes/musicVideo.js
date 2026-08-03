@@ -56,7 +56,7 @@ const router = Router();
 // #3231 Phase 4 — the per-record image render pin (`imageMode`/`imageModelId`,
 // the shared universe/series/sprite field pair) on Music Video projects: scene
 // reference-frame renders resolve through it (imageGen/prepareParams.js).
-// Extended at the route layer — the same pattern as routes/universeBuilder.js —
+// Extended at the route layer — the same pattern as routes/universeBuilder/ —
 // because musicVideoValidation.js can't import recordRenderPinFields from
 // validation.js without a circular import (validation.js re-exports it).
 const projectCreateSchema = musicVideoProjectCreateSchema.extend(recordRenderPinFields);

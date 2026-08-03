@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
-import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
-import { enqueueJob } from '../services/mediaJobQueue/index.js';
-import { mockNoPeers, mockNoPeerSync } from '../lib/mockPathsDataRoot.js';
-import * as canonSvc from '../services/universeCanon.js';
+import { request } from '../../lib/testHelper.js';
+import { errorMiddleware } from '../../lib/errorHandler.js';
+import { enqueueJob } from '../../services/mediaJobQueue/index.js';
+import { mockNoPeers, mockNoPeerSync } from '../../lib/mockPathsDataRoot.js';
+import * as canonSvc from '../../services/universeCanon.js';
 
 const fileStore = new Map();
 
@@ -13,7 +13,7 @@ const fileStore = new Map();
 const resolveGalleryImageMock = vi.fn((filename) => (
   typeof filename === 'string' && !filename.includes('missing') ? `/mock/data/images/${filename}` : null
 ));
-vi.mock('../lib/fileUtils.js', () => ({
+vi.mock('../../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
   PATHS: { data: '/mock/data', screenshots: '/mock/data/screenshots', images: '/mock/data/images' },
   ensureDir: vi.fn().mockResolvedValue(undefined),
@@ -38,8 +38,8 @@ const describeEntityFromImagesMock = vi.fn(async () => ({ description: 'mock pro
 const correctEntityFromImageMock = vi.fn(async () => ({
   descField: 'physicalDescription', currentDescription: 'old', proposedDescription: 'corrected', llm: { provider: 'mock', model: null },
 }));
-vi.mock('../services/universeVisionDescribe.js', async () => {
-  const actual = await vi.importActual('../services/universeVisionDescribe.js');
+vi.mock('../../services/universeVisionDescribe.js', async () => {
+  const actual = await vi.importActual('../../services/universeVisionDescribe.js');
   return {
     ...actual,
     describeEntityFromImages: (...args) => describeEntityFromImagesMock(...args),
@@ -50,13 +50,13 @@ const applyCanonImageCorrectionMock = vi.fn(async (_universeId, kind, entryId, b
   universe: { id: _universeId },
   entry: { id: entryId, [kind === 'character' ? 'physicalDescription' : 'description']: body.description, primaryImageRef: body.imageFilename },
 }));
-vi.mock('../services/universeCanon.js', async () => {
-  const actual = await vi.importActual('../services/universeCanon.js');
+vi.mock('../../services/universeCanon.js', async () => {
+  const actual = await vi.importActual('../../services/universeCanon.js');
   return { ...actual, applyCanonImageCorrection: (...args) => applyCanonImageCorrectionMock(...args) };
 });
 const expandEntityFromImagesMock = vi.fn(async () => ({ fields: { pronouns: 'she/her' }, updatedFields: ['pronouns'], llm: { provider: 'mock', model: null } }));
-vi.mock('../services/universeVisionExpand.js', async () => {
-  const actual = await vi.importActual('../services/universeVisionExpand.js');
+vi.mock('../../services/universeVisionExpand.js', async () => {
+  const actual = await vi.importActual('../../services/universeVisionExpand.js');
   return { ...actual, expandEntityFromImages: (...args) => expandEntityFromImagesMock(...args) };
 });
 const refineWorldPromptsMock = vi.fn(async (args) => ({
@@ -64,7 +64,7 @@ const refineWorldPromptsMock = vi.fn(async (args) => ({
   influences: { embrace: [], avoid: [] }, locked: {}, rationale: 'r', changes: [],
   providerId: 'mock', model: null, _imagePath: args?.imagePath ?? null,
 }));
-vi.mock('../services/universeBuilderRefine.js', () => ({
+vi.mock('../../services/universeBuilderRefine.js', () => ({
   refineWorldPrompts: (...args) => refineWorldPromptsMock(...args),
 }));
 const analyzeUniverseStyleReferenceMock = vi.fn(async (args) => ({
@@ -80,13 +80,13 @@ const analyzeUniverseStyleReferenceMock = vi.fn(async (args) => ({
   rationale: 'mock rationale',
   llm: { provider: 'mock', model: null },
 }));
-vi.mock('../services/universeStyleReference.js', () => ({
+vi.mock('../../services/universeStyleReference.js', () => ({
   analyzeUniverseStyleReference: (...args) => analyzeUniverseStyleReferenceMock(...args),
 }));
 
 // Both mocks needed: vitest.setup.js's global `instances.js` mock uses importOriginal, which leaves the per-file `peerSync.js` mock unable to suppress the createUniverse dynamic-import hoist error alone.
-vi.mock('../services/instances.js', () => mockNoPeers());
-vi.mock('../services/sharing/peerSync.js', () => mockNoPeerSync());
+vi.mock('../../services/instances.js', () => mockNoPeers());
+vi.mock('../../services/sharing/peerSync.js', () => mockNoPeerSync());
 
 let uuidCounter = 0;
 vi.mock('crypto', async () => {
@@ -105,10 +105,10 @@ const promoteVariationToCanonMock = vi.fn(async (_universeId, body = {}) => ({
   runId: 'mock-run',
   llm: { provider: 'mock', model: null },
 }));
-vi.mock('../services/universeBuilderPromote.js', async () => {
+vi.mock('../../services/universeBuilderPromote.js', async () => {
   // Pass the real VALID_TARGET_KINDS through so the route's Zod enum
   // can't drift from the source-of-truth list (derived from BIBLE_FIELD).
-  const actual = await vi.importActual('../services/universeBuilderPromote.js');
+  const actual = await vi.importActual('../../services/universeBuilderPromote.js');
   return {
     ...actual,
     promoteVariationToCanon: (...args) => promoteVariationToCanonMock(...args),
@@ -124,7 +124,7 @@ const autoSortOtherBucketsMock = vi.fn(async (universeId, body = {}) => ({
   llm: { provider: 'mock', model: body.model || null },
   runId: 'mock-autosort-run',
 }));
-vi.mock('../services/universeBuilderAutoSort.js', () => ({
+vi.mock('../../services/universeBuilderAutoSort.js', () => ({
   autoSortOtherBuckets: (...args) => autoSortOtherBucketsMock(...args),
 }));
 
@@ -137,7 +137,7 @@ const expandUniverseCharacterMock = vi.fn(async (universeId, entryId) => ({
   runId: 'mock-expand-run',
   providerId: 'mock', model: 'mock',
 }));
-vi.mock('../services/universeCharacterExpand.js', () => ({
+vi.mock('../../services/universeCharacterExpand.js', () => ({
   expandUniverseCharacter: (...args) => expandUniverseCharacterMock(...args),
 }));
 
@@ -147,14 +147,14 @@ vi.mock('../services/universeCharacterExpand.js', () => ({
 const renderCharacterReferenceSheetMock = vi.fn();
 const deleteCharacterReferenceSheetMock = vi.fn();
 const listSheetVariantsMock = vi.fn();
-vi.mock('../services/universeCharacterSheet.js', () => ({
+vi.mock('../../services/universeCharacterSheet.js', () => ({
   renderCharacterReferenceSheet: (...args) => renderCharacterReferenceSheetMock(...args),
   deleteCharacterReferenceSheet: (...args) => deleteCharacterReferenceSheetMock(...args),
   listSheetVariants: (...args) => listSheetVariantsMock(...args),
 }));
 
 // Stub the LLM expander so the route test doesn't shell out to a real provider.
-vi.mock('../services/universeBuilderExpand.js', () => ({
+vi.mock('../../services/universeBuilderExpand.js', () => ({
   expandWorldTemplate: vi.fn(async ({ starterPrompt }) => ({
     influences: {
       embrace: [`mocked style for ${starterPrompt}`],
@@ -176,12 +176,12 @@ vi.mock('../services/universeBuilderExpand.js', () => ({
 }));
 
 // Skip provisioning real settings — we only exercise CRUD + expand here.
-vi.mock('../services/settings.js', () => ({
+vi.mock('../../services/settings.js', () => ({
   getSettings: vi.fn(async () => ({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } })),
   saveSettings: vi.fn(),
 }));
 
-vi.mock('../services/mediaJobQueue/index.js', () => ({
+vi.mock('../../services/mediaJobQueue/index.js', () => ({
   enqueueJob: vi.fn(({ params }) => ({ jobId: `job-${++uuidCounter}`, position: 1, status: 'queued', params })),
 }));
 
@@ -206,7 +206,7 @@ const upsertUniverseRec = ({ universeId, universeName }) => {
   collectionsByUniverseId.set(universeId, rec);
   return rec;
 };
-vi.mock('../services/mediaCollections.js', () => ({
+vi.mock('../../services/mediaCollections.js', () => ({
   createCollection: vi.fn(async ({ name }) => mockCreateRec(name)),
   findOrCreateCollectionByName: vi.fn(async ({ name }) => {
     return collectionsByName.get(name.toLowerCase()) ?? mockCreateRec(name);
@@ -232,7 +232,7 @@ vi.mock('../services/mediaCollections.js', () => ({
   NAME_MAX_LENGTH: 80,
 }));
 
-vi.mock('../lib/mediaModels.js', () => ({
+vi.mock('../../lib/mediaModels.js', () => ({
   getImageModels: () => [{ id: 'dev', label: 'mflux dev' }],
   isFlux2: () => false,
   isZImage: () => false,
@@ -242,19 +242,19 @@ vi.mock('../lib/mediaModels.js', () => ({
 // Controllable listSeries for DELETE /:id → 409 UNIVERSE_HAS_LIVE_SERIES test.
 // universeBuilder.deleteUniverse() calls listSeries() to guard against live series.
 const listSeriesMock = vi.fn(async () => []);
-vi.mock('../services/pipeline/series.js', async () => {
-  const actual = await vi.importActual('../services/pipeline/series.js');
+vi.mock('../../services/pipeline/series.js', async () => {
+  const actual = await vi.importActual('../../services/pipeline/series.js');
   return { ...actual, listSeries: (...args) => listSeriesMock(...args) };
 });
 
 // Controllable mergeFieldsWithAI for ai-resolve error contract tests.
 const mergeFieldsWithAIMock = vi.fn();
-vi.mock('../services/recordMergeAI.js', async () => {
-  const actual = await vi.importActual('../services/recordMergeAI.js');
+vi.mock('../../services/recordMergeAI.js', async () => {
+  const actual = await vi.importActual('../../services/recordMergeAI.js');
   return { ...actual, mergeFieldsWithAI: (...args) => mergeFieldsWithAIMock(...args) };
 });
 
-const universeBuilderRoutes = (await import('./universeBuilder.js')).default;
+const universeBuilderRoutes = (await import('./index.js')).default;
 
 const buildApp = () => {
   const app = express();
@@ -1159,7 +1159,7 @@ describe('universe-builder routes', () => {
       const b = await request(app).post('/api/universe-builder').send({ name: 'AI-B' });
 
       // All requested fields are empty on at least one side — service throws.
-      const { ServerError } = await import('../lib/errorHandler.js');
+      const { ServerError } = await import('../../lib/errorHandler.js');
       mergeFieldsWithAIMock.mockRejectedValueOnce(
         new ServerError('No mergeable text fields', { status: 422, code: 'MERGE_AI_NO_MERGEABLE_FIELDS' }),
       );
@@ -1176,7 +1176,7 @@ describe('universe-builder routes', () => {
       const a = await request(app).post('/api/universe-builder').send({ name: 'NoProvider-A', logline: 'x' });
       const b = await request(app).post('/api/universe-builder').send({ name: 'NoProvider-B', logline: 'y' });
 
-      const { ServerError } = await import('../lib/errorHandler.js');
+      const { ServerError } = await import('../../lib/errorHandler.js');
       mergeFieldsWithAIMock.mockRejectedValueOnce(
         new ServerError('No AI provider available for AI-assisted merge', { status: 503, code: 'MERGE_AI_NO_PROVIDER' }),
       );
@@ -1193,7 +1193,7 @@ describe('universe-builder routes', () => {
       const a = await request(app).post('/api/universe-builder').send({ name: 'BadJSON-A', logline: 'x' });
       const b = await request(app).post('/api/universe-builder').send({ name: 'BadJSON-B', logline: 'y' });
 
-      const { ServerError } = await import('../lib/errorHandler.js');
+      const { ServerError } = await import('../../lib/errorHandler.js');
       mergeFieldsWithAIMock.mockRejectedValueOnce(
         new ServerError('LLM returned invalid JSON for AI merge', { status: 502, code: 'LLM_INVALID_JSON' }),
       );

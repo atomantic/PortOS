@@ -1,7 +1,7 @@
 /**
  * Universe Builder Render Orchestration
  *
- * Extracted from routes/universeBuilder.js POST /:id/render.
+ * Extracted from routes/universeBuilder/render.js POST /:id/render.
  * Owns the full render-job flow: settings validation, image-mode resolution,
  * compilePrompts, LoRA resolution, findOrCreateUniverseCollection,
  * registerUniverseBuilderRun, job enqueue loop, run record.

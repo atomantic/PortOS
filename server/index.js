@@ -120,7 +120,7 @@ import threejsModelsRoutes from './routes/threejsModels.js';
 import imageTo3dRoutes from './routes/imageTo3d.js';
 import privacyRoutes from './routes/privacy.js';
 import writersRoomRoutes from './routes/writersRoom.js';
-import universeBuilderRoutes from './routes/universeBuilder.js';
+import universeBuilderRoutes from './routes/universeBuilder/index.js';
 import authorsRoutes from './routes/authors.js';
 import artistsRoutes from './routes/artists.js';
 import albumsRoutes from './routes/albums.js';
