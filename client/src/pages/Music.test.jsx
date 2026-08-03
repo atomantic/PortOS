@@ -23,6 +23,7 @@ function LocationDisplay() {
 const renderAt = (path) => render(
   <MemoryRouter initialEntries={[path]}>
     <Routes>
+      <Route path="/music" element={<><LocationDisplay /><Music /></>} />
       <Route path="/music/:tab" element={<><LocationDisplay /><Music /></>} />
     </Routes>
   </MemoryRouter>,
@@ -39,6 +40,12 @@ describe('<Music>', () => {
     expect(screen.getByTestId('albums-manager')).toBeInTheDocument();
     expect(screen.queryByTestId('artists-manager')).toBeNull();
     expect(screen.queryByTestId('tracks-manager')).toBeNull();
+  });
+
+  it('defaults bare /music to the artists tab', () => {
+    renderAt('/music');
+    expect(screen.getByTestId('artists-manager')).toBeInTheDocument();
+    expect(screen.queryByTestId('albums-manager')).toBeNull();
   });
 
   it('redirects an unknown tab param to /music/artists', () => {

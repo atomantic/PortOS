@@ -44,7 +44,7 @@ export default function CityFilterBar({ filter, onChange, matchCount, onJumpToFi
 
   return (
     <div className="pointer-events-auto bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg px-2 py-2 flex items-center gap-2 flex-wrap">
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1 flex-wrap">
         {STATUS_FILTERS.map(f => {
           const active = filter.status === f.id;
           return (
