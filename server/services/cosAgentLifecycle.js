@@ -77,6 +77,48 @@ export async function updateAgent(agentId, updates) {
   });
 }
 
+/**
+ * Move a completed agent's directory into its `YYYY-MM-DD` bucket and index it.
+ * Split out of `completeAgent` so the duplicate-completion path can finish an
+ * archive a prior call left half-done (an fs failure between the state write and
+ * the move) without touching the recorded verdict — every step is a no-op when
+ * the destination already exists.
+ */
+async function archiveCompletedAgent(agentId, agent) {
+  // Determine date bucket from completedAt
+  const dateStr = agent.completedAt.slice(0, 10);
+  const bucketDir = join(AGENTS_DIR, dateStr);
+  await ensureDir(bucketDir);
+
+  // Write metadata to flat dir first (may already have output.txt/prompt.txt there)
+  const flatDir = join(AGENTS_DIR, agentId);
+  if (!existsSync(flatDir)) {
+    await ensureDir(flatDir);
+  }
+  const { output: _output, ...agentWithoutOutput } = agent;
+  await atomicWrite(join(flatDir, 'metadata.json'), agentWithoutOutput);
+
+  // Move entire agent dir into date bucket (atomic on same filesystem)
+  const targetDir = join(bucketDir, agentId);
+  if (!existsSync(targetDir)) {
+    await rename(flatDir, targetDir).catch(async () => {
+      // Fallback for cross-filesystem: copy files then remove
+      await ensureDir(targetDir);
+      const files = await readdir(flatDir);
+      for (const file of files) {
+        const content = await readFile(join(flatDir, file));
+        await writeFile(join(targetDir, file), content);
+      }
+      await rm(flatDir, { recursive: true });
+    });
+  }
+
+  // Update index
+  const idx = await loadAgentIndex();
+  idx.set(agentId, dateStr);
+  await saveAgentIndex();
+}
+
 export async function completeAgent(agentId, result = {}) {
   // Set inside the lock when the record is already terminal, so the post-lock
   // tail below (budget ledger + `agent:completed`) is skipped too — see #3384.
@@ -99,6 +141,15 @@ export async function completeAgent(agentId, result = {}) {
     // are legitimately completed on resume.
     if (state.agents[agentId].status === 'completed') {
       alreadyCompleted = true;
+      // One exception to "do nothing": if a prior completion threw between its
+      // state write and the archive move, the record says completed but its
+      // directory never made it into the date bucket. Finish that with the
+      // ALREADY-RECORDED result, so the retry repairs the archive without
+      // adopting the second caller's (typically bogus) verdict.
+      const { completedAt } = state.agents[agentId];
+      if (completedAt && !existsSync(join(AGENTS_DIR, completedAt.slice(0, 10), agentId))) {
+        await archiveCompletedAgent(agentId, state.agents[agentId]);
+      }
       return state.agents[agentId];
     }
 
@@ -127,38 +178,7 @@ export async function completeAgent(agentId, result = {}) {
     // stays inside the lock.
     cosEvents.emit('agent:updated', state.agents[agentId]);
 
-    // Determine date bucket from completedAt
-    const dateStr = state.agents[agentId].completedAt.slice(0, 10);
-    const bucketDir = join(AGENTS_DIR, dateStr);
-    await ensureDir(bucketDir);
-
-    // Write metadata to flat dir first (may already have output.txt/prompt.txt there)
-    const flatDir = join(AGENTS_DIR, agentId);
-    if (!existsSync(flatDir)) {
-      await ensureDir(flatDir);
-    }
-    const { output: _output, ...agentWithoutOutput } = state.agents[agentId];
-    await atomicWrite(join(flatDir, 'metadata.json'), agentWithoutOutput);
-
-    // Move entire agent dir into date bucket (atomic on same filesystem)
-    const targetDir = join(bucketDir, agentId);
-    if (!existsSync(targetDir)) {
-      await rename(flatDir, targetDir).catch(async () => {
-        // Fallback for cross-filesystem: copy files then remove
-        await ensureDir(targetDir);
-        const files = await readdir(flatDir);
-        for (const file of files) {
-          const content = await readFile(join(flatDir, file));
-          await writeFile(join(targetDir, file), content);
-        }
-        await rm(flatDir, { recursive: true });
-      });
-    }
-
-    // Update index
-    const idx = await loadAgentIndex();
-    idx.set(agentId, dateStr);
-    await saveAgentIndex();
+    await archiveCompletedAgent(agentId, state.agents[agentId]);
 
     return state.agents[agentId];
   });

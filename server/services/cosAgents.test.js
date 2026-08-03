@@ -238,6 +238,41 @@ describe('completeAgent idempotence (#3384)', () => {
     expect(archived.result.exitCode).toBe(0);
   });
 
+  it('finishes a half-done archive using the already-recorded verdict', async () => {
+    // A prior completion that threw between its state write and the directory
+    // move leaves the record `completed` but never archived. The duplicate call
+    // repairs the archive — with the FIRST verdict, not the caller's.
+    const agentId = 'agent-half-archived';
+    const completedAt = '2026-05-25T12:00:00.000Z';
+    mockCosState.state.agents[agentId] = {
+      id: agentId,
+      status: 'completed',
+      completedAt,
+      result: { validationPassed: null, success: true, exitCode: 0 },
+      metadata: { taskType: 'scheduled' },
+      output: []
+    };
+    const flatDir = join(mockCosState.agentsDir, agentId);
+    await mkdir(flatDir, { recursive: true });
+    await writeFile(join(flatDir, 'output.txt'), 'the run that finished\n');
+
+    const returned = await completeAgent(agentId, { success: false, exitCode: 143 });
+
+    const archiveDir = join(mockCosState.agentsDir, '2026-05-25', agentId);
+    const archived = JSON.parse(await readFile(join(archiveDir, 'metadata.json'), 'utf8'));
+    expect(archived.result.success).toBe(true);
+    expect(archived.result.exitCode).toBe(0);
+    expect(existsSync(join(archiveDir, 'output.txt'))).toBe(true);
+    expect(existsSync(flatDir)).toBe(false);
+
+    // Repairing the archive is NOT a re-completion: verdict, ledger and the
+    // scheduler hand-off all stay untouched.
+    expect(returned.result.success).toBe(true);
+    expect(recordDomainUsage).not.toHaveBeenCalled();
+    expect(emittedCompletions).toEqual([]);
+    expect(mockCosState.state.stats).toEqual({ tasksCompleted: 0, errors: 0 });
+  });
+
   it('completes a still-paused agent (the guard is completed-only, not running-only)', async () => {
     const agentId = 'agent-paused-completion';
     mockCosState.state.agents[agentId] = {
