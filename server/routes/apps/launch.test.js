@@ -86,7 +86,17 @@ describe('Apps Launch Routes — POST /:id/open-xcode', () => {
     expect(response.body.path).toBe(join(REPO_PATH, 'MyClient.xcworkspace'));
   });
 
-  it('returns 404 with the resolved target name when no project exists', async () => {
+  it('falls back to the SPM manifest for a swift package with no .xcodeproj', async () => {
+    deriveProjectInfo.mockResolvedValue({ targetName: 'MyClient', bundleId: 'com.example.MyClient' });
+    existingPaths(REPO_PATH, join(REPO_PATH, 'Package.swift'));
+
+    const response = await request(app).post('/api/apps/app-001/open-xcode');
+
+    expect(response.status).toBe(200);
+    expect(response.body.path).toBe(join(REPO_PATH, 'Package.swift'));
+  });
+
+  it('returns 404 naming every candidate when no project exists', async () => {
     deriveProjectInfo.mockResolvedValue({ targetName: 'MyClient', bundleId: 'com.example.MyClient' });
     existingPaths(REPO_PATH);
 
@@ -95,6 +105,7 @@ describe('Apps Launch Routes — POST /:id/open-xcode', () => {
     expect(response.status).toBe(404);
     expect(response.body.code).toBe('XCODE_PROJECT_NOT_FOUND');
     expect(response.body.error).toContain('MyClient.xcodeproj');
+    expect(response.body.error).toContain('Package.swift');
     expect(spawn).not.toHaveBeenCalled();
   });
 

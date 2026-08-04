@@ -164,27 +164,30 @@ router.post('/:id/open-xcode', loadApp, asyncHandler(async (req, res) => {
 
   const { targetName } = await deriveProjectInfo(app.repoPath, app.name);
 
-  // A workspace supersedes the project it wraps (CocoaPods/SPM multi-project
-  // setups), so prefer it when both are present.
+  // In preference order: a workspace supersedes the project it wraps (CocoaPods
+  // / multi-project setups), and a plain SPM package (`swift` apps, which have
+  // no .xcodeproj at all) opens in Xcode straight from its manifest.
+  const candidates = [`${targetName}.xcworkspace`, `${targetName}.xcodeproj`, 'Package.swift'];
+
   let projectPath = null;
-  for (const ext of ['.xcworkspace', '.xcodeproj']) {
-    const candidate = join(app.repoPath, `${targetName}${ext}`);
-    if (await pathExists(candidate)) {
-      projectPath = candidate;
+  for (const candidate of candidates) {
+    const fullPath = join(app.repoPath, candidate);
+    if (await pathExists(fullPath)) {
+      projectPath = fullPath;
       break;
     }
   }
 
   if (!projectPath) {
     throw new ServerError(
-      `No ${targetName}.xcworkspace or ${targetName}.xcodeproj found in ${app.repoPath}`,
+      `No Xcode project in ${app.repoPath} — looked for ${candidates.join(', ')}`,
       { status: 404, code: 'XCODE_PROJECT_NOT_FOUND', context: { targetName, repoPath: app.repoPath } }
     );
   }
 
   openWithSystemHandler(projectPath);
 
-  console.log(`📱 Opened Xcode project for ${app.name}: ${targetName}`);
+  console.log(`📱 Opened Xcode project for ${app.name}: ${projectPath}`);
   res.json({ success: true, path: projectPath });
 }));
 
