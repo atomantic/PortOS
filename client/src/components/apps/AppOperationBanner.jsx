@@ -24,7 +24,7 @@ export default function AppOperationBanner({ appName, type, steps, error, comple
 
   return (
     <div
-      className={`sticky top-0 z-20 mb-4 rounded-xl border p-3 backdrop-blur ${tone}`}
+      className={`rounded-xl border p-3 backdrop-blur ${tone}`}
       role="status"
       aria-live="polite"
       aria-label="App operation status"

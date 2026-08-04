@@ -589,7 +589,7 @@ describe('socket.js — initSocket', () => {
   // app:update — server-held in-flight set (#3435)
   // ===========================================================================
   describe('app operations in-flight set', () => {
-    const APP = { id: 'app-1', name: 'Example App' };
+    const APP = { id: 'app-1', name: 'Example App', repoPath: '/srv/example-app' };
     const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 
     beforeEach(() => {
@@ -612,6 +612,8 @@ describe('socket.js — initSocket', () => {
       const rejections = socket.emitted.filter(([ev, payload]) => ev === 'app:update:error' && /already running/.test(payload.message));
       expect(rejections).toHaveLength(1);
       expect(rejections[0][1].appId).toBe(APP.id);
+      // Flagged as a refused dispatch, not a failure of the run in flight.
+      expect(rejections[0][1].duplicate).toBe(true);
       // The first run is untouched — no second updateApp call.
       expect(vi.mocked(runAppUpdate)).toHaveBeenCalledTimes(1);
 
@@ -629,6 +631,28 @@ describe('socket.js — initSocket', () => {
       await socket.handlers['app:update']({ appId: APP.id });
       await flush();
       expect(vi.mocked(runAppUpdate)).toHaveBeenCalledTimes(2);
+    });
+
+    it('blocks a second app record that points at the same checkout', async () => {
+      const socket = makeSocket('app-op-alias');
+      io.connect(socket);
+
+      let finishUpdate;
+      vi.mocked(runAppUpdate).mockReturnValueOnce(new Promise(resolve => { finishUpdate = resolve; }));
+      const running = socket.handlers['app:update']({ appId: APP.id });
+      await flush();
+
+      // A different app id, same repoPath — the resource being rebuilt is shared.
+      vi.mocked(getAppById).mockResolvedValueOnce({ id: 'app-2', name: 'Alias App', repoPath: APP.repoPath });
+      await socket.handlers['app:standardize']({ appId: 'app-2' });
+
+      expect(socket.emitted.some(([ev, payload]) => (
+        ev === 'app:standardize:error' && payload.duplicate === true && payload.message.includes(APP.name)
+      ))).toBe(true);
+
+      finishUpdate({ success: true, steps: [] });
+      await running;
+      await flush();
     });
 
     it('buffers steps so a client that connects mid-operation rehydrates the log', async () => {
@@ -649,6 +673,8 @@ describe('socket.js — initSocket', () => {
       const pushed = latecomer.emitted.filter(([ev]) => ev === 'app:operations:active').at(-1)[1];
       expect(pushed.operations).toHaveLength(1);
       expect(pushed.operations[0]).toMatchObject({ appId: APP.id, appName: APP.name, type: 'update' });
+      // The wire payload names the run; the checkout path stays server-side.
+      expect(pushed.operations[0].repoPath).toBeUndefined();
       expect(pushed.operations[0].steps).toEqual([
         expect.objectContaining({ appId: APP.id, step: 'pull', status: 'running' })
       ]);

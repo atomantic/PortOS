@@ -283,3 +283,63 @@ describe('Apps in-flight operation banner (#3435)', () => {
     expect(screen.queryByRole('status', { name: 'App operation status' })).toBeNull();
   });
 });
+
+describe('Apps concurrent operations and duplicate dispatch (#3435)', () => {
+  const SECOND_APP = { ...APPS[0], id: 'app-beta', name: 'Second App' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getApps.mockResolvedValue([APPS[0], SECOND_APP]);
+  });
+
+  const emitSocket = async (event, payload) => {
+    const [, handler] = socket.on.mock.calls.find(([evt]) => evt === event);
+    await act(async () => { await handler(payload); });
+  };
+
+  const banners = () => screen.getAllByRole('status', { name: 'App operation status' });
+
+  it('represents every running operation rather than shadowing one with the other', async () => {
+    await renderApps();
+    await emitSocket('app:operations:active', {
+      operations: [
+        { appId: 'app-alpha', appName: 'Example App', type: 'update', steps: [] },
+        { appId: 'app-beta', appName: 'Second App', type: 'standardize', steps: [] }
+      ]
+    });
+    await emitSocket('app:standardize:step', { appId: 'app-beta', step: 'analyze', status: 'running', message: 'Analyzing…' });
+
+    const text = banners().map(b => b.textContent).join(' ');
+    expect(text).toContain('Updating Example App');
+    expect(text).toContain('Standardizing Second App');
+    // The second app's steps land on the second app's banner, not the first's.
+    expect(banners()[1].textContent).toContain('Analyzing…');
+  });
+
+  it('does not report a refused duplicate dispatch as the running operation failing', async () => {
+    await renderApps();
+    await emitSocket('app:operations:active', {
+      operations: [{ appId: 'app-alpha', appName: 'Example App', type: 'update', steps: [] }]
+    });
+
+    await emitSocket('app:update:error', {
+      appId: 'app-alpha',
+      duplicate: true,
+      message: 'An update is already running for Example App'
+    });
+
+    // Still shown as running — the rejection was about the second dispatch.
+    expect(banners()[0].textContent).toContain('Updating Example App');
+    expect(banners()[0].textContent).not.toContain('failed');
+  });
+
+  it('treats an unsuccessful completion as a failure instead of "complete"', async () => {
+    await renderApps();
+    await emitSocket('app:operations:active', {
+      operations: [{ appId: 'app-alpha', appName: 'Example App', type: 'update', steps: [] }]
+    });
+    await emitSocket('app:update:complete', { appId: 'app-alpha', success: false, steps: [] });
+
+    expect(banners()[0].textContent).toContain('Update failed for Example App');
+  });
+});

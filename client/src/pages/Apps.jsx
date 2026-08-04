@@ -47,10 +47,7 @@ export default function Apps() {
     setLoading(false);
   }, []);
 
-  const {
-    steps, isOperating, operatingAppId, operatingAppName, operationType,
-    error, completed, startUpdate, startStandardize, dismiss
-  } = useAppOperation({ onComplete: fetchApps });
+  const { operations, isOperating, startUpdate, startStandardize, dismiss } = useAppOperation({ onComplete: fetchApps });
 
   useEffect(() => {
     fetchApps();
@@ -155,8 +152,8 @@ export default function Apps() {
 
   // The server names the app it is operating on (so a rehydrated operation is
   // labelled even before the list loads); fall back to the loaded list.
-  const operatingApp = apps.find(app => app.id === operatingAppId);
-  const operationLabel = operatingAppName || operatingApp?.name;
+  const operationName = (op) => op.appName || apps.find(app => app.id === op.appId)?.name;
+  const liveOperation = operations.find(op => !op.completed && !op.error);
 
   // Filter apps based on archive status
   const activeApps = apps.filter(app => !app.archived);
@@ -203,15 +200,20 @@ export default function Apps() {
 
       {/* In-flight update/standardize — page-level so it survives collapsing
           the row and remounting the page. */}
-      {operatingAppId && (
+      {operations.length > 0 && (
+      <div className="sticky top-0 z-20 mb-4 space-y-2">
+      {operations.map(op => (
         <AppOperationBanner
-          appName={operationLabel}
-          type={operationType}
-          steps={steps}
-          error={error}
-          completed={completed}
-          onDismiss={error || completed ? dismiss : null}
+          key={op.appId}
+          appName={operationName(op)}
+          type={op.type}
+          steps={op.steps}
+          error={op.error}
+          completed={op.completed}
+          onDismiss={op.error || op.completed ? () => dismiss(op.appId) : null}
         />
+      ))}
+      </div>
       )}
 
       {/* App List */}
@@ -244,12 +246,13 @@ export default function Apps() {
         <div className="space-y-4">
           {displayedApps.map(app => {
             const isNonPm2 = NON_PM2_TYPES.has(app.type);
-            // Only one update/standardize runs at a time. Rows that aren't the
-            // one operating say so in the button label — a bare greyed control
-            // with a tooltip explains nothing on touch.
-            const rowOperating = operatingAppId === app.id;
+            // One update/standardize at a time. Rows that aren't the one
+            // operating say so in the button label — a bare greyed control with
+            // a tooltip explains nothing on touch.
+            const rowOperation = operations.find(op => op.appId === app.id);
+            const rowOperating = !!rowOperation && !rowOperation.completed && !rowOperation.error;
             const busyElsewhere = isOperating && !rowOperating;
-            const busyReason = `${operationLabel || 'Another app'} is ${operationType === 'standardize' ? 'being standardized' : 'updating'}`;
+            const busyReason = `${(liveOperation && operationName(liveOperation)) || 'Another app'} is ${liveOperation?.type === 'standardize' ? 'being standardized' : 'updating'}`;
             return (
             <div
               key={app.id}
@@ -618,8 +621,8 @@ export default function Apps() {
                         aria-label={busyElsewhere ? `Update unavailable — ${busyReason}` : 'Pull latest code, install dependencies, run setup, and restart'}
                         title={busyElsewhere ? busyReason : undefined}
                       >
-                        <Download size={14} aria-hidden="true" className={rowOperating && operationType === 'update' ? 'animate-bounce' : ''} />
-                        {rowOperating && operationType === 'update'
+                        <Download size={14} aria-hidden="true" className={rowOperating && rowOperation.type === 'update' ? 'animate-bounce' : ''} />
+                        {rowOperating && rowOperation.type === 'update'
                           ? 'Updating...'
                           : busyElsewhere ? 'Update (busy)' : 'Update'}
                       </button>
@@ -654,8 +657,8 @@ export default function Apps() {
                               aria-label={busyElsewhere ? `Standardize PM2 unavailable — ${busyReason}` : 'Standardize PM2 config: move all ports to ecosystem.config.cjs'}
                               title={busyElsewhere ? busyReason : undefined}
                             >
-                              <Wrench size={14} aria-hidden="true" className={rowOperating && operationType === 'standardize' ? 'animate-spin' : ''} />
-                              {rowOperating && operationType === 'standardize'
+                              <Wrench size={14} aria-hidden="true" className={rowOperating && rowOperation.type === 'standardize' ? 'animate-spin' : ''} />
+                              {rowOperating && rowOperation.type === 'standardize'
                                 ? 'Standardizing...'
                                 : busyElsewhere ? 'Standardize PM2 (busy)' : 'Standardize PM2'}
                             </button>

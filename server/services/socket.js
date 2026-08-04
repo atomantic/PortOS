@@ -84,10 +84,19 @@ const bumpStreamGeneration = (key) => {
 //      via `app:operations:active` instead of showing a clean slate.
 const activeAppOperations = new Map();
 
-const activeOperationsPayload = () => ({ operations: [...activeAppOperations.values()] });
+// repoPath stays server-side: the client only needs to name and render the run.
+const activeOperationsPayload = () => ({
+  operations: [...activeAppOperations.values()].map(({ repoPath: _repoPath, ...op }) => op)
+});
+
+// Two app records may point at the same checkout, so the app id alone doesn't
+// identify the resource being mutated — match the repo path too, or a second
+// record's Update would run `npm install` in a directory already being rebuilt.
+const findConflictingOperation = (app) => activeAppOperations.get(app.id)
+  || (app.repoPath ? [...activeAppOperations.values()].find(op => op.repoPath === app.repoPath) : undefined);
 
 const beginAppOperation = (io, app, type) => {
-  const operation = { appId: app.id, appName: app.name, type, steps: [], startedAt: Date.now() };
+  const operation = { appId: app.id, appName: app.name, type, steps: [], startedAt: Date.now(), repoPath: app.repoPath };
   activeAppOperations.set(app.id, operation);
   io.emit('app:operations:active', activeOperationsPayload());
   return operation;
@@ -432,11 +441,15 @@ export function initSocket(io) {
           return;
         }
 
-        const inFlight = activeAppOperations.get(app.id);
+        const inFlight = findConflictingOperation(app);
         if (inFlight) {
+          // `duplicate` marks this as "your dispatch was refused", not "the
+          // running operation failed" — the client must not show a failure for
+          // a run that is still healthy.
           socket.emit('app:update:error', {
             appId: app.id,
-            message: `An ${inFlight.type} is already running for ${app.name}`
+            duplicate: true,
+            message: `An ${inFlight.type} is already running for ${inFlight.appName}`
           });
           return;
         }
@@ -486,11 +499,12 @@ export function initSocket(io) {
           return;
         }
 
-        const inFlight = activeAppOperations.get(app.id);
+        const inFlight = findConflictingOperation(app);
         if (inFlight) {
           socket.emit('app:standardize:error', {
             appId: app.id,
-            message: `An ${inFlight.type} is already running for ${app.name}`
+            duplicate: true,
+            message: `An ${inFlight.type} is already running for ${inFlight.appName}`
           });
           return;
         }
