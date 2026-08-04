@@ -153,6 +153,17 @@ describe('planDigestRewrite', () => {
     expect(skipped).toEqual(['2025-W01.json']);
   });
 
+  it("plans a chain where one digest renames onto another digest's current name", () => {
+    const { writes, deletes, skipped } = planDigestRewrite([
+      { file: '2018-W01.json', digest: digestFixture('2018-W01', '2018-12-31') },
+      { file: '2019-W01.json', digest: digestFixture('2019-W01', '2019-12-30') },
+    ]);
+    expect(writes.map(w => w.file).sort()).toEqual(['2019-W01.json', '2020-W01.json']);
+    // 2019-W01.json survives as a rename TARGET, so only the head of the chain goes.
+    expect(deletes).toEqual(['2018-W01.json']);
+    expect(skipped).toEqual([]);
+  });
+
   it('finishes an interrupted rename by deleting the leftover source copy', () => {
     // A run that wrote the target but died before unlinking the source leaves
     // both files with identical bodies. The re-run must converge, not stall.
@@ -269,6 +280,55 @@ describe('migration 224 up()', () => {
 
     await expect(migration.up({ rootDir })).resolves.toMatchObject({ lastActiveWeekChanged: false });
     expect((await readJson(productivityFile())).streaks.lastActiveWeek).toBe('2025-W52');
+  });
+
+  it('carries a whole rename chain without losing the digest in the middle', async () => {
+    // 2018-W01 renames ONTO 2019-W01's current filename, while 2019-W01 itself
+    // moves on to 2020-W01. Writing the first straight to its target would
+    // destroy the second before its own copy was durable.
+    await mkdir(digestsDir(), { recursive: true });
+    await writeFile(join(digestsDir(), '2018-W01.json'), JSON.stringify(digestFixture('2018-W01', '2018-12-31', { summary: { totalTasks: 18 } })));
+    await writeFile(join(digestsDir(), '2019-W01.json'), JSON.stringify(digestFixture('2019-W01', '2019-12-30', { summary: { totalTasks: 19 } })));
+
+    await migration.up({ rootDir });
+
+    expect((await readdir(digestsDir())).sort()).toEqual(['2019-W01.json', '2020-W01.json']);
+    expect(await readJson(join(digestsDir(), '2019-W01.json'))).toMatchObject({ weekId: '2019-W01', summary: { totalTasks: 18 } });
+    expect(await readJson(join(digestsDir(), '2020-W01.json'))).toMatchObject({ weekId: '2020-W01', summary: { totalTasks: 19 } });
+  });
+
+  it('promotes staged rewrites left by a run that died after staging completed', async () => {
+    // Plan file present ⇒ every rewrite was durable, so the leftovers finish.
+    await mkdir(digestsDir(), { recursive: true });
+    await writeFile(join(digestsDir(), '2026-W01.json.staging-224'), JSON.stringify(digestFixture('2026-W01', '2025-12-29', { summary: { totalTasks: 42 } })));
+    await writeFile(join(digestsDir(), '.migration-224-plan'), JSON.stringify({ migration: 224, files: ['2026-W01.json'] }));
+
+    await migration.up({ rootDir });
+
+    expect(await readJson(join(digestsDir(), '2026-W01.json'))).toMatchObject({ summary: { totalTasks: 42 } });
+    expect((await readdir(digestsDir())).sort()).toEqual(['2026-W01.json']);
+  });
+
+  it('discards staged rewrites from a run that died BEFORE staging completed', async () => {
+    // No plan file ⇒ the staged set is partial, so promoting it could overwrite
+    // a live digest with half a plan. Drop it and leave the real files alone.
+    await mkdir(digestsDir(), { recursive: true });
+    await writeFile(join(digestsDir(), '2026-W01.json'), JSON.stringify(digestFixture('2026-W01', '2025-12-29', { summary: { totalTasks: 7 } })));
+    await writeFile(join(digestsDir(), '2026-W01.json.staging-224'), JSON.stringify(digestFixture('2026-W01', '2025-12-29', { summary: { totalTasks: 999 } })));
+
+    await migration.up({ rootDir });
+
+    expect(await readJson(join(digestsDir(), '2026-W01.json'))).toMatchObject({ summary: { totalTasks: 7 } });
+    expect((await readdir(digestsDir())).sort()).toEqual(['2026-W01.json']);
+  });
+
+  it('leaves no staging or plan files behind on a successful run', async () => {
+    await mkdir(digestsDir(), { recursive: true });
+    await writeFile(join(digestsDir(), '2025-W01.json'), JSON.stringify(digestFixture('2025-W01', '2025-12-29')));
+
+    await migration.up({ rootDir });
+
+    expect((await readdir(digestsDir())).sort()).toEqual(['2026-W01.json']);
   });
 
   it('is idempotent — a second run changes nothing on disk', async () => {

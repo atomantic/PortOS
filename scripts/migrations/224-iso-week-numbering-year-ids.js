@@ -41,9 +41,13 @@
  * so a second pass writes nothing. Safe on an install with no digests dir and
  * no productivity file at all — both are runtime-generated (neither ships a
  * `data.reference/` seed), so a fresh install simply has nothing to do.
+ *
+ * Crash-safe: rewrites are staged beside their targets and promoted only once
+ * all of them are durable (see STAGING_SUFFIX / PLAN_FILE), because a rename
+ * target is frequently another digest's current filename.
  */
 
-import { readdir, readFile, unlink } from 'fs/promises';
+import { readdir, readFile, rename, unlink } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite } from '../../server/lib/fileUtils.js';
 import { getIsoWeekNumber, getWeekId, parseWeekId } from '../../server/lib/isoWeek.js';
@@ -193,16 +197,56 @@ export function planDigestRewrite(records, occupied = []) {
   return { writes, deletes, skipped };
 }
 
+// A rename target is often another digest's CURRENT name (2018-W01 → 2019-W01
+// while 2019-W01 itself moves to 2020-W01), so writing straight to the target
+// destroys a source whose migrated copy exists only in memory — one crash and
+// that digest is gone for good. Rewrites are therefore staged beside their
+// target first, and only promoted once EVERY rewrite is durable. The suffix
+// deliberately does not end in `.json`, so neither this migration's own scan
+// nor `listDigests()` ever mistakes a staged file for a digest.
+const STAGING_SUFFIX = '.staging-224';
+// Written once staging is complete; its presence is what makes promoting a
+// staged file safe. No `.json` suffix, for the same reason.
+const PLAN_FILE = '.migration-224-plan';
+
+/**
+ * Finish (or discard) a previous run that died mid-write.
+ *
+ * Plan file present ⇒ every rewrite was durable, so promote whatever staging
+ * files are left; that is precisely the set whose targets may have been
+ * clobbered. Plan file absent ⇒ staging was incomplete and promoting would
+ * overwrite live digests with a partial plan, so drop the leftovers.
+ */
+async function recoverInterruptedRun(dir, entries) {
+  const staged = entries.filter(f => f.endsWith(STAGING_SUFFIX));
+  const plan = await readJsonOrNull(join(dir, PLAN_FILE));
+  if (staged.length === 0 && !plan) return false;
+
+  if (plan) {
+    for (const file of staged) {
+      await rename(join(dir, file), join(dir, file.slice(0, -STAGING_SUFFIX.length)));
+    }
+    console.warn(`⚠️ migration 224: completed ${staged.length} staged rewrite(s) left by an interrupted run`);
+  } else {
+    for (const file of staged) await unlink(join(dir, file)).catch(() => {});
+    console.warn(`⚠️ migration 224: discarded ${staged.length} incomplete staged rewrite(s) from an interrupted run`);
+  }
+  await unlink(join(dir, PLAN_FILE)).catch((err) => { if (err.code !== 'ENOENT') throw err; });
+  return true;
+}
+
 async function migrateDigests(rootDir) {
   const dir = join(rootDir, 'data', 'cos', 'digests');
-  const entries = await readdir(dir).catch((err) => {
+  const readEntries = () => readdir(dir).catch((err) => {
     if (err.code === 'ENOENT') return null;
     throw err;
   });
+  let entries = await readEntries();
   if (entries == null) {
     console.log('📊 migration 224: no CoS digests directory — nothing to rename');
     return { renamed: 0, skipped: 0 };
   }
+  if (await recoverInterruptedRun(dir, entries)) entries = await readEntries() ?? [];
 
   // Read EVERY digest before writing anything: a rename target can be another
   // digest's current name, and reading up front means no pass ever reads a file
@@ -220,13 +264,24 @@ async function migrateDigests(rootDir) {
   }
 
   const { writes, deletes, skipped } = planDigestRewrite(records, unreadable);
-  for (const { file, digest } of writes) await atomicWrite(join(dir, file), digest);
+  if (writes.length > 0) {
+    // Stage → commit → promote. Nothing live is touched until every rewrite is
+    // on disk under its staging name.
+    for (const { file, digest } of writes) await atomicWrite(join(dir, `${file}${STAGING_SUFFIX}`), digest);
+    await atomicWrite(join(dir, PLAN_FILE), { migration: 224, files: writes.map(w => w.file) });
+    for (const { file } of writes) {
+      await rename(join(dir, `${file}${STAGING_SUFFIX}`), join(dir, file));
+    }
+  }
   // Only ENOENT is benign (an already-removed source on a re-run). Anything else
   // means a stale old-form file survives, so let it throw: the runner leaves the
   // migration unrecorded and the next boot retries instead of banking a
   // half-finished rename.
   for (const file of deletes) {
     await unlink(join(dir, file)).catch((err) => { if (err.code !== 'ENOENT') throw err; });
+  }
+  if (writes.length > 0) {
+    await unlink(join(dir, PLAN_FILE)).catch((err) => { if (err.code !== 'ENOENT') throw err; });
   }
 
   if (writes.length === 0) {
