@@ -15,6 +15,7 @@ vi.mock('./fileUtils.js', async () => {
 });
 
 const storyBible = await import('./storyBible.js');
+const { createBibleStore } = await import('../services/bibleStore.js');
 const {
   sanitizeCharacter,
   sanitizePlace,
@@ -27,7 +28,6 @@ const {
   findBibleEntryByName,
   BIBLE_LIMITS,
   BIBLE_KIND,
-  createBibleStore,
   pruneStaleReferenceSheets,
   mergePreservedSheetPointers,
   stripCanonControlFields,

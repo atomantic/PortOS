@@ -6,7 +6,8 @@
  * `createBibleStore` factory; this module just supplies the per-kind config.
  */
 
-import { createBibleStore, BIBLE_KIND, normalizeBibleName } from '../../lib/storyBible.js';
+import { BIBLE_KIND, normalizeBibleName } from '../../lib/storyBible.js';
+import { createBibleStore } from '../bibleStore.js';
 
 export const {
   list: listCharacters,

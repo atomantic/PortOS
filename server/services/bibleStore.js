@@ -5,9 +5,8 @@
  * Extracted from server/lib/storyBible.js (issue #1154) so the lib stays a
  * pure catalog of sanitizers/transformers and the storage factory (which does
  * file I/O under data/writers-room/works/) lives in the services layer.
- * storyBible.js re-exports `createBibleStore` from here so existing
- * `import { createBibleStore } from '../../lib/storyBible.js'` call sites
- * (characters.js / places.js / objects.js) keep working.
+ * Callers (characters.js / places.js / objects.js) import `createBibleStore`
+ * directly from here, and the pure sanitizer names from lib/storyBible.js.
  */
 
 import { randomUUID } from 'crypto';

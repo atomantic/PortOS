@@ -1,5 +1,8 @@
 import { Users, MapPin, Package } from 'lucide-react';
-import { WORLD_CATEGORIES, WORLD_CATEGORY_KEY_MAX } from '../services/api';
+// Imports direct from apiUniverseBuilder (NOT the global `services/api`
+// barrel) — see universeBuilderExpand.js for why: tracing through the
+// barrel pulls all ~40 service modules into this lib's dep graph.
+import { WORLD_CATEGORIES, WORLD_CATEGORY_KEY_MAX } from '../services/apiUniverseBuilder';
 
 // Shared constants + pure category/trunk/composite helpers for the Universe
 // Builder page and its extracted tab/editor components (#2374). Kept free of

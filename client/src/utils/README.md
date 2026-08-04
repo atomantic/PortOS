@@ -54,7 +54,7 @@ grep -i "what you want to do" client/src/utils/README.md
 
 | Module | Purpose |
 |---|---|
-| `fileUpload` | Screenshot/attachment upload helpers: base64 read plus `processScreenshotUploads` / `processAttachmentUploads` and their single-file variants. Also the shared upload constants — `JSON_UPLOAD_MAX_FILE_SIZE` (max file size / wire limit, mirrors `server/lib/uploadLimits.js`), `ATTACHMENT_MAX_FILE_SIZE`, `ALLOWED_ATTACHMENT_EXTENSIONS`, and the `accept` strings `ATTACHMENT_ACCEPT` / `IMAGE_ACCEPT`. |
+| `fileUpload` | Pure screenshot/attachment upload helpers: base64 read (`readFileAsBase64`) and image validation (`validateImageFile`). Also the shared upload constants — `JSON_UPLOAD_MAX_FILE_SIZE` (max file size / wire limit, mirrors `server/lib/uploadLimits.js`), `ATTACHMENT_MAX_FILE_SIZE`, `ALLOWED_ATTACHMENT_EXTENSIONS`, and the `accept` strings `ATTACHMENT_ACCEPT` / `IMAGE_ACCEPT`. The actual upload orchestration (`processScreenshotUploads` / `processAttachmentUploads` and their single-file variants) does network I/O and lives in `services/apiMedia.js`; re-exported here for backward compatibility. |
 
 ## CyberCity — character & avatar
 

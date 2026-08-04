@@ -9,7 +9,8 @@
  * the name-OR-slugline identifier rule.
  */
 
-import { createBibleStore, BIBLE_KIND, normalizeSlugline } from '../../lib/storyBible.js';
+import { BIBLE_KIND, normalizeSlugline } from '../../lib/storyBible.js';
+import { createBibleStore } from '../bibleStore.js';
 import { ServerError } from '../../lib/errorHandler.js';
 
 // Re-export under the historical name for the existing test + import surface.

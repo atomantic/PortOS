@@ -5,34 +5,13 @@
  * Training mode: progressive difficulty, hints, immediate feedback.
  */
 
-import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { userLocalToday } from '../lib/timezone.js';
 import { ymdShift } from '../lib/postStreak.js';
-import { getUnifiedActivityStreak } from './meatspacePost.js';
+import { getUnifiedActivityStreak } from './postActivityStreak.js';
+import { loadTrainingLog, saveTrainingLog, getAllTrainingEntries } from './postTrainingLogStore.js';
 
-const MEATSPACE_DIR = PATHS.meatspace;
-const TRAINING_LOG_FILE = join(MEATSPACE_DIR, 'post-training-log.json');
-
-/**
- * @param {{ strict?: boolean }} [options] - `strict: true` throws when the training
- *   log is present-but-unreadable/corrupt rather than falling back to an empty log.
- *   See `loadSessions` in meatspacePost.js for the rationale (#2726).
- */
-async function loadTrainingLog({ strict = false } = {}) {
-  const data = await readJSONFile(TRAINING_LOG_FILE, { entries: [] }, { allowArray: false, strict });
-  if (strict && !Array.isArray(data?.entries)) {
-    throw new Error(`POST training log malformed: ${TRAINING_LOG_FILE}`);
-  }
-  if (!Array.isArray(data.entries)) data.entries = [];
-  return data;
-}
-
-async function saveTrainingLog(data) {
-  await ensureDir(MEATSPACE_DIR);
-  await atomicWrite(TRAINING_LOG_FILE, data);
-}
+export { getAllTrainingEntries };
 
 /**
  * Submit a training practice entry after a training-mode drill completes.
@@ -42,8 +21,9 @@ export async function submitTrainingEntry(entry) {
   const nowDate = new Date();
   const now = nowDate.toISOString();
   // Stamp the entry's day in the user's local timezone (issue #2681). Training
-  // entries feed the SHARED unified streak (getUnifiedActivityStreak), which now
-  // compares against the user's local `today` — a bare UTC-day stamp here would
+  // entries feed the SHARED unified streak (getUnifiedActivityStreak in
+  // postActivityStreak.js), which now compares against the user's local
+  // `today` — a bare UTC-day stamp here would
   // date a local-evening practice on tomorrow's UTC day and drop it from today's
   // streak. Derive the day from the SAME `nowDate` used for `timestamp` so a
   // midnight boundary can't split them onto different days.
@@ -77,8 +57,8 @@ export async function submitTrainingEntry(entry) {
  * Get training stats: per-drill practice counts, streaks, recent activity.
  *
  * The streak comes from the SHARED unified streak (`getUnifiedActivityStreak` in
- * meatspacePost.js) — the exact same number the launcher, dashboard widgets, and
- * Progress page show — so the Morse trainer can no longer disagree with them
+ * postActivityStreak.js) — the exact same number the launcher, dashboard widgets,
+ * and Progress page show — so the Morse trainer can no longer disagree with them
  * (issue #2091). It counts BOTH scored sessions and training-log entries over
  * ALL history; only the per-drill breakdown below is windowed.
  */
@@ -108,7 +88,10 @@ export async function getTrainingStats(days = 30) {
   }
 
   // ONE unified streak across sessions + training (shared helper, ALL history).
-  const { current: currentStreak, longest: longestStreak } = await getUnifiedActivityStreak();
+  // Pass allEntries (already loaded above) rather than re-fetching via
+  // getAllTrainingEntries() — postActivityStreak.js takes training as a
+  // parameter specifically so it doesn't need to import this module.
+  const { current: currentStreak, longest: longestStreak } = await getUnifiedActivityStreak(allEntries);
   const activeDays = new Set(entries.map(e => String(e.date || '').split('T')[0])).size;
 
   // Summarize
@@ -139,17 +122,4 @@ export async function getTrainingEntries(limit = 20) {
   const data = await loadTrainingLog();
   if (!limit) return data.entries.slice().reverse();
   return data.entries.slice(-limit).reverse();
-}
-
-/**
- * All training-log entries in chronological (append) order — the raw feed the
- * unified progress aggregation reads (both meatspacePostTraining and
- * meatspacePostMemory practice write to the same `post-training-log.json`).
- *
- * @param {{ strict?: boolean }} [options] - `strict: true` throws rather than
- *   reporting an unreadable log as zero entries (#2726).
- */
-export async function getAllTrainingEntries(options) {
-  const data = await loadTrainingLog(options);
-  return data.entries;
 }

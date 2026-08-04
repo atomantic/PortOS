@@ -30,7 +30,11 @@ import {
 import { COGNITIVE_DRILL_TYPES, generateCognitiveDrill, scoreCognitiveDrill } from './meatspacePostCognitive.js';
 import { applySessionToMemoryItems, getMemoryItems, getDueMemoryItems, MASTERY_TARGET_ACCURACY } from './meatspacePostMemory.js';
 import { applySessionToReviewSchedule, getDueReviews, getRetentionReport } from './meatspacePostReview.js';
-import { getAllTrainingEntries } from './meatspacePostTraining.js';
+// From postTrainingLogStore.js (NOT meatspacePostTraining.js) — that module
+// imports getUnifiedActivityStreak from postActivityStreak.js, which in turn
+// needs getPostSessions from this file. Importing getAllTrainingEntries via
+// meatspacePostTraining.js would close that into a 3-file circular import.
+import { getAllTrainingEntries } from './postTrainingLogStore.js';
 import { getMorseProgress, MAX_KOCH_LEVEL } from './meatspacePostMorse.js';
 import { computePostStreaks, computeUnifiedStreak, ymdToUTC, ymdShift } from '../lib/postStreak.js';
 import { userLocalToday as localToday } from '../lib/timezone.js';
@@ -633,19 +637,6 @@ export function deriveTaskAvgResponseMs(task) {
   const timed = qs.filter(q => (q?.responseMs || 0) > 0);
   if (!timed.length) return null;
   return Math.round(timed.reduce((sum, q) => sum + q.responseMs, 0) / timed.length);
-}
-
-/**
- * ONE unified activity streak across scored sessions AND the training log — the
- * single number every POST surface (launcher, Morse trainer, dashboard widgets)
- * should show, so they can't disagree (issue #2091). A day is active with EITHER
- * a scored session or a training-log entry (Morse / memory practice). Computed
- * over ALL history, independent of any stats window.
- */
-export async function getUnifiedActivityStreak(todayStr) {
-  const day = todayStr ?? await localToday();
-  const [sessions, training] = await Promise.all([getPostSessions(), getAllTrainingEntries()]);
-  return computeUnifiedStreak(sessions, training, day);
 }
 
 export async function getPostStats(days = 30) {

@@ -2,9 +2,11 @@
  * Canonical story-bible shapes (Character / Place / Object) shared by the
  * Writers Room (per-work bibles) and the Pipeline (per-series bibles).
  *
- * Owns the shape + sanitization + merge-extracted-entries algorithm AND the
+ * Owns the shape + sanitization + merge-extracted-entries algorithm. The
  * `createBibleStore(...)` factory the writers-room domain files build on for
- * their CRUD + file I/O. Route exposure stays with the caller.
+ * their CRUD + file I/O lives in ../services/bibleStore.js, which imports
+ * these sanitizers/transformers from here (this module must stay pure — no
+ * data/ file I/O — so it cannot import back from bibleStore.js).
  */
 
 import { randomUUID } from 'crypto';
@@ -1423,9 +1425,3 @@ export function mergeExtractedBible(existing, incoming, kind, {
 }
 
 
-// createBibleStore — the per-work CRUD + merge storage factory — moved to
-// server/services/bibleStore.js (issue #1154) so this lib stays a pure
-// catalog of sanitizers/transformers with no data/ file I/O. Re-exported
-// here so existing `import { createBibleStore } from '.../lib/storyBible.js'`
-// call sites keep working.
-export { createBibleStore } from '../services/bibleStore.js';

@@ -1,9 +1,14 @@
 /**
  * Shared file upload utilities
  * Used by DevTools Runner and CoS TasksTab for screenshot and attachment uploads
+ *
+ * This module holds only pure helpers (base64 read, validation, constants) —
+ * no I/O. The upload orchestration that actually POSTs to the server
+ * (`uploadScreenshotFile` / `processScreenshotUploads` / `uploadAttachmentFile`
+ * / `processAttachmentUploads`) lives in `../services/apiMedia.js` and is
+ * re-exported below for backward compatibility with existing callers.
  */
 
-import * as api from '../services/api';
 import { formatBytes } from './formatters';
 
 // Allowed attachment extensions (should match server)
@@ -119,227 +124,16 @@ export function validateImageFile(file, maxFileSize = SCREENSHOT_MAX_FILE_SIZE) 
   return null;
 }
 
-/**
- * Process and upload image files as screenshots
- *
- * @param {FileList|File[]} files - Files to process
- * @param {Object} options - Upload options
- * @param {number} options.maxFileSize - Max file size in bytes (default: 10MB)
- * @param {Function} options.onSuccess - Callback for successful upload (receives uploaded file info)
- * @param {Function} options.onError - Callback for errors (receives error message)
- * @returns {Promise<void>}
- */
-export async function processScreenshotUploads(files, options = {}) {
-  const {
-    maxFileSize = SCREENSHOT_MAX_FILE_SIZE,
-    onSuccess,
-    onError
-  } = options;
-
-  const fileArray = Array.from(files);
-
-  for (const file of fileArray) {
-    // Non-image files are skipped SILENTLY here (this runs over a multi-select /
-    // drop of mixed content, where naming each non-image is noise) — but an
-    // oversized image is reported, since the user clearly meant to upload it.
-    if (!file.type.startsWith('image/')) continue;
-
-    const problem = validateImageFile(file, maxFileSize);
-    if (problem) {
-      onError?.(problem);
-      continue;
-    }
-
-    await uploadScreenshotFile(file, { onSuccess, onError });
-  }
-}
-
-/**
- * Upload a single screenshot file
- *
- * @param {File} file - File to upload
- * @param {Object} options - Upload options
- * @param {Function} options.onSuccess - Callback for successful upload
- * @param {Function} options.onError - Callback for errors
- * @returns {Promise<Object|null>} Uploaded file info or null on failure
- */
-export async function uploadScreenshotFile(file, options = {}) {
-  const { onSuccess, onError } = options;
-
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-
-    reader.onload = async (ev) => {
-      const result = ev?.target?.result;
-      if (typeof result !== 'string') {
-        onError?.('Failed to read file: unexpected result type');
-        resolve(null);
-        return;
-      }
-
-      const parts = result.split(',');
-      if (parts.length < 2) {
-        onError?.('Failed to read file: invalid data URL format');
-        resolve(null);
-        return;
-      }
-
-      const base64 = parts[1];
-      const uploaded = await api.uploadScreenshot(base64, file.name, file.type).catch((err) => {
-        onError?.(`Failed to upload: ${err.message}`);
-        return null;
-      });
-
-      if (uploaded) {
-        const fileInfo = {
-          id: uploaded.id,
-          filename: uploaded.filename,
-          preview: result,
-          path: uploaded.path
-        };
-        onSuccess?.(fileInfo);
-        resolve(fileInfo);
-      } else {
-        resolve(null);
-      }
-    };
-
-    reader.onerror = () => {
-      onError?.('Failed to read file');
-      resolve(null);
-    };
-
-    reader.readAsDataURL(file);
-  });
-}
-
 // Max file size for attachments. Capped by the base64-in-JSON wire limit, not
 // by any attachment-specific rule — see JSON_UPLOAD_MAX_FILE_SIZE.
 export const ATTACHMENT_MAX_FILE_SIZE = JSON_UPLOAD_MAX_FILE_SIZE;
 
-/**
- * Check if a file extension is allowed for attachments
- */
-function isAllowedAttachmentExtension(filename) {
-  const ext = filename.lastIndexOf('.') > -1
-    ? filename.slice(filename.lastIndexOf('.')).toLowerCase()
-    : '';
-  return ALLOWED_ATTACHMENT_EXTENSIONS.includes(ext);
-}
-
-/**
- * Get file extension from filename
- */
-function getFileExtension(filename) {
-  const lastDot = filename.lastIndexOf('.');
-  return lastDot > -1 ? filename.slice(lastDot).toLowerCase() : '';
-}
-
-/**
- * Check if a file is an image based on extension
- */
-function isImageFile(filename) {
-  const ext = getFileExtension(filename);
-  return ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'].includes(ext);
-}
-
-/**
- * Process and upload generic file attachments
- *
- * @param {FileList|File[]} files - Files to process
- * @param {Object} options - Upload options
- * @param {number} options.maxFileSize - Max file size in bytes (default: ATTACHMENT_MAX_FILE_SIZE)
- * @param {Function} options.onSuccess - Callback for successful upload (receives uploaded file info)
- * @param {Function} options.onError - Callback for errors (receives error message)
- * @returns {Promise<void>}
- */
-export async function processAttachmentUploads(files, options = {}) {
-  const {
-    maxFileSize = ATTACHMENT_MAX_FILE_SIZE,
-    onSuccess,
-    onError
-  } = options;
-
-  const fileArray = Array.from(files);
-
-  for (const file of fileArray) {
-    // Check file extension is allowed
-    if (!isAllowedAttachmentExtension(file.name)) {
-      const allowedList = ALLOWED_ATTACHMENT_EXTENSIONS.join(', ');
-      onError?.(`File "${file.name}" has unsupported type. Allowed: ${allowedList}`);
-      continue;
-    }
-
-    // Check file size
-    if (file.size > maxFileSize) {
-      onError?.(`File "${file.name}" exceeds the ${formatBytes(maxFileSize)} limit`);
-      continue;
-    }
-
-    await uploadAttachmentFile(file, { onSuccess, onError });
-  }
-}
-
-/**
- * Upload a single attachment file
- *
- * @param {File} file - File to upload
- * @param {Object} options - Upload options
- * @param {Function} options.onSuccess - Callback for successful upload
- * @param {Function} options.onError - Callback for errors
- * @returns {Promise<Object|null>} Uploaded file info or null on failure
- */
-export async function uploadAttachmentFile(file, options = {}) {
-  const { onSuccess, onError } = options;
-
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-
-    reader.onload = async (ev) => {
-      const result = ev?.target?.result;
-      if (typeof result !== 'string') {
-        onError?.('Failed to read file: unexpected result type');
-        resolve(null);
-        return;
-      }
-
-      const parts = result.split(',');
-      if (parts.length < 2) {
-        onError?.('Failed to read file: invalid data URL format');
-        resolve(null);
-        return;
-      }
-
-      const base64 = parts[1];
-      const uploaded = await api.uploadAttachment(base64, file.name).catch((err) => {
-        onError?.(`Failed to upload: ${err.message}`);
-        return null;
-      });
-
-      if (uploaded) {
-        const fileInfo = {
-          id: uploaded.id,
-          filename: uploaded.filename,
-          originalName: uploaded.originalName || file.name,
-          path: uploaded.path,
-          size: uploaded.size,
-          mimeType: uploaded.mimeType,
-          // For images, create preview from the data URL
-          preview: isImageFile(file.name) ? result : null,
-          isImage: isImageFile(file.name)
-        };
-        onSuccess?.(fileInfo);
-        resolve(fileInfo);
-      } else {
-        resolve(null);
-      }
-    };
-
-    reader.onerror = () => {
-      onError?.('Failed to read file');
-      resolve(null);
-    };
-
-    reader.readAsDataURL(file);
-  });
-}
+// The upload orchestration (network I/O) lives in ../services/apiMedia.js —
+// re-exported here so existing callers that import these from utils/fileUpload
+// keep working without edits.
+export {
+  uploadScreenshotFile,
+  processScreenshotUploads,
+  uploadAttachmentFile,
+  processAttachmentUploads,
+} from '../services/apiMedia.js';

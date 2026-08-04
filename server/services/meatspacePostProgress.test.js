@@ -25,8 +25,9 @@ vi.mock('../services/settings.js', () => ({
   getSettings: () => Promise.resolve({ timezone: 'UTC' }),
 }));
 
-import { getPostProgress, getPostStats, getUnifiedActivityStreak } from './meatspacePost.js';
-import { getTrainingStats } from './meatspacePostTraining.js';
+import { getPostProgress, getPostStats } from './meatspacePost.js';
+import { getTrainingStats, getAllTrainingEntries } from './meatspacePostTraining.js';
+import { getUnifiedActivityStreak } from './postActivityStreak.js';
 import { postProgressQuerySchema } from '../lib/postValidation.js';
 
 const mathTask = (score, questions) => ({ module: 'mental-math', type: 'multiplication', score, questions });
@@ -138,7 +139,7 @@ describe('unified streak agrees across every POST surface', () => {
       getPostStats(30),
       getTrainingStats(30),
       getPostProgress({ days: 30 }),
-      getUnifiedActivityStreak(),
+      getAllTrainingEntries().then((entries) => getUnifiedActivityStreak(entries)),
     ]);
 
     // 3 consecutive active days (session, practice, session) → streak 3.
