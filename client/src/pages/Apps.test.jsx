@@ -31,6 +31,7 @@ vi.mock('../services/api', () => ({
   getMySprintTickets: vi.fn(() => Promise.resolve([])),
   openAppInEditor: vi.fn(() => Promise.resolve({})),
   openAppFolder: vi.fn(() => Promise.resolve({})),
+  openAppInXcode: vi.fn(() => Promise.resolve({ success: true, path: '/srv/example-ios/ExampleIos.xcodeproj' })),
   handleSelfRestart: vi.fn(),
 }));
 
@@ -127,6 +128,28 @@ describe('Apps row action hierarchy', () => {
     await user.click(screen.getByRole('menuitem', { name: 'Archive' }));
 
     await waitFor(() => expect(api.archiveApp).toHaveBeenCalledWith('app-alpha'));
+  });
+
+  it('asks the server to resolve and open the Xcode project instead of guessing the filename', async () => {
+    // Display name deliberately differs from the on-disk project name — the old
+    // client-side `<name>.xcodeproj` guess was a silent no-op for exactly this app.
+    api.getApps.mockResolvedValue([{
+      ...APPS[0],
+      id: 'app-ios',
+      name: 'Example iOS App',
+      type: 'ios-native',
+      repoPath: '/srv/example-ios',
+      pm2ProcessNames: [],
+      processes: [],
+    }]);
+    const user = userEvent.setup();
+    render(<MemoryRouter><Apps /></MemoryRouter>);
+    await screen.findByRole('link', { name: 'Example iOS App' });
+
+    await user.click(screen.getByRole('button', { name: 'Expand Example iOS App details' }));
+    await user.click(screen.getByRole('button', { name: 'Open Example iOS App in Xcode' }));
+
+    await waitFor(() => expect(api.openAppInXcode).toHaveBeenCalledWith('app-ios'));
   });
 
   it('withholds the overflow menu for the PortOS baseline app', async () => {

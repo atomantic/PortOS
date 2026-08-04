@@ -92,6 +92,10 @@ export const unarchiveApp = (id) => request(`/apps/${id}/unarchive`, { method: '
 export const openAppInEditor = (id) => request(`/apps/${id}/open-editor`, { method: 'POST' });
 export const openAppInClaude = (id) => request(`/apps/${id}/open-claude`, { method: 'POST' });
 export const openAppFolder = (id) => request(`/apps/${id}/open-folder`, { method: 'POST' });
+// The server resolves the real .xcworkspace/.xcodeproj name and opens it on the
+// machine Xcode runs on — so this works from a phone, and a missing project
+// comes back as a real error instead of a silent `xcode://` no-op.
+export const openAppInXcode = (id) => request(`/apps/${id}/open-xcode`, { method: 'POST' });
 export const refreshAppConfig = (id) => request(`/apps/${id}/refresh-config`, { method: 'POST' });
 export const pullAndUpdateApp = (id) => request(`/apps/${id}/update`, { method: 'POST' });
 // `options` lets a caller suppress request()'s auto-toast with `{ silent: true }`

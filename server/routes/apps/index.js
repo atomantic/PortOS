@@ -11,7 +11,7 @@
  *   xcode      — xcode-scripts/install
  *   icons      — icon serving + detection
  *   taskTypes  — per-app task-type overrides, work-tracker, layered-intelligence
- *   launch     — open-editor, open-claude, open-folder
+ *   launch     — open-editor, open-claude, open-folder, open-xcode
  *   documents  — planning-doc read/list/commit
  *   agents     — recent CoS agent history
  *

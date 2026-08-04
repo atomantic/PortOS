@@ -1033,8 +1033,12 @@ export function checkScripts(app) {
 /**
  * Derive the target name and bundle ID from an Xcode project at repoPath.
  * Checks project.yml first, then falls back to .xcodeproj name, then app name.
+ *
+ * Exported so callers that need the *real* on-disk project name (e.g. the
+ * `open-xcode` route) resolve it the same way the script generators do, instead
+ * of guessing `<display name>.xcodeproj`.
  */
-async function deriveProjectInfo(repoPath, appName) {
+export async function deriveProjectInfo(repoPath, appName) {
   if (process.platform === 'win32') {
     return { targetName: toTargetName(appName), bundleId: toBundleId(appName) };
   }

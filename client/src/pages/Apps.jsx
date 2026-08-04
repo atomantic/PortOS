@@ -632,10 +632,9 @@ export default function Apps() {
                       {/* Xcode-specific actions */}
                       {isNonPm2 && (
                         <button
-                          onClick={() => {
-                            const xcodeprojName = app.name + '.xcodeproj';
-                            window.open(`xcode://open?url=file://${app.repoPath}/${xcodeprojName}`, '_self');
-                          }}
+                          onClick={() => api.openAppInXcode(app.id)
+                            .then(result => { if (result?.success) toast.success(`Opening ${app.name} in Xcode`); })
+                            .catch(() => null)}
                           className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded-lg text-xs flex items-center gap-1"
                           aria-label={`Open ${app.name} in Xcode`}
                         >
