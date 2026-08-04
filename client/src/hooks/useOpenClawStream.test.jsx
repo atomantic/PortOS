@@ -219,7 +219,7 @@ describe('handleSend', () => {
   });
 
   it('keeps a partial response and marks it completed when the user stops the stream', async () => {
-    streamOpenClawMessage.mockImplementation(async (_sessionId, { onEvent, signal }) => {
+    streamOpenClawMessage.mockImplementation(async (_sessionId, { onEvent }) => {
       onEvent({ event: 'response.output_text.delta', data: 'partial' });
       const err = new Error('aborted');
       err.name = 'AbortError';
