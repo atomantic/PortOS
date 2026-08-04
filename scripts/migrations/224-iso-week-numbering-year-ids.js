@@ -212,23 +212,40 @@ const PLAN_FILE = '.migration-224-plan';
 /**
  * Finish (or discard) a previous run that died mid-write.
  *
- * Plan file present ⇒ every rewrite was durable, so promote whatever staging
- * files are left; that is precisely the set whose targets may have been
+ * Plan file present ⇒ every rewrite reached staging, so promote whatever
+ * staging files are left; that is precisely the set whose targets may have been
  * clobbered. Plan file absent ⇒ staging was incomplete and promoting would
  * overwrite live digests with a partial plan, so drop the leftovers.
+ *
+ * The plan lists its targets, so the promote path can VERIFY that set rather
+ * than trusting the marker: a target with neither a staging file nor a promoted
+ * file lost data the retry cannot reconstruct (no fsync barrier stands between
+ * the staging writes and the marker), so throw and leave the migration
+ * unrecorded instead of promoting over a live digest on top of that loss.
  */
 async function recoverInterruptedRun(dir, entries) {
+  const present = new Set(entries);
   const staged = entries.filter(f => f.endsWith(STAGING_SUFFIX));
   const plan = await readJsonOrNull(join(dir, PLAN_FILE));
   if (staged.length === 0 && !plan) return false;
 
   if (plan) {
+    const planned = Array.isArray(plan.files) ? plan.files : [];
+    const lost = planned.filter(f => !present.has(`${f}${STAGING_SUFFIX}`) && !present.has(f));
+    if (lost.length > 0) {
+      throw new Error(`migration 224: interrupted run left ${lost.length} planned digest rewrite(s) with neither a staged nor a promoted file (${lost.join(', ')}) — refusing to promote a partial plan over live digests`);
+    }
     for (const file of staged) {
       await rename(join(dir, file), join(dir, file.slice(0, -STAGING_SUFFIX.length)));
     }
     console.warn(`⚠️ migration 224: completed ${staged.length} staged rewrite(s) left by an interrupted run`);
   } else {
-    for (const file of staged) await unlink(join(dir, file)).catch(() => {});
+    // Same rule as the main cleanup: only an already-gone file is benign. Any
+    // other failure must throw, or the runner banks 224 as applied with staged
+    // data still on disk and recovery never runs again.
+    for (const file of staged) {
+      await unlink(join(dir, file)).catch((err) => { if (err.code !== 'ENOENT') throw err; });
+    }
     console.warn(`⚠️ migration 224: discarded ${staged.length} incomplete staged rewrite(s) from an interrupted run`);
   }
   await unlink(join(dir, PLAN_FILE)).catch((err) => { if (err.code !== 'ENOENT') throw err; });

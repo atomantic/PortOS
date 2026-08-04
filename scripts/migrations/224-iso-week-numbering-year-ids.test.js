@@ -322,6 +322,19 @@ describe('migration 224 up()', () => {
     expect((await readdir(digestsDir())).sort()).toEqual(['2026-W01.json']);
   });
 
+  it('refuses to promote when a planned rewrite has neither a staged nor a promoted file', async () => {
+    // The marker survived a crash but one staging write did not. Promoting the
+    // survivor would overwrite a live source whose replacement no longer exists.
+    await mkdir(digestsDir(), { recursive: true });
+    await writeFile(join(digestsDir(), '2019-W01.json'), JSON.stringify(digestFixture('2019-W01', '2019-12-30')));
+    await writeFile(join(digestsDir(), '2019-W01.json.staging-224'), JSON.stringify(digestFixture('2019-W01', '2018-12-31')));
+    await writeFile(join(digestsDir(), '.migration-224-plan'), JSON.stringify({ migration: 224, files: ['2019-W01.json', '2020-W01.json'] }));
+
+    await expect(migration.up({ rootDir })).rejects.toThrow(/2020-W01\.json/);
+    // Nothing was promoted, so the live digest is intact for the next attempt.
+    expect(await readJson(join(digestsDir(), '2019-W01.json'))).toMatchObject({ weekId: '2019-W01' });
+  });
+
   it('leaves no staging or plan files behind on a successful run', async () => {
     await mkdir(digestsDir(), { recursive: true });
     await writeFile(join(digestsDir(), '2025-W01.json'), JSON.stringify(digestFixture('2025-W01', '2025-12-29')));
