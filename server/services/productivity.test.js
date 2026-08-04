@@ -81,6 +81,9 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
+  // The mocked bus is shared across cases — drop listeners here so a failing
+  // assertion can't strand one and have a later case observe it.
+  cosEvents.removeAllListeners();
 });
 
 describe('recalculateProductivity — streaks', () => {
@@ -328,6 +331,24 @@ describe('onTaskCompleted — incremental streak updates', () => {
       currentWeekly: 4,
       longestWeekly: 4,
       lastActiveWeek: '2026-W01',
+    });
+  });
+
+  it('splits an ISO week that straddles the new year into two week ids (#3465)', async () => {
+    // Characterization, not endorsement: getWeekId() pairs the ISO week NUMBER
+    // with the CALENDAR year, so Mon 2025-12-29 and Thu 2026-01-01 — one and
+    // the same ISO week — stamp as '2025-W01' and '2026-W01', and the rollover
+    // branch of isConsecutiveWeek (which only accepts w1 >= 52) does not bridge
+    // them. Pinned so the fix in #3465 has to update this deliberately.
+    await productivity.onTaskCompleted(agentOn('dec', { month: 12, day: 29, completedAt: new Date(2025, 11, 29, 10).toISOString() }));
+    expect(readStore().streaks).toMatchObject({ lastActiveWeek: '2025-W01', currentWeekly: 1 });
+
+    await productivity.onTaskCompleted(agentOn('jan', { month: 1, day: 1 }));
+
+    expect(readStore().streaks).toMatchObject({
+      lastActiveWeek: '2026-W01',
+      currentWeekly: 1,
+      longestWeekly: 1,
     });
   });
 

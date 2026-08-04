@@ -55,13 +55,14 @@ const NOW = new Date(2026, 2, 18, 12, 0, 0);
 const THIS_WEEK = '2026-W12';
 const LAST_WEEK = '2026-W11';
 
-const at = (day, hour = 10, month = 3) => new Date(2026, month - 1, day, hour, 0, 0).toISOString();
+const at = (day, hour = 10, month = 3, year = 2026) => new Date(year, month - 1, day, hour, 0, 0).toISOString();
 
 /** Completed-agent fixture. `taskType` lands in metadata.analysisType. */
 const agent = (id, {
   day = 18,
   hour = 10,
   month = 3,
+  year = 2026,
   success = true,
   duration = 60000,
   taskType = null,
@@ -73,8 +74,8 @@ const agent = (id, {
   id,
   taskId: `task-${id}`,
   status,
-  startedAt: at(day, hour - 1, month),
-  completedAt: completedAt === undefined ? at(day, hour, month) : completedAt,
+  startedAt: at(day, hour - 1, month, year),
+  completedAt: completedAt === undefined ? at(day, hour, month, year) : completedAt,
   result: { success, duration, ...(error ? { error } : {}) },
   metadata: { ...(taskType ? { analysisType: taskType } : {}), ...(description ? { taskDescription: description } : {}) },
 });
@@ -116,6 +117,9 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
+  // The mocked bus is shared across cases — drop listeners here so a failing
+  // assertion can't strand one and have a later case observe it.
+  cosEvents.removeAllListeners();
 });
 
 describe('generateWeeklyDigest — summary assembly', () => {
@@ -208,6 +212,22 @@ describe('generateWeeklyDigest — summary assembly', () => {
     expect(issues.map(i => i.error)).toEqual(['timeout', 'lint', 'unknown']);
   });
 
+  it('keeps only the five most frequent error patterns', async () => {
+    // Six distinct errors with descending counts (6…1 occurrences).
+    const failures = [];
+    for (let rank = 6; rank >= 1; rank--) {
+      for (let n = 0; n < rank; n++) {
+        failures.push(agent(`e${rank}-${n}`, { day: 16, success: false, error: `error-${rank}` }));
+      }
+    }
+    onDates(failures);
+
+    const { issues } = await digestService.generateWeeklyDigest();
+
+    expect(issues.map(i => i.error)).toEqual(['error-6', 'error-5', 'error-4', 'error-3', 'error-2']);
+    expect(issues.map(i => i.count)).toEqual([6, 5, 4, 3, 2]);
+  });
+
   it('counts an agent present in both the date index and live state exactly once', async () => {
     const shared = agent('dupe', { day: 17 });
     onDates([shared]);
@@ -217,6 +237,26 @@ describe('generateWeeklyDigest — summary assembly', () => {
 
     expect(digest.summary.totalTasks).toBe(2);
     expect(digest.accomplishments.map(a => a.id).sort()).toEqual(['dupe', 'state-only']);
+  });
+
+  it('splits an ISO week straddling the new year across two digests (#3465)', async () => {
+    // Characterization, not endorsement: the week id pairs the ISO week NUMBER
+    // with the CALENDAR year, so the single ISO week containing Mon 2025-12-29
+    // and Thu 2026-01-01 is filed as '2025-W01' and '2026-W01' — and '2025-W01'
+    // is also the id of the *January* 2025 week, so the two overwrite each
+    // other on disk. Pinned so the fix in #3465 has to update this deliberately.
+    vi.setSystemTime(new Date(2025, 11, 29, 12, 0, 0));
+    onDates([
+      agent('dec', { year: 2025, month: 12, day: 29 }),
+      agent('jan', { year: 2026, month: 1, day: 1 }),
+    ]);
+
+    const digest = await digestService.generateWeeklyDigest();
+
+    expect(digest.weekId).toBe('2025-W01');
+    expect(digest.summary.totalTasks).toBe(1);
+    expect(digest.accomplishments.map(a => a.id)).toEqual(['dec']);
+    expect(existsSync(join(DIGESTS_DIR, '2025-W01.json'))).toBe(true);
   });
 
   it('persists the digest and announces it on the CoS event bus', async () => {
@@ -274,8 +314,6 @@ describe('generateWeeklyDigest — week-over-week comparison', () => {
 });
 
 describe('generateWeeklyDigest — insights', () => {
-  const titles = (digest) => digest.insights.map(i => i.title);
-
   it('calls a week with no completions quiet', async () => {
     const digest = await digestService.generateWeeklyDigest();
 
@@ -380,7 +418,7 @@ describe('generateWeeklyDigest — insights', () => {
 
     const digest = await digestService.generateWeeklyDigest();
 
-    expect(titles(digest)).toEqual(['Focus Area']);
+    expect(digest.insights.map(i => i.title)).toEqual(['Focus Area']);
   });
 });
 
