@@ -1,72 +1,6 @@
 import { describe, it, expect } from 'vitest';
-
-// Inline pure functions to avoid mocking file I/O
-
-function computeStandardDrinks(oz, abv) {
-  const pureAlcoholOz = oz * (abv / 100);
-  return Math.round((pureAlcoholOz / 0.6) * 100) / 100;
-}
-
-function computeRollingAverages(entries, sex = 'male') {
-  const now = new Date();
-  const today = now.toISOString().split('T')[0];
-
-  const alcoholEntries = entries
-    .filter(e => e.alcohol?.standardDrinks > 0)
-    .sort((a, b) => a.date.localeCompare(b.date));
-
-  const allEntries = entries.sort((a, b) => a.date.localeCompare(b.date));
-
-  const todayEntry = allEntries.find(e => e.date === today);
-  const todayDrinks = todayEntry?.alcohol?.standardDrinks || 0;
-
-  const rollingAverage = (days) => {
-    const cutoff = new Date(now);
-    cutoff.setDate(cutoff.getDate() - days);
-    const cutoffStr = cutoff.toISOString().split('T')[0];
-
-    let totalDrinks = 0;
-    let dayCount = 0;
-
-    for (const entry of allEntries) {
-      if (entry.date >= cutoffStr && entry.date <= today) {
-        totalDrinks += entry.alcohol?.standardDrinks || 0;
-        dayCount++;
-      }
-    }
-
-    return dayCount > 0 ? Math.round((totalDrinks / days) * 100) / 100 : 0;
-  };
-
-  let allTimeAvg = 0;
-  if (allEntries.length > 0) {
-    const firstDate = new Date(allEntries[0].date);
-    const totalDays = Math.max(1, Math.ceil((now - firstDate) / (24 * 60 * 60 * 1000)));
-    const totalDrinks = allEntries.reduce((sum, e) => sum + (e.alcohol?.standardDrinks || 0), 0);
-    allTimeAvg = Math.round((totalDrinks / totalDays) * 100) / 100;
-  }
-
-  const thresholds = sex === 'female'
-    ? { dailyMax: 1, weeklyMax: 7 }
-    : { dailyMax: 2, weeklyMax: 14 };
-
-  const avg7day = rollingAverage(7);
-  const weeklyTotal = Math.round(avg7day * 7 * 100) / 100;
-
-  return {
-    today: todayDrinks,
-    avg7day,
-    avg30day: rollingAverage(30),
-    allTimeAvg,
-    weeklyTotal,
-    thresholds,
-    riskLevel: weeklyTotal > thresholds.weeklyMax ? 'high'
-      : weeklyTotal > thresholds.weeklyMax * 0.7 ? 'moderate'
-      : 'low',
-    drinkingDays: alcoholEntries.length,
-    totalEntries: allEntries.length
-  };
-}
+import { computeStandardDrinks, computeRollingAverages } from './meatspaceAlcohol.js';
+import { getDateString } from '../lib/fileUtils.js';
 
 // =============================================================================
 // STANDARD DRINKS TESTS
@@ -173,11 +107,14 @@ describe('updateDrink logic', () => {
 // =============================================================================
 
 describe('computeRollingAverages', () => {
-  // Helper to make dates relative to today
+  // Helper to make dates relative to today. computeRollingAverages derives "today"
+  // from getDateString (local calendar date), NOT a UTC toISOString() split — a
+  // UTC-based fixture here would drift by a day from the function's own "today"
+  // near local midnight in any timezone west of UTC. Match the real semantics.
   const daysAgo = (n) => {
     const d = new Date();
     d.setDate(d.getDate() - n);
-    return d.toISOString().split('T')[0];
+    return getDateString(d);
   };
 
   it('returns zeros for empty entries', () => {
@@ -190,7 +127,7 @@ describe('computeRollingAverages', () => {
   });
 
   it('computes today drinks from matching entry', () => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getDateString();
     const entries = [
       { date: today, alcohol: { standardDrinks: 2.5, drinks: [{ name: 'Beer', oz: 12, abv: 5 }] } }
     ];

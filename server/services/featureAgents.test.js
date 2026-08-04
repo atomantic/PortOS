@@ -1,21 +1,14 @@
 import { describe, it, expect } from 'vitest';
+import { calculateBackoff } from './featureAgents.js';
 
 /**
  * Tests for feature agents pure logic.
- * Uses inline function copies to avoid complex mocking (same pattern as subAgentSpawner.test.js).
  */
 
 const MIN_BACKOFF_MS = 60 * 60 * 1000;
 const MAX_BACKOFF_MS = 24 * 60 * 60 * 1000;
 
 describe('Feature Agent Backoff Calculation', () => {
-  function calculateBackoff(consecutiveIdles) {
-    return Math.min(
-      MIN_BACKOFF_MS * Math.pow(2, consecutiveIdles - 1),
-      MAX_BACKOFF_MS
-    );
-  }
-
   it('should start at 1 hour for first idle', () => {
     expect(calculateBackoff(1)).toBe(60 * 60 * 1000);
   });

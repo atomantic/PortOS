@@ -1,25 +1,14 @@
 import { describe, it, expect } from 'vitest';
+import { extractKeywords } from './taskConflict.js';
 
 /**
  * Tests for the task conflict detection service.
- * We test the pure logic inline to avoid complex mocking of child_process/fs.
+ * extractKeywords is imported from the real module (pure, no I/O). The
+ * conflict-recommendation branching below (`analyzeConflict`) has no standalone
+ * exported counterpart — it's inlined inside the async detectConflicts(), which
+ * shells out to git via getModifiedFiles/isGitRepo. It stays a local copy here
+ * to test the recommendation branching without mocking child_process/fs.
  */
-
-// Inline extractKeywords logic for unit testing
-function extractKeywords(text) {
-  const stopWords = new Set([
-    'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
-    'of', 'with', 'by', 'from', 'is', 'it', 'this', 'that', 'be', 'as',
-    'are', 'was', 'were', 'been', 'has', 'have', 'had', 'do', 'does',
-    'not', 'no', 'can', 'will', 'should', 'may', 'task', 'fix', 'add',
-    'update', 'change', 'make', 'use', 'new', 'all', 'any', 'each'
-  ]);
-
-  return text
-    .replace(/[^a-z0-9\s-_/.]/g, ' ')
-    .split(/\s+/)
-    .filter(w => w.length > 2 && !stopWords.has(w));
-}
 
 // Inline conflict analysis logic for testing without git/fs dependencies
 function analyzeConflict(task, workspacePath, activeAgents, options = {}) {

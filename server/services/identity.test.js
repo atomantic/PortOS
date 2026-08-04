@@ -1,4 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  extractSleepMarkers,
+  extractCaffeineMarkers,
+  extractLongevityMarkers,
+  extractCardiovascularMarkers,
+  computeLifeExpectancy,
+  computeChronotype,
+  computeRecommendations,
+  computeGoalUrgency
+} from './identity.js';
 
 // identity/store.js now persists via the canonical atomicWrite (#1837), which
 // writes to a temp file then renames it over the target (with unlink cleanup on
@@ -31,181 +41,6 @@ function makeFsPromisesStore() {
     }),
     chmod: vi.fn(async () => {}),
   };
-}
-
-// === Pure function copies for unit testing (avoids complex mocking) ===
-
-const SLEEP_MARKERS = {
-  rs1801260: 'clockGene',
-  rs57875989: 'dec2',
-  rs35333999: 'per2',
-  rs2287161: 'cry1',
-  rs4753426: 'mtnr1b'
-};
-
-const CAFFEINE_MARKERS = {
-  rs762551: 'cyp1a2',
-  rs73598374: 'ada'
-};
-
-const MARKER_WEIGHTS = {
-  cry1: 0.30,
-  clockGene: 0.25,
-  per2: 0.20,
-  mtnr1b: 0.15,
-  dec2: 0.10
-};
-
-const SIGNAL_MAP = {
-  clockGene: { beneficial: -1, typical: 0, concern: 1 },
-  dec2: { beneficial: -1, typical: 0, concern: 1 },
-  per2: { beneficial: -1, typical: 0, concern: 1 },
-  cry1: { beneficial: 1, typical: 0, concern: -1 },
-  mtnr1b: { beneficial: 0, typical: 0, concern: 1 }
-};
-
-const SCHEDULE_TEMPLATES = {
-  morning: {
-    wakeTime: '06:00', sleepTime: '22:00',
-    peakFocusStart: '08:00', peakFocusEnd: '12:00',
-    exerciseWindow: '06:30-08:00', windDownStart: '20:30'
-  },
-  intermediate: {
-    wakeTime: '07:00', sleepTime: '23:00',
-    peakFocusStart: '09:30', peakFocusEnd: '13:00',
-    exerciseWindow: '07:30-09:00', windDownStart: '21:30'
-  },
-  evening: {
-    wakeTime: '08:30', sleepTime: '00:30',
-    peakFocusStart: '11:00', peakFocusEnd: '15:00',
-    exerciseWindow: '10:00-12:00', windDownStart: '23:00'
-  }
-};
-
-function extractSleepMarkers(savedMarkers) {
-  const results = {};
-  const markerValues = Object.values(savedMarkers || {});
-  for (const [rsid, name] of Object.entries(SLEEP_MARKERS)) {
-    const found = markerValues.find(m => m.rsid === rsid);
-    if (found) {
-      const signalMap = SIGNAL_MAP[name];
-      const signal = signalMap?.[found.status] ?? 0;
-      results[name] = { rsid, genotype: found.genotype, status: found.status, signal };
-    }
-  }
-  return results;
-}
-
-function extractCaffeineMarkers(savedMarkers) {
-  const results = {};
-  const markerValues = Object.values(savedMarkers || {});
-  for (const [rsid, name] of Object.entries(CAFFEINE_MARKERS)) {
-    const found = markerValues.find(m => m.rsid === rsid);
-    if (found) {
-      results[name] = { rsid, genotype: found.genotype, status: found.status };
-    }
-  }
-  return results;
-}
-
-function computeChronotype(geneticMarkers, behavioralData) {
-  const markerNames = Object.keys(geneticMarkers);
-  const hasGenetic = markerNames.length > 0;
-  const hasBehavioral = behavioralData?.preferredWakeTime || behavioralData?.preferredSleepTime;
-
-  let geneticScore = 0;
-  let totalWeight = 0;
-  for (const name of markerNames) {
-    const weight = MARKER_WEIGHTS[name] ?? 0;
-    geneticScore += geneticMarkers[name].signal * weight;
-    totalWeight += weight;
-  }
-  if (totalWeight > 0) geneticScore /= totalWeight;
-
-  let behavioralScore = 0;
-  if (hasBehavioral) {
-    const scores = [];
-    if (behavioralData.preferredWakeTime) {
-      const [h] = behavioralData.preferredWakeTime.split(':').map(Number);
-      scores.push(Math.max(-1, Math.min(1, (h - 8) / 2)));
-    }
-    if (behavioralData.preferredSleepTime) {
-      const [h] = behavioralData.preferredSleepTime.split(':').map(Number);
-      const normalizedH = h < 6 ? h + 24 : h;
-      scores.push(Math.max(-1, Math.min(1, (normalizedH - 23) / 2)));
-    }
-    if (scores.length > 0) {
-      behavioralScore = scores.reduce((a, b) => a + b, 0) / scores.length;
-    }
-  }
-
-  let composite;
-  if (hasGenetic && hasBehavioral) {
-    composite = (geneticScore + behavioralScore) / 2;
-  } else if (hasGenetic) {
-    composite = geneticScore;
-  } else if (hasBehavioral) {
-    composite = behavioralScore;
-  } else {
-    composite = 0;
-  }
-
-  let type;
-  if (composite < -0.25) type = 'morning';
-  else if (composite > 0.25) type = 'evening';
-  else type = 'intermediate';
-
-  const markerCount = markerNames.length;
-  const maxMarkers = Object.keys(MARKER_WEIGHTS).length;
-  const markerConfidence = Math.min(0.5, (markerCount / maxMarkers) * 0.5);
-  const behavioralConfidence = hasBehavioral ? 0.3 : 0;
-
-  let agreementBonus = 0;
-  if (hasGenetic && hasBehavioral) {
-    const sameDirection = Math.sign(geneticScore) === Math.sign(behavioralScore) &&
-      Math.sign(geneticScore) !== 0;
-    agreementBonus = sameDirection ? 0.2 : -0.1;
-  }
-
-  const confidence = Math.max(0, Math.min(1,
-    markerConfidence + behavioralConfidence + agreementBonus
-  ));
-
-  return {
-    type,
-    confidence: Math.round(confidence * 100) / 100,
-    scores: {
-      genetic: Math.round(geneticScore * 1000) / 1000,
-      behavioral: Math.round(behavioralScore * 1000) / 1000,
-      composite: Math.round(composite * 1000) / 1000
-    }
-  };
-}
-
-function computeRecommendations(type, caffeineMarkers, mtnr1bStatus) {
-  const schedule = { ...SCHEDULE_TEMPLATES[type] };
-
-  const cyp1a2 = caffeineMarkers?.cyp1a2;
-  if (cyp1a2?.status === 'beneficial') {
-    schedule.caffeineCutoff = '16:00';
-    schedule.caffeineNote = 'Fast metabolizer — caffeine clears quickly';
-  } else if (cyp1a2?.status === 'concern' || cyp1a2?.status === 'major_concern') {
-    schedule.caffeineCutoff = '12:00';
-    schedule.caffeineNote = 'Slow metabolizer — limit afternoon caffeine';
-  } else {
-    schedule.caffeineCutoff = '14:00';
-    schedule.caffeineNote = 'Typical metabolism — moderate afternoon cutoff';
-  }
-
-  if (mtnr1bStatus === 'concern' || mtnr1bStatus === 'major_concern') {
-    schedule.lastMealCutoff = '19:00';
-    schedule.mealNote = 'MTNR1B variant — earlier meals may improve glucose response';
-  } else {
-    schedule.lastMealCutoff = '20:30';
-    schedule.mealNote = 'Standard meal timing recommendation';
-  }
-
-  return schedule;
 }
 
 // === Helper: build savedMarkers map from rsid/status pairs ===
@@ -530,135 +365,6 @@ describe('computeRecommendations', () => {
   });
 });
 
-// === Longevity & Goal pure function copies ===
-
-const LONGEVITY_MARKERS = {
-  rs2802292: { name: 'foxo3a', gene: 'FOXO3A', weight: 0.25, label: 'Longevity / FOXO3A' },
-  rs2229765: { name: 'igf1r', gene: 'IGF1R', weight: 0.20, label: 'Growth Factor Receptor' },
-  rs5882: { name: 'cetp', gene: 'CETP', weight: 0.20, label: 'HDL Cholesterol' },
-  rs12366: { name: 'ipmk', gene: 'IPMK', weight: 0.15, label: 'Nutrient Sensing' },
-  rs10936599: { name: 'terc', gene: 'TERC', weight: 0.20, label: 'Telomere Length' }
-};
-
-const CARDIOVASCULAR_MARKERS = {
-  rs6025: { name: 'factorV', gene: 'F5', weight: 0.20, label: 'Factor V Leiden' },
-  rs1333049: { name: 'cad9p21', gene: '9p21.3', weight: 0.20, label: 'Coronary Artery Disease' },
-  rs10455872: { name: 'lpa', gene: 'LPA', weight: 0.15, label: 'Lipoprotein(a)' },
-  rs1799963: { name: 'prothrombin', gene: 'F2', weight: 0.15, label: 'Prothrombin Thrombophilia' },
-  rs1800795: { name: 'il6', gene: 'IL-6', weight: 0.15, label: 'Inflammation / IL-6' },
-  rs1800629: { name: 'tnfa', gene: 'TNF-alpha', weight: 0.15, label: 'Inflammation / TNF-alpha' }
-};
-
-const LONGEVITY_SIGNAL = { beneficial: 1, typical: 0, concern: -1 };
-const CARDIO_SIGNAL = { beneficial: -1, typical: 0, concern: 1, major_concern: 1.5 };
-const SSA_BASELINE_LIFE_EXPECTANCY = 78.5;
-
-function extractLongevityMarkers(savedMarkers) {
-  const results = {};
-  const markerValues = Object.values(savedMarkers || {});
-  for (const [rsid, def] of Object.entries(LONGEVITY_MARKERS)) {
-    const found = markerValues.find(m => m.rsid === rsid);
-    if (found) {
-      const signal = LONGEVITY_SIGNAL[found.status] ?? 0;
-      results[def.name] = {
-        rsid, gene: def.gene, label: def.label,
-        genotype: found.genotype, status: found.status,
-        weight: def.weight, signal
-      };
-    }
-  }
-  return results;
-}
-
-function extractCardiovascularMarkers(savedMarkers) {
-  const results = {};
-  const markerValues = Object.values(savedMarkers || {});
-  for (const [rsid, def] of Object.entries(CARDIOVASCULAR_MARKERS)) {
-    const found = markerValues.find(m => m.rsid === rsid);
-    if (found) {
-      const signal = CARDIO_SIGNAL[found.status] ?? 0;
-      results[def.name] = {
-        rsid, gene: def.gene, label: def.label,
-        genotype: found.genotype, status: found.status,
-        weight: def.weight, signal
-      };
-    }
-  }
-  return results;
-}
-
-function computeLifeExpectancy(longevityMarkers, cardiovascularMarkers, birthDate) {
-  let longevityScore = 0;
-  let longevityWeight = 0;
-  for (const marker of Object.values(longevityMarkers)) {
-    longevityScore += marker.signal * marker.weight;
-    longevityWeight += marker.weight;
-  }
-  if (longevityWeight > 0) longevityScore /= longevityWeight;
-
-  let cardioRisk = 0;
-  let cardioWeight = 0;
-  for (const marker of Object.values(cardiovascularMarkers)) {
-    cardioRisk += marker.signal * marker.weight;
-    cardioWeight += marker.weight;
-  }
-  if (cardioWeight > 0) cardioRisk /= cardioWeight;
-
-  const longevityAdjustment = Math.round(longevityScore * 5 * 100) / 100 || 0;
-  const cardiovascularAdjustment = Math.round(-cardioRisk * 4 * 100) / 100 || 0;
-  const adjusted = Math.round((SSA_BASELINE_LIFE_EXPECTANCY + longevityAdjustment + cardiovascularAdjustment) * 10) / 10;
-
-  const longevityCount = Object.keys(longevityMarkers).length;
-  const cardioCount = Object.keys(cardiovascularMarkers).length;
-  const maxLongevity = Object.keys(LONGEVITY_MARKERS).length;
-  const maxCardio = Object.keys(CARDIOVASCULAR_MARKERS).length;
-  const coverage = (longevityCount + cardioCount) / (maxLongevity + maxCardio);
-  const confidence = Math.round(Math.min(1, coverage) * 100) / 100;
-
-  let timeHorizons = null;
-  if (birthDate) {
-    const birth = new Date(birthDate);
-    const now = new Date();
-    const ageYears = (now - birth) / (365.25 * 24 * 60 * 60 * 1000);
-    const yearsRemaining = Math.max(0, Math.round((adjusted - ageYears) * 10) / 10);
-    const healthyYearsRemaining = Math.round(yearsRemaining * 0.85 * 10) / 10;
-    const percentLifeComplete = Math.round((ageYears / adjusted) * 1000) / 10;
-
-    timeHorizons = {
-      ageYears: Math.round(ageYears * 10) / 10,
-      yearsRemaining,
-      healthyYearsRemaining,
-      percentLifeComplete: Math.min(100, percentLifeComplete)
-    };
-  }
-
-  return {
-    longevityScore: Math.round(longevityScore * 1000) / 1000,
-    cardiovascularRisk: Math.round(cardioRisk * 1000) / 1000,
-    lifeExpectancy: {
-      baseline: SSA_BASELINE_LIFE_EXPECTANCY,
-      adjusted,
-      longevityAdjustment,
-      cardiovascularAdjustment
-    },
-    timeHorizons,
-    confidence
-  };
-}
-
-function computeGoalUrgency(goal, timeHorizons) {
-  if (!timeHorizons || !goal.horizon) return null;
-  const horizonMap = {
-    '1-year': 1, '3-year': 3, '5-year': 5,
-    '10-year': 10, '20-year': 20, 'lifetime': timeHorizons.yearsRemaining
-  };
-  const horizonYears = horizonMap[goal.horizon] ?? 5;
-  const yearsRemaining = timeHorizons.yearsRemaining;
-  const rawUrgency = 1 - Math.min(1, yearsRemaining / (horizonYears * 2));
-  const healthPressure = horizonYears > timeHorizons.healthyYearsRemaining ? 0.2 : 0;
-  return Math.min(1, Math.round((rawUrgency + healthPressure) * 100) / 100);
-}
-
 // ============================================================
 // Longevity Tests
 // ============================================================
@@ -869,6 +575,19 @@ describe('computeGoalUrgency', () => {
     };
     const urgency = computeGoalUrgency({ horizon: '20-year' }, tightHorizons);
     expect(urgency).toBeLessThanOrEqual(1);
+  });
+
+  it('returns max urgency instead of NaN for a lifetime goal with zero years remaining', () => {
+    // horizonYears for 'lifetime' is derived from timeHorizons.yearsRemaining, so
+    // when that's 0 the old formula divided 0/0 and produced NaN. The real
+    // implementation short-circuits to max urgency (1) whenever horizonYears or
+    // yearsRemaining is non-positive — this case is reachable in production for
+    // a user whose computed life expectancy has already elapsed.
+    const urgency = computeGoalUrgency(
+      { horizon: 'lifetime' },
+      { yearsRemaining: 0, healthyYearsRemaining: 0 }
+    );
+    expect(urgency).toBe(1);
   });
 });
 

@@ -28,6 +28,18 @@ const MIN_BACKOFF_MS = 60 * 60 * 1000;       // 1 hour
 const MAX_BACKOFF_MS = 24 * 60 * 60 * 1000;  // 24 hours
 
 /**
+ * Exponential idle backoff, doubling per consecutive idle run and capped at
+ * MAX_BACKOFF_MS. `consecutiveIdles` is 1-indexed (the first idle run yields
+ * MIN_BACKOFF_MS, not half of it).
+ */
+export function calculateBackoff(consecutiveIdles) {
+  return Math.min(
+    MIN_BACKOFF_MS * Math.pow(2, consecutiveIdles - 1),
+    MAX_BACKOFF_MS
+  );
+}
+
+/**
  * Read the feature agents data file
  */
 async function readData() {
@@ -370,10 +382,7 @@ export async function recordRunCompletion(id, runData) {
     // Handle idle detection for backoff
     if (runData.status === 'idle-no-work') {
       const consecutiveIdles = (agent.backoff?.consecutiveIdles || 0) + 1;
-      const currentDelayMs = Math.min(
-        MIN_BACKOFF_MS * Math.pow(2, consecutiveIdles - 1),
-        MAX_BACKOFF_MS
-      );
+      const currentDelayMs = calculateBackoff(consecutiveIdles);
       agent.backoff = {
         currentDelayMs,
         consecutiveIdles,
