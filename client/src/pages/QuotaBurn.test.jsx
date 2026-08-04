@@ -253,6 +253,24 @@ describe('QuotaBurn save races', () => {
     expect(api.saveQuotaBurn.mock.calls[1][0].families.grok.jobs[0].label).toContain('Z!');
   });
 
+  it('stops claiming it is saving once the retry budget is spent', async () => {
+    // The header indicator is the page's only persistent statement about
+    // persistence (there is no Save button). Leaving it on "Saving changes…"
+    // after both attempts failed asserts progress that is not happening.
+    api.saveQuotaBurn.mockRejectedValue(new Error('400'));
+    const user = userEvent.setup();
+    renderPage('/devtools/quota-burn/grok');
+    await user.type(await screen.findByLabelText('Name for step 1'), 'Z');
+    await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('Not saved — edit a field to retry')).toBeInTheDocument();
+
+    // The next edit re-arms the debounce, so the give-up no longer applies.
+    api.saveQuotaBurn.mockResolvedValue({ config });
+    await user.type(screen.getByLabelText('Name for step 1'), '!');
+    expect(screen.getByText('Saving changes…')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Changes save automatically')).toBeInTheDocument());
+  });
+
   it('flushes a pending edit on unmount instead of dropping it', async () => {
     // cancel() alone discards everything typed in the last debounce window —
     // navigating away 200ms after pasting a prompt lost it with no indicator.

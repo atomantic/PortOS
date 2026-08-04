@@ -38,7 +38,19 @@ export default function FamilyCard({
   // page is reloaded. The catalog fetch is best-effort (the page still renders
   // without it), so gate on it rather than minting an unsavable row.
   const canAddJob = catalog.jobTypes.length > 0;
-  const nextJobId = () => `job-${Date.now().toString(36)}`;
+  // Ids key the React list AND pair each job with its server-side pending count,
+  // so a duplicate is a real defect, not a cosmetic one. `Date.now()` alone can
+  // repeat within the same millisecond (two adds from one handler, a preset add
+  // immediately following a blank add), so disambiguate against the ids already
+  // in the plan rather than trusting the clock to have ticked.
+  const nextJobId = () => {
+    const taken = new Set(jobs.map((job) => job.id));
+    const base = `job-${Date.now().toString(36)}`;
+    if (!taken.has(base)) return base;
+    let suffix = 2;
+    while (taken.has(`${base}-${suffix}`)) suffix += 1;
+    return `${base}-${suffix}`;
+  };
   const addJob = () => patchJobs([...jobs, {
     id: nextJobId(),
     enabled: true,
@@ -51,10 +63,10 @@ export default function FamilyCard({
   // A preset job inherits the app the plan is already pointed at, when the plan
   // is unambiguous about it — otherwise a one-click "add a UX audit" lands as a
   // step that cannot run until the user notices the unset app picker.
-  const inheritedAppId = [...new Set(jobs.map((job) => job.params?.appId).filter(Boolean))];
+  const targetedAppIds = [...new Set(jobs.map((job) => job.params?.appId).filter(Boolean))];
   const addPresetJob = (preset) => patchJobs([...jobs, jobFromPreset(preset, {
     id: nextJobId(),
-    appId: inheritedAppId.length === 1 ? inheritedAppId[0] : null,
+    appId: targetedAppIds.length === 1 ? targetedAppIds[0] : null,
   })]);
 
   return (

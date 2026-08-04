@@ -15,7 +15,7 @@
 
 import { inputClass } from './fields';
 
-export default function PresetPicker({ id, label, presets, jobType = null, onPick, disabled = false, hint }) {
+export default function PresetPicker({ id, label, presets, jobType = null, onPick, hint }) {
   // Presets declare the job type they seed, so a plan with several job types
   // only ever offers the ones that can apply here.
   const rows = (presets || []).filter((preset) => !jobType || preset.jobType === jobType);
@@ -28,7 +28,6 @@ export default function PresetPicker({ id, label, presets, jobType = null, onPic
         id={id}
         className={inputClass}
         value=""
-        disabled={disabled}
         onChange={(event) => {
           const picked = rows.find((preset) => preset.id === event.target.value);
           if (picked) onPick(picked);

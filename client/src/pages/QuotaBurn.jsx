@@ -47,6 +47,12 @@ export default function QuotaBurn() {
   // has actually landed — otherwise the user changes a model, clicks Burn, and
   // the server burns with the previous value.
   const [unsaved, setUnsaved] = useState(false);
+  // Distinct from `unsaved`: the retry budget is spent and nothing is in flight
+  // any more. Collapsing the two would leave the header's indicator saying
+  // "Saving changes…" forever after a save gave up — a claim of progress that is
+  // false, on the one control whose whole job is to tell the truth about
+  // persistence.
+  const [saveStalled, setSaveStalled] = useState(false);
   const [running, setRunning] = useState(false);
   const pendingRef = useRef(null);
   // Monotonic counter over local edits. Every server response records the value
@@ -106,11 +112,13 @@ export default function QuotaBurn() {
         persistRef.current?.();
       } else {
         retriedRef.current = false;
+        setSaveStalled(true);
         toast.error('Changes are still unsaved — edit a field to retry.');
       }
       return;
     }
     retriedRef.current = false;
+    setSaveStalled(false);
     // The server's normalization is authoritative — adopt what it stored, but
     // only while no newer keystroke has landed. Then re-read status so pending
     // counts and skip reasons match the saved plan.
@@ -135,6 +143,9 @@ export default function QuotaBurn() {
   const save = (patch) => {
     editSeqRef.current += 1;
     setUnsaved(true);
+    // A new edit re-arms the debounce, so the previous give-up no longer
+    // describes the current state.
+    setSaveStalled(false);
     setConfig((prev) => mergeQuotaBurnPatch(prev, patch));
     pendingRef.current = mergeQuotaBurnPatch(pendingRef.current, patch);
     persist();
@@ -167,8 +178,13 @@ export default function QuotaBurn() {
         {/* There is no Save button on this page, and nothing else said so — the
             silence is what makes people reach for the nearest button-shaped
             thing (the per-job ▶, which spends quota) to "commit" an edit. */}
-        <span className={`text-[11px] ${unsaved ? 'text-amber-300' : 'text-gray-500'}`} aria-live="polite">
-          {unsaved ? 'Saving changes…' : 'Changes save automatically'}
+        <span
+          className={`text-[11px] ${saveStalled ? 'text-port-error' : unsaved ? 'text-amber-300' : 'text-gray-500'}`}
+          aria-live="polite"
+        >
+          {saveStalled
+            ? 'Not saved — edit a field to retry'
+            : unsaved ? 'Saving changes…' : 'Changes save automatically'}
         </span>
         <button
           type="button"
