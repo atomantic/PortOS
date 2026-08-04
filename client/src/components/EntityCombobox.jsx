@@ -142,7 +142,7 @@ export default function EntityCombobox({
         <button
           type="button"
           onClick={() => setOpen((p) => !p)}
-          className="absolute right-1 top-1/2 -translate-y-1/2 p-1 text-gray-500 hover:text-white"
+          className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center justify-center min-h-[44px] min-w-[44px] text-gray-500 hover:text-white"
           aria-label={open ? `Close ${noun} list` : `Open ${noun} list`}
           tabIndex={-1}
         >

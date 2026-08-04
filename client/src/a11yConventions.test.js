@@ -183,7 +183,25 @@ function matchTernaryIcons(inner) {
   return iconRe.test(a) && iconRe.test(b);
 }
 
-function isIconOnlyBody(rawBody) {
+// Unwrap presentational wrappers: a button whose body is `<span><X/></span>`
+// (an extra element for padding, a hover background, or a badge) is still
+// icon-only, but a walker that stops at the wrapper's opening tag reads its
+// children as "more than one top-level node" and skips the button entirely.
+// Recurse through lowercase host elements that carry no text of their own.
+function unwrapPresentational(rawBody, depth = 0) {
+  if (depth > 4) return rawBody;
+  const s = stripJsxComments(rawBody).trim();
+  const m = s.match(/^<([a-z][\w-]*)\b/);
+  if (!m) return s;
+  const boundary = tagBoundaryAt(s, 0);
+  if (!boundary || boundary.selfClosing) return s;
+  const close = `</${m[1]}>`;
+  if (!s.endsWith(close)) return s;
+  return unwrapPresentational(s.slice(boundary.end, s.length - close.length), depth + 1);
+}
+
+function isIconOnlyBody(rawBodyIn) {
+  const rawBody = unwrapPresentational(rawBodyIn);
   const node = soleTopLevelNode(rawBody);
   if (!node) return false;
   if (node.kind === 'element') return node.selfClosing && /^<[A-Z]/.test(node.raw);
@@ -425,7 +443,14 @@ describe('a11y conventions', () => {
     // already covers the entire screen/panel, so a min-w/min-h floor is
     // meaningless — the element's box is already forced to fill its
     // positioned ancestor.
-    const CLOSE_LABEL_RE = /aria-label\s*=\s*"(Close[^"]*)"/;
+    // Matches both a literal `aria-label="Close…"` and an expression form
+    // `aria-label={cond ? 'Close panel' : …}` / {`Close ${x}`} / {closeLabel}.
+    // Scanning only the literal form is how a live 16px close button in
+    // apps/DeployPanel.jsx (dynamic label, no sizing at all) hid from this
+    // guard while it reported zero offenders — the canonical Drawer.jsx close
+    // button uses a dynamic label too, so the literal-only form misses the
+    // exact shape the convention was written from.
+    const CLOSE_LABEL_RE = /aria-label\s*=\s*(?:"Close[^"]*"|\{[^}]*(?:['"`]Close|[Cc]loseLabel)[^}]*\})/;
     const offenders = [];
     for (const file of trackedJsxFiles()) {
       const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');

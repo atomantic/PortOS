@@ -268,7 +268,8 @@ export default function TrustTab({ onRefresh }) {
                   <button
                     onClick={() => setExpandedId(isExpanded ? null : entry.id)}
                     className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-port-border/50"
-                    title="View details" aria-label="View details"
+                    title={isExpanded ? 'Hide details' : 'View details'}
+                    aria-label={isExpanded ? 'Hide details' : 'View details'}
                   >
                     {isExpanded ? <ChevronDown size={16} /> : <Eye size={16} />}
                   </button>
