@@ -6,12 +6,19 @@ import { join } from 'path';
 import migration, { legacyWeekId, planDigestRewrite, resolveNewWeekId, toDateHint } from './224-iso-week-numbering-year-ids.js';
 
 const on = (year, month, day) => new Date(year, month - 1, day);
+// Local midnight, serialized the way the service stores it. Built from LOCAL
+// components (as the service does) so every expectation holds in any timezone —
+// a bare `${ymd}T00:00:00.000Z` reads as the PREVIOUS day west of Greenwich.
+const localMidnightIso = (ymd) => {
+  const [year, month, day] = ymd.split('-').map(Number);
+  return new Date(year, month - 1, day).toISOString();
+};
 // A digest record with only the fields the migration reads. Values are
 // obviously-synthetic, not lifted from any real install.
 const digestFixture = (weekId, weekStart, extra = {}) => ({
   weekId,
-  generatedAt: `${weekStart}T18:00:00.000Z`,
-  weekStart: `${weekStart}T00:00:00.000Z`,
+  generatedAt: localMidnightIso(weekStart),
+  weekStart: localMidnightIso(weekStart),
   summary: { totalTasks: 1 },
   ...extra,
 });
@@ -118,6 +125,47 @@ describe('planDigestRewrite', () => {
     expect(skipped).toEqual(['2025-W52.json']);
   });
 
+  it('steps previousWeekId back by a CALENDAR week, not 168 hours', () => {
+    // Spring-forward week (Mon 2025-03-10 in a DST-observing zone): subtracting
+    // 7 * 24h from a local-midnight weekStart lands on Sun 23:00, i.e. 2025-W09
+    // — one week too far back.
+    const dstWeek = { previousWeekId: '2025-W10' };
+
+    // A correct record must not be rewritten at all.
+    expect(planDigestRewrite([
+      { file: '2025-W11.json', digest: digestFixture('2025-W11', '2025-03-10', dstWeek) },
+    ]).writes).toEqual([]);
+
+    // And when something else does force a rewrite, the value stays put.
+    const { writes } = planDigestRewrite([
+      { file: '2025-W11.json', digest: digestFixture('2025-W99', '2025-03-10', dstWeek) },
+    ]);
+    expect(writes[0].digest).toMatchObject({ weekId: '2025-W11', previousWeekId: '2025-W10' });
+  });
+
+  it('refuses to rename onto a name held by a digest it could not read', () => {
+    const { writes, deletes, skipped } = planDigestRewrite(
+      [{ file: '2025-W01.json', digest: digestFixture('2025-W01', '2025-12-29') }],
+      ['2026-W01.json'],
+    );
+    expect(writes).toEqual([]);
+    expect(deletes).toEqual([]);
+    expect(skipped).toEqual(['2025-W01.json']);
+  });
+
+  it('finishes an interrupted rename by deleting the leftover source copy', () => {
+    // A run that wrote the target but died before unlinking the source leaves
+    // both files with identical bodies. The re-run must converge, not stall.
+    const body = digestFixture('2025-W01', '2025-12-29');
+    const { writes, deletes, skipped } = planDigestRewrite([
+      { file: '2025-W01.json', digest: body },
+      { file: '2026-W01.json', digest: { ...body, weekId: '2026-W01' } },
+    ]);
+    expect(writes).toEqual([]);
+    expect(deletes).toEqual(['2025-W01.json']);
+    expect(skipped).toEqual([]);
+  });
+
   it('keeps one winner when two records claim the same new name, dropping neither file', () => {
     const stays = digestFixture('2026-W01', '2025-12-29');
     const moves = digestFixture('2025-W01', '2025-12-30');
@@ -182,6 +230,17 @@ describe('migration 224 up()', () => {
     await migration.up({ rootDir });
 
     expect(await readFile(path, 'utf-8')).toBe(before);
+  });
+
+  it('does not rename over an unreadable file already sitting at the target name', async () => {
+    await mkdir(digestsDir(), { recursive: true });
+    await writeFile(join(digestsDir(), '2025-W01.json'), JSON.stringify(digestFixture('2025-W01', '2025-12-29')));
+    await writeFile(join(digestsDir(), '2026-W01.json'), 'not json');
+
+    await migration.up({ rootDir });
+
+    expect(await readFile(join(digestsDir(), '2026-W01.json'), 'utf-8')).toBe('not json');
+    expect(existsSync(join(digestsDir(), '2025-W01.json'))).toBe(true);
   });
 
   it('skips an unreadable digest instead of throwing the boot migration run', async () => {
