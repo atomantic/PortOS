@@ -29,6 +29,8 @@ vi.mock('../services/api', () => ({
   buildApp: vi.fn(() => Promise.resolve({})),
   refreshAppConfig: vi.fn(() => Promise.resolve({})),
   getMySprintTickets: vi.fn(() => Promise.resolve([])),
+  getJiraBoardColumns: vi.fn(() => Promise.resolve({ columns: [] })),
+  updateJiraTicketStatus: vi.fn(() => Promise.resolve({})),
   openAppInEditor: vi.fn(() => Promise.resolve({})),
   openAppFolder: vi.fn(() => Promise.resolve({})),
   openAppInXcode: vi.fn(() => Promise.resolve({ success: true, path: '/srv/example-ios/ExampleIos.xcodeproj' })),
@@ -398,5 +400,78 @@ describe('Apps archive result reporting (#3436)', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('archived')));
     // Local state moved the row into the archived list — no refetch needed.
     expect(await screen.findByRole('button', { name: /Archived \(1\)/ })).toBeTruthy();
+  });
+});
+
+describe('Apps sprint-ticket fetch failures (#3437)', () => {
+  const JIRA_APP = {
+    ...APPS[0],
+    jira: { enabled: true, instanceId: 'jira-1', projectKey: 'EX', issueType: 'Task' }
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getApps.mockResolvedValue([JIRA_APP]);
+  });
+
+  // The toggle relabels itself once open, so match either direction.
+  const toggleRow = async (user) => {
+    await user.click(screen.getByRole('button', { name: /(Expand|Collapse) Example App details/ }));
+  };
+
+  it('reports a failed fetch instead of claiming the sprint is empty, and retries on demand', async () => {
+    api.getMySprintTickets.mockRejectedValue(new Error('JIRA instance unreachable'));
+    const user = userEvent.setup();
+    await renderApps();
+
+    await toggleRow(user);
+    await screen.findByText(/Couldn't load sprint tickets/);
+    expect(screen.getByText(/JIRA instance unreachable/)).toBeTruthy();
+    expect(screen.queryByText('No tickets assigned to you in the current sprint')).toBeNull();
+
+    // Retry re-issues the request, and a now-healthy JIRA renders the board.
+    api.getMySprintTickets.mockResolvedValue([
+      { key: 'EX-1', summary: 'Example ticket', status: 'To Do' }
+    ]);
+    await user.click(screen.getByRole('button', { name: 'Retry loading sprint tickets for Example App' }));
+
+    await waitFor(() => expect(api.getMySprintTickets).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText(/Couldn't load sprint tickets/)).toBeNull());
+  });
+
+  it('re-issues the request on the next expand after a failure instead of caching it', async () => {
+    api.getMySprintTickets.mockRejectedValue(new Error('JIRA instance unreachable'));
+    const user = userEvent.setup();
+    await renderApps();
+
+    await toggleRow(user);
+    await screen.findByText(/Couldn't load sprint tickets/);
+
+    await toggleRow(user);   // collapse
+    await toggleRow(user);   // re-expand
+    await waitFor(() => expect(api.getMySprintTickets).toHaveBeenCalledTimes(2));
+  });
+
+  it('still reports a genuinely empty sprint as empty, and caches it', async () => {
+    api.getMySprintTickets.mockResolvedValue([]);
+    const user = userEvent.setup();
+    await renderApps();
+
+    await toggleRow(user);
+    expect(await screen.findByText('No tickets assigned to you in the current sprint')).toBeTruthy();
+
+    await toggleRow(user);   // collapse
+    await toggleRow(user);   // re-expand — the cached [] is authoritative
+    expect(api.getMySprintTickets).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders its own error UI, so the request stays silent', async () => {
+    api.getMySprintTickets.mockRejectedValue(new Error('JIRA instance unreachable'));
+    const user = userEvent.setup();
+    await renderApps();
+
+    await toggleRow(user);
+    await screen.findByText(/Couldn't load sprint tickets/);
+    expect(api.getMySprintTickets).toHaveBeenCalledWith('jira-1', 'EX', { silent: true });
   });
 });

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router';
-import { ExternalLink, Gamepad2, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download, Hammer, Smartphone, Trash2 } from 'lucide-react';
+import { ExternalLink, Gamepad2, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download, Hammer, Smartphone, Trash2, AlertTriangle } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import OverflowMenu from '../components/ui/OverflowMenu';
@@ -36,6 +36,9 @@ export default function Apps() {
   const setShowArchived = (next) => updateParams({ view: next ? 'archived' : null });
   const [jiraTickets, setJiraTickets] = useState({});
   const [loadingTickets, setLoadingTickets] = useState({});
+  // Parallel to jiraTickets: `undefined` tickets + a message here means "the
+  // fetch failed", which is a different thing from a fetched empty sprint.
+  const [ticketErrors, setTicketErrors] = useState({});
   // Per-row "…" trigger refs, so dismissing a row's delete confirmation hands
   // focus back to the control that opened it instead of dropping it on <body>.
   const menuTriggerRefs = useRef({});
@@ -118,22 +121,33 @@ export default function Apps() {
 
   const handleStandardize = (app) => startStandardize(app.id, app.name);
 
-  const toggleExpand = async (id) => {
+  // A failed fetch must NOT be cached as `[]` — that read as "you have no
+  // sprint tickets" and, because the `!jiraTickets[id]` guard was satisfied by
+  // the cached empty array, never retried for the life of the page (#3437).
+  // Failure records a message and leaves `jiraTickets[id]` undefined, so both
+  // Retry and a re-expand re-issue the request; a genuine `[]` is still cached.
+  const loadSprintTickets = useCallback(async (app) => {
+    setLoadingTickets(prev => ({ ...prev, [app.id]: true }));
+    setTicketErrors(prev => ({ ...prev, [app.id]: null }));
+    const tickets = await api
+      .getMySprintTickets(app.jira.instanceId, app.jira.projectKey, { silent: true })
+      .catch(err => {
+        setTicketErrors(prev => ({ ...prev, [app.id]: err?.message || 'Request failed' }));
+        return null;
+      });
+    if (Array.isArray(tickets)) setJiraTickets(prev => ({ ...prev, [app.id]: tickets }));
+    setLoadingTickets(prev => ({ ...prev, [app.id]: false }));
+  }, []);
+
+  const toggleExpand = (id) => {
     const newExpandedId = expandedId === id ? null : id;
     setExpandedId(newExpandedId);
 
     // Fetch JIRA tickets when expanding an app with JIRA enabled
-    if (newExpandedId) {
-      const app = apps.find(a => a.id === newExpandedId);
-      if (app?.jira?.enabled && app.jira.instanceId && app.jira.projectKey) {
-        if (!jiraTickets[id]) {
-          setLoadingTickets(prev => ({ ...prev, [id]: true }));
-          const tickets = await api.getMySprintTickets(app.jira.instanceId, app.jira.projectKey).catch(() => []);
-          setJiraTickets(prev => ({ ...prev, [id]: tickets }));
-          setLoadingTickets(prev => ({ ...prev, [id]: false }));
-        }
-      }
-    }
+    if (!newExpandedId) return;
+    const app = apps.find(a => a.id === newExpandedId);
+    if (!app?.jira?.enabled || !app.jira.instanceId || !app.jira.projectKey) return;
+    if (!jiraTickets[id]) loadSprintTickets(app);
   };
 
   // Archive/unarchive gate their success toast on a response, the way
@@ -585,6 +599,20 @@ export default function Apps() {
                               <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-400">
                                 <BrailleSpinner text="" />
                                 <span>Loading tickets...</span>
+                              </div>
+                            ) : ticketErrors[app.id] ? (
+                              <div className="flex flex-wrap items-center gap-3 px-3 py-2 bg-port-card border border-port-error/30 rounded-lg">
+                                <AlertTriangle size={16} aria-hidden="true" className="text-port-error shrink-0" />
+                                <span className="text-sm text-gray-300 min-w-0">
+                                  Couldn&apos;t load sprint tickets — {ticketErrors[app.id]}
+                                </span>
+                                <button
+                                  onClick={() => loadSprintTickets(app)}
+                                  className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-accent"
+                                  aria-label={`Retry loading sprint tickets for ${app.name}`}
+                                >
+                                  <RefreshCw size={14} aria-hidden="true" /> Retry
+                                </button>
                               </div>
                             ) : jiraTickets[app.id]?.length > 0 ? (
                               <KanbanBoard

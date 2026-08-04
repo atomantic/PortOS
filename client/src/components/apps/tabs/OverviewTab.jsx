@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Link } from 'react-router';
 import { FolderOpen, Gamepad2, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download, Tag, AlertTriangle, Rocket, Camera, Image, Sparkles } from 'lucide-react';
 import toast from '../../ui/Toast';
@@ -23,6 +23,7 @@ export default function OverviewTab({ app, onRefresh }) {
   const [archiving, setArchiving] = useState(false);
   const [jiraTickets, setJiraTickets] = useState(null);
   const [loadingTickets, setLoadingTickets] = useState(false);
+  const [ticketError, setTicketError] = useState(null);
   const [installingScripts, setInstallingScripts] = useState(false);
   const [detectingIcon, setDetectingIcon] = useState(false);
   // Reverse lookup (#2991): sprite records that publish assets into this app.
@@ -35,15 +36,20 @@ export default function OverviewTab({ app, onRefresh }) {
   const updating = isOperating && operationType === 'update';
   const standardizing = isOperating && operationType === 'standardize';
 
-  useEffect(() => {
-    if (app?.jira?.enabled && app.jira.instanceId && app.jira.projectKey) {
-      setLoadingTickets(true);
-      api.getMySprintTickets(app.jira.instanceId, app.jira.projectKey)
-        .then(setJiraTickets)
-        .catch(() => setJiraTickets([]))
-        .finally(() => setLoadingTickets(false));
-    }
+  // Same sentinel contract as the /apps list (#3437): a failed fetch records a
+  // message instead of collapsing into `[]`, which read as "you have no sprint
+  // tickets" and offered no way to retry.
+  const loadSprintTickets = useCallback(() => {
+    if (!app?.jira?.enabled || !app.jira.instanceId || !app.jira.projectKey) return;
+    setLoadingTickets(true);
+    setTicketError(null);
+    api.getMySprintTickets(app.jira.instanceId, app.jira.projectKey, { silent: true })
+      .then(tickets => setJiraTickets(Array.isArray(tickets) ? tickets : []))
+      .catch(err => setTicketError(err?.message || 'Request failed'))
+      .finally(() => setLoadingTickets(false));
   }, [app?.jira?.enabled, app?.jira?.instanceId, app?.jira?.projectKey]);
+
+  useEffect(() => { loadSprintTickets(); }, [loadSprintTickets]);
 
   // Load the sprite records bound to this app (empty for an app with none).
   useEffect(() => {
@@ -307,6 +313,18 @@ export default function OverviewTab({ app, onRefresh }) {
             <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-400">
               <BrailleSpinner text="" />
               <span>Loading tickets...</span>
+            </div>
+          ) : ticketError ? (
+            <div className="flex flex-wrap items-center gap-3 px-3 py-2 bg-port-card border border-port-error/30 rounded-lg max-w-5xl">
+              <AlertTriangle size={16} className="text-port-error shrink-0" />
+              <span className="text-sm text-gray-300 min-w-0">Couldn&apos;t load sprint tickets — {ticketError}</span>
+              <button
+                onClick={loadSprintTickets}
+                className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
+                aria-label={`Retry loading sprint tickets for ${app.name}`}
+              >
+                <RefreshCw size={14} /> Retry
+              </button>
             </div>
           ) : jiraTickets?.length > 0 ? (
             <KanbanBoard tickets={jiraTickets} instanceId={app.jira?.instanceId} onTicketsChange={setJiraTickets} appId={app.id} projectKey={app.jira?.projectKey} boardId={app.jira?.boardId} />
