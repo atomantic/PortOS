@@ -104,3 +104,28 @@ describe('UsagePage breakdown visualization and responsiveness', () => {
   });
 });
 
+describe('UsagePage provider reset times', () => {
+  it('localizes an ISO reset and adds the relative countdown', async () => {
+    // A minute past the 3h mark, so the floor in `timeUntil` can't round to 2h.
+    const resetsAt = new Date(Date.now() + 3 * 60 * 60 * 1000 + 60_000).toISOString();
+    api.getProviderUsage.mockResolvedValue({
+      providers: [{
+        family: 'claude',
+        label: 'Claude',
+        supported: true,
+        limits: [{ key: 'week', label: 'Weekly', percentUsed: 40, percentRemaining: 60, resetsAt, timezone: 'UTC' }],
+        activity: [],
+        approximate: true,
+        fetchedAt: new Date().toISOString()
+      }]
+    });
+
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+
+    // Every adapter emits ISO now, so the card must never show a CLI's own
+    // wording — it shows a localized instant plus "in 3h".
+    const reset = await screen.findByText(/resets .*\(in 3h\)/);
+    expect(reset).toBeInTheDocument();
+    expect(reset.textContent).not.toContain(resetsAt);
+  });
+});

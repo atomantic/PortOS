@@ -7,6 +7,7 @@ import { commandBasename, isClaudeCommand } from '../lib/providerModels.js';
 import { isGrokCommand } from '../lib/grok.js';
 import { scrapeTuiUsage } from '../lib/tuiUsageScrape.js';
 import { createStaleWhileRevalidate, PENDING, WAIT } from '../lib/staleWhileRevalidate.js';
+import { parseHumanReset } from '../lib/quotaReset.js';
 import { getSettings } from './settings.js';
 import { getImageGenQuota } from './imageGenQuota.js';
 import { enabledCloudImageModes } from './imageGen/modes.js';
@@ -335,11 +336,16 @@ const GROK_WINDOWS = { weekly: { label: 'Weekly', scope: 'week' }, monthly: { la
 /**
  * Parse the Grok Build `/usage show` panel text. Emits one row per usage window
  * present (`Weekly limit: N%` and/or `Monthly limit: N%`, percent USED) plus a
- * shared `Next reset: <date>`. Exported for tests. Pure.
+ * shared `Next reset: <date>`. Exported for tests. Pure given `now`.
+ *
+ * The panel's reset is a local-time date with no year and no zone (`August 10,
+ * 06:07`); it is normalized to ISO here, at the adapter, so the Usage page can
+ * localize it. `timezone` is the zone the TUI rendered in — the fetcher forces
+ * the machine's zone on the child, so it passes the same one back in.
  *
  * @returns {{ limits: Array }}
  */
-export function parseGrokUsage(text) {
+export function parseGrokUsage(text, { now = Date.now(), timezone } = {}) {
   const str = String(text || '');
   // Append-only terminal stream: a repaint leaves an older copy of a line ahead
   // of the newer one, so keep the LAST value seen per window (freshest frame) —
@@ -350,7 +356,7 @@ export function parseGrokUsage(text) {
   }
   if (!byWindow.size) return { limits: [] };
   const resets = [...str.matchAll(/next reset:\s*([A-Za-z0-9 ,:]+?)(?:\s{2,}|$)/gi)];
-  const resetsAt = resets.length ? resets[resets.length - 1][1].trim() : null;
+  const resetsAt = resets.length ? parseHumanReset(resets[resets.length - 1][1], { now, timezone }) : null;
   const limits = [...byWindow].map(([window, percentUsed]) => ({
     key: window,
     label: GROK_WINDOWS[window].label,
@@ -358,8 +364,6 @@ export function parseGrokUsage(text) {
     model: null,
     percentUsed,
     percentRemaining: Math.max(0, 100 - percentUsed),
-    // Grok gives a local-time date string without a year/zone; pass it through
-    // verbatim (the UI renders non-ISO reset strings as-is).
     resetsAt,
     timezone: null,
   }));
@@ -423,7 +427,9 @@ function makeTuiUsageFetcher({ id, binary, slashCommand, label, parse, name, rea
     const cacheKey = `${id}:${command}:${provider.type}:${JSON.stringify(env)}:${JSON.stringify(args)}`;
     const card = await scrapeCache.read(cacheKey, async () => {
       const text = await scrapeTuiUsage({ command, args, slashCommand, env, readyMarker });
-      const { limits } = parse(text);
+      // The panel's reset is relative (agy) or zone-less (grok) — both resolve
+      // against the read's own clock and the zone the child rendered in.
+      const { limits } = parse(text, { now: Date.now(), timezone: tz });
       return limits.length
         ? { ...base, supported: true, limits, note: `Scraped from the ${name} /usage panel — local, approximate.` }
         : { ...base, supported: true, limits: [], error: `No quota data found in the ${name} /usage panel.` };

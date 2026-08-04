@@ -23,12 +23,16 @@ Last 7d · 17034 requests · 125 sessions
   Top plugins: do 22%, superpowers 5%`;
 
 describe('parseUsageOutput', () => {
+  // The CLI states no year, so every reset resolves against a `now` — pin it so
+  // the ISO assertions below don't drift with the wall clock.
+  const now = Date.parse('2026-07-06T12:00:00.000Z');
+
   it('detects a subscription plan', () => {
     expect(parseUsageOutput(SAMPLE).plan).toBe('subscription');
   });
 
-  it('parses each limit line with percent, remaining, reset time and timezone', () => {
-    const { limits } = parseUsageOutput(SAMPLE);
+  it('parses each limit line with percent, remaining, an ISO reset and the stated timezone', () => {
+    const { limits } = parseUsageOutput(SAMPLE, { now });
     expect(limits).toHaveLength(3);
 
     expect(limits[0]).toMatchObject({
@@ -38,7 +42,9 @@ describe('parseUsageOutput', () => {
       model: null,
       percentUsed: 4,
       percentRemaining: 96,
-      resetsAt: 'Jul 7 at 2:59am',
+      // `Jul 7 at 2:59am (America/Los_Angeles)` → normalized at the adapter, so
+      // the Usage page localizes it instead of printing the CLI's own wording.
+      resetsAt: '2026-07-07T09:59:00.000Z',
       timezone: 'America/Los_Angeles',
     });
 
@@ -100,9 +106,14 @@ describe('parseUsageOutput', () => {
     expect(limits[0]).toMatchObject({ percentUsed: 50, resetsAt: null, timezone: null });
   });
 
-  it('keeps a reset time that has no (timezone) suffix', () => {
-    const { limits } = parseUsageOutput('Current session: 10% used · resets Jul 7 at 2pm');
-    expect(limits[0]).toMatchObject({ resetsAt: 'Jul 7 at 2pm', timezone: null });
+  it('resolves a reset with no (timezone) suffix against the zone the caller passes', () => {
+    const { limits } = parseUsageOutput('Current session: 10% used · resets Jul 7 at 2pm', { now, timezone: 'UTC' });
+    expect(limits[0]).toMatchObject({ resetsAt: '2026-07-07T14:00:00.000Z', timezone: null });
+  });
+
+  it('emits a null reset when the CLI states one this parser cannot read', () => {
+    const { limits } = parseUsageOutput('Current session: 10% used · resets whenever', { now });
+    expect(limits[0]).toMatchObject({ percentUsed: 10, resetsAt: null });
   });
 
   it('detects an API (pay-as-you-go) plan', () => {

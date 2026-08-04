@@ -1,5 +1,41 @@
 import { describe, expect, it } from 'vitest';
-import { hoursUntilReset, normalizeResetAt } from './quotaReset.js';
+import { hoursUntilReset, normalizeResetAt, parseHumanReset } from './quotaReset.js';
+
+// The adapter-facing half: every provider adapter runs its CLI's reset string
+// through this, so `resetsAt` is ISO 8601 on the wire and the Usage page can
+// localize it instead of printing the CLI's own wording.
+describe('parseHumanReset', () => {
+  const now = Date.parse('2026-07-26T12:00:00.000Z');
+
+  it('reads the claude panel shape — an " at " separator and a glued meridiem', () => {
+    expect(parseHumanReset('Jul 27 at 1:59pm', { now, timezone: 'America/Los_Angeles' }))
+      .toBe('2026-07-27T20:59:00.000Z');
+  });
+
+  it('reads a bare hour, which states no minutes at all', () => {
+    expect(parseHumanReset('Jul 27 at 2pm', { now, timezone: 'UTC' })).toBe('2026-07-27T14:00:00.000Z');
+  });
+
+  it('reads midnight and noon, the two a 12-hour clock gets wrong most often', () => {
+    expect(parseHumanReset('Jul 27 at 12am', { now, timezone: 'UTC' })).toBe('2026-07-27T00:00:00.000Z');
+    expect(parseHumanReset('Jul 27 at 12pm', { now, timezone: 'UTC' })).toBe('2026-07-27T12:00:00.000Z');
+  });
+
+  it('stamps a year-less date (the grok panel shape) with the year `now` falls in', () => {
+    expect(parseHumanReset('August 10, 06:07', { now, timezone: 'UTC' })).toBe('2026-08-10T06:07:00.000Z');
+  });
+
+  it('passes an already-ISO instant through, so re-normalizing is a no-op', () => {
+    expect(parseHumanReset('2026-07-27T12:00:00.000Z', { now })).toBe('2026-07-27T12:00:00.000Z');
+  });
+
+  it('returns null for a missing or unreadable reset rather than guessing one', () => {
+    expect(parseHumanReset(null, { now })).toBeNull();
+    expect(parseHumanReset('', { now })).toBeNull();
+    expect(parseHumanReset('  ', { now })).toBeNull();
+    expect(parseHumanReset('not a date', { now })).toBeNull();
+  });
+});
 
 describe('quota reset normalization', () => {
   const now = Date.parse('2026-07-26T12:00:00.000Z');
@@ -19,10 +55,11 @@ describe('quota reset normalization', () => {
     expect(result).toEqual({ epochMs: Date.parse('2026-07-27T15:00:00.000Z'), source: 'parsed' });
   });
 
-  // The exact strings the live CLIs emit. Both defeated a bare `Date.parse`:
-  // claude's " at " + glued meridiem returned NaN (every window read as "no
-  // reset time", so the family never burned), and a year-less string resolves
-  // to 2001 rather than the current year.
+  // In-tree adapters now hand this an ISO instant, so the cases below are the
+  // BACKWARD-COMPAT path: a limit off an older federated peer still carries the
+  // raw CLI string. Both shapes defeat a bare `Date.parse` — claude's " at " +
+  // glued meridiem returns NaN (every window would read as "no reset time", so
+  // the family never burns), and a year-less string resolves to 2001.
   it('parses the claude panel shape — " at " separator and a glued meridiem', () => {
     expect(normalizeResetAt({ resetsAt: 'Jul 27 at 1:59pm', timezone: 'America/Los_Angeles' }, { now }))
       .toEqual({ epochMs: Date.parse('2026-07-27T20:59:00.000Z'), source: 'parsed' });

@@ -5,7 +5,7 @@ import * as api from '../services/api';
 import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import Pill from '../components/ui/Pill';
-import { formatCompactCount } from '../utils/formatters';
+import { formatCompactCount, timeUntil } from '../utils/formatters';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 
@@ -25,12 +25,17 @@ const formatNumber = (num) => (num == null ? '—' : formatCompactCount(num));
 
 const formatCost = (cost) => `$${(cost ?? 0).toFixed(2)}`;
 
-// Reset times arrive either as human text from the Claude CLI ("Jul 15, 3am")
-// or as an ISO timestamp from telemetry-based adapters — localize the latter.
+// Every provider adapter normalizes its reset to ISO before it reaches here, so
+// this localizes and adds the relative "in 3h" that makes a reset time useful at
+// a glance. The raw-text fallback stays for a reading off an older peer that
+// still emits its CLI's own wording.
 const formatResetsAt = (resetsAt) => {
   if (!resetsAt || !/^\d{4}-\d{2}-\d{2}T/.test(resetsAt)) return resetsAt;
   const d = new Date(resetsAt);
-  return Number.isNaN(d.getTime()) ? resetsAt : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  if (Number.isNaN(d.getTime())) return resetsAt;
+  const local = d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const relative = timeUntil(d, '');
+  return relative ? `${local} (${relative})` : local;
 };
 
 // Color a usage meter by how much is consumed: comfortable → warning → critical.

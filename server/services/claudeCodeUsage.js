@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { existsSync, lstatSync, readlinkSync, readFileSync } from 'fs';
 import { stripAnsi } from '../lib/ansiStrip.js';
+import { parseHumanReset } from '../lib/quotaReset.js';
 import { createStaleWhileRevalidate, WAIT } from '../lib/staleWhileRevalidate.js';
 
 /**
@@ -77,21 +78,29 @@ function resolveSystemTimeZone() {
 /**
  * Parse one `Current …: N% used · resets <when> (<tz>)` limit line.
  * Returns null when the line isn't a limit line.
+ *
+ * `resetsAt` is emitted as ISO 8601 (null when the CLI stated no reset, or
+ * stated one this parser couldn't read) — normalizing at the adapter is the
+ * convention every provider family follows, and it is what lets the Usage page
+ * localize the time instead of printing `Aug 4 at 1:59pm` verbatim. The CLI
+ * renders in a zone it names in a trailing `(…)`; `timezone` falls back to it
+ * for a line that omits the suffix. `now` anchors the year the CLI omits.
  */
-function parseLimitLine(line) {
+function parseLimitLine(line, { now, timezone: fallbackZone } = {}) {
   const match = line.match(/^(Current [^:]+):\s*(\d+)%\s*used(?:\s*·\s*resets\s+(.+?))?$/i);
   if (!match) return null;
   const label = match[1].trim();
   const percentUsed = toInt(match[2]);
-  let resetsAt = match[3] ? match[3].trim() : null;
+  let rawReset = match[3] ? match[3].trim() : null;
   let timezone = null;
-  if (resetsAt) {
-    const tz = resetsAt.match(/\(([^)]+)\)\s*$/);
+  if (rawReset) {
+    const tz = rawReset.match(/\(([^)]+)\)\s*$/);
     if (tz) {
       timezone = tz[1];
-      resetsAt = resetsAt.slice(0, tz.index).trim();
+      rawReset = rawReset.slice(0, tz.index).trim();
     }
   }
+  const resetsAt = parseHumanReset(rawReset, { now, timezone: timezone || fallbackZone });
   // Derive a stable key + optional model from the label.
   // "Current session" → session; "Current week (all models)" → week (model: all models);
   // "Current week (Fable)" → week (model: Fable).
@@ -107,6 +116,9 @@ function parseLimitLine(line) {
     percentUsed,
     percentRemaining: percentUsed == null ? null : Math.max(0, 100 - percentUsed),
     resetsAt,
+    // The zone the CLI labelled the reset with, kept for display/diagnostics.
+    // `resetsAt` no longer depends on it (it carries its own offset), but
+    // `normalizeResetAt` still reads it off limits from older peers.
     timezone,
   };
 }
@@ -121,10 +133,15 @@ function parseActivityHeader(line) {
 }
 
 /**
- * Pure parser: `/usage` text → structured object. Tolerant of absent lines so a
- * future CLI format tweak degrades gracefully instead of throwing.
+ * Parser: `/usage` text → structured object. Tolerant of absent lines so a
+ * future CLI format tweak degrades gracefully instead of throwing. Pure given
+ * `now` (which reset lines need, since the CLI states no year).
+ *
+ * `timezone` is the zone the CLI rendered in, used only for a reset line that
+ * carries no `(zone)` suffix; the caller passes `systemTimeZone()`, the same
+ * zone it forces on the child process.
  */
-export function parseUsageOutput(text) {
+export function parseUsageOutput(text, { now = Date.now(), timezone } = {}) {
   const raw = (text || '').trim();
   const lines = stripAnsi(raw).split('\n');
 
@@ -140,7 +157,7 @@ export function parseUsageOutput(text) {
     const line = rawLine.replace(/\s+$/, '');
     const trimmed = line.trim();
 
-    const limit = parseLimitLine(trimmed);
+    const limit = parseLimitLine(trimmed, { now, timezone });
     if (limit) {
       limits.push(limit);
       currentActivity = null;
@@ -260,6 +277,6 @@ function runUsageCli() {
 export async function getClaudeCodeUsage({ wait = WAIT.CACHED } = {}) {
   return usageCache.read(CACHE_KEY, async () => {
     const stdout = await runUsageCli();
-    return { ...parseUsageOutput(stdout), fetchedAt: new Date().toISOString() };
+    return { ...parseUsageOutput(stdout, { timezone: systemTimeZone() }), fetchedAt: new Date().toISOString() };
   }, { wait });
 }

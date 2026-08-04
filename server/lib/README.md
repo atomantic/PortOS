@@ -30,7 +30,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `quotaBurnConfig.js` | Quota-burn plan shape: the provider families, the burn-job type alphabet + catalog the config page renders its form from, `QUOTA_BURN_BOUNDS` (the one bounds table the normalizer clamps to, the Zod schemas reject against, and the catalog descriptors publish as min/max), and total normalization (`normalizeQuotaBurnConfig`). Pure — no storage, no provider I/O. |
 | `quotaBurnPresets.js` | `QUOTA_BURN_PROMPT_PRESETS` — ready-made single-focus audit prompts for `agent-prompt` burn jobs (UX, a11y, mobile, failure paths, perf, test gaps, dead code, data safety, docs, security), each filing GitHub issues and changing no code. Templates: picking one COPIES its prompt into the job, so editing them never rewrites a configured job. `findQuotaBurnPreset(id)`. |
 | `quotaBurnValidation.js` | Zod schemas for the Quota Burn routes (partial config PUT, manual-run body). |
-| `quotaReset.js` | Normalizes provider quota reset timestamps and computes time remaining without treating unknown values as imminent resets. |
+| `quotaReset.js` | `parseHumanReset` turns a provider CLI's human reset string into ISO 8601 (call it from the adapter); `normalizeResetAt`/`hoursUntilReset` compute time remaining without treating unknown values as imminent resets. |
 | `appleHealthValidation.js` | Apple Health import payloads. |
 | `brainValidation.js` | Brain/memory route schemas (search, ingest, edit). |
 | `catalogValidation.js` | Creative ingredients catalog route schemas (scraps, ingredients, links, relations, tags, revisions, sync envelope). |

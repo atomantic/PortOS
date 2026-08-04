@@ -267,21 +267,29 @@ describe('parseAgyUsage', () => {
 });
 
 describe('parseGrokUsage', () => {
-  it('reads the weekly limit as percent USED and passes the reset string through', () => {
-    const { limits } = parseGrokUsage(GROK_PANEL);
+  // The panel's `Next reset` states no year and no zone, so it resolves against
+  // an injected `now` + the zone the fetcher forced on the child.
+  const opts = { now: Date.parse('2026-07-26T12:00:00.000Z'), timezone: 'UTC' };
+
+  it('reads the weekly limit as percent USED and normalizes the reset to ISO', () => {
+    const { limits } = parseGrokUsage(GROK_PANEL, opts);
     expect(limits).toHaveLength(1);
-    expect(limits[0]).toMatchObject({ key: 'weekly', label: 'Weekly', percentUsed: 42, percentRemaining: 58, resetsAt: 'August 1, 06:07' });
+    expect(limits[0]).toMatchObject({ key: 'weekly', label: 'Weekly', percentUsed: 42, percentRemaining: 58, resetsAt: '2026-08-01T06:07:00.000Z' });
   });
 
   it('returns no limits when the panel has no weekly-limit line', () => {
-    expect(parseGrokUsage('Grok Build Beta  0.2.101').limits).toEqual([]);
-    expect(parseGrokUsage(undefined).limits).toEqual([]);
+    expect(parseGrokUsage('Grok Build Beta  0.2.101', opts).limits).toEqual([]);
+    expect(parseGrokUsage(undefined, opts).limits).toEqual([]);
   });
 
   it('takes the freshest (last) frame when the panel is repainted', () => {
     const repainted = 'Weekly limit: 10% Next reset: July 1, 00:00\nWeekly limit: 73% Next reset: August 1, 06:07';
-    const { limits } = parseGrokUsage(repainted);
-    expect(limits[0]).toMatchObject({ percentUsed: 73, percentRemaining: 27, resetsAt: 'August 1, 06:07' });
+    const { limits } = parseGrokUsage(repainted, opts);
+    expect(limits[0]).toMatchObject({ percentUsed: 73, percentRemaining: 27, resetsAt: '2026-08-01T06:07:00.000Z' });
+  });
+
+  it('emits a null reset rather than a raw string when the panel states none', () => {
+    expect(parseGrokUsage('Weekly limit: 42%', opts).limits[0]).toMatchObject({ percentUsed: 42, resetsAt: null });
   });
 
   it('parses a Monthly window and both windows when present', () => {
