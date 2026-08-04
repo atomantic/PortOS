@@ -70,6 +70,7 @@ import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { audioGenEvents } from './audioGen/events.js';
 import { detachSocketSessions } from './shell.js';
 import * as shellService from './shell.js';
+import { updateApp as runAppUpdate } from './appUpdater.js';
 
 // Build a minimal fake socket with per-event handler capture
 function makeSocket(id = 'sock-1') {
@@ -581,6 +582,85 @@ describe('socket.js — initSocket', () => {
 
       expect(gameStream.kill).toHaveBeenCalledWith('SIGTERM');
       expect(serverStream.kill).toHaveBeenCalledWith('SIGTERM');
+    });
+  });
+
+  // ===========================================================================
+  // app:update — server-held in-flight set (#3435)
+  // ===========================================================================
+  describe('app operations in-flight set', () => {
+    const APP = { id: 'app-1', name: 'Example App' };
+    const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+
+    beforeEach(() => {
+      vi.mocked(getAppById).mockResolvedValue(APP);
+    });
+
+    it('rejects a second app:update for an app already updating, then frees the slot when it finishes', async () => {
+      const socket = makeSocket('app-op-guard');
+      io.connect(socket);
+
+      let finishUpdate;
+      vi.mocked(runAppUpdate).mockReturnValueOnce(new Promise(resolve => { finishUpdate = resolve; }));
+
+      const running = socket.handlers['app:update']({ appId: APP.id });
+      await flush();
+      expect(vi.mocked(runAppUpdate)).toHaveBeenCalledTimes(1);
+
+      // Second dispatch for the same app while the first is still running.
+      await socket.handlers['app:update']({ appId: APP.id });
+      const rejections = socket.emitted.filter(([ev, payload]) => ev === 'app:update:error' && /already running/.test(payload.message));
+      expect(rejections).toHaveLength(1);
+      expect(rejections[0][1].appId).toBe(APP.id);
+      // The first run is untouched — no second updateApp call.
+      expect(vi.mocked(runAppUpdate)).toHaveBeenCalledTimes(1);
+
+      finishUpdate({ success: true, steps: [] });
+      await running;
+      await flush();
+
+      // Slot released: the completion broadcast is followed by an empty set.
+      expect(io.emitted.some(([ev, payload]) => ev === 'app:update:complete' && payload.appId === APP.id)).toBe(true);
+      const activeBroadcasts = io.emitted.filter(([ev]) => ev === 'app:operations:active');
+      expect(activeBroadcasts.at(-1)[1].operations).toEqual([]);
+
+      // …and a fresh dispatch is accepted again.
+      vi.mocked(runAppUpdate).mockResolvedValueOnce({ success: true, steps: [] });
+      await socket.handlers['app:update']({ appId: APP.id });
+      await flush();
+      expect(vi.mocked(runAppUpdate)).toHaveBeenCalledTimes(2);
+    });
+
+    it('buffers steps so a client that connects mid-operation rehydrates the log', async () => {
+      const socket = makeSocket('app-op-buffer');
+      io.connect(socket);
+
+      let finishUpdate;
+      vi.mocked(runAppUpdate).mockImplementationOnce((_app, emit) => new Promise(resolve => {
+        emit('pull', 'running', 'Pulling latest…');
+        finishUpdate = resolve;
+      }));
+
+      const running = socket.handlers['app:update']({ appId: APP.id });
+      await flush();
+
+      const latecomer = makeSocket('app-op-latecomer');
+      io.connect(latecomer);
+      const pushed = latecomer.emitted.filter(([ev]) => ev === 'app:operations:active').at(-1)[1];
+      expect(pushed.operations).toHaveLength(1);
+      expect(pushed.operations[0]).toMatchObject({ appId: APP.id, appName: APP.name, type: 'update' });
+      expect(pushed.operations[0].steps).toEqual([
+        expect.objectContaining({ appId: APP.id, step: 'pull', status: 'running' })
+      ]);
+
+      // The same set is available on demand for a page that mounts later.
+      latecomer.emitted.length = 0;
+      latecomer.handlers['app:operations:list']();
+      expect(latecomer.emitted.at(-1)[1].operations).toHaveLength(1);
+
+      finishUpdate({ success: true, steps: [] });
+      await running;
+      await flush();
     });
   });
 });

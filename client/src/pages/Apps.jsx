@@ -9,7 +9,7 @@ import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import KanbanBoard from '../components/KanbanBoard';
 import StatusBadge from '../components/StatusBadge';
-import ActivityLog from '../components/apps/ActivityLog';
+import AppOperationBanner from '../components/apps/AppOperationBanner';
 import { useAppOperation } from '../hooks/useAppOperation';
 import useUrlParams from '../hooks/useUrlParams';
 import * as api from '../services/api';
@@ -47,7 +47,10 @@ export default function Apps() {
     setLoading(false);
   }, []);
 
-  const { steps, isOperating, operatingAppId, operationType, error, completed, startUpdate, startStandardize } = useAppOperation({ onComplete: fetchApps });
+  const {
+    steps, isOperating, operatingAppId, operatingAppName, operationType,
+    error, completed, startUpdate, startStandardize, dismiss
+  } = useAppOperation({ onComplete: fetchApps });
 
   useEffect(() => {
     fetchApps();
@@ -98,7 +101,7 @@ export default function Apps() {
     if (result?.success) toast.success(`${app.nativeLaunch.label} is running`);
   };
 
-  const handleUpdate = (app) => startUpdate(app.id);
+  const handleUpdate = (app) => startUpdate(app.id, app.name);
 
   const handleBuild = async (app) => {
     setBuilding(prev => ({ ...prev, [app.id]: true }));
@@ -116,7 +119,7 @@ export default function Apps() {
     fetchApps();
   };
 
-  const handleStandardize = (app) => startStandardize(app.id);
+  const handleStandardize = (app) => startStandardize(app.id, app.name);
 
   const toggleExpand = async (id) => {
     const newExpandedId = expandedId === id ? null : id;
@@ -149,6 +152,11 @@ export default function Apps() {
     setArchiving(prev => ({ ...prev, [app.id]: false }));
     toast.success(`${app.name} unarchived - included in COS tasks`);
   };
+
+  // The server names the app it is operating on (so a rehydrated operation is
+  // labelled even before the list loads); fall back to the loaded list.
+  const operatingApp = apps.find(app => app.id === operatingAppId);
+  const operationLabel = operatingAppName || operatingApp?.name;
 
   // Filter apps based on archive status
   const activeApps = apps.filter(app => !app.archived);
@@ -193,6 +201,19 @@ export default function Apps() {
         </div>
       </div>
 
+      {/* In-flight update/standardize — page-level so it survives collapsing
+          the row and remounting the page. */}
+      {operatingAppId && (
+        <AppOperationBanner
+          appName={operationLabel}
+          type={operationType}
+          steps={steps}
+          error={error}
+          completed={completed}
+          onDismiss={error || completed ? dismiss : null}
+        />
+      )}
+
       {/* App List */}
       {displayedApps.length === 0 ? (
         <div className="bg-port-card border border-port-border rounded-xl p-12 text-center">
@@ -223,6 +244,12 @@ export default function Apps() {
         <div className="space-y-4">
           {displayedApps.map(app => {
             const isNonPm2 = NON_PM2_TYPES.has(app.type);
+            // Only one update/standardize runs at a time. Rows that aren't the
+            // one operating say so in the button label — a bare greyed control
+            // with a tooltip explains nothing on touch.
+            const rowOperating = operatingAppId === app.id;
+            const busyElsewhere = isOperating && !rowOperating;
+            const busyReason = `${operationLabel || 'Another app'} is ${operationType === 'standardize' ? 'being standardized' : 'updating'}`;
             return (
             <div
               key={app.id}
@@ -587,11 +614,14 @@ export default function Apps() {
                       <button
                         onClick={() => handleUpdate(app)}
                         disabled={isOperating}
-                        className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-success/20 text-port-success hover:bg-port-success/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
-                        aria-label="Pull latest code, install dependencies, run setup, and restart"
+                        className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-success/20 text-port-success enabled:hover:bg-port-success/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
+                        aria-label={busyElsewhere ? `Update unavailable — ${busyReason}` : 'Pull latest code, install dependencies, run setup, and restart'}
+                        title={busyElsewhere ? busyReason : undefined}
                       >
-                        <Download size={14} aria-hidden="true" className={operatingAppId === app.id && operationType === 'update' ? 'animate-bounce' : ''} />
-                        {operatingAppId === app.id && operationType === 'update' ? 'Updating...' : 'Update'}
+                        <Download size={14} aria-hidden="true" className={rowOperating && operationType === 'update' ? 'animate-bounce' : ''} />
+                        {rowOperating && operationType === 'update'
+                          ? 'Updating...'
+                          : busyElsewhere ? 'Update (busy)' : 'Update'}
                       </button>
                       {app.buildCommand && (
                         <button
@@ -620,11 +650,14 @@ export default function Apps() {
                             <button
                               onClick={() => handleStandardize(app)}
                               disabled={isOperating}
-                              className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
-                              aria-label="Standardize PM2 config: move all ports to ecosystem.config.cjs"
+                              className="px-3 py-1.5 min-h-[40px] sm:min-h-0 bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
+                              aria-label={busyElsewhere ? `Standardize PM2 unavailable — ${busyReason}` : 'Standardize PM2 config: move all ports to ecosystem.config.cjs'}
+                              title={busyElsewhere ? busyReason : undefined}
                             >
-                              <Wrench size={14} aria-hidden="true" className={operatingAppId === app.id && operationType === 'standardize' ? 'animate-spin' : ''} />
-                              {operatingAppId === app.id && operationType === 'standardize' ? 'Standardizing...' : 'Standardize PM2'}
+                              <Wrench size={14} aria-hidden="true" className={rowOperating && operationType === 'standardize' ? 'animate-spin' : ''} />
+                              {rowOperating && operationType === 'standardize'
+                                ? 'Standardizing...'
+                                : busyElsewhere ? 'Standardize PM2 (busy)' : 'Standardize PM2'}
                             </button>
                           )}
                         </>
@@ -642,11 +675,6 @@ export default function Apps() {
                         </button>
                       )}
                     </div>
-
-                    {/* Activity Log */}
-                    {operatingAppId === app.id && (
-                      <ActivityLog steps={steps} error={error} completed={completed} />
-                    )}
                   </div>
                 </div>
               )}

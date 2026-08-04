@@ -29,7 +29,9 @@ export default function OverviewTab({ app, onRefresh }) {
   const [spriteBindings, setSpriteBindings] = useState([]);
 
   const onComplete = useMemo(() => () => onRefresh(), [onRefresh]);
-  const { steps, isOperating, operationType, error, completed, startUpdate, startStandardize } = useAppOperation({ onComplete });
+  // Scoped to this app: the shared hook otherwise reports whichever operation
+  // is running, which would stream another app's steps into this tab.
+  const { steps, isOperating, operationType, error, completed, startUpdate, startStandardize } = useAppOperation({ onComplete, appId: app?.id });
   const updating = isOperating && operationType === 'update';
   const standardizing = isOperating && operationType === 'standardize';
 
@@ -53,7 +55,7 @@ export default function OverviewTab({ app, onRefresh }) {
     return () => { cancelled = true; };
   }, [app?.id]);
 
-  const handleUpdate = () => startUpdate(app.id);
+  const handleUpdate = () => startUpdate(app.id, app.name);
 
   const handleRefreshConfig = async () => {
     setRefreshingConfig(true);
@@ -62,7 +64,7 @@ export default function OverviewTab({ app, onRefresh }) {
     onRefresh();
   };
 
-  const handleStandardize = () => startStandardize(app.id);
+  const handleStandardize = () => startStandardize(app.id, app.name);
 
   const handleDetectIcon = async () => {
     setDetectingIcon(true);

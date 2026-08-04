@@ -205,3 +205,81 @@ describe('Apps archived filter', () => {
     expect(screen.queryByText('No archived apps')).toBeNull();
   });
 });
+
+describe('Apps in-flight operation banner (#3435)', () => {
+  const SECOND_APP = { ...APPS[0], id: 'app-beta', name: 'Second App' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getApps.mockResolvedValue([APPS[0], SECOND_APP]);
+  });
+
+  // Fire a socket event the page subscribed to, the way the server broadcasts it.
+  const emitSocket = async (event, payload) => {
+    const [, handler] = socket.on.mock.calls.find(([evt]) => evt === event);
+    await act(async () => { await handler(payload); });
+  };
+
+  const activeUpdate = (steps = []) => ({
+    operations: [{ appId: 'app-alpha', appName: 'Example App', type: 'update', steps }]
+  });
+
+  it('asks the server for in-flight operations on mount', async () => {
+    await renderApps();
+    expect(socket.emit).toHaveBeenCalledWith('app:operations:list');
+  });
+
+  it('shows an operation started elsewhere with every row collapsed', async () => {
+    await renderApps();
+    await emitSocket('app:operations:active', activeUpdate([
+      { appId: 'app-alpha', step: 'pull', status: 'running', message: 'Pulling latest…' }
+    ]));
+
+    // No row is expanded — the banner is the only place progress could show.
+    expect(screen.queryByText('Repository Path')).toBeNull();
+    const banner = screen.getByRole('status', { name: 'App operation status' });
+    expect(banner.textContent).toContain('Updating Example App');
+    expect(banner.textContent).toContain('Pulling latest…');
+  });
+
+  it('keeps streaming steps into the banner while the row stays collapsed', async () => {
+    await renderApps();
+    await emitSocket('app:operations:active', activeUpdate());
+    await emitSocket('app:update:step', { appId: 'app-alpha', step: 'install', status: 'running', message: 'Installing deps…' });
+
+    expect(screen.getByRole('status', { name: 'App operation status' }).textContent).toContain('Installing deps…');
+  });
+
+  it('states why another app’s Update is unavailable instead of silently greying it out', async () => {
+    await renderApps();
+    await emitSocket('app:operations:active', activeUpdate());
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'Expand Second App details' }).click();
+    });
+
+    const busy = screen.getByRole('button', { name: /Update unavailable/ });
+    expect(busy.textContent).toContain('Update (busy)');
+    expect(busy.disabled).toBe(true);
+  });
+
+  it('keeps the completion visible when the server reports nothing in flight', async () => {
+    await renderApps();
+    await emitSocket('app:operations:active', activeUpdate());
+    await emitSocket('app:update:complete', { appId: 'app-alpha', success: true, steps: [] });
+    // The server clears its in-flight set right after the completion broadcast.
+    await emitSocket('app:operations:active', { operations: [] });
+
+    expect(screen.getByRole('status', { name: 'App operation status' }).textContent).toContain('Updated Example App');
+  });
+
+  it('clears a stale banner when the server reports no operation and none finished', async () => {
+    await renderApps();
+    await emitSocket('app:operations:active', activeUpdate());
+    expect(screen.getByRole('status', { name: 'App operation status' })).toBeTruthy();
+
+    // e.g. the server restarted mid-operation — the work is genuinely gone.
+    await emitSocket('app:operations:active', { operations: [] });
+    expect(screen.queryByRole('status', { name: 'App operation status' })).toBeNull();
+  });
+});

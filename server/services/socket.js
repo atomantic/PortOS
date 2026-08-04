@@ -71,6 +71,42 @@ const bumpStreamGeneration = (key) => {
   streamGenerations.set(key, next);
   return next;
 };
+// In-flight app update/standardize operations, keyed by app id. These run for
+// minutes (git pull → npm install → setup → pm2 restart) and are dispatched from
+// a page the user can navigate away from, so the server — not the client — is
+// the only place that reliably knows one is still running. Two jobs of it:
+//   1. re-entrancy guard: a second `app:update` for an id already in the map is
+//      rejected instead of interleaving a second npm install in the same
+//      checkout (sanctioned by the Security Model — duplicate in-flight
+//      operations, not competing humans);
+//   2. resumable progress: each entry buffers the steps emitted so far, so a
+//      client that mounts (or remounts) mid-operation rehydrates the whole log
+//      via `app:operations:active` instead of showing a clean slate.
+const activeAppOperations = new Map();
+
+const activeOperationsPayload = () => ({ operations: [...activeAppOperations.values()] });
+
+const beginAppOperation = (io, app, type) => {
+  const operation = { appId: app.id, appName: app.name, type, steps: [], startedAt: Date.now() };
+  activeAppOperations.set(app.id, operation);
+  io.emit('app:operations:active', activeOperationsPayload());
+  return operation;
+};
+
+const endAppOperation = (io, appId) => {
+  if (!activeAppOperations.delete(appId)) return;
+  io.emit('app:operations:active', activeOperationsPayload());
+};
+
+// Record a step into the operation's buffer using the same last-write-wins
+// per-step semantics the client renders with, so a rehydrated log matches a
+// live-streamed one.
+const recordOperationStep = (operation, frame) => {
+  const existing = operation.steps.findIndex(s => s.step === frame.step);
+  if (existing >= 0) operation.steps[existing] = frame;
+  else operation.steps.push(frame);
+};
+
 // Store CoS subscribers
 const cosSubscribers = new Set();
 // Store error subscribers for auto-fix notifications
@@ -384,6 +420,8 @@ export function initSocket(io) {
 
     // App update handler — streams progress via socket
     socket.on('app:update', async (rawData) => {
+      // Tracked outside the try so every exit path releases the in-flight slot.
+      let operatingAppId = null;
       try {
         const data = validateSocketData(appUpdateSchema, rawData, socket, 'app:update');
         if (!data) return;
@@ -394,30 +432,50 @@ export function initSocket(io) {
           return;
         }
 
+        const inFlight = activeAppOperations.get(app.id);
+        if (inFlight) {
+          socket.emit('app:update:error', {
+            appId: app.id,
+            message: `An ${inFlight.type} is already running for ${app.name}`
+          });
+          return;
+        }
+
         console.log(`⬇️ Socket update started for ${app.name}`);
+        const operation = beginAppOperation(io, app, 'update');
+        operatingAppId = app.id;
+        // Broadcast (not socket.emit): the client that dispatched may have
+        // unmounted, and any other open tab should see the same progress.
         const emit = (step, status, message) => {
-          socket.emit('app:update:step', { step, status, message, timestamp: Date.now() });
+          const frame = { appId: app.id, step, status, message, timestamp: Date.now() };
+          recordOperationStep(operation, frame);
+          io.emit('app:update:step', frame);
         };
 
         const result = await appUpdater.updateApp(app, emit).catch(err => {
-          socket.emit('app:update:error', { message: err.message });
+          io.emit('app:update:error', { appId: app.id, message: err.message });
           return null;
         });
 
         if (result) {
-          socket.emit('app:update:complete', { success: result.success, steps: result.steps });
+          io.emit('app:update:complete', { appId: app.id, success: result.success, steps: result.steps });
           console.log(`✅ Socket update complete for ${app.name}`);
         }
       } catch (err) {
         const message = err?.message ?? String(err);
         console.error(`❌ Socket handler error [app:update]: ${message}`);
-        socket.emit('app:update:error', { message });
-        socket.emit('app:update:complete', { success: false, steps: [] });
+        io.emit('app:update:error', { appId: operatingAppId, message });
+        io.emit('app:update:complete', { appId: operatingAppId, success: false, steps: [] });
+      } finally {
+        if (operatingAppId) endAppOperation(io, operatingAppId);
       }
     });
 
     // App standardize handler — streams progress via socket
     socket.on('app:standardize', async (rawData) => {
+      // Tracked outside the try so every exit path (early return, thrown error)
+      // releases the in-flight slot in the finally below.
+      let operatingAppId = null;
       try {
         const data = validateSocketData(appStandardizeSchema, rawData, socket, 'app:standardize');
         if (!data) return;
@@ -428,9 +486,22 @@ export function initSocket(io) {
           return;
         }
 
+        const inFlight = activeAppOperations.get(app.id);
+        if (inFlight) {
+          socket.emit('app:standardize:error', {
+            appId: app.id,
+            message: `An ${inFlight.type} is already running for ${app.name}`
+          });
+          return;
+        }
+
         console.log(`🔧 Socket standardize started for ${app.name}`);
+        const operation = beginAppOperation(io, app, 'standardize');
+        operatingAppId = app.id;
         const emit = (step, status, message) => {
-          socket.emit('app:standardize:step', { step, status, message, timestamp: Date.now() });
+          const frame = { appId: app.id, step, status, message, timestamp: Date.now() };
+          recordOperationStep(operation, frame);
+          io.emit('app:standardize:step', frame);
         };
 
         // Step 1: Analyze
@@ -440,7 +511,7 @@ export function initSocket(io) {
 
         if (!analysis.success) {
           emit('analyze', 'error', analysis.error);
-          socket.emit('app:standardize:error', { message: analysis.error });
+          io.emit('app:standardize:error', { appId: app.id, message: analysis.error });
           return;
         }
         emit('analyze', 'done', `Found ${analysis.proposedChanges.processes?.length || 0} processes`);
@@ -464,7 +535,7 @@ export function initSocket(io) {
 
         if (result.errors?.length > 0) {
           emit('apply', 'error', result.errors.join(', '));
-          socket.emit('app:standardize:error', { message: result.errors.join(', ') });
+          io.emit('app:standardize:error', { appId: app.id, message: result.errors.join(', ') });
           return;
         }
         const preserved = result.filesPreserved || [];
@@ -478,7 +549,8 @@ export function initSocket(io) {
           await appsService.updateApp(data.appId, { pm2ProcessNames });
         }
 
-        socket.emit('app:standardize:complete', {
+        io.emit('app:standardize:complete', {
+          appId: app.id,
           success: true,
           result: {
             backupBranch: result.backupBranch,
@@ -491,9 +563,19 @@ export function initSocket(io) {
       } catch (err) {
         const message = err?.message ?? String(err);
         console.error(`❌ Socket handler error [app:standardize]: ${message}`);
-        socket.emit('app:standardize:error', { message });
+        io.emit('app:standardize:error', { appId: operatingAppId, message });
+      } finally {
+        if (operatingAppId) endAppOperation(io, operatingAppId);
       }
     });
+
+    // Current in-flight app operations — pushed on connect and on demand, so a
+    // client mounting mid-operation (or after a remount) restores the live
+    // progress instead of showing a clean slate.
+    socket.on('app:operations:list', () => {
+      socket.emit('app:operations:active', activeOperationsPayload());
+    });
+    socket.emit('app:operations:active', activeOperationsPayload());
 
     // App deploy handler — streams real-time output from deploy.sh. The
     // app-lookup → deploy-script check → run orchestration lives in
