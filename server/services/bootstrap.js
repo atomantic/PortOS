@@ -12,8 +12,11 @@
  *      ends in `httpServer.listen()`.
  *   3. `registerShutdownHandlers()` — the graceful-shutdown state machine.
  *
- * Ordering inside each phase is load-bearing and documented inline — read the
- * comments before reordering anything.
+ * Ordering inside each phase is load-bearing. It lives in `bootstrapSequence.js`
+ * — a dependency-injected, service-free module — so it can be executed and
+ * asserted under test (#3451) without opening a listener or touching a real
+ * database. This file supplies the real implementations; that file decides when
+ * each one runs and which are awaited. Read both before reordering anything.
  *
  * NOTE (CLAUDE.md "No cold-bootstrap LLM calls"): nothing in this file may
  * queue an AI provider call. Boot only loads on-disk state and ARMS schedulers;
@@ -31,6 +34,18 @@ import { conflictJournalStore } from '../lib/conflictJournal.js';
 import { markHostShuttingDown, writeHostShutdownMarker } from '../lib/hostShutdown.js';
 import { setUserCatalogTypes } from '../lib/catalogTypes.js';
 import { runMigrations } from '../../scripts/run-migrations.js';
+
+import {
+  runPreRouteSequence,
+  runPostRouteSequence,
+  runPostListenSequence,
+  runDatabasePhase,
+  gateOnDatabase,
+  runDbAndCatalogMigrations,
+  warmMandatoryStores,
+  initCosAfterSpawner,
+  armCommissionScheduler
+} from './bootstrapSequence.js';
 
 import { ensureBackendProvider, getBackend as getLocalLlmBackend } from './localLlm.js';
 import { ensureProviderReady as ensureOllamaProviderReady, ensureRunning as ensureOllamaRunning } from './ollamaManager.js';
@@ -131,32 +146,6 @@ import * as gameStore from './games/store.js';
  * `runBootSequence` below.
  */
 export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverDir }) => {
-  // Apply pending data migrations BEFORE the AI toolkit reads stage-config.json
-  // and providers.json. Without this, a plain pull-and-restart (no update.sh)
-  // leaves new prompt stages and other shipped data changes unregistered —
-  // existing installs hit "Stage X not found" until the user manually runs
-  // `npm run migrations` or `npm run update`. Idempotent and cheap when the
-  // applied-list is already current.
-  // Prefer PORTOS_DATA_ROOT (set at real launch in ecosystem.config.cjs) over the
-  // import.meta.url-derived path so a server booted from inside a CoS agent
-  // worktree still resolves to the real install; runMigrations also skips a
-  // worktree-rooted path as a backstop (#1947).
-  await runMigrations({ rootDir: resolveInstallRoot(join(serverDir, '..')) }).catch(err => {
-    // Log the full stack (or stringified err for non-Error throws) so failures
-    // during boot are diagnosable without rerunning under a debugger.
-    console.error(`❌ Migration run failed at startup: ${err?.stack ?? err}`);
-  });
-
-  // Verify every registered collection's on-disk type-level schemaVersion
-  // matches what the code expects. Mismatches mean a migration didn't run (or
-  // the user rolled the code back below a forward-only migration) — log loudly
-  // but DO NOT crash the server. PortOS is single-user (CLAUDE.md "Security
-  // Model"); a hard exit on startup is worse than a noisy log the user can act
-  // on. Returns per-store statuses for downstream telemetry; we discard them.
-  await verifyCollectionVersions([universeStore(), seriesStore(), issueStore(), conflictJournalStore(), storyBuilderStore(), mediaCollectionStore(), loraDatasetStore, liOutcomesStore(), commissionStore(), gameStore, ...brainCollectionStores()]).catch(err => {
-    console.error(`❌ Collection version check failed at startup: ${err?.stack ?? err}`);
-  });
-
   // Lifecycle hooks shared between AI Toolkit and PortOS runner shim
   const aiToolkitHooks = {
     ensureProviderReady: (provider) => ensureOllamaProviderReady(provider),
@@ -206,78 +195,95 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
     }
   };
 
-  // Initialize AI Toolkit with PortOS configuration and hooks
-  const aiToolkit = createAIToolkit({
-    dataDir,
-    providersFile: 'providers.json',
-    runsDir: 'runs',
-    promptsDir: 'prompts',
-    screenshotsDir: join(dataDir, 'screenshots'),
-    sampleProvidersFile: join(dataReferenceDir, 'providers.json'),
-    io,
-    asyncHandler,
-    // Inject PortOS's ServerError so toolkit route errors normalize into the
-    // canonical `{ error, code, timestamp, context? }` envelope (issue #1084).
-    ServerError,
-    hooks: aiToolkitHooks
+  // The ORDER these run in is `runPreRouteSequence`'s contract (see
+  // bootstrapSequence.js); this object is only the "what".
+  return runPreRouteSequence({
+    // Apply pending data migrations BEFORE the AI toolkit reads stage-config.json
+    // and providers.json. Without this, a plain pull-and-restart (no update.sh)
+    // leaves new prompt stages and other shipped data changes unregistered —
+    // existing installs hit "Stage X not found" until the user manually runs
+    // `npm run migrations` or `npm run update`. Idempotent and cheap when the
+    // applied-list is already current.
+    // Prefer PORTOS_DATA_ROOT (set at real launch in ecosystem.config.cjs) over the
+    // import.meta.url-derived path so a server booted from inside a CoS agent
+    // worktree still resolves to the real install; runMigrations also skips a
+    // worktree-rooted path as a backstop (#1947).
+    applyDataMigrations: () => runMigrations({ rootDir: resolveInstallRoot(join(serverDir, '..')) }),
+
+    // Verify every registered collection's on-disk type-level schemaVersion
+    // matches what the code expects. Mismatches mean a migration didn't run (or
+    // the user rolled the code back below a forward-only migration) — log loudly
+    // but DO NOT crash the server. PortOS is single-user (CLAUDE.md "Security
+    // Model"); a hard exit on startup is worse than a noisy log the user can act
+    // on. Returns per-store statuses for downstream telemetry; we discard them.
+    verifyCollections: () => verifyCollectionVersions([universeStore(), seriesStore(), issueStore(), conflictJournalStore(), storyBuilderStore(), mediaCollectionStore(), loraDatasetStore, liOutcomesStore(), commissionStore(), gameStore, ...brainCollectionStores()]),
+
+    createToolkit: () => createAIToolkit({
+      dataDir,
+      providersFile: 'providers.json',
+      runsDir: 'runs',
+      promptsDir: 'prompts',
+      screenshotsDir: join(dataDir, 'screenshots'),
+      sampleProvidersFile: join(dataReferenceDir, 'providers.json'),
+      io,
+      asyncHandler,
+      // Inject PortOS's ServerError so toolkit route errors normalize into the
+      // canonical `{ error, code, timestamp, context? }` envelope (issue #1084).
+      ServerError,
+      hooks: aiToolkitHooks
+    }),
+
+    // Compatibility shims for services that import from the old service files.
+    registerToolkitShims: (aiToolkit) => {
+      setProvidersToolkit(aiToolkit);
+      setRunnerToolkit(aiToolkit, { dataDir, hooks: aiToolkitHooks });
+      setPromptsToolkit(aiToolkit);
+      // Note: the prompts service is initialized automatically by createAIToolkit().
+    },
+
+    // Warm the providers file at startup so the codex-sentinel migration runs
+    // before any inbound request can hit the providers cache. A pure READ of
+    // on-disk provider config — it dispatches nothing to a provider.
+    warmProviders: (aiToolkit) => aiToolkit.services.providers.getAllProviders(),
+
+    // Ensure the provider paired with the active local-LLM backend (LLM_BACKEND in
+    // .env, chosen at setup time) is enabled, so a fresh install can use Ollama /
+    // LM Studio for runs without hand-toggling it in the Providers UI. Starting
+    // the Ollama server is not a provider CALL — nothing is inferred until the
+    // user asks for it.
+    ensureLocalLlmBackend: () => {
+      const activeLocalLlmBackend = getLocalLlmBackend();
+      ensureBackendProvider(activeLocalLlmBackend).catch((err) =>
+        console.error(`⚠️ Failed to enable local LLM backend provider: ${err.message}`));
+      if (activeLocalLlmBackend === 'ollama') {
+        ensureOllamaRunning({ preferPersistent: true }).catch((err) =>
+          console.error(`⚠️ Failed to start Ollama for active local LLM backend: ${err.message}`));
+      }
+    },
+
+    // Register PortOS's CLI + TUI runners through the toolkit's declared extension
+    // points (setCliRunner / setTuiRunner) instead of overwriting private props.
+    // The CLI variant adds per-provider argv building (Codex `exec -`, Antigravity
+    // `agy --print`, Claude Code `-p -`); the toolkit's in-tree implementation is
+    // also safe (no shell, prompt via stdin) — the variant exists for the per-CLI
+    // invocation conventions, not for security. The TUI runner has no toolkit
+    // built-in: registering it lets POST /api/runs with a TUI provider dispatch
+    // here instead of 400ing. Both runners track their child process / pty via the
+    // toolkit's external-run registry, so the toolkit's own stopRun/isRunActive/
+    // deleteRun account for live runs without any sibling-method monkey-patching.
+    registerRunners: (aiToolkit) => {
+      aiToolkit.services.runner.setCliRunner(executeCliRunFixed);
+      aiToolkit.services.runner.setTuiRunner(executeTuiRunFixed);
+    },
+
+    // Auto-fixer for error recovery.
+    initAutoFixer,
+    // Task learning system, tracking agent completions.
+    initTaskLearning,
+    // The CoS agent spawner (event wiring + orphan cleanup), initialized
+    // explicitly now that the runner registration + task learning are ready.
+    startSpawner: initSpawner
   });
-
-  // Initialize compatibility shims for services that import from old service files
-  setProvidersToolkit(aiToolkit);
-  setRunnerToolkit(aiToolkit, { dataDir, hooks: aiToolkitHooks });
-  setPromptsToolkit(aiToolkit);
-
-  // Warm the providers file at startup so the codex-sentinel migration runs
-  // before any inbound request can hit the providers cache. Awaited so the
-  // migration write completes deterministically before request handlers
-  // start consulting providers state.
-  await aiToolkit.services.providers.getAllProviders().catch(err => {
-    console.error(`❌ Failed to load providers at startup: ${err.message}`);
-  });
-
-  // Ensure the provider paired with the active local-LLM backend (LLM_BACKEND in
-  // .env, chosen at setup time) is enabled, so a fresh install can use Ollama /
-  // LM Studio for runs without hand-toggling it in the Providers UI.
-  const activeLocalLlmBackend = getLocalLlmBackend();
-  ensureBackendProvider(activeLocalLlmBackend).catch((err) =>
-    console.error(`⚠️ Failed to enable local LLM backend provider: ${err.message}`));
-  if (activeLocalLlmBackend === 'ollama') {
-    ensureOllamaRunning({ preferPersistent: true }).catch((err) =>
-      console.error(`⚠️ Failed to start Ollama for active local LLM backend: ${err.message}`));
-  }
-
-  // Register PortOS's CLI + TUI runners through the toolkit's declared extension
-  // points (setCliRunner / setTuiRunner) instead of overwriting private props.
-  // The CLI variant adds per-provider argv building (Codex `exec -`, Antigravity
-  // `agy --print`, Claude Code `-p -`); the toolkit's in-tree implementation is
-  // also safe (no shell, prompt via stdin) — the variant exists for the per-CLI
-  // invocation conventions, not for security. The TUI runner has no toolkit
-  // built-in: registering it lets POST /api/runs with a TUI provider dispatch
-  // here instead of 400ing. Both runners track their child process / pty via the
-  // toolkit's external-run registry, so the toolkit's own stopRun/isRunActive/
-  // deleteRun account for live runs without any sibling-method monkey-patching.
-  aiToolkit.services.runner.setCliRunner(executeCliRunFixed);
-  aiToolkit.services.runner.setTuiRunner(executeTuiRunFixed);
-  console.log('🔧 Registered PortOS CLI + TUI runners via aiToolkit runner extension points');
-
-  // Note: prompts service is initialized automatically by createAIToolkit()
-
-  // Initialize auto-fixer for error recovery
-  initAutoFixer();
-
-  // Initialize task learning system to track agent completions
-  initTaskLearning();
-
-  // Initialize the CoS agent spawner (event wiring + orphan cleanup) explicitly,
-  // now that the runner patch + task learning are ready. Capture the promise so
-  // CoS auto-start can wait for the spawner's `task:ready` listener before it
-  // emits (see cos.init below). The `.catch` resolves the chain even on failure,
-  // so a spawner init error never blocks CoS init.
-  const spawnerReady = initSpawner().catch(err => {
-    console.error(`❌ Failed to initialize spawner: ${err.message}`);
-  });
-
-  return { aiToolkit, spawnerReady };
 };
 
 /**
@@ -286,13 +292,9 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
  */
 const startBackgroundServices = ({ spawnerReady }) => {
   // Explicit call (not a module-level side effect) so test imports of cos.js
-  // don't spin up its event listeners and timers. Gated on the spawner being
-  // ready: CoS auto-start (alwaysOn) can emit `task:ready` for pending tasks
-  // during init, which would be dropped if the spawner hadn't yet registered its
-  // listener — so wait for `spawnerReady` before kicking off CoS init.
-  spawnerReady
-    .then(() => cos.init())
-    .catch(err => console.error(`❌ CoS init failed: ${err.message}`));
+  // don't spin up its event listeners and timers. The spawner gate itself lives
+  // in bootstrapSequence.js.
+  initCosAfterSpawner({ spawnerReady, initCos: () => cos.init() });
 
   // Initialize agent automation scheduler and action executor
   automationScheduler.init().catch(err => console.error(`❌ Agent scheduler init failed: ${err.message}`));
@@ -359,13 +361,15 @@ const startBackgroundServices = ({ spawnerReady }) => {
   // Commission. Boot only ARMS timers; nothing fires until a cadence elapses, and
   // each fire gates on creative autonomy `execute` + the daily cos budget (so an
   // `off`/`dry-run` install generates nothing). Sanctioned scheduled-automation.
-  // Split any legacy INLINE commission feedback into the federated commissionFeedback
-  // store (#2686) BEFORE arming the scheduler, so a fire reads the federated view.
-  // Pure data movement (no LLM), idempotent, best-effort. The scripts/migrations
-  // runner executes before the DB pool is up, so the data move lives here (see the
-  // migration 194 registration stub); the table itself is created by ensureSchema.
-  backfillAllCommissionFeedback().catch(err => console.error(`❌ Commission feedback backfill failed: ${err.message}`));
-  startCommissionScheduler().catch(err => console.error(`❌ Creative Commission scheduler init failed: ${err.message}`));
+  // The backfill is pure data movement (no LLM), idempotent, best-effort. The
+  // scripts/migrations runner executes before the DB pool is up, so the data move
+  // lives here (see the migration 194 registration stub); the table itself is
+  // created by ensureSchema. Backfill-before-arm ordering lives in
+  // bootstrapSequence.js.
+  armCommissionScheduler({
+    backfillCommissionFeedback: backfillAllCommissionFeedback,
+    startCommissionScheduler
+  });
   // Initialize CyberCity snapshot scheduler — records periodic city-state frames
   // for the historical timeline scrubber (issue #877).
   startCitySnapshotScheduler().catch(err => console.error(`❌ City snapshot scheduler init failed: ${err.message}`));
@@ -500,186 +504,98 @@ const initMediaJobDependentHooks = () => {
 };
 
 /**
- * Verify PostgreSQL is reachable + at the current schema, upgrading it if it
- * merely lags. Returns `{ dbReady }`.
+ * The database phase's dependencies. `runDatabasePhase` (bootstrapSequence.js)
+ * owns the gate → migrate → warm → arm ordering; this supplies the real db.js,
+ * the real migration scripts, and the real stores.
  *
- * PostgreSQL is a mandatory dependency. If the DB is unusable and we're NOT in
- * a sanctioned escape-hatch/test mode this is a fatal misconfiguration: the
- * creative catalog has no file-backed equivalent, so booting "successfully"
- * would silently serve a broken install. Fail fast with an actionable message.
+ * Escape hatches for the health gate (dev/tests only, UNSUPPORTED for
+ * production): `MEMORY_BACKEND=file` (explicit file backend) and `NODE_ENV=test`
+ * (test suites boot without a database). Both downgrade "PostgreSQL is required"
+ * from a fail-fast to a warning.
  *
- * Escape hatches (dev/tests only, UNSUPPORTED for production):
- *   - MEMORY_BACKEND=file  (explicit file backend)
- *   - NODE_ENV=test        (test suites boot without a database)
+ * Every migration/warm step is imported lazily, at the moment it runs, exactly
+ * as before the extraction — nothing in this phase is pulled into the module
+ * graph on a boot that never reaches it.
  */
-const gateOnDatabase = async () => {
-  const dbEscapeHatch =
-    process.env.MEMORY_BACKEND === 'file' || process.env.NODE_ENV === 'test';
-  const { checkHealth, ensureSchema } = await import('../lib/db.js');
-  let health = await checkHealth();
-  // An EXISTING install can be reachable but lag the current schema — e.g.
-  // `memories` exists but a newer column (`sync_sequence`) is missing, which
-  // is exactly what checkHealth() requires for hasSchema. ensureSchema() is
-  // idempotent and exists to bring such installs up to date, so when the DB
-  // is connected but reports incomplete schema, run the upgrade and re-probe
-  // BEFORE declaring the install unbootable. A truly uninitialized DB (base
-  // tables absent) makes ensureSchema() throw — we catch, log, and fall
-  // through to the fail-fast below. (try/catch is appropriate here: this runs
-  // outside the request lifecycle, so an uncaught throw would crash boot.)
-  if (health.connected && (!health.hasSchema || !health.hasCatalogSchema)) {
-    try {
-      await ensureSchema();
-      health = await checkHealth();
-    } catch (err) {
-      console.error(`🗄️  Schema upgrade on boot failed: ${err.message}`);
-    }
-  }
-  // Both the memory schema AND the creative-catalog schema are required —
-  // the catalog has no file-backed equivalent. ensureSchema() creates the
-  // catalog tables idempotently, but if that DDL fails (e.g. the role can't
-  // CREATE) the swallowed error in the migration block below would otherwise
-  // let the server boot with the catalog missing. Gate boot on both.
-  const dbReady = health.connected && health.hasSchema && health.hasCatalogSchema;
-  if (!dbEscapeHatch && !dbReady) {
-    const reason = health.connected ? 'required schema missing' : `unreachable (${health.error || 'connection failed'})`;
-    console.error(`❌ PostgreSQL is required but ${reason} — refusing to start.`);
-    console.error('   Set up the database with: npm run setup:db');
-    console.error('   Dev/test only: set PGMODE=file in .env to boot without PostgreSQL (unsupported for production).');
-    process.exit(1);
-  }
-  if (dbEscapeHatch && !dbReady) {
-    console.warn(`⚠️  PostgreSQL unavailable (${health.error || 'no schema'}) — booting via escape hatch; catalog/DB features are disabled.`);
-  }
-  return { dbReady, ensureSchema };
-};
+const runDatabaseBootPhase = () => runDatabasePhase({
+  gate: async () => {
+    const { checkHealth, ensureSchema } = await import('../lib/db.js');
+    const { dbReady } = await gateOnDatabase({
+      checkHealth,
+      ensureSchema,
+      escapeHatch: process.env.MEMORY_BACKEND === 'file' || process.env.NODE_ENV === 'test'
+    });
+    // ensureSchema is threaded through to the migrations below so the phase
+    // resolves the db.js module exactly once.
+    return { dbReady, ensureSchema };
+  },
 
-/**
- * DB schema + catalog/media migrations. Best-effort as a group (a transient
- * hiccup mid-walk shouldn't crash an otherwise-healthy boot; the route surface
- * tolerates an empty catalog and the user can re-trigger via the admin
- * endpoint) EXCEPT the versioned DB-migration runner, which is fatal.
- */
-const runDbAndCatalogMigrations = async (dbReady, ensureSchema) => {
-  try {
-    // Two early exits guard the migrations below: (1) the fail-fast
-    // process.exit(1) in gateOnDatabase when the DB is required but missing,
-    // and (2) this return when on the escape hatch with no healthy DB —
-    // ensureSchema and the migrations would throw otherwise.
-    if (!dbReady) {
-      return;
-    }
-    await ensureSchema();
-    // Versioned DB-migration runner (#1029): apply ordered schema-DELTA
-    // migrations (renames / type changes / data transforms / embedding-dim
-    // changes) that ensureSchema()'s additive IF NOT EXISTS gates can't
-    // express. Runs AFTER ensureSchema() (base schema + schema_migrations
-    // tracking table present) and AFTER the DB-ready gate, but BEFORE any
-    // store warm or httpServer.listen — so a half-applied delta can't race a
-    // request. Skipped under the file backend by the !dbReady early return
-    // above. A FAILED migration is FATAL: each migration runs in a transaction
-    // so a failure rolls back (NOT marked applied), but we must NOT let boot
-    // continue — a partially-migrated install serving requests is worse than a
-    // hard stop. So this gets its own try/catch (not the generic catalog one
-    // below, which only logs and continues) that exits the process loudly.
-    // This is a process boundary, so the explicit try/catch is sanctioned.
-    const { runDbMigrations } = await import('../scripts/run-db-migrations.js');
-    try {
-      await runDbMigrations();
-    } catch (err) {
-      console.error(`❌ DB migration failed at boot — refusing to start: ${err?.stack ?? err.message}`);
-      process.exit(1);
-    }
-    const { migrateBibleToCatalog } = await import('../scripts/migrateBibleToCatalog.js');
-    await migrateBibleToCatalog();
+  migrate: ({ dbReady, ensureSchema }) => runDbAndCatalogMigrations({
+    dbReady,
+    ensureSchema,
+    // Versioned DB-migration runner (#1029): ordered schema-DELTA migrations
+    // (renames / type changes / data transforms / embedding-dim changes) that
+    // ensureSchema()'s additive IF NOT EXISTS gates can't express.
+    runDbMigrations: async () => (await import('../scripts/run-db-migrations.js')).runDbMigrations(),
+    migrateBibleToCatalog: async () => (await import('../scripts/migrateBibleToCatalog.js')).migrateBibleToCatalog(),
     // One-time data repair: rewrite legacy machine universe tags
     // (`from-universe`, `universe:<id>`) on backfilled rows into the friendly
-    // universe NAME tag. Runs after the backfill so promoted rows exist;
-    // marker-gated in data/catalog-universe-tags.applied.json.
-    const { repairUniverseTags } = await import('../scripts/repairUniverseTags.js');
-    await repairUniverseTags();
+    // universe NAME tag. Marker-gated in data/catalog-universe-tags.applied.json.
+    repairUniverseTags: async () => (await import('../scripts/repairUniverseTags.js')).repairUniverseTags(),
     // Per-record catalog payload-shape migration — walks rows whose stored
     // payload.schemaVersion lags the registry-current and applies registered
-    // upgraders. No-ops via marker once an install is at the high-water
-    // version, so this is free on steady-state boots.
-    const { migrateCatalogPayload } = await import('../scripts/migrateCatalogPayload.js');
-    await migrateCatalogPayload();
+    // upgraders. No-ops via marker once an install is at the high-water version.
+    migrateCatalogPayload: async () => (await import('../scripts/migrateCatalogPayload.js')).migrateCatalogPayload(),
     // One-time canon↔catalog reconciliation: collapse any pre-existing
-    // divergence between an embedded universe-canon entry and its catalog
-    // row (they were copy-on-write mirrors before the bidirectional
-    // projection landed). LWW on updatedAt; writes the winner to both sides.
-    // Runs LAST so promoted rows exist and are at current payload-shape
-    // version; marker-gated in data/catalog-canon-reconcile.applied.json.
-    const { reconcileCanonCatalog } = await import('../scripts/reconcileCanonCatalog.js');
-    await reconcileCanonCatalog();
+    // divergence between an embedded universe-canon entry and its catalog row
+    // (they were copy-on-write mirrors before the bidirectional projection
+    // landed). LWW on updatedAt; writes the winner to both sides. Marker-gated
+    // in data/catalog-canon-reconcile.applied.json.
+    reconcileCanonCatalog: async () => (await import('../scripts/reconcileCanonCatalog.js')).reconcileCanonCatalog(),
     // Media asset index (#1000): subscribe the generation-completed hooks +
     // reconcile the derived media_assets table against on-disk images/videos.
     // Bytes + sidecars + video-history.json stay authoritative; this builds a
     // queryable index over them. Idempotent, safe to run every boot.
-    const { initMediaAssetIndex } = await import('./mediaAssetIndex/index.js');
-    await initMediaAssetIndex();
-  } catch (err) {
-    console.error(`🪄 catalog migrations failed at boot: ${err.message}`);
-  }
-};
+    initMediaAssetIndex: async () => (await import('./mediaAssetIndex/index.js')).initMediaAssetIndex()
+  }),
 
-/**
- * Mandatory PostgreSQL store warmups (#1014–1017, #1001, #997) + legacy prune.
- * Each touch forces backend selection and runs a one-time, marker-gated file→DB
- * import that MUST complete before httpServer.listen — so the first request/sync
- * sees fully-migrated records, never a half-applied import racing a request.
- * Unlike the best-effort catalog migrations (which log-and-continue), a failure
- * here is FATAL: a store that couldn't select its backend or finish its import
- * would serve unmigrated/empty data, which is worse than a hard stop. So this
- * gets its own try/catch (a process boundary, like runDbMigrations) that exits
- * loudly instead of swallowing the error and booting a partially-migrated
- * install.
- */
-const warmMandatoryStores = async () => {
-  try {
+  warmStores: () => warmMandatoryStores({
     // Universe Builder PG warm (#1014): listIds() is the cheapest call that
     // forces backend selection + the migrateUniversesToDB import.
-    await universeStore().listIds();
-    // Pipeline series + issues PG warm (#1015): same contract. Series first
-    // (issues soft-ref it for universe resolution / lists).
-    await seriesStore().listIds();
-    await issueStore().listIds();
-    // Story Builder sessions PG warm (#1016): same contract. Universe +
-    // series warmed first (sessions soft-ref both for staleness recompute).
-    await storyBuilderStore().listIds();
+    warmUniverses: () => universeStore().listIds(),
+    // Pipeline series + issues PG warm (#1015): same contract.
+    warmSeries: () => seriesStore().listIds(),
+    warmIssues: () => issueStore().listIds(),
+    // Story Builder sessions PG warm (#1016): same contract.
+    warmStoryBuilder: () => storyBuilderStore().listIds(),
     // Writers Room PG warm (#1017): listWorkIds() forces backend selection +
     // migrateWritersRoomToDB. Draft .md bodies stay on disk (file-primary);
     // only the metadata migrates.
-    await writersRoomStore().listWorkIds();
-    // Authoritative catalog user-type warm (#1001): load the registry from
-    // the catalog_user_types store (runs the one-time settings→DB import on
-    // first access), so a normal install always serves with the registry
-    // warm even if the early fire-and-forget warm raced a cold DB.
-    const warmTypes = await readUserTypeSlice();
-    setUserCatalogTypes(Array.isArray(warmTypes) ? warmTypes : []);
+    warmWritersRoom: () => writersRoomStore().listWorkIds(),
+    // Authoritative catalog user-type warm (#1001): load the registry from the
+    // catalog_user_types store (runs the one-time settings→DB import on first
+    // access), so a normal install always serves with the registry warm even if
+    // the early fire-and-forget warm raced a cold DB.
+    warmCatalogUserTypes: async () => {
+      const warmTypes = await readUserTypeSlice();
+      setUserCatalogTypes(Array.isArray(warmTypes) ? warmTypes : []);
+    },
     // Creative Director PG warm (#997): unlike the other stores, CD's file→DB
-    // import is triggered lazily on first backend access; at boot the only
-    // other trigger is a NOT-awaited fire-and-forget recoverInFlightProjects()
-    // in an earlier step, so it can still be in flight here. The prune below
-    // stamps a single completion marker once no domain is blocked, so it must
-    // not run while CD's import (and its
-    // creative-director-projects.migrated.json marker) is unfinished, or CD's
-    // .imported file would never be pruned. listProjects() forces
-    // selectBackend() → the (idempotent, marker-gated) import to completion.
-    const { listProjects: warmCdProjects } = await import('./creativeDirector/local.js');
-    await warmCdProjects();
-    // Legacy artifact prune: runs LAST, after every file→DB warm above has
-    // imported + stamped its marker, so both the migration markers AND the
-    // authoritative DB rows exist. Removes the `.imported` / `.bak-NNN`
-    // recovery copies the migrators parked aside, but ONLY when the live row
-    // count matches the marker's recorded import (a wiped/restored DB keeps
-    // the recovery files). Marker-gated in data/legacy-prune.applied.json.
-    const { pruneImportedLegacyFiles } = await import('../scripts/pruneImportedLegacyFiles.js');
-    await pruneImportedLegacyFiles();
-  } catch (err) {
-    console.error(`❌ Mandatory store warmup failed at boot — refusing to start: ${err?.stack ?? err.message}`);
-    process.exit(1);
-  }
-};
+    // import is triggered lazily on first backend access; at boot the only other
+    // trigger is a NOT-awaited fire-and-forget recoverInFlightProjects() in an
+    // earlier step, so it can still be in flight here. listProjects() forces
+    // selectBackend() → the (idempotent, marker-gated) import to completion,
+    // which the prune below depends on.
+    warmCreativeDirector: async () => (await import('./creativeDirector/local.js')).listProjects(),
+    // Legacy artifact prune: removes the `.imported` / `.bak-NNN` recovery
+    // copies the migrators parked aside, but ONLY when the live row count
+    // matches the marker's recorded import (a wiped/restored DB keeps the
+    // recovery files). Marker-gated in data/legacy-prune.applied.json.
+    pruneLegacyFiles: async () => (await import('../scripts/pruneImportedLegacyFiles.js')).pruneImportedLegacyFiles()
+  }),
+
+  reconcileStackerNews: reconcileStackerNewsSchedulers
+});
 
 /** Log the canonical "where do I open this" banner and wire the HTTPS extras. */
 const announceListening = ({ io, httpServer, localHttpServer, httpsEnabled, port }) => {
@@ -718,106 +634,74 @@ const announceListening = ({ io, httpServer, localHttpServer, httpsEnabled, port
 
 /**
  * Post-route boot. Kicks off the background services, then walks the ordered
- * boot chain that ends in `httpServer.listen()`. Returns the chain's promise so
- * a caller can await it; index.js intentionally does not (boot proceeds in the
- * background and any fatal step exits the process itself).
+ * boot chain that ends in `httpServer.listen()` — the walk itself is
+ * `runPostRouteSequence` in bootstrapSequence.js, which owns which of these
+ * steps are awaited and which are fire-and-forget. Returns the chain's promise
+ * so a caller can await it; index.js intentionally does not (boot proceeds in
+ * the background and any fatal step exits the process itself).
  */
-export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled, port, host, spawnerReady }) => {
-  startBackgroundServices({ spawnerReady });
+export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled, port, host, spawnerReady }) =>
+  runPostRouteSequence({
+    startBackgroundServices: () => startBackgroundServices({ spawnerReady }),
 
-  // Initialize instance identity + sync log before accepting requests to prevent
-  // race conditions where brain mutations arrive before the sync log is ready
-  return ensureSelf()
-    .then(() => initSyncLog())
-    .then(() => {
-      // Recover inbox entries stuck in 'classifying' from a previous crash. Runs
-      // AFTER initSyncLog() because updateInboxLog() now appends to the brain sync
-      // log — running it before currentSeq is loaded would mint colliding seqs and
-      // corrupt peer cursors. Fire-and-forget; failures are logged.
-      recoverStuckClassifications().catch(err => console.error(`❌ Brain recovery failed: ${err.message}`));
-    })
-    // initMediaJobQueue is awaited here so that data/ exists and the worker loop
-    // is running before /api/video-gen or /api/image-gen can enqueue (otherwise
-    // persist() can race with ensureDir).
-    .then(() => initMediaJobQueue())
-    .then(() => initMediaJobDependentHooks())
-    .then(() => {
-      // Sharing: attach chokidar watchers to every registered share bucket so
-      // incoming manifests from peers are picked up live. Backlog processing
-      // (manifests that arrived while the server was offline) runs as part of
-      // initSharing. Fire-and-forget — a failed bucket shouldn't block boot.
-      initSharing({ io }).catch((err) => {
-        console.error(`❌ Sharing init failed: ${err.message}`);
-      });
-    })
-    .then(() => {
-      // Fire-and-forget — resume any Creative Director projects that were mid-
-      // flight when the server died. The queue reload above just reclassified
-      // their renders as 'failed (interrupted by restart)'; this nudges the
-      // orchestrator so projects don't sit frozen waiting for listeners that
-      // no longer exist. Doesn't block startup.
-      // recoverInFlightProjects resolves cdRecoveryDone on success. On any
-      // failure path here, explicitly resolve it so cos.start's gate doesn't
-      // hit the 60s timeout fallback for nothing.
-      recoverInFlightProjects().catch(async (e) => {
-        console.log(`⚠️ CD boot recovery failed: ${e.message}`);
-        const { markRecoveryDone } = await import('./creativeDirector/recovery.js');
-        markRecoveryDone();
-      });
-    })
-    .then(async () => {
-      const { dbReady, ensureSchema } = await gateOnDatabase();
-      await runDbAndCatalogMigrations(dbReady, ensureSchema);
-      // Skipped when not dbReady (escape hatch), matching the migrations above.
-      if (dbReady) {
-        await warmMandatoryStores();
-        // OFF by default. This only arms timers for explicitly opted-in
-        // accounts after their tables exist; it does not perform an initial
-        // sync or local-LLM call.
-        await reconcileStackerNewsSchedulers();
-      }
-    })
-    .then(async () => {
-      // One-time series cover-thumbnail backfill: derive `series.coverImage` (the
-      // rendered volume/issue cover shown on the pipeline list) for series whose
-      // covers rendered before the feature shipped. Runs after the series + issues
-      // stores are warmed above so the derivation reads migrated records. Drives
-      // the services, so it works on both the PG backend and the file escape hatch.
-      // FIRE-AND-FORGET (not awaited): a cosmetic thumbnail backfill must never
-      // delay the server accepting requests, and it's marker-gated so it runs at
-      // most once regardless.
-      const { backfillSeriesCoverImages } = await import('../scripts/backfillSeriesCoverImages.js');
-      backfillSeriesCoverImages().catch((err) => {
-        console.error(`❌ series cover backfill failed at boot: ${err?.message ?? err}`);
-      });
-    })
-    .then(() => {
-      // Start server only after sync log + media job queue are initialized.
-      // initMediaJobQueue failure is fatal: the queue owns persistence + SSE
-      // + temp-file cleanup for /api/video-gen and local /api/image-gen, and
-      // accepting requests with a half-init queue silently corrupts state
-      // (persist() throws, SSE streams degrade). Catch + crash via the
-      // outer .catch(...process.exit) below.
-      httpServer.listen(port, host, () => {
-        announceListening({ io, httpServer, localHttpServer, httpsEnabled, port });
+    // Instance identity + sync log come up before requests are accepted, so a
+    // brain mutation can't arrive before the sync log is ready.
+    ensureSelf,
+    initSyncLog,
 
-        // Set up process error handlers with io instance
-        setupProcessErrorHandlers(io);
+    // Recover inbox entries stuck in 'classifying' from a previous crash. Must
+    // run AFTER initSyncLog() because updateInboxLog() appends to the brain sync
+    // log — running it before currentSeq is loaded would mint colliding seqs and
+    // corrupt peer cursors.
+    recoverStuckClassifications,
 
-        // Backfill origin tags and start peer polling + sync (non-blocking)
-        backfillOriginInstanceId()
-          .then(() => {
-            startPolling();
-            initSyncOrchestrator();
-          })
-          .catch(err => console.error(`❌ Post-startup init failed: ${err.message}`));
-      });
-    })
-    .catch(err => {
-      console.error(`❌ Instance init failed: ${err.message}`);
-      process.exit(1);
-    });
-};
+    // Awaited by the sequence so data/ exists and the worker loop is running
+    // before /api/video-gen or /api/image-gen can enqueue (otherwise persist()
+    // can race with ensureDir). A failure here is fatal: the queue owns
+    // persistence + SSE + temp-file cleanup, and accepting requests with a
+    // half-init queue silently corrupts state.
+    initMediaJobQueue,
+    initMediaJobDependentHooks,
+
+    // Sharing: attach chokidar watchers to every registered share bucket so
+    // incoming manifests from peers are picked up live. Backlog processing
+    // (manifests that arrived while the server was offline) runs as part of
+    // initSharing.
+    initSharing: () => initSharing({ io }),
+
+    // Resume any Creative Director projects that were mid-flight when the server
+    // died. The queue reload above just reclassified their renders as 'failed
+    // (interrupted by restart)'; this nudges the orchestrator so projects don't
+    // sit frozen waiting for listeners that no longer exist.
+    // recoverInFlightProjects resolves cdRecoveryDone on success. On any failure
+    // path here, explicitly resolve it so cos.start's gate doesn't hit the 60s
+    // timeout fallback for nothing.
+    recoverCreativeDirectorProjects: () => recoverInFlightProjects().catch(async (e) => {
+      console.log(`⚠️ CD boot recovery failed: ${e.message}`);
+      const { markRecoveryDone } = await import('./creativeDirector/recovery.js');
+      markRecoveryDone();
+    }),
+
+    runDatabasePhase: runDatabaseBootPhase,
+
+    // One-time series cover-thumbnail backfill: derive `series.coverImage` (the
+    // rendered volume/issue cover shown on the pipeline list) for series whose
+    // covers rendered before the feature shipped. Runs after the series + issues
+    // stores are warmed above so the derivation reads migrated records. Drives
+    // the services, so it works on both the PG backend and the file escape hatch.
+    // Marker-gated, so it runs at most once regardless.
+    backfillSeriesCoverImages: async () => (await import('../scripts/backfillSeriesCoverImages.js')).backfillSeriesCoverImages(),
+
+    startListening: () => httpServer.listen(port, host, () => runPostListenSequence({
+      announceListening: () => announceListening({ io, httpServer, localHttpServer, httpsEnabled, port }),
+      // Process-level safety net, wired with the io instance so unhandled
+      // failures also surface in the UI.
+      setupProcessErrorHandlers: () => setupProcessErrorHandlers(io),
+      backfillOriginInstanceId,
+      startPolling,
+      initSyncOrchestrator
+    }))
+  });
 
 // Run an async close but resolve anyway after `ms` — so a close that never
 // settles (e.g. a WebSocket-upgraded socket the server no longer tracks, or a
