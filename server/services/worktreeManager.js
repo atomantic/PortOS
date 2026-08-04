@@ -488,6 +488,12 @@ async function adoptWorktreeUnlocked(agentId, sourceWorkspace, existingWorktreeP
  *   than deleting it) whenever it still holds commits the default branch doesn't,
  *   so a retry can resume the work instead of restarting. Used by the FAILED-agent
  *   cleanup path; the PR path leaves it off so its local branch is still tidied up.
+ * @param {boolean} [options.discardDirt] - remove even when the tree is dirty.
+ *   The dirty-abort exists to protect work that might still be wanted; the
+ *   throwaway-worktree posture has already declared this tree's contents
+ *   worthless (its own prompt invites scratch edits and forbids committing), so
+ *   for it the abort protects nothing and instead strands a full checkout per
+ *   run, forever. ONLY the discard path may pass this.
  */
 export async function removeWorktree(agentId, sourceWorkspace, branchName, options = {}) {
   const worktreePath = join(WORKTREES_DIR, agentId);
@@ -528,7 +534,14 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
     warnings.push(`Worktree preserved — git status failed: ${err.message}`);
     return { merged: false, removed: false, uncommittedSaved: false, warnings };
   }
-  if (dirtyFiles) {
+  if (dirtyFiles && options.discardDirt) {
+    // Throwaway posture: the caller has already established that nothing in this
+    // tree is wanted. Log what is being dropped so a surprising loss is at least
+    // traceable, then fall through to removal.
+    const dirt = classifyWorktreeDirt(dirtyFiles);
+    const shown = dirt.realChangePaths.slice(0, DIRT_PATHS_IN_WARNING);
+    if (shown.length) console.log(`🌳 Discarding uncommitted changes in throwaway worktree ${agentId}: ${shown.join(', ')}`);
+  } else if (dirtyFiles) {
     // Discard auto-generated lockfile changes that agents don't intend to commit
     // (e.g., npm install resolving ^version to exact version in package-lock.json)
     const dirt = classifyWorktreeDirt(dirtyFiles);

@@ -88,6 +88,17 @@ describe('run', () => {
     // the idle-complete gate, which otherwise requires a dirty tree.
     expect(state.added[1].task).toMatchObject({ discardWorktree: true, worktreeChangesExpected: false });
   });
+
+  it('forces off the flags a discarded worktree makes impossible', async () => {
+    // `openPR` defaults to true and sits one checkbox from `discardWorktree`.
+    // The combination makes the spawner expect a PR that cannot exist (the
+    // worktree is thrown away before any push), which downgrades the run to
+    // `pr-missing` and RETRIES it — up to five agent runs of quota burned on a
+    // job that already did its work. `noCodeOutput` rides along so the prompt
+    // names the real output channel instead of the sentinel.
+    await run({ params: { appId: 'app-1', prompt: 'x', discardWorktree: true, openPR: true, simplify: true }, job: { id: 'j3' }, family, candidate });
+    expect(state.added[0].task).toMatchObject({ openPR: false, simplify: false, noCodeOutput: true });
+  });
 });
 
 describe('renderBurnPrompt', () => {

@@ -15,10 +15,12 @@
 
 import { inputClass } from './fields';
 
-export default function PresetPicker({ id, label, presets, jobType = null, onPick, hint }) {
-  // Presets declare the job type they seed, so a plan with several job types
-  // only ever offers the ones that can apply here.
-  const rows = (presets || []).filter((preset) => !jobType || preset.jobType === jobType);
+export default function PresetPicker({ id, label, presets, onPick, hint }) {
+  // Deliberately unfiltered by the row's current job type: a preset carries the
+  // job type it needs, so picking one CONVERTS the step rather than being
+  // inapplicable to it. Filtering hid the control entirely on a non-agent row,
+  // leaving delete-and-re-add as the only way to turn a step into an audit.
+  const rows = presets || [];
   if (!rows.length) return null;
 
   return (

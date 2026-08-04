@@ -42,7 +42,7 @@
  * importing anything, so a normal task type pays ~zero cost.
  */
 
-import { isFalsyMeta } from './agentState.js';
+import { isFalsyMeta, isTruthyMeta } from './agentState.js';
 import { TRACKER_FILING_TASK_TYPES } from '../lib/workTracker.js';
 
 // taskType → () => import('./path/to/hookModule.js'). A module may export either
@@ -192,6 +192,12 @@ export function isNonCommittingCoordinatorTask(task) {
  */
 export function declaresNoCommitCriterion(task) {
   if (isNonCommittingCoordinatorTask(task)) return true;
+  // A discarded worktree cannot leave a `[task-<id>]` commit behind by
+  // construction — cleanup removes it without merging, and the prompt forbids
+  // committing at all. Scoring the commit check against it marks every
+  // SUCCESSFUL run a validation miss and drags that provider/model's learning
+  // bucket toward 0% — the #2696/#3273 artifact, arriving by a third route.
+  if (isTruthyMeta(task?.metadata?.discardWorktree)) return true;
   // Resolved the same way isNonCommittingCoordinatorTask (and the learning
   // bucket) resolves it, so a LIVE queue task (`analysisType`) and the archived
   // agent projection (`taskAnalysisType`) agree.

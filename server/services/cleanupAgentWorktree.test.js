@@ -1643,7 +1643,10 @@ describe('cleanupAgentWorktree - discardWorktree (throwaway reasoning worktree)'
     });
 
     expect(removeWorktree).toHaveBeenCalledTimes(1);
-    expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false });
+    // `discardDirt` is part of the posture, not an optimization: the discard
+    // prompt invites scratch edits, and removeWorktree otherwise ABORTS on dirt
+    // — stranding one full checkout per run.
+    expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false, discardDirt: true });
     // Discard wins over openPR — no code is ever pushed or PR'd.
     expect(git.push).not.toHaveBeenCalled();
     expect(git.createPR).not.toHaveBeenCalled();
@@ -1655,7 +1658,7 @@ describe('cleanupAgentWorktree - discardWorktree (throwaway reasoning worktree)'
       originalTask: { metadata: { discardWorktree: 'true' } }
     });
 
-    expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false });
+    expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false, discardDirt: true });
     expect(git.push).not.toHaveBeenCalled();
     expect(git.createPR).not.toHaveBeenCalled();
   });

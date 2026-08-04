@@ -102,7 +102,11 @@ async function runCleanupAgentWorktree(agentId, success, { openPR = false, prCom
   const discardWorktree = isTruthyMeta(originalTask?.metadata?.discardWorktree);
   if (discardWorktree) {
     emitLog('info', `🌳 Discarding worktree for reasoning agent ${agentId} (no merge, no PR)`, { agentId, branchName: worktreeBranch });
-    const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false }).catch(err => {
+    // `discardDirt`: the discard prompt explicitly invites scratch edits ("only
+    // the completion sentinel is kept"), and removeWorktree otherwise ABORTS on
+    // any non-lockfile dirt — so an agent that took its own prompt at its word
+    // stranded a full checkout on disk, once per run, forever.
+    const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false, discardDirt: true }).catch(err => {
       emitLog('warn', `🌳 Worktree discard failed for ${agentId}: ${err.message}`, { agentId });
       return { warnings: [`Worktree discard failed: ${err.message}`] };
     });

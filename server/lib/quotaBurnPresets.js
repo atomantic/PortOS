@@ -87,8 +87,11 @@ const auditContract = ({ labels, dedupeSearch }) => `
    filed. Never paste a secret, credential, token, hostname, IP address, absolute
    path containing a username, or any personal record into a title or body — cite
    the location and redact the value (\`<token>\`, \`<hostname>\`, \`<user-email>\`).
-   This applies even when the value IS the finding: "\`config/dev.js:42\` commits a
-   live API key" is the report; the key itself never appears.
+   For a LIVE credential, do not file an ordinary issue at all: a public tracker
+   entry naming the file and line is a world-readable map to a working secret.
+   Report it in your final summary to the user, say it needs rotating, and file
+   at most a location-free issue ("a committed credential needs rotating and
+   purging from history — details in the run summary").
 8. **Change no code.** No commits, no branches, no pull requests. The deliverable
    is the filed issues, and the run should end with a clean \`git status\`.
 9. **Report at the end**: the slice you audited, each issue number and title, and
@@ -97,9 +100,8 @@ const auditContract = ({ labels, dedupeSearch }) => `
 If \`gh\` cannot reach the network (errors like "bad file descriptor" or a
 connect timeout), do not give up silently — fall back to the REST API with the
 token from the local keyring:
-\`TOK=$(command gh auth token)\` then, with the payload in a \`mktemp\` file outside
-the repo,
-\`curl -sS -H "Authorization: Bearer $TOK" -H "Accept: application/vnd.github+json" -d @"$PAYLOAD" https://api.github.com/repos/<owner>/<repo>/issues\`.
+\`TOK=$(command gh auth token)\`, then with the JSON payload in \`BODY=$(mktemp)\`:
+\`curl -sS -H "Authorization: Bearer $TOK" -H "Accept: application/vnd.github+json" -d @"$BODY" https://api.github.com/repos/<owner>/<repo>/issues\`.
 A window spent finding real problems and filing none is a wasted window.
 
 Read this repository's \`CLAUDE.md\` (and any nested per-directory ones covering

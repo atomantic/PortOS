@@ -478,6 +478,30 @@ describe('cosTaskStore.addTask', () => {
     expect(task.metadata.openPR).toBeUndefined();
   });
 
+  it('persists the throwaway-worktree posture so a non-raw caller can ask for it', async () => {
+    // Load-bearing: `useWorktree` + `openPR:false` AUTO-MERGES onto the source
+    // workspace's default branch. `discardWorktree` is the only thing standing
+    // between an audit-style task and an unreviewed commit landing there, and
+    // before this passthrough only the raw path could set it — a non-raw caller
+    // silently got the auto-merge default instead.
+    const task = await addTask({
+      description: 'audit only', useWorktree: true, openPR: false,
+      discardWorktree: true, worktreeChangesExpected: false, noCodeOutput: true,
+    }, 'internal');
+    expect(task.metadata.discardWorktree).toBe(true);
+    expect(task.metadata.worktreeChangesExpected).toBe(false);
+    expect(task.metadata.noCodeOutput).toBe(true);
+  });
+
+  it('leaves the throwaway keys absent when the caller did not ask for them', async () => {
+    // Absent means "normal posture"; stamping `false` onto every task would put
+    // an opt-in marker on records that never opted in.
+    const task = await addTask({ description: 'ordinary', useWorktree: true }, 'internal');
+    expect(task.metadata.discardWorktree).toBeUndefined();
+    expect(task.metadata.noCodeOutput).toBeUndefined();
+    expect(task.metadata.worktreeChangesExpected).toBeUndefined();
+  });
+
   it('raw=true stores the pre-built object verbatim', async () => {
     const raw = { id: 'sys-raw', description: 'raw\nmultiline', status: 'pending', metadata: { context: 'ctx' } };
     const task = await addTask(raw, 'internal', { raw: true });

@@ -902,11 +902,20 @@ export function buildCompletionGuidelineBullet({
   if (isPrFollowUp && !discardWorktree && !noCodeOutput && !isReadOnly) {
     return 'Follow the follow-up section above — it is the whole task. Commit and push only fixes you actually make; the deliverable is the PR\'s final state, not a commit. Do NOT open a new PR, and do NOT expect this branch to be merged back for you.';
   }
+  // `noCodeOutput` is checked FIRST because the two flags answer different
+  // questions: `discardWorktree` decides what happens to the checkout, while
+  // `noCodeOutput` decides where the deliverable goes. A task that sets both —
+  // "do your work through an API/CLI action during the run, and never land
+  // code" — must be told its output channel is that action, NOT the sentinel.
+  // Telling it "write your result to the sentinel" is how a run files nothing
+  // and reports its findings into a file that gets thrown away (PLAN.md records
+  // this exact hazard from the 2026-07-16 codex review). No pre-existing task
+  // sets both, so this ordering changes nothing that shipped before it.
+  if (noCodeOutput) {
+    return '**This task produces no code output.** Its result is the API request or command your instructions describe (a PortOS endpoint call, a filed tracker issue, …) — do NOT run `/do:push`, `/do:pr`, `/simplify`, `git commit`, `git push`, or open a PR. Write the completion sentinel (see the Completion section) and stop.';
+  }
   if (discardWorktree) {
     return '**This is a reasoning-only task.** The worktree is discarded on exit — do NOT commit, push, merge, or open a PR. Write your result to the completion sentinel (see the Completion section) and stop.';
-  }
-  if (noCodeOutput) {
-    return '**This task produces no code output.** Its result is the API request your instructions describe — do NOT run `/do:push`, `/do:pr`, `/simplify`, `git commit`, `git push`, or open a PR. Write the completion sentinel (see the Completion section) and stop.';
   }
   if (isReadOnly) {
     return '**This is a read-only task.** Do NOT commit, push, or modify any files in the repository. Only read data and generate reports.';
@@ -1075,7 +1084,7 @@ export function buildReadOnlyCompletionSection({ isTui = false, sentinelPath = n
  * reaper.
  */
 export function buildActionOutputCompletionSection({ isTui = false, sentinelPath = null } = {}) {
-  const notice = '## Completion (No Code Output)\nThis task produces **no code change** — its result is delivered by the API request your instructions describe (a PATCH to a PortOS endpoint), not by a commit. Do NOT run `/do:push`, `/do:pr`, `/simplify`, `git commit`, `git push`, or open a pull request; there is nothing to push.';
+  const notice = '## Completion (No Code Output)\nThis task produces **no code change** — its result is delivered DURING the run by the API request or command your instructions describe (a PATCH to a PortOS endpoint, a filed tracker issue, …), not by a commit and not by this sentinel. Do NOT run `/do:push`, `/do:pr`, `/simplify`, `git commit`, `git push`, or open a pull request; there is nothing to push.';
   if (!isTui || !sentinelPath) return notice;
   return [
     notice,
@@ -1304,10 +1313,15 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
   // A discard task's completion is the sentinel-only contract (no push/PR/merge),
   // and this applies to every provider type — so it wins over the isTui fork and
   // over the fallback template's commit/push instructions below.
-  const tuiCompletionSection = discardWorktree
-    ? buildProgrammaticOutputCompletionSection(sentinelPath)
-    : noCodeOutput
-      ? buildActionOutputCompletionSection({ isTui, sentinelPath })
+  // Same precedence as buildCompletionGuidelineBullet: where the deliverable
+  // goes (`noCodeOutput`) decides the completion contract, and only then does
+  // worktree disposal (`discardWorktree`) pick the reasoning-payload contract.
+  // A task doing external work during the run must not be told the sentinel is
+  // its output channel.
+  const tuiCompletionSection = noCodeOutput
+    ? buildActionOutputCompletionSection({ isTui, sentinelPath })
+    : discardWorktree
+      ? buildProgrammaticOutputCompletionSection(sentinelPath)
       : isTui
         ? buildTuiCompletionSection({
             willOpenPR, prCompletion, simplifyEnabled,

@@ -86,8 +86,14 @@ export async function run({ params, job, family, candidate, context } = {}) {
     provider: provider.id,
     model: job?.model || undefined,
     useWorktree: params?.useWorktree !== false,
-    openPR: params?.openPR !== false,
-    simplify: params?.simplify !== false,
+    // A discarding job can never produce a PR — the worktree is thrown away
+    // before anything is pushed. Leaving `openPR: true` on it (the param's
+    // default, one checkbox away) makes the spawner expect a PR that cannot
+    // exist: the run is downgraded to `pr-missing` and RETRIED, burning up to
+    // five agent runs of subscription quota per misconfigured job. Coerced here
+    // rather than only in the UI so a hand-edited plan can't reach that state.
+    openPR: params?.discardWorktree !== true && params?.openPR !== false,
+    simplify: params?.discardWorktree !== true && params?.simplify !== false,
     // Opt-in throwaway posture for jobs whose deliverable is NOT code (the audit
     // presets). Without it, `useWorktree + !openPR` auto-merges whatever the
     // agent happened to commit onto the managed app's default branch, unreviewed
@@ -95,6 +101,12 @@ export async function run({ params, job, family, candidate, context } = {}) {
     // idle-complete gate, which expects a dirty tree.
     discardWorktree: params?.discardWorktree === true,
     worktreeChangesExpected: params?.discardWorktree !== true,
+    // Where the deliverable goes. A discarding burn job's output is whatever it
+    // did during the run (files an issue, calls an endpoint) — never a commit
+    // and never the completion sentinel, which is only the done-signal. Without
+    // this the prompt tells it "write your result to the sentinel", and an audit
+    // dutifully writes its findings into a file that is then thrown away.
+    noCodeOutput: params?.discardWorktree === true,
     reviewLoop: false,
   }, 'internal');
 

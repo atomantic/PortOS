@@ -300,6 +300,10 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     // failure (code work). Both booleans are meaningful, so persist either.
     if (taskData.worktreeChangesExpected === true) metadata.worktreeChangesExpected = true;
     else if (taskData.worktreeChangesExpected === false) metadata.worktreeChangesExpected = false;
+    // Deliverable is an API call or CLI action performed DURING the run, not a
+    // commit and not the sentinel. Previously only the raw path could set it
+    // (creativeDirector/agentBridge.js builds its task object by hand).
+    if (taskData.noCodeOutput === true) metadata.noCodeOutput = true;
     if (taskData.reviewLoop === true) metadata.reviewLoop = true;
     else if (taskData.reviewLoop === false) metadata.reviewLoop = false;
     // Ordered multi-reviewer list (normalizes legacy single `reviewer` too).

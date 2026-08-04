@@ -1565,6 +1565,25 @@ describe('buildCompletionGuidelineBullet', () => {
     expect(bullet).toMatch(/discarded on exit/);
     expect(bullet).not.toMatch(/`\/do:pr`/);
   });
+
+  it('noCodeOutput wins over discardWorktree — the deliverable is the action, not the sentinel', () => {
+    // The two flags answer different questions: discardWorktree decides what
+    // happens to the checkout, noCodeOutput decides where the deliverable goes.
+    // A task that does its work through an external action DURING the run (an
+    // endpoint call, a filed issue) and also throws the tree away must not be
+    // told "write your result to the sentinel" — that is how a run performs no
+    // action and reports its findings into a file that is then discarded.
+    const bullet = buildCompletionGuidelineBullet({
+      isReadOnly: false, isTui: true, tuiCompletionCommand: '/do:pr',
+      worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true,
+      discardWorktree: true, noCodeOutput: true,
+    });
+    expect(bullet).toMatch(/produces no code output/i);
+    expect(bullet).not.toMatch(/reasoning-only task/i);
+    // It names /do:pr only to forbid it — the TUI arm would have INSTRUCTED it.
+    expect(bullet).toMatch(/do NOT run `\/do:push`, `\/do:pr`/);
+    expect(bullet).not.toMatch(/YOU run the Completion Workflow/);
+  });
 });
 
 // A discardWorktree (reasoning-only) task — the layered-intelligence pattern —
