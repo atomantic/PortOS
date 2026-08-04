@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, Check, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react';
+import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
 import useMounted from '../../hooks/useMounted';
 
@@ -91,7 +92,7 @@ export default function BibleSection({ workId, items: itemsProp, onItemsChange, 
       </div>
 
       {loading && items.length === 0 && (
-        <div className="text-gray-500 italic">Loading…</div>
+        <BrailleSpinner text="Loading…" />
       )}
 
       {!loading && items.length === 0 && !creating && (

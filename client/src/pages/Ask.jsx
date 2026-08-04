@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback, memo } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { Send, Loader2, MessageCircle, Trash2, Pin, Brain, Calendar, Target, BookOpen, FileText, ExternalLink, ListTodo, CheckCircle2 } from 'lucide-react';
 import * as api from '../services/api';
+import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
@@ -63,7 +64,7 @@ function Sidebar({ conversations, activeId, onPick, onNew, isConfirmingDelete, o
         </button>
       </div>
       <div className="py-1">
-        {loading && <div className="p-3 text-xs text-gray-500">Loading…</div>}
+        {loading && <div className="p-3 text-xs"><BrailleSpinner text="Loading…" /></div>}
         {!loading && conversations.length === 0 && (
           <div className="p-3 text-xs text-gray-500">No conversations yet. Ask yourself something.</div>
         )}
@@ -670,7 +671,7 @@ export default function Ask() {
         </div>
 
         <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 md:px-6 py-4 space-y-3">
-          {loadingConv && <div className="text-sm text-gray-500"><Loader2 size={14} className="inline animate-spin mr-1" /> Loading…</div>}
+          {loadingConv && <div className="text-sm"><BrailleSpinner text="Loading…" /></div>}
           {showEmptyState && (
             <div className="max-w-2xl mx-auto mt-8 text-center text-gray-400 space-y-3">
               <h2 className="text-xl text-white">Talk to your digital twin.</h2>

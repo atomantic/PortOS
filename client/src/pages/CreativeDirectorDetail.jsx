@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router';
 import { ArrowLeft, Play, Pause, RefreshCw, SlidersHorizontal } from 'lucide-react';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import {
   getCreativeDirectorProject,
@@ -172,7 +173,24 @@ export default function CreativeDirectorDetail() {
     }
   };
 
-  if (loading) return <div className="p-6 text-port-text-muted">Loading…</div>;
+  if (loading) {
+    return (
+      <PageSkeleton
+        header="bar"
+        label="Loading creative director project"
+        barClassName="px-6 pt-6 pb-3"
+        titleWidthClass="w-56"
+        showSubtitle
+        subtitleOnMobile
+        tabs={TABS.length}
+        tabsInBar
+        fullHeight
+        padded
+        bodyClassName="p-6"
+        cards={3}
+      />
+    );
+  }
   if (!project) return <div className="p-6 text-port-error">Project not found.</div>;
 
   const goTo = (tabId) => navigate(`/creative-director/${id}/${tabId}`);

@@ -12,6 +12,7 @@ import { useParams, useNavigate, Link } from 'react-router';
 import {
   Share2, Plus, Trash2, Folder, Inbox, History, Save, Loader2, Check, X, Users, AlertCircle, RefreshCw, Copy, GitMerge,
 } from 'lucide-react';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import { FormField } from '../components/ui/FormField';
@@ -434,7 +435,7 @@ function SharingBuckets({ selectedId }) {
         {/* Bucket list */}
         <aside>
           {loading ? (
-            <div className="text-gray-500 text-sm">Loading…</div>
+            <PageSkeleton header="none" label="Loading buckets" cards={3} sidebar={false} />
           ) : buckets.length === 0 ? (
             <div className="p-4 bg-port-card border border-port-border rounded-lg text-sm text-gray-500">
               No buckets yet. Click <span className="text-port-accent">Add bucket</span> to register a synced folder.

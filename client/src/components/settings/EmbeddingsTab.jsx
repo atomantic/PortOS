@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Boxes, RefreshCw, AlertTriangle, Check } from 'lucide-react';
+import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
 import { getSettings, updateSettings } from '../../services/apiSystem';
 import { getLocalLlmStatus } from '../../services/apiLocalLlm';
@@ -84,9 +85,7 @@ export default function EmbeddingsTab() {
     }).finally(() => setSaving(false));
   };
 
-  if (loading) {
-    return <div className="text-sm text-gray-400">Loading…</div>;
-  }
+  if (loading) return <BrailleSpinner text="Loading embeddings settings" />;
 
   return (
     <div className="space-y-6">

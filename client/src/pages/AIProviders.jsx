@@ -4,6 +4,7 @@ import * as api from '../services/api';
 import socket from '../services/socket';
 import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, configuredDefaultIn, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isOllamaBackedProvider, isAntigravityProvider, isGrokBuildCli, isLocalEndpoint, effectiveModelContextWindow } from '../utils/providers';
 import useLocalModels from '../hooks/useLocalModels';
+import BrailleSpinner from '../components/BrailleSpinner';
 import EmptyState from '../components/EmptyState';
 import {
   formatDurationMs,
@@ -291,7 +292,7 @@ export default function AIProviders() {
             onClick={handleLoadSamples}
             className="px-4 py-2 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors text-sm sm:text-base"
           >
-            {loadingSamples ? 'Loading...' : 'Load Samples'}
+            {loadingSamples ? <BrailleSpinner text="Loading" /> : 'Load Samples'}
           </button>
           <button
             onClick={() => { setEditingProvider(null); setShowForm(true); }}

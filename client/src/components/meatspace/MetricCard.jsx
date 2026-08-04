@@ -1,6 +1,7 @@
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
+import BrailleSpinner from '../BrailleSpinner';
 import useChartColors from '../../hooks/useChartColors.js';
 
 export default function MetricCard({ data = [], loading = false, config, latestValue }) {
@@ -35,7 +36,7 @@ export default function MetricCard({ data = [], loading = false, config, latestV
     <div className="bg-port-card border border-port-border rounded-xl p-6">
       <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-3">{label}</h3>
       {loading ? (
-        <div className="flex items-center justify-center h-40 text-gray-600 text-sm">Loading...</div>
+        <div className="flex items-center justify-center h-40 text-sm"><BrailleSpinner text="Loading" /></div>
       ) : showLatest ? (
         <div className="flex flex-col items-center justify-center h-40">
           <span className="text-3xl font-bold text-white font-mono">{latestDisplay}</span>

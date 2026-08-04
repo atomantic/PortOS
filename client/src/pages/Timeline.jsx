@@ -4,6 +4,7 @@ import {
   CalendarClock, ChevronLeft, ChevronRight, Mail, MailOpen, Send,
   CalendarDays, Music, Play, MessageSquare, Activity, MapPin, Globe,
 } from 'lucide-react';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
 import SpotifyImportPanel from '../components/timeline/SpotifyImportPanel';
 import TakeoutLocationImportPanel from '../components/timeline/TakeoutLocationImportPanel';
@@ -236,7 +237,7 @@ export default function Timeline() {
       </div>
 
       {loading ? (
-        <div className="py-12 text-center text-gray-500">Loading…</div>
+        <PageSkeleton header="none" label="Loading timeline" cards={4} sidebar={false} />
       ) : events.length === 0 ? (
         <div className="rounded border border-dashed border-port-border py-12 text-center text-gray-500">
           No recorded activity on this day.

@@ -15,6 +15,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useNavigate, useParams, useLocation, useSearchParams, Link } from 'react-router';
 import { ArrowLeft, Sparkles, Clock, Cpu, Zap, Pause, Play, Trash2 } from 'lucide-react';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
@@ -192,7 +193,11 @@ export default function CreativeCommissionDetail() {
   };
 
   if (loading && !commission) {
-    return <div className="max-w-6xl mx-auto text-gray-500 text-sm">Loading…</div>;
+    return (
+      <div className="max-w-6xl mx-auto">
+        <PageSkeleton label="Loading commission" titleWidthClass="w-56" cards={2} sidebar={false} />
+      </div>
+    );
   }
 
   if (notFound) {

@@ -68,7 +68,7 @@ function ConversationList({ conversations, selectedKey, onSelect, query, onQuery
       </div>
       <div className="flex-1 overflow-y-auto">
         {loading ? (
-          <div className="py-10 text-center text-gray-500 text-sm">Loading…</div>
+          <div className="py-10 text-center text-sm"><BrailleSpinner text="Loading…" /></div>
         ) : conversations.length === 0 ? (
           <div className="px-4 py-10 text-center text-sm text-gray-500">
             No conversations yet.

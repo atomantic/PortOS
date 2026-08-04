@@ -79,7 +79,7 @@ export default function PublishedTab({ agentId }) {
             disabled={publishedLoading}
             className="px-3 py-1 text-sm bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30 disabled:opacity-50"
           >
-            {publishedLoading ? 'Loading...' : 'Refresh'}
+            {publishedLoading ? <BrailleSpinner text="Loading" /> : 'Refresh'}
           </button>
         </div>
       </div>

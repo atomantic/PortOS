@@ -17,6 +17,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Sparkles, Plus, Search, FileInput, Loader2, RefreshCw, Wand2, X, LayoutGrid, Library, FolderPlus } from 'lucide-react';
+import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';
 import {
   listCatalogIngredients,
@@ -878,7 +879,7 @@ export default function Catalog() {
                   className="absolute bottom-full mb-2 left-0 right-0 sm:left-auto sm:min-w-[220px] max-h-[60vh] sm:max-h-72 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-lg"
                 >
                   {placeTargetsLoading || placeTargets === null ? (
-                    <p className="px-3 py-2 text-sm text-gray-500">Loading…</p>
+                    <p className="px-3 py-2 text-sm"><BrailleSpinner text="Loading…" /></p>
                   ) : !hasPlaceTargets ? (
                     <p className="px-3 py-2 text-sm text-gray-500">No universes or series yet.</p>
                   ) : (

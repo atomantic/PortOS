@@ -4,6 +4,7 @@ import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import AgentCard from './AgentCard';
 import ResumeAgentModal from './ResumeAgentModal';
+import BrailleSpinner from '../../BrailleSpinner';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 
 const needsAgentFeedback = (agent) => {
@@ -362,7 +363,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
                 className="w-full py-2 text-sm text-port-accent hover:text-white bg-port-card border border-port-border rounded-lg transition-colors flex items-center justify-center gap-1 disabled:opacity-50"
               >
                 {loadingMore ? (
-                  'Loading...'
+                  <BrailleSpinner text="Loading" />
                 ) : (
                   <>
                     <ChevronDown size={14} />

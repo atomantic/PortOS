@@ -17,6 +17,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import useMounted from '../../hooks/useMounted';
 import { RefreshCw, ArrowUpCircle, Download, CheckCircle2, AlertTriangle, WifiOff, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
+import BrailleSpinner from '../BrailleSpinner';
 import Drawer from '../Drawer';
 import { useSyncIntegrity } from '../../hooks/useSyncIntegrity';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
@@ -96,9 +97,8 @@ function StatusPill({ status }) {
 function CollectionPreview({ collection, loading, error }) {
   if (loading) {
     return (
-      <div className="flex items-center gap-2 text-gray-500 text-sm py-2">
-        <Loader2 className="w-4 h-4 animate-spin" />
-        Loading…
+      <div className="text-sm py-2">
+        <BrailleSpinner text="Loading…" />
       </div>
     );
   }
@@ -363,7 +363,7 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
       open
       onClose={onClose}
       title="Sync Details"
-      subtitle={recordName ?? (recordLoading ? 'Loading…' : null)}
+      subtitle={recordName ?? (recordLoading ? <BrailleSpinner text="Loading…" /> : null)}
       size="sm"
       bodyClassName="space-y-5"
       closeLabel="Close sync details"

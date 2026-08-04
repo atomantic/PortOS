@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Box, ImagePlus, LoaderCircle, Sparkles } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import MediaImage from '../components/MediaImage';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import useProviderModels from '../hooks/useProviderModels';
@@ -191,7 +192,7 @@ export default function ThreejsModels() {
       <section>
         <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Model workspaces</h2>
         {loading ? (
-          <div className="py-8 text-center text-sm text-gray-500">Loading…</div>
+          <PageSkeleton header="none" label="Loading model workspaces" layout="grid" cards={3} />
         ) : models.length === 0 ? (
           <div className="rounded-xl border border-dashed border-port-border py-10 text-center text-sm text-gray-500">
             No procedural models yet.

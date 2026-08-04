@@ -377,7 +377,7 @@ export default function ToolsTab({ agentId, agent }) {
                     disabled={feedLoading}
                     className="px-3 py-1 text-sm bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30 disabled:opacity-50"
                   >
-                    {feedLoading ? 'Loading...' : 'Browse Feed'}
+                    {feedLoading ? <BrailleSpinner text="Loading" /> : 'Browse Feed'}
                   </button>
                   <button
                     onClick={handleFindRelevant}

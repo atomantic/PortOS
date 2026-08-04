@@ -12,6 +12,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { Loader2, Trophy, Swords, AlertTriangle } from 'lucide-react';
+import BrailleSpinner from '../BrailleSpinner';
 import { getComparativeRank, runComparativeRank } from '../../services/apiPipeline';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 
@@ -73,7 +74,7 @@ export default function ComparativeRankView({ seriesId, hasContent }) {
       </div>
 
       {loading ? (
-        <p className="text-xs text-gray-500 italic">Loading…</p>
+        <p className="text-xs"><BrailleSpinner text="Loading…" /></p>
       ) : status === 'insufficient' ? (
         <p className="text-xs text-gray-500 italic">
           Need at least two drafted issues to run a head-to-head ranking.

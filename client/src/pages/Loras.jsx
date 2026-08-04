@@ -10,6 +10,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router';
 import { Trash2, Download, ExternalLink, Sparkles, AlertTriangle, KeyRound, Check, X, RefreshCw, Wand2, Search } from 'lucide-react';
+import BrailleSpinner from '../components/BrailleSpinner';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
 import Banner from '../components/ui/Banner';
@@ -405,7 +407,7 @@ export default function Loras() {
           part of the video section. */}
       <div className="border-t border-port-border pt-6">
         <h2 className="text-lg font-semibold text-white mb-3">Installed</h2>
-        {loading && <div className="text-sm text-gray-500">Loading…</div>}
+        {loading && <PageSkeleton header="none" label="Loading installed LoRAs" layout="grid" cards={6} />}
         {error && (
           <Banner tone="error" size="md" icon={AlertTriangle} align="center">{error}</Banner>
         )}
@@ -789,8 +791,7 @@ function SuggestionsSection({ label, hint, cards, alwaysShow = false, runner = n
             disabled={loading}
             className="text-xs text-gray-300 hover:text-white px-4 py-1.5 rounded border border-port-border hover:border-port-accent/40 disabled:opacity-50 flex items-center gap-1.5"
           >
-            {loading ? <RefreshCw size={12} className="animate-spin" /> : <Download size={12} />}
-            {loading ? 'Loading…' : 'Load more'}
+            {loading ? <BrailleSpinner text="Loading…" /> : <><Download size={12} /> Load more</>}
           </button>
         </div>
       )}

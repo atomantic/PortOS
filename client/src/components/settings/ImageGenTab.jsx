@@ -1067,7 +1067,7 @@ export function ImageGenTab() {
                   disabled={agyModelsLoading}
                   className="text-xs text-port-accent hover:underline disabled:opacity-50"
                 >
-                  {agyModelsLoading ? 'Loading…' : 'Refresh models'}
+                  {agyModelsLoading ? <BrailleSpinner text="Loading…" /> : 'Refresh models'}
                 </button>
               </div>
               <input

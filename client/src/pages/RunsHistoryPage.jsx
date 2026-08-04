@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router';
 import { Trash2, RotateCcw, MessageSquarePlus, ScrollText } from 'lucide-react';
 import * as api from '../services/api';
 import { formatTime, formatRuntime, formatBytes, formatDateTime } from '../utils/formatters';
+import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import Banner from '../components/ui/Banner';
 import ProcessLogModal from '../components/ui/ProcessLogModal';
@@ -381,7 +382,7 @@ export function RunsHistoryPage() {
                         <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Prompt</div>
                         <div className="bg-port-card border border-port-border rounded-lg p-3 max-h-48 overflow-auto">
                           <pre className="text-sm text-gray-300 font-mono whitespace-pre-wrap break-all">
-                            {expandedDetails[run.id]?.prompt || run.prompt || 'Loading...'}
+                            {expandedDetails[run.id]?.prompt || run.prompt || <BrailleSpinner text="Loading prompt" />}
                           </pre>
                         </div>
                       </div>

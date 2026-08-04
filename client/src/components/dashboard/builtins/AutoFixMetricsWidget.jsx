@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import { Link } from 'react-router';
 import { Wrench, ArrowRight } from 'lucide-react';
+import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 import { formatDurationMs } from '../../../utils/formatters';
@@ -111,7 +112,7 @@ function AutoFixMetricsWidget() {
   );
 
   if (loading && !data) {
-    return shell(<div className="text-xs text-gray-500">Loading…</div>);
+    return shell(<div className="text-xs"><BrailleSpinner text="Loading" /></div>);
   }
 
   // Empty state — no diagnostics-bearing tasks yet. Distinct from a 0% rate.

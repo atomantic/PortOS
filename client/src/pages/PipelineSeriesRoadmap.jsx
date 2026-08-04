@@ -16,6 +16,7 @@ import { Link, useParams, useNavigate, useSearchParams } from 'react-router';
 import {
   ArrowLeft, Loader2, Sparkles, ChevronRight, ChevronDown, AlertTriangle, Crown, ChartSpline, Users, Swords,
 } from 'lucide-react';
+import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';
 import { ArcRoadmapChart } from '../components/pipeline/ArcCanvas';
 import ReaderPanelView from '../components/pipeline/ReaderPanelView';
@@ -148,7 +149,7 @@ function IssueRow({ entry, quality, onAnalyze, analyzing }) {
       {open && entry.analyzed ? (
         <div className="border-t border-port-border p-2.5">
           {loadingDetail ? (
-            <div className="text-xs text-gray-500 flex items-center gap-1.5"><Loader2 size={12} className="animate-spin" /> Loading…</div>
+            <div className="text-xs"><BrailleSpinner text="Loading…" /></div>
           ) : detail?.sections?.length ? (
             <ul className="space-y-1.5">
               {detail.sections.map((s, i) => <SectionRow key={s.id ?? `${s.title ?? 'section'}-${i}`} section={s} index={i} />)}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, Check, Clapperboard, FileSignature, MapPin, RotateCcw, Sparkles, Users } from 'lucide-react';
+import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
 import { listWritersRoomAnalyses, getWritersRoomAnalysis } from '../../services/apiWritersRoom';
 import { timeAgo } from '../../utils/formatters';
@@ -99,7 +100,7 @@ export default function AnalysisHistory({ work, activeHash, onApplyFormat }) {
               </button>
               {isOpen && (
                 <div className="border-t border-port-border bg-port-bg/40 p-2 space-y-2">
-                  {!full && <div className="text-gray-500">Loading…</div>}
+                  {!full && <BrailleSpinner text="Loading…" />}
                   {full?.status === 'failed' && (
                     <div className="text-port-error text-[11px] whitespace-pre-wrap">{full.error || 'Unknown error'}</div>
                   )}

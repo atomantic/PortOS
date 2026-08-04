@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { AlertTriangle, Info, Lock, Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import BrailleSpinner from '../BrailleSpinner';
 import Drawer from '../Drawer';
 import Banner from '../ui/Banner';
 import Pill from '../ui/Pill';
@@ -491,7 +492,7 @@ export default function AnimationTypesDrawer({ open, onClose }) {
         </div>
       );
     }
-    if (tracks === null) return <p className="text-sm text-gray-500">Loading…</p>;
+    if (tracks === null) return <p className="text-sm"><BrailleSpinner text="Loading…" /></p>;
 
     // A stale `?editTrack=` (a shared link to a type since deleted, or a typo) must
     // say so rather than silently falling through to the blank create form, which

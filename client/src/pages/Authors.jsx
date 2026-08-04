@@ -13,6 +13,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { FilePen, Plus, Loader2, Trash2, Save, Upload, ImageIcon, Sparkles, X } from 'lucide-react';
+import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
@@ -286,7 +287,7 @@ export default function Authors() {
       <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-4">
         <div className="bg-port-card border border-port-border rounded-lg p-2">
           {loading ? (
-            <div className="text-gray-500 text-sm p-2">Loading…</div>
+            <div className="text-sm p-2"><BrailleSpinner text="Loading…" /></div>
           ) : authors.length === 0 ? (
             <div className="text-gray-500 text-sm p-2">No authors yet. Click <span className="text-port-accent">New Author</span>.</div>
           ) : (

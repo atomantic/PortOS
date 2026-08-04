@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Download, Film, Loader2, Trash2, ExternalLink, Video } from 'lucide-react';
+import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { useVideoDownload, useConfirmDelete } from '../hooks';
@@ -107,9 +108,7 @@ export default function VideoDownloaderPage() {
       <section>
         <h2 className="text-sm font-semibold text-gray-300 mb-2">Downloaded ({downloads.length})</h2>
         {loading ? (
-          <p className="text-sm text-gray-500 flex items-center gap-2">
-            <Loader2 size={14} className="animate-spin" /> Loading…
-          </p>
+          <p className="text-sm"><BrailleSpinner text="Loading…" /></p>
         ) : downloads.length === 0 ? (
           <p className="text-sm text-gray-500">No videos downloaded yet.</p>
         ) : (

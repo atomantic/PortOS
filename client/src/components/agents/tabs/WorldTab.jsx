@@ -505,7 +505,7 @@ export default function WorldTab({ agentId }) {
                 disabled={statusLoading}
                 className="px-3 py-1 text-sm bg-port-border text-gray-300 rounded hover:bg-port-border/80 disabled:opacity-50"
               >
-                {statusLoading ? 'Loading...' : 'Refresh'}
+                {statusLoading ? <BrailleSpinner text="Loading" /> : 'Refresh'}
               </button>
             </div>
 
@@ -683,7 +683,7 @@ export default function WorldTab({ agentId }) {
             </div>
             {history.length === 0 ? (
               <p className="text-sm text-gray-500 text-center py-4">
-                {historyLoading ? 'Loading...' : 'No activity history yet'}
+                {historyLoading ? <BrailleSpinner text="Loading" /> : 'No activity history yet'}
               </p>
             ) : (
               <div className="space-y-1.5 max-h-[400px] overflow-y-auto">
@@ -717,7 +717,7 @@ export default function WorldTab({ agentId }) {
                     disabled={historyLoading}
                     className="w-full py-2 text-xs text-gray-400 hover:text-white bg-port-bg rounded disabled:opacity-50"
                   >
-                    {historyLoading ? 'Loading...' : 'Load More'}
+                    {historyLoading ? <BrailleSpinner text="Loading" /> : 'Load More'}
                   </button>
                 )}
               </div>

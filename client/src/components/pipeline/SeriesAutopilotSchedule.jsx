@@ -5,6 +5,7 @@ import { getProviders } from '../../services/apiProviders';
 import { getCosConfig } from '../../services/apiAgents';
 import { describeCron } from '../../utils/cronHelpers';
 import { providerDisplayName, assignmentModelOptions } from '../../utils/providers';
+import BrailleSpinner from '../BrailleSpinner';
 import CronInput from '../CronInput';
 import ProviderModelSelector from '../ProviderModelSelector';
 import toast from '../ui/Toast';
@@ -145,7 +146,7 @@ export default function SeriesAutopilotSchedule({ series }) {
       </div>
 
       {!loaded ? (
-        <p className="text-xs text-gray-500">Loading…</p>
+        <p className="text-xs"><BrailleSpinner text="Loading…" /></p>
       ) : (
         <>
           {/* Schedule time */}

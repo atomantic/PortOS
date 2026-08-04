@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Plus, Search } from 'lucide-react';
+import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
 import { listMediaCollections, createMediaCollection } from '../../services/api';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosition.js';
@@ -236,7 +237,7 @@ export default function CollectionPickerShell({
       )}
       <div className="flex-1 min-h-0 overflow-y-auto">
         {collectionsState == null && (
-          <div className="text-[11px] text-gray-500 px-2 py-2">Loading…</div>
+          <div className="text-[11px] px-2 py-2"><BrailleSpinner text="Loading…" /></div>
         )}
         {collectionsState != null && collectionsState.length === 0 && (
           <div className="text-[11px] text-gray-500 px-2 py-2">{emptyMessage}</div>

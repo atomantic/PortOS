@@ -1,5 +1,9 @@
 # Unreleased
 
+## Changed
+
+- **Every view that used to show a bare "Loading…" text node now uses the shared loading affordances.** ~35 views across Music, MeatSpace, Media, Pipeline, Sprites, Writers Room, Sync, Catalog and a dozen pages rendered unstyled text while fetching, which read as broken content rather than a deliberate loading state. Small inline loads (buttons, side lists, drawer subtitles, popover menus) now render `BrailleSpinner`; full-page and card-grid loads render `PageSkeleton`, which reserves the eventual content's dimensions so the first paint doesn't reflow and announces itself via `role="status"`/`aria-busy`. Several hand-rolled `Loader2 + animate-spin` one-offs collapsed onto the same two components, and the pipeline audio music-library panel lost its duplicate second spinner.
+
 ## Fixed
 
 - **Replaced a real Tailscale identity with placeholders across tracked files, and added a guard so it can't come back.** A real MagicDNS tailnet suffix, real device names, and a real CGNAT peer IP had been committed across server routes/lib, client lib, several test fixtures, two design-plan docs, and two released changelog entries — ~14 tracked files in a public repo. This violates the repo's own `CLAUDE.md` "Sensitive Data & Privacy" rule, which lists Tailscale node/MagicDNS names and Tailscale/LAN IPs as never-commit categories. Every occurrence is now an obviously-fake placeholder (`example-tailnet.ts.net`, `host-alpha`/`beta`/`gamma`/`delta`, a documented CGNAT test IP), preserving the two-host distinctness some tests relied on. A new `scripts/tailnet-identity-leak.test.js` enumerates *tracked* files via `git grep` and fails the moment a real-looking tailnet host or CGNAT address lands again — whether via a pasted log line, a doc example lifted from a live install, or a copy-pasted test fixture.

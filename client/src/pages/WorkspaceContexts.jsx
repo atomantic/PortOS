@@ -2,8 +2,9 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import {
   Layers, GitBranch, SquareTerminal, ListChecks, Save, RotateCcw,
-  Trash2, RefreshCw, FolderGit2, AlertCircle, CheckCircle2, ArrowRight
+  Trash2, FolderGit2, AlertCircle, CheckCircle2, ArrowRight
 } from 'lucide-react';
+import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { timeAgo } from '../utils/formatters';
@@ -67,7 +68,7 @@ function ContextDetail({ appId }) {
   }, { errorMessage: 'Failed to clear context' });
 
   if (loading) {
-    return <div className="text-gray-500 text-sm flex items-center gap-2"><RefreshCw size={14} className="animate-spin" /> Loading…</div>;
+    return <div className="text-sm"><BrailleSpinner text="Loading…" /></div>;
   }
   if (!ctx) return null;
 
@@ -208,7 +209,7 @@ function ContextList() {
   useEffect(() => { load(); }, [load]);
 
   if (loading) {
-    return <div className="text-gray-500 text-sm flex items-center gap-2"><RefreshCw size={14} className="animate-spin" /> Loading projects…</div>;
+    return <div className="text-sm"><BrailleSpinner text="Loading projects…" /></div>;
   }
 
   if (rows.length === 0) {

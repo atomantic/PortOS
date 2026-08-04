@@ -11,6 +11,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Plus, Palette, Trash2, ImageIcon, FileText } from 'lucide-react';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import { timeAgo } from '../utils/formatters';
@@ -83,7 +84,7 @@ export default function MoodBoards() {
       </p>
 
       {loading ? (
-        <div className="text-gray-400 text-sm py-8 text-center">Loading…</div>
+        <PageSkeleton header="none" label="Loading mood boards" cards={3} sidebar={false} />
       ) : boards.length === 0 ? (
         <div className="text-gray-400 text-sm py-12 text-center border border-dashed border-port-border rounded">
           No mood boards yet. Create one to start pinning references.

@@ -15,6 +15,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { Plus, Loader2, Trash2, Save, Upload, Music2, Library } from 'lucide-react';
+import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
 import FilePickerButton from '../ui/FilePickerButton';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
@@ -356,7 +357,7 @@ export default function TracksManager() {
       <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-4">
         <div className="bg-port-card border border-port-border rounded-lg p-2">
           {loading ? (
-            <div className="text-gray-500 text-sm p-2">Loading…</div>
+            <div className="text-sm p-2"><BrailleSpinner text="Loading…" /></div>
           ) : tracks.length === 0 ? (
             <div className="text-gray-500 text-sm p-2">No tracks yet. Click <span className="text-port-accent">New Track</span>.</div>
           ) : (

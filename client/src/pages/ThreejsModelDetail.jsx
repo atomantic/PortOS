@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router';
 import MediaImage from '../components/MediaImage';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import ThreejsModelPreview from '../components/threejsModels/ThreejsModelPreview';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import useProviderModels from '../hooks/useProviderModels';
 import {
@@ -120,7 +121,7 @@ export default function ThreejsModelDetail() {
     if (ok) navigate('/media/threejs');
   };
 
-  if (loading) return <div className="py-10 text-center text-sm text-gray-500">Loading…</div>;
+  if (loading) return <PageSkeleton label="Loading model" titleWidthClass="w-56" cards={2} sidebar={false} />;
   if (notFound || !record) {
     return (
       <div className="py-12 text-center">

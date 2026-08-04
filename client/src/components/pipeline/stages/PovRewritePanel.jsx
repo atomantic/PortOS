@@ -10,6 +10,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Sparkles, Trash2, ChevronDown, ChevronRight, Drama } from 'lucide-react';
+import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 import {
   getPipelinePerspectiveRewrites,
@@ -230,7 +231,7 @@ export default function PovRewritePanel({ issue, series }) {
       </div>
 
       {loading ? (
-        <div className="flex items-center gap-2 text-sm text-gray-500"><Loader2 size={14} className="animate-spin" /> Loading…</div>
+        <div className="text-sm"><BrailleSpinner text="Loading…" /></div>
       ) : (
         <>
           <div className="flex items-end gap-2 flex-wrap">

@@ -11,6 +11,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { ChevronRight, ChevronDown, Loader2 } from 'lucide-react';
+import BrailleSpinner from '../BrailleSpinner';
 import CatalogCard from './CatalogCard';
 
 export default function CatalogAlbum({
@@ -124,8 +125,8 @@ export default function CatalogAlbum({
       {expanded && (
         <div className="px-3 sm:px-4 pb-3 sm:pb-4">
           {loading ? (
-            <div className="flex items-center gap-2 text-sm text-gray-500 py-3">
-              <Loader2 size={14} className="animate-spin" /> Loading…
+            <div className="text-sm py-3">
+              <BrailleSpinner text="Loading…" />
             </div>
           ) : error ? (
             <div className="flex items-center gap-3 py-3">

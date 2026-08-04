@@ -7,6 +7,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Combine, Image as ImageIcon, Film, Search, X } from 'lucide-react';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import MediaCard from '../components/media/MediaCard';
 import MediaPreview from '../components/media/MediaPreview';
@@ -231,7 +232,7 @@ export default function MediaHistory() {
       </div>
 
       {loading ? (
-        <div className="text-gray-500 text-sm">Loading…</div>
+        <PageSkeleton header="none" label="Loading media history" layout="grid" cards={6} />
       ) : filtered.length === 0 ? (
         <div className="bg-port-card border border-port-border rounded-xl p-8 text-center text-gray-500 text-sm">
           {query.trim()

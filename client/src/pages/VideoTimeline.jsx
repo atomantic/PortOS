@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Plus, Film, Trash2, Clock } from 'lucide-react';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import { formatDurationSec } from '../utils/formatters';
@@ -86,9 +87,7 @@ export default function VideoTimeline() {
         </button>
       </form>
 
-      {loading && (
-        <div className="text-gray-500 text-sm">Loading…</div>
-      )}
+      {loading && <PageSkeleton header="none" label="Loading timeline projects" layout="grid" cards={3} />}
 
       {!loading && projects.length === 0 && (
         <div className="text-center py-12 text-gray-500">

@@ -1,5 +1,6 @@
 import { useMemo, useState, useCallback, useEffect } from 'react';
 import { ListOrdered, Image as ImageIcon, Film, Cpu, X, RefreshCw, ChevronDown, ChevronRight, Trash2, RotateCw, Zap, Pencil } from 'lucide-react';
+import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import { FormField } from '../ui/FormField';
@@ -188,7 +189,7 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
       </div>
 
       {loading ? (
-        <div className="text-port-text-muted text-xs">Loading…</div>
+        <div className="text-xs"><BrailleSpinner text="Loading…" /></div>
       ) : live.length === 0 && recent.length === 0 ? (
         <div className="text-port-text-muted text-xs">
           No {kind || 'media'} {kind === 'training' ? 'runs' : 'renders'} queued.

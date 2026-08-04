@@ -1,6 +1,7 @@
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
+import BrailleSpinner from '../BrailleSpinner';
 import useChartColors from '../../hooks/useChartColors.js';
 
 const CustomTooltip = ({ active, payload, label, colors }) => {
@@ -44,7 +45,7 @@ export default function SleepCard({ data = [], loading = false }) {
     <div className="bg-port-card border border-port-border rounded-xl p-6">
       <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-3">Sleep</h3>
       {loading ? (
-        <div className="flex items-center justify-center h-40 text-gray-600 text-sm">Loading...</div>
+        <div className="flex items-center justify-center h-40 text-sm"><BrailleSpinner text="Loading" /></div>
       ) : avg == null ? (
         <div className="flex items-center justify-center h-40 text-gray-600 text-sm">No sleep data available</div>
       ) : (
