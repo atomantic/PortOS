@@ -115,8 +115,14 @@ export async function createMemory(data, embedding = null) {
     );
 
     const mem = rowToMemory(result.rows[0]);
-    // Attach the original embedding array (pgvector may return string representation)
-    if (embedding) mem.embedding = embedding;
+    // Attach the original embedding array (pgvector may return string
+    // representation) — but ONLY when it was actually stored. A
+    // wrong-dimension embedding is dropped to NULL by embeddingColumns(), and
+    // echoing the rejected array back would tell the caller the record is
+    // embedded when it isn't (embedding_model is already NULL), hiding it from
+    // re-embed logic that gates on the returned value. Mirrors
+    // updateMemoryEmbedding().
+    mem.embedding = embeddingCol.value ? embedding : null;
     // Store related memories as links
     if (data.relatedMemories?.length > 0) {
       for (const relId of data.relatedMemories) {

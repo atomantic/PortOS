@@ -4,14 +4,16 @@ import { defineConfig } from 'vitest/config';
  * The DB-backed test files, relative to this config's root (server/). Exported
  * as the single source of truth: this config's `include` uses it, and the drift
  * guard in lib/db.guards.test.js imports it to assert no checkHealth()-gated
- * suite is left out. `**\/db.test.js` auto-covers the adapter round-trips; the
- * rest are listed explicitly.
+ * suite is left out. `**\/db.test.js` only matches a file named exactly
+ * `db.test.js` — a `<name>.db.test.js` suite is NOT auto-included and must be
+ * listed explicitly below (the drift guard fails the build if you forget).
  */
 export const DB_TEST_INCLUDE = [
   '**/db.test.js',
   'services/catalogDB.test.js',
   'services/catalogDB.facets.db.test.js',
   'services/humanActivity.db.test.js',
+  'services/memoryDB.db.test.js',
   'services/privacyVault.db.test.js',
   'services/privacyOrgs.db.test.js',
   'services/privacyChanges.db.test.js',
@@ -42,9 +44,10 @@ export const DB_TEST_INCLUDE = [
  * (PGDATABASE is unset → resolves to non-test `portos`). So `npm test` never
  * runs them; `npm run test:db` does, after `npm run setup:db:test`.
  *
- * Adding a new DB-backed test? If it's named `*.db.test.js` it's auto-included.
- * Otherwise add it to `include` below — db.guards.test.js fails if a checkHealth
- * consumer is left out.
+ * Adding a new DB-backed test? Add it to `DB_TEST_INCLUDE` above — the
+ * `*.db.test.js` naming convention is documentation, not a glob match, so a new
+ * suite silently never runs until it's listed. db.guards.test.js fails if a
+ * checkHealth consumer is left out.
  */
 export default defineConfig({
   test: {
