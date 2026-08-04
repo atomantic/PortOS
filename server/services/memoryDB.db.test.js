@@ -115,7 +115,8 @@ afterAll(async () => {
 
 describe.skipIf(!dbReady)('memoryDB CRUD (#3447)', () => {
   beforeAll(async () => {
-    if (dbReady) await resetMemories();
+    if (!dbReady) return;
+    await resetMemories();
   });
 
   it('round-trips a memory through create → peek, including the pgvector embedding', async () => {
@@ -181,6 +182,27 @@ describe.skipIf(!dbReady)('memoryDB CRUD (#3447)', () => {
     const missing = await memoryDB.getMemoryIdsMissingEmbedding();
     expect(missing).toBeInstanceOf(Set);
     expect(missing.has(created.id)).toBe(true);
+  });
+
+  it('backfills an embedding onto an existing memory, and applies the same dimension guard', async () => {
+    const mem = await memoryDB.createMemory({ type: 'fact', content: 'Awaiting an embedding.' });
+    expect((await memoryDB.getMemoryIdsMissingEmbedding()).has(mem.id)).toBe(true);
+
+    const embedded = await memoryDB.updateMemoryEmbedding(mem.id, VEC_A);
+    expect(embedded.embedding).toHaveLength(DIM);
+    expect(embedded.embeddingModel).toBe(DEFAULT_MEMORY_CONFIG.embeddingModel);
+    expect((await memoryDB.getMemoryIdsMissingEmbedding()).has(mem.id)).toBe(false);
+
+    // A wrong-dimension re-embed clears the column rather than throwing — the
+    // record goes back to being a backfill candidate.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cleared = await memoryDB.updateMemoryEmbedding(mem.id, [0.1, 0.2, 0.3]);
+    warn.mockRestore();
+    expect(cleared.embedding).toBeNull();
+    expect(cleared.embeddingModel).toBeNull();
+    expect((await memoryDB.getMemoryIdsMissingEmbedding()).has(mem.id)).toBe(true);
+
+    expect(await memoryDB.updateMemoryEmbedding('00000000-0000-4000-8000-00000000dead', VEC_A)).toBeNull();
   });
 
   it('getMemory bumps access stats and resolves linked memories', async () => {
