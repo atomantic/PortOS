@@ -188,6 +188,7 @@ export default function CreativeDirectorDetail() {
         padded
         bodyClassName="p-6"
         cards={3}
+        sidebar={false}
       />
     );
   }
