@@ -35,7 +35,7 @@
     "theme:check": "node scripts/check-themes.js",
     "smoke": "node scripts/smoke-boot.js"
   },
-  "devDependencies": {
+  "dependencies": {
     "pm2": "7.0.3"
   },
   "overrides": {
