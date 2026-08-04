@@ -5,6 +5,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import * as cos from '../services/cos.js';
+// Lifecycle transitions go through the facade (#3450), not the `cos.js` barrel.
+import * as agentOrchestrator from '../services/agentOrchestrator.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 
@@ -67,9 +69,11 @@ router.get('/agents/:id/prompt', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// POST /api/cos/agents/:id/terminate - Terminate agent (graceful SIGTERM, then SIGKILL)
+// POST /api/cos/agents/:id/terminate - Request termination (graceful SIGTERM, then SIGKILL)
+// This only emits `agent:terminate` and returns immediately; the spawner's
+// handler runs the actual SIGTERM/SIGKILL sequence.
 router.post('/agents/:id/terminate', asyncHandler(async (req, res) => {
-  const result = await cos.terminateAgent(req.params.id);
+  const result = await agentOrchestrator.requestAgentTermination(req.params.id);
   res.json(result);
 }));
 
@@ -78,7 +82,7 @@ router.post('/agents/:id/terminate', asyncHandler(async (req, res) => {
 // runner/persist step fails — so no result-shape string-matching here.
 router.post('/agents/:id/pause', asyncHandler(async (req, res) => {
   const { reason } = validateRequest(pauseBodySchema, req.body ?? {});
-  const result = await cos.pauseAgent(req.params.id, reason || null);
+  const result = await agentOrchestrator.pauseAgent(req.params.id, reason || null);
   res.json(result);
 }));
 
@@ -86,13 +90,13 @@ router.post('/agents/:id/pause', asyncHandler(async (req, res) => {
 // killAgent throws a ServerError — 404 when the agent is missing, 500 when the
 // runner termination fails — so no result-shape string-matching here.
 router.post('/agents/:id/kill', asyncHandler(async (req, res) => {
-  const result = await cos.killAgent(req.params.id);
+  const result = await agentOrchestrator.killAgent(req.params.id);
   res.json(result);
 }));
 
 // GET /api/cos/agents/:id/stats - Get process stats for agent (CPU, memory)
 router.get('/agents/:id/stats', asyncHandler(async (req, res) => {
-  const stats = await cos.getAgentProcessStats(req.params.id);
+  const stats = await agentOrchestrator.getAgentProcessStats(req.params.id);
   // Return success with active:false instead of 404 - this is expected when process isn't running
   res.json(stats || { active: false, pid: null });
 }));

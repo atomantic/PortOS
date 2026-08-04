@@ -18,7 +18,7 @@
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { dirname, join, relative, resolve } from 'path';
 import { staticImportSpecifiers } from '../lib/staticImportGraph.js';
 
 const SERVICES_DIR = dirname(fileURLToPath(import.meta.url));
@@ -39,6 +39,7 @@ const CLUSTER = [
   'agentSummaryExtraction.js',
   'agentRunnerSync.js',
   'agentRunnerOutputBatchers.js',
+  'agentOrchestrator.js',
 ];
 
 // The static-import scan itself lives in `server/lib/staticImportGraph.js` so
@@ -47,16 +48,36 @@ const CLUSTER = [
 // other). It matches static `import`/`export … from` and bare side-effect
 // imports only, never `await import()` (deferred to call time, so it can't
 // produce a load-time cycle) and never a specifier inside a comment.
+// Every non-test `.js` under SERVICES_DIR, keyed by its path relative to that
+// directory (`agentLifecycle.js`, `agentTuiSpawning/outputSpooler.js`). The
+// walk recurses: scanning only top-level files left a hole big enough to drive
+// the cycle back through, because a subdirectory module can import back up
+// (`agentTuiSpawning/outputSpooler.js` → `../cosAgents.js` is a live example),
+// so a cycle routed through one subdirectory hop was invisible to this guard.
+function listServiceFiles(dir = SERVICES_DIR, prefix = '') {
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) out.push(...listServiceFiles(join(dir, entry.name), rel));
+    else if (entry.name.endsWith('.js') && !entry.name.includes('.test.')) out.push(rel);
+  }
+  return out;
+}
+
 function buildStaticGraph() {
-  const files = readdirSync(SERVICES_DIR).filter(f => f.endsWith('.js') && !f.includes('.test.'));
+  const files = listServiceFiles();
   const known = new Set(files);
   const graph = new Map();
   for (const file of files) {
+    const abs = join(SERVICES_DIR, file);
     const deps = new Set();
-    for (const spec of staticImportSpecifiers(join(SERVICES_DIR, file))) {
-      // Same-directory siblings only — this guard is scoped to the services dir.
-      const sibling = spec.startsWith('./') ? spec.slice(2) : null;
-      if (sibling && known.has(sibling)) deps.add(sibling);
+    for (const spec of staticImportSpecifiers(abs)) {
+      if (!spec.startsWith('.')) continue;
+      // Resolve relative to the importing file, then re-key against SERVICES_DIR
+      // so `./x.js` from a subdirectory and `../x.js` from a sibling land on the
+      // same node. Anything resolving outside the services dir is out of scope.
+      const rel = relative(SERVICES_DIR, resolve(dirname(abs), spec));
+      if (known.has(rel)) deps.add(rel);
     }
     graph.set(file, [...deps]);
   }
@@ -101,6 +122,30 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
       const back = (graph.get(leaf) || []).filter(dep => orchestrators.includes(dep));
       expect(back, `${leaf} must not import ${back.join(', ')}`).toEqual([]);
     }
+  });
+
+  it('keeps the agentOrchestrator facade outside the cluster it fronts (#3450)', () => {
+    // The facade only stays a facade while its edges point one way: it imports
+    // the cluster, the cluster never imports it back. Checked against the SEVEN
+    // named modules rather than all of `server/services` on purpose — a service
+    // that is NOT in the cluster can import the facade without closing any loop,
+    // and forbidding that would freeze the remaining call-site migrations.
+    //
+    // Both forms are checked. The graph above is static-only (correct for cycle
+    // detection), but this cluster's established habit is to reach across a
+    // blocked layer with `await import()` — so a dynamic import of the facade
+    // from inside the cluster would violate the layering with the cycle walk
+    // fully green, which is the failure mode this module exists to end.
+    const CLUSTER_SEVEN = [
+      'cos.js', 'cosAgents.js', 'cosAgentLifecycle.js', 'agentManagement.js',
+      'agents.js', 'subAgentSpawner.js', 'agentLifecycle.js',
+    ];
+    const offenders = CLUSTER_SEVEN.filter(file => {
+      if ((graph.get(file) || []).includes('agentOrchestrator.js')) return true;
+      return /await import\(\s*['"]\.\/agentOrchestrator\.js['"]\s*\)/
+        .test(readFileSync(join(SERVICES_DIR, file), 'utf-8'));
+    });
+    expect(offenders, `agentOrchestrator.js must not be imported by ${offenders.join(', ')}`).toEqual([]);
   });
 
   it('no longer needs the dynamic-import workaround for handleOrphanedTask', () => {

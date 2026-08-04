@@ -29,10 +29,6 @@ vi.mock('../services/cos.js', () => ({
   getAgentDates: vi.fn(),
   getAgentsByDate: vi.fn(),
   getAgent: vi.fn(),
-  terminateAgent: vi.fn(),
-  pauseAgent: vi.fn(),
-  killAgent: vi.fn(),
-  getAgentProcessStats: vi.fn(),
   deleteAgent: vi.fn(),
   clearCompletedAgents: vi.fn(),
   submitAgentFeedback: vi.fn(),
@@ -51,6 +47,14 @@ vi.mock('../services/cos.js', () => ({
   getTodayActivity: vi.fn(),
   getWhileAwayActivity: vi.fn(),
   getRecentTasks: vi.fn()
+}));
+
+// Lifecycle transitions moved off `cos.js` onto the agentOrchestrator facade (#3450).
+vi.mock('../services/agentOrchestrator.js', () => ({
+  requestAgentTermination: vi.fn(),
+  pauseAgent: vi.fn(),
+  killAgent: vi.fn(),
+  getAgentProcessStats: vi.fn()
 }));
 
 // Mock the taskWatcher service
@@ -109,6 +113,7 @@ vi.mock('../services/codeReview.js', () => ({
 
 // Import mocked modules
 import * as cos from '../services/cos.js';
+import * as agentOrchestrator from '../services/agentOrchestrator.js';
 import * as taskWatcher from '../services/taskWatcher.js';
 import * as appActivity from '../services/appActivity.js';
 import * as claudeChangelog from '../services/claudeChangelog.js';
@@ -579,29 +584,29 @@ describe('CoS Routes', () => {
 
   describe('POST /api/cos/agents/:id/terminate', () => {
     it('should terminate agent', async () => {
-      cos.terminateAgent.mockResolvedValue({ success: true, agentId: 'agent-001' });
+      agentOrchestrator.requestAgentTermination.mockResolvedValue({ success: true, agentId: 'agent-001' });
 
       const response = await request(app).post('/api/cos/agents/agent-001/terminate');
 
       expect(response.status).toBe(200);
-      expect(cos.terminateAgent).toHaveBeenCalledWith('agent-001');
+      expect(agentOrchestrator.requestAgentTermination).toHaveBeenCalledWith('agent-001');
     });
   });
 
   describe('POST /api/cos/agents/:id/pause', () => {
     it('should pause agent with reason', async () => {
-      cos.pauseAgent.mockResolvedValue({ success: true, agentId: 'agent-001', pausedAt: '2026-05-25T12:00:00.000Z' });
+      agentOrchestrator.pauseAgent.mockResolvedValue({ success: true, agentId: 'agent-001', pausedAt: '2026-05-25T12:00:00.000Z' });
 
       const response = await request(app)
         .post('/api/cos/agents/agent-001/pause')
         .send({ reason: 'billing window' });
 
       expect(response.status).toBe(200);
-      expect(cos.pauseAgent).toHaveBeenCalledWith('agent-001', 'billing window');
+      expect(agentOrchestrator.pauseAgent).toHaveBeenCalledWith('agent-001', 'billing window');
     });
 
     it('should return 404 if agent not found', async () => {
-      cos.pauseAgent.mockRejectedValue(
+      agentOrchestrator.pauseAgent.mockRejectedValue(
         new ServerError('Agent not found or not running', { status: 404, code: 'NOT_FOUND' }),
       );
 
@@ -613,16 +618,16 @@ describe('CoS Routes', () => {
 
   describe('POST /api/cos/agents/:id/kill', () => {
     it('should force kill agent', async () => {
-      cos.killAgent.mockResolvedValue({ success: true, agentId: 'agent-001', signal: 'SIGKILL' });
+      agentOrchestrator.killAgent.mockResolvedValue({ success: true, agentId: 'agent-001', signal: 'SIGKILL' });
 
       const response = await request(app).post('/api/cos/agents/agent-001/kill');
 
       expect(response.status).toBe(200);
-      expect(cos.killAgent).toHaveBeenCalledWith('agent-001');
+      expect(agentOrchestrator.killAgent).toHaveBeenCalledWith('agent-001');
     });
 
     it('should return 404 if agent not found', async () => {
-      cos.killAgent.mockRejectedValue(
+      agentOrchestrator.killAgent.mockRejectedValue(
         new ServerError('Agent not found or not running', { status: 404, code: 'NOT_FOUND' }),
       );
 
@@ -634,7 +639,7 @@ describe('CoS Routes', () => {
 
   describe('GET /api/cos/agents/:id/stats', () => {
     it('should return agent process stats', async () => {
-      cos.getAgentProcessStats.mockResolvedValue({
+      agentOrchestrator.getAgentProcessStats.mockResolvedValue({
         active: true,
         pid: 12345,
         cpu: 5.2,
@@ -648,7 +653,7 @@ describe('CoS Routes', () => {
     });
 
     it('should return active:false if no stats available', async () => {
-      cos.getAgentProcessStats.mockResolvedValue(null);
+      agentOrchestrator.getAgentProcessStats.mockResolvedValue(null);
 
       const response = await request(app).get('/api/cos/agents/agent-999/stats');
 
