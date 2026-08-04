@@ -43,11 +43,17 @@ describe('root scripts run binaries from `dependencies`, not `devDependencies` (
     expect(packages.length).toBeGreaterThan(0);
   });
 
+  // Compared as key lists rather than via `toHaveProperty`, which reads a dot
+  // in the name as a path separator — `socket.io` would be checked as
+  // `dependencies.socket.io` and silently never match.
+  const dependencies = Object.keys(rootManifest.dependencies ?? {});
+  const devDependencies = Object.keys(rootManifest.devDependencies ?? {});
+
   it.each(packages)(
     '%s is a root `dependency` so it survives a production install',
     (pkg) => {
-      expect(rootManifest.dependencies ?? {}).toHaveProperty(pkg);
-      expect(rootManifest.devDependencies ?? {}).not.toHaveProperty(pkg);
+      expect(dependencies).toContain(pkg);
+      expect(devDependencies).not.toContain(pkg);
     }
   );
 });
