@@ -82,11 +82,20 @@ export const QUOTA_BURN_JOB_CATALOG = Object.freeze([
       { key: 'useWorktree', kind: 'boolean', label: 'Run in a worktree', default: true },
       { key: 'openPR', kind: 'boolean', label: 'Open a PR', default: true },
       { key: 'simplify', kind: 'boolean', label: 'Run /simplify', default: true },
-      // Worktree + no PR means AUTO-MERGE onto the source workspace's default
-      // branch (agentWorktreeCleanup.js). That is the right posture for a burn
-      // that is supposed to land code, and the wrong one for a job whose
-      // deliverable is filed issues — so the audit presets turn this on and the
-      // agent is told, by the spawner itself, not to commit at all.
+      // The two "this job does not land code" postures, which are NOT the same:
+      //
+      // `noCodeOutput` — the deliverable is something the agent DOES during the
+      //   run (files an issue, calls an endpoint). It needs no branch and no
+      //   isolation because it writes nothing, so it runs in the app's checkout
+      //   as-is; the prompt drops every commit/push/PR instruction.
+      // `discardWorktree` — the job DOES want a scratch checkout (it builds, it
+      //   runs tests, it edits to reason) but nothing it produces may land.
+      //   Without it, worktree + no PR means AUTO-MERGE onto the source
+      //   workspace's default branch (agentWorktreeCleanup.js).
+      //
+      // Either one forces `openPR`/`simplify` off in the job runner — both
+      // presuppose a diff to ship.
+      { key: 'noCodeOutput', kind: 'boolean', label: 'No code output (files issues / calls an API)', default: false },
       { key: 'discardWorktree', kind: 'boolean', label: 'Discard the worktree (nothing lands)', default: false },
     ]),
   },

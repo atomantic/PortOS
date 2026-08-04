@@ -23,26 +23,30 @@ import { QUOTA_BURN_JOB_TYPE } from './quotaBurnConfig.js';
 
 /** Params every audit preset sets, and why they differ from the job defaults. */
 const AUDIT_PARAMS = Object.freeze({
-  // Read-only work still gets an isolated checkout: an audit that wanders into
-  // an edit must not dirty (or switch the branch of) the primary working copy
-  // the user has open.
-  useWorktree: true,
-  // No code changes means no PR and nothing for /simplify to clean up. Leaving
-  // these on makes the agent hunt for a diff to ship and end the window
-  // confused.
+  // These jobs READ code and file issues — they never write a file, so there is
+  // nothing to isolate. Running in the app's own checkout, on whatever branch it
+  // is already on, is the honest shape: no branch is created, nothing is
+  // merged, and no worktree is left to clean up.
+  //
+  // This is deliberately NOT the worktree posture. `useWorktree` + `openPR:
+  // false` is the AUTO-MERGE posture — on success the agent's branch is merged
+  // onto the source workspace's default branch with no PR and no review — so
+  // isolating an audit "for safety" actually buys it a way to land code.
+  // Isolation would only earn its keep for an audit that had to build or run
+  // tests; those can still opt in via the job's `discardWorktree` checkbox.
+  useWorktree: false,
+  // The deliverable is what the agent DOES during the run (`gh issue create`),
+  // not a commit and not the completion sentinel. This is what strips every
+  // commit/push/PR instruction out of the prompt — including the one that would
+  // otherwise tell a no-worktree task to `/do:push` to the branch it is
+  // standing on, which here is the app's default branch.
+  noCodeOutput: true,
+  // Both presuppose a diff to ship. Leaving them on sends the agent hunting for
+  // one at the end of a window where there is none. (The job runner forces them
+  // off for a no-code job anyway — belt and braces, since a hand-edited plan
+  // reaches the runner without passing through this file.)
   openPR: false,
   simplify: false,
-  // The one that makes the two above SAFE. `useWorktree` + `openPR: false` is
-  // not "read-only" — it is the auto-merge posture: on success the worktree
-  // branch is merged straight onto the source workspace's default branch, with
-  // no PR and no review. Meanwhile the spawner's own instructions tell a
-  // worktree agent to commit and push. So an audit that decided one dead export
-  // was trivially removable would land that commit on a managed app's `main` at
-  // 3am. `discardWorktree` removes the worktree WITHOUT merging and swaps the
-  // spawner's guidance to "do not commit, push, or open a PR" — enforcing the
-  // preset's own instruction by isolation instead of by hoping the model obeys
-  // the prose.
-  discardWorktree: true,
 });
 
 /**
@@ -69,8 +73,10 @@ const auditContract = ({ labels, dedupeSearch }) => `
 4. **File each surviving finding as its own issue.** Write the body to a scratch
    file OUTSIDE the repository — \`BODY=$(mktemp)\` — then
    \`gh issue create --title "..." --body-file "$BODY" --label ...\`. Keep scratch
-   files out of the working tree — a run that ends dirty is indistinguishable
-   from one that edited code it was told not to touch. Suggested labels:
+   files out of the working tree: you are running in the repository's OWN
+   checkout, on the branch it is currently on — not a throwaway copy — so
+   anything you leave behind is left in the user's working tree. Suggested
+   labels:
    ${labels}. Run \`gh label list\` first and use only labels that exist. One
    problem per issue — never a bundle.
 5. **Bodies must be decision-complete**, in this shape:
@@ -92,8 +98,11 @@ const auditContract = ({ labels, dedupeSearch }) => `
    Report it in your final summary to the user, say it needs rotating, and file
    at most a location-free issue ("a committed credential needs rotating and
    purging from history — details in the run summary").
-8. **Change no code.** No commits, no branches, no pull requests. The deliverable
-   is the filed issues, and the run should end with a clean \`git status\`.
+8. **Change no code.** No edits, no commits, no branches, no pull requests, and
+   no \`git checkout\`/\`switch\` — you are standing in the user's live checkout of
+   this repository, so an edit or a branch change is felt immediately by whoever
+   is working in it. The deliverable is the filed issues, and the run must end
+   with the same \`git status\` and the same branch it started on.
 9. **Report at the end**: the slice you audited, each issue number and title, and
    anything you deliberately did not file and why.
 

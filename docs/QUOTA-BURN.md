@@ -77,20 +77,38 @@ Presets are **templates**: picking one COPIES its prompt into the job's own
 `params.prompt`, and nothing on disk points back at the preset id. So editing the
 text here never rewrites a configured job on any install (no migration needed) —
 and an improved prompt reaches an existing job only when the user re-picks it.
-They set `openPR: false` / `simplify: false` (there is no diff to ship),
-`useWorktree: true` (an audit must not dirty the primary checkout), and
-`discardWorktree: true` — which is what makes the first two safe. `useWorktree`
-with `openPR: false` is the **auto-merge** posture: `agentWorktreeCleanup.js`
-merges the agent branch onto the source workspace's default branch on success,
-and the spawner's own guidance tells a worktree agent to commit and push. So an
-audit that decided one dead export was trivially removable would land that commit
-on a managed app's `main`, unreviewed, at 3am. `discardWorktree` removes the
-worktree without merging and swaps the spawner's guidance to "do not commit,
-push, or open a PR" — enforcing the preset's instruction by isolation rather than
-by trusting the prose. It also carries `worktreeChangesExpected: false`, so a run
-that correctly changed nothing isn't failed by the idle-complete gate. The flag is
-a normal `agent-prompt` param, so a hand-written job can opt into the same posture
-(it defaults to `false`, preserving the land-code behavior).
+### The "lands no code" postures
+
+An `agent-prompt` job has two of them, and they are not the same thing:
+
+| Param | Means | Use when |
+| --- | --- | --- |
+| `noCodeOutput` | The deliverable is what the agent **does during the run** — files an issue, calls an endpoint. It needs no branch and no isolation because it writes nothing, so it runs in the app's own checkout on whatever branch that is. | The audit presets |
+| `discardWorktree` | The job **does** want a scratch checkout (it builds, runs tests, edits to reason) but nothing in it may land: the worktree is removed without merging. | A job that must run a build/test cycle |
+
+Either one forces `openPR`/`simplify` off in the runner (both presuppose a diff
+to ship, and an `openPR: true` that can never produce a PR makes the spawner
+report `pr-missing` and **retry**, burning up to five agent runs per window) and
+sets `worktreeChangesExpected: false`, so a run that correctly changed nothing
+isn't failed by the idle-complete gate. Both default to `false`, so a job meant
+to land code is unaffected.
+
+The audit presets take the **first** posture: `useWorktree: false` +
+`noCodeOutput: true` + `openPR: false` + `simplify: false`. Isolating a
+read-only audit would be worse, not better — `useWorktree: true` with
+`openPR: false` is the **auto-merge** posture (`agentWorktreeCleanup.js` merges
+the agent branch onto the source workspace's default branch on success), so
+"isolating for safety" hands the audit a way to land code. Writing nothing is
+the stronger guarantee, and `noCodeOutput` strips every commit/push/PR
+instruction from the prompt — including the Git Hygiene arm that would otherwise
+tell a **no-worktree** task to `/do:push` to the branch it is standing on, which
+for a task in the app's live checkout is its default branch. (That arm also
+covered the Creative Director agents, which run in the same shape.)
+
+The tradeoff: an audit runs in the user's working copy, so its prompt is
+explicit that it must leave the tree and the branch exactly as it found them.
+A job that genuinely needs to build or test should tick `discardWorktree`
+instead.
 
 Every numeric bound (windows, reserve, caps, entry limits) lives in
 `QUOTA_BURN_BOUNDS` in `server/lib/quotaBurnConfig.js`, read by the normalizer

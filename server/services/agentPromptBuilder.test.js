@@ -1659,6 +1659,21 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
       const prompt = await buildAgentPrompt(auditTask(), {}, '/r', wt, isTruthyMeta, { providerType: 'api' });
       assertActionOutput(prompt);
     });
+
+    it('a no-code task with NO worktree is never told to commit to the branch it is on', async () => {
+      // The dangerous shape: no worktree means the agent stands in the app's own
+      // checkout, on its default branch. Git Hygiene's fallback arm ("Commit and
+      // push using `/do:push`" + "Commit directly to the current branch") would
+      // aim a push straight at that branch — and for a task that changes no code,
+      // whatever it swept up would be the user's own uncommitted work.
+      const task = makeTask({ metadata: { noCodeOutput: true, useWorktree: false, openPR: false } });
+      const prompt = await buildAgentPrompt(task, {}, '/r', null, isTruthyMeta, { providerType: 'api' });
+      expect(prompt).toMatch(/## Completion \(No Code Output\)/);
+      expect(prompt).toMatch(/Do NOT commit, push, or open a PR/);
+      expect(prompt).not.toMatch(/Commit and push using/);
+      expect(prompt).not.toMatch(/Commit directly to the current branch/);
+      expect(prompt).not.toMatch(/Commit and push your changes/);
+    });
   });
 
   it('full (api) path suppresses the commit/push instructions in Instructions + Git Hygiene', async () => {

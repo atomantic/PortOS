@@ -79,6 +79,13 @@ export async function run({ params, job, family, candidate, context } = {}) {
   const { app, prompt, provider } = resolved;
 
   const label = job?.label?.trim() || 'quota-burn work';
+  // The two "lands no code" postures. `noCodeOutput` = the deliverable is an
+  // action performed during the run (a filed issue, an endpoint call), so the
+  // job needs no branch at all. `discardWorktree` = the job wants a scratch
+  // checkout but nothing in it may land. Either one means there is no diff to
+  // ship, which is what the coercions below rest on.
+  const discardsWorktree = params?.discardWorktree === true;
+  const landsNoCode = params?.noCodeOutput === true || discardsWorktree;
   const task = await addTask({
     description: `[Quota burn: ${family.id}] ${label} for ${app.name}`,
     app: app.id,
@@ -86,27 +93,29 @@ export async function run({ params, job, family, candidate, context } = {}) {
     provider: provider.id,
     model: job?.model || undefined,
     useWorktree: params?.useWorktree !== false,
-    // A discarding job can never produce a PR — the worktree is thrown away
-    // before anything is pushed. Leaving `openPR: true` on it (the param's
-    // default, one checkbox away) makes the spawner expect a PR that cannot
-    // exist: the run is downgraded to `pr-missing` and RETRIED, burning up to
-    // five agent runs of subscription quota per misconfigured job. Coerced here
-    // rather than only in the UI so a hand-edited plan can't reach that state.
-    openPR: params?.discardWorktree !== true && params?.openPR !== false,
-    simplify: params?.discardWorktree !== true && params?.simplify !== false,
-    // Opt-in throwaway posture for jobs whose deliverable is NOT code (the audit
-    // presets). Without it, `useWorktree + !openPR` auto-merges whatever the
-    // agent happened to commit onto the managed app's default branch, unreviewed
-    // — and a run that correctly changed nothing is judged a failure by the
-    // idle-complete gate, which expects a dirty tree.
-    discardWorktree: params?.discardWorktree === true,
-    worktreeChangesExpected: params?.discardWorktree !== true,
-    // Where the deliverable goes. A discarding burn job's output is whatever it
-    // did during the run (files an issue, calls an endpoint) — never a commit
-    // and never the completion sentinel, which is only the done-signal. Without
-    // this the prompt tells it "write your result to the sentinel", and an audit
-    // dutifully writes its findings into a file that is then thrown away.
-    noCodeOutput: params?.discardWorktree === true,
+    // A job that lands no code can never produce a PR. Leaving `openPR: true`
+    // on it (the param's default, one checkbox away) makes the spawner expect a
+    // PR that cannot exist: the run is downgraded to `pr-missing` and RETRIED,
+    // burning up to five agent runs of subscription quota per misconfigured job.
+    // `/simplify` reviews changed code ahead of a commit that never happens.
+    // Coerced here rather than only in the UI so a hand-edited plan can't reach
+    // that state.
+    openPR: !landsNoCode && params?.openPR !== false,
+    simplify: !landsNoCode && params?.simplify !== false,
+    // Scratch-checkout posture. Without it, `useWorktree + !openPR` auto-merges
+    // whatever the agent happened to commit onto the managed app's default
+    // branch, unreviewed.
+    discardWorktree: discardsWorktree,
+    // Where the deliverable goes: the action the agent takes DURING the run, not
+    // a commit and not the completion sentinel (which is only the done-signal).
+    // Without this the prompt tells it "write your result to the sentinel" — so
+    // an audit writes its findings into a file instead of filing anything — and,
+    // on a no-worktree job, tells it to `/do:push` to the branch it is standing
+    // on, which is the app's default branch.
+    noCodeOutput: landsNoCode,
+    // A run that correctly changed nothing must not be failed by the
+    // idle-complete gate, which otherwise requires a dirty tree.
+    worktreeChangesExpected: !landsNoCode,
     reviewLoop: false,
   }, 'internal');
 

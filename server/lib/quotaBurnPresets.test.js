@@ -48,19 +48,22 @@ describe('QUOTA_BURN_PROMPT_PRESETS', () => {
     expect(() => quotaBurnConfigUpdateSchema.parse(body)).not.toThrow();
   });
 
-  it('configures audit presets as read-only work that cannot land code', () => {
-    // These prompts file issues and change nothing. Leaving openPR/simplify on
-    // sends the agent hunting for a diff to ship at the end of a window where
-    // there is none — and `useWorktree` + `openPR: false` WITHOUT
-    // `discardWorktree` is the auto-merge posture: whatever the agent committed
-    // goes straight onto the managed app's default branch, unreviewed, while the
-    // spawner's own guidance is telling it to commit. `discardWorktree` is what
-    // makes the other two safe, so assert them together.
+  it('configures audit presets to read the app checkout in place and land nothing', () => {
+    // These prompts read code and file issues — they write no file, so they need
+    // no branch and no isolation. Asserted together because the combination is
+    // the safety property, not any one flag: `useWorktree: true` +
+    // `openPR: false` is the AUTO-MERGE posture (the agent's branch is merged
+    // onto the app's default branch on success, unreviewed), so "isolating an
+    // audit for safety" would actually hand it a way to land code.
+    // `noCodeOutput` is what strips every commit/push/PR instruction from the
+    // prompt — including the one that would otherwise tell a no-worktree task to
+    // `/do:push` to the branch it is standing on.
     for (const preset of QUOTA_BURN_PROMPT_PRESETS) {
+      expect(preset.params.useWorktree).toBe(false);
+      expect(preset.params.noCodeOutput).toBe(true);
       expect(preset.params.openPR).toBe(false);
       expect(preset.params.simplify).toBe(false);
-      expect(preset.params.useWorktree).toBe(true);
-      expect(preset.params.discardWorktree).toBe(true);
+      expect(preset.params.discardWorktree).toBeUndefined();
     }
   });
 
@@ -74,7 +77,10 @@ describe('QUOTA_BURN_PROMPT_PRESETS', () => {
       // An untracked scratch file makes the run's worktree undeletable, so the
       // burn strands one full checkout per window.
       expect(prompt).toMatch(/mktemp/);
-      expect(prompt).toMatch(/clean `git status`/);
+      // It runs in the user's live checkout, so "leave the tree as you found it"
+      // is about their working copy, not a throwaway one.
+      expect(prompt).toMatch(/live checkout/);
+      expect(prompt).toMatch(/same branch it started on/);
     }
   });
 

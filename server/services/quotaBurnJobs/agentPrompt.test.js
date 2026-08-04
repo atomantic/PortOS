@@ -89,6 +89,18 @@ describe('run', () => {
     expect(state.added[1].task).toMatchObject({ discardWorktree: true, worktreeChangesExpected: false });
   });
 
+  it('runs a no-code job in the app checkout with every commit path stripped', async () => {
+    // The audit-preset posture: no worktree (it writes nothing, so there is
+    // nothing to isolate — and worktree + no PR is the auto-merge posture), and
+    // `noCodeOutput` so the prompt neither routes the deliverable to the
+    // sentinel nor tells a no-worktree task to push to the branch it is on.
+    await run({ params: { appId: 'app-1', prompt: 'x', useWorktree: false, noCodeOutput: true }, job: { id: 'j4' }, family, candidate });
+    expect(state.added[0].task).toMatchObject({
+      useWorktree: false, noCodeOutput: true, discardWorktree: false,
+      openPR: false, simplify: false, worktreeChangesExpected: false,
+    });
+  });
+
   it('forces off the flags a discarded worktree makes impossible', async () => {
     // `openPR` defaults to true and sits one checkbox from `discardWorktree`.
     // The combination makes the spawner expect a PR that cannot exist (the
