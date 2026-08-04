@@ -507,3 +507,35 @@ describe('Apps sprint-ticket request races (#3437)', () => {
     expect(await screen.findByText('No tickets assigned to you in the current sprint')).toBeTruthy();
   });
 });
+
+describe('Apps sprint-ticket cache keying (#3437)', () => {
+  const JIRA_APP = {
+    ...APPS[0],
+    jira: { enabled: true, instanceId: 'jira-1', projectKey: 'EX', issueType: 'Task' }
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getApps.mockResolvedValue([JIRA_APP]);
+  });
+
+  it('refetches when the app is repointed at a different JIRA project', async () => {
+    api.getMySprintTickets.mockResolvedValue([]);
+    const user = userEvent.setup();
+    await renderApps();
+    const toggle = () => user.click(screen.getByRole('button', { name: /(Expand|Collapse) Example App details/ }));
+
+    await toggle();
+    await waitFor(() => expect(api.getMySprintTickets).toHaveBeenCalledTimes(1));
+    await toggle();   // collapse
+
+    // The app is edited elsewhere and the list refreshes with a new project key.
+    api.getApps.mockResolvedValue([{ ...JIRA_APP, jira: { ...JIRA_APP.jira, projectKey: 'OTHER' } }]);
+    const [, handleAppsChanged] = socket.on.mock.calls.find(([evt]) => evt === 'apps:changed');
+    await act(async () => { await handleAppsChanged(); });
+
+    await toggle();   // re-expand — the previous project's cache must not answer
+    await waitFor(() => expect(api.getMySprintTickets).toHaveBeenCalledTimes(2));
+    expect(api.getMySprintTickets).toHaveBeenLastCalledWith('jira-1', 'OTHER', { silent: true });
+  });
+});

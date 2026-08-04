@@ -123,6 +123,11 @@ export default function Apps() {
 
   const handleStandardize = (app) => startStandardize(app.id, app.name);
 
+  // Ticket state is keyed by app + JIRA target, not app id alone: editing an
+  // app's instance or project key must not serve the previous project's cached
+  // board (and must not be blocked from fetching by it).
+  const sprintKey = (app) => `${app.id}:${app.jira?.instanceId}:${app.jira?.projectKey}`;
+
   // A failed fetch must NOT be cached as `[]` — that read as "you have no
   // sprint tickets" and, because the `!jiraTickets[id]` guard was satisfied by
   // the cached empty array, never retried for the life of the page (#3437).
@@ -132,22 +137,23 @@ export default function Apps() {
   // one and overwrite a good board with its stale error (the pending-request
   // convention in client/src/CLAUDE.md).
   const loadSprintTickets = useCallback(async (app) => {
-    const generation = (ticketRequestsRef.current[app.id]?.generation || 0) + 1;
-    ticketRequestsRef.current[app.id] = { generation, active: true };
-    const isCurrent = () => ticketRequestsRef.current[app.id]?.generation === generation;
+    const key = sprintKey(app);
+    const generation = (ticketRequestsRef.current[key]?.generation || 0) + 1;
+    ticketRequestsRef.current[key] = { generation, active: true };
+    const isCurrent = () => ticketRequestsRef.current[key]?.generation === generation;
 
-    setLoadingTickets(prev => ({ ...prev, [app.id]: true }));
-    setTicketErrors(prev => ({ ...prev, [app.id]: null }));
+    setLoadingTickets(prev => ({ ...prev, [key]: true }));
+    setTicketErrors(prev => ({ ...prev, [key]: null }));
     const tickets = await api
       .getMySprintTickets(app.jira.instanceId, app.jira.projectKey, { silent: true })
       .catch(err => {
-        if (isCurrent()) setTicketErrors(prev => ({ ...prev, [app.id]: err?.message || 'Request failed' }));
+        if (isCurrent()) setTicketErrors(prev => ({ ...prev, [key]: err?.message || 'Request failed' }));
         return null;
       });
     if (!isCurrent()) return;   // superseded — the newer request owns the state
-    ticketRequestsRef.current[app.id].active = false;
-    if (Array.isArray(tickets)) setJiraTickets(prev => ({ ...prev, [app.id]: tickets }));
-    setLoadingTickets(prev => ({ ...prev, [app.id]: false }));
+    ticketRequestsRef.current[key].active = false;
+    if (Array.isArray(tickets)) setJiraTickets(prev => ({ ...prev, [key]: tickets }));
+    setLoadingTickets(prev => ({ ...prev, [key]: false }));
   }, []);
 
   const toggleExpand = (id) => {
@@ -158,7 +164,8 @@ export default function Apps() {
     if (!newExpandedId) return;
     const app = apps.find(a => a.id === newExpandedId);
     if (!app?.jira?.enabled || !app.jira.instanceId || !app.jira.projectKey) return;
-    if (!jiraTickets[id] && !ticketRequestsRef.current[id]?.active) loadSprintTickets(app);
+    const key = sprintKey(app);
+    if (!jiraTickets[key] && !ticketRequestsRef.current[key]?.active) loadSprintTickets(app);
   };
 
   // Archive/unarchive gate their success toast on a response, the way
@@ -606,16 +613,16 @@ export default function Apps() {
                         {app.jira.instanceId && app.jira.projectKey && (
                           <div className="mt-3">
                             <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">My Sprint Tickets</div>
-                            {loadingTickets[app.id] ? (
+                            {loadingTickets[sprintKey(app)] ? (
                               <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-400">
                                 <BrailleSpinner text="" />
                                 <span>Loading tickets...</span>
                               </div>
-                            ) : ticketErrors[app.id] ? (
+                            ) : ticketErrors[sprintKey(app)] ? (
                               <div className="flex flex-wrap items-center gap-3 px-3 py-2 bg-port-card border border-port-error/30 rounded-lg">
                                 <AlertTriangle size={16} aria-hidden="true" className="text-port-error shrink-0" />
                                 <span className="text-sm text-gray-300 min-w-0">
-                                  Couldn&apos;t load sprint tickets — {ticketErrors[app.id]}
+                                  Couldn&apos;t load sprint tickets — {ticketErrors[sprintKey(app)]}
                                 </span>
                                 <button
                                   onClick={() => loadSprintTickets(app)}
@@ -625,11 +632,11 @@ export default function Apps() {
                                   <RefreshCw size={14} aria-hidden="true" /> Retry
                                 </button>
                               </div>
-                            ) : jiraTickets[app.id]?.length > 0 ? (
+                            ) : jiraTickets[sprintKey(app)]?.length > 0 ? (
                               <KanbanBoard
-                                tickets={jiraTickets[app.id]}
+                                tickets={jiraTickets[sprintKey(app)]}
                                 instanceId={app.jira.instanceId}
-                                onTicketsChange={(updated) => setJiraTickets(prev => ({ ...prev, [app.id]: updated }))}
+                                onTicketsChange={(updated) => setJiraTickets(prev => ({ ...prev, [sprintKey(app)]: updated }))}
                                 appId={app.id}
                                 projectKey={app.jira.projectKey}
                                 boardId={app.jira.boardId}
