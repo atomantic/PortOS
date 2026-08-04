@@ -74,6 +74,20 @@ describe('run', () => {
     await run({ params: { appId: 'app-1', prompt: 'x', useWorktree: false, openPR: false, simplify: false }, job: { id: 'j1' }, family, candidate });
     expect(state.added[0].task).toMatchObject({ useWorktree: false, openPR: false, simplify: false });
   });
+
+  it('keeps the auto-merge posture unless the job explicitly discards its worktree', async () => {
+    // `useWorktree` + `openPR: false` merges the agent's branch onto the source
+    // workspace's default branch. That is intended for a burn meant to land
+    // code, so the default must not change — but a job that opts into
+    // `discardWorktree` must get it, or an audit's stray commit lands unreviewed.
+    await run({ params: { appId: 'app-1', prompt: 'x' }, job: { id: 'j1' }, family, candidate });
+    expect(state.added[0].task).toMatchObject({ discardWorktree: false, worktreeChangesExpected: true });
+
+    await run({ params: { appId: 'app-1', prompt: 'x', discardWorktree: true }, job: { id: 'j2' }, family, candidate });
+    // A run that correctly changed nothing must also not be judged a failure by
+    // the idle-complete gate, which otherwise requires a dirty tree.
+    expect(state.added[1].task).toMatchObject({ discardWorktree: true, worktreeChangesExpected: false });
+  });
 });
 
 describe('renderBurnPrompt', () => {

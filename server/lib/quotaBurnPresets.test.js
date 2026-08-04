@@ -48,14 +48,33 @@ describe('QUOTA_BURN_PROMPT_PRESETS', () => {
     expect(() => quotaBurnConfigUpdateSchema.parse(body)).not.toThrow();
   });
 
-  it('configures audit presets as read-only work', () => {
+  it('configures audit presets as read-only work that cannot land code', () => {
     // These prompts file issues and change nothing. Leaving openPR/simplify on
     // sends the agent hunting for a diff to ship at the end of a window where
-    // there is none.
+    // there is none — and `useWorktree` + `openPR: false` WITHOUT
+    // `discardWorktree` is the auto-merge posture: whatever the agent committed
+    // goes straight onto the managed app's default branch, unreviewed, while the
+    // spawner's own guidance is telling it to commit. `discardWorktree` is what
+    // makes the other two safe, so assert them together.
     for (const preset of QUOTA_BURN_PROMPT_PRESETS) {
       expect(preset.params.openPR).toBe(false);
       expect(preset.params.simplify).toBe(false);
       expect(preset.params.useWorktree).toBe(true);
+      expect(preset.params.discardWorktree).toBe(true);
+    }
+  });
+
+  it('tells the agent to keep secrets and scratch files out of what it publishes', () => {
+    for (const preset of QUOTA_BURN_PROMPT_PRESETS) {
+      const prompt = preset.params.prompt;
+      // An issue is world-readable the moment it is filed, and "quote the
+      // evidence" plus "find committed secrets" is exactly how one gets
+      // republished to a public repo by an unattended agent.
+      expect(prompt).toMatch(/Redact before you publish/);
+      // An untracked scratch file makes the run's worktree undeletable, so the
+      // burn strands one full checkout per window.
+      expect(prompt).toMatch(/mktemp/);
+      expect(prompt).toMatch(/clean `git status`/);
     }
   });
 

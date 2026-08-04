@@ -32,6 +32,17 @@ const AUDIT_PARAMS = Object.freeze({
   // confused.
   openPR: false,
   simplify: false,
+  // The one that makes the two above SAFE. `useWorktree` + `openPR: false` is
+  // not "read-only" — it is the auto-merge posture: on success the worktree
+  // branch is merged straight onto the source workspace's default branch, with
+  // no PR and no review. Meanwhile the spawner's own instructions tell a
+  // worktree agent to commit and push. So an audit that decided one dead export
+  // was trivially removable would land that commit on a managed app's `main` at
+  // 3am. `discardWorktree` removes the worktree WITHOUT merging and swaps the
+  // spawner's guidance to "do not commit, push, or open a PR" — enforcing the
+  // preset's own instruction by isolation instead of by hoping the model obeys
+  // the prose.
+  discardWorktree: true,
 });
 
 /**
@@ -55,10 +66,13 @@ const auditContract = ({ labels, dedupeSearch }) => `
    \`gh issue list --state open --limit 200 --search "${dedupeSearch}"\` (and a
    plain keyword search per finding). If it is already filed, skip it; comment on
    the existing issue only when you have genuinely new evidence.
-4. **File each surviving finding as its own issue.** Use
-   \`gh issue create --title "..." --body-file <file> --label ...\`. Suggested
-   labels: ${labels}. Run \`gh label list\` first and use only labels that exist.
-   One problem per issue — never a bundle.
+4. **File each surviving finding as its own issue.** Write the body to a scratch
+   file OUTSIDE the repository — \`BODY=$(mktemp)\` — then
+   \`gh issue create --title "..." --body-file "$BODY" --label ...\`. Never write
+   scratch files into the working tree: an untracked leftover makes the run's
+   worktree undeletable, so one is stranded on disk per burn. Suggested labels:
+   ${labels}. Run \`gh label list\` first and use only labels that exist. One
+   problem per issue — never a bundle.
 5. **Bodies must be decision-complete**, in this shape:
    - **Problem** — what is wrong, with file:line references.
    - **Impact** — the user-visible consequence, not the code smell.
@@ -69,16 +83,23 @@ const auditContract = ({ labels, dedupeSearch }) => `
 6. **Cap yourself at 5 issues.** A handful of well-evidenced, ready-to-work
    issues is worth more than a wall of nits, and a long tail of low-value issues
    costs a human real triage time. Fewer than 5 real problems? File fewer.
-7. **Change no code.** No commits, no branches, no pull requests. The deliverable
-   is the filed issues.
-8. **Report at the end**: the slice you audited, each issue number and title, and
+7. **Redact before you publish.** An issue is world-readable the moment it is
+   filed. Never paste a secret, credential, token, hostname, IP address, absolute
+   path containing a username, or any personal record into a title or body — cite
+   the location and redact the value (\`<token>\`, \`<hostname>\`, \`<user-email>\`).
+   This applies even when the value IS the finding: "\`config/dev.js:42\` commits a
+   live API key" is the report; the key itself never appears.
+8. **Change no code.** No commits, no branches, no pull requests. The deliverable
+   is the filed issues, and the run should end with a clean \`git status\`.
+9. **Report at the end**: the slice you audited, each issue number and title, and
    anything you deliberately did not file and why.
 
 If \`gh\` cannot reach the network (errors like "bad file descriptor" or a
 connect timeout), do not give up silently — fall back to the REST API with the
 token from the local keyring:
-\`TOK=$(command gh auth token)\` then
-\`curl -sS -H "Authorization: Bearer $TOK" -H "Accept: application/vnd.github+json" -d @body.json https://api.github.com/repos/<owner>/<repo>/issues\`.
+\`TOK=$(command gh auth token)\` then, with the payload in a \`mktemp\` file outside
+the repo,
+\`curl -sS -H "Authorization: Bearer $TOK" -H "Accept: application/vnd.github+json" -d @"$PAYLOAD" https://api.github.com/repos/<owner>/<repo>/issues\`.
 A window spent finding real problems and filing none is a wasted window.
 
 Read this repository's \`CLAUDE.md\` (and any nested per-directory ones covering

@@ -6,7 +6,7 @@
  * work — so the move controls are part of the configuration, not a convenience.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowDown, ArrowUp, Play, Trash2 } from 'lucide-react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
@@ -33,6 +33,12 @@ export default function JobRow({
   // when there is already prompt text, so picking one never silently discards a
   // prompt the user wrote by hand.
   const [pendingPreset, setPendingPreset] = useState(null);
+  // Disarm the run confirm the moment the page has unsaved (or stalled) edits.
+  // The confirm asks "spend now?" about the SAVED plan, so an edit invalidates
+  // the question — and the alternative (leaving the pair on screen with both
+  // buttons disabled, since `busy` disables Cancel too) strands an armed
+  // confirm the user cannot dismiss when a save has stopped retrying.
+  useEffect(() => { if (actionsBusy) setRunArmed(false); }, [actionsBusy]);
   const spec = catalog.jobTypes.find((type) => type.id === job.jobType);
   const idPrefix = `burn-job-${job.id}`;
   const setParam = (key, value) => onChange({ ...job, params: { ...job.params, [key]: value } });
@@ -73,7 +79,6 @@ export default function JobRow({
               confirmIcon={Play}
               cancelText="Cancel"
               tone="warning"
-              busy={actionsBusy}
               ariaLabel={`Confirm running step ${index + 1} now`}
               onConfirm={() => { setRunArmed(false); onRun(job); }}
               onCancel={() => setRunArmed(false)}
@@ -127,7 +132,11 @@ export default function JobRow({
           id={`${idPrefix}-preset`}
           label="Start from a preset (optional)"
           presets={catalog.presets}
-          jobType={job.jobType}
+          // Deliberately NOT filtered to this row's current job type. Filtering
+          // hid the control entirely on a non-agent row, so converting an
+          // existing step into an audit meant deleting and re-adding it — and
+          // the conversion is safe: params carry across the type switch and
+          // existing prompt text is confirmed before it is replaced.
           hint="Fills the work prompt below with a ready-made single-focus audit that files issues and changes no code."
           onPick={(preset) => (hasPromptText ? setPendingPreset(preset) : applyPreset(preset))}
         />

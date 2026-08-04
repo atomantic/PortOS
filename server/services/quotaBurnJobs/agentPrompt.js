@@ -88,6 +88,13 @@ export async function run({ params, job, family, candidate, context } = {}) {
     useWorktree: params?.useWorktree !== false,
     openPR: params?.openPR !== false,
     simplify: params?.simplify !== false,
+    // Opt-in throwaway posture for jobs whose deliverable is NOT code (the audit
+    // presets). Without it, `useWorktree + !openPR` auto-merges whatever the
+    // agent happened to commit onto the managed app's default branch, unreviewed
+    // — and a run that correctly changed nothing is judged a failure by the
+    // idle-complete gate, which expects a dirty tree.
+    discardWorktree: params?.discardWorktree === true,
+    worktreeChangesExpected: params?.discardWorktree !== true,
     reviewLoop: false,
   }, 'internal');
 

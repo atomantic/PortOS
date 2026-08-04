@@ -77,8 +77,20 @@ Presets are **templates**: picking one COPIES its prompt into the job's own
 `params.prompt`, and nothing on disk points back at the preset id. So editing the
 text here never rewrites a configured job on any install (no migration needed) —
 and an improved prompt reaches an existing job only when the user re-picks it.
-They set `openPR: false` / `simplify: false` (there is no diff to ship) and
-`useWorktree: true` (an audit must not dirty the primary checkout).
+They set `openPR: false` / `simplify: false` (there is no diff to ship),
+`useWorktree: true` (an audit must not dirty the primary checkout), and
+`discardWorktree: true` — which is what makes the first two safe. `useWorktree`
+with `openPR: false` is the **auto-merge** posture: `agentWorktreeCleanup.js`
+merges the agent branch onto the source workspace's default branch on success,
+and the spawner's own guidance tells a worktree agent to commit and push. So an
+audit that decided one dead export was trivially removable would land that commit
+on a managed app's `main`, unreviewed, at 3am. `discardWorktree` removes the
+worktree without merging and swaps the spawner's guidance to "do not commit,
+push, or open a PR" — enforcing the preset's instruction by isolation rather than
+by trusting the prose. It also carries `worktreeChangesExpected: false`, so a run
+that correctly changed nothing isn't failed by the idle-complete gate. The flag is
+a normal `agent-prompt` param, so a hand-written job can opt into the same posture
+(it defaults to `false`, preserving the land-code behavior).
 
 Every numeric bound (windows, reserve, caps, entry limits) lives in
 `QUOTA_BURN_BOUNDS` in `server/lib/quotaBurnConfig.js`, read by the normalizer

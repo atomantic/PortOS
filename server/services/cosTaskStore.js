@@ -290,6 +290,16 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     }
     if (taskData.simplify === true) metadata.simplify = true;
     else if (taskData.simplify === false) metadata.simplify = false;
+    // Throwaway-worktree posture. Only the raw path could set this before, so a
+    // non-raw caller that wanted "reason/report, never land code" had no way to
+    // ask for it and silently got the auto-merge default instead. `false` is not
+    // persisted — absent already means "normal posture", and writing it would
+    // stamp the key onto every task that never opted in.
+    if (taskData.discardWorktree === true) metadata.discardWorktree = true;
+    // Whether a clean tree at the end is success (issue-filing, reasoning) or a
+    // failure (code work). Both booleans are meaningful, so persist either.
+    if (taskData.worktreeChangesExpected === true) metadata.worktreeChangesExpected = true;
+    else if (taskData.worktreeChangesExpected === false) metadata.worktreeChangesExpected = false;
     if (taskData.reviewLoop === true) metadata.reviewLoop = true;
     else if (taskData.reviewLoop === false) metadata.reviewLoop = false;
     // Ordered multi-reviewer list (normalizes legacy single `reviewer` too).

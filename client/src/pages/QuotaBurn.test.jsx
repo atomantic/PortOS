@@ -55,7 +55,7 @@ const catalog = {
     label: 'UX issues',
     summary: 'Audit the UI and file issues.',
     jobType: 'agent-prompt',
-    params: { prompt: 'Audit the UI. File issues. Change no code.', useWorktree: true, openPR: false, simplify: false },
+    params: { prompt: 'Audit the UI. File issues. Change no code.', useWorktree: true, openPR: false, simplify: false, discardWorktree: true },
   }],
   apps: [{ id: 'a1', name: 'App One' }],
   universes: [{ id: 'u1', name: 'Example Universe' }],
@@ -125,8 +125,11 @@ describe('QuotaBurn page', () => {
     expect(added.jobType).toBe('agent-prompt');
     expect(added.label).toBe('UX issues');
     expect(added.params.prompt).toContain('File issues');
-    // Read-only audit work: no PR to open and no diff for /simplify to clean.
+    // Read-only audit work: no PR to open, no diff for /simplify to clean, and
+    // the worktree discarded so a stray commit can't auto-merge onto the managed
+    // app's default branch.
     expect(added.params.openPR).toBe(false);
+    expect(added.params.discardWorktree).toBe(true);
   });
 
   it('asks before a preset overwrites a work prompt the user already wrote', async () => {
