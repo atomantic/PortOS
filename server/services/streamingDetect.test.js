@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { detectGodotNativeLaunch, parseEcosystemConfig, rewriteEcosystemPorts, rewriteEcosystemPortsByProcess, writeEcosystemPorts, writeEcosystemPortsByProcess, writeEcosystemPortEdits, DESKTOP_TYPES, NON_PM2_TYPES } from './streamingDetect.js';
+import { detectGodotNativeLaunch, parseEcosystemConfig, resolveViteConfigPortForProcess, rewriteEcosystemPorts, rewriteEcosystemPortsByProcess, writeEcosystemPorts, writeEcosystemPortsByProcess, writeEcosystemPortEdits, DESKTOP_TYPES, NON_PM2_TYPES } from './streamingDetect.js';
 
 describe('detectGodotNativeLaunch', () => {
   let dir;
@@ -957,6 +957,57 @@ module.exports = { apps: [
 //
 // The assertion lives HERE, not in a client test, and the direction matters: the
 // client module is dependency-free so a server test can import it, whereas
+describe('resolveViteConfigPortForProcess', () => {
+  let dir;
+  afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); dir = null; });
+
+  const writeViteConfig = (relDir, name, body) => {
+    mkdirSync(join(dir, relDir), { recursive: true });
+    writeFileSync(join(dir, relDir, name), body);
+  };
+
+  it('reads the port out of the vite config in the process cwd', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'vite-port-'));
+    writeViteConfig('client', 'vite.config.js', 'export default { server: { port: 5174 } };\n');
+
+    expect(await resolveViteConfigPortForProcess(dir, { usesVite: true, cwd: 'client' })).toBe(5174);
+  });
+
+  it('prefers vite.config.ts over vite.config.js', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'vite-port-'));
+    writeViteConfig('client', 'vite.config.ts', 'export default { server: { port: 4001 } };\n');
+    writeViteConfig('client', 'vite.config.js', 'export default { server: { port: 4002 } };\n');
+
+    expect(await resolveViteConfigPortForProcess(dir, { usesVite: true, cwd: 'client' })).toBe(4001);
+  });
+
+  it('falls through to the next candidate when the first declares no port', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'vite-port-'));
+    writeViteConfig('client', 'vite.config.ts', 'export default { plugins: [] };\n');
+    writeViteConfig('client', 'vite.config.js', 'export default { server: { port: 4002 } };\n');
+
+    expect(await resolveViteConfigPortForProcess(dir, { usesVite: true, cwd: 'client' })).toBe(4002);
+  });
+
+  it('returns null when the process is not a port-less vite process', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'vite-port-'));
+    writeViteConfig('client', 'vite.config.ts', 'export default { server: { port: 4001 } };\n');
+
+    // Not a vite process, already has a port, or has no cwd to look in.
+    expect(await resolveViteConfigPortForProcess(dir, { usesVite: false, cwd: 'client' })).toBeNull();
+    expect(await resolveViteConfigPortForProcess(dir, { usesVite: true, port: 3000, cwd: 'client' })).toBeNull();
+    expect(await resolveViteConfigPortForProcess(dir, { usesVite: true })).toBeNull();
+    expect(await resolveViteConfigPortForProcess(dir, null)).toBeNull();
+  });
+
+  it('returns null when no vite config exists in the cwd', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'vite-port-'));
+    mkdirSync(join(dir, 'client'), { recursive: true });
+
+    expect(await resolveViteConfigPortForProcess(dir, { usesVite: true, cwd: 'client' })).toBeNull();
+  });
+});
+
 // streamingDetect.js reaches `pm2.js` → the `pm2` package, which does not
 // resolve from the client workspace in CI (only via root hoisting locally). A
 // client-side version of this test therefore passes on a dev machine and fails

@@ -451,6 +451,35 @@ function extractVitePort(content) {
   return portMatch ? parseInt(portMatch[1], 10) : null;
 }
 
+/** vite config filenames probed inside a PM2 process's `cwd`, in probe order. */
+const VITE_CONFIG_FILENAMES = ['vite.config.ts', 'vite.config.js'];
+
+/**
+ * Resolve the dev-server port for a single parsed PM2 process by reading the
+ * vite config in its `cwd`, relative to the app root `dirPath`.
+ *
+ * Only applies to a process that runs Vite and carries no port of its own — any
+ * other process resolves to `null` so callers can assign unconditionally. The
+ * first config file that yields a port wins; an unreadable file is treated as
+ * empty (no port) and the next candidate is probed.
+ *
+ * @param {string} dirPath - app root the process's `cwd` is relative to
+ * @param {{ usesVite?: boolean, port?: number|null, cwd?: string }} proc
+ * @returns {Promise<number|null>} the resolved port, or null when none applies
+ */
+export async function resolveViteConfigPortForProcess(dirPath, proc) {
+  if (!proc?.usesVite || proc.port || !proc.cwd) return null;
+  const cwdPath = join(dirPath, proc.cwd);
+  for (const viteConfig of VITE_CONFIG_FILENAMES) {
+    const viteConfigPath = join(cwdPath, viteConfig);
+    if (!existsSync(viteConfigPath)) continue;
+    const viteContent = await readFile(viteConfigPath, 'utf-8').catch(() => '');
+    const port = extractVitePort(viteContent);
+    if (port) return port;
+  }
+  return null;
+}
+
 /**
  * Parse ecosystem config from a directory path (non-streaming, for refresh)
  * Also checks vite.config files in subdirectories for processes that use Vite
@@ -465,20 +494,8 @@ export async function parseEcosystemFromPath(dirPath) {
 
       // For processes that use vite and don't have a port, check their cwd for vite.config
       for (const proc of processes) {
-        if (proc.usesVite && !proc.port && proc.cwd) {
-          const cwdPath = join(dirPath, proc.cwd);
-          for (const viteConfig of ['vite.config.ts', 'vite.config.js']) {
-            const viteConfigPath = join(cwdPath, viteConfig);
-            if (existsSync(viteConfigPath)) {
-              const viteContent = await readFile(viteConfigPath, 'utf-8').catch(() => '');
-              const port = extractVitePort(viteContent);
-              if (port) {
-                proc.port = port;
-                break;
-              }
-            }
-          }
-        }
+        const vitePort = await resolveViteConfigPortForProcess(dirPath, proc);
+        if (vitePort) proc.port = vitePort;
         // Clean up internal properties before returning
         delete proc.cwd;
         delete proc.usesVite;
@@ -1225,7 +1242,7 @@ export async function streamDetection(socket, dirPath) {
   }
 
   // Check ecosystem.config.js/cjs for PM2 configuration
-  for (const ecosystemFile of ['ecosystem.config.js', 'ecosystem.config.cjs']) {
+  for (const ecosystemFile of ECOSYSTEM_CONFIG_FILENAMES) {
     const ecosystemPath = join(dirPath, ecosystemFile);
     if (existsSync(ecosystemPath)) {
       const content = await readFile(ecosystemPath, 'utf-8').catch(() => '');
@@ -1238,24 +1255,12 @@ export async function streamDetection(socket, dirPath) {
         if (parsedProcesses.length > 0) {
           // For processes that use vite and don't have a port, check their cwd for vite.config
           for (const proc of parsedProcesses) {
-            if (proc.usesVite && !proc.port && proc.cwd) {
-              const cwdPath = join(dirPath, proc.cwd);
-              for (const viteConfig of ['vite.config.ts', 'vite.config.js']) {
-                const viteConfigPath = join(cwdPath, viteConfig);
-                if (existsSync(viteConfigPath)) {
-                  const viteContent = await readFile(viteConfigPath, 'utf-8').catch(() => '');
-                  const port = extractVitePort(viteContent);
-                  if (port) {
-                    proc.port = port;
-                    break;
-                  }
-                }
-              }
-            }
+            const vitePort = await resolveViteConfigPortForProcess(dirPath, proc);
+            if (vitePort) proc.port = vitePort;
             // Clean up internal properties
             delete proc.cwd;
             delete proc.usesVite;
-              }
+          }
 
           result.processes = parsedProcesses;
           result.pm2ProcessNames = parsedProcesses.map(p => p.name);
