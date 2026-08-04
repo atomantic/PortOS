@@ -28,15 +28,26 @@ const SELF_PATHSPEC = ':!scripts/tailnet-identity-leak.test.js';
 
 /**
  * Real Tailscale MagicDNS tailnet suffixes are auto-generated as the literal
- * `tail` prefix followed by a short lowercase alphanumeric token that always
- * contains at least one digit (this is the exact shape of the value that
- * leaked). Every placeholder already used across this codebase for a fake
- * tailnet host (`tailnet`, `tailwind`-shaped words, `tail-net`, `my-machine`,
- * `example`, `host-example`, `example-tailnet`, …) is a human-chosen word
- * with no digit in the "tail…" segment, so this pattern flags a real-looking
- * suffix without tripping on any existing fake one.
+ * `tail` prefix followed by a short lowercase alphanumeric token.
+ *
+ * Deliberately NOT gated on "the token contains a digit". The value that
+ * leaked happened to have one, but Tailscale picks the token at random from
+ * lowercase alphanumerics — nothing stops it from being all letters, so a
+ * digit gate leaves `device.tailabcxyz.ts.net` (a perfectly real hostname)
+ * passing silently. Instead this matches the shape and subtracts the fake
+ * suffixes by exact name below, which fails closed: a placeholder style
+ * nobody has allowlisted yet trips the guard and gets looked at, rather than
+ * a real hostname slipping through because it lacks a digit.
  */
-const REAL_TAILNET_SUFFIX_SOURCE = '\\btail(?=[a-z0-9]*[0-9])[a-z0-9]{3,8}\\.ts\\.net';
+const REAL_TAILNET_SUFFIX_SOURCE = '\\btail[a-z0-9]{2,10}\\.ts\\.net';
+const REAL_TAILNET_SUFFIX_RE = /\btail([a-z0-9]{2,10})\.ts\.net/gi;
+
+/**
+ * Human-chosen fake tailnet suffixes already used across this repo's tests and
+ * docs, matched on the token that follows `tail`. Add to this list when you
+ * introduce a new placeholder — never widen the pattern above.
+ */
+const ALLOWED_TAILNET_TOKENS = new Set(['net', 'network', 'scale']);
 
 /**
  * 100.64.0.0/10 is Tailscale's CGNAT range. Every address in this range that
@@ -75,22 +86,36 @@ function gitGrepLines(patternSource) {
   }
 }
 
+/**
+ * Every `tail<token>.ts.net` occurrence in `text` whose token is not a known
+ * placeholder — i.e. the ones that look like a real auto-generated suffix.
+ */
+function realTailnetOffenders(text) {
+  return [...text.matchAll(REAL_TAILNET_SUFFIX_RE)]
+    .filter(([, token]) => !ALLOWED_TAILNET_TOKENS.has(token.toLowerCase()))
+    .map(([match]) => match);
+}
+
 describe('no real Tailscale identity in tracked files (see CLAUDE.md Sensitive Data & Privacy)', () => {
   it('detector matches a real-shaped tailnet suffix and not existing placeholders (self-check)', () => {
-    const re = new RegExp(REAL_TAILNET_SUFFIX_SOURCE, 'i');
-    // A synthetic value shaped like a real auto-generated Tailscale suffix
-    // (never an observed real one) — proves the detector actually fires.
-    expect(re.test('device.tail9f00c2.ts.net')).toBe(true);
+    // Synthetic values shaped like real auto-generated Tailscale suffixes
+    // (never observed real ones) — proves the detector actually fires.
+    expect(realTailnetOffenders('device.tail9f00c2.ts.net')).toHaveLength(1);
+    // An all-letters token is just as real: Tailscale picks the token from
+    // lowercase alphanumerics, so a digit is not guaranteed. This is the case
+    // a digit-gated pattern would silently let through.
+    expect(realTailnetOffenders('device.tailabcxyz.ts.net')).toHaveLength(1);
     // Every placeholder style already used in this repo must NOT trip it.
-    expect(re.test('host-alpha.example-tailnet.ts.net')).toBe(false);
-    expect(re.test('host.tailnet.ts.net')).toBe(false);
-    expect(re.test('my-machine.ts.net')).toBe(false);
-    expect(re.test('box.tail-net.ts.net')).toBe(false);
+    expect(realTailnetOffenders('host-alpha.example-tailnet.ts.net')).toEqual([]);
+    expect(realTailnetOffenders('host.tailnet.ts.net')).toEqual([]);
+    expect(realTailnetOffenders('my-machine.ts.net')).toEqual([]);
+    expect(realTailnetOffenders('box.tail-net.ts.net')).toEqual([]);
   });
 
-  it('finds no real-looking tail<digits>.ts.net MagicDNS suffix in tracked files', () => {
-    const hits = gitGrepLines(REAL_TAILNET_SUFFIX_SOURCE);
-    expect(hits, hits.join('\n')).toEqual([]);
+  it('finds no real-looking tail*.ts.net MagicDNS suffix in tracked files', () => {
+    const offenders = gitGrepLines(REAL_TAILNET_SUFFIX_SOURCE)
+      .filter((line) => realTailnetOffenders(line).length > 0);
+    expect(offenders, offenders.join('\n')).toEqual([]);
   });
 
   it('finds no un-allowlisted Tailscale CGNAT (100.64.0.0/10) address in tracked files', () => {
