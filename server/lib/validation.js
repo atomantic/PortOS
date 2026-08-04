@@ -1154,6 +1154,52 @@ export const settingsEmbeddingsSchema = z.object({
   model: z.string().trim().max(200).optional().nullable(),
 }).strict();
 
+// =============================================================================
+// LM STUDIO (server/routes/lmstudio.js)
+// =============================================================================
+
+// PUT /api/lmstudio/config — persisted straight into module-level state
+// (lmStudioManager's `config`) that every other LM Studio call site reads via
+// getBaseUrl(). A malformed baseUrl must be rejected up front rather than
+// degrading local-LLM connectivity until the process restarts.
+export const lmStudioConfigSchema = z.object({
+  baseUrl: z.string().trim().url().optional(),
+  timeout: z.number().int().positive().optional(),
+  defaultThinkingModel: z.string().trim().min(1).optional(),
+});
+
+// Shared by /download, /load, /unload — each acts on a single model id.
+export const lmStudioModelIdSchema = z.object({
+  modelId: z.string().trim().min(1),
+});
+
+// POST /api/lmstudio/completion
+export const lmStudioCompletionSchema = z.object({
+  prompt: z.string().min(1),
+  model: z.string().trim().min(1).optional(),
+  maxTokens: z.number().int().positive().optional(),
+  temperature: z.number().min(0).max(2).optional(),
+  systemPrompt: z.string().optional(),
+});
+
+// POST /api/lmstudio/analyze-task
+export const lmStudioAnalyzeTaskSchema = z.object({
+  description: z.string().min(1),
+  id: z.string().optional(),
+  metadata: z.record(z.any()).optional(),
+});
+
+// POST /api/lmstudio/classify-memory
+export const lmStudioClassifyMemorySchema = z.object({
+  content: z.string().min(1),
+});
+
+// POST /api/lmstudio/embeddings
+export const lmStudioEmbeddingsSchema = z.object({
+  text: z.string().min(1),
+  model: z.string().trim().min(1).optional(),
+});
+
 // Subscription creation: persistent (bucket, record) tuple. Series + universe
 // are the subscribable kinds (records that change over time and benefit from
 // auto-re-export). Media is one-shot via /buckets/:id/export.

@@ -270,109 +270,120 @@ export function initSocket(io) {
 
     // Handle log streaming requests
     socket.on('logs:subscribe', async (rawData) => {
-      const data = validateSocketData(logsSubscribeSchema, rawData, socket, 'logs:subscribe');
-      if (!data) return;
-      const { processName, lines, appId } = data;
-      const key = streamKey(socket.id, processName);
+      // Declared outside the try so the catch can echo it back: the client's
+      // logs:error listener filters on processName, so an error emitted
+      // without it is silently dropped and the log panel just hangs.
+      let processName;
+      try {
+        const data = validateSocketData(logsSubscribeSchema, rawData, socket, 'logs:subscribe');
+        if (!data) return;
+        let lines, appId;
+        ({ processName, lines, appId } = data);
+        const key = streamKey(socket.id, processName);
 
-      // Clean up only this process's existing stream, then claim this request.
-      // Claiming AFTER the cleanup bump is what makes this generation current.
-      cleanupStream(key);
-      const generation = bumpStreamGeneration(key);
+        // Clean up only this process's existing stream, then claim this request.
+        // Claiming AFTER the cleanup bump is what makes this generation current.
+        cleanupStream(key);
+        const generation = bumpStreamGeneration(key);
 
-      // Resolve the app's custom PM2_HOME so the stream tails the home its
-      // processes actually run in. appId remains the disambiguating fast path;
-      // legacy callers without it fall back to the process-name registry lookup.
-      // This runs outside the Express lifecycle, so a lookup failure must not
-      // throw — fall back to the default home.
-      let pm2Home = null;
-      if (appId) {
-        pm2Home = await getAppById(appId)
-          .then(app => app?.pm2Home || null)
-          .catch(err => {
-            console.error(`❌ logs:subscribe could not resolve app ${appId}: ${err.message}`);
-            return null;
+        // Resolve the app's custom PM2_HOME so the stream tails the home its
+        // processes actually run in. appId remains the disambiguating fast path;
+        // legacy callers without it fall back to the process-name registry lookup.
+        // This runs outside the Express lifecycle, so a lookup failure must not
+        // throw — fall back to the default home.
+        let pm2Home = null;
+        if (appId) {
+          pm2Home = await getAppById(appId)
+            .then(app => app?.pm2Home || null)
+            .catch(err => {
+              console.error(`❌ logs:subscribe could not resolve app ${appId}: ${err.message}`);
+              return null;
+            });
+        } else {
+          pm2Home = await resolvePm2HomeForProcess(processName)
+            .catch(err => {
+              console.error(`❌ logs:subscribe could not resolve ${processName}: ${err.message}`);
+              return null;
+            });
+        }
+
+        // The await above yields, so a disconnect, an unsubscribe, or a newer
+        // subscribe may have landed in the meantime. Bail if this socket is gone
+        // rather than spawning an orphan `pm2 logs` nothing will ever clean up.
+        if (socket.disconnected) return;
+        // Superseded or cancelled while the lookup was in flight. Covers both the
+        // unsubscribe (slot left empty) and the two-overlapping-subscribes cases
+        // that a bare `activeStreams.has()` check gets wrong in opposite directions.
+        if (streamGenerations.get(key) !== generation) return;
+
+        console.log(`📜 Log stream started: ${processName} (${lines} lines)`);
+
+        // Spawn pm2 logs with --raw flag
+        // buildEnv(null) is the default-home case, so this is unconditional —
+        // matching every other buildEnv call site in pm2.js.
+        const logProcess = spawnPm2(
+          ['logs', processName, '--raw', '--lines', String(lines)],
+          { env: buildEnv(pm2Home) }
+        );
+
+        activeStreams.set(key, { process: logProcess, processName });
+
+        let buffer = '';
+
+        logProcess.stdout.on('data', (data) => {
+          buffer += data.toString();
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          lines.forEach(line => {
+            if (line.trim()) {
+              socket.emit('logs:line', {
+                line,
+                type: 'stdout',
+                timestamp: Date.now(),
+                processName
+              });
+            }
           });
-      } else {
-        pm2Home = await resolvePm2HomeForProcess(processName)
-          .catch(err => {
-            console.error(`❌ logs:subscribe could not resolve ${processName}: ${err.message}`);
-            return null;
+        });
+
+        logProcess.stderr.on('data', (data) => {
+          buffer += data.toString();
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          lines.forEach(line => {
+            if (line.trim()) {
+              socket.emit('logs:line', {
+                line,
+                type: 'stderr',
+                timestamp: Date.now(),
+                processName
+              });
+            }
           });
+        });
+
+        logProcess.on('error', (err) => {
+          socket.emit('logs:error', { error: err.message, processName });
+        });
+
+        logProcess.on('close', (code) => {
+          // A SIGTERM'd predecessor's `close` fires asynchronously — after the
+          // replacement stream has already registered — so an unscoped
+          // `activeStreams.delete` here would unregister the LIVE stream and leak
+          // it (no later cleanupStream would find it to kill), while `logs:close`
+          // would tell the client the stream it is watching had ended.
+          if (activeStreams.get(key)?.process !== logProcess) return;
+          socket.emit('logs:close', { code, processName });
+          activeStreams.delete(key);
+          streamGenerations.delete(key);
+        });
+
+        socket.emit('logs:subscribed', { processName, timestamp: Date.now() });
+      } catch (err) {
+        const message = err?.message ?? String(err);
+        console.error(`❌ Socket handler error [logs:subscribe]: ${message}`);
+        socket.emit('logs:error', { error: message, processName });
       }
-
-      // The await above yields, so a disconnect, an unsubscribe, or a newer
-      // subscribe may have landed in the meantime. Bail if this socket is gone
-      // rather than spawning an orphan `pm2 logs` nothing will ever clean up.
-      if (socket.disconnected) return;
-      // Superseded or cancelled while the lookup was in flight. Covers both the
-      // unsubscribe (slot left empty) and the two-overlapping-subscribes cases
-      // that a bare `activeStreams.has()` check gets wrong in opposite directions.
-      if (streamGenerations.get(key) !== generation) return;
-
-      console.log(`📜 Log stream started: ${processName} (${lines} lines)`);
-
-      // Spawn pm2 logs with --raw flag
-      // buildEnv(null) is the default-home case, so this is unconditional —
-      // matching every other buildEnv call site in pm2.js.
-      const logProcess = spawnPm2(
-        ['logs', processName, '--raw', '--lines', String(lines)],
-        { env: buildEnv(pm2Home) }
-      );
-
-      activeStreams.set(key, { process: logProcess, processName });
-
-      let buffer = '';
-
-      logProcess.stdout.on('data', (data) => {
-        buffer += data.toString();
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        lines.forEach(line => {
-          if (line.trim()) {
-            socket.emit('logs:line', {
-              line,
-              type: 'stdout',
-              timestamp: Date.now(),
-              processName
-            });
-          }
-        });
-      });
-
-      logProcess.stderr.on('data', (data) => {
-        buffer += data.toString();
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        lines.forEach(line => {
-          if (line.trim()) {
-            socket.emit('logs:line', {
-              line,
-              type: 'stderr',
-              timestamp: Date.now(),
-              processName
-            });
-          }
-        });
-      });
-
-      logProcess.on('error', (err) => {
-        socket.emit('logs:error', { error: err.message, processName });
-      });
-
-      logProcess.on('close', (code) => {
-        // A SIGTERM'd predecessor's `close` fires asynchronously — after the
-        // replacement stream has already registered — so an unscoped
-        // `activeStreams.delete` here would unregister the LIVE stream and leak
-        // it (no later cleanupStream would find it to kill), while `logs:close`
-        // would tell the client the stream it is watching had ended.
-        if (activeStreams.get(key)?.process !== logProcess) return;
-        socket.emit('logs:close', { code, processName });
-        activeStreams.delete(key);
-        streamGenerations.delete(key);
-      });
-
-      socket.emit('logs:subscribed', { processName, timestamp: Date.now() });
     });
 
     // Handle unsubscribe

@@ -451,6 +451,24 @@ describe('socket.js — initSocket', () => {
       expect(opts.env.PM2_HOME).toBe('/opt/example/.pm2');
     });
 
+    // The handler's try/catch exists so a synchronous throw can't become a
+    // process-killing unhandled rejection. But the client's logs:error
+    // listener (client/src/hooks/useProcessLogs.js) drops any event whose
+    // processName doesn't match the panel's, so an error emitted without it
+    // is invisible and the panel just hangs — the failure the catch was
+    // added to prevent, in a quieter form.
+    it('reports the failing process name when the log stream throws', async () => {
+      const socket = makeSocket('logs-spawn-throws');
+      io.connect(socket);
+      vi.mocked(spawnPm2).mockImplementationOnce(() => { throw new Error('pm2 missing'); });
+
+      await socket.handlers['logs:subscribe']({ processName: 'game', lines: 100 });
+
+      const err = socket.emitted.find(([event]) => event === 'logs:error');
+      expect(err).toBeDefined();
+      expect(err[1]).toEqual({ error: 'pm2 missing', processName: 'game' });
+    });
+
     it('falls back to the default home for an app with no custom home', async () => {
       const socket = makeSocket('logs-no-custom-home');
       io.connect(socket);

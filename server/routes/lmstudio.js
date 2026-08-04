@@ -8,6 +8,15 @@ import { Router } from 'express'
 import * as lmStudioManager from '../services/lmStudioManager.js'
 import * as localThinking from '../services/localThinking.js'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
+import {
+  validateRequest,
+  lmStudioConfigSchema,
+  lmStudioModelIdSchema,
+  lmStudioCompletionSchema,
+  lmStudioAnalyzeTaskSchema,
+  lmStudioClassifyMemorySchema,
+  lmStudioEmbeddingsSchema
+} from '../lib/validation.js'
 
 const router = Router()
 
@@ -52,11 +61,7 @@ router.get('/models', asyncHandler(async (req, res) => {
  * Download a model by ID
  */
 router.post('/download', asyncHandler(async (req, res) => {
-  const { modelId } = req.body
-
-  if (!modelId) {
-    throw new ServerError('modelId is required', { status: 400 })
-  }
+  const { modelId } = validateRequest(lmStudioModelIdSchema, req.body)
 
   const result = await lmStudioManager.downloadModel(modelId)
   res.json(result)
@@ -67,11 +72,7 @@ router.post('/download', asyncHandler(async (req, res) => {
  * Load a model into memory
  */
 router.post('/load', asyncHandler(async (req, res) => {
-  const { modelId } = req.body
-
-  if (!modelId) {
-    throw new ServerError('modelId is required', { status: 400 })
-  }
+  const { modelId } = validateRequest(lmStudioModelIdSchema, req.body)
 
   const result = await lmStudioManager.loadModel(modelId)
   res.json(result)
@@ -82,11 +83,7 @@ router.post('/load', asyncHandler(async (req, res) => {
  * Unload a model from memory
  */
 router.post('/unload', asyncHandler(async (req, res) => {
-  const { modelId } = req.body
-
-  if (!modelId) {
-    throw new ServerError('modelId is required', { status: 400 })
-  }
+  const { modelId } = validateRequest(lmStudioModelIdSchema, req.body)
 
   const result = await lmStudioManager.unloadModel(modelId)
   res.json(result)
@@ -97,11 +94,7 @@ router.post('/unload', asyncHandler(async (req, res) => {
  * Quick completion using local model
  */
 router.post('/completion', asyncHandler(async (req, res) => {
-  const { prompt, model, maxTokens, temperature, systemPrompt } = req.body
-
-  if (!prompt) {
-    throw new ServerError('prompt is required', { status: 400 })
-  }
+  const { prompt, model, maxTokens, temperature, systemPrompt } = validateRequest(lmStudioCompletionSchema, req.body)
 
   const result = await lmStudioManager.quickCompletion(prompt, {
     model,
@@ -118,11 +111,7 @@ router.post('/completion', asyncHandler(async (req, res) => {
  * Analyze a task for complexity and escalation needs
  */
 router.post('/analyze-task', asyncHandler(async (req, res) => {
-  const { description, id, metadata } = req.body
-
-  if (!description) {
-    throw new ServerError('description is required', { status: 400 })
-  }
+  const { description, id, metadata } = validateRequest(lmStudioAnalyzeTaskSchema, req.body)
 
   const analysis = await localThinking.analyzeTask({
     id,
@@ -138,11 +127,7 @@ router.post('/analyze-task', asyncHandler(async (req, res) => {
  * Classify memory content
  */
 router.post('/classify-memory', asyncHandler(async (req, res) => {
-  const { content } = req.body
-
-  if (!content) {
-    throw new ServerError('content is required', { status: 400 })
-  }
+  const { content } = validateRequest(lmStudioClassifyMemorySchema, req.body)
 
   const classification = await localThinking.classifyMemory(content)
   res.json(classification)
@@ -153,11 +138,7 @@ router.post('/classify-memory', asyncHandler(async (req, res) => {
  * Get embeddings for text
  */
 router.post('/embeddings', asyncHandler(async (req, res) => {
-  const { text, model } = req.body
-
-  if (!text) {
-    throw new ServerError('text is required', { status: 400 })
-  }
+  const { text, model } = validateRequest(lmStudioEmbeddingsSchema, req.body)
 
   const result = await lmStudioManager.getEmbeddings(text, { model })
   res.json(result)
@@ -168,7 +149,7 @@ router.post('/embeddings', asyncHandler(async (req, res) => {
  * Update LM Studio configuration
  */
 router.put('/config', asyncHandler(async (req, res) => {
-  const { baseUrl, timeout, defaultThinkingModel } = req.body
+  const { baseUrl, timeout, defaultThinkingModel } = validateRequest(lmStudioConfigSchema, req.body)
 
   const config = lmStudioManager.updateConfig({
     baseUrl,

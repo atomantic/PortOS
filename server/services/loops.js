@@ -9,7 +9,7 @@
 
 import { EventEmitter } from 'events';
 import { join } from 'path';
-import { PATHS, ensureDir, atomicWrite } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, atomicWrite, tryReadFile } from '../lib/fileUtils.js';
 import { randomUUID } from 'crypto';
 import { createRun } from './runner.js';
 import { resolveProviderAndModel, runPromptThroughProvider } from '../lib/promptRunner.js';
@@ -46,8 +46,7 @@ function formatInterval(ms) {
 let loopsTail = Promise.resolve();
 
 async function loadLoops() {
-  const { readFile } = await import('fs/promises');
-  const raw = await readFile(LOOPS_FILE, 'utf-8').catch(() => null);
+  const raw = await tryReadFile(LOOPS_FILE);
   if (raw === null) return [];
   try {
     return JSON.parse(raw);

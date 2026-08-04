@@ -77,7 +77,7 @@
 
 import { readFile, writeFile, rm, readdir, stat } from 'fs/promises';
 import { join } from 'path';
-import { PATHS } from '../lib/fileUtils.js';
+import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 
 const MARKER_VERSION = 1;
 const MARKER_FILENAME = 'legacy-prune.applied.json';
@@ -309,7 +309,7 @@ async function pathExists(p) {
 }
 
 async function readJson(base, file) {
-  const raw = await readFile(join(base, file), 'utf-8').catch(() => null);
+  const raw = await tryReadFile(join(base, file));
   if (!raw) return null;
   try { return JSON.parse(raw); } catch { return null; }
 }

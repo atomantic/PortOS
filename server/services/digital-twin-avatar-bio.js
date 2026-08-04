@@ -14,8 +14,6 @@
  *     the deterministic draft into first-person, avatar-ready prose.
  */
 
-import { readFile } from 'fs/promises';
-import { existsSync } from 'fs';
 import { join } from 'path';
 import { DIGITAL_TWIN_DIR, callProviderAI } from './digital-twin-helpers.js';
 import { loadMeta } from './digital-twin-meta.js';
@@ -23,6 +21,7 @@ import { getTraits } from './digital-twin-analysis.js';
 import { getGoals } from './identity.js';
 import { getProviderById } from './providers.js';
 import { estimateTokens } from '../lib/contextBudget.js';
+import { tryReadFile } from '../lib/fileUtils.js';
 
 // Bio length presets. `blurb` is a single paragraph per section (avatar persona
 // fields are often short); `persona` is the balanced default; `knowledge` keeps
@@ -32,8 +31,7 @@ export const DEFAULT_AVATAR_BIO_LENGTH = 'persona';
 
 async function readDoc(filename) {
   const filePath = join(DIGITAL_TWIN_DIR, filename);
-  if (!existsSync(filePath)) return null;
-  return readFile(filePath, 'utf-8').catch(() => null);
+  return tryReadFile(filePath);
 }
 
 /**

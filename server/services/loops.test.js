@@ -40,8 +40,7 @@ vi.mock('./providers.js', () => ({
   getActiveProvider: vi.fn(),
 }));
 
-import { readFile } from 'fs/promises';
-import { atomicWrite } from '../lib/fileUtils.js';
+import { tryReadFile, atomicWrite } from '../lib/fileUtils.js';
 import { createRun } from './runner.js';
 import { runPromptThroughProvider, resolveProviderAndModel } from '../lib/promptRunner.js';
 import {
@@ -82,7 +81,7 @@ function setupProviderMocks() {
 
 describe('loops.js', () => {
   // Track IDs of loops created in each test so afterEach can stop them reliably.
-  // getLoops() reads from the mocked readFile (which stays '[]'), so we cannot
+  // getLoops() reads from the mocked tryReadFile (which stays '[]'), so we cannot
   // rely on it to discover active loops; instead we intercept atomicWrite.
   let createdLoopIds = [];
 
@@ -91,7 +90,7 @@ describe('loops.js', () => {
     vi.useFakeTimers();
     createdLoopIds = [];
     // Default: file has no saved loops
-    readFile.mockResolvedValue('[]');
+    tryReadFile.mockResolvedValue('[]');
     atomicWrite.mockImplementation((_path, data) => {
       try {
         // atomicWrite receives the data object directly (not JSON string)
@@ -181,9 +180,9 @@ describe('loops.js', () => {
       });
 
       // Capture the loop data that was written to disk
-      // atomicWrite receives the data object directly; stringify it for readFile mock
+      // atomicWrite receives the data object directly; stringify it for tryReadFile mock
       const savedBefore = atomicWrite.mock.calls[0][1];
-      readFile.mockResolvedValue(JSON.stringify(savedBefore));
+      tryReadFile.mockResolvedValue(JSON.stringify(savedBefore));
 
       await stopLoop(loop.id);
 
@@ -202,9 +201,9 @@ describe('loops.js', () => {
         runImmediately: false
       });
 
-      // atomicWrite receives the data object directly; stringify it for readFile mock
+      // atomicWrite receives the data object directly; stringify it for tryReadFile mock
       const savedBefore = atomicWrite.mock.calls[0][1];
-      readFile.mockResolvedValue(JSON.stringify(savedBefore));
+      tryReadFile.mockResolvedValue(JSON.stringify(savedBefore));
 
       const emitted = [];
       loopEvents.on('stopped', (data) => emitted.push(data));
@@ -232,16 +231,16 @@ describe('loops.js', () => {
         runImmediately: false
       });
 
-      // atomicWrite receives the data object directly; stringify it for readFile mock
+      // atomicWrite receives the data object directly; stringify it for tryReadFile mock
       const savedBefore = atomicWrite.mock.calls[0][1];
-      readFile.mockResolvedValue(JSON.stringify(savedBefore));
+      tryReadFile.mockResolvedValue(JSON.stringify(savedBefore));
 
       const result = await triggerLoop(loop.id);
       expect(result).toEqual({ triggered: true });
     });
 
     it('throws when loop id does not exist in saved file', async () => {
-      readFile.mockResolvedValue('[]');
+      tryReadFile.mockResolvedValue('[]');
       await expect(triggerLoop('ghost-id')).rejects.toThrow('not found');
     });
 
@@ -253,7 +252,7 @@ describe('loops.js', () => {
         intervalMs: 30_000,
         status: 'stopped'
       }];
-      readFile.mockResolvedValue(JSON.stringify(loopRecord));
+      tryReadFile.mockResolvedValue(JSON.stringify(loopRecord));
       await expect(triggerLoop('test-stopped')).rejects.toThrow('not running');
     });
   });
@@ -269,9 +268,9 @@ describe('loops.js', () => {
         runImmediately: false
       });
 
-      // atomicWrite receives the data object directly; stringify it for readFile mock
+      // atomicWrite receives the data object directly; stringify it for tryReadFile mock
       const savedBefore = atomicWrite.mock.calls[0][1];
-      readFile.mockResolvedValue(JSON.stringify(savedBefore));
+      tryReadFile.mockResolvedValue(JSON.stringify(savedBefore));
 
       // Make runPromptThroughProvider reject (replaces the old executeCliRun
       // rejection path — same failure surface, new dispatcher).
@@ -297,9 +296,9 @@ describe('loops.js', () => {
         runImmediately: false
       });
 
-      // atomicWrite receives the data object directly; stringify it for readFile mock
+      // atomicWrite receives the data object directly; stringify it for tryReadFile mock
       const savedBefore = atomicWrite.mock.calls[0][1];
-      readFile.mockResolvedValue(JSON.stringify(savedBefore));
+      tryReadFile.mockResolvedValue(JSON.stringify(savedBefore));
 
       mockCreateRun.mockRejectedValue(new Error('createRun blew up'));
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -324,9 +323,9 @@ describe('loops.js', () => {
         runImmediately: false
       });
 
-      // atomicWrite receives the data object directly; stringify it for readFile mock
+      // atomicWrite receives the data object directly; stringify it for tryReadFile mock
       const savedBefore = atomicWrite.mock.calls[0][1];
-      readFile.mockResolvedValue(JSON.stringify(savedBefore));
+      tryReadFile.mockResolvedValue(JSON.stringify(savedBefore));
 
       const errors = [];
       loopEvents.on('iteration:error', (data) => errors.push(data));
@@ -355,7 +354,7 @@ describe('loops.js', () => {
         runImmediately: false,
       });
       const savedBefore = atomicWrite.mock.calls[0][1];
-      readFile.mockResolvedValue(JSON.stringify(savedBefore));
+      tryReadFile.mockResolvedValue(JSON.stringify(savedBefore));
 
       const completes = [];
       loopEvents.on('iteration:complete', (data) => completes.push(data));
@@ -411,9 +410,9 @@ describe('loops.js', () => {
         runImmediately: false
       });
 
-      // atomicWrite receives the data object directly; stringify it for readFile mock
+      // atomicWrite receives the data object directly; stringify it for tryReadFile mock
       const savedBefore = atomicWrite.mock.calls[0][1];
-      readFile.mockResolvedValue(JSON.stringify(savedBefore));
+      tryReadFile.mockResolvedValue(JSON.stringify(savedBefore));
 
       // Should not throw — the `let` fix allows provider reassignment
       let threw = false;
