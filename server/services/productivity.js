@@ -45,12 +45,17 @@ const DEFAULT_PRODUCTIVITY = {
  */
 export async function loadProductivity() {
   await ensureDir(DATA_DIR);
-  const data = await readJSONFile(PRODUCTIVITY_FILE, DEFAULT_PRODUCTIVITY);
+  const data = await readJSONFile(PRODUCTIVITY_FILE, null);
+  // Clone the defaults on every read: callers (onTaskCompleted) mutate the
+  // nested pattern maps in place, so handing back the module-level constant
+  // would leak one call's counters into the next "no file yet" read.
+  const defaults = structuredClone(DEFAULT_PRODUCTIVITY);
+  if (!data) return defaults;
   // Merge with defaults to ensure all fields exist
   return {
-    ...DEFAULT_PRODUCTIVITY,
+    ...defaults,
     ...data,
-    streaks: { ...DEFAULT_PRODUCTIVITY.streaks, ...data.streaks }
+    streaks: { ...defaults.streaks, ...data.streaks }
   };
 }
 
