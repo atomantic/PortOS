@@ -18,21 +18,34 @@ import { loadApp, pathExists } from './shared.js';
 const router = Router();
 
 /**
- * Hand a path to the OS's default handler, detached. `open`/`explorer`/`xdg-open`
- * all take the path as their only argument, so folder-opening and
- * project-opening share this one launcher.
+ * Spawn a detached launcher and drop it. Every launch route responds as soon as
+ * the child is handed off, so a spawn failure (binary missing, no desktop
+ * session) has no request left to fail — but an unlistened `error` event on a
+ * ChildProcess is an uncaught exception that takes the server down, so it is
+ * logged instead.
+ */
+function spawnDetached(cmd, args, options = {}) {
+  const child = spawn(cmd, args, {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+    ...options
+  });
+  child.on('error', (err) => console.error(`❌ Failed to launch '${cmd}': ${err.message}`));
+  child.unref();
+}
+
+/**
+ * Hand a path to the OS's default handler. `open`/`explorer`/`xdg-open` all take
+ * the path as their only argument, so folder-opening and project-opening share
+ * this one launcher.
  */
 function openWithSystemHandler(targetPath) {
   const cmd = process.platform === 'darwin'
     ? 'open'
     : process.platform === 'win32' ? 'explorer' : 'xdg-open';
 
-  const child = spawn(cmd, [targetPath], {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true
-  });
-  child.unref();
+  spawnDetached(cmd, [targetPath]);
 }
 
 // Allowlist of safe editor commands
@@ -96,14 +109,10 @@ router.post('/:id/open-editor', loadApp, asyncHandler(async (req, res) => {
   // `cursor.cmd`) which Node refuses to spawn without a shell since 20.12.2 — so we
   // opt into the shell on win32. Args are pre-sanitized for shell metacharacters
   // above, and the command is allowlisted.
-  const child = spawn(cmd, args, {
+  spawnDetached(cmd, args, {
     cwd: app.repoPath,
-    detached: true,
-    stdio: 'ignore',
-    shell: process.platform === 'win32',
-    windowsHide: true
+    shell: process.platform === 'win32'
   });
-  child.unref();
 
   res.json({ success: true, command: editorCommand, path: app.repoPath });
 }));
@@ -118,14 +127,10 @@ router.post('/:id/open-claude', loadApp, asyncHandler(async (req, res) => {
 
   // shell:true on Windows so `claude.cmd` resolves (see open-editor above for the
   // Node 20.12.2 rationale). No user args reach the command line here.
-  const child = spawn('claude', [], {
+  spawnDetached('claude', [], {
     cwd: app.repoPath,
-    detached: true,
-    stdio: 'ignore',
-    shell: process.platform === 'win32',
-    windowsHide: true
+    shell: process.platform === 'win32'
   });
-  child.unref();
 
   console.log(`🤖 Opened Claude Code in ${app.name}`);
   res.json({ success: true, path: app.repoPath });

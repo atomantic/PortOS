@@ -22,7 +22,7 @@ vi.mock('fs/promises', async (importOriginal) => ({
 
 vi.mock('child_process', async (importOriginal) => ({
   ...(await importOriginal()),
-  spawn: vi.fn(() => ({ unref: vi.fn() }))
+  spawn: vi.fn(() => ({ on: vi.fn(), unref: vi.fn() }))
 }));
 
 import * as appsService from '../../services/apps.js';
@@ -106,6 +106,22 @@ describe('Apps Launch Routes — POST /:id/open-xcode', () => {
     expect(response.status).toBe(400);
     expect(response.body.code).toBe('PATH_NOT_FOUND');
     expect(deriveProjectInfo).not.toHaveBeenCalled();
+  });
+
+  it('logs a launcher failure instead of letting the unlistened error event kill the process', async () => {
+    deriveProjectInfo.mockResolvedValue({ targetName: 'MyClient', bundleId: 'com.example.MyClient' });
+    existingPaths(REPO_PATH, join(REPO_PATH, 'MyClient.xcodeproj'));
+    const handlers = {};
+    spawn.mockReturnValue({ on: (event, fn) => { handlers[event] = fn; }, unref: vi.fn() });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const response = await request(app).post('/api/apps/app-001/open-xcode');
+
+    expect(response.status).toBe(200);
+    expect(handlers.error).toBeTypeOf('function');
+    handlers.error(new Error('spawn ENOENT'));
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('spawn ENOENT'));
+    consoleError.mockRestore();
   });
 
   it('returns 404 when the app does not exist', async () => {
