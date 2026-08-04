@@ -1722,16 +1722,23 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   }
 
   // --- Completion / review-loop ------------------------------------------
-  if (discardWorktree) {
-    // Reasoning-only task: the sentinel payload (shape set by the task-type
-    // output hook) is the sole output; the worktree is discarded on exit. Wins
-    // over the isTui / CLI push-and-PR completion workflows below.
-    sections.push(buildProgrammaticOutputCompletionSection(`${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`));
-  } else if (noCodeOutput) {
+  // Ordering matches the full path's (buildCompletionGuidelineBullet and the
+  // tuiCompletionSection ternary): the deliverable's destination
+  // (`noCodeOutput`) decides the contract, and only then does worktree disposal
+  // (`discardWorktree`) pick the reasoning-payload one. THIS is the branch that
+  // matters in production — every `tui`/`cli` provider returns from the light
+  // path above and never reaches the other two, so a fix applied only there is
+  // no fix at all for anything a subscription-quota job can run.
+  if (noCodeOutput) {
     sections.push(buildActionOutputCompletionSection({
       isTui,
       sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
     }));
+  } else if (discardWorktree) {
+    // Reasoning-only task: the sentinel payload (shape set by the task-type
+    // output hook) is the sole output; the worktree is discarded on exit. Wins
+    // over the isTui / CLI push-and-PR completion workflows below.
+    sections.push(buildProgrammaticOutputCompletionSection(`${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`));
   } else if (isReadOnly) {
     sections.push(buildReadOnlyCompletionSection({
       isTui,

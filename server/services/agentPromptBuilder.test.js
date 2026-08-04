@@ -1621,6 +1621,46 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
     assertReasoningOnly(prompt);
   });
 
+  // A discard task whose deliverable is an EXTERNAL action performed during the
+  // run (a filed issue, an endpoint call) must get the no-code-output contract,
+  // NOT "write your result to the sentinel" — otherwise it reports its findings
+  // into a file the cleanup then throws away, and the window produces nothing.
+  //
+  // Asserted on the LIGHT path specifically: every `tui`/`cli` provider returns
+  // from buildLightContextPrompt, so a quota-burn job (which only ever selects
+  // CLI/TUI providers — it exists to spend a subscription window) never reaches
+  // the full path. A unit test on buildCompletionGuidelineBullet alone passes
+  // while production is unchanged; that false green is how this shipped broken
+  // once already.
+  describe('with noCodeOutput — the deliverable is the action, not the sentinel', () => {
+    const auditTask = () => makeTask({ metadata: { discardWorktree: true, noCodeOutput: true, useWorktree: true, openPR: false } });
+
+    const assertActionOutput = (prompt) => {
+      expect(prompt).toMatch(/## Completion \(No Code Output\)/);
+      expect(prompt).not.toMatch(/## Completion \(Reasoning-Only Task\)/);
+      expect(prompt).not.toMatch(/in the exact payload format/);
+      expect(prompt).not.toMatch(/## Completion Workflow/);
+    };
+
+    it('light TUI path', () => {
+      const prompt = buildLightContextPrompt(auditTask(), '/r', wt, isTruthyMeta, { isTui: true });
+      assertActionOutput(prompt);
+      // The sentinel is still the done-signal for a TUI run — just not the
+      // place the deliverable goes.
+      expect(prompt).toMatch(/\.agent-done/);
+    });
+
+    it('light CLI (non-TUI) path', () => {
+      const prompt = buildLightContextPrompt(auditTask(), '/r', wt, isTruthyMeta, { isTui: false, providerId: 'codex' });
+      assertActionOutput(prompt);
+    });
+
+    it('full (api) path', async () => {
+      const prompt = await buildAgentPrompt(auditTask(), {}, '/r', wt, isTruthyMeta, { providerType: 'api' });
+      assertActionOutput(prompt);
+    });
+  });
+
   it('full (api) path suppresses the commit/push instructions in Instructions + Git Hygiene', async () => {
     const prompt = await buildAgentPrompt(liTask(), {}, '/r', wt, isTruthyMeta, { providerType: 'api' });
     assertReasoningOnly(prompt);

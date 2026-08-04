@@ -68,9 +68,9 @@ const auditContract = ({ labels, dedupeSearch }) => `
    the existing issue only when you have genuinely new evidence.
 4. **File each surviving finding as its own issue.** Write the body to a scratch
    file OUTSIDE the repository — \`BODY=$(mktemp)\` — then
-   \`gh issue create --title "..." --body-file "$BODY" --label ...\`. Never write
-   scratch files into the working tree: an untracked leftover makes the run's
-   worktree undeletable, so one is stranded on disk per burn. Suggested labels:
+   \`gh issue create --title "..." --body-file "$BODY" --label ...\`. Keep scratch
+   files out of the working tree — a run that ends dirty is indistinguishable
+   from one that edited code it was told not to touch. Suggested labels:
    ${labels}. Run \`gh label list\` first and use only labels that exist. One
    problem per issue — never a bundle.
 5. **Bodies must be decision-complete**, in this shape:
