@@ -43,6 +43,8 @@ export default function Apps() {
   // focus back to the control that opened it instead of dropping it on <body>.
   const menuTriggerRefs = useRef({});
   const menuTriggerRef = (id) => (menuTriggerRefs.current[id] ||= { current: null });
+  // Per-app sprint-ticket request tracking: `{ generation, active }`.
+  const ticketRequestsRef = useRef({});
 
   const fetchApps = useCallback(async () => {
     const data = await api.getApps().catch(() => []);
@@ -126,15 +128,24 @@ export default function Apps() {
   // the cached empty array, never retried for the life of the page (#3437).
   // Failure records a message and leaves `jiraTickets[id]` undefined, so both
   // Retry and a re-expand re-issue the request; a genuine `[]` is still cached.
+  // Per-app request generation, so a slow earlier fetch can't land after a newer
+  // one and overwrite a good board with its stale error (the pending-request
+  // convention in client/src/CLAUDE.md).
   const loadSprintTickets = useCallback(async (app) => {
+    const generation = (ticketRequestsRef.current[app.id]?.generation || 0) + 1;
+    ticketRequestsRef.current[app.id] = { generation, active: true };
+    const isCurrent = () => ticketRequestsRef.current[app.id]?.generation === generation;
+
     setLoadingTickets(prev => ({ ...prev, [app.id]: true }));
     setTicketErrors(prev => ({ ...prev, [app.id]: null }));
     const tickets = await api
       .getMySprintTickets(app.jira.instanceId, app.jira.projectKey, { silent: true })
       .catch(err => {
-        setTicketErrors(prev => ({ ...prev, [app.id]: err?.message || 'Request failed' }));
+        if (isCurrent()) setTicketErrors(prev => ({ ...prev, [app.id]: err?.message || 'Request failed' }));
         return null;
       });
+    if (!isCurrent()) return;   // superseded — the newer request owns the state
+    ticketRequestsRef.current[app.id].active = false;
     if (Array.isArray(tickets)) setJiraTickets(prev => ({ ...prev, [app.id]: tickets }));
     setLoadingTickets(prev => ({ ...prev, [app.id]: false }));
   }, []);
@@ -147,7 +158,7 @@ export default function Apps() {
     if (!newExpandedId) return;
     const app = apps.find(a => a.id === newExpandedId);
     if (!app?.jira?.enabled || !app.jira.instanceId || !app.jira.projectKey) return;
-    if (!jiraTickets[id]) loadSprintTickets(app);
+    if (!jiraTickets[id] && !ticketRequestsRef.current[id]?.active) loadSprintTickets(app);
   };
 
   // Archive/unarchive gate their success toast on a response, the way

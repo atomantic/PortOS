@@ -475,3 +475,35 @@ describe('Apps sprint-ticket fetch failures (#3437)', () => {
     expect(api.getMySprintTickets).toHaveBeenCalledWith('jira-1', 'EX', { silent: true });
   });
 });
+
+describe('Apps sprint-ticket request races (#3437)', () => {
+  const JIRA_APP = {
+    ...APPS[0],
+    jira: { enabled: true, instanceId: 'jira-1', projectKey: 'EX', issueType: 'Task' }
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getApps.mockResolvedValue([JIRA_APP]);
+  });
+
+  it('does not start a second fetch while one is still in flight, and the in-flight result still lands', async () => {
+    let resolveFirst;
+    api.getMySprintTickets.mockImplementation(() => new Promise(resolve => { resolveFirst = resolve; }));
+
+    const user = userEvent.setup();
+    await renderApps();
+    const toggle = () => user.click(screen.getByRole('button', { name: /(Expand|Collapse) Example App details/ }));
+
+    await toggle();   // first fetch — hangs
+    await toggle();   // collapse
+    await toggle();   // re-expand while the first request is still open
+
+    // One request, not two — so no older response can land after a newer one
+    // and overwrite it.
+    expect(api.getMySprintTickets).toHaveBeenCalledTimes(1);
+
+    await act(async () => { resolveFirst([]); });
+    expect(await screen.findByText('No tickets assigned to you in the current sprint')).toBeTruthy();
+  });
+});

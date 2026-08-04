@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Link } from 'react-router';
 import { FolderOpen, Gamepad2, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download, Tag, AlertTriangle, Rocket, Camera, Image, Sparkles } from 'lucide-react';
 import toast from '../../ui/Toast';
@@ -24,6 +24,7 @@ export default function OverviewTab({ app, onRefresh }) {
   const [jiraTickets, setJiraTickets] = useState(null);
   const [loadingTickets, setLoadingTickets] = useState(false);
   const [ticketError, setTicketError] = useState(null);
+  const ticketRequestRef = useRef(0);
   const [installingScripts, setInstallingScripts] = useState(false);
   const [detectingIcon, setDetectingIcon] = useState(false);
   // Reverse lookup (#2991): sprite records that publish assets into this app.
@@ -41,12 +42,18 @@ export default function OverviewTab({ app, onRefresh }) {
   // tickets" and offered no way to retry.
   const loadSprintTickets = useCallback(() => {
     if (!app?.jira?.enabled || !app.jira.instanceId || !app.jira.projectKey) return;
+    // Generation guard: a Retry (or a JIRA-config change) while an earlier
+    // request is still open must not let the older response land last.
+    const generation = ticketRequestRef.current + 1;
+    ticketRequestRef.current = generation;
+    const isCurrent = () => ticketRequestRef.current === generation;
+
     setLoadingTickets(true);
     setTicketError(null);
     api.getMySprintTickets(app.jira.instanceId, app.jira.projectKey, { silent: true })
-      .then(tickets => setJiraTickets(Array.isArray(tickets) ? tickets : []))
-      .catch(err => setTicketError(err?.message || 'Request failed'))
-      .finally(() => setLoadingTickets(false));
+      .then(tickets => { if (isCurrent()) setJiraTickets(Array.isArray(tickets) ? tickets : []); })
+      .catch(err => { if (isCurrent()) setTicketError(err?.message || 'Request failed'); })
+      .finally(() => { if (isCurrent()) setLoadingTickets(false); });
   }, [app?.jira?.enabled, app?.jira?.instanceId, app?.jira?.projectKey]);
 
   useEffect(() => { loadSprintTickets(); }, [loadSprintTickets]);
