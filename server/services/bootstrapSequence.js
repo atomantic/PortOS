@@ -161,12 +161,17 @@ export const gateOnDatabase = async ({
  * `reconcileCanonCatalog` last so it reconciles rows already at the current
  * payload-shape version.
  *
+ * `loadDbMigrationRunner` is a separate step from running it on purpose: only a
+ * migration that RAN and failed is fatal. A runner module that can't even be
+ * loaded falls to the group's log-and-continue handler, exactly as it did when
+ * the `await import(...)` sat outside the inner try.
+ *
  * Skipped entirely when `!dbReady` (escape hatch) — every step below would throw.
  */
 export const runDbAndCatalogMigrations = async ({
   dbReady,
   ensureSchema,
-  runDbMigrations,
+  loadDbMigrationRunner,
   migrateBibleToCatalog,
   repairUniverseTags,
   migrateCatalogPayload,
@@ -177,6 +182,7 @@ export const runDbAndCatalogMigrations = async ({
   if (!dbReady) return;
   try {
     await ensureSchema();
+    const runDbMigrations = await loadDbMigrationRunner();
     try {
       await runDbMigrations();
     } catch (err) {
@@ -270,8 +276,10 @@ export const runDatabasePhase = async ({ gate, migrate, warmStores, reconcileSta
  *      reloaded jobs, and before a route can enqueue against a half-init queue.
  *   5. The database phase before `startListening`, so no request can land on a
  *      partially-migrated install.
- *   6. `backfillSeriesCoverImages` fire-and-forget: a cosmetic thumbnail
- *      backfill must never delay the server accepting requests.
+ *   6. The series-cover backfill MODULE is awaited but the backfill RUN is not:
+ *      a cosmetic thumbnail pass must never delay the server accepting
+ *      requests, while a script that won't even load is a real breakage and
+ *      takes the fatal path.
  *
  * Returns the chain's promise; a rejection anywhere in it is fatal.
  */
@@ -285,7 +293,7 @@ export const runPostRouteSequence = ({
   initSharing,
   recoverCreativeDirectorProjects,
   runDatabasePhase: databasePhase,
-  backfillSeriesCoverImages,
+  loadSeriesCoverBackfill,
   startListening,
   onFatal = () => process.exit(1)
 }) => {
@@ -311,7 +319,9 @@ export const runPostRouteSequence = ({
       recoverCreativeDirectorProjects();
     })
     .then(() => databasePhase())
-    .then(() => {
+    .then(async () => {
+      // Load awaited, run not — see point 6 above.
+      const backfillSeriesCoverImages = await loadSeriesCoverBackfill();
       bestEffort(backfillSeriesCoverImages(), logFailure('series cover backfill failed at boot'));
     })
     .then(() => startListening())

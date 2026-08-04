@@ -535,8 +535,10 @@ const runDatabaseBootPhase = () => runDatabasePhase({
     ensureSchema,
     // Versioned DB-migration runner (#1029): ordered schema-DELTA migrations
     // (renames / type changes / data transforms / embedding-dim changes) that
-    // ensureSchema()'s additive IF NOT EXISTS gates can't express.
-    runDbMigrations: async () => (await import('../scripts/run-db-migrations.js')).runDbMigrations(),
+    // ensureSchema()'s additive IF NOT EXISTS gates can't express. Loading the
+    // runner is a separate step from running it because only the latter is
+    // fatal — a module that won't load falls to the group's log-and-continue.
+    loadDbMigrationRunner: async () => (await import('../scripts/run-db-migrations.js')).runDbMigrations,
     migrateBibleToCatalog: async () => (await import('../scripts/migrateBibleToCatalog.js')).migrateBibleToCatalog(),
     // One-time data repair: rewrite legacy machine universe tags
     // (`from-universe`, `universe:<id>`) on backfilled rows into the friendly
@@ -689,8 +691,10 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
     // covers rendered before the feature shipped. Runs after the series + issues
     // stores are warmed above so the derivation reads migrated records. Drives
     // the services, so it works on both the PG backend and the file escape hatch.
-    // Marker-gated, so it runs at most once regardless.
-    backfillSeriesCoverImages: async () => (await import('../scripts/backfillSeriesCoverImages.js')).backfillSeriesCoverImages(),
+    // Marker-gated, so it runs at most once regardless. Loading it is a
+    // separate step from running it: the sequence awaits the load (a script
+    // that won't load is a real breakage) but never the backfill itself.
+    loadSeriesCoverBackfill: async () => (await import('../scripts/backfillSeriesCoverImages.js')).backfillSeriesCoverImages,
 
     startListening: () => httpServer.listen(port, host, () => runPostListenSequence({
       announceListening: () => announceListening({ io, httpServer, localHttpServer, httpsEnabled, port }),

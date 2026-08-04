@@ -313,7 +313,8 @@ describe('runDbAndCatalogMigrations', () => {
     return {
       dbReady: true,
       ensureSchema: step('ensureSchema', () => Promise.resolve()),
-      runDbMigrations: step('runDbMigrations', () => Promise.resolve()),
+      loadDbMigrationRunner: step('loadDbMigrationRunner', () =>
+        Promise.resolve(step('runDbMigrations', () => Promise.resolve()))),
       migrateBibleToCatalog: step('migrateBibleToCatalog', () => Promise.resolve()),
       repairUniverseTags: step('repairUniverseTags', () => Promise.resolve()),
       migrateCatalogPayload: step('migrateCatalogPayload', () => Promise.resolve()),
@@ -329,6 +330,7 @@ describe('runDbAndCatalogMigrations', () => {
     await runDbAndCatalogMigrations(buildDeps(recorder));
     expect(recorder.calls).toEqual([
       'ensureSchema',
+      'loadDbMigrationRunner',
       'runDbMigrations',
       'migrateBibleToCatalog',
       'repairUniverseTags',
@@ -347,12 +349,27 @@ describe('runDbAndCatalogMigrations', () => {
   it('treats a failed schema-delta migration as fatal and skips the rest', async () => {
     const recorder = createRecorder();
     const deps = buildDeps(recorder, {
-      runDbMigrations: recorder.step('runDbMigrations', () => Promise.reject(new Error('delta 42 failed')))
+      loadDbMigrationRunner: recorder.step('loadDbMigrationRunner', () =>
+        Promise.resolve(recorder.step('runDbMigrations', () => Promise.reject(new Error('delta 42 failed')))))
     });
     await runDbAndCatalogMigrations(deps);
-    expect(recorder.calls).toEqual(['ensureSchema', 'runDbMigrations']);
+    expect(recorder.calls).toEqual(['ensureSchema', 'loadDbMigrationRunner', 'runDbMigrations']);
     expect(deps.onMigrationFailure).toHaveBeenCalledTimes(1);
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('DB migration failed at boot'));
+  });
+
+  it('is NOT fatal when the migration runner module itself cannot be loaded', async () => {
+    // Only a migration that RAN and failed leaves a possibly-half-applied
+    // install; a runner that never loaded applied nothing, so it takes the
+    // group's log-and-continue path.
+    const recorder = createRecorder();
+    const deps = buildDeps(recorder, {
+      loadDbMigrationRunner: recorder.step('loadDbMigrationRunner', () => Promise.reject(new Error('module missing')))
+    });
+    await runDbAndCatalogMigrations(deps);
+    expect(deps.onMigrationFailure).not.toHaveBeenCalled();
+    expect(recorder.calls).toEqual(['ensureSchema', 'loadDbMigrationRunner']);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('catalog migrations failed at boot'));
   });
 
   it('keeps booting when a best-effort catalog migration fails', async () => {
@@ -364,7 +381,13 @@ describe('runDbAndCatalogMigrations', () => {
     expect(deps.onMigrationFailure).not.toHaveBeenCalled();
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('catalog migrations failed at boot'));
     // Later steps are skipped (they share one try block) but boot continues.
-    expect(recorder.calls).toEqual(['ensureSchema', 'runDbMigrations', 'migrateBibleToCatalog', 'repairUniverseTags']);
+    expect(recorder.calls).toEqual([
+      'ensureSchema',
+      'loadDbMigrationRunner',
+      'runDbMigrations',
+      'migrateBibleToCatalog',
+      'repairUniverseTags'
+    ]);
   });
 });
 
@@ -460,7 +483,8 @@ describe('runPostRouteSequence — post-route boot order', () => {
       initSharing: step('initSharing', () => Promise.resolve()),
       recoverCreativeDirectorProjects: step('recoverCreativeDirectorProjects', () => Promise.resolve()),
       runDatabasePhase: step('runDatabasePhase', () => Promise.resolve({ dbReady: true })),
-      backfillSeriesCoverImages: step('backfillSeriesCoverImages', () => Promise.resolve()),
+      loadSeriesCoverBackfill: step('loadSeriesCoverBackfill', () =>
+        Promise.resolve(step('backfillSeriesCoverImages', () => Promise.resolve()))),
       startListening: step('startListening'),
       onFatal: vi.fn(),
       ...overrides
@@ -481,6 +505,7 @@ describe('runPostRouteSequence — post-route boot order', () => {
       'initSharing',
       'recoverCreativeDirectorProjects',
       'runDatabasePhase',
+      'loadSeriesCoverBackfill',
       'backfillSeriesCoverImages',
       'startListening'
     ]);
@@ -534,12 +559,40 @@ describe('runPostRouteSequence — post-route boot order', () => {
       recoverStuckClassifications: recorder.step('recoverStuckClassifications', () => stuck.promise),
       initSharing: recorder.step('initSharing', () => deferred().promise),
       recoverCreativeDirectorProjects: recorder.step('recoverCreativeDirectorProjects', () => deferred().promise),
-      backfillSeriesCoverImages: recorder.step('backfillSeriesCoverImages', () => deferred().promise)
+      loadSeriesCoverBackfill: recorder.step('loadSeriesCoverBackfill', () =>
+        Promise.resolve(recorder.step('backfillSeriesCoverImages', () => deferred().promise)))
     });
     // None of these ever settle; the server must still start listening.
     await runPostRouteSequence(deps);
     expect(recorder.calls).toContain('startListening');
     stuck.resolve();
+  });
+
+  it('awaits the series-cover backfill MODULE but not the backfill itself', async () => {
+    const recorder = createRecorder();
+    const load = deferred();
+    const deps = buildDeps(recorder, {
+      loadSeriesCoverBackfill: recorder.step('loadSeriesCoverBackfill', () => load.promise)
+    });
+    const done = runPostRouteSequence(deps);
+    await flush();
+    expect(recorder.calls).not.toContain('startListening');
+    // A script that won't even load is a real breakage, so the load sits on the
+    // fatal path; the cosmetic backfill run never delays the listener.
+    load.resolve(recorder.step('backfillSeriesCoverImages', () => deferred().promise));
+    await done;
+    expect(recorder.calls).toContain('startListening');
+    expect(deps.onFatal).not.toHaveBeenCalled();
+  });
+
+  it('is fatal when the series-cover backfill module cannot be loaded', async () => {
+    const recorder = createRecorder();
+    const deps = buildDeps(recorder, {
+      loadSeriesCoverBackfill: recorder.step('loadSeriesCoverBackfill', () => Promise.reject(new Error('script missing')))
+    });
+    await runPostRouteSequence(deps);
+    expect(deps.onFatal).toHaveBeenCalledTimes(1);
+    expect(recorder.calls).not.toContain('startListening');
   });
 
   it('finishes the database phase before the listener opens', async () => {
@@ -573,7 +626,8 @@ describe('runPostRouteSequence — post-route boot order', () => {
     const deps = buildDeps(recorder, {
       recoverStuckClassifications: recorder.step('recoverStuckClassifications', () => Promise.reject(new Error('brain boom'))),
       initSharing: recorder.step('initSharing', () => Promise.reject(new Error('bucket gone'))),
-      backfillSeriesCoverImages: recorder.step('backfillSeriesCoverImages', () => Promise.reject(new Error('no covers')))
+      loadSeriesCoverBackfill: recorder.step('loadSeriesCoverBackfill', () =>
+        Promise.resolve(recorder.step('backfillSeriesCoverImages', () => Promise.reject(new Error('no covers')))))
     });
     await runPostRouteSequence(deps);
     await flush();
