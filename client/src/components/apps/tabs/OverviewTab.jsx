@@ -97,21 +97,23 @@ export default function OverviewTab({ app, onRefresh }) {
     }
   };
 
-  const handleArchive = async () => {
+  // Same contract as the /apps list (#3436): `request()` already toasted the
+  // failure, so a success toast on top of it would tell the user the app was
+  // excluded from CoS scheduling when nothing changed.
+  const setArchived = async (archived) => {
     setArchiving(true);
-    await api.archiveApp(app.id).catch(() => null);
+    const result = await (archived ? api.archiveApp(app.id) : api.unarchiveApp(app.id)).catch(() => null);
     setArchiving(false);
-    toast.success(`${app.name} archived - excluded from COS tasks`);
+    if (!result) return;
+    toast.success(archived
+      ? `${app.name} archived — excluded from CoS tasks`
+      : `${app.name} unarchived — included in CoS tasks`);
     onRefresh();
   };
 
-  const handleUnarchive = async () => {
-    setArchiving(true);
-    await api.unarchiveApp(app.id).catch(() => null);
-    setArchiving(false);
-    toast.success(`${app.name} unarchived - included in COS tasks`);
-    onRefresh();
-  };
+  const handleArchive = () => setArchived(true);
+
+  const handleUnarchive = () => setArchived(false);
 
   return (
     <div className="space-y-6">

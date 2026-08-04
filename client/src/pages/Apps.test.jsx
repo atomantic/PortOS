@@ -35,11 +35,16 @@ vi.mock('../services/api', () => ({
   handleSelfRestart: vi.fn(),
 }));
 
+vi.mock('../components/ui/Toast', () => ({
+  default: { success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn(), custom: vi.fn() }
+}));
+
 vi.mock('../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
 }));
 
 import * as api from '../services/api';
+import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import Apps from './Apps';
 
@@ -341,5 +346,57 @@ describe('Apps concurrent operations and duplicate dispatch (#3435)', () => {
     await emitSocket('app:update:complete', { appId: 'app-alpha', success: false, steps: [] });
 
     expect(banners()[0].textContent).toContain('Update failed for Example App');
+  });
+});
+
+describe('Apps archive result reporting (#3436)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getApps.mockResolvedValue(APPS);
+  });
+
+  it('does not claim an app was archived when the request failed', async () => {
+    api.archiveApp.mockRejectedValue(new Error('Server unreachable'));
+    const user = userEvent.setup();
+    await renderApps();
+
+    await openRowMenu(user);
+    await user.click(screen.getByRole('menuitem', { name: 'Archive' }));
+    await waitFor(() => expect(api.archiveApp).toHaveBeenCalledWith('app-alpha'));
+
+    // request() already toasted the failure — a green "archived" on top of it
+    // told the user CoS would skip the app when nothing changed.
+    expect(toast.success).not.toHaveBeenCalled();
+
+    // …and the menu item is back from "Working…" so the action can be retried.
+    await openRowMenu(user);
+    expect(screen.getByRole('menuitem', { name: 'Archive' })).toBeTruthy();
+  });
+
+  it('does not claim an app was unarchived when the request failed', async () => {
+    api.getApps.mockResolvedValue([ARCHIVED_APP]);
+    api.unarchiveApp.mockRejectedValue(new Error('Server unreachable'));
+    const user = userEvent.setup();
+    render(<MemoryRouter initialEntries={['/apps?view=archived']}><Apps /></MemoryRouter>);
+    await screen.findByRole('link', { name: 'Example App' });
+
+    await openRowMenu(user);
+    await user.click(screen.getByRole('menuitem', { name: 'Unarchive' }));
+    await waitFor(() => expect(api.unarchiveApp).toHaveBeenCalledWith('app-alpha'));
+
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('confirms and reflects a successful archive without waiting for a refetch', async () => {
+    api.archiveApp.mockResolvedValue({ ...APPS[0], archived: true });
+    const user = userEvent.setup();
+    await renderApps();
+
+    await openRowMenu(user);
+    await user.click(screen.getByRole('menuitem', { name: 'Archive' }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('archived')));
+    // Local state moved the row into the archived list — no refetch needed.
+    expect(await screen.findByRole('button', { name: /Archived \(1\)/ })).toBeTruthy();
   });
 });

@@ -136,19 +136,24 @@ export default function Apps() {
     }
   };
 
-  const handleArchive = async (app) => {
+  // Archive/unarchive gate their success toast on a response, the way
+  // handleBuild does: `request()` already toasted the failure, and a green
+  // "archived" on top of it told the user an app was excluded from CoS
+  // scheduling when it was not (#3436).
+  const setArchived = async (app, archived) => {
     setArchiving(prev => ({ ...prev, [app.id]: true }));
-    await api.archiveApp(app.id).catch(() => null);
+    const result = await (archived ? api.archiveApp(app.id) : api.unarchiveApp(app.id)).catch(() => null);
     setArchiving(prev => ({ ...prev, [app.id]: false }));
-    toast.success(`${app.name} archived - excluded from COS tasks`);
+    if (!result) return;
+    setApps(prev => prev.map(a => (a.id === app.id ? { ...a, archived } : a)));
+    toast.success(archived
+      ? `${app.name} archived — excluded from CoS tasks`
+      : `${app.name} unarchived — included in CoS tasks`);
   };
 
-  const handleUnarchive = async (app) => {
-    setArchiving(prev => ({ ...prev, [app.id]: true }));
-    await api.unarchiveApp(app.id).catch(() => null);
-    setArchiving(prev => ({ ...prev, [app.id]: false }));
-    toast.success(`${app.name} unarchived - included in COS tasks`);
-  };
+  const handleArchive = (app) => setArchived(app, true);
+
+  const handleUnarchive = (app) => setArchived(app, false);
 
   // The server names the app it is operating on (so a rehydrated operation is
   // labelled even before the list loads); fall back to the loaded list.
