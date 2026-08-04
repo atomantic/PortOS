@@ -251,12 +251,36 @@ describe('generateWeeklyDigest — summary assembly', () => {
       agent('jan', { year: 2026, month: 1, day: 1 }),
     ]);
 
-    const digest = await digestService.generateWeeklyDigest();
+    const december = await digestService.generateWeeklyDigest();
 
-    expect(digest.weekId).toBe('2025-W01');
-    expect(digest.summary.totalTasks).toBe(1);
-    expect(digest.accomplishments.map(a => a.id)).toEqual(['dec']);
+    expect(december.weekId).toBe('2025-W01');
+    expect(december.summary.totalTasks).toBe(1);
+    expect(december.accomplishments.map(a => a.id)).toEqual(['dec']);
     expect(existsSync(join(DIGESTS_DIR, '2025-W01.json'))).toBe(true);
+
+    // Same ISO week, three days later — filed as a second, separate digest.
+    vi.setSystemTime(new Date(2026, 0, 1, 12, 0, 0));
+    const january = await digestService.generateWeeklyDigest();
+
+    expect(january.weekId).toBe('2026-W01');
+    expect(january.summary.totalTasks).toBe(1);
+    expect(january.accomplishments.map(a => a.id)).toEqual(['jan']);
+
+    // And the collision half: the week of 2025-01-02 stamps '2025-W01' too, so
+    // regenerating it merges in the December-2025 agent and overwrites the file
+    // the first generation wrote.
+    onDates([
+      agent('dec', { year: 2025, month: 12, day: 29 }),
+      agent('jan', { year: 2026, month: 1, day: 1 }),
+      agent('jan2025', { year: 2025, month: 1, day: 2 }),
+    ]);
+    vi.setSystemTime(new Date(2025, 0, 2, 12, 0, 0));
+    const collided = await digestService.generateWeeklyDigest();
+
+    expect(collided.weekId).toBe('2025-W01');
+    expect(collided.summary.totalTasks).toBe(2);
+    expect(collided.accomplishments.map(a => a.id).sort()).toEqual(['dec', 'jan2025']);
+    expect(readDigest('2025-W01').summary.totalTasks).toBe(2);
   });
 
   it('persists the digest and announces it on the CoS event bus', async () => {
