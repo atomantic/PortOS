@@ -482,8 +482,30 @@ export function buildReviewersCsv(reviewers, usernames = [], optionalReviewers =
  *   the flag). A model pin can't trigger that exemption because `copilot[…]` isn't
  *   a legal slashdo entry (see BRACKET_MODEL_REVIEWERS) — so a lone copilot with a
  *   stray pin emits nothing extra, exactly as before.
+ *
+ * Everything past `reviewers` is an options object: the two reviewer-name lists
+ * (`usernames` / `optionalReviewers`) and the two per-reviewer lookup maps
+ * (`reviewerMaxRounds` / `reviewerModels`) are same-shaped and were silently
+ * transposable as positionals.
+ *
+ * @param {string[]} reviewers - ordered keyed reviewer slugs
+ * @param {Object} [options]
+ * @param {string} [options.stopMode] - review stop mode (`all` / `on-findings` / `on-clean`)
+ * @param {boolean} [options.reviewerApplies] - emit `--reviewer-applies`
+ * @param {string[]} [options.usernames] - GitHub reviewer usernames (emitted as `@user`)
+ * @param {string[]} [options.optionalReviewers] - reviewers that get the `~opt` suffix
+ * @param {Object<string, number>} [options.reviewerMaxRounds] - per-reviewer `~max=<n>` caps
+ * @param {Object<string, string>} [options.reviewerModels] - per-reviewer `[<model>]` pins
+ * @returns {string} the slashdo review flag string (possibly empty)
  */
-export function buildReviewWithArgs(reviewers, stopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}) {
+export function buildReviewWithArgs(reviewers, {
+  stopMode = DEFAULT_REVIEW_STOP_MODE,
+  reviewerApplies = false,
+  usernames = [],
+  optionalReviewers = [],
+  reviewerMaxRounds = {},
+  reviewerModels = {},
+} = {}) {
   const users = normalizeReviewUsernames(usernames);
   const keyed = resolveKeyedReviewers(reviewers, users.length > 0);
   const combined = [...keyed, ...users.map(u => `@${u}`)];

@@ -1083,60 +1083,60 @@ describe('validation.js', () => {
     });
 
     it('adds stop-mode only for 2+ reviewers and reviewer-applies only with a CLI reviewer', () => {
-      expect(buildReviewWithArgs(['codex', 'copilot'], 'on-findings', true))
+      expect(buildReviewWithArgs(['codex', 'copilot'], { stopMode: 'on-findings', reviewerApplies: true }))
         .toBe('--review-with codex,copilot --review-stop-on-findings --reviewer-applies');
       // single reviewer → no stop-mode flag
-      expect(buildReviewWithArgs(['codex'], 'on-clean', true))
+      expect(buildReviewWithArgs(['codex'], { stopMode: 'on-clean', reviewerApplies: true }))
         .toBe('--review-with codex --reviewer-applies');
       // copilot-only → reviewer-applies suppressed (no-op on copilot)
-      expect(buildReviewWithArgs(['copilot'], 'all', true)).toBe('');
+      expect(buildReviewWithArgs(['copilot'], { reviewerApplies: true })).toBe('');
     });
 
     it('appends username reviewers as @user tokens after the keyed reviewers', () => {
       // copilot + a username is no longer "lone default" → the flag is emitted.
-      expect(buildReviewWithArgs(['copilot'], 'all', false, ['CodeReviewbot']))
+      expect(buildReviewWithArgs(['copilot'], { usernames: ['CodeReviewbot'] }))
         .toBe('--review-with copilot,@CodeReviewbot');
-      expect(buildReviewWithArgs(['codex', 'copilot'], 'all', false, ['@Bot']))
+      expect(buildReviewWithArgs(['codex', 'copilot'], { usernames: ['@Bot'] }))
         .toBe('--review-with codex,copilot,@Bot');
     });
 
     it('counts usernames toward the 2+ stop-mode gate', () => {
       // one keyed reviewer + one username = two review sources → stop-mode applies.
-      expect(buildReviewWithArgs(['copilot'], 'on-clean', false, ['Bot']))
+      expect(buildReviewWithArgs(['copilot'], { stopMode: 'on-clean', usernames: ['Bot'] }))
         .toBe('--review-with copilot,@Bot --review-stop-on-clean');
     });
 
     it('does not enable reviewer-applies for username-only additions', () => {
       // usernames are external PR reviewers, not CLIs that apply fixes.
-      expect(buildReviewWithArgs(['copilot'], 'all', true, ['Bot']))
+      expect(buildReviewWithArgs(['copilot'], { reviewerApplies: true, usernames: ['Bot'] }))
         .toBe('--review-with copilot,@Bot');
     });
 
     it('normalizes/strips bogus usernames before emitting', () => {
-      expect(buildReviewWithArgs(['copilot'], 'all', false, ['@Bot', 'bad token', 'bot']))
+      expect(buildReviewWithArgs(['copilot'], { usernames: ['@Bot', 'bad token', 'bot'] }))
         .toBe('--review-with copilot,@Bot');
     });
 
     it('appends ~opt to the tokens named in optionalReviewers (keyed + @user)', () => {
       // ollama marked optional → its token carries ~opt; codex stays blocking.
-      expect(buildReviewWithArgs(['claude', 'ollama', 'codex'], 'all', false, [], ['ollama']))
+      expect(buildReviewWithArgs(['claude', 'ollama', 'codex'], { optionalReviewers: ['ollama'] }))
         .toBe('--review-with claude,ollama~opt,codex');
       // a username can be optional too — matched by its @-form.
-      expect(buildReviewWithArgs(['codex'], 'all', false, ['Bot'], ['@Bot']))
+      expect(buildReviewWithArgs(['codex'], { usernames: ['Bot'], optionalReviewers: ['@Bot'] }))
         .toBe('--review-with codex,@Bot~opt');
       // aliases resolve before matching: gemini→antigravity.
-      expect(buildReviewWithArgs(['antigravity', 'codex'], 'all', false, [], ['gemini']))
+      expect(buildReviewWithArgs(['antigravity', 'codex'], { optionalReviewers: ['gemini'] }))
         .toBe('--review-with antigravity~opt,codex');
     });
 
     it('forces the flag on for a lone default copilot marked optional (so ~opt is not lost)', () => {
       // Without the marker this is the suppressed lone-default case ('').
-      expect(buildReviewWithArgs(['copilot'], 'all', false, [], ['copilot']))
+      expect(buildReviewWithArgs(['copilot'], { optionalReviewers: ['copilot'] }))
         .toBe('--review-with copilot~opt');
     });
 
     it('ignores optionalReviewers entries not present in the emitted list', () => {
-      expect(buildReviewWithArgs(['codex', 'copilot'], 'all', false, [], ['ollama', 'bad token']))
+      expect(buildReviewWithArgs(['codex', 'copilot'], { optionalReviewers: ['ollama', 'bad token'] }))
         .toBe('--review-with codex,copilot');
     });
   });
@@ -1247,36 +1247,36 @@ describe('validation.js', () => {
 
   describe('buildReviewWithArgs — ~max round caps', () => {
     it('emits <token>~max=<n> for exactly the tokens carrying a cap', () => {
-      expect(buildReviewWithArgs(['claude', 'ollama', 'codex'], 'all', false, [], [], { ollama: 1 }))
+      expect(buildReviewWithArgs(['claude', 'ollama', 'codex'], { reviewerMaxRounds: { ollama: 1 } }))
         .toBe('--review-with claude,ollama~max=1,codex');
     });
 
     it('emits ~opt before ~max when a reviewer carries both', () => {
-      expect(buildReviewWithArgs(['claude', 'ollama'], 'all', false, [], ['ollama'], { ollama: 1 }))
+      expect(buildReviewWithArgs(['claude', 'ollama'], { optionalReviewers: ['ollama'], reviewerMaxRounds: { ollama: 1 } }))
         .toBe('--review-with claude,ollama~opt~max=1');
     });
 
     it('round-trips ~max=0 and distinguishes it from no cap', () => {
-      expect(buildReviewWithArgs(['claude', 'ollama'], 'all', false, [], [], { ollama: 0 }))
+      expect(buildReviewWithArgs(['claude', 'ollama'], { reviewerMaxRounds: { ollama: 0 } }))
         .toBe('--review-with claude,ollama~max=0');
-      expect(buildReviewWithArgs(['claude', 'ollama'], 'all', false, [], [], {}))
+      expect(buildReviewWithArgs(['claude', 'ollama']))
         .toBe('--review-with claude,ollama');
     });
 
     it('caps a @username reviewer by its @-form token', () => {
-      expect(buildReviewWithArgs(['codex'], 'all', false, ['Bot'], [], { '@Bot': 2 }))
+      expect(buildReviewWithArgs(['codex'], { usernames: ['Bot'], reviewerMaxRounds: { '@Bot': 2 } }))
         .toBe('--review-with codex,@Bot~max=2');
     });
 
     it('forces the flag on for a lone default copilot carrying a cap (so ~max is not lost)', () => {
       // Without the suffix this is the suppressed lone-default case ('').
-      expect(buildReviewWithArgs(['copilot'], 'all', false, [], [], { copilot: 2 }))
+      expect(buildReviewWithArgs(['copilot'], { reviewerMaxRounds: { copilot: 2 } }))
         .toBe('--review-with copilot~max=2');
-      expect(buildReviewWithArgs(['copilot'], 'all', false, [], [], {})).toBe('');
+      expect(buildReviewWithArgs(['copilot'])).toBe('');
     });
 
     it('ignores caps for tokens not present in the emitted list, and invalid entries', () => {
-      expect(buildReviewWithArgs(['codex', 'copilot'], 'all', false, [], [], { ollama: 1, nope: 2, codex: -1 }))
+      expect(buildReviewWithArgs(['codex', 'copilot'], { reviewerMaxRounds: { ollama: 1, nope: 2, codex: -1 } }))
         .toBe('--review-with codex,copilot');
     });
   });
@@ -1386,30 +1386,30 @@ describe('validation.js', () => {
 
   describe('buildReviewWithArgs — per-reviewer [model] selector', () => {
     it('emits <token>[<model>] for exactly the tokens carrying a pin', () => {
-      expect(buildReviewWithArgs(['claude', 'ollama', 'codex'], 'all', false, [], [], {}, { ollama: 'qwen2.5:7b' }))
+      expect(buildReviewWithArgs(['claude', 'ollama', 'codex'], { reviewerModels: { ollama: 'qwen2.5:7b' } }))
         .toBe('--review-with claude,ollama[qwen2.5:7b],codex');
     });
 
     it('places the bracket between the slug and the ~ suffixes (slashdo strips suffixes first)', () => {
-      expect(buildReviewWithArgs(['ollama'], 'all', false, [], ['ollama'], { ollama: 1 }, { ollama: 'qwen2.5:7b' }))
+      expect(buildReviewWithArgs(['ollama'], { optionalReviewers: ['ollama'], reviewerMaxRounds: { ollama: 1 }, reviewerModels: { ollama: 'qwen2.5:7b' } }))
         .toBe('--review-with ollama[qwen2.5:7b]~opt~max=1');
     });
 
     it('never brackets copilot, a @username, or lmstudio (no slashdo slug takes one)', () => {
       // lmstudio's model rides in the /api/code-review/local request body instead.
-      expect(buildReviewWithArgs(['copilot', 'lmstudio'], 'all', false, ['Bot'], [], {}, {
+      expect(buildReviewWithArgs(['copilot', 'lmstudio'], { usernames: ['Bot'], reviewerModels: {
         copilot: 'x', lmstudio: 'local-a', '@Bot': 'y',
-      })).toBe('--review-with copilot,lmstudio,@Bot');
+      } })).toBe('--review-with copilot,lmstudio,@Bot');
     });
 
     it('does not let a stray copilot pin force the suppressed lone-default flag on', () => {
       // Unlike ~opt / ~max, a model pin is not an explicit naming of copilot —
       // `copilot[…]` isn't even legal slashdo, so nothing would be emitted.
-      expect(buildReviewWithArgs(['copilot'], 'all', false, [], [], {}, { copilot: 'x' })).toBe('');
+      expect(buildReviewWithArgs(['copilot'], { reviewerModels: { copilot: 'x' } })).toBe('');
     });
 
     it('ignores pins for tokens not in the emitted list, and invalid entries', () => {
-      expect(buildReviewWithArgs(['codex'], 'all', false, [], [], {}, { ollama: 'a', nope: 'b', codex: '  ' }))
+      expect(buildReviewWithArgs(['codex'], { reviewerModels: { ollama: 'a', nope: 'b', codex: '  ' } }))
         .toBe('--review-with codex');
     });
   });
