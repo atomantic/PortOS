@@ -334,21 +334,30 @@ describe('onTaskCompleted — incremental streak updates', () => {
     });
   });
 
-  it('splits an ISO week that straddles the new year into two week ids (#3465)', async () => {
-    // Characterization, not endorsement: getWeekId() pairs the ISO week NUMBER
-    // with the CALENDAR year, so Mon 2025-12-29 and Thu 2026-01-01 — one and
-    // the same ISO week — stamp as '2025-W01' and '2026-W01', and the rollover
-    // branch of isConsecutiveWeek (which only accepts w1 >= 52) does not bridge
-    // them. Pinned so the fix in #3465 has to update this deliberately.
+  it('keeps an ISO week that straddles the new year on a single week id (#3465)', async () => {
+    // Mon 2025-12-29 and Thu 2026-01-01 are the SAME ISO week. Before #3465 the
+    // week id paired the ISO week NUMBER with the CALENDAR year, so they stamped
+    // '2025-W01' and '2026-W01' — splitting the week (and reusing '2025-W01',
+    // which is also the id of the JANUARY 2025 week). Both are now '2026-W01'.
     await productivity.onTaskCompleted(agentOn('dec', { month: 12, day: 29, completedAt: new Date(2025, 11, 29, 10).toISOString() }));
-    expect(readStore().streaks).toMatchObject({ lastActiveWeek: '2025-W01', currentWeekly: 1 });
+    expect(readStore().streaks).toMatchObject({ lastActiveWeek: '2026-W01', currentWeekly: 1 });
 
     await productivity.onTaskCompleted(agentOn('jan', { month: 1, day: 1 }));
 
+    // Same week, so the id does not move and the week is not counted twice.
     expect(readStore().streaks).toMatchObject({
       lastActiveWeek: '2026-W01',
       currentWeekly: 1,
       longestWeekly: 1,
+    });
+
+    // …and the following week extends the streak instead of resetting it.
+    await productivity.onTaskCompleted(agentOn('next', { month: 1, day: 5 }));
+
+    expect(readStore().streaks).toMatchObject({
+      lastActiveWeek: '2026-W02',
+      currentWeekly: 2,
+      longestWeekly: 2,
     });
   });
 

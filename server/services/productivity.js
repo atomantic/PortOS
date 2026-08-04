@@ -9,6 +9,7 @@ import { join } from 'path';
 import { cosEvents } from './cosEvents.js';
 import { getAgents } from './cosAgents.js';
 import { ensureDir, getDateString, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
+import { getWeekId, isConsecutiveWeek } from '../lib/isoWeek.js';
 
 const DATA_DIR = PATHS.cos;
 const PRODUCTIVITY_FILE = join(DATA_DIR, 'productivity.json');
@@ -70,18 +71,6 @@ async function saveProductivity(data) {
 }
 
 /**
- * Get week identifier (YYYY-WXX format)
- */
-function getWeekId(date = new Date()) {
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const dayNum = d.getUTCDay() || 7;
-  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  const week = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
-  return `${date.getFullYear()}-W${week.toString().padStart(2, '0')}`;
-}
-
-/**
  * Check if two dates are consecutive days
  */
 function isConsecutiveDay(date1, date2) {
@@ -92,20 +81,6 @@ function isConsecutiveDay(date1, date2) {
   d2.setHours(0, 0, 0, 0);
   const diffDays = Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
   return diffDays === 1;
-}
-
-/**
- * Check if two weeks are consecutive
- */
-function isConsecutiveWeek(week1, week2) {
-  if (!week1 || !week2) return false;
-  // Parse YYYY-WXX format
-  const [y1, w1] = week1.split('-W').map(Number);
-  const [y2, w2] = week2.split('-W').map(Number);
-
-  if (y1 === y2) return w2 - w1 === 1;
-  if (y2 - y1 === 1 && w1 >= 52 && w2 === 1) return true;
-  return false;
 }
 
 /**

@@ -267,6 +267,7 @@ export * from './domainAutonomy.js';
 export * from './domainBudgets.js';
 export * from './errorHandler.js';
 export * from './extensionErrors.js';
+export * from './isoWeek.js';
 export * from './lwwTimestamp.js';
 export * from './mapWithConcurrency.js';
 export * from './markedSection.js';

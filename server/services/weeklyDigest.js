@@ -12,6 +12,7 @@ import { join } from 'path';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { getAgents, getAgentDates, getAgentsByDate } from './cosAgents.js';
 import { atomicWrite, ensureDir, readJSONFile, formatDuration, PATHS } from '../lib/fileUtils.js';
+import { getWeekId } from '../lib/isoWeek.js';
 
 const DIGESTS_DIR = PATHS.digests;
 
@@ -23,26 +24,6 @@ function getWeekStart(date = new Date()) {
   const day = d.getDay();
   const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Monday
   return new Date(d.setDate(diff));
-}
-
-/**
- * Get the ISO week number for a date
- */
-function getWeekNumber(date = new Date()) {
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const dayNum = d.getUTCDay() || 7;
-  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
-}
-
-/**
- * Get week identifier (YYYY-WXX format)
- */
-function getWeekId(date = new Date()) {
-  const year = date.getFullYear();
-  const week = getWeekNumber(date);
-  return `${year}-W${week.toString().padStart(2, '0')}`;
 }
 
 /**
