@@ -150,9 +150,15 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
     // graph deliberately ignores `import()` (correct for cycle detection), but
     // reaching across a blocked layer with a deferred import is exactly this
     // cluster's habit, so a `return import(...).then(...)` back-edge would
-    // violate the layering with the cycle walk fully green. Any relative
-    // specifier ending in `agentOrchestrator.js` counts, from any depth.
-    const DYNAMIC_FACADE_IMPORT = /\bimport\(\s*['"][^'"]*\bagentOrchestrator\.js['"]\s*\)/;
+    // violate the layering with the cycle walk fully green.
+    //
+    // The match is deliberately loose — anything between `import(` and the
+    // closing paren that names the facade — so quotes, template literals and an
+    // interleaved comment all count, at any path depth. A mention inside a
+    // comment would also trip it; that fails CLOSED, which is the correct bias
+    // for a structural guard (the alternative is a green suite over a live
+    // back-edge).
+    const DYNAMIC_FACADE_IMPORT = /\bimport\(\s*[^)]*\bagentOrchestrator\.js[^)]*\)/;
     const offenders = [...reachable].filter(file =>
       (graph.get(file) || []).includes('agentOrchestrator.js') ||
       DYNAMIC_FACADE_IMPORT.test(readFileSync(join(SERVICES_DIR, file), 'utf-8'))
