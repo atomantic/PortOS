@@ -11,6 +11,7 @@ import KanbanBoard from '../components/KanbanBoard';
 import StatusBadge from '../components/StatusBadge';
 import ActivityLog from '../components/apps/ActivityLog';
 import { useAppOperation } from '../hooks/useAppOperation';
+import useUrlParams from '../hooks/useUrlParams';
 import * as api from '../services/api';
 import socket from '../services/socket';
 import { NON_PM2_TYPES, getAppTypeLabel } from '../components/apps/constants';
@@ -26,7 +27,13 @@ export default function Apps() {
   const [refreshingConfig, setRefreshingConfig] = useState({});
   const [building, setBuilding] = useState({});
   const [archiving, setArchiving] = useState({});
-  const [showArchived, setShowArchived] = useState(false);
+  // The archived filter lives in the URL (`/apps?view=archived`) so the archived
+  // list is linkable/bookmarkable and — critically — survivable: unarchiving the
+  // last archived app used to strand the user on an empty card with no control
+  // to get back (#3434).
+  const [searchParams, updateParams] = useUrlParams();
+  const showArchived = searchParams.get('view') === 'archived';
+  const setShowArchived = (next) => updateParams({ view: next ? 'archived' : null });
   const [jiraTickets, setJiraTickets] = useState({});
   const [loadingTickets, setLoadingTickets] = useState({});
   // Per-row "…" trigger refs, so dismissing a row's delete confirmation hands
@@ -162,10 +169,11 @@ export default function Apps() {
           <p className="text-gray-500 text-sm sm:text-base">Manage registered applications</p>
         </div>
         <div className="flex items-center gap-3">
-          {/* Archive Toggle */}
-          {archivedApps.length > 0 && (
+          {/* Archive Toggle — stays mounted while the archived view is open even
+              once it empties, so the way back never disappears. */}
+          {(showArchived || archivedApps.length > 0) && (
             <button
-              onClick={() => setShowArchived(prev => !prev)}
+              onClick={() => setShowArchived(!showArchived)}
               className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 transition-colors ${
                 showArchived
                   ? 'bg-port-warning/20 text-port-warning border border-port-warning/30'
@@ -195,7 +203,14 @@ export default function Apps() {
           <p className="text-gray-500 mb-6">
             {showArchived ? 'Archived apps will appear here' : 'Register your first app to monitor its health, restart it, and surface it on your dashboard.'}
           </p>
-          {!showArchived && (
+          {showArchived ? (
+            <button
+              onClick={() => setShowArchived(false)}
+              className="inline-block px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
+            >
+              Back to active apps
+            </button>
+          ) : (
             <Link
               to="/apps/create"
               className="inline-block px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"

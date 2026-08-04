@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
@@ -39,7 +39,10 @@ vi.mock('../services/socket', () => ({
 }));
 
 import * as api from '../services/api';
+import socket from '../services/socket';
 import Apps from './Apps';
+
+const ARCHIVED_APP = { ...APPS[0], archived: true };
 
 const renderApps = async () => {
   render(<MemoryRouter><Apps /></MemoryRouter>);
@@ -132,5 +135,50 @@ describe('Apps row action hierarchy', () => {
     await screen.findByRole('link', { name: 'Manage PortOS' });
 
     expect(screen.queryByRole('button', { name: /More actions/ })).toBeNull();
+  });
+});
+
+describe('Apps archived filter', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getApps.mockResolvedValue([ARCHIVED_APP]);
+  });
+
+  // Fire the `apps:changed` handler the page registered, so the list refreshes
+  // exactly the way it does in the app after an archive/unarchive round-trip.
+  const emitAppsChanged = async () => {
+    const [, handler] = socket.on.mock.calls.find(([evt]) => evt === 'apps:changed');
+    await act(async () => { await handler(); });
+  };
+
+  it('opens the archived list directly from /apps?view=archived', async () => {
+    render(<MemoryRouter initialEntries={['/apps?view=archived']}><Apps /></MemoryRouter>);
+
+    await screen.findByRole('link', { name: 'Example App' });
+    expect(screen.getByRole('button', { name: /Active \(0\)/ })).toBeTruthy();
+  });
+
+  it('leaves a way back to the active list after the last archived app is unarchived', async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter initialEntries={['/apps']}><Apps /></MemoryRouter>);
+
+    await user.click(await screen.findByRole('button', { name: /Archived \(1\)/ }));
+    await screen.findByRole('link', { name: 'Example App' });
+
+    await user.click(screen.getByRole('button', { name: 'More actions for Example App' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Unarchive' }));
+    await waitFor(() => expect(api.unarchiveApp).toHaveBeenCalledWith('app-alpha'));
+
+    // The archive is now empty, which used to unmount the toggle and strand the
+    // user on a blank "No archived apps" card.
+    api.getApps.mockResolvedValue([{ ...APPS[0], archived: false }]);
+    await emitAppsChanged();
+
+    expect(screen.getByText('No archived apps')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Active \(1\)/ })).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Back to active apps' }));
+    await screen.findByRole('link', { name: 'Example App' });
+    expect(screen.queryByText('No archived apps')).toBeNull();
   });
 });
