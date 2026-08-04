@@ -221,10 +221,20 @@ router.post('/instances/:instanceId/tickets/:ticketId/transition', asyncHandler(
  * Get tickets assigned to current user in active sprint for a project
  */
 router.get('/instances/:instanceId/my-sprint-tickets/:projectKey', asyncHandler(async (req, res) => {
-  const tickets = await jiraService.getMyCurrentSprintTickets(
+  // STRICT variant on purpose (#3437): the UI has to tell "the fetch failed"
+  // apart from "the sprint is empty", and the swallow-to-[] wrapper made that
+  // impossible — an unreachable instance rendered as "No tickets assigned to
+  // you" with no retry. Non-UI callers that genuinely prefer a soft failure
+  // (voice/character context) keep using getMyCurrentSprintTickets.
+  const tickets = await jiraService.fetchMyCurrentSprintTickets(
     req.params.instanceId,
     req.params.projectKey
-  );
+  ).catch(err => {
+    throw new ServerError(`JIRA sprint fetch failed: ${err.message}`, {
+      status: 502,
+      code: 'JIRA_FETCH_FAILED'
+    });
+  });
   res.json(tickets);
 }));
 
