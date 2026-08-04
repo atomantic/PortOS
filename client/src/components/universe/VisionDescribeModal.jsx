@@ -25,7 +25,7 @@ import toast from '../ui/Toast';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import VisionProviderPicker from './VisionProviderPicker';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
-import { processScreenshotUploads } from '../../utils/fileUpload';
+import { processScreenshotUploads } from '../../services/apiMedia';
 import { describeEntityFromImages, expandEntityFromImages } from '../../services/apiUniverseBuilder';
 
 // Mirror server VISION_MAX_IMAGES so the UI stops the user before the request

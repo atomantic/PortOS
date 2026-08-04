@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { X, CheckCircle, AlertCircle, RotateCcw, Image, Loader2 } from 'lucide-react';
-import { processScreenshotUploads } from '../../../utils/fileUpload';
+import { processScreenshotUploads } from '../../../services/apiMedia';
 import toast from '../../ui/Toast';
 import Modal from '../../ui/Modal';
 import FilePickerButton from '../../ui/FilePickerButton';

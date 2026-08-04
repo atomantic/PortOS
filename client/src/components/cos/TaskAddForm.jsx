@@ -3,7 +3,8 @@ import { Plus, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip
 import toast from '../ui/Toast';
 import AppContextPicker from '../AppContextPicker';
 import * as api from '../../services/api';
-import { processScreenshotUploads, processAttachmentUploads, ATTACHMENT_ACCEPT } from '../../utils/fileUpload';
+import { processScreenshotUploads, processAttachmentUploads } from '../../services/apiMedia';
+import { ATTACHMENT_ACCEPT } from '../../utils/fileUpload';
 import FilePickerButton from '../ui/FilePickerButton';
 import { formatBytes } from '../../utils/formatters';
 import { filterSelectableModels, isTuiProvider, isCliProvider, isProcessProvider, isCodexProvider } from '../../utils/providers';

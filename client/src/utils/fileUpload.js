@@ -5,8 +5,8 @@
  * This module holds only pure helpers (base64 read, validation, constants) —
  * no I/O. The upload orchestration that actually POSTs to the server
  * (`uploadScreenshotFile` / `processScreenshotUploads` / `uploadAttachmentFile`
- * / `processAttachmentUploads`) lives in `../services/apiMedia.js` and is
- * re-exported below for backward compatibility with existing callers.
+ * / `processAttachmentUploads`) lives in `../services/apiMedia.js`; import it
+ * from there directly.
  */
 
 import { formatBytes } from './formatters';
@@ -127,13 +127,3 @@ export function validateImageFile(file, maxFileSize = SCREENSHOT_MAX_FILE_SIZE) 
 // Max file size for attachments. Capped by the base64-in-JSON wire limit, not
 // by any attachment-specific rule — see JSON_UPLOAD_MAX_FILE_SIZE.
 export const ATTACHMENT_MAX_FILE_SIZE = JSON_UPLOAD_MAX_FILE_SIZE;
-
-// The upload orchestration (network I/O) lives in ../services/apiMedia.js —
-// re-exported here so existing callers that import these from utils/fileUpload
-// keep working without edits.
-export {
-  uploadScreenshotFile,
-  processScreenshotUploads,
-  uploadAttachmentFile,
-  processAttachmentUploads,
-} from '../services/apiMedia.js';

@@ -93,7 +93,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 |---|---|
 | `apiImageVideo.js` | Image-gen local backend extras (gallery, models, LoRAs, cancel, delete). |
 | `apiLoraTraining.js` | Character LoRA training — datasets (CRUD, upload, generate, slice, caption), training runs (start/list/cancel/delete + status), character→LoRA link lookup. |
-| `apiMedia.js` | Screenshots + media assets. Also owns the multi-file upload orchestration — `processScreenshotUploads` / `processAttachmentUploads` and their single-file variants (`uploadScreenshotFile` / `uploadAttachmentFile`) — moved from `utils/fileUpload.js` since they perform network I/O, not pure transforms. |
+| `apiMedia.js` | Screenshots + media assets. Also owns the multi-file upload orchestration — `processScreenshotUploads` / `processAttachmentUploads` and their single-file variants (`uploadScreenshotFile` / `uploadAttachmentFile`) — moved from `utils/fileUpload.js` since they perform network I/O, not pure transforms. `utils/fileUpload.js` keeps only the pure helpers/constants and no longer re-exports these. |
 | `apiMediaJobs.js` | Media generation job tracking. |
 | `apiCreativeDirector.js` | Creative Director (video production). |
 | `apiCreativeCommission.js` | Creative Commissions (Autonomous Creation Engine — standing recurring briefs). |

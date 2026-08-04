@@ -5,7 +5,7 @@ import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { processScreenshotUploads } from '../utils/fileUpload';
+import { processScreenshotUploads } from '../services/apiMedia';
 import { filterSelectableModels } from '../utils/providers';
 
 export function RunnerPage() {
