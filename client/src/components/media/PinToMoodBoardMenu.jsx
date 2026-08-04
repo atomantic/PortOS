@@ -173,7 +173,7 @@ export default function PinToMoodBoardMenu({ item, size = 'sm' }) {
         type="button"
         onClick={handleToggleOpen}
         className={`shrink-0 ${sizeCls.button} bg-port-border hover:bg-port-border/70 text-white rounded flex items-center justify-center`}
-        title="Pin to mood board"
+        title="Pin to mood board" aria-label="Pin to mood board"
         aria-haspopup="menu"
         aria-expanded={open}
       >

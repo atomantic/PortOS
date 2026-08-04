@@ -298,7 +298,7 @@ export function CategoryEditor({
             <button
               onClick={onRemove}
               className="p-1 text-gray-400 hover:text-port-error rounded"
-              title="Remove category"
+              title="Remove category" aria-label="Remove category"
             >
               <Trash2 size={14} />
             </button>
@@ -491,7 +491,7 @@ function VariationCard({
             }}
             disabled={!canPromote || promotingIdx !== null}
             className="p-1 text-gray-400 hover:text-port-success disabled:opacity-30 disabled:cursor-not-allowed rounded"
-            title={promoteTitle}
+            title={promoteTitle} aria-label={promoteTitle}
             aria-haspopup={requiresTargetKind ? 'menu' : undefined}
             aria-expanded={requiresTargetKind ? pickerIdx === idx : undefined}
           >
@@ -526,7 +526,7 @@ function VariationCard({
           onClick={() => onRenderVariation(v)}
           disabled={!canRender}
           className="p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
-          title={canRender ? 'Render this variation' : 'Save the world and configure a render backend to enable'}
+          title={canRender ? 'Render this variation' : 'Save the world and configure a render backend to enable'} aria-label={canRender ? 'Render this variation' : 'Save the world and configure a render backend to enable'}
         >
           <Play size={14} />
         </button>
@@ -534,7 +534,7 @@ function VariationCard({
       <button
         onClick={toggleLock}
         className={`p-1 rounded ${locked ? 'text-port-accent hover:bg-port-accent/20' : 'text-gray-500 hover:text-gray-300'}`}
-        title={locked ? 'Locked — AI expand will preserve this variation' : 'Lock this variation against AI expand'}
+        title={locked ? 'Locked — AI expand will preserve this variation' : 'Lock this variation against AI expand'} aria-label={locked ? 'Locked — AI expand will preserve this variation' : 'Lock this variation against AI expand'}
         aria-pressed={locked}
       >
         {locked ? <Lock size={14} /> : <Unlock size={14} />}
@@ -542,14 +542,14 @@ function VariationCard({
       <button
         onClick={startEdit}
         className="p-1 text-gray-400 hover:text-port-accent rounded"
-        title="Edit"
+        title="Edit" aria-label="Edit"
       >
         <Edit3 size={14} />
       </button>
       <button
         onClick={remove}
         className="p-1 text-gray-400 hover:text-port-error rounded"
-        title="Remove"
+        title="Remove" aria-label="Remove"
       >
         <X size={14} />
       </button>

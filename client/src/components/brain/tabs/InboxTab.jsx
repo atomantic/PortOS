@@ -336,7 +336,7 @@ export default function InboxTab({ onRefresh, settings }) {
             type="submit"
             disabled={!inputText.trim()}
             className="px-4 py-3 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-            title="Capture thought"
+            title="Capture thought" aria-label="Capture thought"
           >
             <Send className="w-5 h-5" />
           </button>
@@ -431,14 +431,14 @@ export default function InboxTab({ onRefresh, settings }) {
                             <button
                               onClick={() => handleSaveEdit(entry.id)}
                               className="p-1 text-port-success hover:bg-port-success/20 rounded transition-colors"
-                              title="Save changes"
+                              title="Save changes" aria-label="Save changes"
                             >
                               <Save size={14} />
                             </button>
                             <button
                               onClick={handleCancelEdit}
                               className="p-1 text-gray-400 hover:bg-port-border/50 rounded transition-colors"
-                              title="Cancel editing"
+                              title="Cancel editing" aria-label="Cancel editing"
                             >
                               <X size={14} />
                             </button>
@@ -451,14 +451,14 @@ export default function InboxTab({ onRefresh, settings }) {
                             <button
                               onClick={() => handleEdit(entry)}
                               className="p-1 text-gray-400 hover:text-white transition-colors"
-                              title="Edit text"
+                              title="Edit text" aria-label="Edit text"
                             >
                               <Edit2 size={14} />
                             </button>
                             <button
                               onClick={() => setConfirmingDeleteId(entry.id)}
                               className="p-1 text-gray-400 hover:text-port-error transition-colors"
-                              title="Delete entry"
+                              title="Delete entry" aria-label="Delete entry"
                             >
                               <Trash2 size={14} />
                             </button>
@@ -604,14 +604,14 @@ export default function InboxTab({ onRefresh, settings }) {
                           <button
                             onClick={() => handleSaveEdit(entry.id)}
                             className="p-1 text-port-success hover:bg-port-success/20 rounded transition-colors"
-                            title="Save changes"
+                            title="Save changes" aria-label="Save changes"
                           >
                             <Save size={14} />
                           </button>
                           <button
                             onClick={handleCancelEdit}
                             className="p-1 text-gray-400 hover:bg-port-border/50 rounded transition-colors"
-                            title="Cancel editing"
+                            title="Cancel editing" aria-label="Cancel editing"
                           >
                             <X size={14} />
                           </button>
@@ -624,14 +624,14 @@ export default function InboxTab({ onRefresh, settings }) {
                           <button
                             onClick={() => handleEdit(entry)}
                             className="p-1 text-gray-400 hover:text-white transition-colors"
-                            title="Edit text"
+                            title="Edit text" aria-label="Edit text"
                           >
                             <Edit2 size={14} />
                           </button>
                           <button
                             onClick={() => setConfirmingDeleteId(entry.id)}
                             className="p-1 text-gray-400 hover:text-port-error transition-colors"
-                            title="Delete entry"
+                            title="Delete entry" aria-label="Delete entry"
                           >
                             <Trash2 size={14} />
                           </button>
@@ -719,7 +719,7 @@ export default function InboxTab({ onRefresh, settings }) {
                         <button
                           onClick={() => setConfirmingDeleteId(entry.id)}
                           className="p-1 text-gray-400 hover:text-port-error transition-colors"
-                          title="Delete entry"
+                          title="Delete entry" aria-label="Delete entry"
                         >
                           <Trash2 size={14} />
                         </button>
@@ -864,7 +864,7 @@ export default function InboxTab({ onRefresh, settings }) {
                           <button
                             onClick={() => setConfirmingDeleteId(entry.id)}
                             className="p-1 text-gray-500 hover:text-port-error transition-colors"
-                            title="Delete entry"
+                            title="Delete entry" aria-label="Delete entry"
                           >
                             <Trash2 size={14} />
                           </button>

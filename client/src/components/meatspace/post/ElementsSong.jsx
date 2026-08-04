@@ -570,7 +570,7 @@ function SelectedElementDetail({ sym, elementMap, mastery, inSong, category, ver
             {category && <div className="text-xs text-gray-500">{category.label}</div>}
           </div>
         </div>
-        <button aria-label="Close" onClick={onClear} className="text-gray-500 hover:text-white transition-colors"><X size={16} /></button>
+        <button aria-label="Close" onClick={onClear} className="text-gray-500 hover:text-white transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"><X size={16} /></button>
       </div>
       {inSong ? (
         <>

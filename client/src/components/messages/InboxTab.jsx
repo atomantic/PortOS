@@ -564,7 +564,7 @@ export default function InboxTab({ accounts }) {
                           ? `${cfg.bg} ${cfg.color} ring-1 ring-current`
                           : 'text-gray-500 hover:text-gray-300 hover:bg-port-border/50'
                       }`}
-                      title={title}
+                      title={title} aria-label={title}
                     >
                       {actionInProgress === msg.id && isActionable
                         ? <Loader2 size={14} className="animate-spin" />

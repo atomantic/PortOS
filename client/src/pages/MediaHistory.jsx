@@ -175,7 +175,7 @@ export default function MediaHistory() {
                 type="button"
                 onClick={() => setQuery('')}
                 className="absolute right-1 top-1/2 -translate-y-1/2 p-0.5 text-gray-500 hover:text-white"
-                title="Clear search"
+                title="Clear search" aria-label="Clear search"
               >
                 <X className="w-3.5 h-3.5" />
               </button>

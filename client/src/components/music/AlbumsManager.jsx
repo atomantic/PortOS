@@ -329,7 +329,7 @@ export default function AlbumsManager() {
                   ) : form.coverImageUrl ? (
                     <div className="relative">
                       <img src={form.coverImageUrl} alt="Album cover" className="w-28 h-28 rounded object-cover border border-port-border bg-port-bg" />
-                      <button type="button" onClick={() => setCover('')} title="Remove cover" className="absolute -top-2 -right-2 p-1 rounded-full bg-port-bg border border-port-border text-gray-400 hover:text-port-error">
+                      <button type="button" onClick={() => setCover('')} title="Remove cover" aria-label="Remove cover" className="absolute -top-2 -right-2 p-1 rounded-full bg-port-bg border border-port-border text-gray-400 hover:text-port-error">
                         <X size={12} />
                       </button>
                     </div>

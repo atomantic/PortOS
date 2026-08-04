@@ -45,7 +45,7 @@ export default function TrackRenderModal({ render, active = false, onClose, onSe
             </span>
           ) : null}
         </h2>
-        <button onClick={onClose} className="text-gray-400 hover:text-white p-1" aria-label="Close">
+        <button onClick={onClose} className="text-gray-400 hover:text-white p-1 min-h-[44px] min-w-[44px] flex items-center justify-center" aria-label="Close">
           <X size={18} />
         </button>
       </div>

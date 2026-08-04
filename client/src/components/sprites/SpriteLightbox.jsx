@@ -33,7 +33,7 @@ export default function SpriteLightbox({ recordId, path, version, alt, onClose }
             type="button"
             onClick={onClose}
             aria-label="Close preview"
-            className="shrink-0 text-gray-400 hover:text-white"
+            className="shrink-0 text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"
           >
             <X className="w-4 h-4" />
           </button>

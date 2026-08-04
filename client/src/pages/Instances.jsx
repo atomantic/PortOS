@@ -1282,7 +1282,7 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
             onClick={handleProbe}
             disabled={probing}
             className="p-1.5 text-gray-500 hover:text-white transition-colors disabled:opacity-50"
-            title="Probe now"
+            title="Probe now" aria-label="Probe now"
           >
             <RefreshCw size={14} className={probing ? 'animate-spin' : ''} />
           </button>
@@ -1302,7 +1302,7 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
             <button
               onClick={() => setConfirmRemove(true)}
               className="p-1.5 text-gray-600 hover:text-port-error transition-colors"
-              title="Remove peer"
+              title="Remove peer" aria-label="Remove peer"
             >
               <Trash2 size={14} />
             </button>

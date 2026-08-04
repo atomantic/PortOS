@@ -149,7 +149,7 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
           <h3 className="mt-1 truncate font-semibold text-white" title={node.label}>{node.label}</h3>
           <p className="mt-1 text-xs text-gray-500">Times use {timezone || 'the configured timezone'}.</p>
         </div>
-        <button type="button" onClick={onClose} className="rounded p-1 text-gray-500 hover:bg-port-border hover:text-white" aria-label="Close schedule editor">
+        <button type="button" onClick={onClose} className="rounded p-1 text-gray-500 hover:bg-port-border hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center" aria-label="Close schedule editor">
           <X className="h-4 w-4" />
         </button>
       </div>

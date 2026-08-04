@@ -523,7 +523,7 @@ export default function VideoTimelineEditor() {
             type="button"
             onClick={() => navigate('/media/timeline')}
             className="p-1.5 text-gray-400 hover:text-white"
-            title="Back to projects"
+            title="Back to projects" aria-label="Back to projects"
           >
             <ArrowLeft className="w-4 h-4" />
           </button>
@@ -612,7 +612,7 @@ export default function VideoTimelineEditor() {
               onClick={() => setPlaying((p) => !p)}
               disabled={clips.length === 0}
               className="p-2 bg-port-card border border-port-border rounded-md hover:border-port-accent disabled:opacity-40"
-              title={playing ? 'Pause' : 'Play'}
+              title={playing ? 'Pause' : 'Play'} aria-label={playing ? 'Pause' : 'Play'}
             >
               {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
             </button>
@@ -620,7 +620,7 @@ export default function VideoTimelineEditor() {
               type="button"
               onClick={() => setMuted((m) => !m)}
               className="p-2 bg-port-card border border-port-border rounded-md hover:border-port-accent"
-              title={muted ? 'Unmute' : 'Mute'}
+              title={muted ? 'Unmute' : 'Mute'} aria-label={muted ? 'Unmute' : 'Mute'}
             >
               {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
             </button>

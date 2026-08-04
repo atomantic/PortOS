@@ -129,7 +129,7 @@ export default function AdvancedParamsPanel({
                 type="button"
                 onClick={onRandomSeed}
                 className="p-2 text-gray-400 hover:text-white border border-port-border rounded-lg hover:bg-port-border/50 disabled:opacity-50 min-h-[40px] min-w-[40px] flex items-center justify-center"
-                title="Randomize seed"
+                title="Randomize seed" aria-label="Randomize seed"
               >
                 <Dice5 className="w-4 h-4" />
               </button>

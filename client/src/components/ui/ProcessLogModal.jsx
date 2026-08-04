@@ -126,7 +126,7 @@ export default function ProcessLogModal({ open, onClose, processName, title = 'S
             </button>
             <button
               onClick={onClose}
-              className="p-1.5 text-gray-400 hover:text-white transition-colors"
+              className="p-1.5 text-gray-400 hover:text-white transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
               title="Close"
               aria-label="Close logs"
             >

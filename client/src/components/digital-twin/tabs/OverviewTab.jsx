@@ -202,7 +202,7 @@ export default function OverviewTab({ status, settings, onRefresh }) {
           <button
             onClick={() => setShowSettings(!showSettings)}
             className="p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-            title="Settings"
+            title="Settings" aria-label="Settings"
           >
             <Settings size={20} />
           </button>

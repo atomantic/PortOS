@@ -40,7 +40,7 @@ function DatasetImageLightbox({ datasetId, images, index, onIndexChange, onClose
         <button
           type="button"
           onClick={onClose}
-          className="absolute -top-1 right-0 z-10 p-2 rounded-full bg-white text-black hover:bg-white/85 shadow-lg focus:outline-none focus:ring-2 focus:ring-port-accent"
+          className="absolute -top-1 right-0 z-10 p-2 rounded-full bg-white text-black hover:bg-white/85 shadow-lg focus:outline-none focus:ring-2 focus:ring-port-accent min-h-[44px] min-w-[44px] flex items-center justify-center"
           aria-label="Close (Esc)"
           title="Close (Esc)"
         >

@@ -205,7 +205,7 @@ export default function CompositeSheetsEditor({ sheets, onChange, canRender = fa
                         onClick={() => onRender(sheet)}
                         disabled={!canRender}
                         className="p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
-                        title={canRender ? 'Render this board' : 'Save the world and configure a render backend to enable'}
+                        title={canRender ? 'Render this board' : 'Save the world and configure a render backend to enable'} aria-label={canRender ? 'Render this board' : 'Save the world and configure a render backend to enable'}
                       >
                         <Play size={14} />
                       </button>
@@ -213,7 +213,7 @@ export default function CompositeSheetsEditor({ sheets, onChange, canRender = fa
                     <button
                       onClick={() => toggleLockAt(idx)}
                       className={`p-1 rounded ${sheet.locked ? 'text-port-accent hover:bg-port-accent/20' : 'text-gray-500 hover:text-gray-300'}`}
-                      title={sheet.locked ? 'Locked — AI expand will preserve this board' : 'Lock this board against AI expand'}
+                      title={sheet.locked ? 'Locked — AI expand will preserve this board' : 'Lock this board against AI expand'} aria-label={sheet.locked ? 'Locked — AI expand will preserve this board' : 'Lock this board against AI expand'}
                       aria-pressed={!!sheet.locked}
                     >
                       {sheet.locked ? <Lock size={14} /> : <Unlock size={14} />}
@@ -221,14 +221,14 @@ export default function CompositeSheetsEditor({ sheets, onChange, canRender = fa
                     <button
                       onClick={() => startEdit(idx, sheet)}
                       className="p-1 text-gray-400 hover:text-port-accent rounded"
-                      title="Edit"
+                      title="Edit" aria-label="Edit"
                     >
                       <Edit3 size={14} />
                     </button>
                     <button
                       onClick={() => removeAt(idx)}
                       className="p-1 text-gray-400 hover:text-port-error rounded"
-                      title="Remove"
+                      title="Remove" aria-label="Remove"
                     >
                       <X size={14} />
                     </button>

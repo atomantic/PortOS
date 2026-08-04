@@ -533,7 +533,7 @@ export default function MediaCollectionDetail() {
                         ? 'bg-port-accent text-white border-port-accent'
                         : 'bg-black/60 text-gray-300 border-port-border hover:text-white'
                     }`}
-                    title={isCover ? 'Cover (click to reset to newest)' : 'Set as cover'}
+                    title={isCover ? 'Cover (click to reset to newest)' : 'Set as cover'} aria-label={isCover ? 'Cover (click to reset to newest)' : 'Set as cover'}
                   >
                     <Star className="w-3.5 h-3.5" fill={isCover ? 'currentColor' : 'none'} />
                   </button>

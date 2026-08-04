@@ -905,7 +905,7 @@ function CharacterArcsSection({ series, patchSeries }) {
                   type="button"
                   onClick={() => removeArc(i)}
                   className="text-gray-500 hover:text-port-error shrink-0"
-                  title="Remove this character arc"
+                  title="Remove this character arc" aria-label="Remove this character arc"
                 >
                   <Trash2 size={14} />
                 </button>
@@ -962,7 +962,7 @@ function CharacterArcsSection({ series, patchSeries }) {
                         type="button"
                         onClick={() => removeTransition(i, j)}
                         className="text-gray-500 hover:text-port-error shrink-0"
-                        title="Remove this transition"
+                        title="Remove this transition" aria-label="Remove this transition"
                       >
                         <Trash2 size={12} />
                       </button>

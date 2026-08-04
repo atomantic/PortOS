@@ -346,7 +346,7 @@ export default function MediaCollections() {
                           type="button"
                           onClick={() => handleDelete(c)}
                           className="px-1.5 py-1 bg-port-error/20 hover:bg-port-error/40 text-port-error text-[10px] rounded flex items-center gap-1"
-                          title="Delete collection"
+                          title="Delete collection" aria-label="Delete collection"
                         >
                           <Trash2 className="w-3 h-3" />
                         </button>

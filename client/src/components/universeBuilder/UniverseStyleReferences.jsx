@@ -213,7 +213,7 @@ export default function UniverseStyleReferences({
               <h2 className="text-base font-semibold text-white">Add art style reference</h2>
               <p className="text-xs text-gray-500">Choose an image, analyze it, then preview whether to adopt its style.</p>
             </div>
-            <button type="button" onClick={close} disabled={analyzing || persisting} className="p-1 text-gray-400 hover:text-white" aria-label="Close">
+            <button type="button" onClick={close} disabled={analyzing || persisting} className="p-1 text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center" aria-label="Close">
               <X size={18} />
             </button>
           </div>

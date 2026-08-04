@@ -315,7 +315,7 @@ export default function MediaLightbox({
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); onClose(); }}
-            className="absolute top-2 left-2 z-30 p-2 rounded-full bg-white text-black hover:bg-white/85 shadow-lg focus:outline-none focus:ring-2 focus:ring-port-accent"
+            className="absolute top-2 left-2 z-30 p-2 rounded-full bg-white text-black hover:bg-white/85 shadow-lg focus:outline-none focus:ring-2 focus:ring-port-accent min-h-[44px] min-w-[44px] flex items-center justify-center"
             aria-label="Close"
             title="Close (Esc)"
           >
@@ -512,7 +512,7 @@ function SettingsPane({
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
+            className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50 min-h-[44px] min-w-[44px] flex items-center justify-center"
             aria-label="Close"
           >
             <X className="w-4 h-4" />
@@ -529,7 +529,7 @@ function SettingsPane({
                 type="button"
                 onClick={() => copy(item.prompt, 'Prompt')}
                 className="p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
-                title="Copy prompt"
+                title="Copy prompt" aria-label="Copy prompt"
               >
                 <Copy className="w-3 h-3" />
               </button>
@@ -570,7 +570,7 @@ function SettingsPane({
                 type="button"
                 onClick={() => copy(item.negativePrompt, 'Negative prompt')}
                 className="p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
-                title="Copy negative prompt"
+                title="Copy negative prompt" aria-label="Copy negative prompt"
               >
                 <Copy className="w-3 h-3" />
               </button>
@@ -619,7 +619,7 @@ function SettingsPane({
                         type="button"
                         onClick={() => copy(String(v), k)}
                         className="p-0.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
-                        title={`Copy ${k.toLowerCase()}`}
+                        title={`Copy ${k.toLowerCase()}`} aria-label={`Copy ${k.toLowerCase()}`}
                       >
                         <Copy className="w-3 h-3" />
                       </button>

@@ -85,7 +85,7 @@ export default function FeatureAgents() {
             <button
               onClick={fetchAgents}
               className="p-2 text-gray-400 hover:text-white hover:bg-port-border/50 rounded-lg transition-colors"
-              title="Refresh"
+              title="Refresh" aria-label="Refresh"
             >
               <RefreshCw size={16} />
             </button>

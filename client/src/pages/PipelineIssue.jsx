@@ -445,7 +445,7 @@ export default function PipelineIssue() {
               <button
                 type="button"
                 onClick={() => setSettingsOpen(false)}
-                className="p-1 text-gray-400 hover:text-white"
+                className="p-1 text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"
                 aria-label="Close"
               >
                 <X size={16} />

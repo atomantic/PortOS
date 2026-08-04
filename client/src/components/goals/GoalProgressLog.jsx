@@ -25,7 +25,7 @@ export default function GoalProgressLog({
         <button
           onClick={() => setShowProgressForm(!showProgressForm)}
           className="p-0.5 text-gray-500 hover:text-port-accent"
-          title="Log progress"
+          title="Log progress" aria-label="Log progress"
         >
           <Plus className="w-3.5 h-3.5" />
         </button>
@@ -94,7 +94,7 @@ export default function GoalProgressLog({
               <button
                 onClick={() => requestDelete(entry.id)}
                 className="p-0.5 text-gray-700 hover:text-red-400 opacity-40 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 shrink-0"
-                title="Delete"
+                title="Delete" aria-label="Delete"
               >
                 <Trash2 className="w-3 h-3" />
               </button>

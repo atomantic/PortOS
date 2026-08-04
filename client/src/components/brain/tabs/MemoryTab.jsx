@@ -593,7 +593,7 @@ export default function MemoryTab({ onRefresh }) {
               <button
                 onClick={() => handleMarkDone(record)}
                 className="p-1.5 text-gray-400 hover:text-port-success rounded hover:bg-port-success/20"
-                title="Mark done"
+                title="Mark done" aria-label="Mark done"
               >
                 <CheckCircle2 size={14} />
               </button>
@@ -609,14 +609,14 @@ export default function MemoryTab({ onRefresh }) {
             <button
               onClick={() => startEdit(record)}
               className="p-1.5 text-gray-400 hover:text-white rounded hover:bg-port-border/50"
-              title="Edit"
+              title="Edit" aria-label="Edit"
             >
               <Edit2 size={14} />
             </button>
             <button
               onClick={() => requestDelete(record.id)}
               className="p-1.5 text-gray-400 hover:text-port-error rounded hover:bg-port-error/20"
-              title="Delete"
+              title="Delete" aria-label="Delete"
             >
               <Trash2 size={14} />
             </button>
@@ -738,7 +738,7 @@ export default function MemoryTab({ onRefresh }) {
           <button
             onClick={() => setSearchQuery('')}
             aria-label="Close"
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"
           >
             <X size={14} />
           </button>

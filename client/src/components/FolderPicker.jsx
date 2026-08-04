@@ -117,7 +117,7 @@ export default function FolderPicker({ value, onChange, defaultPath }) {
             <button
               type="button"
               onClick={() => setIsOpen(false)}
-              className="p-1 text-gray-400 hover:text-white"
+              className="p-1 text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"
               aria-label="Close folder picker"
             >
               <X size={20} />
@@ -134,7 +134,7 @@ export default function FolderPicker({ value, onChange, defaultPath }) {
               type="button"
               onClick={() => handleNavigate('~')}
               className="p-1 text-gray-500 hover:text-white shrink-0"
-              title="Home directory"
+              title="Home directory" aria-label="Home directory"
             >
               <Home size={16} />
             </button>

@@ -65,7 +65,7 @@ export default function DeriveFromManuscriptPreview({ preview, committing, onCan
           <BookText size={14} className="text-port-accent" />
           Derived from manuscript — review before applying
         </h3>
-        <button type="button" onClick={onCancel} disabled={committing} aria-label="Close" className="text-gray-500 hover:text-white disabled:opacity-40">
+        <button type="button" onClick={onCancel} disabled={committing} aria-label="Close" className="text-gray-500 hover:text-white disabled:opacity-40 min-h-[44px] min-w-[44px] flex items-center justify-center">
           <X size={16} />
         </button>
       </div>

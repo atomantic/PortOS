@@ -133,7 +133,7 @@ export default function GalleryImagePicker({ open, onClose, onSelect, allowUploa
         <button
           type="button"
           onClick={onClose}
-          className="shrink-0 p-1.5 text-gray-400 hover:text-white rounded"
+          className="shrink-0 p-1.5 text-gray-400 hover:text-white rounded min-h-[44px] min-w-[44px] flex items-center justify-center"
           aria-label="Close"
         >
           <X className="w-4 h-4" />

@@ -603,7 +603,7 @@ export default function BrowserPage() {
                             <button
                               onClick={() => handleDeleteDownload(file.name)}
                               className="p-1.5 rounded-md text-gray-400 hover:text-port-error hover:bg-port-border/50 transition-colors"
-                              title="Delete file"
+                              title="Delete file" aria-label="Delete file"
                             >
                               <Trash2 size={16} />
                             </button>

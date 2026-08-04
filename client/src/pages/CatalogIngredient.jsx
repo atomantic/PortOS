@@ -1261,12 +1261,12 @@ function MediaTile({ m, missing, isPortrait = false, onSetPortrait, onDetach }) 
       )}
       <div className="absolute top-1 right-1 flex gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
         {!isPortrait && isImage && (
-          <button type="button" onClick={() => onSetPortrait(m.mediaKey)} title="Set as portrait"
+          <button type="button" onClick={() => onSetPortrait(m.mediaKey)} title="Set as portrait" aria-label="Set as portrait"
             className="p-2 sm:p-1 rounded bg-black/60 text-gray-200 hover:text-port-warning">
             <Star size={12} aria-hidden="true" />
           </button>
         )}
-        <button type="button" onClick={() => onDetach(m.mediaKey, m.kind)} title="Detach"
+        <button type="button" onClick={() => onDetach(m.mediaKey, m.kind)} title="Detach" aria-label="Detach"
           className="p-2 sm:p-1 rounded bg-black/60 text-gray-200 hover:text-port-error">
           <X size={12} aria-hidden="true" />
         </button>
@@ -1298,7 +1298,7 @@ function GalleryPickerModal({ onClose, onPick }) {
       <>
         <div className="flex items-center justify-between p-3 border-b border-port-border shrink-0">
           <h3 id="gallery-picker-title" className="text-sm font-semibold text-white">Pick from media gallery</h3>
-          <button type="button" onClick={onClose} className="text-gray-400 hover:text-white" aria-label="Close">
+          <button type="button" onClick={onClose} className="text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center" aria-label="Close">
             <X size={16} />
           </button>
         </div>

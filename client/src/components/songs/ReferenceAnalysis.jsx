@@ -196,7 +196,7 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
             <button
               type="button"
               onClick={() => onUpdate('midiFilename', '')}
-              title="Remove the MIDI transcription"
+              title="Remove the MIDI transcription" aria-label="Remove the MIDI transcription"
               className="flex items-center gap-1 px-1.5 py-1 text-xs rounded-lg border border-port-border text-gray-400 hover:text-port-error"
             >
               <X size={13} />
@@ -205,7 +205,7 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
         ) : midiJob.active ? (
           <span className="flex items-center gap-1.5 px-2 py-1 text-xs rounded-lg border border-port-border text-gray-300">
             <Loader2 size={13} className="animate-spin" /> {midiJob.stageLabel}
-            <button type="button" onClick={midiJob.cancel} title="Cancel MIDI transcription" className="ml-1 text-gray-400 hover:text-port-error">
+            <button type="button" onClick={midiJob.cancel} title="Cancel MIDI transcription" aria-label="Cancel MIDI transcription" className="ml-1 text-gray-400 hover:text-port-error">
               <X size={13} />
             </button>
           </span>
@@ -291,7 +291,7 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
         {downloading ? (
           <span className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-port-border text-gray-300">
             <Loader2 size={14} className="animate-spin" /> {downloadLabel}
-            <button type="button" onClick={audioImport.cancel} title="Cancel download" className="ml-1 text-gray-400 hover:text-port-error">
+            <button type="button" onClick={audioImport.cancel} title="Cancel download" aria-label="Cancel download" className="ml-1 text-gray-400 hover:text-port-error">
               <X size={13} />
             </button>
           </span>

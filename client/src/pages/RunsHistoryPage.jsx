@@ -300,7 +300,7 @@ export function RunsHistoryPage() {
                         <button
                           onClick={(e) => handleResume(run, e)}
                           className="p-1 text-gray-500 hover:text-port-accent transition-colors sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 sm:focus-visible:opacity-100"
-                          title="Resume run"
+                          title="Resume run" aria-label="Resume run"
                           data-testid={`resume-run-${run.id}`}
                         >
                           <RotateCcw size={14} />
@@ -309,7 +309,7 @@ export function RunsHistoryPage() {
                       <button
                         onClick={(e) => handleDelete(run.id, e)}
                         className="p-1 text-gray-500 hover:text-port-error transition-colors sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 sm:focus-visible:opacity-100"
-                        title="Delete run"
+                        title="Delete run" aria-label="Delete run"
                         data-testid={`delete-run-${run.id}`}
                       >
                         <Trash2 size={14} />

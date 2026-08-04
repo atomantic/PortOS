@@ -45,7 +45,7 @@ export default function AnnotatedManuscriptSection({
       <button
         type="button"
         onClick={onCloseComment}
-        className="absolute right-1 top-1 z-10 text-gray-500 hover:text-white"
+        className="absolute right-1 top-1 z-10 text-gray-500 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"
         aria-label="Close note"
         title="Close note"
       >

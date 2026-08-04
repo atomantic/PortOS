@@ -275,14 +275,14 @@ export default function NotesTab() {
             <button
               onClick={() => setShowVaultSetup(true)}
               className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white"
-              title="Manage vaults"
+              title="Manage vaults" aria-label="Manage vaults"
             >
               <Settings size={14} />
             </button>
             <button
               onClick={() => { setShowCreateForm(true); setNewNotePath(''); }}
               className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-port-accent"
-              title="New note"
+              title="New note" aria-label="New note"
             >
               <Plus size={14} />
             </button>
@@ -303,7 +303,7 @@ export default function NotesTab() {
               <button
                 onClick={clearSearch}
                 aria-label="Close"
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"
               >
                 <X size={14} />
               </button>
@@ -331,7 +331,7 @@ export default function NotesTab() {
               <button
                 onClick={() => setShowCreateForm(false)}
                 aria-label="Close"
-                className="p-1 rounded hover:bg-port-card text-gray-400"
+                className="p-1 rounded hover:bg-port-card text-gray-400 min-h-[44px] min-w-[44px] flex items-center justify-center"
               >
                 <X size={14} />
               </button>
@@ -357,14 +357,14 @@ export default function NotesTab() {
           <button
             onClick={() => { loadTags(); setShowTags(!showTags); }}
             className={`ml-auto p-0.5 rounded ${showTags ? 'text-port-accent' : 'text-gray-500 hover:text-white'}`}
-            title="Tags"
+            title="Tags" aria-label="Tags"
           >
             <Tag size={12} />
           </button>
           <button
             onClick={loadNotes}
             className="p-0.5 rounded text-gray-500 hover:text-white"
-            title="Refresh"
+            title="Refresh" aria-label="Refresh"
           >
             <RefreshCw size={12} className={scanning ? 'animate-spin' : ''} />
           </button>
@@ -480,7 +480,7 @@ export default function NotesTab() {
                     <button
                       onClick={() => { setEditing(false); setNoteContent(selectedNote.content); }}
                       aria-label="Close editor"
-                      className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white"
+                      className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"
                     >
                       <X size={16} />
                     </button>
@@ -497,7 +497,7 @@ export default function NotesTab() {
                 <button
                   onClick={() => requestDelete(selectedNote.path)}
                   className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-port-error"
-                  title="Delete note"
+                  title="Delete note" aria-label="Delete note"
                 >
                   <Trash2 size={14} />
                 </button>
@@ -647,7 +647,7 @@ function VaultSetup({ detectedVaults, vaults, customPath, setCustomPath, adding,
           </p>
         </div>
         {vaults.length > 0 && (
-          <button onClick={onClose} aria-label="Close" className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white">
+          <button onClick={onClose} aria-label="Close" className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center">
             <X size={16} />
           </button>
         )}

@@ -226,7 +226,7 @@ export default function BodyTab() {
                           <button
                             onClick={() => startEditEye(exam, realIdx)}
                             className="p-1 text-gray-600 hover:text-port-accent transition-colors"
-                            title="Edit"
+                            title="Edit" aria-label="Edit"
                           >
                             <Pencil size={12} />
                           </button>
@@ -242,7 +242,7 @@ export default function BodyTab() {
                             <button
                               onClick={() => requestDelete(realIdx)}
                               className="p-1 text-gray-600 hover:text-port-error transition-colors"
-                              title="Delete"
+                              title="Delete" aria-label="Delete"
                             >
                               <Trash2 size={12} />
                             </button>

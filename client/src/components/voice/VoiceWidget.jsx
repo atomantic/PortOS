@@ -694,6 +694,7 @@ export default function VoiceWidget() {
           <button
             onClick={hideWidget}
             title="Hide voice widget (restore from the sidebar or Settings → Voice)"
+            aria-label="Hide voice widget"
             className={`p-2 rounded-full bg-port-card border text-gray-400 hover:text-white ${fabSurface}`}
           >
             <EyeOff size={14} />
@@ -706,6 +707,7 @@ export default function VoiceWidget() {
                 : 'bg-port-card text-white'
             }`}
             title="Open voice controls"
+            aria-label="Open voice controls"
           >
             <Icon size={20} />
           </button>
@@ -719,6 +721,7 @@ export default function VoiceWidget() {
               <button
                 onClick={handleClear}
                 title="Clear conversation"
+                aria-label="Clear conversation"
                 className="p-1 rounded text-gray-400 hover:text-port-error hover:bg-port-error/10"
               >
                 <Trash2 size={12} />
@@ -757,6 +760,7 @@ export default function VoiceWidget() {
             type="submit"
             disabled={!draft.trim()}
             title="Send text (Enter)"
+            aria-label="Send text"
             className="p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400"
           >
             <Send size={14} />
@@ -830,6 +834,7 @@ export default function VoiceWidget() {
             <button
               onClick={() => setCollapsed((c) => !c)}
               title={collapsed ? 'Show conversation' : 'Hide conversation'}
+              aria-label={collapsed ? 'Show conversation' : 'Hide conversation'}
               className="p-1.5 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
             >
               {collapsed ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
@@ -839,6 +844,7 @@ export default function VoiceWidget() {
             <button
               onClick={interrupt}
               title="Interrupt"
+              aria-label="Interrupt"
               className="p-2 rounded-full text-port-error hover:bg-port-error/10"
             >
               <Square size={14} />
@@ -861,12 +867,16 @@ export default function VoiceWidget() {
                 ? `Click or press ${hotkey} to send`
                 : `Click or press ${hotkey} to listen`;
             })()}
+            aria-label={handsFree
+              ? (capturing ? 'Stop hands-free listening' : 'Start hands-free listening')
+              : (capturing ? 'Send voice message' : 'Start listening')}
           >
             <Icon size={16} />
           </button>
           <button
             onClick={() => setExpanded(false)}
             title="Minimize voice controls"
+            aria-label="Minimize voice controls"
             className="md:hidden p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
           >
             <X size={14} />
@@ -874,6 +884,7 @@ export default function VoiceWidget() {
           <button
             onClick={hideWidget}
             title="Hide voice widget (restore from the sidebar or Settings → Voice)"
+            aria-label="Hide voice widget"
             className="p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
           >
             <EyeOff size={14} />

@@ -539,14 +539,14 @@ export default function DailyLogTab() {
           <button
             onClick={() => setShowSettings((s) => !s)}
             className="ml-auto min-h-[40px] min-w-[40px] flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-port-card"
-            title="Daily log settings"
+            title="Daily log settings" aria-label="Daily log settings"
           >
             <Settings size={14} />
           </button>
           <button
             onClick={() => setHistoryOpen(false)}
-            className="md:hidden min-h-[40px] min-w-[40px] flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-port-card"
-            title="Close history"
+            className="md:hidden min-h-[44px] min-w-[44px] flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-port-card"
+            title="Close history" aria-label="Close history"
           >
             <X size={14} />
           </button>
@@ -703,7 +703,7 @@ export default function DailyLogTab() {
           <button
             onClick={() => setDate(shiftDate(date, -1))}
             className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-white"
-            title="Previous day"
+            title="Previous day" aria-label="Previous day"
           >
             <ChevronLeft size={16} />
           </button>
@@ -717,7 +717,7 @@ export default function DailyLogTab() {
             onClick={() => setDate(shiftDate(date, 1))}
             disabled={date >= serverToday}
             className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-white disabled:opacity-30"
-            title="Next day"
+            title="Next day" aria-label="Next day"
           >
             <ChevronRight size={16} />
           </button>

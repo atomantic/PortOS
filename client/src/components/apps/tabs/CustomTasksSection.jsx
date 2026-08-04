@@ -372,10 +372,10 @@ export default function CustomTasksSection({ appId, appName }) {
                       </div>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
-                      <button onClick={() => handleTrigger(job)} disabled={triggering === job.id || !job.enabled} className="p-1.5 text-gray-500 hover:text-port-accent transition-colors disabled:opacity-40" title="Run now">
+                      <button onClick={() => handleTrigger(job)} disabled={triggering === job.id || !job.enabled} className="p-1.5 text-gray-500 hover:text-port-accent transition-colors disabled:opacity-40" title="Run now" aria-label="Run now">
                         <Play size={14} />
                       </button>
-                      <button onClick={() => startEdit(job)} className="p-1.5 text-gray-500 hover:text-white transition-colors" title="Edit">
+                      <button onClick={() => startEdit(job)} className="p-1.5 text-gray-500 hover:text-white transition-colors" title="Edit" aria-label="Edit">
                         <Edit3 size={14} />
                       </button>
                       {isConfirming(job.id) ? (
@@ -386,7 +386,7 @@ export default function CustomTasksSection({ appId, appName }) {
                           ariaLabel="Confirm delete custom task"
                         />
                       ) : (
-                        <button onClick={() => requestDelete(job.id)} className="p-1.5 text-red-400/60 hover:text-red-400 transition-colors" title="Delete">
+                        <button onClick={() => requestDelete(job.id)} className="p-1.5 text-red-400/60 hover:text-red-400 transition-colors" title="Delete" aria-label="Delete">
                           <Trash2 size={14} />
                         </button>
                       )}

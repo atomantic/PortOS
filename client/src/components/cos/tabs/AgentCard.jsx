@@ -1002,7 +1002,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
             )}
             <button
               onClick={() => setPromptOpen(false)}
-              className="text-xs px-2 py-1 rounded bg-port-border/40 text-gray-400 hover:text-white"
+              className="text-xs px-2 py-1 rounded bg-port-border/40 text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"
               aria-label="Close prompt viewer"
             >
               Close

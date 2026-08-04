@@ -691,7 +691,7 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
                             <button
                               onClick={() => setMergeConfirm(branch.name)}
                               className={`${iconBtnCls} text-gray-400 hover:text-port-accent hover:bg-port-bg rounded`}
-                              title={`Merge ${branch.name} into current branch`}
+                              title={`Merge ${branch.name} into current branch`} aria-label={`Merge ${branch.name} into current branch`}
                             >
                               <GitMerge size={14} />
                             </button>
@@ -805,7 +805,7 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
                           <button
                             onClick={() => setDeleteConfirm(rb.name)}
                             className={`${iconBtnCls} text-gray-500 hover:text-port-error hover:bg-port-bg rounded`}
-                            title="Delete branch"
+                            title="Delete branch" aria-label="Delete branch"
                           >
                             <Trash2 size={14} />
                           </button>
@@ -865,7 +865,7 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
       >
         <div className="flex items-center justify-between p-4 border-b border-port-border">
           <h3 id="git-diff-modal-title" className="font-medium text-white">Git Diff</h3>
-          <button onClick={() => setShowDiff(false)} aria-label="Close" className="text-gray-400 hover:text-white">×</button>
+          <button onClick={() => setShowDiff(false)} aria-label="Close" className="text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center">×</button>
         </div>
         <pre className="p-4 overflow-auto max-h-[70vh] text-sm font-mono">
           {diff.split('\n').map((line, i) => {
@@ -894,7 +894,7 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
             <Rocket size={18} className="text-port-accent" />
             Create Release PR for {appName}
           </h3>
-          <button onClick={() => setShowReleaseConfirm(false)} aria-label="Close" className="text-gray-400 hover:text-white">×</button>
+          <button onClick={() => setShowReleaseConfirm(false)} aria-label="Close" className="text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center">×</button>
         </div>
         <div className="p-4 space-y-3">
           <p className="text-sm text-gray-300">

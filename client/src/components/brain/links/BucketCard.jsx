@@ -184,14 +184,14 @@ export default function BucketCard({
           <button
             onClick={startEdit}
             className="p-1 text-gray-400 hover:text-white transition-colors"
-            title="Edit bucket"
+            title="Edit bucket" aria-label="Edit bucket"
           >
             <Edit2 size={13} />
           </button>
           <button
             onClick={() => setConfirmDelete(true)}
             className="p-1 text-gray-400 hover:text-port-error transition-colors"
-            title="Delete bucket"
+            title="Delete bucket" aria-label="Delete bucket"
           >
             <Trash2 size={13} />
           </button>
@@ -247,7 +247,7 @@ export default function BucketCard({
           type="submit"
           disabled={adding || !addUrl.trim()}
           className="shrink-0 px-2 py-1 bg-port-accent/80 hover:bg-port-accent text-white rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          title="Add link to bucket"
+          title="Add link to bucket" aria-label="Add link to bucket"
         >
           {adding ? <BrailleSpinner /> : <Plus size={14} />}
         </button>

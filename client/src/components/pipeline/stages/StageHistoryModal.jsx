@@ -72,7 +72,7 @@ export default function StageHistoryModal({
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="text-gray-400 hover:text-white"
+            className="text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"
           >
             <X size={18} />
           </button>

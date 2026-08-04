@@ -249,7 +249,7 @@ export default function AutobiographyTab({ onRefresh }) {
           <button
             onClick={() => setShowConfig(!showConfig)}
             className="p-2 rounded text-gray-400 hover:text-white hover:bg-port-card transition-colors"
-            title="Settings"
+            title="Settings" aria-label="Settings"
           >
             <Settings size={16} />
           </button>
@@ -311,7 +311,7 @@ export default function AutobiographyTab({ onRefresh }) {
             <button
               onClick={() => setFollowUps(null)}
               aria-label="Close"
-              className="p-1 text-gray-500 hover:text-white"
+              className="p-1 text-gray-500 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"
             >
               <X size={14} />
             </button>
@@ -374,7 +374,7 @@ export default function AutobiographyTab({ onRefresh }) {
             <button
               onClick={() => { setWriting(false); setCurrentPrompt(null); setStoryContent(''); setParentStoryId(null); }}
               aria-label="Close"
-              className="p-1 text-gray-500 hover:text-white"
+              className="p-1 text-gray-500 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"
             >
               <X size={16} />
             </button>

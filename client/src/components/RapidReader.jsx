@@ -211,7 +211,7 @@ export default function RapidReader({
             <button
               type="button"
               onClick={onClose}
-              className="min-h-10 min-w-10 flex items-center justify-center rounded-lg border border-port-border text-gray-400 hover:text-white hover:bg-port-bg/60 ml-1"
+              className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg border border-port-border text-gray-400 hover:text-white hover:bg-port-bg/60 ml-1"
               title="Close (Esc)"
               aria-label="Close"
             >
@@ -323,7 +323,7 @@ export function RapidReaderModal({ open, text, title, onClose, ...readerProps })
         <button
           type="button"
           onClick={onClose}
-          className="min-h-10 min-w-10 flex items-center justify-center text-gray-400 hover:text-white"
+          className="min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-400 hover:text-white"
           aria-label="Close rapid reader"
         >
           <X size={18} />

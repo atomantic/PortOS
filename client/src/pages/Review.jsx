@@ -450,7 +450,7 @@ export default function Review() {
                 <button
                   onClick={() => setBriefingFullscreen(prev => !prev)}
                   className="p-1 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-white/5"
-                  title={briefingFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                  title={briefingFullscreen ? 'Exit fullscreen' : 'Fullscreen'} aria-label={briefingFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
                 >
                   {briefingFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
                 </button>
@@ -658,14 +658,14 @@ function QueueRow({ item, onDrill, onDismiss, onResolve, onPromoteAsk, resolving
         <button
           onClick={() => onDrill(item)}
           className="p-1.5 text-gray-500 hover:text-port-accent transition-colors"
-          title="Open"
+          title="Open" aria-label="Open"
         >
           <ArrowRight size={16} />
         </button>
         <button
           onClick={() => onDismiss(item.id)}
           className="p-1.5 text-gray-500 hover:text-port-warning transition-colors"
-          title="Dismiss from queue (this session)"
+          title="Dismiss from queue (this session)" aria-label="Dismiss from queue (this session)"
         >
           <X size={16} />
         </button>
@@ -816,7 +816,7 @@ function ReviewItem({ item, config, idScope, isEditing, onComplete, onDismiss, o
             <button
               onClick={onStartEdit}
               className="p-1.5 text-gray-500 hover:text-white transition-colors"
-              title="Edit"
+              title="Edit" aria-label="Edit"
             >
               <Pencil size={14} />
             </button>
@@ -824,21 +824,21 @@ function ReviewItem({ item, config, idScope, isEditing, onComplete, onDismiss, o
           <button
             onClick={() => onComplete(item.id)}
             className="p-1.5 text-gray-500 hover:text-port-success transition-colors"
-            title={item.type === 'alert' ? 'Accept' : 'Complete'}
+            title={item.type === 'alert' ? 'Accept' : 'Complete'} aria-label={item.type === 'alert' ? 'Accept' : 'Complete'}
           >
             <CheckCircle2 size={16} />
           </button>
           <button
             onClick={() => onDismiss(item.id)}
             className="p-1.5 text-gray-500 hover:text-port-warning transition-colors"
-            title={item.type === 'alert' ? 'Reject' : 'Dismiss'}
+            title={item.type === 'alert' ? 'Reject' : 'Dismiss'} aria-label={item.type === 'alert' ? 'Reject' : 'Dismiss'}
           >
             <X size={16} />
           </button>
           <button
             onClick={() => onDelete(item.id)}
             className="p-1.5 text-gray-500 hover:text-port-error transition-colors"
-            title="Delete"
+            title="Delete" aria-label="Delete"
           >
             <Trash2 size={14} />
           </button>

@@ -414,7 +414,7 @@ export function VoiceTab() {
               type="button"
               onClick={() => handlePreviewVoice(activeVoice)}
               disabled={!activeVoice || !!previewingVoice || !!downloadingVoice}
-              title={downloadingVoice ? `Downloading ${downloadingVoice}…` : 'Preview this voice'}
+              title={downloadingVoice ? `Downloading ${downloadingVoice}…` : 'Preview this voice'} aria-label={downloadingVoice ? `Downloading ${downloadingVoice}…` : 'Preview this voice'}
               className="shrink-0 p-2 rounded-lg bg-port-border hover:bg-port-border/70 text-white disabled:opacity-50"
             >
               {previewingVoice === activeVoice || downloadingVoice === activeVoice

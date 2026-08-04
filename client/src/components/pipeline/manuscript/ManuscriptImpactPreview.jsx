@@ -142,7 +142,7 @@ export default function ManuscriptImpactPreview({ open, onClose, seriesId, secti
                   : `Accept all ${totalEdits} edit${totalEdits === 1 ? '' : 's'}`}
               </button>
             ) : null}
-            <button type="button" onClick={onClose} className="text-gray-400 hover:text-white" aria-label="Close preview" title="Close (Esc)">
+            <button type="button" onClick={onClose} className="text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center" aria-label="Close preview" title="Close (Esc)">
               <X size={18} />
             </button>
           </div>

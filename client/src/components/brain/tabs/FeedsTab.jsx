@@ -251,14 +251,14 @@ export default function FeedsTab({ onRefresh }) {
                   <button
                     onClick={(e) => { e.stopPropagation(); handleRefreshFeed(feed.id); }}
                     className="p-1 text-gray-500 hover:text-white rounded"
-                    title="Refresh feed"
+                    title="Refresh feed" aria-label="Refresh feed"
                   >
                     <RefreshCw size={10} />
                   </button>
                   <button
                     onClick={(e) => { e.stopPropagation(); setConfirmingDeleteId(feed.id); }}
                     className="p-1 text-gray-500 hover:text-port-error rounded"
-                    title="Remove feed"
+                    title="Remove feed" aria-label="Remove feed"
                   >
                     <Trash2 size={10} />
                   </button>

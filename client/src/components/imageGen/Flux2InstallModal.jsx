@@ -87,7 +87,7 @@ export default function Flux2InstallModal({ open, onClose, onComplete }) {
           </div>
           <button
             onClick={handleClose}
-            className="text-gray-400 hover:text-white p-1"
+            className="text-gray-400 hover:text-white p-1 min-h-[44px] min-w-[44px] flex items-center justify-center"
             aria-label="Close installer"
           >
             <X size={18} />

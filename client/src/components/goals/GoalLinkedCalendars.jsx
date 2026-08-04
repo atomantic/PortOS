@@ -25,7 +25,7 @@ export default function GoalLinkedCalendars({
               <button
                 onClick={() => handleUnlinkCalendar(lc.subcalendarId)}
                 className="p-0.5 text-gray-600 hover:text-red-400"
-                title="Unlink"
+                title="Unlink" aria-label="Unlink"
               >
                 <Unlink className="w-3 h-3" />
               </button>

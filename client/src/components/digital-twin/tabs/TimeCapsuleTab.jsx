@@ -224,7 +224,7 @@ export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
               <GitCompare size={16} />
               Comparison: {compareResult.snapshot1.label} vs {compareResult.snapshot2.label}
             </h3>
-            <button onClick={() => setCompareResult(null)} aria-label="Close" className="p-1 text-gray-400 hover:text-white">
+            <button onClick={() => setCompareResult(null)} aria-label="Close" className="p-1 text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center">
               <X size={16} />
             </button>
           </div>
@@ -362,7 +362,7 @@ export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
                           <button
                             onClick={() => setConfirmDelete(snap.id)}
                             className="p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-red-400 rounded-lg hover:bg-port-border transition-colors"
-                            title="Delete snapshot"
+                            title="Delete snapshot" aria-label="Delete snapshot"
                           >
                             <Trash2 size={16} />
                           </button>

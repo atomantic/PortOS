@@ -976,7 +976,7 @@ function CivitaiAuthModal({ pendingUrl, message, auth, onClose, onSaved, onRetry
           <KeyRound size={18} className="text-port-accent" />
           <h2 id="civitai-auth-title" className="text-base font-semibold text-white">Civitai API key</h2>
         </div>
-        <button onClick={onClose} className="text-gray-400 hover:text-gray-200" aria-label="Close">
+        <button onClick={onClose} className="text-gray-400 hover:text-gray-200 min-h-[44px] min-w-[44px] flex items-center justify-center" aria-label="Close">
           <X size={16} />
         </button>
       </div>
@@ -1169,7 +1169,7 @@ function LoraCard({ lora, onDelete, deleting }) {
             onClick={onDelete}
             disabled={deleting}
             className="text-port-error hover:text-port-error/80 p-1.5 rounded hover:bg-port-error/10 disabled:opacity-50"
-            title="Delete LoRA"
+            title="Delete LoRA" aria-label="Delete LoRA"
           >
             <Trash2 size={14} />
           </button>

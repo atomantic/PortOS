@@ -111,7 +111,7 @@ export default function DraftsTab({ accounts }) {
                   <button
                     onClick={() => handleApprove(draft.id)}
                     className="p-1 text-gray-400 hover:text-port-success transition-colors"
-                    title="Approve"
+                    title="Approve" aria-label="Approve"
                   >
                     <Check size={16} />
                   </button>
@@ -124,7 +124,7 @@ export default function DraftsTab({ accounts }) {
                   <button
                     onClick={() => handleSend(draft.id)}
                     className="p-1 text-gray-400 hover:text-port-accent transition-colors"
-                    title="Send"
+                    title="Send" aria-label="Send"
                   >
                     <Send size={16} />
                   </button>
@@ -151,7 +151,7 @@ export default function DraftsTab({ accounts }) {
                   <button
                     onClick={() => requestDelete(draft.id)}
                     className="p-1 text-gray-400 hover:text-port-error transition-colors"
-                    title="Delete"
+                    title="Delete" aria-label="Delete"
                   >
                     <Trash2 size={16} />
                   </button>

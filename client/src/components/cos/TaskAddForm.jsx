@@ -446,10 +446,12 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
                   {!template.isBuiltin && (
                     <button
                       onClick={(e) => deleteTemplate(template.id, e)}
-                      className="flex md:hidden md:group-hover:flex absolute -top-1 -right-1 w-4 h-4 bg-port-error rounded-full items-center justify-center"
+                      className="flex md:hidden md:group-hover:flex absolute -top-[18px] -right-[18px] w-11 h-11 items-center justify-center"
                       aria-label="Delete template"
                     >
-                      <X size={10} />
+                      <span className="flex items-center justify-center w-4 h-4 bg-port-error rounded-full">
+                        <X size={10} />
+                      </span>
                     </button>
                   )}
                 </div>

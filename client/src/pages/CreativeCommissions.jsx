@@ -197,7 +197,7 @@ export default function CreativeCommissions() {
               </button>
               <button
                 onClick={() => toggleEnabled(c)}
-                title={c.enabled ? 'Pause' : 'Resume'}
+                title={c.enabled ? 'Pause' : 'Resume'} aria-label={c.enabled ? 'Pause' : 'Resume'}
                 className="p-2 text-gray-400 hover:text-gray-100"
               >
                 {c.enabled ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}

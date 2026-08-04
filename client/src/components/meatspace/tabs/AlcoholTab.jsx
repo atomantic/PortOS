@@ -380,10 +380,10 @@ export default function AlcoholTab() {
                       placeholder="ABV%"
                       className="w-16 px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white text-right"
                     />
-                    <button onClick={saveEditButton} className="p-1.5 text-port-success hover:text-port-success/80" title="Save">
+                    <button onClick={saveEditButton} className="p-1.5 text-port-success hover:text-port-success/80" title="Save" aria-label="Save">
                       <Check size={14} />
                     </button>
-                    <button onClick={cancelEditButton} className="p-1.5 text-gray-500 hover:text-gray-300" title="Cancel">
+                    <button onClick={cancelEditButton} className="p-1.5 text-gray-500 hover:text-gray-300" title="Cancel" aria-label="Cancel">
                       <X size={14} />
                     </button>
                   </>
@@ -392,7 +392,7 @@ export default function AlcoholTab() {
                     <span className="flex-1 text-xs text-gray-300">{drink.name}</span>
                     <span className="text-xs text-gray-500">{drink.oz}oz</span>
                     <span className="text-xs text-gray-500">{drink.abv}%</span>
-                    <button onClick={() => startEditButton(idx)} className="p-1.5 text-gray-600 hover:text-port-accent" title="Edit">
+                    <button onClick={() => startEditButton(idx)} className="p-1.5 text-gray-600 hover:text-port-accent" title="Edit" aria-label="Edit">
                       <Pencil size={12} />
                     </button>
                     {isConfirming(`btn:${idx}`) ? (
@@ -405,7 +405,7 @@ export default function AlcoholTab() {
                         onCancel={cancelDelete}
                       />
                     ) : (
-                      <button onClick={() => requestDelete(`btn:${idx}`)} className="p-1.5 text-gray-600 hover:text-port-error" title="Remove">
+                      <button onClick={() => requestDelete(`btn:${idx}`)} className="p-1.5 text-gray-600 hover:text-port-error" title="Remove" aria-label="Remove">
                         <Trash2 size={12} />
                       </button>
                     )}
@@ -649,14 +649,14 @@ export default function AlcoholTab() {
                                 <button
                                   onClick={saveEdit}
                                   className="p-1 text-port-success hover:text-port-success/80 transition-colors"
-                                  title="Save"
+                                  title="Save" aria-label="Save"
                                 >
                                   <Check size={14} />
                                 </button>
                                 <button
                                   onClick={cancelEdit}
                                   className="p-1 text-gray-500 hover:text-gray-300 transition-colors"
-                                  title="Cancel"
+                                  title="Cancel" aria-label="Cancel"
                                 >
                                   <X size={14} />
                                 </button>
@@ -675,7 +675,7 @@ export default function AlcoholTab() {
                                 <button
                                   onClick={() => startEdit(entry.date, idx, drink)}
                                   className="p-1 text-gray-600 hover:text-port-accent transition-colors"
-                                  title="Edit drink"
+                                  title="Edit drink" aria-label="Edit drink"
                                 >
                                   <Pencil size={12} />
                                 </button>
@@ -692,7 +692,7 @@ export default function AlcoholTab() {
                                   <button
                                     onClick={() => requestDelete(key)}
                                     className="p-1 text-gray-600 hover:text-port-error transition-colors"
-                                    title="Remove drink"
+                                    title="Remove drink" aria-label="Remove drink"
                                   >
                                     <Trash2 size={12} />
                                   </button>

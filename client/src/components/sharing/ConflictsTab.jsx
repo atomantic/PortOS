@@ -104,7 +104,7 @@ function ConflictEntry({ entry, onResolved }) {
             className="px-2 py-1 rounded border border-port-border text-gray-400 hover:text-white text-[11px]">
             Discard
           </button>
-          <button type="button" onClick={remove} disabled={busy} className="p-1 text-gray-500 hover:text-port-error" title="Remove entry">
+          <button type="button" onClick={remove} disabled={busy} className="p-1 text-gray-500 hover:text-port-error" title="Remove entry" aria-label="Remove entry">
             <Trash2 size={13} />
           </button>
         </div>

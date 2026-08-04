@@ -218,7 +218,7 @@ export default function VisionDescribeModal({
             <Sparkles size={14} className="text-port-accent" />
             {entryName ? `"${entryName}"` : `This ${noun}`} from image{multi ? 's' : ''}
           </h3>
-          <button type="button" onClick={onClose} className="text-gray-500 hover:text-white" aria-label="Close">
+          <button type="button" onClick={onClose} className="text-gray-500 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center" aria-label="Close">
             <X size={16} />
           </button>
         </div>

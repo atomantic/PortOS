@@ -435,7 +435,7 @@ export default function CharacterSheet() {
         <button
           onClick={() => { setLoading(true); load(); }}
           className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-port-border/50"
-          title="Refresh"
+          title="Refresh" aria-label="Refresh"
         >
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
         </button>
@@ -728,7 +728,7 @@ export default function CharacterSheet() {
             <div className="mt-3 p-3 bg-port-bg rounded-lg border border-port-error/30 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-port-error">Roll Damage</span>
-                <button onClick={() => setActiveAction(null)} aria-label="Close" className="text-gray-500 hover:text-white">
+                <button onClick={() => setActiveAction(null)} aria-label="Close" className="text-gray-500 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center">
                   <X className="w-4 h-4" />
                 </button>
               </div>
@@ -762,7 +762,7 @@ export default function CharacterSheet() {
             <div className="mt-3 p-3 bg-port-bg rounded-lg border border-port-warning/30 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-port-warning">Add Experience</span>
-                <button onClick={() => setActiveAction(null)} aria-label="Close" className="text-gray-500 hover:text-white">
+                <button onClick={() => setActiveAction(null)} aria-label="Close" className="text-gray-500 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center">
                   <X className="w-4 h-4" />
                 </button>
               </div>
@@ -794,7 +794,7 @@ export default function CharacterSheet() {
             <div className="mt-3 p-3 bg-port-bg rounded-lg border border-port-accent-2/30 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-port-accent-2">Log Event</span>
-                <button onClick={() => setActiveAction(null)} aria-label="Close" className="text-gray-500 hover:text-white">
+                <button onClick={() => setActiveAction(null)} aria-label="Close" className="text-gray-500 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center">
                   <X className="w-4 h-4" />
                 </button>
               </div>

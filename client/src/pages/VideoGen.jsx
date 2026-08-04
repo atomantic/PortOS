@@ -603,7 +603,7 @@ export default function VideoGen() {
             onClick={refreshStatus}
             disabled={statusLoading}
             className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50 disabled:opacity-50"
-            title="Refresh status"
+            title="Refresh status" aria-label="Refresh status"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${statusLoading ? 'animate-spin' : ''}`} />
           </button>

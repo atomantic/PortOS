@@ -240,7 +240,7 @@ export default function AccountsTab() {
           <button
             onClick={loadData}
             className="p-2 text-gray-400 hover:text-white border border-port-border rounded-lg hover:bg-port-card transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"
-            title="Refresh"
+            title="Refresh" aria-label="Refresh"
           >
             <RefreshCw className="w-4 h-4" />
           </button>
@@ -286,7 +286,7 @@ export default function AccountsTab() {
             <button
               onClick={handleCancel}
               aria-label="Close"
-              className="p-1 text-gray-400 hover:text-white transition-colors"
+              className="p-1 text-gray-400 hover:text-white transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
             >
               <X className="w-4 h-4" />
             </button>
@@ -529,7 +529,7 @@ export default function AccountsTab() {
                     <button
                       onClick={() => handleEdit(account)}
                       className="p-1.5 text-gray-400 hover:text-white rounded transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"
-                      title="Edit"
+                      title="Edit" aria-label="Edit"
                     >
                       <Edit3 className="w-4 h-4" />
                     </button>

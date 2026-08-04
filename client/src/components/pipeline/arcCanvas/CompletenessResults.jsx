@@ -44,7 +44,7 @@ export default function CompletenessResults({ issues, onDismiss, seriesId }) {
               <FileText size={12} /> Open editor
             </Link>
           ) : null}
-          <button type="button" onClick={onDismiss} aria-label="Close" className="text-gray-500 hover:text-white"><X size={16} /></button>
+          <button type="button" onClick={onDismiss} aria-label="Close" className="text-gray-500 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"><X size={16} /></button>
         </div>
       </div>
       {issues.length === 0 ? (

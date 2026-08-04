@@ -104,7 +104,7 @@ export default function KeyboardHelp() {
           <button
             ref={closeButtonRef}
             onClick={close}
-            className="p-1 text-gray-500 hover:text-white transition-colors rounded"
+            className="p-1 text-gray-500 hover:text-white transition-colors rounded min-h-[44px] min-w-[44px] flex items-center justify-center"
             aria-label="Close keyboard shortcuts"
           >
             <X size={16} />

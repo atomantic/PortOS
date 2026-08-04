@@ -338,7 +338,7 @@ function BackupsSection({ backups, loading, onDelete }) {
                     <button
                       onClick={() => requestDelete(b.name)}
                       className="text-gray-500 hover:text-port-error transition-colors"
-                      title="Delete backup"
+                      title="Delete backup" aria-label="Delete backup"
                     >
                       <Trash2 size={12} />
                     </button>
@@ -484,7 +484,7 @@ export default function DataManager() {
           <button
             onClick={() => { setLoading(true); fetchOverview(); }}
             className="p-2 text-gray-400 hover:text-white hover:bg-port-card rounded transition-colors"
-            title="Refresh"
+            title="Refresh" aria-label="Refresh"
           >
             <RefreshCw size={16} />
           </button>

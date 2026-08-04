@@ -399,7 +399,7 @@ export default function Authors() {
                       <button
                         type="button"
                         onClick={() => setHeadshot('')}
-                        title="Remove headshot"
+                        title="Remove headshot" aria-label="Remove headshot"
                         className="absolute -top-2 -right-2 p-1 rounded-full bg-port-bg border border-port-border text-gray-400 hover:text-port-error"
                       >
                         <X size={12} />

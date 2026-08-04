@@ -357,7 +357,7 @@ function JobCard({ job, apps, providers, onToggle, onTrigger, onDelete, onUpdate
           className={`shrink-0 transition-colors ${
             job.enabled ? 'text-port-success' : 'text-gray-600'
           }`}
-          title={job.enabled ? 'Disable job' : 'Enable job'}
+          title={job.enabled ? 'Disable job' : 'Enable job'} aria-label={job.enabled ? 'Disable job' : 'Enable job'}
         >
           {job.enabled ? <ToggleRight size={24} /> : <ToggleLeft size={24} />}
         </button>
@@ -418,20 +418,21 @@ function JobCard({ job, apps, providers, onToggle, onTrigger, onDelete, onUpdate
           <button
             onClick={() => onTrigger(job.id)}
             className="p-1.5 text-gray-500 hover:text-port-accent transition-colors"
-            title="Run now"
+            title="Run now" aria-label="Run now"
           >
             <Play size={14} />
           </button>
           <button
             onClick={startEditing}
             className="p-1.5 text-gray-500 hover:text-white transition-colors"
-            title="Edit"
+            title="Edit" aria-label="Edit"
           >
             <Edit3 size={14} />
           </button>
           <button
             onClick={() => setExpanded(!expanded)}
             className="p-1.5 text-gray-500 hover:text-white transition-colors"
+            title={expanded ? 'Collapse' : 'Expand'} aria-label={expanded ? 'Collapse' : 'Expand'}
           >
             {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </button>

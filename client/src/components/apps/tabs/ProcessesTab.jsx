@@ -261,7 +261,7 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
               <button
                 onClick={() => setFullscreen(false)}
                 className="p-2 text-gray-400 hover:text-white"
-                title="Exit fullscreen"
+                title="Exit fullscreen" aria-label="Exit fullscreen"
               >
                 <X size={20} />
               </button>

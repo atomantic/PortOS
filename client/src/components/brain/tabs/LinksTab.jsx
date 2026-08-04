@@ -459,7 +459,7 @@ export default function LinksTab({ onRefresh }) {
           <button
             onClick={() => setSearch('')}
             className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-500 hover:text-white transition-colors"
-            title="Clear search"
+            title="Clear search" aria-label="Clear search"
           >
             <X size={14} />
           </button>
@@ -586,14 +586,14 @@ export default function LinksTab({ onRefresh }) {
                     <button
                       onClick={() => handleEdit(link)}
                       className="p-1.5 text-gray-400 hover:text-white transition-colors"
-                      title="Edit"
+                      title="Edit" aria-label="Edit"
                     >
                       <Edit2 size={14} />
                     </button>
                     <button
                       onClick={() => setConfirmingDeleteId(link.id)}
                       className="p-1.5 text-gray-400 hover:text-port-error transition-colors"
-                      title="Delete"
+                      title="Delete" aria-label="Delete"
                     >
                       <Trash2 size={14} />
                     </button>

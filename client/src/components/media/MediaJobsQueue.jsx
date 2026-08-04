@@ -180,7 +180,7 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
           <button
             onClick={fetchJobs}
             className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
-            title="Refresh"
+            title="Refresh" aria-label="Refresh"
           >
             <RefreshCw className="w-3.5 h-3.5" />
           </button>

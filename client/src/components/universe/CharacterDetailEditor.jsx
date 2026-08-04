@@ -207,7 +207,7 @@ function ListRow({ row, idx, columns, swatchHex, onChange, onDelete, disabled })
         type="button"
         onClick={() => onDelete(idx)}
         disabled={disabled}
-        title="Remove row"
+        title="Remove row" aria-label="Remove row"
         className="shrink-0 text-gray-500 hover:text-port-error disabled:opacity-30"
       >
         <Trash2 size={12} />
@@ -561,7 +561,7 @@ function ArcFrameworkControls({ entry, onPatch, disabled, idPrefix }) {
                     type="button"
                     onClick={() => patchSlider(axis, null)}
                     disabled={disabled}
-                    title={`Clear ${axis}`}
+                    title={`Clear ${axis}`} aria-label={`Clear ${axis}`}
                     className="text-gray-500 hover:text-port-error disabled:opacity-30"
                   >
                     <Trash2 size={11} />

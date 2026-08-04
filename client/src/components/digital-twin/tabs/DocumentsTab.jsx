@@ -129,7 +129,7 @@ export default function DocumentsTab({ onRefresh }) {
           <button
             onClick={() => setShowCreate(true)}
             className="p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-            title="Create document"
+            title="Create document" aria-label="Create document"
           >
             <Plus size={18} />
           </button>
@@ -189,7 +189,7 @@ export default function DocumentsTab({ onRefresh }) {
                   <button
                     onClick={() => setSelectedDoc(null)}
                     className="lg:hidden p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-                    title="Back to list"
+                    title="Back to list" aria-label="Back to list"
                   >
                     <ArrowLeft size={18} />
                   </button>
@@ -220,7 +220,7 @@ export default function DocumentsTab({ onRefresh }) {
                     className={`p-2 min-h-[40px] min-w-[40px] flex items-center justify-center transition-colors ${
                       selectedDoc.enabled ? 'text-port-success' : 'text-gray-500'
                     }`}
-                    title={selectedDoc.enabled ? 'Disable for CoS injection' : 'Enable for CoS injection'}
+                    title={selectedDoc.enabled ? 'Disable for CoS injection' : 'Enable for CoS injection'} aria-label={selectedDoc.enabled ? 'Disable for CoS injection' : 'Enable for CoS injection'}
                   >
                     {selectedDoc.enabled ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}
                   </button>
@@ -230,7 +230,7 @@ export default function DocumentsTab({ onRefresh }) {
                         onClick={handleSave}
                         disabled={saving}
                         className="p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-port-success hover:text-port-success/80 transition-colors disabled:opacity-50"
-                        title="Save"
+                        title="Save" aria-label="Save"
                       >
                         <Save size={18} />
                       </button>
@@ -240,7 +240,7 @@ export default function DocumentsTab({ onRefresh }) {
                           setEditMode(false);
                         }}
                         className="p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-                        title="Cancel"
+                        title="Cancel" aria-label="Cancel"
                       >
                         <X size={18} />
                       </button>
@@ -250,14 +250,14 @@ export default function DocumentsTab({ onRefresh }) {
                       <button
                         onClick={() => setEditMode(true)}
                         className="p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-                        title="Edit"
+                        title="Edit" aria-label="Edit"
                       >
                         <Edit2 size={18} />
                       </button>
                       <button
                         onClick={() => setDeleteConfirm(selectedDoc.id)}
                         className="p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-red-400 transition-colors"
-                        title="Delete"
+                        title="Delete" aria-label="Delete"
                       >
                         <Trash2 size={18} />
                       </button>

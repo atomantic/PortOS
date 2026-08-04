@@ -386,7 +386,7 @@ export default function EditorialHealthPanel({
               onClick={() => setSelectedSnapshot(null)}
               aria-label="Close snapshot detail"
               title="Close snapshot detail"
-              className="shrink-0 rounded p-0.5 text-gray-500 transition-colors hover:bg-port-border/50 hover:text-gray-300"
+              className="shrink-0 rounded p-0.5 text-gray-500 transition-colors hover:bg-port-border/50 hover:text-gray-300 min-h-[44px] min-w-[44px] flex items-center justify-center"
             >
               <X size={13} />
             </button>

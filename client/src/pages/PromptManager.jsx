@@ -377,7 +377,7 @@ export default function PromptManager() {
         <button
           onClick={loadData}
           className="p-2 text-gray-400 hover:text-white self-end sm:self-auto"
-          title="Reload"
+          title="Reload" aria-label="Reload"
         >
           <RefreshCw size={20} />
         </button>
@@ -421,7 +421,7 @@ export default function PromptManager() {
               <button
                 onClick={() => setCreatingStage(true)}
                 className="p-1 text-port-accent hover:text-port-accent/80"
-                title="New Stage"
+                title="New Stage" aria-label="New Stage"
               >
                 <Plus size={16} />
               </button>
@@ -900,7 +900,7 @@ export default function PromptManager() {
             <button
               onClick={() => setCreatingStage(false)}
               aria-label="Close"
-              className="text-gray-400 hover:text-white"
+              className="text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"
             >
               ✕
             </button>

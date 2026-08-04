@@ -138,7 +138,7 @@ export default function ProjectToolbar({
             <Film size={15} /> Render final
           </button>
         )}
-        <button onClick={onDelete} title="Delete project"
+        <button onClick={onDelete} title="Delete project" aria-label="Delete project"
           className="flex items-center gap-1 text-port-error border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0">
           <Trash2 size={15} />
         </button>

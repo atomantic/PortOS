@@ -139,7 +139,7 @@ export default function IngredientPicker({
           type="button"
           onClick={onClose}
           aria-label="Close ingredient picker"
-          className="p-2 text-gray-500 hover:text-white rounded"
+          className="p-2 text-gray-500 hover:text-white rounded min-h-[44px] min-w-[44px] flex items-center justify-center"
         >
           <X size={18} aria-hidden="true" />
         </button>

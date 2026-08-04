@@ -39,7 +39,7 @@ export default function ShellSessionTabs({ sessions, activeSessionId, onSwitch, 
               className={`shrink-0 ml-0.5 p-0.5 rounded transition-colors ${
                 isActive ? 'text-port-accent/60 hover:text-port-error' : 'text-gray-600 hover:text-port-error'
               }`}
-              title={isRun ? 'Stop run' : 'Kill session'}
+              title={isRun ? 'Stop run' : 'Kill session'} aria-label={isRun ? 'Stop run' : 'Kill session'}
             >
               <X size={14} />
             </button>
@@ -49,7 +49,7 @@ export default function ShellSessionTabs({ sessions, activeSessionId, onSwitch, 
       <button
         onClick={onNew}
         className="flex items-center gap-1 px-2 py-1.5 text-xs text-gray-500 hover:text-white hover:bg-port-border rounded transition-colors min-h-[40px]"
-        title="New session"
+        title="New session" aria-label="New session"
       >
         <Plus size={14} />
       </button>

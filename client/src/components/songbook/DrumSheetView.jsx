@@ -210,7 +210,7 @@ const HitReadout = ({ info, position, onClose }) => (
         type="button"
         onClick={onClose}
         aria-label="Close note explanation"
-        className="shrink-0 rounded px-1.5 leading-none text-base text-gray-500 hover:text-gray-200 focus:outline-none focus-visible:ring-1 focus-visible:ring-port-accent"
+        className="shrink-0 rounded px-1.5 leading-none text-base text-gray-500 hover:text-gray-200 focus:outline-none focus-visible:ring-1 focus-visible:ring-port-accent min-h-[44px] min-w-[44px] flex items-center justify-center"
       >
         <span aria-hidden="true">×</span>
       </button>

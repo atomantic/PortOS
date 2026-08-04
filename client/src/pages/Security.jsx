@@ -402,7 +402,7 @@ export default function Security() {
                     ? 'bg-port-card border border-port-border text-white hover:bg-port-border'
                     : 'bg-port-error/20 text-port-error'
                 } disabled:opacity-50 disabled:cursor-not-allowed`}
-                title={videoEnabled ? 'Disable camera' : 'Enable camera'}
+                title={videoEnabled ? 'Disable camera' : 'Enable camera'} aria-label={videoEnabled ? 'Disable camera' : 'Enable camera'}
               >
                 {videoEnabled ? <Video size={20} /> : <VideoOff size={20} />}
               </button>
@@ -415,7 +415,7 @@ export default function Security() {
                     ? 'bg-port-card border border-port-border text-white hover:bg-port-border'
                     : 'bg-port-error/20 text-port-error'
                 } disabled:opacity-50 disabled:cursor-not-allowed`}
-                title={audioEnabled ? 'Mute microphone' : 'Unmute microphone'}
+                title={audioEnabled ? 'Mute microphone' : 'Unmute microphone'} aria-label={audioEnabled ? 'Mute microphone' : 'Unmute microphone'}
               >
                 {audioEnabled ? <Mic size={20} /> : <MicOff size={20} />}
               </button>
@@ -441,7 +441,7 @@ export default function Security() {
                 onClick={fetchDevices}
                 disabled={isLoading}
                 className="p-3 rounded-full bg-port-card border border-port-border text-gray-400 hover:text-white hover:bg-port-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                title="Refresh devices"
+                title="Refresh devices" aria-label="Refresh devices"
               >
                 <RefreshCw size={20} className={isLoading ? 'animate-spin' : ''} />
               </button>

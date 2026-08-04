@@ -250,19 +250,19 @@ function LoopCard({ loop, onAction, expandedId, onToggle }) {
         <div className="flex items-center gap-1">
           {loop.isRunning ? (
             <>
-              <button onClick={e => { e.stopPropagation(); onAction('trigger', loop.id); }} className="p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-accent" title="Run now">
+              <button onClick={e => { e.stopPropagation(); onAction('trigger', loop.id); }} className="p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-accent" title="Run now" aria-label="Run now">
                 <Zap size={14} />
               </button>
-              <button onClick={e => { e.stopPropagation(); onAction('stop', loop.id); }} className="p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-warning" title="Stop">
+              <button onClick={e => { e.stopPropagation(); onAction('stop', loop.id); }} className="p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-warning" title="Stop" aria-label="Stop">
                 <Square size={14} />
               </button>
             </>
           ) : (
-            <button onClick={e => { e.stopPropagation(); onAction('resume', loop.id); }} className="p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-success" title="Resume">
+            <button onClick={e => { e.stopPropagation(); onAction('resume', loop.id); }} className="p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-success" title="Resume" aria-label="Resume">
               <Play size={14} />
             </button>
           )}
-          <button onClick={e => { e.stopPropagation(); onAction('delete', loop.id); }} className="p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-error" title="Delete">
+          <button onClick={e => { e.stopPropagation(); onAction('delete', loop.id); }} className="p-1.5 rounded hover:bg-port-border text-gray-400 hover:text-port-error" title="Delete" aria-label="Delete">
             <Trash2 size={14} />
           </button>
           {expanded ? <ChevronDown size={14} className="text-gray-500" /> : <ChevronRight size={14} className="text-gray-500" />}
@@ -394,7 +394,7 @@ export default function Loops() {
         <div className="flex items-center gap-3 text-xs text-gray-400">
           {runningCount > 0 && <span className="text-port-success">{runningCount} active</span>}
           <span>{loops.length} total</span>
-          <button onClick={fetchLoops} className="p-1 rounded hover:bg-port-border" title="Refresh">
+          <button onClick={fetchLoops} className="p-1 rounded hover:bg-port-border" title="Refresh" aria-label="Refresh">
             <RefreshCw size={14} />
           </button>
         </div>

@@ -171,7 +171,7 @@ export default function MemoryBuilder({ onBack, onSelectItem, onReviewItem = onS
         <div className="bg-port-card border border-port-accent/30 rounded-lg p-5 space-y-4 max-w-2xl">
           <div className="flex items-center justify-between">
             <h3 className="text-white font-medium">Add Memory Item</h3>
-            <button aria-label="Close" onClick={resetCreateForm} className="text-gray-500 hover:text-white transition-colors">
+            <button aria-label="Close" onClick={resetCreateForm} className="text-gray-500 hover:text-white transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center">
               <X size={16} />
             </button>
           </div>

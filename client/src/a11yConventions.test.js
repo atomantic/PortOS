@@ -87,6 +87,140 @@ function balancedCallAt(src, openIndex, skipStrings = true) {
   return skipStrings ? balancedCallAt(src, openIndex, false) : null;
 }
 
+// --- helpers for the icon-only-button-name and 44px-close-target rules ---
+
+// Find the index of the `}` matching the `{` at `s[idx]`, respecting nested
+// braces and quoted/template strings.
+function matchingBraceEnd(s, idx) {
+  let depth = 0;
+  for (let i = idx; i < s.length; i++) {
+    const c = s[i];
+    if (c === '"' || c === '\'' || c === '`') {
+      const q = c;
+      for (i++; i < s.length && s[i] !== q; i++) if (s[i] === '\\') i++;
+      continue;
+    }
+    if (c === '{') depth++;
+    else if (c === '}') { depth--; if (depth === 0) return i; }
+  }
+  return -1;
+}
+
+// Find the top-level `>` closing a JSX opening tag starting at `s[idx]` (`<`),
+// respecting `{...}` attribute-expression nesting and quoted strings inside
+// them. Returns `{ end, selfClosing }`, `end` being the index just past `>`.
+function tagBoundaryAt(s, idx) {
+  let depth = 0;
+  for (let i = idx + 1; i < s.length; i++) {
+    const c = s[i];
+    if (c === '{') depth++;
+    else if (c === '}') depth--;
+    else if ((c === '"' || c === '\'' || c === '`') && depth > 0) {
+      const q = c;
+      for (i++; i < s.length && s[i] !== q; i++) if (s[i] === '\\') i++;
+    } else if (c === '>' && depth === 0) {
+      let back = i - 1;
+      while (back > idx && /\s/.test(s[back])) back--;
+      return { end: i + 1, selfClosing: s[back] === '/' };
+    }
+  }
+  return null;
+}
+
+const stripJsxComments = (s) => s.replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '');
+
+// A button body counts as icon-only when it is a SOLE top-level JSX child: a
+// single self-closing capitalized component, or a `{...}` expression whose
+// entire content is a ternary/`&&` between two such components (the
+// play/pause, expand/collapse shape). A naive `^<Icon.../>$`-shaped regex
+// over the raw body text is unsafe here — a wildcard greedily matches straight
+// across sibling boundaries, so `<Icon/><span>text</span>` misreads as one
+// self-closing element with a visible-text sibling silently absorbed into it.
+// Walking to the true boundary of the first top-level node and checking
+// nothing follows it is what catches that case (see ui/ProvenanceChip.jsx,
+// whose icon + <span>label</span> + icon button must NOT be flagged, since
+// the <span> already gives it an accessible name).
+function soleTopLevelNode(rawBody) {
+  const s = stripJsxComments(rawBody).trim();
+  if (!s) return null;
+  if (s[0] === '<') {
+    const boundary = tagBoundaryAt(s, 0);
+    if (!boundary) return null;
+    if (s.slice(boundary.end).trim() !== '') return null; // more than one top-level node
+    return { kind: 'element', raw: s.slice(0, boundary.end), selfClosing: boundary.selfClosing };
+  }
+  if (s[0] === '{') {
+    const end = matchingBraceEnd(s, 0);
+    if (end === -1) return null;
+    if (s.slice(end + 1).trim() !== '') return null; // more than one top-level node
+    return { kind: 'expr', inner: s.slice(1, end).trim() };
+  }
+  return null; // bare text at top level
+}
+
+function matchTernaryIcons(inner) {
+  let depth = 0;
+  let qIdx = -1;
+  for (let i = 0; i < inner.length; i++) {
+    const c = inner[i];
+    if (c === '(' || c === '{' || c === '[') depth++;
+    else if (c === ')' || c === '}' || c === ']') depth--;
+    else if (c === '?' && depth === 0 && inner[i + 1] !== '.') { qIdx = i; break; }
+  }
+  if (qIdx === -1) return false;
+  depth = 0;
+  let cIdx = -1;
+  for (let i = qIdx + 1; i < inner.length; i++) {
+    const c = inner[i];
+    if (c === '(' || c === '{' || c === '[') depth++;
+    else if (c === ')' || c === '}' || c === ']') depth--;
+    else if (c === ':' && depth === 0) { cIdx = i; break; }
+  }
+  if (cIdx === -1) return false;
+  const a = inner.slice(qIdx + 1, cIdx).trim();
+  const b = inner.slice(cIdx + 1).trim();
+  const iconRe = /^<[A-Z][\w.]*(\s[^]*)?\/>$/;
+  return iconRe.test(a) && iconRe.test(b);
+}
+
+function isIconOnlyBody(rawBody) {
+  const node = soleTopLevelNode(rawBody);
+  if (!node) return false;
+  if (node.kind === 'element') return node.selfClosing && /^<[A-Z]/.test(node.raw);
+  const inner = node.inner;
+  if (matchTernaryIcons(inner)) return true;
+  const andMatch = inner.match(/^.*&&\s*(<[A-Z][\w.]*(\s[^]*)?\/>)\s*$/s);
+  if (!andMatch) return false;
+  return /^<[A-Z][\w.]*(\s[^]*)?\/>$/.test(andMatch[1].trim());
+}
+
+// Buttons don't nest in valid HTML/JSX, so the first `</button>` after the
+// opening tag's end is its match.
+function findButtonBody(src, openEnd) {
+  const closeIdx = src.indexOf('</button>', openEnd);
+  return closeIdx === -1 ? null : src.slice(openEnd, closeIdx);
+}
+
+// Tailwind `h-`/`w-`/`min-h-`/`min-w-` token → px, for both an arbitrary
+// value (`min-h-[44px]`) and the spacing scale (`h-11` = 11 * 4px = 44px).
+function tokenPx(token) {
+  const arb = token.match(/^(?:min-)?[hw]-\[(\d+(?:\.\d+)?)px\]$/);
+  if (arb) return parseFloat(arb[1]);
+  const scale = token.match(/^(?:min-)?[hw]-(\d+(?:\.5)?)$/);
+  if (scale) return parseFloat(scale[1]) * 4;
+  return null;
+}
+
+function hasFortyFourMinTouchTarget(cls) {
+  let hOk = false;
+  let wOk = false;
+  for (const token of cls.split(/\s+/)) {
+    if (/^(?:min-)?h-/.test(token) && tokenPx(token) >= 44) hOk = true;
+    if (/^(?:min-)?w-/.test(token) && tokenPx(token) >= 44) wOk = true;
+  }
+  return hOk && wOk;
+}
+
 describe('a11y conventions', () => {
   // Modal.jsx IS the shared implementation; Drawer and Layout use the same
   // backdrop treatment for a slide-in panel / mobile nav scrim, both of which
@@ -251,5 +385,62 @@ describe('a11y conventions', () => {
       }
     }
     expect(offenders, `role="switch" without aria-checked:\n${offenders.join('\n')}`).toEqual([]);
+  });
+
+  it('gives every icon-only button an accessible name', () => {
+    // A <button> whose entire body is an icon (including one chosen by a
+    // ternary, e.g. play/pause, expand/collapse) has no text content for a
+    // screen reader to announce. `title` alone doesn't fill that gap — it's
+    // mouse-hover-only (no touch discoverability, and this app is opened from
+    // other devices over the tailnet) and browser/AT support for `title` as
+    // the accessible name is inconsistent. aria-label (or aria-labelledby) is
+    // required; media/MediaCard.jsx's Annotate button (title + a paired
+    // aria-label) is the existing convention.
+    const offenders = [];
+    for (const file of trackedJsxFiles()) {
+      const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
+      const re = /<button\b/g;
+      let m;
+      while ((m = re.exec(src))) {
+        const tag = openingTagAt(src, m.index, '<button'.length);
+        if (!tag || tag.endsWith('/>')) continue; // self-closing — no body to judge
+        if (/\baria-label\s*=/.test(tag) || /\baria-labelledby\s*=/.test(tag)) continue;
+        const openEnd = m.index + tag.length;
+        const body = findButtonBody(src, openEnd);
+        if (body === null || !isIconOnlyBody(body)) continue;
+        offenders.push(`${file}:${lineOf(src, m.index)}`);
+      }
+    }
+    expect(offenders, `Icon-only <button> with no aria-label/aria-labelledby — title alone isn't touch-discoverable and isn't reliably read as the accessible name; see media/MediaCard.jsx's Annotate button for the convention:\n${offenders.join('\n')}`).toEqual([]);
+  });
+
+  it('meets the 44px touch-target minimum on Close buttons', () => {
+    // Close buttons keep shipping sized to their bare icon (w-4 h-4, p-1,
+    // p-1.5) instead of a real tap target. components/Drawer.jsx:106 is the
+    // convention: min-h-[44px] min-w-[44px] + flex items-center
+    // justify-center, so the icon stays centered in the larger box.
+    //
+    // `inset-0` buttons are exempt: a full-bleed tap-anywhere-to-dismiss
+    // backdrop (e.g. brain/tabs/DailyLogTab.jsx's mobile history scrim)
+    // already covers the entire screen/panel, so a min-w/min-h floor is
+    // meaningless — the element's box is already forced to fill its
+    // positioned ancestor.
+    const CLOSE_LABEL_RE = /aria-label\s*=\s*"(Close[^"]*)"/;
+    const offenders = [];
+    for (const file of trackedJsxFiles()) {
+      const src = readFileSync(join(CLIENT_ROOT, file), 'utf8');
+      const re = /<button\b/g;
+      let m;
+      while ((m = re.exec(src))) {
+        const tag = openingTagAt(src, m.index, '<button'.length);
+        if (!tag || !CLOSE_LABEL_RE.test(tag)) continue;
+        if (/\binset-0\b/.test(tag)) continue;
+        const clsMatch = tag.match(/className\s*=\s*"([^"]*)"/);
+        if (!clsMatch) continue; // dynamic className — reviewed by hand, not scanned here
+        if (hasFortyFourMinTouchTarget(clsMatch[1])) continue;
+        offenders.push(`${file}:${lineOf(src, m.index)}`);
+      }
+    }
+    expect(offenders, `Close button under the 44px touch-target minimum — add min-h-[44px] min-w-[44px] + flex items-center justify-center (see Drawer.jsx:106):\n${offenders.join('\n')}`).toEqual([]);
   });
 });

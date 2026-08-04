@@ -71,7 +71,7 @@ export default function ForkSpriteModal({ open, onClose, source, referencePath, 
         <h2 className="text-sm font-medium text-white flex items-center gap-1.5">
           <GitFork className="w-4 h-4" /> Fork {source?.name}
         </h2>
-        <button type="button" onClick={onClose} aria-label="Close" className="p-1.5 text-gray-400 hover:text-white rounded">
+        <button type="button" onClick={onClose} aria-label="Close" className="p-1.5 text-gray-400 hover:text-white rounded min-h-[44px] min-w-[44px] flex items-center justify-center">
           <X className="w-4 h-4" />
         </button>
       </div>

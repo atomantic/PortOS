@@ -123,7 +123,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
           <button
             onClick={() => { loadTags(); setShowTags(!showTags); }}
             className={`p-1.5 rounded ${showTags ? 'text-port-accent' : 'text-gray-500 hover:text-white'}`}
-            title="Tags"
+            title="Tags" aria-label="Tags"
           >
             <Tag size={14} />
           </button>
@@ -259,7 +259,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
                 <button
                   onClick={() => setConfirmDelete(selectedNote.path)}
                   className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-port-error"
-                  title="Delete note"
+                  title="Delete note" aria-label="Delete note"
                 >
                   <Trash2 size={14} />
                 </button>

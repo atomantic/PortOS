@@ -96,7 +96,7 @@ export default function AddToCollectionMenu({ item, size = 'sm' }) {
         type="button"
         onClick={handleToggleOpen}
         className={`shrink-0 ${sizeCls.button} bg-port-border hover:bg-port-border/70 text-white rounded flex items-center justify-center`}
-        title="Add to collection"
+        title="Add to collection" aria-label="Add to collection"
         aria-haspopup="menu"
         aria-expanded={open}
       >

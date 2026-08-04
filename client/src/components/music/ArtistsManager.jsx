@@ -379,7 +379,7 @@ export default function ArtistsManager() {
                       <button
                         type="button"
                         onClick={() => setPortrait('')}
-                        title="Remove portrait"
+                        title="Remove portrait" aria-label="Remove portrait"
                         className="absolute -top-2 -right-2 p-1 rounded-full bg-port-bg border border-port-border text-gray-400 hover:text-port-error"
                       >
                         <X size={12} />

@@ -184,7 +184,7 @@ export default function ManuscriptLiveSection({
             <div className="rounded-lg border border-port-accent/50 bg-port-card shadow-xl shadow-black/50">
               <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 border-b border-port-border">
                 <span className="text-[10px] uppercase tracking-wider text-gray-400">Editorial note</span>
-                <button type="button" onClick={onCloseComment} className="text-gray-500 hover:text-white" aria-label="Close note" title="Close note (Esc)">
+                <button type="button" onClick={onCloseComment} className="text-gray-500 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center" aria-label="Close note" title="Close note (Esc)">
                   <X size={13} />
                 </button>
               </div>

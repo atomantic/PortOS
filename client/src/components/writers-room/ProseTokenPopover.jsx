@@ -207,7 +207,7 @@ export default function ProseTokenPopover({
           <button
             type="button"
             onClick={onClose}
-            className="text-gray-500 hover:text-gray-200"
+            className="text-gray-500 hover:text-gray-200 min-h-[44px] min-w-[44px] flex items-center justify-center"
             aria-label="Close"
           >
             <X size={12} />

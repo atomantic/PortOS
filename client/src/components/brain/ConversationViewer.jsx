@@ -38,7 +38,7 @@ export default function ConversationViewer({ record, onClose }) {
         <h3 className="font-medium text-white truncate pr-4">{record.title}</h3>
         <button
           onClick={onClose}
-          className="text-gray-400 hover:text-white flex-shrink-0"
+          className="text-gray-400 hover:text-white flex-shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center"
           aria-label="Close conversation viewer"
         >
           <X size={18} />

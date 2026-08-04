@@ -121,7 +121,7 @@ export default function ExercisePanel({ activeWork, onClose }) {
       <div className="flex items-center gap-2 px-3 py-2 border-b border-port-border bg-port-bg/40">
         <Timer size={14} className="text-port-accent" />
         <h3 className="text-sm font-semibold text-white flex-1">Write for {Math.round(duration / 60)}</h3>
-        <button onClick={onClose} className="text-gray-500 hover:text-white" aria-label="Close exercise">
+        <button onClick={onClose} className="text-gray-500 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center" aria-label="Close exercise">
           <X size={14} />
         </button>
       </div>
@@ -183,7 +183,7 @@ export default function ExercisePanel({ activeWork, onClose }) {
             </button>
             <button onClick={() => finishSession({ keep: false })}
               className="flex items-center gap-1 px-2 py-1 text-gray-500 text-xs rounded hover:text-port-error"
-              title="Discard"
+              title="Discard" aria-label="Discard"
             >
               <X size={12} />
             </button>

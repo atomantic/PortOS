@@ -174,7 +174,7 @@ export default function MediaCard({
                 type="button"
                 onClick={() => onSendToVideo(item)}
                 className="shrink-0 px-1.5 py-1 bg-port-success/20 hover:bg-port-success/40 text-port-success text-[10px] rounded flex items-center justify-center"
-                title="Send to Video"
+                title="Send to Video" aria-label="Send to Video"
               >
                 <Film className="w-3 h-3" />
               </button>
@@ -205,7 +205,7 @@ export default function MediaCard({
                 type="button"
                 onClick={() => onUpscale(item)}
                 className="shrink-0 px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center"
-                title="Upscale 2× (Lanczos, ~10s)"
+                title="Upscale 2× (Lanczos, ~10s)" aria-label="Upscale 2× (Lanczos, ~10s)"
               >
                 <Maximize2 className="w-3 h-3" />
               </button>

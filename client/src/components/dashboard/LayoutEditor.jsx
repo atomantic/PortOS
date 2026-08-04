@@ -211,7 +211,7 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
     >
         <div className="flex items-center justify-between px-5 py-4 border-b border-port-border">
           <h2 id="layout-editor-title" className="text-sm font-semibold text-white">Edit Layouts</h2>
-          <button ref={closeRef} onClick={close} className="p-1 text-gray-500 hover:text-white transition-colors rounded" aria-label="Close">
+          <button ref={closeRef} onClick={close} className="p-1 text-gray-500 hover:text-white transition-colors rounded min-h-[44px] min-w-[44px] flex items-center justify-center" aria-label="Close">
             <X size={16} />
           </button>
         </div>

@@ -83,7 +83,7 @@ export default function CorrectiveReferenceModal({
             <Sparkles size={14} className="text-port-accent" />
             Corrective reference for {subject}
           </h3>
-          <button type="button" onClick={close} disabled={analyzing || applying} className="text-gray-500 hover:text-white disabled:opacity-50" aria-label="Close">
+          <button type="button" onClick={close} disabled={analyzing || applying} className="text-gray-500 hover:text-white disabled:opacity-50 min-h-[44px] min-w-[44px] flex items-center justify-center" aria-label="Close">
             <X size={16} />
           </button>
         </div>

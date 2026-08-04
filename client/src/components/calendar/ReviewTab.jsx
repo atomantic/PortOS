@@ -243,7 +243,7 @@ export default function ReviewTab() {
                           onClick={() => handleConfirm(event, true)}
                           disabled={confirming === eventId}
                           className="p-1.5 rounded hover:bg-port-success/20 text-gray-500 hover:text-port-success transition-colors"
-                          title="Confirm - it happened"
+                          title="Confirm - it happened" aria-label="Confirm - it happened"
                         >
                           <Check size={16} />
                         </button>
@@ -251,7 +251,7 @@ export default function ReviewTab() {
                           onClick={() => handleConfirm(event, false)}
                           disabled={confirming === eventId}
                           className="p-1.5 rounded hover:bg-red-500/20 text-gray-500 hover:text-red-400 transition-colors"
-                          title="Skip - didn't happen"
+                          title="Skip - didn't happen" aria-label="Skip - didn't happen"
                         >
                           <X size={16} />
                         </button>

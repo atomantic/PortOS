@@ -239,7 +239,7 @@ export default function ManuscriptReadAloud({ open, onClose, section }) {
           <button
             type="button"
             onClick={onClose}
-            className="ml-auto text-gray-500 hover:text-white text-sm px-2"
+            className="ml-auto text-gray-500 hover:text-white text-sm px-2 min-h-[44px] min-w-[44px] flex items-center justify-center"
             aria-label="Close read-aloud"
           >
             ✕

@@ -96,7 +96,7 @@ export default function EntryThumbSlot({
       type="button"
       onClick={() => onRender?.()}
       disabled={!onRender || !canRender}
-      title={canRender ? 'Render image for this item' : 'Save the universe first to enable render'}
+      title={canRender ? 'Render image for this item' : 'Save the universe first to enable render'} aria-label={canRender ? 'Render image for this item' : 'Save the universe first to enable render'}
       className={`${dim} shrink-0 flex items-center justify-center rounded border border-dashed border-port-border bg-port-bg/40 text-gray-500 hover:border-port-accent/50 hover:text-port-accent hover:bg-port-accent/5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-port-border disabled:hover:text-gray-500 disabled:hover:bg-port-bg/40 transition-colors`}
     >
       <Sparkles size={iconSize} />

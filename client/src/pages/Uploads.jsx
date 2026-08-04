@@ -159,7 +159,7 @@ export default function Uploads() {
           <button
             onClick={fetchUploads}
             className="flex items-center gap-2 px-3 py-2 bg-port-card border border-port-border rounded-lg text-gray-400 hover:text-white hover:border-port-accent/50 transition-colors"
-            title="Refresh"
+            title="Refresh" aria-label="Refresh"
           >
             <RefreshCw size={16} />
           </button>
@@ -280,7 +280,7 @@ export default function Uploads() {
                     <button
                       onClick={() => requestDelete(file.filename)}
                       className="p-2 text-gray-500 hover:text-port-error transition-colors"
-                      title="Delete"
+                      title="Delete" aria-label="Delete"
                     >
                       <Trash2 size={18} />
                     </button>

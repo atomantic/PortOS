@@ -130,7 +130,7 @@ export default function PromptRefineModal({ item, open, onClose }) {
         <button
           type="button"
           onClick={onClose}
-          className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
+          className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50 min-h-[44px] min-w-[44px] flex items-center justify-center"
           aria-label="Close"
         >
           <X className="w-4 h-4" />
