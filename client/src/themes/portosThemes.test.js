@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { THEMES } from './portosThemes.js';
+import { DEFAULT_AVATAR_COLOR, DEFAULT_THEME_ID, THEMES } from './portosThemes.js';
 
 // WCAG 2.x relative luminance + contrast ratio, computed straight from the
 // stored "R G B" token strings so the assertion proves the on-disk theme
@@ -38,4 +38,19 @@ describe('portosThemes warning token contrast', () => {
       expect(ratio).toBeGreaterThanOrEqual(AA_SMALL_TEXT);
     },
   );
+});
+
+describe('DEFAULT_AVATAR_COLOR', () => {
+  it('is a literal #rrggbb hex — a native <input type="color"> rejects anything else', () => {
+    expect(DEFAULT_AVATAR_COLOR).toMatch(/^#[0-9a-f]{6}$/);
+  });
+
+  it('matches the default theme accent, in both hex and token form', () => {
+    const theme = THEMES[DEFAULT_THEME_ID];
+    expect(DEFAULT_AVATAR_COLOR).toBe(theme.accent);
+    const hex = parseRgb(theme.colors['--port-accent'])
+      .map((n) => n.toString(16).padStart(2, '0'))
+      .join('');
+    expect(DEFAULT_AVATAR_COLOR).toBe(`#${hex}`);
+  });
 });

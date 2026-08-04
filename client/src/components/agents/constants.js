@@ -2,6 +2,8 @@
  * Agent Feature Constants
  */
 
+import { DEFAULT_AVATAR_COLOR } from '../../themes/portosThemes';
+
 export const AGENT_DETAIL_TABS = [
   { id: 'overview', label: 'Overview', icon: '📋' },
   { id: 'tools', label: 'Moltbook', icon: '📚' },
@@ -64,7 +66,7 @@ export const DEFAULT_PERSONALITY = {
 
 export const DEFAULT_AVATAR = {
   emoji: '🤖',
-  color: '#3b82f6'
+  color: DEFAULT_AVATAR_COLOR
 };
 
 // Re-export shared cron presets for agent scheduling

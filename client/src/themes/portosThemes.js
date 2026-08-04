@@ -633,6 +633,12 @@ export const THEMES = {
 export const THEME_IDS = Object.keys(THEMES);
 export const THEME_LIST = THEME_IDS.map(id => THEMES[id]);
 
+// Fallback color for user-pickable swatches (agent avatars, calendar sources).
+// A native <input type="color"> only accepts a literal `#rrggbb` and cannot read
+// a CSS custom property, so this mirrors the default theme's accent instead of
+// `rgb(var(--port-accent))`. Single definition — every swatch site imports it.
+export const DEFAULT_AVATAR_COLOR = THEMES[DEFAULT_THEME_ID].accent;
+
 export const LEGACY_THEME_ALIASES = {
   midnight: DEFAULT_THEME_ID,
   phosphor: 'black-ice-terminal',

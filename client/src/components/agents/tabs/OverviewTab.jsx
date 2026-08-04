@@ -7,6 +7,7 @@ import { filterSelectableModels } from '../../../utils/providers';
 import BrailleSpinner from '../../BrailleSpinner';
 import { FormField } from '../../ui/FormField';
 import { PERSONALITY_STYLES, DEFAULT_PERSONALITY, DEFAULT_AVATAR, PLATFORM_TYPES, ACCOUNT_STATUSES } from '../constants';
+import { DEFAULT_AVATAR_COLOR } from '../../../themes/portosThemes';
 import { useCooldownTick } from '../../../hooks/useCooldownTick';
 import { formatCooldown, formatDateTime } from '../../../utils/formatters';
 
@@ -365,7 +366,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                 <FormField label="Color" className="flex items-center gap-2" labelClassName="text-sm text-gray-400">
                   <input
                     type="color"
-                    value={formData.avatar.color || '#3b82f6'}
+                    value={formData.avatar.color || DEFAULT_AVATAR_COLOR}
                     onChange={(e) => setFormData({ ...formData, avatar: { ...formData.avatar, color: e.target.value } })}
                     className="w-12 h-9 border border-port-border rounded cursor-pointer"
                   />

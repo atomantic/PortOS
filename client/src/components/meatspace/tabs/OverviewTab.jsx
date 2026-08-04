@@ -76,7 +76,11 @@ function CompactCountdown({ deathDate, lifeExpectancy, percentComplete, lev }) {
               className="h-full rounded-full transition-all duration-1000"
               style={{
                 width: `${Math.min(100, percentComplete)}%`,
-                background: percentComplete > 80 ? '#ef4444' : percentComplete > 60 ? '#f59e0b' : '#3b82f6'
+                background: percentComplete > 80
+                  ? 'rgb(var(--port-error))'
+                  : percentComplete > 60
+                    ? 'rgb(var(--port-warning))'
+                    : 'rgb(var(--port-accent))'
               }}
             />
           </div>

@@ -4,6 +4,7 @@ import { ArrowLeft } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import * as api from '../../services/api';
 import { AGENT_DETAIL_TABS } from './constants';
+import { DEFAULT_AVATAR_COLOR } from '../../themes/portosThemes';
 import OverviewTab from './tabs/OverviewTab';
 import ToolsTab from './tabs/ToolsTab';
 import WorldTab from './tabs/WorldTab';
@@ -117,7 +118,7 @@ export default function AgentDetail() {
           </Link>
           <div
             className="w-10 h-10 rounded-full flex items-center justify-center text-xl shrink-0"
-            style={{ backgroundColor: agent.avatar?.color || '#3b82f6' }}
+            style={{ backgroundColor: agent.avatar?.color || DEFAULT_AVATAR_COLOR }}
           >
             {agent.avatar?.emoji || '🤖'}
           </div>

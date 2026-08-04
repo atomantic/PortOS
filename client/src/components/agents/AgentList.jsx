@@ -6,6 +6,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import { FormField } from '../ui/FormField';
 import * as api from '../../services/api';
 import { PERSONALITY_STYLES, DEFAULT_PERSONALITY, DEFAULT_AVATAR } from './constants';
+import { DEFAULT_AVATAR_COLOR } from '../../themes/portosThemes';
 import { filterSelectableModels } from '../../utils/providers';
 
 export default function AgentList() {
@@ -348,7 +349,7 @@ export default function AgentList() {
               <input
                 id="agent-avatar-color"
                 type="color"
-                value={formData.avatar.color || '#3b82f6'}
+                value={formData.avatar.color || DEFAULT_AVATAR_COLOR}
                 onChange={(e) => setFormData({ ...formData, avatar: { ...formData.avatar, color: e.target.value } })}
                 className="w-12 h-8 border border-port-border rounded cursor-pointer"
               />
@@ -391,7 +392,7 @@ export default function AgentList() {
                 <div className="flex items-center gap-3 mb-3">
                   <div
                     className="w-12 h-12 rounded-full flex items-center justify-center text-2xl shrink-0"
-                    style={{ backgroundColor: agent.avatar?.color || '#3b82f6' }}
+                    style={{ backgroundColor: agent.avatar?.color || DEFAULT_AVATAR_COLOR }}
                   >
                     {agent.avatar?.emoji || '🤖'}
                   </div>

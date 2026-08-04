@@ -8,6 +8,7 @@ import FeatureProviderPicker from '../FeatureProviderPicker';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { FormField } from '../ui/FormField';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
+import { DEFAULT_AVATAR_COLOR } from '../../themes/portosThemes';
 
 const TYPE_ICONS = { 'outlook-calendar': Globe, 'google-calendar': Calendar };
 const TYPE_LABELS = { 'outlook-calendar': 'Outlook Calendar (API)', 'google-calendar': 'Google Calendar' };
@@ -543,10 +544,10 @@ export default function ConfigTab({ accounts, setAccounts }) {
                         >
                           <div className="flex items-center gap-2 min-w-0">
                             <label className="relative w-4 h-4 shrink-0 cursor-pointer" title="Change color">
-                              <div className="w-4 h-4 rounded-full border border-port-border" style={{ backgroundColor: sc.color || '#3b82f6' }} />
+                              <div className="w-4 h-4 rounded-full border border-port-border" style={{ backgroundColor: sc.color || DEFAULT_AVATAR_COLOR }} />
                               <input
                                 type="color"
-                                value={sc.color || '#3b82f6'}
+                                value={sc.color || DEFAULT_AVATAR_COLOR}
                                 onInput={(e) => handleSubcalendarLocal(account, sc.calendarId, 'color', e.target.value)}
                                 onChange={(e) => handleSubcalendarToggle(account, sc.calendarId, 'color', e.target.value)}
                                 className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
