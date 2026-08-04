@@ -25,15 +25,16 @@
  * `await import(...)`), and it re-exports ~40 symbols as a back-compat barrel.
  * A facade has to be small, complete, and outside the graph it fronts.
  *
- * **Invariant, enforced by `agentImportCycles.test.js`: none of those seven
- * modules may import this one — statically OR via `await import(...)`.** One
- * such edge closes the loop and puts every dynamic-import workaround back on the
- * table, and this cluster's habit is to reach across a blocked layer with
- * `await import()`, so the guard checks both forms. Anything *outside* the seven
- * may import the facade freely — routes, socket handlers, and any service the
- * cluster does not depend on. That is the migration path for the exports below
- * whose current callers are still inside the cluster: the caller moves out, it
- * does not import back in.
+ * **Invariant, enforced by `agentImportCycles.test.js`: no module reachable
+ * FROM this one may import it back — statically OR via `import(...)`.** One such
+ * edge closes the loop and puts every dynamic-import workaround back on the
+ * table, and this cluster's habit is to reach across a blocked layer with a
+ * deferred import, so the guard checks both forms. The forbidden set is derived
+ * from the graph rather than listed, so it grows as the cluster does. Anything
+ * *outside* that closure may import the facade freely — routes, socket handlers,
+ * and any service the cluster does not depend on. That is the migration path for
+ * the exports below whose current callers are still inside the cluster: the
+ * caller moves out, it does not import back in.
  *
  * ## Transition vs leaf (step 1 of the #3450 sequencing)
  *

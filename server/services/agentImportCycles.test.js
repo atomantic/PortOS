@@ -124,27 +124,39 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
     }
   });
 
-  it('keeps the agentOrchestrator facade outside the cluster it fronts (#3450)', () => {
+  it('keeps the agentOrchestrator facade outside the graph it fronts (#3450)', () => {
     // The facade only stays a facade while its edges point one way: it imports
-    // the cluster, the cluster never imports it back. Checked against the SEVEN
-    // named modules rather than all of `server/services` on purpose — a service
-    // that is NOT in the cluster can import the facade without closing any loop,
-    // and forbidding that would freeze the remaining call-site migrations.
+    // the cluster, the cluster never imports it back.
     //
-    // Both forms are checked. The graph above is static-only (correct for cycle
-    // detection), but this cluster's established habit is to reach across a
-    // blocked layer with `await import()` — so a dynamic import of the facade
-    // from inside the cluster would violate the layering with the cycle walk
-    // fully green, which is the failure mode this module exists to end.
-    const CLUSTER_SEVEN = [
-      'cos.js', 'cosAgents.js', 'cosAgentLifecycle.js', 'agentManagement.js',
-      'agents.js', 'subAgentSpawner.js', 'agentLifecycle.js',
-    ];
-    const offenders = CLUSTER_SEVEN.filter(file => {
-      if ((graph.get(file) || []).includes('agentOrchestrator.js')) return true;
-      return /await import\(\s*['"]\.\/agentOrchestrator\.js['"]\s*\)/
-        .test(readFileSync(join(SERVICES_DIR, file), 'utf-8'));
-    });
+    // The forbidden set is derived, not listed. It is everything reachable FROM
+    // the facade — an import back from any of those closes a loop, and the set
+    // grows on its own as the cluster does, so it can't fall behind the way a
+    // hand-maintained list of seven names would (that list omitted
+    // agentCliSpawning/agentTuiSpawning, both reachable via agentLifecycle).
+    // Modules outside the closure may import the facade freely: they close no
+    // loop, and forbidding them would freeze the remaining call-site migrations.
+    const reachable = new Set();
+    const walk = (node) => {
+      for (const dep of graph.get(node) || []) {
+        if (reachable.has(dep)) continue;
+        reachable.add(dep);
+        walk(dep);
+      }
+    };
+    walk('agentOrchestrator.js');
+    expect(reachable.size, 'facade closure looks empty — did the module move?').toBeGreaterThan(3);
+
+    // Dynamic imports are matched too, and WITHOUT requiring `await`: the static
+    // graph deliberately ignores `import()` (correct for cycle detection), but
+    // reaching across a blocked layer with a deferred import is exactly this
+    // cluster's habit, so a `return import(...).then(...)` back-edge would
+    // violate the layering with the cycle walk fully green. Any relative
+    // specifier ending in `agentOrchestrator.js` counts, from any depth.
+    const DYNAMIC_FACADE_IMPORT = /\bimport\(\s*['"][^'"]*\bagentOrchestrator\.js['"]\s*\)/;
+    const offenders = [...reachable].filter(file =>
+      (graph.get(file) || []).includes('agentOrchestrator.js') ||
+      DYNAMIC_FACADE_IMPORT.test(readFileSync(join(SERVICES_DIR, file), 'utf-8'))
+    ).sort();
     expect(offenders, `agentOrchestrator.js must not be imported by ${offenders.join(', ')}`).toEqual([]);
   });
 
