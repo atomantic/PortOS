@@ -1308,7 +1308,15 @@ function StoryBuilderDetail({ storyId, stepParam }) {
     toast.success('Re-baselined to this machine');
   };
 
-  if (loading) return <PageSkeleton label="Loading story session" padded fullHeight titleWidthClass="w-64" cards={3} sidebar={false} />;
+  if (loading) {
+    return (
+      <div className="h-full overflow-y-auto p-4 md:p-6">
+        <div className="max-w-5xl mx-auto">
+          <PageSkeleton label="Loading story session" titleWidthClass="w-64" cards={3} sidebar={false} />
+        </div>
+      </div>
+    );
+  }
   if (!session) return <div className="p-6 text-gray-400">Session not found. <Link to="/story-builder" className="text-port-accent">Back to Story Builder</Link></div>;
 
   return (

@@ -295,7 +295,17 @@ export default function MediaCollectionDetail() {
     },
   });
 
-  if (loading) return <PageSkeleton label="Loading collection" titleWidthClass="w-56" layout="grid" cards={6} />;
+  if (loading) {
+    return (
+      <PageSkeleton
+        label="Loading collection"
+        titleWidthClass="w-56"
+        layout="grid"
+        cards={10}
+        gridColsClass="grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
+      />
+    );
+  }
   if (!collection) return (
     <div className="text-gray-500 text-sm">
       <Link to="/media/collections" className="text-port-accent hover:underline">← Back to collections</Link>

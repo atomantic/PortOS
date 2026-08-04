@@ -161,7 +161,17 @@ export default function MoodBoardDetail() {
   };
 
   if (loading) {
-    return <PageSkeleton label="Loading mood board" titleWidthClass="w-56" layout="grid" cards={6} />;
+    return (
+      <div className="max-w-5xl mx-auto">
+        <PageSkeleton
+          label="Loading mood board"
+          titleWidthClass="w-56"
+          layout="grid"
+          cards={8}
+          gridColsClass="grid-cols-2 md:grid-cols-3 lg:grid-cols-4"
+        />
+      </div>
+    );
   }
   if (!board) {
     return (

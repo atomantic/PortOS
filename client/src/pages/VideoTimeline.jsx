@@ -87,7 +87,7 @@ export default function VideoTimeline() {
         </button>
       </form>
 
-      {loading && <PageSkeleton header="none" label="Loading timeline projects" layout="grid" cards={3} />}
+      {loading && <PageSkeleton header="none" label="Loading timeline projects" layout="grid" cards={3} gridColsClass="sm:grid-cols-2 lg:grid-cols-3" />}
 
       {!loading && projects.length === 0 && (
         <div className="text-center py-12 text-gray-500">

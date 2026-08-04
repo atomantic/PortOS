@@ -121,7 +121,13 @@ export default function ThreejsModelDetail() {
     if (ok) navigate('/media/threejs');
   };
 
-  if (loading) return <PageSkeleton label="Loading model" titleWidthClass="w-56" cards={2} sidebar={false} />;
+  if (loading) {
+    return (
+      <div className="mx-auto max-w-7xl">
+        <PageSkeleton label="Loading model" titleWidthClass="w-56" cards={2} sidebar={false} />
+      </div>
+    );
+  }
   if (notFound || !record) {
     return (
       <div className="py-12 text-center">

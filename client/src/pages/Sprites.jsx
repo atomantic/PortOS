@@ -440,7 +440,13 @@ export default function Sprites() {
           {!id ? (
             // The bare /sprites route IS the Library catalog now.
             records === null ? (
-              <PageSkeleton header="none" label="Loading sprite library" layout="grid" cards={6} />
+              <PageSkeleton
+                header="none"
+                label="Loading sprite library"
+                layout="grid"
+                cards={10}
+                gridColsClass="grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
+              />
             ) : records.length === 0 ? (
               <p className="text-sm text-gray-500">
                 No sprites yet. Import a production set from a sprite-pipeline checkout to get started.

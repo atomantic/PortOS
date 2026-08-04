@@ -232,7 +232,7 @@ export default function MediaHistory() {
       </div>
 
       {loading ? (
-        <PageSkeleton header="none" label="Loading media history" layout="grid" cards={6} />
+        <PageSkeleton header="none" label="Loading media history" layout="grid" cards={10} gridColsClass="grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5" />
       ) : filtered.length === 0 ? (
         <div className="bg-port-card border border-port-border rounded-xl p-8 text-center text-gray-500 text-sm">
           {query.trim()

@@ -192,7 +192,7 @@ export default function ThreejsModels() {
       <section>
         <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Model workspaces</h2>
         {loading ? (
-          <PageSkeleton header="none" label="Loading model workspaces" layout="grid" cards={3} />
+          <PageSkeleton header="none" label="Loading model workspaces" layout="grid" cards={3} gridColsClass="sm:grid-cols-2 lg:grid-cols-3" />
         ) : models.length === 0 ? (
           <div className="rounded-xl border border-dashed border-port-border py-10 text-center text-sm text-gray-500">
             No procedural models yet.
