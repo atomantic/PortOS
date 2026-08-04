@@ -10,7 +10,7 @@
 
 import { Router } from 'express';
 import { spawn } from 'child_process';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { deriveProjectInfo } from '../../services/xcodeScripts.js';
 import { loadApp, pathExists } from './shared.js';
@@ -187,7 +187,7 @@ router.post('/:id/open-xcode', loadApp, asyncHandler(async (req, res) => {
 
   openWithSystemHandler(projectPath);
 
-  console.log(`📱 Opened Xcode project for ${app.name}: ${projectPath}`);
+  console.log(`📱 Opened Xcode project for ${app.name}: ${basename(projectPath)}`);
   res.json({ success: true, path: projectPath });
 }));
 
