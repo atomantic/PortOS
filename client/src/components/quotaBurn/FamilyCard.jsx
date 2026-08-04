@@ -9,6 +9,8 @@
 
 import { ChevronDown, ChevronRight, Flame, Plus } from 'lucide-react';
 import JobRow from './JobRow';
+import PresetPicker from './PresetPicker';
+import { jobFromPreset } from '../../lib/quotaBurnPatch';
 import { NumberField, TextField } from './fields';
 
 export default function FamilyCard({
@@ -36,8 +38,9 @@ export default function FamilyCard({
   // page is reloaded. The catalog fetch is best-effort (the page still renders
   // without it), so gate on it rather than minting an unsavable row.
   const canAddJob = catalog.jobTypes.length > 0;
+  const nextJobId = () => `job-${Date.now().toString(36)}`;
   const addJob = () => patchJobs([...jobs, {
-    id: `job-${Date.now().toString(36)}`,
+    id: nextJobId(),
     enabled: true,
     label: '',
     jobType: catalog.jobTypes[0].id,
@@ -45,6 +48,14 @@ export default function FamilyCard({
     providerId: null,
     params: {},
   }]);
+  // A preset job inherits the app the plan is already pointed at, when the plan
+  // is unambiguous about it — otherwise a one-click "add a UX audit" lands as a
+  // step that cannot run until the user notices the unset app picker.
+  const inheritedAppId = [...new Set(jobs.map((job) => job.params?.appId).filter(Boolean))];
+  const addPresetJob = (preset) => patchJobs([...jobs, jobFromPreset(preset, {
+    id: nextJobId(),
+    appId: inheritedAppId.length === 1 ? inheritedAppId[0] : null,
+  })]);
 
   return (
     <div className="rounded border border-port-border bg-port-card/40">
@@ -67,6 +78,15 @@ export default function FamilyCard({
         ) : (
           <span className="text-xs text-gray-500">{status?.skipReason || 'not evaluated yet'}</span>
         )}
+
+        {/* A collapsed card otherwise says nothing about whether this family has
+            a plan at all — and a family with zero enabled jobs can never burn,
+            no matter how healthy its window looks. */}
+        <span className="text-[11px] text-gray-500">
+          {jobs.length
+            ? `${jobs.length} job${jobs.length === 1 ? '' : 's'} · ${jobs.filter((job) => job.enabled !== false).length} enabled`
+            : 'no jobs'}
+        </span>
 
         <div className="ml-auto flex items-center gap-2">
           <button
@@ -115,6 +135,15 @@ export default function FamilyCard({
               >
                 <Plus size={13} /> Add job
               </button>
+            </div>
+            <div className="sm:max-w-md">
+              <PresetPicker
+                id={`burn-${familyId}-preset`}
+                label="Add a preset job"
+                presets={catalog.presets}
+                onPick={addPresetJob}
+                hint="Single-focus audits that read the code, file GitHub issues, and change nothing — safe work for an unattended window."
+              />
             </div>
             {!jobs.length && (
               <p className="text-xs text-gray-500">No jobs yet — this family will never burn until one is added.</p>

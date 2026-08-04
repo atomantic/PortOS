@@ -51,6 +51,35 @@ the scan; `run` must still work without it, because the force path calls it with
 no probe. A job that declines reports `dispatched: false` with a reason and is
 **not** charged against the window's cap.
 
+### Prompt presets
+
+`agent-prompt` jobs can be seeded from `QUOTA_BURN_PROMPT_PRESETS`
+(`server/lib/quotaBurnPresets.js`), served in the config catalog and applied from
+either **Add a preset job** on a family card or **Start from a preset** on a job
+row. Each preset is one narrow audit dimension — the single-focus form of
+`/do:better --issues` — that reads real code, files decision-complete GitHub
+issues, and changes nothing:
+
+| Preset | Focus |
+| --- | --- |
+| UX issues | Interaction friction: unconfirmed destructive controls, invisible save state, unexplained disabled buttons, lost edits, dead ends |
+| Accessibility issues | Keyboard paths, labels, focus management, live-region state, contrast |
+| Mobile & responsive issues | Overflow, touch targets, hover-only information, drawer/modal behavior at small widths |
+| Error & empty-state issues | Swallowed failures, doubled/missing toasts, absent-vs-empty conflation, stale UI, unsaved-work loss |
+| Performance issues | Per-item I/O, repeated scans, unbounded growth, render storms, timers, leaks |
+| Test coverage gaps | Untested guards on irreversible/expensive paths, fixes landed without regression tests, false-green mocking |
+| Dead code & duplication | Unreferenced exports, re-implemented helpers, copy-paste drift (never cross-version compatibility code) |
+| Data & upgrade-safety issues | Missing migrations/seeds, schema-parity drift, version gates, destructive defaults |
+| Docs drift | Doc claims the code contradicts, stale commands, undocumented surfaces |
+| Security issues | Real exposure under the documented threat model — findings that contradict it are noise |
+
+Presets are **templates**: picking one COPIES its prompt into the job's own
+`params.prompt`, and nothing on disk points back at the preset id. So editing the
+text here never rewrites a configured job on any install (no migration needed) —
+and an improved prompt reaches an existing job only when the user re-picks it.
+They set `openPR: false` / `simplify: false` (there is no diff to ship) and
+`useWorktree: true` (an audit must not dirty the primary checkout).
+
 Every numeric bound (windows, reserve, caps, entry limits) lives in
 `QUOTA_BURN_BOUNDS` in `server/lib/quotaBurnConfig.js`, read by the normalizer
 (which clamps an older on-disk plan), the Zod schemas (which reject a bad
@@ -64,7 +93,9 @@ request), and the catalog descriptors the client renders as `min`/`max`.
 - The ▶ on a job row **forces** that one job past the window/reserve/cap gates.
   It goes through the same selection, so the run still reports the family's real
   remaining percentage and reset time — it is only marked `charge: false`, so it
-  never eats the family's automatic budget.
+  never eats the family's automatic budget. It **arms on first click** and
+  dispatches on the confirm: the page has no Save button, so a spend-now control
+  sitting among the row's small icons was being hit as if it were one.
 
 ## Storage
 
@@ -86,6 +117,7 @@ folds those overrides into the single plan (each app's family prompt becomes an
 | File | Role |
 | --- | --- |
 | `server/lib/quotaBurnConfig.js` | Plan shape, job-type catalog, total normalization |
+| `server/lib/quotaBurnPresets.js` | Ready-made single-focus audit prompts for `agent-prompt` jobs |
 | `server/services/quotaBurnStore.js` | `data/cos/quota-burn.json` + the run log |
 | `server/services/quotaBurn.js` | `evaluateFamily` — the one gate ladder both selection and the page's skip reasons read — plus the dispatch ledger |
 | `server/services/quotaBurnJobs/` | The job registry and its modules |

@@ -39,8 +39,24 @@ const catalog = {
   families: ['grok', 'codex'],
   jobTypes: [
     { id: 'universe-bible-images', label: 'Universe bible images', description: 'Render missing bible images.', params: [{ key: 'universeId', kind: 'universe', label: 'Universe', default: 'all' }] },
-    { id: 'agent-prompt', label: 'Agent prompt', description: 'Queue a CoS agent.', params: [{ key: 'appId', kind: 'app', label: 'Managed app', required: true }] },
+    {
+      id: 'agent-prompt',
+      label: 'Agent prompt',
+      description: 'Queue a CoS agent.',
+      params: [
+        { key: 'appId', kind: 'app', label: 'Managed app', required: true },
+        { key: 'prompt', kind: 'text', label: 'Work prompt', required: true },
+        { key: 'openPR', kind: 'boolean', label: 'Open a PR', default: true },
+      ],
+    },
   ],
+  presets: [{
+    id: 'ux-audit',
+    label: 'UX issues',
+    summary: 'Audit the UI and file issues.',
+    jobType: 'agent-prompt',
+    params: { prompt: 'Audit the UI. File issues. Change no code.', useWorktree: true, openPR: false, simplify: false },
+  }],
   apps: [{ id: 'a1', name: 'App One' }],
   universes: [{ id: 'u1', name: 'Example Universe' }],
   imageModes: ['codex', 'grok'],
@@ -87,13 +103,60 @@ describe('QuotaBurn page', () => {
     expect(screen.getByText(/Ready — 4 bible entries have no image/)).toBeInTheDocument();
   });
 
-  it('force-runs a single job from its row', async () => {
+  it('force-runs a single job from its row only after the arm click is confirmed', async () => {
     const user = userEvent.setup();
     renderPage('/devtools/quota-burn/grok');
+    // First click only arms — a stray click on this icon must not spend quota.
     await user.click(await screen.findByLabelText('Run step 1 now'));
+    expect(api.runQuotaBurn).not.toHaveBeenCalled();
+    await user.click(await screen.findByRole('button', { name: 'Run' }));
     await waitFor(() => expect(api.runQuotaBurn).toHaveBeenCalledWith(
       { familyId: 'grok', jobId: 'j1', force: true }, { silent: true },
     ));
+  });
+
+  it('adds a fully-configured job from a preset, inheriting the plan\'s app', async () => {
+    const user = userEvent.setup();
+    renderPage('/devtools/quota-burn/grok');
+    await user.selectOptions(await screen.findByLabelText(/Add a preset job/), 'ux-audit');
+    await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalled());
+    const [patch] = api.saveQuotaBurn.mock.calls.at(-1);
+    const added = patch.families.grok.jobs.at(-1);
+    expect(added.jobType).toBe('agent-prompt');
+    expect(added.label).toBe('UX issues');
+    expect(added.params.prompt).toContain('File issues');
+    // Read-only audit work: no PR to open and no diff for /simplify to clean.
+    expect(added.params.openPR).toBe(false);
+  });
+
+  it('asks before a preset overwrites a work prompt the user already wrote', async () => {
+    const user = userEvent.setup();
+    renderPage('/devtools/quota-burn/grok');
+    await user.selectOptions(await screen.findByLabelText('Job type'), 'agent-prompt');
+    const promptBox = screen.getByLabelText('Work prompt');
+    await user.type(promptBox, 'my own prompt');
+    await user.selectOptions(screen.getByLabelText(/Start from a preset/), 'ux-audit');
+
+    // Held, not applied — the typed prompt is still on screen behind a confirm.
+    expect(promptBox).toHaveValue('my own prompt');
+    await user.click(screen.getByRole('button', { name: 'Keep mine' }));
+    expect(promptBox).toHaveValue('my own prompt');
+
+    await user.selectOptions(screen.getByLabelText(/Start from a preset/), 'ux-audit');
+    await user.click(screen.getByRole('button', { name: 'Replace' }));
+    expect(promptBox).toHaveValue('Audit the UI. File issues. Change no code.');
+  });
+
+  it('keeps the work prompt when the job type picker is clicked through', async () => {
+    // Params are carried across a type switch: resetting them destroyed a long
+    // hand-written prompt with no confirmation and no undo.
+    const user = userEvent.setup();
+    renderPage('/devtools/quota-burn/grok');
+    await user.selectOptions(await screen.findByLabelText('Job type'), 'agent-prompt');
+    await user.type(screen.getByLabelText('Work prompt'), 'keep me');
+    await user.selectOptions(screen.getByLabelText('Job type'), 'universe-bible-images');
+    await user.selectOptions(screen.getByLabelText('Job type'), 'agent-prompt');
+    expect(screen.getByLabelText('Work prompt')).toHaveValue('keep me');
   });
 
   it('never persists a status field alongside the job config', async () => {

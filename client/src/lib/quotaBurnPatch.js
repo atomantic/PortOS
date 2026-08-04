@@ -26,3 +26,38 @@ export function mergeQuotaBurnPatch(base, patch) {
   else delete merged.families;
   return merged;
 }
+
+/**
+ * Apply a catalog preset to a burn job, returning the next job.
+ *
+ * A preset is a TEMPLATE: its prompt and recommended flags are copied in, and
+ * from then on the job owns them. Two things are deliberately preserved rather
+ * than overwritten, because they are choices the preset cannot make:
+ *   - `label` — only filled when blank, so applying a preset to a step the user
+ *     named does not rename it.
+ *   - `params.appId` — which managed app the work targets. Wiping it would turn
+ *     "make this step a UX audit" into a silently unrunnable job whose only
+ *     symptom is a status line at the bottom of the row.
+ */
+export function applyQuotaBurnPreset(job, preset) {
+  if (!preset) return job;
+  const { appId } = job?.params || {};
+  return {
+    ...job,
+    label: job?.label?.trim() ? job.label : preset.label,
+    jobType: preset.jobType || job?.jobType,
+    params: { ...(job?.params || {}), ...(preset.params || {}), ...(appId ? { appId } : {}) },
+  };
+}
+
+/**
+ * A brand-new job seeded from a preset. `id` is passed in rather than minted
+ * here so this stays pure (and so the caller keeps using whatever id scheme the
+ * rest of its list uses).
+ */
+export function jobFromPreset(preset, { id, appId = null } = {}) {
+  return applyQuotaBurnPreset({
+    id, enabled: true, label: '', jobType: preset.jobType, model: null, providerId: null,
+    params: appId ? { appId } : {},
+  }, preset);
+}

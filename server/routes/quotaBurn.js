@@ -8,6 +8,7 @@ import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, quotaBurnConfigUpdateSchema, quotaBurnRunSchema } from '../lib/validation.js';
 import { QUOTA_BURN_JOB_CATALOG } from '../lib/quotaBurnConfig.js';
+import { QUOTA_BURN_PROMPT_PRESETS } from '../lib/quotaBurnPresets.js';
 import { QUEUEABLE_IMAGE_MODES } from '../services/imageGen/modes.js';
 import { saveQuotaBurnConfig } from '../services/quotaBurnStore.js';
 import { getQuotaBurnStatus, runQuotaBurnCycle } from '../services/quotaBurnRunner.js';
@@ -39,6 +40,10 @@ router.get('/catalog', asyncHandler(async (_req, res) => {
   ]);
   res.json({
     jobTypes: QUOTA_BURN_JOB_CATALOG,
+    // Prompt templates for `agent-prompt` jobs. Served rather than bundled into
+    // the client so the wording is one server-side edit — and so a job the user
+    // has already tuned is never overwritten by a newer version of the text.
+    presets: QUOTA_BURN_PROMPT_PRESETS,
     apps: (apps || []).map((app) => ({ id: app.id, name: app.name })),
     universes,
     // Exactly the modes the media job queue can dispatch — the burn job enqueues

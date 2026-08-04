@@ -164,6 +164,12 @@ export default function QuotaBurn() {
     <div className="space-y-4">
       <header className="flex flex-wrap items-center gap-3">
         <h1 className="text-xl font-semibold text-white flex items-center gap-2"><Flame size={20} className="text-orange-400" /> Quota Burn</h1>
+        {/* There is no Save button on this page, and nothing else said so — the
+            silence is what makes people reach for the nearest button-shaped
+            thing (the per-job ▶, which spends quota) to "commit" an edit. */}
+        <span className={`text-[11px] ${unsaved ? 'text-amber-300' : 'text-gray-500'}`} aria-live="polite">
+          {unsaved ? 'Saving changes…' : 'Changes save automatically'}
+        </span>
         <button
           type="button"
           className="inline-flex items-center gap-1 text-xs text-gray-300 hover:text-white"
