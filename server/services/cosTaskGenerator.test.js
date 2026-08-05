@@ -450,6 +450,10 @@ describe('resolveSwarmBlock', () => {
     expect(block).toMatch(/scratchpad root/i);
     // The scope is ALL temp files, not just the PR body that surfaced the bug.
     expect(block).toMatch(/ALL temp files/i);
+    // CoS agents also run under codex/agy/grok/opencode, which inject no
+    // scratchpad path. Without a named fallback such an agent picks its cwd —
+    // the source repo the prompt otherwise forbids writing to.
+    expect(block).toContain('$(mktemp -d)/issue-<num>');
   });
 
   it('instructs each agent to verify its own issue trailer after create and after each edit', () => {
@@ -457,10 +461,30 @@ describe('resolveSwarmBlock', () => {
     // a stale/foreign body can land minutes later during the review loop. `gh`
     // exits 0 either way, so only a read-back catches it.
     const block = resolveSwarmBlock('claim-issue', 3);
-    expect(block).toContain('gh pr view <num> --json body -q .body');
     expect(block).toContain('Closes #<num>');
     expect(block).toContain('Refs #<num>');
     expect(block).toMatch(/after each edit|after every edit/i);
+  });
+
+  it('reads the PR body back by branch, never by a number that could be the issue number', () => {
+    // `<num>` is the ISSUE number everywhere else in this block, and an issue
+    // number is not a PR number. Passing one to `gh pr view` reads the wrong
+    // object (on GitLab, a real but unrelated MR) — so the agent "corrects" a
+    // stranger's PR body, which is the very bug #3489 is about. Both CLIs infer
+    // the PR/MR from the agent's own claim/issue-<num> branch, so no id is needed.
+    const block = resolveSwarmBlock('claim-issue', 3);
+    expect(block).toContain('gh pr view --json body -q .body');
+    expect(block).not.toContain('gh pr view <num>');
+    expect(block).not.toContain('gh pr view <pr-num>');
+  });
+
+  it('caps the rewrite-and-re-verify loop so one stuck agent cannot stall Phase C', () => {
+    // Phase C waits on every agent, so an unbounded "rewrite from scratch file
+    // and re-verify" blocks the whole batch's merges when the scratch file is
+    // itself the wrong one and republishing can never satisfy the check.
+    const block = resolveSwarmBlock('claim-issue', 3);
+    expect(block).toMatch(/Cap this at 2 rewrites/i);
+    expect(block).toMatch(/Never loop on it/i);
   });
 
   it('returns a glab/MR swarm directive for the gitlab claim body', () => {
@@ -471,7 +495,11 @@ describe('resolveSwarmBlock', () => {
     // The scratch/read-back guidance is forge-agnostic — the MR body read-back
     // uses the glab command, not the gh one.
     expect(block).toContain('<scratchpad>/issue-<num>/');
-    expect(block).toContain('glab mr view <iid> --output json');
+    // Same no-identifier rule as the gh path — and it matters MORE here: issue
+    // iids and MR iids are separate sequences on GitLab, so an issue number
+    // passed to `glab mr view` usually resolves to a real, unrelated MR.
+    expect(block).toContain('glab mr view --output json | jq -r .description');
+    expect(block).not.toContain('glab mr view <iid>');
     expect(block).not.toContain('gh pr view');
   });
 
