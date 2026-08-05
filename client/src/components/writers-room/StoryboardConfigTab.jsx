@@ -71,10 +71,12 @@ function WorldStyleRow({ value, presets, onChange }) {
           <Palette size={10} /> World style
         </span>
         {value.presetId !== STYLE_ID.NONE && (
+          // 44px tap target; -my-1 stays inside the 1.5 stack gap so the box
+          // never overlaps the preset <select> below it.
           <button
             type="button"
             onClick={() => pickPreset(STYLE_ID.NONE)}
-            className="text-[9px] text-gray-500 hover:text-port-error"
+            className="shrink-0 flex items-center justify-center min-w-[44px] min-h-[44px] -my-1 text-[9px] text-gray-500 hover:text-port-error"
             title="Clear style"
           >
             Clear

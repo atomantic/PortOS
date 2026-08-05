@@ -184,9 +184,11 @@ function BibleRow({ item, config, onEdit, readingTheme }) {
             </div>
           )}
         </div>
+        {/* 44px tap target; the negative margins let it bleed into the row's
+            own px-3/py-2 padding so a one-line row doesn't grow taller. */}
         <button
           onClick={onEdit}
-          className="text-gray-500 hover:text-port-accent shrink-0"
+          className="shrink-0 flex items-center justify-center min-w-[44px] min-h-[44px] -my-2 -mr-3 text-gray-500 hover:text-port-accent"
           title={config.editButtonTitle}
           aria-label={`Edit ${config.getDisplayName(item)}`}
         >

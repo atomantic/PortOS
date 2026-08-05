@@ -231,11 +231,13 @@ export default function PolishPanel({ work, dirty, onBodyChanged }) {
                 {typeof s.qualityScore === 'number' && <span className="text-gray-500"> · <ScoreBadge value={s.qualityScore} inline /></span>}
               </span>
               <span className="text-gray-600 text-[10px] shrink-0">{s.wordCount?.toLocaleString()}w · {timeAgo(s.createdAt, '')}</span>
+              {/* 44px tap target; -my-1.5/-mr-2 bleed into the row's own
+                  padding so the snapshot list keeps its density. */}
               <button
                 onClick={() => revert(s.id)}
                 disabled={running || reverting === s.id}
                 title="Revert the draft to this snapshot"
-                className="flex items-center gap-1 text-gray-400 hover:text-white disabled:opacity-40 text-[11px]"
+                className="shrink-0 flex items-center justify-center gap-1 min-h-[44px] px-2 -my-1.5 -mr-2 text-gray-400 hover:text-white disabled:opacity-40 text-[11px]"
               >
                 <RotateCcw size={11} className={reverting === s.id ? 'animate-spin' : ''} /> Revert
               </button>

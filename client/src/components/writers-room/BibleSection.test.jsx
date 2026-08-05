@@ -233,6 +233,20 @@ describe.each(SCENARIOS)('$label (BibleSection)', (s) => {
     expect(screen.getByText(displayText(s.existingItem))).toBeInTheDocument();
   });
 
+  // The row Edit button used to render as a bare 11px pencil icon, which is a
+  // ~11px tap target on a phone (#3565). Assert the utility tokens rather than
+  // computed geometry — jsdom doesn't apply Tailwind.
+  it('a11y: the row Edit button meets the 44px touch-target floor', async () => {
+    s.api.list.mockResolvedValue([s.existingItem]);
+
+    render(<s.Component workId="work-1" />);
+    await screen.findByText(displayText(s.existingItem));
+
+    const editBtn = screen.getByRole('button', { name: `Edit ${displayText(s.existingItem)}` });
+    expect(editBtn.className).toContain('min-h-[44px]');
+    expect(editBtn.className).toContain('min-w-[44px]');
+  });
+
   it('a11y: the identity field exposes an accessible name matching its config label', async () => {
     s.api.list.mockResolvedValue([]);
     render(<s.Component workId="work-1" />);
