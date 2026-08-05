@@ -13,9 +13,25 @@
  * autonomous agent…" preamble are gone from BOTH paths.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import { join } from 'path';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { PATHS } from '../lib/fileUtils.js';
+
+// #3475 — The builder reads ~/.claude/CLAUDE.md off the real filesystem and splices
+// it into the prompt, so without this every `not.toMatch` assertion below is decided
+// by the contributor's personal global config: it false-fails when their file happens
+// to contain the string, and false-passes on a machine that has no such file at all
+// (CI), where the suppression being asserted is never actually exercised. Pointing
+// homedir() at a path that cannot exist makes the global section deterministically
+// empty. `homeStub` stays mutable so the one test that needs a REAL global CLAUDE.md
+// (a fixture that deliberately contains the suppressed string) can swap it in and
+// prove the suppression positively — see the #3475 describe block further down.
+const homeStub = vi.hoisted(() => ({ dir: '/nonexistent-home-for-tests' }));
+vi.mock('os', async (importOriginal) => ({
+  ...(await importOriginal()),
+  homedir: () => homeStub.dir,
+}));
 
 // Mock heavy dependencies used by the full (api) prompt path so the API-routing
 // regression test doesn't try to hit the memory DB, digital-twin services, or
@@ -75,7 +91,7 @@ vi.mock('./codeReview.js', () => ({
   getCodeReviewDefaults: vi.fn().mockResolvedValue({ reviewers: ['copilot'] }),
 }));
 
-import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBullet, reconcileSplitContext, buildReviewLoopFollowUpSection, getAppWorkspace, UNATTENDED_RUN_RULE } from './agentPromptBuilder.js';
+import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBullet, reconcileSplitContext, buildReviewLoopFollowUpSection, getAppWorkspace, getClaudeMdContext, UNATTENDED_RUN_RULE } from './agentPromptBuilder.js';
 import { getCodeReviewDefaults } from './codeReview.js'; // mocked above — control the configured default
 import { isTruthyMeta } from './agentState.js';
 import { buildPrompt } from './promptService.js'; // mocked above — inspect call args
@@ -1686,6 +1702,75 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
     expect(prompt).toMatch(/Do NOT commit, push, or open a PR/);
     // Simplify-before-commit step is suppressed (nothing gets committed).
     expect(prompt).not.toMatch(/## Simplify Step/);
+  });
+
+  // #3475 — The `not.toMatch(/gh pr merge/)` assertions above run with homedir
+  // stubbed to a path that cannot exist, so the `## CLAUDE.md Instructions`
+  // section is empty. That makes them deterministic, but on its own it can't
+  // distinguish "the builder suppresses the merge instruction" from "no section
+  // of this prompt could ever have contained it" — which is exactly the false
+  // green CI has been shipping.
+  //
+  // This test closes that gap from the other side: it points homedir at a
+  // fixture home whose global CLAUDE.md deliberately DOES contain `gh pr merge`,
+  // then asserts (a) the fixture really is spliced into the prompt verbatim — so
+  // the string is demonstrably reachable — and (b) every byte the BUILDER itself
+  // generates still omits it on the discardWorktree path. Verified by probe: stub
+  // buildAgentPrompt's `discardWorktree` to `false` (i.e. remove the suppression)
+  // and (b) fails on `Commit and push your changes`.
+  describe('suppression is positively pinned against a fixture global CLAUDE.md (#3475)', () => {
+    // Obviously-fake stand-in for a contributor's personal global instructions.
+    const FIXTURE_GLOBAL_CLAUDE_MD = [
+      '# Example Global Instructions',
+      '',
+      '- When CI is green, land it with `gh pr merge <url> --merge --delete-branch`.',
+      '- Commit and push your changes before you stop.',
+    ].join('\n');
+
+    let fixtureHome;
+    let priorHomeStub;
+
+    beforeAll(() => {
+      fixtureHome = mkdtempSync(join(process.env.TMPDIR || '/tmp', 'portos-claudemd-fixture-'));
+      mkdirSync(join(fixtureHome, '.claude'), { recursive: true });
+      writeFileSync(join(fixtureHome, '.claude', 'CLAUDE.md'), FIXTURE_GLOBAL_CLAUDE_MD);
+      priorHomeStub = homeStub.dir;
+      homeStub.dir = fixtureHome;
+    });
+
+    // Restore the nonexistent-home stub — every other test in the file depends on
+    // the global CLAUDE.md section being empty.
+    afterAll(() => {
+      homeStub.dir = priorHomeStub;
+      rmSync(fixtureHome, { recursive: true, force: true });
+    });
+
+    it('splices the fixture verbatim yet still suppresses commit/push/merge in every builder-generated section', async () => {
+      // Sanity: the fixture is live and carries the strings under test. Without
+      // this the assertions below could pass because nothing was read at all.
+      const claudeMdSection = await getClaudeMdContext('/r');
+      expect(claudeMdSection).toMatch(/## CLAUDE\.md Instructions/);
+      expect(claudeMdSection).toMatch(/gh pr merge/);
+      expect(claudeMdSection).toMatch(/Commit and push your changes/);
+
+      const prompt = await buildAgentPrompt(liTask(), {}, '/r', wt, isTruthyMeta, { providerType: 'api' });
+      // The verbatim splice is the production contract — the builder passes the
+      // user's own instructions through untouched.
+      expect(prompt).toContain(claudeMdSection);
+
+      // Everything the builder authored. Removing the exact spliced section (rather
+      // than regex-slicing around a heading) keeps the boundary unambiguous.
+      const builderAuthored = prompt.replace(claudeMdSection, '');
+      expect(builderAuthored).not.toMatch(/Example Global Instructions/); // strip really worked
+      // The exact assertion that false-failed in #3475 — now scoped so the
+      // fixture's own copy of the string can't decide it.
+      expect(builderAuthored).not.toMatch(/gh pr merge/);
+      expect(builderAuthored).not.toMatch(/Commit and push your changes/);
+      expect(builderAuthored).not.toMatch(/## Completion Workflow/);
+      // …and the positive half of the same contract still renders.
+      expect(builderAuthored).toMatch(/## Completion \(Reasoning-Only Task\)/);
+      expect(builderAuthored).toMatch(/Do NOT commit, push, or open a PR/);
+    });
   });
 });
 
