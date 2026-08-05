@@ -34,10 +34,11 @@ describe('PolishPanel', () => {
   // The snapshot Revert button used to be an 11px icon + 11px label with no
   // vertical padding — a ~16px tall tap target on a phone (#3565). Assert the
   // utility tokens rather than computed geometry; jsdom applies no Tailwind.
-  it('a11y: the snapshot Revert button meets the 44px touch-target height floor', async () => {
+  it('a11y: the snapshot Revert button meets the 44px touch-target floor', async () => {
     render(<PolishPanel work={{ id: 'work-1' }} dirty={false} />);
 
     const revertBtn = await screen.findByRole('button', { name: /revert/i });
     expect(revertBtn.className).toContain('min-h-[44px]');
+    expect(revertBtn.className).toContain('min-w-[44px]');
   });
 });

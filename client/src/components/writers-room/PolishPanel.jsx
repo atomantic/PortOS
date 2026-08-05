@@ -237,7 +237,7 @@ export default function PolishPanel({ work, dirty, onBodyChanged }) {
                 onClick={() => revert(s.id)}
                 disabled={running || reverting === s.id}
                 title="Revert the draft to this snapshot"
-                className="shrink-0 flex items-center justify-center gap-1 min-h-[44px] px-2 -my-1.5 -mr-2 text-gray-400 hover:text-white disabled:opacity-40 text-[11px]"
+                className="shrink-0 flex items-center justify-center gap-1 min-w-[44px] min-h-[44px] px-2 -my-1.5 -mr-2 text-gray-400 hover:text-white disabled:opacity-40 text-[11px]"
               >
                 <RotateCcw size={11} className={reverting === s.id ? 'animate-spin' : ''} /> Revert
               </button>
