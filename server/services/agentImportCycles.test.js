@@ -368,14 +368,44 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
         }
       }
 
-      // `import * as cos from './cos.js'` names no bindings, so the loop above
-      // cannot see it — yet it hands the caller every transition the barrel
-      // forwards. Banning the namespace import outright is too blunt (that same
-      // handle is how a dozen modules reach the task store, which is not this
-      // issue's business), so check the two ways a transition comes back OFF the
-      // handle: a property read and a destructure. Both, because either one
+      // DEFERRED forms. `await import()` is invisible to the static graph — by
+      // design, it cannot produce a load-time cycle — but reaching across a
+      // blocked layer with one is this cluster's whole habit, and the exact
+      // pattern this PR deleted from `cleanupOrphanedAgents` was
+      // `const { completeAgent } = await import('./cos.js')`. A guard that only
+      // reads static syntax would go green the day someone writes it again.
+      // In a destructure the LEFT of `a: b` is the exported name, same role `as`
+      // plays in a static import.
+      for (const [, names, spec] of src.matchAll(/(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:await\s+)?import\s*\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+        const target = resolveSpec(spec);
+        if (allowed.has(target)) continue;
+        for (const entry of names.split(',')) {
+          const name = entry.split(':')[0].trim();
+          if (!declaredBy.has(name) || declaredBy.get(name).has(target)) continue;
+          offenders.push(`${file} defer-imports ${name} from ${target}`);
+        }
+      }
+      // `(await import('./cos.js')).completeAgent` — the same reach, one step
+      // shorter.
+      for (const [, spec, name] of src.matchAll(/import\s*\(\s*['"]([^'"]+)['"]\s*\)[\s)]*\.\s*(\w+)/g)) {
+        const target = resolveSpec(spec);
+        if (allowed.has(target) || !declaredBy.has(name) || declaredBy.get(name).has(target)) continue;
+        offenders.push(`${file} defer-imports ${name} from ${target}`);
+      }
+
+      // HANDLES onto a whole module — `import * as cos from './cos.js'` and its
+      // deferred twin `const cos = await import('./cos.js')`. Neither names a
+      // binding, so the loops above cannot see them, yet each hands the caller
+      // every transition the barrel forwards. Banning the handle outright is too
+      // blunt (that is how a dozen modules reach the task store, which is not
+      // this issue's business), so check the two ways a transition comes back
+      // OFF it: a property read and a destructure. Both, because either one
       // alone reads green over the other.
-      for (const [, ns, spec] of src.matchAll(/import\s*\*\s*as\s+(\w+)\s*from\s*['"]([^'"]+)['"]/g)) {
+      const handles = [
+        ...src.matchAll(/import\s*\*\s*as\s+(\w+)\s*from\s*['"]([^'"]+)['"]/g),
+        ...src.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*(?:await\s+)?import\s*\(\s*['"]([^'"]+)['"]\s*\)/g),
+      ];
+      for (const [, ns, spec] of handles) {
         const target = resolveSpec(spec);
         if (!forwarders.has(target)) continue;
         for (const name of declaredBy.keys()) {
