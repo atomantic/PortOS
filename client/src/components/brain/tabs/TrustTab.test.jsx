@@ -9,7 +9,6 @@ vi.mock('../../ui/Toast', () => ({ default: mockToast }));
 const api = vi.hoisted(() => ({
   getBrainInbox: vi.fn(),
   getBrainSettings: vi.fn(),
-  updateBrainSettings: vi.fn(),
 }));
 vi.mock('../../../services/api', () => api);
 
@@ -58,14 +57,18 @@ describe('TrustTab mobile header', () => {
     expect(stats().className).toContain('flex-wrap');
   });
 
-  it('keeps all five counters rendered and readable', async () => {
+  // Passes against the pre-fix markup too — it is not an overflow assertion. It
+  // guards the tempting wrong fix for this bug: hiding counters behind
+  // `hidden sm:inline` so the row fits, which drops them off the phone entirely.
+  it('keeps all five counters rendered rather than hiding any on mobile', async () => {
     await renderTab();
 
-    expect(screen.getByText('Total: 128')).toBeInTheDocument();
-    expect(screen.getByText('Filed: 96')).toBeInTheDocument();
-    expect(screen.getByText('Review: 18')).toBeInTheDocument();
-    expect(screen.getByText('Corrected: 12')).toBeInTheDocument();
-    expect(screen.getByText('Errors: 2')).toBeInTheDocument();
+    for (const label of ['Total: 128', 'Filed: 96', 'Review: 18', 'Corrected: 12', 'Errors: 2']) {
+      const counter = screen.getByText(label);
+      expect(counter).toBeInTheDocument();
+      // `hidden` would render it in jsdom but hide it on the phone this fixes.
+      expect(counter.className).not.toContain('hidden');
+    }
   });
 
   it('wraps the status-filter row so the Refresh button never spills off screen', async () => {
