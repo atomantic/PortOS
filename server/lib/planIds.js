@@ -9,6 +9,7 @@
  *   - assignMissingIds(markdown, extraIds)→ { content, assigned[] }
  *   - extractAllIds(markdown)             → string[]   (every `[slug]` in PLAN.md)
  *   - findInProgressIds(repoPath, ids)    → Set<string> (subset present in branch/PR names)
+ *   - resetInProgressScanCache(repoPath?) → void     (evict the TTL-cached ref scan)
  *   - pickFirstAvailable(items, takenIds) → PlanItem | null
  *
  * @typedef {Object} PlanItem
@@ -298,26 +299,39 @@ export function extractSlugFromRef(ref) {
 }
 
 /**
- * Find which of `knownIds` are currently in flight, as evidenced by an open
- * git branch (local or remote) or open PR with the slug encoded into a
- * documented claim ref pattern (`claim/<slug>` or `cos/<task>/<slug>/<agent>`).
- *
- * `repoPath` is the repository to query. Git refs (local + freshly fetched
- * `origin/*`) are the primary evidence and cover every documented claim pattern;
- * the open-PR head refs are a secondary net for a claim whose branch was pruned.
- *
- * When `gh` cannot be reached the PR net is UNAVAILABLE, not empty (#3358) — the
- * degradation is logged once so a run that later double-claims an item has a
- * visible cause, rather than the forge outage passing as "no PRs are open".
- *
- * @param {string} repoPath
- * @param {string[]|Set<string>} knownIds
- * @returns {Promise<Set<string>>}
+ * How long a claim-ref scan stays reusable. The scan costs a network
+ * `git fetch --prune`, a `git branch -a`, and a `gh pr list` child process, and
+ * the background scheduler re-evaluates plan-task dispatch far more often than
+ * claim branches actually appear (#3499). One minute is short enough that a
+ * freshly pushed claim branch is seen on the next tick or two, and long enough
+ * that a burst of evaluation ticks costs one scan instead of one each.
  */
-export async function findInProgressIds(repoPath, knownIds) {
-  const known = knownIds instanceof Set ? knownIds : new Set(knownIds);
-  if (known.size === 0) return new Set();
+export const IN_PROGRESS_SCAN_TTL_MS = 60_000;
 
+/** repoPath → { expiresAt:number, promise:Promise<Set<string>> } */
+const inProgressScanCache = new Map();
+
+/**
+ * Drop cached claim-ref scans. Call with a `repoPath` to evict one repo, or
+ * with no argument to clear every entry.
+ *
+ * Tests MUST call this in `beforeEach` — the cache is module-level, so without
+ * a reset one test's scan result leaks into the next one's assertions.
+ *
+ * @param {string} [repoPath]
+ */
+export function resetInProgressScanCache(repoPath) {
+  if (typeof repoPath === 'string') inProgressScanCache.delete(repoPath);
+  else inProgressScanCache.clear();
+}
+
+/**
+ * The uncached scan: every claim slug currently evidenced by a git ref or an
+ * open PR head ref in `repoPath`. Returns ALL slugs found, not just the ones a
+ * particular caller asked about, so one scan can serve callers with different
+ * `knownIds` sets.
+ */
+async function scanClaimedSlugs(repoPath) {
   // Best-effort fetch so remote branches are current
   await execGit(['fetch', '--prune'], repoPath).catch(() => {});
 
@@ -339,10 +353,73 @@ export async function findInProgressIds(repoPath, knownIds) {
     ...(prHeadRefs || [])
   ].map(s => s.trim()).filter(Boolean);
 
-  const inFlight = new Set();
+  const slugs = new Set();
   for (const ref of refs) {
     const slug = extractSlugFromRef(ref);
-    if (slug && known.has(slug)) inFlight.add(slug);
+    if (slug) slugs.add(slug);
+  }
+  return slugs;
+}
+
+/**
+ * TTL-cached wrapper around `scanClaimedSlugs`. Concurrent callers share the
+ * one in-flight promise; the TTL is stamped again when it settles so a slow
+ * scan doesn't immediately look stale. A rejected scan is evicted so the next
+ * call retries rather than caching the failure.
+ */
+function claimedSlugs(repoPath, { force = false } = {}) {
+  const cached = inProgressScanCache.get(repoPath);
+  if (!force && cached && cached.expiresAt > Date.now()) return cached.promise;
+
+  const entry = { expiresAt: Date.now() + IN_PROGRESS_SCAN_TTL_MS, promise: null };
+  entry.promise = scanClaimedSlugs(repoPath).then(
+    slugs => {
+      entry.expiresAt = Date.now() + IN_PROGRESS_SCAN_TTL_MS;
+      return slugs;
+    },
+    err => {
+      if (inProgressScanCache.get(repoPath) === entry) inProgressScanCache.delete(repoPath);
+      throw err;
+    }
+  );
+  inProgressScanCache.set(repoPath, entry);
+  return entry.promise;
+}
+
+/**
+ * Find which of `knownIds` are currently in flight, as evidenced by an open
+ * git branch (local or remote) or open PR with the slug encoded into a
+ * documented claim ref pattern (`claim/<slug>` or `cos/<task>/<slug>/<agent>`).
+ *
+ * `repoPath` is the repository to query. Git refs (local + freshly fetched
+ * `origin/*`) are the primary evidence and cover every documented claim pattern;
+ * the open-PR head refs are a secondary net for a claim whose branch was pruned.
+ *
+ * When `gh` cannot be reached the PR net is UNAVAILABLE, not empty (#3358) — the
+ * degradation is logged once so a run that later double-claims an item has a
+ * visible cause, rather than the forge outage passing as "no PRs are open".
+ *
+ * The underlying ref scan is cached per `repoPath` for `IN_PROGRESS_SCAN_TTL_MS`
+ * so back-to-back scheduler evaluation ticks reuse it instead of respawning
+ * `git fetch` / `git branch` / `gh pr list` every time (#3499). What's cached is
+ * the full slug set, so a caller passing a different `knownIds` still gets a
+ * correct intersection. Pass `{ force: true }` to bypass the cache when a caller
+ * is about to act on the result rather than merely gate on it.
+ *
+ * @param {string} repoPath
+ * @param {string[]|Set<string>} knownIds
+ * @param {{ force?: boolean }} [options]
+ * @returns {Promise<Set<string>>}
+ */
+export async function findInProgressIds(repoPath, knownIds, options = {}) {
+  const known = knownIds instanceof Set ? knownIds : new Set(knownIds);
+  if (known.size === 0) return new Set();
+
+  const claimed = await claimedSlugs(repoPath, options);
+
+  const inFlight = new Set();
+  for (const slug of claimed) {
+    if (known.has(slug)) inFlight.add(slug);
   }
   return inFlight;
 }

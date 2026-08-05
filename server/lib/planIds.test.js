@@ -1,4 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'events';
+
+const execGitMock = vi.hoisted(() => vi.fn());
+const spawnMock = vi.hoisted(() => vi.fn());
+
+vi.mock('./execGit.js', () => ({ execGit: (...args) => execGitMock(...args) }));
+vi.mock('child_process', () => ({ spawn: (...args) => spawnMock(...args) }));
+
 import {
   slugify,
   parsePlanItems,
@@ -6,7 +14,10 @@ import {
   extractAllIds,
   pickFirstAvailable,
   diagnoseUnpickablePlan,
-  extractSlugFromRef
+  extractSlugFromRef,
+  findInProgressIds,
+  resetInProgressScanCache,
+  IN_PROGRESS_SCAN_TTL_MS
 } from './planIds.js';
 
 describe('planIds.js', () => {
@@ -318,6 +329,138 @@ describe('planIds.js', () => {
       // would compare against the full string. Slugs are slash-free today;
       // this test fails loudly if that ever changes.
       expect(extractSlugFromRef('claim/foo/bar')).toBe('foo/bar');
+    });
+  });
+
+  describe('findInProgressIds TTL cache', () => {
+    // A fake `gh pr list` child: emits its stdout then closes clean.
+    const fakeGhChild = (stdout) => {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.kill = () => {};
+      setImmediate(() => {
+        if (stdout) child.stdout.emit('data', Buffer.from(stdout));
+        child.emit('close', 0);
+      });
+      return child;
+    };
+
+    // Per-repo branch listings, so a leaked cache entry shows up as the wrong
+    // repo's slugs rather than merely as a missing process spawn.
+    const branchesByRepo = {
+      '/repo/a': 'main\nclaim/alpha\n',
+      '/repo/b': 'main\ncos/task-7/beta/agent-1\n'
+    };
+    const KNOWN = ['alpha', 'beta', 'gamma'];
+
+    let now;
+
+    beforeEach(() => {
+      resetInProgressScanCache();
+      execGitMock.mockReset();
+      spawnMock.mockReset();
+      now = 1_700_000_000_000;
+      vi.spyOn(Date, 'now').mockImplementation(() => now);
+      execGitMock.mockImplementation((args, repoPath) =>
+        args[0] === 'branch'
+          ? Promise.resolve({ stdout: branchesByRepo[repoPath] ?? '' })
+          : Promise.resolve({ stdout: '' })
+      );
+      spawnMock.mockImplementation(() => fakeGhChild(''));
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      resetInProgressScanCache();
+    });
+
+    const scanCount = () => spawnMock.mock.calls.length;
+
+    it('reuses the scan for a second call inside the TTL window', async () => {
+      const first = await findInProgressIds('/repo/a', KNOWN);
+      expect([...first]).toEqual(['alpha']);
+      expect(scanCount()).toBe(1);
+
+      now += IN_PROGRESS_SCAN_TTL_MS - 1;
+      const second = await findInProgressIds('/repo/a', KNOWN);
+      expect([...second]).toEqual(['alpha']);
+      // No second `git fetch` / `git branch` / `gh pr list` round-trip.
+      expect(scanCount()).toBe(1);
+      expect(execGitMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('dedupes concurrent callers onto one in-flight scan', async () => {
+      const [a, b] = await Promise.all([
+        findInProgressIds('/repo/a', KNOWN),
+        findInProgressIds('/repo/a', KNOWN)
+      ]);
+      expect([...a]).toEqual(['alpha']);
+      expect([...b]).toEqual(['alpha']);
+      expect(scanCount()).toBe(1);
+    });
+
+    it('re-scans after the TTL expires and picks up the newer refs', async () => {
+      expect([...await findInProgressIds('/repo/a', KNOWN)]).toEqual(['alpha']);
+      expect(scanCount()).toBe(1);
+
+      branchesByRepo['/repo/a'] = 'main\nclaim/alpha\nclaim/gamma\n';
+      now += IN_PROGRESS_SCAN_TTL_MS + 1;
+
+      const after = await findInProgressIds('/repo/a', KNOWN);
+      expect([...after].sort()).toEqual(['alpha', 'gamma']);
+      expect(scanCount()).toBe(2);
+
+      branchesByRepo['/repo/a'] = 'main\nclaim/alpha\n';
+    });
+
+    it('caches per repoPath — one repo\'s scan never answers for another', async () => {
+      expect([...await findInProgressIds('/repo/a', KNOWN)]).toEqual(['alpha']);
+      expect([...await findInProgressIds('/repo/b', KNOWN)]).toEqual(['beta']);
+      expect(scanCount()).toBe(2);
+
+      // Still isolated on the cached path.
+      expect([...await findInProgressIds('/repo/a', KNOWN)]).toEqual(['alpha']);
+      expect([...await findInProgressIds('/repo/b', KNOWN)]).toEqual(['beta']);
+      expect(scanCount()).toBe(2);
+
+      const repoArgs = execGitMock.mock.calls.map(([, repoPath]) => repoPath);
+      expect(new Set(repoArgs)).toEqual(new Set(['/repo/a', '/repo/b']));
+    });
+
+    it('intersects the cached slug set against each caller\'s own knownIds', async () => {
+      // The cache holds every claimed slug, not one caller's filtered answer —
+      // otherwise a second caller with a different id set would read a subset.
+      branchesByRepo['/repo/a'] = 'claim/alpha\nclaim/gamma\n';
+      expect([...await findInProgressIds('/repo/a', ['alpha'])]).toEqual(['alpha']);
+      expect([...await findInProgressIds('/repo/a', ['gamma'])]).toEqual(['gamma']);
+      expect(scanCount()).toBe(1);
+
+      branchesByRepo['/repo/a'] = 'main\nclaim/alpha\n';
+    });
+
+    it('bypasses the cache with { force: true }', async () => {
+      await findInProgressIds('/repo/a', KNOWN);
+      expect(scanCount()).toBe(1);
+
+      await findInProgressIds('/repo/a', KNOWN, { force: true });
+      expect(scanCount()).toBe(2);
+    });
+
+    it('resetInProgressScanCache evicts one repo without clearing the rest', async () => {
+      await findInProgressIds('/repo/a', KNOWN);
+      await findInProgressIds('/repo/b', KNOWN);
+      expect(scanCount()).toBe(2);
+
+      resetInProgressScanCache('/repo/a');
+      await findInProgressIds('/repo/a', KNOWN);
+      await findInProgressIds('/repo/b', KNOWN);
+      expect(scanCount()).toBe(3);
+    });
+
+    it('never scans when there are no known ids to match', async () => {
+      expect([...await findInProgressIds('/repo/a', [])]).toEqual([]);
+      expect(scanCount()).toBe(0);
+      expect(execGitMock).not.toHaveBeenCalled();
     });
   });
 });
