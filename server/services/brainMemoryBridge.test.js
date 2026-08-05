@@ -13,8 +13,10 @@ const updateMemory = vi.fn(async () => ({ id: 'updated' }));
 const updateMemoryEmbedding = vi.fn(async () => {});
 const deleteMemory = vi.fn(async () => ({ success: true }));
 const generateMemoryEmbedding = vi.fn(async () => [0.1, 0.2, 0.3]);
+const getMemoryIdsMissingEmbedding = vi.fn(async () => new Set());
 const getById = vi.fn();
 const getAll = vi.fn(async () => []);
+const listLiveIds = vi.fn(async () => []);
 const getDigests = vi.fn(async () => []);
 const getReviews = vi.fn(async () => []);
 const listJournals = vi.fn(async () => ({ records: [] }));
@@ -37,11 +39,13 @@ vi.mock('../lib/fileUtils.js', () => ({
     return writeFile(filePath, payload);
   }),
 }));
-vi.mock('./memoryBackend.js', () => ({ createMemory, updateMemory, updateMemoryEmbedding, deleteMemory }));
+vi.mock('./memoryBackend.js', () => ({
+  createMemory, updateMemory, updateMemoryEmbedding, deleteMemory, getMemoryIdsMissingEmbedding,
+}));
 vi.mock('./memoryEmbeddings.js', () => ({ generateMemoryEmbedding }));
 vi.mock('./brainStorage.js', () => {
   const { EventEmitter } = require('events');
-  return { brainEvents: new EventEmitter(), getById, getAll, getDigests, getReviews };
+  return { brainEvents: new EventEmitter(), getById, getAll, listLiveIds, getDigests, getReviews };
 });
 vi.mock('./brainJournal.js', () => ({ listJournals, getJournal }));
 
@@ -484,5 +488,60 @@ describe('brainMemoryBridge — syncAllBrainData refresh mode (issue #1080 recov
     // Re-embedded (update via syncBrainRecord), never archived.
     expect(refreshed.archived).toBe(0);
     expect(updateMemory).not.toHaveBeenCalledWith('mem-live', { status: 'archived' });
+  });
+});
+
+describe('brainMemoryBridge — getEmbeddingCoverage (issue #3508)', () => {
+  const ENTITY_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories'];
+
+  beforeEach(() => {
+    listLiveIds.mockImplementation(async () => []);
+    getDigests.mockImplementation(async () => []);
+    getReviews.mockImplementation(async () => []);
+    getMemoryIdsMissingEmbedding.mockImplementation(async () => new Set());
+  });
+
+  it('tallies live ids without loading any record bodies', async () => {
+    const bridge = await loadBridge();
+    listLiveIds.mockImplementation(async (type) => {
+      if (type === 'people') return ['p1', 'p2'];
+      if (type === 'journals') return ['2026-01-01'];
+      return [];
+    });
+    // p1 is embedded; p2 is mapped to a vector-less memory; the day is unmapped.
+    bridgeFileContents = JSON.stringify({
+      [bridge.bridgeKey('people', 'p1')]: 'mem-p1',
+      [bridge.bridgeKey('people', 'p2')]: 'mem-p2',
+    });
+    getMemoryIdsMissingEmbedding.mockResolvedValue(new Set(['mem-p2']));
+
+    expect(await bridge.getEmbeddingCoverage()).toEqual({ total: 3, missing: 2 });
+
+    // The whole point of the fix: identity comes from the id index, never from
+    // a full-body walk of every collection.
+    expect(getAll).not.toHaveBeenCalled();
+    expect(listJournals).not.toHaveBeenCalled();
+    for (const type of [...ENTITY_TYPES, 'journals']) {
+      expect(listLiveIds).toHaveBeenCalledWith(type);
+    }
+  });
+
+  it('counts the append-only JSONL logs alongside the id-indexed stores', async () => {
+    const bridge = await loadBridge();
+    listLiveIds.mockImplementation(async (type) => (type === 'ideas' ? ['i1'] : []));
+    getDigests.mockResolvedValue([{ id: 'd1' }]);
+    getReviews.mockResolvedValue([{ id: 'r1' }]);
+    bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('digests', 'd1')]: 'mem-d1' });
+
+    expect(await bridge.getEmbeddingCoverage()).toEqual({ total: 3, missing: 2 });
+  });
+
+  it('treats an unreachable missing-embedding query as "nothing known missing"', async () => {
+    const bridge = await loadBridge();
+    listLiveIds.mockImplementation(async (type) => (type === 'admin' ? ['a1'] : []));
+    bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('admin', 'a1')]: 'mem-a1' });
+    getMemoryIdsMissingEmbedding.mockRejectedValue(new Error('backend down'));
+
+    expect(await bridge.getEmbeddingCoverage()).toEqual({ total: 1, missing: 0 });
   });
 });

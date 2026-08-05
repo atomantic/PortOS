@@ -384,6 +384,13 @@ export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMi
  * only reports active rows (an archived/non-active mapped memory is treated as
  * embedded and is not a backfill target). Read-only; walks the same stores as
  * the onlyMissing sync so the count matches what "Embed missing" would process.
+ *
+ * Only IDENTITY is needed to tally — each store's live ids, checked against the
+ * bridge map — so the entity/journal walks go through `brainStorage.listLiveIds`
+ * rather than `getAll` / `listJournals` (issue #3508). Those loaded and parsed
+ * every record body across every collection, then threw all of it away but the
+ * `id` and `archived` fields, turning a status poll into hundreds of disk reads.
+ * `listLiveIds` reads only the ids it has never resolved.
  */
 export async function getEmbeddingCoverage() {
   const map = await loadBridgeMap();
@@ -394,17 +401,16 @@ export async function getEmbeddingCoverage() {
   let missing = 0;
   const tally = (key) => { total += 1; if (!isEmbedded(key)) missing += 1; };
 
-  for (const type of ['people', 'projects', 'ideas', 'admin', 'memories']) {
-    const records = await brainStorage.getAll(type);
-    for (const record of records) {
-      if (record.archived) continue;
-      tally(bridgeKey(type, record.id));
-    }
+  // Entity stores plus the daily log — the journal record id IS its date, the
+  // same key syncAllBrainData bridges under. `listLiveIds` already drops
+  // tombstones and archived records, and it has no page cap (the old
+  // `listJournals({ limit: 10000 })` silently stopped counting past 10k days).
+  for (const type of ['people', 'projects', 'ideas', 'admin', 'memories', 'journals']) {
+    for (const id of await brainStorage.listLiveIds(type)) tally(bridgeKey(type, id));
   }
 
-  const { records: journals } = await listJournals({ limit: 10000, includeContent: false });
-  for (const record of journals) tally(bridgeKey('journals', record.id));
-
+  // digests/reviews are append-only JSONL: one whole-file read each, behind
+  // brainStorage's own cache — not a per-record disk walk, so they stay as-is.
   for (const [type, getter] of [['digests', brainStorage.getDigests], ['reviews', brainStorage.getReviews]]) {
     const records = await getter(1000);
     for (const record of records) tally(bridgeKey(type, record.id));

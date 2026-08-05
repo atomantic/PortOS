@@ -322,6 +322,80 @@ describe('songs entity enrollment (SongBook)', () => {
   });
 });
 
+describe('listLiveIds (embedding-coverage id index, issue #3508)', () => {
+  it('returns only live ids — archived and tombstoned records are excluded', async () => {
+    const live = await brainStorage.create('ideas', { title: 'Live Idea' });
+    const archived = await brainStorage.create('ideas', { title: 'Archived Idea' });
+    const removed = await brainStorage.create('ideas', { title: 'Removed Idea' });
+    await brainStorage.update('ideas', archived.id, { archived: true });
+    await brainStorage.remove('ideas', removed.id);
+
+    const ids = await brainStorage.listLiveIds('ideas');
+    expect(ids).toContain(live.id);
+    expect(ids).not.toContain(archived.id);
+    expect(ids).not.toContain(removed.id);
+  });
+
+  it('serves a repeat call from the index instead of re-parsing record bodies', async () => {
+    const created = await brainStorage.create('projects', { name: 'Indexed Project' });
+    expect(await brainStorage.listLiveIds('projects')).toContain(created.id);
+
+    // Flip `archived` on disk BEHIND the store — no write path, so no event.
+    // A re-read would see it; the index (correctly) does not, which is exactly
+    // how we prove the second call did no body read.
+    await writeRawRecord('projects', created.id, { name: 'Indexed Project', archived: true });
+    expect(await brainStorage.listLiveIds('projects')).toContain(created.id);
+
+    // …and the cache is droppable.
+    brainStorage.invalidateAllCaches();
+    expect(await brainStorage.listLiveIds('projects')).not.toContain(created.id);
+  });
+
+  it('re-reads a single record after a local write event', async () => {
+    const created = await brainStorage.create('admin', { title: 'Admin Task' });
+    expect(await brainStorage.listLiveIds('admin')).toContain(created.id);
+
+    await brainStorage.update('admin', created.id, { archived: true });
+    expect(await brainStorage.listLiveIds('admin')).not.toContain(created.id);
+  });
+
+  it('re-reads after an event-SILENT peer apply (record:changed)', async () => {
+    // applyRemoteRecord never emits `${type}:upserted` (that would echo back to
+    // the peer, #1077) — only the local-only `record:changed` signal, so the
+    // index has to be listening for it or an inbound archive goes unnoticed.
+    await brainStorage.applyRemoteRecord(
+      'memories', 'peer-mem-1',
+      { title: 'From Peer', updatedAt: ISO('2026-06-09'), originInstanceId: 'peer-x' },
+      'create',
+    );
+    expect(await brainStorage.listLiveIds('memories')).toContain('peer-mem-1');
+
+    await brainStorage.applyRemoteRecord(
+      'memories', 'peer-mem-1',
+      { title: 'From Peer', archived: true, updatedAt: ISO('2026-06-10'), originInstanceId: 'peer-x' },
+      'update',
+    );
+    expect(await brainStorage.listLiveIds('memories')).not.toContain('peer-mem-1');
+  });
+
+  it('picks up creates and hard-prunes from the directory listing alone', async () => {
+    const first = await brainStorage.create('buckets', { name: 'Bucket One' });
+    expect(await brainStorage.listLiveIds('buckets')).toContain(first.id);
+
+    const second = await brainStorage.create('buckets', { name: 'Bucket Two' });
+    const both = await brainStorage.listLiveIds('buckets');
+    expect(both).toEqual(expect.arrayContaining([first.id, second.id]));
+  });
+});
+
+// Overwrite a record's stored JSON directly, bypassing every brainStorage write
+// path (and therefore every brainEvents signal). Used to prove the live-id index
+// is answering from memory rather than re-reading the file.
+async function writeRawRecord(type, id, record) {
+  const { PATHS, atomicWrite } = await import('../lib/fileUtils.js');
+  await atomicWrite(join(PATHS.brain, type, id, 'index.json'), record);
+}
+
 // Read the raw stored record (including tombstones) by bypassing the read
 // filter. getRawRecords returns the per-record map with tombstones, so this is
 // layout-agnostic (works against the collectionStore per-record files).

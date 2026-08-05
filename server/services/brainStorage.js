@@ -264,6 +264,93 @@ export async function getAll(type) {
     .map(([id, record]) => ({ id, ...record }));
 }
 
+// ─── Live-id index (issue #3508) ────────────────────────────────────────────
+// `listLiveIds(type)` answers "which record ids are live right now?" — the only
+// question tally/coverage callers ask — WITHOUT re-reading and re-parsing every
+// record body on every call, the way `getAll(type)` must.
+//
+// Cost model per call: one `listIds()` (readdir + lstat, no body reads) plus a
+// `loadOne` for ids the index has never resolved. Steady state is zero body
+// reads; a store the caller has already walked answers from memory.
+//
+// FRESHNESS — the same three signal classes brainSearchIndex documents:
+//   1. Adds and hard-deletes (create, pruneTombstones) — covered by the
+//      `listIds()` diff itself; membership is re-read from disk every call.
+//   2. IN-PLACE mutations that keep the id: an `archived` flip, or `remove()`
+//      writing a tombstone over the record. The id survives the diff, so these
+//      ride the per-record `${type}:upserted` / `${type}:deleted` events.
+//   3. Event-SILENT writes — `applyRemoteRecord` (silent to prevent the #1077
+//      echo loop) and `upsertWithId({ emitEvent: false })` — ride the local-only
+//      `record:changed` invalidation signal.
+//
+// No `null = not built` sentinel is needed here (unlike brainSearchIndex):
+// `listIds()` is the membership authority on every call, so an empty index is a
+// legitimate "nothing resolved yet" state and never causes a redundant re-scan.
+const liveIdIndex = Object.fromEntries(BRAIN_ENTITY_TYPES.map((type) => [type, new Map()]));
+// Bumped by every invalidation, so a resolve pass that raced an invalidation is
+// retried instead of writing the value it read just before the change landed.
+const liveIdGeneration = Object.fromEntries(BRAIN_ENTITY_TYPES.map((type) => [type, 0]));
+const LIVE_ID_MAX_ATTEMPTS = 3;
+
+// Live = present, not a tombstone, and not archived. `loadOne` returns null for
+// a missing/corrupt/unparseable record, which `getAll` also drops — so it is
+// not live either.
+const isLiveRecord = (record) => !!record && !isTombstone(record) && !record.archived;
+
+function invalidateLiveId(type, id) {
+  const index = liveIdIndex[type];
+  if (!index || !id) return;
+  index.delete(id);
+  liveIdGeneration[type] += 1;
+}
+
+async function resolveLiveIds(type, attempt) {
+  const store = storeFor(type);
+  const index = liveIdIndex[type];
+  const generation = liveIdGeneration[type];
+
+  const ids = await store.listIds();
+  const present = new Set(ids);
+  for (const id of [...index.keys()]) {
+    if (!present.has(id)) index.delete(id);
+  }
+
+  const unresolved = ids.filter((id) => !index.has(id));
+  const loaded = await Promise.all(unresolved.map((id) => store.loadOne(id)));
+
+  // An invalidation landed while we were reading, so what we loaded may already
+  // describe the pre-change record — re-run instead of caching it. The retry
+  // re-reads only the ids that invalidation dropped, so it is cheap. On the
+  // final attempt we adopt what we have: a tally one write behind is better
+  // than a caller that never returns.
+  if (liveIdGeneration[type] !== generation && attempt + 1 < LIVE_ID_MAX_ATTEMPTS) {
+    return resolveLiveIds(type, attempt + 1);
+  }
+
+  unresolved.forEach((id, i) => index.set(id, isLiveRecord(loaded[i])));
+  return ids.filter((id) => index.get(id) === true);
+}
+
+/**
+ * Ids of the LIVE records in a store — present, not tombstoned, not archived —
+ * without loading record bodies for ids the index has already resolved.
+ *
+ * This is the cheap counterpart to `getAll(type).filter(r => !r.archived)` for
+ * callers that only need identity (embedding-coverage tallies, membership
+ * checks). Returns a fresh array in `listIds()` order each call.
+ */
+export function listLiveIds(type) {
+  return resolveLiveIds(type, 0);
+}
+
+// Wire the freshness signals once, at module load. Invalidation only drops the
+// touched id, so the next `listLiveIds` re-reads exactly one record.
+for (const type of BRAIN_ENTITY_TYPES) {
+  brainEvents.on(`${type}:upserted`, ({ id } = {}) => invalidateLiveId(type, id));
+  brainEvents.on(`${type}:deleted`, ({ id } = {}) => invalidateLiveId(type, id));
+}
+brainEvents.on('record:changed', ({ type, id } = {}) => invalidateLiveId(type, id));
+
 /**
  * Get the RAW records map for a store, INCLUDING tombstones, keyed by id.
  *
@@ -975,13 +1062,18 @@ export async function backfillOriginInstanceId() {
 // =============================================================================
 
 /**
- * Invalidate the non-collection caches (meta + JSONL logs). Entity stores read
- * through to disk, so there is no entity cache to clear.
+ * Invalidate the non-collection caches (meta + JSONL logs) and the live-id
+ * index. Entity store BODIES still read through to disk, so there is no
+ * whole-record entity cache to clear.
  */
 export function invalidateAllCaches() {
   for (const key of Object.keys(caches)) {
     caches[key].data = null;
     caches[key].timestamp = 0;
+  }
+  for (const type of BRAIN_ENTITY_TYPES) {
+    liveIdIndex[type].clear();
+    liveIdGeneration[type] += 1;
   }
 }
 
