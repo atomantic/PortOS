@@ -466,6 +466,10 @@ describe('getLinksPage (paginated link reads, issue #3509)', () => {
       .toEqual([plain.id, untyped.id].sort());
     expect(mine(await brainStorage.getLinksPage({ linkType: 'github', isGitHubRepo: true, limit: 50 }), ids))
       .toEqual([repo.id]);
+    // An empty linkType means "no filter" (the route's old truthiness check), and
+    // is NOT the same as omitting isGitHubRepo — `false` there is a real filter.
+    expect(mine(await brainStorage.getLinksPage({ linkType: '', limit: 50 }), ids).sort())
+      .toEqual(ids.slice().sort());
   });
 
   it('drops a link from the page as soon as it is deleted', async () => {

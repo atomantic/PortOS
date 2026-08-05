@@ -287,6 +287,13 @@ export async function getAll(type) {
 // No `null = not built` sentinel is needed here (unlike brainSearchIndex):
 // `listIds()` is the membership authority on every call, so an empty index is a
 // legitimate "nothing resolved yet" state and never causes a redundant re-scan.
+//
+// Two write paths are deliberately event-silent and NOT covered by the three
+// classes above, because neither can change what any projection reads:
+// `pruneTombstones` hard-deletes the record dir, so the id leaves `listIds()`
+// and the diff drops it; `backfillOriginInstanceId` only stamps
+// `originInstanceId`, a field no projection looks at, and runs once at boot.
+// A NEW projection that reads either signal must invalidate from those paths.
 const RECORD_INDEX_MAX_ATTEMPTS = 3;
 
 // Every index registers itself here so ONE invalidation drops the touched id
@@ -1008,8 +1015,12 @@ const resolveLinkSummaries = () => resolveRecordIndex(linkSummaryIndex, 'links',
  */
 export async function getLinksPage({ linkType, isGitHubRepo, limit = 50, offset = 0 } = {}) {
   const rows = await resolveLinkSummaries();
+  // The two filters guard differently ON PURPOSE, mirroring the route code this
+  // replaced: `linkType` was a truthiness check (no link type is the empty
+  // string, so `''` means "don't filter"), while `isGitHubRepo` must honour an
+  // explicit `false` and so can only be skipped when it is genuinely absent.
   const matching = rows.filter(([, summary]) => summary
-    && (linkType === undefined || summary.linkType === linkType)
+    && (!linkType || summary.linkType === linkType)
     && (isGitHubRepo === undefined || summary.isGitHubRepo === isGitHubRepo));
 
   // Newest-first, with the id as a deterministic tiebreak: a bulk import stamps
