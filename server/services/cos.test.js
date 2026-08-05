@@ -716,10 +716,19 @@ describe('cos.js source — priority + capacity invariants', () => {
 
     // evaluateTasks: Priority 0 runs unconditionally; Priorities 1+ are wrapped in
     // an `if (!paused)` block that begins after spawnPriority0OnDemand.
+    //
+    // Anchor on the LAST `if (!paused)` preceding the user tier, not the first in
+    // the function: `evaluateTasks` legitimately carries other pause-gated work
+    // that runs before Priority 0 (the pending-merge sweep, which claims no agent
+    // lane and so must not sit behind the slot gate). A plain `.search()` matched
+    // that one instead and read as "the tier gate moved to the top" — a false
+    // positive on the exact regression this pins.
     const evOnDemandIdx = evalFn.indexOf('spawnPriority0OnDemand(ctx)');
-    const evPauseGateIdx = evalFn.search(/if\s*\(\s*!\s*paused\s*\)/);
     const evUserIdx = evalFn.indexOf('spawnPriority1UserTasks(ctx)');
+    const pauseGates = [...evalFn.matchAll(/if\s*\(\s*!\s*paused\s*\)/g)].map(m => m.index);
+    const evPauseGateIdx = pauseGates.filter(i => i < evUserIdx).pop() ?? -1;
     expect(evOnDemandIdx, 'evaluateTasks must invoke spawnPriority0OnDemand').toBeGreaterThan(-1);
+    expect(evUserIdx, 'evaluateTasks must invoke spawnPriority1UserTasks').toBeGreaterThan(-1);
     expect(evPauseGateIdx, 'evaluateTasks must gate the lower tiers on !paused').toBeGreaterThan(evOnDemandIdx);
     expect(evUserIdx, 'user/autonomous tiers must sit inside the !paused gate').toBeGreaterThan(evPauseGateIdx);
   });
