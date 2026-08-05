@@ -808,8 +808,7 @@ export async function updateTaskInterval(taskType, settings) {
       const nowMs = Date.now();
       const records = [exec, ...Object.values(exec.perApp || {})];
       for (const rec of records) {
-        const parkedUntilMs = rec?.parkedUntil ? new Date(rec.parkedUntil).getTime() : 0;
-        if (parkedUntilMs > nowMs) {
+        if (parkedUntilMs(rec) > nowMs) {
           rec.parkedUntil = await computePerpetualRecheckAt(merged);
         }
       }
@@ -898,6 +897,86 @@ export async function computePerpetualRecheckAt(interval, fromMs = Date.now()) {
     ? Number(interval.recheckIntervalMs)
     : DEFAULT_PERPETUAL_RECHECK_MS;
   return new Date(fromMs + ms).toISOString();
+}
+
+/**
+ * Numeric ms of a record's perpetual park, or 0 when it carries none (or an
+ * unparseable timestamp). The single reader of `parkedUntil` — every park
+ * comparison in this file goes through it so "parked" can't mean two things.
+ */
+function parkedUntilMs(record) {
+  if (!record?.parkedUntil) return 0;
+  const ms = new Date(record.parkedUntil).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+/**
+ * Roll a perpetual task's park records up into ONE aggregate that every
+ * per-app-park consumer projects from (getUpcomingTasks eligibility and the
+ * getScheduleStatus UI block).
+ *
+ * GLOBAL-RECORD INCLUSION RULE (documented once, here, so the callers can't
+ * diverge): every `perApp` record is a tracked scope; the top-level execution
+ * record is a tracked scope ONLY when it carries its OWN `parkedUntil`.
+ * Rationale — perpetual parks are recorded PER-APP (parkPerpetual is always
+ * called with an appId for the shipped app-scoped drains: claim-issue,
+ * claim-work, branch-/issue-reconcile), so for those the top-level record is
+ * just a container and must not be mistaken for a scope that is "due now".
+ * A future global-park perpetual (none ship today) stamps its own `parkedUntil`
+ * and is then folded in like any other scope.
+ *
+ * Returns:
+ *   trackedAppCount  per-app records (the UI's "N app(s)" denominator)
+ *   trackedCount     tracked scopes total (per-app + an own-parked global)
+ *   parkedAppCount   per-app records still parked in the future
+ *   globalParked     the top-level record carries a park that hasn't elapsed
+ *   soonestParkAt    ms of the earliest un-elapsed park, or null when none
+ *   anyDueNow        some tracked scope is unparked or its park has elapsed
+ *   parkReason       first parked app's reason, else the parked global's
+ */
+function aggregatePerpetualParks(execution, now) {
+  const appRecords = Object.values(execution?.perApp || {});
+  const globalUntil = parkedUntilMs(execution);
+  const globalTracked = globalUntil > 0;
+  const globalParked = globalUntil > now;
+
+  let parkedAppCount = 0;
+  let anyDueNow = false;
+  let soonestParkAt = null;
+  // The FIRST parked app in iteration order, not the first one that happens to
+  // carry a reason — the UI names the app it counted first, so a reasonless park
+  // must read as "no reason" rather than borrowing the next app's.
+  let firstParkedApp = null;
+
+  for (const rec of appRecords) {
+    const until = parkedUntilMs(rec);
+    // Unparked (mid-drain) or park already elapsed → this scope is due now.
+    if (until <= now) {
+      anyDueNow = true;
+      continue;
+    }
+    parkedAppCount++;
+    if (firstParkedApp === null) firstParkedApp = rec;
+    if (soonestParkAt === null || until < soonestParkAt) soonestParkAt = until;
+  }
+
+  if (globalTracked) {
+    if (globalParked) {
+      if (soonestParkAt === null || globalUntil < soonestParkAt) soonestParkAt = globalUntil;
+    } else {
+      anyDueNow = true;
+    }
+  }
+
+  return {
+    trackedAppCount: appRecords.length,
+    trackedCount: appRecords.length + (globalTracked ? 1 : 0),
+    parkedAppCount,
+    globalParked,
+    soonestParkAt,
+    anyDueNow,
+    parkReason: firstParkedApp?.parkReason || (globalParked ? execution.parkReason : null) || null
+  };
 }
 
 /**
@@ -1433,19 +1512,17 @@ export async function shouldRunTask(taskType, appId = null) {
       // I/O even though it's called several times per evaluation cycle. While
       // parked, the recheck cadence (parkedUntil) gates re-probing; once it
       // elapses the task becomes due again and the gate re-runs the detector.
-      const parkedUntilMs = appExecution.parkedUntil
-        ? new Date(appExecution.parkedUntil).getTime()
-        : 0;
-      if (parkedUntilMs && now < parkedUntilMs) {
+      const parkUntil = parkedUntilMs(appExecution);
+      if (parkUntil && now < parkUntil) {
         result = {
           shouldRun: false,
           reason: 'perpetual-parked',
-          nextRunAt: new Date(parkedUntilMs).toISOString(),
+          nextRunAt: new Date(parkUntil).toISOString(),
           parkReason: appExecution.parkReason || null,
           parkActionableCount: appExecution.parkActionableCount ?? null
         };
       } else {
-        result = { shouldRun: true, reason: parkedUntilMs ? 'perpetual-recheck' : 'perpetual-drain' };
+        result = { shouldRun: true, reason: parkUntil ? 'perpetual-recheck' : 'perpetual-drain' };
       }
       break;
     }
@@ -1783,22 +1860,16 @@ export async function getScheduleStatus() {
     // 'perpetual-drain' for app-scoped tasks like claim-issue/claim-work even
     // when every app is parked. Aggregate the per-app (and global) park records
     // so the UI can show the true parked/draining state and the soonest recheck.
+    // Projects the shared aggregatePerpetualParks rollup (same park semantics as
+    // the getUpcomingTasks eligibility derivation below).
     if (interval.type === INTERVAL_TYPES.PERPETUAL) {
-      const nowMs = Date.now();
-      const isParked = (r) => !!(r?.parkedUntil && new Date(r.parkedUntil).getTime() > nowMs);
-      const perAppEntries = Object.values(execution.perApp || {});
-      const parkedApps = perAppEntries.filter(isParked);
-      const globalParked = isParked(execution);
-      const nextRecheckAt = [
-        ...parkedApps.map((r) => r.parkedUntil),
-        ...(globalParked ? [execution.parkedUntil] : [])
-      ].filter(Boolean).sort()[0] || null;
+      const parks = aggregatePerpetualParks(execution, Date.now());
       taskStatus.perpetual = {
-        globalParked,
-        parkedAppCount: parkedApps.length,
-        trackedAppCount: perAppEntries.length,
-        nextRecheckAt,
-        parkReason: parkedApps[0]?.parkReason || (globalParked ? execution.parkReason : null) || null
+        globalParked: parks.globalParked,
+        parkedAppCount: parks.parkedAppCount,
+        trackedAppCount: parks.trackedAppCount,
+        nextRecheckAt: parks.soonestParkAt === null ? null : new Date(parks.soonestParkAt).toISOString(),
+        parkReason: parks.parkReason
       };
     }
 
@@ -1857,25 +1928,18 @@ export async function resetExecutionHistory(taskType, appId = null) {
  * drain only resumed on the ≤1h fallback poll, so a task configured for 9am ran
  * up to an hour late (or read as "didn't run").
  *
- * Derive eligibility from the per-app records instead — plus the top-level record
- * only when it carries its OWN park (a future global-park perpetual; none ship
- * today, but keep it general). Returns:
+ * Derive eligibility from the shared aggregatePerpetualParks rollup instead (see
+ * its GLOBAL-RECORD INCLUSION RULE for which scopes count). Returns:
  *   - null                                    → no tracked scope yet (caller keeps its global 'ready' default)
  *   - { status:'ready', eligibleAt:now }      → some tracked scope is due now (unparked or park elapsed)
  *   - { status:'scheduled', eligibleAt:<ms> } → every tracked scope parked; soonest recheck
  */
 function perpetualUpcomingEligibility(execution, now) {
-  const scopes = Object.values(execution?.perApp || {});
-  if (execution?.parkedUntil) scopes.push(execution);
-  if (scopes.length === 0) return null;
-  let soonest = Infinity;
-  for (const rec of scopes) {
-    const until = rec?.parkedUntil ? new Date(rec.parkedUntil).getTime() : 0;
-    // Unparked (mid-drain) or park already elapsed → this scope is due now.
-    if (!until || until <= now) return { status: 'ready', eligibleAt: now };
-    if (until < soonest) soonest = until;
-  }
-  return { status: 'scheduled', eligibleAt: soonest };
+  const parks = aggregatePerpetualParks(execution, now);
+  if (parks.trackedCount === 0) return null;
+  return parks.anyDueNow
+    ? { status: 'ready', eligibleAt: now }
+    : { status: 'scheduled', eligibleAt: parks.soonestParkAt };
 }
 
 export async function getUpcomingTasks(limit = 10) {
