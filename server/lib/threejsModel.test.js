@@ -484,6 +484,36 @@ describe('evaluateThreejsFlatness', () => {
     expect(flatness).toMatchObject({ flatIdentityDetailCount: 0, flatRatio: 0, slabPartIds: [] });
   });
 
+  it('still catches a flat fan whose rotation was baked into its vertices', () => {
+    // Turned 45° about X, the fan samples a distinct value on every axis, so
+    // axis-aligned plane counting alone would read it as solid.
+    const turned = flatFanGeometry();
+    const half = Math.SQRT1_2;
+    for (let index = 0; index < turned.vertices.length; index += 3) {
+      const y = turned.vertices[index + 1];
+      const z = turned.vertices[index + 2];
+      turned.vertices[index + 1] = Number(((y * half) - (z * half)).toFixed(6));
+      turned.vertices[index + 2] = Number(((y * half) + (z * half)).toFixed(6));
+    }
+    const distinctPerAxis = [0, 1, 2].map((axis) => new Set(
+      turned.vertices.filter((_, index) => index % 3 === axis),
+    ).size);
+    // Every axis is now well past the 11-plane threshold the counter uses.
+    expect(Math.min(...distinctPerAxis)).toBeGreaterThan(11);
+
+    const flatness = evaluateThreejsFlatness(flatnessSpec([geometryPart('badge', turned)]));
+    expect(flatness.findings.map((finding) => finding.code)).toEqual(['flat-identity-parts']);
+  });
+
+  it('does not punish a small part for being small', () => {
+    // A fixed absolute plane grid would give a 0.005-unit mesh five planes per
+    // axis however round it is; the quantum is relative to the mesh's own size.
+    const tiny = solidShellGeometry();
+    tiny.vertices = tiny.vertices.map((value) => Number((value * 0.005).toFixed(6)));
+    const flatness = evaluateThreejsFlatness(flatnessSpec([geometryPart('rivet', tiny)]));
+    expect(flatness).toMatchObject({ flatIdentityDetailCount: 0, findings: [] });
+  });
+
   it('reads an unbevelled extrude as a slab and a bevelled one as solid', () => {
     const unbevelled = { ...validExtrude(), bevelEnabled: false };
     const bevelled = { ...validExtrude(), bevelEnabled: true, bevelThickness: 0.15, bevelSize: 0.1 };
@@ -495,6 +525,14 @@ describe('evaluateThreejsFlatness', () => {
     const solid = evaluateThreejsFlatness(flatnessSpec([geometryPart('plate', bevelled)]));
     expect(solid.findings).toEqual([]);
     expect(solid.flatRatio).toBe(0);
+  });
+
+  it('does not accept a zero-thickness bevel as depth', () => {
+    // Flipping the flag while leaving the bevel flat is the cheapest way to
+    // answer the gate without touching the geometry, so it stays a slab.
+    const pretend = { ...validExtrude(), bevelEnabled: true, bevelThickness: 0, bevelSize: 0.2 };
+    const flatness = evaluateThreejsFlatness(flatnessSpec([geometryPart('plate', pretend)]));
+    expect(flatness.findings.map((finding) => finding.code)).toEqual(['flat-identity-parts']);
   });
 
   it('stays quiet while flat parts are the minority — extrude is right for a plate', () => {

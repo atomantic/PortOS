@@ -440,7 +440,8 @@ export const listSpecNames = (names) => (names.length > MAX_NAMES_IN_MESSAGE
 // Evidence of form is PLANE count, not triangle count: a fan of four hundred
 // triangles sharing one Z value has no profile at all. So a `custom` mesh is
 // slab-like when its thinnest axis carries fewer distinct coordinates than a
-// curved surface needs to read as curved, and an unbevelled `extrude` is one by
+// curved surface needs to read as curved (or when the cloud has no volume in
+// any orientation), and an `extrude` with no bevel thickness is one by
 // construction — its sweep has exactly two depth planes no matter how many
 // `steps` subdivide the side walls.
 //
@@ -450,7 +451,24 @@ export const listSpecNames = (names) => (names.length > MAX_NAMES_IN_MESSAGE
 // fires on geometry that should not have been custom triangles in the first
 // place.
 const SLAB_PLANE_THRESHOLD = 11;
-const PLANE_QUANTUM = 1e-3;
+
+// Planes are quantized relative to the mesh's own size rather than in absolute
+// units: a fixed 1e-3 grid would report a 0.005-unit detail mesh as having five
+// planes on every axis no matter how round it is, so the gate would punish
+// small parts for being small. A thousandth of the largest extent asks the
+// scale-free question the gate actually means — does this axis carry structure
+// at the scale of the part itself.
+const RELATIVE_PLANE_QUANTUM = 1e-3;
+
+// Plane counting is axis-aligned, which a cut-out whose ROTATION was baked into
+// its vertices (rather than carried by the part's `rotationDegrees`) slips past
+// — turned 45°, a single flat fan samples a distinct value on all three axes. A
+// point cloud with no volume is flat in every orientation, so the covariance
+// determinant, normalized by the mean variance so it is scale-free, catches
+// that case however the mesh is turned. The bound is deliberately strict: only
+// an essentially zero-thickness cloud qualifies, leaving thin-but-real parts to
+// the plane count above rather than double-jeopardy here.
+const COPLANAR_DETERMINANT = 1e-6;
 
 // Aggregate, never per-part: `extrude` is the RIGHT answer for a plate, a badge,
 // or a sign, so a flat part is only evidence when the model's identity rides on
@@ -458,21 +476,60 @@ const PLANE_QUANTUM = 1e-3;
 // once the majority of buildable identity features are backed by nothing else.
 const FLAT_IDENTITY_RATIO_THRESHOLD = 0.6;
 
+const axisExtent = (vertices, axis) => {
+  let min = Infinity;
+  let max = -Infinity;
+  for (let index = axis; index < vertices.length; index += 3) {
+    if (vertices[index] < min) min = vertices[index];
+    if (vertices[index] > max) max = vertices[index];
+  }
+  return max - min;
+};
+
 const countAxisPlanes = (vertices) => {
+  const quantum = Math.max(axisExtent(vertices, 0), axisExtent(vertices, 1), axisExtent(vertices, 2))
+    * RELATIVE_PLANE_QUANTUM;
+  // Every vertex sits on one point, so there is exactly one plane per axis.
+  if (!(quantum > 0)) return [1, 1, 1];
   const axes = [new Set(), new Set(), new Set()];
-  vertices.forEach((value, index) => axes[index % 3].add(Math.round(value / PLANE_QUANTUM)));
+  vertices.forEach((value, index) => axes[index % 3].add(Math.round(value / quantum)));
   return axes.map((axis) => axis.size);
+};
+
+const isCoplanarCloud = (vertices) => {
+  const count = vertices.length / 3;
+  const mean = [0, 0, 0];
+  vertices.forEach((value, index) => { mean[index % 3] += value / count; });
+  let xx = 0; let yy = 0; let zz = 0; let xy = 0; let xz = 0; let yz = 0;
+  for (let index = 0; index < count; index += 1) {
+    const x = vertices[index * 3] - mean[0];
+    const y = vertices[(index * 3) + 1] - mean[1];
+    const z = vertices[(index * 3) + 2] - mean[2];
+    xx += (x * x) / count; yy += (y * y) / count; zz += (z * z) / count;
+    xy += (x * y) / count; xz += (x * z) / count; yz += (y * z) / count;
+  }
+  const determinant = (xx * ((yy * zz) - (yz * yz)))
+    - (xy * ((xy * zz) - (yz * xz)))
+    + (xz * ((xy * yz) - (yy * xz)));
+  const meanVariance = (xx + yy + zz) / 3;
+  if (!(meanVariance > 0)) return true;
+  return Math.abs(determinant) / (meanVariance ** 3) < COPLANAR_DETERMINANT;
 };
 
 const isSlabGeometry = (geometry) => {
   if (!geometry) return false;
-  // `bevelEnabled` defaults to false in the schema, so a parsed spec always
-  // carries it; `!== true` also reads an older stored spec that predates it.
-  if (geometry.type === 'extrude') return geometry.bevelEnabled !== true;
+  if (geometry.type === 'extrude') {
+    // `bevelEnabled` defaults to false in the schema, so a parsed spec always
+    // carries it; `!== true` also reads a stored spec that predates it. The
+    // thickness matters as much as the flag: a bevel of zero thickness adds no
+    // depth plane, and flipping the boolean alone is the cheapest way for a
+    // model to answer this gate without changing the geometry at all.
+    return geometry.bevelEnabled !== true || !(geometry.bevelThickness > 0);
+  }
   if (geometry.type !== 'custom') return false;
   const vertices = Array.isArray(geometry.vertices) ? geometry.vertices : [];
   if (vertices.length < 9) return false;
-  return Math.min(...countAxisPlanes(vertices)) < SLAB_PLANE_THRESHOLD;
+  return Math.min(...countAxisPlanes(vertices)) < SLAB_PLANE_THRESHOLD || isCoplanarCloud(vertices);
 };
 
 const collectMeshes = (part, out = []) => {
