@@ -137,10 +137,26 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     onRefresh();
   };
 
+  // The response is the signal (issue #3518): a failed check-in used to expand the
+  // accordion onto an unchanged list and fire a pointless refresh, so the only
+  // feedback the user got was an empty panel. Now the panel opens only when the
+  // server actually returned the new check-in. No custom toast on purpose —
+  // `request()` already toasts the failure, so this stays a single-layer error UI.
+  // `try/finally` rather than the `.catch(() => null)` used elsewhere in this hook
+  // for the same reason as runSchedulingAction below: a bare `.catch` only covers a
+  // rejected promise, so a call that threw before returning one would skip the reset
+  // and latch the button on "Checking in..." until a full page reload.
   const handleCheckIn = async () => {
     setCheckingIn(true);
-    await api.checkInGoal(goal.id).catch(() => null);
-    setCheckingIn(false);
+    let checkIn = null;
+    try {
+      checkIn = await api.checkInGoal(goal.id);
+    } catch {
+      // Deliberately swallowed — see the single-layer note above.
+    } finally {
+      setCheckingIn(false);
+    }
+    if (checkIn == null) return;
     setCheckInsOpen(true);
     onRefresh();
   };

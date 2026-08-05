@@ -6,13 +6,15 @@ const getCalendarAccounts = vi.fn(() => Promise.resolve([]));
 const scheduleGoalTimeBlocks = vi.fn(() => Promise.resolve({}));
 const removeGoalSchedule = vi.fn(() => Promise.resolve({}));
 const rescheduleGoalTimeBlocks = vi.fn(() => Promise.resolve({}));
+const checkInGoal = vi.fn(() => Promise.resolve({ id: 'check-in-1' }));
 
 vi.mock('../services/api', () => ({
   getActivities: (...args) => getActivities(...args),
   getCalendarAccounts: (...args) => getCalendarAccounts(...args),
   scheduleGoalTimeBlocks: (...args) => scheduleGoalTimeBlocks(...args),
   removeGoalSchedule: (...args) => removeGoalSchedule(...args),
-  rescheduleGoalTimeBlocks: (...args) => rescheduleGoalTimeBlocks(...args)
+  rescheduleGoalTimeBlocks: (...args) => rescheduleGoalTimeBlocks(...args),
+  checkInGoal: (...args) => checkInGoal(...args)
 }));
 
 const { useGoalDetail } = await import('./useGoalDetail');
@@ -110,5 +112,99 @@ describe('useGoalDetail scheduling actions', () => {
     await act(async () => {
       await expect(result.current.handleSchedule()).resolves.toBeUndefined();
     });
+  });
+});
+
+// Issue #3518: handleCheckIn opened the accordion and refreshed unconditionally, so
+// a failed check-in expanded an unchanged list with no sign anything went wrong.
+describe('useGoalDetail handleCheckIn', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getActivities.mockResolvedValue([]);
+    getCalendarAccounts.mockResolvedValue([]);
+    checkInGoal.mockResolvedValue({ id: 'check-in-1' });
+  });
+
+  it('opens the check-ins list and refreshes when the server returns a check-in', async () => {
+    const { result, onRefresh } = renderGoalDetail();
+
+    await act(async () => { await result.current.handleCheckIn(); });
+
+    expect(checkInGoal).toHaveBeenCalledWith(GOAL.id);
+    expect(result.current.checkInsOpen).toBe(true);
+    expect(result.current.checkingIn).toBe(false);
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('flips checkingIn true while the request is in flight', async () => {
+    let release;
+    checkInGoal.mockReturnValue(new Promise((resolve) => { release = resolve; }));
+    const { result } = renderGoalDetail();
+
+    let pending;
+    act(() => { pending = result.current.handleCheckIn(); });
+    expect(result.current.checkingIn).toBe(true);
+
+    await act(async () => { release({ id: 'check-in-1' }); await pending; });
+    expect(result.current.checkingIn).toBe(false);
+  });
+
+  it('leaves the check-ins list closed and skips the refresh when the request rejects', async () => {
+    checkInGoal.mockRejectedValue(new Error('server exploded'));
+    const { result, onRefresh } = renderGoalDetail();
+
+    await act(async () => { await result.current.handleCheckIn(); });
+
+    expect(result.current.checkInsOpen).toBe(false);
+    expect(onRefresh).not.toHaveBeenCalled();
+    // The button must re-arm — the failure is recoverable by clicking again.
+    expect(result.current.checkingIn).toBe(false);
+  });
+
+  // A 204/empty body is "nothing was created", not a check-in worth revealing.
+  it('leaves the check-ins list closed when the server returns no check-in', async () => {
+    checkInGoal.mockResolvedValue(null);
+    const { result, onRefresh } = renderGoalDetail();
+
+    await act(async () => { await result.current.handleCheckIn(); });
+
+    expect(result.current.checkInsOpen).toBe(false);
+    expect(onRefresh).not.toHaveBeenCalled();
+    expect(result.current.checkingIn).toBe(false);
+  });
+
+  // A bare `.catch()` never gets attached when the call throws before handing back
+  // a promise, so the reset would be skipped and the button would latch forever.
+  it('clears checkingIn when the api call throws synchronously', async () => {
+    checkInGoal.mockImplementation(() => { throw new Error('threw before returning a promise'); });
+    const { result, onRefresh } = renderGoalDetail();
+
+    await act(async () => { await result.current.handleCheckIn(); });
+
+    expect(result.current.checkingIn).toBe(false);
+    expect(result.current.checkInsOpen).toBe(false);
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  it('does not surface a rejection to the caller as an unhandled promise', async () => {
+    checkInGoal.mockRejectedValue(new Error('server exploded'));
+    const { result } = renderGoalDetail();
+
+    await act(async () => {
+      await expect(result.current.handleCheckIn()).resolves.toBeUndefined();
+    });
+  });
+
+  it('can be retried after a failure', async () => {
+    checkInGoal.mockRejectedValueOnce(new Error('server exploded'));
+    const { result, onRefresh } = renderGoalDetail();
+
+    await act(async () => { await result.current.handleCheckIn(); });
+    expect(result.current.checkInsOpen).toBe(false);
+
+    await act(async () => { await result.current.handleCheckIn(); });
+    expect(checkInGoal).toHaveBeenCalledTimes(2);
+    expect(result.current.checkInsOpen).toBe(true);
+    expect(onRefresh).toHaveBeenCalledTimes(1);
   });
 });
