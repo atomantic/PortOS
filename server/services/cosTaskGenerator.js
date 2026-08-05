@@ -645,34 +645,43 @@ export function isWithinProjectLimit(task, agentsByProject, perProjectLimit) {
 }
 
 /**
+ * Unblock every expired `orphan-cooldown` task in ONE queue's blocked group.
+ * `defaultTaskType` names the store the array came from, so a task that carries
+ * no explicit `taskType` is routed back to the queue it was read from — no
+ * membership scan needed.
+ */
+async function unblockExpiredCooldownsInQueue(blocked, defaultTaskType) {
+  for (const task of blocked || []) {
+    if (task.metadata?.blockedCategory !== 'orphan-cooldown' || !task.metadata?.cooldownUntil) continue;
+    if (new Date(task.metadata.cooldownUntil).getTime() > Date.now()) continue;
+    emitLog('info', `⏰ Orphan cooldown expired for task ${task.id}, unblocking`, { taskId: task.id });
+    await updateTask(task.id, {
+      status: 'pending',
+      metadata: {
+        ...task.metadata,
+        blockedReason: undefined,
+        blockedCategory: undefined,
+        blockedAt: undefined,
+        cooldownUntil: undefined
+      }
+    }, task.taskType || defaultTaskType);
+  }
+}
+
+/**
  * Unblock tasks whose orphan-retry cooldown has expired. Walks the blocked
  * groups of both task stores and flips any `orphan-cooldown` task back to
  * pending once its `cooldownUntil` has passed. Extracted from `evaluateTasks`
  * so the cooldown-unblock pass is independently testable.
+ *
+ * Each store is walked separately rather than concatenated: the old single-pass
+ * version re-derived the queue of origin with `userBlocked.includes(task)` per
+ * task, an O(N) scan inside an O(N) loop (#3500). Passing the origin down makes
+ * classification O(1) and the whole pass linear.
  */
-async function unblockExpiredOrphanCooldowns(userTaskData, cosTaskData) {
-  const allBlocked = [
-    ...(userTaskData.grouped?.blocked || []),
-    ...(cosTaskData.grouped?.blocked || [])
-  ];
-  for (const task of allBlocked) {
-    if (task.metadata?.blockedCategory === 'orphan-cooldown' && task.metadata?.cooldownUntil) {
-      if (new Date(task.metadata.cooldownUntil).getTime() <= Date.now()) {
-        const taskType = task.taskType || (userTaskData.grouped?.blocked?.includes(task) ? 'user' : 'internal');
-        emitLog('info', `⏰ Orphan cooldown expired for task ${task.id}, unblocking`, { taskId: task.id });
-        await updateTask(task.id, {
-          status: 'pending',
-          metadata: {
-            ...task.metadata,
-            blockedReason: undefined,
-            blockedCategory: undefined,
-            blockedAt: undefined,
-            cooldownUntil: undefined
-          }
-        }, taskType);
-      }
-    }
-  }
+export async function unblockExpiredOrphanCooldowns(userTaskData, cosTaskData) {
+  await unblockExpiredCooldownsInQueue(userTaskData.grouped?.blocked, 'user');
+  await unblockExpiredCooldownsInQueue(cosTaskData.grouped?.blocked, 'internal');
 }
 
 /**
