@@ -67,7 +67,11 @@ export const acceptGoalPhases = (goalId, phases) => request(`/digital-twin/ident
 export const decomposeGoal = (goalId, options = {}) => request(`/digital-twin/identity/goals/${goalId}/decompose`, { method: 'POST', body: JSON.stringify(options) });
 export const acceptGoalDecomposition = (goalId, milestones) => request(`/digital-twin/identity/goals/${goalId}/accept-decomposition`, { method: 'POST', body: JSON.stringify({ milestones }) });
 export const completeMilestoneTask = (goalId, milestoneId, taskId) => request(`/digital-twin/identity/goals/${goalId}/milestones/${milestoneId}/tasks/${taskId}/complete`, { method: 'PUT' });
-export const organizeGoals = (options = {}) => request('/digital-twin/identity/goals/organize', { method: 'POST', body: JSON.stringify(options) });
+// `body` carries the AI provider selection ({ providerId, model }); the second
+// `options` arg passes request-level flags through (e.g. `{ silent: true }`) so
+// the Goals views, which own their own "Failed to organize goals" toast, don't
+// also get the helper's default error toast stacked on top of it.
+export const organizeGoals = (body = {}, options = {}) => request('/digital-twin/identity/goals/organize', { method: 'POST', body: JSON.stringify(body), ...options });
 export const applyGoalOrganization = (organization) => request('/digital-twin/identity/goals/organize/apply', { method: 'POST', body: JSON.stringify({ organization }) });
 export const checkInGoal = (goalId, options = {}) => request(`/digital-twin/identity/goals/${goalId}/check-in`, { method: 'POST', body: JSON.stringify(options) });
 export const scheduleGoalTimeBlocks = (goalId) => request(`/digital-twin/identity/goals/${goalId}/schedule`, { method: 'POST' });

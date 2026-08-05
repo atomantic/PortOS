@@ -450,7 +450,9 @@ export default function GoalsTreeView({ data, onRefresh }) {
   const handleOrganize = async () => {
     if (!selectedProviderId) { toast.error('No API provider available'); return; }
     setOrganizing(true);
-    const result = await api.organizeGoals({ providerId: selectedProviderId, model: selectedModel }).catch(() => null);
+    // `silent: true` — this handler owns the failure toast below; without it
+    // request() also toasts and the user sees two stacked errors.
+    const result = await api.organizeGoals({ providerId: selectedProviderId, model: selectedModel }, { silent: true }).catch(() => null);
     setOrganizing(false);
     if (result) {
       setOrgSuggestion(result);
