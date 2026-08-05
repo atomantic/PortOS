@@ -162,4 +162,36 @@ describe('mergeSocialAccounts tombstone semantics (#3532)', () => {
     expect(merged.deletedAccounts).toEqual([{ id: 'a1', deletedAt: T1 }]);
     expect(merged.accounts).toEqual({});
   });
+
+  it('converges: two peers merging each other reach the same state and then stay put', () => {
+    // A deleted a1 and added a3; B still has a1, edited a2, and deleted nothing.
+    let a = {
+      accounts: { a2: { username: 'bob', createdAt: T1, updatedAt: T1 }, a3: { username: 'carol', createdAt: T2, updatedAt: T2 } },
+      deletedAccounts: [{ id: 'a1', deletedAt: T2 }],
+    };
+    let b = {
+      accounts: {
+        a1: { username: 'alice', createdAt: T1, updatedAt: T1 },
+        a2: { username: 'bob-edited', createdAt: T1, updatedAt: T2 },
+      },
+      deletedAccounts: [],
+    };
+
+    for (let round = 0; round < 2; round++) {
+      const nextA = mergeSocialAccounts(a, b).merged;
+      const nextB = mergeSocialAccounts(b, a).merged;
+      a = nextA;
+      b = nextB;
+    }
+
+    expect(a.accounts).toEqual(b.accounts);
+    expect(a.deletedAccounts).toEqual(b.deletedAccounts);
+    expect(Object.keys(a.accounts).sort()).toEqual(['a2', 'a3']);
+    expect(a.accounts.a2.username).toBe('bob-edited'); // B's later edit won
+    expect(a.deletedAccounts).toEqual([{ id: 'a1', deletedAt: T2 }]);
+
+    // Fixed point: another exchange changes nothing on either side.
+    expect(mergeSocialAccounts(a, b).changed).toBe(false);
+    expect(mergeSocialAccounts(b, a).changed).toBe(false);
+  });
 });
