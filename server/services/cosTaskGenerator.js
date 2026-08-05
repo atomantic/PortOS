@@ -219,8 +219,8 @@ export function resolveIssueAuthorFilterBlock(promptTaskType, mode = 'self') {
 // forge-agnostic (partition → fan-out → serialized merge); only the PR/MR noun
 // and the merge command differ between GitHub (`gh`) and GitLab (`glab`).
 const SWARM_FORGE = {
-  gh: { pr: 'PR', mergeCmd: 'gh pr merge' },
-  glab: { pr: 'MR', mergeCmd: 'glab mr merge' }
+  gh: { pr: 'PR', mergeCmd: 'gh pr merge', bodyCmd: 'gh pr view <num> --json body -q .body' },
+  glab: { pr: 'MR', mergeCmd: 'glab mr merge', bodyCmd: 'glab mr view <iid> --output json | jq -r .description' }
 };
 
 /**
@@ -235,6 +235,15 @@ const SWARM_FORGE = {
  * `count` independent issues. The block does NOT restate the per-issue phases —
  * each fan-out agent reuses the single-issue Phases 2–6 verbatim, so the swarm
  * layer stays a thin orchestration wrapper (never a divergent claim path).
+ *
+ * That verbatim-identical invariant is exactly why Phase B has to hand each agent
+ * its own scratch subdirectory: N agents running identical prose independently
+ * pick the same obvious filename (`pr-body.md`) in the shared session scratchpad
+ * and clobber each other last-writer-wins, which once published one worker's PR
+ * body onto another worker's PR. Namespacing the directory is deterministic where
+ * "invent a unique filename" is not, and it covers every scratch artifact at once.
+ * The trailer read-back after create/edit is the second layer, catching a wrong
+ * body from any other cause.
  */
 export function resolveSwarmBlock(promptTaskType, count) {
   const n = Number.isInteger(count) ? count : 0;
@@ -243,7 +252,7 @@ export function resolveSwarmBlock(promptTaskType, count) {
     : promptTaskType === 'claim-issue' ? 'gh'
       : null;
   if (!forgeKey) return ''; // plan-task / jira have no swarm flow
-  const { pr, mergeCmd } = SWARM_FORGE[forgeKey];
+  const { pr, mergeCmd, bodyCmd } = SWARM_FORGE[forgeKey];
   return `# ⚡ SWARM MODE — claim and ship up to ${n} independent issues in parallel
 
 **This run operates in slashdo \`/do:next --swarm=${n}\` mode.** The single-issue framing in the task body below is your PER-AGENT playbook, not the shape of the whole run: instead of claiming ONE issue, claim up to ${n} *mutually independent* open issues and ship them concurrently, then serialize only the merges. Swarm adds exactly two things over the single-issue flow — a partition step up front and a serialized merge queue at the end; everything in between (claim, worktree, verify, implement, changelog, review gate) is the unchanged single-issue flow run once per agent. Never special-case a swarm agent's claim/ship logic.
@@ -256,6 +265,10 @@ export function resolveSwarmBlock(promptTaskType, count) {
 
 ## Phase B — Fan out (one subagent per picked issue)
 For EACH picked issue, spawn a subagent that runs the single-issue **Phases 2–6 below** for that one issue — claim (own \`claim/issue-<num>\` worktree + assignee + \`in-progress\` label) → verify → implement → changelog → open the ${pr} → run the review gate ({reviewers}) — **but with NO merge and NO Phase 7 cleanup** (the orchestrator owns those; each agent opens its ${pr} the equivalent of \`--no-merge\`). Because each agent claims through the normal Phase 2 assignee marker + race read-back, two agents can never ship the same issue.
+
+**Each fan-out agent gets its OWN scratch subdirectory — the scratchpad root is off-limits.** Every agent in this run shares one session scratchpad path, and every agent runs these byte-identical instructions, so left to themselves two agents pick the same obvious filename (\`pr-body.md\`) and silently clobber each other — last writer wins, the command still exits 0, and the wrong text lands on the wrong ${pr}. So: **each fan-out agent writes ALL temp files under \`<scratchpad>/issue-<num>/\` (its own issue number), and NEVER writes to the scratchpad root** (the root stays the orchestrator's). That covers ${pr} body drafts, review notes, diff dumps, test output — every scratch artifact, not just the body file. Create the directory before first use (\`mkdir -p\`). Filenames inside it may be as obvious as you like; the directory is what makes them unique.
+
+**Verify the ${pr} body's issue trailer after create AND after every edit.** The ${pr}-body flow is create-then-edit — the file is written once, then re-read minutes later during the review loop — which is a wide window for a stale or foreign body to land. Belt to the namespacing's braces: immediately after \`create\` and after each body \`edit\`, re-read the published body (\`${bodyCmd}\`) and confirm it contains this agent's own trailer (\`Closes #<num>\` or \`Refs #<num>\` for ITS issue number). If it does not, the body is wrong — rewrite it from this agent's own scratch file and re-verify before continuing. Never assume a zero exit code means the right body was published.
 
 ## Phase C — Serialize the merges (orchestrator, after all agents finish)
 Merge the ready ${pr}s ONE AT A TIME. For each: re-sync onto the latest default branch, gate on **required** CI (one re-run on a flaky required check, then proceed; a real failure or an irreconcilable conflict leaves that ${pr} OPEN and recorded — move to the next), then \`${mergeCmd}\`. After all merges, run Phase 7 cleanup once per merged worktree.

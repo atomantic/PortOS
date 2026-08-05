@@ -440,11 +440,39 @@ describe('resolveSwarmBlock', () => {
     expect(block).toContain('Completion Workflow');
   });
 
+  it('gives every fan-out agent its own scratch subdirectory', () => {
+    // All fan-out agents share ONE session scratchpad and run byte-identical
+    // instructions, so without an assigned per-agent directory two of them pick
+    // the same obvious filename (pr-body.md) and clobber each other silently —
+    // which once published one worker's PR body onto another worker's PR.
+    const block = resolveSwarmBlock('claim-issue', 3);
+    expect(block).toContain('<scratchpad>/issue-<num>/');
+    expect(block).toMatch(/scratchpad root/i);
+    // The scope is ALL temp files, not just the PR body that surfaced the bug.
+    expect(block).toMatch(/ALL temp files/i);
+  });
+
+  it('instructs each agent to verify its own issue trailer after create and after each edit', () => {
+    // Belt to the namespacing's braces: the PR-body flow is create-then-edit, so
+    // a stale/foreign body can land minutes later during the review loop. `gh`
+    // exits 0 either way, so only a read-back catches it.
+    const block = resolveSwarmBlock('claim-issue', 3);
+    expect(block).toContain('gh pr view <num> --json body -q .body');
+    expect(block).toContain('Closes #<num>');
+    expect(block).toContain('Refs #<num>');
+    expect(block).toMatch(/after each edit|after every edit/i);
+  });
+
   it('returns a glab/MR swarm directive for the gitlab claim body', () => {
     const block = resolveSwarmBlock('claim-issue-gitlab', 4);
     expect(block).toContain('--swarm=4');
     expect(block).toContain('glab mr merge');
     expect(block).toContain('open the MR');
+    // The scratch/read-back guidance is forge-agnostic — the MR body read-back
+    // uses the glab command, not the gh one.
+    expect(block).toContain('<scratchpad>/issue-<num>/');
+    expect(block).toContain('glab mr view <iid> --output json');
+    expect(block).not.toContain('gh pr view');
   });
 
   it('is a no-op for non-forge claim types (plan-task / jira have no swarm flow)', () => {
