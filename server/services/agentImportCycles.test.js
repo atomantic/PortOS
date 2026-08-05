@@ -175,7 +175,7 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
     expect(offenders, `agentOrchestrator.js must not be imported by ${offenders.join(', ')}`).toEqual([]);
   });
 
-  it('no longer needs the state-layer forwarders into the process layer (#3450)', () => {
+  it('no longer needs the state-layer forwarders into the process layer (#3450)', async () => {
     // Step 4 of the #3450 sequencing. `cosAgentLifecycle.js` — the agent STATE
     // layer — used to forward pause/kill/stats into the PROCESS layer with
     // `await import()`, purely so a caller holding a `cos.js` handle could reach
@@ -216,29 +216,19 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
     const forbidden = reexportedFrom('agentManagement.js').filter(name => !stateLayer.has(name));
     expect(forbidden.length, 'derived nothing to forbid — check the facade export blocks').toBeGreaterThan(0);
 
-    // Scope to cos.js's re-export statements, not the whole file: `completeAgent`
-    // and friends legitimately appear elsewhere in it. But scope to ALL of them,
-    // from ANY source — the two realistic regressions are a second
-    // `export { pauseAgent } from './cosAgents.js';` statement (which a
-    // first-match-only scan never sees) and a re-export sourced straight from
-    // `./agentManagement.js` (which a cosAgents-only scan never sees). Either one
-    // restores the surface with the guard fully green.
-    const cosSrc = readFileSync(join(SERVICES_DIR, 'cos.js'), 'utf-8');
-    const cosReexports = [...cosSrc.matchAll(/export\s*\{[^}]*\}\s*from\s*(['"])[^'"]+\1/g)].map(m => m[0]).join('\n');
-    expect(cosReexports, "cos.js re-exports nothing from './cosAgents.js' — did the block move?")
-      .toMatch(/cosAgents\.js/);
+    // Then assert against cos.js's REAL export surface, not its source text.
+    // Every regex for this was bypassable by a form it did not anticipate — a
+    // second re-export statement, a different source module, double quotes,
+    // `export *`, `import` + a bare `export { … }` with no `from` at all. The
+    // module's own key list is ground truth and has no syntax to outrun. cos.js
+    // imports clean and side-effect-free here (its side effects live behind
+    // `init()`/`start()`), which is what makes this affordable.
+    const cosExports = Object.keys(await import('./cos.js'));
+    expect(cosExports, 'cos.js exports nothing — did the import fail?').not.toEqual([]);
     for (const name of forbidden) {
-      expect(cosReexports, `cos.js must not re-export ${name} — it is a process-layer transition, ask the facade`)
-        .not.toMatch(new RegExp(String.raw`\b${name}\b`));
+      expect(cosExports, `cos.js must not re-export ${name} — it is a process-layer transition, ask the facade`)
+        .not.toContain(name);
     }
-
-    // A named-export scan cannot see `export * from './agentManagement.js'` —
-    // that statement lists no names but re-exposes every one of them. cos.js has
-    // no wildcard re-export today, so forbid the form outright rather than trying
-    // to resolve what each one would pull in.
-    expect([...cosSrc.matchAll(/export\s*\*(?:\s+as\s+\w+)?\s*from\s*(['"])([^'"]+)\1/g)].map(m => m[2]),
-      'cos.js must not wildcard-re-export — it would re-expose process-layer transitions the named scan cannot see')
-      .toEqual([]);
 
     // Scoped to `cos.js` on purpose: `subAgentSpawner.js` still re-exports these
     // same three from `agentManagement.js`. That barrel is the cluster's declared
