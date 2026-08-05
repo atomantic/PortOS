@@ -7,7 +7,8 @@ import useEscapeKey from '../../hooks/useEscapeKey';
 // always-visible control set, so the row keeps a single primary affordance.
 // Keyboard: ArrowDown from the trigger opens and focuses the first item,
 // ArrowUp/ArrowDown cycle, Escape closes and returns focus to the trigger.
-// Items are >=40px tall so they stay tappable on a phone.
+// Trigger and items are >=44px on phones (the repo's touch-target floor) and
+// relax to the denser desktop sizing from `sm` up.
 //
 // Tones pre-compose full Tailwind class names — the JIT scans for complete
 // tokens, so `text-port-${tone}` would NOT generate the utility.
@@ -93,7 +94,7 @@ export default function OverflowMenu({ label, items = [], className = '', trigge
         aria-expanded={open}
         aria-label={label}
         title={label}
-        className="px-2 py-1.5 min-h-[40px] sm:min-h-0 inline-flex items-center rounded-lg border border-port-border text-gray-400 hover:text-white hover:bg-port-border transition-colors focus:outline-hidden focus:ring-2 focus:ring-port-accent"
+        className="px-2 py-1.5 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 inline-flex items-center justify-center rounded-lg border border-port-border text-gray-400 hover:text-white hover:bg-port-border transition-colors focus:outline-hidden focus:ring-2 focus:ring-port-accent"
       >
         <MoreHorizontal size={16} aria-hidden="true" />
       </button>
@@ -115,7 +116,7 @@ export default function OverflowMenu({ label, items = [], className = '', trigge
               // follow-up UI (an inline confirm) owns moving focus onward from
               // there — its mount effect runs after this commit and wins.
               onClick={() => { close(true); item.onSelect?.(); }}
-              className={`w-full px-3 py-2 min-h-[40px] text-left text-xs flex items-center gap-2 transition-colors disabled:opacity-50 focus:outline-hidden focus:bg-port-border/70 ${TONES[item.tone] || TONES.default}`}
+              className={`w-full px-3 py-2 min-h-[44px] sm:min-h-[40px] text-left text-xs flex items-center gap-2 transition-colors disabled:opacity-50 focus:outline-hidden focus:bg-port-border/70 ${TONES[item.tone] || TONES.default}`}
             >
               {item.icon ? <item.icon size={14} aria-hidden="true" /> : null}
               <span>{item.label}</span>

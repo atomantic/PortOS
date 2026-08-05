@@ -6,6 +6,7 @@ import { getNotesVaults } from '../../../services/apiNotes';
 import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { FormField } from '../../ui/FormField';
+import OverflowMenu from '../../ui/OverflowMenu';
 import { onVoiceEvent, sendText, setDictation as setVoiceDictation } from '../../../services/voiceClient';
 import BrailleSpinner from '../../BrailleSpinner';
 import useMounted from '../../../hooks/useMounted';
@@ -519,6 +520,20 @@ export default function DailyLogTab() {
     } catch { return date; }
   }, [date]);
 
+  // AI policy: the surface that can trigger LLM work names the provider, so the
+  // overflow menu item and the sm+ button share one title string.
+  const draftTitle = digestProvider
+    ? `Draft an activity-digest section for this day using ${digestProvider.name || digestProvider.id}`
+    : 'Draft an activity-digest section for this day (structured summary — no AI provider)';
+
+  // Under `sm` these three drop out of the toolbar row and live here instead —
+  // still reachable, just not costing a wrapped row each (#3526).
+  const mobileToolbarActions = [
+    { id: 'draft', label: drafting ? 'Drafting…' : 'Draft activity digest', icon: Sparkles, disabled: drafting, onSelect: handleDraft },
+    { id: 'read-back', label: 'Read back', icon: Volume2, onSelect: readBack },
+    { id: 'delete', label: 'Delete entry', icon: Trash2, tone: 'danger', disabled: !entry, onSelect: () => setConfirmDelete(true) },
+  ];
+
   return (
     <div className="flex h-full min-h-0 relative">
       {/* Left: history + settings. Drawer on mobile, persistent column on md+. */}
@@ -654,7 +669,7 @@ export default function DailyLogTab() {
               </FormField>
               <p className="text-[10px] text-gray-600">
                 {digestProvider
-                  ? `Scheduled drafts will call ${digestProvider.name || digestProvider.id}. Use the Draft button in the toolbar to run it now.`
+                  ? `Scheduled drafts will call ${digestProvider.name || digestProvider.id}. Use the Draft action in the toolbar to run it now.`
                   : 'No AI provider selected — drafts are a deterministic structured summary with zero AI calls.'}
               </p>
             </div>
@@ -691,103 +706,119 @@ export default function DailyLogTab() {
 
       {/* Right: editor */}
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
-        <div className="flex flex-wrap items-center gap-2 px-3 sm:px-4 py-2 sm:py-3 border-b border-port-border">
-          <button
-            onClick={() => setHistoryOpen(true)}
-            className="md:hidden min-h-[40px] min-w-[40px] flex items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-white"
-            title="Show history"
-            aria-label="Show history"
-          >
-            <Menu size={16} />
-          </button>
-          <button
-            onClick={() => setDate(shiftDate(date, -1))}
-            className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-white"
-            title="Previous day" aria-label="Previous day"
-          >
-            <ChevronLeft size={16} />
-          </button>
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value || serverToday)}
-            className="bg-port-bg border border-port-border rounded px-2 min-h-[40px] text-sm text-white"
-          />
-          <button
-            onClick={() => setDate(shiftDate(date, 1))}
-            disabled={date >= serverToday}
-            className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-white disabled:opacity-30"
-            title="Next day" aria-label="Next day"
-          >
-            <ChevronRight size={16} />
-          </button>
-          {!isToday && (
+        {/* Two stacked clusters under `sm` (date nav, then label + actions), one
+            wrapping row from `sm` up. The old flat `flex-wrap` toolbar spilled
+            its 11 controls into 4+ rows on a 375px viewport and pushed the
+            textarea below the fold (#3526), so on phones the rarely-used
+            actions move into the overflow menu instead of taking a row each. */}
+        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 px-3 sm:px-4 py-2 sm:py-3 border-b border-port-border">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <button
-              onClick={() => setDate(serverToday)}
-              className="px-3 min-h-[40px] rounded bg-port-card text-xs text-gray-300 hover:text-white"
+              onClick={() => setHistoryOpen(true)}
+              className="md:hidden min-h-[44px] min-w-[44px] sm:min-h-[40px] sm:min-w-[40px] flex items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-white"
+              title="Show history"
+              aria-label="Show history"
             >
-              Today
+              <Menu size={16} />
             </button>
-          )}
-          <div className="basis-full md:basis-auto md:flex-1 md:min-w-0">
-            <div className="text-white font-medium truncate text-sm md:text-base">{dateLabel}</div>
-            <div className="text-xs text-gray-500 truncate">
-              {segmentCount} segment{segmentCount === 1 ? '' : 's'}
-              {entry?.obsidianPath ? ` · ${entry.obsidianPath}` : ''}
-              {saveStatus ? <span className={parked ? 'text-port-warning' : ''}> · {saveStatus}</span> : null}
-            </div>
+            <button
+              onClick={() => setDate(shiftDate(date, -1))}
+              className="min-h-[44px] min-w-[44px] sm:min-h-[40px] sm:min-w-[40px] flex items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-white"
+              title="Previous day" aria-label="Previous day"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value || serverToday)}
+              aria-label="Log date"
+              className="min-w-0 bg-port-bg border border-port-border rounded px-2 min-h-[44px] sm:min-h-[40px] text-sm text-white"
+            />
+            <button
+              onClick={() => setDate(shiftDate(date, 1))}
+              disabled={date >= serverToday}
+              className="min-h-[44px] min-w-[44px] sm:min-h-[40px] sm:min-w-[40px] flex items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-white disabled:opacity-30"
+              title="Next day" aria-label="Next day"
+            >
+              <ChevronRight size={16} />
+            </button>
+            {!isToday && (
+              <button
+                onClick={() => setDate(serverToday)}
+                className="px-3 min-h-[44px] sm:min-h-[40px] rounded bg-port-card text-xs text-gray-300 hover:text-white"
+              >
+                Today
+              </button>
+            )}
           </div>
-          <button
-            onClick={handleDraft}
-            disabled={drafting}
-            className="flex items-center gap-1 px-3 min-h-[40px] rounded bg-port-card text-gray-300 text-sm hover:text-white disabled:opacity-50"
-            title={digestProvider
-              ? `Draft an activity-digest section for this day using ${digestProvider.name || digestProvider.id}`
-              : 'Draft an activity-digest section for this day (structured summary — no AI provider)'}
-            aria-label="Draft activity digest"
-          >
-            <Sparkles size={14} className={drafting ? 'animate-pulse' : ''} />
-            <span className="hidden sm:inline">{drafting ? 'Drafting…' : 'Draft'}</span>
-          </button>
-          <button
-            onClick={readBack}
-            className="flex items-center gap-1 px-3 min-h-[40px] rounded bg-port-card text-gray-300 text-sm hover:text-white"
-            title="Have the voice agent read this log back to you"
-            aria-label="Read back"
-          >
-            <Volume2 size={14} /> <span className="hidden sm:inline">Read back</span>
-          </button>
-          <button
-            onClick={toggleDictation}
-            className={`flex items-center gap-1 px-3 min-h-[40px] rounded text-sm ${
-              dictation
-                ? 'bg-port-accent text-white animate-pulse'
-                : 'bg-port-card text-gray-300 hover:text-white'
-            }`}
-            title={dictation ? 'Stop voice dictation' : 'Start voice dictation (voice goes straight into this log)'}
-            aria-label={dictation ? 'Stop dictation' : 'Start dictation'}
-          >
-            {dictation ? <MicOff size={14} /> : <Mic size={14} />}
-            <span className="hidden sm:inline">{dictation ? 'Dictating' : 'Dictate'}</span>
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={saving || !dirty}
-            className="flex items-center gap-1 px-3 min-h-[40px] rounded bg-port-accent text-white text-sm hover:bg-port-accent/80 disabled:opacity-50"
-            aria-label="Save"
-          >
-            <Save size={14} />
-            <span className="hidden sm:inline">{saving ? 'Saving…' : 'Save'}</span>
-          </button>
-          <button
-            onClick={() => setConfirmDelete(true)}
-            disabled={!entry}
-            className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-port-error disabled:opacity-30"
-            title="Delete this entry"
-            aria-label="Delete entry"
-          >
-            <Trash2 size={14} />
-          </button>
+          {/* `sm:flex-1` so on sm+ the date label absorbs the slack and the
+              action buttons stay right-aligned, as the flat toolbar rendered
+              them; under sm this cluster is simply the second stacked row. */}
+          <div className="flex items-center gap-1.5 sm:gap-2 sm:flex-1 min-w-0">
+            <div className="flex-1 min-w-0">
+              <div className="text-white font-medium truncate text-sm md:text-base">{dateLabel}</div>
+              <div className="text-xs text-gray-500 truncate">
+                {segmentCount} segment{segmentCount === 1 ? '' : 's'}
+                {entry?.obsidianPath ? ` · ${entry.obsidianPath}` : ''}
+                {saveStatus ? <span className={parked ? 'text-port-warning' : ''}> · {saveStatus}</span> : null}
+              </div>
+            </div>
+            <button
+              onClick={handleDraft}
+              disabled={drafting}
+              className="hidden sm:flex items-center gap-1 px-3 min-h-[40px] rounded bg-port-card text-gray-300 text-sm hover:text-white disabled:opacity-50"
+              title={draftTitle}
+              aria-label="Draft activity digest"
+            >
+              <Sparkles size={14} className={drafting ? 'animate-pulse' : ''} />
+              <span>{drafting ? 'Drafting…' : 'Draft'}</span>
+            </button>
+            <button
+              onClick={readBack}
+              className="hidden sm:flex items-center gap-1 px-3 min-h-[40px] rounded bg-port-card text-gray-300 text-sm hover:text-white"
+              title="Have the voice agent read this log back to you"
+              aria-label="Read back"
+            >
+              <Volume2 size={14} /> <span>Read back</span>
+            </button>
+            <button
+              onClick={toggleDictation}
+              className={`flex items-center gap-1 px-3 min-h-[44px] min-w-[44px] sm:min-h-[40px] sm:min-w-0 justify-center rounded text-sm ${
+                dictation
+                  ? 'bg-port-accent text-white animate-pulse'
+                  : 'bg-port-card text-gray-300 hover:text-white'
+              }`}
+              title={dictation ? 'Stop voice dictation' : 'Start voice dictation (voice goes straight into this log)'}
+              aria-label={dictation ? 'Stop dictation' : 'Start dictation'}
+            >
+              {dictation ? <MicOff size={14} /> : <Mic size={14} />}
+              <span className="hidden sm:inline">{dictation ? 'Dictating' : 'Dictate'}</span>
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={saving || !dirty}
+              className="flex items-center gap-1 px-3 min-h-[44px] min-w-[44px] sm:min-h-[40px] sm:min-w-0 justify-center rounded bg-port-accent text-white text-sm hover:bg-port-accent/80 disabled:opacity-50"
+              aria-label="Save"
+            >
+              <Save size={14} />
+              <span className="hidden sm:inline">{saving ? 'Saving…' : 'Save'}</span>
+            </button>
+            <button
+              onClick={() => setConfirmDelete(true)}
+              disabled={!entry}
+              className="hidden sm:flex min-h-[40px] min-w-[40px] items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-port-error disabled:opacity-30"
+              title="Delete this entry"
+              aria-label="Delete entry"
+            >
+              <Trash2 size={14} />
+            </button>
+            <OverflowMenu
+              className="sm:hidden shrink-0"
+              label="More log actions"
+              items={mobileToolbarActions}
+            />
+          </div>
         </div>
 
         {dictation && (

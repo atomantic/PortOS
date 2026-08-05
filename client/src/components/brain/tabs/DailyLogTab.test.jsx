@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import { __resetVisibilityEventForTests } from '../../../hooks/useVisibilityEvent';
 
 // ── Mock toast ────────────────────────────────────────────────────────────────
@@ -395,5 +395,87 @@ describe('DailyLogTab autosave', () => {
 
     await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
     expect(screen.getByText(/· Saved/)).toBeInTheDocument();
+  });
+});
+
+// The toolbar used to be one flat `flex-wrap` row of 11 controls, which spilled
+// into 4+ stacked rows on a 375px viewport and pushed the textarea below the
+// fold (#3526). jsdom has no layout engine, so these assert the structure that
+// produces the two-row mobile toolbar rather than measured pixel heights.
+describe('DailyLogTab mobile toolbar', () => {
+  const toolbar = () => screen.getByLabelText('Save').closest('div.border-b');
+  const openOverflow = () => {
+    fireEvent.click(screen.getByRole('button', { name: 'More log actions' }));
+    return screen.getByRole('menu', { name: 'More log actions' });
+  };
+
+  it('stacks into exactly two clusters under sm — date nav, then label + actions', async () => {
+    await renderTab();
+    const header = toolbar();
+
+    // `flex-col` under sm keeps the clusters as two rows no matter how many
+    // controls each holds; from sm up it collapses back to one wrapping row.
+    expect(header.className).toContain('flex-col');
+    expect(header.className).toContain('sm:flex-row');
+    expect(header.children).toHaveLength(2);
+  });
+
+  it('demotes Draft / Read back / Delete out of the mobile row but keeps them on sm+', async () => {
+    await renderTab();
+
+    for (const label of ['Draft activity digest', 'Read back', 'Delete entry']) {
+      expect(screen.getByLabelText(label).className).toContain('hidden sm:flex');
+    }
+    // Primary controls stay on the mobile row.
+    for (const label of ['Save', 'Start dictation', 'Previous day', 'Next day']) {
+      expect(screen.getByLabelText(label).className).not.toContain('hidden');
+    }
+    // ...and the overflow trigger is the mobile-only counterpart.
+    expect(screen.getByRole('button', { name: 'More log actions' }).parentElement.className)
+      .toContain('sm:hidden');
+  });
+
+  it('keeps every demoted action reachable from the overflow menu', async () => {
+    await renderTab();
+    const menu = openOverflow();
+
+    for (const name of ['Draft activity digest', 'Read back', 'Delete entry']) {
+      expect(within(menu).getByRole('menuitem', { name })).toBeTruthy();
+    }
+  });
+
+  it('runs Read back from the overflow menu and closes it', async () => {
+    await renderTab();
+    const menu = openOverflow();
+
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Read back' }));
+    expect(voice.sendText).toHaveBeenCalledWith(expect.stringContaining('existing'));
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('runs Draft from the overflow menu', async () => {
+    api.draftActivityDigest.mockResolvedValue({ entry: entryFor(TODAY, 'drafted'), drafted: true });
+    await renderTab();
+    const menu = openOverflow();
+
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Draft activity digest' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(api.draftActivityDigest).toHaveBeenCalledWith(TODAY, { silent: true });
+  });
+
+  it('opens the inline delete confirm from the overflow menu', async () => {
+    await renderTab();
+    const menu = openOverflow();
+
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Delete entry' }));
+    expect(screen.getByText(new RegExp(`Delete the entry for ${TODAY}`))).toBeInTheDocument();
+  });
+
+  it('closes the overflow menu on Escape', async () => {
+    await renderTab();
+    openOverflow();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
   });
 });
