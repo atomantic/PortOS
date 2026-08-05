@@ -151,7 +151,7 @@ export default function DeployPanel({ appId, appName }) {
 
           <div
             ref={outputRef}
-            className="flex-1 overflow-auto p-4 font-mono text-xs leading-relaxed bg-black/40"
+            className="always-dark flex-1 overflow-auto p-4 font-mono text-xs leading-relaxed bg-black/40"
           >
             {output.map((line, i) => (
               <div

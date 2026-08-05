@@ -137,13 +137,13 @@ export default function ProjectPreview({ project, to }) {
           onClick={() => setPlaying(true)}
           aria-label={`Play ${preview.label}`}
           title={`Play ${preview.label}`}
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80 focus:outline-none focus:ring-2 focus:ring-port-accent"
+          className="always-dark absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80 focus:outline-none focus:ring-2 focus:ring-port-accent"
         >
           <Play className="w-4 h-4" aria-hidden="true" />
         </button>
       )}
       {preview.kind !== 'none' && (
-        <span className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded bg-black/60 text-white text-[10px] pointer-events-none">
+        <span className="always-dark absolute bottom-1 left-1 px-1.5 py-0.5 rounded bg-black/60 text-white text-[10px] pointer-events-none">
           {preview.label}
         </span>
       )}

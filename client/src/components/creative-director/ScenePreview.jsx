@@ -132,7 +132,7 @@ export default function ScenePreview({ jobId, label, aspectClass = 'aspect-video
         rel="noopener noreferrer"
         aria-label={`Open ${label} in new tab`}
         title="Open video in new tab"
-        className="absolute top-1 right-1 p-1 rounded bg-black/50 text-white hover:bg-black/80"
+        className="always-dark absolute top-1 right-1 p-1 rounded bg-black/50 text-white hover:bg-black/80"
       >
         <ExternalLink className="w-3 h-3" />
       </a>

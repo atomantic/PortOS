@@ -585,7 +585,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                         Wire it up in your server entry:
                       </div>
                       <div className="relative">
-                        <pre className="bg-black/40 text-gray-200 p-2 rounded overflow-x-auto font-mono text-[11px] leading-tight">{tlsResult.snippet}</pre>
+                        <pre className="always-dark bg-black/40 text-gray-200 p-2 rounded overflow-x-auto font-mono text-[11px] leading-tight">{tlsResult.snippet}</pre>
                         <button
                           type="button"
                           onClick={() => copyToClipboard(tlsResult.snippet, 'Snippet copied')}

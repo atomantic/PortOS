@@ -161,7 +161,7 @@ export default function ThreejsModelPreview({ spec, className = '' }) {
       >
         <ProceduralScene spec={spec} background={background} />
       </Canvas>
-      <div className="absolute left-2 top-2 flex max-w-[calc(100%-1rem)] flex-wrap items-center gap-1.5 rounded-lg bg-black/70 px-2 py-1.5 text-[10px] text-gray-300 backdrop-blur-sm">
+      <div className="always-dark absolute left-2 top-2 flex max-w-[calc(100%-1rem)] flex-wrap items-center gap-1.5 rounded-lg bg-black/70 px-2 py-1.5 text-[10px] text-gray-300 backdrop-blur-sm">
         <span className="mr-1 whitespace-nowrap text-gray-400">Background</span>
         <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Preview background">
           {BACKGROUND_PRESETS.map((preset) => (
@@ -188,7 +188,7 @@ export default function ThreejsModelPreview({ spec, className = '' }) {
           />
         </label>
       </div>
-      <div className="pointer-events-none absolute bottom-2 left-2 rounded bg-black/60 px-2 py-1 text-[10px] text-gray-300">
+      <div className="always-dark pointer-events-none absolute bottom-2 left-2 rounded bg-black/60 px-2 py-1 text-[10px] text-gray-300">
         Drag to orbit · scroll to zoom
       </div>
     </div>
