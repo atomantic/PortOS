@@ -12,13 +12,10 @@ import { expect } from 'vitest';
 // Pinning the settled input value in between turns a load-dependent flake into
 // either a pass or an honest, immediately-legible failure.
 
-// `waitFor` defaults to a 1000ms timeout (testing-library/dom, uncustomized here —
-// see setup.js). Under parallel test-worker CPU contention that's tight for a
-// `user.type()`/`user.clear()` + React re-render to settle, producing phantom
-// failures that have nothing to do with the component under test. Raise it
-// explicitly rather than relying on the tight default.
-const settled = (input, value) =>
-  waitFor(() => expect(input).toHaveValue(value), { timeout: 3000 });
+// The timeout `waitFor` uses here comes from the suite-wide
+// `configure({ asyncUtilTimeout: 3000 })` in setup.js — testing-library's 1000ms
+// default is too tight for these under parallel-worker CPU contention.
+const settled = (input, value) => waitFor(() => expect(input).toHaveValue(value));
 
 // A `type="number"` input reads its value back coerced, and empty as `null`.
 const readBack = (input, text) => (input.type === 'number' ? Number(text) : text);

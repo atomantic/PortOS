@@ -176,10 +176,7 @@ describe('MediaCollections', () => {
     renderPage();
     await waitFor(() => screen.getByText('Alpha'));
     await user.type(screen.getByLabelText('Search collections'), 'beta');
-    await waitFor(
-      () => expect(screen.getByTestId('search-string')).toHaveTextContent('q=beta'),
-      { timeout: 3000 },
-    );
+    await waitFor(() => expect(screen.getByTestId('search-string')).toHaveTextContent('q=beta'));
   });
 
   it('writes the sort to the URL and drops the param at the default', async () => {

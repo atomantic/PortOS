@@ -198,7 +198,7 @@ describe('ReferenceAnalysis — extract → review → apply (solo segment)', ()
     fireEvent.click(extract);
     // The proposal renders the transcribed score (220 Hz → A3) once the
     // deferred DSP tick runs.
-    await waitFor(() => expect(screen.getAllByTestId('scoresheet').length).toBeGreaterThan(0), { timeout: 3000 });
+    await waitFor(() => expect(screen.getAllByTestId('scoresheet').length).toBeGreaterThan(0));
     const sheets = screen.getAllByTestId('scoresheet');
     expect(sheets[0].textContent).toMatch(/A3/);
     expect(sheets[0].textContent).toContain('key: C');
@@ -231,7 +231,7 @@ describe('ReferenceAnalysis — extract → review → apply (solo segment)', ()
     const extract = screen.getByRole('button', { name: /extract part/i });
     await waitFor(() => expect(extract.disabled).toBe(false));
     fireEvent.click(extract);
-    await waitFor(() => expect(screen.getAllByTestId('scoresheet').length).toBeGreaterThan(0), { timeout: 3000 });
+    await waitFor(() => expect(screen.getAllByTestId('scoresheet').length).toBeGreaterThan(0));
 
     // Comparison select defaulted to the matching stored part → diff chips render.
     expect(screen.getByLabelText(/compare \/ apply to/i).value).toBe('part-bass');
@@ -263,7 +263,7 @@ describe('ReferenceAnalysis — extract → review → apply (solo segment)', ()
     const extract = screen.getByRole('button', { name: /extract part/i });
     await waitFor(() => expect(extract.disabled).toBe(false));
     fireEvent.click(extract);
-    await waitFor(() => expect(screen.getAllByTestId('scoresheet').length).toBeGreaterThan(0), { timeout: 3000 });
+    await waitFor(() => expect(screen.getAllByTestId('scoresheet').length).toBeGreaterThan(0));
 
     // Melody defaults to the base-score target and applies as { base: true }.
     expect(screen.getByLabelText(/compare \/ apply to/i).value).toBe('__base__');
@@ -395,7 +395,7 @@ describe('ReferenceAnalysis — stacked-mix extraction (#2121)', () => {
     fireEvent.click(extractFromMix);
 
     // The spectral diff subtracts the C4 backing and transcribes the new A4.
-    await waitFor(() => expect(screen.getAllByTestId('scoresheet').length).toBeGreaterThan(0), { timeout: 3000 });
+    await waitFor(() => expect(screen.getAllByTestId('scoresheet').length).toBeGreaterThan(0));
     expect(screen.getAllByTestId('scoresheet')[0].textContent).toMatch(/A4/);
     expect(toastError).not.toHaveBeenCalled();
   });
