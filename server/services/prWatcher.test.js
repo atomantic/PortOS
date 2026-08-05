@@ -28,6 +28,7 @@ vi.mock('./agentWorktreeCleanup.js', () => ({
 
 const mockApps = new Map();
 vi.mock('./apps.js', () => ({
+  getActiveApps: vi.fn(async () => [...mockApps.values()]),
   getAppById: vi.fn(async (id) => mockApps.get(id) || null),
   updateApp: vi.fn(async (id, patch) => {
     const cur = mockApps.get(id) || { id };
@@ -51,6 +52,7 @@ import {
   queuePendingMerge,
   isPendingMergeReady,
   processPendingMergePrs,
+  sweepPendingMergePrs,
   MAX_PENDING_MERGE_TICKS,
   checkPullRequests,
   getSelfLogin,
@@ -255,6 +257,62 @@ describe('merge-only PR watcher', () => {
       link: 'https://github.com/o/r/pull/88'
     }));
     expect(readPendingMergePrs(mockApps.get('app1'))).toEqual([]);
+  });
+});
+
+describe('sweepPendingMergePrs', () => {
+  beforeEach(() => {
+    mockApps.clear();
+    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'o/r' });
+  });
+
+  // The regression this whole sweep exists for: pending merges used to drain
+  // only when the app's `pr-watcher` scheduled task fired, so an install that
+  // left that task disabled queued green PRs into a list nothing ever read.
+  // The sweep must not consult the task schedule at all.
+  it('drains a pending merge for an app with no pr-watcher config', async () => {
+    mockApps.set('app1', { ...pendingApp(), name: 'App One', prWatcherState: undefined });
+    execGhMock.mockResolvedValueOnce(JSON.stringify({
+      state: 'OPEN', mergeStateStatus: 'CLEAN', statusCheckRollup: [{ conclusion: 'SUCCESS' }]
+    }));
+    mergePrMock.mockResolvedValue({ success: true });
+
+    const totals = await sweepPendingMergePrs();
+
+    expect(totals).toMatchObject({ checked: 1, merged: 1, failures: 0 });
+    expect(readPendingMergePrs(mockApps.get('app1'))).toEqual([]);
+  });
+
+  it('skips apps with no queued PRs without resolving their git origin', async () => {
+    mockApps.set('app1', { id: 'app1', name: 'App One', repoPath: '/repos/app1' });
+    mockApps.set('app2', { id: 'app2', name: 'App Two', repoPath: '/repos/app2', pendingMergePrs: [] });
+
+    const totals = await sweepPendingMergePrs();
+
+    expect(totals).toMatchObject({ checked: 0, merged: 0, failures: 0 });
+    expect(getOriginInfoMock).not.toHaveBeenCalled();
+    expect(execGhMock).not.toHaveBeenCalled();
+  });
+
+  it('counts a failing app and still sweeps the rest', async () => {
+    mockApps.set('app1', { ...pendingApp(), name: 'App One' });
+    mockApps.set('app2', {
+      id: 'app2', name: 'App Two', repoPath: '/repos/app2',
+      pendingMergePrs: [pendingMerge({ prNumber: 99, prUrl: 'https://github.com/o/r/pull/99' })]
+    });
+    // app1 fails the forge check; app2 proceeds and merges.
+    ensureForgeReachableMock.mockResolvedValueOnce({ ok: false, status: 'unreachable' });
+    execGhMock.mockResolvedValueOnce(JSON.stringify({
+      state: 'OPEN', mergeStateStatus: 'CLEAN', statusCheckRollup: [{ conclusion: 'SUCCESS' }]
+    }));
+    mergePrMock.mockResolvedValue({ success: true });
+
+    const totals = await sweepPendingMergePrs();
+
+    expect(totals).toMatchObject({ failures: 1, checked: 1, merged: 1 });
+    // The unreachable app keeps its entry for the next tick.
+    expect(readPendingMergePrs(mockApps.get('app1'))).toHaveLength(1);
+    expect(readPendingMergePrs(mockApps.get('app2'))).toEqual([]);
   });
 });
 

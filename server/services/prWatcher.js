@@ -25,7 +25,7 @@
  */
 
 import { execGh, ensureForgeReachable } from './github.js';
-import { getAppById, updateApp } from './apps.js';
+import { getAppById, updateApp, getActiveApps } from './apps.js';
 import * as git from './git.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 import { classifyPrFailure } from './layeredIntelligenceRejections.js';
@@ -391,6 +391,49 @@ export async function processPendingMergePrs(app) {
     return outcome === undefined ? [entry] : outcome ? [outcome] : [];
   }));
   return result;
+}
+
+/**
+ * Drain every app's pending merge-only PRs, independent of whether that app has
+ * the `pr-watcher` scheduled task enabled.
+ *
+ * `queuePendingMerge` is written from the agent-completion path whenever a
+ * merge-on-green PR is opened — a path with no relationship to the watcher's
+ * task-type config. Draining it only from `resolvePrWatcherBlock` (which runs
+ * exclusively when a `pr-watcher` task fires) meant that on the common setup —
+ * `pr-watcher` left disabled, since its default prompt is a review-and-comment
+ * agent most operators don't want — PortOS queued PRs into a list nothing ever
+ * read. Green PRs then sat open forever at `ticks: 0`, and even the bounded
+ * `MAX_PENDING_MERGE_TICKS` escape hatch never fired.
+ *
+ * Called from the CoS evaluation tick, which is the same cadence-bearing loop
+ * that spawned the agent that opened the PR. Never throws: each app is swept
+ * independently and a failure is returned in `failures`, so one unreachable
+ * forge can't stall the tick.
+ *
+ * @returns {Promise<{checked: number, merged: number, escalated: number,
+ *   timedOut: number, failures: number}>}
+ */
+export async function sweepPendingMergePrs() {
+  const totals = { checked: 0, merged: 0, escalated: 0, timedOut: 0, failures: 0 };
+  const apps = await getActiveApps().catch(() => []);
+  // Only apps that actually own a queued PR — the common case is an empty list,
+  // and `processPendingMergePrs` short-circuits on it anyway, but filtering here
+  // keeps the tick from resolving git origins for every managed app.
+  const withPending = apps.filter((app) => readPendingMergePrs(app).length > 0);
+  for (const app of withPending) {
+    const result = await processPendingMergePrs(app).catch((err) => ({ ok: false, reason: err.message }));
+    if (!result?.ok) {
+      totals.failures += 1;
+      console.log(`⚠️ Pending-merge sweep failed for ${app.name}: ${result?.reason || 'unknown error'}`);
+      continue;
+    }
+    totals.checked += result.checked || 0;
+    totals.merged += result.merged || 0;
+    totals.escalated += result.escalated || 0;
+    totals.timedOut += result.timedOut || 0;
+  }
+  return totals;
 }
 
 /**

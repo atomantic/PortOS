@@ -1116,6 +1116,20 @@ export async function evaluateTasks(options) {
     return s;
   });
 
+  // Drain merge-only PRs on the evaluation cadence rather than the `pr-watcher`
+  // task's, which most installs leave disabled — that coupling stranded every
+  // green PortOS-opened PR at `ticks: 0` forever. Runs BEFORE the agent-slot
+  // gate below because a deterministic merge claims no lane, so a full agent
+  // roster must not also wedge the merge queue. Gated on `!paused` to match the
+  // autonomous tiers: merging is an autonomous action a global pause suppresses.
+  if (!paused) {
+    const prWatcher = await import('./prWatcher.js');
+    const sweep = await prWatcher.sweepPendingMergePrs();
+    if (sweep.merged || sweep.escalated || sweep.timedOut) {
+      emitLog('info', `🤖 Pending merges: ${sweep.merged} merged, ${sweep.escalated} escalated, ${sweep.timedOut} timed out`);
+    }
+  }
+
   // Resolve this instance's federation id once per cycle so the priority tiers
   // can skip tasks a peer holds a live lease on (#1650). Warm path is the cheap
   // cached read; only the cold boot creates the identity.
@@ -2312,15 +2326,9 @@ async function resolveReferenceWatchBlock(app, taskType) {
 async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedule) {
   if (taskType !== 'pr-watcher') return { skip: false, block: '', repoFullName: '', defaultBranch: '' };
   const prWatcher = await import('./prWatcher.js');
-  // Merge-only PRs created by PortOS share this existing cadence. A green PR
-  // lands deterministically here without claiming an agent lane; only a failed
-  // check or conflict recreates the merge-only follow-up agent.
-  const pendingMerges = await prWatcher.processPendingMergePrs(app);
-  if (!pendingMerges.ok) {
-    emitLog('warn', `pr-watcher pending merge sweep failed for ${app.name}: ${pendingMerges.reason}`, { appId: app.id });
-  } else if (pendingMerges.merged || pendingMerges.escalated || pendingMerges.timedOut) {
-    emitLog('info', `pr-watcher pending merges for ${app.name}: ${pendingMerges.merged} merged, ${pendingMerges.escalated} escalated, ${pendingMerges.timedOut} timed out`, { appId: app.id });
-  }
+  // Merge-only PRs are NOT drained here — `evaluateTasks` sweeps them every
+  // cycle instead, so a disabled `pr-watcher` task can't strand them (see
+  // `sweepPendingMergePrs`). This function owns only PR *discovery*.
   // prAuthorFilter was already merged + value-constrained into `metadata`.
   const authorFilter = metadata.prAuthorFilter || 'any';
   const check = await prWatcher.checkPullRequests(app, { authorFilter });
