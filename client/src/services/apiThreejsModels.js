@@ -2,6 +2,8 @@ import { request } from './apiCore.js';
 
 export const listThreejsModels = (options) => request('/threejs-models', options);
 
+export const listThreejsModelFamilies = (options) => request('/threejs-models/families', options);
+
 export const getThreejsModel = (id, options) =>
   request(`/threejs-models/${encodeURIComponent(id)}`, options);
 

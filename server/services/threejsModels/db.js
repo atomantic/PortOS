@@ -8,6 +8,7 @@
 import { randomUUID } from 'crypto';
 import { query, withTransaction } from '../../lib/db.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { GENERAL_FAMILY_ID } from '../../lib/threejsModelFamilies.js';
 
 const rowToModel = (row) => row?.data ?? null;
 
@@ -67,6 +68,11 @@ export async function createModel(input) {
     // field — records written before this shipped simply read back `undefined`,
     // which every consumer treats the same as "no override".
     effort: input.effort || null,
+    // Subject-family checklist to narrow generation with. Additive JSON field
+    // with the same contract as `effort`: a record written before this shipped
+    // reads back `undefined`, which every consumer treats as `general` — the
+    // no-checklist default that leaves the prompt unchanged.
+    family: input.family || GENERAL_FAMILY_ID,
     status: 'draft',
     spec: null,
     // Assembly-coverage findings for `spec`, written alongside it by

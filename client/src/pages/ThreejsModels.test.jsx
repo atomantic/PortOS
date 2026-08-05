@@ -5,6 +5,7 @@ import ThreejsModels from './ThreejsModels';
 
 vi.mock('../services/api', () => ({
   createThreejsModel: vi.fn(),
+  listThreejsModelFamilies: vi.fn(),
   listThreejsModels: vi.fn(),
 }));
 
@@ -35,16 +36,22 @@ vi.mock('../components/imageGen/GalleryImagePicker', () => ({
   ) : null,
 }));
 
-import { createThreejsModel, listThreejsModels } from '../services/api';
+import { createThreejsModel, listThreejsModelFamilies, listThreejsModels } from '../services/api';
 
 function LocationProbe() {
   return <output aria-label="Current query">{useLocation().search}</output>;
 }
 
+const FAMILY_OPTIONS = [
+  { id: 'general', label: 'General (no checklist)', description: 'One general-purpose prompt.' },
+  { id: 'vehicle', label: 'Vehicle', description: 'Cars, ships, aircraft.' },
+];
+
 describe('ThreejsModels', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listThreejsModels.mockResolvedValue([]);
+    listThreejsModelFamilies.mockResolvedValue(FAMILY_OPTIONS);
   });
 
   it('starts a model from a gallery deep link and navigates to its workspace', async () => {
@@ -70,8 +77,53 @@ describe('ThreejsModels', () => {
       prompt: 'Keep the antenna articulated.',
       providerId: 'vision-api',
       model: 'vision-pro',
+      family: 'general',
     }, { silent: true }));
     expect(await screen.findByText('Model workspace opened')).toBeInTheDocument();
+  });
+
+  it('sends the chosen subject family and shows what it narrows to', async () => {
+    createThreejsModel.mockResolvedValue({ id: 'threejs-example', status: 'generating' });
+    render(
+      <MemoryRouter initialEntries={['/media/threejs?image=example-robot.png']}>
+        <Routes>
+          <Route path="/media/threejs" element={<ThreejsModels />} />
+          <Route path="/media/threejs/:id" element={<div>Model workspace opened</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const picker = await screen.findByLabelText(/Subject family/);
+    fireEvent.change(picker, { target: { value: 'vehicle' } });
+    expect(screen.getByText('Cars, ships, aircraft.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Generate model' }));
+
+    await waitFor(() => expect(createThreejsModel).toHaveBeenCalledWith(
+      expect.objectContaining({ family: 'vehicle' }),
+      { silent: true },
+    ));
+  });
+
+  it('hides the family picker rather than showing an empty select when the fetch fails', async () => {
+    // Creation must still work — it simply gets the general-purpose prompt.
+    listThreejsModelFamilies.mockRejectedValue(new Error('offline'));
+    createThreejsModel.mockResolvedValue({ id: 'threejs-example', status: 'generating' });
+    render(
+      <MemoryRouter initialEntries={['/media/threejs?image=example-robot.png']}>
+        <Routes>
+          <Route path="/media/threejs" element={<ThreejsModels />} />
+          <Route path="/media/threejs/:id" element={<div>Model workspace opened</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(listThreejsModelFamilies).toHaveBeenCalled());
+    expect(screen.queryByLabelText(/Subject family/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Generate model' }));
+    await waitFor(() => expect(createThreejsModel).toHaveBeenCalledWith(
+      expect.objectContaining({ family: 'general' }),
+      { silent: true },
+    ));
   });
 
   it('keeps a newly picked gallery image in the shareable URL', async () => {

@@ -5,6 +5,8 @@
  * approach, while targeting PortOS's bounded JSON scene schema.
  */
 
+import { buildThreejsFamilyChecklist } from '../../lib/threejsModelFamilies.js';
+
 const geometryContract = `
 Allowed geometry definitions:
 - {"type":"box","width":n,"height":n,"depth":n}
@@ -91,7 +93,11 @@ export function buildThreejsGenerationPrompt({
   prompt = '',
   currentSpec = null,
   feedback = '',
+  family = null,
 }) {
+  // Empty for the default `general` family, so a user who does not narrow the
+  // subject gets the same general-purpose prompt this contract always shipped.
+  const familyChecklist = buildThreejsFamilyChecklist(family);
   const refinement = currentSpec
     ? `
 This is a refinement pass. Preserve good existing work, but revise the scene spec to address the feedback.
@@ -110,7 +116,7 @@ REFERENCE IMAGE:
 - A local/CLI/TUI agent can inspect the same image at: ${sourcePath}
 - Target name: ${name}
 - User direction: ${prompt || 'Faithfully reconstruct the main subject.'}
-${refinement}
+${refinement}${familyChecklist}
 WORKFLOW:
 1. Inspect the image before deciding geometry.
 2. Classify the subject as object, character, or hybrid.
@@ -130,7 +136,11 @@ QUALITY GATE:
 - Do not spend custom triangles on a shape extrude, tube, or lathe already expresses.
 - A subject that is not genuinely plate-like must not have every identity part flat along one axis: the model has to hold up when it is orbited, not only from the camera you choose.
 - Include useful ambient/hemisphere fill plus at least one directional/key light.
-- Keep the full hierarchy at 160 parts or fewer.
+- Keep the full hierarchy at 160 parts or fewer.${familyChecklist ? `
+- Every required component in the subject-family checklist is either built and inventoried, or
+  named in limitations with the reason the reference does not support it. Silence on one is a failure.
+- The checklist is the floor: a spec that inventories only the checklist and nothing else has
+  under-observed the reference.` : ''}
 
 ${geometryContract}
 ${outputContract}`;

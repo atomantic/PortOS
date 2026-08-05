@@ -414,4 +414,89 @@ describe('Three.js model generation orchestration', () => {
       expect(read().effort).toBeNull();
     });
   });
+
+  describe('subject-family threading', () => {
+    const primeRecord = (overrides = {}) => {
+      let current = {
+        id: 'threejs-family',
+        name: 'Example Beacon',
+        sourceImage: { filename: 'example.png' },
+        providerId: 'vision-api',
+        model: null,
+        prompt: '',
+        status: 'draft',
+        spec: null,
+        coverage: null,
+        runs: [],
+        ...overrides,
+      };
+      store.getModel.mockImplementation(async () => current);
+      store.mutateModel.mockImplementation(async (_id, mutate) => {
+        const next = mutate(current);
+        if (next) current = next;
+        return current;
+      });
+      runPromptThroughProvider.mockResolvedValue({
+        text: JSON.stringify(spec),
+        runId: 'run-family',
+        provider: { id: 'vision-api' },
+        model: null,
+      });
+      return () => current;
+    };
+
+    it('splices the checklist into the prompt and gates coverage on it', async () => {
+      const read = primeRecord();
+
+      await startGeneration('threejs-family', { providerId: 'vision-api', family: 'device' });
+
+      await vi.waitFor(() => expect(read().status).toBe('ready'));
+      expect(runPromptThroughProvider).toHaveBeenCalledWith(expect.objectContaining({
+        prompt: expect.stringContaining('SUBJECT FAMILY — Device / machine'),
+      }));
+      expect(read().family).toBe('device');
+      expect(read().runs.at(-1)).toMatchObject({ family: 'device' });
+      // The beacon spec mentions almost nothing a device checklist expects, so
+      // the gate fires — which is the whole point of choosing a family.
+      expect(read().coverage.family).toMatchObject({ id: 'device' });
+      expect(read().coverage.findings.some((f) => f.code === 'missing-family-component')).toBe(true);
+    });
+
+    it('keeps the record family when the caller omits the key entirely', async () => {
+      const read = primeRecord({ family: 'vehicle' });
+
+      await startGeneration('threejs-family', { providerId: 'vision-api' });
+
+      await vi.waitFor(() => expect(read().status).toBe('ready'));
+      expect(runPromptThroughProvider).toHaveBeenCalledWith(expect.objectContaining({
+        prompt: expect.stringContaining('SUBJECT FAMILY — Vehicle'),
+      }));
+      expect(read().family).toBe('vehicle');
+    });
+
+    it('turns the checklist back off when the picker sends General', async () => {
+      // Unlike effort, `general` is a real value rather than a clear — it is how
+      // a user backs out of a family they picked by mistake.
+      const read = primeRecord({ family: 'vehicle' });
+
+      await startGeneration('threejs-family', { providerId: 'vision-api', family: 'general' });
+
+      await vi.waitFor(() => expect(read().status).toBe('ready'));
+      expect(runPromptThroughProvider).toHaveBeenCalledWith(expect.objectContaining({
+        prompt: expect.not.stringContaining('SUBJECT FAMILY'),
+      }));
+      expect(read().family).toBe('general');
+      expect(read().coverage.family).toBeNull();
+    });
+
+    it('carries an unmentioned component into the next unsteered refinement', async () => {
+      const read = primeRecord({ family: 'device' });
+
+      await startGeneration('threejs-family', { providerId: 'vision-api' });
+      await vi.waitFor(() => expect(read().status).toBe('ready'));
+
+      await startGeneration('threejs-family', { providerId: 'vision-api' });
+      expect(read().runs.at(-1).feedback).toContain('device / machine checklist expects');
+    });
+  });
 });

@@ -6,6 +6,8 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import MediaImage from '../components/MediaImage';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import useProviderModels from '../hooks/useProviderModels';
+import SubjectFamilySelect from '../components/threejsModels/SubjectFamilySelect';
+import useThreejsModelFamilies, { GENERAL_FAMILY_ID } from '../hooks/useThreejsModelFamilies';
 import { createThreejsModel, listThreejsModels } from '../services/api';
 import toast from '../components/ui/Toast';
 import { timeAgo, nameFromImageFilename } from '../utils/formatters';
@@ -36,6 +38,8 @@ export default function ThreejsModels() {
   ));
   const [name, setName] = useState(() => nameFromFilename(imageFromRoute));
   const [prompt, setPrompt] = useState('');
+  const families = useThreejsModelFamilies();
+  const [family, setFamily] = useState(GENERAL_FAMILY_ID);
   const [creating, setCreating] = useState(false);
   const {
     providers,
@@ -88,6 +92,7 @@ export default function ThreejsModels() {
       prompt: prompt.trim(),
       providerId: selectedProviderId,
       model: selectedModel || undefined,
+      family,
     }, { silent: true }).catch((error) => {
       toast.error(error.message || 'Failed to start model generation');
       return null;
@@ -144,6 +149,15 @@ export default function ThreejsModels() {
               className="w-full rounded-lg border border-port-border bg-port-bg px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:border-port-accent focus:outline-none"
             />
           </div>
+          <SubjectFamilySelect
+            id="threejs-model-family"
+            families={families}
+            value={family}
+            onChange={setFamily}
+            disabled={creating}
+            optional
+            showDescription
+          />
           <div>
             <label htmlFor="threejs-model-direction" className="mb-1 block text-xs text-gray-400">
               Modeling direction <span className="text-gray-600">(optional)</span>

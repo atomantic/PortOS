@@ -9,10 +9,18 @@
  *
  * This module reads the parsed spec and reports where the assembly does not back
  * the inventory. Its honest limit: it proves the model built what the spec
- * promised, never that the spec promised enough.
+ * promised, never that the spec promised enough — a component nobody noticed is
+ * never promised and so never missed.
+ *
+ * A chosen subject family is the one lever against that limit: it supplies an
+ * external list of components the spec is expected to resolve, so the gate can
+ * fail a spec that never mentioned the trigger guard rather than only a build
+ * that skipped it. That check runs ONLY when the user picked a family; with none
+ * (the default) this module behaves exactly as it did before families existed.
  */
 
 import { listSpecNames } from './threejsModel.js';
+import { findMissingFamilyComponents } from './threejsModelFamilies.js';
 
 // Severity of a promised-but-unbuilt feature scales with how much of the
 // subject's identity rides on it. A missing identity feature is a defect; a
@@ -46,9 +54,10 @@ function flattenParts(parts) {
 
 /**
  * @param {object} spec a spec that has already passed `threejsSculptSpecSchema`
- * @returns {{findings: Array, errorCount: number, warningCount: number, noteCount: number}}
+ * @param {{family?: string|null}} [options] the subject family the user chose, if any
+ * @returns {{findings: Array, errorCount: number, warningCount: number, noteCount: number, family: object|null}}
  */
-export function evaluateThreejsPartCoverage(spec) {
+export function evaluateThreejsPartCoverage(spec, { family = null } = {}) {
   const parts = flattenParts(spec?.parts);
   const byId = new Map(parts.map((part) => [part.id, part]));
   const details = Array.isArray(spec?.detailInventory) ? spec.detailInventory : [];
@@ -197,25 +206,62 @@ export function evaluateThreejsPartCoverage(spec) {
 
   findings.push(...foldedNotes);
 
+  // 5. Family gap — a component the chosen family says a faithful reconstruction
+  // has to resolve, which the spec never mentions anywhere: not in the inventory,
+  // not in a part name, not even in limitations as something the reference does
+  // not show. This is the one check that can fault a spec for what it failed to
+  // promise, and it is a `warning` rather than an `error` precisely because the
+  // evidence is a substring match — over-claiming here would make the whole gate
+  // less trustworthy than the gap it closes.
+  const familyResult = findMissingFamilyComponents(spec, family);
+  if (familyResult?.missing.length > 0) {
+    findings.push({
+      code: 'missing-family-component',
+      severity: 'warning',
+      components: familyResult.missing,
+      message: `${familyResult.missing.length} component(s) the ${familyResult.family.label.toLowerCase()} checklist expects are not mentioned anywhere in the spec (${listSpecNames(familyResult.missing)}). Build each one, or say in limitations why the reference does not show it.`,
+    });
+  }
+
   const countBy = (severity) => findings.filter((finding) => finding.severity === severity).length;
   return {
     findings,
     errorCount: countBy('error'),
     warningCount: countBy('warning'),
     noteCount: countBy('note'),
+    // Snapshotted onto the record so the detail page can render the checklist
+    // (and which items are unresolved) without re-deriving the taxonomy client
+    // side. `null` when no family applies — distinct from a family with nothing
+    // missing, which is `missing: []`.
+    family: familyResult
+      ? {
+        id: familyResult.family.id,
+        label: familyResult.family.label,
+        components: familyResult.family.components.map((component) => component.name),
+        missing: familyResult.missing,
+        reviewAxes: familyResult.family.reviewAxes,
+        orbitViews: familyResult.family.orbitViews,
+      }
+      : null,
   };
 }
 
 /**
  * Default refinement feedback derived from a stored coverage result. Only
- * error-severity findings are worth spending another provider run on; a spec
- * with none returns '' so the caller falls back to its own generic wording.
+ * error-severity findings are worth spending another provider run on — plus the
+ * family gap, which is a `warning` only because its evidence is textual, not
+ * because it matters less: an unmentioned required component is exactly the
+ * defect a refinement pass should be told about, and nothing else in the loop
+ * will ever surface it. A spec with neither returns '' so the caller falls back
+ * to its own generic wording.
  */
 export function buildThreejsCoverageFeedback(coverage) {
-  const errors = (coverage?.findings || []).filter((finding) => finding.severity === 'error');
-  if (errors.length === 0) return '';
+  const actionable = (coverage?.findings || []).filter((finding) => (
+    finding.severity === 'error' || finding.code === 'missing-family-component'
+  ));
+  if (actionable.length === 0) return '';
   return [
     'The previous pass failed the assembly-coverage check. Fix these before anything else:',
-    ...errors.map((finding, index) => `${index + 1}. ${finding.message}`),
+    ...actionable.map((finding, index) => `${index + 1}. ${finding.message}`),
   ].join('\n');
 }

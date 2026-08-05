@@ -15,6 +15,7 @@ import {
   threejsSculptSpecSchema,
 } from '../../lib/threejsModel.js';
 import { buildThreejsCoverageFeedback, evaluateThreejsPartCoverage } from '../../lib/threejsModelCoverage.js';
+import { GENERAL_FAMILY_ID } from '../../lib/threejsModelFamilies.js';
 import { resolveCliEffort } from '../../lib/providerModels.js';
 import { getProviderById } from '../providers.js';
 import { buildThreejsGenerationPrompt } from './prompt.js';
@@ -75,6 +76,7 @@ async function executeGeneration({
   requestedEffort,
   sourcePath,
   prompt,
+  family,
 }) {
   try {
     const result = await runPromptThroughProvider({
@@ -101,7 +103,7 @@ async function executeGeneration({
     // A structural miss is not a parse failure — a spec that promises more than
     // it builds is still a usable generation, so the gate is recorded on the
     // record and surfaced as refinement feedback rather than thrown away.
-    const coverage = evaluateThreejsPartCoverage(spec);
+    const coverage = evaluateThreejsPartCoverage(spec, { family });
     // Likewise for a spec that builds everything it promised out of slabs: it
     // renders correctly from the generated camera, so it is recorded rather than
     // rejected — the user sees it and an unsteered refinement asks for depth.
@@ -163,6 +165,7 @@ export async function createModel(input) {
     model: input.model,
     effort: input.effort,
     prompt: input.prompt,
+    family: input.family,
   });
 }
 
@@ -171,6 +174,7 @@ export async function startGeneration(id, {
   model,
   effort,
   prompt,
+  family,
   feedback = '',
 } = {}) {
   const current = await store.getModel(id);
@@ -207,12 +211,19 @@ export async function startGeneration(id, {
   // returns null for API/effort-less providers and clamps an out-of-range level
   // to the tier the chosen model really has, matching the CLI arg builders.
   const effectiveEffort = resolveCliEffort(requestedEffort, provider, model || provider.defaultModel || null);
+  // Absent keeps the record's stored family; the picker's "General" choice sends
+  // the explicit `general` id, which is a real value rather than a clear — it is
+  // how the user turns a checklist back OFF for the next pass.
+  const effectiveFamily = family === undefined
+    ? (current.family || GENERAL_FAMILY_ID)
+    : (family || GENERAL_FAMILY_ID);
   const generationPrompt = buildThreejsGenerationPrompt({
     sourcePath,
     name: current.name,
     prompt: effectivePrompt,
     currentSpec: current.spec,
     feedback: effectiveFeedback,
+    family: effectiveFamily,
   });
   const next = await store.mutateModel(id, (fresh) => {
     if (fresh.status === 'generating') {
@@ -224,6 +235,7 @@ export async function startGeneration(id, {
       providerId: provider.id,
       model: model || provider.defaultModel || null,
       effort: effectiveEffort,
+      family: effectiveFamily,
       status: 'generating',
       error: null,
       generationOperationId: operationId,
@@ -235,6 +247,7 @@ export async function startGeneration(id, {
           providerId: provider.id,
           model: model || provider.defaultModel || null,
           effort: effectiveEffort,
+          family: effectiveFamily,
           feedback: effectiveFeedback || null,
           startedAt,
           completedAt: null,
@@ -255,6 +268,7 @@ export async function startGeneration(id, {
       requestedEffort: effectiveEffort,
       sourcePath,
       prompt: generationPrompt,
+      family: effectiveFamily,
     });
   });
   return next;

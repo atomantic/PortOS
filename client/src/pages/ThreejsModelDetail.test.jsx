@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ThreejsModelDetail from './ThreejsModelDetail';
@@ -8,6 +8,7 @@ vi.mock('../services/api', () => ({
   generateThreejsModel: vi.fn(),
   getThreejsModel: vi.fn(),
   getThreejsModelSource: vi.fn(),
+  listThreejsModelFamilies: vi.fn(),
   threejsModelSourceUrl: (id) => `/api/threejs-models/${id}/source`,
 }));
 
@@ -32,7 +33,7 @@ vi.mock('../components/threejsModels/ThreejsModelPreview', () => ({
   default: () => <div>Model preview</div>,
 }));
 
-import { getThreejsModel } from '../services/api';
+import { generateThreejsModel, getThreejsModel, listThreejsModelFamilies } from '../services/api';
 
 const baseRecord = {
   id: 'threejs-example',
@@ -47,6 +48,16 @@ const baseRecord = {
   runs: [],
 };
 
+const FAMILY_OPTIONS = [
+  { id: 'general', label: 'General (no checklist)', description: 'One general-purpose prompt.' },
+  { id: 'vehicle', label: 'Vehicle', description: 'Cars, ships, aircraft.' },
+];
+
+const resetMocks = () => {
+  vi.clearAllMocks();
+  listThreejsModelFamilies.mockResolvedValue(FAMILY_OPTIONS);
+};
+
 const renderDetail = () => render(
   <MemoryRouter initialEntries={['/media/threejs/threejs-example']}>
     <Routes>
@@ -56,7 +67,7 @@ const renderDetail = () => render(
 );
 
 describe('ThreejsModelDetail assembly coverage', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(resetMocks);
 
   it('lists the findings, tallies them, and states the gate is not a completeness proof', async () => {
     getThreejsModel.mockResolvedValue({
@@ -119,7 +130,7 @@ describe('ThreejsModelDetail assembly coverage', () => {
 });
 
 describe('ThreejsModelDetail cross-section gate', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(resetMocks);
 
   it('lists the flatness finding and says an unsteered refinement will ask for depth', async () => {
     getThreejsModel.mockResolvedValue({
@@ -162,5 +173,81 @@ describe('ThreejsModelDetail cross-section gate', () => {
 
     await waitFor(() => expect(screen.getByText('Example Beacon')).toBeInTheDocument());
     expect(screen.queryByText('Cross-section')).not.toBeInTheDocument();
+  });
+});
+
+describe('ThreejsModelDetail subject family', () => {
+  beforeEach(resetMocks);
+
+  const withFamily = (family) => ({
+    ...baseRecord,
+    family: 'vehicle',
+    coverage: { errorCount: 0, warningCount: 0, noteCount: 0, findings: [], family },
+  });
+
+  it('marks each expected component resolved or not and names the orbit views to check', async () => {
+    getThreejsModel.mockResolvedValue(withFamily({
+      id: 'vehicle',
+      label: 'Vehicle',
+      components: ['Chassis or hull', 'Glazing', 'Lights'],
+      missing: ['Lights'],
+      reviewAxes: ['wheelbase and track proportion'],
+      orbitViews: ['side profile', 'top-down'],
+    }));
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Vehicle checklist')).toBeInTheDocument());
+    expect(screen.getByText('1 of 3 unaccounted for')).toBeInTheDocument();
+    expect(screen.getByText('Lights')).toBeInTheDocument();
+    expect(screen.getByText(/side profile, top-down/)).toBeInTheDocument();
+    expect(screen.getByText(/wheelbase and track proportion/)).toBeInTheDocument();
+    // The floor-not-ceiling framing has to reach the user too — otherwise the
+    // checklist reads as the whole job rather than the minimum.
+    expect(screen.getByText(/floor, not a ceiling/)).toBeInTheDocument();
+  });
+
+  it('reports a fully accounted-for checklist without claiming completeness', async () => {
+    getThreejsModel.mockResolvedValue(withFamily({
+      id: 'vehicle', label: 'Vehicle', components: ['Chassis or hull'], missing: [], reviewAxes: [], orbitViews: [],
+    }));
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Vehicle checklist')).toBeInTheDocument());
+    expect(screen.getByText('Every expected component is accounted for')).toBeInTheDocument();
+  });
+
+  it('hides the checklist for a record generated with no family', async () => {
+    getThreejsModel.mockResolvedValue({
+      ...baseRecord,
+      coverage: { errorCount: 0, warningCount: 0, noteCount: 0, findings: [], family: null },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Assembly coverage')).toBeInTheDocument());
+    expect(screen.queryByText(/checklist$/)).not.toBeInTheDocument();
+    // With no family the coverage footer keeps its original honest caveat.
+    expect(screen.getByText(/never that the spec promised enough/)).toBeInTheDocument();
+  });
+
+  it('seeds the picker from the record and sends the family with a refinement', async () => {
+    getThreejsModel.mockResolvedValue({ ...baseRecord, family: 'vehicle' });
+    generateThreejsModel.mockResolvedValue({ ...baseRecord, family: 'general', status: 'generating' });
+    renderDetail();
+
+    // The picker renders as soon as the taxonomy lands and is seeded from the
+    // record a tick later, so the two fetches can resolve in either order.
+    const picker = await screen.findByLabelText('Subject family');
+    await waitFor(() => expect(picker).toHaveValue('vehicle'));
+
+    // Switching back to General must turn the checklist OFF for the next pass
+    // rather than silently re-applying the record's stored family.
+    fireEvent.change(picker, { target: { value: 'general' } });
+    fireEvent.click(screen.getByRole('button', { name: /Refine model/ }));
+
+    await waitFor(() => expect(generateThreejsModel).toHaveBeenCalledWith(
+      'threejs-example',
+      expect.objectContaining({ family: 'general' }),
+      { silent: true },
+    ));
   });
 });

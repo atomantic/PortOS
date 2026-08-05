@@ -64,6 +64,7 @@ export { default as useProviderModels } from './useProviderModels.js';
 export { default as useReviewerModelOptions } from './useReviewerModelOptions.js';
 export { default as useRowDraft } from './useRowDraft.js';
 export { default as useTheme } from './useTheme.js';
+export { default as useThreejsModelFamilies } from './useThreejsModelFamilies.js';
 export { default as useUniverse } from './useUniverse.js';
 export { default as useUniverseAction } from './useUniverseAction.js';
 export { default as useUniverseBucketActions } from './useUniverseBucketActions.js';

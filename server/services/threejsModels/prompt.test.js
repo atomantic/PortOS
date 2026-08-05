@@ -45,4 +45,38 @@ describe('buildThreejsGenerationPrompt', () => {
     expect(prompt).toContain('Thin the handle.');
     expect(build()).not.toContain('This is a refinement pass');
   });
+
+  describe('subject family', () => {
+    it('leaves the prompt byte-identical when no family is chosen', () => {
+      // The taxonomy is a narrowing the user opts into. If the default path
+      // drifted even slightly, every existing install's generations would change
+      // behavior without anyone asking for it.
+      const baseline = build();
+      expect(build({ family: null })).toBe(baseline);
+      expect(build({ family: 'general' })).toBe(baseline);
+      expect(build({ family: 'not-a-family' })).toBe(baseline);
+      expect(baseline).not.toContain('SUBJECT FAMILY');
+    });
+
+    it('splices the checklist and its extra quality gates when a family is chosen', () => {
+      const prompt = build({ family: 'vehicle' });
+      expect(prompt).toContain('SUBJECT FAMILY — Vehicle');
+      expect(prompt).toContain('Cockpit or cabin');
+      expect(prompt).toContain('subject-family checklist is either built and inventoried');
+      expect(prompt).toContain('The checklist is the floor');
+    });
+
+    it('keeps the family checklist alongside refinement feedback rather than replacing it', () => {
+      // A refinement is where an under-observed component is most likely to get
+      // fixed, so dropping the checklist on the second pass would defeat it.
+      const prompt = build({
+        family: 'architecture',
+        currentSpec: { schemaVersion: 1, name: 'Example Model' },
+        feedback: 'Deepen the window reveals.',
+      });
+      expect(prompt).toContain('This is a refinement pass');
+      expect(prompt).toContain('Deepen the window reveals.');
+      expect(prompt).toContain('SUBJECT FAMILY — Building / structure');
+    });
+  });
 });

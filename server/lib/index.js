@@ -44,6 +44,7 @@ export * as telegramValidation from './telegramValidation.js';
 export * from './validation.js';
 export * from './threejsModel.js';
 export * from './threejsModelCoverage.js';
+export * from './threejsModelFamilies.js';
 
 // === Story & narrative ===
 export * from './bibleExtractor.js';

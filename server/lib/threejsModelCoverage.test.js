@@ -434,6 +434,67 @@ describe('evaluateThreejsPartCoverage', () => {
   });
 });
 
+describe('subject-family coverage', () => {
+  // A clean, ordinary spec: one mesh, one detail pointing at it. Nothing here
+  // trips any of the structural checks, so a family finding stands alone.
+  const cleanSpec = () => makeSpec({
+    parts: [{ id: 'hull', name: 'Hull', geometry: box(2), material: 'shell' }],
+    detailInventory: [detail('Boxy hull', ['hull'], 'identity')],
+  });
+
+  it('adds nothing at all when no family is chosen', () => {
+    const coverage = evaluateThreejsPartCoverage(cleanSpec());
+    expect(codes(coverage)).not.toContain('missing-family-component');
+    // `null` rather than an empty snapshot, so the detail page can tell "no
+    // family" apart from "a family with nothing missing".
+    expect(coverage.family).toBeNull();
+    expect(evaluateThreejsPartCoverage(cleanSpec(), { family: 'general' }).family).toBeNull();
+  });
+
+  it('warns on components the spec never mentions and snapshots the checklist', () => {
+    const coverage = evaluateThreejsPartCoverage(cleanSpec(), { family: 'vehicle' });
+    const finding = coverage.findings.find((item) => item.code === 'missing-family-component');
+    // Warning, never error: the evidence is a substring match, and a gate that
+    // over-claims is worse than the gap it closes.
+    expect(finding.severity).toBe('warning');
+    expect(finding.components).toContain('Cockpit or cabin');
+    // "Chassis or hull" is satisfied by the part named "Hull", proving the
+    // haystack really does read part names and not just the inventory.
+    expect(finding.components).not.toContain('Chassis or hull');
+    expect(coverage.family).toMatchObject({ id: 'vehicle', label: 'Vehicle' });
+    expect(coverage.family.missing).toEqual(finding.components);
+    expect(coverage.family.orbitViews.length).toBeGreaterThan(0);
+    expect(coverage.warningCount).toBeGreaterThan(0);
+  });
+
+  it('records a family with nothing missing as an empty miss list, not as absent', () => {
+    const parts = [
+      { id: 'grip', name: 'Wrapped grip', geometry: box(1), material: 'shell' },
+      { id: 'blade', name: 'Blade', geometry: box(1), material: 'shell' },
+      { id: 'guard', name: 'Crossguard', geometry: box(1), material: 'shell' },
+      { id: 'pommel', name: 'Pommel', geometry: box(1), material: 'shell' },
+      { id: 'pins', name: 'Handle pins', geometry: box(1), material: 'shell' },
+      { id: 'latch', name: 'Release catch', geometry: box(1), material: 'shell' },
+      { id: 'sight', name: 'Alignment notch', geometry: box(1), material: 'shell' },
+      { id: 'ring', name: 'Lanyard ring', geometry: box(1), material: 'shell' },
+    ];
+    const coverage = evaluateThreejsPartCoverage(makeSpec({
+      parts,
+      detailInventory: parts.map((part) => detail(part.name, [part.id], 'major')),
+    }), { family: 'weapon' });
+
+    expect(codes(coverage)).not.toContain('missing-family-component');
+    expect(coverage.family).toMatchObject({ id: 'weapon', missing: [] });
+  });
+
+  it('degrades an unknown family id to no checklist instead of throwing', () => {
+    // A record synced from a peer running a newer taxonomy must still evaluate.
+    const coverage = evaluateThreejsPartCoverage(cleanSpec(), { family: 'kaiju-mecha-hybrid' });
+    expect(coverage.family).toBeNull();
+    expect(codes(coverage)).not.toContain('missing-family-component');
+  });
+});
+
 describe('buildThreejsCoverageFeedback', () => {
   it('returns empty for a missing, clean, or warning-only coverage result', () => {
     expect(buildThreejsCoverageFeedback(null)).toBe('');
@@ -441,6 +502,19 @@ describe('buildThreejsCoverageFeedback', () => {
     expect(buildThreejsCoverageFeedback({
       findings: [{ severity: 'warning', message: 'unattributed geometry' }],
     })).toBe('');
+  });
+
+  it('carries the family gap into refinement even though it is only a warning', () => {
+    // Nothing else in the loop will ever surface an under-observed component —
+    // if this warning does not reach the next pass, the checklist buys nothing.
+    const feedback = buildThreejsCoverageFeedback({
+      findings: [
+        { severity: 'warning', code: 'orphan-geometry', message: 'unattributed geometry' },
+        { severity: 'warning', code: 'missing-family-component', message: '3 component(s) are not mentioned' },
+      ],
+    });
+    expect(feedback).toContain('1. 3 component(s) are not mentioned');
+    expect(feedback).not.toContain('unattributed geometry');
   });
 
   it('lists only the error findings for the next refinement pass', () => {
