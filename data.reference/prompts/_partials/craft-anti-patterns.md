@@ -10,9 +10,19 @@ These are hard-won lessons about prose that reads as machine-generated. Follow t
 - **Section breaks ≤ two per chapter.** Hard section breaks (blank-line / horizontal-rule scene cuts within a chapter) fragment momentum. Use at most two per chapter.
 - **Vary paragraph length.** Never write three or more consecutive paragraphs of similar length. Break the pattern deliberately — a one-line paragraph after two dense ones, or vice versa.
 - **End each chapter differently from previous chapters.** Do not fall into a repeated closing rhythm (every chapter ending on a line of dialogue, or a lone-image beat, or an em-dash). Vary how endings land across the work.
-- **At least 70% in-scene, not summary.** The majority of the prose should be dramatized moment-to-moment scene, not narrated summary ("Over the next week, they…"). Summary is for compression between scenes, not the default mode.
+- **At least 70% in-scene, not summary.** The majority of the prose should be dramatized moment-to-moment scene, not narrated summary ("Over the next week, they…"). Summary is for compression between scenes, not the default mode. See **Zoom into the moment** below for how to build one.
 - **Dialogue sounds like speech, not polished prose.** People interrupt, trail off, use contractions and fragments, dodge the question. Do not write dialogue that reads like edited essay prose.
 - **Include at least one genuinely surprising moment.** Every chapter should contain at least one beat the reader could not have predicted a paragraph earlier — a reveal, a reversal, an unexpected reaction. Predictable-throughout is a failure state.
+
+## Zoom into the moment — how to build a scene
+
+Everything above is a thing to avoid. These five are things to *do*. They are the construction recipe for the 70%-in-scene rule: when you drop into a dramatized beat, build it out of these elements. A passage missing them is the summary that rule is warning you about, and "add more description" is not the fix.
+
+- **Location first.** Open the beat by saying where the character physically is — one concrete noun ("the conference room", "the kitchen table"), not an inventory. A named place is enough for the reader to build the room themselves; piling on furniture and floor materials buys nothing and crowds out interiority.
+- **Actions, in verbs.** Say what the character is *doing* in this specific moment — walking, waiting, opening, reading. Present-moment verbs create forward momentum and signal that the story has already started; context can be back-filled later, or not at all.
+- **Thoughts, raw.** Render the thought itself, in the character's own diction — fragmentary, self-interrupting, unflattering. Never write a thought in essay register ("this represents a considerable opportunity"); nobody thinks that.
+- **Emotions, shown on the body.** Do not name the feeling. Give the physical tell — the lean back and the exhale, the pen tapping, the glance at the clock. A named emotion is invisible; a body is not.
+- **Dialogue, quoted and specific.** When a character says something that matters, quote the actual words, and make them worth quoting — concrete and characterful, never corporate paraphrase ("I'm dissatisfied with the inadequate execution"). Narrated speech ("she told him she was leaving") is the most common place a draft leaves value on the table.
 
 ## Stability Trap countermeasures
 

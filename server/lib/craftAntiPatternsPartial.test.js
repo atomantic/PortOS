@@ -25,6 +25,7 @@ describe('craft-anti-patterns partial (#2172)', () => {
     // The include marker is gone and the partial body landed inline.
     expect(expanded).not.toContain('{{> craft-anti-patterns }}');
     expect(expanded).toContain('No triadic sensory lists');
+    expect(expanded).toContain('Zoom into the moment');
     expect(expanded).toContain('Stability Trap countermeasures');
     expect(expanded).toContain('Characters must end TRULY different');
     expect(expanded).toContain('A choice with no real cost is not a real choice');
@@ -37,6 +38,30 @@ describe('craft-anti-patterns partial (#2172)', () => {
       const rendered = applyTemplate(expanded, {});
       expect(rendered).not.toContain('{{>');
       expect(rendered).toContain('Include at least one genuinely surprising moment');
+      // The construction recipe (#3594) must reach BOTH drafting stages — it is
+      // the only positive-instruction block in the partial, and the thing that
+      // makes the 70%-in-scene rule actionable rather than aspirational.
+      expect(rendered).toContain('Zoom into the moment');
+      expect(rendered).toContain('Emotions, shown on the body');
+    }
+  });
+
+  it('carries the five "Zoom into the moment" construction elements (#3594)', () => {
+    const body = readFileSync(join(partialsDir, 'craft-anti-patterns.md'), 'utf-8');
+    const zoom = body.indexOf('## Zoom into the moment');
+    const stability = body.indexOf('## Stability Trap countermeasures');
+    // Positioned after the rule it operationalizes, before the Stability Trap block.
+    expect(body.indexOf('At least 70% in-scene, not summary')).toBeLessThan(zoom);
+    expect(zoom).toBeLessThan(stability);
+    const section = body.slice(zoom, stability);
+    for (const element of [
+      'Location first',
+      'Actions, in verbs',
+      'Thoughts, raw',
+      'Emotions, shown on the body',
+      'Dialogue, quoted and specific',
+    ]) {
+      expect(section).toContain(element);
     }
   });
 

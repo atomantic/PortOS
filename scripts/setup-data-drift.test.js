@@ -81,9 +81,11 @@ const EXPECTED_STAGE_NEW = {
 };
 const EXPECTED_PARTIAL_OLD = {
   'bible-deference.md': ['218f0e85643609ed85a12b1ccc7b5a8d'],
+  'craft-anti-patterns.md': ['bd0149bf1a5c721e65e053dad8e536d3'],
 };
 const EXPECTED_PARTIAL_NEW = {
   'bible-deference.md': 'a4681348c27776e414acf6e0be566a99',
+  'craft-anti-patterns.md': 'f34e75f19ac4e41aa0533a0abcb38a2a',
 };
 
 // Compare a swept oldMap to a baseline with each hash list order-normalized.
@@ -105,6 +107,7 @@ describe('buildPromptDriftTables', () => {
     expect(_partials.newMap).toEqual(EXPECTED_PARTIAL_NEW);
     expect(sortValues(_partials.oldMap)).toEqual(sortValues(EXPECTED_PARTIAL_OLD));
     expect(stages.newMap['bible-deference.md']).toBeUndefined();
+    expect(stages.newMap['craft-anti-patterns.md']).toBeUndefined();
   });
 
   it('never lists the current hash among its own accepted-old set', async () => {

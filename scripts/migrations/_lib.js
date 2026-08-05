@@ -323,6 +323,12 @@ export const md5 = (str) => {
  *   flag, a missing sample raises an ENOENT at read time. Used by migration
  *   003 to handle the `pipeline-tv-script.md` → `pipeline-teleplay.md`
  *   rename.
+ *
+ * `subdirs` mirrors a migration's `DRIFT_SUBDIRS` export: a per-filename
+ * override of the `prompts/<subdir>/` directory both sides resolve under.
+ * Stage prompts (the default, `'stages'`) need no entry; prompt fragments in
+ * `prompts/_partials/` do. Passing the migration's own `DRIFT_SUBDIRS` object
+ * keeps the replace pass and the setup-data.js drift sweep reading one table.
  */
 export async function applyPromptReplaceMigration({
   rootDir,
@@ -332,9 +338,11 @@ export async function applyPromptReplaceMigration({
   customizedHint,
   createIfMissing = false,
   retireOnSampleMissing = false,
+  subdirs = {},
 }) {
-  const stagesDir = join(rootDir, 'data', 'prompts', 'stages');
-  const sampleDir = join(rootDir, 'data.reference', 'prompts', 'stages');
+  const subdirFor = (filename) => subdirs[filename] || 'stages';
+  const dataPathFor = (filename) => join(rootDir, 'data', 'prompts', subdirFor(filename), filename);
+  const samplePathFor = (filename) => join(rootDir, 'data.reference', 'prompts', subdirFor(filename), filename);
   const filenames = Object.keys(accepted);
 
   // Two phases so parallelism never changes the migration's failure semantics:
@@ -351,8 +359,8 @@ export async function applyPromptReplaceMigration({
   //      order so log output and the on-disk result are deterministic, exactly
   //      as the serial loop produced them.
   const plans = await Promise.all(filenames.map(async (filename) => {
-    const dataPath = join(stagesDir, filename);
-    const samplePath = join(sampleDir, filename);
+    const dataPath = dataPathFor(filename);
+    const samplePath = samplePathFor(filename);
 
     const existing = await readFile(dataPath, 'utf-8').catch((err) => {
       if (err.code !== 'ENOENT') throw err;
@@ -391,7 +399,7 @@ export async function applyPromptReplaceMigration({
         return {
           counter: 'skipped',
           warn: `⚠️  ${label} ${filename} was renamed/retired upstream but your local copy has been customized.\n` +
-            `   Check data.reference/prompts/stages/ for the replacement file and merge any custom edits manually.`,
+            `   Check data.reference/prompts/${subdirFor(filename)}/ for the replacement file and merge any custom edits manually.`,
         };
       }
     }
@@ -439,6 +447,7 @@ export function makePromptReplaceMigration({
   skipFooter,
   createIfMissing = false,
   retireOnSampleMissing = false,
+  subdirs = {},
 }) {
   const applyMigration = (opts = {}) =>
     applyPromptReplaceMigration({
@@ -448,6 +457,7 @@ export function makePromptReplaceMigration({
       customizedHint,
       createIfMissing,
       retireOnSampleMissing,
+      subdirs,
       ...opts,
     });
 
