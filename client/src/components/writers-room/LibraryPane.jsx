@@ -128,10 +128,15 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
     <div className="space-y-4 text-sm">
       <div className="flex items-center justify-between">
         <h2 className="text-xs uppercase text-gray-400 tracking-wider">Library</h2>
+        {/* The three header actions wrap 14px icons, so they need an explicit
+            44px floor to be tappable — the same treatment the row-level actions
+            below already carry. The row has no padding of its own to bleed the
+            extra height back into (unlike the bible/snapshot rows in #3565), so
+            it grows to 44px rather than clawing it back with a negative margin. */}
         <div className="flex items-center gap-1">
           <button
             onClick={() => { setCreatingFolder(true); setCreatingWork(null); }}
-            className="p-1 text-gray-400 hover:text-port-accent"
+            className="flex items-center justify-center min-w-[44px] min-h-[44px] text-gray-400 hover:text-port-accent"
             title="New folder"
             aria-label="New folder"
           >
@@ -139,7 +144,7 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
           </button>
           <button
             onClick={() => { setCreatingWork('unfiled'); setCreatingFolder(false); }}
-            className="p-1 text-gray-400 hover:text-port-accent"
+            className="flex items-center justify-center min-w-[44px] min-h-[44px] text-gray-400 hover:text-port-accent"
             title="New work"
             aria-label="New work"
           >
@@ -148,7 +153,7 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
           {onCollapse && (
             <button
               onClick={onCollapse}
-              className="hidden md:inline-flex p-1 text-gray-400 hover:text-white"
+              className="hidden md:inline-flex items-center justify-center min-w-[44px] min-h-[44px] text-gray-400 hover:text-white"
               title="Hide library"
               aria-label="Hide library"
             >
@@ -165,12 +170,12 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
             value={folderName}
             onChange={(e) => setFolderName(e.target.value)}
             placeholder="Folder name"
-            className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs min-w-0"
+            className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs min-w-0 min-h-[44px]"
           />
           <div className="flex items-center gap-1">
-            <button type="submit" className="text-xs px-2 py-1 bg-port-accent text-white rounded flex-1">Add</button>
+            <button type="submit" className="text-xs px-2 py-1 bg-port-accent text-white rounded flex-1 min-h-[44px]">Add</button>
             <button type="button" onClick={() => { setCreatingFolder(false); setFolderName(''); }}
-              className="text-xs px-2 py-1 text-gray-400">Cancel</button>
+              className="text-xs px-2 py-1 text-gray-400 min-w-[44px] min-h-[44px]">Cancel</button>
           </div>
         </form>
       )}
@@ -182,18 +187,18 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
             value={workTitle}
             onChange={(e) => setWorkTitle(e.target.value)}
             placeholder="Title"
-            className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs"
+            className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs min-h-[44px]"
           />
           <select
             value={workKind}
             onChange={(e) => setWorkKind(e.target.value)}
-            className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs"
+            className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs min-h-[44px]"
           >
             {Object.entries(KIND_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
           </select>
           <div className="flex items-center gap-1">
-            <button type="submit" className="text-xs px-2 py-1 bg-port-accent text-white rounded flex-1">Create</button>
-            <button type="button" onClick={() => setCreatingWork(null)} className="text-xs px-2 py-1 text-gray-400">Cancel</button>
+            <button type="submit" className="text-xs px-2 py-1 bg-port-accent text-white rounded flex-1 min-h-[44px]">Create</button>
+            <button type="button" onClick={() => setCreatingWork(null)} className="text-xs px-2 py-1 text-gray-400 min-w-[44px] min-h-[44px]">Cancel</button>
           </div>
         </form>
       )}
