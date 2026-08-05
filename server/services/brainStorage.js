@@ -264,10 +264,11 @@ export async function getAll(type) {
     .map(([id, record]) => ({ id, ...record }));
 }
 
-// ─── Live-id index (issue #3508) ────────────────────────────────────────────
-// `listLiveIds(type)` answers "which record ids are live right now?" — the only
-// question tally/coverage callers ask — WITHOUT re-reading and re-parsing every
-// record body on every call, the way `getAll(type)` must.
+// ─── Per-record projection indexes (issues #3508, #3509) ────────────────────
+// A projection index answers one question about EVERY record in a store — "is
+// this id live?" (#3508), "what are this link's sort/filter keys?" (#3509) —
+// WITHOUT re-reading and re-parsing every record body on every call, the way
+// `getAll(type)` must.
 //
 // Cost model per call: one `listIds()` (readdir + lstat, no body reads) plus a
 // `loadOne` for ids the index has never resolved. Steady state is zero body
@@ -286,30 +287,51 @@ export async function getAll(type) {
 // No `null = not built` sentinel is needed here (unlike brainSearchIndex):
 // `listIds()` is the membership authority on every call, so an empty index is a
 // legitimate "nothing resolved yet" state and never causes a redundant re-scan.
-const liveIdIndex = Object.fromEntries(BRAIN_ENTITY_TYPES.map((type) => [type, new Map()]));
-// Bumped by every invalidation, so a resolve pass that raced an invalidation is
-// retried instead of writing the value it read just before the change landed.
-const liveIdGeneration = Object.fromEntries(BRAIN_ENTITY_TYPES.map((type) => [type, 0]));
-const LIVE_ID_MAX_ATTEMPTS = 3;
+const RECORD_INDEX_MAX_ATTEMPTS = 3;
 
-// Live = present, not a tombstone, and not archived. `loadOne` returns null for
-// a missing/corrupt/unparseable record, which `getAll` also drops — so it is
-// not live either.
-const isLiveRecord = (record) => !!record && !isTombstone(record) && !record.archived;
+// Every index registers itself here so ONE invalidation drops the touched id
+// from all of them — an index that missed a signal would serve a stale
+// projection until the next unrelated change to that record.
+const recordIndexes = [];
 
-function invalidateLiveId(type, id) {
-  const index = liveIdIndex[type];
-  if (!index || !id) return;
-  index.delete(id);
-  liveIdGeneration[type] += 1;
+/**
+ * Build a per-type projection index. `project(record)` maps the parsed on-disk
+ * record (or `null` for a missing/corrupt one) to the value to cache for that
+ * id. Registers itself for invalidation; call `resolveRecordIndex` to read it.
+ */
+function createRecordIndex(project) {
+  const index = {
+    project,
+    byType: Object.fromEntries(BRAIN_ENTITY_TYPES.map((type) => [type, new Map()])),
+    // Bumped by every invalidation, so a resolve pass that raced an invalidation
+    // is retried instead of writing the value it read just before the change landed.
+    generation: Object.fromEntries(BRAIN_ENTITY_TYPES.map((type) => [type, 0])),
+  };
+  recordIndexes.push(index);
+  return index;
 }
 
-async function resolveLiveIds(type, attempt) {
-  // `storeFor` throws for an unknown type, and both maps are keyed off the same
-  // BRAIN_ENTITY_TYPES list — so past this line `liveIdIndex[type]` exists.
+function invalidateRecordIndexes(type, id) {
+  if (!id) return;
+  for (const index of recordIndexes) {
+    const byType = index.byType[type];
+    if (!byType) continue;
+    byType.delete(id);
+    index.generation[type] += 1;
+  }
+}
+
+/**
+ * Resolve a projection index for one store. Returns `[id, value]` pairs in
+ * `listIds()` order — every present id, including ones whose projection is
+ * `null` (callers decide what a null projection means).
+ */
+async function resolveRecordIndex(indexState, type, attempt) {
+  // `storeFor` throws for an unknown type, and the index maps are keyed off the
+  // same BRAIN_ENTITY_TYPES list — so past this line `byType[type]` exists.
   const store = storeFor(type);
-  const index = liveIdIndex[type];
-  const generation = liveIdGeneration[type];
+  const index = indexState.byType[type];
+  const generation = indexState.generation[type];
 
   const ids = await store.listIds();
   const present = new Set(ids);
@@ -319,31 +341,37 @@ async function resolveLiveIds(type, attempt) {
 
   const unresolved = ids.filter((id) => !index.has(id));
   const loaded = await Promise.all(unresolved.map((id) => store.loadOne(id)));
-  const verdicts = new Map(unresolved.map((id, i) => [id, isLiveRecord(loaded[i])]));
+  const resolved = new Map(unresolved.map((id, i) => [id, indexState.project(loaded[i])]));
 
   // An invalidation landed while we were reading, so what we loaded may already
   // describe the pre-change record. Re-run — the retry re-reads only the ids the
   // invalidation dropped, so it is cheap. Past the attempt ceiling we answer
-  // from what we have but do NOT write it into the index: caching a verdict we
+  // from what we have but do NOT write it into the index: caching a value we
   // know raced would strand it there until the next change to that record.
-  const raced = liveIdGeneration[type] !== generation;
-  if (raced && attempt + 1 < LIVE_ID_MAX_ATTEMPTS) {
-    return resolveLiveIds(type, attempt + 1);
+  const raced = indexState.generation[type] !== generation;
+  if (raced && attempt + 1 < RECORD_INDEX_MAX_ATTEMPTS) {
+    return resolveRecordIndex(indexState, type, attempt + 1);
   }
   if (raced) {
     // Ceiling reached. The invalidation may also have dropped ids this pass
     // took FROM the index (so they were never in `unresolved`) — read those
     // before answering, or a record we merely stopped knowing about would be
-    // reported as not live and undercount the tally.
-    const unknown = ids.filter((id) => !verdicts.has(id) && !index.has(id));
+    // reported as absent and undercount the result.
+    const unknown = ids.filter((id) => !resolved.has(id) && !index.has(id));
     const reloaded = await Promise.all(unknown.map((id) => store.loadOne(id)));
-    unknown.forEach((id, i) => verdicts.set(id, isLiveRecord(reloaded[i])));
+    unknown.forEach((id, i) => resolved.set(id, indexState.project(reloaded[i])));
   } else {
-    for (const [id, live] of verdicts) index.set(id, live);
+    for (const [id, value] of resolved) index.set(id, value);
   }
 
-  return ids.filter((id) => (verdicts.has(id) ? verdicts.get(id) : index.get(id)) === true);
+  return ids.map((id) => [id, resolved.has(id) ? resolved.get(id) : index.get(id)]);
 }
+
+// Live = present, not a tombstone, and not archived. `loadOne` returns null for
+// a missing/corrupt/unparseable record, which `getAll` also drops — so it is
+// not live either.
+const isLiveRecord = (record) => !!record && !isTombstone(record) && !record.archived;
+const liveIdIndex = createRecordIndex(isLiveRecord);
 
 /**
  * Ids of the LIVE records in a store — present, not tombstoned, not archived —
@@ -353,12 +381,13 @@ async function resolveLiveIds(type, attempt) {
  * callers that only need identity (embedding-coverage tallies, membership
  * checks). Returns a fresh array in `listIds()` order each call.
  */
-export function listLiveIds(type) {
-  return resolveLiveIds(type, 0);
+export async function listLiveIds(type) {
+  const rows = await resolveRecordIndex(liveIdIndex, type, 0);
+  return rows.filter(([, live]) => live === true).map(([id]) => id);
 }
 
 // Wire the freshness signals once, at module load. Invalidation only drops the
-// touched id, so the next `listLiveIds` re-reads exactly one record.
+// touched id, so the next resolve re-reads exactly one record.
 //
 // The `journals` type is the one that needs checking rather than assuming:
 // brainJournal re-emits `journals:upserted` / `journals:deleted` under the SAME
@@ -369,10 +398,10 @@ export function listLiveIds(type) {
 // `remove()` → `journals:deleted` with `{ id }`), which is what actually
 // invalidates.
 for (const type of BRAIN_ENTITY_TYPES) {
-  brainEvents.on(`${type}:upserted`, ({ id } = {}) => invalidateLiveId(type, id));
-  brainEvents.on(`${type}:deleted`, ({ id } = {}) => invalidateLiveId(type, id));
+  brainEvents.on(`${type}:upserted`, ({ id } = {}) => invalidateRecordIndexes(type, id));
+  brainEvents.on(`${type}:deleted`, ({ id } = {}) => invalidateRecordIndexes(type, id));
 }
-brainEvents.on('record:changed', ({ type, id } = {}) => invalidateLiveId(type, id));
+brainEvents.on('record:changed', ({ type, id } = {}) => invalidateRecordIndexes(type, id));
 
 /**
  * Get the RAW records map for a store, INCLUDING tombstones, keyed by id.
@@ -940,12 +969,79 @@ export const updateLink = (id, data) => update('links', id, data);
 export const reorderLinks = (updates) => updateMany('links', updates);
 export const deleteLink = (id) => remove('links', id);
 
+// ─── Link summary index (issue #3509) ───────────────────────────────────────
+// Every ordering, filtering, counting, and membership question the links API
+// asks is answerable from four fields. Caching just those in a projection index
+// (see createRecordIndex above) means `GET /api/brain/links` reads ONLY the
+// requested page's record bodies instead of the whole collection — page cost
+// goes from O(N) parsed records to O(limit).
+//
+// `null` marks an id that is not a user-visible link (absent, unparseable, or
+// tombstoned) — exactly what `getAll` drops. Tombstones stay in the id listing,
+// so this must be a null projection rather than an omitted entry.
+const projectLinkSummary = (record) => (record && !isTombstone(record)
+  ? {
+    // Pre-parsed sort key: `getAll` + `new Date()` in a comparator re-parses the
+    // same timestamp O(n log n) times. `safeDate` yields 0 for a missing or
+    // unparseable createdAt, so such a link sorts last deterministically
+    // instead of poisoning the comparator with NaN.
+    createdAtMs: safeDate(record.createdAt),
+    // Filter keys are stored RAW so the route's strict `===` comparison keeps
+    // its exact semantics (a link with no `isGitHubRepo` field must not match
+    // `?isGitHubRepo=false`, just as the old in-memory filter behaved).
+    linkType: record.linkType,
+    isGitHubRepo: record.isGitHubRepo,
+    url: record.url,
+  }
+  : null);
+const linkSummaryIndex = createRecordIndex(projectLinkSummary);
+
+const resolveLinkSummaries = () => resolveRecordIndex(linkSummaryIndex, 'links', 0);
+
 /**
- * Find link by URL
+ * One page of links, newest-first by `createdAt`.
+ *
+ * Filtering, ordering, and the `total` count all come off the cached summary
+ * index; only the page's own records are loaded from disk. `linkType` /
+ * `isGitHubRepo` are optional and compared strictly, matching the filters the
+ * route used to apply in memory.
+ */
+export async function getLinksPage({ linkType, isGitHubRepo, limit = 50, offset = 0 } = {}) {
+  const rows = await resolveLinkSummaries();
+  const matching = rows.filter(([, summary]) => summary
+    && (linkType === undefined || summary.linkType === linkType)
+    && (isGitHubRepo === undefined || summary.isGitHubRepo === isGitHubRepo));
+
+  // Newest-first, with the id as a deterministic tiebreak: a bulk import stamps
+  // many links with the SAME createdAt, and an unstable order across two page
+  // requests would drop or duplicate records at the slice boundary.
+  matching.sort(([idA, a], [idB, b]) => (b.createdAtMs - a.createdAtMs) || idA.localeCompare(idB));
+
+  const total = matching.length;
+  const pageIds = matching.slice(offset, offset + limit).map(([id]) => id);
+  const page = await Promise.all(pageIds.map((id) => getById('links', id)));
+  // A record deleted between the index read and the body read comes back null —
+  // drop it rather than emitting a hole in the page.
+  return { links: page.filter(Boolean), total };
+}
+
+/**
+ * Ids of the user-visible (non-tombstoned) links, from the same summary index —
+ * a membership check that parses no record bodies in steady state.
+ */
+export async function listLinkIds() {
+  const rows = await resolveLinkSummaries();
+  return rows.filter(([, summary]) => summary).map(([id]) => id);
+}
+
+/**
+ * Find link by URL. Resolves the id from the summary index (no bodies) and
+ * loads only the one match.
  */
 export async function getLinkByUrl(url) {
-  const links = await getAll('links');
-  return links.find(link => link.url === url) || null;
+  const rows = await resolveLinkSummaries();
+  const hit = rows.find(([, summary]) => summary && summary.url === url);
+  return hit ? getById('links', hit[0]) : null;
 }
 
 // Buckets (bookmark groups for links)
@@ -1085,7 +1181,7 @@ export async function backfillOriginInstanceId() {
 // =============================================================================
 
 /**
- * Invalidate the non-collection caches (meta + JSONL logs) and the live-id
+ * Invalidate the non-collection caches (meta + JSONL logs) and every projection
  * index. Entity store BODIES still read through to disk, so there is no
  * whole-record entity cache to clear.
  */
@@ -1094,9 +1190,11 @@ export function invalidateAllCaches() {
     caches[key].data = null;
     caches[key].timestamp = 0;
   }
-  for (const type of BRAIN_ENTITY_TYPES) {
-    liveIdIndex[type].clear();
-    liveIdGeneration[type] += 1;
+  for (const index of recordIndexes) {
+    for (const type of BRAIN_ENTITY_TYPES) {
+      index.byType[type].clear();
+      index.generation[type] += 1;
+    }
   }
 }
 

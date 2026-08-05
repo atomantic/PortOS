@@ -47,6 +47,8 @@ vi.mock('./brainStorage.js', () => {
     getAdminById: vi.fn(),
     deleteAdminItem: vi.fn(),
     getLinks: vi.fn(),
+    getLinksPage: vi.fn(),
+    listLinkIds: vi.fn(),
     getLinkById: vi.fn(),
     getLinkByUrl: vi.fn(),
     createLink: vi.fn(),

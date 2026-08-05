@@ -876,6 +876,10 @@ export async function deleteMemoryEntry(id) {
 }
 
 export const getLinks = storage.getLinks;
+// Paginated read path — filters/sorts/counts off the cached link summary index
+// and loads only the requested page's bodies (issue #3509).
+export const getLinksPage = storage.getLinksPage;
+export const listLinkIds = storage.listLinkIds;
 export const getLinkById = storage.getLinkById;
 export const getLinkByUrl = storage.getLinkByUrl;
 export const updateLink = storage.updateLink;

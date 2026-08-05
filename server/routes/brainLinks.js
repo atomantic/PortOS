@@ -37,23 +37,10 @@ const router = Router();
  */
 router.get('/links', asyncHandler(async (req, res) => {
   const { linkType, isGitHubRepo, limit, offset } = validateRequest(linksQuerySchema, req.query);
-  let links = await brainService.getLinks();
-
-  // Apply filters
-  if (linkType) {
-    links = links.filter(l => l.linkType === linkType);
-  }
-  if (isGitHubRepo !== undefined) {
-    links = links.filter(l => l.isGitHubRepo === isGitHubRepo);
-  }
-
-  // Sort by createdAt descending
-  links.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
-  // Apply pagination
-  const total = links.length;
-  links = links.slice(offset, offset + limit);
-
+  // Filtering, newest-first ordering, and the total count are answered from
+  // brainStorage's cached link-summary index, so only THIS page's records are
+  // read and parsed from disk (issue #3509) — not the whole collection.
+  const { links, total } = await brainService.getLinksPage({ linkType, isGitHubRepo, limit, offset });
   res.json({ links, total, limit, offset });
 }));
 
@@ -69,7 +56,9 @@ router.post('/links/reorder', asyncHandler(async (req, res) => {
   // All-or-nothing: reject before any write if a batch references a link that
   // no longer exists, so the response can't report success after a partial
   // apply (mirrors the single-link PUT's 404 on an unknown id).
-  const known = new Set((await brainService.getLinks()).map(l => l.id));
+  // Membership only — `listLinkIds` answers it from the summary index instead
+  // of parsing every link body (issue #3509).
+  const known = new Set(await brainService.listLinkIds());
   const missing = updates.filter(u => !known.has(u.id)).map(u => u.id);
   if (missing.length) {
     throw new ServerError('Unknown link id in reorder batch', {

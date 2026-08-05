@@ -57,6 +57,8 @@ vi.mock('../services/brain.js', () => ({
   getSummary: vi.fn(),
   // Links
   getLinks: vi.fn(),
+  getLinksPage: vi.fn(),
+  listLinkIds: vi.fn(),
   getLinkById: vi.fn(),
   getLinkByUrl: vi.fn(),
   createLinkFromUrl: vi.fn(),
@@ -1437,7 +1439,7 @@ describe('Brain Routes', () => {
         { id: idB, bucketId: bucket, bucketOrder: 0 },
         { id: idA, bucketId: bucket, bucketOrder: 1 }
       ];
-      brainService.getLinks.mockResolvedValue([{ id: idA }, { id: idB }]);
+      brainService.listLinkIds.mockResolvedValue([idA, idB]);
       brainService.reorderLinks.mockResolvedValue(updates.map(u => ({ ...u, url: 'x' })));
       const res = await request(app).post('/api/brain/links/reorder').send({ updates });
       expect(res.status).toBe(200);
@@ -1455,7 +1457,7 @@ describe('Brain Routes', () => {
     });
 
     it('rejects the whole batch (no write) when any id is unknown', async () => {
-      brainService.getLinks.mockResolvedValue([{ id: idA }]); // idB no longer exists
+      brainService.listLinkIds.mockResolvedValue([idA]); // idB no longer exists
       const res = await request(app).post('/api/brain/links/reorder').send({
         updates: [
           { id: idA, bucketId: bucket, bucketOrder: 0 },
@@ -1467,7 +1469,7 @@ describe('Brain Routes', () => {
     });
 
     it('is matched before /links/:id so "reorder" is not treated as an id', async () => {
-      brainService.getLinks.mockResolvedValue([{ id: idA }]);
+      brainService.listLinkIds.mockResolvedValue([idA]);
       brainService.reorderLinks.mockResolvedValue([]);
       const res = await request(app)
         .post('/api/brain/links/reorder')

@@ -388,6 +388,142 @@ describe('listLiveIds (embedding-coverage id index, issue #3508)', () => {
   });
 });
 
+describe('getLinksPage (paginated link reads, issue #3509)', () => {
+  // The temp store is shared by every test in this file, so assertions filter
+  // the page down to the ids the test itself created rather than assuming the
+  // links collection is empty.
+  const mine = (page, ids) => page.links.map((l) => l.id).filter((id) => ids.includes(id));
+  const linkCount = async () => (await brainStorage.getAll('links')).length;
+
+  // Overwrite createdAt behind the store (create() stamps its own) and drop the
+  // caches so the summary index picks the new sort key up.
+  const stampCreatedAt = async (id, createdAt) => {
+    await writeRawRecord('links', id, { ...(await rawRecord('links', id)), createdAt });
+    brainStorage.invalidateAllCaches();
+  };
+
+  it('orders newest-first and returns only the requested window plus a full total', async () => {
+    const older = await brainStorage.create('links', { url: 'https://example.com/older', linkType: 'article' });
+    const newer = await brainStorage.create('links', { url: 'https://example.com/newer', linkType: 'article' });
+    const newest = await brainStorage.create('links', { url: 'https://example.com/newest', linkType: 'article' });
+    // Far-future stamps so these three are unambiguously the newest three links
+    // in the shared store, whatever else the file has created.
+    await stampCreatedAt(older.id, ISO('2099-01-01'));
+    await stampCreatedAt(newer.id, ISO('2099-02-01'));
+    await stampCreatedAt(newest.id, ISO('2099-03-01'));
+
+    const first = await brainStorage.getLinksPage({ limit: 2, offset: 0 });
+    expect(first.links.map((l) => l.id)).toEqual([newest.id, newer.id]);
+    // `total` counts everything matching the filters, not the page.
+    expect(first.total).toBe(await linkCount());
+    // The page carries FULL records, not just the indexed summary fields.
+    expect(first.links[0]).toMatchObject({ url: 'https://example.com/newest', linkType: 'article' });
+
+    const second = await brainStorage.getLinksPage({ limit: 2, offset: 2 });
+    expect(second.links[0].id).toBe(older.id);
+    expect(second.total).toBe(first.total);
+  });
+
+  it('answers filtering and counting from the index, reading only the page bodies', async () => {
+    const ids = [];
+    for (let i = 0; i < 5; i++) {
+      const l = await brainStorage.create('links', { url: `https://example.com/slice-${i}`, linkType: 'tool' });
+      ids.push(l.id);
+    }
+    // Prime the summary index.
+    expect(mine(await brainStorage.getLinksPage({ linkType: 'tool', limit: 50 }), ids)).toHaveLength(5);
+
+    // Retype every one of them BEHIND the store — no write path, so no event and
+    // no invalidation. Filtering/counting that still re-read bodies would now
+    // return zero matches.
+    for (const id of ids) {
+      await writeRawRecord('links', id, { ...(await rawRecord('links', id)), linkType: 'other' });
+    }
+
+    const page = await brainStorage.getLinksPage({ linkType: 'tool', limit: 1, offset: 0 });
+    expect(page.total).toBe(5);
+    expect(page.links).toHaveLength(1);
+    // …and the one body the page DID read is the fresh on-disk record — proof the
+    // stale filter/count above came from the index, not from a whole-store re-read.
+    expect(page.links[0].linkType).toBe('other');
+
+    // The cache is droppable: a full re-read sees the retype and matches nothing.
+    brainStorage.invalidateAllCaches();
+    expect(mine(await brainStorage.getLinksPage({ linkType: 'tool', limit: 50 }), ids)).toHaveLength(0);
+  });
+
+  it('filters strictly on linkType and isGitHubRepo, matching the old in-memory filter', async () => {
+    const repo = await brainStorage.create('links', { url: 'https://example.com/gh', linkType: 'github', isGitHubRepo: true });
+    const plain = await brainStorage.create('links', { url: 'https://example.com/plain', linkType: 'documentation', isGitHubRepo: false });
+    // No isGitHubRepo field at all — must NOT match `false`, exactly as the old
+    // `l.isGitHubRepo === isGitHubRepo` filter behaved.
+    const untyped = await brainStorage.create('links', { url: 'https://example.com/untyped', linkType: 'documentation' });
+    const ids = [repo.id, plain.id, untyped.id];
+
+    expect(mine(await brainStorage.getLinksPage({ isGitHubRepo: true, limit: 50 }), ids)).toEqual([repo.id]);
+    expect(mine(await brainStorage.getLinksPage({ isGitHubRepo: false, limit: 50 }), ids)).toEqual([plain.id]);
+    expect(mine(await brainStorage.getLinksPage({ linkType: 'documentation', limit: 50 }), ids).sort())
+      .toEqual([plain.id, untyped.id].sort());
+    expect(mine(await brainStorage.getLinksPage({ linkType: 'github', isGitHubRepo: true, limit: 50 }), ids))
+      .toEqual([repo.id]);
+  });
+
+  it('drops a link from the page as soon as it is deleted', async () => {
+    const kept = await brainStorage.create('links', { url: 'https://example.com/kept', linkType: 'reference' });
+    const gone = await brainStorage.create('links', { url: 'https://example.com/gone', linkType: 'reference' });
+    const ids = [kept.id, gone.id];
+
+    expect(mine(await brainStorage.getLinksPage({ linkType: 'reference', limit: 50 }), ids).sort())
+      .toEqual(ids.slice().sort());
+
+    // remove() tombstones in place — the id survives `listIds()`, so the index
+    // has to drop it off the `links:deleted` event rather than the id diff.
+    await brainStorage.remove('links', gone.id);
+
+    expect(mine(await brainStorage.getLinksPage({ linkType: 'reference', limit: 50 }), ids)).toEqual([kept.id]);
+  });
+
+  it('orders createdAt ties by id so a page boundary never drops or duplicates a link', async () => {
+    const shared = ISO('2098-04-01');
+    const created = [];
+    for (const n of ['a', 'b', 'c']) {
+      created.push(await brainStorage.create('links', { url: `https://example.com/tie-${n}`, linkType: 'other' }));
+    }
+    const ids = created.map((l) => l.id);
+    for (const id of ids) await stampCreatedAt(id, shared);
+
+    const p1 = await brainStorage.getLinksPage({ linkType: 'other', limit: 2, offset: 0 });
+    const p2 = await brainStorage.getLinksPage({ linkType: 'other', limit: 2, offset: 2 });
+    const seen = [...mine(p1, ids), ...mine(p2, ids)];
+    expect(new Set(seen).size).toBe(3);
+    expect(seen.slice().sort()).toEqual(ids.slice().sort());
+  });
+
+  it('listLinkIds reports live ids and skips tombstones', async () => {
+    const alive = await brainStorage.create('links', { url: 'https://example.com/alive' });
+    const dead = await brainStorage.create('links', { url: 'https://example.com/dead' });
+    await brainStorage.remove('links', dead.id);
+
+    const ids = await brainStorage.listLinkIds();
+    expect(ids).toContain(alive.id);
+    expect(ids).not.toContain(dead.id);
+  });
+
+  it('getLinkByUrl resolves through the index and returns the full record', async () => {
+    const created = await brainStorage.create('links', {
+      url: 'https://example.com/by-url', linkType: 'documentation', title: 'Docs',
+    });
+
+    expect(await brainStorage.getLinkByUrl('https://example.com/by-url'))
+      .toMatchObject({ id: created.id, title: 'Docs' });
+    expect(await brainStorage.getLinkByUrl('https://example.com/never-saved')).toBeNull();
+
+    // A deleted link's url must stop resolving.
+    await brainStorage.remove('links', created.id);
+    expect(await brainStorage.getLinkByUrl('https://example.com/by-url')).toBeNull();
+  });
+});
+
 // Overwrite a record's stored JSON directly, bypassing every brainStorage write
 // path (and therefore every brainEvents signal). Used to prove the live-id index
 // is answering from memory rather than re-reading the file.
