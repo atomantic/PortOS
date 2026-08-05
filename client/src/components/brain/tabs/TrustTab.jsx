@@ -81,16 +81,16 @@ export default function TrustTab({ onRefresh }) {
   return (
     <div className="space-y-6">
       {/* Header with stats */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <Shield className="w-6 h-6 text-port-accent" />
-          <div>
+          <Shield className="w-6 h-6 text-port-accent shrink-0" />
+          <div className="min-w-0">
             <h2 className="text-lg font-semibold text-white">Trust Panel</h2>
             <p className="text-sm text-gray-500">Audit trail and system settings</p>
           </div>
         </div>
 
-        <div className="flex items-center gap-4 text-sm">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
           <span className="text-gray-500">Total: {counts.total || 0}</span>
           <span className="text-port-success">Filed: {counts.filed || 0}</span>
           <span className="text-port-warning">Review: {counts.needs_review || 0}</span>
@@ -207,7 +207,7 @@ export default function TrustTab({ onRefresh }) {
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-4">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <span className="text-sm text-gray-500">Filter by status:</span>
         <select
           value={statusFilter}
