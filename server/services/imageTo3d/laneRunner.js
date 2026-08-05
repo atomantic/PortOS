@@ -21,6 +21,7 @@
 import { spawn } from 'node:child_process';
 import { sleep as defaultSleep } from '../../lib/fileUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { createLineReader } from '../../lib/streamLines.js';
 
 /**
  * Build a case-insensitive predicate testing text against an alternation of signature
@@ -189,10 +190,17 @@ export function runInstallSteps({
  * the produced asset path, and resolves `{ assetPath }` once the child exits 0 and the
  * asset has been post-processed.
  *
- * Output is split on `\r` AND `\n`: tqdm redraws its progress bar in place with
- * carriage returns, so a single chunk can carry several frames separated only by `\r`.
- * Splitting on `\n` alone would treat them as one line and parse just the first
- * (lowest) percent — under-reporting progress during the long sampling phase.
+ * Output is split on `\r` AND `\n` via `createLineReader`: tqdm redraws its progress
+ * bar in place with carriage returns, so a single chunk can carry several frames
+ * separated only by `\r`. Splitting on `\n` alone would treat them as one line and
+ * parse just the first (lowest) percent — under-reporting progress during the long
+ * sampling phase. The reader's carry buffer is what makes that safe: chunks arrive on
+ * arbitrary byte boundaries, so a stage banner straddling two `data` events would
+ * otherwise be seen as two partial lines, match no signature, and stall the bar at the
+ * previous percent until the next banner landed (#3578). Each stream gets its OWN
+ * reader (a shared carry would splice a partial stdout line onto a stderr chunk), and
+ * both are flushed on `close` so a final unterminated line — including the `Saved:`
+ * line carrying the asset path — is still parsed.
  *
  * `classifiers` turn a non-zero exit into an actionable error instead of a bare
  * "exited N" — each is `{ test, code, help }` and the first match wins, so a lane can
@@ -222,20 +230,27 @@ export function runGenerateSubprocess({
   const child = spawnImpl(command, args, { ...(cwd ? { cwd } : {}), ...(env ? { env } : {}) });
   let assetPath = initialAssetPath;
   let outputTail = '';
+  const onLine = (line) => {
+    const frame = parseProgress(line);
+    if (!frame) return;
+    if (frame.assetPath) assetPath = frame.assetPath;
+    if (onProgress) onProgress(frame);
+  };
+  const stdoutReader = createLineReader(onLine, { splitRe: /[\r\n]+/ });
+  const stderrReader = createLineReader(onLine, { splitRe: /[\r\n]+/ });
+  // The tail is appended from the RAW chunk, not the parsed lines, so an exit
+  // classifier still sees text the progress parser ignored.
+  const ingest = (reader) => (buf) => {
+    outputTail = appendTail(outputTail, buf);
+    reader.push(buf);
+  };
   const promise = new Promise((resolve, reject) => {
-    const ingest = (buf) => {
-      outputTail = appendTail(outputTail, buf);
-      for (const line of String(buf).split(/[\r\n]+/)) {
-        const frame = parseProgress(line);
-        if (!frame) continue;
-        if (frame.assetPath) assetPath = frame.assetPath;
-        if (onProgress) onProgress(frame);
-      }
-    };
-    child.stdout?.on('data', ingest);
-    child.stderr?.on('data', ingest);
+    child.stdout?.on('data', ingest(stdoutReader));
+    child.stderr?.on('data', ingest(stderrReader));
     child.on('error', reject);
     child.on('close', (code) => {
+      stdoutReader.flush();
+      stderrReader.flush();
       if (code === 0 && assetPath) {
         Promise.resolve()
           .then(() => (postprocessGlb ? postprocessGlb(assetPath) : undefined))

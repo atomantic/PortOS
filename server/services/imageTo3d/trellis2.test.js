@@ -448,6 +448,28 @@ describe('runTrellis2Generate', () => {
     expect(frames.map((f) => f.percent)).toEqual([10, 30, 50, 92]);
   });
 
+  it('matches a stage banner that arrives split across two stdout chunks', async () => {
+    // Real-vocabulary cover for the shared carry buffer (#3578): 'Baking textures'
+    // straddling a chunk boundary used to match no GENERATE_STAGE_SIGNATURES entry,
+    // stalling the bar at the previous percent until the next banner landed.
+    const child = makeChild();
+    const frames = [];
+    const { promise } = runTrellis2Generate({
+      imagePath: 'a.png',
+      outputPath: '/out/a.glb',
+      base: BASE,
+      exists: installed,
+      spawnImpl: () => child,
+      postprocessGlb: vi.fn(async () => {}),
+      onProgress: (f) => frames.push(f),
+    });
+    child.stdout.emit('data', 'Baking te');
+    child.stdout.emit('data', 'xtures at 2048px...\n  Saved: /out/a.glb\n');
+    child.emit('close', 0);
+    await expect(promise).resolves.toEqual({ assetPath: '/out/a.glb' });
+    expect(frames.map((f) => f.stage)).toEqual(['texturing', 'export']);
+  });
+
   it('selects the high-quality pipeline and 4K atlas on a high-memory host', async () => {
     const child = makeChild();
     const spawnImpl = vi.fn(() => child);
