@@ -342,6 +342,7 @@ function ProsePane({ containerRef, className, segments, proseIds, selectedId, ha
             <button
               key={seg.id}
               data-sync-id={seg.id}
+              aria-pressed={state === 'selected'}
               onClick={() => onSelect(seg.id)}
               className={`w-full text-left rounded border px-3 py-2 transition-all ${CARD_CLASS[state]}`}
             >
@@ -383,6 +384,7 @@ function ScriptPane({ containerRef, className, script, sceneIds, selectedId, has
               <button
                 key={sc.id}
                 data-sync-id={sc.id}
+                aria-pressed={state === 'selected'}
                 onClick={() => onSelect(sc.id)}
                 className={`w-full text-left rounded border px-3 py-2 transition-all ${CARD_CLASS[state]}`}
               >
@@ -428,6 +430,7 @@ function MediaPane({ containerRef, className, items, mediaSceneIds, selectedId, 
               <button
                 key={`${m.sceneId}-${m.ref}`}
                 data-sync-id={m.sceneId}
+                aria-pressed={state === 'selected'}
                 onClick={() => onSelect(m.sceneId)}
                 className={`text-left rounded border overflow-hidden transition-all ${CARD_CLASS[state]}`}
               >

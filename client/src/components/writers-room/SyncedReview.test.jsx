@@ -101,6 +101,9 @@ describe('SyncedReview', () => {
     expect(isLinked(card('media', 'scene-01'))).toBe(true);
     // an unrelated prose card dims rather than reading as linked
     expect(card('prose', 'seg-002').className).toMatch(/opacity-40/);
+    // the anchor is also exposed non-visually, so it doesn't read as color-only
+    expect(card('prose', 'seg-001').getAttribute('aria-pressed')).toBe('true');
+    expect(card('script', 'scene-01').getAttribute('aria-pressed')).toBe('false');
 
     // Selecting the script scene moves the anchor to the script pane.
     fireEvent.click(card('script', 'scene-01'));
