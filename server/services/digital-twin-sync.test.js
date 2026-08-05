@@ -340,6 +340,70 @@ describe('mergeMeta', () => {
     expect(changed).toBe(false);
   });
 
+  // #3530: documents unioned add-only with no deletion tracking, so a peer that
+  // still held a document the user deleted re-inserted its metadata entry (and
+  // applyDocuments re-wrote the .md file) on every subsequent sync.
+  describe('deleted-document tombstones (#3530)', () => {
+    const DELETED_AT = '2026-02-01T00:00:00.000Z';
+    const tomb = (filename, deletedAt = DELETED_AT) => ({ filename, deletedAt });
+    const doc = (filename, extra = {}) => ({ id: `id-${filename}`, filename, weight: 5, ...extra });
+
+    it('does not resurrect a document the local machine deleted', () => {
+      const local = { documents: [doc('SOUL.md')], deletedDocuments: [tomb('CUSTOM_ROUTINE.md')] };
+      const remote = { documents: [doc('SOUL.md'), doc('CUSTOM_ROUTINE.md', { createdAt: '2026-01-01T00:00:00.000Z' })] };
+      const { merged, changed } = mergeMeta(local, remote);
+      expect(merged.documents.map((d) => d.filename)).toEqual(['SOUL.md']);
+      expect(changed).toBe(false);
+    });
+
+    it('suppresses a resurrected document that carries no creation stamp (legacy entry)', () => {
+      const local = { documents: [], deletedDocuments: [tomb('CUSTOM_ROUTINE.md')] };
+      const { merged, changed } = mergeMeta(local, { documents: [doc('CUSTOM_ROUTINE.md')] });
+      expect(merged.documents ?? []).toEqual([]);
+      expect(changed).toBe(false);
+    });
+
+    it('propagates a peer\'s delete: drops the local entry and adopts the tombstone', () => {
+      const local = { documents: [doc('CUSTOM_ROUTINE.md', { createdAt: '2026-01-01T00:00:00.000Z' })], deletedDocuments: [] };
+      const remote = { documents: [], deletedDocuments: [tomb('CUSTOM_ROUTINE.md')] };
+      const { merged, changed } = mergeMeta(local, remote);
+      expect(merged.documents).toEqual([]);
+      expect(merged.deletedDocuments).toEqual([tomb('CUSTOM_ROUTINE.md')]);
+      expect(changed).toBe(true);
+    });
+
+    it('does NOT suppress a document re-created after the delete, and prunes the stale tombstone', () => {
+      const recreated = doc('CUSTOM_ROUTINE.md', { createdAt: '2026-03-01T00:00:00.000Z' });
+      // The peer still holds the tombstone from the earlier delete.
+      const local = { documents: [recreated], deletedDocuments: [] };
+      const remote = { documents: [], deletedDocuments: [tomb('CUSTOM_ROUTINE.md')] };
+      const { merged, changed } = mergeMeta(local, remote);
+      expect(merged.documents ?? local.documents).toEqual([recreated]);
+      expect(merged.deletedDocuments ?? []).toEqual([]);
+      expect(changed).toBe(false);
+      // …and the peer receiving the re-created doc accepts it, dropping its own tombstone.
+      const onPeer = mergeMeta(remote, local);
+      expect(onPeer.merged.documents).toEqual([recreated]);
+      expect(onPeer.merged.deletedDocuments).toEqual([]);
+      expect(onPeer.changed).toBe(true);
+    });
+
+    it('keeps the newer of two competing deletes and converges in both directions', () => {
+      const a = { documents: [], deletedDocuments: [tomb('A.md', '2026-01-01T00:00:00.000Z')] };
+      const b = { documents: [], deletedDocuments: [tomb('A.md', '2026-05-01T00:00:00.000Z'), tomb('B.md')] };
+      expect(mergeMeta(a, b).merged.deletedDocuments)
+        .toEqual(mergeMeta(b, a).merged.deletedDocuments ?? b.deletedDocuments);
+      expect(mergeMeta(a, b).merged.deletedDocuments).toEqual([tomb('A.md', '2026-05-01T00:00:00.000Z'), tomb('B.md')]);
+    });
+
+    it('leaves local tombstones untouched when an older peer sends none (key-presence guarded)', () => {
+      const local = { documents: [doc('SOUL.md')], deletedDocuments: [tomb('GONE.md')] };
+      const { merged, changed } = mergeMeta(local, { documents: [doc('SOUL.md')] });
+      expect(merged.deletedDocuments ?? local.deletedDocuments).toEqual([tomb('GONE.md')]);
+      expect(changed).toBe(false);
+    });
+  });
+
   it('leaves histories the peer did not send untouched (key-presence guarded)', () => {
     const local = { testHistory: [run('L1', '2026-01-01T00:00:00.000Z'), run('L2', '2026-01-02T00:00:00.000Z')] };
     const { merged, changed } = mergeMeta(local, { documents: [] });

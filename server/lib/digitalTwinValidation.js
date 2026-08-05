@@ -60,7 +60,22 @@ export const documentMetaSchema = z.object({
   version: z.string().optional(),
   enabled: z.boolean().default(true),
   priority: z.number().int().min(0).default(0),
-  weight: z.number().int().min(1).max(10).default(5)
+  weight: z.number().int().min(1).max(10).default(5),
+  // When this document was (re-)created. Optional because documents predating
+  // #3530 — and any rebuilt by digital-twin-meta's disk scan — carry no stamp.
+  // It exists so a re-created document can supersede an older `deletedDocuments`
+  // tombstone during peer sync instead of being suppressed forever.
+  createdAt: z.string().optional()
+});
+
+// Tombstone for a deleted Digital Twin document (#3530). Keyed on `filename`,
+// NOT the document id: ids are minted per-install (`generateId`), so the same
+// logical document can carry a different id on each machine — filename is the
+// only identifier every peer agrees on (it is also what `mergeMeta` unions
+// documents by, and what the `.md` file on disk is named).
+export const deletedDocumentSchema = z.object({
+  filename: z.string().min(1),
+  deletedAt: z.string().min(1)
 });
 
 // Test history entry schema. personaId/personaName are present only when the
@@ -285,6 +300,7 @@ export const confidenceSchema = z.object({
 export const digitalTwinMetaSchema = z.object({
   version: z.string().default('1.0.0'),
   documents: z.array(documentMetaSchema).default([]),
+  deletedDocuments: z.array(deletedDocumentSchema).default([]),
   testHistory: z.array(testHistoryEntrySchema).default([]),
   valuesTestHistory: z.array(valuesTestHistoryEntrySchema).default([]),
   adversarialTestHistory: z.array(adversarialTestHistoryEntrySchema).default([]),

@@ -4,6 +4,7 @@ import { join } from 'path';
 import { DIGITAL_TWIN_DIR, generateId, ensureSoulDir } from './digital-twin-helpers.js';
 import { loadMeta, saveMeta } from './digital-twin-meta.js';
 import { extractVersion } from './digital-twin-meta.js';
+import { recordTombstone, clearTombstone, tombstoneTimestamp, supersedingTimestamp } from '../lib/tombstones.js';
 
 export async function getDocuments() {
   const meta = await loadMeta();
@@ -50,6 +51,12 @@ export async function createDocument(data) {
   // Write the file
   await writeFile(filePath, data.content);
 
+  // Re-creating a filename that was previously deleted must clear its tombstone
+  // and stamp a creation time that STRICTLY supersedes the deletion — otherwise
+  // a peer that still holds the old tombstone would reap the new document on the
+  // next sync (#3530).
+  const deletedAt = tombstoneTimestamp(meta.deletedDocuments, data.filename, 'filename');
+
   // Add to meta
   const docMeta = {
     id: generateId(),
@@ -59,11 +66,13 @@ export async function createDocument(data) {
     version: extractVersion(data.content),
     enabled: data.enabled !== false,
     priority: data.priority || 50,
-    weight: data.weight || 5
+    weight: data.weight || 5,
+    createdAt: supersedingTimestamp(deletedAt)
   };
 
   meta.documents.push(docMeta);
   meta.documents.sort((a, b) => a.priority - b.priority);
+  meta.deletedDocuments = clearTombstone(meta.deletedDocuments, data.filename, 'filename');
   await saveMeta(meta);
 
   console.log(`🧬 Created soul document: ${data.filename}`);
@@ -115,8 +124,11 @@ export async function deleteDocument(id) {
     await unlink(filePath);
   }
 
-  // Remove from meta
+  // Remove from meta and tombstone the filename so peer sync — which unions
+  // documents add-only — can't resurrect it from a machine that still has the
+  // file (#3530). The tombstone also propagates the delete to those peers.
   meta.documents.splice(docIndex, 1);
+  meta.deletedDocuments = recordTombstone(meta.deletedDocuments, docMeta.filename, { keyField: 'filename' });
   await saveMeta(meta);
 
   console.log(`🧬 Deleted soul document: ${docMeta.filename}`);

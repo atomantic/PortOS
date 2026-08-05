@@ -287,6 +287,7 @@ export * from './staleWhileRevalidate.js';
 export * from './staticImportGraph.js';
 export * from './streamBackpressure.js';
 export * from './sseUtils.js';
+export * from './tombstones.js';
 export * from './uploadLimits.js';
 export * from './uuid.js';
 export * from './versionUtils.js';

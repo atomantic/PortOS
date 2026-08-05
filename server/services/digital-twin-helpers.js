@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { existsSync } from 'fs';
 import { ensureDir, PATHS, safeJSONParse } from '../lib/fileUtils.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { clearTombstone, tombstoneTimestamp, supersedingTimestamp } from '../lib/tombstones.js';
 
 export const DIGITAL_TWIN_DIR = PATHS.digitalTwin;
 
@@ -86,11 +87,17 @@ export function resolveTestPersona(personas, personaId) {
 /**
  * Ensure a document entry exists in meta.documents. If absent, push it.
  * Mutates meta in place; caller must saveMeta() after.
+ *
+ * Re-registering a filename the user had deleted clears its `deletedDocuments`
+ * tombstone and stamps a superseding `createdAt`, so peer sync treats the
+ * regenerated document as new rather than reaping it against the old tombstone
+ * (#3530) — enrichment regenerates its target docs on every session.
  */
 export function ensureDocumentInMeta(meta, filename, title, category, { enabled = true, priority = 30 } = {}) {
-  if (!meta.documents.find(d => d.filename === filename)) {
-    meta.documents.push({ id: generateId(), filename, title, category, enabled, priority });
-  }
+  if (meta.documents.find(d => d.filename === filename)) return;
+  const createdAt = supersedingTimestamp(tombstoneTimestamp(meta.deletedDocuments, filename, 'filename'));
+  meta.documents.push({ id: generateId(), filename, title, category, enabled, priority, createdAt });
+  meta.deletedDocuments = clearTombstone(meta.deletedDocuments, filename, 'filename');
 }
 
 export async function ensureSoulDir() {

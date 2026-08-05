@@ -21,7 +21,8 @@
  *                            personality-trait confidence (max per dimension —
  *                            see mergeConfidence)
  *   - *.md documents       — content shipped by filename, ADD-ONLY on the
- *                            receiver (a local doc is never overwritten)
+ *                            receiver (a local doc is never overwritten) MINUS
+ *                            anything either side tombstoned (see below)
  *   - autobiography/        — stories union by id (LWW); config (the prompt
  *                            schedule) is NOT synced — it's machine-local
  *   - social-accounts.json  — the user's own social accounts, union by id (LWW)
@@ -31,14 +32,25 @@
  * sends the four legacy keys can't blank out taste/documents/autobiography. The
  * snapshot is additive and ignore-if-unknown, so it needs no schemaVersions gate
  * (digitalTwin stays unversioned — see SNAPSHOT_CATEGORY_SCHEMA_KEYS).
+ *
+ * DELETES are the one thing pure union semantics can't express, so documents
+ * carry tombstones (#3530): `meta.deletedDocuments` is a `{ filename, deletedAt }`
+ * list that unions in BOTH directions, suppressing the document metadata entry
+ * and reaping the `.md` file on whichever peer still has it. A document
+ * re-created after a delete carries a `createdAt` that supersedes the tombstone,
+ * so it is never permanently suppressed. This stays additive too: an older peer
+ * simply drops the unknown `deletedDocuments` key (Zod strips it), keeps
+ * resurrecting its own copy, and the upgraded peer defends locally — degraded,
+ * but never corrupting, so still no schemaVersions bump. See lib/tombstones.js.
  */
 
 import crypto from 'crypto';
 import { join, basename } from 'path';
-import { readdir, readFile } from 'fs/promises';
+import { readdir, readFile, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { atomicWrite, readJSONFile, ensureDir, PATHS } from '../lib/fileUtils.js';
 import { canonicalStringify, isPlainObject } from '../lib/objects.js';
+import { normalizeTombstones, mergeTombstones, isTombstoned, pruneTombstones, tombstonesEqual } from '../lib/tombstones.js';
 
 const DIR = PATHS.digitalTwin;
 const IDENTITY_FILE = join(DIR, 'identity.json');
@@ -367,11 +379,40 @@ function sortRunsNewestFirst(runs) {
   });
 }
 
+// The tombstone list on meta.json, keyed on document filename (see
+// deletedDocumentSchema — document ids are minted per-install, so they can't key
+// a cross-machine merge).
+const DOC_TOMBSTONE_OPTS = { keyField: 'filename' };
+
+/**
+ * Merge the document list against both sides' delete tombstones (#3530).
+ *
+ * The document union is still ADD-ONLY — a local entry is never replaced — but
+ * the tombstone lists union in BOTH directions first, and any document a
+ * surviving tombstone covers is then dropped. That makes a delete performed on
+ * either machine converge: the deleting side stops resurrecting the entry, and
+ * the side that still has the document removes it.
+ *
+ * A document whose own `createdAt` is strictly newer than the tombstone
+ * supersedes it (re-create after delete), and the now-obsolete tombstone is
+ * pruned so it can't bounce back from a peer that hasn't seen the re-create.
+ *
+ * Returns the surviving documents plus the merged tombstone list.
+ */
+export function mergeDocumentsWithTombstones(local, remote) {
+  const { merged: tombstonesUnion } = mergeTombstones(local?.deletedDocuments, remote?.deletedDocuments, DOC_TOMBSTONE_OPTS);
+  const { merged: unioned } = unionByKey(local?.documents, remote?.documents, 'filename');
+  const documents = unioned.filter((doc) => !isTombstoned(tombstonesUnion, doc.filename, doc.createdAt, 'filename'));
+  const deletedDocuments = pruneTombstones(tombstonesUnion, documents, { ...DOC_TOMBSTONE_OPTS, timestampField: 'createdAt' });
+  return { documents, deletedDocuments };
+}
+
 /**
  * Merge digital-twin meta.json: documents union by filename (ADD-ONLY — a local
- * doc entry is never replaced), the four test histories union by runId, personas
- * union by id, enrichment deep-unions, settings fill missing keys (local values
- * win), and the analyzed personality-trait confidence max-per-dimension.
+ * doc entry is never replaced) minus anything either side has tombstoned in
+ * `deletedDocuments`, the four test histories union by runId, personas union by
+ * id, enrichment deep-unions, settings fill missing keys (local values win), and
+ * the analyzed personality-trait confidence max-per-dimension.
  */
 export function mergeMeta(local, remote) {
   if (!isPlainObject(remote)) return { merged: local, changed: false };
@@ -380,8 +421,16 @@ export function mergeMeta(local, remote) {
   let changed = false;
   const merged = { ...local };
 
-  const docs = unionByKey(local.documents, remote.documents, 'filename');
-  if (docs.changed) { merged.documents = docs.merged; changed = true; }
+  const { documents, deletedDocuments } = mergeDocumentsWithTombstones(local, remote);
+  const localDocs = Array.isArray(local.documents) ? local.documents : [];
+  // unionByKey preserves the local record objects, so identity comparison is
+  // enough to tell whether anything was added, replaced, or reaped.
+  if (documents.length !== localDocs.length || documents.some((d, i) => d !== localDocs[i])) {
+    merged.documents = documents; changed = true;
+  }
+  if (!tombstonesEqual(deletedDocuments, normalizeTombstones(local.deletedDocuments, 'filename'), 'filename')) {
+    merged.deletedDocuments = deletedDocuments; changed = true;
+  }
 
   // Test-history entries identify a run by `runId` (see digitalTwinValidation.js)
   // — they carry no `id`. Unioning them on 'id' collapsed every history to a
@@ -536,16 +585,64 @@ async function applyMerge(path, remote, mergeFn, { dir } = {}) {
   return 1;
 }
 
+/**
+ * The set of document filenames a delete tombstone currently suppresses (#3530).
+ *
+ * Read straight off META_FILE rather than through `loadMeta()`: loadMeta's
+ * missing-file path REBUILDS meta from a disk scan and saves it, which is
+ * exactly the side effect the meta-before-documents ordering below exists to
+ * avoid. applyMeta has already written the merged tombstones, so the file is
+ * current.
+ *
+ * A filename that survived the merge as a live document entry is never
+ * suppressed — that is the re-created-after-delete case, where the document's
+ * `createdAt` superseded the tombstone.
+ */
+async function readSuppressedDocuments() {
+  const meta = await readJSONFile(META_FILE, null);
+  if (!isPlainObject(meta)) return new Set();
+  const live = new Set(
+    (Array.isArray(meta.documents) ? meta.documents : [])
+      .filter(isPlainObject)
+      .map((d) => d.filename)
+  );
+  return new Set(
+    normalizeTombstones(meta.deletedDocuments, 'filename')
+      .map((t) => t.filename)
+      .filter((name) => !live.has(name))
+  );
+}
+
+// Remove local .md files for documents that are tombstoned. This is what makes a
+// delete PROPAGATE: mergeMeta drops the metadata entry on the receiving peer,
+// and this removes the file the entry pointed at. Without it the receiver would
+// keep serving the file and re-ship it in its own snapshot forever (#3530).
+async function reapTombstonedDocuments(suppressed) {
+  let count = 0;
+  for (const rawName of suppressed) {
+    const name = safeMdName(rawName);
+    if (!name) continue;
+    const filePath = join(DIR, name);
+    if (!existsSync(filePath)) continue;
+    await unlink(filePath);
+    console.log(`🧬 Digital twin sync: removed deleted document ${name}`);
+    count++;
+  }
+  return count;
+}
+
 // Documents are written ADD-ONLY: a local .md is never overwritten by a peer's
 // copy (we have no per-document timestamp to order edits). New documents the
-// receiver is missing are written verbatim. The meta.json merge separately
-// brings over each document's metadata entry so the UI lists them.
-async function applyDocuments(documents) {
+// receiver is missing are written verbatim — unless the filename is tombstoned,
+// in which case the user deleted it and the peer is simply behind. The meta.json
+// merge separately brings over each document's metadata entry so the UI lists them.
+async function applyDocuments(documents, suppressed) {
   if (!isPlainObject(documents)) return 0;
   let count = 0;
   for (const [rawName, content] of Object.entries(documents)) {
     const name = safeMdName(rawName);
     if (!name || typeof content !== 'string') continue;
+    if (suppressed.has(name)) continue;
     const filePath = join(DIR, name);
     if (existsSync(filePath)) continue;
     await ensureDir(DIR);
@@ -618,7 +715,12 @@ export async function applyDigitalTwinRemote(remoteData) {
   // sender's real document metadata (title/category/priority/weight). Merging
   // meta first preserves the sender's entries; the files are written after.
   count += await applyMeta(remoteData.meta);
-  count += await applyDocuments(remoteData.documents);
+  // Delete tombstones (#3530) gate both directions of the document apply: reap
+  // local files a peer's delete covers, and skip re-writing anything this
+  // machine deleted. Read AFTER applyMeta so the merged tombstone list is on disk.
+  const suppressed = await readSuppressedDocuments();
+  count += await reapTombstonedDocuments(suppressed);
+  count += await applyDocuments(remoteData.documents, suppressed);
 
   if (isPlainObject(remoteData.autobiography)) {
     // stories only — config (prompt schedule) is intentionally machine-local.

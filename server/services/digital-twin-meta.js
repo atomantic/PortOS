@@ -29,6 +29,9 @@ export { cache };
 export const DEFAULT_META = {
   version: '1.0.0',
   documents: [],
+  // Tombstones for documents the user deleted (#3530) — peer sync is otherwise
+  // add-only and would resurrect them from a machine that still has the file.
+  deletedDocuments: [],
   testHistory: [],
   valuesTestHistory: [],
   adversarialTestHistory: [],
@@ -62,7 +65,9 @@ export async function loadMeta() {
 }
 
 async function buildInitialMeta() {
-  const meta = { ...DEFAULT_META };
+  // Deep clone — a shallow spread would share DEFAULT_META's arrays, so the
+  // `documents.push` below would mutate the module-level default in place.
+  const meta = structuredClone(DEFAULT_META);
 
   const files = await readdir(DIGITAL_TWIN_DIR).catch(() => []);
   const mdFiles = files.filter(f => f.endsWith('.md'));
