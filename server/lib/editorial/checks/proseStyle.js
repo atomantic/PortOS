@@ -6,6 +6,7 @@ import {
   DEAD_METAPHOR_STAGE,
   EDITORIAL_PROMPT_OVERHEAD_TOKENS,
   INFO_DUMPING_STAGE,
+  INTERIORITY_REGISTER_STAGE,
   KILL_YOUR_DARLINGS_STAGE,
   MIRROR_DESCRIPTION_STAGE,
   STYLE_CONFORMANCE_STAGE,
@@ -868,6 +869,37 @@ export const proseStyleChecks = [
     // a plain per-chunk run with no cross-chunk digest — mirrors prose.dead-metaphor.
     run: (ctx) => runManuscriptLlmCheck(ctx, {
       stage: TELLING_EMOTION_STAGE,
+      category: 'style',
+      overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS,
+      buildVars: (manuscript) => ({ manuscript }),
+    }),
+  },
+  {
+    id: 'interiority.register',
+    sources: ['manuscript'],
+    label: 'Interiority register (thoughts that sound authored, not thought)',
+    description:
+      "LLM scan for rendered thought written in an authored, essayistic register instead of the character's own voice — analytical full-sentence thought where a character under pressure would think in fragments (\"I thought: this represents a supreme opportunity\"), author intrusion articulating a theme the character would never consciously articulate, a plain-spoken character thinking in polished literary prose that contradicts how they speak elsewhere, and an inner voice indistinguishable across the whole cast (flagged once, not per passage). The register layer above the other interiority checks: interiority.protagonist judges whether thought is present, scene.interiority-balance how much of a scene it occupies, this one how it sounds. Skips characterized formality in a genuinely erudite POV, deliberate free indirect discourse, calm reflective beats, and transitional summary interiority — and leaves told emotion to prose.telling-emotion. Findings name the register shift rather than rewriting the passage.",
+    scope: 'issue',
+    kind: 'llm',
+    category: 'style',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a long manuscript can not flood the review.' },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    // Localized prose-level findings (one essayistic thought = one spot), so this
+    // stays a plain per-chunk run with no cross-chunk digest — mirrors
+    // prose.telling-emotion. The prompt reconciles a character's thought against
+    // their dialogue, which lives in the same chunk as the thought itself.
+    run: (ctx) => runManuscriptLlmCheck(ctx, {
+      stage: INTERIORITY_REGISTER_STAGE,
       category: 'style',
       overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS,
       buildVars: (manuscript) => ({ manuscript }),

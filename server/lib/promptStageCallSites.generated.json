@@ -156,6 +156,9 @@
   "pipeline-editorial-interiority-balance": [
     "server/lib/editorial/checkInfra/craftStages.js"
   ],
+  "pipeline-editorial-interiority-register": [
+    "server/lib/editorial/checkInfra/craftStages.js"
+  ],
   "pipeline-editorial-kill-your-darlings": [
     "server/lib/editorial/checkInfra/craftStages.js"
   ],

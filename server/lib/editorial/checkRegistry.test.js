@@ -65,6 +65,7 @@ const WHITE_ROOM = 'scene.white-room';
 const INTERIORITY_BALANCE = 'scene.interiority-balance';
 const SUMMARY_NOT_SCENE = 'narration.summary-not-scene';
 const REPORTED_SPEECH = 'dialogue.reported-speech';
+const INTERIORITY_REGISTER = 'interiority.register';
 const PLOT_STRUCTURE = 'plot.structure-momentum';
 const PACING_ESCALATION = 'pacing.escalation-curve';
 const HEAD_HOPPING = 'pov.head-hopping';
@@ -909,6 +910,95 @@ describe('dialogue.reported-speech — reported-speech LLM check (#3592)', () =>
       callStagedLLM: async () => ({ content: { findings: many } }),
     });
     const findings = await getCheck(REPORTED_SPEECH).run(ctx);
+    expect(findings).toHaveLength(4);
+  });
+});
+
+describe('interiority.register — interiority-register LLM check (#3593)', () => {
+  // A plain-spoken character whose dialogue and whose rendered thought sit in two
+  // different registers — the strongest signal the prompt asks the model for.
+  const MANUSCRIPT = '# Issue 1\n\n"Ain\'t no way," Dell said. "Not for that money."\n\nI thought: this represents a supreme opportunity, one whose implications I would do well to consider.';
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: MANUSCRIPT,
+    config: { maxFindings: 12 },
+    severityDefault: 'low',
+    planManuscriptChunks: async () => [overrides.manuscript ?? MANUSCRIPT],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as an issue-scoped manuscript LLM check in the style category', () => {
+    const check = getCheck(INTERIORITY_REGISTER);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('issue');
+    expect(check.category).toBe('style');
+    expect(check.severityDefault).toBe('low');
+    expect(check.defaultEnabled).toBe(true);
+    expect(check.needsManuscript).toBe(true);
+    expect(check.sources).toEqual(['manuscript']);
+  });
+
+  it('gates on a non-empty manuscript', () => {
+    const check = getCheck(INTERIORITY_REGISTER);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: MANUSCRIPT })).toBeTruthy();
+  });
+
+  it('budgets the fixed prompt overhead when planning chunks and stamps findings with the style category', async () => {
+    let seenVars = null;
+    let seenOverhead = 0;
+    const ctx = wholeCtx({
+      planManuscriptChunks: async (_stage, opts) => {
+        // No trimmable context rides along, so the template reserve is passed as
+        // `overheadTokens` — unbudgeted, a long manuscript plans chunks that
+        // overflow the provider window once the prompt is added.
+        seenOverhead = opts.overheadTokens;
+        return [MANUSCRIPT];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return {
+          content: {
+            findings: [{
+              severity: 'low',
+              issueNumber: 1,
+              location: 'Issue 1 — Dell at the table',
+              problem: 'Dell speaks in clipped fragments but thinks in balanced essay prose.',
+              suggestion: 'Let him think in the same blunt vocabulary he argues in.',
+              anchorQuote: 'I thought: this represents a supreme opportunity',
+            }],
+          },
+        };
+      },
+    });
+    const findings = await getCheck(INTERIORITY_REGISTER).run(ctx);
+    expect(seenOverhead).toBeGreaterThan(0);
+    expect(seenVars.manuscript).toBe(MANUSCRIPT);
+    // Manuscript-only check — no scene map or canon voice profiles ride along.
+    expect(seenVars.sceneMap).toBeUndefined();
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('style');
+    expect(findings[0].issueNumber).toBe(1);
+    // The mismatch against how the character SPEAKS is what the finding must cite.
+    expect(findings[0].problem).toContain('speaks');
+    // The anchor is a verbatim slice of the manuscript so the editor can jump to it.
+    expect(MANUSCRIPT).toContain(findings[0].anchorQuote);
+  });
+
+  it('returns no findings for a consistently erudite POV character (no false positive on characterized formality)', async () => {
+    const findings = await getCheck(INTERIORITY_REGISTER).run(wholeCtx({
+      manuscript: '# Issue 1\n\n"The implications are considerable," Dr. Aurel said. "One hesitates to speculate."\n\nOne hesitates, she thought. One always hesitates, and the hesitation is the diagnosis.',
+    }));
+    expect(findings).toEqual([]);
+  });
+
+  it('respects maxFindings as a whole-run cap', async () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ severity: 'low', problem: `p${i}`, anchorQuote: `a${i}` }));
+    const ctx = wholeCtx({
+      config: { maxFindings: 4 },
+      callStagedLLM: async () => ({ content: { findings: many } }),
+    });
+    const findings = await getCheck(INTERIORITY_REGISTER).run(ctx);
     expect(findings).toHaveLength(4);
   });
 });

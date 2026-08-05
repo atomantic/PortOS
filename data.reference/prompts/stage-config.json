@@ -800,6 +800,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-interiority-register": {
+      "name": "Pipeline — Editorial Check: Interiority register",
+      "description": "Editorial check (#3593): flags rendered thought written in an authored, essayistic register instead of the character's own voice — analytical full-sentence thought where a character under pressure would think in fragments, author intrusion articulating a theme the character would not, register mismatch against how that character speaks elsewhere, and an indistinguishable inner voice across the whole cast (flagged once). The register layer above the other interiority checks, which judge presence and ratio. Reads the stitched manuscript; severity is advisory; skips characterized formality, free indirect discourse, calm reflective beats, and transitional summary interiority. Findings name the register shift rather than rewriting the passage. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-on-the-nose": {
       "name": "Pipeline — Editorial Check: On-the-nose / subtext-free dialogue",
       "description": "Editorial check (#1307): the judgment layer for dialogue that states feeling/meaning outright with no subtext and \"maid-and-butler\" exchanges where characters tell each other what they both already know. Reads the stitched manuscript; severity is advisory; skips earned directness, functional exchanges, and dialogue whose subtext already works. Returns issue-anchored findings.",

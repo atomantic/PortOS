@@ -124,6 +124,20 @@ Before adding an editorial rule, check whether an existing registry entry covers
 it. To add a new built-in check, append an entry to `EDITORIAL_CHECKS` in
 `checkRegistry.js` (the fail-fast guards enforce shape, enum, and unique-id).
 
+The interiority family is the worked example of how close two checks can sit
+without overlapping — four checks read the same paragraphs and each judges a
+different axis, so a new one has to name which axis is still unclaimed:
+`interiority.protagonist` (#1294) judges **presence** (are the four POV
+dimensions developed at all), `scene.interiority-balance` (#1623) judges
+**ratio** (does description swamp inner life inside a scene),
+`prose.italic-thoughts` judges **formatting** consistency of rendered thought,
+and `interiority.register` (#3593) judges **diction** — whether the thought that
+is on the page sounds like that character thinking or like the author writing an
+essay, reconciled against how the character speaks. The boundary is enforced in
+the prompt bodies (each names the others' territory in its do-NOT-flag list) and
+pinned by `checks/proseStyle.test.js`, because nothing in the registry stops
+three checks from returning three findings on one paragraph.
+
 Declare every input the check's `run(ctx)` reads in its `sources` array (a
 non-empty subset of `EDITORIAL_SOURCES`: `manuscript`, `canon`,
 `series.styleGuide`, `series.arc.tickingClock`, `series.arc.readerMap`,

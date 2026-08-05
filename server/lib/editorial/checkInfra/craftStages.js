@@ -105,6 +105,17 @@ export const ARC_REGRESSION_STAGE = 'pipeline-editorial-arc-regression';
 // prose.sentence-rhythm) need no stage.
 export const TELLING_EMOTION_STAGE = 'pipeline-editorial-telling-emotion';
 
+// Stage name for the interiority-register LLM check (#3593): rendered thought
+// written in an authored, essayistic register ("I thought: this represents a
+// supreme opportunity") instead of the character's own raw, fragmentary voice.
+// Ships in data.reference/prompts/stages/ + stage-config.json (fresh installs
+// via setup-data.js) and migrates to existing installs via migration 230 (boot
+// runs migrations but NOT setup-data, so the migration is required). The third
+// axis of interiority: INTERIORITY_STAGE (revealForeshadowing.js) judges whether
+// thought is PRESENT, INTERIORITY_BALANCE_STAGE above judges how MUCH of a scene
+// it occupies, and this one judges how it SOUNDS.
+export const INTERIORITY_REGISTER_STAGE = 'pipeline-editorial-interiority-register';
+
 // Stage names for the two dialogue-craft LLM checks (#1307): on-the-nose /
 // subtext-free dialogue, and per-character voice distinctiveness. Each prompt
 // ships in data.reference/prompts/stages/ + stage-config.json (fresh installs via
