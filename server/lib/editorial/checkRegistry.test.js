@@ -760,8 +760,13 @@ describe('narration.summary-not-scene — summary-vs-scene LLM check (#3591)', (
 
   it('injects the scene map into the prompt vars and stamps findings with the pacing category', async () => {
     let seenVars = null;
+    let seenOverhead = 0;
     const ctx = wholeCtx({
       planManuscriptChunks: async (_stage, opts) => {
+        // The scene map rides as trimmable context (#1459); the fixed template
+        // reserve is passed separately and must be budgeted, or a long manuscript
+        // plans chunks that overflow the provider window once the prompt is added.
+        seenOverhead = opts.fixedOverheadTokens;
         expect(opts.context).toHaveProperty('sceneMap');
         return [MANUSCRIPT];
       },
@@ -784,6 +789,7 @@ describe('narration.summary-not-scene — summary-vs-scene LLM check (#3591)', (
     const findings = await getCheck(SUMMARY_NOT_SCENE).run(ctx);
     expect(seenVars.sceneMap).toContain('Issue 1: The void');
     expect(seenVars.manuscript).toBe(MANUSCRIPT);
+    expect(seenOverhead).toBeGreaterThan(0);
     expect(findings).toHaveLength(1);
     expect(findings[0].category).toBe('pacing');
     expect(findings[0].issueNumber).toBe(1);
