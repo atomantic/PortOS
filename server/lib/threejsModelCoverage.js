@@ -56,69 +56,85 @@ export function evaluateThreejsPartCoverage(spec) {
   const label = (id) => byId.get(id)?.name || id;
   const findings = [];
 
-  // 1. Fusion — details whose ONLY implementing part is the same single part.
-  // `detailSchema` does not constrain `implementationPartIds` to be unique, so
-  // `['hull','hull']` validates; without the dedupe the arity test below reads
-  // it as a two-part detail and the fusion gate silently stops looking at the
-  // most fused spec there is. Deliberate scope limit: a group of details that
-  // all name the SAME multi-part set is not reported — the issue defines fusion
-  // as collapsing onto one part, and two parts is already an assembly.
-  const partIdsOf = (detail) => [...new Set(detail.implementationPartIds || [])];
-  const soleImplementers = new Map();
+  // 1. Fusion — details whose implementing parts are the SAME set. Grouping by
+  // the sorted, deduped id set (not by a single id) is what catches the spec
+  // that aims eight identity details at the same two parts: one fused assembly
+  // wearing a second part id reads exactly as clean as a real assembly unless
+  // the key carries the whole set. `detailSchema` does not constrain
+  // `implementationPartIds` to be unique, so `['hull','hull']` validates — the
+  // dedupe is what keeps the most fused spec there is from keying itself apart
+  // from `['hull']`. Only *identical* sets group: `['a','b']` and `['b','c']`
+  // merely overlap, which is ordinary attribution and would fire on almost
+  // every real spec.
+  const partIdsOf = (detail) => [...new Set(detail.implementationPartIds || [])].sort();
+  const sharedSets = new Map();
   for (const detail of details) {
     const ids = partIdsOf(detail);
-    if (ids.length !== 1) continue;
-    const group = soleImplementers.get(ids[0]) || [];
-    group.push(detail);
-    soleImplementers.set(ids[0], group);
+    if (ids.length === 0) continue;
+    // `|` cannot appear in a part id (`idSchema` is `[A-Za-z][A-Za-z0-9_-]*`),
+    // so the joined key is unambiguous — no set can collide with another.
+    const key = ids.join('|');
+    const group = sharedSets.get(key) || { ids, details: [] };
+    group.details.push(detail);
+    sharedSets.set(key, group);
   }
 
   // Details already accounted for by a shared-part finding, so the folded-relief
   // pass below cannot report the same detail a second time.
   const groupedDetails = new Set();
-  for (const [partId, group] of soleImplementers) {
-    const sharedPart = byId.get(partId);
-    // Nothing was built on this part or anywhere beneath it, so the details did
-    // not fuse onto it — they went unbuilt. Leaving the group to the folded and
-    // unbuilt passes below keeps the gate from reporting a fusion that never
-    // happened alongside the "nothing was built" finding that describes the same
-    // details, which would hand the next refinement pass two opposite orders.
-    if (group.length < 2 || !sharedPart?.subtreeHasGeometry) continue;
-    for (const detail of group) groupedDetails.add(detail);
+  for (const { ids, details: group } of sharedSets.values()) {
+    const sharedParts = ids.map((id) => byId.get(id)).filter(Boolean);
+    // Nothing was built on these parts or anywhere beneath them, so the details
+    // did not fuse onto them — they went unbuilt. Leaving the group to the
+    // folded and unbuilt passes below keeps the gate from reporting a fusion
+    // that never happened alongside the "nothing was built" finding that
+    // describes the same details, which would hand the next refinement pass two
+    // opposite orders.
+    if (group.length < 2 || !sharedParts.some((part) => part.subtreeHasGeometry)) continue;
     const ranked = group.filter((detail) => RANKED_PRIORITIES.has(detail.priority));
     if (ranked.length >= 2) {
+      for (const detail of group) groupedDetails.add(detail);
       const features = ranked.map((detail) => detail.feature);
       // Re-attribute or rebuild? The answer is not "is the shared part a mesh"
-      // — it is whether enough unclaimed geometry already exists beneath it to
-      // give every ranked feature a home. Telling the provider to rebuild parts
-      // it already modelled duplicates geometry; telling it to re-attribute to
-      // children that do not exist wastes a whole provider round-trip and lands
-      // back here next pass. A shared part that is itself a mesh houses one of
-      // the features legitimately, so it only needs children for the rest.
+      // — it is whether enough unclaimed geometry already exists beneath the set
+      // to give every ranked feature a home. Telling the provider to rebuild
+      // parts it already modelled duplicates geometry; telling it to
+      // re-attribute to children that do not exist wastes a whole provider
+      // round-trip and lands back here next pass. Each shared part that is
+      // itself a mesh houses one of the features legitimately, so the set only
+      // needs children for the rest.
       const unclaimedDescendants = parts.filter((part) => part.hasGeometry
-        && part.ancestorIds.includes(partId)
+        && part.ancestorIds.some((ancestorId) => ids.includes(ancestorId))
         && !implementedIds.has(part.id)).length;
-      const needHomes = ranked.length - (sharedPart.hasGeometry ? 1 : 0);
+      const needHomes = ranked.length - sharedParts.filter((part) => part.hasGeometry).length;
       const remedy = unclaimedDescendants >= needHomes
         ? 'Point each detail at the specific child part that implements it.'
         : 'Build each as its own part instead of one fused mesh.';
+      const names = listSpecNames(ids.map(label));
+      const message = ids.length === 1
+        ? `${features.length} promised features collapsed onto the single part "${label(ids[0])}" (${listSpecNames(features)}). ${remedy}`
+        : `${features.length} promised features are all attributed to the same ${ids.length} parts (${names}) with no per-feature geometry distinguishing them (${listSpecNames(features)}). ${remedy}`;
       findings.push({
         code: 'fused-parts',
         severity: 'error',
-        partIds: [partId],
+        partIds: ids,
         features,
-        message: `${features.length} promised features collapsed onto the single part "${label(partId)}" (${listSpecNames(features)}). ${remedy}`,
+        message,
       });
       continue;
     }
-    // At most one ranked feature owns the part and the rest are minor: relief
-    // folded into the piece it rides on. A right answer is not a defect.
+    // At most one ranked feature owns the set and the rest are minor: relief
+    // folded into the piece it rides on. A right answer is not a defect. Only
+    // said for a single part — "folded into its parent" is a claim about one
+    // mesh, and a multi-part set has no single piece the relief rides on.
+    if (ids.length !== 1) continue;
+    for (const detail of group) groupedDetails.add(detail);
     findings.push({
       code: 'folded-detail',
       severity: 'note',
-      partIds: [partId],
+      partIds: ids,
       features: group.map((detail) => detail.feature),
-      message: `${group.length} details share the single part "${label(partId)}" (${listSpecNames(group.map((detail) => detail.feature))}). Folding minor relief into the piece it rides on is expected.`,
+      message: `${group.length} details share the single part "${label(ids[0])}" (${listSpecNames(group.map((detail) => detail.feature))}). Folding minor relief into the piece it rides on is expected.`,
     });
   }
 

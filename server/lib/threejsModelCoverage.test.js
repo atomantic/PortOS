@@ -143,6 +143,102 @@ describe('evaluateThreejsPartCoverage', () => {
     expect(coverage.errorCount).toBe(1);
   });
 
+  it('errors when several identity features all name the same multi-part set', () => {
+    // A fused assembly wearing a second part id: nothing distinguishes the
+    // three features from one another, they just all point at the same pair.
+    const coverage = evaluateThreejsPartCoverage(makeSpec({
+      parts: [
+        { id: 'hull', name: 'Hull', geometry: box(2), material: 'shell' },
+        { id: 'base', name: 'Base', geometry: box(1), material: 'shell' },
+      ],
+      detailInventory: [
+        detail('Boxy hull', ['hull', 'base'], 'identity'),
+        detail('Recessed lens', ['hull', 'base'], 'identity'),
+        // Same set, written in the other order — the key sorts before joining.
+        detail('Sensor ring', ['base', 'hull'], 'identity'),
+      ],
+    }));
+
+    expect(codes(coverage)).toEqual(['fused-parts']);
+    expect(coverage.errorCount).toBe(1);
+    expect(coverage.findings[0]).toMatchObject({
+      severity: 'error',
+      partIds: ['base', 'hull'],
+      features: ['Boxy hull', 'Recessed lens', 'Sensor ring'],
+    });
+    expect(coverage.findings[0].message).toContain('the same 2 parts');
+    expect(coverage.findings[0].message).toContain('Hull');
+    expect(coverage.findings[0].message).toContain('Base');
+  });
+
+  it('does not report a fusion onto a multi-part set nothing was built on', () => {
+    // Same guard the single-part path carries: a set whose parts hold no
+    // geometry anywhere went unbuilt, it did not fuse. Reporting both would
+    // hand the next refinement pass two opposite orders.
+    const coverage = evaluateThreejsPartCoverage(makeSpec({
+      parts: [
+        { id: 'hull', name: 'Hull', geometry: box(2), material: 'shell' },
+        { id: 'anchor', name: 'Anchor' },
+        { id: 'mount', name: 'Mount' },
+      ],
+      detailInventory: [
+        detail('Boxy hull', ['hull'], 'identity'),
+        detail('Recessed lens', ['anchor', 'mount'], 'identity'),
+        detail('Sensor ring', ['anchor', 'mount'], 'identity'),
+        detail('Vent grille', ['mount', 'anchor'], 'identity'),
+      ],
+    }));
+
+    expect(codes(coverage)).toEqual(['unbuilt-detail', 'unbuilt-detail', 'unbuilt-detail']);
+    expect(coverage.errorCount).toBe(3);
+  });
+
+  it('does not flag details whose part sets merely overlap', () => {
+    // Partial overlap is ordinary attribution — treating it as fusion would
+    // fire on almost every real spec.
+    const coverage = evaluateThreejsPartCoverage(makeSpec({
+      parts: [
+        { id: 'alpha', name: 'Alpha', geometry: box(1), material: 'shell' },
+        { id: 'bravo', name: 'Bravo', geometry: box(1), material: 'shell' },
+        { id: 'charlie', name: 'Charlie', geometry: box(1), material: 'shell' },
+      ],
+      detailInventory: [
+        detail('Swept forward shell', ['alpha', 'bravo'], 'identity'),
+        detail('Tapered tail', ['bravo', 'charlie'], 'identity'),
+      ],
+    }));
+
+    expect(coverage.findings).toEqual([]);
+  });
+
+  it('tells a multi-part set with unclaimed geometry children to re-attribute', () => {
+    // Both shared parts are bare groups with two spare meshes beneath them —
+    // enough homes for the ranked features, so rebuilding would duplicate
+    // geometry the provider already got right.
+    const coverage = evaluateThreejsPartCoverage(makeSpec({
+      parts: [
+        {
+          id: 'head',
+          name: 'Head',
+          children: [{ id: 'skull', name: 'Skull', geometry: box(0.8), material: 'shell' }],
+        },
+        {
+          id: 'neck',
+          name: 'Neck',
+          children: [{ id: 'collar', name: 'Collar', geometry: box(0.4), material: 'shell' }],
+        },
+      ],
+      detailInventory: [
+        detail('Domed skull', ['head', 'neck'], 'identity'),
+        detail('Ribbed collar', ['head', 'neck'], 'identity'),
+      ],
+    }));
+
+    const fused = coverage.findings.find((finding) => finding.code === 'fused-parts');
+    expect(fused.message).toContain('Point each detail at the specific child part');
+    expect(fused.message).not.toContain('one fused mesh');
+  });
+
   it('does not report a fusion onto a part nothing was built on', () => {
     // Two details sharing a locator that carries no geometry anywhere did not
     // fuse — they went unbuilt. Reporting both would tell the next refinement
