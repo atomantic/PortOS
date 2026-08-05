@@ -105,16 +105,19 @@ function importsDynamically(file, mod) {
   return new RegExp(String.raw`\bimport\s*\(\s*[^)]*\b${mod.replace(/\./g, '\\.')}[^)]*\)`).test(src);
 }
 
-// The names the facade re-exports out of `source`, in the facade's own spelling
-// (the LEFT side of `x as y` — what the defining module calls it). Both quote
-// styles throughout — `from "./x.js"` is valid ESM, and a matcher that only
-// knows `'` reads as green over the exact statement it forbids.
+// What the facade re-exports out of `source`, as `{ declared, exposedAs }` —
+// the two sides of `terminateAgent as requestAgentTermination`. `declared` is
+// what the defining module calls it; `exposedAs` is the name callers above the
+// closure use, which for a renamed export exists ONLY on the facade and so has
+// exactly one legitimate source. Both quote styles throughout — `from "./x.js"`
+// is valid ESM, and a matcher that only knows `'` reads as green over the exact
+// statement it forbids.
 //
 // One parse shared by every guard that needs the facade's surface, for the same
 // reason the static scan lives once in `server/lib/staticImportGraph.js`: two
 // copies of a structural matcher is how a guard rots.
 const FACADE = 'agentOrchestrator.js';
-function reexportedFrom(source) {
+function reexportedPairs(source) {
   const facade = readFileSync(join(SERVICES_DIR, FACADE), 'utf-8');
   const block = facade.match(new RegExp(
     String.raw`export\s*\{([^}]*)\}\s*from\s*['"]\./${source.replace(/\./g, '\\.')}['"]`));
@@ -122,9 +125,11 @@ function reexportedFrom(source) {
   return block[1]
     .replace(/\/\/[^\n]*/g, '')       // strip the per-export state-edge comments
     .split(',')
-    .map(entry => entry.split(/\s+as\s+/)[0].trim())
-    .filter(Boolean);
+    .map(entry => entry.split(/\s+as\s+/).map(part => part.trim()))
+    .filter(([declared]) => declared)
+    .map(([declared, exposedAs]) => ({ declared, exposedAs: exposedAs || declared }));
 }
+const reexportedFrom = (source) => reexportedPairs(source).map(pair => pair.declared);
 
 // Loaders for the modules whose REAL export surface the guards below assert on.
 // Spelled out one literal specifier each rather than `import(`./${name}`)` —
@@ -304,17 +309,27 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
     // file anyone edits to change the rule.
     const declaringModules = ['agentManagement.js', 'cosAgentLifecycle.js', 'agentLifecycle.js'];
     const declaredBy = new Map(); // transition name → the modules allowed to serve it
+    const allow = (name, source) => {
+      if (!declaredBy.has(name)) declaredBy.set(name, new Set());
+      declaredBy.get(name).add(source);
+    };
     for (const source of declaringModules) {
-      for (const name of reexportedFrom(source)) {
-        if (!declaredBy.has(name)) declaredBy.set(name, new Set());
-        declaredBy.get(name).add(source);
+      for (const { declared, exposedAs } of reexportedPairs(source)) {
+        allow(declared, source);
+        // A RENAMED export (`terminateAgent as requestAgentTermination`) has a
+        // public name that exists nowhere but the facade, so the facade is its
+        // only legitimate source. Registering it is what stops a barrel from
+        // re-exporting the alias and slipping past a map keyed on `terminateAgent`.
+        if (exposedAs !== declared) allow(exposedAs, FACADE);
       }
     }
-    // `terminateAgent` lands in two of them: the process-side one and the
-    // state-side one the facade renames to `requestAgentTermination`. Both are
-    // real definitions, so both stay allowed — the rule here is "not a barrel",
-    // and that collision is a naming question the facade already answered.
+    // `terminateAgent` lands in two declaring modules: the process-side one and
+    // the state-side one the facade renames. Both are real definitions, so both
+    // stay allowed — the rule here is "not a barrel", and that collision is a
+    // naming question the facade already answered.
     expect(declaredBy.size, 'derived no transitions — check the facade export blocks').toBeGreaterThan(3);
+    expect([...declaredBy.keys()], 'the facade rename is no longer covered — check reexportedPairs')
+      .toContain('requestAgentTermination');
 
     // A FORWARDER is any module that re-exports its way to a declaring module, at
     // any depth: `cosAgents.js` is one hop (`export * from './cosAgentLifecycle.js'`),
@@ -386,8 +401,11 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
         }
       }
       // `(await import('./cos.js')).completeAgent` — the same reach, one step
-      // shorter.
-      for (const [, spec, name] of src.matchAll(/import\s*\(\s*['"]([^'"]+)['"]\s*\)[\s)]*\.\s*(\w+)/g)) {
+      // shorter. `?.` and `['name']` are the same property read to the engine,
+      // so a matcher that only knows the dot reads green over both.
+      for (const [, spec, dotted, bracketed] of src.matchAll(
+        /import\s*\(\s*['"]([^'"]+)['"]\s*\)[\s)]*(?:\?)?(?:\.\s*(\w+)|\.?\s*\[\s*['"`](\w+)['"`]\s*\])/g)) {
+        const name = dotted || bracketed;
         const target = resolveSpec(spec);
         if (allowed.has(target) || !declaredBy.has(name) || declaredBy.get(name).has(target)) continue;
         offenders.push(`${file} defer-imports ${name} from ${target}`);
@@ -400,7 +418,9 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
       // blunt (that is how a dozen modules reach the task store, which is not
       // this issue's business), so check the two ways a transition comes back
       // OFF it: a property read and a destructure. Both, because either one
-      // alone reads green over the other.
+      // alone reads green over the other — and the property read covers `?.`
+      // and `['name']` alongside the dot, since all three compile to the same
+      // access and a dot-only matcher waves the other two straight through.
       const handles = [
         ...src.matchAll(/import\s*\*\s*as\s+(\w+)\s*from\s*['"]([^'"]+)['"]/g),
         ...src.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*(?:await\s+)?import\s*\(\s*['"]([^'"]+)['"]\s*\)/g),
@@ -409,7 +429,8 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
         const target = resolveSpec(spec);
         if (!forwarders.has(target)) continue;
         for (const name of declaredBy.keys()) {
-          const reached = new RegExp(String.raw`\b${ns}\s*\.\s*${name}\b`).test(src)
+          const reached = new RegExp(
+            String.raw`\b${ns}\s*(?:\?)?(?:\.\s*${name}\b|\.?\s*\[\s*['"\`]${name}['"\`]\s*\])`).test(src)
             || new RegExp(String.raw`\{[^}]*\b${name}\b[^}]*\}\s*=\s*(?:await\s+)?${ns}\b`).test(src);
           if (reached) offenders.push(`${file} reaches ${name} through the forwarder ${target}`);
         }
