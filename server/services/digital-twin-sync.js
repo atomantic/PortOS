@@ -26,6 +26,7 @@
  *   - autobiography/        — stories union by id (LWW); config (the prompt
  *                            schedule) is NOT synced — it's machine-local
  *   - social-accounts.json  — the user's own social accounts, union by id (LWW)
+ *                            MINUS anything either side tombstoned (see below)
  *
  * Merge philosophy mirrors the rest of dataSync: union semantics, no data is
  * ever lost, and every field is key-presence guarded so an OLDER peer that only
@@ -46,6 +47,9 @@
  * Personas carry the same tombstone (#3533) as `meta.deletedPersonas`, keyed on
  * the persona id — a persona lives only in meta.json, so the merge alone
  * completes the delete with no file to reap.
+ *
+ * Social accounts carry the same machinery on `deletedAccounts`, keyed on the
+ * account id (#3532) — see mergeSocialAccounts.
  */
 
 import crypto from 'crypto';
@@ -583,11 +587,35 @@ export function mergeMeta(local, remote) {
   return { merged, changed };
 }
 
+// Social-account tombstones (#3532) key on the account id, NOT a platform/handle
+// natural key: the id is minted once by whichever machine created the account
+// and then travels verbatim as the `accounts` map key, so every peer agrees on
+// it — and re-adding the same handle after a delete mints a FRESH id, which a
+// natural key would wrongly suppress.
+const ACCOUNT_TOMBSTONE_OPTS = { keyField: 'id' };
+
+/**
+ * The instant an account was last asserted to EXIST — its creation stamp, or a
+ * later edit. A delete only wins over an account older than the delete: an edit
+ * made after another machine deleted it is the user's latest word (#3532).
+ */
+function accountLiveStamp(account) {
+  return newerStamp(account?.updatedAt, account?.createdAt);
+}
+
 /**
  * Merge the user's own social accounts (social-accounts.json: `{ accounts: { id:
- * {...} } }`). Accounts union by id, LWW on updatedAt — an account added on
- * either machine survives, and the more-recently-edited copy wins a collision.
+ * {...} }, deletedAccounts: [{ id, deletedAt }] }`). Accounts union by id, LWW on
+ * updatedAt — an account added on either machine survives, and the
+ * more-recently-edited copy wins a collision.
  * Key-presence guarded: a peer that sends no socialAccounts can't blank local.
+ *
+ * DELETES ride the `deletedAccounts` tombstone list (#3532), which unions in
+ * BOTH directions before the account union is filtered — so a delete performed
+ * on either machine converges: the deleting side stops resurrecting the account,
+ * and the side that still has it drops it. An account whose own live stamp is
+ * strictly newer than the tombstone supersedes it, and that now-obsolete
+ * tombstone is pruned so it can't bounce back from a peer that hasn't caught up.
  */
 export function mergeSocialAccounts(local, remote) {
   if (!isPlainObject(remote)) return { merged: local, changed: false };
@@ -595,15 +623,31 @@ export function mergeSocialAccounts(local, remote) {
 
   const lAcc = isPlainObject(local.accounts) ? local.accounts : {};
   const rAcc = isPlainObject(remote.accounts) ? remote.accounts : {};
+  const { merged: tombstones } = mergeTombstones(local.deletedAccounts, remote.deletedAccounts, ACCOUNT_TOMBSTONE_OPTS);
+
   const accounts = { ...lAcc };
-  let changed = false;
   for (const [id, rv] of Object.entries(rAcc)) {
     if (!isPlainObject(rv)) continue;
     const lv = accounts[id];
-    if (!isPlainObject(lv)) { accounts[id] = rv; changed = true; continue; }
-    if ((rv.updatedAt || '') > (lv.updatedAt || '')) { accounts[id] = rv; changed = true; }
+    if (!isPlainObject(lv)) { accounts[id] = rv; continue; }
+    if ((rv.updatedAt || '') > (lv.updatedAt || '')) accounts[id] = rv;
   }
-  return { merged: { ...local, accounts }, changed };
+  for (const [id, account] of Object.entries(accounts)) {
+    if (isTombstoned(tombstones, id, accountLiveStamp(account), 'id')) delete accounts[id];
+  }
+
+  // Prune against the same live stamp the filter used, or an account kept alive
+  // by an edit would leave its tombstone behind to retry on every cycle.
+  const survivors = Object.entries(accounts).map(([id, account]) => ({ id, createdAt: accountLiveStamp(account) }));
+  const deletedAccounts = pruneTombstones(tombstones, survivors, { ...ACCOUNT_TOMBSTONE_OPTS, timestampField: 'createdAt' });
+
+  // The account map is rebuilt from the two sides' own objects, so identity
+  // comparison catches an add, a replacement, AND a reap.
+  const localIds = Object.keys(lAcc);
+  const changed = localIds.length !== Object.keys(accounts).length
+    || localIds.some((id) => lAcc[id] !== accounts[id])
+    || !tombstonesEqual(deletedAccounts, normalizeTombstones(local.deletedAccounts, 'id'), 'id');
+  return { merged: { ...local, accounts, deletedAccounts }, changed };
 }
 
 /**

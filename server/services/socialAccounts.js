@@ -13,9 +13,14 @@ import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import EventEmitter from 'events';
 import { PATHS, createCachedStore } from '../lib/fileUtils.js';
+import { recordTombstone } from '../lib/tombstones.js';
 
 const DATA_FILE = join(PATHS.digitalTwin, 'social-accounts.json');
-const store = createCachedStore(DATA_FILE, { accounts: {} }, { context: 'socialAccounts' });
+// `deletedAccounts` holds `{ id, deletedAt }` tombstones for accounts the user
+// removed (#3532). Peer sync unions accounts add-only, so without them a machine
+// that still has the account re-adds it forever. No migration is needed: an
+// existing file simply has no key, and every reader treats that as an empty list.
+const store = createCachedStore(DATA_FILE, { accounts: {}, deletedAccounts: [] }, { context: 'socialAccounts' });
 
 export const socialAccountEvents = new EventEmitter();
 
@@ -242,6 +247,13 @@ export async function deleteAccount(id) {
     if (!data.accounts[id]) return data;
     account = data.accounts[id];
     delete data.accounts[id];
+    // Tombstone the id so peer sync — which unions accounts add-only — can't
+    // resurrect it from a machine that still has it, and so the delete
+    // PROPAGATES to that machine rather than only being defended here (#3532).
+    // The account id is the right key: unlike Digital Twin document ids it is
+    // minted once by whichever machine created the account and then travels
+    // verbatim as the `accounts` map key, so every peer agrees on it.
+    data.deletedAccounts = recordTombstone(data.deletedAccounts, id, { keyField: 'id' });
     return data;
   });
 
