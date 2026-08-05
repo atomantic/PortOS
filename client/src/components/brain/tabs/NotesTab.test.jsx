@@ -23,6 +23,12 @@ vi.mock('../../../services/api', () => api);
 
 const NotesTab = (await import('./NotesTab')).default;
 
+// jsdom has no layout engine and Tailwind is never compiled for the test run,
+// so touch-target size is asserted from the utility tokens the element renders
+// with rather than from measured geometry — the same approach as the repo-wide
+// guard in src/a11yConventions.test.js and Layout.test.jsx. Reverting
+// NotesTab.jsx to its pre-fix state fails every case in this file.
+//
 // Tailwind `min-h-`/`min-w-`/`h-`/`w-` token → px, for both the arbitrary value
 // (`min-h-[44px]`) and the spacing scale (`h-11` = 11 * 4px = 44px). Mirrors
 // `tokenPx` in src/a11yConventions.test.js.
@@ -89,7 +95,9 @@ describe('NotesTab header touch targets', () => {
     fireEvent.click(screen.getByRole('button', { name: 'New note' }));
 
     expectTouchTarget(screen.getByPlaceholderText('folder/note-name'), { width: false });
-    expectTouchTarget(screen.getByRole('button', { name: 'Create' }), { width: false });
+    // The Create button needs the width floor too: mid-create its label
+    // collapses to '...', which `px-3` alone does not pad out to 44px.
+    expectTouchTarget(screen.getByRole('button', { name: 'Create' }));
     expectTouchTarget(screen.getByRole('button', { name: 'Close' }));
   });
 
@@ -99,12 +107,25 @@ describe('NotesTab header touch targets', () => {
     const input = screen.getByPlaceholderText('Search notes...');
     fireEvent.change(input, { target: { value: 'meeting' } });
 
-    const clear = screen.getByRole('button', { name: 'Close' });
+    // The create-note form is closed here, so the clear-search button is the
+    // only thing labelled "Close" — assert that, or a second Close button
+    // appearing later would silently redirect this assertion at the wrong
+    // element and make it pass for the wrong reason.
+    const closeButtons = screen.getAllByRole('button', { name: 'Close' });
+    expect(closeButtons).toHaveLength(1);
+    const [clear] = closeButtons;
+
     // The clear button is absolutely positioned at `right-2` (8px) and is 44px
     // wide, so the input needs >= 52px of right padding or the typed text runs
     // underneath it.
     const rightOffset = (clear.className.match(/(?:^|\s)right-(\d+)(?:\s|$)/) || [, '0'])[1] * 4;
+    const clearWidth = axisPx(clear.className, 'w');
+    // Guard the guard: if either token stopped parsing, the comparison below
+    // would degrade to `padRight >= 0` and pass trivially.
+    expect(rightOffset).toBeGreaterThan(0);
+    expect(clearWidth).toBeGreaterThanOrEqual(44);
+
     const padRight = (input.className.match(/(?:^|\s)pr-(\d+)(?:\s|$)/) || [, '0'])[1] * 4;
-    expect(padRight).toBeGreaterThanOrEqual(rightOffset + axisPx(clear.className, 'w'));
+    expect(padRight).toBeGreaterThanOrEqual(rightOffset + clearWidth);
   });
 });

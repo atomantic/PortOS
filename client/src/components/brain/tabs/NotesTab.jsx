@@ -324,7 +324,7 @@ export default function NotesTab() {
               <button
                 onClick={handleCreateNote}
                 disabled={creating || !newNotePath.trim()}
-                className="px-3 min-h-[44px] shrink-0 rounded bg-port-accent text-white text-xs disabled:opacity-50"
+                className="px-3 min-h-[44px] min-w-[44px] shrink-0 rounded bg-port-accent text-white text-xs disabled:opacity-50"
               >
                 {creating ? '...' : 'Create'}
               </button>
