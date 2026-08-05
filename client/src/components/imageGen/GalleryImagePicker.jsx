@@ -45,6 +45,11 @@ const KIND_PREFIX = 'kind:';
 // `item.key` — so membership is a set lookup, not a filename comparison.
 const membershipKey = (it) => `${it?.kind}:${it?.ref}`;
 const byLabel = (a, b) => a.label.localeCompare(b.label);
+// Image sidecars are unvalidated JSON on disk and arrive from peers, so a
+// non-string `entryCategory` / `universeName` is representable. Everything
+// downstream here calls string methods (humanizeCategory, localeCompare), so a
+// bad value drops the option rather than throwing during render.
+const asText = (value) => (typeof value === 'string' && value.trim() ? value : null);
 
 export default function GalleryImagePicker({ open, onClose, onSelect, allowUpload = false }) {
   const [items, setItems] = useState([]);
@@ -105,10 +110,13 @@ export default function GalleryImagePicker({ open, onClose, onSelect, allowUploa
   const universeOptions = useMemo(() => {
     const present = new Map();
     for (const it of items) {
-      if (it.universeId && !present.has(it.universeId)) present.set(it.universeId, it.universeName || it.universeId);
+      const id = asText(it.universeId);
+      if (id && !present.has(id)) present.set(id, asText(it.universeName) || id);
     }
     for (const u of universes) {
-      if (u?.id && u.name && present.has(u.id)) present.set(u.id, u.name);
+      const id = asText(u?.id);
+      const name = asText(u?.name);
+      if (id && name && present.has(id)) present.set(id, name);
     }
     return [...present.entries()]
       .map(([id, label]) => ({ value: `${UNI_PREFIX}${id}`, label }))
@@ -120,16 +128,18 @@ export default function GalleryImagePicker({ open, onClose, onSelect, allowUploa
   // Same "must match something" rule as universes. A collection also holds video
   // refs, which this image-only picker can never surface.
   const collectionOptions = useMemo(() => collections
-    .filter((c) => Array.isArray(c?.items) && c.items.some((it) => galleryKeys.has(membershipKey(it))))
-    .map((c) => ({ value: `${COL_PREFIX}${c.id}`, label: c.name || c.id }))
+    .filter((c) => asText(c?.id) && Array.isArray(c?.items) && c.items.some((it) => galleryKeys.has(membershipKey(it))))
+    .map((c) => ({ value: `${COL_PREFIX}${c.id}`, label: asText(c.name) || c.id }))
     .sort(byLabel), [collections, galleryKeys]);
 
   const [categoryOptions, kindOptions] = useMemo(() => {
     const categories = new Set();
     const kinds = new Set();
     for (const it of items) {
-      if (it.entryCategory) categories.add(it.entryCategory);
-      if (it.entryKind) kinds.add(it.entryKind);
+      const category = asText(it.entryCategory);
+      const kind = asText(it.entryKind);
+      if (category) categories.add(category);
+      if (kind) kinds.add(kind);
     }
     const toOptions = (values, prefix) => [...values]
       .map((value) => ({ value: `${prefix}${value}`, label: humanizeCategory(value) }))

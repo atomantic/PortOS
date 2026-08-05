@@ -240,6 +240,27 @@ describe('GalleryImagePicker', () => {
     expect(listUniverses).toHaveBeenCalledWith({ silent: true });
   });
 
+  it('skips malformed sidecar metadata instead of throwing while building options', async () => {
+    listImageGallery.mockResolvedValue([
+      // Sidecars are unvalidated JSON on disk and arrive from peers.
+      { filename: 'bad.png', path: '/data/images/bad.png', prompt: 'bad metadata', entryCategory: 1, entryKind: {}, universeId: 7, universeName: 42 },
+      { filename: 'ok.png', path: '/data/images/ok.png', prompt: 'good metadata', entryCategory: 'places', universeId: 'uni-a', universeName: 'Second Universe' },
+    ]);
+    listMediaCollections.mockResolvedValue([{ id: 'col-1', name: 5, items: [{ kind: 'image', ref: 'ok.png' }] }]);
+    listUniverses.mockResolvedValue([{ id: 'uni-a', name: 99 }]);
+    render(<GalleryImagePicker open onClose={vi.fn()} onSelect={vi.fn()} />);
+    await screen.findByAltText('bad metadata');
+
+    expect(screen.getByRole('option', { name: 'Places' })).toBeTruthy();
+    // The non-string universe/collection names fall back to their ids, not to a throw.
+    await waitFor(() => expect(screen.getByRole('option', { name: 'col-1' })).toBeTruthy());
+    expect(screen.getByRole('option', { name: 'Second Universe' })).toBeTruthy();
+
+    fireEvent.change(typeSelect(), { target: { value: 'cat:places' } });
+    await waitFor(() => expect(screen.queryByAltText('bad metadata')).toBeNull());
+    expect(screen.getByAltText('good metadata')).toBeTruthy();
+  });
+
   it('does not render the filter selects when nothing is filterable', async () => {
     listImageGallery.mockResolvedValue([{ filename: 'plain.png', path: '/data/images/plain.png', prompt: 'plain' }]);
     listMediaCollections.mockResolvedValue([]);
