@@ -198,6 +198,74 @@ describe('Three.js model generation orchestration', () => {
     })));
   });
 
+  it('records the cross-section gate and folds it into an unsteered refinement', async () => {
+    // Both identity features are unbevelled extrudes: a spec that renders
+    // correctly from its own camera and like cardboard from anywhere else.
+    const slabSpec = {
+      ...spec,
+      parts: [
+        {
+          id: 'body',
+          name: 'Body',
+          geometry: { type: 'extrude', outline: [[-1, -1], [1, -1], [1, 1], [-1, 1]], depth: 0.4 },
+          material: 'body',
+        },
+        {
+          id: 'lens',
+          name: 'Lens',
+          geometry: { type: 'extrude', outline: [[-0.4, -0.4], [0.4, -0.4], [0.4, 0.4]], depth: 0.2 },
+          material: 'lens',
+        },
+      ],
+      detailInventory: [
+        { ...spec.detailInventory[0], implementationPartIds: ['lens'] },
+        {
+          feature: 'Beacon housing',
+          evidence: 'A tapered housing carries the lens in the reference.',
+          implementationPartIds: ['body'],
+          priority: 'identity',
+        },
+      ],
+    };
+    let current = {
+      id: 'threejs-flat',
+      name: 'Example Beacon',
+      sourceImage: { filename: 'example.png' },
+      providerId: 'vision-api',
+      model: null,
+      prompt: '',
+      status: 'draft',
+      spec: null,
+      coverage: null,
+      flatness: null,
+      runs: [],
+    };
+    store.getModel.mockImplementation(async () => current);
+    store.mutateModel.mockImplementation(async (_id, mutate) => {
+      const next = mutate(current);
+      if (next) current = next;
+      return current;
+    });
+    runPromptThroughProvider.mockResolvedValue({
+      text: JSON.stringify(slabSpec),
+      runId: 'run-flat',
+      provider: { id: 'vision-api' },
+      model: null,
+    });
+
+    await startGeneration(current.id, { providerId: 'vision-api' });
+    await vi.waitFor(() => expect(current.status).toBe('ready'));
+    expect(current.flatness).toMatchObject({
+      warningCount: 1,
+      identityDetailCount: 2,
+      flatIdentityDetailCount: 2,
+    });
+    expect(current.flatness.findings[0]).toMatchObject({ code: 'flat-identity-parts' });
+
+    await startGeneration(current.id, { providerId: 'vision-api' });
+    expect(current.runs.at(-1).feedback).toContain('cross-section check');
+  });
+
   it('gives CLI agents a gallery path without passing an API attachment', async () => {
     getProviderById.mockResolvedValue({
       id: 'local-agent',

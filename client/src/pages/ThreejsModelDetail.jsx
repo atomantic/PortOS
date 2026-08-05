@@ -28,6 +28,56 @@ const SEVERITY_STYLE = {
   note: 'border-port-border bg-port-bg/50 text-gray-400',
 };
 
+// Counted from the findings actually rendered rather than read off the stored
+// tallies, so a header can never disagree with the list below it — or print
+// "undefined error" for a record whose gate result arrived without its counts.
+// An unrecognized severity counts as a note rather than being dropped: the list
+// still renders it (styled as a note), and a tally that omitted it would read
+// "0 note" above a visible finding.
+const countSeverities = (findings) => findings.reduce((counts, finding) => {
+  const bucket = counts[finding.severity] === undefined ? 'note' : finding.severity;
+  counts[bucket] += 1;
+  return counts;
+}, { error: 0, warning: 0, note: 0 });
+
+/**
+ * One quality-gate result (assembly coverage, cross-section) rendered as a
+ * severity-styled finding list. Shared so a second gate cannot drift into a
+ * different look for the same data.
+ */
+function GatePanel({ title, findings, cleanLabel, footer }) {
+  const counts = countSeverities(findings);
+  return (
+    <section className="rounded-xl border border-port-border bg-port-card p-4">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-xs font-medium uppercase tracking-wide text-gray-400">{title}</h2>
+        <span className="text-xs text-gray-600">
+          {findings.length === 0
+            ? cleanLabel
+            : `${counts.error} error · ${counts.warning} warning · ${counts.note} note`}
+        </span>
+      </div>
+      {findings.length > 0 && (
+        <ul className="space-y-2">
+          {findings.map((finding, index) => (
+            <li
+              key={`${finding.code}-${index}`}
+              className={`rounded-lg border px-3 py-2 text-xs leading-relaxed ${SEVERITY_STYLE[finding.severity] || SEVERITY_STYLE.note}`}
+            >
+              <span className="mr-2 text-[9px] uppercase tracking-wide opacity-80">{finding.severity}</span>
+              {finding.message}
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="mt-3 flex items-start gap-1.5 text-[11px] leading-relaxed text-gray-500">
+        <Info className="mt-0.5 h-3 w-3 shrink-0" />
+        <span>{footer}</span>
+      </p>
+    </section>
+  );
+}
+
 export default function ThreejsModelDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -162,18 +212,11 @@ export default function ThreejsModelDetail() {
 
   const generating = record.status === 'generating' || starting;
   const latestRun = Array.isArray(record.runs) ? record.runs[record.runs.length - 1] : null;
+  // A record generated before a gate shipped has no result at all, which is not
+  // the same as passing it — the panel is omitted rather than shown clean.
   const coverageFindings = Array.isArray(record.coverage?.findings) ? record.coverage.findings : null;
-  // Counted from the findings actually rendered rather than read off the stored
-  // tallies, so the header can never disagree with the list below it — or print
-  // "undefined error" for a record whose coverage arrived without its counts.
-  // An unrecognized severity counts as a note rather than being dropped — the
-  // list below still renders it (styled as a note), and a tally that omitted it
-  // would read "0 note" above a visible finding.
-  const coverageCounts = (coverageFindings || []).reduce((counts, finding) => {
-    const bucket = counts[finding.severity] === undefined ? 'note' : finding.severity;
-    counts[bucket] += 1;
-    return counts;
-  }, { error: 0, warning: 0, note: 0 });
+  const flatnessFindings = Array.isArray(record.flatness?.findings) ? record.flatness.findings : null;
+  const coverageErrors = countSeverities(coverageFindings || []).error;
 
   return (
     <div className="mx-auto max-w-7xl space-y-4">
@@ -318,37 +361,25 @@ export default function ThreejsModelDetail() {
       </section>
 
       {coverageFindings && (
-        <section className="rounded-xl border border-port-border bg-port-card p-4">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-xs font-medium uppercase tracking-wide text-gray-400">Assembly coverage</h2>
-            <span className="text-xs text-gray-600">
-              {coverageFindings.length === 0
-                ? 'Nothing promised was left unbuilt'
-                : `${coverageCounts.error} error · ${coverageCounts.warning} warning · ${coverageCounts.note} note`}
-            </span>
-          </div>
-          {coverageFindings.length > 0 && (
-            <ul className="space-y-2">
-              {coverageFindings.map((finding, index) => (
-                <li
-                  key={`${finding.code}-${index}`}
-                  className={`rounded-lg border px-3 py-2 text-xs leading-relaxed ${SEVERITY_STYLE[finding.severity] || SEVERITY_STYLE.note}`}
-                >
-                  <span className="mr-2 text-[9px] uppercase tracking-wide opacity-80">{finding.severity}</span>
-                  {finding.message}
-                </li>
-              ))}
-            </ul>
-          )}
-          <p className="mt-3 flex items-start gap-1.5 text-[11px] leading-relaxed text-gray-500">
-            <Info className="mt-0.5 h-3 w-3 shrink-0" />
-            <span>
-              This check proves the model built what its own spec promised — never that the spec promised enough.
-              {coverageCounts.error > 0
-                && ' Refining without your own feedback will target the errors above.'}
-            </span>
-          </p>
-        </section>
+        <GatePanel
+          title="Assembly coverage"
+          findings={coverageFindings}
+          cleanLabel="Nothing promised was left unbuilt"
+          footer={`This check proves the model built what its own spec promised — never that the spec promised enough.${
+            coverageErrors > 0 ? ' Refining without your own feedback will target the errors above.' : ''
+          }`}
+        />
+      )}
+
+      {flatnessFindings && (
+        <GatePanel
+          title="Cross-section"
+          findings={flatnessFindings}
+          cleanLabel="Identity parts carry real depth"
+          footer={`A model can match its reference head-on and still be a stack of cardboard cut-outs, so this check counts how many identity-defining features are built only from flat parts.${
+            flatnessFindings.length > 0 ? ' Refining without your own feedback will also ask for real depth.' : ''
+          }`}
+        />
       )}
 
       {record.spec?.detailInventory?.length > 0 && (

@@ -23,6 +23,15 @@ describe('buildThreejsGenerationPrompt', () => {
     expect(build()).toContain('The model must come apart into readable components');
   });
 
+  it('says when extrude is the WRONG answer and gates on cross-section', () => {
+    const prompt = build();
+    // Selling extrude for silhouettes without naming its failure mode is how a
+    // whole model ends up as a stack of unbevelled slabs.
+    expect(prompt).toContain('When extrude is the WRONG answer');
+    expect(prompt).toContain('"bevelEnabled":true');
+    expect(prompt).toContain('must not have every identity part flat along one axis');
+  });
+
   it('carries the reference path, name, and direction into the prompt', () => {
     const prompt = build({ prompt: 'Match the brass finish.' });
     expect(prompt).toContain('/tmp/reference.png');

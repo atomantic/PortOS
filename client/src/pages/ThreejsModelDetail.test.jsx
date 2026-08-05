@@ -117,3 +117,50 @@ describe('ThreejsModelDetail assembly coverage', () => {
     expect(screen.queryByText('Assembly coverage')).not.toBeInTheDocument();
   });
 });
+
+describe('ThreejsModelDetail cross-section gate', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('lists the flatness finding and says an unsteered refinement will ask for depth', async () => {
+    getThreejsModel.mockResolvedValue({
+      ...baseRecord,
+      flatness: {
+        errorCount: 0,
+        warningCount: 1,
+        noteCount: 0,
+        identityDetailCount: 3,
+        flatIdentityDetailCount: 3,
+        flatRatio: 1,
+        slabPartIds: ['front', 'back', 'fin'],
+        findings: [{
+          code: 'flat-identity-parts',
+          severity: 'warning',
+          message: '3 of 3 identity-defining features are built only from flat parts (Front, Back, Fin).',
+        }],
+      },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Cross-section')).toBeInTheDocument());
+    expect(screen.getByText('3 of 3 identity-defining features are built only from flat parts (Front, Back, Fin).')).toBeInTheDocument();
+    expect(screen.getByText('0 error · 1 warning · 0 note')).toBeInTheDocument();
+    expect(screen.getByText(/will also ask for real depth/)).toBeInTheDocument();
+  });
+
+  it('reports real depth on a clean pass and stays quiet about refinement', async () => {
+    getThreejsModel.mockResolvedValue({ ...baseRecord, flatness: { warningCount: 0, findings: [] } });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Cross-section')).toBeInTheDocument());
+    expect(screen.getByText('Identity parts carry real depth')).toBeInTheDocument();
+    expect(screen.queryByText(/will also ask for real depth/)).not.toBeInTheDocument();
+  });
+
+  it('hides the section for a record generated before the gate existed', async () => {
+    getThreejsModel.mockResolvedValue({ ...baseRecord, flatness: null });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Example Beacon')).toBeInTheDocument());
+    expect(screen.queryByText('Cross-section')).not.toBeInTheDocument();
+  });
+});

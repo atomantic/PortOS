@@ -73,6 +73,11 @@ export async function createModel(input) {
     // `evaluateThreejsPartCoverage`. Records written before this field existed
     // read back as undefined; every consumer treats that as "not evaluated".
     coverage: null,
+    // Cross-section findings for `spec`, written alongside it by
+    // `evaluateThreejsFlatness`. Same additive-field contract as `coverage`:
+    // an older record reads back undefined, which every consumer treats as
+    // "not evaluated" rather than "passed".
+    flatness: null,
     error: null,
     generationOperationId: null,
     runs: [],

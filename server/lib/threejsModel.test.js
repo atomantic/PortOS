@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildThreejsFactorySource,
+  buildThreejsFlatnessFeedback,
+  evaluateThreejsFlatness,
   storedThreejsSculptSpecSchema,
   threejsGeometrySchema,
   threejsSculptSpecSchema,
@@ -382,5 +384,180 @@ describe('buildThreejsFactorySource', () => {
     expect(thrown?.message).toMatch(/parts\.0\.material: unknown material: missing/);
     expect(thrown?.status).toBe(400);
     expect(thrown?.code).toBe('VALIDATION_ERROR');
+  });
+});
+
+// A wide, finely-sampled outline that is nonetheless ONE plane in Z: the shape
+// the gate exists to catch, and the one a head-on similarity score rewards.
+const flatFanGeometry = () => {
+  const points = 24;
+  const vertices = [];
+  const indices = [];
+  for (let index = 0; index < points; index += 1) {
+    const angle = (index / points) * Math.PI * 2;
+    vertices.push(Number(Math.cos(angle).toFixed(3)), Number(Math.sin(angle).toFixed(3)), 0);
+  }
+  vertices.push(0, 0, 0);
+  for (let index = 0; index < points; index += 1) indices.push(points, index, (index + 1) % points);
+  return { type: 'custom', vertices, indices };
+};
+
+// A lat/long sphere shell — every axis carries far more than the plane
+// threshold, which is what having a cross-section looks like numerically.
+const solidShellGeometry = () => {
+  const rings = 12;
+  const segments = 12;
+  const vertices = [];
+  const indices = [];
+  for (let ring = 0; ring <= rings; ring += 1) {
+    const phi = (ring / rings) * Math.PI;
+    for (let segment = 0; segment < segments; segment += 1) {
+      const theta = (segment / segments) * Math.PI * 2;
+      vertices.push(
+        Number((Math.sin(phi) * Math.cos(theta)).toFixed(3)),
+        Number(Math.cos(phi).toFixed(3)),
+        Number((Math.sin(phi) * Math.sin(theta)).toFixed(3)),
+      );
+    }
+  }
+  for (let index = 0; index + 2 < vertices.length / 3; index += 3) indices.push(index, index + 1, index + 2);
+  return { type: 'custom', vertices, indices };
+};
+
+const geometryPart = (id, geometry) => ({
+  id,
+  name: `${id} part`,
+  geometry,
+  material: 'body',
+  position: [0, 0, 0],
+  rotationDegrees: [0, 0, 0],
+  scale: [1, 1, 1],
+  children: [],
+});
+
+// Every part gets its own identity-priority detail, so the aggregate ratio is
+// exactly the fraction of parts that are slabs.
+const flatnessSpec = (parts, priority = 'identity') => ({
+  ...validSpec(),
+  parts,
+  sockets: [],
+  detailInventory: parts.map((part) => ({
+    feature: `${part.name} silhouette`,
+    evidence: 'Visible in the reference image.',
+    implementationPartIds: [part.id],
+    priority,
+  })),
+});
+
+describe('evaluateThreejsFlatness', () => {
+  it('keeps the fixtures inside the authoring contract', () => {
+    const spec = flatnessSpec([geometryPart('fan', flatFanGeometry()), geometryPart('shell', solidShellGeometry())]);
+    expect(threejsSculptSpecSchema.safeParse(spec).success).toBe(true);
+  });
+
+  it('flags a spec whose identity parts are all slab custom meshes', () => {
+    const flatness = evaluateThreejsFlatness(flatnessSpec([
+      geometryPart('front', flatFanGeometry()),
+      geometryPart('back', flatFanGeometry()),
+    ]));
+    expect(flatness.findings).toHaveLength(1);
+    expect(flatness.findings[0]).toMatchObject({
+      code: 'flat-identity-parts',
+      severity: 'warning',
+      partIds: ['front', 'back'],
+    });
+    expect(flatness).toMatchObject({
+      errorCount: 0,
+      warningCount: 1,
+      identityDetailCount: 2,
+      flatIdentityDetailCount: 2,
+      flatRatio: 1,
+    });
+  });
+
+  it('accepts a custom mesh with a real cross-section on every axis', () => {
+    const flatness = evaluateThreejsFlatness(flatnessSpec([
+      geometryPart('shellA', solidShellGeometry()),
+      geometryPart('shellB', solidShellGeometry()),
+    ]));
+    expect(flatness.findings).toEqual([]);
+    expect(flatness).toMatchObject({ flatIdentityDetailCount: 0, flatRatio: 0, slabPartIds: [] });
+  });
+
+  it('reads an unbevelled extrude as a slab and a bevelled one as solid', () => {
+    const unbevelled = { ...validExtrude(), bevelEnabled: false };
+    const bevelled = { ...validExtrude(), bevelEnabled: true, bevelThickness: 0.15, bevelSize: 0.1 };
+
+    const flat = evaluateThreejsFlatness(flatnessSpec([geometryPart('plate', unbevelled)]));
+    expect(flat.findings.map((finding) => finding.code)).toEqual(['flat-identity-parts']);
+    expect(flat.flatRatio).toBe(1);
+
+    const solid = evaluateThreejsFlatness(flatnessSpec([geometryPart('plate', bevelled)]));
+    expect(solid.findings).toEqual([]);
+    expect(solid.flatRatio).toBe(0);
+  });
+
+  it('stays quiet while flat parts are the minority — extrude is right for a plate', () => {
+    const flatness = evaluateThreejsFlatness(flatnessSpec([
+      geometryPart('badge', { ...validExtrude(), bevelEnabled: false }),
+      geometryPart('shellA', solidShellGeometry()),
+      geometryPart('shellB', solidShellGeometry()),
+    ]));
+    expect(flatness.findings).toEqual([]);
+    // Still recorded, so the UI can show which part the one flat feature used.
+    expect(flatness).toMatchObject({ flatIdentityDetailCount: 1, slabPartIds: ['badge'] });
+    expect(flatness.flatRatio).toBeCloseTo(1 / 3);
+  });
+
+  it('ignores flat parts that carry no identity-priority feature', () => {
+    const flatness = evaluateThreejsFlatness(flatnessSpec([
+      geometryPart('vent', flatFanGeometry()),
+      geometryPart('grille', flatFanGeometry()),
+    ], 'minor'));
+    expect(flatness.findings).toEqual([]);
+    expect(flatness).toMatchObject({ identityDetailCount: 0, flatIdentityDetailCount: 0, flatRatio: null });
+  });
+
+  it('measures the meshes beneath a group rather than the group itself', () => {
+    const group = {
+      ...geometryPart('housing', undefined),
+      children: [geometryPart('housingShell', solidShellGeometry())],
+    };
+    delete group.geometry;
+    delete group.material;
+    const flatness = evaluateThreejsFlatness(flatnessSpec([group]));
+    expect(flatness).toMatchObject({ identityDetailCount: 1, flatIdentityDetailCount: 0 });
+  });
+
+  it('leaves a detail nothing was built for to the assembly-coverage gate', () => {
+    const locator = { ...geometryPart('anchor', undefined), children: [] };
+    delete locator.geometry;
+    delete locator.material;
+    const flatness = evaluateThreejsFlatness(flatnessSpec([locator]));
+    // `null`, not 0 — nothing was measured, which is not the same as passing.
+    expect(flatness).toMatchObject({ identityDetailCount: 0, flatRatio: null, findings: [] });
+  });
+
+  it('returns a clean result for a missing spec', () => {
+    expect(evaluateThreejsFlatness(null)).toMatchObject({ findings: [], flatRatio: null });
+  });
+});
+
+describe('buildThreejsFlatnessFeedback', () => {
+  it('returns empty for a missing or clean flatness result', () => {
+    expect(buildThreejsFlatnessFeedback(null)).toBe('');
+    expect(buildThreejsFlatnessFeedback({ findings: [] })).toBe('');
+  });
+
+  it('turns the warning into a numbered instruction naming the offending parts', () => {
+    const flatness = evaluateThreejsFlatness(flatnessSpec([
+      geometryPart('front', flatFanGeometry()),
+      geometryPart('back', flatFanGeometry()),
+    ]));
+    const feedback = buildThreejsFlatnessFeedback(flatness);
+    expect(feedback).toContain('cross-section check');
+    expect(feedback).toContain('1. ');
+    expect(feedback).toContain('front part');
+    expect(feedback).toContain('genuine depth');
   });
 });

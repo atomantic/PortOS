@@ -23,6 +23,15 @@ Choosing between them:
 - tube — anything sweeping a constant round section along a path: cables, hoses, wires, handles, pipes, straps, springs, antennae, bent rods, rope, rims.
 - lathe — profiles that are rotationally symmetric about the Y axis.
 - custom triangles — a last resort, only after none of the above can express the silhouette.
+
+When extrude is the WRONG answer: an unbevelled extrude has exactly two depth planes, so it is
+a slab. A body with a real cross-section — a torso, a limb, a head, a housing, a grip, a shell
+that swells or tapers through its thickness — must not be one. Build it from primitives, a
+lathe, or a tube, or compose several. When only an extrude can express the silhouette of a part
+that is not genuinely plate-like, set "bevelEnabled":true with a real bevelThickness/bevelSize,
+or add primitives on top of it that give it depth. The same applies to custom triangles: a fan
+of points sharing one Z value is a cut-out no matter how many triangles it carries — a custom
+mesh standing in for a solid must have depth on every axis.
 `;
 
 const outputContract = `
@@ -119,6 +128,7 @@ QUALITY GATE:
 - Major visible attachments may not float or be omitted.
 - Identity-priority details must be represented by actual geometry/material choices.
 - Do not spend custom triangles on a shape extrude, tube, or lathe already expresses.
+- A subject that is not genuinely plate-like must not have every identity part flat along one axis: the model has to hold up when it is orbited, not only from the camera you choose.
 - Include useful ambient/hemisphere fill plus at least one directional/key light.
 - Keep the full hierarchy at 160 parts or fewer.
 

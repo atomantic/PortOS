@@ -12,13 +12,14 @@
  * promised, never that the spec promised enough.
  */
 
+import { listSpecNames } from './threejsModel.js';
+
 // Severity of a promised-but-unbuilt feature scales with how much of the
 // subject's identity rides on it. A missing identity feature is a defect; a
 // missing minor one is a note, because folding fine relief into a parent mesh
 // is a legitimate modeling choice rather than an omission.
 const UNBUILT_SEVERITY = { identity: 'error', major: 'warning', minor: 'note' };
 const RANKED_PRIORITIES = new Set(['identity', 'major']);
-const MAX_NAMES_IN_MESSAGE = 8;
 
 /**
  * Depth-first flatten that carries, per part, the ancestor chain and whether the
@@ -42,10 +43,6 @@ function flattenParts(parts) {
   for (const part of parts || []) walk(part, []);
   return flat;
 }
-
-const listNames = (names) => (names.length > MAX_NAMES_IN_MESSAGE
-  ? `${names.slice(0, MAX_NAMES_IN_MESSAGE).join(', ')} (+${names.length - MAX_NAMES_IN_MESSAGE} more)`
-  : names.join(', '));
 
 /**
  * @param {object} spec a spec that has already passed `threejsSculptSpecSchema`
@@ -110,7 +107,7 @@ export function evaluateThreejsPartCoverage(spec) {
         severity: 'error',
         partIds: [partId],
         features,
-        message: `${features.length} promised features collapsed onto the single part "${label(partId)}" (${listNames(features)}). ${remedy}`,
+        message: `${features.length} promised features collapsed onto the single part "${label(partId)}" (${listSpecNames(features)}). ${remedy}`,
       });
       continue;
     }
@@ -121,7 +118,7 @@ export function evaluateThreejsPartCoverage(spec) {
       severity: 'note',
       partIds: [partId],
       features: group.map((detail) => detail.feature),
-      message: `${group.length} details share the single part "${label(partId)}" (${listNames(group.map((detail) => detail.feature))}). Folding minor relief into the piece it rides on is expected.`,
+      message: `${group.length} details share the single part "${label(partId)}" (${listSpecNames(group.map((detail) => detail.feature))}). Folding minor relief into the piece it rides on is expected.`,
     });
   }
 
@@ -138,7 +135,7 @@ export function evaluateThreejsPartCoverage(spec) {
       severity: 'warning',
       count: orphans.length,
       partIds: orphans.map((part) => part.id),
-      message: `${orphans.length} geometry part(s) are claimed by no detailInventory entry (${listNames(orphans.map((part) => part.name))}). Unattributed geometry cannot be reviewed or refined.`,
+      message: `${orphans.length} geometry part(s) are claimed by no detailInventory entry (${listSpecNames(orphans.map((part) => part.name))}). Unattributed geometry cannot be reviewed or refined.`,
     });
   }
 
@@ -178,7 +175,7 @@ export function evaluateThreejsPartCoverage(spec) {
       severity: UNBUILT_SEVERITY[detail.priority] || 'warning',
       partIds: resolved.map((part) => part.id),
       features: [detail.feature],
-      message: `"${detail.feature}" (${detail.priority}) points only at parts with no geometry (${listNames(resolved.map((part) => part.name))}), so nothing was built for it.`,
+      message: `"${detail.feature}" (${detail.priority}) points only at parts with no geometry (${listSpecNames(resolved.map((part) => part.name))}), so nothing was built for it.`,
     });
   }
 

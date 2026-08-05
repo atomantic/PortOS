@@ -419,6 +419,150 @@ export const threejsSculptSpecSchema = makeSpecSchema(makePartSchema(scale3Schem
  */
 export const storedThreejsSculptSpecSchema = makeSpecSchema(makePartSchema(vec3Schema));
 
+const MAX_NAMES_IN_MESSAGE = 8;
+
+/**
+ * Render a capped, comma-joined list of spec-level names (parts or features) for
+ * a finding message. Shared with `threejsModelCoverage.js` so both gates cap the
+ * same way — a finding that prints forty part names is one nobody reads.
+ */
+export const listSpecNames = (names) => (names.length > MAX_NAMES_IN_MESSAGE
+  ? `${names.slice(0, MAX_NAMES_IN_MESSAGE).join(', ')} (+${names.length - MAX_NAMES_IN_MESSAGE} more)`
+  : names.join(', '));
+
+// Cross-section gate. A spec can match its reference head-on — silhouette,
+// colour zones, part count — and still be a diorama of cardboard cut-outs:
+// every load-bearing part a planar extrusion on its own depth plane, correct
+// from the generated camera and hollow the moment the user orbits. Neither the
+// schema nor the assembly-coverage gate sees it, because a slab is well-formed
+// geometry that implements exactly the detail it claims.
+//
+// Evidence of form is PLANE count, not triangle count: a fan of four hundred
+// triangles sharing one Z value has no profile at all. So a `custom` mesh is
+// slab-like when its thinnest axis carries fewer distinct coordinates than a
+// curved surface needs to read as curved, and an unbevelled `extrude` is one by
+// construction — its sweep has exactly two depth planes no matter how many
+// `steps` subdivide the side walls.
+//
+// Honest limit: a genuinely three-dimensional but very coarse custom mesh (an
+// eight-vertex box) also lands under the plane threshold. That shape is already
+// against the prompt's guidance — `box` exists — so the false positive only
+// fires on geometry that should not have been custom triangles in the first
+// place.
+const SLAB_PLANE_THRESHOLD = 11;
+const PLANE_QUANTUM = 1e-3;
+
+// Aggregate, never per-part: `extrude` is the RIGHT answer for a plate, a badge,
+// or a sign, so a flat part is only evidence when the model's identity rides on
+// it. The finding is "the load-bearing parts are predominantly flat", reported
+// once the majority of buildable identity features are backed by nothing else.
+const FLAT_IDENTITY_RATIO_THRESHOLD = 0.6;
+
+const countAxisPlanes = (vertices) => {
+  const axes = [new Set(), new Set(), new Set()];
+  vertices.forEach((value, index) => axes[index % 3].add(Math.round(value / PLANE_QUANTUM)));
+  return axes.map((axis) => axis.size);
+};
+
+const isSlabGeometry = (geometry) => {
+  if (!geometry) return false;
+  // `bevelEnabled` defaults to false in the schema, so a parsed spec always
+  // carries it; `!== true` also reads an older stored spec that predates it.
+  if (geometry.type === 'extrude') return geometry.bevelEnabled !== true;
+  if (geometry.type !== 'custom') return false;
+  const vertices = Array.isArray(geometry.vertices) ? geometry.vertices : [];
+  if (vertices.length < 9) return false;
+  return Math.min(...countAxisPlanes(vertices)) < SLAB_PLANE_THRESHOLD;
+};
+
+const collectMeshes = (part, out = []) => {
+  if (part.geometry) out.push(part);
+  for (const child of part.children || []) collectMeshes(child, out);
+  return out;
+};
+
+/**
+ * @param {object} spec a spec that has already passed `threejsSculptSpecSchema`
+ * @returns {{findings: Array, errorCount: number, warningCount: number, noteCount: number,
+ *   identityDetailCount: number, flatIdentityDetailCount: number, flatRatio: number|null,
+ *   slabPartIds: string[]}}
+ */
+export function evaluateThreejsFlatness(spec) {
+  const byId = new Map();
+  const indexPart = (part) => {
+    byId.set(part.id, part);
+    for (const child of part.children || []) indexPart(child);
+  };
+  for (const part of spec?.parts || []) indexPart(part);
+
+  const details = Array.isArray(spec?.detailInventory) ? spec.detailInventory : [];
+  const slabPartIds = new Set();
+  const flatFeatures = [];
+  let evaluated = 0;
+
+  for (const detail of details) {
+    if (detail.priority !== 'identity') continue;
+    const meshes = new Map();
+    for (const id of new Set(detail.implementationPartIds || [])) {
+      const part = byId.get(id);
+      if (!part) continue;
+      // A detail may point at a group whose children carry the geometry, and two
+      // of its ids may nest, so meshes are collected by id rather than counted.
+      for (const mesh of collectMeshes(part)) meshes.set(mesh.id, mesh);
+    }
+    // Nothing was built for this feature anywhere — that is the assembly-coverage
+    // gate's `unbuilt-detail`, and counting it here would let a spec that built
+    // almost nothing read as a flat one.
+    if (meshes.size === 0) continue;
+    evaluated += 1;
+    const implementing = [...meshes.values()];
+    if (!implementing.every((mesh) => isSlabGeometry(mesh.geometry))) continue;
+    flatFeatures.push(detail.feature);
+    for (const mesh of implementing) slabPartIds.add(mesh.id);
+  }
+
+  // `null`, not 0: a spec with no buildable identity feature was not measured
+  // flat, it was not measured at all, and a 0 would read as a clean result.
+  const flatRatio = evaluated === 0 ? null : flatFeatures.length / evaluated;
+  const findings = [];
+  if (flatRatio !== null && flatRatio > FLAT_IDENTITY_RATIO_THRESHOLD) {
+    const offenders = [...slabPartIds];
+    findings.push({
+      code: 'flat-identity-parts',
+      severity: 'warning',
+      partIds: offenders,
+      features: flatFeatures,
+      message: `${flatFeatures.length} of ${evaluated} identity-defining features are built only from flat parts (${listSpecNames(offenders.map((id) => byId.get(id)?.name || id))}). The model will read as a projection the moment it is orbited — give the parts the subject's identity rides on a real cross-section instead of stacking unbevelled extrusions and planar triangle fans.`,
+    });
+  }
+
+  return {
+    findings,
+    errorCount: 0,
+    warningCount: findings.length,
+    noteCount: 0,
+    identityDetailCount: evaluated,
+    flatIdentityDetailCount: flatFeatures.length,
+    flatRatio,
+    slabPartIds: [...slabPartIds],
+  };
+}
+
+/**
+ * Default refinement feedback derived from a stored flatness result. Returns ''
+ * when the model has a cross-section, so the caller falls through to whatever
+ * other feedback it has.
+ */
+export function buildThreejsFlatnessFeedback(flatness) {
+  const warnings = (flatness?.findings || []).filter((finding) => finding.severity === 'warning');
+  if (warnings.length === 0) return '';
+  return [
+    'The previous pass failed the cross-section check — it reads as a flat projection rather than a solid:',
+    ...warnings.map((finding, index) => `${index + 1}. ${finding.message}`),
+    'Rebuild those parts with genuine depth: compose them from primitives, or give an extrude a bevel, so the model holds up from any orbit angle.',
+  ].join('\n');
+}
+
 const toIdentifier = (name) => {
   const words = String(name || 'Procedural').replace(/[^A-Za-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
   const joined = words.map((word) => word[0].toUpperCase() + word.slice(1)).join('') || 'Procedural';
