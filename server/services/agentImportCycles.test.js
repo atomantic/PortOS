@@ -232,6 +232,14 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
         .not.toMatch(new RegExp(String.raw`\b${name}\b`));
     }
 
+    // A named-export scan cannot see `export * from './agentManagement.js'` —
+    // that statement lists no names but re-exposes every one of them. cos.js has
+    // no wildcard re-export today, so forbid the form outright rather than trying
+    // to resolve what each one would pull in.
+    expect([...cosSrc.matchAll(/export\s*\*(?:\s+as\s+\w+)?\s*from\s*(['"])([^'"]+)\1/g)].map(m => m[2]),
+      'cos.js must not wildcard-re-export — it would re-expose process-layer transitions the named scan cannot see')
+      .toEqual([]);
+
     // Scoped to `cos.js` on purpose: `subAgentSpawner.js` still re-exports these
     // same three from `agentManagement.js`. That barrel is the cluster's declared
     // back-compat surface and retiring it is its own slice of #3450, so widening
