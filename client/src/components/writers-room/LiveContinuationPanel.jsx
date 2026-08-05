@@ -140,13 +140,14 @@ export default function LiveContinuationPanel({
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <LiveBudgetBadge label="Suggestions" budget={budget} spent={spent} />
-          {/* 44px tap target; -my-2 bleeds into the header's own py-2 so the
-              row keeps the height it already had. */}
+          {/* 44px tap target. No negative margin to claw the height back the
+              way a list row can (#3565): this header WRAPS at phone widths, and
+              a button pulled 8px up would then overlap the line above it. */}
           <button
             type="button"
             onClick={requestSuggest}
             disabled={loading}
-            className="flex items-center justify-center gap-1 min-h-[44px] px-2 -my-2 text-[10px] rounded bg-port-bg border border-port-border text-gray-300 hover:text-white disabled:opacity-50"
+            className="flex items-center justify-center gap-1 min-h-[44px] px-2 text-[10px] rounded bg-port-bg border border-port-border text-gray-300 hover:text-white disabled:opacity-50"
             title={SUGGEST_LABEL}
             aria-label={SUGGEST_LABEL}
           >
@@ -178,8 +179,9 @@ export default function LiveContinuationPanel({
               </span>
               {(opt.kind === 'prose' || opt.kind === 'dialogue') && (
                 // Every Insert button reads "Insert", so the accessible name
-                // names WHICH suggestion it inserts; 44px tap target bleeding
-                // into the card's own p-2.
+                // names WHICH suggestion it inserts. 44px tap target; -my-2
+                // bleeds into the card's own p-2 to keep the option list dense
+                // — safe here (unlike the header) because this row never wraps.
                 <button
                   type="button"
                   onClick={() => onInsert?.(opt)}

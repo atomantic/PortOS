@@ -113,6 +113,15 @@ describe('LiveBudgetBadge', () => {
     expect(badge.className).not.toContain('text-port-error');
   });
 
+  // A fifth of a 1-call budget rounds back up to 1, so an untouched allowance
+  // used to render as a warning.
+  it('does not warn on an untouched single-call budget', () => {
+    render(<LiveBudgetBadge label="Renders" budget={1} spent={0} />);
+    const badge = screen.getByText('Renders: 1 / 1 left today');
+    expect(badge.className).toContain('text-gray-500');
+    expect(badge.className).not.toContain('text-port-warning');
+  });
+
   it('never reports a negative balance when spend has overrun the budget', () => {
     render(<LiveBudgetBadge label="Suggestions" budget={5} spent={9} />);
     expect(screen.getByText(/Suggestions: 0 \/ 5 left today/)).toBeInTheDocument();
@@ -127,6 +136,9 @@ describe('CdBridgePanel a11y (#3567)', () => {
     const btn = screen.getByRole('button', { name: 'Propose treatment: Turns the prose at your cursor into a Creative Director treatment' });
     expectLabelInName(btn);
     expect(btn.className).toContain('min-h-[44px]');
+    // The header wraps at phone widths, so the button must NOT claw its height
+    // back with a negative margin — it would overlap the wrapped line above.
+    expect(btn.className).not.toContain('-my-');
   });
 
   it('shows the shared suggestion budget without hover', () => {
@@ -161,6 +173,9 @@ describe('LiveContinuationPanel a11y (#3567)', () => {
     const btn = screen.getByRole('button', { name: 'Suggest a continuation from the cursor' });
     expectLabelInName(btn);
     expect(btn.className).toContain('min-h-[44px]');
+    // The header wraps at phone widths, so the button must NOT claw its height
+    // back with a negative margin — it would overlap the wrapped line above.
+    expect(btn.className).not.toContain('-my-');
   });
 
   it('shows the suggestion budget without hover', () => {
@@ -194,6 +209,9 @@ describe('LiveRenderPanel a11y (#3567)', () => {
     const btn = screen.getByRole('button', { name: 'Render scene: Renders a quick reference image for the scene at your cursor' });
     expectLabelInName(btn);
     expect(btn.className).toContain('min-h-[44px]');
+    // The header wraps at phone widths, so the button must NOT claw its height
+    // back with a negative margin — it would overlap the wrapped line above.
+    expect(btn.className).not.toContain('-my-');
   });
 
   it('shows the render budget and what the action does without hover', () => {

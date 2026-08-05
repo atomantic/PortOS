@@ -18,14 +18,17 @@ import { AlertTriangle } from 'lucide-react';
 // announced twice).
 
 // Warn once a fifth of the daily allowance is left — at least 1 call, so a tiny
-// budget still gets a warning before it hits zero.
+// budget still gets a warning before it hits zero, but never the whole budget:
+// a `dailyCallBudget` of 1 would otherwise render its untouched allowance as a
+// warning, because a fifth of 1 rounds back up to 1.
 const LOW_RATIO = 0.2;
+const lowThreshold = (budget) => Math.min(budget - 1, Math.max(1, Math.ceil(budget * LOW_RATIO)));
 
 export default function LiveBudgetBadge({ label, budget, spent }) {
   const limited = budget > 0;
   const remaining = limited ? Math.max(0, budget - (spent || 0)) : null;
   const exhausted = limited && remaining === 0;
-  const low = limited && !exhausted && remaining <= Math.max(1, Math.ceil(budget * LOW_RATIO));
+  const low = limited && !exhausted && remaining <= lowThreshold(budget);
   const tone = exhausted ? 'text-port-error' : low ? 'text-port-warning' : 'text-gray-500';
 
   return (

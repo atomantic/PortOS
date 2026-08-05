@@ -117,13 +117,14 @@ export default function CdBridgePanel({ workId, liveMode, usage, onUsageChange, 
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <LiveBudgetBadge label="Suggestions (shared)" budget={budget} spent={spent} />
-          {/* 44px tap target; -my-2 bleeds into the panel's own py-2 so the
-              header doesn't grow taller than it already was. */}
+          {/* 44px tap target. No negative margin to claw the height back the
+              way a list row can (#3565): this header WRAPS at phone widths, and
+              a button pulled 8px up would then overlap the line above it. */}
           <button
             type="button"
             onClick={requestProposal}
             disabled={loading}
-            className="flex items-center justify-center gap-1 min-h-[44px] px-2 -my-2 text-[10px] rounded bg-port-bg border border-port-border text-gray-300 hover:text-white disabled:opacity-50"
+            className="flex items-center justify-center gap-1 min-h-[44px] px-2 text-[10px] rounded bg-port-bg border border-port-border text-gray-300 hover:text-white disabled:opacity-50"
             title={PROPOSE_LABEL}
             aria-label={PROPOSE_LABEL}
           >
