@@ -33,6 +33,13 @@ import toast from '../ui/Toast';
 // Scope-select values are prefixed so one <select> can carry both option kinds.
 const UNI_PREFIX = 'uni:';
 const COL_PREFIX = 'col:';
+// The type select spans two independent vocabularies — `entryCategory` is a
+// user-authored bucket key, `entryKind` is the fixed canon/variation/sheet
+// stage. They can collide (a category literally keyed `canon`), so options are
+// prefixed by which field they filter and grouped so the two "Canon" rows are
+// still distinguishable in the list.
+const CAT_PREFIX = 'cat:';
+const KIND_PREFIX = 'kind:';
 // A collection stores membership as `{ kind, ref }` (server/lib/mediaItemKey.js),
 // which serializes to the same `<kind>:<ref>` string `normalizeImage` puts on
 // `item.key` — so membership is a set lookup, not a filename comparison.
@@ -117,13 +124,17 @@ export default function GalleryImagePicker({ open, onClose, onSelect, allowUploa
     .map((c) => ({ value: `${COL_PREFIX}${c.id}`, label: c.name || c.id }))
     .sort(byLabel), [collections, galleryKeys]);
 
-  const typeOptions = useMemo(() => {
-    const seen = new Set();
+  const [categoryOptions, kindOptions] = useMemo(() => {
+    const categories = new Set();
+    const kinds = new Set();
     for (const it of items) {
-      if (it.entryCategory) seen.add(it.entryCategory);
-      if (it.entryKind) seen.add(it.entryKind);
+      if (it.entryCategory) categories.add(it.entryCategory);
+      if (it.entryKind) kinds.add(it.entryKind);
     }
-    return [...seen].map((value) => ({ value, label: humanizeCategory(value) })).sort(byLabel);
+    const toOptions = (values, prefix) => [...values]
+      .map((value) => ({ value: `${prefix}${value}`, label: humanizeCategory(value) }))
+      .sort(byLabel);
+    return [toOptions(categories, CAT_PREFIX), toOptions(kinds, KIND_PREFIX)];
   }, [items]);
 
   // Membership set for the selected collection — `null` whenever no collection
@@ -140,17 +151,20 @@ export default function GalleryImagePicker({ open, onClose, onSelect, allowUploa
     if (scope && ![...universeOptions, ...collectionOptions].some((o) => o.value === scope)) setScope('');
   }, [scope, universeOptions, collectionOptions]);
   useEffect(() => {
-    if (type && !typeOptions.some((o) => o.value === type)) setType('');
-  }, [type, typeOptions]);
+    if (type && ![...categoryOptions, ...kindOptions].some((o) => o.value === type)) setType('');
+  }, [type, categoryOptions, kindOptions]);
 
   const filtered = useMemo(() => {
     const universeId = scope.startsWith(UNI_PREFIX) ? scope.slice(UNI_PREFIX.length) : null;
-    if (tokens.length === 0 && !universeId && !scopedCollectionKeys && !type) return items;
+    const category = type.startsWith(CAT_PREFIX) ? type.slice(CAT_PREFIX.length) : null;
+    const kind = type.startsWith(KIND_PREFIX) ? type.slice(KIND_PREFIX.length) : null;
+    if (tokens.length === 0 && !universeId && !scopedCollectionKeys && !category && !kind) return items;
     return items.filter((item, idx) => {
       if (tokens.length > 0 && !matchHaystack(haystacks[idx], tokens)) return false;
       if (universeId && item.universeId !== universeId) return false;
       if (scopedCollectionKeys && !scopedCollectionKeys.has(item.key)) return false;
-      if (type && item.entryCategory !== type && item.entryKind !== type) return false;
+      if (category && item.entryCategory !== category) return false;
+      if (kind && item.entryKind !== kind) return false;
       return true;
     });
   }, [items, haystacks, tokens, scope, scopedCollectionKeys, type]);
@@ -263,7 +277,7 @@ export default function GalleryImagePicker({ open, onClose, onSelect, allowUploa
               </select>
             </div>
           )}
-          {typeOptions.length > 0 && (
+          {(categoryOptions.length > 0 || kindOptions.length > 0) && (
             <div className="sm:w-36">
               <label htmlFor="gallery-picker-type" className="sr-only">Filter by type</label>
               <select
@@ -273,7 +287,16 @@ export default function GalleryImagePicker({ open, onClose, onSelect, allowUploa
                 className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-port-accent"
               >
                 <option value="">All types</option>
-                {typeOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                {categoryOptions.length > 0 && (
+                  <optgroup label="Categories">
+                    {categoryOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </optgroup>
+                )}
+                {kindOptions.length > 0 && (
+                  <optgroup label="Entry kinds">
+                    {kindOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </optgroup>
+                )}
               </select>
             </div>
           )}

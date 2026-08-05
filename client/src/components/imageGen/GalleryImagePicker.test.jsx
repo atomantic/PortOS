@@ -157,14 +157,32 @@ describe('GalleryImagePicker', () => {
     expect(screen.getByRole('option', { name: 'Vehicles' })).toBeTruthy();
     expect(screen.getByRole('option', { name: 'Canon' })).toBeTruthy();
 
-    fireEvent.change(typeSelect(), { target: { value: 'vehicles' } });
+    fireEvent.change(typeSelect(), { target: { value: 'cat:vehicles' } });
     await waitFor(() => expect(screen.queryByAltText('a neon sunset')).toBeNull());
     expect(screen.getByAltText('a chrome mecha')).toBeTruthy();
 
     // entryKind is matched by the same select — 'variation' only tags forest.
-    fireEvent.change(typeSelect(), { target: { value: 'variation' } });
+    fireEvent.change(typeSelect(), { target: { value: 'kind:variation' } });
     await waitFor(() => expect(screen.queryByAltText('a chrome mecha')).toBeNull());
     expect(screen.getByAltText('a quiet forest')).toBeTruthy();
+  });
+
+  it('keeps a category keyed like an entry kind distinct from that kind', async () => {
+    listImageGallery.mockResolvedValue([
+      // A user-authored bucket that happens to be keyed 'canon', on a variation.
+      { filename: 'a.png', path: '/data/images/a.png', prompt: 'category canon', entryCategory: 'canon', entryKind: 'variation' },
+      { filename: 'b.png', path: '/data/images/b.png', prompt: 'kind canon', entryCategory: 'places', entryKind: 'canon' },
+    ]);
+    render(<GalleryImagePicker open onClose={vi.fn()} onSelect={vi.fn()} />);
+    await screen.findByAltText('category canon');
+
+    fireEvent.change(typeSelect(), { target: { value: 'cat:canon' } });
+    await waitFor(() => expect(screen.queryByAltText('kind canon')).toBeNull());
+    expect(screen.getByAltText('category canon')).toBeTruthy();
+
+    fireEvent.change(typeSelect(), { target: { value: 'kind:canon' } });
+    await waitFor(() => expect(screen.queryByAltText('category canon')).toBeNull());
+    expect(screen.getByAltText('kind canon')).toBeTruthy();
   });
 
   it('AND-combines the filters with the text query', async () => {
@@ -190,7 +208,7 @@ describe('GalleryImagePicker', () => {
     await waitFor(() => expect(screen.getByRole('option', { name: 'Mood Board' })).toBeTruthy());
 
     fireEvent.change(scopeSelect(), { target: { value: 'col:col-1' } });
-    fireEvent.change(typeSelect(), { target: { value: 'variation' } });
+    fireEvent.change(typeSelect(), { target: { value: 'kind:variation' } });
     await waitFor(() => expect(screen.queryByAltText('a neon sunset')).toBeNull());
 
     fireEvent.change(scopeSelect(), { target: { value: '' } });
