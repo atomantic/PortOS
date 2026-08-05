@@ -169,8 +169,10 @@ export default function BucketCard({
           </div>
         </div>
       ) : (
+        // py-1 rather than py-2: the 44px action buttons now set the row height,
+        // so the larger tap targets don't also inflate the header.
         <div
-          className={`flex items-center gap-2 px-3 py-2 border-b cursor-grab ${colors.header}`}
+          className={`flex items-center gap-2 px-3 py-1 border-b cursor-grab ${colors.header}`}
           draggable
           onDragStart={(e) => {
             e.dataTransfer.setData(BUCKET_DND_TYPE, bucket.id);
@@ -183,17 +185,17 @@ export default function BucketCard({
           <span className="text-xs text-gray-500">{links.length}</span>
           <button
             onClick={startEdit}
-            className="p-1 text-gray-400 hover:text-white transition-colors"
+            className="shrink-0 flex items-center justify-center min-h-[44px] min-w-[44px] rounded text-gray-400 hover:text-white transition-colors"
             title="Edit bucket" aria-label="Edit bucket"
           >
-            <Edit2 size={13} />
+            <Edit2 size={14} />
           </button>
           <button
             onClick={() => setConfirmDelete(true)}
-            className="p-1 text-gray-400 hover:text-port-error transition-colors"
+            className="shrink-0 flex items-center justify-center min-h-[44px] min-w-[44px] rounded text-gray-400 hover:text-port-error transition-colors"
             title="Delete bucket" aria-label="Delete bucket"
           >
-            <Trash2 size={13} />
+            <Trash2 size={14} />
           </button>
         </div>
       )}
@@ -246,7 +248,7 @@ export default function BucketCard({
         <button
           type="submit"
           disabled={adding || !addUrl.trim()}
-          className="shrink-0 px-2 py-1 bg-port-accent/80 hover:bg-port-accent text-white rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          className="shrink-0 flex items-center justify-center min-h-[44px] min-w-[44px] bg-port-accent/80 hover:bg-port-accent text-white rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           title="Add link to bucket" aria-label="Add link to bucket"
         >
           {adding ? <BrailleSpinner /> : <Plus size={14} />}
