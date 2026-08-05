@@ -199,9 +199,12 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
     // only unambiguous inside the facade because the facade renames it to
     // `requestAgentTermination`. Subtracting is what keeps this derivation from
     // failing on a name `cos.js` is right to export.
+    // Both quote styles throughout — `from "./x.js"` is valid ESM, and a matcher
+    // that only knows `'` reads as green over the exact statement it forbids.
     const facade = readFileSync(join(SERVICES_DIR, 'agentOrchestrator.js'), 'utf-8');
     const reexportedFrom = (source) => {
-      const block = facade.match(new RegExp(String.raw`export\s*\{([^}]*)\}\s*from\s*'\./${source}'`));
+      const block = facade.match(new RegExp(
+        String.raw`export\s*\{([^}]*)\}\s*from\s*['"]\./${source.replace(/\./g, '\\.')}['"]`));
       expect(block, `facade no longer re-exports from ${source} — did the layering change?`).toBeTruthy();
       return block[1]
         .replace(/\/\/[^\n]*/g, '')       // strip the per-export state-edge comments
@@ -221,7 +224,7 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
     // `./agentManagement.js` (which a cosAgents-only scan never sees). Either one
     // restores the surface with the guard fully green.
     const cosSrc = readFileSync(join(SERVICES_DIR, 'cos.js'), 'utf-8');
-    const cosReexports = [...cosSrc.matchAll(/export\s*\{[^}]*\}\s*from\s*'[^']+'/g)].map(m => m[0]).join('\n');
+    const cosReexports = [...cosSrc.matchAll(/export\s*\{[^}]*\}\s*from\s*(['"])[^'"]+\1/g)].map(m => m[0]).join('\n');
     expect(cosReexports, "cos.js re-exports nothing from './cosAgents.js' — did the block move?")
       .toMatch(/cosAgents\.js/);
     for (const name of forbidden) {
