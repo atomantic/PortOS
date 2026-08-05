@@ -330,7 +330,15 @@ async function resolveLiveIds(type, attempt) {
   if (raced && attempt + 1 < LIVE_ID_MAX_ATTEMPTS) {
     return resolveLiveIds(type, attempt + 1);
   }
-  if (!raced) {
+  if (raced) {
+    // Ceiling reached. The invalidation may also have dropped ids this pass
+    // took FROM the index (so they were never in `unresolved`) — read those
+    // before answering, or a record we merely stopped knowing about would be
+    // reported as not live and undercount the tally.
+    const unknown = ids.filter((id) => !verdicts.has(id) && !index.has(id));
+    const reloaded = await Promise.all(unknown.map((id) => store.loadOne(id)));
+    unknown.forEach((id, i) => verdicts.set(id, isLiveRecord(reloaded[i])));
+  } else {
     for (const [id, live] of verdicts) index.set(id, live);
   }
 
