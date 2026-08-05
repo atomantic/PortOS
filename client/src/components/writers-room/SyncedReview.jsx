@@ -59,6 +59,14 @@ function computeHighlights(data, selection) {
   return { proseIds, sceneIds, mediaSceneIds };
 }
 
+// The id the selection anchors on within `paneType`, or null when the selection
+// lives in another pane. `computeHighlights` also adds the selected item to its
+// own pane's highlight set, so without this the anchor card would be
+// indistinguishable from the cards it links to.
+function selectedIdFor(selection, paneType) {
+  return selection?.type === paneType ? selection.id : null;
+}
+
 // Visual state for a card given the active selection: 'selected' | 'linked' |
 // 'dim' | 'none'. Drives the ring/opacity so a selection reads at a glance.
 function cardState(isSelected, isLinked, hasSelection) {
@@ -274,6 +282,7 @@ export default function SyncedReview({ work }) {
               containerRef={proseRef}
               segments={data.prose.segments}
               proseIds={proseIds}
+              selectedId={selectedIdFor(selection, 'prose')}
               hasSelection={hasSelection}
               onSelect={(id) => select('prose', id)}
             />
@@ -284,6 +293,7 @@ export default function SyncedReview({ work }) {
               containerRef={scriptRef}
               script={data.script}
               sceneIds={sceneIds}
+              selectedId={selectedIdFor(selection, 'script')}
               hasSelection={hasSelection}
               segHeading={segHeading}
               onSelect={(id) => select('script', id)}
@@ -295,6 +305,7 @@ export default function SyncedReview({ work }) {
               containerRef={mediaRef}
               items={data.media.items}
               mediaSceneIds={mediaSceneIds}
+              selectedId={selectedIdFor(selection, 'media')}
               hasSelection={hasSelection}
               segHeading={segHeading}
               onSelect={(sceneId) => select('media', sceneId)}
@@ -321,12 +332,12 @@ function ScrollPane({ containerRef, className = '', paneKey, icon: Icon, label, 
 }
 
 // ---- Prose pane ----
-function ProsePane({ containerRef, className, segments, proseIds, hasSelection, onSelect }) {
+function ProsePane({ containerRef, className, segments, proseIds, selectedId, hasSelection, onSelect }) {
   return (
     <ScrollPane containerRef={containerRef} className={className} paneKey="prose" icon={FileText} label="Prose" count={segments.length}>
       <div className="p-3 space-y-2">
         {segments.map((seg) => {
-          const state = cardState(false, proseIds.has(seg.id), hasSelection);
+          const state = cardState(seg.id === selectedId, proseIds.has(seg.id), hasSelection);
           return (
             <button
               key={seg.id}
@@ -355,7 +366,7 @@ function ProsePane({ containerRef, className, segments, proseIds, hasSelection, 
 }
 
 // ---- Script pane ----
-function ScriptPane({ containerRef, className, script, sceneIds, hasSelection, segHeading, onSelect }) {
+function ScriptPane({ containerRef, className, script, sceneIds, selectedId, hasSelection, segHeading, onSelect }) {
   return (
     <ScrollPane containerRef={containerRef} className={className} paneKey="script" icon={Clapperboard} label="Script" count={script.scenes.length}>
       {!script.available ? (
@@ -367,7 +378,7 @@ function ScriptPane({ containerRef, className, script, sceneIds, hasSelection, s
       ) : (
         <div className="p-3 space-y-2">
           {script.scenes.map((sc) => {
-            const state = cardState(false, sceneIds.has(sc.id), hasSelection);
+            const state = cardState(sc.id === selectedId, sceneIds.has(sc.id), hasSelection);
             return (
               <button
                 key={sc.id}
@@ -402,7 +413,7 @@ function ScriptPane({ containerRef, className, script, sceneIds, hasSelection, s
 }
 
 // ---- Media pane ----
-function MediaPane({ containerRef, className, items, mediaSceneIds, hasSelection, segHeading, onSelect }) {
+function MediaPane({ containerRef, className, items, mediaSceneIds, selectedId, hasSelection, segHeading, onSelect }) {
   return (
     <ScrollPane containerRef={containerRef} className={className} paneKey="media" icon={ImageIcon} label="Media" count={items.length}>
       {items.length === 0 ? (
@@ -412,7 +423,7 @@ function MediaPane({ containerRef, className, items, mediaSceneIds, hasSelection
       ) : (
         <div className="p-3 grid grid-cols-2 gap-2">
           {items.map((m) => {
-            const state = cardState(false, mediaSceneIds.has(m.sceneId), hasSelection);
+            const state = cardState(m.sceneId === selectedId, mediaSceneIds.has(m.sceneId), hasSelection);
             return (
               <button
                 key={`${m.sceneId}-${m.ref}`}

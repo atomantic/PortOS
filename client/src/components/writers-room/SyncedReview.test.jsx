@@ -64,6 +64,58 @@ describe('SyncedReview', () => {
     await waitFor(() => expect(screen.queryByText(/Clear link/)).toBeNull());
   });
 
+  it('renders the anchor card of a cross-link stronger than the cards it links to', async () => {
+    // seg-001 ↔ scene-01 ↔ one rendered media item, so every pane has both an
+    // anchor candidate and a merely-linked card (#3586).
+    const base = payload();
+    getWritersRoomSyncedReview.mockResolvedValue(payload({
+      prose: {
+        segments: [
+          { ...base.prose.segments[0], media: [{ sceneId: 'scene-01', ref: 'a.png' }] },
+          base.prose.segments[1],
+        ],
+      },
+      script: { ...base.script, scenes: [{ ...base.script.scenes[0], media: { ref: 'a.png' } }] },
+      media: {
+        items: [{
+          sceneId: 'scene-01', ref: 'a.png', sceneHeading: 'Opening Scene', orphan: false,
+          proseSegmentIds: ['seg-001'], prompt: 'a room', generatedAt: '2026-01-01T00:00:00Z',
+        }],
+      },
+    }));
+    const { container } = render(<SyncedReview work={work} />);
+    await screen.findByText('The hero wakes.');
+
+    const card = (pane, syncId) => container.querySelector(`[data-pane="${pane}"] [data-sync-id="${syncId}"]`);
+    const isSelected = (el) => /\bring-port-accent\b/.test(el.className);
+    const isLinked = (el) => /border-port-accent\/50/.test(el.className);
+
+    // Selecting prose: its own card is the anchor; the script/media cards it
+    // maps to get the weaker "linked" treatment.
+    fireEvent.click(screen.getByText('The hero wakes.'));
+    await waitFor(() => expect(isSelected(card('prose', 'seg-001'))).toBe(true));
+    expect(isLinked(card('prose', 'seg-001'))).toBe(false);
+    expect(isSelected(card('script', 'scene-01'))).toBe(false);
+    expect(isLinked(card('script', 'scene-01'))).toBe(true);
+    expect(isSelected(card('media', 'scene-01'))).toBe(false);
+    expect(isLinked(card('media', 'scene-01'))).toBe(true);
+    // an unrelated prose card dims rather than reading as linked
+    expect(card('prose', 'seg-002').className).toMatch(/opacity-40/);
+
+    // Selecting the script scene moves the anchor to the script pane.
+    fireEvent.click(card('script', 'scene-01'));
+    await waitFor(() => expect(isSelected(card('script', 'scene-01'))).toBe(true));
+    expect(isSelected(card('prose', 'seg-001'))).toBe(false);
+    expect(isLinked(card('prose', 'seg-001'))).toBe(true);
+    expect(isSelected(card('media', 'scene-01'))).toBe(false);
+
+    // …and selecting the media item moves it to the media pane.
+    fireEvent.click(card('media', 'scene-01'));
+    await waitFor(() => expect(isSelected(card('media', 'scene-01'))).toBe(true));
+    expect(isSelected(card('script', 'scene-01'))).toBe(false);
+    expect(isLinked(card('script', 'scene-01'))).toBe(true);
+  });
+
   it('toggling the Script pane off hides it but keeps at least one pane', async () => {
     getWritersRoomSyncedReview.mockResolvedValue(payload());
     render(<SyncedReview work={work} />);
