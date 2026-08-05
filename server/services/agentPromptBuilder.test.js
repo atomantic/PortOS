@@ -1762,14 +1762,37 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
       // than regex-slicing around a heading) keeps the boundary unambiguous.
       const builderAuthored = prompt.replace(claudeMdSection, '');
       expect(builderAuthored).not.toMatch(/Example Global Instructions/); // strip really worked
-      // The exact assertion that false-failed in #3475 — now scoped so the
-      // fixture's own copy of the string can't decide it.
+      // Containment check, not merge coverage: this proves the fixture's own copy
+      // of the string stays inside the spliced section and can't decide the
+      // assertion — which is the exact confusion that made #3475 false-fail. The
+      // api path never emits merge guidance anyway; that half of the contract is
+      // pinned by the TUI sibling below.
       expect(builderAuthored).not.toMatch(/gh pr merge/);
+      // Non-vacuous: drop the discardWorktree arm and step 4 of the fallback
+      // template renders "Commit and push your changes" here.
       expect(builderAuthored).not.toMatch(/Commit and push your changes/);
       expect(builderAuthored).not.toMatch(/## Completion Workflow/);
       // …and the positive half of the same contract still renders.
       expect(builderAuthored).toMatch(/## Completion \(Reasoning-Only Task\)/);
       expect(builderAuthored).toMatch(/Do NOT commit, push, or open a PR/);
+    });
+
+    it('light TUI path suppresses the merge instruction and never splices the global CLAUDE.md at all', () => {
+      // `openPR: true` on purpose: this is the shape where merge suppression has
+      // to do work — the task metadata asks for a PR, and discardWorktree must
+      // still win. Remove the discardWorktree arm and this prompt falls through to
+      // buildTuiCompletionSection, which renders `gh pr merge … --merge
+      // --delete-branch`. (The `openPR: false` sibling above never reaches that
+      // line at all, which is why its /gh pr merge/ check can't carry this.)
+      const prTask = makeTask({ metadata: { discardWorktree: true, useWorktree: true, openPR: true, simplify: true } });
+      const prompt = buildLightContextPrompt(prTask, '/r', wt, isTruthyMeta, { isTui: true });
+      expect(prompt).not.toMatch(/gh pr merge/);
+      expect(prompt).toMatch(/## Completion \(Reasoning-Only Task\)/);
+      // The light path targets agentic CLIs that load CLAUDE.md natively, so the
+      // builder must not paste it in. The live fixture proves that positively; the
+      // nonexistent-home stub the rest of the file uses could not.
+      expect(prompt).not.toMatch(/## CLAUDE\.md Instructions/);
+      expect(prompt).not.toMatch(/Example Global Instructions/);
     });
   });
 });
