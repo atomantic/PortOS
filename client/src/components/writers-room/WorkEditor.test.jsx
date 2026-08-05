@@ -5,11 +5,11 @@ import { MemoryRouter } from 'react-router';
 
 // Header layout contract for #3568: on a ~375px phone the WorkEditor header
 // used to wrap into 4-5 rows and push the prose textarea below the fold. The
-// fix regroups the secondary controls (status, view mode, snapshot) into one
-// full-width sub-bar under `sm` while `sm:contents` dissolves that wrapper on
-// desktop so the single-row layout — and its left-to-right order — is
-// unchanged. jsdom doesn't apply Tailwind, so these assert the class contract
-// that drives the layout plus the behaviour that must survive the regroup.
+// fix moves the status select and view-mode toggle into a full-width sub-bar
+// that `sm:contents` dissolves back into the single header row on desktop —
+// so DOM order stays the desktop order and only the phone layout changes.
+// jsdom doesn't apply Tailwind, so these assert the class contract that drives
+// the layout plus the behaviour that must survive the regroup.
 
 vi.mock('./StoryboardPanel', () => ({
   default: function StoryboardPanelStub() { return <div data-testid="storyboard-panel" />; },
@@ -54,7 +54,6 @@ async function renderEditor() {
   return view;
 }
 
-// The header controls, in the order they must read left-to-right on desktop.
 function headerControls() {
   const title = screen.getByLabelText('Work title');
   return {
@@ -64,13 +63,9 @@ function headerControls() {
     viewGroup: screen.getByRole('group', { name: 'View mode' }),
     save: screen.getByRole('button', { name: /^Sav/ }),
     snapshot: screen.getByRole('button', { name: 'Snapshot' }),
-    menu: screen.getByLabelText('Work menu').closest('div'),
+    // The `relative` wrapper that positions the dropdown, not the button.
+    menu: screen.getByLabelText('Work menu').parentElement,
   };
-}
-
-function orderOf(el) {
-  const match = /(?:^|\s)sm:order-(\d+)(?:\s|$)/.exec(el.className);
-  return match ? Number(match[1]) : null;
 }
 
 beforeEach(() => {
@@ -78,35 +73,46 @@ beforeEach(() => {
 });
 
 describe('WorkEditor header layout (#3568)', () => {
-  it('keeps the first header row to title + Save + Work menu on mobile', async () => {
+  it('gives the secondary controls their own row under sm and none of their own on desktop', async () => {
     await renderEditor();
-    const { header, title, save, menu } = headerControls();
+    const { status, viewGroup } = headerControls();
     const secondary = screen.getByTestId('work-header-secondary');
 
-    // Four direct children: three first-row controls plus the sub-bar.
-    expect([...header.children]).toEqual([title, save, menu, secondary]);
-    // The sub-bar takes a full row of its own under `sm`…
+    // Its own full-width row, ordered after the primary actions, under `sm`…
     expect(secondary.className).toContain('w-full');
-    // …and dissolves into the header row at `sm+`.
+    expect(secondary.className).toContain('order-last');
+    // …dissolved into the header row at `sm+`.
     expect(secondary.className).toContain('sm:contents');
-  });
-
-  it('parks status, view mode and snapshot in the mobile sub-bar', async () => {
-    await renderEditor();
-    const { status, viewGroup, snapshot } = headerControls();
-    const secondary = screen.getByTestId('work-header-secondary');
-
-    for (const el of [status, viewGroup, snapshot]) {
+    for (const el of [status, viewGroup]) {
       expect(secondary.contains(el)).toBe(true);
     }
   });
 
-  it('restores the original left-to-right control order on desktop', async () => {
+  it('leaves title, Save, Snapshot and the Work menu on the first mobile row', async () => {
+    await renderEditor();
+    const { header, title, save, snapshot, menu } = headerControls();
+    const secondary = screen.getByTestId('work-header-secondary');
+
+    expect([...header.children]).toEqual([title, secondary, save, snapshot, menu]);
+    // Only the sub-bar is re-ordered; anything else carrying an `order-*` class
+    // would either break the row split or desync tab order from the layout.
+    for (const el of [title, save, snapshot, menu]) {
+      expect(el.className).not.toMatch(/(?:^|\s)(?:sm:)?order-/);
+    }
+  });
+
+  it('keeps DOM order equal to the desktop left-to-right order', async () => {
     await renderEditor();
     const { title, status, viewGroup, save, snapshot, menu } = headerControls();
 
-    const expected = [title, status, viewGroup, save, snapshot, menu];
-    expect(expected.map(orderOf)).toEqual([1, 2, 3, 4, 5, 6]);
+    // title · status · view mode · Save · Snapshot · menu — the pre-#3568
+    // desktop sequence, and (because nothing sets `order` on desktop) the tab
+    // order a keyboard user gets.
+    const sequence = [title, status, viewGroup, save, snapshot, menu];
+    for (let i = 0; i < sequence.length - 1; i += 1) {
+      const relation = sequence[i].compareDocumentPosition(sequence[i + 1]);
+      expect(relation & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
   });
 
   it('renders every control exactly once — nothing is duplicated per breakpoint', async () => {
@@ -117,19 +123,20 @@ describe('WorkEditor header layout (#3568)', () => {
     expect(screen.getAllByRole('group', { name: 'View mode' })).toHaveLength(1);
   });
 
-  it('keeps view-mode buttons named when their labels collapse to icons under sm', async () => {
+  it('keeps buttons named when their labels collapse to icons under sm', async () => {
     await renderEditor();
-    const { viewGroup } = headerControls();
+    const { viewGroup, snapshot } = headerControls();
 
     for (const name of ['Edit', 'Read', 'Review']) {
       const button = within(viewGroup).getByRole('button', { name });
-      // The visible text is hidden under `sm`, so the name comes from aria-label.
       expect(button).toHaveAttribute('aria-label', name);
       expect(within(button).getByText(name).className).toContain('hidden sm:inline');
     }
+    expect(snapshot).toHaveAttribute('aria-label', 'Snapshot');
+    expect(within(snapshot).getByText('Snapshot').className).toContain('hidden sm:inline');
   });
 
-  it('gives the mobile-visible header controls a 44px touch target', async () => {
+  it('gives the header controls a 44px touch target on mobile', async () => {
     await renderEditor();
     const { title, status, save, snapshot } = headerControls();
     const menuButton = screen.getByLabelText('Work menu');
