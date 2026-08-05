@@ -153,12 +153,42 @@ describe('Three.js model routes', () => {
     });
   });
 
-  it('rejects a family that is not in the shipped taxonomy', async () => {
+  it('degrades a family this build does not ship to general instead of 400-ing', async () => {
+    // A record written by a build with a larger taxonomy (a downgrade, or a
+    // restored backup) reads its stored family straight back into the refine
+    // request. Rejecting it would leave that record permanently un-refinable.
+    models.startGeneration.mockResolvedValueOnce({ id: 'threejs-1', status: 'generating' });
     const res = await request(makeApp())
       .post('/api/threejs-models/threejs-1/generate')
       .send({ providerId: 'codex', family: 'kaiju-mecha-hybrid' });
+    expect(res.status).toBe(202);
+    expect(models.startGeneration).toHaveBeenCalledWith('threejs-1', {
+      providerId: 'codex',
+      family: 'general',
+      feedback: '',
+    });
+  });
+
+  it('still rejects a family that is not a string at all', async () => {
+    // A stale id is a plausible value; a number is a malformed body.
+    const res = await request(makeApp())
+      .post('/api/threejs-models/threejs-1/generate')
+      .send({ providerId: 'codex', family: 42 });
     expect(res.status).toBe(400);
     expect(models.startGeneration).not.toHaveBeenCalled();
+  });
+
+  it('leaves the family key absent when the caller omits it', async () => {
+    // Absent must stay absent — the service reads that as "keep what is stored",
+    // which a preprocess that defaulted to `general` would silently overwrite.
+    models.startGeneration.mockResolvedValueOnce({ id: 'threejs-1', status: 'generating' });
+    await request(makeApp())
+      .post('/api/threejs-models/threejs-1/generate')
+      .send({ providerId: 'codex' });
+    expect(models.startGeneration).toHaveBeenCalledWith('threejs-1', {
+      providerId: 'codex',
+      feedback: '',
+    });
   });
 
   it('serves generated source as a JavaScript attachment', async () => {

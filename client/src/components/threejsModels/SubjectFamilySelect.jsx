@@ -1,3 +1,5 @@
+import { resolveFamilyId } from '../../hooks/useThreejsModelFamilies';
+
 /**
  * Subject-family picker, shared by the create form and the workspace so the two
  * cannot drift on labelling or on what an empty taxonomy does. Renders nothing
@@ -7,7 +9,7 @@
 export default function SubjectFamilySelect({
   id,
   families,
-  value,
+  value: requestedValue,
   onChange,
   disabled = false,
   optional = false,
@@ -18,6 +20,8 @@ export default function SubjectFamilySelect({
   // this element: a caller's own margin div would leave a visible gap where the
   // picker isn't.
   if (families.length === 0) return null;
+  // Never hand the select a value it has no option for — see resolveFamilyId.
+  const value = resolveFamilyId(families, requestedValue);
   const description = families.find((option) => option.id === value)?.description;
   return (
     <div className={className}>

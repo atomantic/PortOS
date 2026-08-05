@@ -8,7 +8,7 @@ import ThreejsModelPreview from '../components/threejsModels/ThreejsModelPreview
 import PageSkeleton from '../components/ui/PageSkeleton';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import useProviderModels from '../hooks/useProviderModels';
-import useThreejsModelFamilies, { GENERAL_FAMILY_ID } from '../hooks/useThreejsModelFamilies';
+import useThreejsModelFamilies, { GENERAL_FAMILY_ID, resolveFamilyId } from '../hooks/useThreejsModelFamilies';
 import {
   deleteThreejsModel,
   generateThreejsModel,
@@ -240,7 +240,9 @@ export default function ThreejsModelDetail() {
       effort,
       // Always sent so switching back to General turns the checklist OFF for
       // this pass instead of silently re-applying the record's stored family.
-      family,
+      // Resolved against the served taxonomy so what is sent is what the picker
+      // is showing, even for a record holding a family this install dropped.
+      family: resolveFamilyId(families, family),
       prompt: record.prompt || '',
       feedback: feedback.trim(),
     }, { silent: true }).catch((error) => {
@@ -301,8 +303,12 @@ export default function ThreejsModelDetail() {
     : null;
   // The record's own family, not the coverage snapshot's — the header should
   // read the current setting even before the next generation re-runs the gate.
-  const familyLabel = record.family && record.family !== GENERAL_FAMILY_ID
-    ? (families.find((option) => option.id === record.family)?.label || record.family)
+  // Resolved like the picker is, so a record holding a family this install no
+  // longer ships does not have the header and the picker naming two different
+  // things; the coverage panel below still reports the checklist that ran.
+  const activeFamily = resolveFamilyId(families, record.family);
+  const familyLabel = activeFamily && activeFamily !== GENERAL_FAMILY_ID
+    ? (families.find((option) => option.id === activeFamily)?.label || activeFamily)
     : '';
 
   return (

@@ -250,4 +250,26 @@ describe('ThreejsModelDetail subject family', () => {
       { silent: true },
     ));
   });
+
+  it('falls back to General for a family this build no longer ships', async () => {
+    // A record written by a build with a larger taxonomy (a downgrade, or a
+    // restored backup). Left as-is, the select would carry a value it has no
+    // option for: what is on screen stops matching the state behind it, and
+    // picking the option it appears to show fires no change event at all.
+    getThreejsModel.mockResolvedValue({ ...baseRecord, family: 'kaiju-mecha-hybrid' });
+    generateThreejsModel.mockResolvedValue({ ...baseRecord, status: 'generating' });
+    renderDetail();
+
+    const picker = await screen.findByLabelText('Subject family');
+    await waitFor(() => expect(picker).toHaveValue('general'));
+    // The header must not name a different family than the picker is showing.
+    expect(screen.queryByText(/kaiju-mecha-hybrid/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Refine model/ }));
+    await waitFor(() => expect(generateThreejsModel).toHaveBeenCalledWith(
+      'threejs-example',
+      expect.objectContaining({ family: 'general' }),
+      { silent: true },
+    ));
+  });
 });
