@@ -88,6 +88,7 @@ describe('brainJournal', () => {
     rmSync(TEMP_ROOT, { recursive: true, force: true });
     mkdirSync(TEMP_ROOT, { recursive: true });
     journalRecords.clear();
+    journal._clearObsidianLocationsCacheForTest();
     vi.clearAllMocks();
   });
 
@@ -143,10 +144,9 @@ describe('brainJournal', () => {
       expect(second.segments).toHaveLength(2);
     });
 
-    it('emits journals:changed, journals:appended, and journals:upserted', async () => {
+    it('emits journals:appended and journals:upserted', async () => {
       await journal.appendJournal('2026-04-17', 'hello');
       const eventNames = brainEvents.emit.mock.calls.map((c) => c[0]);
-      expect(eventNames).toContain('journals:changed');
       expect(eventNames).toContain('journals:appended');
       // journals:upserted is the per-entry event the memory bridge listens
       // on — must fire for every append so a single day's embedding gets
@@ -154,16 +154,12 @@ describe('brainJournal', () => {
       expect(eventNames).toContain('journals:upserted');
     });
 
-    // Issue #3510: journals:changed used to carry the full date→entry map,
-    // rebuilt by reading every historical day off disk on every autosave /
-    // dictation segment. It now carries just the day that moved.
-    it('emits journals:changed as a { date, entry } delta, not a full map', async () => {
+    it('emits journals:upserted with the updated entry delta', async () => {
       await journal.appendJournal('2026-04-16', 'yesterday');
       await journal.appendJournal('2026-04-17', 'today');
-      const payload = lastEmit('journals:changed');
-      expect(payload.date).toBe('2026-04-17');
+      const payload = lastEmit('journals:upserted');
+      expect(payload.entry.date).toBe('2026-04-17');
       expect(payload.entry.content).toBe('today');
-      expect(payload).not.toHaveProperty('records');
     });
 
     it('does not read every historical entry when appending to one day', async () => {
@@ -204,29 +200,25 @@ describe('brainJournal', () => {
       expect(cleared.segments).toEqual([]);
     });
 
-    it('emits a { date, entry } delta without re-reading the store (#3510)', async () => {
+    it('emits journals:upserted without re-reading the store (#3510)', async () => {
       await journal.appendJournal('2026-04-16', 'yesterday');
       getAll.mockClear();
       await journal.setJournalContent('2026-04-17', 'brand new');
       expect(getAll).not.toHaveBeenCalled();
-      expect(lastEmit('journals:changed')).toMatchObject({
-        date: '2026-04-17',
+      expect(lastEmit('journals:upserted')).toMatchObject({
         entry: { content: 'brand new' },
       });
     });
   });
 
   describe('deleteJournal', () => {
-    // `entry: null` marks the day as gone; the journals:deleted event that
-    // follows carries the removed record for consumers that need its contents.
-    it('emits journals:changed with a null entry and no full-store read (#3510)', async () => {
+    it('emits journals:deleted without full-store read (#3510)', async () => {
       await journal.appendJournal('2026-04-16', 'yesterday');
       await journal.appendJournal('2026-04-17', 'today');
       getAll.mockClear();
 
       expect(await journal.deleteJournal('2026-04-17')).toBe(true);
       expect(getAll).not.toHaveBeenCalled();
-      expect(lastEmit('journals:changed')).toEqual({ date: '2026-04-17', entry: null });
       expect(lastEmit('journals:deleted').entry.content).toBe('today');
     });
   });
@@ -318,6 +310,28 @@ describe('brainJournal', () => {
       const { records } = await journal.listJournals();
       const revived = records.find((r) => r.date === '2026-04-17');
       expect(revived).toBeUndefined();
+    });
+
+    it('serializes obsidian syncs per date in strict sequential order', async () => {
+      const callOrder = [];
+      obsidian.upsertNote.mockImplementation(async (vaultId, path, content) => {
+        const match = content.match(/content-(\d+)/);
+        const num = match ? match[1] : '0';
+        callOrder.push(`start-${num}`);
+        await new Promise((r) => setTimeout(r, 10));
+        callOrder.push(`end-${num}`);
+        return path;
+      });
+
+      await journal.updateSettings({ obsidianVaultId: 'v1', autoSync: true });
+
+      await journal.setJournalContent('2026-04-17', 'content-1');
+      await journal.setJournalContent('2026-04-17', 'content-2');
+
+      // Wait for background queue to flush
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(callOrder).toEqual(['start-1', 'end-1', 'start-2', 'end-2']);
     });
   });
 });

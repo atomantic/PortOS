@@ -26,7 +26,7 @@ embedding budget) was fixed in that PR by debouncing the journal re-embed
 (`queueJournalResync` in `server/services/brainMemoryBridge.js`). These are the
 rest — each is a perf/cleanup item, none is a correctness bug:
 
-- [ ] Delete the dead `journals:changed` event. `server/services/brainJournal.js`
+- [x] Delete the dead `journals:changed` event. `server/services/brainJournal.js`
   emits it at lines ~259/298/335/356 as `{ records: await rawRecords() }`, and
   `rawRecords()` (line ~142) rebuilds the entire date→entry map (two full object
   copies of every journal day) — awaited inline before the save returns, so it
@@ -36,13 +36,13 @@ rest — each is a perf/cleanup item, none is a correctness bug:
   (`brainStorage.js`) with no cross-install surface, so removal is compat-safe.
   `server/services/brainJournal.test.js:141` asserts the emit and must be updated.
   Skipped in the autosave PR as pre-existing dead-code cleanup outside its scope.
-- [ ] Cache the Obsidian sidecar. `loadObsidianLocations()`
+- [x] Cache the Obsidian sidecar. `loadObsidianLocations()`
   (`server/services/brainJournal.js:85`) is `ensureDir` + `readJSONFile` with no
   cache, called from `getEntry`, `putEntry`, and `rawRecords` — ~3 uncached file
   reads + 3 `mkdir` syscalls per save, now once per autosave. Mirror the
   write-through cache `brainStorage` already uses (`CACHE_TTL_MS = 2000`). Fixing
   the item above removes one of the three call sites for free.
-- [ ] Serialize `scheduleObsidianSync` per date (`server/services/brainJournal.js:238`).
+- [x] Serialize `scheduleObsidianSync` per date (`server/services/brainJournal.js:238`).
   It rewrites the day's full markdown note fire-and-forget on every save, and its
   own comment notes Obsidian lives on iCloud where "writes can stall for hundreds
   of ms" — so at autosave cadence, overlapping writes to one file are possible and
