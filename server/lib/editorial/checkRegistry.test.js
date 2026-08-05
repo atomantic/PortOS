@@ -64,6 +64,7 @@ const SENSORY_BALANCE = 'sensory.balance';
 const WHITE_ROOM = 'scene.white-room';
 const INTERIORITY_BALANCE = 'scene.interiority-balance';
 const SUMMARY_NOT_SCENE = 'narration.summary-not-scene';
+const REPORTED_SPEECH = 'dialogue.reported-speech';
 const PLOT_STRUCTURE = 'plot.structure-momentum';
 const PACING_ESCALATION = 'pacing.escalation-curve';
 const HEAD_HOPPING = 'pov.head-hopping';
@@ -822,6 +823,92 @@ describe('narration.summary-not-scene — summary-vs-scene LLM check (#3591)', (
       callStagedLLM: async () => ({ content: { findings: many } }),
     });
     const findings = await getCheck(SUMMARY_NOT_SCENE).run(ctx);
+    expect(findings).toHaveLength(4);
+  });
+});
+
+describe('dialogue.reported-speech — reported-speech LLM check (#3592)', () => {
+  const MANUSCRIPT = '# Issue 1\n\nThey argued about the money for an hour, and in the end she told him she was leaving.';
+  const wholeCtx = (overrides = {}) => ({
+    manuscript: MANUSCRIPT,
+    config: { maxFindings: 12 },
+    severityDefault: 'low',
+    planManuscriptChunks: async () => [overrides.manuscript ?? MANUSCRIPT],
+    callStagedLLM: async () => ({ content: { findings: [] } }),
+    ...overrides,
+  });
+
+  it('is registered as an issue-scoped manuscript LLM check in the dialogue category', () => {
+    const check = getCheck(REPORTED_SPEECH);
+    expect(check.kind).toBe('llm');
+    expect(check.scope).toBe('issue');
+    expect(check.category).toBe('dialogue');
+    expect(check.severityDefault).toBe('low');
+    expect(check.defaultEnabled).toBe(true);
+    expect(check.needsManuscript).toBe(true);
+    expect(check.sources).toEqual(['manuscript']);
+  });
+
+  it('gates on a non-empty manuscript', () => {
+    const check = getCheck(REPORTED_SPEECH);
+    expect(check.gate({ manuscript: '' })).toBe(false);
+    expect(check.gate({ manuscript: MANUSCRIPT })).toBeTruthy();
+  });
+
+  it('budgets the fixed prompt overhead when planning chunks and stamps findings with the dialogue category', async () => {
+    let seenVars = null;
+    let seenOverhead = 0;
+    const ctx = wholeCtx({
+      planManuscriptChunks: async (_stage, opts) => {
+        // No trimmable context rides along, so the template reserve is passed as
+        // `overheadTokens` — unbudgeted, a long manuscript plans chunks that
+        // overflow the provider window once the prompt is added.
+        seenOverhead = opts.overheadTokens;
+        return [MANUSCRIPT];
+      },
+      callStagedLLM: async (_stage, vars) => {
+        seenVars = vars;
+        return {
+          content: {
+            findings: [{
+              severity: 'low',
+              issueNumber: 1,
+              location: 'Issue 1 — the money argument',
+              problem: 'The confrontation is narrated instead of quoted.',
+              suggestion: 'Quote the moment she says she is leaving.',
+              anchorQuote: 'she told him she was leaving',
+            }],
+          },
+        };
+      },
+    });
+    const findings = await getCheck(REPORTED_SPEECH).run(ctx);
+    expect(seenOverhead).toBeGreaterThan(0);
+    expect(seenVars.manuscript).toBe(MANUSCRIPT);
+    // Manuscript-only check — no scene map rides along.
+    expect(seenVars.sceneMap).toBeUndefined();
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe('dialogue');
+    expect(findings[0].issueNumber).toBe(1);
+    expect(findings[0].suggestion).toContain('Quote the moment');
+    // The anchor is a verbatim slice of the manuscript so the editor can jump to it.
+    expect(MANUSCRIPT).toContain(findings[0].anchorQuote);
+  });
+
+  it('returns no findings for a manuscript whose decisive beats are already quoted', async () => {
+    const findings = await getCheck(REPORTED_SPEECH).run(wholeCtx({
+      manuscript: '# Issue 1\n\n"I\'m leaving," she said.',
+    }));
+    expect(findings).toEqual([]);
+  });
+
+  it('respects maxFindings as a whole-run cap', async () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ severity: 'low', problem: `p${i}`, anchorQuote: `a${i}` }));
+    const ctx = wholeCtx({
+      config: { maxFindings: 4 },
+      callStagedLLM: async () => ({ content: { findings: many } }),
+    });
+    const findings = await getCheck(REPORTED_SPEECH).run(ctx);
     expect(findings).toHaveLength(4);
   });
 });

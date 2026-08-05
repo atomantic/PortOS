@@ -5,6 +5,7 @@ import {
   EDITORIAL_PROMPT_OVERHEAD_TOKENS,
   ON_THE_NOSE_STAGE,
   ON_THE_NOSE_SUBTYPES,
+  REPORTED_SPEECH_STAGE,
   VOICE_DISTINCTIVENESS_STAGE,
   characterVoiceProfiles,
   findDialogueTagVariety,
@@ -281,6 +282,35 @@ export const dialogueChecks = [
       // `subtype` on the finding so the editor sees exposition / emotion-tell /
       // relationship-report instead of a flat "on-the-nose".
       subtypes: ON_THE_NOSE_SUBTYPES,
+    }),
+  },
+  {
+    id: 'dialogue.reported-speech',
+    sources: ['manuscript'],
+    label: 'Reported speech where a quoted line belongs (LLM)',
+    description:
+      'LLM scan for a character\'s decisive utterance delivered as narrated report instead of a quoted line — summarized speech at a turning point ("she told him she was leaving"), reported reaction to speech ("my friend was furious about it"), and confrontations narrated indirectly with no line ever quoted. The inverse of the other dialogue checks: they judge the dialogue that is on the page, this one flags the line that never made it there. Skips deliberate compression of routine exchanges (that is dialogue.pleasantries\' job), between-scene bridges, POV constraints where the character did not hear the words, and free-indirect-discourse voices. Findings name which moment to quote rather than drafting the line.',
+    scope: 'issue',
+    kind: 'llm',
+    category: 'dialogue',
+    severityDefault: 'low',
+    defaultEnabled: true,
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a long manuscript can not flood the review.' },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    // Localized prose-level findings (one reported beat = one spot), so this stays
+    // a plain per-chunk run with no cross-chunk digest — mirrors dialogue.on-the-nose.
+    run: (ctx) => runManuscriptLlmCheck(ctx, {
+      stage: REPORTED_SPEECH_STAGE,
+      category: 'dialogue',
+      overheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS,
+      buildVars: (manuscript) => ({ manuscript }),
     }),
   },
   {

@@ -189,6 +189,9 @@
   "pipeline-editorial-reaction-proportionality": [
     "server/lib/editorial/checkInfra/structureStages.js"
   ],
+  "pipeline-editorial-reported-speech": [
+    "server/lib/editorial/checkInfra/craftStages.js"
+  ],
   "pipeline-editorial-secondary-arc": [
     "server/lib/editorial/checkInfra/structureStages.js"
   ],

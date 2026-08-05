@@ -115,6 +115,16 @@ export const TELLING_EMOTION_STAGE = 'pipeline-editorial-telling-emotion';
 export const ON_THE_NOSE_STAGE = 'pipeline-editorial-on-the-nose';
 export const VOICE_DISTINCTIVENESS_STAGE = 'pipeline-editorial-voice-distinctiveness';
 
+// Stage name for the reported-speech LLM check (#3592): a character's decisive
+// utterance delivered as narrated report ("she told him she was leaving")
+// instead of the quoted line that would carry the beat. Ships in
+// data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 229 (boot runs
+// migrations but NOT setup-data, so the migration is required). The INVERSE of
+// ON_THE_NOSE_STAGE above — that one judges dialogue with too little under it,
+// this one flags the line that never made it onto the page at all.
+export const REPORTED_SPEECH_STAGE = 'pipeline-editorial-reported-speech';
+
 // Finding subtypes for `dialogue.on-the-nose` (#1626) — the stage prompt classifies
 // each subtext-free line into *why* it reads on-the-nose so the writer gets specific,
 // actionable feedback instead of a flat "on-the-nose" label. Surfaced on the finding

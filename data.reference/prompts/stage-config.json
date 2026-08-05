@@ -807,6 +807,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-reported-speech": {
+      "name": "Pipeline — Editorial Check: Reported speech where a quoted line belongs",
+      "description": "Editorial check (#3592): flags a character's decisive utterance delivered as narrated report instead of a quoted line — summarized speech at a turning point (\"she told him she was leaving\"), reported reaction to speech, and confrontations narrated indirectly with no line ever quoted. The inverse of on-the-nose dialogue: too little dialogue on the page rather than dialogue with too little under it. Reads the stitched manuscript; severity is advisory; skips deliberate compression of routine exchanges, between-scene bridges, POV constraints, and free-indirect-discourse voices. Findings name which moment to quote rather than drafting the line. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-voice-distinctiveness": {
       "name": "Pipeline — Editorial Check: Character voice distinctiveness",
       "description": "Editorial check (#1307): samples each character dialogue and flags interchangeable voices (everyone sounds like one narrator) plus drafted lines that contradict the canon speechPattern/speechAccent. Reads the stitched manuscript + authored voice profiles; rolls a per-character voice-sample digest across chunks. Returns issue-anchored findings naming differentiating tics.",
