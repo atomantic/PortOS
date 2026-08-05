@@ -102,6 +102,7 @@ A full creative studio for taking an idea from blank page to finished media. Eac
   - **Collections / History / Models / LoRAs** — Browse generated assets, install Civitai LoRAs by URL, and manage installed model weights
 - **Music Studio** — Artists, albums, and tracks with AI music generation, plus Rounds (musical rounds / quodlibets)
 - **Mood Boards** — Collect reference imagery into shareable boards that feed generation work
+- **Three.js Models** — Procedural 3D model generator from gallery assets with disassembly and part picking ([Three.js Models docs](./docs/THREEJS_MODELS.md))
 - **Catalog** — The creative-ingredients graph (characters, places, objects, lore) shared across every Create surface
 - **Importer** — Drop in an external manuscript (short story, novel, screenplay, comic script). The importer analyzes the text, suggests an arc shape, classifies characters/locations/scenes, and commits the result as either a new Writers Room work or a Pipeline series with a pre-filled bible
 - **Sharing** — Cross-network share buckets via cloud-synced folders (Dropbox / iCloud / etc.). Register a bucket, pick `auto-merge` or `inbox` mode, and outgoing PortOS records (universes, series, characters, media) propagate to friends running their own PortOS instance. Live subscription indicators surface when the sender is actively editing
@@ -152,6 +153,7 @@ Unified inbox for everything that talks back at you — email, chat, agent-gener
 - **Inbox / Drafts / Sync** — Aggregated message inbox with AI-generated drafts you can approve, edit, or discard before sending
 - **OpenClaw** — In-app chat with external operator agents (computer-use, Anthropic operator, etc.) with app context, attachments, and streaming responses ([OpenClaw docs](./docs/features/openclaw-operator-chat.md))
 - **Social Agents** — Personality-driven agents that handle specific accounts/personas
+- **Stacker News** — Territory management, untrusted content safety, and account stewardship ([Stacker News docs](./docs/features/stacker-news.md))
 
 ### Calendar
 
@@ -196,6 +198,7 @@ Everything you need to manage your dev environment without leaving the browser.
 - **Loops** — Schedule recurring work (cron-style) for any PortOS action or agent task
 - **Action History** — Searchable log of all executed actions with filtering and statistics
 - **Usage** — Token spend and cost tracking across all configured AI providers
+- **Quota Burn** — Automated spending of subscription-backed CLI quota before expiry (`/devtools/quota-burn`) ([Quota Burn docs](./docs/QUOTA-BURN.md))
 - **CyberCity** — 3D voxel city visualization of your apps and agents in real-time ([CyberCity V2 docs](./docs/features/cybercity-v2.md))
 - **Browser Control** — Remote Chrome DevTools Protocol integration for headless browser management ([Browser docs](./docs/features/browser.md))
 - **Code Runner** — In-app code execution with syntax highlighting
@@ -355,10 +358,13 @@ Full catalog (including design plans, ADRs, and research notes): [docs/README.md
 ### Architecture & Operations
 - [Architecture Overview](./docs/ARCHITECTURE.md) — System design, data flow, and service diagram
 - [API Reference](./docs/API.md) — REST endpoints, full route-domain index, and WebSocket events
+- [Companion App API](./docs/COMPANION_APP_API.md) — PortDeck native mobile client discovery and HTTP API contract
 - [Storage Classification Contract](./docs/STORAGE.md) — when data belongs in PostgreSQL vs the filesystem, plus the new-data-store checklist
 - [Backup & Restore](./docs/BACKUP.md) — filesystem snapshots + mandatory PostgreSQL dumps and how to restore them
 - [Port Allocation](./docs/PORTS.md) — Port conventions (5553-5561) and allocation guide
 - [PM2 Configuration](./docs/PM2.md) — PM2 patterns and best practices
+- [Quota Burn Automation](./docs/QUOTA-BURN.md) — Subscription quota spending loop and window rules
+- [Three.js Models](./docs/THREEJS_MODELS.md) — Procedural Three.js scene generation and trust boundary
 
 ### Development
 - [Contributing Guide](./docs/CONTRIBUTING.md) — Development setup and code conventions
@@ -392,6 +398,7 @@ Full catalog (including design plans, ADRs, and research notes): [docs/README.md
 - [JIRA Sprint Manager](./docs/features/jira-sprint-manager.md) — Autonomous JIRA triage and implementation
 - [Writers Room](./docs/features/writers-room.md) — Prose-to-media writing environment with explicit AI passes
 - [OpenClaw](./docs/features/openclaw-operator-chat.md) — In-app operator-agent chat
+- [Stacker News](./docs/features/stacker-news.md) — Territory management and content stewardship
 - [Error Handling](./docs/features/error-handling.md) — Centralized error normalization and recovery
 
 ## Contributing
