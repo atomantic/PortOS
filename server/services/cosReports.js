@@ -77,9 +77,7 @@ export async function generateReport(date = null) {
       id: a.id,
       taskId: a.taskId,
       success: a.result?.success || false,
-      duration: a.completedAt && a.startedAt
-        ? new Date(a.completedAt) - new Date(a.startedAt)
-        : 0
+      duration: agentDurationMs(a)
     }))
   };
 

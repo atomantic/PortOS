@@ -13,8 +13,12 @@ import { validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
+// The date is both a date-bucket key and the report's filename, so it must be a
+// bare YYYY-MM-DD day. A full ISO timestamp would match no bucket (and no
+// agent's `completedAt` prefix), silently writing an all-zero report under a
+// filename `listReports`/`getReport` can never round-trip.
 const generateReportSchema = z.object({
-  date: z.string().optional(),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD').optional(),
 });
 
 // `since` is the client's last-visit marker (ISO-8601). Optional and tolerant:

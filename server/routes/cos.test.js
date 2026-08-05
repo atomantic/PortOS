@@ -1360,6 +1360,17 @@ describe('CoS Routes', () => {
       expect(response.status).toBe(200);
       expect(cos.generateReport).toHaveBeenCalledWith('2026-02-25');
     });
+
+    it('should reject a date that is not a bare YYYY-MM-DD day', async () => {
+      // A full ISO timestamp matches no date bucket and no completedAt prefix,
+      // so it would write an all-zero report under an unreadable filename.
+      const response = await request(app)
+        .post('/api/cos/reports/generate')
+        .send({ date: '2026-02-25T00:00:00.000Z' });
+
+      expect(response.status).toBe(400);
+      expect(cos.generateReport).not.toHaveBeenCalled();
+    });
   });
 
   describe('GET /api/cos/briefings', () => {
