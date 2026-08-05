@@ -38,7 +38,7 @@ import { join, basename } from 'path';
 import { readdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { atomicWrite, readJSONFile, ensureDir, PATHS } from '../lib/fileUtils.js';
-import { isPlainObject } from '../lib/objects.js';
+import { canonicalStringify, isPlainObject } from '../lib/objects.js';
 
 const DIR = PATHS.digitalTwin;
 const IDENTITY_FILE = join(DIR, 'identity.json');
@@ -117,20 +117,36 @@ export function mergeDeepUnion(local, remote, timestampField = 'derivedAt') {
   return { merged, changed };
 }
 
+// Resolve the dedupe key for one record. A record that carries no usable value
+// under `keyField` must NOT fall through to a shared `undefined` Map key —
+// every such record would collide, collapsing the whole array down to one
+// survivor and silently destroying history on the next sync. That is exactly
+// what #3529 did: the four digital-twin test histories were unioned on 'id'
+// while the schema stores 'runId', so a single peer merge wiped every run but
+// the last. Unkeyed records fall back to a canonical content signature instead
+// — they survive the merge, and re-syncing the same record stays idempotent.
+function unionKeyFor(item, keyField) {
+  const key = item[keyField];
+  if (typeof key === 'string' && key !== '') return key;
+  if (typeof key === 'number' && Number.isFinite(key)) return key;
+  return `\u0000sig:${canonicalStringify(item)}`;
+}
+
 /**
  * Union two arrays of records by a key field. Records unique to either side are
  * kept; on a key collision the local record is kept (ADD-ONLY) unless a
- * timestampField is given and remote's is strictly newer (LWW).
+ * timestampField is given and remote's is strictly newer (LWW). Records missing
+ * the key field are deduped by content signature rather than collapsing.
  */
 export function unionByKey(localArr, remoteArr, keyField, timestampField = null) {
   const local = Array.isArray(localArr) ? localArr : [];
   const remote = Array.isArray(remoteArr) ? remoteArr : [];
   const map = new Map();
-  for (const item of local) if (isPlainObject(item)) map.set(item[keyField], item);
+  for (const item of local) if (isPlainObject(item)) map.set(unionKeyFor(item, keyField), item);
   let changed = false;
   for (const item of remote) {
     if (!isPlainObject(item)) continue;
-    const key = item[keyField];
+    const key = unionKeyFor(item, keyField);
     const existing = map.get(key);
     if (!existing) { map.set(key, item); changed = true; continue; }
     if (timestampField) {
@@ -328,11 +344,34 @@ export function mergeConfidence(local, remote) {
   return { merged, changed };
 }
 
+// The four digital-twin evaluation-run histories on meta.json. Each entry is
+// identified by `runId` — NOT `id`.
+export const TEST_HISTORY_KEYS = ['testHistory', 'valuesTestHistory', 'adversarialTestHistory', 'multiTurnTestHistory'];
+
+// The run recorders (digital-twin-*-testing.js) `unshift` each new run and then
+// `slice(0, 50)`, so these arrays are newest-first and the readers' `slice(0,
+// limit)` means "most recent N". A union appends the peer's runs at the END, so
+// without re-sorting a freshly-synced peer run would read as the oldest — and
+// the next local run's slice(0, 50) would discard the newest entries instead of
+// the oldest. Sort descending on the ISO `timestamp` to restore the invariant;
+// entries with no timestamp sort last rather than jumping to the front. `runId`
+// breaks ties so both peers land on the SAME order for the same set of runs
+// (each merges its own side first, so insertion order alone would diverge).
+function sortRunsNewestFirst(runs) {
+  const at = (r) => (typeof r?.timestamp === 'string' ? r.timestamp : '');
+  const id = (r) => (typeof r?.runId === 'string' ? r.runId : '');
+  return [...runs].sort((a, b) => {
+    if (at(a) !== at(b)) return at(a) > at(b) ? -1 : 1;
+    if (id(a) === id(b)) return 0;
+    return id(a) < id(b) ? -1 : 1;
+  });
+}
+
 /**
  * Merge digital-twin meta.json: documents union by filename (ADD-ONLY — a local
- * doc entry is never replaced), the four test histories + personas union by id,
- * enrichment deep-unions, settings fill missing keys (local values win), and the
- * analyzed personality-trait confidence max-per-dimension.
+ * doc entry is never replaced), the four test histories union by runId, personas
+ * union by id, enrichment deep-unions, settings fill missing keys (local values
+ * win), and the analyzed personality-trait confidence max-per-dimension.
  */
 export function mergeMeta(local, remote) {
   if (!isPlainObject(remote)) return { merged: local, changed: false };
@@ -344,9 +383,12 @@ export function mergeMeta(local, remote) {
   const docs = unionByKey(local.documents, remote.documents, 'filename');
   if (docs.changed) { merged.documents = docs.merged; changed = true; }
 
-  for (const key of ['testHistory', 'valuesTestHistory', 'adversarialTestHistory', 'multiTurnTestHistory']) {
-    const u = unionByKey(local[key], remote[key], 'id');
-    if (u.changed) { merged[key] = u.merged; changed = true; }
+  // Test-history entries identify a run by `runId` (see digitalTwinValidation.js)
+  // — they carry no `id`. Unioning them on 'id' collapsed every history to a
+  // single entry on the first peer merge (#3529).
+  for (const key of TEST_HISTORY_KEYS) {
+    const u = unionByKey(local[key], remote[key], 'runId');
+    if (u.changed) { merged[key] = sortRunsNewestFirst(u.merged); changed = true; }
   }
 
   const personas = unionByKey(local.personas, remote.personas, 'id');
