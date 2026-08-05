@@ -10,6 +10,7 @@
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { recordTombstone } from '../lib/tombstones.js';
 import { addNotification, NOTIFICATION_TYPES, exists as notificationExists } from './notifications.js';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { callProviderAISimple, parseLLMJSON } from '../lib/aiProvider.js';
@@ -164,12 +165,20 @@ const DEFAULT_CONFIG = {
 const DEFAULT_DATA = {
   version: 1,
   stories: [],
-  usedPrompts: []
+  usedPrompts: [],
+  // Tombstones for stories the user deleted (#3531) — peer sync unions stories
+  // add-only, so without these a machine that still holds the story resurrects
+  // it on the next cycle. Keyed on the story `id` (see deleteStory).
+  deletedStories: []
 };
 
 async function loadStories() {
   await ensureDir(DATA_DIR);
-  return readJSONFile(STORIES_FILE, DEFAULT_DATA);
+  // Deep clone the default — readJSONFile hands the fallback back BY REFERENCE
+  // on a missing file, so `data.stories.push(...)` / the deletedStories rewrite
+  // below would otherwise mutate the module-level DEFAULT_DATA and leak the
+  // previous caller's stories into the next fresh-install read.
+  return readJSONFile(STORIES_FILE, structuredClone(DEFAULT_DATA));
 }
 
 async function saveStories(data) {
@@ -322,6 +331,14 @@ export async function updateStory(storyId, content) {
 
 /**
  * Delete a story
+ *
+ * Records a `deletedStories` tombstone alongside the removal so peer sync —
+ * which unions stories ADD-ONLY by id — can't resurrect it from a machine that
+ * still has the story, and so the delete propagates to that machine (#3531).
+ * The tombstone keys on the story `id` rather than a derived natural key: story
+ * ids are minted once by `saveStory` and travel with the record through sync
+ * (`mergeAutobiographyStories` unions on `id`), so the same logical story
+ * carries the same id on every peer.
  */
 export async function deleteStory(storyId) {
   const data = await loadStories();
@@ -329,6 +346,7 @@ export async function deleteStory(storyId) {
   if (idx === -1) return null;
 
   const removed = data.stories.splice(idx, 1)[0];
+  data.deletedStories = recordTombstone(data.deletedStories, removed.id, { keyField: 'id' });
   await saveStories(data);
   console.log(`📖 Autobiography story deleted: ${removed.themeLabel}`);
 

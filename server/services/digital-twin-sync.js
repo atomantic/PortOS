@@ -23,7 +23,8 @@
  *   - *.md documents       — content shipped by filename, ADD-ONLY on the
  *                            receiver (a local doc is never overwritten) MINUS
  *                            anything either side tombstoned (see below)
- *   - autobiography/        — stories union by id (LWW); config (the prompt
+ *   - autobiography/        — stories union by id (LWW) MINUS anything either
+ *                            side tombstoned (see below); config (the prompt
  *                            schedule) is NOT synced — it's machine-local
  *   - social-accounts.json  — the user's own social accounts, union by id (LWW)
  *                            MINUS anything either side tombstoned (see below)
@@ -39,8 +40,10 @@
  * list that unions in BOTH directions, suppressing the document metadata entry
  * and reaping the `.md` file on whichever peer still has it. A document
  * re-created after a delete carries a `createdAt` that supersedes the tombstone,
- * so it is never permanently suppressed. This stays additive too: an older peer
- * simply drops the unknown `deletedDocuments` key (Zod strips it), keeps
+ * so it is never permanently suppressed. Autobiography stories carry the same
+ * mechanism (#3531) as `deletedStories` inside autobiography/stories.json, keyed
+ * on the story id. This stays additive too: an older peer simply drops the
+ * unknown tombstone key (Zod strips it, or it never reads it), keeps
  * resurrecting its own copy, and the upgraded peer defends locally — degraded,
  * but never corrupting, so still no schemaVersions bump. See lib/tombstones.js.
  *
@@ -650,35 +653,73 @@ export function mergeSocialAccounts(local, remote) {
   return { merged: { ...local, accounts, deletedAccounts }, changed };
 }
 
+// Autobiography story tombstones key on the story `id` (#3531). Unlike the
+// per-install document ids of #3530, a story id is minted ONCE by
+// `autobiography.saveStory` and travels with the record through sync — every
+// peer holds the same logical story under the same id, which is also what this
+// merge already unions on.
+const STORY_TOMBSTONE_OPTS = { keyField: 'id' };
+
+/** The instant a story was last asserted to EXIST — creation, or a later edit. */
+function storyLiveStamp(story) {
+  return newerStamp(story?.updatedAt, story?.createdAt);
+}
+
 /**
  * Merge autobiography stories: union by id (LWW on updatedAt||createdAt), union
- * usedPrompts. Both outputs are sorted by a stable key — this file feeds the
- * snapshot checksum (via JSON.stringify), and union-by-Map preserves insertion
- * order, so without a stable sort two peers with identical stories would emit
- * different array orders → different checksums → never converge. (getStories
- * re-sorts by createdAt for display, so the on-disk order is presentation-free.)
+ * usedPrompts, minus anything either side tombstoned in `deletedStories`. Both
+ * outputs are sorted by a stable key — this file feeds the snapshot checksum
+ * (via JSON.stringify), and union-by-Map preserves insertion order, so without a
+ * stable sort two peers with identical stories would emit different array orders
+ * → different checksums → never converge. (getStories re-sorts by createdAt for
+ * display, so the on-disk order is presentation-free.)
+ *
+ * DELETES need the tombstone because the story union is add-only: the deleting
+ * machine would otherwise re-import the story from any peer that still has it.
+ * `deletedStories` unions in BOTH directions, so the delete also propagates to
+ * that peer. A story whose own live stamp is strictly newer than the tombstone
+ * supersedes it — an edit made after another machine deleted the story is the
+ * user's latest word — and the now-obsolete tombstone is pruned so it can't
+ * bounce back from a peer that has not seen the edit yet.
  */
 export function mergeAutobiographyStories(local, remote) {
   if (!isPlainObject(remote)) return { merged: local, changed: false };
   if (!isPlainObject(local)) return { merged: remote, changed: true };
 
+  const { merged: tombstonesUnion } = mergeTombstones(local.deletedStories, remote.deletedStories, STORY_TOMBSTONE_OPTS);
+
   const byId = new Map((Array.isArray(local.stories) ? local.stories : []).map((s) => [s.id, s]));
-  let changed = false;
   for (const rs of Array.isArray(remote.stories) ? remote.stories : []) {
     if (!isPlainObject(rs)) continue;
     const ls = byId.get(rs.id);
-    if (!ls) { byId.set(rs.id, rs); changed = true; continue; }
+    if (!ls) { byId.set(rs.id, rs); continue; }
     const lt = ls.updatedAt || ls.createdAt || '';
     const rt = rs.updatedAt || rs.createdAt || '';
-    if (rt > lt) { byId.set(rs.id, rs); changed = true; }
+    if (rt > lt) byId.set(rs.id, rs);
   }
+
+  const stories = Array.from(byId.values())
+    .filter((s) => !isTombstoned(tombstonesUnion, s.id, storyLiveStamp(s), 'id'))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
   const localUsed = Array.isArray(local.usedPrompts) ? local.usedPrompts : [];
   const usedPrompts = [...new Set([...localUsed, ...(Array.isArray(remote.usedPrompts) ? remote.usedPrompts : [])])].sort();
-  if (usedPrompts.length !== localUsed.length) changed = true;
+  let changed = usedPrompts.length !== localUsed.length;
 
-  const stories = Array.from(byId.values()).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  return { merged: { ...local, stories, usedPrompts }, changed };
+  // Prune against the same live stamp the filter used, or a story kept alive by
+  // an edit would leave its tombstone behind to retry on every cycle.
+  const survivorStamps = stories.map((s) => ({ id: s.id, createdAt: storyLiveStamp(s) }));
+  const deletedStories = pruneTombstones(tombstonesUnion, survivorStamps, { ...STORY_TOMBSTONE_OPTS, timestampField: 'createdAt' });
+  if (!tombstonesEqual(deletedStories, normalizeTombstones(local.deletedStories, 'id'), 'id')) changed = true;
+
+  // The union preserves the local story objects, so identity comparison tells
+  // whether anything was added, replaced, reaped, or reordered. Comparing the
+  // survivors (rather than flagging inside the union loop) keeps a remote story
+  // this machine already tombstoned from forcing a no-op write every cycle.
+  const localStories = Array.isArray(local.stories) ? local.stories : [];
+  if (stories.length !== localStories.length || stories.some((s, i) => s !== localStories[i])) changed = true;
+
+  return { merged: { ...local, stories, usedPrompts, deletedStories }, changed };
 }
 
 // Sanitize a peer-supplied document name down to a safe `*.md` basename so a
