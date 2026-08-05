@@ -146,6 +146,21 @@ describe('mergeAutobiographyStories tombstones (#3531)', () => {
     expect(mergeAutobiographyStories(local, remote).changed).toBe(false);
   });
 
+  it('rewrites a merely-unsorted local usedPrompts so two peers converge on one checksum', () => {
+    // saveStory appends in write order, so the on-disk list is often unsorted —
+    // a length-only comparison would call this a no-op and never converge.
+    const local = { stories: [], usedPrompts: ['family-0', 'childhood-0'], deletedStories: [] };
+    const { merged, changed } = mergeAutobiographyStories(local, { stories: [], usedPrompts: ['childhood-0'], deletedStories: [] });
+    expect(changed).toBe(true);
+    expect(merged.usedPrompts).toEqual(['childhood-0', 'family-0']);
+  });
+
+  it('drops a peer story with no usable id rather than keying the union on undefined', () => {
+    const local = { stories: [], usedPrompts: [], deletedStories: [] };
+    const remote = { stories: [{ content: 'no id' }, { id: '', content: 'empty id' }], usedPrompts: [], deletedStories: [] };
+    expect(mergeAutobiographyStories(local, remote)).toEqual({ merged: { ...local, stories: [], usedPrompts: [], deletedStories: [] }, changed: false });
+  });
+
   it('tolerates a legacy peer that sends no tombstone key at all', () => {
     const local = { stories: [{ id: 's1', createdAt: '2026-01-01T00:00:00.000Z' }], usedPrompts: [] };
     const { merged, changed } = mergeAutobiographyStories(local, { stories: [{ id: 's1', createdAt: '2026-01-01T00:00:00.000Z' }], usedPrompts: [] });

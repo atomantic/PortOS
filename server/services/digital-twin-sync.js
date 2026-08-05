@@ -690,7 +690,10 @@ export function mergeAutobiographyStories(local, remote) {
 
   const byId = new Map((Array.isArray(local.stories) ? local.stories : []).map((s) => [s.id, s]));
   for (const rs of Array.isArray(remote.stories) ? remote.stories : []) {
-    if (!isPlainObject(rs)) continue;
+    // A peer story without a usable id would key the map on `undefined`, so a
+    // second malformed one silently overwrites the first and neither can ever be
+    // tombstoned (the tombstone key would be `undefined` too). Drop them.
+    if (!isPlainObject(rs) || typeof rs.id !== 'string' || rs.id === '') continue;
     const ls = byId.get(rs.id);
     if (!ls) { byId.set(rs.id, rs); continue; }
     const lt = ls.updatedAt || ls.createdAt || '';
@@ -704,7 +707,12 @@ export function mergeAutobiographyStories(local, remote) {
 
   const localUsed = Array.isArray(local.usedPrompts) ? local.usedPrompts : [];
   const usedPrompts = [...new Set([...localUsed, ...(Array.isArray(remote.usedPrompts) ? remote.usedPrompts : [])])].sort();
-  let changed = usedPrompts.length !== localUsed.length;
+  // Compare CONTENT, not just length: saveStory appends prompt ids in write
+  // order, so a local list that is merely unsorted has the same length as the
+  // sorted union and would never be written back — leaving two peers with the
+  // same prompts emitting different JSON, different checksums, and a sync that
+  // retries forever (the same convergence trap the story sort above avoids).
+  let changed = usedPrompts.length !== localUsed.length || usedPrompts.some((p, i) => p !== localUsed[i]);
 
   // Prune against the same live stamp the filter used, or a story kept alive by
   // an edit would leave its tombstone behind to retry on every cycle.
