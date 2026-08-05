@@ -15,7 +15,9 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
 import Banner from '../components/ui/Banner';
+import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { FormField } from '../components/ui/FormField';
+import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import { formatBytes } from '../utils/formatters';
 import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, isVideoLoraFamily } from '../lib/runnerFamilies';
 import {
@@ -92,6 +94,10 @@ export default function Loras() {
   // unrecognizable id shouldn't dead-end at an error toast.
   const [hfFamilyPrompt, setHfFamilyPrompt] = useState(null);
   const [deleting, setDeleting] = useState(null);
+  // Arms one installed card's delete at a time — a LoRA is a multi-gigabyte
+  // file with no undo, so the trash icon only reveals an inline confirm pair
+  // instead of deleting on the first click/tap (#3519).
+  const deleteConfirm = useConfirmDelete();
   // Civitai auth — `auth` is `{ hasKey, source }`; `authPrompt` is set to a
   // pending install URL when a 401/403 redirects the user to the inline key
   // form. The form saves the key and retries the same install in one click
@@ -424,8 +430,8 @@ export default function Loras() {
             render it flat. */}
         {visibleLoras.length > 0 && (
           mediaFilter === 'all'
-            ? <InstalledGroups loras={visibleLoras} deleting={deleting} onDelete={handleDelete} />
-            : <LoraGrid loras={visibleLoras} deleting={deleting} onDelete={handleDelete} />
+            ? <InstalledGroups loras={visibleLoras} deleting={deleting} onDelete={handleDelete} deleteConfirm={deleteConfirm} />
+            : <LoraGrid loras={visibleLoras} deleting={deleting} onDelete={handleDelete} deleteConfirm={deleteConfirm} />
         )}
       </div>
     </div>
@@ -1033,11 +1039,17 @@ function CivitaiAuthModal({ pendingUrl, message, auth, onClose, onSaved, onRetry
 // Responsive grid of installed LoRA cards. Extracted so the Installed section
 // can render either one flat grid (filtered view) or several grouped grids
 // (the "All" view) without duplicating the grid markup.
-function LoraGrid({ loras, deleting, onDelete }) {
+function LoraGrid({ loras, deleting, onDelete, deleteConfirm }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
       {loras.map((lora) => (
-        <LoraCard key={lora.filename} lora={lora} onDelete={() => onDelete(lora.filename)} deleting={deleting === lora.filename} />
+        <LoraCard
+          key={lora.filename}
+          lora={lora}
+          onDelete={() => onDelete(lora.filename)}
+          deleting={deleting === lora.filename}
+          deleteConfirm={deleteConfirm}
+        />
       ))}
     </div>
   );
@@ -1047,7 +1059,7 @@ function LoraGrid({ loras, deleting, onDelete }) {
 // with a labeled header mirroring the suggestion panel's grouping. Empty groups
 // are omitted. Video is listed first (fewer, and the source of the layout
 // confusion this grouping resolves).
-function InstalledGroups({ loras, deleting, onDelete }) {
+function InstalledGroups({ loras, deleting, onDelete, deleteConfirm }) {
   const video = loras.filter((l) => isVideoLoraFamily(l.runnerFamily));
   const image = loras.filter((l) => !isVideoLoraFamily(l.runnerFamily));
   const groups = [
@@ -1062,14 +1074,14 @@ function InstalledGroups({ loras, deleting, onDelete }) {
             <h3 className="text-sm font-medium text-gray-300">{g.label}</h3>
             <span className="text-xs text-gray-600">{g.items.length}</span>
           </div>
-          <LoraGrid loras={g.items} deleting={deleting} onDelete={onDelete} />
+          <LoraGrid loras={g.items} deleting={deleting} onDelete={onDelete} deleteConfirm={deleteConfirm} />
         </div>
       ))}
     </div>
   );
 }
 
-function LoraCard({ lora, onDelete, deleting }) {
+function LoraCard({ lora, onDelete, deleting, deleteConfirm }) {
   const family = lora.runnerFamily;
   const familyLabel = family ? (RUNNER_LABEL[family] || family) : 'Unsupported base';
   const badgeClass = family ? (RUNNER_BADGE_CLASS[family] || 'bg-gray-600/20 text-gray-300 border-gray-500/30') : 'bg-port-warning/20 text-port-warning border-port-warning/30';
@@ -1081,6 +1093,10 @@ function LoraCard({ lora, onDelete, deleting }) {
   // preselect an LTX adapter into an incompatible image render.
   const isVideoLora = family === VIDEO_LORA_FAMILIES.LTX_VIDEO;
   const testHref = `${isVideoLora ? '/media/video' : '/media/image'}?lora=${encodeURIComponent(lora.filename)}`;
+  // The confirm pair also stays mounted while the delete is in flight (the hook
+  // disarms the moment it fires), so the spinner replaces the row rather than
+  // flashing the trash icon back for the duration of the request.
+  const confirming = deleteConfirm.isConfirming(lora.filename) || deleting;
 
   return (
     <div className="bg-port-card border border-port-border rounded-lg overflow-hidden flex flex-col">
@@ -1137,44 +1153,61 @@ function LoraCard({ lora, onDelete, deleting }) {
           {civitai?.baseModel && (<><span>Base model</span><span className="text-gray-300 truncate text-right" title={civitai.baseModel}>{civitai.baseModel}</span></>)}
         </div>
 
-        <div className="mt-auto flex items-center gap-2">
-          <Link
-            to={testHref}
-            className="flex-1 bg-port-accent text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-port-accent/90 text-center"
-          >
-            Test
-          </Link>
-          {civitai?.url && (
-            <a
-              href={civitai.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-gray-400 hover:text-gray-200 p-1.5 rounded hover:bg-port-bg"
-              title="Open on Civitai"
+        {/* Armed state replaces the whole action row instead of squeezing the
+            confirm pair in beside Test/Civitai — a narrow card (or a phone at
+            one column) has no room for both, and the row would wrap. */}
+        {confirming ? (
+          <div className="mt-auto">
+            <ConfirmButtonPair
+              prompt="Delete file?"
+              confirmText="Delete"
+              confirmIcon={Trash2}
+              busy={deleting}
+              busyText="Deleting"
+              ariaLabel={`Confirm delete ${lora.name}`}
+              onConfirm={() => deleteConfirm.confirmDelete(onDelete)}
+              onCancel={deleteConfirm.cancelDelete}
+            />
+          </div>
+        ) : (
+          <div className="mt-auto flex items-center gap-2">
+            <Link
+              to={testHref}
+              className="flex-1 bg-port-accent text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-port-accent/90 text-center"
             >
-              <ExternalLink size={14} />
-            </a>
-          )}
-          {lora.huggingface?.url && (
-            <a
-              href={lora.huggingface.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-gray-400 hover:text-gray-200 p-1.5 rounded hover:bg-port-bg"
-              title="Open on HuggingFace"
+              Test
+            </Link>
+            {civitai?.url && (
+              <a
+                href={civitai.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-gray-400 hover:text-gray-200 p-1.5 rounded hover:bg-port-bg"
+                title="Open on Civitai"
+              >
+                <ExternalLink size={14} />
+              </a>
+            )}
+            {lora.huggingface?.url && (
+              <a
+                href={lora.huggingface.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-gray-400 hover:text-gray-200 p-1.5 rounded hover:bg-port-bg"
+                title="Open on HuggingFace"
+              >
+                <ExternalLink size={14} />
+              </a>
+            )}
+            <button
+              onClick={() => deleteConfirm.requestDelete(lora.filename)}
+              className="text-port-error hover:text-port-error/80 p-1.5 rounded hover:bg-port-error/10"
+              title={`Delete ${lora.name}`} aria-label={`Delete ${lora.name}`}
             >
-              <ExternalLink size={14} />
-            </a>
-          )}
-          <button
-            onClick={onDelete}
-            disabled={deleting}
-            className="text-port-error hover:text-port-error/80 p-1.5 rounded hover:bg-port-error/10 disabled:opacity-50"
-            title="Delete LoRA" aria-label="Delete LoRA"
-          >
-            <Trash2 size={14} />
-          </button>
-        </div>
+              <Trash2 size={14} />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
