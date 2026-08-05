@@ -90,6 +90,10 @@ export default function SyncedReview({ work }) {
   const scriptRef = useRef(null);
   const mediaRef = useRef(null);
 
+  // Derived (not stored) so disabling the active pane on desktop can't leave the
+  // narrow layout pointing at a pane that is no longer rendered.
+  const activePane = visible.has(mobilePane) ? mobilePane : [...visible][0];
+
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -120,13 +124,16 @@ export default function SyncedReview({ work }) {
     return map;
   }, [data]);
 
-  // On selection, scroll the OTHER panes to the first mapped item.
+  // On selection, scroll the OTHER panes to the first mapped item. Below `lg`
+  // the non-active panes are `display:none`, where offsetTop reads 0 and the
+  // scroll no-ops — so this also re-runs when the narrow layout swaps panes,
+  // landing the newly revealed pane on the mapped item rather than at the top.
   useEffect(() => {
     if (!selection || !data) return;
     if (selection.type !== 'prose' && proseIds.size) scrollPaneTo(proseRef.current, [...proseIds][0]);
     if (selection.type !== 'script' && sceneIds.size) scrollPaneTo(scriptRef.current, [...sceneIds][0]);
     if (selection.type !== 'media' && mediaSceneIds.size) scrollPaneTo(mediaRef.current, [...mediaSceneIds][0]);
-  }, [selection, data, proseIds, sceneIds, mediaSceneIds]);
+  }, [selection, data, proseIds, sceneIds, mediaSceneIds, activePane]);
 
   const select = useCallback((type, id) => {
     setSelection((prev) => (prev && prev.type === type && prev.id === id ? null : { type, id }));
@@ -155,9 +162,6 @@ export default function SyncedReview({ work }) {
   const hasSelection = !!selection;
   const visibleCount = [...visible].length;
   const colClass = visibleCount === 1 ? 'lg:grid-cols-1' : visibleCount === 2 ? 'lg:grid-cols-2' : 'lg:grid-cols-3';
-  // Derived (not stored) so disabling the active pane on desktop can't leave the
-  // narrow layout pointing at a pane that is no longer rendered.
-  const activePane = visible.has(mobilePane) ? mobilePane : [...visible][0];
   // Every pane renders; below `lg` all but the active one are display:none.
   const paneClass = (key) => `${key === activePane ? '' : 'hidden'} lg:block`;
 
