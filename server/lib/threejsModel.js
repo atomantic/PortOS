@@ -476,23 +476,30 @@ const COPLANAR_DETERMINANT = 1e-6;
 // once the majority of buildable identity features are backed by nothing else.
 const FLAT_IDENTITY_RATIO_THRESHOLD = 0.6;
 
-const axisExtent = (vertices, axis) => {
+const axisBounds = (vertices, axis) => {
   let min = Infinity;
   let max = -Infinity;
   for (let index = axis; index < vertices.length; index += 3) {
     if (vertices[index] < min) min = vertices[index];
     if (vertices[index] > max) max = vertices[index];
   }
-  return max - min;
+  return [min, max];
 };
 
 const countAxisPlanes = (vertices) => {
-  const quantum = Math.max(axisExtent(vertices, 0), axisExtent(vertices, 1), axisExtent(vertices, 2))
-    * RELATIVE_PLANE_QUANTUM;
+  const bounds = [0, 1, 2].map((axis) => axisBounds(vertices, axis));
+  const quantum = Math.max(...bounds.map(([min, max]) => max - min)) * RELATIVE_PLANE_QUANTUM;
   // Every vertex sits on one point, so there is exactly one plane per axis.
   if (!(quantum > 0)) return [1, 1, 1];
   const axes = [new Set(), new Set(), new Set()];
-  vertices.forEach((value, index) => axes[index % 3].add(Math.round(value / quantum)));
+  // Bucketed from each axis's own minimum rather than the absolute coordinate,
+  // so the count is a property of the shape and not of where it was authored:
+  // a mesh built far from the origin divides a large offset by a small quantum
+  // and loses distinct planes to float resolution.
+  vertices.forEach((value, index) => {
+    const axis = index % 3;
+    axes[axis].add(Math.round((value - bounds[axis][0]) / quantum));
+  });
   return axes.map((axis) => axis.size);
 };
 

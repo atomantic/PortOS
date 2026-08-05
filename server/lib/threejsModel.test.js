@@ -505,6 +505,13 @@ describe('evaluateThreejsFlatness', () => {
     expect(flatness.findings.map((finding) => finding.code)).toEqual(['flat-identity-parts']);
   });
 
+  it('judges the shape, not where it was authored', () => {
+    const shifted = solidShellGeometry();
+    shifted.vertices = shifted.vertices.map((value, index) => (index % 3 === 0 ? value + 900 : value));
+    const flatness = evaluateThreejsFlatness(flatnessSpec([geometryPart('shell', shifted)]));
+    expect(flatness).toMatchObject({ flatIdentityDetailCount: 0, findings: [] });
+  });
+
   it('does not punish a small part for being small', () => {
     // A fixed absolute plane grid would give a 0.005-unit mesh five planes per
     // axis however round it is; the quantum is relative to the mesh's own size.
