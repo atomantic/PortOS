@@ -90,6 +90,19 @@ describe('useGoalDetail scheduling actions', () => {
     expect(result.current.schedulingBusy).toBe(false);
   });
 
+  // A bare `.catch()` on the call would miss this: it never gets attached when the
+  // action throws before handing back a promise, so the reset would be skipped and
+  // the buttons would latch exactly as they did before the fix.
+  it.each(SCHEDULING_ACTIONS)('%s clears schedulingBusy when the action throws synchronously', async (handler, apiFn) => {
+    apiFn().mockImplementation(() => { throw new Error('threw before returning a promise'); });
+    const { result, onRefresh } = renderGoalDetail();
+
+    await act(async () => { await result.current[handler](); });
+
+    expect(result.current.schedulingBusy).toBe(false);
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
   it('does not surface a rejection to the caller as an unhandled promise', async () => {
     scheduleGoalTimeBlocks.mockRejectedValue(new Error('server exploded'));
     const { result } = renderGoalDetail();

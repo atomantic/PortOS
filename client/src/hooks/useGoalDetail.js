@@ -146,17 +146,25 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   };
 
   // The three time-block actions share one busy flag, so they share one runner
-  // (issue #3517). Swallowing the rejection is what clears `schedulingBusy` on a
-  // failed request — without it the buttons latch on "Scheduling..." forever and
-  // the only recovery is a full page reload. No custom toast here on purpose:
-  // `request()` already toasts the failure, so this stays a single-layer error UI.
-  // The refresh runs either way, because a failed schedule/reschedule can still
-  // have written some blocks before erroring and the panel should show reality.
+  // (issue #3517). Swallowing the failure is what clears `schedulingBusy` — without
+  // it the buttons latch on "Scheduling..." forever and the only recovery is a full
+  // page reload. No custom toast here on purpose: `request()` already toasts the
+  // failure, so this stays a single-layer error UI. The refresh runs either way,
+  // because a failed schedule/reschedule can still have written some blocks before
+  // erroring and the panel should show reality.
+  // `finally` rather than the `.catch(() => null)` used elsewhere in this hook:
+  // a bare `.catch` only covers a rejected promise, so an action that threw
+  // before returning one would skip the reset and re-open this very bug.
   const runSchedulingAction = async (action) => {
     setSchedulingBusy(true);
-    await action(goal.id).catch(() => null);
-    setSchedulingBusy(false);
-    onRefresh();
+    try {
+      await action(goal.id);
+    } catch {
+      // Deliberately swallowed — see the single-layer note above.
+    } finally {
+      setSchedulingBusy(false);
+      onRefresh();
+    }
   };
 
   const handleSchedule = () => runSchedulingAction(api.scheduleGoalTimeBlocks);
