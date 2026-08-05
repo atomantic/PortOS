@@ -33,17 +33,24 @@ import {
   unavailableReasonLabel as clientLabel,
 } from '../../../client/src/lib/imageTo3dReasons.js';
 
-// Every kebab-case string literal inside `unavailableReason()` is a reason code:
-// the only other literal in the body is `'unknown'` (the cudaProbe status), which
-// has no dash and so falls outside this pattern.
+// Reason codes are kebab-case (asserted below), and every OTHER single-quoted
+// literal in `unavailableReason()` is a dash-free status token (`'unknown'`, the
+// cudaProbe state) — so "quoted, has a dash" identifies the codes exactly.
+// Comments are stripped first so a code named in prose can't count as a return.
+const KEBAB_CODE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/;
+
 function reasonCodesInSource() {
   const src = readFileSync(fileURLToPath(new URL('./targets.js', import.meta.url)), 'utf8');
   const start = src.indexOf('export function unavailableReason(');
-  const end = src.indexOf('\nexport function isTargetAvailable');
   expect(start, 'unavailableReason() not found in targets.js').toBeGreaterThan(-1);
-  expect(end, 'isTargetAvailable() not found in targets.js').toBeGreaterThan(start);
-  const body = src.slice(start, end);
-  return [...body.matchAll(/'([a-z][a-z0-9]*(?:-[a-z0-9]+)+)'/g)].map((m) => m[1]);
+  // End at whatever export follows — robust to the next declaration being
+  // renamed, reordered, or having a new export inserted before it.
+  const after = src.indexOf('\nexport ', start + 1);
+  expect(after, 'no export follows unavailableReason() — cannot bound its body').toBeGreaterThan(start);
+  const body = src.slice(start, after)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/[^\n]*/g, '');
+  return [...body.matchAll(/'([a-z][a-z0-9-]*)'/g)].map((m) => m[1]).filter((s) => KEBAB_CODE.test(s));
 }
 
 describe('image-to-3D unavailable reasons — server↔client parity', () => {
@@ -64,6 +71,14 @@ describe('image-to-3D unavailable reasons — server↔client parity', () => {
 });
 
 describe('image-to-3D unavailable reasons — code coverage', () => {
+  // The source guard below identifies codes by their kebab shape, so the shape
+  // is part of the contract: a dash-free code would slip past it unlabelled.
+  it('keeps every code kebab-case', () => {
+    for (const code of Object.keys(SERVER_REASONS)) {
+      expect(code, `${code} must be kebab-case for the source guard to see it`).toMatch(KEBAB_CODE);
+    }
+  });
+
   it('labels exactly the codes unavailableReason() can return', () => {
     const codes = reasonCodesInSource();
     expect(codes.length).toBeGreaterThan(0);

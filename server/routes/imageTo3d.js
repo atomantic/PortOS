@@ -7,7 +7,6 @@ import {
   getTarget,
   listTargets,
   detectHostCapabilities,
-  isTargetAvailable,
   unavailableReason,
   unavailableReasonLabel,
   IMAGE_TO_3D_TARGET_IDS,
@@ -104,12 +103,15 @@ async function handleTargetInstall(targetId, req, res) {
   // Refuse on unsupported hardware rather than clone a multi-GB install that can
   // never run.
   const capabilities = await detectHostCapabilities();
-  if (!isTargetAvailable(targetId, capabilities)) {
+  // `unavailableReason` is what `isTargetAvailable` asks anyway — take the reason
+  // directly so the refusal doesn't re-run the gate to name what blocked it.
+  const blockedReason = unavailableReason(targetId, capabilities);
+  if (blockedReason !== null) {
     send({
       type: 'error',
       // The label, not the raw kebab-case code — this string is read by a human
       // in the install log, and `requires-linux-host` doesn't tell them to use WSL2.
-      message: `This host cannot run ${target.label} (${unavailableReasonLabel(unavailableReason(targetId, capabilities))}). Install skipped.`,
+      message: `This host cannot run ${target.label} (${unavailableReasonLabel(blockedReason)}). Install skipped.`,
     });
     return safeEnd();
   }

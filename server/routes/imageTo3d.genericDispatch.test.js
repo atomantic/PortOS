@@ -24,7 +24,6 @@ vi.mock('../services/imageTo3d/targets.js', async (importOriginal) => ({
   detectHostCapabilities: vi.fn(() => ({ appleSilicon: true, unifiedMemoryGb: 128, cuda: false })),
   getTarget: vi.fn((id) => (id === 'fakegen' ? FAKE_TARGET : null)),
   listTargets: vi.fn(() => [FAKE_TARGET]),
-  isTargetAvailable: vi.fn(() => true),
   unavailableReason: vi.fn(() => null),
   IMAGE_TO_3D_TARGET_IDS: ['fakegen'],
 }));
