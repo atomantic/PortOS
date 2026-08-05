@@ -1862,6 +1862,37 @@ describe('taskSchedule', () => {
         const saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
         expect(saved.executions['task:claim-issue'].perApp['app-1'].parkedUntil).toBeUndefined()
       })
+
+      // #3590: an elapsed park is never cleared when it expires — shouldRunTask
+      // reports `perpetual-recheck` and the dispatch gate clears it — so a record
+      // whose parkedUntil is in the past is DUE RIGHT NOW. Restamping it from a
+      // LENGTHENED cadence would silently delay work the user is already waiting on.
+      it('leaves an already-elapsed park alone while re-deriving a future one', async () => {
+        isTaskTypeEnabledForApp.mockResolvedValue(true)
+        const soon = new Date(Date.now() + 60 * 1000).toISOString()
+        const elapsed = new Date(Date.now() - 60 * 1000).toISOString()
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'perpetual', enabled: true, recheckIntervalMs: 60 * 1000 } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {
+            'app-future': { lastRun: null, count: 0, parkedUntil: soon },
+            'app-elapsed': { lastRun: null, count: 0, parkedUntil: elapsed }
+          } } }
+        })
+        // Cadence LENGTHENED from 1 minute to 30 days.
+        await updateTaskInterval('claim-issue', { recheckIntervalMs: 30 * 24 * 60 * 60 * 1000 })
+        const saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
+        const perApp = saved.executions['task:claim-issue'].perApp
+        // The future park is rewritten from the new (longer) cadence.
+        expect(new Date(perApp['app-future'].parkedUntil).getTime())
+          .toBeGreaterThan(new Date(soon).getTime())
+        // The elapsed park is untouched, so the recheck it was owed still fires now.
+        expect(perApp['app-elapsed'].parkedUntil).toBe(elapsed)
+
+        readJSONFile.mockResolvedValue(saved)
+        const result = await shouldRunTask('claim-issue', 'app-elapsed')
+        expect(result.shouldRun).toBe(true)
+        expect(result.reason).toBe('perpetual-recheck')
+      })
     })
 
     describe('getScheduleStatus per-app park aggregate', () => {

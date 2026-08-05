@@ -796,14 +796,20 @@ export async function updateTaskInterval(taskType, settings) {
   // from the new cadence — otherwise an already-parked task keeps waiting out
   // its old timestamp and the cadence control appears to do nothing until then.
   // Only recompute existing parks (never create one), and compute from now so a
-  // shortened cadence takes effect on the next slot.
+  // shortened cadence takes effect on the next slot. A park whose timestamp has
+  // ALREADY elapsed is left alone (#3590): an elapsed park is not cleared when it
+  // expires — shouldRunTask reports `perpetual-recheck` and the dispatch gate
+  // clears it — so it is a record that is DUE RIGHT NOW. Restamping it from a
+  // lengthened cadence would silently push already-due work back into the future.
   const merged = schedule.tasks[taskType];
   if (merged.type === INTERVAL_TYPES.PERPETUAL && ('recheckCron' in settings || 'recheckIntervalMs' in settings)) {
     const exec = schedule.executions[`task:${taskType}`];
     if (exec) {
+      const nowMs = Date.now();
       const records = [exec, ...Object.values(exec.perApp || {})];
       for (const rec of records) {
-        if (rec?.parkedUntil) {
+        const parkedUntilMs = rec?.parkedUntil ? new Date(rec.parkedUntil).getTime() : 0;
+        if (parkedUntilMs > nowMs) {
           rec.parkedUntil = await computePerpetualRecheckAt(merged);
         }
       }
