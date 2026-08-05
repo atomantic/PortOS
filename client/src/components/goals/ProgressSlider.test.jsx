@@ -114,19 +114,80 @@ describe('ProgressSlider commit', () => {
     expect(screen.getByText('85%')).toBeTruthy();
   });
 
-  it('ignores a second release while the first commit is still in flight', async () => {
+  it('sends one request when a touch release also fires a synthesized mouseup', async () => {
     let release;
     const onCommit = vi.fn(() => new Promise((resolve) => { release = resolve; }));
     const { slider } = renderSlider(onCommit);
 
     drag(slider, 85);
-    // Touch devices fire touchend and a synthesized mouseup for one release.
-    await act(async () => { fireEvent.touchEnd(slider); });
-    await act(async () => { fireEvent.mouseUp(slider); });
+    // Both events land in the same task, with no re-render in between — a `useState`
+    // in-flight flag would still read stale in the second handler and double-send.
+    await act(async () => {
+      fireEvent.touchEnd(slider);
+      fireEvent.mouseUp(slider);
+    });
 
     expect(onCommit).toHaveBeenCalledTimes(1);
 
     await act(async () => { release(true); });
+    expect(onCommit).toHaveBeenCalledTimes(1);
+  });
+
+  // Dropping the second value would leave the slider showing a percentage that was
+  // never sent — the same lie as the bug this issue is about.
+  it('sends a value set while a commit is in flight once that commit resolves', async () => {
+    let release;
+    const onCommit = vi.fn(() => new Promise((resolve) => { release = resolve; }));
+    const { slider } = renderSlider(onCommit);
+
+    drag(slider, 85);
+    await act(async () => { fireEvent.mouseUp(slider); });
+    expect(onCommit).toHaveBeenCalledTimes(1);
+
+    // Second interaction lands before the first request is answered.
+    drag(slider, 90);
+    await act(async () => { fireEvent.mouseUp(slider); });
+    expect(onCommit).toHaveBeenCalledTimes(1);
+
+    await act(async () => { release(true); });
+
+    expect(onCommit).toHaveBeenNthCalledWith(1, 85);
+    expect(onCommit).toHaveBeenNthCalledWith(2, 90);
+    expect(screen.getByText('90%')).toBeTruthy();
+  });
+
+  // The queued value replaces the failed one instead of being rolled back over.
+  it('sends a value queued behind a commit that fails', async () => {
+    let release;
+    const onCommit = vi.fn(() => new Promise((resolve) => { release = resolve; }));
+    const { slider } = renderSlider(onCommit);
+
+    drag(slider, 85);
+    await act(async () => { fireEvent.mouseUp(slider); });
+    drag(slider, 90);
+    await act(async () => { fireEvent.mouseUp(slider); });
+
+    await act(async () => { release(false); });
+
+    expect(onCommit).toHaveBeenCalledTimes(2);
+    expect(onCommit).toHaveBeenNthCalledWith(2, 90);
+    expect(screen.getByText('90%')).toBeTruthy();
+  });
+
+  it('does not re-send a release that lands on the percentage already in flight', async () => {
+    let release;
+    const onCommit = vi.fn(() => new Promise((resolve) => { release = resolve; }));
+    const { slider } = renderSlider(onCommit);
+
+    drag(slider, 85);
+    await act(async () => { fireEvent.mouseUp(slider); });
+    drag(slider, 90);
+    drag(slider, 85);
+    await act(async () => { fireEvent.mouseUp(slider); });
+
+    await act(async () => { release(true); });
+
+    expect(onCommit).toHaveBeenCalledTimes(1);
   });
 
   // Arrow/Home/End move a range input without ever firing mouseup.

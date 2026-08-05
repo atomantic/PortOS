@@ -6,7 +6,6 @@ export default function ProgressSlider({ goal, onCommit }) {
   const stored = goal.progress ?? 0;
   const [draft, setDraft] = useState(stored);
   const [dragging, setDragging] = useState(false);
-  const [saving, setSaving] = useState(false);
   // Per-goal so the label/input pairing stays unique if two panels ever co-exist.
   const sliderId = `goal-progress-${goal.id}`;
 
@@ -23,30 +22,54 @@ export default function ProgressSlider({ goal, onCommit }) {
     if (!dragging) setDraft(stored);
   }, [stored, dragging]);
 
-  const commit = async () => {
-    setDragging(false);
-    // Re-entrancy guard: touch devices fire touchend AND a synthesized mouseup, and
-    // a blur can follow both — none of them should re-send an in-flight percentage.
-    if (saving || draft === stored) return;
-    setSaving(true);
+  // In-flight bookkeeping lives in refs, not state: a touch release fires touchend
+  // AND a synthesized mouseup in the same task, so a state flag would still read
+  // stale in the second handler and send the same percentage twice.
+  const inFlight = useRef(null);
+  const queued = useRef(null);
+
+  const send = async (value) => {
+    inFlight.current = value;
     let saved = false;
     try {
       // Only an explicit `false` means "the server never took this" — a handler
       // that returns nothing keeps the pre-#3520 optimistic behavior.
-      saved = (await onCommit(draft)) !== false;
+      saved = (await onCommit(value)) !== false;
     } catch {
       // Deliberately swallowed — `request()` already toasted the failure, so this
-      // stays a single-layer error UI. `try/finally` rather than `.catch()`: a
-      // handler that throws before returning a promise would otherwise latch
-      // `saving` on and freeze the slider on an unsaved value.
-    } finally {
-      setSaving(false);
+      // stays a single-layer error UI. `try` rather than `.catch()`: a handler that
+      // throws before returning a promise would otherwise latch `inFlight` on and
+      // freeze the slider on an unsaved value.
+    }
+    inFlight.current = null;
+    const next = queued.current;
+    queued.current = null;
+    // A percentage the user set while this one was in flight supersedes it, whether
+    // it succeeded or not — dropping it would leave the slider showing a value that
+    // was never sent, which is the same lie this issue is about.
+    if (next !== null && next !== value) {
+      send(next);
+      return;
     }
     // The reset is the fix: without it the panel keeps advertising a percentage the
     // database rejected until the user closes and re-opens it. Read through the ref
-    // rather than this closure's `stored` so a value that arrived while the request
-    // was in flight isn't undone by a rollback to the pre-commit snapshot.
+    // rather than a render closure so a value that arrived while the request was in
+    // flight isn't undone by a rollback to the pre-commit snapshot.
     if (!saved) setDraft(lastStored.current);
+  };
+
+  const commit = () => {
+    setDragging(false);
+    // What the server already has, or is about to: re-releasing on that percentage
+    // (touchend + mouseup, a blur right after, a key release that changed nothing)
+    // must not re-send it.
+    const settled = queued.current ?? inFlight.current ?? stored;
+    if (draft === settled) return;
+    if (inFlight.current !== null) {
+      queued.current = draft;
+      return;
+    }
+    send(draft);
   };
 
   return (
