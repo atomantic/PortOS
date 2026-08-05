@@ -24,11 +24,17 @@ vi.mock('./thinkingLevels.js', async (importOriginal) => {
 });
 
 import { describe, it, expect, vi } from 'vitest';
-import { isTruthyMeta, isFalsyMeta, selectModelForTask } from './subAgentSpawner.js';
+import { isTruthyMeta, isFalsyMeta } from './agentState.js';
+import { selectModelForTask } from './agentModelSelection.js';
 import { applyAppWorktreeDefault } from './cos.js';
 
 /**
- * Tests for the subAgentSpawner service
+ * Pure decision helpers from the sub-agent spawn path.
+ *
+ * Kept under this name because it is where these cases were written; each import
+ * now names the module that DEFINES the helper. They used to come through
+ * `subAgentSpawner.js`'s back-compat barrel, retired in #3450 — a test reaching
+ * for a re-export is exactly the kind of consumer that kept that barrel alive.
  *
  * Note: We test the pure functions directly by importing them from production.
  * For functions with complex dependencies (process spawning, file system, etc.)

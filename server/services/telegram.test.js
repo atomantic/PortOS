@@ -104,7 +104,7 @@ vi.mock('../lib/fileUtils.js', () => ({
   atomicWrite: vi.fn(async () => {}),
 }));
 
-vi.mock('./subAgentSpawner.js', () => ({ getActiveAgents: vi.fn(() => []) }));
+vi.mock('./agentManagement.js', () => ({ getActiveAgents: vi.fn(() => []) }));
 vi.mock('./identity.js', () => ({ getGoals: vi.fn(async () => ({ goals: [] })) }));
 vi.mock('../lib/uuid.js', () => ({ v4: vi.fn(() => 'test-uuid') }));
 

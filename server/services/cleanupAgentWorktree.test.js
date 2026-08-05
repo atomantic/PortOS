@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// --- Mock every dependency subAgentSpawner.js imports ---
+// --- Mock every dependency agentWorktreeCleanup.js pulls in transitively ---
 
 vi.mock('child_process', () => ({
   spawn: vi.fn(),
@@ -208,8 +208,10 @@ vi.mock('./runner.js', () => ({
 
 import { join } from 'path';
 import { existsSync as existsSyncMock } from 'fs';
-import { cleanupAgentWorktree, spawnMergeRecoveryTask, spawnReviewLoopFollowUp } from './subAgentSpawner.js';
-import { resolveResumePointer, resolveTaskResumePatch, recordTaskResumePointer, releaseRetryHold, resumePointerMetadata } from './agentWorktreeCleanup.js';
+// All five come from `agentWorktreeCleanup.js`, the module that defines them.
+// They used to be pulled through the `subAgentSpawner.js` barrel, which was
+// retired in #3450.
+import { cleanupAgentWorktree, spawnMergeRecoveryTask, spawnReviewLoopFollowUp, resolveResumePointer, resolveTaskResumePatch, recordTaskResumePointer, releaseRetryHold, resumePointerMetadata } from './agentWorktreeCleanup.js';
 import { getAgent, getAgentRecord, getTaskById, addTask, updateTask } from './cos.js';
 import { removeWorktree } from './worktreeManager.js';
 import { PATHS } from '../lib/fileUtils.js';

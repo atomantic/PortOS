@@ -56,7 +56,7 @@
     { "id": "svc.voicePipeline", "label": "voice pipeline", "group": "server-services", "file": "server/services/voice/pipeline.js", "desc": "Voice turn orchestration: STT → LLM tool loop → TTS streaming." },
     { "id": "svc.voiceTools", "label": "voice tools", "group": "server-services", "file": "server/services/voice/tools.js", "desc": "Voice agent tool schemas + dispatch: navigation, UI actions, timers, calendar." },
     { "id": "svc.cos", "label": "cos", "group": "server-services", "file": "server/services/cos.js", "desc": "CoS task lifecycle: create/approve/queue; emits task:ready." },
-    { "id": "svc.subAgentSpawner", "label": "subAgentSpawner", "group": "server-services", "file": "server/services/subAgentSpawner.js", "desc": "Turns a ready task into a running agent: prompt build, model selection, worktree prep." },
+    { "id": "svc.subAgentSpawner", "label": "subAgentSpawner", "group": "server-services", "file": "server/services/subAgentSpawner.js", "desc": "Wires task:ready and the CoS Runner events to the spawn path; agentLifecycle.js does the prompt build, model selection and worktree prep." },
     { "id": "svc.cosRunnerClient", "label": "cosRunnerClient", "group": "server-services", "file": "server/services/cosRunnerClient.js", "desc": "Client for the standalone CoS Runner process (Socket.IO + HTTP health)." },
     { "id": "svc.cosAgents", "label": "cosAgents", "group": "server-services", "file": "server/services/cosAgents.js", "desc": "Agent state index (date-bucketed JSON) + agent:* event fan-out to the UI." },
     { "id": "svc.pm2", "label": "pm2 service", "group": "server-services", "file": "server/services/pm2.js", "desc": "PM2 wrapper: CLI spawn + programmatic connect, strict jlist status." },

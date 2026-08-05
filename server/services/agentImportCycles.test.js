@@ -105,6 +105,19 @@ function importsDynamically(file, mod) {
   return new RegExp(String.raw`\bimport\s*\(\s*[^)]*\b${mod.replace(/\./g, '\\.')}[^)]*\)`).test(src);
 }
 
+// Loaders for the modules whose REAL export surface the guards below assert on.
+// Spelled out one literal specifier each rather than `import(`./${name}`)` —
+// the bundler cannot analyze a fully-variable specifier and warns, and the point
+// of reading the live key list is that it is ground truth, so it should not
+// depend on runtime path assembly. Every module here is side-effect-free to
+// import (their side effects live behind `init()`/`start()`/`initSpawner()`).
+const MODULE_LOADERS = {
+  'cos.js': () => import('./cos.js'),
+  'subAgentSpawner.js': () => import('./subAgentSpawner.js'),
+  'agentLifecycle.js': () => import('./agentLifecycle.js'),
+};
+const exportedNames = async (mod) => Object.keys(await MODULE_LOADERS[mod]());
+
 function findCycles(graph) {
   const cycles = new Set();
   const stack = [];
@@ -216,25 +229,53 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
     const forbidden = reexportedFrom('agentManagement.js').filter(name => !stateLayer.has(name));
     expect(forbidden.length, 'derived nothing to forbid — check the facade export blocks').toBeGreaterThan(0);
 
-    // Then assert against cos.js's REAL export surface, not its source text.
-    // Every regex for this was bypassable by a form it did not anticipate — a
-    // second re-export statement, a different source module, double quotes,
+    // Then assert against each barrel's REAL export surface, not its source
+    // text. Every regex for this was bypassable by a form it did not anticipate
+    // — a second re-export statement, a different source module, double quotes,
     // `export *`, `import` + a bare `export { … }` with no `from` at all. The
-    // module's own key list is ground truth and has no syntax to outrun. cos.js
-    // imports clean and side-effect-free here (its side effects live behind
-    // `init()`/`start()`), which is what makes this affordable.
-    const cosExports = Object.keys(await import('./cos.js'));
-    expect(cosExports, 'cos.js exports nothing — did the import fail?').not.toEqual([]);
-    for (const name of forbidden) {
-      expect(cosExports, `cos.js must not re-export ${name} — it is a process-layer transition, ask the facade`)
-        .not.toContain(name);
+    // module's own key list is ground truth and has no syntax to outrun.
+    //
+    // `subAgentSpawner.js` joined this loop in #3450. It used to be excluded on
+    // purpose — it re-exported the same three transitions as its back-compat
+    // barrel, so the rule could only be stated for `cos.js`. With that barrel
+    // retired the rule generalizes, which is the point of having retired it.
+    for (const barrel of ['cos.js', 'subAgentSpawner.js']) {
+      const barrelExports = await exportedNames(barrel);
+      expect(barrelExports, `${barrel} exports nothing — did the import fail?`).not.toEqual([]);
+      for (const name of forbidden) {
+        expect(barrelExports, `${barrel} must not re-export ${name} — it is a process-layer transition, ask the facade`)
+          .not.toContain(name);
+      }
     }
+  });
 
-    // Scoped to `cos.js` on purpose: `subAgentSpawner.js` still re-exports these
-    // same three from `agentManagement.js`. That barrel is the cluster's declared
-    // back-compat surface and retiring it is its own slice of #3450, so widening
-    // this to "no module may re-export a facade transition" would fail today. The
-    // narrower rule holds the line where the forwarders actually had callers.
+  it('keeps the cluster orchestrators from re-growing a re-export barrel (#3450)', async () => {
+    // `subAgentSpawner.js` re-exported ~40 symbols from nine siblings, and
+    // `agentLifecycle.js` re-exported the leaves that had been extracted out of
+    // it for that barrel to forward. So "where does finalizeAgent live" had
+    // three answers, and a caller could reach a transition through a module that
+    // merely forwards it. Both surfaces are gone; this keeps them gone.
+    //
+    // Stated as "every export is DECLARED here", which is the only form that
+    // survives contact with the syntax: `export *`, `export { x } from …`, and
+    // `import` + a bare `export { x }` all fail it identically, and so does a
+    // re-export from a module this test has never heard of. The real key list is
+    // ground truth for what is exported; the source scan only answers what is
+    // declared, and if that scan ever misses a legitimate local declaration the
+    // test fails LOUD rather than going green over a live re-export.
+    for (const mod of ['subAgentSpawner.js', 'agentLifecycle.js']) {
+      const src = readFileSync(join(SERVICES_DIR, mod), 'utf-8');
+      const declared = new Set(
+        [...src.matchAll(/^export\s+(?:async\s+)?(?:function\s*\*?|const|let|var|class)\s+([A-Za-z0-9_$]+)/gm)]
+          .map(m => m[1])
+      );
+      const actual = await exportedNames(mod);
+      expect(actual, `${mod} exports nothing — did the import fail?`).not.toEqual([]);
+      const forwarded = actual.filter(name => !declared.has(name)).sort();
+      expect(forwarded,
+        `${mod} must declare what it exports — ${forwarded.join(', ')} is forwarded from another module; import it from the one that defines it`
+      ).toEqual([]);
+    }
   });
 
   it('keeps agentState.js an import-free leaf, so agents.js can use the facade (#3450)', () => {

@@ -1,9 +1,26 @@
 /**
- * Sub-Agent Spawner Service
+ * Sub-Agent Spawner Service — the agent cluster's EVENT WIRING.
  *
- * Orchestrator module: imports from focused sub-modules and re-exports
- * everything for backward compatibility. Owns the explicit `initSpawner()`
- * entry point (event wiring + orphan cleanup) and shared state references.
+ * Owns `initSpawner()`: the CoS Runner connection, the runner event handlers
+ * (`agent:output` / `agent:completed` / `agents:orphaned` / `agent:error`), the
+ * `task:ready` → spawn and `agent:terminate` → terminate listeners, run-directory
+ * pruning, and the delayed orphan sweep. Nothing else.
+ *
+ * ## It is no longer a barrel (#3450)
+ *
+ * Until #3450 this file also re-exported ~40 symbols from nine sibling modules
+ * "for backward compatibility" — a second, partial view of the cluster layered
+ * over `cosAgents.js` and `cos.js`'s agent block, including three process-layer
+ * transitions `agentOrchestrator.js` also owns. Two barrels naming the same
+ * transition is how a caller ends up importing the wrong one and the layering
+ * stops meaning anything. The re-exports are gone; the surviving consumers of
+ * this module import `initSpawner` (`bootstrap.js`) and `loadSlashdoCommand`
+ * (CoS agent prompts), and everything else now imports the module that actually
+ * defines it — or, for a lifecycle transition, `agentOrchestrator.js`.
+ *
+ * That is also why this module can take a static `agentOrchestrator.js` import
+ * while the modules it wires cannot: with the barrel retired, nothing in the
+ * facade's closure imports this file at all.
  *
  * NOTE: importing this module is side-effect-free — `initSpawner()` must be
  * called explicitly (see `server/index.js`). This keeps test imports from
@@ -24,37 +41,14 @@ import { syncRunnerAgents } from './agentRunnerSync.js';
 import { handleAgentCompletion } from './agentLifecycle.js';
 import { cleanupOrphanedAgents } from './agentManagement.js';
 import { completeAgentRun } from './agentRunTracking.js';
+import { runnerAgents, setUseRunner } from './agentState.js';
 // This module's own event wiring drives three LIFECYCLE TRANSITIONS, so it takes
 // them from the facade rather than from the three separate leaves that happen to
-// implement them (#3450). It can: nothing the facade imports imports this barrel
-// back, so the edge stays one-directional. The `export { … }` blocks below still
-// name the leaves directly — those are the back-compat barrel surface, not calls.
+// implement them (#3450). It can: nothing the facade imports imports this module
+// back, so the edge stays one-directional.
 import { completeAgent, spawnAgentForTask, terminateAgent } from './agentOrchestrator.js';
 
-// ─── Shared state (imported from agentState.js) ──────────────────────────────
-export { activeAgents, runnerAgents, userTerminatedAgents, spawningTasks, useRunner, isTruthyMeta, isFalsyMeta, getActiveAgentIds } from './agentState.js';
-import { runnerAgents, setUseRunner } from './agentState.js';
-
-// ─── Sub-module re-exports ────────────────────────────────────────────────────
-export { selectModelForTask } from './agentModelSelection.js';
-export { createAgentRun, completeAgentRun, checkForTaskCommit, extractErrorFromOutput } from './agentRunTracking.js';
-export { ERROR_PATTERNS, analyzeAgentFailure, createInvestigationTask, API_ACCESS_ERROR_CATEGORIES, maybeCreateInvestigationTask, resolveFailedTaskUpdate, MAX_TASK_RETRIES } from './agentErrorAnalysis.js';
-export { buildAgentPrompt, getAppWorkspace, getAppDataForTask, generateJiraTitle, createJiraTicketForTask, getClaudeMdContext, buildCompactionSection, detectSkillTemplate, loadSkillTemplate } from './agentPromptBuilder.js';
-export { spawnDirectly, createStreamJsonParser, summarizeToolInput, safeParse, buildCliSpawnConfig, isClaudeCliProvider, isTuiProvider, getClaudeSettingsEnv } from './agentCliSpawning.js';
-export { spawnAgentForTask, waitForRunnerStability, spawnViaRunner, extractPipelineOutputSummary, handlePipelineProgression, handleAgentCompletion, cleanupAgentWorktree, spawnMergeRecoveryTask, spawnReviewLoopFollowUp } from './agentLifecycle.js';
-export { syncRunnerAgents } from './agentRunnerSync.js';
-export { extractFinalSummary } from './agentSummaryExtraction.js';
-export { terminateAgent, pauseAgent, getActiveAgents, killAgent, getAgentProcessStats, killAllAgents, isPidAlive, cleanupOrphanedAgents, handleOrphanedTask } from './agentManagement.js';
-export { processAgentCompletion } from './agentCompletion.js';
-
 const RUNS_DIR = PATHS.runs;
-
-// The runner output batchers moved to their own leaf module (issue #2837) so
-// agentManagement.js can import `flushRunnerOutputBatcher` statically instead of
-// dynamically reaching back through this barrel. Re-exported for consumers that
-// still import it from here.
-export { flushRunnerOutputBatcher } from './agentRunnerOutputBatchers.js';
-
 
 /**
  * Load a slashdo command from the bundled submodule, resolving !`cat` lib includes inline.

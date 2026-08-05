@@ -215,10 +215,11 @@ Server Event → Socket.IO → socket.js → React Component State Update
 - Self-improvement task generation
 
 ### Sub-Agent Spawner (`server/services/subAgentSpawner.js`)
-- Claude CLI process spawning
-- Model selection based on task complexity
-- MCP server integration
-- Usage tracking
+- `initSpawner()`: CoS Runner connection + runner event handlers, the `task:ready` → spawn and `agent:terminate` → terminate listeners, run-directory pruning, orphan sweep
+- The work itself lives in focused siblings: `agentLifecycle.js` (spawn/completion), `agentCliSpawning.js` / `agentTuiSpawning.js` (process spawning), `agentModelSelection.js`, `agentPromptBuilder.js`, `agentRunTracking.js`
+
+### Agent Orchestrator (`server/services/agentOrchestrator.js`)
+- The one entry point for an agent LIFECYCLE TRANSITION (pause / kill / terminate / complete / spawn) — read its header before touching the agent cluster
 
 ### Memory Service (`server/services/memoryBackend.js`)
 - Backend switcher: PostgreSQL + pgvector (`memoryDB.js`) for real installs; the file backend (`memory.js`) is a test-only escape hatch

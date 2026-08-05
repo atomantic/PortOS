@@ -85,8 +85,8 @@ import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
 // `evaluateTasks` and the generators emit `task:ready`; the spawn-side
 // scheduler (dequeueNextTask / tryImmediateSpawn) below reacts to that. Most of
 // these are imported for internal use by the scheduler; checkStagePrecondition
-// and applyAppWorktreeDefault are re-exported for agentLifecycle.js and
-// subAgentSpawner, and evaluateTasks for the cos route + `import * as cos`.
+// is re-exported for agentCompletionCleanup.js, applyAppWorktreeDefault for the
+// suite, and evaluateTasks for the cos route + `import * as cos`.
 import {
   evaluateTasks,
   generateIdleReviewTask,
@@ -219,7 +219,7 @@ export async function start() {
   setDaemonRunning(true);
 
   // First clean up orphaned agents (agents marked running but no live process)
-  const { cleanupOrphanedAgents } = await import('./subAgentSpawner.js');
+  const { cleanupOrphanedAgents } = await import('./agentManagement.js');
   const cleanedAgents = await cleanupOrphanedAgents();
   if (cleanedAgents > 0) {
     emitLog('info', `Cleaned up ${cleanedAgents} orphaned agent(s)`);
@@ -576,7 +576,7 @@ async function resetOrphanedTasks({ bootRecovery = false } = {}) {
 
   // Route orphaned tasks through handleOrphanedTask for consistent retry counting,
   // cooldown enforcement, and max-spawn limits (prevents runaway respawning)
-  const { handleOrphanedTask } = await import('./subAgentSpawner.js');
+  const { handleOrphanedTask } = await import('./agentManagement.js');
 
   const processOrphanedTasks = async (tasks) => {
     for (const task of tasks) {

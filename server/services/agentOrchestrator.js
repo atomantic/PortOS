@@ -3,7 +3,8 @@
  *
  * ## Why this module exists (#3450)
  *
- * Seven modules in the core agent path form one tightly-coupled cluster:
+ * Seven modules in the core agent path formed one tightly-coupled cluster when
+ * this was filed:
  *
  *   cos.js → cosAgents.js → cosAgentLifecycle.js → agentManagement.js
  *          → agents.js → subAgentSpawner.js → agentLifecycle.js
@@ -14,18 +15,22 @@
  * from source and guards it. The cost is comprehension: no module owns the agent
  * state machine, so reasoning about one transition means holding all seven files
  * in mind. (`cos.js#handleOrphanedTask` is what a surviving deferred back-edge
- * looks like; the ones this facade replaced are described further down.)
+ * looks like; the ones this facade replaced are described further down. The
+ * `agents.js` and `subAgentSpawner.js` hops in that chain are gone — read it as
+ * the shape of the problem, not as today's graph.)
  *
  * This module sits ABOVE that cluster. It imports the three modules that own
  * transitions (`agentManagement`, `cosAgentLifecycle`, `agentLifecycle`) and is
  * imported BY nobody inside the cluster — so its edges stay static and callers
  * above `server/services/` get one unambiguous entry point.
  *
- * `subAgentSpawner.js` calls itself an orchestrator but cannot be this: it is
- * *inside* the cluster — `cos.js` still reaches it via `await import(...)` — and
- * it re-exports ~40 symbols as a back-compat barrel, including three transitions
- * this facade also owns. A facade has to be small, complete, and outside the
- * graph it fronts; retiring that barrel is its own slice of #3450.
+ * `subAgentSpawner.js` calls itself an orchestrator but is not this one: it is
+ * the cluster's EVENT WIRING (runner handlers, `task:ready`, `agent:terminate`),
+ * and it used to re-export ~40 symbols as a back-compat barrel — including three
+ * transitions this facade also owns. That barrel is retired (#3450), along with
+ * the pass-through re-exports `agentLifecycle.js` kept for it, so the two modules
+ * no longer answer the same question two ways. What is left there consumes the
+ * facade rather than duplicating it.
  *
  * **Invariant, enforced by `agentImportCycles.test.js`: no module reachable
  * FROM this one may import it back — statically OR via `import(...)`.** One such
@@ -60,8 +65,8 @@
  * `bufferedSpawn.killProcessTree`), runner RPC (`cosRunnerClient`), the task store
  * (`cos.js` task functions), post-run work (`agentWorktreeCleanup`,
  * `agentFinalization`, `agentRunTracking`, `agentCompletionCleanup`,
- * `agentSummaryExtraction`), and the pure re-export barrels (`cosAgents.js`,
- * `subAgentSpawner.js`). If it is not exported below, it is a leaf.
+ * `agentSummaryExtraction`), and the one remaining re-export barrel
+ * (`cosAgents.js`). If it is not exported below, it is a leaf.
  *
  * ## Moving a caller out (the shape every migration takes)
  *
@@ -76,14 +81,21 @@
  * ## What is still outstanding
  *
  * `server/routes/cosAgentRoutes.js`, `agents.js` and `subAgentSpawner.js`'s event
- * wiring are migrated, and the deferred forwarders that used to sit in
+ * wiring are migrated, the deferred forwarders that used to sit in
  * `cosAgentLifecycle.js` are gone along with the `cos.js` re-exports that were
- * their only consumers — steps 3 and 4 of the #3450 sequencing. Remaining:
- * the transitions below that still have callers INSIDE the closure, and the
- * three overlapping barrels (`cosAgents.js`, `subAgentSpawner.js`, and `cos.js`'s
- * agent re-export block), which each expose a partial view of the cluster.
+ * their only consumers, and the `subAgentSpawner.js` barrel (plus the
+ * `agentLifecycle.js` pass-throughs whose last consumer it was) is retired.
  * `grep -rn agentOrchestrator server/` is the live answer to what has moved —
  * do not keep a hand-written call-site inventory here; it only goes stale.
+ *
+ * Remaining: the transitions below that still have callers INSIDE the closure
+ * (all four are `completeAgent`, reached through `cosAgents.js`), and the two
+ * barrels that still expose a partial view of the cluster — `cosAgents.js` and
+ * `cos.js`'s agent re-export block. Note that `agentFinalization.js` and
+ * `agentCliSpawning.js` are LEAVES that call a transition, so "move the caller
+ * out" does not apply to them as written: the closure edge to break is the one
+ * `agentLifecycle.js`/`agentManagement.js` hold INTO them, not an import of
+ * theirs.
  */
 
 // Process/runner layer — owns the live agent maps and the OS-level signals.

@@ -16,10 +16,13 @@
  *   - `agentRunnerSync.js`         — syncRunnerAgents (agentManagement, subAgentSpawner)
  *   - `agentState.js`              — the shared in-memory agent maps
  *
- * All of them are re-exported below so existing `from './agentLifecycle.js'`
- * imports keep resolving. Do NOT move a function back in here if a spawner or
- * agentManagement calls it — that re-creates the cycle, and
- * `agentImportCycles.test.js` will fail.
+ * This module used to re-export all of them so `from './agentLifecycle.js'`
+ * kept resolving for callers written before the extraction. Those pass-throughs
+ * are gone (#3450): their last consumer was `subAgentSpawner.js`'s back-compat
+ * barrel, and re-exporting a leaf from the orchestrator above it is what made
+ * "where does finalizeAgent live" a three-answer question. Import a leaf from
+ * the leaf. Do NOT move a function back in here if a spawner or agentManagement
+ * calls it — that re-creates the cycle, and `agentImportCycles.test.js` will fail.
  */
 
 import { join } from 'path';
@@ -60,9 +63,8 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 
 // Extracted helpers — these carve the two giant orchestrators
 // (spawnAgentForTask / handleAgentCompletion) into focused, testable modules.
-// The worktree-cleanup cluster and handlePipelineProgression are re-exported
-// below so existing consumers (subAgentSpawner, agentManagement) that import
-// them from agentLifecycle.js keep working.
+// Imported for use here only; the pass-through re-exports that used to sit
+// below them were retired with the `subAgentSpawner.js` barrel (#3450).
 import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import { cleanupAgentWorktree } from './agentWorktreeCleanup.js';
@@ -70,21 +72,6 @@ import { runAgentCompletionCleanup } from './agentCompletionCleanup.js';
 import { dispatchRecoveredTaskOutputHook, finalizeAgent, stampLiExecutionVerdict } from './agentFinalization.js';
 import { extractFinalSummary } from './agentSummaryExtraction.js';
 import { handleOrphanedTask } from './agentManagement.js';
-
-// Re-export the moved functions so existing consumers (subAgentSpawner,
-// agentManagement) keep importing them from agentLifecycle.js. cleanupAgentWorktree
-// is also used internally (passed as cleanupWorktreeFn to the spawn helpers), so it
-// stays imported above; the rest are pure pass-throughs.
-export { cleanupAgentWorktree };
-export { spawnReviewLoopFollowUp, spawnMergeRecoveryTask } from './agentWorktreeCleanup.js';
-export { handlePipelineProgression } from './agentCompletionCleanup.js';
-// The finalize/summary/runner-sync clusters moved OUT to their own modules to
-// break the static import cycle with the two spawners (issue #2837). Re-exported
-// here so long-standing consumers (subAgentSpawner's barrel, agentManagement,
-// existing tests) keep resolving them from agentLifecycle.js.
-export { dispatchRecoveredTaskOutputHook, dispatchTaskOutputHookOnce, finalizeAgent, releaseAgentLane, evaluateSuccessCriteria, resolveProgrammaticIoVerdict, withOutputHookTimeout, persistSimplifySummaries } from './agentFinalization.js';
-export { extractFinalSummary, extractSimplifySummaries } from './agentSummaryExtraction.js';
-export { syncRunnerAgents } from './agentRunnerSync.js';
 
 const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;

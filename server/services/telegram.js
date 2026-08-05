@@ -14,7 +14,7 @@ import { getDomainAutonomyMode } from './cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 import { approveMemory, rejectMemory, peekMemory } from './memoryBackend.js';
 import { ensureDir, PATHS, readJSONFile, formatDuration, atomicWrite } from '../lib/fileUtils.js';
-import { getActiveAgents } from './subAgentSpawner.js';
+import { getActiveAgents } from './agentManagement.js';
 import { getGoals } from './identity.js';
 
 const HEALTH_CHECK_INTERVAL_MS = 30_000;
