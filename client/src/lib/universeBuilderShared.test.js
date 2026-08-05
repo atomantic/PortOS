@@ -57,6 +57,13 @@ describe('universeBuilderShared — humanizeCategory', () => {
     expect(humanizeCategory('deep_space')).toBe('Deep Space');
     expect(humanizeCategory('')).toBe('');
   });
+
+  it('title-cases Object.prototype keys instead of returning the inherited member', () => {
+    // Category keys are user-authored and reach here from unvalidated sidecar
+    // metadata, so an unguarded lookup would hand back a function.
+    expect(humanizeCategory('constructor')).toBe('Constructor');
+    expect(humanizeCategory('toString')).toBe('ToString');
+  });
 });
 
 describe('universeBuilderShared — draft categories', () => {

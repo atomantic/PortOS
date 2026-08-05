@@ -86,7 +86,10 @@ export default function GalleryImagePicker({ open, onClose, onSelect, allowUploa
   // from the scope dropdown, leaving text + type filtering intact. `silent`
   // because the empty-list fallback below is this caller's error UI.
   useEffect(() => {
-    if (!open) return undefined;
+    // Drop the previous lists on close rather than letting them straddle a
+    // reopen: the gallery refetch can land first, and stale membership matched
+    // against fresh images offers options that filter to the wrong set.
+    if (!open) { setCollections([]); setUniverses([]); return undefined; }
     let cancelled = false;
     listMediaCollections({ silent: true })
       .then((list) => { if (!cancelled) setCollections(Array.isArray(list) ? list : []); })

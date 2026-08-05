@@ -64,7 +64,11 @@ export const normalizeCategoryKey = (raw) => (raw || '')
   .replace(/_{2,}/g, '_')
   .slice(0, WORLD_CATEGORY_KEY_MAX);
 
-export const humanizeCategory = (key) => CATEGORY_LABELS[key]
+// `hasOwn`-guarded because category keys are user-authored and reach here from
+// unvalidated sidecar metadata: a bare `CATEGORY_LABELS[key]` resolves
+// `'constructor'` / `'toString'` to an inherited function, which then flows into
+// callers as a label and throws the moment one calls a string method on it.
+export const humanizeCategory = (key) => (Object.hasOwn(CATEGORY_LABELS, key) ? CATEGORY_LABELS[key] : null)
   || (key || '').replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
 
 export const ensureDraftCategories = (categories = {}) => ({
