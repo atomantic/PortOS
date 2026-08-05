@@ -68,8 +68,11 @@ vi.mock('./brainStorage.js', () => ({
 }));
 
 import * as journal from './brainJournal.js';
-import { brainEvents } from './brainStorage.js';
+import { brainEvents, getAll } from './brainStorage.js';
 import * as obsidian from './obsidian.js';
+
+// Pull the payload of the last emit of `name`, or undefined if it never fired.
+const lastEmit = (name) => brainEvents.emit.mock.calls.filter((c) => c[0] === name).at(-1)?.[1];
 
 afterAll(() => {
   rmSync(TEMP_ROOT, { recursive: true, force: true });
@@ -149,6 +152,26 @@ describe('brainJournal', () => {
       expect(eventNames).toContain('journals:upserted');
     });
 
+    // Issue #3510: journals:changed used to carry the full date→entry map,
+    // rebuilt by reading every historical day off disk on every autosave /
+    // dictation segment. It now carries just the day that moved.
+    it('emits journals:changed as a { date, entry } delta, not a full map', async () => {
+      await journal.appendJournal('2026-04-16', 'yesterday');
+      await journal.appendJournal('2026-04-17', 'today');
+      const payload = lastEmit('journals:changed');
+      expect(payload.date).toBe('2026-04-17');
+      expect(payload.entry.content).toBe('today');
+      expect(payload).not.toHaveProperty('records');
+    });
+
+    it('does not read every historical entry when appending to one day', async () => {
+      await journal.appendJournal('2026-04-15', 'day one');
+      await journal.appendJournal('2026-04-16', 'day two');
+      getAll.mockClear();
+      await journal.appendJournal('2026-04-17', 'day three');
+      expect(getAll).not.toHaveBeenCalled();
+    });
+
     it('ignores empty/whitespace text', async () => {
       const res = await journal.appendJournal('2026-04-17', '   ');
       expect(res).toBeNull();
@@ -177,6 +200,32 @@ describe('brainJournal', () => {
       const cleared = await journal.setJournalContent('2026-04-17', '');
       expect(cleared.content).toBe('');
       expect(cleared.segments).toEqual([]);
+    });
+
+    it('emits a { date, entry } delta without re-reading the store (#3510)', async () => {
+      await journal.appendJournal('2026-04-16', 'yesterday');
+      getAll.mockClear();
+      await journal.setJournalContent('2026-04-17', 'brand new');
+      expect(getAll).not.toHaveBeenCalled();
+      expect(lastEmit('journals:changed')).toMatchObject({
+        date: '2026-04-17',
+        entry: { content: 'brand new' },
+      });
+    });
+  });
+
+  describe('deleteJournal', () => {
+    // `entry: null` marks the day as gone; the journals:deleted event that
+    // follows carries the removed record for consumers that need its contents.
+    it('emits journals:changed with a null entry and no full-store read (#3510)', async () => {
+      await journal.appendJournal('2026-04-16', 'yesterday');
+      await journal.appendJournal('2026-04-17', 'today');
+      getAll.mockClear();
+
+      expect(await journal.deleteJournal('2026-04-17')).toBe(true);
+      expect(getAll).not.toHaveBeenCalled();
+      expect(lastEmit('journals:changed')).toEqual({ date: '2026-04-17', entry: null });
+      expect(lastEmit('journals:deleted').entry.content).toBe('today');
     });
   });
 

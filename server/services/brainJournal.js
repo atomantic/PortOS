@@ -136,19 +136,21 @@ async function putEntry(date, entry) {
   return { ...saved, obsidianPath: loc.obsidianPath, obsidianVaultId: loc.obsidianVaultId };
 }
 
-// The legacy journals:changed event carried the full date→entry map. Rebuild it
-// from the store (tombstones stripped) so existing consumers keep working. The
-// brainStorage 2s cache absorbs dictation bursts so this isn't a hot re-read.
-async function rawRecords() {
-  const locations = await loadObsidianLocations();
-  const records = {};
-  for (const entry of await brainStorage.getAll('journals')) {
-    const date = entry.date || entry.id;
-    const loc = locations[date] || { obsidianPath: null, obsidianVaultId: null };
-    records[date] = { ...entry, obsidianPath: loc.obsidianPath, obsidianVaultId: loc.obsidianVaultId };
-  }
-  return records;
-}
+// Store-wide "the daily log changed" signal, carrying the ONE day that moved.
+//
+// This used to ship the full date→entry map, rebuilt by reading and JSON-parsing
+// every `data/brain/journals/<date>/index.json` on disk (issue #3510). Since the
+// per-record split (#725) there is no whole-store cache to absorb that, so every
+// autosave/dictation segment against today re-read the user's entire history to
+// build a payload nobody consumed — the write paths already emit
+// `journals:upserted` / `journals:appended` / `journals:deleted` with the single
+// affected entry, and those are what the memory bridge listens on.
+//
+// Payload is now a delta: `{ date, entry }`, with `entry: null` for a delete. A
+// listener that wants more than the changed day should read it back through
+// `listJournals()` / `getJournal(date)` rather than have every writer pay for a
+// full-store materialization on the off chance someone is subscribed.
+const emitChanged = (date, entry) => brainEvents.emit('journals:changed', { date, entry });
 
 // Accept YYYY-MM-DD only, and require a real calendar day so we can't create
 // store keys like '2026-02-30' that don't sort meaningfully or round-trip.
@@ -256,7 +258,7 @@ export async function setJournalContent(date, content) {
     return putEntry(date, next);
   });
   scheduleObsidianSync(entry);
-  brainEvents.emit('journals:changed', { records: await rawRecords() });
+  emitChanged(date, entry);
   // Per-entry event so downstream syncers (memory bridge) can update the
   // single affected day without iterating the whole store.
   brainEvents.emit('journals:upserted', { entry });
@@ -295,7 +297,7 @@ export async function appendJournal(date, text, { source = 'text' } = {}) {
     return { entry: saved, segment: segmentLocal };
   });
   scheduleObsidianSync(entry);
-  brainEvents.emit('journals:changed', { records: await rawRecords() });
+  emitChanged(date, entry);
   brainEvents.emit('journals:appended', { entry, segment });
   // Per-entry event so the memory bridge re-embeds only this day, not all
   // of them. (Keep journals:appended separate — it carries the single new
@@ -332,7 +334,7 @@ export async function upsertAutoSection(date, body, markers) {
   });
   if (!entry) return null;
   scheduleObsidianSync(entry);
-  brainEvents.emit('journals:changed', { records: await rawRecords() });
+  emitChanged(date, entry);
   brainEvents.emit('journals:upserted', { entry });
   return entry;
 }
@@ -353,7 +355,9 @@ export async function deleteJournal(date) {
   }
   // Drop the local mirror-location record for this day (sidecar is not synced).
   await saveObsidianLocation(date, { obsidianPath: null, obsidianVaultId: null });
-  brainEvents.emit('journals:changed', { records: await rawRecords() });
+  // `entry: null` — the day is gone; the journals:deleted event below carries
+  // the record that was removed for consumers that need its contents.
+  emitChanged(date, null);
   // Explicit deletion signal so memory bridges / integrations can archive
   // the corresponding vector entry — the changed event alone doesn't tell
   // the bridge which record vanished.
