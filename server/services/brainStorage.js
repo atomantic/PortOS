@@ -305,6 +305,8 @@ function invalidateLiveId(type, id) {
 }
 
 async function resolveLiveIds(type, attempt) {
+  // `storeFor` throws for an unknown type, and both maps are keyed off the same
+  // BRAIN_ENTITY_TYPES list — so past this line `liveIdIndex[type]` exists.
   const store = storeFor(type);
   const index = liveIdIndex[type];
   const generation = liveIdGeneration[type];
@@ -317,18 +319,22 @@ async function resolveLiveIds(type, attempt) {
 
   const unresolved = ids.filter((id) => !index.has(id));
   const loaded = await Promise.all(unresolved.map((id) => store.loadOne(id)));
+  const verdicts = new Map(unresolved.map((id, i) => [id, isLiveRecord(loaded[i])]));
 
   // An invalidation landed while we were reading, so what we loaded may already
-  // describe the pre-change record — re-run instead of caching it. The retry
-  // re-reads only the ids that invalidation dropped, so it is cheap. On the
-  // final attempt we adopt what we have: a tally one write behind is better
-  // than a caller that never returns.
-  if (liveIdGeneration[type] !== generation && attempt + 1 < LIVE_ID_MAX_ATTEMPTS) {
+  // describe the pre-change record. Re-run — the retry re-reads only the ids the
+  // invalidation dropped, so it is cheap. Past the attempt ceiling we answer
+  // from what we have but do NOT write it into the index: caching a verdict we
+  // know raced would strand it there until the next change to that record.
+  const raced = liveIdGeneration[type] !== generation;
+  if (raced && attempt + 1 < LIVE_ID_MAX_ATTEMPTS) {
     return resolveLiveIds(type, attempt + 1);
   }
+  if (!raced) {
+    for (const [id, live] of verdicts) index.set(id, live);
+  }
 
-  unresolved.forEach((id, i) => index.set(id, isLiveRecord(loaded[i])));
-  return ids.filter((id) => index.get(id) === true);
+  return ids.filter((id) => (verdicts.has(id) ? verdicts.get(id) : index.get(id)) === true);
 }
 
 /**
@@ -345,6 +351,15 @@ export function listLiveIds(type) {
 
 // Wire the freshness signals once, at module load. Invalidation only drops the
 // touched id, so the next `listLiveIds` re-reads exactly one record.
+//
+// The `journals` type is the one that needs checking rather than assuming:
+// brainJournal re-emits `journals:upserted` / `journals:deleted` under the SAME
+// names with its own richer `{ entry }` / `{ date, entry }` payloads, which
+// carry no top-level `id`. Those extra emits are harmless no-ops here — every
+// journal write still routes through brainStorage first (`putEntry` →
+// `upsertWithId({ emitEvent: false })` → `record:changed`; `deleteJournal` →
+// `remove()` → `journals:deleted` with `{ id }`), which is what actually
+// invalidates.
 for (const type of BRAIN_ENTITY_TYPES) {
   brainEvents.on(`${type}:upserted`, ({ id } = {}) => invalidateLiveId(type, id));
   brainEvents.on(`${type}:deleted`, ({ id } = {}) => invalidateLiveId(type, id));
