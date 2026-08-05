@@ -224,7 +224,7 @@ export default function FeedsTab({ onRefresh }) {
           <p className="text-sm mt-1">Paste an RSS or Atom feed URL above to get started.</p>
         </div>
       ) : (
-        <div className="flex gap-4 flex-1 min-h-0">
+        <div className="flex flex-col md:flex-row gap-4 flex-1 min-h-0">
           {/* Feed sidebar */}
           <div className="w-56 shrink-0 space-y-1 overflow-y-auto hidden md:block">
             {feeds.map(feed => (
@@ -289,7 +289,7 @@ export default function FeedsTab({ onRefresh }) {
           </div>
 
           {/* Mobile feed selector */}
-          <div className="md:hidden mb-3 w-full">
+          <div className="md:hidden shrink-0">
             <select
               value={selectedFeedId || ''}
               onChange={(e) => setSelectedFeedId(e.target.value || null)}
