@@ -653,7 +653,12 @@ export function isWithinProjectLimit(task, agentsByProject, perProjectLimit) {
 async function unblockExpiredCooldownsInQueue(blocked, defaultTaskType) {
   for (const task of blocked || []) {
     if (task.metadata?.blockedCategory !== 'orphan-cooldown' || !task.metadata?.cooldownUntil) continue;
-    if (new Date(task.metadata.cooldownUntil).getTime() > Date.now()) continue;
+    // An unparseable `cooldownUntil` yields NaN, and NaN loses BOTH comparisons —
+    // so the expiry test has to be written as "is expired", not as the negation of
+    // "is still cooling". Guard it explicitly: a garbage timestamp leaves the task
+    // blocked (the pre-#3500 behavior) rather than reviving it on the next tick.
+    const cooldownUntil = new Date(task.metadata.cooldownUntil).getTime();
+    if (!(cooldownUntil <= Date.now())) continue;
     emitLog('info', `⏰ Orphan cooldown expired for task ${task.id}, unblocking`, { taskId: task.id });
     await updateTask(task.id, {
       status: 'pending',

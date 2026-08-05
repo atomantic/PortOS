@@ -118,4 +118,13 @@ describe('unblockExpiredOrphanCooldowns', () => {
 
     expect(updateTaskMock).not.toHaveBeenCalled();
   });
+
+  it('leaves a task with an unparseable cooldownUntil blocked rather than reviving it', async () => {
+    // NaN loses both `<=` and `>`, so writing the expiry test as the negation of
+    // "still cooling" would silently unblock every malformed timestamp on the
+    // next tick instead of leaving it parked for a human to look at.
+    await unblockExpiredOrphanCooldowns(store([cooldownTask('u1', 'not-a-date')]), store([]));
+
+    expect(updateTaskMock).not.toHaveBeenCalled();
+  });
 });
