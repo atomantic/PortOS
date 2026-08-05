@@ -66,6 +66,14 @@ const ANALYSIS_KIND = { SCRIPT: 'script', CHARACTERS: 'characters', PLACES: 'pla
 const DRAWER = { VERSIONS: 'versions', HISTORY: 'history', POLISH: 'polish', VOICE: 'voice' };
 const MOBILE_TAB = { WRITING: 'writing', STORYBOARD: 'storyboard' };
 
+// The three prose surfaces the header toggles between. Declared once so the
+// toggle group stays a map instead of three hand-copied buttons.
+const VIEW_MODES = [
+  { id: 'edit', label: 'Edit', icon: Pencil, title: 'Edit prose (textarea)' },
+  { id: 'read', label: 'Read', icon: BookOpen, title: 'Read view with scene anchors' },
+  { id: 'review', label: 'Review', icon: Columns3, title: 'Synced prose · script · media review' },
+];
+
 const ANALYSIS_LABELS = {
   [ANALYSIS_KIND.SCRIPT]: 'Adapt',
   [ANALYSIS_KIND.CHARACTERS]: 'Characters',
@@ -719,84 +727,40 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header — title + status on left, primary actions + overflow on right */}
+      {/*
+        Header — one wrapping row on desktop, two compact rows on phones (#3568).
+        Under `sm` the secondary controls (status, view mode, snapshot) live in
+        their own full-width sub-bar so the first row is just title + Save +
+        Work menu; at `sm+` that wrapper becomes `display: contents` and its
+        children rejoin the single header row. The `sm:order-*` classes restore
+        the original left-to-right desktop sequence (title · status · view mode ·
+        Save · Snapshot · menu) that the DOM regrouping would otherwise shuffle.
+        Every control stays on screen at every width — nothing is hidden behind
+        the menu, so the prose editor clears the fold without losing reach.
+      */}
       <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-port-border bg-port-card">
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           onBlur={commitTitle}
           onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
-          className="bg-transparent text-base font-semibold text-white border-none focus:outline-none focus:bg-port-bg/50 px-1 rounded flex-1 min-w-[180px]"
+          className="bg-transparent text-base font-semibold text-white border-none focus:outline-none focus:bg-port-bg/50 px-1 rounded flex-1 min-w-[140px] sm:min-w-[180px] min-h-[44px] sm:min-h-0 order-1 sm:order-1"
           aria-label="Work title"
         />
-        <select
-          value={status}
-          onChange={(e) => commitStatus(e.target.value)}
-          className="bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-300"
-          aria-label="Status"
-        >
-          {Object.entries(STATUS_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-        </select>
-        {/* Two-state toggle, not a true tablist (no separate panels keyed off
-            tab id, no roving tabindex, no arrow-key cycling). aria-pressed is
-            the semantically correct primitive for an on/off-style toggle pair. */}
-        <div className="flex items-center bg-port-bg border border-port-border rounded p-0.5" role="group" aria-label="View mode">
-          <button
-            type="button"
-            aria-pressed={viewMode === 'edit'}
-            onClick={() => setViewMode('edit')}
-            className={`flex items-center gap-1 px-2 py-0.5 text-[11px] rounded ${
-              viewMode === 'edit' ? 'bg-port-card text-white' : 'text-gray-400 hover:text-gray-200'
-            }`}
-            title="Edit prose (textarea)"
-          >
-            <Pencil size={11} /> Edit
-          </button>
-          <button
-            type="button"
-            aria-pressed={viewMode === 'read'}
-            onClick={() => setViewMode('read')}
-            className={`flex items-center gap-1 px-2 py-0.5 text-[11px] rounded ${
-              viewMode === 'read' ? 'bg-port-card text-white' : 'text-gray-400 hover:text-gray-200'
-            }`}
-            title="Read view with scene anchors"
-          >
-            <BookOpen size={11} /> Read
-          </button>
-          <button
-            type="button"
-            aria-pressed={viewMode === 'review'}
-            onClick={() => setViewMode('review')}
-            className={`flex items-center gap-1 px-2 py-0.5 text-[11px] rounded ${
-              viewMode === 'review' ? 'bg-port-card text-white' : 'text-gray-400 hover:text-gray-200'
-            }`}
-            title="Synced prose · script · media review"
-          >
-            <Columns3 size={11} /> Review
-          </button>
-        </div>
         <button
           onClick={handleSave}
           disabled={!dirty || saving}
-          className={`flex items-center gap-1 px-3 py-1 text-xs rounded ${
+          className={`flex items-center gap-1 px-3 py-1 min-h-[44px] sm:min-h-0 text-xs rounded order-2 sm:order-4 ${
             dirty && !saving ? 'bg-port-accent text-white hover:bg-port-accent/80' : 'bg-port-bg text-gray-500'
           }`}
           title={dirty ? 'Save (Ctrl/Cmd+S)' : 'Up to date'}
         >
           <Save size={12} /> {saving ? 'Saving…' : dirty ? 'Save' : 'Saved'}
         </button>
-        <button
-          onClick={handleSnapshot}
-          disabled={dirty}
-          className="flex items-center gap-1 px-3 py-1 text-xs rounded bg-port-bg border border-port-border text-gray-300 hover:text-white disabled:text-gray-600 disabled:cursor-not-allowed"
-          title="Snapshot the active draft as a new version"
-        >
-          <GitCommit size={12} /> Snapshot
-        </button>
-        <div className="relative" ref={overflowRef}>
+        <div className="relative order-3 sm:order-6" ref={overflowRef}>
           <button
             onClick={() => setOverflowOpen((v) => !v)}
-            className="flex items-center justify-center px-2 py-1 text-xs rounded bg-port-bg border border-port-border text-gray-300 hover:text-white"
+            className="flex items-center justify-center px-3 sm:px-2 py-1 min-h-[44px] sm:min-h-0 text-xs rounded bg-port-bg border border-port-border text-gray-300 hover:text-white"
             aria-label="Work menu"
             aria-expanded={overflowOpen}
             title="Work menu"
@@ -844,6 +808,49 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
               </MenuSection>
             </div>
           )}
+        </div>
+        {/* Secondary controls. `w-full` forces its own compact row under `sm`;
+            `sm:contents` dissolves the wrapper so these are direct flex items
+            of the header row again on desktop. */}
+        <div className="order-4 w-full flex items-center gap-2 sm:contents" data-testid="work-header-secondary">
+          <select
+            value={status}
+            onChange={(e) => commitStatus(e.target.value)}
+            className="bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] sm:min-h-0 text-[11px] text-gray-300 sm:order-2"
+            aria-label="Status"
+          >
+            {Object.entries(STATUS_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select>
+          {/* Not a true tablist (no separate panels keyed off tab id, no roving
+              tabindex, no arrow-key cycling). aria-pressed is the semantically
+              correct primitive for a toggle group. The text labels collapse to
+              icon-only under `sm` to keep this row single-line at ~375px, so
+              each button carries an explicit aria-label. */}
+          <div className="flex items-center bg-port-bg border border-port-border rounded p-0.5 sm:order-3" role="group" aria-label="View mode">
+            {VIEW_MODES.map(({ id, label, icon: Icon, title: viewTitle }) => (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={viewMode === id}
+                aria-label={label}
+                onClick={() => setViewMode(id)}
+                className={`flex items-center gap-1 px-3 sm:px-2 py-2 sm:py-0.5 min-h-[40px] sm:min-h-0 text-[11px] rounded ${
+                  viewMode === id ? 'bg-port-card text-white' : 'text-gray-400 hover:text-gray-200'
+                }`}
+                title={viewTitle}
+              >
+                <Icon size={11} /> <span className="hidden sm:inline">{label}</span>
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={handleSnapshot}
+            disabled={dirty}
+            className="flex items-center gap-1 px-3 py-1 min-h-[44px] sm:min-h-0 text-xs rounded bg-port-bg border border-port-border text-gray-300 hover:text-white disabled:text-gray-600 disabled:cursor-not-allowed sm:order-5"
+            title="Snapshot the active draft as a new version"
+          >
+            <GitCommit size={12} /> Snapshot
+          </button>
         </div>
       </div>
 
