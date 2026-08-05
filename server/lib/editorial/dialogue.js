@@ -7,9 +7,12 @@
  *   - findSaidBookisms()           → `dialogue.said-bookisms`     (ornate / non-speech tags)
  *   - findUnattributedDialogueRuns() → `dialogue.attribution-clarity` (untrackable speakers)
  *
- * Their LLM siblings (`dialogue.on-the-nose`, `dialogue.voice-distinctiveness`)
- * handle the judgment cases these pure scanners can't: subtext-free / "as you
- * know, Bob" dialogue, and per-character voice distinctiveness against canon.
+ * Their LLM siblings (`dialogue.on-the-nose`, `dialogue.voice-distinctiveness`,
+ * `dialogue.reported-speech`) handle the judgment cases these pure scanners
+ * can't: subtext-free / "as you know, Bob" dialogue, per-character voice
+ * distinctiveness against canon, and the decisive line that was narrated as
+ * reported speech instead of quoted (which no quote-delimited scan can see,
+ * because there is no quote on the page to find).
  *
  * Quote handling: only DOUBLE quotes (straight " and curly “ ”) are treated as
  * dialogue delimiters. Single quotes are deliberately excluded — they collide

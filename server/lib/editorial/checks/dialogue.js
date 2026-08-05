@@ -289,7 +289,7 @@ export const dialogueChecks = [
     sources: ['manuscript'],
     label: 'Reported speech where a quoted line belongs (LLM)',
     description:
-      'LLM scan for a character\'s decisive utterance delivered as narrated report instead of a quoted line — summarized speech at a turning point ("she told him she was leaving"), reported reaction to speech ("my friend was furious about it"), and confrontations narrated indirectly with no line ever quoted. The inverse of the other dialogue checks: they judge the dialogue that is on the page, this one flags the line that never made it there. Skips deliberate compression of routine exchanges (that is dialogue.pleasantries\' job), between-scene bridges, POV constraints where the character did not hear the words, and free-indirect-discourse voices. Findings name which moment to quote rather than drafting the line.',
+      "LLM scan for a character's decisive utterance delivered as narrated report instead of a quoted line — summarized speech at a turning point (\"she told him she was leaving\"), reported reaction to speech (\"my friend was furious about it\"), and confrontations narrated indirectly with no line ever quoted. The inverse of the other dialogue checks: they judge the dialogue that is on the page, this one flags the line that never made it there. Skips deliberate compression of routine exchanges (that is what dialogue.pleasantries cuts), between-scene bridges, POV constraints where the character did not hear the words, and free-indirect-discourse voices. Findings name which moment to quote rather than drafting the line.",
     scope: 'issue',
     kind: 'llm',
     category: 'dialogue',
