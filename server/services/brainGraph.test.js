@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import EventEmitter from 'events';
 
+// `brainSearchIndex` (which the search-index path reads through) subscribes to
+// brainEvents and uses the memories recency ranker, so the mock has to carry
+// both alongside `getAll`.
 vi.mock('./brainStorage.js', () => ({
-  getAll: vi.fn()
+  getAll: vi.fn(),
+  brainEvents: new EventEmitter(),
+  memoryRecencyMs: (record) => Date.parse(record?.updatedAt ?? '') || 0
 }));
 
 vi.mock('./memoryBackend.js', () => ({
@@ -21,6 +27,7 @@ import * as brainStorage from './brainStorage.js';
 import * as memoryBackend from './memoryBackend.js';
 import { loadBridgeMap } from './brainMemoryBridge.js';
 import { getGoals } from './identity.js';
+import { getBrainProjections, __resetBrainSearchIndex } from './brainSearchIndex.js';
 import {
   getBrainGraphSearchIndex,
   getBrainGraphOverview,
@@ -29,11 +36,14 @@ import {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetBrainSearchIndex();
   loadBridgeMap.mockResolvedValue({});
   memoryBackend.getGraphData.mockResolvedValue(null);
   brainStorage.getAll.mockResolvedValue([]);
   getGoals.mockResolvedValue({ goals: [] });
 });
+
+const byId = (a, b) => a.id.localeCompare(b.id);
 
 // A small node set fits entirely inside one overview page, so getBrainGraphOverview
 // with a generous limit exercises the same edge-derivation the full graph used to.
@@ -59,6 +69,100 @@ describe('getBrainGraphSearchIndex', () => {
     ]);
     const { nodes } = await getBrainGraphSearchIndex();
     expect(nodes.map(n => n.id)).toEqual(['p1']);
+  });
+
+  // The projection path (#3507) must derive exactly what the full-record path
+  // derives — same node set, same labels, same brainTypes.
+  it('matches the full-record derivation node-for-node', async () => {
+    brainStorage.getAll.mockImplementation(async (type) => {
+      if (type === 'people') return [
+        { id: 'p1', name: 'Ada Placeholder', tags: ['x'] },
+        { id: 'p2', name: 'Archived', tags: [], archived: true }
+      ];
+      if (type === 'projects') return [{ id: 'pr1', title: 'Example Project', tags: [] }];
+      if (type === 'ideas') return [{ id: 'i1', tags: [] }];
+      if (type === 'admin') return [{ id: 'ad1', title: 'Renew registration', tags: [] }];
+      if (type === 'memories') return [{ id: 'm1', name: 'A memory', tags: [] }];
+      return [];
+    });
+    getGoals.mockResolvedValue({ goals: [
+      { id: 'g1', title: 'Active goal', status: 'active' },
+      { id: 'g2', title: 'Done goal', status: 'completed' }
+    ] });
+
+    // getBrainGraphOverview runs the full loadNodes() path; a generous limit
+    // keeps every node, so its node set is the reference derivation.
+    const overview = await getBrainGraphOverview({ limit: 250 });
+    const fullPath = overview.nodes
+      .map(n => ({ id: n.id, label: n.label, brainType: n.brainType }))
+      .sort(byId);
+
+    const { nodes } = await getBrainGraphSearchIndex();
+    expect(nodes.slice().sort(byId)).toEqual(fullPath);
+    expect(nodes).toHaveLength(6);
+  });
+
+  it('emits nodes in entity-type order, then goals, then journals', async () => {
+    brainStorage.getAll.mockImplementation(async (type) => {
+      if (type === 'memories') return [{ id: 'm1', name: 'M' }];
+      if (type === 'people') return [{ id: 'p1', name: 'P' }];
+      if (type === 'journals') return [{ id: '2026-01-01', content: 'Hello' }];
+      return [];
+    });
+    getGoals.mockResolvedValue({ goals: [{ id: 'g1', title: 'G', status: 'active' }] });
+
+    const { nodes } = await getBrainGraphSearchIndex();
+    expect(nodes.map(n => n.id)).toEqual(['p1', 'm1', 'g1', '2026-01-01']);
+  });
+
+  it('keeps memories in store order rather than the ranked search order', async () => {
+    onlyType('memories', [
+      { id: 'older', name: 'Older', updatedAt: '2026-01-01T00:00:00.000Z' },
+      { id: 'newer', name: 'Newer', updatedAt: '2026-02-01T00:00:00.000Z' }
+    ]);
+    const { nodes } = await getBrainGraphSearchIndex();
+    expect(nodes.map(n => n.id)).toEqual(['older', 'newer']);
+  });
+
+  it('reads each store once and serves repeat requests from the projections', async () => {
+    onlyType('people', [{ id: 'p1', name: 'A' }]);
+
+    await getBrainGraphSearchIndex();
+    // 5 entity types + journals, one scan each.
+    expect(brainStorage.getAll).toHaveBeenCalledTimes(6);
+
+    await getBrainGraphSearchIndex();
+    expect(brainStorage.getAll).toHaveBeenCalledTimes(6);
+  });
+
+  it('keeps unrendered payloads and journal bodies out of the projections it reads', async () => {
+    brainStorage.getAll.mockImplementation(async (type) => {
+      if (type === 'memories') return [{
+        id: 'm1',
+        name: 'A memory',
+        content: 'x'.repeat(500),
+        embedding: [1, 2, 3],
+        attachments: [{ blob: 'y'.repeat(500) }]
+      }];
+      if (type === 'journals') return [{
+        id: '2026-01-01',
+        content: 'z'.repeat(5000),
+        segments: [{ text: 'z'.repeat(5000) }]
+      }];
+      return [];
+    });
+
+    await getBrainGraphSearchIndex();
+
+    const [memory] = await getBrainProjections('memories', { ranked: false });
+    expect(memory.embedding).toBeUndefined();
+    expect(memory.attachments).toBeUndefined();
+
+    // The Daily Log body is the biggest record in the brain — the graph only
+    // needs "is this day non-empty?", so the text must never reach the cache.
+    expect(await getBrainProjections('journals', { ranked: false })).toEqual([
+      { id: '2026-01-01', date: undefined, hasBody: true }
+    ]);
   });
 });
 

@@ -7,7 +7,12 @@ vi.mock('./brainStorage.js', () => ({
   memoryRecencyMs: (record) => Date.parse(record?.updatedAt ?? '') || 0
 }))
 
-import { getBrainProjections, BRAIN_SEARCH_TYPES, __resetBrainSearchIndex } from './brainSearchIndex.js'
+import {
+  getBrainProjections,
+  BRAIN_SEARCH_TYPES,
+  BRAIN_PROJECTION_TYPES,
+  __resetBrainSearchIndex
+} from './brainSearchIndex.js'
 import { getAll, brainEvents } from './brainStorage.js'
 
 const deferred = () => {
@@ -29,17 +34,51 @@ describe('brainSearchIndex', () => {
     ])
   })
 
-  it('rejects a type it does not index', async () => {
-    await expect(getBrainProjections('journals')).rejects.toThrow(/unknown search type/)
+  it('indexes every search source plus the graph-only journals type', () => {
+    for (const type of BRAIN_SEARCH_TYPES) {
+      expect(BRAIN_PROJECTION_TYPES).toContain(type)
+    }
+    expect(BRAIN_PROJECTION_TYPES).toContain('journals')
   })
 
-  it('projects only the searched fields', async () => {
+  it('rejects a type it does not index', async () => {
+    await expect(getBrainProjections('songs')).rejects.toThrow(/unknown projection type/)
+  })
+
+  it('projects only the fields its consumers read', async () => {
     getAll.mockResolvedValue([
       { id: 'p1', name: 'Ada Placeholder', context: 'colleague', avatarBlob: 'x'.repeat(50), embedding: [1, 2, 3] }
     ])
 
     const [projection] = await getBrainProjections('people')
     expect(projection).toEqual({ id: 'p1', name: 'Ada Placeholder', context: 'colleague' })
+    expect(projection).not.toHaveProperty('avatarBlob')
+    expect(projection).not.toHaveProperty('embedding')
+  })
+
+  it('projects a journal entry as a body predicate, never the body', async () => {
+    getAll.mockResolvedValue([
+      { id: '2026-01-01', content: 'x'.repeat(500), segments: [{ text: 'x' }] },
+      { id: '2026-01-02', content: '', segments: [] },
+      { id: '2026-01-03', content: '', segments: [{ text: 'voice note' }] }
+    ])
+
+    expect(await getBrainProjections('journals')).toEqual([
+      { id: '2026-01-01', date: undefined, hasBody: true },
+      { id: '2026-01-02', date: undefined, hasBody: false },
+      { id: '2026-01-03', date: undefined, hasBody: true }
+    ])
+  })
+
+  it('keeps store order when the caller opts out of ranking', async () => {
+    getAll.mockResolvedValue([
+      { id: 'older', title: 'Older', updatedAt: '2026-01-01T00:00:00.000Z' },
+      { id: 'newer', title: 'Newer', updatedAt: '2026-02-01T00:00:00.000Z' }
+    ])
+
+    expect((await getBrainProjections('memories')).map((p) => p.id)).toEqual(['newer', 'older'])
+    expect((await getBrainProjections('memories', { ranked: false })).map((p) => p.id))
+      .toEqual(['older', 'newer'])
   })
 
   it('scans the store once and serves later reads from memory', async () => {

@@ -13,11 +13,19 @@
  * one node's neighborhood (`getBrainGraphNeighborhood`). Shared-tag edges are
  * only ever computed *among a bounded node set* and capped per node, so the
  * O(n²) tag explosion can't happen.
+ *
+ * The two edge-bearing views need every record's tags and summary, so they go
+ * through `loadNodes()` (a full read of each entity store). The search index
+ * needs only `{ id, label, brainType }`, so it reads the cached field
+ * projections in `brainSearchIndex` instead — focusing the graph's search box
+ * no longer walks and JSON-parses every record body and Daily Log entry on disk
+ * (issue #3507).
  */
 
 import * as brainStorage from './brainStorage.js';
 import * as memoryBackend from './memoryBackend.js';
 import { loadBridgeMap, bridgeKey } from './brainMemoryBridge.js';
+import { getBrainProjections, journalHasBody } from './brainSearchIndex.js';
 import { getGoals } from './identity.js';
 
 const ENTITY_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories'];
@@ -48,6 +56,14 @@ const clampLimit = (limit, fallback) => {
   return Math.min(Math.floor(n), MAX_LIMIT);
 };
 
+// Node identity — shared by the full-record path (`loadNodes`) and the
+// projection-backed search index, so the two can never drift on what a node is
+// called or which records are skipped.
+const entityLabel = (record) => record.name || record.title || '(untitled)';
+const goalLabel = (goal) => goal.title || '(untitled goal)';
+const isInactiveGoal = (goal) => goal.status === 'completed' || goal.status === 'abandoned';
+const journalDate = (entry) => entry.id || entry.date;
+
 // Load all non-archived brain entities as graph nodes (no edges).
 async function loadNodes() {
   const nodes = [];
@@ -58,7 +74,7 @@ async function loadNodes() {
       nodes.push({
         id: record.id,
         brainType: type,
-        label: record.name || record.title || '(untitled)',
+        label: entityLabel(record),
         summary: record.context || record.oneLiner || record.notes || record.content || '',
         tags: record.tags || [],
         importance: 0.6,
@@ -70,11 +86,11 @@ async function loadNodes() {
   // Goals (identity system): active goals only (completed/abandoned excluded)
   const goalsData = await getGoals().catch(() => null);
   for (const goal of goalsData?.goals ?? []) {
-    if (goal.status === 'completed' || goal.status === 'abandoned') continue;
+    if (isInactiveGoal(goal)) continue;
     nodes.push({
       id: goal.id,
       brainType: 'goals',
-      label: goal.title || '(untitled goal)',
+      label: goalLabel(goal),
       summary: goal.description || '',
       tags: goal.tags || [],
       importance: goal.status === 'active' ? 0.75 : 0.5,
@@ -86,8 +102,8 @@ async function loadNodes() {
   // Journals (Daily Log): non-empty dated entries as graph nodes
   const journals = await brainStorage.getAll('journals').catch(() => []);
   for (const entry of journals) {
-    if (!entry.content && !entry.segments?.length) continue;
-    const date = entry.id || entry.date;
+    if (!journalHasBody(entry)) continue;
+    const date = journalDate(entry);
     if (!date) continue;
     nodes.push({
       id: date,
@@ -102,10 +118,49 @@ async function loadNodes() {
   return nodes;
 }
 
-// Lightweight index for the client-side search box — every node, no edges.
+/**
+ * Lightweight index for the client-side search box — every node, no edges.
+ *
+ * Deliberately does NOT go through `loadNodes()`: that reads the full body of
+ * every entity record and Daily Log entry only to throw the summaries and tags
+ * away here. Instead it reads `brainSearchIndex`'s cached field projections, so
+ * the endpoint costs an in-memory scan after the first call and never parses a
+ * record body it doesn't render. Node set, labels, and order are identical to
+ * the `loadNodes()` derivation — the label/skip rules are the shared helpers
+ * above, and `ranked: false` keeps each store's natural order.
+ *
+ * Goals still come from `getGoals()`: identity keeps them in ONE file, so
+ * there is no per-record walk to avoid.
+ */
 export async function getBrainGraphSearchIndex() {
-  const nodes = await loadNodes();
-  return { nodes: nodes.map(n => ({ id: n.id, label: n.label, brainType: n.brainType })) };
+  const nodes = [];
+
+  // Independent stores — read them together, then emit in ENTITY_TYPES order so
+  // the node order matches the `loadNodes()` derivation. A store that fails
+  // still rejects the request, exactly as the full-record path does.
+  const perType = await Promise.all(ENTITY_TYPES.map((type) => getBrainProjections(type, { ranked: false })));
+  perType.forEach((records, i) => {
+    for (const record of records) {
+      if (record.archived) continue;
+      nodes.push({ id: record.id, label: entityLabel(record), brainType: ENTITY_TYPES[i] });
+    }
+  });
+
+  const goalsData = await getGoals().catch(() => null);
+  for (const goal of goalsData?.goals ?? []) {
+    if (isInactiveGoal(goal)) continue;
+    nodes.push({ id: goal.id, label: goalLabel(goal), brainType: 'goals' });
+  }
+
+  const journals = await getBrainProjections('journals', { ranked: false }).catch(() => []);
+  for (const entry of journals) {
+    if (!entry.hasBody) continue;
+    const date = journalDate(entry);
+    if (!date) continue;
+    nodes.push({ id: date, label: date, brainType: 'journals' });
+  }
+
+  return { nodes };
 }
 
 // Build the shared graph context once: nodes + tag index + remapped

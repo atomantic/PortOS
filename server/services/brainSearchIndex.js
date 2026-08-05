@@ -3,7 +3,9 @@
  *
  * In-memory field projections of the brain entity stores, so unified search
  * (`server/services/search.js`) can answer a keystroke without re-reading and
- * re-parsing every record file on disk (issue #3506).
+ * re-parsing every record file on disk (issue #3506), and so the brain graph's
+ * search index (`brainGraph.getBrainGraphSearchIndex`) can answer the graph
+ * search box without a full-body disk walk (issue #3507).
  *
  * Brain entity stores are per-record `collectionStore` dirs
  * (`data/brain/<type>/<id>/index.json`) with NO whole-store cache — every
@@ -14,9 +16,11 @@
  * calls. This module reads each store at most once and then keeps the
  * projection fresh from `brainEvents`.
  *
- * Only the fields search actually matches on (plus the ordering key) are
+ * Only the fields a consumer actually reads (plus the ordering key) are
  * projected — the index holds no attachments, embeddings, or classification
- * payloads.
+ * payloads. A consumer that needs a *predicate* over a large body (the Daily
+ * Log's `content`/`segments`) gets a derived boolean instead, so the body never
+ * enters the cache.
  *
  * FRESHNESS — three signal classes, all of them covered:
  *   1. `${type}:upserted` / `${type}:deleted` — the per-record events every
@@ -36,20 +40,54 @@
 import { getAll, brainEvents, memoryRecencyMs } from './brainStorage.js';
 import { safeDate } from '../lib/fileUtils.js';
 
-// The projected fields per searchable brain type — the exact set
-// `searchBrain` matches on and renders snippets from.
-const SEARCH_FIELDS = Object.freeze({
+/**
+ * The projected fields per indexed brain type — the union of what every
+ * consumer reads:
+ *   - `searchBrain` (server/services/search.js) matches on and renders snippets
+ *     from `capturedText` / `name` / `context` / `title` / `oneLiner` / `notes`
+ *     / `nextAction` / `content` / `mood` / `url` / `description`.
+ *   - `getBrainGraphSearchIndex` (server/services/brainGraph.js) derives each
+ *     node's label from `name || title` and drops archived records, so the five
+ *     graph entity types also project `name`, `title` and `archived`.
+ * `journals` is graph-only (the Daily Log is not a unified-search source), and
+ * projects no body — see `journalHasBody` below.
+ */
+const PROJECTED_FIELDS = Object.freeze({
   inbox: Object.freeze(['capturedText']),
-  people: Object.freeze(['name', 'context']),
-  projects: Object.freeze(['name', 'notes']),
-  ideas: Object.freeze(['title', 'oneLiner', 'notes']),
-  admin: Object.freeze(['title', 'notes', 'nextAction']),
-  memories: Object.freeze(['title', 'content', 'mood']),
+  people: Object.freeze(['name', 'title', 'context', 'archived']),
+  projects: Object.freeze(['name', 'title', 'notes', 'archived']),
+  ideas: Object.freeze(['name', 'title', 'oneLiner', 'notes', 'archived']),
+  admin: Object.freeze(['name', 'title', 'notes', 'nextAction', 'archived']),
+  memories: Object.freeze(['name', 'title', 'content', 'mood', 'archived']),
   links: Object.freeze(['title', 'url', 'description']),
+  journals: Object.freeze(['date']),
 });
 
-/** The brain entity types this index covers. */
-export const BRAIN_SEARCH_TYPES = Object.freeze(Object.keys(SEARCH_FIELDS));
+/**
+ * Is this Daily Log entry non-empty? The graph only asks the question — it
+ * never renders the answer's source — and a journal body is the largest record
+ * in the brain, so the predicate is projected and `content`/`segments` are not.
+ * Exported so `brainGraph`'s full-record path (which still loads bodies, for
+ * summaries and tags) applies the identical rule.
+ */
+export const journalHasBody = (record) => !!(record?.content || record?.segments?.length);
+
+// Fields computed from the record rather than copied off it, per type.
+const DERIVED_FIELDS = Object.freeze({
+  journals: Object.freeze({ hasBody: journalHasBody }),
+});
+
+/**
+ * The brain entity types unified search reads. A strict subset of
+ * `BRAIN_PROJECTION_TYPES` — every source `search.js` fans out to must be
+ * indexed here or its `getBrainProjections` call throws.
+ */
+export const BRAIN_SEARCH_TYPES = Object.freeze([
+  'inbox', 'people', 'projects', 'ideas', 'admin', 'memories', 'links',
+]);
+
+/** Every brain entity type this index projects (search sources + graph-only). */
+export const BRAIN_PROJECTION_TYPES = Object.freeze(Object.keys(PROJECTED_FIELDS));
 
 // Newest-first ordering key, for the two types whose reader sorted before
 // handing records to search: inbox by capture time, memories by the
@@ -76,7 +114,7 @@ const generation = {};
 const building = {};
 
 function resetState() {
-  for (const type of BRAIN_SEARCH_TYPES) {
+  for (const type of BRAIN_PROJECTION_TYPES) {
     cache[type] = null;
     generation[type] = 0;
     delete building[type];
@@ -86,8 +124,11 @@ resetState();
 
 function project(type, record) {
   const projection = { id: record.id };
-  for (const field of SEARCH_FIELDS[type]) {
+  for (const field of PROJECTED_FIELDS[type]) {
     projection[field] = record[field];
+  }
+  for (const [field, derive] of Object.entries(DERIVED_FIELDS[type] ?? {})) {
+    projection[field] = derive(record);
   }
   const ranker = RANKERS[type];
   if (ranker) projection._rank = ranker(record);
@@ -135,12 +176,17 @@ function patchDelete(type, id) {
  * served from memory. Returns a fresh array each call (callers filter/map it),
  * but the projection objects themselves are shared — treat them as read-only.
  * Ranked types carry a `_rank` ordering key alongside the projected fields.
+ *
+ * `ranked: false` keeps store order for a type that HAS a ranker. The brain
+ * graph's node list is built from `brainStorage.getAll()` order, so the graph
+ * search index opts out rather than silently reordering its `memories` nodes.
  */
-export async function getBrainProjections(type) {
-  if (!(type in cache)) throw new Error(`brainSearchIndex: unknown search type "${type}"`);
+export async function getBrainProjections(type, { ranked = true } = {}) {
+  if (!(type in cache)) throw new Error(`brainSearchIndex: unknown projection type "${type}"`);
+  const order = (projections) => (ranked ? sortProjections(type, projections) : projections);
 
   const cached = cache[type];
-  if (cached) return sortProjections(type, [...cached.values()]);
+  if (cached) return order([...cached.values()]);
 
   if (!building[type]) {
     const startedAt = generation[type];
@@ -155,11 +201,11 @@ export async function getBrainProjections(type) {
   }
 
   const map = await building[type];
-  return sortProjections(type, [...map.values()]);
+  return order([...map.values()]);
 }
 
 // Wire the freshness signals once, at module load.
-for (const type of BRAIN_SEARCH_TYPES) {
+for (const type of BRAIN_PROJECTION_TYPES) {
   brainEvents.on(`${type}:upserted`, ({ record } = {}) => patchUpsert(type, record));
   brainEvents.on(`${type}:deleted`, ({ id } = {}) => patchDelete(type, id));
 }
