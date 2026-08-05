@@ -78,6 +78,24 @@
  * import: the guard rejects it, and it is how this cluster got here in the first
  * place. `agentState.js#spawnedAgentCommands` documents the worked example.
  *
+ * ## When the caller CANNOT move out (the other half)
+ *
+ * Some callers are inside the closure permanently, and no edge-breaking changes
+ * that. `agentManagement.js` and `agentLifecycle.js` DEFINE transitions this
+ * module re-exports — importing the facade from either is the cycle, by
+ * construction. `agentFinalization.js` and `agentCliSpawning.js` are leaves those
+ * two must call to spawn and to finalize; inverting that would move the spawn
+ * implementation and the completion flow, which buys nothing the facade wants.
+ *
+ * For those, the achievable property is not "use the facade" — it is the one the
+ * facade exists to create: ONE address per transition. Above the closure that
+ * address is this module; inside it, the module that DECLARES the function
+ * (`cosAgentLifecycle.js` for `completeAgent`). A barrel is never an answer.
+ * `agentImportCycles.test.js` derives the transition names from the export blocks
+ * below, walks re-export edges to find which modules forward them, and fails any
+ * production module that reaches a transition through one — by named import,
+ * renamed import, namespace property read, or destructure off a namespace handle.
+ *
  * ## What is still outstanding
  *
  * `server/routes/cosAgentRoutes.js`, `agents.js` and `subAgentSpawner.js`'s event
@@ -88,14 +106,16 @@
  * `grep -rn agentOrchestrator server/` is the live answer to what has moved —
  * do not keep a hand-written call-site inventory here; it only goes stale.
  *
- * Remaining: the transitions below that still have callers INSIDE the closure
- * (all four are `completeAgent`, reached through `cosAgents.js`), and the two
- * barrels that still expose a partial view of the cluster — `cosAgents.js` and
- * `cos.js`'s agent re-export block. Note that `agentFinalization.js` and
- * `agentCliSpawning.js` are LEAVES that call a transition, so "move the caller
- * out" does not apply to them as written: the closure edge to break is the one
- * `agentLifecycle.js`/`agentManagement.js` hold INTO them, not an import of
- * theirs.
+ * Step 3 is done. The four in-closure `completeAgent` callers
+ * (`agentManagement`, `agentLifecycle`, `agentFinalization`, `agentCliSpawning`)
+ * name `cosAgentLifecycle.js` directly under the rule above, and the deferred
+ * `import('./cos.js')` in `cleanupOrphanedAgents` — which reached `completeAgent`
+ * and `getAgents` through the `cos.js` re-export block for no cycle-breaking
+ * benefit, since that module is a static import here — is gone with it.
+ *
+ * Remaining: the two barrels that still expose a partial view of the cluster —
+ * `cosAgents.js` and `cos.js`'s agent re-export block. Both are wide surfaces
+ * (30+ importers, many `vi.mock`ed) and each wants its own PR.
  */
 
 // Process/runner layer — owns the live agent maps and the OS-level signals.

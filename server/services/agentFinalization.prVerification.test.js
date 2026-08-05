@@ -35,7 +35,7 @@ vi.mock('./git.js', () => ({
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
 
 const completeAgentMock = vi.fn();
-vi.mock('./cosAgents.js', () => ({
+vi.mock('./cosAgentLifecycle.js', () => ({
   getAgent: vi.fn(async () => null),
   updateAgent: vi.fn(async () => null),
   completeAgent: (...args) => completeAgentMock(...args),

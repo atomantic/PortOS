@@ -3,13 +3,13 @@ import { EventEmitter } from 'events';
 
 // Heavy modules needed only by spawnDirectly — mock them all before importing.
 vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() }, emitLog: vi.fn() }));
-vi.mock('./cosAgents.js', () => {
+vi.mock('./cosAgentLifecycle.js', () => {
   const appendAgentOutput = vi.fn().mockResolvedValue(undefined);
   const appendAgentOutputLines = vi.fn().mockResolvedValue(undefined);
   // Faithful stand-in for the real debounced batcher: accumulates pushed lines
   // and, on flush(), routes them through the mocked appendAgentOutputLines while
   // swallowing+logging failures (mirrors the real createAgentOutputBatcher in
-  // cosAgents.js — whose error handling is unit-tested in cosAgents.test.js).
+  // cosAgentLifecycle.js — whose error handling is unit-tested in cosAgents.test.js).
   const createAgentOutputBatcher = vi.fn((agentId) => {
     let pending = [];
     return {
@@ -474,17 +474,17 @@ describe('stream error containment', () => {
     isTruthyMetaFn: vi.fn().mockReturnValue(false),
   };
 
-  // Re-import the mocked cosAgents module reference once — mocking is module-scoped.
-  let cosAgentsMocks;
+  // Re-import the mocked cosAgentLifecycle module reference once — mocking is module-scoped.
+  let agentStateMocks;
   beforeEach(async () => {
     fakeProcess = makeFakeProcess();
     // Fresh mocked module reference for each test so mockRejectedValueOnce is clean.
-    cosAgentsMocks = await import('./cosAgents.js');
+    agentStateMocks = await import('./cosAgentLifecycle.js');
     // Reset all implementations to their default "resolve" state before each test.
-    cosAgentsMocks.updateAgent.mockResolvedValue(undefined);
-    cosAgentsMocks.completeAgent.mockResolvedValue(undefined);
-    cosAgentsMocks.appendAgentOutput.mockResolvedValue(undefined);
-    cosAgentsMocks.appendAgentOutputLines.mockResolvedValue(undefined);
+    agentStateMocks.updateAgent.mockResolvedValue(undefined);
+    agentStateMocks.completeAgent.mockResolvedValue(undefined);
+    agentStateMocks.appendAgentOutput.mockResolvedValue(undefined);
+    agentStateMocks.appendAgentOutputLines.mockResolvedValue(undefined);
     (await import('./agentRunTracking.js')).completeAgentRun.mockResolvedValue(undefined);
     (await import('./agentFinalization.js')).finalizeAgent.mockResolvedValue(undefined);
     minimalArgs.cleanupWorktreeFn.mockResolvedValue(undefined);
@@ -503,7 +503,7 @@ describe('stream error containment', () => {
     // stdout output is now batched: the data handler pushes lines to the output
     // batcher and the close handler drains it. Make the drain's state write fail
     // and assert the batcher swallows+logs it with a ❌ prefix — no escape.
-    cosAgentsMocks.appendAgentOutputLines.mockRejectedValueOnce(new Error('db write failed'));
+    agentStateMocks.appendAgentOutputLines.mockRejectedValueOnce(new Error('db write failed'));
 
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const unhandledRejections = [];
@@ -542,7 +542,7 @@ describe('stream error containment', () => {
   });
 
   it('drains stderr output on close and a failed batch flush is logged, not leaked as an unhandled rejection', async () => {
-    cosAgentsMocks.appendAgentOutputLines.mockRejectedValueOnce(new Error('stderr db write failed'));
+    agentStateMocks.appendAgentOutputLines.mockRejectedValueOnce(new Error('stderr db write failed'));
 
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const unhandledRejections = [];
@@ -579,7 +579,7 @@ describe('stream error containment', () => {
     // metadata.phase, so it resolves normally and lets spawn finish).
     let releaseFirstWrite;
     const firstWriteGate = new Promise((r) => { releaseFirstWrite = r; });
-    cosAgentsMocks.updateAgent.mockImplementation((id, patch) => {
+    agentStateMocks.updateAgent.mockImplementation((id, patch) => {
       if (patch?.metadata?.phase === 'working') return firstWriteGate;
       return Promise.resolve(undefined);
     });
@@ -616,7 +616,7 @@ describe('stream error containment', () => {
 
     // Assert: the two chunks landed in emission order (serialized, not reordered
     // by the blocked first write racing the second).
-    const allLines = cosAgentsMocks.appendAgentOutputLines.mock.calls.flatMap((c) => c[1]);
+    const allLines = agentStateMocks.appendAgentOutputLines.mock.calls.flatMap((c) => c[1]);
     const firstIdx = allLines.findIndex((l) => l.includes('first output line'));
     const usageIdx = allLines.findIndex((l) => l.includes('Now using extra usage'));
     expect(firstIdx).toBeGreaterThanOrEqual(0);
@@ -716,7 +716,7 @@ describe('stream error containment', () => {
     it('calls updateAgent with working phase after 3s when agent has not started working', async () => {
       vi.useFakeTimers();
       const { activeAgents } = await import('./agentState.js');
-      const agents = cosAgentsMocks;
+      const agents = agentStateMocks;
 
       const spawnPromise = spawnDirectly(minimalArgs);
       // Yield two microtask rounds so the getClaudeSettingsEnv await resolves and
@@ -746,7 +746,7 @@ describe('stream error containment', () => {
       // before the 3-second setTimeout fires. Allow that first call to resolve
       // normally so spawnDirectly doesn't throw before the timeout test begins;
       // then reject the SECOND call (the phase-transition inside the timeout).
-      cosAgentsMocks.updateAgent
+      agentStateMocks.updateAgent
         .mockResolvedValueOnce(undefined)     // PID update — let it pass
         .mockRejectedValueOnce(new Error('db write failed')); // timeout update — reject
 
@@ -859,7 +859,7 @@ describe('stream error containment', () => {
     beforeEach(async () => {
       const { finalizeAgent } = await import('./agentFinalization.js');
       finalizeAgent.mockClear();
-      cosAgentsMocks.updateAgent.mockClear();
+      agentStateMocks.updateAgent.mockClear();
     });
 
     afterEach(() => resetHostShutdownFlagForTests());
@@ -881,7 +881,7 @@ describe('stream error containment', () => {
       expect(finalizeAgent).not.toHaveBeenCalled();
       expect(cleanupWorktreeFn).not.toHaveBeenCalled();
       // The breadcrumb the orphan sweep falls back on when no marker names the agent.
-      expect(cosAgentsMocks.updateAgent).toHaveBeenCalledWith(
+      expect(agentStateMocks.updateAgent).toHaveBeenCalledWith(
         minimalArgs.agentId,
         { metadata: { phase: 'interrupted', interruptedBy: 'host-shutdown' } },
       );

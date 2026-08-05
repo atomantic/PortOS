@@ -20,7 +20,11 @@
 import { join } from 'path';
 import { execGit } from '../lib/execGit.js';
 import { emitLog } from './cosEvents.js';
-import { getAgent, updateAgent, completeAgent } from './cosAgents.js';
+// The DEFINING module, not the `cosAgents.js` barrel (#3450) — see the note in
+// `agentManagement.js`. This module is a LEAF that both transition modules
+// import, which puts it inside the facade's closure, so the facade is out of
+// reach here.
+import { getAgent, updateAgent, completeAgent } from './cosAgentLifecycle.js';
 import { updateTask } from './cos.js';
 import { getActiveProvider } from './providers.js';
 import { markProviderUsageLimit, markProviderRateLimited } from './providerStatus.js';

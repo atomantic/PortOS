@@ -29,7 +29,11 @@ import { join } from 'path';
 import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { registerAgent, updateAgent, completeAgent } from './cosAgents.js';
+// The DEFINING module, not the `cosAgents.js` barrel (#3450) — see the note in
+// `agentManagement.js`. This module owns the `spawnAgentForTask` transition the
+// facade re-exports, so it is permanently inside the facade's closure and must
+// name `completeAgent`'s home directly.
+import { registerAgent, updateAgent, completeAgent } from './cosAgentLifecycle.js';
 // `getAgentRecord`, NOT `getAgent`: the record without its transcript. Both
 // consumers below want only `.status` / `.metadata`, and `getAgent` hydrates a
 // completed or paused record by reading the whole output.txt, line-splitting it

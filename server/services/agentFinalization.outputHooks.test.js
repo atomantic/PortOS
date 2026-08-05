@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
-vi.mock('./cosAgents.js', () => ({
+vi.mock('./cosAgentLifecycle.js', () => ({
   getAgent: vi.fn(),
   updateAgent: vi.fn(),
   completeAgent: vi.fn(),
@@ -17,7 +17,7 @@ vi.mock('./taskTypeHooks.js', () => ({
   resolveTaskHookType: vi.fn(task => task?.metadata?.analysisType || null),
 }));
 
-import { getAgent, updateAgent } from './cosAgents.js';
+import { getAgent, updateAgent } from './cosAgentLifecycle.js';
 import { canRunTaskOutputHookWithoutPayload, getTaskOutputHook } from './taskTypeHooks.js';
 import {
   dispatchRecoveredTaskOutputHook,
@@ -201,7 +201,7 @@ describe('recovery path wiring (#3182)', () => {
     const start = MANAGEMENT_SOURCE.indexOf('export async function cleanupOrphanedAgents');
     const body = MANAGEMENT_SOURCE.slice(start, start + 7_000);
     expect(body.indexOf('dispatchRecoveredTaskOutputHook({')).toBeGreaterThan(-1);
-    expect(body.indexOf('dispatchRecoveredTaskOutputHook({')).toBeLessThan(body.indexOf('await markComplete(agent.id'));
+    expect(body.indexOf('dispatchRecoveredTaskOutputHook({')).toBeLessThan(body.indexOf('await completeAgent(agent.id'));
   });
 
   it('dispatches before post-restart recovery marks the agent complete', () => {

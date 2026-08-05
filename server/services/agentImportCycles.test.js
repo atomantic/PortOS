@@ -105,6 +105,27 @@ function importsDynamically(file, mod) {
   return new RegExp(String.raw`\bimport\s*\(\s*[^)]*\b${mod.replace(/\./g, '\\.')}[^)]*\)`).test(src);
 }
 
+// The names the facade re-exports out of `source`, in the facade's own spelling
+// (the LEFT side of `x as y` — what the defining module calls it). Both quote
+// styles throughout — `from "./x.js"` is valid ESM, and a matcher that only
+// knows `'` reads as green over the exact statement it forbids.
+//
+// One parse shared by every guard that needs the facade's surface, for the same
+// reason the static scan lives once in `server/lib/staticImportGraph.js`: two
+// copies of a structural matcher is how a guard rots.
+const FACADE = 'agentOrchestrator.js';
+function reexportedFrom(source) {
+  const facade = readFileSync(join(SERVICES_DIR, FACADE), 'utf-8');
+  const block = facade.match(new RegExp(
+    String.raw`export\s*\{([^}]*)\}\s*from\s*['"]\./${source.replace(/\./g, '\\.')}['"]`));
+  expect(block, `facade no longer re-exports from ${source} — did the layering change?`).toBeTruthy();
+  return block[1]
+    .replace(/\/\/[^\n]*/g, '')       // strip the per-export state-edge comments
+    .split(',')
+    .map(entry => entry.split(/\s+as\s+/)[0].trim())
+    .filter(Boolean);
+}
+
 // Loaders for the modules whose REAL export surface the guards below assert on.
 // Spelled out one literal specifier each rather than `import(`./${name}`)` —
 // the bundler cannot analyze a fully-variable specifier and warns, and the point
@@ -214,17 +235,6 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
     // failing on a name `cos.js` is right to export.
     // Both quote styles throughout — `from "./x.js"` is valid ESM, and a matcher
     // that only knows `'` reads as green over the exact statement it forbids.
-    const facade = readFileSync(join(SERVICES_DIR, 'agentOrchestrator.js'), 'utf-8');
-    const reexportedFrom = (source) => {
-      const block = facade.match(new RegExp(
-        String.raw`export\s*\{([^}]*)\}\s*from\s*['"]\./${source.replace(/\./g, '\\.')}['"]`));
-      expect(block, `facade no longer re-exports from ${source} — did the layering change?`).toBeTruthy();
-      return block[1]
-        .replace(/\/\/[^\n]*/g, '')       // strip the per-export state-edge comments
-        .split(',')
-        .map(entry => entry.split(/\s+as\s+/)[0].trim())
-        .filter(Boolean);
-    };
     const stateLayer = new Set(reexportedFrom('cosAgentLifecycle.js'));
     const forbidden = reexportedFrom('agentManagement.js').filter(name => !stateLayer.has(name));
     expect(forbidden.length, 'derived nothing to forbid — check the facade export blocks').toBeGreaterThan(0);
@@ -276,6 +286,108 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
         `${mod} must declare what it exports — ${forwarded.join(', ')} is forwarded from another module; import it from the one that defines it`
       ).toEqual([]);
     }
+  });
+
+  it('makes every transition caller name the facade or the defining module, never a barrel (#3450)', () => {
+    // Step 3 of the #3450 sequencing, for the callers the "move the caller out"
+    // recipe cannot reach. `agentManagement.js` and `agentLifecycle.js` DEFINE
+    // transitions the facade re-exports, and `agentFinalization.js` /
+    // `agentCliSpawning.js` are leaves those two must call — all four sit inside
+    // the facade's closure permanently, so importing the facade is a cycle, not
+    // an option. What is still achievable there is the property the facade was
+    // built for: ONE address per transition. Above the closure that address is
+    // the facade; inside it, the module that declares the function. A barrel is
+    // never an answer — that is the third address this sequencing keeps deleting.
+    //
+    // Derived from the facade's own export blocks, so a transition added there
+    // is guarded the moment it lands and `agentOrchestrator.js` stays the only
+    // file anyone edits to change the rule.
+    const declaringModules = ['agentManagement.js', 'cosAgentLifecycle.js', 'agentLifecycle.js'];
+    const declaredBy = new Map(); // transition name → the modules allowed to serve it
+    for (const source of declaringModules) {
+      for (const name of reexportedFrom(source)) {
+        if (!declaredBy.has(name)) declaredBy.set(name, new Set());
+        declaredBy.get(name).add(source);
+      }
+    }
+    // `terminateAgent` lands in two of them: the process-side one and the
+    // state-side one the facade renames to `requestAgentTermination`. Both are
+    // real definitions, so both stay allowed — the rule here is "not a barrel",
+    // and that collision is a naming question the facade already answered.
+    expect(declaredBy.size, 'derived no transitions — check the facade export blocks').toBeGreaterThan(3);
+
+    // A FORWARDER is any module that re-exports its way to a declaring module, at
+    // any depth: `cosAgents.js` is one hop (`export * from './cosAgentLifecycle.js'`),
+    // `cos.js` is two (`export { … } from './cosAgents.js'`). Walking the
+    // re-export edges instead of listing the barrels means a NEW barrel is
+    // covered the day it is written, and the two this issue has yet to collapse
+    // need no naming here. Asserted rather than merely computed, so collapsing
+    // one has to come here and say so.
+    const reexportEdges = (file) => [
+      ...readFileSync(join(SERVICES_DIR, file), 'utf-8')
+        .matchAll(/export\s*(?:\*|\{[^}]*\})\s*(?:as\s+\w+\s*)?from\s*['"]([^'"]+)['"]/g)
+    ].map(m => relative(SERVICES_DIR, resolve(dirname(join(SERVICES_DIR, file)), m[1])));
+
+    const forwarders = new Set();
+    for (const file of graph.keys()) {
+      if (file === FACADE || declaringModules.includes(file)) continue; // both are answers, not forwarders
+      const seen = new Set([file]);
+      const queue = [file];
+      while (queue.length) {
+        for (const target of reexportEdges(queue.pop())) {
+          if (seen.has(target) || !graph.has(target)) continue;
+          if (declaringModules.includes(target)) { forwarders.add(file); queue.length = 0; break; }
+          seen.add(target);
+          queue.push(target);
+        }
+      }
+    }
+    expect([...forwarders].sort(), 'the set of barrels still forwarding a transition changed — intended?')
+      .toEqual(['cos.js', 'cosAgents.js']);
+
+    // Production sources only. A test mirrors whatever its subject imports (a
+    // mock pointed at a module the subject no longer imports silently stops
+    // applying), so tests follow this rule rather than defining it.
+    const allowed = new Set([FACADE, ...declaringModules]);
+    const offenders = [];
+    for (const file of graph.keys()) {
+      if (file === FACADE) continue;
+      const src = readFileSync(join(SERVICES_DIR, file), 'utf-8');
+      const resolveSpec = (spec) => relative(SERVICES_DIR, resolve(dirname(join(SERVICES_DIR, file)), spec));
+
+      // Named imports — `import { completeAgent as done } from './cos.js'`. The
+      // binding's LEFT side is the transition name; renaming it on the way in
+      // does not change where it came from.
+      for (const [, names, spec] of src.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g)) {
+        const target = resolveSpec(spec);
+        if (allowed.has(target)) continue;
+        for (const entry of names.split(',')) {
+          const name = entry.split(/\s+as\s+/)[0].trim();
+          if (!declaredBy.has(name) || declaredBy.get(name).has(target)) continue;
+          offenders.push(`${file} imports ${name} from ${target}`);
+        }
+      }
+
+      // `import * as cos from './cos.js'` names no bindings, so the loop above
+      // cannot see it — yet it hands the caller every transition the barrel
+      // forwards. Banning the namespace import outright is too blunt (that same
+      // handle is how a dozen modules reach the task store, which is not this
+      // issue's business), so check the two ways a transition comes back OFF the
+      // handle: a property read and a destructure. Both, because either one
+      // alone reads green over the other.
+      for (const [, ns, spec] of src.matchAll(/import\s*\*\s*as\s+(\w+)\s*from\s*['"]([^'"]+)['"]/g)) {
+        const target = resolveSpec(spec);
+        if (!forwarders.has(target)) continue;
+        for (const name of declaredBy.keys()) {
+          const reached = new RegExp(String.raw`\b${ns}\s*\.\s*${name}\b`).test(src)
+            || new RegExp(String.raw`\{[^}]*\b${name}\b[^}]*\}\s*=\s*(?:await\s+)?${ns}\b`).test(src);
+          if (reached) offenders.push(`${file} reaches ${name} through the forwarder ${target}`);
+        }
+      }
+    }
+    expect(offenders.sort(),
+      `a transition must come from the facade or the module that declares it:\n${offenders.join('\n')}`
+    ).toEqual([]);
   });
 
   it('keeps agentState.js an import-free leaf, so agents.js can use the facade (#3450)', () => {

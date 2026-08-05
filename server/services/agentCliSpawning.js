@@ -11,7 +11,10 @@ import { existsSync } from 'fs';
 import { spawn } from 'child_process';
 import { homedir } from 'os';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { updateAgent, completeAgent, createAgentOutputBatcher } from './cosAgents.js';
+// The DEFINING module, not the `cosAgents.js` barrel (#3450) — see the note in
+// `agentManagement.js`. This module is a LEAF that `agentLifecycle.js` imports,
+// which puts it inside the facade's closure, so the facade is out of reach here.
+import { updateAgent, completeAgent, createAgentOutputBatcher } from './cosAgentLifecycle.js';
 import { release } from './executionLanes.js';
 import { completeExecution, errorExecution } from './toolStateMachine.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';

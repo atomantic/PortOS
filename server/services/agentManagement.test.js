@@ -46,9 +46,6 @@ vi.mock('./cos.js', () => ({
   addTask: vi.fn().mockResolvedValue({ id: 'sys-mocked' }),
   getTaskById: vi.fn(),
   getAllTasks: vi.fn(),
-  // cleanupOrphanedAgents pulls these in via a dynamic import.
-  getAgents: vi.fn().mockResolvedValue([]),
-  completeAgent: vi.fn().mockResolvedValue(undefined),
   evaluateTasks: vi.fn().mockResolvedValue(undefined)
 }));
 
@@ -62,7 +59,14 @@ vi.mock('./agentRunTracking.js', () => ({
 }));
 
 // Stub other transitive imports we don't exercise in handleOrphanedTask.
-vi.mock('./cosAgents.js', () => ({ completeAgent: vi.fn(), updateAgent: vi.fn().mockResolvedValue(undefined) }));
+// The DEFINING module, not the `cosAgents.js` barrel — mirrors the production
+// import (#3450). Mocking the barrel here would silently stop applying and let
+// the real state layer load.
+vi.mock('./cosAgentLifecycle.js', () => ({
+  completeAgent: vi.fn().mockResolvedValue(undefined),
+  updateAgent: vi.fn().mockResolvedValue(undefined),
+  getAgents: vi.fn().mockResolvedValue([]),
+}));
 vi.mock('./cosRunnerClient.js', () => ({
   terminateAgentViaRunner: vi.fn(),
   killAgentViaRunner: vi.fn(),
@@ -97,16 +101,14 @@ vi.mock('./creativeDirector/completionHook.js', () => ({ advanceAfterSceneSettle
 
 import { handleOrphanedTask, pauseAgent, settleOrphanedCreativeDirectorRun, cleanupOrphanedAgents } from './agentManagement.js';
 import { cleanupAgentWorktree, resolveTaskResumePatch } from './agentWorktreeCleanup.js';
-import { getAgents } from './cos.js';
+import { getAgents, updateAgent, completeAgent as markAgentComplete } from './cosAgentLifecycle.js';
 import { updateRun, getProject } from './creativeDirector/local.js';
 import { advanceAfterPlanStepSettled } from './creativeDirector/planAdvance.js';
 import { advanceAfterSceneSettled } from './creativeDirector/completionHook.js';
 import { updateTask, addTask, getTaskById } from './cos.js';
-import { updateAgent } from './cosAgents.js';
 import { pauseAgentViaRunner } from './cosRunnerClient.js';
 import * as shellService from './shell.js';
 import { readHostShutdownMarker, clearHostShutdownMarker } from '../lib/hostShutdown.js';
-import { completeAgent as markAgentComplete } from './cos.js';
 import { checkForTaskCommit, completeAgentRun } from './agentRunTracking.js';
 import { activeAgents, runnerAgents, pausedAgents } from './agentState.js';
 
