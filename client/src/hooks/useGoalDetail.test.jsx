@@ -7,6 +7,7 @@ const scheduleGoalTimeBlocks = vi.fn(() => Promise.resolve({}));
 const removeGoalSchedule = vi.fn(() => Promise.resolve({}));
 const rescheduleGoalTimeBlocks = vi.fn(() => Promise.resolve({}));
 const checkInGoal = vi.fn(() => Promise.resolve({ id: 'check-in-1' }));
+const updateGoalProgress = vi.fn(() => Promise.resolve({}));
 
 vi.mock('../services/api', () => ({
   getActivities: (...args) => getActivities(...args),
@@ -14,7 +15,8 @@ vi.mock('../services/api', () => ({
   scheduleGoalTimeBlocks: (...args) => scheduleGoalTimeBlocks(...args),
   removeGoalSchedule: (...args) => removeGoalSchedule(...args),
   rescheduleGoalTimeBlocks: (...args) => rescheduleGoalTimeBlocks(...args),
-  checkInGoal: (...args) => checkInGoal(...args)
+  checkInGoal: (...args) => checkInGoal(...args),
+  updateGoalProgress: (...args) => updateGoalProgress(...args)
 }));
 
 const { useGoalDetail } = await import('./useGoalDetail');
@@ -206,5 +208,60 @@ describe('useGoalDetail handleCheckIn', () => {
     expect(checkInGoal).toHaveBeenCalledTimes(2);
     expect(result.current.checkInsOpen).toBe(true);
     expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Issue #3520: the handler threw on a failed PUT, so ProgressSlider kept rendering
+// the dragged percentage as if it had been saved.
+describe('useGoalDetail handleProgressChange', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getActivities.mockResolvedValue([]);
+    getCalendarAccounts.mockResolvedValue([]);
+    updateGoalProgress.mockResolvedValue({});
+  });
+
+  it('saves the value, refreshes, and reports success', async () => {
+    const { result, onRefresh } = renderGoalDetail();
+
+    let outcome;
+    await act(async () => { outcome = await result.current.handleProgressChange(85); });
+
+    expect(updateGoalProgress).toHaveBeenCalledWith(GOAL.id, 85);
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+    expect(outcome).toBe(true);
+  });
+
+  it('reports failure and skips the refresh when the request rejects', async () => {
+    updateGoalProgress.mockRejectedValue(new Error('server exploded'));
+    const { result, onRefresh } = renderGoalDetail();
+
+    let outcome;
+    await act(async () => { outcome = await result.current.handleProgressChange(85); });
+
+    expect(outcome).toBe(false);
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  // A bare `.catch()` never gets attached when the call throws before handing back a
+  // promise, so the failure would surface as a rejection instead of a `false`.
+  it('reports failure when the api call throws synchronously', async () => {
+    updateGoalProgress.mockImplementation(() => { throw new Error('threw before returning a promise'); });
+    const { result, onRefresh } = renderGoalDetail();
+
+    let outcome;
+    await act(async () => { outcome = await result.current.handleProgressChange(85); });
+
+    expect(outcome).toBe(false);
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  it('does not surface a rejection to the caller as an unhandled promise', async () => {
+    updateGoalProgress.mockRejectedValue(new Error('server exploded'));
+    const { result } = renderGoalDetail();
+
+    await act(async () => {
+      await expect(result.current.handleProgressChange(85)).resolves.toBe(false);
+    });
   });
 });

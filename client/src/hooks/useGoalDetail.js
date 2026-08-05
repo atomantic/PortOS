@@ -268,9 +268,21 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     onRefresh();
   };
 
+  // The return value is the signal (issue #3520): ProgressSlider renders its own
+  // dragged `draft`, so a failed PUT has to tell it to snap back — otherwise the
+  // panel keeps showing a percentage the database never took. No custom toast on
+  // purpose — `request()` already toasts the failure, so this stays a single-layer
+  // error UI. `try/catch` rather than a bare `.catch()` for the same reason as
+  // runSchedulingAction above: a call that throws before handing back a promise
+  // would skip the catch and report a save that never happened.
   const handleProgressChange = async (value) => {
-    await api.updateGoalProgress(goal.id, value);
+    try {
+      await api.updateGoalProgress(goal.id, value);
+    } catch {
+      return false;
+    }
     onRefresh();
+    return true;
   };
 
   const handleAddTodo = async () => {
