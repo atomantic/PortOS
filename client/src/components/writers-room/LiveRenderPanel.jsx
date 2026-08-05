@@ -15,6 +15,13 @@ import {
   matchSceneCharacters,
   matchScenePlace,
 } from '../../lib/scenePrompt';
+import LiveBudgetBadge from './LiveBudgetBadge';
+
+// What the Render button does used to live only in its `title`, invisible on a
+// touch screen (#3567). It is a visible helper line now, and rides along in the
+// accessible name PREFIXED by the button's own visible words so the two agree
+// (WCAG 2.5.3 "Label in Name").
+const RENDER_HINT = 'Renders a quick reference image for the scene at your cursor';
 
 // Phase 5 live render preview. While the work has live mode opted in, the
 // writer can trigger a quick reference render for the scene their cursor sits
@@ -235,38 +242,45 @@ export default function LiveRenderPanel({
 
   const budget = liveMode?.dailyRenderBudget ?? 0;
   const spent = renderUsage?.count ?? 0;
-  const remainingLabel = budget > 0 ? `${Math.max(0, budget - spent)} / ${budget} left today` : 'unlimited';
   const busy = reserving || genStatus === 'running';
+  const renderText = genStatus === 'running' ? 'Rendering…' : 'Render scene';
   const targetLabel = target
     ? `S${String(target.sceneNumber).padStart(2, '0')} ${target.scene.heading || ''}`.trim()
     : null;
 
   return (
     <div className="px-3 py-2 border-b border-port-border">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center justify-between gap-x-2 gap-y-1 flex-wrap">
         <div className="flex items-center gap-1.5 text-[11px] font-semibold text-port-success">
           <ImagePlus size={12} /> Live Render
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] text-gray-500" title="Daily render-preview budget">{remainingLabel}</span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <LiveBudgetBadge label="Renders" budget={budget} spent={spent} />
+          {/* 44px tap target; -my-2 bleeds into the panel's own py-2 so the
+              header keeps the height it already had. */}
           <button
             type="button"
             onClick={renderCursorScene}
             disabled={busy}
-            className="flex items-center gap-1 px-2 py-0.5 text-[10px] rounded bg-port-bg border border-port-border text-gray-300 hover:text-white disabled:opacity-50"
-            title="Render a quick reference image for the scene at your cursor"
+            className="flex items-center justify-center gap-1 min-h-[44px] px-2 -my-2 text-[10px] rounded bg-port-bg border border-port-border text-gray-300 hover:text-white disabled:opacity-50"
+            title={`${renderText}: ${RENDER_HINT}`}
+            aria-label={`${renderText}: ${RENDER_HINT}`}
           >
             {busy ? <Loader2 size={10} className="animate-spin" /> : <ImagePlus size={10} />}
-            {genStatus === 'running' ? 'Rendering…' : 'Render scene'}
+            {renderText}
           </button>
         </div>
       </div>
       {notice ? (
         <div className="mt-1.5 text-[10px] text-gray-400">{notice}</div>
       ) : (
-        <div className="mt-1 text-[10px] text-gray-500 truncate" title={targetLabel || undefined}>
-          {targetLabel ? `Cursor scene: ${targetLabel}` : 'Place your cursor in a scene to render it.'}
-        </div>
+        <>
+          <div className="mt-1 text-[10px] text-gray-500">{RENDER_HINT}.</div>
+          {/* The heading can be long, so this line (and only this line) truncates. */}
+          <div className="text-[10px] text-gray-400 truncate" title={targetLabel || undefined}>
+            {targetLabel ? `Cursor scene: ${targetLabel}` : 'Place your cursor in a scene to render it.'}
+          </div>
+        </>
       )}
     </div>
   );

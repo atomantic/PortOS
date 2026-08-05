@@ -57,16 +57,19 @@ describe('live text-suggest budget shares across panels', () => {
     suggestWritersRoomContinuation.mockResolvedValue({ options: [], usage: { count: 7 } });
     render(<Harness />);
 
-    // Both panels start at the full budget.
-    expect(screen.getAllByText('100 / 100 left today')).toHaveLength(2);
+    // Both panels start at the full budget. Each readout names the budget it
+    // reports in visible text (#3567), so match the labeled strings.
+    expect(screen.getByText('Suggestions: 100 / 100 left today')).toBeInTheDocument();
+    expect(screen.getByText('Suggestions (shared): 100 / 100 left today')).toBeInTheDocument();
 
     // Spend budget from the continuation panel.
-    fireEvent.click(screen.getByTitle('Suggest a continuation from the cursor'));
+    fireEvent.click(screen.getByRole('button', { name: 'Suggest a continuation from the cursor' }));
 
     // BOTH readouts reflect the new count — the CD bridge panel did NOT make
     // the call but still updates because the counter is lifted into the parent.
     await waitFor(() => {
-      expect(screen.getAllByText('93 / 100 left today')).toHaveLength(2);
+      expect(screen.getByText('Suggestions: 93 / 100 left today')).toBeInTheDocument();
+      expect(screen.getByText('Suggestions (shared): 93 / 100 left today')).toBeInTheDocument();
     });
   });
 
@@ -74,10 +77,11 @@ describe('live text-suggest budget shares across panels', () => {
     suggestWritersRoomCdBridge.mockResolvedValue({ proposal: null, usage: { count: 12 } });
     render(<Harness />);
 
-    fireEvent.click(screen.getByTitle('Propose a Creative Director treatment from the cursor'));
+    fireEvent.click(screen.getByRole('button', { name: 'Propose treatment: Turns the prose at your cursor into a Creative Director treatment' }));
 
     await waitFor(() => {
-      expect(screen.getAllByText('88 / 100 left today')).toHaveLength(2);
+      expect(screen.getByText('Suggestions: 88 / 100 left today')).toBeInTheDocument();
+      expect(screen.getByText('Suggestions (shared): 88 / 100 left today')).toBeInTheDocument();
     });
   });
 });

@@ -7,6 +7,18 @@ import {
   sendWritersRoomCdBridge,
 } from '../../services/apiWritersRoom';
 import useMounted from '../../hooks/useMounted';
+import LiveBudgetBadge from './LiveBudgetBadge';
+
+// Both actions used to explain themselves only through `title`, which a touch
+// screen never reveals (#3567). The sentence is the accessible name now — kept
+// PREFIXED with the button's visible words so the two agree (WCAG 2.5.3 "Label
+// in Name": a voice-control user must still be able to say "Propose treatment").
+const PROPOSE_TEXT = 'Propose treatment';
+const PROPOSE_HINT = 'Turns the prose at your cursor into a Creative Director treatment';
+const PROPOSE_LABEL = `${PROPOSE_TEXT}: ${PROPOSE_HINT}`;
+const SEND_TEXT = 'Send to Creative Director';
+const SEND_HINT = 'Creates a new Creative Director project seeded with this treatment';
+const SEND_LABEL = `${SEND_TEXT}: ${SEND_HINT}`;
 
 // Phase 5 Creative Director bridge panel. While the work has live mode opted
 // in, the writer can ask the Creative Director to turn the prose around the
@@ -96,25 +108,27 @@ export default function CdBridgePanel({ workId, liveMode, usage, onUsageChange, 
 
   const budget = liveMode?.dailyCallBudget ?? 0;
   const spent = usage?.count ?? 0;
-  const remainingLabel = budget > 0 ? `${Math.max(0, budget - spent)} / ${budget} left today` : 'unlimited';
 
   return (
     <div className="px-3 py-2 border-b border-port-border">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center justify-between gap-x-2 gap-y-1 flex-wrap">
         <div className="flex items-center gap-1.5 text-[11px] font-semibold text-port-accent">
           <Clapperboard size={12} /> CD Bridge
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] text-gray-500" title="Shares the daily suggestion budget">{remainingLabel}</span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <LiveBudgetBadge label="Suggestions (shared)" budget={budget} spent={spent} />
+          {/* 44px tap target; -my-2 bleeds into the panel's own py-2 so the
+              header doesn't grow taller than it already was. */}
           <button
             type="button"
             onClick={requestProposal}
             disabled={loading}
-            className="flex items-center gap-1 px-2 py-0.5 text-[10px] rounded bg-port-bg border border-port-border text-gray-300 hover:text-white disabled:opacity-50"
-            title="Propose a Creative Director treatment from the cursor"
+            className="flex items-center justify-center gap-1 min-h-[44px] px-2 -my-2 text-[10px] rounded bg-port-bg border border-port-border text-gray-300 hover:text-white disabled:opacity-50"
+            title={PROPOSE_LABEL}
+            aria-label={PROPOSE_LABEL}
           >
             {loading ? <Loader2 size={10} className="animate-spin" /> : <Clapperboard size={10} />}
-            Propose treatment
+            {PROPOSE_TEXT}
           </button>
         </div>
       </div>
@@ -155,15 +169,17 @@ export default function CdBridgePanel({ workId, liveMode, usage, onUsageChange, 
               </div>
             ))}
           </div>
+          <div className="text-[10px] text-gray-500">{SEND_HINT}.</div>
           <button
             type="button"
             onClick={sendToCd}
             disabled={sending}
-            className="flex items-center gap-1 px-2 py-1 text-[10px] rounded bg-port-accent/15 text-port-accent hover:bg-port-accent/25 disabled:opacity-50"
-            title="Create a Creative Director project seeded with this treatment"
+            className="flex items-center justify-center gap-1 min-h-[44px] px-3 text-[10px] rounded bg-port-accent/15 text-port-accent hover:bg-port-accent/25 disabled:opacity-50"
+            title={SEND_LABEL}
+            aria-label={SEND_LABEL}
           >
             {sending ? <Loader2 size={10} className="animate-spin" /> : <Send size={10} />}
-            Send to Creative Director
+            {SEND_TEXT}
           </button>
         </div>
       )}

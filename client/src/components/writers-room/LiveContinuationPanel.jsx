@@ -3,6 +3,12 @@ import { Sparkles, Loader2, Plus } from 'lucide-react';
 import toast from '../ui/Toast';
 import { suggestWritersRoomContinuation } from '../../services/apiWritersRoom';
 import useMounted from '../../hooks/useMounted';
+import LiveBudgetBadge from './LiveBudgetBadge';
+
+// The Suggest button explained itself only through `title`, which never appears
+// on touch — that sentence is the accessible name now (#3567). It opens with the
+// button's own visible word so the two agree (WCAG 2.5.3 "Label in Name").
+const SUGGEST_LABEL = 'Suggest a continuation from the cursor';
 
 const KIND_LABEL = { beat: 'Beat', prose: 'Prose', dialogue: 'Dialogue' };
 const KIND_TONE = {
@@ -117,7 +123,6 @@ export default function LiveContinuationPanel({
 
   const budget = liveMode?.dailyCallBudget ?? 0;
   const spent = usage?.count ?? 0;
-  const remainingLabel = budget > 0 ? `${Math.max(0, budget - spent)} / ${budget} left today` : 'unlimited';
 
   if (!liveMode?.enabled) {
     return (
@@ -129,18 +134,21 @@ export default function LiveContinuationPanel({
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-port-border">
+      <div className="flex items-center justify-between gap-x-2 gap-y-1 flex-wrap px-3 py-2 border-b border-port-border">
         <div className="flex items-center gap-1.5 text-[11px] font-semibold text-port-accent">
           <Sparkles size={12} /> Live Director
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] text-gray-500" title="Daily suggestion budget">{remainingLabel}</span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <LiveBudgetBadge label="Suggestions" budget={budget} spent={spent} />
+          {/* 44px tap target; -my-2 bleeds into the header's own py-2 so the
+              row keeps the height it already had. */}
           <button
             type="button"
             onClick={requestSuggest}
             disabled={loading}
-            className="flex items-center gap-1 px-2 py-0.5 text-[10px] rounded bg-port-bg border border-port-border text-gray-300 hover:text-white disabled:opacity-50"
-            title="Suggest a continuation from the cursor"
+            className="flex items-center justify-center gap-1 min-h-[44px] px-2 -my-2 text-[10px] rounded bg-port-bg border border-port-border text-gray-300 hover:text-white disabled:opacity-50"
+            title={SUGGEST_LABEL}
+            aria-label={SUGGEST_LABEL}
           >
             {loading ? <Loader2 size={10} className="animate-spin" /> : <Sparkles size={10} />}
             Suggest
@@ -169,11 +177,15 @@ export default function LiveContinuationPanel({
                 {KIND_LABEL[opt.kind] || 'Beat'}
               </span>
               {(opt.kind === 'prose' || opt.kind === 'dialogue') && (
+                // Every Insert button reads "Insert", so the accessible name
+                // names WHICH suggestion it inserts; 44px tap target bleeding
+                // into the card's own p-2.
                 <button
                   type="button"
                   onClick={() => onInsert?.(opt)}
-                  className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded bg-port-accent/15 text-port-accent hover:bg-port-accent/25"
+                  className="flex items-center justify-center gap-1 min-h-[44px] px-2 -my-2 text-[10px] rounded bg-port-accent/15 text-port-accent hover:bg-port-accent/25"
                   title="Insert at cursor"
+                  aria-label={`Insert ${KIND_LABEL[opt.kind] || 'Beat'} suggestion ${i + 1} at cursor`}
                 >
                   <Plus size={10} /> Insert
                 </button>
