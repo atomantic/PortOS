@@ -709,6 +709,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-editorial-summary-not-scene": {
+      "name": "Pipeline — Editorial Check: Narrated summary where a scene belongs",
+      "description": "Editorial check (#3591): flags dramatizable beats narrated at helicopter level instead of played out in-scene — compressed-away turning points, reported action, habitual/iterative mode wrapped around a single decisive event, and result-first narration. The reviewer half of the drafting rule \"at least 70% in-scene, not summary\". Reads the stitched manuscript plus the reverse-outline scene segmentation (degrading to a whole-issue scan when absent). Each finding names the summarized beat and where to zoom in. Returns issue-anchored findings.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-editorial-interiority-balance": {
       "name": "Pipeline — Editorial Check: Interiority balance (description vs. POV reaction)",
       "description": "Editorial check (#1623): flags visually dense but emotionally empty scenes — prose heavy on setting, blocking, and physical detail yet light on the viewpoint character's reaction, emotion, or thought, so description swamps interiority. Judges the description-to-interiority ratio within each scene. Reads the stitched manuscript plus the reverse-outline scene segmentation (degrading to a whole-issue scan when absent). Distinct from sensory.balance (the senses) and interiority.protagonist (whole-issue interiority absence). Returns issue-anchored findings.",

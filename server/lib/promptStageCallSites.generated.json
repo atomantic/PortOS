@@ -198,6 +198,9 @@
   "pipeline-editorial-style-conformance": [
     "server/lib/editorial/checkInfra/revealForeshadowing.js"
   ],
+  "pipeline-editorial-summary-not-scene": [
+    "server/lib/editorial/checkInfra/craftStages.js"
+  ],
   "pipeline-editorial-telling-emotion": [
     "server/lib/editorial/checkInfra/craftStages.js"
   ],

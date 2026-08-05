@@ -54,6 +54,18 @@ export const SAFE_CUT_TYPES = Object.freeze(['OVER-EXPLAIN', 'REDUNDANT']);
 export const SENSORY_BALANCE_STAGE = 'pipeline-editorial-sensory-balance';
 export const WHITE_ROOM_STAGE = 'pipeline-editorial-white-room';
 
+// Stage name for the summary-vs-scene LLM check (#3591): dramatizable beats
+// narrated at helicopter level ("Over the next week, they argued about it, and
+// eventually she agreed") instead of played out in-scene. Ships in
+// data.reference/prompts/stages/ + stage-config.json (fresh installs via
+// setup-data.js) and migrates to existing installs via migration 227 (boot runs
+// migrations but NOT setup-data, so the migration is required). The reviewer
+// half of the drafting rule already encoded in the craft-anti-patterns partial
+// ("at least 70% in-scene, not summary"). Like the scene-grounding checks above
+// it consumes the reverse-outline scene segmentation as context and degrades to
+// a whole-issue manuscript scan when no outline exists.
+export const SUMMARY_NOT_SCENE_STAGE = 'pipeline-editorial-summary-not-scene';
+
 // Stage name for the interiority-balance LLM check (#1623): visually dense but
 // emotionally empty scenes — heavy on description, light on POV reaction. Ships
 // in data.reference/prompts/stages/ + stage-config.json (fresh installs via

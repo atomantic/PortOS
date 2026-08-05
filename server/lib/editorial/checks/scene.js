@@ -9,6 +9,7 @@ import {
   PLOT_STRUCTURE_STAGE,
   REACTION_PROPORTIONALITY_STAGE,
   SENSORY_BALANCE_STAGE,
+  SUMMARY_NOT_SCENE_STAGE,
   WHITE_ROOM_STAGE,
   authoredCliffhangerSummary,
   authoredSetupPayoffSummary,
@@ -167,6 +168,50 @@ export const sceneChecks = [
       return runManuscriptLlmCheck(ctx, {
         stage: WHITE_ROOM_STAGE,
         category: 'style',
+        context: { sceneMap },
+        buildVars: (manuscript, _meta, c) => ({ manuscript, sceneMap: c.sceneMap }),
+      });
+    },
+  },
+  {
+    id: 'narration.summary-not-scene',
+    sources: ['manuscript', 'reverseOutline'],
+    label: 'Narrated summary where a scene belongs',
+    description:
+      'Flags dramatizable beats narrated at helicopter level instead of played out in-scene — a compressed-away turning point ("Over the next week they argued, and eventually she agreed"), reported action the reader never physically enters, habitual/iterative mode ("every night she would…") wrapped around a single decisive event, and result-first narration that states the outcome and skips the scene. The reviewer half of the drafting rule "at least 70% in-scene, not summary". Reads the stitched manuscript plus the reverse-outline scene segmentation, degrading to a whole-issue scan when no outline exists. Distinct from prose.info-dumping (backstory exposition) and scene.component-balance (the mode mix inside a scene that already exists) — a beat that was summarized never became a scene at all.',
+    scope: 'issue',
+    kind: 'llm',
+    category: 'pacing',
+    severityDefault: 'medium',
+    defaultEnabled: true,
+    // Reads the stitched manuscript corpus — so the runner only pays the
+    // section-collection I/O when a manuscript-consuming check is enabled.
+    needsManuscript: true,
+    configSchema: z.object({
+      // Cap findings per run so a long manuscript can't flood the review.
+      maxFindings: z.number().int().min(1).max(50).default(12),
+    }),
+    configFields: [
+      {
+        key: 'maxFindings',
+        label: 'Max findings per run',
+        type: 'number',
+        min: 1,
+        max: 50,
+        step: 1,
+        help: 'Cap findings so a long manuscript can not flood the review.',
+      },
+    ],
+    gate: (ctx) => (ctx.manuscript || '').trim().length > 0,
+    run: (ctx) => {
+      // The scene map is fixed per-call overhead (re-sent on each chunk). Here it
+      // separates legitimate BETWEEN-scene compression from a dramatizable beat
+      // that never became a scene at all; the check degrades to a whole-issue
+      // scan when no outline exists (the prompt's {{#sceneMap}} renders nothing).
+      const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
+      return runManuscriptLlmCheck(ctx, {
+        stage: SUMMARY_NOT_SCENE_STAGE,
+        category: 'pacing',
         context: { sceneMap },
         buildVars: (manuscript, _meta, c) => ({ manuscript, sceneMap: c.sceneMap }),
       });
