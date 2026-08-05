@@ -271,9 +271,13 @@ export default function GoalsListView({ data, onRefresh }) {
     const result = await api.organizeGoals({ providerId: selectedProviderId, model: selectedModel }, { silent: true }).catch(() => null);
     setOrganizing(false);
     if (!result) { toast.error('Failed to organize goals'); return; }
-    await applyOrganizationSuggestion(result);
-    toast.success('Goal hierarchy applied');
+    const applied = await applyOrganizationSuggestion(result);
+    // Refresh either way: a failed apply can still have created the apex or some
+    // sub-apex goals before aborting, and leaving the stale list on screen is the
+    // out-of-sync state this guard exists to prevent (issue #3516).
     onRefresh();
+    if (!applied) { toast.error('Failed to apply goal hierarchy'); return; }
+    toast.success('Goal hierarchy applied');
   };
 
   const handleDragStart = useCallback((event) => {

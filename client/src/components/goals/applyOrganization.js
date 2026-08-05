@@ -1,5 +1,13 @@
 import * as api from '../../services/api';
 
+// Every API call below swallows its rejection and folds it into the `false` return
+// value, so each one passes `{ silent: true }` — the caller that acts on `false` owns
+// the error toast, and without this the request helper would stack its own on top.
+const SILENT = { silent: true };
+
+// Returns true when the whole suggestion landed, false when any step failed. Callers
+// MUST branch on this — a false return means the backend is partially or wholly
+// unchanged, so a success toast would be a lie (issue #3516).
 export async function applyOrganizationSuggestion(suggestion) {
   let apexId = null;
   // Clone organization array to avoid mutating caller's state
@@ -13,7 +21,7 @@ export async function applyOrganizationSuggestion(suggestion) {
       horizon: 'lifetime',
       category: 'legacy',
       goalType: 'apex'
-    }).then(res => res, () => null);
+    }, SILENT).then(res => res, () => null);
     if (!apex?.id) return false;
     apexId = apex.id;
   }
@@ -43,14 +51,14 @@ export async function applyOrganizationSuggestion(suggestion) {
         category: sg.category || 'legacy',
         goalType: 'sub-apex',
         ...(parentId ? { parentId } : {})
-      }).then(() => true, () => false);
+      }, SILENT).then(() => true, () => false);
     }));
     if (results.some(r => !r)) return false;
   }
 
   // Apply organization to existing goals
   if (organization?.length) {
-    const ok = await api.applyGoalOrganization(organization).then(() => true, () => false);
+    const ok = await api.applyGoalOrganization(organization, SILENT).then(() => true, () => false);
     if (!ok) return false;
   }
 

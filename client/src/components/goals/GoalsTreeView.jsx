@@ -464,11 +464,14 @@ export default function GoalsTreeView({ data, onRefresh }) {
   const handleApplyOrganization = async () => {
     if (!orgSuggestion) return;
     setApplyingOrg(true);
-    await applyOrganizationSuggestion(orgSuggestion);
+    const applied = await applyOrganizationSuggestion(orgSuggestion);
     setApplyingOrg(false);
     setOrgSuggestion(null);
-    toast.success('Goal hierarchy applied');
+    // Refresh either way — a failed apply can still have landed part of the hierarchy
+    // (issue #3516).
     onRefresh();
+    if (!applied) { toast.error('Failed to apply goal hierarchy'); return; }
+    toast.success('Goal hierarchy applied');
   };
 
   return (

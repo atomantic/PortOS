@@ -17,9 +17,12 @@ export const setBirthDate = (birthDate) => request('/digital-twin/identity/goals
   method: 'PUT',
   body: JSON.stringify({ birthDate })
 });
-export const createGoal = (data) => request('/digital-twin/identity/goals', {
+// `options` passes request-level flags through (e.g. `{ silent: true }`) for callers
+// that swallow the rejection and own the resulting error UI — see applyOrganization.js.
+export const createGoal = (data, options = {}) => request('/digital-twin/identity/goals', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
 export const updateGoal = (id, data, options = {}) => request(`/digital-twin/identity/goals/${id}`, {
   method: 'PUT',
@@ -72,7 +75,7 @@ export const completeMilestoneTask = (goalId, milestoneId, taskId) => request(`/
 // the Goals views, which own their own "Failed to organize goals" toast, don't
 // also get the helper's default error toast stacked on top of it.
 export const organizeGoals = (body = {}, options = {}) => request('/digital-twin/identity/goals/organize', { method: 'POST', body: JSON.stringify(body), ...options });
-export const applyGoalOrganization = (organization) => request('/digital-twin/identity/goals/organize/apply', { method: 'POST', body: JSON.stringify({ organization }) });
+export const applyGoalOrganization = (organization, options = {}) => request('/digital-twin/identity/goals/organize/apply', { method: 'POST', body: JSON.stringify({ organization }), ...options });
 export const checkInGoal = (goalId, options = {}) => request(`/digital-twin/identity/goals/${goalId}/check-in`, { method: 'POST', body: JSON.stringify(options) });
 export const scheduleGoalTimeBlocks = (goalId) => request(`/digital-twin/identity/goals/${goalId}/schedule`, { method: 'POST' });
 export const removeGoalSchedule = (goalId) => request(`/digital-twin/identity/goals/${goalId}/schedule`, { method: 'DELETE' });

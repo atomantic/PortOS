@@ -40,7 +40,8 @@ describe('applyOrganizationSuggestion — __new_apex__ round-trip', () => {
 
     // Apex created from the suggestion
     expect(api.createGoal).toHaveBeenCalledWith(
-      expect.objectContaining({ title: 'Live fully', goalType: 'apex' })
+      expect.objectContaining({ title: 'Live fully', goalType: 'apex' }),
+      { silent: true }
     );
 
     // The server received the rewritten organization — no raw sentinel survives
@@ -101,7 +102,8 @@ describe('applyOrganizationSuggestion — __new_apex__ round-trip', () => {
     expect(api.createGoal.mock.calls[0][0]).toMatchObject({ title: 'Apex', goalType: 'apex' });
     // ...then the sub-apex create is parented under the real apex id
     expect(api.createGoal).toHaveBeenCalledWith(
-      expect.objectContaining({ title: 'Health', goalType: 'sub-apex', parentId: 'apex-real-3' })
+      expect.objectContaining({ title: 'Health', goalType: 'sub-apex', parentId: 'apex-real-3' }),
+      { silent: true }
     );
   });
 
@@ -152,5 +154,56 @@ describe('applyOrganizationSuggestion — __new_apex__ round-trip', () => {
     const ok = await applyOrganizationSuggestion(suggestion);
     expect(ok).toBe(false);
     expect(api.applyGoalOrganization).not.toHaveBeenCalled();
+  });
+});
+
+// Guards #3516: every failure has to surface as `false` so the calling view can toast
+// an error instead of a false "Goal hierarchy applied", and every call has to be
+// `silent` so that view's toast is the only one the user sees.
+describe('applyOrganizationSuggestion — failure reporting and toast layering', () => {
+  it('returns false when a suggested sub-apex goal fails to create', async () => {
+    api.createGoal
+      .mockResolvedValueOnce({ id: 'apex-real-5' })   // apex creates fine...
+      .mockRejectedValueOnce(new Error('sub-apex create failed')); // ...sub-apex does not
+
+    const suggestion = {
+      apexGoal: { existingId: null, suggestedTitle: 'Apex', suggestedDescription: '' },
+      organization: [{ id: 'g-1', goalType: 'standard', suggestedParentId: null }],
+      suggestedSubApex: [{ title: 'Health', description: '', category: 'health' }],
+    };
+
+    const ok = await applyOrganizationSuggestion(suggestion);
+    expect(ok).toBe(false);
+    // Aborts before pushing the organization, so the server isn't left half-applied.
+    expect(api.applyGoalOrganization).not.toHaveBeenCalled();
+  });
+
+  it('returns false when the organization apply call rejects', async () => {
+    api.applyGoalOrganization.mockRejectedValue(new Error('apply failed'));
+
+    const suggestion = {
+      apexGoal: { existingId: 'existing-apex', suggestedTitle: null, suggestedDescription: null },
+      organization: [{ id: 'g-1', goalType: 'standard', suggestedParentId: 'existing-apex' }],
+      suggestedSubApex: [],
+    };
+
+    expect(await applyOrganizationSuggestion(suggestion)).toBe(false);
+  });
+
+  it('passes silent:true on every API call so only the caller toasts', async () => {
+    api.createGoal.mockResolvedValue({ id: 'apex-real-6' });
+
+    const suggestion = {
+      apexGoal: { existingId: null, suggestedTitle: 'Apex', suggestedDescription: '' },
+      organization: [{ id: 'g-1', goalType: 'standard', suggestedParentId: null }],
+      suggestedSubApex: [{ title: 'Health', description: '', category: 'health' }],
+    };
+
+    expect(await applyOrganizationSuggestion(suggestion)).toBe(true);
+
+    for (const call of api.createGoal.mock.calls) {
+      expect(call[1]).toEqual({ silent: true });
+    }
+    expect(api.applyGoalOrganization).toHaveBeenCalledWith(expect.anything(), { silent: true });
   });
 });
