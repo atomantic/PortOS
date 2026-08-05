@@ -14,6 +14,7 @@
 
 import { generateId, now } from './digital-twin-helpers.js';
 import { loadMeta, saveMeta } from './digital-twin-meta.js';
+import { recordTombstone } from '../lib/tombstones.js';
 
 export async function getPersonas() {
   const meta = await loadMeta();
@@ -77,6 +78,16 @@ export async function deletePersona(id) {
   const meta = await loadMeta();
   const before = (meta.personas || []).length;
   meta.personas = (meta.personas || []).filter(p => p.id !== id);
+  const deleted = before !== meta.personas.length;
+
+  // Tombstone the id so peer sync — which unions personas add-only — can't
+  // resurrect it from a machine that still has the persona (#3533). The
+  // tombstone also propagates the delete to those machines. Only recorded when
+  // something was actually removed: a delete for an unknown id is a no-op, and
+  // writing a tombstone for it would just consume the capped list.
+  if (deleted) {
+    meta.deletedPersonas = recordTombstone(meta.deletedPersonas, id, { keyField: 'id' });
+  }
 
   // Clearing the active persona when it's the one being deleted keeps the
   // settings pointer from dangling at a non-existent id.
@@ -85,7 +96,7 @@ export async function deletePersona(id) {
   }
 
   await saveMeta(meta);
-  return { deleted: before !== meta.personas.length };
+  return { deleted };
 }
 
 /**

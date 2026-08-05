@@ -37,6 +37,9 @@ export const DEFAULT_META = {
   adversarialTestHistory: [],
   multiTurnTestHistory: [],
   personas: [],
+  // Tombstones for personas the user deleted (#3533) — the persona union is
+  // add-only, so a peer that still has the persona would otherwise re-add it.
+  deletedPersonas: [],
   enrichment: { completedCategories: [], lastSession: null },
   settings: { autoInjectToCoS: true, maxContextTokens: 4000, includePrivacyContext: false }
 };

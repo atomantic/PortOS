@@ -42,6 +42,10 @@
  * simply drops the unknown `deletedDocuments` key (Zod strips it), keeps
  * resurrecting its own copy, and the upgraded peer defends locally — degraded,
  * but never corrupting, so still no schemaVersions bump. See lib/tombstones.js.
+ *
+ * Personas carry the same tombstone (#3533) as `meta.deletedPersonas`, keyed on
+ * the persona id — a persona lives only in meta.json, so the merge alone
+ * completes the delete with no file to reap.
  */
 
 import crypto from 'crypto';
@@ -452,12 +456,62 @@ export function mergeDocumentsWithTombstones(local, remote) {
   return { documents, deletedDocuments };
 }
 
+// The persona tombstone list on meta.json, keyed on the persona `id` (see
+// deletedPersonaSchema). Unlike a document id, a persona id is minted once by
+// the machine that created the persona and then travels with the record, so it
+// means the same thing on every peer.
+const PERSONA_TOMBSTONE_OPTS = { keyField: 'id' };
+
+/**
+ * The instant a persona was last asserted to EXIST — its creation stamp, or a
+ * later edit. Mirrors the document rule: a delete only wins over a persona older
+ * than the delete, so an edit made after another machine deleted the persona is
+ * the user's latest word and is not silently destroyed.
+ */
+function personaLiveStamp(persona) {
+  return newerStamp(persona?.updatedAt, persona?.createdAt);
+}
+
+/**
+ * Merge the persona list against both sides' delete tombstones (#3533).
+ *
+ * Personas are the same add-only-union shape documents were before #3530: the
+ * machine that still had the record simply re-added it, so a deleted persona
+ * came back on the next cycle, forever. The tombstone lists union in BOTH
+ * directions and any persona a surviving tombstone covers is dropped, so a
+ * delete performed on either machine converges. A persona lives entirely inside
+ * meta.json, so there is no on-disk companion to reap — unlike documents, the
+ * merge alone completes the delete.
+ *
+ * The union takes the more recently edited copy (LWW on `updatedAt`) rather than
+ * always keeping the local one. Persona ids are stable across peers and every
+ * persona carries a mandatory `updatedAt` (see personaSchema), so LWW is
+ * well-defined here — and it is what keeps supersession honest: a persona edited
+ * on one machine after another deleted it must carry that newer stamp to every
+ * peer, or a third machine holding a stale copy would still reap it against the
+ * older tombstone and the two would never converge.
+ *
+ * Returns the surviving personas plus the merged tombstone list.
+ */
+export function mergePersonasWithTombstones(local, remote) {
+  const { merged: tombstonesUnion } = mergeTombstones(local?.deletedPersonas, remote?.deletedPersonas, PERSONA_TOMBSTONE_OPTS);
+  const { merged: unioned } = unionByKey(local?.personas, remote?.personas, 'id', 'updatedAt');
+  const personas = unioned.filter((p) => !isTombstoned(tombstonesUnion, p.id, personaLiveStamp(p), 'id'));
+
+  // Prune against the same live stamp the filter used, or a persona kept alive
+  // by an edit would leave its tombstone behind to retry on every cycle.
+  const survivorStamps = personas.map((p) => ({ id: p.id, createdAt: personaLiveStamp(p) }));
+  const deletedPersonas = pruneTombstones(tombstonesUnion, survivorStamps, { ...PERSONA_TOMBSTONE_OPTS, timestampField: 'createdAt' });
+  return { personas, deletedPersonas };
+}
+
 /**
  * Merge digital-twin meta.json: documents union by filename (ADD-ONLY — a local
  * doc entry is never replaced) minus anything either side has tombstoned in
  * `deletedDocuments`, the four test histories union by runId, personas union by
- * id, enrichment deep-unions, settings fill missing keys (local values win), and
- * the analyzed personality-trait confidence max-per-dimension.
+ * id (LWW) minus anything tombstoned in `deletedPersonas`, enrichment
+ * deep-unions, settings fill missing keys (local values win), and the analyzed
+ * personality-trait confidence max-per-dimension.
  */
 export function mergeMeta(local, remote) {
   if (!isPlainObject(remote)) return { merged: local, changed: false };
@@ -485,8 +539,16 @@ export function mergeMeta(local, remote) {
     if (u.changed) { merged[key] = sortRunsNewestFirst(u.merged); changed = true; }
   }
 
-  const personas = unionByKey(local.personas, remote.personas, 'id');
-  if (personas.changed) { merged.personas = personas.merged; changed = true; }
+  const { personas, deletedPersonas } = mergePersonasWithTombstones(local, remote);
+  const localPersonas = Array.isArray(local.personas) ? local.personas : [];
+  // The union preserves the local record objects it kept, so identity
+  // comparison is enough to tell whether anything was added, replaced, or reaped.
+  if (personas.length !== localPersonas.length || personas.some((p, i) => p !== localPersonas[i])) {
+    merged.personas = personas; changed = true;
+  }
+  if (!tombstonesEqual(deletedPersonas, normalizeTombstones(local.deletedPersonas, 'id'), 'id')) {
+    merged.deletedPersonas = deletedPersonas; changed = true;
+  }
 
   if (isPlainObject(remote.enrichment)) {
     const e = mergeEnrichment(local.enrichment, remote.enrichment);
@@ -503,6 +565,19 @@ export function mergeMeta(local, remote) {
   if (isPlainObject(remote.confidence)) {
     const c = mergeConfidence(local.confidence, remote.confidence);
     if (c.changed) { merged.confidence = c.merged; changed = true; }
+  }
+
+  // A persona another machine deleted is reaped above, which can leave
+  // `settings.activePersonaId` pointing at an id that is no longer in the list
+  // (deletePersona clears it for a LOCAL delete; this is the remote half).
+  // Cleared rather than left dangling so the embodied twin falls back to the
+  // base twin instead of silently resolving to nothing (#3533).
+  const settings = isPlainObject(merged.settings) ? merged.settings : local.settings;
+  const activePersonaId = isPlainObject(settings) ? settings.activePersonaId : null;
+  const survivingPersonas = merged.personas ?? localPersonas;
+  if (activePersonaId && !survivingPersonas.some((p) => p?.id === activePersonaId)) {
+    merged.settings = { ...settings, activePersonaId: null };
+    changed = true;
   }
 
   return { merged, changed };
