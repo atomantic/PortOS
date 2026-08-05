@@ -404,6 +404,12 @@ describe('planIds.js', () => {
       expect(scanCount()).toBe(1);
 
       branchesByRepo['/repo/a'] = 'main\nclaim/alpha\nclaim/gamma\n';
+
+      // Still inside the window: the new branch is deliberately NOT visible yet.
+      // Without this the test would pass against a no-cache implementation.
+      expect([...await findInProgressIds('/repo/a', KNOWN)]).toEqual(['alpha']);
+      expect(scanCount()).toBe(1);
+
       now += IN_PROGRESS_SCAN_TTL_MS + 1;
 
       const after = await findInProgressIds('/repo/a', KNOWN);
@@ -439,6 +445,11 @@ describe('planIds.js', () => {
     });
 
     it('bypasses the cache with { force: true }', async () => {
+      await findInProgressIds('/repo/a', KNOWN);
+      expect(scanCount()).toBe(1);
+
+      // Establish that the cache IS live at this point — otherwise the forced
+      // call below would count a second scan against a no-cache implementation.
       await findInProgressIds('/repo/a', KNOWN);
       expect(scanCount()).toBe(1);
 
