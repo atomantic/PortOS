@@ -50,6 +50,13 @@ const axisPx = (className, axis) => {
   return px;
 };
 
+// Tailwind spacing token on the given prefix (`right-2`, `pr-14`) → px.
+// 0 when the class carries no such token.
+const spacingPx = (className, prefix) => {
+  const m = String(className).match(new RegExp(`(?:^|\\s)${prefix}-(\\d+)(?:\\s|$)`));
+  return m ? Number(m[1]) * 4 : 0;
+};
+
 const expectTouchTarget = (el, { width = true } = {}) => {
   expect(axisPx(el.className, 'h'), `height floor on: ${el.className}`).toBeGreaterThanOrEqual(44);
   if (width) {
@@ -118,14 +125,14 @@ describe('NotesTab header touch targets', () => {
     // The clear button is absolutely positioned at `right-2` (8px) and is 44px
     // wide, so the input needs >= 52px of right padding or the typed text runs
     // underneath it.
-    const rightOffset = (clear.className.match(/(?:^|\s)right-(\d+)(?:\s|$)/) || [, '0'])[1] * 4;
+    const rightOffset = spacingPx(clear.className, 'right');
     const clearWidth = axisPx(clear.className, 'w');
     // Guard the guard: if either token stopped parsing, the comparison below
     // would degrade to `padRight >= 0` and pass trivially.
     expect(rightOffset).toBeGreaterThan(0);
     expect(clearWidth).toBeGreaterThanOrEqual(44);
 
-    const padRight = (input.className.match(/(?:^|\s)pr-(\d+)(?:\s|$)/) || [, '0'])[1] * 4;
+    const padRight = spacingPx(input.className, 'pr');
     expect(padRight).toBeGreaterThanOrEqual(rightOffset + clearWidth);
   });
 });
