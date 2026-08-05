@@ -767,7 +767,7 @@ export default function DailyLogTab() {
             <button
               onClick={handleDraft}
               disabled={drafting}
-              className="hidden sm:flex items-center gap-1 px-3 min-h-[40px] rounded bg-port-card text-gray-300 text-sm hover:text-white disabled:opacity-50"
+              className="hidden sm:flex shrink-0 items-center gap-1 px-3 min-h-[40px] rounded bg-port-card text-gray-300 text-sm hover:text-white disabled:opacity-50"
               title={draftTitle}
               aria-label="Draft activity digest"
             >
@@ -776,7 +776,7 @@ export default function DailyLogTab() {
             </button>
             <button
               onClick={readBack}
-              className="hidden sm:flex items-center gap-1 px-3 min-h-[40px] rounded bg-port-card text-gray-300 text-sm hover:text-white"
+              className="hidden sm:flex shrink-0 items-center gap-1 px-3 min-h-[40px] rounded bg-port-card text-gray-300 text-sm hover:text-white"
               title="Have the voice agent read this log back to you"
               aria-label="Read back"
             >
@@ -784,7 +784,7 @@ export default function DailyLogTab() {
             </button>
             <button
               onClick={toggleDictation}
-              className={`flex items-center gap-1 px-3 min-h-[44px] min-w-[44px] sm:min-h-[40px] sm:min-w-0 justify-center rounded text-sm ${
+              className={`flex shrink-0 items-center gap-1 px-3 min-h-[44px] min-w-[44px] sm:min-h-[40px] sm:min-w-0 justify-center rounded text-sm ${
                 dictation
                   ? 'bg-port-accent text-white animate-pulse'
                   : 'bg-port-card text-gray-300 hover:text-white'
@@ -798,7 +798,7 @@ export default function DailyLogTab() {
             <button
               onClick={handleSave}
               disabled={saving || !dirty}
-              className="flex items-center gap-1 px-3 min-h-[44px] min-w-[44px] sm:min-h-[40px] sm:min-w-0 justify-center rounded bg-port-accent text-white text-sm hover:bg-port-accent/80 disabled:opacity-50"
+              className="flex shrink-0 items-center gap-1 px-3 min-h-[44px] min-w-[44px] sm:min-h-[40px] sm:min-w-0 justify-center rounded bg-port-accent text-white text-sm hover:bg-port-accent/80 disabled:opacity-50"
               aria-label="Save"
             >
               <Save size={14} />
@@ -807,7 +807,7 @@ export default function DailyLogTab() {
             <button
               onClick={() => setConfirmDelete(true)}
               disabled={!entry}
-              className="hidden sm:flex min-h-[40px] min-w-[40px] items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-port-error disabled:opacity-30"
+              className="hidden sm:flex shrink-0 min-h-[40px] min-w-[40px] items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-port-error disabled:opacity-30"
               title="Delete this entry"
               aria-label="Delete entry"
             >
