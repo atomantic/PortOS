@@ -170,6 +170,28 @@ describe('AgentCard transcript truncation (#3498)', () => {
     expect(screen.getByText(/12 MB/)).toBeInTheDocument();
   });
 
+  it('still reports the clip when the tail window yielded no renderable lines', async () => {
+    const user = userEvent.setup();
+    api.getCosAgent.mockResolvedValue({
+      ...agent,
+      output: [],
+      outputTruncated: true,
+      outputTotalBytes: 8 * 1024 * 1024,
+    });
+
+    render(
+      <MemoryRouter>
+        <AgentCard agent={agent} completed />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Show' }));
+
+    // "No output captured" would call a multi-MB log empty.
+    expect(await screen.findByText(/no readable lines/)).toBeInTheDocument();
+    expect(screen.queryByText('No output captured')).not.toBeInTheDocument();
+  });
+
   it('stays quiet when the whole transcript fit under the cap', async () => {
     const user = userEvent.setup();
     api.getCosAgent.mockResolvedValue({

@@ -119,8 +119,11 @@ describe('cosAgentLifecycle', () => {
 
       const agent = await getAgent('agent-oneline', { maxBytes: 1024 });
 
-      // The leading partial line is dropped, so a single over-cap line yields none.
-      expect(agent.output).toEqual([]);
+      // The leading partial line is normally dropped, but here it is the ONLY
+      // content in the window — a partial last screen beats an empty transcript
+      // for a file that is plainly not empty.
+      expect(agent.output).toHaveLength(1);
+      expect(agent.output[0].line).toBe('x'.repeat(1024));
       expect(agent.outputTruncated).toBe(true);
       expect(agent.outputTotalBytes).toBe(200_000);
     });

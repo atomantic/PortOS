@@ -434,9 +434,15 @@ async function readAgentTranscriptTail(outputFile, { limit, maxBytes }) {
   if (text === null) return null;
   const clippedByBytes = info.size > maxBytes;
   // The byte window can start mid-line (and mid-multibyte-character), so drop
-  // the leading fragment rather than surfacing a garbled partial line.
+  // the leading fragment rather than surfacing a garbled partial line — UNLESS
+  // it is the only thing in the window. A repainted TUI transcript is one
+  // enormous newline-free line, and dropping it would hand the UI an empty
+  // transcript for a file that is plainly not empty; a partial last screen
+  // beats nothing.
   const split = text.split('\n');
-  const lines = (clippedByBytes ? split.slice(1) : split).filter(line => line.trim());
+  const kept = split.filter(line => line.trim());
+  const withoutFragment = clippedByBytes ? split.slice(1).filter(line => line.trim()) : kept;
+  const lines = withoutFragment.length > 0 ? withoutFragment : kept;
   const clippedByLines = lines.length > limit;
   return {
     lines: clippedByLines ? lines.slice(-limit) : lines,

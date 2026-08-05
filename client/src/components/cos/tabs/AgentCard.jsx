@@ -97,12 +97,15 @@ function toTranscript(data) {
 
 function TranscriptTruncationNotice({ transcript }) {
   if (!transcript?.truncated) return null;
+  const count = transcript.lines.length;
+  const size = transcript.totalBytes > 0 ? ` (${formatBytes(transcript.totalBytes)})` : '';
   return (
     <div className="flex items-center gap-1.5 text-xs text-yellow-500 mb-2">
       <AlertTriangle size={12} aria-hidden="true" className="shrink-0" />
       <span>
-        Showing the last {transcript.lines.length.toLocaleString()} {transcript.lines.length === 1 ? 'line' : 'lines'} — the full transcript
-        {transcript.totalBytes > 0 ? ` (${formatBytes(transcript.totalBytes)})` : ''} is on disk in the agent&apos;s output.txt.
+        {count > 0
+          ? `Showing the last ${count.toLocaleString()} ${count === 1 ? 'line' : 'lines'} — the full transcript${size} is on disk in the agent's output.txt.`
+          : `The tail of this transcript held no readable lines — the full transcript${size} is on disk in the agent's output.txt.`}
       </span>
     </div>
   );
@@ -972,11 +975,14 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                   </div>
                 );
               }
-              if (stageOut?.lines.length > 0) {
+              // A truncated transcript whose tail window yielded no renderable
+              // lines still has to say so — falling through to "No output
+              // captured" would call a multi-MB log empty.
+              if (stageOut?.lines.length > 0 || stageOut?.truncated) {
                 return (
                   <>
                     <TranscriptTruncationNotice transcript={stageOut} />
-                    <OutputBlocks key={activeStage.agentId} output={stageOut.lines} />
+                    {stageOut.lines.length > 0 && <OutputBlocks key={activeStage.agentId} output={stageOut.lines} />}
                   </>
                 );
               }
@@ -995,11 +1001,12 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                 </div>
               );
             }
-            if (output.length > 0) {
+            const truncated = inactive && fullOutput?.truncated;
+            if (output.length > 0 || truncated) {
               return (
                 <>
-                  {inactive && <TranscriptTruncationNotice transcript={fullOutput} />}
-                  <OutputBlocks output={output} />
+                  {truncated && <TranscriptTruncationNotice transcript={fullOutput} />}
+                  {output.length > 0 && <OutputBlocks output={output} />}
                 </>
               );
             }
