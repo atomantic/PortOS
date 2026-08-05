@@ -14,11 +14,23 @@ vi.mock('./cosState.js', () => ({
   isDaemonRunning: () => mock.daemonRunning
 }));
 
+// The date-bucket index is derived from the same fixture as the on-disk buckets,
+// mirroring the real invariant: every archived agent has an index entry.
 vi.mock('./cosAgentIndex.js', () => ({
-  getAgentsByDate: vi.fn(async (date) => mock.agentsByDate[date] || [])
+  getAgentsByDate: vi.fn(async (date) => mock.agentsByDate[date] || []),
+  getAgentIdsForDates: vi.fn(async (dates) => new Map(
+    dates.map(date => [date, (mock.agentsByDate[date] || []).map(a => a.id)])
+  ))
 }));
 
-import { getWhileAwayActivity } from './cosReports.js';
+vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  atomicWrite: vi.fn(async () => {})
+}));
+
+import { getAgentsByDate } from './cosAgentIndex.js';
+import { atomicWrite } from '../lib/fileUtils.js';
+import { generateReport, getTodayActivity, getWhileAwayActivity } from './cosReports.js';
 
 // Build a completed agent record at a fixed completedAt offset (ms before now).
 const agentAt = (id, { msAgo, success = true, desc = 'did a thing', taskType = 'review', app = null } = {}) => {
@@ -156,5 +168,118 @@ describe('getWhileAwayActivity', () => {
     expect(result.accomplishments).toHaveLength(8);
     expect(result.incidents).toHaveLength(8);
     expect(result.stats.completed).toBe(24);
+  });
+
+  it('skips the archive read entirely when every indexed id is still live (#3501)', async () => {
+    const live = agentAt('a1', { msAgo: 30 * 60000 });
+    mock.state = stateWith([live]);
+    const todayStr = new Date().toISOString().slice(0, 10);
+    mock.agentsByDate[todayStr] = [live]; // archived at completion, still in state
+
+    const result = await getWhileAwayActivity(new Date(Date.now() - 3600000).toISOString());
+
+    expect(result.stats.completed).toBe(1);
+    expect(getAgentsByDate).not.toHaveBeenCalled();
+  });
+});
+
+// Completed agent pinned to an explicit UTC date so the assertions can't drift
+// across a midnight boundary mid-run.
+const agentOnDate = (id, dateStr, { success = true, desc = 'did a thing' } = {}) => ({
+  id,
+  taskId: `task-${id}`,
+  status: 'completed',
+  startedAt: `${dateStr}T11:00:00.000Z`,
+  completedAt: `${dateStr}T12:00:00.000Z`,
+  result: { success, duration: 3600000 },
+  metadata: { taskDescription: desc, taskType: 'review' }
+});
+
+const todayStr = () => new Date().toISOString().slice(0, 10);
+
+describe('generateReport (#3501 date-bucket sourcing)', () => {
+  beforeEach(() => {
+    mock.daemonRunning = true;
+    mock.agentsByDate = {};
+    mock.state = stateWith([]);
+  });
+
+  afterEach(() => vi.clearAllMocks());
+
+  it('reports a historical date from the archive after state.json was swept', async () => {
+    // archiveStaleAgents evicted these from state.json — before #3501 the report
+    // scanned state.agents only and came back all-zero.
+    mock.agentsByDate['2026-01-15'] = [
+      agentOnDate('old1', '2026-01-15', { success: true }),
+      agentOnDate('old2', '2026-01-15', { success: false })
+    ];
+
+    const report = await generateReport('2026-01-15');
+
+    expect(report.date).toBe('2026-01-15');
+    expect(report.summary).toMatchObject({ tasksCompleted: 1, tasksFailed: 1, totalAgents: 2 });
+    expect(report.agents.map(a => a.id).sort()).toEqual(['old1', 'old2']);
+    expect(report.agents[0].duration).toBe(3600000);
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+  });
+
+  it('prefers the live record over its archived copy', async () => {
+    const date = '2026-01-16';
+    // Live record carries the authoritative verdict; the archive predates it.
+    mock.state = stateWith([agentOnDate('dup', date, { success: true })]);
+    mock.agentsByDate[date] = [agentOnDate('dup', date, { success: false })];
+
+    const report = await generateReport(date);
+
+    expect(report.summary).toMatchObject({ tasksCompleted: 1, tasksFailed: 0, totalAgents: 1 });
+    expect(getAgentsByDate).not.toHaveBeenCalled();
+  });
+
+  it('ignores agents completed on other dates', async () => {
+    mock.state = stateWith([agentOnDate('other', '2026-01-17')]);
+    mock.agentsByDate['2026-01-18'] = [agentOnDate('wanted', '2026-01-18')];
+
+    const report = await generateReport('2026-01-18');
+
+    expect(report.agents.map(a => a.id)).toEqual(['wanted']);
+  });
+});
+
+describe('getTodayActivity (#3501 date-bucket sourcing)', () => {
+  beforeEach(() => {
+    mock.daemonRunning = true;
+    mock.agentsByDate = {};
+    mock.state = stateWith([]);
+  });
+
+  afterEach(() => vi.clearAllMocks());
+
+  it('counts today agents that have been archived out of state.json', async () => {
+    const today = todayStr();
+    mock.state = stateWith([agentOnDate('live', today, { success: true })]);
+    mock.agentsByDate[today] = [
+      agentOnDate('live', today, { success: true }),
+      agentOnDate('evicted', today, { success: false })
+    ];
+
+    const activity = await getTodayActivity();
+
+    expect(activity.stats).toMatchObject({ completed: 2, succeeded: 1, failed: 1, successRate: 50 });
+    expect(activity.time.totalDurationMs).toBe(7200000);
+    expect(activity.accomplishments.map(a => a.id)).toEqual(['live']);
+  });
+
+  it('still counts running agents from live state', async () => {
+    const today = todayStr();
+    mock.state = stateWith([
+      agentOnDate('done', today),
+      { id: 'busy', taskId: 'task-busy', status: 'running', startedAt: new Date().toISOString() }
+    ]);
+    mock.agentsByDate[today] = [agentOnDate('done', today)];
+
+    const activity = await getTodayActivity();
+
+    expect(activity.stats).toMatchObject({ completed: 1, running: 1, successRate: 100 });
+    expect(getAgentsByDate).not.toHaveBeenCalled();
   });
 });

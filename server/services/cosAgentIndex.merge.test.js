@@ -18,7 +18,7 @@ vi.mock('./cosState.js', () => ({
 }));
 vi.mock('./domainUsage.js', () => ({ recordDomainUsage: vi.fn(async () => {}) }));
 
-import { addAgentArchivesToIndex, loadAgentIndex } from './cosAgentIndex.js';
+import { addAgentArchivesToIndex, getAgentIdsForDates, loadAgentIndex } from './cosAgentIndex.js';
 
 const INDEX_FILE = join(mockCosState.agentsDir, 'index.json');
 
@@ -70,5 +70,36 @@ describe('addAgentArchivesToIndex (#1650)', () => {
   it('returns 0 for a non-array / empty input', async () => {
     expect(await addAgentArchivesToIndex(null)).toBe(0);
     expect(await addAgentArchivesToIndex([])).toBe(0);
+  });
+});
+
+describe('getAgentIdsForDates (#3501)', () => {
+  beforeEach(async () => {
+    await rm(mockCosState.agentsDir, { recursive: true, force: true });
+    await mkdir(mockCosState.agentsDir, { recursive: true });
+    await writeFile(INDEX_FILE, '{}');
+    await addAgentArchivesToIndex([
+      { agentId: 'agent-sep1a', date: '2026-09-01' },
+      { agentId: 'agent-sep1b', date: '2026-09-01' },
+      { agentId: 'agent-sep2', date: '2026-09-02' },
+    ]);
+  });
+  afterEach(async () => {
+    await rm(mockCosState.agentsDir, { recursive: true, force: true });
+  });
+
+  it('groups ids per requested date and returns an empty list for unknown dates', async () => {
+    const byDate = await getAgentIdsForDates(['2026-09-01', '2026-09-02', '2026-09-03']);
+
+    expect([...byDate.get('2026-09-01')].sort()).toEqual(['agent-sep1a', 'agent-sep1b']);
+    expect(byDate.get('2026-09-02')).toEqual(['agent-sep2']);
+    // Requested but unindexed dates are still keyed — callers can read without a guard.
+    expect(byDate.get('2026-09-03')).toEqual([]);
+    // Dates outside the request never leak into the result.
+    expect(byDate.has('2026-06-20')).toBe(false);
+  });
+
+  it('returns an empty map for an empty date list', async () => {
+    expect((await getAgentIdsForDates([])).size).toBe(0);
   });
 });

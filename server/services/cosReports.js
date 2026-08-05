@@ -9,8 +9,39 @@ import { readFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { loadState, ensureDirectories, REPORTS_DIR, isDaemonRunning } from './cosState.js';
-import { getAgentsByDate } from './cosAgentIndex.js';
+import { getAgentIdsForDates, getAgentsByDate } from './cosAgentIndex.js';
 import { formatDuration, safeJSONParse, atomicWrite } from '../lib/fileUtils.js';
+
+// Completed-agent records for a set of UTC date buckets (YYYY-MM-DD), merged
+// from live in-memory state and the on-disk date-bucket archive. `accept(agent)`
+// filters both sources identically.
+//
+// `state.agents` stays authoritative for every id it still holds — it carries the
+// freshest result/feedback for a run whose archive was written back at completion
+// time — so the archive is consulted only for ids the date-bucket INDEX lists and
+// state has already evicted. The index is a tiny in-memory id→date map, so a date
+// whose agents are all still live costs zero disk reads, while a date already
+// swept out of state.json by `archiveStaleAgents` resolves from disk instead of
+// reading as empty (issue #3501: reports for past dates came back all-zero, and
+// every dashboard refresh linearly rescanned the whole agent history).
+async function collectCompletedAgents(dates, state, accept) {
+  const liveIds = new Set(Object.keys(state.agents));
+  const collected = Object.values(state.agents).filter(a => a.completedAt && accept(a));
+  const idsByDate = await getAgentIdsForDates(dates);
+
+  // Iterating the Map (not `dates`) keeps a repeated date from reading its bucket twice.
+  for (const [date, ids] of idsByDate) {
+    const missing = new Set(ids.filter(id => !liveIds.has(id)));
+    if (missing.size === 0) continue;
+    for (const agent of await getAgentsByDate(date)) {
+      if (!missing.has(agent.id)) continue; // live copy wins, and non-indexed strays stay out
+      if (!agent.completedAt || !accept(agent)) continue;
+      collected.push(agent);
+    }
+  }
+
+  return collected;
+}
 
 // A completed agent's work duration in ms: prefer the recorded `result.duration`,
 // else derive from completedAt − startedAt. Clamped to >=0 so a clock-skewed
@@ -27,11 +58,12 @@ export async function generateReport(date = null) {
   const reportDate = date || new Date().toISOString().split('T')[0];
   const state = await loadState();
 
-  // Filter agents completed on this date
-  const completedAgents = Object.values(state.agents).filter(a => {
-    if (!a.completedAt) return false;
-    return a.completedAt.startsWith(reportDate);
-  });
+  // Agents completed on this date, from the date bucket (index-gated) + live state
+  const completedAgents = await collectCompletedAgents(
+    [reportDate],
+    state,
+    a => a.completedAt.startsWith(reportDate)
+  );
 
   const report = {
     date: reportDate,
@@ -119,11 +151,12 @@ export async function getTodayActivity() {
   const state = await loadState();
   const today = new Date().toISOString().split('T')[0];
 
-  // Filter agents completed today
-  const todayAgents = Object.values(state.agents).filter(a => {
-    if (!a.completedAt) return false;
-    return a.completedAt.startsWith(today);
-  });
+  // Agents completed today, from today's date bucket (index-gated) + live state
+  const todayAgents = await collectCompletedAgents(
+    [today],
+    state,
+    a => a.completedAt.startsWith(today)
+  );
 
   const succeeded = todayAgents.filter(a => a.result?.success);
   const failed = todayAgents.filter(a => !a.result?.success);
@@ -251,29 +284,24 @@ export async function getWhileAwayActivity(sinceIso) {
     return Number.isFinite(t) && t >= sinceMs && t <= now;
   };
 
-  // Live (in-memory) completed agents within the window.
-  const state = await loadState();
-  const live = Object.values(state.agents).filter(a => a.status === 'completed' && inWindow(a));
-
-  // Archived agents: read each date bucket the window spans (UTC day strings).
-  const seen = new Set(live.map(a => a.id));
-  const archived = [];
+  // Every UTC day string the window spans — each is a date bucket to consider.
+  const dates = [];
   const startDay = new Date(sinceMs);
   const endDay = new Date(now);
   for (let d = new Date(Date.UTC(startDay.getUTCFullYear(), startDay.getUTCMonth(), startDay.getUTCDate()));
     d.getTime() <= endDay.getTime();
     d = new Date(d.getTime() + 86400000)) {
-    const dateStr = d.toISOString().slice(0, 10);
-    const agents = await getAgentsByDate(dateStr);
-    for (const a of agents) {
-      if (seen.has(a.id)) continue; // live copy wins (fresher result/output)
-      if (!inWindow(a)) continue;
-      seen.add(a.id);
-      archived.push(a);
-    }
+    dates.push(d.toISOString().slice(0, 10));
   }
 
-  const summary = summarizeAwayActivity([...live, ...archived], effectiveSinceIso);
+  const state = await loadState();
+  const agents = await collectCompletedAgents(
+    dates,
+    state,
+    a => a.status === 'completed' && inWindow(a)
+  );
+
+  const summary = summarizeAwayActivity(agents, effectiveSinceIso);
   return { ...summary, isRunning: isDaemonRunning(), isPaused: state.paused };
 }
 
