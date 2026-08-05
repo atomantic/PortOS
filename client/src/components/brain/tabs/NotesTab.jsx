@@ -266,7 +266,7 @@ export default function NotesTab() {
                 setSearchResults(null);
                 setFolderFilter('');
               }}
-              className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
+              className="flex-1 min-w-0 min-h-[44px] bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
             >
               {vaults.map(v => (
                 <option key={v.id} value={v.id}>{v.name}</option>
@@ -274,14 +274,14 @@ export default function NotesTab() {
             </select>
             <button
               onClick={() => setShowVaultSetup(true)}
-              className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white"
+              className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
               title="Manage vaults" aria-label="Manage vaults"
             >
               <Settings size={14} />
             </button>
             <button
               onClick={() => { setShowCreateForm(true); setNewNotePath(''); }}
-              className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-port-accent"
+              className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-port-accent min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
               title="New note" aria-label="New note"
             >
               <Plus size={14} />
@@ -297,7 +297,7 @@ export default function NotesTab() {
               onChange={e => setSearchQuery(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSearch()}
               placeholder="Search notes..."
-              className="w-full bg-port-bg border border-port-border rounded pl-7 pr-7 py-1.5 text-sm text-white placeholder-gray-500"
+              className="w-full min-h-[44px] bg-port-bg border border-port-border rounded pl-7 pr-14 py-1.5 text-sm text-white placeholder-gray-500"
             />
             {searchQuery && (
               <button
@@ -318,20 +318,20 @@ export default function NotesTab() {
                 onChange={e => setNewNotePath(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && handleCreateNote()}
                 placeholder="folder/note-name"
-                className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white placeholder-gray-500"
+                className="flex-1 min-w-0 min-h-[44px] bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white placeholder-gray-500"
                 autoFocus
               />
               <button
                 onClick={handleCreateNote}
                 disabled={creating || !newNotePath.trim()}
-                className="px-2 py-1 rounded bg-port-accent text-white text-xs disabled:opacity-50"
+                className="px-3 min-h-[44px] shrink-0 rounded bg-port-accent text-white text-xs disabled:opacity-50"
               >
                 {creating ? '...' : 'Create'}
               </button>
               <button
                 onClick={() => setShowCreateForm(false)}
                 aria-label="Close"
-                className="p-1 rounded hover:bg-port-card text-gray-400 min-h-[44px] min-w-[44px] flex items-center justify-center"
+                className="p-1 rounded hover:bg-port-card text-gray-400 min-h-[44px] min-w-[44px] shrink-0 flex items-center justify-center"
               >
                 <X size={14} />
               </button>
