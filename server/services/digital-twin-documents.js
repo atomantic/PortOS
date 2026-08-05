@@ -103,6 +103,11 @@ export async function updateDocument(id, updates) {
   }
   if (updates.weight !== undefined) docMeta.weight = updates.weight;
 
+  // Stamp the edit so a delete performed on ANOTHER machine before this edit
+  // reached it can't reap the document and destroy the edit with it: the sync
+  // merge keeps whichever of create/edit/delete happened last (#3530).
+  docMeta.updatedAt = new Date().toISOString();
+
   meta.documents[docIndex] = docMeta;
   await saveMeta(meta);
 

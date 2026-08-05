@@ -101,6 +101,12 @@ describe('recordTombstone / clearTombstone', () => {
     expect(recordTombstone(many, 'new.md', OPTS)).toHaveLength(DEFAULT_TOMBSTONE_LIMIT);
   });
 
+  it('ignores an empty/non-string key rather than writing a tombstone nothing can match', () => {
+    const list = [tomb('a.md', '2026-01-01T00:00:00.000Z')];
+    expect(recordTombstone(list, '', OPTS)).toEqual(list);
+    expect(recordTombstone(list, undefined, OPTS)).toEqual(list);
+  });
+
   it('clears a tombstone by key and leaves the rest normalized', () => {
     const list = [tomb('a.md', '2026-01-01T00:00:00.000Z'), tomb('b.md', '2026-01-02T00:00:00.000Z')];
     expect(clearTombstone(list, 'a.md', 'filename')).toEqual([tomb('b.md', '2026-01-02T00:00:00.000Z')]);
@@ -195,5 +201,10 @@ describe('tombstonesEqual', () => {
     expect(tombstonesEqual(a, [tomb('a.md', '2026-01-01T00:00:00.000Z')], 'filename')).toBe(true);
     expect(tombstonesEqual(a, [tomb('a.md', '2026-01-02T00:00:00.000Z')], 'filename')).toBe(false);
     expect(tombstonesEqual(a, [], 'filename')).toBe(false);
+  });
+
+  it('returns false rather than throwing on a non-array side', () => {
+    expect(tombstonesEqual(undefined, [], 'filename')).toBe(false);
+    expect(tombstonesEqual([], null, 'filename')).toBe(false);
   });
 });

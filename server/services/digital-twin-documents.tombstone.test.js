@@ -27,7 +27,8 @@ vi.mock('../lib/fileUtils.js', async () => {
   });
 });
 
-const { createDocument, deleteDocument } = await import('./digital-twin-documents.js');
+const { createDocument, updateDocument, deleteDocument } = await import('./digital-twin-documents.js');
+const { ensureDocumentInMeta } = await import('./digital-twin-helpers.js');
 const { loadMeta, saveMeta, cache } = await import('./digital-twin-meta.js');
 const { applyDigitalTwinRemote, getDigitalTwinSnapshot } = await import('./digital-twin-sync.js');
 
@@ -118,6 +119,33 @@ describe('digital twin document tombstones (#3530)', () => {
     expect(meta.documents.map((d) => d.filename)).toContain(FILENAME);
     expect(meta.deletedDocuments).toEqual([]);
     expect(existsSync(docPath)).toBe(true);
+  });
+
+  it('keeps a document edited here after another machine deleted it', async () => {
+    const created = await newDoc();
+    await updateDocument(created.id, { content: `${CONTENT}\nEdited.\n` });
+    const edited = (await loadMeta()).documents.find((d) => d.filename === FILENAME);
+    expect(edited.updatedAt).toBeTruthy();
+
+    // The peer's delete predates our edit, so the edit is the user's last word.
+    const deletedAt = new Date(Date.parse(edited.updatedAt) - 1_000).toISOString();
+    await applyDigitalTwinRemote({ meta: { documents: [], deletedDocuments: [{ filename: FILENAME, deletedAt }] }, documents: {} });
+
+    const meta = await loadMeta();
+    expect(meta.documents.map((d) => d.filename)).toContain(FILENAME);
+    expect(meta.deletedDocuments).toEqual([]);
+    expect(existsSync(docPath)).toBe(true);
+  });
+
+  it('re-registering an enrichment target clears a tombstone the peer merged in', async () => {
+    const meta = await loadMeta();
+    meta.documents.push({ id: 'x', filename: 'MEMORIES.md', title: 'Memories', category: 'enrichment', enabled: true, priority: 30 });
+    meta.deletedDocuments = [{ filename: 'MEMORIES.md', deletedAt: new Date().toISOString() }];
+    await saveMeta(meta);
+
+    ensureDocumentInMeta(meta, 'MEMORIES.md', 'Memories', 'enrichment');
+    expect(meta.deletedDocuments).toEqual([]);
+    expect(meta.documents.find((d) => d.filename === 'MEMORIES.md').createdAt).toBeTruthy();
   });
 
   it('still accepts a document the peer has that was never deleted here', async () => {

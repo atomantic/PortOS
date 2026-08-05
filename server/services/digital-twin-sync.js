@@ -51,6 +51,7 @@ import { existsSync } from 'fs';
 import { atomicWrite, readJSONFile, ensureDir, PATHS } from '../lib/fileUtils.js';
 import { canonicalStringify, isPlainObject } from '../lib/objects.js';
 import { normalizeTombstones, mergeTombstones, isTombstoned, pruneTombstones, tombstonesEqual } from '../lib/tombstones.js';
+import { compareNewerWins } from '../lib/lwwTimestamp.js';
 
 const DIR = PATHS.digitalTwin;
 const IDENTITY_FILE = join(DIR, 'identity.json');
@@ -384,26 +385,70 @@ function sortRunsNewestFirst(runs) {
 // a cross-machine merge).
 const DOC_TOMBSTONE_OPTS = { keyField: 'filename' };
 
+/** The newer of two timestamp strings; either may be absent/unparseable. */
+function newerStamp(candidate, incumbent) {
+  return compareNewerWins(candidate, incumbent) ? candidate : incumbent;
+}
+
+/**
+ * The instant a document was last asserted to EXIST — its creation stamp, or a
+ * later edit. A delete only wins over a document older than the delete: an edit
+ * made after another machine deleted the document is the user's latest word on
+ * the subject, and reaping it would silently destroy that edit.
+ */
+function documentLiveStamp(doc) {
+  return newerStamp(doc?.updatedAt, doc?.createdAt);
+}
+
 /**
  * Merge the document list against both sides' delete tombstones (#3530).
  *
- * The document union is still ADD-ONLY — a local entry is never replaced — but
- * the tombstone lists union in BOTH directions first, and any document a
- * surviving tombstone covers is then dropped. That makes a delete performed on
- * either machine converge: the deleting side stops resurrecting the entry, and
- * the side that still has the document removes it.
+ * The document union is still ADD-ONLY — a local entry's title/priority/weight
+ * is never replaced — but the tombstone lists union in BOTH directions first,
+ * and any document a surviving tombstone covers is then dropped. That makes a
+ * delete performed on either machine converge: the deleting side stops
+ * resurrecting the entry, and the side that still has the document removes it.
  *
- * A document whose own `createdAt` is strictly newer than the tombstone
- * supersedes it (re-create after delete), and the now-obsolete tombstone is
- * pruned so it can't bounce back from a peer that hasn't seen the re-create.
+ * A document whose own live stamp is strictly newer than the tombstone
+ * supersedes it (re-created, or edited after the delete), and the now-obsolete
+ * tombstone is pruned so it can't bounce back from a peer that hasn't seen that
+ * yet. The two stamps themselves are the one part of a document entry that is
+ * NOT add-only: each takes the newer of the two sides, so the knowledge that a
+ * document was re-created (or edited) propagates to every peer. Without that, a
+ * machine holding a stale entry would keep an older stamp and a third peer's
+ * still-live tombstone would reap the document there.
  *
  * Returns the surviving documents plus the merged tombstone list.
  */
 export function mergeDocumentsWithTombstones(local, remote) {
   const { merged: tombstonesUnion } = mergeTombstones(local?.deletedDocuments, remote?.deletedDocuments, DOC_TOMBSTONE_OPTS);
+
+  const remoteStamps = new Map();
+  for (const doc of Array.isArray(remote?.documents) ? remote.documents : []) {
+    if (!isPlainObject(doc) || typeof doc.filename !== 'string') continue;
+    const prev = remoteStamps.get(doc.filename);
+    remoteStamps.set(doc.filename, {
+      createdAt: newerStamp(doc.createdAt, prev?.createdAt),
+      updatedAt: newerStamp(doc.updatedAt, prev?.updatedAt),
+    });
+  }
+
   const { merged: unioned } = unionByKey(local?.documents, remote?.documents, 'filename');
-  const documents = unioned.filter((doc) => !isTombstoned(tombstonesUnion, doc.filename, doc.createdAt, 'filename'));
-  const deletedDocuments = pruneTombstones(tombstonesUnion, documents, { ...DOC_TOMBSTONE_OPTS, timestampField: 'createdAt' });
+  const documents = unioned
+    .map((doc) => {
+      const peer = remoteStamps.get(doc.filename);
+      if (!peer) return doc;
+      const createdAt = newerStamp(peer.createdAt, doc.createdAt);
+      const updatedAt = newerStamp(peer.updatedAt, doc.updatedAt);
+      if (createdAt === doc.createdAt && updatedAt === doc.updatedAt) return doc;
+      return { ...doc, ...(createdAt ? { createdAt } : {}), ...(updatedAt ? { updatedAt } : {}) };
+    })
+    .filter((doc) => !isTombstoned(tombstonesUnion, doc.filename, documentLiveStamp(doc), 'filename'));
+
+  // Prune against the same live stamp the filter used, or a document kept alive
+  // by an edit would leave its tombstone behind to retry on every cycle.
+  const survivorStamps = documents.map((doc) => ({ filename: doc.filename, createdAt: documentLiveStamp(doc) }));
+  const deletedDocuments = pruneTombstones(tombstonesUnion, survivorStamps, { ...DOC_TOMBSTONE_OPTS, timestampField: 'createdAt' });
   return { documents, deletedDocuments };
 }
 
@@ -624,7 +669,13 @@ async function reapTombstonedDocuments(suppressed) {
     if (!name) continue;
     const filePath = join(DIR, name);
     if (!existsSync(filePath)) continue;
-    await unlink(filePath);
+    // A file we can't remove (permissions, or it vanished between the check and
+    // the call) must not abort the rest of the sync — report and move on.
+    const removed = await unlink(filePath).then(() => true, (err) => {
+      console.error(`❌ Digital twin sync: could not remove deleted document ${name}: ${err.message}`);
+      return false;
+    });
+    if (!removed) continue;
     console.log(`🧬 Digital twin sync: removed deleted document ${name}`);
     count++;
   }

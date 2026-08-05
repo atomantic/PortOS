@@ -396,6 +396,37 @@ describe('mergeMeta', () => {
       expect(mergeMeta(a, b).merged.deletedDocuments).toEqual([tomb('A.md', '2026-05-01T00:00:00.000Z'), tomb('B.md')]);
     });
 
+    it('adopts the peer\'s newer creation stamp so a third peer\'s tombstone can\'t reap the re-created doc', () => {
+      // This machine has the ORIGINAL entry; the peer re-created the document
+      // after a delete. Without propagating the newer stamp, the stale local
+      // entry would later be reaped by a third peer still holding the tombstone.
+      const local = { documents: [doc('CUSTOM_ROUTINE.md', { createdAt: '2026-01-01T00:00:00.000Z', weight: 9 })] };
+      const remote = { documents: [doc('CUSTOM_ROUTINE.md', { createdAt: '2026-03-01T00:00:00.000Z', weight: 1 })] };
+      const { merged, changed } = mergeMeta(local, remote);
+      expect(changed).toBe(true);
+      expect(merged.documents[0].createdAt).toBe('2026-03-01T00:00:00.000Z');
+      expect(merged.documents[0].weight).toBe(9); // the rest of the entry stays add-only
+
+      // …and that refreshed entry now survives the stale tombstone.
+      const third = { documents: [], deletedDocuments: [tomb('CUSTOM_ROUTINE.md')] };
+      expect(mergeMeta(merged, third).merged.documents).toEqual(merged.documents);
+    });
+
+    it('does not reap a document edited after another machine deleted it', () => {
+      const edited = doc('CUSTOM_ROUTINE.md', { createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-03-01T00:00:00.000Z' });
+      const { merged } = mergeMeta({ documents: [edited] }, { documents: [], deletedDocuments: [tomb('CUSTOM_ROUTINE.md')] });
+      expect(merged.documents ?? [edited]).toEqual([edited]);
+      // …and the superseded tombstone is pruned rather than retried every cycle.
+      expect(merged.deletedDocuments ?? []).toEqual([]);
+    });
+
+    it('still reaps a document whose last edit predates the delete', () => {
+      const stale = doc('CUSTOM_ROUTINE.md', { createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-15T00:00:00.000Z' });
+      const { merged } = mergeMeta({ documents: [stale] }, { documents: [], deletedDocuments: [tomb('CUSTOM_ROUTINE.md')] });
+      expect(merged.documents).toEqual([]);
+      expect(merged.deletedDocuments).toEqual([tomb('CUSTOM_ROUTINE.md')]);
+    });
+
     it('leaves local tombstones untouched when an older peer sends none (key-presence guarded)', () => {
       const local = { documents: [doc('SOUL.md')], deletedDocuments: [tomb('GONE.md')] };
       const { merged, changed } = mergeMeta(local, { documents: [doc('SOUL.md')] });

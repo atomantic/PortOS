@@ -97,8 +97,13 @@ export function isTombstoned(list, key, createdAt, keyField = 'key') {
   return !compareNewerWins(createdAt, deletedAt);
 }
 
-/** Record (or refresh) a tombstone for `key`. Returns a new normalized list. */
+/**
+ * Record (or refresh) a tombstone for `key`. Returns a new normalized list.
+ * An empty/non-string key is ignored rather than written — a keyless tombstone
+ * matches nothing and would only fail the caller's schema on the next read.
+ */
 export function recordTombstone(list, key, { keyField = 'key', deletedAt, limit = DEFAULT_TOMBSTONE_LIMIT } = {}) {
+  if (typeof key !== 'string' || key === '') return normalizeTombstones(list, keyField);
   const stamp = parseTsMs(deletedAt) === null ? new Date().toISOString() : deletedAt;
   const kept = normalizeTombstones(list, keyField).filter((t) => t[keyField] !== key);
   return sortTombstones([...kept, { [keyField]: key, deletedAt: stamp }], keyField).slice(0, limit);
@@ -111,6 +116,7 @@ export function clearTombstone(list, key, keyField = 'key') {
 
 /** Structural equality for two normalized tombstone lists (order-sensitive). */
 export function tombstonesEqual(a, b, keyField = 'key') {
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
   if (a.length !== b.length) return false;
   return a.every((t, i) => t[keyField] === b[i][keyField] && t.deletedAt === b[i].deletedAt);
 }

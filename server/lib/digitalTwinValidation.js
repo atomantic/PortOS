@@ -61,11 +61,13 @@ export const documentMetaSchema = z.object({
   enabled: z.boolean().default(true),
   priority: z.number().int().min(0).default(0),
   weight: z.number().int().min(1).max(10).default(5),
-  // When this document was (re-)created. Optional because documents predating
-  // #3530 — and any rebuilt by digital-twin-meta's disk scan — carry no stamp.
-  // It exists so a re-created document can supersede an older `deletedDocuments`
-  // tombstone during peer sync instead of being suppressed forever.
-  createdAt: z.string().optional()
+  // When this document was (re-)created, and when it was last edited. Both are
+  // optional because documents predating #3530 — and any rebuilt by
+  // digital-twin-meta's disk scan — carry no stamp. They exist so a document
+  // re-created (or edited) after a delete supersedes the older
+  // `deletedDocuments` tombstone during peer sync instead of being reaped.
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional()
 });
 
 // Tombstone for a deleted Digital Twin document (#3530). Keyed on `filename`,

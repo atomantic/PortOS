@@ -94,9 +94,15 @@ export function resolveTestPersona(personas, personaId) {
  * (#3530) — enrichment regenerates its target docs on every session.
  */
 export function ensureDocumentInMeta(meta, filename, title, category, { enabled = true, priority = 30 } = {}) {
-  if (meta.documents.find(d => d.filename === filename)) return;
-  const createdAt = supersedingTimestamp(tombstoneTimestamp(meta.deletedDocuments, filename, 'filename'));
-  meta.documents.push({ id: generateId(), filename, title, category, enabled, priority, createdAt });
+  const deletedAt = tombstoneTimestamp(meta.deletedDocuments, filename, 'filename');
+  const existing = meta.documents.find(d => d.filename === filename);
+  if (existing && deletedAt === null) return;
+  // An entry that already exists but is still covered by a tombstone would be
+  // reaped on the next sync even though the caller just wrote the file — so
+  // refresh its stamp and drop the tombstone rather than returning early.
+  const createdAt = supersedingTimestamp(deletedAt);
+  if (existing) existing.createdAt = createdAt;
+  else meta.documents.push({ id: generateId(), filename, title, category, enabled, priority, createdAt });
   meta.deletedDocuments = clearTombstone(meta.deletedDocuments, filename, 'filename');
 }
 
