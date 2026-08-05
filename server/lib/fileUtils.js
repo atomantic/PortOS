@@ -4,7 +4,7 @@
  * Shared utilities for file operations used across services.
  */
 
-import { access, appendFile, chmod, mkdir, readFile, readdir, stat, writeFile, rename, unlink, copyFile } from 'fs/promises';
+import { access, appendFile, chmod, mkdir, open, readFile, readdir, stat, writeFile, rename, unlink, copyFile } from 'fs/promises';
 import { existsSync, statSync, createReadStream } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -433,6 +433,48 @@ export function safeJSONParse(str, defaultValue = null, { allowArray = true, log
  */
 export async function tryReadFile(filePath, encoding = 'utf8') {
   return readFile(filePath, encoding).catch(() => null);
+}
+
+/**
+ * Read at most `maxBytes` from the END of a file, as UTF-8.
+ *
+ * The bounded-memory counterpart to `tryReadFile` for append-only logs and
+ * spools that have no upper size bound (agent transcripts, PTY spools, CLI
+ * rollout JSONL). `readFile` on one of those loads the whole thing into heap;
+ * this reads only the trailing window.
+ *
+ * Non-throwing, with the sentinel distinction the CLAUDE.md rule demands:
+ *   - missing / unopenable / read error → `null`
+ *   - zero-byte file                    → `''`
+ * so a caller can tell "nothing to read" from "couldn't read".
+ *
+ * The window starts at a BYTE offset, so when the file is larger than
+ * `maxBytes` the first line comes back partial (and can begin mid-multibyte
+ * character). Callers that split on newlines should drop that leading fragment.
+ *
+ * @param {string} path - File to read
+ * @param {number} maxBytes - Maximum trailing bytes to read
+ * @returns {Promise<string|null>} Trailing text, `''` for an empty file, or null on error
+ */
+export async function readFileTail(path, maxBytes) {
+  const info = await stat(path).catch(() => null);
+  if (!info) return null;
+  if (info.size === 0) return '';
+  const start = Math.max(0, info.size - maxBytes);
+  const length = info.size - start;
+  const handle = await open(path, 'r').catch(() => null);
+  if (!handle) return null;
+  try {
+    const buffer = Buffer.alloc(length);
+    // Honour bytesRead — the file can shrink between stat and read, or the OS
+    // can return a short read; decoding the whole `buffer` would append NULs.
+    // A read failure surfaces as null so callers keep the ''-vs-null contract.
+    const result = await handle.read(buffer, 0, length, start).catch(() => null);
+    if (result === null) return null;
+    return buffer.toString('utf8', 0, result.bytesRead);
+  } finally {
+    await handle.close().catch(() => {});
+  }
 }
 
 // Private sentinel for "the parse produced nothing usable". A unique Symbol, NOT

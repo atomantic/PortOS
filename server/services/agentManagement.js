@@ -665,9 +665,10 @@ export async function cleanupOrphanedAgents() {
 
         if (agent.taskId) {
           // Carry the agent's metadata forward rather than re-reading the record
-          // later: `getAgent` on a completed agent re-splits its whole output.txt
-          // transcript, and the worktree fields the resume pointer needs are
-          // stamped once at registerAgent and never mutated.
+          // later: `getAgent` on a completed agent still hits the disk to hydrate
+          // its output.txt tail (capped since #3498, but not free), and the
+          // worktree fields the resume pointer needs are stamped once at
+          // registerAgent and never mutated.
           orphanedTaskIds.push({ taskId: agent.taskId, agentId: agent.id, agentMetadata: agent.metadata });
         }
       }

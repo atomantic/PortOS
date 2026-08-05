@@ -16,6 +16,13 @@ const router = Router();
 // shape so a non-string body can't store `[object Object]`.
 const pauseBodySchema = z.object({ reason: z.string().max(500).optional() });
 
+// GET /agents/:id?lines=N — how many TAIL transcript lines to hydrate. The
+// service defaults to `AGENT_OUTPUT_TAIL_LINES` and the ceiling here keeps a
+// hand-written query from re-opening the unbounded read this cap closed (#3498).
+const agentQuerySchema = z.object({
+  lines: z.coerce.number().int().positive().max(10000).optional()
+});
+
 // GET /api/cos/health - Get health status
 router.get('/health', asyncHandler(async (req, res) => {
   const health = await cos.getHealthStatus();
@@ -52,9 +59,10 @@ router.get('/agents/history/:date', asyncHandler(async (req, res) => {
   res.json(agents);
 }));
 
-// GET /api/cos/agents/:id - Get agent by ID
+// GET /api/cos/agents/:id - Get agent by ID (transcript hydrated as a capped tail)
 router.get('/agents/:id', asyncHandler(async (req, res) => {
-  const agent = await cos.getAgent(req.params.id);
+  const { lines } = validateRequest(agentQuerySchema, req.query);
+  const agent = await cos.getAgent(req.params.id, lines ? { limit: lines } : {});
   if (!agent) {
     throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
   }

@@ -1,4 +1,4 @@
-import { open, readdir, readFile, stat } from 'fs/promises';
+import { readdir } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
 import { getAllProviders } from './providers.js';
@@ -8,6 +8,7 @@ import { isGrokCommand } from '../lib/grok.js';
 import { scrapeTuiUsage } from '../lib/tuiUsageScrape.js';
 import { createStaleWhileRevalidate, PENDING, WAIT } from '../lib/staleWhileRevalidate.js';
 import { parseHumanReset } from '../lib/quotaReset.js';
+import { readFileTail } from '../lib/fileUtils.js';
 import { getSettings } from './settings.js';
 import { getImageGenQuota, IMAGE_GEN_FAMILY } from './imageGenQuota.js';
 import { enabledCloudImageModes } from './imageGen/modes.js';
@@ -163,23 +164,10 @@ async function listCodexRolloutFiles(codexHome) {
   return files;
 }
 
-async function readFileTail(file, bytes) {
-  const info = await stat(file);
-  if (info.size <= bytes) return readFile(file, 'utf-8');
-  const handle = await open(file, 'r');
-  try {
-    const buffer = Buffer.alloc(bytes);
-    await handle.read(buffer, 0, bytes, info.size - bytes);
-    return buffer.toString('utf-8');
-  } finally {
-    await handle.close();
-  }
-}
-
 async function fetchCodexQuota({ codexHome = codexHomeDir() } = {}) {
   const files = await listCodexRolloutFiles(codexHome);
   for (const file of files) {
-    const tail = await readFileTail(file, CODEX_TAIL_BYTES).catch(() => null);
+    const tail = await readFileTail(file, CODEX_TAIL_BYTES);
     if (!tail) continue;
     const found = parseCodexRateLimits(tail);
     if (found) return mapCodexQuota(found.rateLimits, found.timestamp);

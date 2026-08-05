@@ -46,7 +46,7 @@ vi.mock('fs/promises', async (importOriginal) => {
   };
 });
 
-import { getAgent, createAgentOutputBatcher, completeAgent, updateAgent, registerAgent } from './cosAgentLifecycle.js';
+import { getAgent, createAgentOutputBatcher, completeAgent, updateAgent, registerAgent, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
 import { saveState } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
@@ -82,6 +82,81 @@ describe('cosAgentLifecycle', () => {
       { line: 'full line one', timestamp: pausedAt },
       { line: 'full line two', timestamp: pausedAt }
     ]);
+    expect(agent.outputTruncated).toBe(false);
+  });
+
+  // #3498: output.txt is unbounded — a long TUI run writes tens of MB. Reading it
+  // whole and mapping EVERY line to an object spiked heap on a single request.
+  describe('transcript tail caps (#3498)', () => {
+    const writeCompleted = async (agentId, completedAt, contents) => {
+      mockCosState.state.agents[agentId] = { id: agentId, status: 'completed', completedAt, metadata: {}, output: [] };
+      const dir = join(mockCosState.agentsDir, completedAt.slice(0, 10), agentId);
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'output.txt'), contents);
+      return dir;
+    };
+
+    it('returns only the tail lines and flags the transcript as truncated', async () => {
+      const completedAt = '2026-05-25T12:00:00.000Z';
+      const contents = Array.from({ length: 5000 }, (_, i) => `line ${i}`).join('\n');
+      await writeCompleted('agent-long', completedAt, contents);
+
+      const agent = await getAgent('agent-long', { limit: 10 });
+
+      expect(agent.output).toHaveLength(10);
+      expect(agent.output[0]).toEqual({ line: 'line 4990', timestamp: completedAt });
+      expect(agent.output[9]).toEqual({ line: 'line 4999', timestamp: completedAt });
+      expect(agent.outputTruncated).toBe(true);
+      expect(agent.outputTotalBytes).toBe(Buffer.byteLength(contents));
+    });
+
+    it('caps by BYTES too, so a newline-free TUI transcript cannot blow memory', async () => {
+      // A repainted TUI screen spools as effectively one enormous line, on which
+      // a line-based tail is a no-op — the byte cap is what bounds it.
+      const completedAt = '2026-05-26T12:00:00.000Z';
+      const contents = 'x'.repeat(200_000);
+      await writeCompleted('agent-oneline', completedAt, contents);
+
+      const agent = await getAgent('agent-oneline', { maxBytes: 1024 });
+
+      // The leading partial line is dropped, so a single over-cap line yields none.
+      expect(agent.output).toEqual([]);
+      expect(agent.outputTruncated).toBe(true);
+      expect(agent.outputTotalBytes).toBe(200_000);
+    });
+
+    it('drops the partial leading line the byte window starts mid-way through', async () => {
+      const completedAt = '2026-05-27T12:00:00.000Z';
+      const contents = `${'a'.repeat(50)}\nbbbb\ncccc\n`;
+      await writeCompleted('agent-partial', completedAt, contents);
+
+      const agent = await getAgent('agent-partial', { maxBytes: 20 });
+
+      expect(agent.output.map(o => o.line)).toEqual(['bbbb', 'cccc']);
+      expect(agent.outputTruncated).toBe(true);
+    });
+
+    it('applies the default caps when no options are passed', async () => {
+      const completedAt = '2026-05-28T12:00:00.000Z';
+      const contents = Array.from({ length: AGENT_OUTPUT_TAIL_LINES + 500 }, (_, i) => `line ${i}`).join('\n');
+      await writeCompleted('agent-default', completedAt, contents);
+
+      const agent = await getAgent('agent-default');
+
+      expect(agent.output).toHaveLength(AGENT_OUTPUT_TAIL_LINES);
+      expect(agent.outputTruncated).toBe(true);
+    });
+
+    it('leaves the record untouched when output.txt is missing', async () => {
+      const completedAt = '2026-05-29T12:00:00.000Z';
+      mockCosState.state.agents['agent-nofile'] = { id: 'agent-nofile', status: 'completed', completedAt, metadata: {}, output: [] };
+      await mkdir(join(mockCosState.agentsDir, '2026-05-29', 'agent-nofile'), { recursive: true });
+
+      const agent = await getAgent('agent-nofile');
+
+      expect(agent.output).toEqual([]);
+      expect(agent).not.toHaveProperty('outputTruncated');
+    });
   });
 
   it('persists post-completion metadata updates in the archived agent record', async () => {

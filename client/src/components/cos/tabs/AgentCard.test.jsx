@@ -147,3 +147,47 @@ describe('AgentCard feedback', () => {
     );
   });
 });
+
+describe('AgentCard transcript truncation (#3498)', () => {
+  it('says the transcript was clipped when the server returns a capped tail', async () => {
+    const user = userEvent.setup();
+    api.getCosAgent.mockResolvedValue({
+      ...agent,
+      output: [{ line: 'last line', timestamp: agent.completedAt }],
+      outputTruncated: true,
+      outputTotalBytes: 12 * 1024 * 1024,
+    });
+
+    render(
+      <MemoryRouter>
+        <AgentCard agent={agent} completed />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Show' }));
+
+    expect(await screen.findByText(/Showing the last 1 line —/)).toBeInTheDocument();
+    expect(screen.getByText(/12 MB/)).toBeInTheDocument();
+  });
+
+  it('stays quiet when the whole transcript fit under the cap', async () => {
+    const user = userEvent.setup();
+    api.getCosAgent.mockResolvedValue({
+      ...agent,
+      output: [{ line: 'only line', timestamp: agent.completedAt }],
+      outputTruncated: false,
+      outputTotalBytes: 10,
+    });
+
+    render(
+      <MemoryRouter>
+        <AgentCard agent={agent} completed />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Show' }));
+
+    await waitFor(() => expect(api.getCosAgent).toHaveBeenCalledWith(agent.id));
+    expect(screen.queryByText(/Showing the last/)).not.toBeInTheDocument();
+  });
+});

@@ -38,6 +38,7 @@ import {
   readJSONLines,
   writeJSONLines,
   formatDuration,
+  readFileTail,
   sha256File,
   resolveImageInputPath,
   resolveScreenshot,
@@ -1073,6 +1074,41 @@ describe('fileUtils', () => {
       writeFileSync(a, 'one');
       writeFileSync(b, 'two');
       expect(await sha256File(a)).not.toBe(await sha256File(b));
+    });
+  });
+
+  describe('readFileTail', () => {
+    let dir;
+    beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'portos-tail-')); });
+    afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+    it('returns null for a missing file so it stays distinct from an empty one', async () => {
+      expect(await readFileTail(join(dir, 'nope.txt'), 1024)).toBeNull();
+    });
+
+    it('returns an empty string for a zero-byte file', async () => {
+      const p = join(dir, 'empty.txt');
+      writeFileSync(p, '');
+      expect(await readFileTail(p, 1024)).toBe('');
+    });
+
+    it('returns the whole file when it fits under maxBytes', async () => {
+      const p = join(dir, 'small.txt');
+      writeFileSync(p, 'hello');
+      expect(await readFileTail(p, 1024)).toBe('hello');
+    });
+
+    it('returns only the trailing window when the file is larger than maxBytes', async () => {
+      const p = join(dir, 'big.txt');
+      writeFileSync(p, 'abcdefghij');
+      expect(await readFileTail(p, 4)).toBe('ghij');
+    });
+
+    it('does not load the whole file for a multi-MB log', async () => {
+      const p = join(dir, 'huge.log');
+      writeFileSync(p, Buffer.alloc(4 * 1024 * 1024, 0x61));
+      const tail = await readFileTail(p, 128);
+      expect(tail).toHaveLength(128);
     });
   });
 

@@ -9,9 +9,15 @@
  */
 
 import { join } from 'path';
-import { open, stat as fsStat, writeFile } from 'fs/promises';
+import { writeFile } from 'fs/promises';
 import * as git from '../git.js';
+import { readFileTail } from '../../lib/fileUtils.js';
 import { analyzeAgentFailure } from '../agentErrorAnalysis.js';
+
+// Re-exported so this module's existing importers (and its tests) keep their
+// entry point after the implementation moved to lib/fileUtils.js (#3498) —
+// `getAgent`'s transcript cap needed the same bounded tail read.
+export { readFileTail };
 
 // Tail-read window for raw.txt at failure analysis. analyzeAgentFailure narrows
 // further (ANSI-stripped, last ~200 lines AND ≤16K chars), so reading the whole
@@ -21,37 +27,6 @@ import { analyzeAgentFailure } from '../agentErrorAnalysis.js';
 // transcript, where escape sequences dominate the byte count — while keeping
 // peak finalize memory bounded.
 export const RAW_TAIL_ANALYSIS_BYTES = 1024 * 1024;
-
-/**
- * Read at most `maxBytes` from the end of a file. Returns null when the file
- * doesn't exist or can't be opened; an empty string for a zero-byte file.
- * Used to bound the memory footprint of failure-analysis reads against the
- * uncapped raw PTY spool. Non-throwing — any failure surfaces as null so
- * the caller's failure-analysis path can fall back to outputBuffer instead
- * of aborting `finish()` before finalizeAgent runs.
- */
-export async function readFileTail(path, maxBytes) {
-  const st = await fsStat(path).catch(() => null);
-  if (!st) return null;
-  if (st.size === 0) return '';
-  const start = Math.max(0, st.size - maxBytes);
-  const length = st.size - start;
-  const fh = await open(path, 'r').catch(() => null);
-  if (!fh) return null;
-  try {
-    const buf = Buffer.alloc(length);
-    // Honour bytesRead — the file can shrink between stat and read, or the
-    // OS can return a short read; decoding the whole `buf` would otherwise
-    // append NULs to the returned string. Read failures surface as null so
-    // callers can distinguish "empty file" ('') from "read error" (null) —
-    // a `bytesRead: 0` fallback would conflate the two.
-    const readResult = await fh.read(buf, 0, length, start).catch(() => null);
-    if (readResult === null) return null;
-    return buf.toString('utf8', 0, readResult.bytesRead);
-  } finally {
-    await fh.close().catch(() => {});
-  }
-}
 
 /**
  * Check if a worktree has any uncommitted changes. Returns true when the
