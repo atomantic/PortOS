@@ -247,7 +247,7 @@ function ProviderQuotaSection() {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-white">Subscription Usage</h2>
+        <h1 className="text-2xl font-bold text-white">Subscription Usage</h1>
         <button
           onClick={() => load(true)}
           disabled={loading}
@@ -953,7 +953,6 @@ function InternalUsageMetrics() {
 export function UsagePage() {
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-white">Usage</h1>
       <ProviderQuotaSection />
       <InternalUsageMetrics />
     </div>
