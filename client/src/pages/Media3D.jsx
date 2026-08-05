@@ -13,6 +13,7 @@ import { useHfTokenStatus } from '../hooks/useHfTokenStatus';
 import useUrlParams from '../hooks/useUrlParams';
 import MediaImage from '../components/MediaImage';
 import { imageTo3dStatusMeta } from '../components/media/imageTo3dStatus';
+import { unavailableReasonLabel } from '../lib/imageTo3dReasons';
 
 // Poll cadence while a render is in flight (a real TRELLIS.2 render is multi-minute).
 const POLL_INTERVAL_MS = 2500;
@@ -65,22 +66,6 @@ function HfAccessNotice({ models, tokenPresent, tokenSource, onSaved }) {
   );
 }
 
-// Human-readable reasons a target can't run on this host, keyed by the stable
-// reason code the registry returns (server/services/imageTo3d/targets.js).
-const REASON_LABEL = {
-  'requires-apple-silicon': 'Requires an Apple Silicon Mac',
-  'insufficient-memory': 'Needs 24 GB+ of unified memory',
-  'requires-cuda': 'Requires an NVIDIA CUDA GPU',
-  'insufficient-vram': 'Needs a 24 GB+ NVIDIA GPU',
-  // Shown on a Windows host that HAS a qualifying card: upstream TRELLIS.2 builds
-  // its CUDA extensions against a POSIX toolchain and is Linux-only, so WSL2 is the
-  // supported route — name it, since this blocker is the one the user can act on.
-  'requires-linux-host': 'Requires a Linux host (use WSL2 on Windows)',
-  // The probe itself failed — say so rather than claiming the GPU isn't there.
-  'cuda-probe-failed': 'Could not detect this host’s GPU',
-  'unknown-target': 'Unavailable',
-};
-
 const LANE_LABEL = {
   'local-mps': 'Runs on-device (Apple Silicon)',
   'local-cuda': 'Runs on-device (CUDA)',
@@ -97,7 +82,7 @@ function StatusBadge({ target }) {
     return (
       <span className="inline-flex items-center gap-1.5 text-xs font-medium text-port-warning">
         <AlertTriangle className="w-3.5 h-3.5" />
-        {REASON_LABEL[target.unavailableReason] || 'Unsupported on this host'}
+        {unavailableReasonLabel(target.unavailableReason)}
       </span>
     );
   }
@@ -314,7 +299,7 @@ export default function Media3D() {
   const generateGatedReason = (() => {
     if (!selectedImage) return 'Pick a source image to continue.';
     if (!selectedTarget) return 'No image-to-3D model is registered.';
-    if (!selectedTarget.available) return REASON_LABEL[selectedTarget.unavailableReason] || 'This model can’t run on this host.';
+    if (!selectedTarget.available) return unavailableReasonLabel(selectedTarget.unavailableReason, 'This model can’t run on this host.');
     if (selectedTarget.installed === false) return `Install ${selectedTarget.label} below before generating.`;
     return null;
   })();

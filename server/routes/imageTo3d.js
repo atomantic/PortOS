@@ -9,6 +9,7 @@ import {
   detectHostCapabilities,
   isTargetAvailable,
   unavailableReason,
+  unavailableReasonLabel,
   IMAGE_TO_3D_TARGET_IDS,
 } from '../services/imageTo3d/targets.js';
 import { getTargetAdapter } from '../services/imageTo3d/adapters.js';
@@ -106,7 +107,9 @@ async function handleTargetInstall(targetId, req, res) {
   if (!isTargetAvailable(targetId, capabilities)) {
     send({
       type: 'error',
-      message: `This host cannot run ${target.label} (${unavailableReason(targetId, capabilities)}). Install skipped.`,
+      // The label, not the raw kebab-case code — this string is read by a human
+      // in the install log, and `requires-linux-host` doesn't tell them to use WSL2.
+      message: `This host cannot run ${target.label} (${unavailableReasonLabel(unavailableReason(targetId, capabilities))}). Install skipped.`,
     });
     return safeEnd();
   }

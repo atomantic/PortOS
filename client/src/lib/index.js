@@ -33,6 +33,7 @@ export * from './imageGenBackends.js';
 export * as imageGenModes from './imageGenModes.js';
 export * from './imageGenDefaults.js';
 export * from './imageGenResolutions.js';
+export * from './imageTo3dReasons.js';
 export * from './importerDeepLink.js';
 export * from './letteringDensity.js';
 export * from './issueLength.js';

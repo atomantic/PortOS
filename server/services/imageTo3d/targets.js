@@ -187,6 +187,51 @@ export function isTargetAvailable(target, caps = {}) {
 }
 
 /**
+ * Every reason code `unavailableReason` can return, mapped to the user-facing
+ * label. This is the LABEL side the codes never had: the API/SSE surfaces and
+ * the client both render from here rather than each re-declaring the set, so a
+ * new code is a one-line addition next to the branch that returns it.
+ *
+ * MIRRORED verbatim to `client/src/lib/imageTo3dReasons.js`; the parity test
+ * (`unavailableReasons.parity.test.js`) asserts the two never drift AND that
+ * the key set still equals the codes `unavailableReason` actually returns — so
+ * adding a code without a label fails CI instead of rendering as the generic
+ * "Unsupported on this host" fallback.
+ *
+ * The GB figures restate the registry floors (`minUnifiedMemoryGb` /
+ * `minVramGb`, both 24) as prose rather than interpolating them: the labels are
+ * mirrored to the client, which has no registry to read, and both lanes would
+ * have to move for the numbers to diverge.
+ */
+export const UNAVAILABLE_REASONS = Object.freeze({
+  'unknown-target': 'Unavailable',
+  'requires-apple-silicon': 'Requires an Apple Silicon Mac',
+  'insufficient-memory': 'Needs 24 GB+ of unified memory',
+  'requires-cuda': 'Requires an NVIDIA CUDA GPU',
+  // Shown on a Windows host that HAS a qualifying card: upstream TRELLIS.2 builds
+  // its CUDA extensions against a POSIX toolchain and is Linux-only, so WSL2 is the
+  // supported route — name it, since this blocker is the one the user can act on.
+  'requires-linux-host': 'Requires a Linux host (use WSL2 on Windows)',
+  'insufficient-vram': 'Needs a 24 GB+ NVIDIA GPU',
+  // The probe itself failed — say so rather than claiming the GPU isn't there.
+  'cuda-probe-failed': 'Could not detect this host’s GPU',
+});
+
+/** Label for a reason code the map doesn't know (or a null/absent code). */
+export const UNAVAILABLE_REASON_FALLBACK = 'Unsupported on this host';
+
+/**
+ * User-facing label for a reason code. Own-property lookup only, so a code that
+ * happens to name an Object.prototype key can't render as a function/object.
+ * @param {string|null} [reason]
+ * @param {string} [fallback] label for an unknown/absent code.
+ * @returns {string}
+ */
+export function unavailableReasonLabel(reason, fallback = UNAVAILABLE_REASON_FALLBACK) {
+  return Object.hasOwn(UNAVAILABLE_REASONS, reason ?? '') ? UNAVAILABLE_REASONS[reason] : fallback;
+}
+
+/**
  * Reason codes meaning "this machine's hardware will never run that target" — as
  * opposed to a blocker the user can act on (install an OS in WSL2, fix a driver,
  * install the model). This is a property of the REASON, not of any one target, so it

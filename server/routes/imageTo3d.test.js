@@ -23,7 +23,12 @@ const TRELLIS2_TARGET = {
   ],
 };
 
-vi.mock('../services/imageTo3d/targets.js', () => ({
+// Partial mock: the resolver/probe functions are stubbed so the route tests stay
+// hardware-independent, but the reason→label map + `unavailableReasonLabel` come
+// from the real module, so the refusal message asserted below is the exact string
+// a user would see.
+vi.mock('../services/imageTo3d/targets.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   detectHostCapabilities: vi.fn(() => ({ appleSilicon: true, unifiedMemoryGb: 128, cuda: false })),
   getTarget: vi.fn((id) => (id === 'trellis2' ? TRELLIS2_TARGET : null)),
   listTargets: vi.fn((caps) => [
@@ -324,7 +329,9 @@ describe('GET /trellis2/install (SSE)', () => {
     targets.unavailableReason.mockReturnValueOnce('requires-apple-silicon');
     const res = await request(makeApp()).get('/api/image-to-3d/trellis2/install');
     const frames = sseFrames(res.text);
-    expect(frames.at(-1)).toMatchObject({ type: 'error', message: expect.stringMatching(/requires-apple-silicon/) });
+    // The human label, not the raw kebab-case reason code (#3579).
+    expect(frames.at(-1)).toMatchObject({ type: 'error', message: expect.stringMatching(/Requires an Apple Silicon Mac/) });
+    expect(frames.at(-1).message).not.toMatch(/requires-apple-silicon/);
     expect(trellis2.installTrellis2).not.toHaveBeenCalled();
   });
 });
