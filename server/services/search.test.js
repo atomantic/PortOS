@@ -1,14 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import EventEmitter from 'events'
 
-// Mock all dependencies
+// Mock all dependencies. Brain search runs through the REAL brainSearchIndex
+// (issue #3506), so the seam mocked here is brainStorage's disk reader.
 vi.mock('./brainStorage.js', () => ({
-  getInboxLog: vi.fn().mockResolvedValue([]),
-  getPeople: vi.fn().mockResolvedValue([]),
-  getProjects: vi.fn().mockResolvedValue([]),
-  getIdeas: vi.fn().mockResolvedValue([]),
-  getAdminItems: vi.fn().mockResolvedValue([]),
-  getMemoryEntries: vi.fn().mockResolvedValue([]),
-  getLinks: vi.fn().mockResolvedValue([])
+  brainEvents: new EventEmitter(),
+  getAll: vi.fn().mockResolvedValue([]),
+  memoryRecencyMs: (record) => Date.parse(record?.updatedAt ?? '') || 0
 }))
 
 vi.mock('./memoryBM25.js', () => ({
@@ -30,15 +28,23 @@ vi.mock('./history.js', () => ({
 }))
 
 import { fanOutSearch } from './search.js'
-import { getInboxLog, getPeople, getProjects, getIdeas, getAdminItems, getMemoryEntries, getLinks } from './brainStorage.js'
+import { getAll } from './brainStorage.js'
+import { __resetBrainSearchIndex } from './brainSearchIndex.js'
 import { searchBM25 } from './memoryBM25.js'
 import { getMemories, ensureBackend, hybridSearchMemories } from './memoryBackend.js'
 import { getAllApps } from './apps.js'
 import { getHistory } from './history.js'
 
+// Per-type record fixtures the mocked brainStorage.getAll serves.
+let brainRecords = {}
+const setBrainRecords = (type, records) => { brainRecords[type] = records }
+
 describe('search service', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    brainRecords = {}
+    __resetBrainSearchIndex()
+    getAll.mockImplementation(async (type) => brainRecords[type] ?? [])
     ensureBackend.mockResolvedValue('file')
   })
 
@@ -49,7 +55,7 @@ describe('search service', () => {
     })
 
     it('should search across brain inbox entries', async () => {
-      getInboxLog.mockResolvedValue([
+      setBrainRecords('inbox', [
         { id: 'i1', capturedText: 'Hello world from inbox' },
         { id: 'i2', capturedText: 'Another thought' }
       ])
@@ -63,7 +69,7 @@ describe('search service', () => {
     })
 
     it('should search across people', async () => {
-      getPeople.mockResolvedValue([
+      setBrainRecords('people', [
         { id: 'p1', name: 'John Doe', context: 'Friend from school' },
         { id: 'p2', name: 'Jane Smith', context: 'Colleague at work' }
       ])
@@ -78,7 +84,7 @@ describe('search service', () => {
     })
 
     it('should search across projects', async () => {
-      getProjects.mockResolvedValue([
+      setBrainRecords('projects', [
         { id: 'pr1', name: 'PortOS', notes: 'Personal operating system' }
       ])
 
@@ -91,7 +97,7 @@ describe('search service', () => {
     })
 
     it('should search across ideas', async () => {
-      getIdeas.mockResolvedValue([
+      setBrainRecords('ideas', [
         { id: 'id1', title: 'AI assistant', oneLiner: 'Build a smart agent', notes: 'Use LLMs' }
       ])
 
@@ -104,7 +110,7 @@ describe('search service', () => {
     })
 
     it('should search across links', async () => {
-      getLinks.mockResolvedValue([
+      setBrainRecords('links', [
         { id: 'l1', title: 'GitHub', url: 'https://github.com', description: 'Code hosting platform' }
       ])
 
@@ -114,6 +120,52 @@ describe('search service', () => {
       const linkResult = brainSource.results.find(r => r.id === 'l1')
       expect(linkResult).toBeDefined()
       expect(linkResult.type).toBe('link')
+    })
+
+    it('should search across admin items', async () => {
+      setBrainRecords('admin', [
+        { id: 'ad1', title: 'Renew registration', notes: 'Due next month', nextAction: 'Book appointment' }
+      ])
+
+      const results = await fanOutSearch('renew')
+      const brainSource = results.find(s => s.id === 'brain')
+      const adminResult = brainSource.results.find(r => r.id === 'ad1')
+      expect(adminResult).toBeDefined()
+      expect(adminResult.type).toBe('admin')
+      expect(adminResult.url).toBe('/brain/memory?type=admin&id=ad1')
+    })
+
+    it('should search across memory entries, newest first', async () => {
+      setBrainRecords('memories', [
+        { id: 'me-old', title: 'Trip notes', content: 'older recollection', updatedAt: '2020-01-01T00:00:00.000Z' },
+        { id: 'me-new', title: 'Trip recap', content: 'newer recollection', updatedAt: '2026-01-01T00:00:00.000Z' }
+      ])
+
+      const results = await fanOutSearch('recollection')
+      const brainSource = results.find(s => s.id === 'brain')
+      const memoryEntries = brainSource.results.filter(r => r.type === 'memory-entry')
+      expect(memoryEntries.map(r => r.id)).toEqual(['me-new', 'me-old'])
+    })
+
+    it('should read each brain store from disk only once across repeated queries', async () => {
+      setBrainRecords('people', [{ id: 'p1', name: 'Ada Placeholder', context: 'colleague' }])
+
+      await fanOutSearch('ada')
+      const afterFirst = getAll.mock.calls.length
+      await fanOutSearch('ada')
+      await fanOutSearch('placeholder')
+
+      // One scan per brain source on the first query; every later keystroke is
+      // served from the in-memory projection (issue #3506).
+      expect(afterFirst).toBe(7)
+      expect(getAll).toHaveBeenCalledTimes(7)
+    })
+
+    it('should not re-scan a brain store that is legitimately empty', async () => {
+      await fanOutSearch('anything')
+      await fanOutSearch('anything else')
+
+      expect(getAll).toHaveBeenCalledTimes(7)
     })
 
     it('should search apps', async () => {
@@ -205,13 +257,7 @@ describe('search service', () => {
     })
 
     it('should handle failing adapters gracefully', async () => {
-      getInboxLog.mockRejectedValue(new Error('DB error'))
-      getPeople.mockRejectedValue(new Error('DB error'))
-      getProjects.mockRejectedValue(new Error('DB error'))
-      getIdeas.mockRejectedValue(new Error('DB error'))
-      getAdminItems.mockRejectedValue(new Error('DB error'))
-      getMemoryEntries.mockRejectedValue(new Error('DB error'))
-      getLinks.mockRejectedValue(new Error('DB error'))
+      getAll.mockRejectedValue(new Error('DB error'))
       searchBM25.mockRejectedValue(new Error('Index error'))
       getAllApps.mockRejectedValue(new Error('App error'))
       getHistory.mockRejectedValue(new Error('History error'))
@@ -223,12 +269,10 @@ describe('search service', () => {
     })
 
     it('should limit brain results to 8', async () => {
-      getInboxLog.mockResolvedValue(
-        Array.from({ length: 20 }, (_, i) => ({
-          id: `inbox-${i}`,
-          capturedText: `test entry ${i}`
-        }))
-      )
+      setBrainRecords('inbox', Array.from({ length: 20 }, (_, i) => ({
+        id: `inbox-${i}`,
+        capturedText: `test entry ${i}`
+      })))
 
       const results = await fanOutSearch('test')
       const brainSource = results.find(s => s.id === 'brain')

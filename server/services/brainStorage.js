@@ -127,6 +127,25 @@ const FILES = {
 // Event emitter for brain data changes
 export const brainEvents = new EventEmitter();
 
+/**
+ * Announce a persisted entity-store change that did NOT emit the usual
+ * `${type}:upserted` / `${type}:deleted` event.
+ *
+ * Two write paths are deliberately event-silent — `applyRemoteRecord` (peer
+ * applies, silent to prevent the #1077 cross-peer echo loop) and
+ * `upsertWithId({ emitEvent: false })` (the caller emits its own richer event).
+ * Read-through consumers didn't care, but a derived in-memory projection does:
+ * without this signal, brainSearchIndex would serve stale results forever after
+ * an inbound sync (issue #3506).
+ *
+ * LOCAL-ONLY, like `sync:applied`: it carries no record payload, is never fed
+ * to the sync log, and is never relayed to a peer, so it cannot amplify an
+ * echo. Listeners must treat it as "re-read this type from canonical state".
+ */
+function emitRecordChanged(type, id) {
+  brainEvents.emit('record:changed', { type, id });
+}
+
 // In-memory caches — only for the non-collection files. Entity stores read
 // through to disk (per issue #725: no whole-store cache to go stale when a
 // per-record write bypasses it).
@@ -414,7 +433,12 @@ export async function upsertWithId(type, id, recordData, { emitEvent = true } = 
     };
 
     await store.saveOneNow(id, record);
-    if (emitEvent) brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
+    if (emitEvent) {
+      brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
+    } else {
+      // A suppressed per-record event still has to reach derived projections.
+      emitRecordChanged(type, id);
+    }
     await brainSyncLog.appendChange(live ? 'update' : 'create', type, id, record, originInstanceId)
       .catch(err => console.error(`⚠️ Sync log append failed for upsert ${type}/${id}: ${err.message}`));
 
@@ -822,8 +846,10 @@ export const updateBucket = (id, data) => update('buckets', id, data);
 export const deleteBucket = (id) => remove('buckets', id);
 
 // =============================================================================
-// REMOTE SYNC OPERATIONS (no events, no sync log — echo prevention)
+// REMOTE SYNC OPERATIONS (no per-record events, no sync log — echo prevention)
 // =============================================================================
+// The only event these emit is the local-only `record:changed` invalidation
+// signal (see emitRecordChanged) — it never leaves this instance.
 
 /**
  * Apply a remote record to a store (last-writer-wins by updatedAt)
@@ -883,6 +909,9 @@ export async function applyRemoteRecord(type, id, record, op) {
         : { ...record });
     }
 
+    // Still no per-record event (that would echo back to the peer, #1077) —
+    // just the local invalidation signal so derived projections re-read.
+    emitRecordChanged(type, id);
     return { applied: true };
   });
 }

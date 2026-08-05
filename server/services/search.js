@@ -5,11 +5,12 @@
  * Uses Promise.allSettled for fault isolation — a failing adapter never
  * blocks results from the other sources.
  *
- * Sources: Brain (inbox/people/projects/ideas/links), CoS Memory (BM25),
- *          Apps, History, Health metrics
+ * Sources: Brain (inbox/people/projects/ideas/admin/memories/links, served from
+ *          the in-memory projections in brainSearchIndex.js), CoS Memory
+ *          (BM25/hybrid), Apps, History, Health metrics
  */
 
-import { getInboxLog, getPeople, getProjects, getIdeas, getAdminItems, getMemoryEntries, getLinks } from './brainStorage.js';
+import { getBrainProjections } from './brainSearchIndex.js';
 import { searchBM25 } from './memoryBM25.js';
 import { getMemories, ensureBackend, hybridSearchMemories } from './memoryBackend.js';
 import { getAllApps } from './apps.js';
@@ -42,115 +43,102 @@ function extractSnippet(text, query, maxLen = 100) {
 // SOURCE ADAPTERS
 // =============================================================================
 
+// Deep link into the Brain memory view for the id-addressed entity types.
+const brainMemoryUrl = (type) => (record) => `/brain/memory?type=${type}&id=${record.id}`;
+
+/**
+ * Brain sources, in the order their matches appear in the result list.
+ *
+ * `match` names the fields a query is tested against; they must stay a subset
+ * of the fields `brainSearchIndex` projects for that type, or the match
+ * silently stops working.
+ */
+const BRAIN_SOURCES = Object.freeze([
+  {
+    type: 'inbox',
+    resultType: 'inbox',
+    match: ['capturedText'],
+    title: (r) => (r.capturedText ?? '').substring(0, 60),
+    snippet: (r) => r.capturedText,
+    url: () => '/brain/inbox'
+  },
+  {
+    type: 'people',
+    resultType: 'person',
+    match: ['name', 'context'],
+    title: (r) => r.name,
+    snippet: (r) => r.context,
+    url: brainMemoryUrl('people')
+  },
+  {
+    type: 'projects',
+    resultType: 'project',
+    match: ['name', 'notes'],
+    title: (r) => r.name,
+    snippet: (r) => r.notes,
+    url: brainMemoryUrl('projects')
+  },
+  {
+    type: 'ideas',
+    resultType: 'idea',
+    match: ['title', 'oneLiner', 'notes'],
+    title: (r) => r.title,
+    snippet: (r) => r.oneLiner || r.notes,
+    url: brainMemoryUrl('ideas')
+  },
+  {
+    type: 'admin',
+    resultType: 'admin',
+    match: ['title', 'notes', 'nextAction'],
+    title: (r) => r.title,
+    snippet: (r) => r.notes || r.nextAction,
+    url: brainMemoryUrl('admin')
+  },
+  {
+    type: 'memories',
+    resultType: 'memory-entry',
+    match: ['title', 'content', 'mood'],
+    title: (r) => r.title,
+    snippet: (r) => r.content,
+    url: brainMemoryUrl('memories')
+  },
+  {
+    type: 'links',
+    resultType: 'link',
+    match: ['title', 'url', 'description'],
+    title: (r) => r.title || r.url,
+    snippet: (r) => r.description || r.url,
+    url: () => '/brain/links'
+  }
+]);
+
+/**
+ * Search the brain entity stores.
+ *
+ * Reads field projections from `brainSearchIndex` rather than
+ * `brainStorage.getAll()`, so a keystroke costs an in-memory scan instead of a
+ * full stat+read+parse of every record file across seven collection dirs
+ * (issue #3506). The index also removes the old `limit: 200` cap on inbox
+ * entries — that cap existed only to bound the per-query disk cost.
+ */
 async function searchBrain(query) {
   const q = query.toLowerCase();
-  const [inboxResult, peopleResult, projectsResult, ideasResult, adminResult, memoriesResult, linksResult] =
-    await Promise.allSettled([
-      getInboxLog({ limit: 200 }),
-      getPeople(),
-      getProjects(),
-      getIdeas(),
-      getAdminItems(),
-      getMemoryEntries(),
-      getLinks()
-    ]);
+  // allSettled per source: one unreadable store never blanks the others.
+  const settled = await Promise.allSettled(BRAIN_SOURCES.map((s) => getBrainProjections(s.type)));
 
-  const inboxEntries = inboxResult.status === 'fulfilled' ? inboxResult.value : [];
-  const inboxMatches = (Array.isArray(inboxEntries) ? inboxEntries : [])
-    .filter(e => e.capturedText?.toLowerCase().includes(q))
-    .map(e => ({
-      id: e.id,
-      title: (e.capturedText ?? '').substring(0, 60),
-      snippet: extractSnippet(e.capturedText, query),
-      url: '/brain/inbox',
-      type: 'inbox'
-    }));
-
-  const peopleMatches = peopleResult.status === 'fulfilled'
-    ? (peopleResult.value ?? [])
-        .filter(p => p.name?.toLowerCase().includes(q) || p.context?.toLowerCase().includes(q))
-        .map(p => ({
-          id: p.id,
-          title: p.name,
-          snippet: extractSnippet(p.context, query),
-          url: `/brain/memory?type=people&id=${p.id}`,
-          type: 'person'
-        }))
-    : [];
-
-  const projectMatches = projectsResult.status === 'fulfilled'
-    ? (projectsResult.value ?? [])
-        .filter(p => p.name?.toLowerCase().includes(q) || p.notes?.toLowerCase().includes(q))
-        .map(p => ({
-          id: p.id,
-          title: p.name,
-          snippet: extractSnippet(p.notes, query),
-          url: `/brain/memory?type=projects&id=${p.id}`,
-          type: 'project'
-        }))
-    : [];
-
-  const ideaMatches = ideasResult.status === 'fulfilled'
-    ? (ideasResult.value ?? [])
-        .filter(i => i.title?.toLowerCase().includes(q) || i.oneLiner?.toLowerCase().includes(q) || i.notes?.toLowerCase().includes(q))
-        .map(i => ({
-          id: i.id,
-          title: i.title,
-          snippet: extractSnippet(i.oneLiner || i.notes, query),
-          url: `/brain/memory?type=ideas&id=${i.id}`,
-          type: 'idea'
-        }))
-    : [];
-
-  const adminMatches = adminResult.status === 'fulfilled'
-    ? (adminResult.value ?? [])
-        .filter(a => a.title?.toLowerCase().includes(q) || a.notes?.toLowerCase().includes(q) || a.nextAction?.toLowerCase().includes(q))
-        .map(a => ({
-          id: a.id,
-          title: a.title,
-          snippet: extractSnippet(a.notes || a.nextAction, query),
-          url: `/brain/memory?type=admin&id=${a.id}`,
-          type: 'admin'
-        }))
-    : [];
-
-  const memoryMatches = memoriesResult.status === 'fulfilled'
-    ? (memoriesResult.value ?? [])
-        .filter(m => m.title?.toLowerCase().includes(q) || m.content?.toLowerCase().includes(q) || m.mood?.toLowerCase().includes(q))
-        .map(m => ({
-          id: m.id,
-          title: m.title,
-          snippet: extractSnippet(m.content, query),
-          url: `/brain/memory?type=memories&id=${m.id}`,
-          type: 'memory-entry'
-        }))
-    : [];
-
-  const linkMatches = linksResult.status === 'fulfilled'
-    ? (linksResult.value ?? [])
-        .filter(l =>
-          l.title?.toLowerCase().includes(q) ||
-          l.url?.toLowerCase().includes(q) ||
-          l.description?.toLowerCase().includes(q)
-        )
-        .map(l => ({
-          id: l.id,
-          title: l.title || l.url,
-          snippet: extractSnippet(l.description || l.url, query),
-          url: '/brain/links',
-          type: 'link'
-        }))
-    : [];
-
-  const results = [
-    ...inboxMatches,
-    ...peopleMatches,
-    ...projectMatches,
-    ...ideaMatches,
-    ...adminMatches,
-    ...memoryMatches,
-    ...linkMatches
-  ].slice(0, 8);
+  const results = BRAIN_SOURCES.flatMap((source, i) => {
+    const outcome = settled[i];
+    if (outcome.status !== 'fulfilled') return [];
+    return (outcome.value ?? [])
+      .filter((r) => source.match.some((f) => typeof r[f] === 'string' && r[f].toLowerCase().includes(q)))
+      .map((r) => ({
+        id: r.id,
+        title: source.title(r),
+        snippet: extractSnippet(source.snippet(r), query),
+        url: source.url(r),
+        type: source.resultType
+      }));
+  }).slice(0, 8);
 
   return { id: 'brain', label: 'Brain', icon: 'Brain', results };
 }
