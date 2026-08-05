@@ -92,15 +92,17 @@ function buildStaticGraph() {
 // rots: a fix to one silently under-reports in the other (the same reason the
 // static scan lives once in `server/lib/staticImportGraph.js`).
 //
-// The match is deliberately loose — anything between `import(` and the closing
+// The match is deliberately loose — anything between the paren and the closing
 // paren that names the module — so quotes, template literals, an interleaved
 // comment and any path depth all count. `await` is NOT required, so a
-// `return import(...).then(...)` back-edge is caught too. A mention inside a
-// comment trips it as well; that fails CLOSED, which is the correct bias for a
-// structural guard (the alternative is a green suite over a live back-edge).
+// `return import(...).then(...)` back-edge is caught too, and whitespace before
+// the paren is allowed because `import ('./x.js')` is valid ESM that a `import\(`
+// matcher would wave straight through. A mention inside a comment trips it as
+// well; that fails CLOSED, which is the correct bias for a structural guard (the
+// alternative is a green suite over a live back-edge).
 function importsDynamically(file, mod) {
   const src = readFileSync(join(SERVICES_DIR, file), 'utf-8');
-  return new RegExp(String.raw`\bimport\(\s*[^)]*\b${mod.replace(/\./g, '\\.')}[^)]*\)`).test(src);
+  return new RegExp(String.raw`\bimport\s*\(\s*[^)]*\b${mod.replace(/\./g, '\\.')}[^)]*\)`).test(src);
 }
 
 function findCycles(graph) {
@@ -211,14 +213,17 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
     const forbidden = reexportedFrom('agentManagement.js').filter(name => !stateLayer.has(name));
     expect(forbidden.length, 'derived nothing to forbid — check the facade export blocks').toBeGreaterThan(0);
 
-    // Scope to the re-export statements, not the whole file: `completeAgent` and
-    // friends legitimately appear elsewhere in cos.js. ALL of them, via matchAll
-    // — the realistic way one of these comes back is a second
-    // `export { pauseAgent } from './cosAgents.js';` statement, which a
-    // first-match-only scan would never see, staying green over the regression.
-    const cosReexports = [...readFileSync(join(SERVICES_DIR, 'cos.js'), 'utf-8')
-      .matchAll(/export\s*\{[^}]*\}\s*from\s*'\.\/cosAgents\.js'/g)].map(m => m[0]).join('\n');
-    expect(cosReexports, 'cos.js agent re-export block not found — did it move?').toBeTruthy();
+    // Scope to cos.js's re-export statements, not the whole file: `completeAgent`
+    // and friends legitimately appear elsewhere in it. But scope to ALL of them,
+    // from ANY source — the two realistic regressions are a second
+    // `export { pauseAgent } from './cosAgents.js';` statement (which a
+    // first-match-only scan never sees) and a re-export sourced straight from
+    // `./agentManagement.js` (which a cosAgents-only scan never sees). Either one
+    // restores the surface with the guard fully green.
+    const cosSrc = readFileSync(join(SERVICES_DIR, 'cos.js'), 'utf-8');
+    const cosReexports = [...cosSrc.matchAll(/export\s*\{[^}]*\}\s*from\s*'[^']+'/g)].map(m => m[0]).join('\n');
+    expect(cosReexports, "cos.js re-exports nothing from './cosAgents.js' — did the block move?")
+      .toMatch(/cosAgents\.js/);
     for (const name of forbidden) {
       expect(cosReexports, `cos.js must not re-export ${name} — it is a process-layer transition, ask the facade`)
         .not.toMatch(new RegExp(String.raw`\b${name}\b`));
