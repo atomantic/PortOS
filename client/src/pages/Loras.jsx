@@ -1097,6 +1097,10 @@ function LoraCard({ lora, onDelete, deleting, deleteConfirm }) {
   // disarms the moment it fires), so the spinner replaces the row rather than
   // flashing the trash icon back for the duration of the request.
   const confirming = deleteConfirm.isConfirming(lora.filename) || deleting;
+  // A sidecar-less install can reach the client with no `name` (the server
+  // falls back to the filename, but peers and hand-dropped files predate that),
+  // and "Delete undefined" is a bad thing to announce over a destructive action.
+  const displayName = lora.name || lora.filename;
 
   return (
     <div className="bg-port-card border border-port-border rounded-lg overflow-hidden flex flex-col">
@@ -1115,7 +1119,7 @@ function LoraCard({ lora, onDelete, deleting, deleteConfirm }) {
       )}
       <div className="p-3 flex-1 flex flex-col">
         <div className="flex items-start justify-between gap-2 mb-2">
-          <h3 className="font-semibold text-white text-sm flex-1 break-words">{lora.name}</h3>
+          <h3 className="font-semibold text-white text-sm flex-1 break-words">{displayName}</h3>
           <span className={`text-[10px] px-2 py-0.5 rounded border whitespace-nowrap ${badgeClass}`} title={civitai?.baseModel || 'Unknown'}>
             {familyLabel}
           </span>
@@ -1164,7 +1168,7 @@ function LoraCard({ lora, onDelete, deleting, deleteConfirm }) {
               confirmIcon={Trash2}
               busy={deleting}
               busyText="Deleting"
-              ariaLabel={`Confirm delete ${lora.name}`}
+              ariaLabel={`Confirm delete ${displayName}`}
               onConfirm={() => deleteConfirm.confirmDelete(onDelete)}
               onCancel={deleteConfirm.cancelDelete}
             />
@@ -1202,7 +1206,7 @@ function LoraCard({ lora, onDelete, deleting, deleteConfirm }) {
             <button
               onClick={() => deleteConfirm.requestDelete(lora.filename)}
               className="text-port-error hover:text-port-error/80 p-1.5 rounded hover:bg-port-error/10"
-              title={`Delete ${lora.name}`} aria-label={`Delete ${lora.name}`}
+              title={`Delete ${displayName}`} aria-label={`Delete ${displayName}`}
             >
               <Trash2 size={14} />
             </button>

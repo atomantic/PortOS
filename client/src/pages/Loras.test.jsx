@@ -90,6 +90,16 @@ describe('Loras installed-card delete confirmation', () => {
     expect(deleteLoraFull).not.toHaveBeenCalled();
   });
 
+  it('falls back to the filename when a sidecar-less LoRA has no name', async () => {
+    listLorasFull.mockResolvedValue([{ ...LORA, name: undefined }]);
+    renderPage();
+
+    const trash = await screen.findByLabelText('Delete example-lora.safetensors');
+    fireEvent.click(trash);
+
+    expect(screen.getByLabelText('Confirm delete example-lora.safetensors')).toBeInTheDocument();
+  });
+
   it('keeps the card when the delete fails, re-showing the trash affordance', async () => {
     deleteLoraFull.mockRejectedValue(new Error('Delete failed'));
     renderPage();
