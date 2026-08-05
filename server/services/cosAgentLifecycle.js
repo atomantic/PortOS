@@ -446,24 +446,12 @@ export async function terminateAgent(agentId) {
   return { success: true, agentId };
 }
 
-// Pause an agent without completing its task or cleaning up its worktree.
-//
-// The three delegations below stay DYNAMIC on purpose (#2837): this module is
-// the agent STATE layer that `agentManagement.js` builds on (via the
-// `cosAgents.js` barrel), so a static import here would invert the layering and
-// reintroduce a cycle. They now target `agentManagement.js` directly rather than
-// the `subAgentSpawner.js` barrel, so the deferred load pulls in one module
-// instead of the entire spawner graph.
-export async function pauseAgent(agentId, reason = null) {
-  const { pauseAgent: pauseAgentFromSpawner } = await import('./agentManagement.js');
-  return pauseAgentFromSpawner(agentId, reason);
-}
-
-// Force kill an agent with SIGKILL (immediate, no graceful shutdown)
-export async function killAgent(agentId) {
-  const { killAgent: killAgentFromSpawner } = await import('./agentManagement.js');
-  return killAgentFromSpawner(agentId);
-}
+// `pauseAgent` / `killAgent` / `getAgentProcessStats` moved to
+// `agentOrchestrator.js` (#3450). They lived here as deferred-import forwarders
+// into the process layer, which this STATE layer cannot import statically
+// without inverting the layering — so do not re-add one. Ask the facade for a
+// transition; `agentImportCycles.test.js` fails on any new deferred import of
+// `agentManagement.js` from this file.
 
 // Send a BTW (additional context) message to a running agent.
 //
@@ -519,12 +507,6 @@ export async function sendBtwToAgent(agentId, message) {
 
   cosEvents.emit('agent:btw', { agentId, message, timestamp });
   return { success: true, delivered: 'tui-paste', tuiSessionId: agentInfo.tuiSessionId };
-}
-
-// Get process stats for an agent (CPU, memory)
-export async function getAgentProcessStats(agentId) {
-  const { getAgentProcessStats: getStatsFromSpawner } = await import('./agentManagement.js');
-  return getStatsFromSpawner(agentId);
 }
 
 // Check if a PID is still running

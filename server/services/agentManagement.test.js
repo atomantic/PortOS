@@ -70,7 +70,6 @@ vi.mock('./cosRunnerClient.js', () => ({
   getAgentStatsFromRunner: vi.fn(),
   getActiveAgentsFromRunner: vi.fn().mockResolvedValue([])
 }));
-vi.mock('./agents.js', () => ({ unregisterSpawnedAgent: vi.fn() }));
 vi.mock('./executionLanes.js', () => ({ release: vi.fn() }));
 vi.mock('./toolStateMachine.js', () => ({ completeExecution: vi.fn(), errorExecution: vi.fn() }));
 vi.mock('./shell.js', () => ({ writeToSession: vi.fn(), killSession: vi.fn() }));

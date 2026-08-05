@@ -84,10 +84,6 @@ vi.mock('./promptService.js', () => ({
   buildPrompt: vi.fn()
 }));
 
-vi.mock('./agents.js', () => ({
-  registerSpawnedAgent: vi.fn(),
-  unregisterSpawnedAgent: vi.fn()
-}));
 
 vi.mock('./memoryRetriever.js', () => ({
   getMemorySection: vi.fn()

@@ -1,5 +1,7 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { getSpawnedAgent } from './agentState.js';
+import { killAgent } from './agentOrchestrator.js';
 
 const execAsync = promisify(exec);
 
@@ -13,9 +15,6 @@ const AGENT_PATTERNS = [
   { name: 'Cursor', pattern: 'cursor', command: 'cursor' },
   { name: 'Copilot', pattern: 'copilot', command: 'copilot' }
 ];
-
-// Track spawned agents with their full commands (by PID)
-const spawnedAgentCommands = new Map();
 
 /**
  * Decide whether a matched process line is a real AI-agent CLI or an OS/UI
@@ -42,28 +41,6 @@ export function isAgentProcessCommand(command) {
 }
 
 /**
- * Register a spawned agent's full command (call when spawning)
- */
-export function registerSpawnedAgent(pid, data) {
-  spawnedAgentCommands.set(pid, {
-    fullCommand: data.fullCommand,
-    agentId: data.agentId,
-    taskId: data.taskId,
-    model: data.model,
-    workspacePath: data.workspacePath,
-    prompt: data.prompt,
-    registeredAt: Date.now()
-  });
-}
-
-/**
- * Unregister a spawned agent (call when process exits)
- */
-export function unregisterSpawnedAgent(pid) {
-  spawnedAgentCommands.delete(pid);
-}
-
-/**
  * Get list of running agent processes
  */
 export async function getRunningAgents() {
@@ -73,7 +50,7 @@ export async function getRunningAgents() {
     const procs = await findProcesses(agent.pattern);
     procs.forEach(proc => {
       // Enrich with spawned command data if available
-      const spawnedData = spawnedAgentCommands.get(proc.pid);
+      const spawnedData = getSpawnedAgent(proc.pid);
 
       agents.push({
         ...proc,
@@ -295,7 +272,8 @@ function formatRuntime(ms) {
 /**
  * Kill a process by PID.
  * If the process is a CoS-spawned agent, delegates to the CoS killAgent
- * to ensure the task is properly blocked instead of requeued.
+ * transition (via the `agentOrchestrator` facade) so the task is properly
+ * blocked instead of requeued.
  */
 export async function killProcess(pid) {
   // Security: Ensure PID is a valid integer to prevent command injection
@@ -305,10 +283,9 @@ export async function killProcess(pid) {
   }
 
   // Check if this PID belongs to a CoS-spawned agent
-  const spawnedData = spawnedAgentCommands.get(safePid);
+  const spawnedData = getSpawnedAgent(safePid);
   if (spawnedData?.agentId) {
     console.log(`🔪 PID ${safePid} is CoS agent ${spawnedData.agentId}, delegating to CoS killAgent`);
-    const { killAgent } = await import('./subAgentSpawner.js');
     // killAgent throws a ServerError when the agent is missing or the kill
     // fails; treat that as "already gone" and fall through to the raw kill
     // below rather than surfacing it — this path is a best-effort cleanup.

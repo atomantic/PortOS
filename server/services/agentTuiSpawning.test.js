@@ -28,10 +28,6 @@ vi.mock('./cosAgents.js', () => ({
   completeAgent: vi.fn().mockResolvedValue(undefined)
 }));
 
-vi.mock('./agents.js', () => ({
-  registerSpawnedAgent: vi.fn(),
-  unregisterSpawnedAgent: vi.fn()
-}));
 
 vi.mock('./providerStatus.js', () => ({
   markProviderUsageLimit: vi.fn().mockResolvedValue(undefined),
@@ -86,6 +82,8 @@ vi.mock('./agentState.js', () => ({
   activeAgents: new Map(),
   userTerminatedAgents: new Set(),
   pausedAgents: new Map(),
+  registerSpawnedAgent: vi.fn(),
+  unregisterSpawnedAgent: vi.fn(),
   // Mirrors the real predicate (covers the TASKS.md string round-trip) — the
   // worktreeChangesExpected opt-out reads through it.
   isFalsyMeta: (value) => value === false || value === 'false',

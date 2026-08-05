@@ -14,16 +14,22 @@ import { join } from 'path';
 import { readdir, rm, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { emitLog, cosEvents } from './cosEvents.js';
-import { updateAgent, completeAgent } from './cosAgents.js';
+import { updateAgent } from './cosAgents.js';
 import { initProviderStatus } from './providerStatus.js';
 import { onCosRunnerEvent, initCosRunnerConnection, isRunnerAvailable } from './cosRunnerClient.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { loadSlashdoFile } from '../lib/slashdoLoader.js';
 import { getRunnerOutputBatcher, flushRunnerOutputBatcher } from './agentRunnerOutputBatchers.js';
 import { syncRunnerAgents } from './agentRunnerSync.js';
-import { handleAgentCompletion, spawnAgentForTask } from './agentLifecycle.js';
-import { cleanupOrphanedAgents, terminateAgent } from './agentManagement.js';
+import { handleAgentCompletion } from './agentLifecycle.js';
+import { cleanupOrphanedAgents } from './agentManagement.js';
 import { completeAgentRun } from './agentRunTracking.js';
+// This module's own event wiring drives three LIFECYCLE TRANSITIONS, so it takes
+// them from the facade rather than from the three separate leaves that happen to
+// implement them (#3450). It can: nothing the facade imports imports this barrel
+// back, so the edge stays one-directional. The `export { … }` blocks below still
+// name the leaves directly — those are the back-compat barrel surface, not calls.
+import { completeAgent, spawnAgentForTask, terminateAgent } from './agentOrchestrator.js';
 
 // ─── Shared state (imported from agentState.js) ──────────────────────────────
 export { activeAgents, runnerAgents, userTerminatedAgents, spawningTasks, useRunner, isTruthyMeta, isFalsyMeta, getActiveAgentIds } from './agentState.js';

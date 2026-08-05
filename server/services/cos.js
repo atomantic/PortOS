@@ -39,8 +39,13 @@ import { loadState, saveState, withStateLock, ensureDirectories, isImprovementEn
 import { cosEvents, emitLog } from './cosEvents.js';
 export { cosEvents, emitLog };
 
-// Agent lifecycle (re-export for backward compat with `import * as cos`)
-export { registerAgent, updateAgent, completeAgent, appendAgentOutput, getAgents, getAgentDates, getAgentsByDate, getAgent, getAgentRecord, getAgentPrompt, terminateAgent, pauseAgent, killAgent, sendBtwToAgent, getAgentProcessStats, cleanupZombieAgents, deleteAgent, submitAgentFeedback, getFeedbackStats, extractTaskType, archiveStaleAgents, clearCompletedAgents, pruneOldAgentArchives } from './cosAgents.js';
+// Agent lifecycle (re-export for backward compat with `import * as cos`).
+//
+// `pauseAgent` / `killAgent` / `getAgentProcessStats` are deliberately NOT here:
+// they are process-layer transitions, and re-exporting them from the task store
+// is what forced the `await import()` forwarders in `cosAgentLifecycle.js`.
+// Callers ask `agentOrchestrator.js` for those (#3450).
+export { registerAgent, updateAgent, completeAgent, appendAgentOutput, getAgents, getAgentDates, getAgentsByDate, getAgent, getAgentRecord, getAgentPrompt, terminateAgent, sendBtwToAgent, cleanupZombieAgents, deleteAgent, submitAgentFeedback, getFeedbackStats, extractTaskType, archiveStaleAgents, clearCompletedAgents, pruneOldAgentArchives } from './cosAgents.js';
 
 // Reports and activity (re-export for backward compat with `import * as cos`)
 export { generateReport, getReport, getTodayReport, listReports, listBriefings, getBriefing, getLatestBriefing, getTodayActivity, getWhileAwayActivity, getRecentTasks, formatRelativeTime } from './cosReports.js';

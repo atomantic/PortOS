@@ -34,10 +34,6 @@ vi.mock('./cosAgents.js', () => {
     createAgentOutputBatcher,
   };
 });
-vi.mock('./agents.js', () => ({
-  registerSpawnedAgent: vi.fn(),
-  unregisterSpawnedAgent: vi.fn(),
-}));
 vi.mock('./executionLanes.js', () => ({ release: vi.fn() }));
 vi.mock('./toolStateMachine.js', () => ({
   completeExecution: vi.fn(),
@@ -57,6 +53,8 @@ vi.mock('./agentState.js', () => ({
   activeAgents: new Map(),
   userTerminatedAgents: new Set(),
   pausedAgents: new Map(),
+  registerSpawnedAgent: vi.fn(),
+  unregisterSpawnedAgent: vi.fn(),
   metaStringOr: (value, fallback) => (typeof value === 'string' && value) ? value : fallback,
 }));
 vi.mock('../lib/fileUtils.js', () => ({

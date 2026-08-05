@@ -9,11 +9,12 @@
  *          → agents.js → subAgentSpawner.js → agentLifecycle.js
  *
  * with several edges reaching back up the chain. There is no correctness bug —
- * the load-bearing back-edges are already broken with `await import(...)` (see
- * the comment at `cosAgentLifecycle.js#pauseAgent`) and `agentImportCycles.test.js`
- * derives the live static graph from source and guards it. The cost is
- * comprehension: no module owns the agent state machine, so reasoning about one
- * transition means holding all seven files in mind.
+ * the load-bearing back-edges were broken with `await import(...)` before this
+ * module existed, and `agentImportCycles.test.js` derives the live static graph
+ * from source and guards it. The cost is comprehension: no module owns the agent
+ * state machine, so reasoning about one transition means holding all seven files
+ * in mind. (`cos.js#handleOrphanedTask` is what a surviving deferred back-edge
+ * looks like; the ones this facade replaced are described further down.)
  *
  * This module sits ABOVE that cluster. It imports the three modules that own
  * transitions (`agentManagement`, `cosAgentLifecycle`, `agentLifecycle`) and is
@@ -21,9 +22,10 @@
  * above `server/services/` get one unambiguous entry point.
  *
  * `subAgentSpawner.js` calls itself an orchestrator but cannot be this: it is
- * *inside* the cluster (`agents.js` and `cos.js` both reach it via
- * `await import(...)`), and it re-exports ~40 symbols as a back-compat barrel.
- * A facade has to be small, complete, and outside the graph it fronts.
+ * *inside* the cluster — `cos.js` still reaches it via `await import(...)` — and
+ * it re-exports ~40 symbols as a back-compat barrel, including three transitions
+ * this facade also owns. A facade has to be small, complete, and outside the
+ * graph it fronts; retiring that barrel is its own slice of #3450.
  *
  * **Invariant, enforced by `agentImportCycles.test.js`: no module reachable
  * FROM this one may import it back — statically OR via `import(...)`.** One such
@@ -61,14 +63,27 @@
  * `agentSummaryExtraction`), and the pure re-export barrels (`cosAgents.js`,
  * `subAgentSpawner.js`). If it is not exported below, it is a leaf.
  *
+ * ## Moving a caller out (the shape every migration takes)
+ *
+ * A caller is stuck inside the closure because something in the closure imports
+ * IT. Find that edge, push what the importer actually wanted down into a leaf,
+ * and the caller migrates itself. Use `agentState.js` for shared mutable state —
+ * it is import-free precisely so modules that cannot import each other can still
+ * share; do not add a second leaf beside it. Do NOT reach back in with a deferred
+ * import: the guard rejects it, and it is how this cluster got here in the first
+ * place. `agentState.js#spawnedAgentCommands` documents the worked example.
+ *
  * ## What is still outstanding
  *
- * `server/routes/cosAgentRoutes.js` is migrated. Every other call site still
- * reaches these transitions through `cos.js` or `subAgentSpawner.js`, and the
- * `await import(...)` forwarders at `cosAgentLifecycle.js#pauseAgent` /
- * `#killAgent` / `#getAgentProcessStats` still exist to serve them — those are
- * steps 3 and 4 of the #3450 sequencing. `grep -rn agentOrchestrator server/`
- * is the live answer to "what has moved so far".
+ * `server/routes/cosAgentRoutes.js`, `agents.js` and `subAgentSpawner.js`'s event
+ * wiring are migrated, and the deferred forwarders that used to sit in
+ * `cosAgentLifecycle.js` are gone along with the `cos.js` re-exports that were
+ * their only consumers — steps 3 and 4 of the #3450 sequencing. Remaining:
+ * the transitions below that still have callers INSIDE the closure, and the
+ * three overlapping barrels (`cosAgents.js`, `subAgentSpawner.js`, and `cos.js`'s
+ * agent re-export block), which each expose a partial view of the cluster.
+ * `grep -rn agentOrchestrator server/` is the live answer to what has moved —
+ * do not keep a hand-written call-site inventory here; it only goes stale.
  */
 
 // Process/runner layer — owns the live agent maps and the OS-level signals.

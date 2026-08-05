@@ -1,6 +1,10 @@
 /**
  * Shared mutable state for agent tracking.
  * Imported by agentLifecycle.js, agentManagement.js, and subAgentSpawner.js.
+ *
+ * **This module must stay import-free.** It is what lets modules that cannot
+ * import each other share state, so one import of a cluster module here closes
+ * a cycle for every one of them at once. `agentImportCycles.test.js` enforces it.
  */
 
 // activeAgents: direct spawn mode processes (Map<agentId, { process, task, runId, ... }>)
@@ -18,6 +22,39 @@ export const pausedAgents = new Map();
 
 // spawningTasks: tasks currently being spawned (Set<taskId>) — deduplication guard
 export const spawningTasks = new Set();
+
+// spawnedAgentCommands: OS pid → spawn metadata for agents this server started
+// (Map<pid, { fullCommand, agentId, taskId, model, workspacePath, prompt, registeredAt }>).
+//
+// Lived in `agents.js` until #3450. It had to move because it was the last edge
+// from the agent cluster into `agents.js`: `agentManagement.js` imported
+// `unregisterSpawnedAgent` from there, so `agents.js` could not import the
+// `killAgent` transition back without a cycle — it reached it through
+// `await import('./subAgentSpawner.js')` instead, and that same back-edge put
+// `agents.js` inside the `agentOrchestrator` facade's closure, where importing
+// the facade was forbidden too. With the map here (a module both sides already
+// import, and which imports nothing itself) the edge is gone and `agents.js`
+// takes a plain static `import … from './agentOrchestrator.js'`.
+const spawnedAgentCommands = new Map();
+
+// Register a spawned agent's full command (call when spawning).
+export const registerSpawnedAgent = (pid, data) => {
+  spawnedAgentCommands.set(pid, {
+    fullCommand: data.fullCommand,
+    agentId: data.agentId,
+    taskId: data.taskId,
+    model: data.model,
+    workspacePath: data.workspacePath,
+    prompt: data.prompt,
+    registeredAt: Date.now()
+  });
+};
+
+// Unregister a spawned agent (call when its process exits).
+export const unregisterSpawnedAgent = (pid) => { spawnedAgentCommands.delete(pid); };
+
+// Spawn metadata for a pid, or undefined when the pid is not one of ours.
+export const getSpawnedAgent = (pid) => spawnedAgentCommands.get(pid);
 
 // useRunner: whether CoS Runner mode is active
 export let useRunner = false;

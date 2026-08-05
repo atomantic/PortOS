@@ -23,15 +23,16 @@ vi.mock('util', async (importOriginal) => {
   };
 });
 
-// Mock subAgentSpawner so killProcess CoS delegation doesn't import real code
-vi.mock('./subAgentSpawner.js', () => ({
+// Mock the orchestrator facade so killProcess's CoS delegation doesn't import
+// the real agent cluster (#3450 — agents.js reaches killAgent through the facade
+// now, not through the subAgentSpawner barrel).
+vi.mock('./agentOrchestrator.js', () => ({
   killAgent: vi.fn().mockResolvedValue({ success: true })
 }));
 
 import { exec } from 'child_process';
+import { registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
 import {
-  registerSpawnedAgent,
-  unregisterSpawnedAgent,
   getRunningAgents,
   killProcess,
   getProcessInfo,
@@ -129,7 +130,7 @@ describe('agents.js', () => {
 
       // Verify the CoS killAgent mock was invoked with the registered agentId —
       // this proves the registry entry is live and used by killProcess.
-      const { killAgent } = await import('./subAgentSpawner.js');
+      const { killAgent } = await import('./agentOrchestrator.js');
       expect(killAgent).toHaveBeenCalledWith('agent-ts');
     });
 
@@ -137,7 +138,7 @@ describe('agents.js', () => {
       // killAgent now throws a ServerError when the agent is already gone
       // (issue #2534). killProcess must catch that and fall through to a raw
       // kill rather than surfacing the throw.
-      const { killAgent } = await import('./subAgentSpawner.js');
+      const { killAgent } = await import('./agentOrchestrator.js');
       killAgent.mockRejectedValueOnce(
         Object.assign(new Error('Agent not found or not running'), { status: 404, code: 'NOT_FOUND' }),
       );

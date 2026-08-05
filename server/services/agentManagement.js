@@ -11,10 +11,9 @@ import { emitLog } from './cosEvents.js';
 import { completeAgent, updateAgent } from './cosAgents.js';
 import { updateTask, addTask, getTaskById } from './cos.js';
 import { terminateAgentViaRunner, killAgentViaRunner, pauseAgentViaRunner, getAgentStatsFromRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
-import { unregisterSpawnedAgent } from './agents.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
-import { activeAgents, runnerAgents, userTerminatedAgents, pausedAgents, useRunner, isAgentOwnedLocally } from './agentState.js';
+import { activeAgents, runnerAgents, userTerminatedAgents, pausedAgents, useRunner, isAgentOwnedLocally, unregisterSpawnedAgent } from './agentState.js';
 // Both were extracted out of agentLifecycle.js (issue #2837) so this module no
 // longer depends on the lifecycle orchestrator — which depends on THIS module
 // for handleOrphanedTask. Importing them from their own leaf modules is what

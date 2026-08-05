@@ -84,6 +84,25 @@ function buildStaticGraph() {
   return graph;
 }
 
+// Does `file` reach `mod` with a DEFERRED import? The static graph deliberately
+// ignores `import()` — correct for cycle detection, since a deferred import
+// cannot produce a load-time cycle — but reaching across a blocked layer that
+// way is exactly this cluster's habit, so several guards below need to see it.
+// One implementation, because two copies of a structural matcher is how a guard
+// rots: a fix to one silently under-reports in the other (the same reason the
+// static scan lives once in `server/lib/staticImportGraph.js`).
+//
+// The match is deliberately loose — anything between `import(` and the closing
+// paren that names the module — so quotes, template literals, an interleaved
+// comment and any path depth all count. `await` is NOT required, so a
+// `return import(...).then(...)` back-edge is caught too. A mention inside a
+// comment trips it as well; that fails CLOSED, which is the correct bias for a
+// structural guard (the alternative is a green suite over a live back-edge).
+function importsDynamically(file, mod) {
+  const src = readFileSync(join(SERVICES_DIR, file), 'utf-8');
+  return new RegExp(String.raw`\bimport\(\s*[^)]*\b${mod.replace(/\./g, '\\.')}[^)]*\)`).test(src);
+}
+
 function findCycles(graph) {
   const cycles = new Set();
   const stack = [];
@@ -146,31 +165,90 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
     walk('agentOrchestrator.js');
     expect(reachable.size, 'facade closure looks empty — did the module move?').toBeGreaterThan(3);
 
-    // Dynamic imports are matched too, and WITHOUT requiring `await`: the static
-    // graph deliberately ignores `import()` (correct for cycle detection), but
-    // reaching across a blocked layer with a deferred import is exactly this
-    // cluster's habit, so a `return import(...).then(...)` back-edge would
-    // violate the layering with the cycle walk fully green.
-    //
-    // The match is deliberately loose — anything between `import(` and the
-    // closing paren that names the facade — so quotes, template literals and an
-    // interleaved comment all count, at any path depth. A mention inside a
-    // comment would also trip it; that fails CLOSED, which is the correct bias
-    // for a structural guard (the alternative is a green suite over a live
-    // back-edge).
-    const DYNAMIC_FACADE_IMPORT = /\bimport\(\s*[^)]*\bagentOrchestrator\.js[^)]*\)/;
+    // Deferred imports count as back-edges here too — see `importsDynamically`.
     const offenders = [...reachable].filter(file =>
       (graph.get(file) || []).includes('agentOrchestrator.js') ||
-      DYNAMIC_FACADE_IMPORT.test(readFileSync(join(SERVICES_DIR, file), 'utf-8'))
+      importsDynamically(file, 'agentOrchestrator.js')
     ).sort();
     expect(offenders, `agentOrchestrator.js must not be imported by ${offenders.join(', ')}`).toEqual([]);
+  });
+
+  it('no longer needs the state-layer forwarders into the process layer (#3450)', () => {
+    // Step 4 of the #3450 sequencing. `cosAgentLifecycle.js` — the agent STATE
+    // layer — used to forward pause/kill/stats into the PROCESS layer with
+    // `await import()`, purely so a caller holding a `cos.js` handle could reach
+    // across a boundary the state layer cannot import across statically. Those
+    // callers go through the facade now.
+    //
+    // Guard the mechanism, not the three names: ANY deferred import of
+    // `agentManagement.js` from here is a new forwarder. A *static* one needs no
+    // assertion — it closes a cycle the walk above already fails on.
+    expect(importsDynamically('cosAgentLifecycle.js', 'agentManagement.js'),
+      'cosAgentLifecycle.js must not defer-import the process layer — ask the facade').toBe(false);
+
+    // The other half: `cos.js` re-exporting those transitions is what gave the
+    // forwarders callers in the first place. Derive which names are off-limits
+    // from the facade itself — everything it takes from the process layer —
+    // rather than listing them, so the rule tracks the facade as it grows.
+    //
+    // Minus the names the facade ALSO serves from the state layer. That set is
+    // `terminateAgent`, the one genuine collision in this cluster: `cos.js`
+    // legitimately re-exports the state-layer function of that name, and it is
+    // only unambiguous inside the facade because the facade renames it to
+    // `requestAgentTermination`. Subtracting is what keeps this derivation from
+    // failing on a name `cos.js` is right to export.
+    const facade = readFileSync(join(SERVICES_DIR, 'agentOrchestrator.js'), 'utf-8');
+    const reexportedFrom = (source) => {
+      const block = facade.match(new RegExp(String.raw`export\s*\{([^}]*)\}\s*from\s*'\./${source}'`));
+      expect(block, `facade no longer re-exports from ${source} — did the layering change?`).toBeTruthy();
+      return block[1]
+        .replace(/\/\/[^\n]*/g, '')       // strip the per-export state-edge comments
+        .split(',')
+        .map(entry => entry.split(/\s+as\s+/)[0].trim())
+        .filter(Boolean);
+    };
+    const stateLayer = new Set(reexportedFrom('cosAgentLifecycle.js'));
+    const forbidden = reexportedFrom('agentManagement.js').filter(name => !stateLayer.has(name));
+    expect(forbidden.length, 'derived nothing to forbid — check the facade export blocks').toBeGreaterThan(0);
+
+    // Scope to the re-export statements, not the whole file: `completeAgent` and
+    // friends legitimately appear elsewhere in cos.js. ALL of them, via matchAll
+    // — the realistic way one of these comes back is a second
+    // `export { pauseAgent } from './cosAgents.js';` statement, which a
+    // first-match-only scan would never see, staying green over the regression.
+    const cosReexports = [...readFileSync(join(SERVICES_DIR, 'cos.js'), 'utf-8')
+      .matchAll(/export\s*\{[^}]*\}\s*from\s*'\.\/cosAgents\.js'/g)].map(m => m[0]).join('\n');
+    expect(cosReexports, 'cos.js agent re-export block not found — did it move?').toBeTruthy();
+    for (const name of forbidden) {
+      expect(cosReexports, `cos.js must not re-export ${name} — it is a process-layer transition, ask the facade`)
+        .not.toMatch(new RegExp(String.raw`\b${name}\b`));
+    }
+
+    // Scoped to `cos.js` on purpose: `subAgentSpawner.js` still re-exports these
+    // same three from `agentManagement.js`. That barrel is the cluster's declared
+    // back-compat surface and retiring it is its own slice of #3450, so widening
+    // this to "no module may re-export a facade transition" would fail today. The
+    // narrower rule holds the line where the forwarders actually had callers.
+  });
+
+  it('keeps agentState.js an import-free leaf, so agents.js can use the facade (#3450)', () => {
+    // `agentState.js` is what lets modules that cannot import each other share
+    // state — the pid map moved here so `agentManagement.js` no longer had to
+    // import it out of `agents.js`. One import of a cluster module here would
+    // close a cycle for every such pair at once, so it must stay import-free.
+    expect(graph.get('agentState.js')).toEqual([]);
+
+    // The payoff: with that back-edge gone, agents.js is outside the facade's
+    // closure and reaches the kill transition through a plain static import.
+    expect(importsDynamically('agents.js', 'subAgentSpawner.js'),
+      'agents.js must not defer-import the spawner barrel — the facade is a static import now').toBe(false);
+    expect(graph.get('agents.js')).toContain('agentOrchestrator.js');
   });
 
   it('no longer needs the dynamic-import workaround for handleOrphanedTask', () => {
     // The cycle-dodge this issue was filed for: agentLifecycle reached
     // agentManagement via `await import()` because agentManagement imported it back.
-    const src = readFileSync(join(SERVICES_DIR, 'agentLifecycle.js'), 'utf-8');
-    expect(src).not.toMatch(/await import\(\s*['"]\.\/agentManagement\.js['"]\s*\)/);
-    expect(src).toMatch(/import \{ handleOrphanedTask \} from '\.\/agentManagement\.js';/);
+    expect(importsDynamically('agentLifecycle.js', 'agentManagement.js')).toBe(false);
+    expect(graph.get('agentLifecycle.js')).toContain('agentManagement.js');
   });
 });
