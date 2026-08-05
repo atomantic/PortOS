@@ -76,6 +76,52 @@ describe('SyncedReview', () => {
     expect(screen.getByText('The hero wakes.')).toBeTruthy();
   });
 
+  it('stacks to a single pane below lg and switches with the mobile selector', async () => {
+    getWritersRoomSyncedReview.mockResolvedValue(payload());
+    const { container } = render(<SyncedReview work={work} />);
+    await screen.findByText('The hero wakes.');
+
+    const paneClasses = () => Object.fromEntries(
+      ['prose', 'script', 'media'].map((k) => [k, container.querySelector(`[data-pane="${k}"]`).className]),
+    );
+
+    // Only the active pane is displayed at narrow widths; the rest are display:none
+    // until `lg` — no pane is left clipped below the fold (#3566).
+    let classes = paneClasses();
+    expect(classes.prose).not.toMatch(/\bhidden\b/);
+    expect(classes.script).toMatch(/\bhidden\b/);
+    expect(classes.media).toMatch(/\bhidden\b/);
+    ['prose', 'script', 'media'].forEach((k) => expect(classes[k]).toMatch(/\blg:block\b/));
+
+    fireEvent.click(screen.getByTitle('Show Media pane'));
+    await waitFor(() => expect(paneClasses().media).not.toMatch(/\bhidden\b/));
+    classes = paneClasses();
+    expect(classes.prose).toMatch(/\bhidden\b/);
+    expect(classes.script).toMatch(/\bhidden\b/);
+    expect(screen.getByTitle('Show Media pane').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('falls back to a still-enabled pane when the active one is toggled off', async () => {
+    getWritersRoomSyncedReview.mockResolvedValue(payload());
+    render(<SyncedReview work={work} />);
+    await screen.findByText('The hero wakes.');
+    // Prose starts active on mobile; disabling it must hand the mobile view to
+    // another enabled pane rather than render nothing.
+    fireEvent.click(screen.getByTitle('Toggle Prose pane'));
+    await waitFor(() => expect(screen.getByTitle('Show Script pane').getAttribute('aria-pressed')).toBe('true'));
+  });
+
+  it('re-enables a disabled pane when it is picked from the mobile selector', async () => {
+    getWritersRoomSyncedReview.mockResolvedValue(payload());
+    render(<SyncedReview work={work} />);
+    await screen.findByText('Opening Scene');
+    fireEvent.click(screen.getByTitle('Toggle Script pane'));
+    await waitFor(() => expect(screen.queryByText('Opening Scene')).toBeNull());
+    fireEvent.click(screen.getByTitle('Show Script pane'));
+    expect(await screen.findByText('Opening Scene')).toBeTruthy();
+    expect(screen.getByTitle('Toggle Script pane').getAttribute('aria-pressed')).toBe('true');
+  });
+
   it('shows the stale badge when the script is stale', async () => {
     getWritersRoomSyncedReview.mockResolvedValue(payload({
       script: { ...payload().script, stale: true },

@@ -80,6 +80,10 @@ export default function SyncedReview({ work }) {
   const [error, setError] = useState(null);
   const [selection, setSelection] = useState(null);
   const [visible, setVisible] = useState(() => new Set(['prose', 'script', 'media']));
+  // Below `lg` the three panes collapse to one column, so only one is shown at a
+  // time — stacking them inside the fixed-height, overflow-hidden grid pushed
+  // Script and Media off-screen with nothing to scroll (#3566).
+  const [mobilePane, setMobilePane] = useState('prose');
   const mountedRef = useMounted();
 
   const proseRef = useRef(null);
@@ -141,9 +145,21 @@ export default function SyncedReview({ work }) {
     });
   }, []);
 
+  // Picking a pane on mobile also re-enables it, so the narrow layout never
+  // needs the (desktop-only) visibility toggles to reach a pane.
+  const showPane = useCallback((key) => {
+    setVisible((prev) => (prev.has(key) ? prev : new Set(prev).add(key)));
+    setMobilePane(key);
+  }, []);
+
   const hasSelection = !!selection;
   const visibleCount = [...visible].length;
   const colClass = visibleCount === 1 ? 'lg:grid-cols-1' : visibleCount === 2 ? 'lg:grid-cols-2' : 'lg:grid-cols-3';
+  // Derived (not stored) so disabling the active pane on desktop can't leave the
+  // narrow layout pointing at a pane that is no longer rendered.
+  const activePane = visible.has(mobilePane) ? mobilePane : [...visible][0];
+  // Every pane renders; below `lg` all but the active one are display:none.
+  const paneClass = (key) => `${key === activePane ? '' : 'hidden'} lg:block`;
 
   if (loading && !data) {
     return (
@@ -173,7 +189,8 @@ export default function SyncedReview({ work }) {
     <div className="w-full h-full flex flex-col bg-port-bg min-h-0">
       {/* Toolbar */}
       <div className="flex items-center gap-2 px-4 py-2 border-b border-port-border bg-port-bg/60 shrink-0 flex-wrap">
-        <div className="flex items-center bg-port-card border border-port-border rounded p-0.5" role="group" aria-label="Visible panes">
+        {/* Desktop: pick which panes sit side by side. */}
+        <div className="hidden lg:flex items-center bg-port-card border border-port-border rounded p-0.5" role="group" aria-label="Visible panes">
           {PANES.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
@@ -186,6 +203,24 @@ export default function SyncedReview({ work }) {
               title={`Toggle ${label} pane`}
             >
               <Icon size={11} /> {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Mobile: one column fits one pane — switch between them instead. */}
+        <div className="flex lg:hidden items-center gap-1 flex-1 bg-port-card border border-port-border rounded p-0.5" role="group" aria-label="Active pane">
+          {PANES.map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              type="button"
+              aria-pressed={key === activePane}
+              onClick={() => showPane(key)}
+              className={`flex flex-1 items-center justify-center gap-1 px-2 min-h-[44px] text-[11px] rounded ${
+                key === activePane ? 'bg-port-accent text-white' : 'text-gray-400'
+              }`}
+              title={`Show ${label} pane`}
+            >
+              <Icon size={12} /> {label}
             </button>
           ))}
         </div>
@@ -231,6 +266,7 @@ export default function SyncedReview({ work }) {
         <div className={`flex-1 min-h-0 grid grid-cols-1 ${colClass} gap-px bg-port-border overflow-hidden`}>
           {visible.has('prose') && (
             <ProsePane
+              className={paneClass('prose')}
               containerRef={proseRef}
               segments={data.prose.segments}
               proseIds={proseIds}
@@ -240,6 +276,7 @@ export default function SyncedReview({ work }) {
           )}
           {visible.has('script') && (
             <ScriptPane
+              className={paneClass('script')}
               containerRef={scriptRef}
               script={data.script}
               sceneIds={sceneIds}
@@ -250,6 +287,7 @@ export default function SyncedReview({ work }) {
           )}
           {visible.has('media') && (
             <MediaPane
+              className={paneClass('media')}
               containerRef={mediaRef}
               items={data.media.items}
               mediaSceneIds={mediaSceneIds}
@@ -266,9 +304,9 @@ export default function SyncedReview({ work }) {
 
 // Shared pane chrome: the scroll container + sticky header. Each pane passes
 // its own item list (or empty state) as children.
-function ScrollPane({ containerRef, icon: Icon, label, count, children }) {
+function ScrollPane({ containerRef, className = '', paneKey, icon: Icon, label, count, children }) {
   return (
-    <div ref={containerRef} className="bg-port-bg overflow-y-auto min-h-0">
+    <div ref={containerRef} data-pane={paneKey} className={`bg-port-bg overflow-y-auto min-h-0 ${className}`}>
       <div className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] uppercase tracking-wider text-gray-400 border-b border-port-border bg-port-card/60 sticky top-0 z-10">
         <Icon size={12} /> {label}
         <span className="text-gray-600">· {count}</span>
@@ -279,9 +317,9 @@ function ScrollPane({ containerRef, icon: Icon, label, count, children }) {
 }
 
 // ---- Prose pane ----
-function ProsePane({ containerRef, segments, proseIds, hasSelection, onSelect }) {
+function ProsePane({ containerRef, className, segments, proseIds, hasSelection, onSelect }) {
   return (
-    <ScrollPane containerRef={containerRef} icon={FileText} label="Prose" count={segments.length}>
+    <ScrollPane containerRef={containerRef} className={className} paneKey="prose" icon={FileText} label="Prose" count={segments.length}>
       <div className="p-3 space-y-2">
         {segments.map((seg) => {
           const state = cardState(false, proseIds.has(seg.id), hasSelection);
@@ -313,9 +351,9 @@ function ProsePane({ containerRef, segments, proseIds, hasSelection, onSelect })
 }
 
 // ---- Script pane ----
-function ScriptPane({ containerRef, script, sceneIds, hasSelection, segHeading, onSelect }) {
+function ScriptPane({ containerRef, className, script, sceneIds, hasSelection, segHeading, onSelect }) {
   return (
-    <ScrollPane containerRef={containerRef} icon={Clapperboard} label="Script" count={script.scenes.length}>
+    <ScrollPane containerRef={containerRef} className={className} paneKey="script" icon={Clapperboard} label="Script" count={script.scenes.length}>
       {!script.available ? (
         <div className="p-4 text-[11px] text-gray-500 text-center">
           {script.status === 'failed'
@@ -360,9 +398,9 @@ function ScriptPane({ containerRef, script, sceneIds, hasSelection, segHeading, 
 }
 
 // ---- Media pane ----
-function MediaPane({ containerRef, items, mediaSceneIds, hasSelection, segHeading, onSelect }) {
+function MediaPane({ containerRef, className, items, mediaSceneIds, hasSelection, segHeading, onSelect }) {
   return (
-    <ScrollPane containerRef={containerRef} icon={ImageIcon} label="Media" count={items.length}>
+    <ScrollPane containerRef={containerRef} className={className} paneKey="media" icon={ImageIcon} label="Media" count={items.length}>
       {items.length === 0 ? (
         <div className="p-4 text-[11px] text-gray-500 text-center">
           No rendered media yet — generate scene images from the Storyboard panel.
