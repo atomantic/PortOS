@@ -9,6 +9,8 @@ const SETTLE_MS = 1_500;
 const MAX_POSTS = 100;
 const MAX_BODY_LENGTH = 40_000;
 const MAX_BIO_LENGTH = 2_000;
+const MAX_INTEGER = 2_147_483_647;
+const X_STATUS_URL = /^https:\/\/x\.com\/(?:(?:[A-Za-z0-9_]{1,15}|i)\/)?status\/\d+$/;
 
 const POST_HELPERS = String.raw`
   const parseCount = (value) => {
@@ -87,14 +89,14 @@ export const PEOPLE_EXPRESSION = `(() => ({
 }))()`;
 
 const boundedString = (value, max) => typeof value === 'string' ? value.replace(/\0/g, '').slice(0, max) : '';
-const nullableCount = (value) => Number.isInteger(value) && value >= 0 ? value : null;
+const nullableCount = (value) => Number.isInteger(value) && value >= 0 && value <= MAX_INTEGER ? value : null;
 const normalizedHandle = (value) => boundedString(value, 15).replace(/^@/, '').toLowerCase();
 
 const normalizePost = (post) => {
   const remoteId = boundedString(post?.remoteId, 80);
   if (!remoteId || !/^\d+$/.test(remoteId)) return null;
   const sourceUrl = boundedString(post?.sourceUrl, 2_000);
-  const safeUrl = /^https:\/\/x\.com\/status\/\d+$/.test(sourceUrl) ? sourceUrl : '';
+  const safeUrl = X_STATUS_URL.test(sourceUrl) ? sourceUrl : '';
   const replies = nullableCount(post?.replies) ?? 0;
   const reposts = nullableCount(post?.reposts) ?? 0;
   const likes = nullableCount(post?.likes) ?? 0;
@@ -107,7 +109,7 @@ const normalizePost = (post) => {
     authorHandle: normalizedHandle(post?.authorHandle),
     remoteCreatedAt: typeof post?.remoteCreatedAt === 'string' ? post.remoteCreatedAt.slice(0, 64) : null,
     impressions: nullableCount(post?.impressions),
-    engagements: replies + reposts + likes + bookmarks,
+    engagements: nullableCount(replies + reposts + likes + bookmarks),
     replies,
     reposts,
     likes,

@@ -84,4 +84,19 @@ describe('X page', () => {
     expect(screen.queryByRole('button', { name: /publish/i })).not.toBeInTheDocument();
     expect(screen.getByText(/Diagnostic complete/)).toBeInTheDocument();
   });
+
+  it('opens the account editor from the accounts index with an id-backed URL', async () => {
+    const user = userEvent.setup();
+    renderPage('/x');
+    await screen.findByRole('heading', { name: 'X accounts' });
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(await screen.findByRole('heading', { name: 'Edit X account' })).toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent(`/x/${account.id}/accounts?xAccount=edit`);
+  });
+
+  it('renders a not-found fallback for stale account URLs', async () => {
+    renderPage('/x/00000000-0000-4000-8000-000000000099/health');
+    expect(await screen.findByText(/This X account was not found/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Return to accounts.' })).toBeInTheDocument();
+  });
 });

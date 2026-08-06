@@ -6,7 +6,10 @@ import { openXHandoff } from './xBrowser.js';
 const USERNAME_PATTERN = /^[A-Za-z0-9_]{1,15}$/;
 const DRAFT_STATES = new Set(['draft', 'pending_review', 'approved', 'rejected', 'opened']);
 const MAX_DRAFT_AGE_MS = 24 * 60 * 60 * 1000;
+const MAX_INTEGER = 2_147_483_647;
+const X_STATUS_URL = /^https:\/\/x\.com\/(?:(?:[A-Za-z0-9_]{1,15}|i)\/)?status\/\d+$/;
 const syncLocks = new Map();
+const draftOpenLocks = new Map();
 
 const normalizeUsername = (value) => {
   const username = String(value || '').trim().replace(/^@/, '');
@@ -126,19 +129,24 @@ export function deriveXDiagnostics({ accountUsername, profile = {}, latest = {},
   };
 }
 
-const normalizeRemotePost = (post) => ({
-  remoteId: boundedText(post?.remoteId, 80),
-  kind: post?.kind === 'reply' ? 'reply' : 'post',
-  body: boundedText(post?.body, 40_000),
-  sourceUrl: boundedText(post?.sourceUrl, 2_000),
-  remoteCreatedAt: safeDate(post?.remoteCreatedAt),
-  impressions: Number.isInteger(post?.impressions) ? post.impressions : null,
-  engagements: Number.isInteger(post?.engagements) ? post.engagements : null,
-  replies: Number.isInteger(post?.replies) ? post.replies : 0,
-  reposts: Number.isInteger(post?.reposts) ? post.reposts : 0,
-  likes: Number.isInteger(post?.likes) ? post.likes : 0,
-  bookmarks: Number.isInteger(post?.bookmarks) ? post.bookmarks : 0,
-});
+const safeMetric = (value) => Number.isInteger(value) && value >= 0 && value <= MAX_INTEGER ? value : null;
+
+const normalizeRemotePost = (post) => {
+  const sourceUrl = boundedText(post?.sourceUrl, 2_000);
+  return {
+    remoteId: boundedText(post?.remoteId, 80),
+    kind: post?.kind === 'reply' ? 'reply' : 'post',
+    body: boundedText(post?.body, 40_000),
+    sourceUrl: X_STATUS_URL.test(sourceUrl) ? sourceUrl : '',
+    remoteCreatedAt: safeDate(post?.remoteCreatedAt),
+    impressions: safeMetric(post?.impressions),
+    engagements: safeMetric(post?.engagements),
+    replies: safeMetric(post?.replies) ?? 0,
+    reposts: safeMetric(post?.reposts) ?? 0,
+    likes: safeMetric(post?.likes) ?? 0,
+    bookmarks: safeMetric(post?.bookmarks) ?? 0,
+  };
+};
 
 const mergePosts = (...lists) => [...new Map(lists.flat().map(normalizeRemotePost).filter((post) => /^\d+$/.test(post.remoteId)).map((post) => [post.remoteId, post])).values()].slice(0, 100);
 
@@ -208,6 +216,7 @@ export async function listPosts(accountId) {
 export async function openAccountDestination(accountId, kind) {
   const account = await getAccountRow(accountId);
   if (!account) return null;
+  if (!account.enabled) throw new Error('Selected X account is disabled');
   if (!['profile', 'latest', 'people', 'settings'].includes(kind)) throw new Error('Unsupported X handoff destination');
   const value = kind === 'settings' ? '' : account.username;
   return openXHandoff({ kind, value });
@@ -245,23 +254,19 @@ export async function listPendingReviewActions({ limit = 50 } = {}) {
 
 export async function reviewDraft(id, state, reviewNote = '') {
   if (!DRAFT_STATES.has(state) || !['pending_review', 'approved', 'rejected'].includes(state)) throw new Error('Unsupported X draft review state');
-  const current = await query('SELECT * FROM x_drafts WHERE id=$1', [id]);
-  const existing = current.rows[0];
-  if (!existing) return null;
-  const allowed = existing.state === 'draft' && state === 'pending_review'
-    || existing.state === 'pending_review' && ['approved', 'rejected'].includes(state);
-  if (!allowed) return null;
+  const expectedState = state === 'pending_review' ? 'draft' : 'pending_review';
   const result = await query(
     `UPDATE x_drafts SET state=$2,review_note=$3,approved_at=CASE WHEN $2='approved' THEN NOW() ELSE approved_at END,updated_at=NOW()
-     WHERE id=$1 RETURNING *`,
-    [id, state, boundedText(reviewNote, 2_000)],
+     WHERE id=$1 AND state=$4 RETURNING *`,
+    [id, state, boundedText(reviewNote, 2_000), expectedState],
   );
   const row = result.rows[0];
+  if (!row) return null;
   const account = await getAccountRow(row.account_id);
   return draftView({ ...row, account_label: account?.label, username: account?.username });
 }
 
-export async function openApprovedDraft(id) {
+async function openApprovedDraftUnlocked(id) {
   const result = await query(
     `SELECT d.*, a.label AS account_label, a.username, a.enabled
      FROM x_drafts d JOIN x_accounts a ON a.id=d.account_id WHERE d.id=$1`,
@@ -278,6 +283,13 @@ export async function openApprovedDraft(id) {
   );
   const opened = updated.rows[0];
   return opened ? draftView({ ...opened, account_label: draft.account_label, username: draft.username }) : null;
+}
+
+export async function openApprovedDraft(id) {
+  if (draftOpenLocks.has(id)) return draftOpenLocks.get(id);
+  const run = openApprovedDraftUnlocked(id).finally(() => draftOpenLocks.delete(id));
+  draftOpenLocks.set(id, run);
+  return run;
 }
 
 export const xDraftStates = [...DRAFT_STATES];

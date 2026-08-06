@@ -26,7 +26,7 @@ describe('X browser read transport', () => {
         remoteId: '123',
         authorHandle: 'Example_User',
         body: 'A public post',
-        sourceUrl: 'https://x.com/status/123',
+        sourceUrl: 'https://x.com/example_user/status/123',
         impressions: 382,
         replies: 1,
         reposts: 2,
@@ -49,7 +49,7 @@ describe('X browser read transport', () => {
         remoteId: '123',
         kind: 'post',
         engagements: 10,
-        sourceUrl: 'https://x.com/status/123',
+        sourceUrl: 'https://x.com/example_user/status/123',
       })],
     });
     expect(navigateToUrlPinned).toHaveBeenCalledWith('https://x.com/Example_User', expect.objectContaining({
