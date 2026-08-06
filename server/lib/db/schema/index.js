@@ -26,6 +26,7 @@ import { writersRoomDdl } from './writersRoom.js';
 import { loraDdl } from './lora.js';
 import { privacyDdl } from './privacy.js';
 import { stackerNewsDdl } from './stackerNews.js';
+import { xDdl } from './x.js';
 import { auditDdl, auditedTables, buildAuditTriggers } from './audit.js';
 
 export {
@@ -43,6 +44,7 @@ export {
   loraDdl,
   privacyDdl,
   stackerNewsDdl,
+  xDdl,
   auditDdl,
   auditedTables,
   buildAuditTriggers,
@@ -75,6 +77,7 @@ export function buildCatalogDdl() {
     ...loraDdl,
     ...privacyDdl,
     ...stackerNewsDdl,
+    ...xDdl,
     ...auditDdl,
     ...buildAuditTriggers(),
   ];

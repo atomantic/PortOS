@@ -81,6 +81,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiCalendar.js` | Calendar events. |
 | `apiMessages.js` | Messages / notifications + iMessage manager (#2413). |
 | `apiStackerNews.js` | Stacker News account, territory, review-action, and safe analysis APIs. |
+| `apiX.js` | X account diagnostics, public post metrics, review-gated drafts, and manual browser handoffs. |
 | `apiContacts.js` | macOS Contacts sync + identity resolve + Tribe enrich (#2415). |
 | `apiSignal.js` | Signal Desktop ingestion status / setup-check / sync. |
 | `apiSpotify.js` | Spotify OAuth + listening-history sync. |

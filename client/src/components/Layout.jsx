@@ -96,7 +96,8 @@ import {
   PersonStanding,
   Box,
   Boxes,
-  Gamepad2
+  Gamepad2,
+  AtSign
 } from 'lucide-react';
 // `__APP_VERSION__` is a Vite build-time define (see vite.config.js). Biome does
 // not honour ESLint-style "global" block comments, so it is declared in
@@ -217,6 +218,7 @@ const navItems = [
       { to: '/messages/inbox', label: 'Inbox', icon: Inbox },
       { to: '/stacker-news', label: 'Stacker News', icon: Newspaper },
       { to: '/messages/sync', label: 'Sync', icon: RefreshCw },
+      { to: '/x', label: 'X', icon: AtSign },
     ],
   },
   {

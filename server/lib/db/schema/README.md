@@ -31,13 +31,14 @@ Parity with `server/scripts/init-db.sql` (the fresh-install path) is locked by
 | `lora.js` | `loraDdl` | LoRA training runs |
 | `privacy.js` | `privacyDdl` | Privacy suite — vault, consents, orgs, brokers, change events |
 | `stackerNews.js` | `stackerNewsDdl` | Stacker News accounts, territories, untrusted-content analyses, and review-gated actions |
+| `x.js` | `xDdl` | X account diagnostics, public post metrics, and review-gated drafts |
 | `audit.js` | `auditDdl`, `auditedTables`, `buildAuditTriggers()` | `record_audit` table/function + per-table audit triggers |
 
 ### Composer (`index.js`)
 
 - `buildUpgradeDdl()` → phase-1 list (`core` → `tribe` → `humanActivity` → `commissions`).
 - `buildCatalogDdl()` → phase-2 list (`catalog` → `media` → `catalogUserTypes` →
-  `universes` → `library` → `pipeline` → `writersRoom` → `lora` → `privacy` → `stackerNews` →
+  `universes` → `library` → `pipeline` → `writersRoom` → `lora` → `privacy` → `stackerNews` → `x` →
   `audit` DDL → audit triggers).
 
 `ensureSchemaImpl()` calls these two builders and runs each list through

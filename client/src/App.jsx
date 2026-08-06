@@ -31,6 +31,7 @@ const FeatureAgentDetail = lazyWithReload(() => import('./pages/FeatureAgentDeta
 const CalendarPage = lazyWithReload(() => import('./pages/Calendar'));
 const Messages = lazyWithReload(() => import('./pages/Messages'));
 const StackerNews = lazyWithReload(() => import('./pages/StackerNews'));
+const XPage = lazyWithReload(() => import('./pages/X'));
 const IMessage = lazyWithReload(() => import('./pages/IMessage'));
 const Tribe = lazyWithReload(() => import('./pages/Tribe'));
 const Timeline = lazyWithReload(() => import('./pages/Timeline'));
@@ -317,6 +318,8 @@ export default function App() {
           <Route path="messages/:tab" element={<Messages />} />
           <Route path="stacker-news" element={<StackerNews />} />
           <Route path="stacker-news/:accountId/:tab" element={<StackerNews />} />
+          <Route path="x" element={<XPage />} />
+          <Route path="x/:accountId/:tab" element={<XPage />} />
           {/* Legacy /imessage → Comms Messages → iMessage tab */}
           <Route path="imessage" element={<Navigate to="/messages/imessage" replace />} />
           <Route path="imessage/:chatKey" element={<IMessage />} />

@@ -16,6 +16,7 @@ const askPromote = { promoteLatestAssistantTurn: vi.fn() };
 // active goals so existing cases see the brain/task-only target list.
 const identity = { getGoals: vi.fn() };
 const stackerNews = { listPendingReviewActions: vi.fn() };
+const x = { listPendingReviewActions: vi.fn() };
 
 vi.mock('./brain.js', () => brain);
 vi.mock('./askConversations.js', () => askConversations);
@@ -26,6 +27,7 @@ vi.mock('./backup.js', () => backup);
 vi.mock('./identity.js', () => identity);
 vi.mock('./askPromote.js', () => askPromote);
 vi.mock('./stackerNews.js', () => stackerNews);
+vi.mock('./x.js', () => x);
 
 const { buildQueue, resolveQueueItem, promoteAskQueueItem, __resetAlertsCache } = await import('./reviewQueue.js');
 
@@ -39,6 +41,7 @@ function resetEmpty() {
   backup.getState.mockResolvedValue({ status: 'ok', error: null });
   identity.getGoals.mockResolvedValue({ goals: [] });
   stackerNews.listPendingReviewActions.mockResolvedValue([]);
+  x.listPendingReviewActions.mockResolvedValue([]);
 }
 
 describe('reviewQueue.buildQueue', () => {
@@ -78,6 +81,16 @@ describe('reviewQueue.buildQueue', () => {
       id: 'stacker:s1',
       drillTo: '/stacker-news/a1/review',
       sourceLabel: 'Stacker News approvals',
+    });
+  });
+
+  it('surfaces X drafts with an account-specific drill-down', async () => {
+    x.listPendingReviewActions.mockResolvedValue([{ id: 'x1', accountId: 'a1', accountLabel: 'Example X account', username: 'example_user', payload: { body: 'A thoughtful draft' }, createdAt: '2026-06-03T11:00:00.000Z' }]);
+    const queue = await buildQueue();
+    expect(queue.items.find((item) => item.source === 'x')).toMatchObject({
+      id: 'x:x1',
+      drillTo: '/x/a1/drafts',
+      sourceLabel: 'X drafts',
     });
   });
 

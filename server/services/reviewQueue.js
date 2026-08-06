@@ -32,6 +32,7 @@ import * as proactiveAlerts from './proactiveAlerts.js';
 import * as backup from './backup.js';
 import * as identity from './identity.js';
 import * as stackerNews from './stackerNews.js';
+import * as x from './x.js';
 import { promoteLatestAssistantTurn } from './askPromote.js';
 import { ServerError } from '../lib/errorHandler.js';
 
@@ -254,6 +255,25 @@ const PRODUCERS = [
         severity: 'normal',
         drillTo: `/stacker-news/${action.accountId}/review`,
         meta: { account: action.accountLabel },
+      };
+    },
+  },
+  {
+    source: 'x',
+    label: 'X drafts',
+    drillTo: '/x',
+    async gather() {
+      return x.listPendingReviewActions({ limit: PER_SOURCE_LIMIT * 2 });
+    },
+    map(draft) {
+      return {
+        id: `x:${draft.id}`,
+        title: 'X draft awaiting review',
+        summary: draft.payload?.body?.slice(0, 200) || '(empty draft)',
+        timestamp: draft.createdAt || null,
+        severity: 'normal',
+        drillTo: `/x/${draft.accountId}/drafts`,
+        meta: { account: draft.accountLabel || `@${draft.username}` },
       };
     },
   },
