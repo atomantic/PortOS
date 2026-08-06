@@ -14,6 +14,7 @@
 
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import { readResponseJson } from '../lib/readResponseJson.js'
+import { commandExists } from '../lib/commandExists.js'
 import {
   LOCAL_LLM_REVIEWERS,
   DEFAULT_REVIEWERS,
@@ -21,6 +22,8 @@ import {
   REVIEWER_ALIASES,
   REVIEWER_VALUES,
   REVIEW_STOP_MODES,
+  isCliReviewer,
+  reviewerCliBinary,
   normalizeReviewUsernames,
   normalizeOptionalReviewers,
   resolveReviewUsernames,
@@ -167,6 +170,49 @@ export async function resolveReviewLoopOptions(metadata, { normalize, isTruthyMe
   // backend); spawnReviewLoopFollowUp narrows to the reviewers actually in the list.
   const reviewerModels = resolveReviewerModels(metadata?.reviewerModels, reviewerModelsFromDefaults(defaults))
   return { reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewStopMode, reviewerApplies, reviewerModels }
+}
+
+/**
+ * Per-reviewer CLI-binary install probe, keyed by reviewer slug (e.g.
+ * `{ claude: true, antigravity: false, codex: true, grok: false }`). Only CLI
+ * reviewers (`isCliReviewer`) are probed — `copilot` is a GitHub API review
+ * and `lmstudio`/`ollama` route through `/api/code-review/local`, neither has
+ * a binary to find.
+ *
+ * TTL-cached (`authGate.js`'s inline Map+expiresAt pattern) rather than
+ * settings-event-invalidated like `getCodeReviewDefaults()`, because a probe
+ * result can go stale from something settings changes never fire for (the
+ * user installs/uninstalls a CLI mid-session). Deliberately kept OUT of
+ * `getCodeReviewDefaults()`/`pickCodeReviewDefaults()`: those are synchronous,
+ * no-I/O functions also called from the agent-completion spawn path
+ * (`resolveReviewLoopOptions`), and this does a real `execFile` per reviewer —
+ * only the `GET /defaults` route needs it, so it's called from there alone.
+ *
+ * Warn-only, per #3606's "warn, do not block" decision: this never filters or
+ * rejects a reviewer, it only reports installed state for the UI to surface.
+ */
+const REVIEWER_CLI_INSTALLED_TTL_MS = 5 * 60 * 1000
+// Matches imageGen/{grok,agy,codex}.js's own checkConnection() probes for
+// these same binaries — a plain 5s default (commandExists's fallback, sized
+// for lightweight tools like `brew --version`) previously clocked these
+// heavier agentic CLIs as falsely uninstalled under a cold start.
+const REVIEWER_CLI_PROBE_TIMEOUT_MS = 15_000
+let cachedInstalled = null
+let cachedInstalledExpiresAt = 0
+
+/** Test-only: reset the memoized reviewer-CLI-installed cache. */
+export function __resetReviewerCliInstalledCache() { cachedInstalled = null; cachedInstalledExpiresAt = 0 }
+
+export async function getReviewerCliInstalled() {
+  if (cachedInstalled && cachedInstalledExpiresAt > Date.now()) return cachedInstalled
+  const cliReviewers = REVIEWER_VALUES.filter(isCliReviewer)
+  const entries = await Promise.all(cliReviewers.map(async (reviewer) => {
+    const binary = reviewerCliBinary(reviewer)
+    return [reviewer, binary ? await commandExists(binary, undefined, { timeoutMs: REVIEWER_CLI_PROBE_TIMEOUT_MS }) : true]
+  }))
+  cachedInstalled = Object.fromEntries(entries)
+  cachedInstalledExpiresAt = Date.now() + REVIEWER_CLI_INSTALLED_TTL_MS
+  return cachedInstalled
 }
 
 const CODE_REVIEW_SYSTEM_PROMPT = `You are a careful senior code reviewer. The user will paste a unified PR diff. Review only what the diff changes (not the whole repo). Produce findings as a markdown list grouped by severity:

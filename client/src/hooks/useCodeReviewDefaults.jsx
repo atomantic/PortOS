@@ -22,6 +22,10 @@ const FALLBACK = Object.freeze({
   ollamaModel: null,
   codexModel: null,
   claudeModel: null,
+  // Per-CLI-reviewer install probe (#3606) — absent/empty means "not fetched
+  // yet", not "nothing installed"; ReviewerPicker only warns on an explicit
+  // `false`.
+  installed: {},
 });
 
 const CodeReviewDefaultsContext = createContext(FALLBACK);
@@ -51,6 +55,7 @@ export function CodeReviewDefaultsProvider({ children }) {
           ollamaModel: d.ollamaModel || null,
           codexModel: d.codexModel || null,
           claudeModel: d.claudeModel || null,
+          installed: d.installed && typeof d.installed === 'object' && !Array.isArray(d.installed) ? d.installed : {},
         });
       })
       .catch(() => {});

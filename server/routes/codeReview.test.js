@@ -6,6 +6,7 @@ import { errorMiddleware } from '../lib/errorHandler.js'
 vi.mock('../services/codeReview.js', () => ({
   runLocalCodeReview: vi.fn(),
   getCodeReviewDefaults: vi.fn(),
+  getReviewerCliInstalled: vi.fn(),
 }))
 
 vi.mock('../services/settings.js', () => ({
@@ -34,6 +35,16 @@ beforeEach(() => {
     reviewerApplies: false,
     lmstudioModel: null,
     ollamaModel: null,
+  })
+  codeReviewSvc.getReviewerCliInstalled.mockResolvedValue({ claude: true, antigravity: false, codex: true, grok: true })
+})
+
+describe('GET /api/code-review/defaults', () => {
+  it('merges the reviewer-CLI-installed probe into the defaults response', async () => {
+    const res = await request(makeApp()).get('/api/code-review/defaults')
+    expect(res.status).toBe(200)
+    expect(res.body.reviewers).toEqual(['copilot'])
+    expect(res.body.installed).toEqual({ claude: true, antigravity: false, codex: true, grok: true })
   })
 })
 

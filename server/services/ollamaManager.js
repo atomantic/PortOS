@@ -29,6 +29,7 @@ import {
 } from '../lib/localLlmDisk.js'
 import { buildHfAuthHeaders } from '../lib/huggingfaceLora.js'
 import { isEmbeddingModel } from '../lib/localModelHeuristics.js'
+import { commandExists } from '../lib/commandExists.js'
 
 const execFileAsync = promisify(execFile)
 const AVAILABILITY_CACHE_TTL_MS = 30_000
@@ -85,10 +86,6 @@ let managedProcess = null
 let managedProcessPid = null
 
 const status = { lastError: null, lastSuccessAt: null, consecutiveErrors: 0 }
-
-async function commandExists(cmd, args = ['--version']) {
-  return execFileAsync(cmd, args, { timeout: 5_000 }).then(() => true).catch(() => false)
-}
 
 async function getServiceController() {
   if (process.platform === 'darwin' && await commandExists('brew', ['--version'])) {

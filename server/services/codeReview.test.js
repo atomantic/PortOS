@@ -15,6 +15,10 @@ vi.mock('./settings.js', () => ({
 // does, and those tests stub `global.fetch` directly.
 vi.mock('./lmStudioManager.js', () => ({ getBaseUrl: () => 'http://localhost:1234' }))
 vi.mock('./ollamaManager.js', () => ({ getBaseUrl: () => 'http://localhost:11434' }))
+// Reviewer-CLI-installed probe: stub the shared execFile-based helper so the
+// test controls per-binary results without touching the real PATH.
+const commandExistsMock = { impl: async () => true }
+vi.mock('../lib/commandExists.js', () => ({ commandExists: (...args) => commandExistsMock.impl(...args) }))
 
 import { mockJsonResponse, mockTextResponse } from '../lib/testHelper.js'
 import {
@@ -23,7 +27,9 @@ import {
   getCodeReviewDefaults,
   resolveReviewLoopOptions,
   runLocalCodeReview,
+  getReviewerCliInstalled,
   __resetCodeReviewDefaultsCache,
+  __resetReviewerCliInstalledCache,
 } from './codeReview.js'
 
 // Minimal stand-ins for the deps resolveReviewLoopOptions is handed by its
@@ -38,6 +44,8 @@ describe('codeReview helpers', () => {
   afterEach(() => {
     mockedSettings.current = {}
     __resetCodeReviewDefaultsCache()
+    __resetReviewerCliInstalledCache()
+    commandExistsMock.impl = async () => true
     vi.restoreAllMocks()
   })
 
@@ -168,6 +176,31 @@ describe('codeReview helpers', () => {
       expect(out.reviewers).toEqual(['ollama'])
       expect(out.ollamaModel).toBe('codellama')
       expect(out.stopMode).toBe('all')
+    })
+  })
+
+  describe('getReviewerCliInstalled', () => {
+    it('probes only CLI reviewers, resolving each through reviewerCliBinary', async () => {
+      const probed = []
+      commandExistsMock.impl = async (binary) => { probed.push(binary); return binary !== 'agy' }
+      const out = await getReviewerCliInstalled()
+      expect(out).toEqual({ claude: true, antigravity: false, codex: true, grok: true })
+      expect(probed.sort()).toEqual(['agy', 'claude', 'codex', 'grok'])
+    })
+
+    it('caches the result within the TTL — a second call does not re-probe', async () => {
+      let calls = 0
+      commandExistsMock.impl = async () => { calls += 1; return true }
+      await getReviewerCliInstalled()
+      await getReviewerCliInstalled()
+      expect(calls).toBe(4) // one probe per CLI reviewer, only on the first call
+    })
+
+    it('probes with the longer 15s timeout these heavier agentic CLIs need', async () => {
+      const seenOpts = []
+      commandExistsMock.impl = async (_binary, _args, opts) => { seenOpts.push(opts); return true }
+      await getReviewerCliInstalled()
+      expect(seenOpts).toEqual(seenOpts.map(() => ({ timeoutMs: 15_000 })))
     })
   })
 

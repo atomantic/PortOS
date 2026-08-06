@@ -32,6 +32,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   const [reviewerModels, setReviewerModels] = useState({});
   const [reviewStopMode, setReviewStopMode] = useState(DEFAULT_REVIEW_STOP_MODE);
   const [reviewerApplies, setReviewerApplies] = useState(false);
+  const [reviewerCliInstalled, setReviewerCliInstalled] = useState({});
   const [createJiraTicket, setCreateJiraTicket] = useState(false);
   const [screenshots, setScreenshots] = useState([]);
   const [attachments, setAttachments] = useState([]);
@@ -82,6 +83,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
         setReviewerModels(reviewerModelsFromDefaults(d));
         if (d.stopMode) setReviewStopMode(d.stopMode);
         if (d.reviewerApplies === true) setReviewerApplies(true);
+        if (d.installed && typeof d.installed === 'object' && !Array.isArray(d.installed)) setReviewerCliInstalled(d.installed);
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -589,6 +591,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
                 reviewerMaxRounds={reviewerMaxRounds}
                 reviewerModels={reviewerModels}
                 modelOptions={reviewerModelOptions}
+                installed={reviewerCliInstalled}
                 stopMode={reviewStopMode}
                 reviewerApplies={reviewerApplies}
                 onChange={({ reviewers: r, usernames: u, optionalReviewers: o, reviewerMaxRounds: m, reviewerModels: rm, stopMode, reviewerApplies: ra }) => {

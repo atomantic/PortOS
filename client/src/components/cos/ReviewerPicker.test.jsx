@@ -14,6 +14,31 @@ describe('ReviewerPicker', () => {
     expect(screen.getByRole('button', { name: /Claude/ })).toBeInTheDocument();
   });
 
+  describe('installed badge (#3606)', () => {
+    it('flags a selected reviewer whose CLI probe came back false', () => {
+      render(<ReviewerPicker reviewers={['antigravity']} installed={{ antigravity: false }} onChange={() => {}} />);
+      expect(screen.getByText('not installed')).toBeInTheDocument();
+    });
+
+    it('does not flag a selected reviewer with no probe entry (not a CLI reviewer, or not fetched)', () => {
+      render(<ReviewerPicker reviewers={['copilot']} installed={{ antigravity: false }} onChange={() => {}} />);
+      // copilot has no `installed` entry (it's not a CLI reviewer) — its row
+      // stays unbadged even though the map has an entry for a different reviewer.
+      expect(screen.getByText('Copilot').closest('div')).not.toHaveTextContent('not installed');
+    });
+
+    it('does not flag anything when installed is absent', () => {
+      render(<ReviewerPicker reviewers={['codex', 'antigravity']} onChange={() => {}} />);
+      expect(screen.queryByText('not installed')).not.toBeInTheDocument();
+    });
+
+    it('flags an unselected reviewer in the Add row too', () => {
+      render(<ReviewerPicker reviewers={['copilot']} installed={{ antigravity: false }} onChange={() => {}} />);
+      const addButton = screen.getByRole('button', { name: /Antigravity/ });
+      expect(addButton).toHaveTextContent('not installed');
+    });
+  });
+
   it('shows the empty-state hint when no reviewers are selected', () => {
     render(<ReviewerPicker reviewers={[]} onChange={() => {}} />);
     expect(screen.getByText(/none — defaults to Copilot/)).toBeInTheDocument();

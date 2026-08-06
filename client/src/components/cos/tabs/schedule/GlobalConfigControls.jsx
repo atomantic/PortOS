@@ -471,6 +471,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
               // Review Defaults (persisted as `<reviewer>Model` scalars).
               reviewerModels={config.taskMetadata?.reviewerModels ?? reviewerModelsFromDefaults(reviewDefaults)}
               modelOptions={reviewerModelOptions}
+              installed={reviewDefaults.installed}
               stopMode={config.taskMetadata?.reviewStopMode || reviewDefaults.stopMode || DEFAULT_REVIEW_STOP_MODE}
               reviewerApplies={config.taskMetadata?.reviewerApplies !== undefined
                 ? (config.taskMetadata?.reviewerApplies === true || config.taskMetadata?.reviewerApplies === 'true')

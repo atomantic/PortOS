@@ -1,5 +1,6 @@
 import { useId, useState } from 'react';
 import { Plus, X, ChevronUp, ChevronDown } from 'lucide-react';
+import Pill from '../ui/Pill';
 import {
   REVIEWER_OPTIONS,
   REVIEW_STOP_MODES,
@@ -55,6 +56,15 @@ const normalizeReviewerValue = (value) => value === 'gemini' ? 'antigravity' : v
  * flows substitute a reviewer CSV into their prompt and have no slashdo flag
  * string, so rendering those two controls there would be a knob wired to
  * nothing. The reviewer list itself still applies.
+ *
+ * `installed` is a per-reviewer-slug install probe from the Code Review
+ * Defaults endpoint (`GET /api/code-review/defaults`'s `installed` field,
+ * #3606) — `{ claude: true, antigravity: false, ... }`. Only an explicit
+ * `false` renders a "not installed" badge; `undefined` (not a CLI reviewer,
+ * or the caller didn't fetch it) renders nothing. Warn-only: a reviewer stays
+ * selectable and selected even when flagged not-installed, since the CLI
+ * check is local-machine-only and a federated peer (or a later install) may
+ * satisfy it.
  */
 export default function ReviewerPicker({
   reviewers = [],
@@ -63,6 +73,7 @@ export default function ReviewerPicker({
   reviewerMaxRounds = {},
   reviewerModels = {},
   modelOptions = null,
+  installed = null,
   stopMode = DEFAULT_REVIEW_STOP_MODE,
   reviewerApplies = false,
   onChange,
@@ -116,6 +127,20 @@ export default function ReviewerPicker({
   // DELETES the key rather than persisting `''` (a `--model ` with no id).
   const modelsMap = asMap(reviewerModels);
   const models = keyedLookup(modelsMap);
+  // Only an explicit `false` counts — `undefined` covers both "not a CLI
+  // reviewer" (copilot/lmstudio/ollama/@username) and "caller didn't fetch
+  // `installed`", neither of which should render a warning badge.
+  const notInstalled = (token) => installed?.[token] === false;
+  const renderInstalledBadge = (token) => notInstalled(token) && (
+    <Pill
+      tone="warning"
+      size="xs"
+      className="shrink-0"
+      title={`${labelFor(token)}'s CLI binary wasn't found on this machine. It still runs (federation-wide config), but the review loop here will report it unsatisfied until it's installed.`}
+    >
+      not installed
+    </Pill>
+  );
 
   const emit = (next) => onChange?.({
     reviewers: selected,
@@ -397,7 +422,10 @@ export default function ReviewerPicker({
                       <ChevronDown size={12} />
                     </button>
                   </div>
-                  <span className="text-xs text-gray-300 col-span-2 sm:col-span-1 truncate">{labelFor(value)}</span>
+                  <span className="flex items-center gap-1 min-w-0 col-span-2 sm:col-span-1">
+                    <span className="text-xs text-gray-300 truncate">{labelFor(value)}</span>
+                    {renderInstalledBadge(value)}
+                  </span>
                   <span className={CELL_LABEL_CLASS}>Model</span>
                   <div className="min-w-0">{renderModelCell(value)}</div>
                   <span className={CELL_LABEL_CLASS}>Optional</span>
@@ -449,6 +477,7 @@ export default function ReviewerPicker({
             >
               <Plus size={11} />
               {opt.label}
+              {renderInstalledBadge(opt.value)}
             </button>
           ))}
         </div>

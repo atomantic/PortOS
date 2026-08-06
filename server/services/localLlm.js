@@ -33,6 +33,7 @@ import { compareSemver } from '../lib/versionUtils.js'
 import { isBackend, mapModelToBackend } from '../lib/localLlmCatalog.js'
 import { sanitizeOllamaName } from '../lib/localLlmDisk.js'
 import { recommendEditorialModel, isVisionModel, isVisionCapableCliProvider, isToolUseModel } from '../lib/localModelHeuristics.js'
+import { commandExists } from '../lib/commandExists.js'
 import * as ollamaManager from './ollamaManager.js'
 import * as lmStudioManager from './lmStudioManager.js'
 import { getProviderById, getAllProviders, updateProvider, refreshProviderModels, isOllamaBackedProvider } from './providers.js'
@@ -196,10 +197,6 @@ export async function ensureBackendProvider(backend) {
 }
 
 // ---- backend capability probes ----------------------------------------------
-
-async function commandExists(cmd, args) {
-  return execFileAsync(cmd, args, { timeout: 5_000 }).then(() => true).catch(() => false)
-}
 
 // Whether Homebrew already has the backend's formula/cask installed. Used to
 // recover from a non-zero `brew install` exit that nonetheless left the package

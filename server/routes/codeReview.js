@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
 import { validateRequest, LOCAL_LLM_REVIEWERS } from '../lib/validation.js'
 import { getSettings } from '../services/settings.js'
-import { runLocalCodeReview, getCodeReviewDefaults } from '../services/codeReview.js'
+import { runLocalCodeReview, getCodeReviewDefaults, getReviewerCliInstalled } from '../services/codeReview.js'
 
 const router = Router()
 
@@ -21,8 +21,12 @@ const localReviewRequestSchema = z.object({
 // GET /api/code-review/defaults — resolved global defaults (settings.codeReview
 // + hardcoded fallback). The AI Providers panel reads this to render the
 // initial state; TaskAddForm + ScheduleTab read it to seed new reviewer lists.
+// `installed` (per-CLI-reviewer boolean, TTL-probed) rides alongside so a
+// picker can flag a configured reviewer whose binary isn't on this machine
+// (#3606) — warn-only, never filters the `reviewers` list above.
 router.get('/defaults', asyncHandler(async (_req, res) => {
-  res.json(await getCodeReviewDefaults())
+  const [defaults, installed] = await Promise.all([getCodeReviewDefaults(), getReviewerCliInstalled()])
+  res.json({ ...defaults, installed })
 }))
 
 // POST /api/code-review/local — run a single review pass against the

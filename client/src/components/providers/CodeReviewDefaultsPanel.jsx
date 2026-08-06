@@ -26,6 +26,7 @@ export default function CodeReviewDefaultsPanel() {
   const [reviewerModels, setReviewerModels] = useState({});
   const [stopMode, setStopMode] = useState(DEFAULT_REVIEW_STOP_MODE);
   const [reviewerApplies, setReviewerApplies] = useState(false);
+  const [installed, setInstalled] = useState({});
   const modelOptions = useReviewerModelOptions();
 
   useEffect(() => {
@@ -44,6 +45,7 @@ export default function CodeReviewDefaultsPanel() {
           setReviewerModels(reviewerModelsFromDefaults(defaults));
           setStopMode(defaults.stopMode || DEFAULT_REVIEW_STOP_MODE);
           setReviewerApplies(defaults.reviewerApplies === true);
+          setInstalled(defaults.installed && typeof defaults.installed === 'object' && !Array.isArray(defaults.installed) ? defaults.installed : {});
         }
         setLoading(false);
       });
@@ -89,6 +91,7 @@ export default function CodeReviewDefaultsPanel() {
             reviewerMaxRounds={reviewerMaxRounds}
             reviewerModels={reviewerModels}
             modelOptions={modelOptions}
+            installed={installed}
             stopMode={stopMode}
             reviewerApplies={reviewerApplies}
             disabled={saving}
