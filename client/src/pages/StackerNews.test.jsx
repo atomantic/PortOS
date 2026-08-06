@@ -97,7 +97,7 @@ describe('StackerNews', () => {
   it('deep-links to one account and shows its independent schedule and rules', async () => {
     const user = userEvent.setup();
     renderPage('/stacker-news/a1/accounts');
-    expect(await screen.findByText('@art_steward · every 15m')).toBeInTheDocument();
+    expect(await screen.findByText('@art_steward · every 15m · newest 30/community')).toBeInTheDocument();
     expect(screen.getByText('@personal_stacker · monitoring off')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Edit account settings' }));
     await user.click(drawerTab('Monitoring & models'));
@@ -137,7 +137,7 @@ describe('StackerNews', () => {
     await user.selectOptions(accountSwitcher(), 'a2');
     expect(await screen.findByRole('heading', { name: 'Communities for @personal_stacker' })).toBeInTheDocument();
     expect(currentUrl()).toBe('/stacker-news/a2/territory');
-    expect(screen.getByRole('tab', { name: 'Territory' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: 'Communities' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('names the account in scope on every scoped section', async () => {
@@ -146,11 +146,33 @@ describe('StackerNews', () => {
     expect(await screen.findByRole('heading', { name: 'Approval queue for @art_steward' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Monitored content for @art_steward' })).toBeInTheDocument();
     expect(screen.getByText(/No actions are waiting for @art_steward/)).toBeInTheDocument();
-    await user.click(screen.getByRole('tab', { name: 'Territory' }));
+    await user.click(screen.getByRole('tab', { name: 'Communities' }));
     expect(await screen.findByRole('heading', { name: 'Add community to @art_steward' })).toBeInTheDocument();
     expect(screen.getByText(/Add communities @art_steward monitors or owns/)).toBeInTheDocument();
     await user.click(screen.getByRole('tab', { name: 'Activity' }));
     expect(await screen.findByRole('heading', { name: 'Action ledger for @art_steward' })).toBeInTheDocument();
+  });
+
+  it('turns each newest item into explicit reply, zap, moderation, and image-analysis tasks', async () => {
+    const user = userEvent.setup();
+    const item = {
+      id: 'item-new', remoteId: '42', accountId: 'a1', territoryId: 't1', kind: 'post', authorName: 'artist', title: 'Fresh artwork',
+      body: 'A new visual post', imageUrls: ['https://cdn.example.com/artwork.png'], remoteCreatedAt: '2026-08-06T10:00:00.000Z',
+    };
+    api.getStackerNewsItems.mockResolvedValue({ items: [item] });
+    api.createStackerNewsAction.mockResolvedValue({ id: 'zap-action', accountId: 'a1', itemId: 'item-new', territoryId: 't1', kind: 'open_browser', state: 'pending_review', destination: 'item', payload: { intent: 'zap' }, reviewedTarget: { username: 'art_steward' }, policyVersion: 'v1' });
+    renderPage('/stacker-news/a1/review');
+    expect(await screen.findByRole('heading', { name: 'Fresh artwork' })).toBeInTheDocument();
+    expect(screen.getByText(/1 image/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Analyze image with Ollama' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open item' })).toHaveAttribute('href', 'https://stacker.news/items/42');
+    await user.click(screen.getByRole('button', { name: 'Queue zap' }));
+    await waitFor(() => expect(api.createStackerNewsAction).toHaveBeenCalledWith({
+      accountId: 'a1', itemId: 'item-new', territoryId: 't1', kind: 'open_browser', destination: 'item', payload: { intent: 'zap' },
+    }, { silent: true }));
+    expect(await screen.findByText(/Zap handoff queued for human review/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Prepare reply' }));
+    expect(currentUrl()).toBe('/stacker-news/a1/drafts');
   });
 
   it('keeps entered account values across drawer tab switches and deep-links the open tab', async () => {
@@ -193,7 +215,7 @@ describe('StackerNews', () => {
     renderPage('/stacker-news/a1/accounts');
     await screen.findByRole('button', { name: /Personal/ });
     await user.click(screen.getByRole('button', { name: /Personal/ }));
-    await user.click(screen.getByRole('tab', { name: 'Territory' }));
+    await user.click(screen.getByRole('tab', { name: 'Communities' }));
     expect(await screen.findByText('Current community')).toBeInTheDocument();
     await act(async () => oldTerritories.resolve({ territories: [{ id: 't1', accountId: 'a1', slug: 'old-community', label: 'Old community', rules: {} }] }));
     expect(screen.queryByText('Old community')).not.toBeInTheDocument();
@@ -207,10 +229,10 @@ describe('StackerNews', () => {
       ? Promise.resolve({ actions: [{ id: 'old-action', kind: 'publish_comment', state: 'approved', payload: { body: 'Old account action' }, reviewedTarget: { username: 'art_steward' }, policyVersion: 'v1' }] })
       : nextActions.promise);
     renderPage('/stacker-news/a1/review');
-    expect(await screen.findByRole('button', { name: 'Execute reviewed action' })).toBeInTheDocument();
-    await user.click(screen.getByRole('tab', { name: 'Accounts & Safety' }));
+    expect(await screen.findByRole('button', { name: 'Open verified handoff' })).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: 'Automation & accounts' }));
     await user.click(await screen.findByRole('button', { name: /Personal/ }));
-    expect(screen.queryByRole('button', { name: 'Execute reviewed action' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open verified handoff' })).not.toBeInTheDocument();
     await act(async () => nextActions.resolve({ actions: [] }));
   });
 

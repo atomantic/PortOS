@@ -29,6 +29,7 @@ const accountSchema = z.object({
   enabled: z.boolean().optional(),
   monitoringEnabled: z.boolean().optional(),
   monitoringIntervalMinutes: z.number().int().min(5).max(1_440).optional(),
+  syncItemLimit: z.number().int().min(1).max(100).optional(),
   analysisEnabled: z.boolean().optional(),
   textModel: z.string().trim().max(200).optional(),
   visionModel: z.string().trim().max(200).optional(),
@@ -58,10 +59,11 @@ const itemSchema = z.object({
   remoteUpdatedAt: z.iso.datetime().nullable().optional(),
 }).strict();
 const actionBase = { accountId: uuid, itemId: uuid.nullable().optional(), territoryId: uuid.nullable().optional() };
+const itemHandoffPayload = z.object({ intent: z.enum(['inspect', 'zap', 'moderate']).optional() }).strict().optional();
 const actionSchema = z.discriminatedUnion('kind', [
   z.object({ ...actionBase, kind: z.enum(['draft_post', 'publish_post']), territoryId: uuid, destination: z.literal('').optional(), payload: z.object({ title: z.string().trim().min(1).max(200), body: z.string().max(40_000).optional() }).strict() }).strict(),
   z.object({ ...actionBase, kind: z.enum(['draft_comment', 'publish_comment']), itemId: uuid, destination: z.literal('').optional(), payload: z.object({ body: z.string().trim().min(1).max(40_000) }).strict() }).strict(),
-  z.object({ ...actionBase, kind: z.literal('open_browser'), destination: z.enum(['item', 'territory_settings']), payload: z.object({}).strict().optional() }).strict(),
+  z.object({ ...actionBase, kind: z.literal('open_browser'), destination: z.enum(['item', 'territory_settings']), payload: itemHandoffPayload }).strict(),
   z.object({ ...actionBase, kind: z.literal('territory_setting'), territoryId: uuid, destination: z.literal('territory_settings').optional(), payload: z.object({}).strict().optional() }).strict(),
 ]).superRefine((value, ctx) => {
   if (value.kind === 'open_browser' && value.destination === 'item' && !value.itemId) {

@@ -1280,6 +1280,7 @@ CREATE TABLE IF NOT EXISTS stacker_news_accounts (
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   monitoring_enabled BOOLEAN NOT NULL DEFAULT FALSE,
   monitoring_interval_minutes INTEGER NOT NULL DEFAULT 30 CHECK (monitoring_interval_minutes BETWEEN 5 AND 1440),
+  sync_item_limit INTEGER NOT NULL DEFAULT 30 CHECK (sync_item_limit BETWEEN 1 AND 100),
   analysis_enabled BOOLEAN NOT NULL DEFAULT FALSE,
   text_model TEXT NOT NULL DEFAULT '',
   vision_model TEXT NOT NULL DEFAULT '',
@@ -1335,6 +1336,7 @@ CREATE TABLE IF NOT EXISTS stacker_news_items (
   UNIQUE (account_id, remote_id)
 );
 CREATE INDEX IF NOT EXISTS idx_stacker_news_items_account_received ON stacker_news_items (account_id, received_at DESC);
+CREATE INDEX IF NOT EXISTS idx_stacker_news_items_account_remote_created ON stacker_news_items (account_id, remote_created_at DESC NULLS LAST, received_at DESC);
 CREATE TABLE IF NOT EXISTS stacker_news_media (
   id UUID PRIMARY KEY,
   item_id UUID NOT NULL REFERENCES stacker_news_items (id) ON DELETE CASCADE,

@@ -9,6 +9,7 @@ export const stackerNewsDdl = [
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     monitoring_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     monitoring_interval_minutes INTEGER NOT NULL DEFAULT 30 CHECK (monitoring_interval_minutes BETWEEN 5 AND 1440),
+    sync_item_limit INTEGER NOT NULL DEFAULT 30 CHECK (sync_item_limit BETWEEN 1 AND 100),
     analysis_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     text_model TEXT NOT NULL DEFAULT '',
     vision_model TEXT NOT NULL DEFAULT '',
@@ -23,6 +24,7 @@ export const stackerNewsDdl = [
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_stacker_news_accounts_username_ci ON stacker_news_accounts (LOWER(username))`,
   `ALTER TABLE stacker_news_accounts ADD COLUMN IF NOT EXISTS monitoring_interval_minutes INTEGER NOT NULL DEFAULT 30 CHECK (monitoring_interval_minutes BETWEEN 5 AND 1440)`,
+  `ALTER TABLE stacker_news_accounts ADD COLUMN IF NOT EXISTS sync_item_limit INTEGER NOT NULL DEFAULT 30 CHECK (sync_item_limit BETWEEN 1 AND 100)`,
   `ALTER TABLE stacker_news_accounts ADD COLUMN IF NOT EXISTS analysis_enabled BOOLEAN NOT NULL DEFAULT FALSE`,
   `ALTER TABLE stacker_news_accounts ADD COLUMN IF NOT EXISTS policy_version TEXT NOT NULL DEFAULT 'v1'`,
   `ALTER TABLE stacker_news_accounts ADD COLUMN IF NOT EXISTS last_sync_at TIMESTAMPTZ`,
@@ -78,6 +80,7 @@ export const stackerNewsDdl = [
   `CREATE INDEX IF NOT EXISTS idx_stacker_news_items_account_received ON stacker_news_items (account_id, received_at DESC)`,
   `ALTER TABLE stacker_news_items ADD COLUMN IF NOT EXISTS remote_created_at TIMESTAMPTZ`,
   `ALTER TABLE stacker_news_items ADD COLUMN IF NOT EXISTS remote_updated_at TIMESTAMPTZ`,
+  `CREATE INDEX IF NOT EXISTS idx_stacker_news_items_account_remote_created ON stacker_news_items (account_id, remote_created_at DESC NULLS LAST, received_at DESC)`,
   `CREATE TABLE IF NOT EXISTS stacker_news_media (
     id UUID PRIMARY KEY,
     item_id UUID NOT NULL REFERENCES stacker_news_items (id) ON DELETE CASCADE,

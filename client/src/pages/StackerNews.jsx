@@ -10,6 +10,7 @@ import useDrawerTab from '../hooks/useDrawerTab';
 import useLocalModels from '../hooks/useLocalModels';
 import useVisionModelIds from '../hooks/useVisionModelIds';
 import { useValidTab } from '../hooks/useValidTab';
+import { timeAgo } from '../utils/formatters';
 import { visionLocalModelFilter } from '../utils/providers';
 
 // Stacker News analysis is hard-wired to Ollama (every call site is
@@ -17,13 +18,13 @@ import { visionLocalModelFilter } from '../utils/providers';
 // Module-level so the reference is stable across renders.
 const OLLAMA_PROVIDER = { id: 'ollama' };
 const TABS = [
-  { id: 'review', label: 'Review', icon: ShieldCheck },
-  { id: 'territory', label: 'Territory', icon: Newspaper },
-  { id: 'drafts', label: 'Drafts', icon: Plus },
+  { id: 'review', label: 'Triage queue', icon: ShieldCheck },
+  { id: 'territory', label: 'Communities', icon: Newspaper },
+  { id: 'drafts', label: 'Compose', icon: Plus },
   { id: 'activity', label: 'Activity', icon: RefreshCw },
-  { id: 'accounts', label: 'Accounts & Safety', icon: ShieldAlert },
+  { id: 'accounts', label: 'Automation & accounts', icon: ShieldAlert },
 ];
-// The account form is a 19-field config surface, so it lives in the shared
+// The account form is a broad config surface, so it lives in the shared
 // tabbed Drawer rather than a page-length flat scroll (client/src/CLAUDE.md).
 const ACCOUNT_TABS = [
   { id: 'identity', label: 'Identity' },
@@ -36,6 +37,7 @@ const ACCOUNT_TAB_IDS = ACCOUNT_TABS.map((accountTab) => accountTab.id);
 // different tab can still report which one is wrong.
 const ACCOUNT_NUMBER_FIELDS = [
   { key: 'monitoringIntervalMinutes', label: 'Monitoring interval (minutes)', tab: 'monitoring', min: 5, max: 1440 },
+  { key: 'syncItemLimit', label: 'Newest items per community', tab: 'monitoring', min: 1, max: 100 },
   { key: 'maxPerHour', label: 'Max/hour', tab: 'budgets', min: 1, max: 50 },
   { key: 'maxPerDay', label: 'Max/day', tab: 'budgets', min: 1, max: 200 },
   { key: 'minMinutesBetween', label: 'Spacing min', tab: 'budgets', min: 0, max: 1440 },
@@ -55,9 +57,10 @@ const validateAccountForm = (form) => {
   });
   return invalid ? { tab: invalid.tab, message: `${invalid.label} must be a whole number from ${invalid.min} to ${invalid.max}.` } : null;
 };
-const emptyAccount = { label: '', username: '', apiKey: '', clearApiKey: false, readTransport: 'browser', enabled: true, monitoringEnabled: false, monitoringIntervalMinutes: 30, analysisEnabled: false, textModel: '', visionModel: '', guidance: '', tone: '', allowedThemes: '', disallowedThemes: '', escalationCues: '', desiredEngagement: '', maxPerHour: 3, maxPerDay: 12, minMinutesBetween: 5 };
+const emptyAccount = { label: '', username: '', apiKey: '', clearApiKey: false, readTransport: 'browser', enabled: true, monitoringEnabled: false, monitoringIntervalMinutes: 30, syncItemLimit: 30, analysisEnabled: false, textModel: '', visionModel: '', guidance: '', tone: '', allowedThemes: '', disallowedThemes: '', escalationCues: '', desiredEngagement: '', maxPerHour: 3, maxPerDay: 12, minMinutesBetween: 5 };
 const emptyTerritory = { slug: '', label: '', isOwned: false, monitoringEnabled: '', inheritAccountRules: true, guidance: '', tone: '', allowedThemes: '', disallowedThemes: '', escalationCues: '' };
-const emptyDraft = { kind: 'publish_comment', itemId: '', territoryId: '', title: '', body: '', destination: 'item' };
+const emptyDraft = { kind: 'publish_comment', itemId: '', territoryId: '', title: '', body: '', destination: 'item', intent: 'inspect' };
+const stackerNewsItemUrl = (remoteId) => remoteId ? `https://stacker.news/items/${encodeURIComponent(String(remoteId))}` : '';
 const fieldClass = 'w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white';
 const buttonClass = 'rounded bg-port-accent px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50';
 const secondaryButton = 'rounded border border-port-border px-3 py-2 text-sm text-gray-200 disabled:opacity-50';
@@ -76,6 +79,7 @@ const accountToForm = (account) => ({
   label: account.label, username: account.username, apiKey: '', clearApiKey: false,
   readTransport: account.readTransport || 'browser', enabled: account.enabled,
   monitoringEnabled: account.monitoringEnabled, monitoringIntervalMinutes: account.monitoringIntervalMinutes,
+  syncItemLimit: account.syncItemLimit ?? 30,
   analysisEnabled: account.analysisEnabled, textModel: account.textModel, visionModel: account.visionModel,
   guidance: account.rules?.guidance || '', tone: account.rules?.tone || '', allowedThemes: (account.rules?.allowedThemes || []).join(', '),
   disallowedThemes: (account.rules?.disallowedThemes || []).join(', '), escalationCues: (account.rules?.escalationCues || []).join(', '),
@@ -238,6 +242,7 @@ export default function StackerNews() {
       label: newAccount.label, username: newAccount.username, enabled: newAccount.enabled, ...(newAccount.apiKey ? { apiKey: newAccount.apiKey } : {}),
       readTransport: newAccount.readTransport,
       monitoringEnabled: newAccount.monitoringEnabled, monitoringIntervalMinutes: Number(newAccount.monitoringIntervalMinutes),
+      syncItemLimit: Number(newAccount.syncItemLimit),
       analysisEnabled: newAccount.analysisEnabled, textModel: newAccount.textModel, visionModel: newAccount.visionModel,
       rules: accountRules(newAccount),
     }, { silent: true }), (result) => {
@@ -255,6 +260,7 @@ export default function StackerNews() {
       ...(editAccount.clearApiKey ? { apiKey: '' } : editAccount.apiKey ? { apiKey: editAccount.apiKey } : {}),
       readTransport: editAccount.readTransport,
       monitoringEnabled: editAccount.monitoringEnabled, monitoringIntervalMinutes: Number(editAccount.monitoringIntervalMinutes),
+      syncItemLimit: Number(editAccount.syncItemLimit),
       analysisEnabled: editAccount.analysisEnabled, textModel: editAccount.textModel, visionModel: editAccount.visionModel,
       rules: accountRules(editAccount),
     }, { silent: true }), (result) => {
@@ -302,7 +308,7 @@ export default function StackerNews() {
     setNotice(`Pinned browser identity: @${result.username || 'unknown'}. ${result.matchesConfigured ? 'Matches this account.' : 'Mismatch: handoffs are blocked.'}`);
   });
   const syncNow = () => selected && finish('sync', api.syncStackerNewsAccount(selected.id, { silent: true }), async (result) => {
-    setNotice(`Sync complete via ${result.transport === 'api' ? 'the API key' : 'the pinned browser'}: ${result.ingested} item(s), ${result.analyzed} analyzed.`); await Promise.all([loadAccounts(), loadSelected()]);
+    setNotice(`Sync complete via ${result.transport === 'api' ? 'the API key' : 'the pinned browser'}: ${result.ingested} newest item(s) checked, ${result.analyzed} analyzed (cap ${result.newestItemLimit || selected.syncItemLimit || 30} per community).`); await Promise.all([loadAccounts(), loadSelected()]);
   });
   const analyze = (item) => finish(`analyze-${item.id}`, api.analyzeStackerNewsItem(item.id, { silent: true }), (result) => {
     setAnalysisResults((previous) => ({ ...previous, [item.id]: result }));
@@ -327,7 +333,7 @@ export default function StackerNews() {
       kind: draft.kind,
       ...(isPost || draft.destination === 'territory_settings' ? { territoryId: draft.territoryId } : {}),
       ...(isComment || draft.destination === 'item' ? { itemId: draft.itemId } : {}),
-      ...(draft.kind === 'open_browser' ? { destination: draft.destination, payload: {} } : {}),
+      ...(draft.kind === 'open_browser' ? { destination: draft.destination, payload: draft.destination === 'item' ? { intent: draft.intent } : {} } : {}),
       ...(isPost ? { payload: { title: draft.title, body: draft.body } } : {}),
       ...(isComment ? { payload: { body: draft.body } } : {}),
     };
@@ -341,38 +347,101 @@ export default function StackerNews() {
   });
   const executeAction = (action) => finish(`execute-${action.id}`, api.executeStackerNewsAction(action.id, { silent: true }), (result) => {
     setActions((previous) => previous.map((candidate) => candidate.id === result.id ? result : candidate));
-    setNotice(result.state === 'completed' ? 'Reviewed action completed.' : `Action failed safely: ${result.error}`);
+    setNotice(result.state === 'completed'
+      ? result.result?.intent === 'zap' ? 'Zap handoff opened. Complete the zap manually in the verified browser.'
+        : result.result?.intent === 'moderate' ? 'Moderation handoff opened. Complete the moderation manually in the verified browser.'
+          : 'Reviewed action completed.'
+      : `Action failed safely: ${result.error}`);
   });
+
+  const queueItemHandoff = (item, intent) => {
+    if (!selected) return;
+    finish(`handoff-${item.id}-${intent}`, api.createStackerNewsAction({
+      accountId: selected.id,
+      itemId: item.id,
+      territoryId: item.territoryId,
+      kind: 'open_browser',
+      destination: 'item',
+      payload: { intent },
+    }, { silent: true }), (result) => {
+      setActions((previous) => [result, ...previous]);
+      setNotice(`${intent === 'zap' ? 'Zap' : 'Moderation'} handoff queued for human review.`);
+    });
+  };
+
+  const prepareReply = (item) => {
+    setDraft({ ...emptyDraft, kind: 'draft_comment', itemId: item.id, territoryId: item.territoryId || '' });
+    navigate(accountPath(selected.id, 'drafts'));
+  };
+
+  const analysisForItem = (item) => analysisResults[item.id]?.policy
+    || (item.latestAnalysis?.stage === 'policy' ? item.latestAnalysis.result : null);
+  const activeItemIntent = (item, intent) => visibleActions.some((action) => action.itemId === item.id
+    && (action.payload?.intent || 'inspect') === intent
+    && ['pending_review', 'approved', 'executing'].includes(action.state));
+  const itemNeedsAttention = (item) => {
+    const policy = analysisForItem(item);
+    return !policy || ['review', 'escalate'].includes(policy.decision);
+  };
 
   // Every scoped list is filtered to the selected account, so each section says
   // whose workspace it is showing rather than reading as a global list.
   const scope = selected ? `@${selected.username}` : '';
 
-  const renderReview = () => (
-    <div className="grid gap-3 xl:grid-cols-2">
-      <section className="rounded border border-port-border bg-port-card p-4">
-        <h2 className="font-semibold text-white">Approval queue for {scope}</h2>
-        <p className="mt-1 text-sm text-gray-400">Approval and execution are separate. Identity, content freshness, rules, budgets, and idempotency are rechecked at execution.</p>
-        <div className="mt-3 space-y-2">
-          {visibleActions.filter((action) => ['pending_review', 'approved'].includes(action.state)).map((action) => (
-            <div key={action.id} className="rounded border border-port-border p-3 text-sm">
-              <div className="flex items-center justify-between gap-2"><span className="font-medium text-white">{action.kind.replaceAll('_', ' ')}</span><span className="text-xs text-gray-400">{action.state.replaceAll('_', ' ')}</span></div>
-              <div className="mt-1 whitespace-pre-wrap text-gray-400">{action.payload?.title || action.payload?.body || `Fixed ${action.destination || 'local'} action`}</div>
-              <div className="mt-1 text-xs text-gray-400">Reviewed target: @{action.reviewedTarget?.username || selected.username}{action.reviewedTarget?.territorySlug ? ` · ${action.reviewedTarget.territorySlug}` : ''}{action.reviewedTarget?.remoteItemId ? ` · item ${action.reviewedTarget.remoteItemId}` : ''}</div>
-              <div className="mt-1 font-mono text-[11px] text-gray-500">content {action.sourceContentHash?.slice(0, 10) || 'n/a'} · rules {action.rulesHash?.slice(0, 10) || 'n/a'} · {action.policyVersion}</div>
-              {action.state === 'pending_review' && <div className="mt-2 flex gap-2"><button className={buttonClass} disabled={busy === `review-${action.id}`} onClick={() => reviewAction(action, 'approved')}>Approve</button><button className={secondaryButton} onClick={() => reviewAction(action, 'rejected')}>Reject</button></div>}
-              {action.state === 'approved' && <button className={`${buttonClass} mt-2`} disabled={busy === `execute-${action.id}`} onClick={() => executeAction(action)}>Execute reviewed action</button>}
+  const renderReview = () => {
+    const waitingActions = visibleActions.filter((action) => ['pending_review', 'approved'].includes(action.state));
+    const attentionCount = visibleItems.filter(itemNeedsAttention).length;
+    const imageCount = visibleItems.filter((item) => item.imageUrls?.length).length;
+    return (
+      <div className="space-y-3">
+        <section className="grid gap-2 sm:grid-cols-3">
+          <div className="rounded border border-port-border bg-port-card p-3"><div className="text-xs uppercase tracking-wide text-gray-500">Newest items</div><div className="mt-1 text-2xl font-semibold text-white">{visibleItems.length}</div><div className="text-xs text-gray-400">Showing the newest {selected.syncItemLimit || 30} per community</div></div>
+          <div className="rounded border border-port-border bg-port-card p-3"><div className="text-xs uppercase tracking-wide text-gray-500">Needs attention</div><div className="mt-1 text-2xl font-semibold text-port-warning">{attentionCount}</div><div className="text-xs text-gray-400">Unanalyzed, review, or escalated</div></div>
+          <div className="rounded border border-port-border bg-port-card p-3"><div className="text-xs uppercase tracking-wide text-gray-500">Image posts</div><div className="mt-1 text-2xl font-semibold text-white">{imageCount}</div><div className="text-xs text-gray-400">Ollama vision is {selected.visionModel ? 'configured' : 'not configured'}</div></div>
+        </section>
+        <section className="flex flex-wrap items-center justify-between gap-3 rounded border border-port-border bg-port-card p-3 text-sm"><div><span className="font-medium text-white">Automation:</span> <span className="text-gray-300">{selected.monitoringEnabled ? `syncs every ${selected.monitoringIntervalMinutes} minutes` : 'scheduled sync is off'}</span><span className="text-gray-500"> · </span><span className="text-gray-300">{selected.analysisEnabled ? 'new items are analyzed automatically' : 'analysis runs only when requested'}</span><span className="text-gray-500"> · </span><span className="text-gray-300">cap {selected.syncItemLimit || 30} per community</span></div><button className={secondaryButton} onClick={() => navigate(`${accountPath(selected.id, 'accounts')}?snAccount=edit&snAccountTab=monitoring`)}>Configure automation</button></section>
+        <div className="grid gap-3 xl:grid-cols-2">
+          <section className="rounded border border-port-border bg-port-card p-4">
+            <div className="flex items-center justify-between gap-2"><div><h2 className="font-semibold text-white">Approval queue for {scope}</h2><p className="mt-1 text-sm text-gray-400">Human approval comes before every reply, zap, or moderation handoff.</p></div><span className="rounded-full bg-port-bg px-2 py-1 text-xs text-gray-300">{waitingActions.length} waiting</span></div>
+            <div className="mt-3 space-y-2">
+              {waitingActions.map((action) => (
+                <div key={action.id} className="rounded border border-port-border p-3 text-sm">
+                  <div className="flex items-center justify-between gap-2"><span className="font-medium text-white">{action.payload?.intent ? `${action.payload.intent} handoff` : action.kind.replaceAll('_', ' ')}</span><span className="text-xs text-gray-400">{action.state.replaceAll('_', ' ')}</span></div>
+                  <div className="mt-1 whitespace-pre-wrap text-gray-400">{action.payload?.title || action.payload?.body || `Fixed ${action.destination || 'local'} action`}</div>
+                  <div className="mt-1 text-xs text-gray-400">Reviewed target: @{action.reviewedTarget?.username || selected.username}{action.reviewedTarget?.territorySlug ? ` · ${action.reviewedTarget.territorySlug}` : ''}{action.reviewedTarget?.remoteItemId ? ` · item ${action.reviewedTarget.remoteItemId}` : ''}</div>
+                  <div className="mt-1 font-mono text-[11px] text-gray-500">content {action.sourceContentHash?.slice(0, 10) || 'n/a'} · rules {action.rulesHash?.slice(0, 10) || 'n/a'} · {action.policyVersion}</div>
+                  {action.state === 'pending_review' && <div className="mt-2 flex gap-2"><button className={buttonClass} disabled={busy === `review-${action.id}`} onClick={() => reviewAction(action, 'approved')}>Approve</button><button className={secondaryButton} onClick={() => reviewAction(action, 'rejected')}>Reject</button></div>}
+                  {action.state === 'approved' && <button className={`${buttonClass} mt-2`} disabled={busy === `execute-${action.id}`} onClick={() => executeAction(action)}>Open verified handoff</button>}
+                </div>
+              ))}
+              {!waitingActions.length && <p className="text-sm text-gray-500">No actions are waiting for {scope}. Use the newest-item buttons to queue a reply, zap, or moderation handoff.</p>}
             </div>
-          ))}
-          {!visibleActions.some((action) => ['pending_review', 'approved'].includes(action.state)) && <p className="text-sm text-gray-500">No actions are waiting for {scope}.</p>}
+          </section>
+          <section className="rounded border border-port-border bg-port-card p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-semibold text-white">Monitored content for {scope}</h2><p className="text-sm text-gray-400">Remote text and images remain untrusted data. The queue is newest first.</p></div><button className={secondaryButton} disabled={accountActionsDisabled} onClick={syncNow}>Sync newest</button></div>
+            <div className="mt-3 space-y-3">
+              {visibleItems.map((item) => {
+                const policy = analysisForItem(item);
+                const hasImages = Boolean(item.imageUrls?.length);
+                const itemUrl = stackerNewsItemUrl(item.remoteId);
+                const queuedZap = activeItemIntent(item, 'zap');
+                const queuedModeration = activeItemIntent(item, 'moderate');
+                return <article key={item.id} className="rounded border border-port-border p-3">
+                  <div className="flex items-start justify-between gap-2"><div><h3 className="font-medium text-white">{item.title || `${item.kind} by @${item.authorName}`}</h3><div className="mt-1 text-xs text-gray-500">@{item.authorName || 'unknown'} · {timeAgo(item.remoteCreatedAt || item.receivedAt, 'unknown time')}{hasImages ? ` · ${item.imageUrls.length} image${item.imageUrls.length === 1 ? '' : 's'}` : ''}</div></div><span className={`rounded-full px-2 py-1 text-xs ${policy?.decision === 'escalate' ? 'bg-port-error/20 text-port-error' : policy?.decision === 'review' ? 'bg-port-warning/20 text-port-warning' : policy ? 'bg-port-bg text-gray-300' : 'bg-port-accent/20 text-port-accent'}`}>{policy?.decision || 'new'}</span></div>
+                  <div className="mt-2 line-clamp-3 text-sm text-gray-400">{item.body || (hasImages ? 'Image-first post; run the configured Ollama vision model before deciding.' : 'No text content.')}</div>
+                  {hasImages && <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-400"><span>Image evidence is normalized before Ollama sees it.</span>{itemUrl && <a className="text-port-accent underline" href={itemUrl} target="_blank" rel="noreferrer">Open item</a>}</div>}
+                  {policy?.reasons?.length ? <div className="mt-2 text-xs text-port-warning">Why: {policy.reasons.join(', ')}</div> : null}
+                  {analysisResults[item.id] && <div className="mt-2 rounded bg-port-bg p-2 text-xs text-gray-300"><div>Latest run: {analysisResults[item.id].stale ? 'stale result discarded' : policy?.decision || 'review'}</div><div className="mt-2 flex flex-wrap gap-2"><input aria-label={`Feedback for ${item.title || item.id}`} className={`${fieldClass} min-w-0 flex-1`} placeholder="Moderator feedback" value={feedbackDrafts[item.id] || ''} onChange={(event) => setFeedbackDrafts((previous) => ({ ...previous, [item.id]: event.target.value }))} /><button className={secondaryButton} disabled={!analysisResults[item.id].analysisId || busy === `feedback-${item.id}`} onClick={() => saveFeedback(item)}>Save feedback</button></div></div>}
+                  <div className="mt-3 flex flex-wrap gap-2"><button className={buttonClass} disabled={accountActionsDisabled || busy === `analyze-${item.id}`} onClick={() => analyze(item)}>{hasImages ? 'Analyze image with Ollama' : 'Analyze with Ollama'}</button><button className={secondaryButton} disabled={accountActionsDisabled} onClick={() => prepareReply(item)}>Prepare reply</button><button className={secondaryButton} disabled={accountActionsDisabled || queuedZap || busy === `handoff-${item.id}-zap`} onClick={() => queueItemHandoff(item, 'zap')}>{queuedZap ? 'Zap queued' : 'Queue zap'}</button><button className={secondaryButton} disabled={accountActionsDisabled || queuedModeration || busy === `handoff-${item.id}-moderate`} onClick={() => queueItemHandoff(item, 'moderate')}>{queuedModeration ? 'Moderation queued' : 'Queue moderation'}</button></div>
+                </article>;
+              })}
+              {!visibleItems.length && <p className="text-sm text-gray-500">No stored content for {scope}. Add a community, then sync newest explicitly or enable scheduled monitoring.</p>}
+            </div>
+          </section>
         </div>
-      </section>
-      <section className="rounded border border-port-border bg-port-card p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-semibold text-white">Monitored content for {scope}</h2><p className="text-sm text-gray-400">Remote text and images remain untrusted data.</p></div><button className={secondaryButton} disabled={accountActionsDisabled} onClick={syncNow}>Sync now</button></div>
-        <div className="mt-3 space-y-2">{visibleItems.map((item) => <div key={item.id} className="rounded border border-port-border p-3"><div className="text-sm font-medium text-white">{item.title || `${item.kind} by @${item.authorName}`}</div><div className="mt-1 line-clamp-3 text-sm text-gray-400">{item.body}</div>{analysisResults[item.id] && <div className="mt-2 rounded bg-port-bg p-2 text-xs text-gray-300">Policy: {analysisResults[item.id].stale ? 'stale' : analysisResults[item.id].policy?.decision || 'review'}{analysisResults[item.id].policy?.reasons?.length ? ` · ${analysisResults[item.id].policy.reasons.join(', ')}` : ''}<div className="mt-2 flex gap-2"><input aria-label={`Feedback for ${item.title || item.id}`} className={fieldClass} placeholder="Moderator feedback" value={feedbackDrafts[item.id] || ''} onChange={(event) => setFeedbackDrafts((previous) => ({ ...previous, [item.id]: event.target.value }))} /><button className={secondaryButton} disabled={!analysisResults[item.id].analysisId || busy === `feedback-${item.id}`} onClick={() => saveFeedback(item)}>Save feedback</button></div></div>}<button className={`${secondaryButton} mt-2`} disabled={busy === `analyze-${item.id}`} onClick={() => analyze(item)}>Run local analysis</button></div>)}{!visibleItems.length && <p className="text-sm text-gray-500">No stored content for {scope}. Add a territory, then sync explicitly or enable a schedule.</p>}</div>
-      </section>
-    </div>
-  );
+      </div>
+    );
+  };
 
   const renderTerritory = () => (
     <div className="grid gap-3 lg:grid-cols-2">
@@ -402,19 +471,19 @@ export default function StackerNews() {
   const renderDrafts = () => {
     const post = draft.kind.endsWith('_post');
     const comment = draft.kind.endsWith('_comment');
-    return <form className="mx-auto max-w-2xl rounded border border-port-border bg-port-card p-4" onSubmit={createAction}><h2 className="font-semibold text-white">Prepare a review-gated action for {scope}</h2><p className="mt-1 text-sm text-gray-400">Wallet actions are browser handoffs only. Publishing uses the constrained API after separate approval.</p><div className="mt-3 space-y-3"><Field id="action-kind" label="Action"><select id="action-kind" className={fieldClass} value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value })}><option value="draft_comment">Local comment draft</option><option value="publish_comment">Publish comment after review</option><option value="draft_post">Local post draft</option><option value="publish_post">Publish post after review</option><option value="open_browser">Open fixed browser handoff</option></select></Field>{draft.kind === 'open_browser' && <Field id="action-destination" label="Handoff"><select id="action-destination" className={fieldClass} value={draft.destination} onChange={(event) => setDraft({ ...draft, destination: event.target.value })}><option value="item">Item (zap, downzap, boost, or manual interaction)</option><option value="territory_settings">Territory settings</option></select></Field>}{(comment || (draft.kind === 'open_browser' && draft.destination === 'item')) && <Field id="action-item" label="Source item"><select id="action-item" required className={fieldClass} value={draft.itemId} onChange={(event) => setDraft({ ...draft, itemId: event.target.value })}><option value="">Choose item</option>{visibleItems.map((item) => <option key={item.id} value={item.id}>{item.title || `${item.kind} by ${item.authorName}`}</option>)}</select></Field>}{(post || (draft.kind === 'open_browser' && draft.destination === 'territory_settings')) && <Field id="action-territory" label="Territory"><select id="action-territory" required className={fieldClass} value={draft.territoryId} onChange={(event) => setDraft({ ...draft, territoryId: event.target.value })}><option value="">Choose territory</option>{visibleTerritories.map((territory) => <option key={territory.id} value={territory.id}>{territory.label || territory.slug}</option>)}</select></Field>}{post && <Field id="action-title" label="Title"><input id="action-title" required className={fieldClass} value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></Field>}{(post || comment) && <Field id="action-body" label="Draft text"><textarea id="action-body" required className={fieldClass} rows="6" value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} /></Field>}<button className={buttonClass} disabled={busy === 'create-action'}>Send to approval queue</button></div></form>;
+    return <form className="mx-auto max-w-2xl rounded border border-port-border bg-port-card p-4" onSubmit={createAction}><h2 className="font-semibold text-white">Prepare a review-gated action for {scope}</h2><p className="mt-1 text-sm text-gray-400">Wallet actions are browser handoffs only. Publishing uses the constrained API after separate approval.</p><div className="mt-3 space-y-3"><Field id="action-kind" label="Action"><select id="action-kind" className={fieldClass} value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value })}><option value="draft_comment">Local comment draft</option><option value="publish_comment">Publish comment after review</option><option value="draft_post">Local post draft</option><option value="publish_post">Publish post after review</option><option value="open_browser">Open fixed browser handoff</option></select></Field>{draft.kind === 'open_browser' && <Field id="action-destination" label="Handoff"><select id="action-destination" className={fieldClass} value={draft.destination} onChange={(event) => setDraft({ ...draft, destination: event.target.value })}><option value="item">Item (inspect, zap, or moderate manually)</option><option value="territory_settings">Territory settings</option></select></Field>}{draft.kind === 'open_browser' && draft.destination === 'item' && <Field id="action-intent" label="Human task"><select id="action-intent" className={fieldClass} value={draft.intent} onChange={(event) => setDraft({ ...draft, intent: event.target.value })}><option value="inspect">Inspect item</option><option value="zap">Zap item</option><option value="moderate">Moderate item</option></select><p className="mt-1 text-xs text-gray-400">The approved step opens the verified item page; you still complete the zap or moderation yourself.</p></Field>}{(comment || (draft.kind === 'open_browser' && draft.destination === 'item')) && <Field id="action-item" label="Source item"><select id="action-item" required className={fieldClass} value={draft.itemId} onChange={(event) => setDraft({ ...draft, itemId: event.target.value })}><option value="">Choose item</option>{visibleItems.map((item) => <option key={item.id} value={item.id}>{item.title || `${item.kind} by ${item.authorName}`}</option>)}</select></Field>}{(post || (draft.kind === 'open_browser' && draft.destination === 'territory_settings')) && <Field id="action-territory" label="Territory"><select id="action-territory" required className={fieldClass} value={draft.territoryId} onChange={(event) => setDraft({ ...draft, territoryId: event.target.value })}><option value="">Choose territory</option>{visibleTerritories.map((territory) => <option key={territory.id} value={territory.id}>{territory.label || territory.slug}</option>)}</select></Field>}{post && <Field id="action-title" label="Title"><input id="action-title" required className={fieldClass} value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></Field>}{(post || comment) && <Field id="action-body" label="Draft text"><textarea id="action-body" required className={fieldClass} rows="6" value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} /></Field>}<button className={buttonClass} disabled={busy === 'create-action'}>Send to approval queue</button></div></form>;
   };
 
   const renderAccounts = () => (
     <div className="grid gap-3 lg:grid-cols-2">
       <section className="rounded border border-port-border bg-port-card p-4">
         <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold text-white">Accounts</h2><button type="button" className={buttonClass} onClick={() => openAccountForm('new')}>Add account</button></div>
-        <div className="mt-3 space-y-2">{accounts.map((account) => <button key={account.id} className={`block w-full rounded border p-3 text-left ${account.id === selected?.id ? 'border-port-accent' : 'border-port-border'}`} onClick={() => navigate(accountPath(account.id, 'accounts'))}><div className="flex justify-between gap-2"><span className="font-medium text-white">{account.label}</span><span className="text-xs text-gray-400">{account.apiKeyConfigured ? 'Key protected' : 'No key'}</span></div><div className="mt-1 text-sm text-gray-400">@{account.username} · {account.monitoringEnabled ? `every ${account.monitoringIntervalMinutes}m` : 'monitoring off'}</div></button>)}{!accounts.length && <p className="text-sm text-gray-500">No accounts configured.</p>}</div>
+        <div className="mt-3 space-y-2">{accounts.map((account) => <button key={account.id} className={`block w-full rounded border p-3 text-left ${account.id === selected?.id ? 'border-port-accent' : 'border-port-border'}`} onClick={() => navigate(accountPath(account.id, 'accounts'))}><div className="flex justify-between gap-2"><span className="font-medium text-white">{account.label}</span><span className="text-xs text-gray-400">{account.apiKeyConfigured ? 'Key protected' : 'No key'}</span></div><div className="mt-1 text-sm text-gray-400">@{account.username} · {account.monitoringEnabled ? `every ${account.monitoringIntervalMinutes}m · newest ${account.syncItemLimit || 30}/community` : 'monitoring off'}</div></button>)}{!accounts.length && <p className="text-sm text-gray-500">No accounts configured.</p>}</div>
       </section>
       {selected ? (
         <section className="rounded border border-port-border bg-port-card p-4">
           <h2 className="font-semibold text-white">Settings and safety for {scope}</h2>
-          <p className="mt-1 text-sm text-gray-400">{selected.label} · {selected.monitoringEnabled ? `monitored every ${selected.monitoringIntervalMinutes}m` : 'monitoring off'} · reads via {selected.readTransport === 'api' ? 'API key' : 'pinned browser'} · {selected.apiKeyConfigured ? 'API key stored' : 'no API key stored'}</p>
+          <p className="mt-1 text-sm text-gray-400">{selected.label} · {selected.monitoringEnabled ? `monitored every ${selected.monitoringIntervalMinutes}m, newest ${selected.syncItemLimit || 30}/community` : 'monitoring off'} · reads via {selected.readTransport === 'api' ? 'API key' : 'pinned browser'} · {selected.apiKeyConfigured ? 'API key stored' : 'no API key stored'}</p>
           <div className="mt-3 flex flex-wrap gap-2">
             <button type="button" className={buttonClass} onClick={() => openAccountForm('edit')}>Edit account settings</button>
             {/* The API check is the one action that genuinely needs a stored
@@ -427,7 +496,7 @@ export default function StackerNews() {
           {/* These three read server-side saved state, so an unsaved edit would
               silently not apply — say why they are disabled instead of leaving
               the user to guess (the checks are also disabled mid-save). Closing
-              the drawer deliberately keeps the draft so a half-finished 19-field
+              the drawer deliberately keeps the draft so a half-finished account
               edit survives reopening it, which means the only way back out of
               the disabled state has to be an explicit discard. (Selecting a
               different account still loads that account's saved form — there is
@@ -480,7 +549,7 @@ function Field({ id, label, children }) {
   return <div><label htmlFor={id} className="mb-1 block text-sm text-gray-300">{label}</label>{children}</div>;
 }
 
-// The 19-field account config, grouped into Drawer tabs. All of its state lives
+// The account config is grouped into Drawer tabs. All of its state lives
 // in the page (newAccount / editAccount) because the Drawer body remounts on
 // every tab switch (`key={currentTab}`) — an uncontrolled input here would
 // silently lose what the user typed the moment they changed tabs.
@@ -533,8 +602,12 @@ function AccountDrawer({ mode, username, activeTab, onTabChange, onClose, formEr
         </>}
         {activeTab === 'monitoring' && <>
           {checkbox('monitoringEnabled', 'Enable scheduled monitoring')}
-          {numberField('interval', 'Monitoring interval (minutes)', 'monitoringIntervalMinutes', 5, 1440)}
-          {checkbox('analysisEnabled', 'Run configured local analysis during monitoring')}
+          <div className="grid gap-2 sm:grid-cols-2">
+            {numberField('interval', 'Monitoring interval (minutes)', 'monitoringIntervalMinutes', 5, 1440)}
+            {numberField('sync-limit', 'Newest items per community', 'syncItemLimit', 1, 100)}
+          </div>
+          <p className="text-xs text-gray-400">Each sync reads only this many items from each community, newest first. Older snapshots remain stored but are not pulled into the active queue.</p>
+          {checkbox('analysisEnabled', 'Analyze new or changed items automatically during monitoring')}
           <div className="grid gap-2 sm:grid-cols-2">
             <Field id={`${prefix}-text-model`} label="Ollama text model"><ModelSelect id={`${prefix}-text-model`} value={form.textModel} models={models} onChange={(value) => update('textModel', value)} /></Field>
             <Field id={`${prefix}-vision-model`} label="Ollama vision model"><ModelSelect id={`${prefix}-vision-model`} value={form.visionModel} models={visionModels} onChange={(value) => update('visionModel', value)} />{visionPending ? <p className="mt-1 text-xs text-gray-400">Checking which installed Ollama models can read an image…</p> : !visionModels.length ? <p className="mt-1 text-xs text-port-warning">No vision-capable Ollama model installed. Install one (e.g. a qwen-vl or llava model) to analyze images.</p> : null}</Field>

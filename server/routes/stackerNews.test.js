@@ -59,6 +59,28 @@ describe('Stacker News routes', () => {
     expect(stackerNews.createAction).not.toHaveBeenCalled();
   });
 
+  it('accepts only named manual item handoff intents', async () => {
+    stackerNews.createAction.mockResolvedValue({ id: 'action', accountId: '00000000-0000-4000-8000-000000000001' });
+    const accepted = await request(app).post('/api/stacker-news/actions').send({
+      accountId: '00000000-0000-4000-8000-000000000001',
+      itemId: '00000000-0000-4000-8000-000000000002',
+      kind: 'open_browser',
+      destination: 'item',
+      payload: { intent: 'moderate' },
+    });
+    expect(accepted.status).toBe(201);
+    expect(stackerNews.createAction).toHaveBeenCalledWith(expect.objectContaining({ payload: { intent: 'moderate' } }));
+
+    const rejected = await request(app).post('/api/stacker-news/actions').send({
+      accountId: '00000000-0000-4000-8000-000000000001',
+      itemId: '00000000-0000-4000-8000-000000000002',
+      kind: 'open_browser',
+      destination: 'item',
+      payload: { intent: 'delete-account' },
+    });
+    expect(rejected.status).toBe(400);
+  });
+
   it('executes only through the dedicated approved-action primitive', async () => {
     stackerNews.executeApprovedAction.mockResolvedValue({
       id: '00000000-0000-4000-8000-000000000010',

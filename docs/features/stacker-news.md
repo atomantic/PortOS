@@ -30,8 +30,9 @@ accounts its user explicitly adds.
   bounded and screened for instruction-shaped content before optional local
   analysis. A prompt-injection match prevents text and images from reaching an
   Ollama model. The complete bounded title and body are hashed even though the
-  model copy is shorter, so edits outside the model window still invalidate an
-  analysis or approval.
+  model copy is shorter, and image URLs are included in the hash, so edits
+  outside the model window or changed media still invalidate an analysis or
+  approval.
 - Remote images use the strict public-network fetch posture, a five-megabyte
   download cap, MIME and pixel limits, and a single-frame Sharp decode. SVG and
   other active formats are rejected. Ollama receives only an in-memory,
@@ -84,7 +85,7 @@ handoff for the user to complete.
 | --- | --- | --- |
 | Verify account identity | Pinned-browser `me` (default) or named GraphQL `me` | Read only |
 | Refresh territory settings/ownership | Pinned-browser `sub` (default) or named GraphQL `sub` | Read only |
-| Monitor recent posts and comments | Pinned-browser `items` (default) or named GraphQL `items` | Explicit sync or an effective account/territory opt-in |
+| Monitor recent posts and comments | Pinned-browser `items` (default) or named GraphQL `items` | Explicit sync or an effective account/territory opt-in; each sync is capped to the configured newest-item limit per community |
 | Analyze text/images | Local Ollama | Strict schema; no tools, credentials, or write access |
 | Publish a discussion/comment | Named GraphQL mutations | Separate human approval and execution; no write retry |
 | Open an item or territory settings | Fixed-origin CDP handoff | Identity match required; no clicks or DOM supplied by callers |
@@ -94,7 +95,7 @@ handoff for the user to complete.
 
 ## Setup
 
-1. Open **Comms > Stacker News > Accounts & Safety** and choose **Add account**.
+1. Open **Comms > Stacker News > Automation & accounts** and choose **Add account**.
    The account form opens in a drawer grouped into Identity, Monitoring & models,
    Stewardship, and Budgets tabs; the open tab is kept in the URL.
 2. Sign the pinned PortOS browser into the same Stacker News account and run
@@ -110,14 +111,23 @@ handoff for the user to complete.
    later as ownership and stewardship responsibilities change.
 5. Configure account and territory guidance, themes, escalation cues, and action
    budgets. Each account keeps its own effective rules.
-6. Optionally choose installed Ollama text and vision models. Analysis remains
-   off until explicitly enabled or run on demand.
-7. Run **Sync now** once to verify territory ownership and inspect the first
-   snapshots. Enable a monitoring schedule only when ready.
+6. In **Monitoring & models**, set the newest-item limit per community (30 by
+   default), choose installed Ollama text and vision models, and decide whether
+   scheduled monitoring should analyze new or changed items automatically.
+   Image-first posts use the configured Ollama vision model after their images
+   are normalized; analysis remains off until explicitly enabled or run on
+   demand.
+7. Open **Triage queue**. Every newest item has direct **Prepare reply**,
+   **Queue zap**, **Queue moderation**, and Ollama analysis actions. Zap and
+   moderation buttons create review-gated browser handoffs; the final action is
+   always completed manually in the verified browser.
+8. Run **Sync newest** once to verify territory ownership and inspect the first
+   snapshots. Enable scheduled monitoring only when ready.
 
 Every tab is scoped to one account. The header carries an account switcher that
 keeps the current tab, and each section names the account it operates on, so a
-Territory, Review, Drafts, or Activity list is never mistaken for a global one.
+Communities, Triage queue, Compose, or Activity list is never mistaken for a
+global one.
 
 Monitoring is off by default. Boot may arm a schedule the user already enabled,
 including a territory override on an otherwise quiet account, but it never

@@ -29,7 +29,7 @@ const executeStackerNewsBrowserRead = vi.fn(browserRead);
 vi.mock('../lib/db.js', () => ({ query, withTransaction: vi.fn() }));
 vi.mock('../lib/vaultCrypto.js', () => ({ decryptValue: () => 'api-key', encryptValue: vi.fn(), ensureVaultKey: vi.fn() }));
 vi.mock('../integrations/stackerNews/index.js', () => ({ executeStackerNewsOperation, executeStackerNewsBrowserRead, stackerNewsCapabilities: {} }));
-const { syncAccount, verifyConnection } = await import('./stackerNews.js');
+const { listItems, syncAccount, verifyConnection } = await import('./stackerNews.js');
 
 const baseAccount = { id: accountId, label: 'Example', username: 'example_user', enabled: true, monitoring_enabled: false, monitoring_interval_minutes: 30, analysis_enabled: false, text_model: '', vision_model: '', rules: {}, policy_version: 'v1' };
 
@@ -93,5 +93,83 @@ describe('Stacker News sync', () => {
     await expect(verifyConnection(accountId, { transport: 'api' })).resolves.toMatchObject({ configured: false, connected: false, transport: 'api' });
     credentialRows = [{ api_key_enc: 'ciphertext' }];
     await expect(verifyConnection(accountId, { transport: 'api' })).resolves.toMatchObject({ configured: true, transport: 'api', username: 'example_user' });
+  });
+
+  it('limits each territory sync to the configured newest-item cap and reports it', async () => {
+    accountRow = { ...baseAccount, read_transport: 'api', sync_item_limit: 1 };
+    await expect(syncAccount(accountId, { force: true })).resolves.toMatchObject({ ingested: 1, newestItemLimit: 1 });
+    const itemCalls = executeStackerNewsOperation.mock.calls.filter(([name]) => name === 'items');
+    expect(itemCalls).toHaveLength(1);
+    expect(itemCalls[0][1]).toMatchObject({ limit: 1 });
+  });
+
+  it('captures a direct image URL from an image-first item for the vision stage', async () => {
+    executeStackerNewsOperation.mockImplementation(async (name, input) => {
+      if (name === 'me') return { me: { id: 'owner-1', name: 'example_user' } };
+      if (name === 'sub') return { sub: { name: 'art', userId: 'owner-1' } };
+      if (input.cursor) return { items: { cursor: null, items: [] } };
+      return { items: { cursor: null, items: [{ id: '42', createdAt: '2026-08-06T10:00:00.000Z', title: 'Fresh artwork', text: '', url: 'https://cdn.example.com/artwork.png', user: { name: 'artist' } }] } };
+    });
+    await syncAccount(accountId, { force: true });
+    const insert = query.mock.calls.find(([sql]) => sql.includes('INSERT INTO stacker_news_items'));
+    expect(insert[1][9]).toEqual(['https://cdn.example.com/artwork.png']);
+  });
+
+  it('requests newest source items first and exposes the latest persisted analysis', async () => {
+    const latestAnalysis = {
+      id: '00000000-0000-4000-8000-000000000004',
+      stage: 'policy',
+      provider: 'deterministic',
+      model: '',
+      status: 'completed',
+      source_content_hash: 'hash',
+      rules_hash: 'rules-hash',
+      policy_version: 'v1',
+      result: { classification: 'review' },
+      created_at: new Date('2026-08-06T10:01:00.000Z'),
+    };
+    query.mockImplementationOnce(async (sql, params) => {
+      expect(sql).toContain('ORDER BY i.remote_created_at DESC NULLS LAST');
+      expect(sql).toContain('PARTITION BY territory_id');
+      expect(sql).toContain('queue_rank <= COALESCE');
+      expect(params).toEqual([accountId, 30]);
+      return {
+        rows: [{
+          id: '00000000-0000-4000-8000-000000000003',
+          account_id: accountId,
+          territory_id: territoryId,
+          remote_id: '42',
+          kind: 'post',
+          author_name: 'artist',
+          title: 'Fresh artwork',
+          body: '',
+          source_url: 'https://stacker.news/items/42',
+          image_urls: ['https://cdn.example.com/artwork.png'],
+          content_hash: 'hash',
+          remote_created_at: new Date('2026-08-06T10:00:00.000Z'),
+          remote_updated_at: null,
+          received_at: new Date('2026-08-06T10:00:01.000Z'),
+          created_at: new Date('2026-08-06T10:00:01.000Z'),
+          latest_analysis_id: latestAnalysis.id,
+          latest_analysis_stage: latestAnalysis.stage,
+          latest_analysis_provider: latestAnalysis.provider,
+          latest_analysis_model: latestAnalysis.model,
+          latest_analysis_status: latestAnalysis.status,
+          latest_analysis_source_content_hash: latestAnalysis.source_content_hash,
+          latest_analysis_rules_hash: latestAnalysis.rules_hash,
+          latest_analysis_policy_version: latestAnalysis.policy_version,
+          latest_analysis_result: latestAnalysis.result,
+          latest_analysis_created_at: latestAnalysis.created_at,
+        }],
+      };
+    });
+
+    await expect(listItems(accountId)).resolves.toMatchObject([{
+      remoteId: '42',
+      latestAnalysis: {
+        stage: 'policy',
+        result: { classification: 'review' },
+      },
+    }]);
   });
 });
