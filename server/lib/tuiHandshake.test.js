@@ -50,6 +50,9 @@ import {
   AGY_INPUT_READY_PATTERN,
 } from './tuiHandshake.js';
 import { CODEX_CONFIGURED_DEFAULT } from './providerModels.js';
+import { readFileSync } from 'fs';
+import { dirname, resolve } from 'path';
+import { fileURLToPath } from 'url';
 
 // The exported constants are load-bearing for both production callers
 // (`tuiPromptRunner.js`, `agentTuiSpawning.js`). Pin every value so an
@@ -1168,4 +1171,121 @@ describe('tuiHandshake.isCollapsedPasteChip', () => {
     expect(isCollapsedPasteChip('')).toBe(false);
     expect(isCollapsedPasteChip(123)).toBe(false);
   });
+});
+
+// ─── Discovery: shipped-catalog parity for the TUI dispatch points ─────────
+//
+// Adding a coding-agent vendor means touching a spread of per-vendor `if`
+// branches, and the failure mode is SILENT: the vendor ships in the seed
+// catalog, its provider shows up in the UI and spawns, but a dispatch point
+// nobody remembered doesn't know it — so it launches with the wrong binary or
+// without its unattended-run posture and stalls on a prompt with nobody to
+// answer. (Not theoretical: `resolveInjectedTuiModel` exists because the two
+// model-injection sites had already drifted that way — issue #3618.)
+//
+// These tests DERIVE their expectations by walking `data.reference/providers.json`
+// rather than hand-transcribing a vendor list, so a newly-seeded vendor that a
+// builder doesn't know about FAILS here instead of diverging in production.
+// Same shape as `server/cos-runner/allowedCommands.test.js` (catalog-derived
+// parity) and `server/lib/cliChildEnv.test.js` (discovery of a hand-rolled
+// call site). Sibling coverage for the model-injection point lives in
+// `providerModels.test.js#resolveInjectedTuiModel`.
+describe('tuiHandshake — parity with the shipped provider catalog', () => {
+  const SEED_PATH = resolve(dirname(fileURLToPath(import.meta.url)), '../../data.reference/providers.json');
+  const seedProviders = Object.entries(
+    JSON.parse(readFileSync(SEED_PATH, 'utf8')).providers || {}
+  )
+    .map(([id, p]) => ({ ...p, id }))
+    .filter((p) => typeof p.command === 'string' && p.command);
+  const tuiProviders = seedProviders.filter((p) => p.type === 'tui');
+  const tuiCommands = [...new Set(tuiProviders.map((p) => p.command))];
+
+  // Commands `applyCommandDefaults` deliberately has NO arm for, and where the
+  // unattended-run posture actually comes from. Both are asserted below, so an
+  // exemption can't rot into "we just forgot this vendor":
+  //   - the builder must still inject nothing for it, and
+  //   - the recorded alternate channel must still carry the posture in the seed.
+  // A vendor absent from BOTH this map and `applyCommandDefaults` fails.
+  const POSTURE_NOT_FROM_BUILDER = new Map([
+    // claude's `--dangerously-skip-permissions` rides in the seed `args`.
+    ['claude', { channel: 'args', marker: '--dangerously-skip-permissions' }],
+    // opencode has no argv approval/trust gate; its permission posture is
+    // configured through OPENCODE_CONFIG_CONTENT (see cliChildEnv.js).
+    ['opencode', { channel: 'envVars', marker: '"permission":"allow"' }],
+  ]);
+
+  it('parses the shipped catalog (guards against a silently empty walk)', () => {
+    expect(seedProviders.length).toBeGreaterThan(0);
+    expect(tuiProviders.length).toBeGreaterThan(0);
+    // More than one distinct binary, or the per-command loops below prove nothing.
+    expect(tuiCommands.length).toBeGreaterThan(1);
+  });
+
+  // `inferTuiCommand` is the blank-`provider.command` fallback for BOTH spawners
+  // and the binary `resolveSlashdoStyle` asks about before deciding whether a
+  // session can type `/do:pr`. A vendor missing from its map silently resolves
+  // to `claude` — the wrong binary, told to run slash commands it doesn't have.
+  it.each(seedProviders.map((p) => [p.id, p.command]))(
+    'inferTuiCommand("%s") resolves to the catalog command "%s"',
+    (id, command) => {
+      expect(inferTuiCommand(id)).toBe(command);
+    }
+  );
+
+  // `applyCommandDefaults` is the TUI approval/trust-argv dispatch. A vendor
+  // with no arm falls through `return args` unchanged and launches interactive,
+  // then stalls on its first tool-approval prompt with nobody at the keyboard.
+  describe.each(tuiCommands)('applyCommandDefaults("%s")', (command) => {
+    const exemption = POSTURE_NOT_FROM_BUILDER.get(command);
+
+    if (exemption) {
+      it('injects nothing (its posture comes from another channel)', () => {
+        expect(applyCommandDefaults(command, [])).toEqual([]);
+      });
+
+      it(`still gets its unattended posture from the seed ${exemption.channel}`, () => {
+        for (const provider of tuiProviders.filter((p) => p.command === command)) {
+          const declared = exemption.channel === 'args'
+            ? (provider.args || []).join(' ')
+            // The env VALUES verbatim — not JSON.stringify of the map, which
+            // would re-escape the quotes inside OPENCODE_CONFIG_CONTENT's own
+            // embedded JSON and never match the marker.
+            : Object.values(provider.envVars || {}).join(' ');
+          expect(declared, `${provider.id} must declare ${exemption.marker}`)
+            .toContain(exemption.marker);
+        }
+      });
+    } else {
+      it('has a dispatch arm that injects an unattended-run posture', () => {
+        expect(
+          applyCommandDefaults(command, []),
+          `No applyCommandDefaults arm for "${command}". Add one (see ensureCursorTuiArgs), `
+          + 'or record why its posture arrives another way in POSTURE_NOT_FROM_BUILDER.'
+        ).not.toEqual([]);
+      });
+    }
+  });
+
+  // Each spawn path calls applyCommandDefaults on argv that may ALREADY carry
+  // the seed's posture flags, so a non-idempotent arm double-appends — codex
+  // errors outright on a repeated approval flag, and every other vendor grows a
+  // duplicated argv that's a coin flip on which wins.
+  it.each(tuiProviders.map((p) => [p.id, p.command, p.args || []]))(
+    'applyCommandDefaults is idempotent over the seed args of "%s" (%s)',
+    (_id, command, args) => {
+      const once = applyCommandDefaults(command, [...args]);
+      expect(applyCommandDefaults(command, [...once])).toEqual(once);
+    }
+  );
+
+  // End-to-end over the two dispatch points at once: a provider whose `command`
+  // is blank (older stored configs, and the shape `buildTuiSpawnConfig` handles)
+  // must land on exactly the same invocation as the fully-specified one.
+  it.each(tuiProviders.map((p) => [p.id, p]))(
+    'buildTuiInvocation("%s") is identical with and without an explicit command',
+    (_id, provider) => {
+      expect(buildTuiInvocation({ ...provider, command: '' }))
+        .toEqual(buildTuiInvocation(provider));
+    }
+  );
 });
