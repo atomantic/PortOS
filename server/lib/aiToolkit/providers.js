@@ -12,17 +12,24 @@ import {
   ANTIGRAVITY_TUI_ID,
   ensureAntigravityPrintArgs,
   ensureAntigravityTuiArgs,
-  isAntigravityCommand,
   LEGACY_GEMINI_CLI_ID,
   LEGACY_GEMINI_TUI_ID,
   parseAntigravityModelList,
 } from './internal/antigravity.js';
 import {
   CURSOR_COMMAND,
-  CURSOR_TUI_ID,
-  isCursorCommand,
   parseCursorModelList,
 } from './internal/cursor.js';
+import { isOllamaBackedProvider } from './internal/ollamaBacked.js';
+import { canRefreshModels, resolveModelFetcher } from './internal/modelFetchers.js';
+
+// Re-exported (rather than defined here) so the model-fetcher table can key its
+// ollama row on the same predicate without importing back into this module.
+export { isOllamaBackedProvider };
+// The pure capability predicate that both refresh arms below dispatch through —
+// exported so the providers route can decorate its payload with it and the
+// client stops re-deriving refreshability from command/name string sniffing.
+export { canRefreshModels };
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_SAMPLE_PATH = join(__dirname, 'defaults/providers.sample.json');
@@ -114,27 +121,6 @@ const TOOL_USE_RE = new RegExp([
   'smollm2',
   'deepseek-v3', 'deepseek-r1',
 ].join('|'), 'i');
-
-/**
- * Whether `provider` is served by an Ollama daemon rather than its nominal
- * cloud/CLI backend. Covers three shapes: the built-in `ollama` API provider
- * itself (id match — its `endpoint` carries the daemon URL, not `envVars`);
- * an `api`-type provider whose `endpoint` points at Ollama (generic local
- * setups); and the Claude-Ollama CLI/TUI pattern — a `claude` process that
- * carries the `ollamaBacked` marker or an `ANTHROPIC_BASE_URL` pointed at
- * Ollama, running the full Claude Code harness but generating tokens from a
- * local model, so its model list must come from Ollama (filtered to
- * tool-use-capable models) rather than the static Anthropic list. Exported
- * (re-exported by `server/services/providers.js`) so hosts can classify
- * providers the same way this module's own refresh dispatch does, instead of
- * re-deriving the shape check and risking drift.
- */
-export function isOllamaBackedProvider(provider) {
-  if (provider?.id === 'ollama') return true;
-  if (provider?.ollamaBacked === true) return true;
-  const base = String(provider?.envVars?.ANTHROPIC_BASE_URL || provider?.endpoint || '');
-  return /:11434\b/.test(base) || /ollama/i.test(base);
-}
 
 /** Normalize an Ollama base URL (strip trailing slash + an OpenAI-compat `/v1`). */
 function ollamaBaseFromProvider(provider) {
@@ -754,32 +740,19 @@ export function createProviderService(config = {}) {
       let models = null;
 
       try {
+        // A TUI provider's model is normally fixed by its CLI/config, so only
+        // the vendors whose `--model` flag also applies to the interactive
+        // session carry a `tuiMatch` column in the table (ollama-backed,
+        // antigravity, cursor today). One lookup replaces the per-vendor
+        // `else if` chain this used to be — see internal/modelFetchers.js.
+        const tuiFetcher = provider.type === 'tui' ? resolveModelFetcher(provider) : null;
+
         if (provider.type === 'api') {
           models = await this._refreshAPIProviderModels(provider);
         } else if (provider.type === 'cli') {
           models = await this._refreshCLIProviderModels(provider);
-        } else if (provider.type === 'tui' && isOllamaBackedProvider(provider)) {
-          // TUI providers normally don't refresh (their model is fixed by the
-          // CLI/config), but the Claude-Ollama TUI variant still needs its
-          // tool-use-capable Ollama model list pulled live, same as the CLI one.
-          models = await this._fetchOllamaToolCapableModels(provider);
-        } else if (provider.type === 'tui' && (provider.id === ANTIGRAVITY_TUI_ID || isAntigravityCommand(provider.command))) {
-          // Same exception for the Antigravity TUI: `agy --model` applies to the
-          // interactive session too, so its catalog must refresh like the CLI's.
-          models = await this._fetchAntigravityModels(provider);
-        } else if (provider.type === 'tui' && (provider.id === CURSOR_TUI_ID || isCursorCommand(provider.command))) {
-          // And for the Cursor TUI: `cursor-agent --model` applies to the
-          // interactive session too — the binary's own `Tip:` line documents
-          // both `--model <id>` and the in-session `/model <id>` — so its
-          // catalog must refresh like the CLI's.
-          // The id test alongside the command one (which the CLI arm below
-          // deliberately does without) carries none of that arm's hazard: it is
-          // an EXACT shipped-id match, not a name substring, so it can only
-          // admit the provider PortOS itself seeds — and if the user repointed
-          // its command at a wrapper, probing that wrapper is the right answer.
-          // Shaped to match the antigravity arm above; both collapse together
-          // when the dispatch becomes a table (#3620).
-          models = await this._fetchCursorModels(provider);
+        } else if (tuiFetcher) {
+          models = await this[tuiFetcher.fetch](provider);
         } else {
           // No branch matched — this provider type/shape has no fetcher. Say so,
           // the same 400 the CLI arm's own fall-through throws. Previously this
@@ -880,66 +853,18 @@ export function createProviderService(config = {}) {
     },
 
     async _refreshCLIProviderModels(provider) {
-      const providerName = provider.name.toLowerCase();
+      // One lookup, not a per-vendor `if` chain. The table
+      // (internal/modelFetchers.js) also owns the ORDER this used to encode in
+      // prose: the ollama row first (a `claude` CLI pointed at a local Ollama
+      // daemon must pull the installed tool-use-capable models, not the static
+      // Anthropic list), then every command/structural match, and only then the
+      // weaker display-name matches — so a cursor provider a user renamed
+      // "Cursor Claude Opus" reaches cursor-agent rather than having Anthropic's
+      // catalog persisted onto it.
+      const fetcher = resolveModelFetcher(provider);
 
-      // Claude Ollama: a `claude` CLI pointed at a local Ollama daemon. Pull the
-      // installed Ollama models (filtered to tool-use-capable ones — the agent
-      // harness depends on reliable tool-calling) instead of the static Anthropic
-      // list. Checked BEFORE the generic claude branch below.
-      if (isOllamaBackedProvider(provider)) {
-        return await this._fetchOllamaToolCapableModels(provider);
-      }
-
-      // Cursor is keyed on the command BASENAME — path/exe-tolerant like the
-      // antigravity branch, so a binary configured by absolute path still
-      // refreshes rather than falling through to the throw below while the
-      // client's mirrored gate still offers the button. Unlike every vendor
-      // around it there is deliberately NO name test: "cursor" is an ordinary
-      // English word (a DB cursor, a text cursor), so a `name.includes('cursor')`
-      // clause would hijack the refresh for an unrelated provider the user
-      // happened to name "Cursor Notes".
-      //
-      // It sits ABOVE the name-substring branches on purpose, and the order is
-      // load-bearing: those branches match on the DISPLAY NAME, so a cursor
-      // provider a user renamed "Cursor Claude Opus" or "Cursor Antigravity"
-      // would otherwise be routed to _fetchAnthropicModels / _fetchAntigravityModels
-      // and have that vendor's catalog persisted onto it — ids cursor-agent will
-      // reject, written silently because the client (command-keyed) shows the
-      // Refresh button. An exact command match is a stronger identity signal
-      // than a name substring, so it must win. Same reasoning that already puts
-      // the ollama check first.
-      if (isCursorCommand(provider.command)) {
-        return await this._fetchCursorModels(provider);
-      }
-
-      // Antigravity's COMMAND test is hoisted for the same reason, and split from
-      // its name test below to do it. It is path/exe-tolerant (`isAntigravityCommand`,
-      // not `command === 'agy'`) so a provider configured with the absolute binary
-      // path still refreshes; matches the TUI branch in refreshProviderModels.
-      // Left fused below the claude name test, an `agy` provider named
-      // "Antigravity Claude Sonnet 4.6" — the natural name for a second agy
-      // provider, since agy's own catalog carries claude ids — got Anthropic's
-      // static list persisted onto it AND lost the `antigravity-configured-default`
-      // sentinel from `models` while `defaultModel` still pointed at it, which
-      // blanks the model <select> and reads as "unset".
-      if (isAntigravityCommand(provider.command)) {
-        return await this._fetchAntigravityModels(provider);
-      }
-
-      if (providerName.includes('claude') || provider.command === 'claude') {
-        return await this._fetchAnthropicModels(provider);
-      }
-
-      // The NAME tests stay below the command tests above: they are the weaker
-      // signal, so they only get a say once no command has claimed the provider.
-      // `name: 'Claude via Antigravity'` + `command: 'claude'` therefore still
-      // reaches Anthropic, which is the right answer for a claude binary.
-      if (providerName.includes('antigravity')) {
-        return await this._fetchAntigravityModels(provider);
-      }
-
-      if (providerName.includes('gemini') || provider.command === 'gemini') {
-        return await this._fetchGeminiModels(provider);
+      if (fetcher) {
+        return await this[fetcher.fetch](provider);
       }
 
       // 400, not the rethrow's 502 default: nothing upstream failed — this CLI

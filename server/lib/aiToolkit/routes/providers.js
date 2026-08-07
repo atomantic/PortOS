@@ -1,6 +1,17 @@
 import { Router } from 'express';
 import { ToolkitHttpError, defaultAsyncHandler } from '../internal/httpError.js';
 import { providerSchema, providerActiveSchema, validate } from '../validation.js';
+import { withRefreshCapability, withRefreshCapabilityList } from '../internal/modelFetchers.js';
+
+// `canRefreshModels` is DERIVED ON READ and decorated HERE, at the route —
+// never inside `getAllProviders()`. Computing it in the service would put it on
+// the object `saveProviders` writes back, so it would land in providers.json and
+// go stale against the fetcher table the first time a user repoints a command.
+// Decorating on the way out keeps the persisted record clean while every
+// provider-shaped response still carries the flag, so the client can read it
+// instead of re-deriving refreshability from command/name string sniffing.
+// Safe against a round-trip: `providerSchema.partial()` on PUT strips unknown
+// keys, so even a client that echoes the whole object back cannot persist it.
 
 export function createProvidersRoutes(providerService, options = {}) {
   const router = Router();
@@ -12,12 +23,12 @@ export function createProvidersRoutes(providerService, options = {}) {
 
   router.get('/', asyncHandler(async (req, res) => {
     const data = await providerService.getAllProviders();
-    res.json(data);
+    res.json({ ...data, providers: withRefreshCapabilityList(data.providers) });
   }));
 
   router.get('/active', asyncHandler(async (req, res) => {
     const provider = await providerService.getActiveProvider();
-    res.json(provider);
+    res.json(withRefreshCapability(provider));
   }));
 
   router.put('/active', asyncHandler(async (req, res) => {
@@ -33,7 +44,7 @@ export function createProvidersRoutes(providerService, options = {}) {
       throw new ServerError('Provider not found', { status: 404 });
     }
 
-    res.json(provider);
+    res.json(withRefreshCapability(provider));
   }));
 
   router.get('/samples', asyncHandler(async (req, res) => {
@@ -48,7 +59,7 @@ export function createProvidersRoutes(providerService, options = {}) {
       throw new ServerError('Provider not found', { status: 404 });
     }
 
-    res.json(provider);
+    res.json(withRefreshCapability(provider));
   }));
 
   router.post('/', asyncHandler(async (req, res) => {
@@ -58,7 +69,7 @@ export function createProvidersRoutes(providerService, options = {}) {
     }
 
     const provider = await providerService.createProvider(result.data);
-    res.status(201).json(provider);
+    res.status(201).json(withRefreshCapability(provider));
   }));
 
   router.put('/:id', asyncHandler(async (req, res) => {
@@ -75,7 +86,7 @@ export function createProvidersRoutes(providerService, options = {}) {
       throw new ServerError('Provider not found', { status: 404 });
     }
 
-    res.json(provider);
+    res.json(withRefreshCapability(provider));
   }));
 
   router.delete('/:id', asyncHandler(async (req, res) => {
@@ -106,7 +117,7 @@ export function createProvidersRoutes(providerService, options = {}) {
       throw new ServerError('Provider not found', { status: 404 });
     }
 
-    res.json(provider);
+    res.json(withRefreshCapability(provider));
   }));
 
   return router;

@@ -3,6 +3,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/visionTest.js';
 import { getAllProviderStatuses, getProviderStatus, markProviderAvailable, getTimeUntilRecovery } from '../services/providerStatus.js';
 import { providerSchema, providerActiveSchema, validate } from '../lib/aiToolkit/validation.js';
+import { withRefreshCapability } from '../lib/aiToolkit/internal/modelFetchers.js';
 
 /**
  * Sanitize a provider object for client responses.
@@ -29,6 +30,23 @@ const sanitizeProvider = (provider) => {
 };
 
 /**
+ * The shape a provider takes on its way OUT to the client: secrets stripped,
+ * plus the derived `canRefreshModels` flag the AI Providers page reads to
+ * decide whether to offer a "Refresh Models" button (#3620).
+ *
+ * Order matters. `canRefreshModels` is computed on the RAW provider, before
+ * sanitization: the ollama row of the fetcher table keys partly on
+ * `envVars.ANTHROPIC_BASE_URL`, which `sanitizeProvider` redacts to `'***'`
+ * when the user marked it secret — deriving after would silently drop the
+ * Refresh button for a Claude-Ollama provider.
+ *
+ * These PortOS routes SHADOW the toolkit's own (which decorate the same way);
+ * the toolkit keeps its copy so it stays correct standalone. Both decorate on
+ * the way out only — the field is never persisted.
+ */
+const presentProvider = (provider) => sanitizeProvider(withRefreshCapability(provider));
+
+/**
  * Create PortOS-specific provider routes
  * Extends AI Toolkit routes with vision testing endpoints
  */
@@ -41,13 +59,13 @@ export function createPortOSProviderRoutes(aiToolkit) {
     const data = await providerService.getAllProviders();
     res.json({
       activeProvider: data.activeProvider,
-      providers: data.providers.map(sanitizeProvider)
+      providers: data.providers.map(presentProvider)
     });
   }));
 
   router.get('/active', asyncHandler(async (req, res) => {
     const provider = await providerService.getActiveProvider();
-    res.json(sanitizeProvider(provider));
+    res.json(presentProvider(provider));
   }));
 
   // PUT /active must be defined before PUT /:id to avoid the wildcard
@@ -62,12 +80,12 @@ export function createPortOSProviderRoutes(aiToolkit) {
     if (!provider) {
       throw new ServerError('Provider not found', { status: 404 });
     }
-    res.json(sanitizeProvider(provider));
+    res.json(presentProvider(provider));
   }));
 
   router.get('/samples', asyncHandler(async (req, res) => {
     const providers = await providerService.getSampleProviders();
-    res.json({ providers: providers.map(sanitizeProvider) });
+    res.json({ providers: providers.map(presentProvider) });
   }));
 
   // Provider status routes MUST be defined before toolkit routes,
@@ -132,7 +150,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
   router.get('/:id', asyncHandler(async (req, res) => {
     const provider = await providerService.getProviderById(req.params.id);
     if (!provider) throw new ServerError('Provider not found', { status: 404 });
-    res.json(sanitizeProvider(provider));
+    res.json(presentProvider(provider));
   }));
 
   // PUT /:id — intercept to (a) validate the body via a partial provider
@@ -167,7 +185,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
     }
 
     const provider = await providerService.updateProvider(req.params.id, updates);
-    res.json(sanitizeProvider(provider));
+    res.json(presentProvider(provider));
   }));
 
   // POST / — intercept to (a) validate the body against providerSchema so
@@ -181,7 +199,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
       throw new ServerError('Invalid provider data', { status: 400, code: 'VALIDATION_ERROR', context: { details: validation.errors } });
     }
     const provider = await providerService.createProvider(validation.data);
-    res.status(201).json(sanitizeProvider(provider));
+    res.status(201).json(presentProvider(provider));
   }));
 
   // Mount base toolkit routes last (GET/PUT /:id and POST / are now shadowed

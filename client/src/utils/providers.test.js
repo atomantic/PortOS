@@ -35,8 +35,6 @@ import {
   isGrokBuildCli,
   isKimiProvider,
   isCodexProvider,
-  isCursorCommand,
-  isAntigravityCommand,
   supportsModelRefresh,
   isAntigravityProvider,
   effortLevelsForProvider,
@@ -62,6 +60,10 @@ import {
 } from './providers.js';
 import { PROVIDER_TYPES as SERVER_PROVIDER_TYPES } from '../../../server/lib/aiToolkit/constants.js';
 import SHIPPED_PROVIDERS from '../../../data.reference/providers.json';
+// The server's own payload decorator, so the shipped-catalog walk below tests
+// the REAL derivation instead of a hand transcription of it (#3620). Pure and
+// dependency-free — it imports nothing outside the vendored aiToolkit.
+import { withRefreshCapabilityList } from '../../../server/lib/aiToolkit/internal/modelFetchers.js';
 import {
   effortLevelsForProvider as serverEffortLevelsForProvider,
   isAntigravityProvider as serverIsAntigravityProvider,
@@ -736,152 +738,65 @@ describe('isKimiProvider (mirror of server providerModels)', () => {
 });
 
 describe('supportsModelRefresh', () => {
-  // Guards the AI Providers page's "Refresh Models" button. Lived as a
-  // module-local in AIProviders.jsx with zero coverage until it moved here.
-  // The contract is a MIRROR of the server's `_refreshCLIProviderModels`
-  // dispatch: anything the server throws for must be false here, or the button
-  // 404s on every click.
-  // `_fetchCursorModels` shells `cursor-agent models`, so cursor now refreshes.
-  // Command-keyed on BOTH arms (path- and `.exe`-tolerant), because the server's
-  // cursor branch is — a name test would be wrong in the other direction, see
-  // the "Cursor Notes" case below.
-  it('offers the button for cursor, including a path-configured binary', () => {
-    expect(supportsModelRefresh({ id: 'cursor-cli', type: 'cli', command: 'cursor-agent', name: 'Cursor Agent CLI' })).toBe(true);
-    expect(supportsModelRefresh({ id: 'custom', type: 'cli', command: '/home/x/.local/bin/cursor-agent', name: 'Cursor' })).toBe(true);
+  // Guards the AI Providers page's "Refresh Models" button. It is now a READ of
+  // the server-derived `canRefreshModels` field — the server owns the one
+  // per-vendor fetcher table (server/lib/aiToolkit/internal/modelFetchers.js)
+  // and the providers route decorates every payload with the answer.
+  //
+  // What used to be here was a ~40-line hand-written mirror of both server
+  // dispatch arms, "kept in lockstep" by a comment, plus a parity test that
+  // re-implemented the server dispatch a SECOND time — so it only proved the
+  // mirror matched the test's own copy. Both are gone with #3620/#3616.
+  it('reads the flag the server put on the payload', () => {
+    expect(supportsModelRefresh({ id: 'claude-code', canRefreshModels: true })).toBe(true);
+    expect(supportsModelRefresh({ id: 'codex', canRefreshModels: false })).toBe(false);
   });
 
-  it('offers it for the cursor TUI too — `--model` applies to the session', () => {
-    expect(supportsModelRefresh({ id: 'cursor-tui', type: 'tui', command: 'cursor-agent', name: 'Cursor Agent TUI' })).toBe(true);
-    expect(supportsModelRefresh({ id: 'cursor-tui', type: 'tui', command: '/home/x/.local/bin/cursor-agent', name: 'renamed' })).toBe(true);
+  it('ignores the command/name/type shapes it used to sniff', () => {
+    // The whole point: the client no longer has an opinion. A codex provider
+    // the server says it CAN refresh gets a button; a claude provider the
+    // server says it cannot, does not.
+    expect(supportsModelRefresh({ type: 'cli', command: 'codex', name: 'Codex CLI', canRefreshModels: true })).toBe(true);
+    expect(supportsModelRefresh({ type: 'cli', command: 'claude', name: 'Claude Code CLI', canRefreshModels: false })).toBe(false);
+    expect(supportsModelRefresh({ type: 'api', endpoint: 'http://localhost:1234/v1', canRefreshModels: false })).toBe(false);
   });
 
-  // Pins the `id === '<vendor>-tui'` half of each TUI arm's OR. Every other case
-  // here matches on the COMMAND, so deleting those id clauses left the suite
-  // green while a shipped TUI provider repointed at a wrapper script silently
-  // lost its button (the server's TUI arms still serve it via the same id test).
-  it('offers it for a shipped cursor-tui / antigravity-tui repointed at a wrapper', () => {
-    expect(supportsModelRefresh({ id: 'cursor-tui', type: 'tui', command: '/opt/bin/cursor-wrap', name: 'Cursor Agent TUI' })).toBe(true);
-    expect(supportsModelRefresh({ id: 'antigravity-tui', type: 'tui', command: '/opt/bin/agy-wrap', name: 'Antigravity TUI' })).toBe(true);
-    // …but an unshipped id with an unrelated command still gets nothing.
-    expect(supportsModelRefresh({ id: 'custom-tui', type: 'tui', command: '/opt/bin/cursor-wrap', name: 'Custom' })).toBe(false);
-  });
-
-  it('does not offer it for a provider merely NAMED cursor, or for the GUI binary', () => {
-    // "cursor" is an ordinary English word, and a bare `cursor` is the GUI
-    // editor launcher — neither reaches the server's command-keyed arm.
-    expect(supportsModelRefresh({ id: 'x', type: 'cli', command: 'some-other-binary', name: 'Cursor Notes' })).toBe(false);
-    expect(supportsModelRefresh({ id: 'x', type: 'cli', command: 'cursor', name: 'Cursor' })).toBe(false);
-  });
-
-  // Regression: these two SHIP in data.reference/providers.json and the old
-  // deny-list reported true for both, so the button 404'd on every click.
-  it('hides the button for shipped CLIs the server has no fetcher for', () => {
-    expect(supportsModelRefresh({ id: 'codex', type: 'cli', command: 'codex', name: 'Codex CLI' })).toBe(false);
-    expect(supportsModelRefresh({ id: 'kimi-cli', type: 'cli', command: 'kimi', name: 'Kimi Code CLI' })).toBe(false);
-    expect(supportsModelRefresh({ id: 'grok-cli', type: 'cli', command: 'grok', name: 'Grok Build CLI' })).toBe(false);
-  });
-
-  // The server's claude/gemini arms compare the RAW command string, so this
-  // must too — a basename-tolerant client would show a button on a renamed,
-  // path-configured binary that the server still refuses, which is the same
-  // 404 in a new place. (Widening both sides is tracked separately.)
-  it('matches the server on the raw command string, not a basename', () => {
-    expect(supportsModelRefresh({ id: 'c', type: 'cli', command: 'claude', name: 'renamed' })).toBe(true);
-    expect(supportsModelRefresh({ id: 'c', type: 'cli', command: '/opt/homebrew/bin/claude', name: 'renamed' })).toBe(false);
-    // A name carrying the vendor word is the server's other accepted signal.
-    expect(supportsModelRefresh({ id: 'c', type: 'cli', command: '/opt/homebrew/bin/claude', name: 'Claude Code CLI' })).toBe(true);
-  });
-
-  // Antigravity is the one vendor the server matches by NAME on its CLI arm but
-  // NOT on its TUI arm — mirror that asymmetry or the button drifts either way.
-  it('mirrors the antigravity name/command asymmetry between cli and tui', () => {
-    expect(supportsModelRefresh({ id: 'x', type: 'cli', command: '/usr/bin/weird', name: 'Antigravity Nightly' })).toBe(true);
-    expect(supportsModelRefresh({ id: 'x', type: 'tui', command: '/usr/bin/weird', name: 'Antigravity Nightly' })).toBe(false);
-    expect(supportsModelRefresh({ id: 'x', type: 'tui', command: '/opt/bin/agy', name: 'whatever' })).toBe(true);
-  });
-
-  // Pins the COMMAND half of the antigravity CLI test, which the server hoisted
-  // above its name test. Only the NAME half was covered above, so deleting
-  // `isAntigravityCommand(command)` here left the suite green while an
-  // agy-commanded provider under any other name lost a button the server serves.
-  it('offers it for an agy-commanded CLI provider whose name says nothing about it', () => {
-    expect(supportsModelRefresh({ id: 'x', type: 'cli', command: 'agy', name: 'My Coding Agent' })).toBe(true);
-    expect(supportsModelRefresh({ id: 'x', type: 'cli', command: '/opt/homebrew/bin/agy', name: 'My Coding Agent' })).toBe(true);
-  });
-
-  it('still offers it for the providers the server CAN fetch for', () => {
-    // Ollama-backed and antigravity are checked BEFORE the TUI gate, so their
-    // TUI variants must still refresh — the ordering is the load-bearing part.
-    expect(supportsModelRefresh({ id: 'claude-ollama-tui', type: 'tui', ollamaBacked: true, name: 'Claude Ollama TUI' })).toBe(true);
-    expect(supportsModelRefresh({ id: 'antigravity-tui', type: 'tui', command: 'agy', name: 'Antigravity TUI' })).toBe(true);
-    expect(supportsModelRefresh({ id: 'claude-code', type: 'cli', command: 'claude', name: 'Claude Code CLI' })).toBe(true);
-    expect(supportsModelRefresh({ id: 'lmstudio', type: 'api', endpoint: 'http://localhost:1234/v1', name: 'LM Studio' })).toBe(true);
-    expect(supportsModelRefresh({ id: 'cerebras', type: 'api', name: 'Cerebras' })).toBe(true);
+  it('hides the button when the field is absent — an older server, not a hint to guess', () => {
+    // Strict `=== true`: guessing from the shape is what produced a button that
+    // 404'd on every click. Absent means "this server does not say", so stay quiet.
+    expect(supportsModelRefresh({ id: 'claude-code', type: 'cli', command: 'claude', name: 'Claude Code CLI' })).toBe(false);
+    expect(supportsModelRefresh({ id: 'x', canRefreshModels: 'yes' })).toBe(false);
+    expect(supportsModelRefresh({ id: 'x', canRefreshModels: 1 })).toBe(false);
   });
 
   it('does not throw on a nullish provider', () => {
-    expect(() => supportsModelRefresh(null)).not.toThrow();
-    expect(() => supportsModelRefresh(undefined)).not.toThrow();
+    expect(supportsModelRefresh(null)).toBe(false);
+    expect(supportsModelRefresh(undefined)).toBe(false);
   });
 
-  // The real lockstep gate: walk the SHIPPED catalog and compare this predicate
-  // against a transcription of the server's own dispatch. Targeted cases above
-  // can only cover the mismatches someone already thought of; this catches the
-  // next provider added to the seed without a matching client branch, which is
-  // exactly how codex and kimi-cli ended up with a button that 404'd.
-  it('agrees with the server dispatch for every shipped provider', () => {
-    // Transcribed from `refreshProviderModels` + `_refreshCLIProviderModels`
-    // (server/lib/aiToolkit/providers.js). Note the type-routing order and that
-    // the tui arm does NOT consult the provider name.
-    const serverWouldRefresh = (p) => {
-      const name = String(p.name || '').toLowerCase();
-      if (p.type === 'api') return true;
-      if (p.type === 'cli') {
-        if (isOllamaBackedProvider(p)) return true;
-        // Command-only, and ABOVE the name tests — the server orders it that way
-        // so a renamed "Cursor Claude Opus" reaches the cursor fetcher.
-        if (isCursorCommand(p.command)) return true;
-        if (isAntigravityCommand(p.command)) return true;
-        if (name.includes('claude') || p.command === 'claude') return true;
-        if (name.includes('antigravity')) return true;
-        if (name.includes('gemini') || p.command === 'gemini') return true;
-        return false; // server throws → route 404s
-      }
-      if (p.type === 'tui' && isOllamaBackedProvider(p)) return true;
-      if (p.type === 'tui' && (p.id === 'antigravity-tui' || isAntigravityCommand(p.command))) return true;
-      if (p.type === 'tui' && (p.id === 'cursor-tui' || isCursorCommand(p.command))) return true;
-      return false;
-    };
+  // The shipped-catalog walk, retargeted at the payload field. It used to
+  // compare this predicate against a hand transcription of the server dispatch;
+  // now it runs the SERVER's own decorator over the shipped seed and asserts the
+  // button visibility that produces. That is the real lockstep gate: a provider
+  // added to the seed without a fetcher-table row (how codex and kimi-cli ended
+  // up with a 404ing button) shows up here.
+  it('agrees with the server decorator for every shipped provider', () => {
+    const decorated = withRefreshCapabilityList(Object.values(SHIPPED_PROVIDERS.providers));
+    expect(decorated.length).toBeGreaterThan(20);
 
-    const providers = Object.values(SHIPPED_PROVIDERS.providers);
-    expect(providers.length).toBeGreaterThan(20);
-    for (const p of providers) {
-      expect(
-        supportsModelRefresh(p),
-        `${p.id}: client and server disagree on model-refresh support`,
-      ).toBe(serverWouldRefresh(p));
-    }
+    const withButton = decorated.filter(supportsModelRefresh).map((p) => p.id).sort();
+    // Frozen from the pre-#3620 dispatch chains — the refactor must not change
+    // WHICH shipped provider offers the button.
+    expect(withButton).toEqual([
+      'antigravity-cli', 'antigravity-tui', 'cerebras', 'claude-code',
+      'claude-code-bedrock', 'claude-ollama', 'claude-ollama-tui', 'cursor-cli',
+      'cursor-tui', 'grok', 'lmstudio', 'nvidia-kimi', 'ollama',
+      'opencode-ollama', 'opencode-ollama-tui',
+    ]);
   });
 });
 
-describe('isCursorCommand (mirror of server lib/cursor.js)', () => {
-  it('matches the agent binary bare, by path, and with a Windows .exe', () => {
-    expect(isCursorCommand('cursor-agent')).toBe(true);
-    expect(isCursorCommand('/Users/x/.local/bin/cursor-agent')).toBe(true);
-    expect(isCursorCommand('C:\\tools\\Cursor-Agent.exe')).toBe(true);
-  });
-
-  it('does NOT match a bare `cursor` — that is the GUI editor launcher', () => {
-    expect(isCursorCommand('cursor')).toBe(false);
-    expect(isCursorCommand('/usr/local/bin/cursor')).toBe(false);
-  });
-
-  it('rejects other CLIs and nullish input', () => {
-    expect(isCursorCommand('claude')).toBe(false);
-    expect(isCursorCommand('')).toBe(false);
-    expect(isCursorCommand(null)).toBe(false);
-  });
-
+describe('cursor providers', () => {
   it('offers no effort ladder — cursor bakes the reasoning tier into the model id', () => {
     expect(effortLevelsForProvider({ id: 'cursor-cli', command: 'cursor-agent' })).toBeNull();
     expect(effortLevelsForProvider({ id: 'cursor-tui', command: 'cursor-agent' }, 'claude-opus-5-thinking-high')).toBeNull();
