@@ -83,6 +83,18 @@ describe('#3620: providers route decorates canRefreshModels without persisting i
     expect(stored.providers.codex).not.toHaveProperty('canRefreshModels');
   });
 
+  it('decorates GET /samples — a sample answers as the provider it will become', async () => {
+    const res = await request(app).get('/api/providers/samples');
+    expect(res.status).toBe(200);
+    expect(res.body.providers.length).toBeGreaterThan(0);
+    for (const sample of res.body.providers) {
+      expect(typeof sample.canRefreshModels, `${sample.id}: sample missing the flag`).toBe('boolean');
+    }
+    const byId = Object.fromEntries(res.body.providers.map((p) => [p.id, p]));
+    expect(byId['claude-code']?.canRefreshModels).toBe(true);
+    expect(byId.codex?.canRefreshModels).toBe(false);
+  });
+
   it('decorates GET /:id and GET /active too, so every read agrees', async () => {
     await createProvider({ id: 'claude-code', name: 'Claude Code CLI', type: 'cli', command: 'claude' });
     await request(app).put('/api/providers/active').send({ id: 'claude-code' });

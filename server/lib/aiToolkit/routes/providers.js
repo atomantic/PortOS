@@ -49,7 +49,10 @@ export function createProvidersRoutes(providerService, options = {}) {
 
   router.get('/samples', asyncHandler(async (req, res) => {
     const providers = await providerService.getSampleProviders();
-    res.json({ providers });
+    // Samples are provider-shaped and the flag is derived purely from that
+    // shape, so decorate them too — a sample's answer is what the provider it
+    // becomes will report. PortOS's shadowing `/samples` handler does the same.
+    res.json({ providers: withRefreshCapabilityList(providers) });
   }));
 
   router.get('/:id', asyncHandler(async (req, res) => {
