@@ -1194,11 +1194,16 @@ describe('tuiHandshake — parity with the shipped provider catalog', () => {
   const SEED_PATH = resolve(dirname(fileURLToPath(import.meta.url)), '../../data.reference/providers.json');
   const seedProviders = Object.entries(
     JSON.parse(readFileSync(SEED_PATH, 'utf8')).providers || {}
-  )
-    .map(([id, p]) => ({ ...p, id }))
-    .filter((p) => typeof p.command === 'string' && p.command);
+  ).map(([id, p]) => ({ ...p, id }));
+  // EVERY seeded TUI provider is walked, including one that declares no
+  // `command` — that shape is exactly what `inferTuiCommand` exists to resolve,
+  // so filtering it out would let a new vendor skip every check below.
   const tuiProviders = seedProviders.filter((p) => p.type === 'tui');
-  const tuiCommands = [...new Set(tuiProviders.map((p) => p.command))];
+  // The binary a provider actually launches: its own `command`, or whatever the
+  // blank-command fallback resolves its id to (what the spawners do).
+  const launchCommand = (p) => p.command || inferTuiCommand(p.id);
+  const tuiCommands = [...new Set(tuiProviders.map(launchCommand))];
+  const withDeclaredCommand = seedProviders.filter((p) => typeof p.command === 'string' && p.command);
 
   // Commands `applyCommandDefaults` deliberately has NO arm for, and where the
   // unattended-run posture actually comes from. Both are asserted below, so an
@@ -1206,6 +1211,11 @@ describe('tuiHandshake — parity with the shipped provider catalog', () => {
   //   - the builder must still inject nothing for it, and
   //   - the recorded alternate channel must still carry the posture in the seed.
   // A vendor absent from BOTH this map and `applyCommandDefaults` fails.
+  //
+  // `channel: null` is the escape hatch for a binary that genuinely needs no
+  // unattended posture at all — it must carry a `reason`, so the next vendor
+  // resolves this by making a documented call rather than inventing a marker
+  // string to satisfy the assertion.
   const POSTURE_NOT_FROM_BUILDER = new Map([
     // claude's `--dangerously-skip-permissions` rides in the seed `args`.
     ['claude', { channel: 'args', marker: '--dangerously-skip-permissions' }],
@@ -1217,6 +1227,7 @@ describe('tuiHandshake — parity with the shipped provider catalog', () => {
   it('parses the shipped catalog (guards against a silently empty walk)', () => {
     expect(seedProviders.length).toBeGreaterThan(0);
     expect(tuiProviders.length).toBeGreaterThan(0);
+    expect(withDeclaredCommand.length).toBeGreaterThan(0);
     // More than one distinct binary, or the per-command loops below prove nothing.
     expect(tuiCommands.length).toBeGreaterThan(1);
   });
@@ -1225,7 +1236,13 @@ describe('tuiHandshake — parity with the shipped provider catalog', () => {
   // and the binary `resolveSlashdoStyle` asks about before deciding whether a
   // session can type `/do:pr`. A vendor missing from its map silently resolves
   // to `claude` — the wrong binary, told to run slash commands it doesn't have.
-  it.each(seedProviders.map((p) => [p.id, p.command]))(
+  //
+  // Only providers that DECLARE a command can be checked here (there is nothing
+  // to compare against otherwise); every seeded id happens to name its vendor,
+  // which is the property this pins. A new provider that legitimately can't
+  // satisfy it should be renamed to name its vendor, not exempted — the
+  // fallback has no other signal to work from.
+  it.each(withDeclaredCommand.map((p) => [p.id, p.command]))(
     'inferTuiCommand("%s") resolves to the catalog command "%s"',
     (id, command) => {
       expect(inferTuiCommand(id)).toBe(command);
@@ -1243,18 +1260,28 @@ describe('tuiHandshake — parity with the shipped provider catalog', () => {
         expect(applyCommandDefaults(command, [])).toEqual([]);
       });
 
-      it(`still gets its unattended posture from the seed ${exemption.channel}`, () => {
-        for (const provider of tuiProviders.filter((p) => p.command === command)) {
-          const declared = exemption.channel === 'args'
-            ? (provider.args || []).join(' ')
-            // The env VALUES verbatim — not JSON.stringify of the map, which
-            // would re-escape the quotes inside OPENCODE_CONFIG_CONTENT's own
-            // embedded JSON and never match the marker.
-            : Object.values(provider.envVars || {}).join(' ');
-          expect(declared, `${provider.id} must declare ${exemption.marker}`)
-            .toContain(exemption.marker);
-        }
-      });
+      if (exemption.channel) {
+        it(`still gets its unattended posture from the seed ${exemption.channel}`, () => {
+          for (const provider of tuiProviders.filter((p) => launchCommand(p) === command)) {
+            const args = provider.args || [];
+            const declared = exemption.channel === 'args'
+              // Exact argv membership, not a substring of the joined argv — a
+              // marker that is a prefix of some longer flag would match anything.
+              ? args.includes(exemption.marker)
+              // The env VALUES verbatim — not JSON.stringify of the map, which
+              // would re-escape the quotes inside OPENCODE_CONFIG_CONTENT's own
+              // embedded JSON and never match the marker.
+              : Object.values(provider.envVars || {}).join(' ').includes(exemption.marker);
+            expect(declared, `${provider.id} must declare ${exemption.marker} in its ${exemption.channel}`)
+              .toBe(true);
+          }
+        });
+      } else {
+        it('is recorded as needing no unattended posture at all', () => {
+          expect(exemption.reason, `${command}'s channel-less exemption must carry a reason`)
+            .toBeTruthy();
+        });
+      }
     } else {
       it('has a dispatch arm that injects an unattended-run posture', () => {
         expect(
@@ -1270,7 +1297,7 @@ describe('tuiHandshake — parity with the shipped provider catalog', () => {
   // the seed's posture flags, so a non-idempotent arm double-appends — codex
   // errors outright on a repeated approval flag, and every other vendor grows a
   // duplicated argv that's a coin flip on which wins.
-  it.each(tuiProviders.map((p) => [p.id, p.command, p.args || []]))(
+  it.each(tuiProviders.map((p) => [p.id, launchCommand(p), p.args || []]))(
     'applyCommandDefaults is idempotent over the seed args of "%s" (%s)',
     (_id, command, args) => {
       const once = applyCommandDefaults(command, [...args]);
