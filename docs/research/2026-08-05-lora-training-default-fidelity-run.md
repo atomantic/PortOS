@@ -1,9 +1,10 @@
 # Fidelity run: LoRA-training defaults — 4B vs 9B base, and how many steps
 
-**Status:** PAUSED at user request — Run A (4B) canceled at step 563/1200
-(checkpoint 299 retained, resumable); Run B (9B) never started. The #2791 gate is
-**not** satisfied yet; defaults must not change on this partial data.
-**Date:** 2026-08-05
+**Status:** RESUMED 2026-08-07 — Run A (4B) restarted from checkpoint 299 (job
+`d7aece3a…`), continuing toward step 1200; Run B (9B) still not started. The
+#2791 gate is **not** satisfied yet; defaults must not change until both arms
+finish and are visually compared.
+**Date:** 2026-08-05 (resumed 2026-08-07)
 **Hardware:** Apple M5 Max, 128 GB unified memory, macOS 26.5.2
 **Runtime:** mflux 0.17.5 · mlx 0.31.2 · mlx-metal 0.31.2 · python 3.14.6
 **Closes:** the "blocked on empirical fidelity validation" gate on issue #2791
@@ -153,14 +154,14 @@ until this run is completed.
 
 ## Resuming
 
-Run A retains its checkpoint at step 299 and can be continued rather than
-restarted:
+Run A was resumed 2026-08-07 via `POST /api/lora-training/runs/9f6fce7e-bbce-44c3-8deb-a1acb5409639/resume`,
+which re-enqueued from checkpoint 299 (job `d7aece3a-b457-4a86-97f0-24c498d5b6ee`,
+`fromStep: 300`) and is training toward step 1200. Confirmed picked up cleanly:
+checkpoint restored, LoRA reapplied (200/200 keys matched), step counter
+continuing from 300.
 
-```
-POST /api/lora-training/runs/9f6fce7e-bbce-44c3-8deb-a1acb5409639/resume
-```
-
-Run B (9B) must be started fresh with the Run B column of the method table above.
-Budget ~3.1 h for the remainder of the 4B arm and appreciably longer for the 9B
-arm; both want the display asleep for the duration (see Environment notes).
+Run B (9B) still must be started fresh with the Run B column of the method table
+above once Run A finishes. Budget ~2.4 h for the remainder of the 4B arm from
+this resume point and appreciably longer for the 9B arm; both want the display
+asleep for the duration (see Environment notes).
 
