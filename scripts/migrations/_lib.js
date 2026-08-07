@@ -95,6 +95,8 @@ const splitReadJsonTolerant = async (path) => {
 // authoritative legacy value, then stamp + rename the legacy store — and the
 // truncated record would forever load as null. rename() is atomic within one
 // filesystem, and tmp sits in the same dir as its target, so the swap is safe.
+// Also used by the provider-seed family, where a truncated `data/providers.json`
+// would cost the user every stored apiKey and provider customization.
 const writeJsonAtomic = async (path, value) => {
   const tmp = `${path}.tmp-${process.pid}`;
   await writeFile(tmp, JSON.stringify(value, null, 2) + '\n');
@@ -105,6 +107,9 @@ const writeJsonAtomic = async (path, value) => {
 // surfaces a literal `"__proto__"` key as an own property). They pass a typical
 // `idPattern`, so a map split must drop them explicitly rather than write a
 // `__proto__/index.json` record dir — left in the backup for manual recovery.
+// Shared with the provider-seed family below, which faces the mirror-image
+// hazard: these keys are INHERITED on every plain object, so a `map[id]`
+// presence probe reads truthy for them even on an empty map.
 const RESERVED_MAP_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 // Scan the type dir for records already split in a prior partial run. Uses
