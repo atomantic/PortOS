@@ -7,13 +7,18 @@
  *
  * Per-migration tests still rely on the underlying loop logic; these
  * exercise the branches the helper guards behind opt-in flags.
+ *
+ * Also home to the shell suites for the other migration factories —
+ * `makeSplitMigration`'s flags and `makeProviderSeedMigration`'s whole
+ * read → guard → add-missing-ids → write shell, which the six provider-seed
+ * migrations (149/152/185/195/201/231) used to re-assert one file at a time.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { applyPromptReplaceMigration, md5, readLayoutsDoc, writeLayoutsDoc, makeSplitMigration } from './_lib.js';
+import { applyPromptReplaceMigration, md5, readLayoutsDoc, writeLayoutsDoc, makeSplitMigration, makeProviderSeedMigration } from './_lib.js';
 
 const FILENAME = 'pipeline-fake.md';
 const BODY_OLD = '# OLD\n';
@@ -306,5 +311,117 @@ describe('makeSplitMigration flags', () => {
     const mig = makeSplitMigration({ ...base, onUnreadable: 'throw' });
     await expect(mig.up({ rootDir })).rejects.toThrow(/unreadable/);
     expect(existsSync(join(dataDir, 'widgets', 'index.json'))).toBe(false);
+  });
+});
+
+// The shell shared by every provider-seed migration (149/152/185/195/201/231).
+// These cases used to be re-asserted once per migration against byte-identical
+// code; they live here once now, so each migration's own suite only pins what
+// is genuinely specific to its payload.
+describe('makeProviderSeedMigration', () => {
+  let rootDir;
+  let providersPath;
+
+  // One shared array across both defs — the 231/CURSOR_MODELS shape.
+  const SHARED_MODELS = ['m1', 'm2'];
+  const DEF_A = { id: 'seed-a', name: 'Seed A', type: 'cli', models: SHARED_MODELS, envVars: { K: 'v' } };
+  const DEF_B = { id: 'seed-b', name: 'Seed B', type: 'tui', models: SHARED_MODELS, envVars: { K: 'v' } };
+  const mig = () => makeProviderSeedMigration({ label: 'Seed', defs: [DEF_A, DEF_B] });
+
+  beforeEach(() => {
+    rootDir = mkdtempSync(join(tmpdir(), 'provider-seed-'));
+    mkdirSync(join(rootDir, 'data'), { recursive: true });
+    providersPath = join(rootDir, 'data/providers.json');
+  });
+
+  afterEach(() => rmSync(rootDir, { recursive: true, force: true }));
+
+  const write = (value) => writeFileSync(providersPath, JSON.stringify(value, null, 2) + '\n');
+  const read = () => JSON.parse(readFileSync(providersPath, 'utf-8'));
+
+  it('adds every missing def and leaves unrelated providers + top-level keys untouched', async () => {
+    write({ activeProvider: 'claude-code', providers: { 'claude-code': { id: 'claude-code', type: 'cli' } } });
+
+    expect(await mig().up({ rootDir })).toEqual({ ok: true, reason: 'seeded', added: 2 });
+
+    const out = read();
+    expect(out.providers['seed-a']).toEqual(DEF_A);
+    expect(out.providers['seed-b']).toEqual(DEF_B);
+    expect(out.providers['claude-code']).toEqual({ id: 'claude-code', type: 'cli' });
+    expect(out.activeProvider).toBe('claude-code');
+  });
+
+  it('never overwrites an existing entry, but still adds its missing siblings', async () => {
+    write({ providers: { 'seed-a': { id: 'seed-a', enabled: true, apiKey: 'user-key' } } });
+
+    expect(await mig().up({ rootDir })).toMatchObject({ reason: 'seeded', added: 1 });
+
+    const out = read();
+    expect(out.providers['seed-a']).toEqual({ id: 'seed-a', enabled: true, apiKey: 'user-key' });
+    expect(out.providers['seed-b']).toBeDefined();
+  });
+
+  it('deep-copies each def so sibling entries and the frozen module default stay detached', async () => {
+    // DEF_A and DEF_B share one `models` array by reference (231's CURSOR_MODELS
+    // shape). A shallow spread would give both installed entries — and the
+    // module-level constant — the same array object.
+    expect(DEF_A.models).toBe(DEF_B.models);
+    write({ providers: {} });
+
+    await mig().up({ rootDir });
+
+    const out = read();
+    out.providers['seed-a'].models.push('mutated');
+    out.providers['seed-a'].envVars.K = 'mutated';
+    expect(out.providers['seed-b'].models).toEqual(['m1', 'm2']);
+    expect(DEF_A.models).toEqual(['m1', 'm2']);
+    expect(DEF_A.envVars.K).toBe('v');
+  });
+
+  it('is idempotent — a second run rewrites nothing', async () => {
+    write({ providers: { 'claude-code': { id: 'claude-code', type: 'cli' } } });
+
+    await mig().up({ rootDir });
+    const afterFirst = readFileSync(providersPath, 'utf-8');
+
+    expect(await mig().up({ rootDir })).toEqual({ ok: true, reason: 'already-present', added: 0 });
+    expect(readFileSync(providersPath, 'utf-8')).toBe(afterFirst);
+  });
+
+  it('is a no-op when data/providers.json does not exist (fresh install seeds from data.reference)', async () => {
+    expect(await mig().up({ rootDir })).toEqual({ ok: false, reason: 'no-file', added: 0 });
+    expect(existsSync(providersPath)).toBe(false);
+  });
+
+  it('leaves an unparseable file byte-identical rather than clobbering user data', async () => {
+    writeFileSync(providersPath, '{ not valid json');
+
+    expect(await mig().up({ rootDir })).toEqual({ ok: false, reason: 'unreadable', added: 0 });
+    expect(readFileSync(providersPath, 'utf-8')).toBe('{ not valid json');
+  });
+
+  it('leaves the file untouched when the providers map is missing or not an object', async () => {
+    for (const doc of [{}, { providers: null }, { providers: 'nope' }]) {
+      write(doc);
+      const before = readFileSync(providersPath, 'utf-8');
+      expect(await mig().up({ rootDir })).toEqual({ ok: false, reason: 'bad-shape', added: 0 });
+      expect(readFileSync(providersPath, 'utf-8')).toBe(before);
+    }
+  });
+
+  it('refuses a reserved prototype key as a provider id instead of skipping it forever', async () => {
+    // `providers['constructor']` is truthy on ANY plain object, so the
+    // presence probe would read the inherited Object.prototype.constructor and
+    // silently treat the provider as already installed on every run.
+    write({ providers: {} });
+    const polluting = makeProviderSeedMigration({ label: 'Bad', defs: [{ id: 'constructor', name: 'Bad' }, DEF_A] });
+
+    expect(await polluting.up({ rootDir })).toMatchObject({ reason: 'seeded', added: 1 });
+
+    const out = read();
+    expect(Object.hasOwn(out.providers, 'constructor')).toBe(false);
+    expect(out.providers['seed-a']).toBeDefined();
+    // The prototype itself is untouched — nothing leaked onto Object.prototype.
+    expect({}.name).toBeUndefined();
   });
 });

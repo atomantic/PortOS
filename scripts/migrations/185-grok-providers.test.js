@@ -2,9 +2,14 @@
  * Test for migration 185 — add the xAI Grok provider trio (API + Grok Build
  * CLI + TUI) to existing installs. Picked up by server/vitest.config.js's
  * `../scripts/**\/*.test.js` glob.
+ *
+ * The shell shared by all six provider-seed migrations (read → guard → add
+ * missing ids → conditional write) is asserted once against
+ * `makeProviderSeedMigration` in _lib.test.js; what stays here is this
+ * migration's own frozen payload.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -56,65 +61,5 @@ describe('migration 185 — Grok providers', () => {
     // unrelated providers + active provider untouched
     expect(out.providers['claude-code']).toBeDefined();
     expect(out.activeProvider).toBe('claude-code');
-  });
-
-  it('does not overwrite a user-customized grok entry', async () => {
-    writeJson(providersPath, {
-      providers: {
-        grok: { id: 'grok', type: 'api', endpoint: 'https://api.x.ai/v1', enabled: true, apiKey: 'sk-secret', defaultModel: 'grok-3' },
-      },
-    });
-
-    await migration.up({ rootDir });
-
-    const out = readJson(providersPath);
-    // existing entry preserved untouched
-    expect(out.providers.grok.enabled).toBe(true);
-    expect(out.providers.grok.apiKey).toBe('sk-secret');
-    expect(out.providers.grok.defaultModel).toBe('grok-3');
-    // the still-missing CLI/TUI siblings are added alongside it
-    expect(out.providers['grok-cli']).toBeDefined();
-    expect(out.providers['grok-tui']).toBeDefined();
-  });
-
-  it('deep-copies shipped arrays/objects so mutating the install cannot corrupt the frozen defaults', async () => {
-    writeJson(providersPath, { providers: {} });
-    await migration.up({ rootDir });
-    const first = readJson(providersPath);
-    first.providers.grok.models.push('mutated');
-
-    // A second install run must still ship the pristine model list.
-    const rootDir2 = mkdtempSync(join(tmpdir(), 'migration-185-b-'));
-    mkdirSync(join(rootDir2, 'data'), { recursive: true });
-    const providersPath2 = join(rootDir2, 'data/providers.json');
-    writeJson(providersPath2, { providers: {} });
-    await migration.up({ rootDir: rootDir2 });
-    expect(readJson(providersPath2).providers.grok.models).not.toContain('mutated');
-    rmSync(rootDir2, { recursive: true, force: true });
-  });
-
-  it('is idempotent — a second run makes no changes', async () => {
-    writeJson(providersPath, {
-      providers: { 'claude-code': { id: 'claude-code', type: 'cli', command: 'claude' } },
-    });
-
-    await migration.up({ rootDir });
-    const afterFirst = readFileSync(providersPath, 'utf-8');
-    await migration.up({ rootDir });
-    expect(readFileSync(providersPath, 'utf-8')).toBe(afterFirst);
-  });
-
-  it('is a no-op when data/providers.json does not exist (fresh install)', async () => {
-    await migration.up({ rootDir });
-    expect(existsSync(providersPath)).toBe(false);
-  });
-
-  it('does not modify the file on invalid JSON', async () => {
-    writeFileSync(providersPath, '{ not valid json');
-    const before = readFileSync(providersPath, 'utf-8');
-
-    await migration.up({ rootDir });
-
-    expect(readFileSync(providersPath, 'utf-8')).toBe(before);
   });
 });

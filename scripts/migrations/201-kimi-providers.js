@@ -21,10 +21,7 @@
  * migrations rather than mutating this one.
  */
 
-import { readFile, writeFile } from 'fs/promises';
-import { join } from 'path';
-
-const PROVIDERS_REL_PATH = 'data/providers.json';
+import { makeProviderSeedMigration } from './_lib.js';
 
 const KIMI_CLI = {
   id: 'kimi-cli',
@@ -64,48 +61,7 @@ const KIMI_TUI = {
   tuiIdleTimeoutMs: 180000,
 };
 
-export default {
-  async up({ rootDir }) {
-    const providersPath = join(rootDir, PROVIDERS_REL_PATH);
-    const raw = await readFile(providersPath, 'utf-8').catch((err) => {
-      if (err.code === 'ENOENT') return null;
-      throw err;
-    });
-    if (raw == null) {
-      console.log(`📄 ${PROVIDERS_REL_PATH} not present — skipping (fresh install seeds Kimi from data.reference)`);
-      return;
-    }
-
-    let config;
-    try {
-      config = JSON.parse(raw);
-    } catch (err) {
-      console.log(`⚠️ ${PROVIDERS_REL_PATH}: invalid JSON, skipping (${err.message})`);
-      return;
-    }
-
-    if (!config || typeof config !== 'object' || !config.providers || typeof config.providers !== 'object') {
-      console.log(`⚠️ ${PROVIDERS_REL_PATH}: unexpected shape, skipping`);
-      return;
-    }
-
-    const providers = config.providers;
-    let changed = false;
-
-    for (const def of [KIMI_CLI, KIMI_TUI]) {
-      if (!providers[def.id]) {
-        // structuredClone fully detaches the frozen shipped def (nested arrays/
-        // objects included) so a later mutation of the install can't corrupt it.
-        providers[def.id] = structuredClone(def);
-        changed = true;
-        console.log(`📝 ${PROVIDERS_REL_PATH}: added ${def.id} provider`);
-      }
-    }
-
-    if (changed) {
-      await writeFile(providersPath, `${JSON.stringify(config, null, 2)}\n`);
-    } else {
-      console.log(`✅ ${PROVIDERS_REL_PATH}: Kimi providers already present — no change`);
-    }
-  },
-};
+export default makeProviderSeedMigration({
+  label: 'Kimi',
+  defs: [KIMI_CLI, KIMI_TUI],
+});

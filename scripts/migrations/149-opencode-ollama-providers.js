@@ -27,10 +27,7 @@
  * own migrations rather than mutating this one.
  */
 
-import { readFile, writeFile } from 'fs/promises';
-import { join } from 'path';
-
-const PROVIDERS_REL_PATH = 'data/providers.json';
+import { makeProviderSeedMigration } from './_lib.js';
 
 // Inline OpenCode config: declare the local Ollama daemon as an
 // openai-compatible provider and auto-approve tools (the OpenCode equivalent of
@@ -55,46 +52,7 @@ const OPENCODE_OLLAMA_CLI = {
   headlessArgs: [],
 };
 
-export default {
-  async up({ rootDir }) {
-    const providersPath = join(rootDir, PROVIDERS_REL_PATH);
-    const raw = await readFile(providersPath, 'utf-8').catch((err) => {
-      if (err.code === 'ENOENT') return null;
-      throw err;
-    });
-    if (raw == null) {
-      console.log(`📄 ${PROVIDERS_REL_PATH} not present — skipping (fresh install seeds OpenCode Ollama from data.reference)`);
-      return;
-    }
-
-    let config;
-    try {
-      config = JSON.parse(raw);
-    } catch (err) {
-      console.log(`⚠️ ${PROVIDERS_REL_PATH}: invalid JSON, skipping (${err.message})`);
-      return;
-    }
-
-    if (!config || typeof config !== 'object' || !config.providers || typeof config.providers !== 'object') {
-      console.log(`⚠️ ${PROVIDERS_REL_PATH}: unexpected shape, skipping`);
-      return;
-    }
-
-    const providers = config.providers;
-    let changed = false;
-
-    for (const def of [OPENCODE_OLLAMA_CLI]) {
-      if (!providers[def.id]) {
-        providers[def.id] = { ...def, envVars: { ...def.envVars } };
-        changed = true;
-        console.log(`📝 ${PROVIDERS_REL_PATH}: added ${def.id} provider`);
-      }
-    }
-
-    if (changed) {
-      await writeFile(providersPath, `${JSON.stringify(config, null, 2)}\n`);
-    } else {
-      console.log(`✅ ${PROVIDERS_REL_PATH}: OpenCode Ollama providers already present — no change`);
-    }
-  },
-};
+export default makeProviderSeedMigration({
+  label: 'OpenCode Ollama',
+  defs: [OPENCODE_OLLAMA_CLI],
+});

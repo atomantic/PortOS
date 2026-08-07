@@ -1,5 +1,5 @@
 /**
- * Shared scaffolding for migrations. Two families live here:
+ * Shared scaffolding for migrations. Several families live here:
  *
  *   1. Hash-driven prompt-replace migrations — every one from 003 onward uses
  *      `makePromptReplaceMigration` to collapse onto ~50 lines (hash table +
@@ -8,6 +8,11 @@
  *      `writeLayoutsDoc` collapse the read → JSON.parse → `Array.isArray`
  *      guard → write shell shared by every migration that mutates built-in
  *      layouts in `data/dashboard-layouts.json` (029, 030, 033, …).
+ *   3. Monolithic → per-record split migrations — `makeSplitMigration`.
+ *   4. Brain seed-record migrations — `makeBrainSeedMigration`.
+ *   5. Provider-seed migrations — `makeProviderSeedMigration` collapses the
+ *      read → guard → add-missing-ids → write shell every migration that ships
+ *      a new `data/providers.json` entry repeats (149, 152, 185, 195, 201, 231).
  *
  * The runner (`scripts/run-migrations.js`) explicitly skips `_`-prefixed
  * files so this module is never imported as a migration.
@@ -90,7 +95,7 @@ const splitReadJsonTolerant = async (path) => {
 // authoritative legacy value, then stamp + rename the legacy store — and the
 // truncated record would forever load as null. rename() is atomic within one
 // filesystem, and tmp sits in the same dir as its target, so the swap is safe.
-const splitWriteJson = async (path, value) => {
+const writeJsonAtomic = async (path, value) => {
   const tmp = `${path}.tmp-${process.pid}`;
   await writeFile(tmp, JSON.stringify(value, null, 2) + '\n');
   await rename(tmp, path);
@@ -178,7 +183,7 @@ export function makeSplitMigration({
     // boot-time verifyCollectionVersions doesn't flag it missing.
     if (!legacyExists && !backupExists) {
       await mkdir(typeDir, { recursive: true });
-      await splitWriteJson(typeIndexPath, {
+      await writeJsonAtomic(typeIndexPath, {
         schemaVersion: typeSchemaVersion,
         type: typeLabel,
         updatedAt: new Date().toISOString(),
@@ -265,14 +270,14 @@ export function makeSplitMigration({
       }
       const recordDir = join(typeDir, id);
       await mkdir(recordDir, { recursive: true });
-      await splitWriteJson(join(recordDir, 'index.json'), record);
+      await writeJsonAtomic(join(recordDir, 'index.json'), record);
       if (dedupe) existingIds.add(id); // first-wins: later duplicates skip above
       written += 1;
     }
 
     // Stamp the type index AFTER all records land so a crash mid-split leaves
     // it missing — the next boot's gate 1 won't trip and gate 2/recovery re-runs.
-    await splitWriteJson(typeIndexPath, {
+    await writeJsonAtomic(typeIndexPath, {
       schemaVersion: typeSchemaVersion,
       type: typeLabel,
       updatedAt: new Date().toISOString(),
@@ -644,6 +649,107 @@ export function makeBrainSeedMigration({ logTag, entityType, seedIds, seedLabel,
 
     console.log(`${logTag}: added ${seedLabel} (${added} per-record, ${legacyAdded} legacy) to ${storeLabel}.`);
     return { ok: true, reason: 'seeded', added, legacyAdded, skipped };
+  }
+
+  return { up };
+}
+
+// ---- provider-seed migration family ----
+//
+// `scripts/setup-data.js` merges *missing* `data/providers.json` entries from
+// data.reference, but only when an install actually re-runs setup. Every
+// migration that ships a new provider therefore delivers it on a plain server
+// restart too, and each one repeats the identical shell: read
+// `data/providers.json` → ENOENT skip (a fresh install seeds from
+// data.reference) → JSON.parse guard → shape guard → add each missing id →
+// write only when something changed. 149 / 152 / 185 / 195 / 201 / 231 are the
+// current members; `makeProviderSeedMigration` is that shell.
+//
+// What each migration still owns is its `defs` — a FROZEN literal in its own
+// file, never read from `data.reference/providers.json` at migration time. A
+// migration is the historical record of what it installed; later default
+// changes ride their own migrations (precedent: 058/153/206 bumping the Claude
+// defaults). Reading the live reference would hand an upgrading install a
+// different payload than the migration's own tests assert, and a different one
+// than earlier users received.
+
+const PROVIDERS_REL_PATH = 'data/providers.json';
+
+/**
+ * Build a provider-seed migration's `up()`. Returns `{ up }`, so a migration is
+ * `export default makeProviderSeedMigration({ label, defs })`.
+ *
+ *   - `label` — human name of the provider family for the log lines
+ *     ("Grok", "Cerebras", "OpenCode Ollama TUI").
+ *   - `defs`  — the frozen provider objects this migration installs, each with
+ *     an `id`. Added only when the id is missing, so an existing entry (user
+ *     edits, a stored apiKey, a refreshed model list) is never clobbered and a
+ *     second run is a no-op.
+ *
+ * Each def is installed via `structuredClone`, which fully detaches nested
+ * arrays/objects — necessary because sibling defs commonly share one constant
+ * (231's two entries both reference `CURSOR_MODELS`), so a shallow spread would
+ * leak a later in-memory mutation across both entries and back into the frozen
+ * module-level default.
+ *
+ * Resolves to `{ ok, reason: 'no-file' | 'unreadable' | 'bad-shape' |
+ * 'already-present' | 'seeded', added }`.
+ */
+export function makeProviderSeedMigration({ label, defs }) {
+  const noun = defs.length === 1 ? 'provider' : 'providers';
+
+  async function up({ rootDir }) {
+    const providersPath = join(rootDir, PROVIDERS_REL_PATH);
+    const raw = await readFile(providersPath, 'utf-8').catch((err) => {
+      if (err.code === 'ENOENT') return null;
+      throw err;
+    });
+    if (raw == null) {
+      console.log(`📄 ${PROVIDERS_REL_PATH} not present — skipping (fresh install seeds ${label} from data.reference)`);
+      return { ok: false, reason: 'no-file', added: 0 };
+    }
+
+    let config;
+    try {
+      config = JSON.parse(raw);
+    } catch (err) {
+      console.log(`⚠️ ${PROVIDERS_REL_PATH}: invalid JSON, skipping (${err.message})`);
+      return { ok: false, reason: 'unreadable', added: 0 };
+    }
+
+    if (!config || typeof config !== 'object' || !config.providers || typeof config.providers !== 'object') {
+      console.log(`⚠️ ${PROVIDERS_REL_PATH}: unexpected shape, skipping`);
+      return { ok: false, reason: 'bad-shape', added: 0 };
+    }
+
+    const providers = config.providers;
+    let added = 0;
+
+    for (const def of defs) {
+      // Same guard the split family applies to legacy map keys: `__proto__` /
+      // `constructor` / `prototype` are inherited on any plain object, so the
+      // `providers[def.id]` presence probe below reads TRUTHY for them even on
+      // an empty map — the id would be silently skipped forever — and writing
+      // one would mutate the prototype rather than add a provider. A provider
+      // id is never one of these; refuse loudly if a def ever carries one.
+      if (RESERVED_MAP_KEYS.has(def.id)) {
+        console.log(`⚠️ ${PROVIDERS_REL_PATH}: refusing reserved provider id ${def.id}`);
+        continue;
+      }
+      if (!providers[def.id]) {
+        providers[def.id] = structuredClone(def);
+        added++;
+        console.log(`📝 ${PROVIDERS_REL_PATH}: added ${def.id} provider`);
+      }
+    }
+
+    if (added === 0) {
+      console.log(`✅ ${PROVIDERS_REL_PATH}: ${label} ${noun} already present — no change`);
+      return { ok: true, reason: 'already-present', added: 0 };
+    }
+
+    await writeJsonAtomic(providersPath, config);
+    return { ok: true, reason: 'seeded', added };
   }
 
   return { up };

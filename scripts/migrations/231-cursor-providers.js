@@ -24,10 +24,7 @@
  * migrations rather than mutating this one.
  */
 
-import { readFile, writeFile } from 'fs/promises';
-import { join } from 'path';
-
-const PROVIDERS_REL_PATH = 'data/providers.json';
+import { makeProviderSeedMigration } from './_lib.js';
 
 // Curated from `cursor-agent models` (177 ids as of 2026-08-07). The full account
 // catalog enumerates every reasoning tier AND a `-fast` priority-compute twin of
@@ -101,49 +98,7 @@ const CURSOR_TUI = {
   tuiIdleTimeoutMs: 180000,
 };
 
-export default {
-  async up({ rootDir }) {
-    const providersPath = join(rootDir, PROVIDERS_REL_PATH);
-    const raw = await readFile(providersPath, 'utf-8').catch((err) => {
-      if (err.code === 'ENOENT') return null;
-      throw err;
-    });
-    if (raw == null) {
-      console.log(`📄 ${PROVIDERS_REL_PATH} not present — skipping (fresh install seeds Cursor from data.reference)`);
-      return;
-    }
-
-    let config;
-    try {
-      config = JSON.parse(raw);
-    } catch (err) {
-      console.log(`⚠️ ${PROVIDERS_REL_PATH}: invalid JSON, skipping (${err.message})`);
-      return;
-    }
-
-    if (!config || typeof config !== 'object' || !config.providers || typeof config.providers !== 'object') {
-      console.log(`⚠️ ${PROVIDERS_REL_PATH}: unexpected shape, skipping`);
-      return;
-    }
-
-    const providers = config.providers;
-    let changed = false;
-
-    for (const def of [CURSOR_CLI, CURSOR_TUI]) {
-      if (!providers[def.id]) {
-        // structuredClone fully detaches the shipped def (nested arrays/objects
-        // included — CURSOR_MODELS is shared by both entries) so a later mutation
-        // of the install can't corrupt it or leak across the two providers.
-        providers[def.id] = structuredClone(def);
-        changed = true;
-        console.log(`📝 ${PROVIDERS_REL_PATH}: added ${def.id} provider`);
-      }
-    }
-
-    if (changed) {
-      await writeFile(providersPath, `${JSON.stringify(config, null, 2)}\n`);
-    } else {
-      console.log(`✅ ${PROVIDERS_REL_PATH}: Cursor providers already present — no change`);
-    }
-  },
-};
+export default makeProviderSeedMigration({
+  label: 'Cursor',
+  defs: [CURSOR_CLI, CURSOR_TUI],
+});

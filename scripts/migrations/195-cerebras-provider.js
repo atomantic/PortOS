@@ -29,11 +29,7 @@
  * own migrations rather than mutating this one.
  */
 
-import { readFile } from 'fs/promises';
-import { atomicWrite } from '../../server/lib/fileUtils.js';
-import { join } from 'path';
-
-const PROVIDERS_REL_PATH = 'data/providers.json';
+import { makeProviderSeedMigration } from './_lib.js';
 
 const CEREBRAS_API = {
   id: 'cerebras',
@@ -53,40 +49,7 @@ const CEREBRAS_API = {
   secretEnvVars: [],
 };
 
-export default {
-  async up({ rootDir }) {
-    const providersPath = join(rootDir, PROVIDERS_REL_PATH);
-    const raw = await readFile(providersPath, 'utf-8').catch((err) => {
-      if (err.code === 'ENOENT') return null;
-      throw err;
-    });
-    if (raw == null) {
-      console.log(`📄 ${PROVIDERS_REL_PATH} not present — skipping (fresh install seeds Cerebras from data.reference)`);
-      return;
-    }
-
-    let config;
-    try {
-      config = JSON.parse(raw);
-    } catch (err) {
-      console.log(`⚠️ ${PROVIDERS_REL_PATH}: invalid JSON, skipping (${err.message})`);
-      return;
-    }
-
-    if (!config || typeof config !== 'object' || !config.providers || typeof config.providers !== 'object') {
-      console.log(`⚠️ ${PROVIDERS_REL_PATH}: unexpected shape, skipping`);
-      return;
-    }
-
-    if (config.providers[CEREBRAS_API.id]) {
-      console.log(`✅ ${PROVIDERS_REL_PATH}: Cerebras provider already present — no change`);
-      return;
-    }
-
-    // structuredClone fully detaches the frozen shipped def (nested arrays/
-    // objects included) so a later mutation of the install can't corrupt it.
-    config.providers[CEREBRAS_API.id] = structuredClone(CEREBRAS_API);
-    console.log(`📝 ${PROVIDERS_REL_PATH}: added ${CEREBRAS_API.id} provider`);
-    await atomicWrite(providersPath, `${JSON.stringify(config, null, 2)}\n`);
-  },
-};
+export default makeProviderSeedMigration({
+  label: 'Cerebras',
+  defs: [CEREBRAS_API],
+});

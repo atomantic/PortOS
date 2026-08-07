@@ -2,9 +2,14 @@
  * Test for migration 231 — add the Cursor Agent process-provider pair (CLI + TUI)
  * to existing installs. Picked up by server/vitest.config.js's
  * `../scripts/**\/*.test.js` glob.
+ *
+ * The shell shared by all six provider-seed migrations (read → guard → add
+ * missing ids → conditional write) is asserted once against
+ * `makeProviderSeedMigration` in _lib.test.js; what stays here is this
+ * migration's own frozen payload.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -59,23 +64,6 @@ describe('migration 231 — Cursor providers', () => {
     expect(out.activeProvider).toBe('claude-code');
   });
 
-  it('does not overwrite a user-customized cursor entry', async () => {
-    writeJson(providersPath, {
-      providers: {
-        'cursor-cli': { id: 'cursor-cli', type: 'cli', command: 'cursor-agent', enabled: true, defaultModel: 'composer-2.5' },
-      },
-    });
-
-    await migration.up({ rootDir });
-
-    const out = readJson(providersPath);
-    // existing entry preserved untouched
-    expect(out.providers['cursor-cli'].enabled).toBe(true);
-    expect(out.providers['cursor-cli'].defaultModel).toBe('composer-2.5');
-    // the still-missing TUI sibling is added alongside it
-    expect(out.providers['cursor-tui']).toBeDefined();
-  });
-
   // Replaces a pair of "deep-copy isolation" tests that could not fail: they
   // mutated a value re-parsed from disk, which has no reference relationship to
   // the module-level CURSOR_MODELS, so `structuredClone` could be deleted
@@ -102,30 +90,5 @@ describe('migration 231 — Cursor providers', () => {
       // ship the same catalog, or a user's CLI and TUI offer different models.
       expect(out.providers['cursor-cli'].models).toEqual(out.providers['cursor-tui'].models);
     });
-  });
-
-  it('is idempotent — a second run makes no changes', async () => {
-    writeJson(providersPath, {
-      providers: { 'claude-code': { id: 'claude-code', type: 'cli', command: 'claude' } },
-    });
-
-    await migration.up({ rootDir });
-    const afterFirst = readFileSync(providersPath, 'utf-8');
-    await migration.up({ rootDir });
-    expect(readFileSync(providersPath, 'utf-8')).toBe(afterFirst);
-  });
-
-  it('is a no-op when data/providers.json does not exist (fresh install)', async () => {
-    await migration.up({ rootDir });
-    expect(existsSync(providersPath)).toBe(false);
-  });
-
-  it('does not modify the file on invalid JSON', async () => {
-    writeFileSync(providersPath, '{ not valid json');
-    const before = readFileSync(providersPath, 'utf-8');
-
-    await migration.up({ rootDir });
-
-    expect(readFileSync(providersPath, 'utf-8')).toBe(before);
   });
 });
