@@ -1203,7 +1203,13 @@ describe('tuiHandshake — parity with the shipped provider catalog', () => {
   // blank-command fallback resolves its id to (what the spawners do).
   const launchCommand = (p) => p.command || inferTuiCommand(p.id);
   const tuiCommands = [...new Set(tuiProviders.map(launchCommand))];
-  const withDeclaredCommand = seedProviders.filter((p) => typeof p.command === 'string' && p.command);
+  // Providers that name their own binary, and so can be compared against the
+  // fallback. Scoped to the process-spawning types: `inferTuiCommand` is also
+  // what `resolveSlashdoStyle` asks "which command will actually be spawned?",
+  // which it does for CLI providers too — so they are deliberately in scope,
+  // while a future non-process type that happens to carry a `command` is not.
+  const PROCESS_TYPES = new Set(['tui', 'cli']);
+  const withDeclaredCommand = seedProviders.filter((p) => PROCESS_TYPES.has(p.type) && Boolean(p.command));
 
   // Commands `applyCommandDefaults` deliberately has NO arm for, and where the
   // unattended-run posture actually comes from. Both are asserted below, so an
@@ -1311,8 +1317,11 @@ describe('tuiHandshake — parity with the shipped provider catalog', () => {
   it.each(tuiProviders.map((p) => [p.id, p]))(
     'buildTuiInvocation("%s") is identical with and without an explicit command',
     (_id, provider) => {
+      // Right-hand side is pinned to the RESOLVED binary rather than `provider`
+      // as-seeded: a provider that already ships a blank command would
+      // otherwise compare blank against blank and pass vacuously.
       expect(buildTuiInvocation({ ...provider, command: '' }))
-        .toEqual(buildTuiInvocation(provider));
+        .toEqual(buildTuiInvocation({ ...provider, command: launchCommand(provider) }));
     }
   );
 });
