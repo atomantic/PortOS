@@ -1,10 +1,12 @@
 # Fidelity run: LoRA-training defaults — 4B vs 9B base, and how many steps
 
-**Status:** RESUMED 2026-08-07 — Run A (4B) restarted from checkpoint 299 (job
-`d7aece3a…`), continuing toward step 1200; Run B (9B) still not started. The
-#2791 gate is **not** satisfied yet; defaults must not change until both arms
-finish and are visually compared.
-**Date:** 2026-08-05 (resumed 2026-08-07)
+**Status:** COMPLETE 2026-08-08 — both arms finished all 1200 steps and were
+visually compared at matched checkpoints. The #2791 gate is satisfied. **Verdict:
+stay as-is — the data does not justify either proposed default change**, though
+it does surface a real (separate) observation about checkpoint selection. See
+Verdict below.
+**Date:** 2026-08-05 (resumed 2026-08-07, Run B started + both arms completed
+2026-08-07/08)
 **Hardware:** Apple M5 Max, 128 GB unified memory, macOS 26.5.2
 **Runtime:** mflux 0.17.5 · mlx 0.31.2 · mlx-metal 0.31.2 · python 3.14.6
 **Closes:** the "blocked on empirical fidelity validation" gate on issue #2791
@@ -108,60 +110,92 @@ as a training-progress curve rather than as raw prompt adherence.
 
 ## Results
 
-**Incomplete.** Run A reached step 563 of 1200 before being paused; samples exist
-for steps 0 and 300 only. Run B (9B) was never started. What follows is an interim
-observation, explicitly **not** a verdict.
+Both arms completed all 1200 steps. Run A (4B) finished 2026-08-07 (run
+`9f6fce7e…`, adapter `0001200_adapter.safetensors`, throughput ~9.4 s/step). Run
+B (9B) finished 2026-08-08 (run `151f3631…`, LoRA
+`lora-trained-freydis-a-b-9b-8bit-defaults-2791-151f3631.safetensors`, throughput
+~15.3 s/step — roughly 1.6× slower than 4B per step, plus a heavier model load).
+All ten preview-grid samples (steps 0/300/600/900/1200 × 2 arms) were read and
+compared directly.
 
-### Interim observation: the current defaults bind identity far harder than the shipped 400-step LoRA
+### Step 0 (both arms) — confirmed control
 
-Comparing the step-300 sample against the previously promoted Freydis adapter
-(`3847825e…`, 4B / 400 steps / rank 16 / lr 5e-5) is instructive, because that
-older adapter is what the install has been treating as an acceptable result:
+Both arms render a generic, non-matching person at step 0 (Run A: light-skinned
+person with a headband; Run B: dark-curly-haired person) — the zero-init LoRA
+carries no identity, exactly as expected. Any likeness at later steps is
+attributable to training, not prompt wording or a base-model prior.
 
-| | Old promoted LoRA (400 / r16 / 5e-5) | This run @ step 300 (r32 / 1e-4) |
+### Step-by-step comparison at matched checkpoints
+
+| Step | Run A (4B) | Run B (9B) |
 |---|---|---|
-| Render quality | sharp, clean | soft, mushy |
-| Prompt adherence | keeps "neutral background" | drifts to dataset-like rocky scenes |
-| **Identity** | **wrong** — dark curly hair, generic young woman in a headband | platinum cropped hair, i.e. the actual character trait |
+| 300 | Soft/mushy render, drifts to a dataset-like rocky scene; hints of light hair | **Blank/near-white image** (anomalous — see note below); no evaluable content |
+| 600 | Sharp, but **wrong identity** — dark brown hair, generic "dark-fantasy warrior" look (style-leak dominated) | Sharp, **also wrong identity** — dark brown hair, near-identical "dark-fantasy warrior" composition to Run A's step 600 |
+| 900 | **Best of both arms** — sharp, clean, **platinum/silver cropped hair with a headwrap — the character's actual defining trait** | Sharp, but still **wrong identity** — dark brown hair with a braided headband and leather armor, no platinum trait |
+| 1200 (final) | Quality regresses from step 900 — softer, more painterly/blurred; hair reverts to long wavy blonde (identity-adjacent but no longer "cropped") | Quality also regresses from step 900 — softer/blurrier; hair has drifted again, now auburn/red (off-identity) |
 
-The older adapter looks better as an *image* while largely failing to encode the
-subject; the current defaults are visibly encoding the subject by step 300 while
-still mid-convergence. This suggests the shipped rank-32 / lr-1e-4 defaults are
-doing real work that the earlier lighter settings were not — and it is a caution
-against reading "the old 400-step run looked fine" as evidence that fewer steps
-suffice. The two failure modes are different: one is under-quality, the other is
-under-identity.
-
-**Do not act on this.** A single mid-training sample cannot distinguish
-"converging" from "starting to over-cook" — and this codebase has prior history of
-a run degrading late (the divergence noted in the `TRAINING_DEFAULTS` comment).
-The step-600/900/1200 samples are exactly the evidence that would separate those,
-and they were not collected.
+**Anomaly at Run B step 300:** the preview render is blank/near-white (132 KB vs
+600–900 KB for every other sample). No error, `Traceback`, or warning appears in
+the trainer log around that checkpoint (`CHECKPOINT`/`SAMPLE` lines are normal;
+segment 1→2 handoff and LoRA reapplication at step 300 both report success). This
+looks like a transient/degenerate sample-render artifact specific to the 9B+8bit
+combination at that checkpoint rather than a training failure — training
+continued normally afterward — but it means the 300-step column has no usable
+image for the 9B arm.
 
 ## Verdict
 
-_None. The run was paused before either question could be answered._
+**Stay as-is. Neither proposed default change is justified by this run — but a
+related, unplanned observation is worth recording.**
 
-Neither #2791 change is justified by the data collected here:
+- **(a-alt) 4B vs 9B-8bit base model.** At matched steps, **4B did not lose to
+  9B on identity — if anything the opposite**: only the 4B arm ever produced the
+  character's defining trait (platinum cropped hair), and only briefly, at step
+  900. The 9B arm never reproduced it in any of its four post-zero samples,
+  staying on generic dark/auburn hair throughout. This is a genuinely surprising,
+  directionally interesting result — but it rests on **one run, one seed, one
+  dataset, with the caption leak confound acknowledged up front** (see Method).
+  A result this counter to the naive "bigger model = better identity" prior needs
+  independent replication (a second seed, ideally with clean captions) before it
+  should move a default that every install inherits. **Do not flip the
+  base-model default on this data alone.**
+- **(b) 1200 → ~600 steps.** Not supported either, but not in the direction
+  #1321 hypothesized. Step 600 was **weaker on identity than step 900 in both
+  arms** — at 600 neither arm shows the character's distinguishing trait, both
+  are still dominated by the generic "dark fantasy" style leak. So cutting to
+  ~600 steps would ship a *worse* result than the current 1200-step default's
+  own best checkpoint, not a cheaper equivalent one. **Do not cut steps to
+  ~600.**
+- **Unplanned finding: the final checkpoint (1200) was not the best checkpoint
+  in either arm.** Both arms peaked at step 900 and visibly regressed by 1200
+  (softer render, drifting hair color/length) — consistent, same-shape
+  degradation in both independent runs, which makes it a more reliable signal
+  than the single-run 4B-vs-9B comparison above. This doesn't call for changing
+  `TRAINING_DEFAULTS.steps` (a shorter *default* would have missed each arm's own
+  best point, since 900 only reads as a peak in hindsight against 1200's decline
+  — earlier isn't reliably better, later isn't reliably better, it needs the
+  full curve to tell). What it does support: the existing checkpoint picker
+  (mentioned in #2791/#1321 — the run keeps checkpoints at every `sampleEvery`
+  interval, not just the final step) is doing real work, and users training a
+  single-character LoRA should be pointed at comparing checkpoints rather than
+  assuming the last one is best. No code change needed here since that picker
+  already exists; noting it so it doesn't get relearned from scratch.
 
-- **(a-alt) 4B vs 9B-8bit** — unanswerable; the 9B arm never ran, so there is no
-  baseline to compare 4B against.
-- **(b) 1200 → ~600 steps** — unanswerable; the run stopped at 563 with samples
-  only at 0 and 300, so the shape of the curve past 300 is unknown.
+`TRAINING_DEFAULTS` and the base-model picker in
+`server/services/loraTraining/runtimes.js` stay exactly as they are. This closes
+the "blocked on empirical fidelity validation" gate on #2791 with a documented
+stay-as-is outcome — the experiment ran to completion, both questions were
+evaluated against real evidence, and the evidence does not clear the bar #2791
+set for changing a default every install inherits. A future attempt to revisit
+(a-alt) should replicate with a second seed and, ideally, clean (non-leaking)
+captions before trusting the direction found here.
 
-`TRAINING_DEFAULTS` and the base-model picker should stay exactly as they are
-until this run is completed.
+## Run artifacts
 
-## Resuming
-
-Run A was resumed 2026-08-07 via `POST /api/lora-training/runs/9f6fce7e-bbce-44c3-8deb-a1acb5409639/resume`,
-which re-enqueued from checkpoint 299 (job `d7aece3a-b457-4a86-97f0-24c498d5b6ee`,
-`fromStep: 300`) and is training toward step 1200. Confirmed picked up cleanly:
-checkpoint restored, LoRA reapplied (200/200 keys matched), step counter
-continuing from 300.
-
-Run B (9B) still must be started fresh with the Run B column of the method table
-above once Run A finishes. Budget ~2.4 h for the remainder of the 4B arm from
-this resume point and appreciably longer for the 9B arm; both want the display
-asleep for the duration (see Environment notes).
+- **Run A (4B):** `9f6fce7e-bbce-44c3-8deb-a1acb5409639` — adapter
+  `data/training-runs/9f6fce7e-bbce-44c3-8deb-a1acb5409639/adapter/0001200_adapter.safetensors`,
+  samples in `data/training-runs/9f6fce7e-bbce-44c3-8deb-a1acb5409639/samples/`.
+- **Run B (9B):** `151f3631-58f4-4ecc-833a-e9d02733301d` — LoRA
+  `lora-trained-freydis-a-b-9b-8bit-defaults-2791-151f3631.safetensors`, samples
+  in `data/training-runs/151f3631-58f4-4ecc-833a-e9d02733301d/samples/`.
 
