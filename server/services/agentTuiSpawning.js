@@ -27,11 +27,11 @@ import * as git from './git.js';
 import { resolveReviewLoopOptions } from './codeReview.js';
 import { spawnTuiSessionViaRunner } from './cosRunnerClient.js';
 import { shellQuote } from '../lib/shellQuote.js';
-import { resolveCliModel, buildEffortArgs, resolveInjectedTuiModel, hasModelFlag, isClaudeCommand, applyLeanClaudeArgs, providerSuppliesGithubToken } from '../lib/providerModels.js';
+import { isClaudeCommand, applyLeanClaudeArgs, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { isMachineOnline } from '../lib/connectivity.js';
-import { isAntigravityCommand, resolveAntigravityModelAndEffort } from '../lib/antigravity.js';
+import { isAntigravityCommand } from '../lib/antigravity.js';
 import {
   DEFAULT_TUI_PROMPT_DELAY_MS,
   DEFAULT_TUI_IDLE_TIMEOUT_MS,
@@ -67,6 +67,7 @@ import {
   extractVerifiablePromptPrefix,
   isPasteConfirmed,
 } from '../lib/tuiHandshake.js';
+import { injectTuiModelAndEffort } from '../lib/providerVendors.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { composeProviderEnv } from '../lib/cliChildEnv.js';
 import { execFile } from 'child_process';
@@ -222,43 +223,14 @@ function shellHasLiveChild(shellPid) {
   });
 }
 
-function appendModelArgs(args, model, command, provider) {
-  const effectiveModel = resolveCliModel(model);
-  if (!effectiveModel) return args;
-  // Respect a user-baked --model/-m pin for EVERY command rather than appending
-  // a second flag that overrides it — the same gate `buildTuiInvocation` and
-  // `buildCliArgs` apply, and the documented convention repo-wide ("a baked pin
-  // wins"). This used to be scoped to opencode alone, so a pinned claude/codex —
-  // and now cursor — provider spawned `--model <pin> --model <ui-choice>`, where
-  // last-flag-wins silently discarded the user's pin (or the CLI rejected the
-  // duplicate outright).
-  if (hasModelFlag(args)) return args;
-  // Antigravity never reaches here: buildTuiSpawnConfig resolves its model and
-  // effort together up front (agy validates the pair) — see antigravity.js.
-
-  // Which id to actually pass (OpenCode namespacing / cursor passthrough /
-  // Bedrock mapping) is shared with tuiHandshake.js#buildTuiInvocation, so the
-  // two spawn paths can't drift — they already had, on cursor.
-  return [...args, '--model', resolveInjectedTuiModel(effectiveModel, provider, command)];
-}
-
 export function buildTuiSpawnConfig(provider, model, { systemPromptFile = null, effort = null } = {}) {
   const command = provider?.command || inferTuiCommand(provider?.id);
   const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
-  let args;
-  if (isAntigravityCommand(command)) {
-    // agy validates the (model, effort) PAIR — `gemini-3.1-pro` has no `medium`
-    // tier — and a legacy suffixed id carries its own effort, so the two are
-    // resolved together against the provider's catalog (see antigravity.js).
-    const resolved = resolveAntigravityModelAndEffort(baseArgs, { model, effort, models: provider?.models });
-    args = resolved.model ? [...baseArgs, '--model', resolved.model] : baseArgs;
-    args = [...args, ...buildEffortArgs(resolved.effort, resolved.provider, args, resolved.base)];
-  } else {
-    args = appendModelArgs(baseArgs, model, command, provider);
-    // Reasoning-effort override — the provider is re-keyed on the RESOLVED launch
-    // command so an inferred command (blank provider.command) still qualifies.
-    args = [...args, ...buildEffortArgs(effort, { id: provider?.id, command }, args)];
-  }
+  // Model+effort injection (including the antigravity-validates-the-pair special
+  // case) is shared with tuiHandshake.js#buildTuiInvocation via
+  // providerVendors.js#injectTuiModelAndEffort, so the two spawn paths can't
+  // drift — they already had once, on cursor, before #3618.
+  let args = injectTuiModelAndEffort(command, baseArgs, provider, model, effort);
   // Lean mode for Ollama-backed claude sessions (no-op otherwise) — must come
   // before the system-prompt flag so `--bare` is present when the contract
   // file rides along.

@@ -27,12 +27,12 @@ import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
-import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
-import { CURSOR_COMMAND, isCursorCommand, ensureCursorHeadlessArgs } from '../lib/cursor.js';
-import { isGrokCommand, ensureGrokHeadlessArgs } from '../lib/grok.js';
-import { isKimiCommand, ensureKimiHeadlessArgs } from '../lib/kimi.js';
-import { resolveCliModel, buildEffortArgs, buildCodexStartupArgs, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs, providerSuppliesGithubToken, isOllamaClaudeProvider } from '../lib/providerModels.js';
+// buildCliSpawnConfig's per-vendor argv construction dispatches through the
+// PROVIDER_VENDORS registry (#3618) instead of a hand-rolled per-vendor
+// if-chain — see providerVendors.js for the vendor rows.
+import { buildVendorSpawnConfig } from '../lib/providerVendors.js';
+import { resolveCliModel, providerSuppliesGithubToken, isOllamaClaudeProvider } from '../lib/providerModels.js';
 import { resolveForgeTokenEnv } from './git.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
@@ -252,175 +252,19 @@ export function createStreamJsonParser() {
  * to the spawned child (see the spawn env below at the `claudeSettingsEnv`
  * merge) — without it, a settings-only Bedrock box would map against an env
  * missing the flag and still emit a bare, Bedrock-invalid `--model`.
+ *
+ * Per-vendor argv construction is dispatched through the PROVIDER_VENDORS
+ * registry (#3618) — see providerVendors.js for each vendor's `spawnArgs` row
+ * and the file header on the (preserved, not silently "fixed") asymmetries vs
+ * `buildCliArgs` (e.g. codex never forwards `provider.args` here, and there is
+ * no gemini-cli row so a legacy gemini-cli provider falls through to claude's
+ * default, exactly as before this registry existed).
  */
 export function buildCliSpawnConfig(provider, model, settingsEnv = {}, { systemPromptFile = null, effort = null } = {}) {
-  const providerId = provider?.id || 'claude-code';
   // Configured-default sentinels (Codex / Antigravity / Grok Build) → null so
   // the CLI uses its own default without a --model flag.
   const effectiveModel = resolveCliModel(model);
-
-  // Codex CLI uses different invocation pattern.
-  // `--dangerously-bypass-approvals-and-sandbox` is the Codex equivalent of
-  // Claude/Antigravity's `--dangerously-skip-permissions`: it skips all
-  // approval prompts AND disables the sandbox. Without it, `codex exec` runs
-  // under the default workspace-write sandbox (network blocked, so `gh pr create`
-  // can't resolve api.github.com) and, in non-interactive `exec` mode, any
-  // command that needs approval is silently cancelled — which is exactly how a
-  // codex agent could push a branch over SSH yet fail to open the PR over HTTPS.
-  // PortOS runs on a private, single-user, trusted machine (the "externally
-  // sandboxed" context this flag documents), matching how we already spawn the
-  // other CLIs unrestricted.
-  if (providerId === 'codex') {
-    // buildCodexStartupArgs disables codex's startup update check so a headless
-    // exec run never spends startup time hitting GitHub / kicking off a brew
-    // upgrade it can't complete unattended (the fatal interactive-modal variant
-    // is documented on buildCodexStartupArgs in providerModels.js). Injected
-    // UNCONDITIONALLY here (no provider.args passed): this branch builds codex's
-    // argv from scratch and never forwards provider.args, and a headless CoS
-    // agent can never dismiss the update modal — so the check must be off
-    // regardless of any provider.args pin. (Passing provider.args would detect a
-    // pin and skip injecting, but since the pin is never forwarded either, codex
-    // would fall back to its check-ON default — the exact wedge this prevents.)
-    const args = ['exec', '--dangerously-bypass-approvals-and-sandbox', ...buildCodexStartupArgs()];
-    if (effectiveModel) {
-      args.push('--model', effectiveModel);
-    }
-    args.push(...buildEffortArgs(effort, provider, args));
-    return {
-      command: provider?.command || 'codex',
-      args,
-      stdinMode: 'prompt' // codex exec reads prompt from stdin
-    };
-  }
-
-  // Antigravity CLI (`agy`) replaces Gemini CLI. Use print mode for a
-  // headless agent run; the prompt rides as the trailing `--print` value.
-  // Per-task `--model` / `--effort` overrides are threaded in the same way as
-  // claude/codex — agy documents both as session-scoped flags.
-  if (isAntigravityCliProvider(provider)) {
-    // `models` narrows the effort ladder to the tiers the chosen base model
-    // actually offers — agy rejects `--model gemini-3.1-pro --effort medium`.
-    const args = ensureAntigravityPrintArgs(provider?.args || [], {
-      model: effectiveModel,
-      effort,
-      models: provider?.models,
-    });
-    return {
-      command: provider?.command || 'agy',
-      args,
-      stdinMode: 'prompt'
-    };
-  }
-
-  // OpenCode CLI (`opencode run`): headless agent invocation for a local Ollama
-  // model. `opencode run` reads the prompt from stdin and auto-approves tools via
-  // the `permission: "allow"` baked into OPENCODE_CONFIG_CONTENT (the equivalent
-  // of claude's `--dangerously-skip-permissions` / codex's bypass — appropriate
-  // for PortOS's single-user trusted box). The model is namespaced `ollama/<id>`
-  // (prefixOpencodeModel). OpenCode emits plain text (no stream-json), so the
-  // live-output handler falls through to its default text path.
-  if (isOpencodeCommand(provider?.command)) {
-    const baseArgs = provider?.args?.includes('run') ? [...provider.args] : ['run', ...(provider?.args || [])];
-    const model = prefixOpencodeModel(provider, effectiveModel);
-    // Respect a user-baked -m/--model pin (mirrors buildCliArgs) rather than
-    // duplicating the flag — opencode takes the last, silently overriding it.
-    if (model && !hasModelFlag(baseArgs)) {
-      baseArgs.push('-m', model);
-    }
-    return {
-      command: provider.command,
-      args: baseArgs,
-      stdinMode: 'prompt'
-    };
-  }
-
-  // Grok Build CLI (`grok`): headless one-shot agent. Reads the combined
-  // contract+task prompt from `--prompt-file /dev/stdin` (rewritten to a temp
-  // file on Windows at the spawn site — via prepareCliPrompt), bypasses approval
-  // prompts, and emits plain text (the live-output handler falls through to its
-  // default text path, like OpenCode). grok is a non-Claude command, so
-  // agentLifecycle keeps the operating contract in the stdin prompt (no
-  // system-prompt-file split) — matching codex/antigravity/opencode.
-  if (isGrokCommand(provider?.command)) {
-    return {
-      command: provider?.command || 'grok',
-      args: ensureGrokHeadlessArgs(provider?.args || [], effectiveModel),
-      stdinMode: 'prompt',
-    };
-  }
-
-  // Kimi Code CLI (`kimi`): headless one-shot agent. `--print` runs non-
-  // interactive print mode (implies `--afk`, so tool calls auto-approve). The
-  // combined contract+task prompt is delivered as the `--prompt <value>` argv
-  // (kimi does NOT read stdin in print mode) — spliced in at the spawn site via
-  // prepareCliPrompt. Emits plain text (the live-output handler falls through to
-  // its default text path, like grok/opencode). A non-Claude command, so
-  // agentLifecycle keeps the operating contract in the prompt (no system-prompt-
-  // file split) — matching codex/antigravity/grok/opencode.
-  if (isKimiCommand(provider?.command)) {
-    return {
-      command: provider?.command || 'kimi',
-      args: ensureKimiHeadlessArgs(provider?.args || [], effectiveModel),
-      stdinMode: 'prompt',
-    };
-  }
-
-  // Cursor Agent CLI (`cursor-agent`): headless one-shot. `--print` reads the
-  // combined contract+task prompt from raw stdin (like claude/codex, unlike
-  // grok/kimi). `--force` is load-bearing beyond approvals: without a trust
-  // posture cursor-agent prints "Workspace Trust Required" and EXITS without
-  // doing any work — in a fresh CoS worktree that is every run. Emits plain text
-  // (the live-output handler falls through to its default text path, like
-  // grok/kimi/opencode — see cursor.js on why stream-json isn't selected yet). A
-  // non-Claude command, so agentLifecycle keeps the operating contract in the
-  // stdin prompt (no system-prompt-file split), matching the other CLIs above.
-  if (isCursorCommand(provider?.command)) {
-    return {
-      command: provider?.command || CURSOR_COMMAND,
-      args: ensureCursorHeadlessArgs(provider?.args || [], effectiveModel),
-      stdinMode: 'prompt',
-    };
-  }
-
-  // Default: Claude Code CLI. applyLeanClaudeArgs adds `--bare
-  // --strict-mcp-config` for Ollama-backed claude sessions (no-op otherwise,
-  // idempotent against user-baked flags); the system-prompt contract file
-  // rides via --append-system-prompt-file.
-  const args = applyLeanClaudeArgs(provider, [
-    '--dangerously-skip-permissions', // Unrestricted mode
-    '--print',                          // Print output and exit
-    '--output-format', 'stream-json',   // Stream JSON events for live output
-    '--verbose',                        // Required for stream-json
-    '--include-partial-messages',       // Include incremental text deltas
-    ...(provider?.args || []),          // User-configured provider args
-  ], provider?.command || 'claude');
-  if (systemPromptFile) {
-    args.push('--append-system-prompt-file', systemPromptFile);
-  }
-  if (effectiveModel) {
-    // Bedrock box: map a bare Claude id to its region-prefixed Bedrock form
-    // just-in-time (no-op off Bedrock / for already-prefixed or non-Claude ids).
-    // Env precedence mirrors the actual spawn env below: process.env <
-    // settingsEnv (~/.claude/settings.json) < provider.envVars.
-    const injectedModel = resolveBedrockCliModel(effectiveModel, {
-      env: { ...process.env, ...settingsEnv, ...provider?.envVars },
-      providerId,
-    });
-    args.push('--model', injectedModel);
-  }
-  // Per-task reasoning-effort override; a user-baked --effort in provider args
-  // wins (buildEffortArgs mirrors the hasModelFlag rule). Keyed on the RESOLVED
-  // launch command — not the raw provider — so a blank-command claude provider
-  // still qualifies, matching the TUI builder's re-keying.
-  const command = provider?.command || process.env.CLAUDE_PATH || 'claude';
-  args.push(...buildEffortArgs(effort, { id: providerId, command }, args));
-
-  return {
-    command,
-    args,
-    stdinMode: 'prompt',
-    streamFormat: 'stream-json'
-  };
+  return buildVendorSpawnConfig(provider, { effectiveModel, effort, systemPromptFile, settingsEnv });
 }
 
 /**

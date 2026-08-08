@@ -92,6 +92,7 @@ export * as antigravity from './antigravity.js';
 export * from './cliChildEnv.js';
 export * from './cliProviderArgs.js';
 export * from './cliProviderRun.js';
+export * from './codex.js';
 export * from './codexAssistantExtract.js';
 export * from './codexCliOutput.js';
 export * from './contextBudget.js';
@@ -113,6 +114,11 @@ export * from './promptRunner.js';
 export * from './promptSystemStages.js';
 export * from './promptTemplate.js';
 export * from './providerModels.js';
+// Namespaced: providerVendors.js re-exports `inferTuiCommand` /
+// `applyCommandDefaults` (from tuiHandshake.js) and `prepareCliPrompt` (from
+// cliProviderArgs.js), which would trip the barrel's duplicate-identifier
+// collision check as flat exports.
+export * as providerVendors from './providerVendors.js';
 export * from './providerTranscriptUsage.js';
 export * from './quotaBurnConfig.js';
 export * from './quotaBurnPresets.js';

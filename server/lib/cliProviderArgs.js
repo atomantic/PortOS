@@ -19,11 +19,12 @@
  *   - Claude Code: `-p -`                (+ `--model <id>`)
  */
 
-import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel, isOpencodeCommand, buildCodexStartupArgs, buildEffortArgs, stripBrokenModelFlags } from './providerModels.js';
-import { ensureAntigravityPrintArgs, isAntigravityCliProvider, isAntigravityCommand, prepareAntigravityPrompt } from './antigravity.js';
-import { isGrokCommand, ensureGrokHeadlessArgs, prepareGrokPromptFile } from './grok.js';
-import { isKimiCommand, ensureKimiHeadlessArgs, prepareKimiPrompt } from './kimi.js';
-import { isCursorCommand, ensureCursorHeadlessArgs } from './cursor.js';
+import { resolveCliModel, stripBrokenModelFlags } from './providerModels.js';
+// buildVendorCliArgs / prepareCliPrompt dispatch through the PROVIDER_VENDORS
+// registry (#3618) instead of a hand-rolled per-vendor if-chain — see
+// providerVendors.js for the vendor rows and its own dependency-light note
+// (this module must stay importable from the standalone autofixer process).
+import { buildVendorCliArgs, prepareCliPrompt } from './providerVendors.js';
 
 /**
  * Build CLI args based on provider type. Each CLI provider has different
@@ -43,124 +44,17 @@ import { isCursorCommand, ensureCursorHeadlessArgs } from './cursor.js';
  * codex, and is suppressed when the saved args already bake an effort pin.
  */
 export function buildCliArgs(provider) {
-  const providerId = provider?.id || '';
   const effort = provider?.effort || null;
   // Sanitize: drop any broken/dangling `--model` / `-m` tokens before
-  // appending. hasModelFlag treats those as "not a real pin" so the
-  // injection path fires — but if we kept the bogus token in baseArgs the
-  // CLI would still see two `--model` occurrences and reject the argv.
+  // appending. hasModelFlag (in providerVendors.js's per-vendor arg builders)
+  // treats those as "not a real pin" so the injection path fires — but if we
+  // kept the bogus token in baseArgs the CLI would still see two `--model`
+  // occurrences and reject the argv.
   const baseArgs = stripBrokenModelFlags(Array.isArray(provider?.args) ? provider.args : []);
   // Configured-default sentinels (Codex / Antigravity / Grok Build) resolve to
   // null so the CLI uses its own latest/default model without a --model flag.
   const effectiveDefaultModel = resolveCliModel(provider.defaultModel);
-
-  // Codex CLI: `codex exec -` reads prompt from stdin, --model for model.
-  // Detect an existing leading `exec` in user/legacy args so we don't end up
-  // running `codex exec --full-auto exec -` after migration of legacy
-  // configs that already pinned an `exec` subcommand.
-  if (providerId === 'codex') {
-    const hasExec = baseArgs.includes('exec');
-    const args = hasExec ? [...baseArgs] : [...baseArgs, 'exec'];
-    // Disable codex's startup update check (see buildCodexStartupArgs) so a run
-    // never stalls on the update-check network round-trip or an unattended
-    // `brew upgrade` it can't complete headless. No-op when the user pinned it.
-    args.push(...buildCodexStartupArgs(baseArgs));
-    if (effectiveDefaultModel) {
-      args.push('--model', effectiveDefaultModel);
-    }
-    args.push(...buildEffortArgs(effort, provider, args));
-    args.push('-'); // stdin marker
-    return args;
-  }
-
-  // Antigravity CLI (`agy`) replaces the old Gemini CLI for Google's coding
-  // agent. Print mode is the headless one-shot interface; the prompt is spliced
-  // in as the trailing `--print` value at spawn time (see prepareCliPrompt).
-  // `--model` is honored like every other CLI here — the configured-default
-  // sentinel resolves to null so agy falls back to its own configured model.
-  if (isAntigravityCliProvider(provider)) {
-    return ensureAntigravityPrintArgs(baseArgs, {
-      model: effectiveDefaultModel,
-      effort,
-      models: provider?.models,
-    });
-  }
-
-  // Grok Build CLI (`grok`): headless one-shot. The prompt is delivered through
-  // `--prompt-file /dev/stdin` (grok reads a single-turn prompt from a file, not
-  // raw stdin) so PortOS's existing stdin write feeds it unchanged — see grok.js.
-  // `--output-format plain` + `--permission-mode bypassPermissions` are injected
-  // there unless the user pinned their own. Model flag gated like the others.
-  if (isGrokCommand(provider?.command)) {
-    return ensureGrokHeadlessArgs(baseArgs, effectiveDefaultModel);
-  }
-
-  // Kimi Code CLI (`kimi`): headless one-shot. `--print` runs non-interactive
-  // print mode (implies `--afk`, so tool calls auto-approve). The prompt is NOT
-  // over stdin — it's spliced in as the `--prompt <value>` at spawn time by
-  // prepareKimiPrompt (see below). Model flag gated like the others; the
-  // configured-default sentinel resolves to null so `--model` is omitted.
-  if (isKimiCommand(provider?.command)) {
-    return ensureKimiHeadlessArgs(baseArgs, effectiveDefaultModel);
-  }
-
-  // Cursor Agent CLI (`cursor-agent`): headless one-shot. `--print` reads the
-  // prompt from raw stdin (so the shared stdin delivery works unchanged) and
-  // `--force` clears cursor's workspace-trust gate — which otherwise EXITS
-  // instead of running — while also auto-approving tool calls. Both are injected
-  // by ensureCursorHeadlessArgs unless the user pinned their own. Cursor's `auto`
-  // model is a real id, not a sentinel, so it rides `--model` like any other.
-  if (isCursorCommand(provider?.command)) {
-    return ensureCursorHeadlessArgs(baseArgs, effectiveDefaultModel);
-  }
-
-  // OpenCode CLI (`opencode run`): the headless, non-interactive subcommand. It
-  // reads the prompt from stdin (the runner's shell-pipeline delivery, same as
-  // every other CLI here) and selects the model with `-m provider/model`. The
-  // OpenCode Ollama provider is namespaced `ollama/<model>` (see
-  // prefixOpencodeModel). Ensure the `run` subcommand leads the argv even if the
-  // saved provider.args dropped it. Model injection is gated on the user not
-  // having hard-coded a `--model`/`-m` of their own, mirroring the claude/gemini
-  // gate below.
-  if (isOpencodeCommand(provider?.command)) {
-    const args = baseArgs.includes('run') ? [...baseArgs] : ['run', ...baseArgs];
-    const model = prefixOpencodeModel(provider, effectiveDefaultModel);
-    if (model && !hasModelFlag(baseArgs)) {
-      args.push('-m', model);
-    }
-    return args;
-  }
-
-  // Gemini CLI: prompt is piped via stdin directly. `-m <model>` is gemini-
-  // cli's documented short flag for model selection (long form: `--model`).
-  // Skip injection when the user's saved args already pin a model (either
-  // form) so we don't duplicate the flag.
-  if (providerId === 'gemini-cli') {
-    const args = [...baseArgs];
-    if (effectiveDefaultModel && !hasModelFlag(baseArgs)) {
-      args.push('-m', effectiveDefaultModel);
-    }
-    return args;
-  }
-
-  // Default (Claude Code CLI): `-p -` means "read prompt from stdin".
-  // `--model <id>` is claude-code's model flag; it parses flags
-  // positionally so appending after `-p -` is fine. Same gate as gemini-
-  // cli — respect user-baked model flags.
-  const args = [...baseArgs, '-p', '-'];
-  if (effectiveDefaultModel && !hasModelFlag(baseArgs)) {
-    // On a Bedrock box a bare `claude-opus-5` is rejected — map it to the
-    // region-prefixed Bedrock id just-in-time (no-op off Bedrock / for
-    // already-prefixed ids). provider.envVars carries CLAUDE_CODE_USE_BEDROCK
-    // for the bedrock provider variants; process.env covers a Bedrock host.
-    const model = resolveBedrockCliModel(effectiveDefaultModel, {
-      env: { ...process.env, ...provider?.envVars },
-      providerId,
-    });
-    args.push('--model', model);
-  }
-  args.push(...buildEffortArgs(effort, provider, args));
-  return args;
+  return buildVendorCliArgs(provider, baseArgs, { model: effectiveDefaultModel, effort });
 }
 
 /**
@@ -183,16 +77,11 @@ export function buildCliArgs(provider) {
  * @param {string[]} args - argv as built by buildCliArgs
  * @param {string} prompt - the full prompt text
  * @returns {{ args: string[], useStdin: boolean, cleanup: () => void }}
+ *
+ * Defined in providerVendors.js (the PROVIDER_VENDORS registry, #3618);
+ * re-exported here for existing importers of this module.
  */
-export function prepareCliPrompt(command, args, prompt) {
-  if (isAntigravityCommand(command)) {
-    return prepareAntigravityPrompt(args, prompt);
-  }
-  if (isKimiCommand(command)) {
-    return prepareKimiPrompt(args, prompt);
-  }
-  return prepareGrokPromptFile(args, prompt);
-}
+export { prepareCliPrompt };
 
 // Re-exported from providerModels.js (its home, next to `hasModelFlag`, so the
 // antigravity arg builders can share it without importing this module and
