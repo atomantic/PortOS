@@ -63,7 +63,8 @@ export function broadcast(seriesId, payload) {
   // Retain the diagnosable frames for the opt-in self-improvement pass. A single
   // tap here (rather than instrumenting each step runner) means any telemetry
   // frame a future step emits is diagnosable evidence for free. No-op unless the
-  // run opted in — see selfImprove.js#noteSignal.
+  // run opted in — see state.js#noteSignal (it lives with the run registry it
+  // mutates, which is what keeps selfImprove.js out of this module's imports).
   noteSignal(run, payload);
   // Mirror every frame onto the in-process bus (CDO Phase 3, #2185) so a
   // server-side consumer (CD plan step) sees the same progress/pause/terminal

@@ -199,32 +199,48 @@ describe('buildSelfImproveTask', () => {
     expect(task.prCompletion).toBe('review-then-merge');
   });
 
+  it('keeps the description to ONE line so the brief is not silently dropped', () => {
+    // generateTasksMarkdown writes the description verbatim into a single
+    // "- [ ] #id | PRIORITY | <description>" row and only escapes newlines in
+    // METADATA values. A multi-line description spills into TASKS.md as stray
+    // lines and is truncated to its first line on the next read — the agent
+    // would get a defect report with no defect in it.
+    const task = build();
+    expect(task.description).not.toContain('\n');
+    // The brief itself rides `context`, which IS newline-escaped.
+    expect(task.context).toContain(goodDiagnosis.title);
+    expect(task.context).toContain(goodDiagnosis.problem);
+    expect(task.context).toContain(goodDiagnosis.proposedChange);
+    expect(task.context).toContain(goodDiagnosis.evidence[0]);
+  });
+
   it('keeps the dedup line stable per defect, not per series', () => {
-    const firstLine = (t) => t.description.split('\n')[0];
     const a = build();
     const b = build({ seriesId: 'series-2', seriesName: 'Another Series', outcome: 'error' });
     // The defect lives in shared PortOS code — one open task should cover it
     // however many series hit it, so cosTaskStore's first-line dedup must match.
-    expect(firstLine(a)).toBe(firstLine(b));
-    expect(firstLine(a)).toContain('editorial-check');
+    expect(a.description).toBe(b.description);
+    expect(a.description).toContain('editorial-check');
     // A different area is different work and must NOT collapse onto it...
     const otherArea = build({ diagnosis: shapeDiagnosis({ ...goodDiagnosis, area: 'runner' }) });
-    expect(firstLine(otherArea)).not.toBe(firstLine(a));
+    expect(otherArea.description).not.toBe(a.description);
     // ...and neither must a DIFFERENT defect in the same area. Keying on the
     // bucket alone would cap PortOS at one open task per area forever and
     // silently discard every later diagnosis in it.
     const otherDefect = build({ diagnosis: shapeDiagnosis({ ...goodDiagnosis, title: 'Reverse outline is never refreshed before the checks' }) });
-    expect(firstLine(otherDefect)).not.toBe(firstLine(a));
+    expect(otherDefect.description).not.toBe(a.description);
   });
 
   it('always awaits approval — an LLM diagnosis never dispatches a coding agent on its own', () => {
     expect(build().approvalRequired).toBe(true);
   });
 
-  it('carries the run provenance in context, not the manuscript', () => {
-    const ctx = JSON.parse(build().context);
-    expect(ctx).toMatchObject({ source: 'series-autopilot-self-improve', seriesId: 'series-1', outcome: 'paused', area: 'editorial-check' });
-    expect(ctx.evidence).toEqual(goodDiagnosis.evidence);
+  it('carries the run provenance in the brief', () => {
+    const ctx = build().context;
+    expect(ctx).toContain('series-1');
+    expect(ctx).toContain('Example Series');
+    expect(ctx).toContain('paused');
+    expect(ctx).toContain('editorialReview: ran out of rounds');
   });
 });
 

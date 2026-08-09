@@ -30,9 +30,12 @@
  *     `approvalRequired: true`); the autonomy dial for this class of work is the
  *     CoS approval queue, not a per-series checkbox.
  *
- * The signal log is captured passively: `noteSignal` taps the same SSE frames
- * the run already broadcasts (`session.js#broadcast`), so a new telemetry frame
- * becomes diagnosable evidence with no extra instrumentation.
+ * The signal log is captured passively: `state.js#noteSignal`, called from
+ * `session.js#broadcast`, retains the same SSE frames the run already emits — so
+ * a telemetry frame a future step adds becomes diagnosable evidence with no
+ * extra instrumentation. It lives in `state.js` (the run-registry owner) rather
+ * than here so this module can import the registry instead of the registry
+ * importing the diagnosis.
  *
  * PRIVACY: the diagnosis prompt asks for a defect report about PortOS's code and
  * prompts, explicitly NOT about the story — and `shapeDiagnosis` bounds every
@@ -136,46 +139,47 @@ export function isFilable(diagnosis) {
  * Shape the CoS task for a filable diagnosis. Pure, so the dedup key and the
  * agent-facing brief are testable without a task store.
  *
- * The FIRST LINE is the dedup key (cosTaskStore matches on it, lowercased,
+ * `description` is ONE LINE, and that is a hard requirement, not a style choice:
+ * `generateTasksMarkdown` writes the description verbatim into a single
+ * `- [ ] #id | PRIORITY | <description>` row (only *metadata* values go through
+ * `escapeNewlines`). A multi-line description therefore spills its tail into
+ * TASKS.md as stray un-parsed lines AND is truncated to its first line on the
+ * next read — silently dropping the entire brief, so the agent would receive a
+ * defect report with no defect in it. The brief lives in `context`, which is
+ * newline-escaped and round-trips intact.
+ *
+ * That one line is also the dedup key (cosTaskStore matches on it, lowercased,
  * scoped to the app), so it carries the area AND a slug of the diagnosis itself.
  * Area alone would be wrong in both directions: it is deliberately NOT
  * per-series (the defect lives in shared PortOS code, so one open task should
  * cover it however many series hit it), but keying on the bucket would cap
  * PortOS at one open task per area forever and silently discard the next,
  * different `editorial-check` defect — and a task that ends up `blocked` counts
- * as a duplicate too, which would mute that area permanently.
+ * as a duplicate too, which would mute that area permanently. The slug is the
+ * kebab-cased title, so the row stays readable in TASKS.md.
  */
 export function buildSelfImproveTask({ diagnosis, seriesId, seriesName, outcome, outcomeReason, counts }) {
   const slug = slugify(diagnosis.title);
-  const lines = [
-    `Pipeline self-improvement (${diagnosis.area}/${slug}) — Series Autopilot diagnosed a PortOS automation defect`,
-    '',
-    `**${diagnosis.title}**`,
+  const brief = [
+    `Series Autopilot diagnosed a PortOS automation defect: ${diagnosis.title}`,
     '',
     diagnosis.problem,
     '',
     `Proposed change: ${diagnosis.proposedChange}`,
   ];
-  if (diagnosis.risks) lines.push('', `Risks / things to be careful of: ${diagnosis.risks}`);
-  lines.push(
+  if (diagnosis.risks) brief.push('', `Risks / things to be careful of: ${diagnosis.risks}`);
+  if (diagnosis.evidence.length) {
+    brief.push('', 'Evidence from the run telemetry:', ...diagnosis.evidence.map((e) => `- ${e}`));
+  }
+  brief.push(
     '',
-    `Diagnosed from an autopilot run that ended \`${outcome}\`${outcomeReason ? ` — ${outcomeReason}` : ''}.`,
+    `Diagnosed from an autopilot run on series ${seriesId}${seriesName ? ` ("${seriesName}")` : ''} that ended \`${outcome}\`${outcomeReason ? ` — ${trimToClause(outcomeReason, 500)}` : ''}.`,
+    `Signal counts: ${JSON.stringify(counts)}.`,
     'Confirm the defect in the code before changing anything: this brief is one LLM\'s read of a single run\'s telemetry, not a reproduction.',
   );
-  const context = JSON.stringify({
-    source: 'series-autopilot-self-improve',
-    seriesId,
-    seriesName,
-    outcome,
-    outcomeReason: trimToClause(outcomeReason, 500),
-    area: diagnosis.area,
-    confidence: diagnosis.confidence,
-    evidence: diagnosis.evidence,
-    signalCounts: counts,
-  }).slice(0, 4000);
   return {
-    description: lines.join('\n'),
-    context,
+    description: `Pipeline self-improvement (${diagnosis.area}/${slug})`,
+    context: brief.join('\n').slice(0, 4000),
     app: PORTOS_APP_ID,
     priority: 'MEDIUM',
     // Always isolated, always via a PR, always approval-gated — see the module
