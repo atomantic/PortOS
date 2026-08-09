@@ -322,6 +322,36 @@ const socketSchema = z.object({
   rotationDegrees: vec3Schema.default([0, 0, 0]),
 });
 
+// Articulation is a DECLARATION of intent, not a skeleton: PortOS does not skin,
+// bind, or deform anything, and nothing downstream of this schema pretends it
+// does. A joint names a part that is meant to rotate and the socket it rotates
+// about, so a later rig/export path has something stable to attach to and the UI
+// can say "articulation-ready" only when the graph is actually well formed.
+const jointSchema = z.object({
+  id: idSchema,
+  // The part this joint drives. One part backs at most one joint — two joints on
+  // the same part is a graph that cannot be built, not a redundancy.
+  partId: idSchema,
+  // `null` marks the single root. Every other joint names a joint declared
+  // EARLIER in the array, which is what makes a cycle unrepresentable.
+  parentJointId: idSchema.nullable().default(null),
+  // The named socket this joint pivots about. Optional on the root (whose pivot
+  // is the model origin); a child joint without one has no defined axis, which
+  // the rig-readiness report treats as not-ready rather than silently rigged.
+  pivotSocket: idSchema.nullable().default(null),
+});
+
+const MAX_JOINTS = 64;
+
+const articulationSchema = z.object({
+  joints: z.array(jointSchema).min(1).max(MAX_JOINTS),
+  // Parts explicitly declared as carried attachments — a pack, a weapon, a hat.
+  // They ride an articulated part rather than articulating, and saying so is the
+  // point: without the declaration "not a joint" and "nobody classified it" are
+  // the same silence.
+  attachmentPartIds: z.array(idSchema).max(40).default([]),
+});
+
 const detailSchema = z.object({
   feature: z.string().trim().min(1).max(240),
   evidence: z.string().trim().min(1).max(500),
@@ -347,6 +377,9 @@ const makeSpecSchema = (partSchema) => z.object({
   lights: z.array(lightSchema).min(1).max(8),
   parts: z.array(partSchema).min(1).max(40),
   sockets: z.array(socketSchema).max(40).default([]),
+  // Optional and additive: a spec written before articulation shipped simply has
+  // no key, which every consumer reads as "static assembly", never as "rigged".
+  articulation: articulationSchema.optional(),
   detailInventory: z.array(detailSchema).min(1).max(80),
 }).superRefine((spec, ctx) => {
   const materialIds = new Set(Object.keys(spec.materials));
@@ -388,6 +421,57 @@ const makeSpecSchema = (partSchema) => z.object({
       ctx.addIssue({ code: 'custom', message: `unknown socket parent: ${socket.parentPartId}`, path: ['sockets', index, 'parentPartId'] });
     }
   }
+  if (spec.articulation) {
+    const socketNames = new Set(spec.sockets.map((socket) => socket.name));
+    const jointIds = new Set();
+    const jointPartIds = new Set();
+    let rootCount = 0;
+    for (const [index, joint] of spec.articulation.joints.entries()) {
+      const at = (key) => ['articulation', 'joints', index, key];
+      if (jointIds.has(joint.id)) {
+        ctx.addIssue({ code: 'custom', message: `duplicate joint id: ${joint.id}`, path: at('id') });
+      }
+      if (!partIds.has(joint.partId)) {
+        ctx.addIssue({ code: 'custom', message: `unknown joint part: ${joint.partId}`, path: at('partId') });
+      } else if (jointPartIds.has(joint.partId)) {
+        ctx.addIssue({ code: 'custom', message: `part ${joint.partId} is already driven by another joint`, path: at('partId') });
+      }
+      if (joint.parentJointId === null) {
+        rootCount += 1;
+      } else if (!jointIds.has(joint.parentJointId)) {
+        // Earlier-only, so a dangling parent, a forward reference, and a cycle
+        // are all the same rejection — there is no graph walk to get wrong.
+        ctx.addIssue({
+          code: 'custom',
+          message: `joint ${joint.id} names parent ${joint.parentJointId}, which is not a joint declared before it`,
+          path: at('parentJointId'),
+        });
+      }
+      if (joint.pivotSocket !== null && !socketNames.has(joint.pivotSocket)) {
+        ctx.addIssue({ code: 'custom', message: `unknown pivot socket: ${joint.pivotSocket}`, path: at('pivotSocket') });
+      }
+      jointIds.add(joint.id);
+      jointPartIds.add(joint.partId);
+    }
+    if (rootCount !== 1) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `articulation needs exactly one root joint (a joint with parentJointId null), found ${rootCount}`,
+        path: ['articulation', 'joints'],
+      });
+    }
+    for (const [index, partId] of spec.articulation.attachmentPartIds.entries()) {
+      const path = ['articulation', 'attachmentPartIds', index];
+      if (!partIds.has(partId)) {
+        ctx.addIssue({ code: 'custom', message: `unknown attachment part: ${partId}`, path });
+      } else if (jointPartIds.has(partId)) {
+        // A part cannot be both carried and articulated — that is the one
+        // ambiguity this declaration exists to remove.
+        ctx.addIssue({ code: 'custom', message: `part ${partId} is declared as an attachment and also driven by a joint`, path });
+      }
+    }
+  }
+
   for (const [index, detail] of spec.detailInventory.entries()) {
     for (const [partIndex, id] of detail.implementationPartIds.entries()) {
       if (!partIds.has(id)) {
@@ -775,6 +859,11 @@ export function ${factoryName}() {
     subjectType: spec.subjectType,
     nodes,
     sockets: spec.sockets,
+    // Declared articulation intent, or null when the spec has none — the parse
+    // above is what makes this trustworthy, so a consumer reads a graph that is
+    // known single-rooted, acyclic, and pointed at real parts and sockets. It is
+    // NOT a skeleton: nothing here is skinned, bound, or deformed.
+    articulation: spec.articulation || null,
     detailInventory: spec.detailInventory,
     limitations: spec.limitations,
   };

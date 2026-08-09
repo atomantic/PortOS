@@ -84,6 +84,12 @@ export async function createModel(input) {
     // an older record reads back undefined, which every consumer treats as
     // "not evaluated" rather than "passed".
     flatness: null,
+    // Rig-readiness report for `spec`, written alongside it by
+    // `evaluateThreejsRigReadiness`. Same additive-field contract as `coverage`
+    // and `flatness`: a record written before this shipped reads back undefined,
+    // which every consumer renders as an unevaluated STATIC assembly — never as
+    // "articulation-ready".
+    rig: null,
     error: null,
     generationOperationId: null,
     runs: [],

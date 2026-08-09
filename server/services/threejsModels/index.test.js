@@ -141,12 +141,69 @@ describe('Three.js model generation orchestration', () => {
     // it alongside the spec instead of failing an otherwise usable generation.
     expect(current.coverage).toMatchObject({ errorCount: 0, warningCount: 1 });
     expect(current.coverage.findings[0]).toMatchObject({ code: 'orphan-geometry', partIds: ['body'] });
+    // Nothing is skinned, so a spec that declared no articulation is recorded as
+    // not-ready WITH a reason rather than passing silently.
+    expect(current.rig).toMatchObject({ articulationReady: false, jointCount: 0, socketCount: 0 });
+    expect(current.rig.reasons).toHaveLength(1);
     expect(current.runs.at(-1)).toMatchObject({
       status: 'completed',
       runId: 'run-example',
       providerId: 'vision-api',
       model: 'vision-pro',
     });
+  });
+
+  it('persists an articulation-ready report when the character declares a usable graph', async () => {
+    const characterSpec = {
+      ...spec,
+      subjectType: 'character',
+      sockets: [{ name: 'lensPivot', parentPartId: 'body' }],
+      articulation: {
+        joints: [
+          { id: 'rootJoint', partId: 'body', parentJointId: null },
+          { id: 'lensJoint', partId: 'lens', parentJointId: 'rootJoint', pivotSocket: 'lensPivot' },
+        ],
+        attachmentPartIds: [],
+      },
+    };
+    let current = {
+      id: 'threejs-rigged',
+      name: 'Example Beacon',
+      sourceImage: { filename: 'example.png' },
+      providerId: 'vision-api',
+      model: null,
+      prompt: '',
+      status: 'draft',
+      spec: null,
+      runs: [],
+    };
+    store.getModel.mockResolvedValue(current);
+    store.mutateModel.mockImplementation(async (_id, mutate) => {
+      const next = mutate(current);
+      if (next) current = next;
+      return current;
+    });
+    runPromptThroughProvider.mockResolvedValue({
+      text: JSON.stringify(characterSpec),
+      runId: 'run-rigged',
+      provider: { id: 'vision-api' },
+      model: null,
+    });
+
+    await startGeneration(current.id, { providerId: 'vision-api' });
+    await vi.waitFor(() => expect(current.status).toBe('ready'));
+
+    expect(current.rig).toMatchObject({
+      articulationReady: true,
+      reasons: [],
+      jointCount: 2,
+      socketCount: 1,
+      rootJointId: 'rootJoint',
+      subjectType: 'character',
+    });
+    // The graph survives the parse onto the record, so the export and the
+    // preview read the same joints the report counted.
+    expect(current.spec.articulation.joints).toHaveLength(2);
   });
 
   it('aims an unsteered refinement at the previous pass coverage errors', async () => {

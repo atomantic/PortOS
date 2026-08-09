@@ -5,6 +5,7 @@ import { Bounds, OrbitControls, useBounds } from '@react-three/drei';
 import * as THREE from 'three';
 import { createSculptBufferGeometry, needsSculptBufferGeometry, sculptMaterialProps } from '../../lib/threejsSculpt';
 import { buildPartSelectionIndex, computeExplodeLayout, isReliefPart } from '../../lib/threejsExplode';
+import { summarizeThreejsArticulation } from '../../lib/threejsRig';
 
 const radians = (degrees = 0) => THREE.MathUtils.degToRad(degrees);
 const rotation = (degrees = [0, 0, 0]) => degrees.map(radians);
@@ -218,6 +219,7 @@ export default function ThreejsModelPreview({ spec, className = '' }) {
   }, [authoredBackground]);
 
   const parts = spec?.parts;
+  const articulation = useMemo(() => summarizeThreejsArticulation(spec), [spec]);
   const selection = useMemo(() => buildPartSelectionIndex(parts || []), [parts]);
   const layout = useMemo(() => computeExplodeLayout(parts || [], explode), [parts, explode]);
 
@@ -328,6 +330,16 @@ export default function ThreejsModelPreview({ spec, className = '' }) {
         <div className="always-dark absolute right-2 top-2 flex max-w-[calc(100%-1rem)] items-center gap-2 rounded-lg bg-black/70 px-2 py-1.5 text-[10px] text-gray-200 backdrop-blur-sm">
           <span className="truncate font-medium text-white">{selection.names[selectedId] || selectedId}</span>
           <code className="truncate text-gray-400">{selectedId}</code>
+          {/* Which declared joint (if any) drives the picked part — the diagnostic
+              that turns "it says articulation-ready" into something checkable. */}
+          {articulation.jointsByPartId[selectedId] && (
+            <span className="truncate text-port-accent">
+              joint {articulation.jointsByPartId[selectedId].id}
+              {articulation.jointsByPartId[selectedId].pivotSocket
+                ? ` · pivot ${articulation.jointsByPartId[selectedId].pivotSocket}`
+                : ' · no pivot'}
+            </span>
+          )}
           <button
             type="button"
             aria-label="Clear part selection"
@@ -338,8 +350,22 @@ export default function ThreejsModelPreview({ spec, className = '' }) {
           </button>
         </div>
       )}
-      <div className="always-dark pointer-events-none absolute bottom-2 left-2 rounded bg-black/60 px-2 py-1 text-[10px] text-gray-300">
-        Drag to orbit · scroll to zoom · click a part to identify it
+      <div className="always-dark pointer-events-none absolute bottom-2 left-2 flex max-w-[calc(100%-1rem)] flex-wrap items-center gap-1.5 text-[10px]">
+        <span className="rounded bg-black/60 px-2 py-1 text-gray-300">
+          Drag to orbit · scroll to zoom · click a part to identify it
+        </span>
+        {/* Never "animation-ready": nothing here is skinned. The badge says only
+            whether the spec declared a usable articulation graph, and a model
+            that predates the contract has none and reads as a static assembly. */}
+        <span
+          className={articulation.articulationReady
+            ? 'rounded bg-port-success/20 px-2 py-1 text-port-success'
+            : 'rounded bg-black/60 px-2 py-1 text-gray-400'}
+        >
+          {articulation.articulationReady
+            ? `Articulation-ready · ${articulation.jointCount} joints · ${articulation.socketCount} pivot${articulation.socketCount === 1 ? '' : 's'}`
+            : `Static assembly${articulation.jointCount > 0 ? ` · ${articulation.jointCount} joints declared` : ''}`}
+        </span>
       </div>
     </div>
   );

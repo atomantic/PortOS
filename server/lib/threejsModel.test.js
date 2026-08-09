@@ -606,3 +606,135 @@ describe('buildThreejsFlatnessFeedback', () => {
     expect(feedback).toContain('genuine depth');
   });
 });
+
+// A two-joint character graph over the shared fixture: the crate body is the
+// root and its trim is a child that pivots about a declared socket.
+const articulatedSpec = () => {
+  const spec = validSpec();
+  spec.subjectType = 'character';
+  spec.sockets = [
+    ...spec.sockets,
+    { name: 'trimPivot', parentPartId: 'frontTrim', position: [0, 0, 0], rotationDegrees: [0, 0, 0] },
+  ];
+  spec.articulation = {
+    joints: [
+      { id: 'rootJoint', partId: 'crateBody', parentJointId: null, pivotSocket: null },
+      { id: 'trimJoint', partId: 'frontTrim', parentJointId: 'rootJoint', pivotSocket: 'trimPivot' },
+    ],
+    attachmentPartIds: [],
+  };
+  return spec;
+};
+
+const articulationIssues = (mutate) => {
+  const spec = articulatedSpec();
+  mutate(spec);
+  const result = threejsSculptSpecSchema.safeParse(spec);
+  expect(result.success).toBe(false);
+  return result.error.issues.map((issue) => issue.message);
+};
+
+describe('threejsSculptSpecSchema articulation', () => {
+  it('accepts a well-formed graph and fills the optional joint fields', () => {
+    const parsed = threejsSculptSpecSchema.parse(articulatedSpec());
+    expect(parsed.articulation.joints[0].parentJointId).toBeNull();
+    expect(parsed.articulation.joints[1].pivotSocket).toBe('trimPivot');
+    expect(parsed.articulation.attachmentPartIds).toEqual([]);
+  });
+
+  // The whole point of the field being optional: a record written before it
+  // existed has no key at all, and must not acquire one on read.
+  it('leaves a spec that declares no articulation without the key', () => {
+    const parsed = threejsSculptSpecSchema.parse(validSpec());
+    expect(parsed.articulation).toBeUndefined();
+    expect(storedThreejsSculptSpecSchema.parse(validSpec()).articulation).toBeUndefined();
+  });
+
+  it('rejects duplicate joint ids', () => {
+    expect(articulationIssues((spec) => {
+      spec.articulation.joints[1].id = 'rootJoint';
+    })).toEqual(expect.arrayContaining(['duplicate joint id: rootJoint']));
+  });
+
+  it('rejects two roots and a graph with no root at all', () => {
+    expect(articulationIssues((spec) => {
+      spec.articulation.joints[1].parentJointId = null;
+    })).toEqual(expect.arrayContaining([expect.stringContaining('exactly one root joint')]));
+    expect(articulationIssues((spec) => {
+      spec.articulation.joints[0].parentJointId = 'trimJoint';
+    })).toEqual(expect.arrayContaining([expect.stringContaining('exactly one root joint')]));
+  });
+
+  it('rejects a dangling parent and a forward reference, which is what makes a cycle unrepresentable', () => {
+    expect(articulationIssues((spec) => {
+      spec.articulation.joints[1].parentJointId = 'noSuchJoint';
+    })).toEqual(expect.arrayContaining([
+      'joint trimJoint names parent noSuchJoint, which is not a joint declared before it',
+    ]));
+    // A two-joint cycle can only be written as a forward reference, so the
+    // earlier-only rule rejects it without walking the graph.
+    expect(articulationIssues((spec) => {
+      spec.articulation.joints[0].parentJointId = 'trimJoint';
+      spec.articulation.joints[1].parentJointId = 'rootJoint';
+    })).toEqual(expect.arrayContaining([
+      'joint rootJoint names parent trimJoint, which is not a joint declared before it',
+    ]));
+  });
+
+  it('rejects joints pointed at parts and sockets that do not exist', () => {
+    expect(articulationIssues((spec) => {
+      spec.articulation.joints[1].partId = 'notARealPart';
+      spec.articulation.joints[1].pivotSocket = 'notARealSocket';
+    })).toEqual(expect.arrayContaining([
+      'unknown joint part: notARealPart',
+      'unknown pivot socket: notARealSocket',
+    ]));
+  });
+
+  it('rejects one part driven by two joints', () => {
+    expect(articulationIssues((spec) => {
+      spec.articulation.joints[1].partId = 'crateBody';
+    })).toEqual(expect.arrayContaining(['part crateBody is already driven by another joint']));
+  });
+
+  it('rejects an attachment that is unknown or also articulated', () => {
+    expect(articulationIssues((spec) => {
+      spec.articulation.attachmentPartIds = ['notARealPart'];
+    })).toEqual(expect.arrayContaining(['unknown attachment part: notARealPart']));
+    expect(articulationIssues((spec) => {
+      spec.articulation.attachmentPartIds = ['frontTrim'];
+    })).toEqual(expect.arrayContaining([
+      'part frontTrim is declared as an attachment and also driven by a joint',
+    ]));
+  });
+});
+
+describe('buildThreejsFactorySource articulation', () => {
+  it('carries a validated graph into the exported runtime metadata', () => {
+    const source = buildThreejsFactorySource(articulatedSpec());
+    expect(source).toContain('articulation: spec.articulation || null,');
+    expect(source.replace(/\s+/g, '')).toContain('"pivotSocket":"trimPivot"');
+  });
+
+  it('exports null articulation for a spec that declares none, and never invents one', () => {
+    const source = buildThreejsFactorySource(validSpec());
+    expect(source).toContain('articulation: spec.articulation || null,');
+    expect(source).not.toContain('"joints"');
+  });
+
+  // Only VALIDATED metadata reaches the factory: an impossible graph fails the
+  // export the same way a bad material reference does, rather than being
+  // serialized into a file a downstream tool would trust.
+  it('refuses to export an impossible graph', () => {
+    const broken = articulatedSpec();
+    broken.articulation.joints[1].parentJointId = 'noSuchJoint';
+    let thrown = null;
+    try {
+      buildThreejsFactorySource(broken);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown?.status).toBe(400);
+    expect(thrown?.message).toMatch(/not a joint declared before it/);
+  });
+});

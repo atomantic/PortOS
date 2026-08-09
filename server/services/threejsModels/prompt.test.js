@@ -80,3 +80,40 @@ describe('buildThreejsGenerationPrompt', () => {
     });
   });
 });
+
+describe('buildThreejsGenerationPrompt articulation', () => {
+  it('never calls the result animation-ready, because nothing PortOS generates is skinned', () => {
+    const prompt = build();
+    expect(prompt).not.toContain('animation-ready');
+    expect(prompt).toContain('cleanly decomposed Three.js model');
+  });
+
+  it('requests the articulation contract when the subject could be a character', () => {
+    for (const family of [undefined, null, 'general', 'character', 'not-a-family']) {
+      const prompt = build({ family });
+      expect(prompt).toContain('ARTICULATION (character and hybrid subjects only)');
+      expect(prompt).toContain('"parentJointId":null');
+      expect(prompt).toContain('"attachmentPartIds"');
+      // The contract has to say what it is NOT, or the model invents weights.
+      expect(prompt).toContain('not a skeleton');
+    }
+  });
+
+  it('leaves a prop, vehicle, or structure prompt without an articulation section', () => {
+    for (const family of ['vehicle', 'weapon', 'architecture', 'device']) {
+      expect(build({ family })).not.toContain('ARTICULATION');
+    }
+  });
+
+  it('drops the section on a refinement of a spec already classified as an object', () => {
+    const object = build({ currentSpec: { schemaVersion: 1, name: 'Example Model', subjectType: 'object' } });
+    expect(object).not.toContain('ARTICULATION');
+    // …and keeps it for a character refinement even under a non-character family,
+    // because the spec's own classification is the stronger signal.
+    const character = build({
+      family: 'vehicle',
+      currentSpec: { schemaVersion: 1, name: 'Example Model', subjectType: 'hybrid' },
+    });
+    expect(character).toContain('ARTICULATION (character and hybrid subjects only)');
+  });
+});

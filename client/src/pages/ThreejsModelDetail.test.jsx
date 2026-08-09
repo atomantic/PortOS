@@ -273,3 +273,70 @@ describe('ThreejsModelDetail subject family', () => {
     ));
   });
 });
+
+describe('ThreejsModelDetail rig readiness', () => {
+  beforeEach(resetMocks);
+
+  it('reports an articulation-ready character with its joint and pivot counts', async () => {
+    getThreejsModel.mockResolvedValue({
+      ...baseRecord,
+      rig: {
+        articulationReady: true,
+        reasons: [],
+        jointCount: 6,
+        socketCount: 5,
+        attachmentCount: 1,
+        rootJointId: 'rootJoint',
+        subjectType: 'character',
+      },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Rig readiness')).toBeInTheDocument());
+    expect(screen.getByText('Articulation-ready')).toBeInTheDocument();
+    expect(screen.getByText('6 joints · 5 pivot sockets · 1 declared attachment')).toBeInTheDocument();
+    // The claim has to stay bounded: readiness is not a rigged mesh.
+    expect(screen.getByText(/never a skeleton/)).toBeInTheDocument();
+  });
+
+  it('reports a static assembly with the reasons rather than a silent pass', async () => {
+    getThreejsModel.mockResolvedValue({
+      ...baseRecord,
+      rig: {
+        articulationReady: false,
+        reasons: ['The spec declares no articulation graph, so this character is a static assembly.'],
+        jointCount: 0,
+        socketCount: 0,
+        attachmentCount: 0,
+        rootJointId: null,
+        subjectType: 'character',
+      },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Rig readiness')).toBeInTheDocument());
+    expect(screen.getByText('Static assembly')).toBeInTheDocument();
+    expect(screen.getByText('0 joints · 0 pivot sockets · 0 declared attachments')).toBeInTheDocument();
+    expect(screen.getByText(/declares no articulation graph/)).toBeInTheDocument();
+    expect(screen.queryByText('Articulation-ready')).not.toBeInTheDocument();
+  });
+
+  // A record from before the report shipped was never evaluated, which is not
+  // the same as having passed — it degrades to static and says so.
+  it('degrades a record with no report to an unevaluated static assembly', async () => {
+    getThreejsModel.mockResolvedValue({ ...baseRecord, rig: undefined });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Rig readiness')).toBeInTheDocument());
+    expect(screen.getByText('Static assembly')).toBeInTheDocument();
+    expect(screen.getByText(/generated before rig readiness was reported/)).toBeInTheDocument();
+  });
+
+  it('omits the panel entirely until there is a generated scene', async () => {
+    getThreejsModel.mockResolvedValue({ ...baseRecord, spec: null, rig: undefined });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Example Beacon')).toBeInTheDocument());
+    expect(screen.queryByText('Rig readiness')).not.toBeInTheDocument();
+  });
+});

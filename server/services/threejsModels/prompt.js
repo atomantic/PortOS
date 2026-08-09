@@ -5,7 +5,11 @@
  * approach, while targeting PortOS's bounded JSON scene schema.
  */
 
-import { buildThreejsFamilyChecklist } from '../../lib/threejsModelFamilies.js';
+import {
+  buildThreejsFamilyChecklist,
+  GENERAL_FAMILY_ID,
+  THREEJS_MODEL_FAMILY_IDS,
+} from '../../lib/threejsModelFamilies.js';
 
 const geometryContract = `
 Allowed geometry definitions:
@@ -87,6 +91,50 @@ a mirrored counterpart as its own part with its own position and rotationDegrees
 simply omit a part you do not want rendered.
 `;
 
+const CHARACTER_FAMILY_ID = 'character';
+
+// Requested ONLY when the subject could be a character. A chosen vehicle,
+// weapon, architecture, or device family is positive evidence that it is not,
+// and a refinement pass over a spec the model already classified as an `object`
+// is the same evidence — those prompts stay exactly as they were. An unknown
+// family id resolves to `general` the way the checklist builder resolves it, so
+// a stale stored family cannot silently change which contract is requested.
+const wantsArticulation = (family, currentSpec) => {
+  if (currentSpec?.subjectType) return currentSpec.subjectType !== 'object';
+  const resolved = THREEJS_MODEL_FAMILY_IDS.includes(family) ? family : GENERAL_FAMILY_ID;
+  return resolved === CHARACTER_FAMILY_ID || resolved === GENERAL_FAMILY_ID;
+};
+
+// PortOS does not skin, bind, or deform anything — this asks for a DECLARATION
+// of what is meant to move, so a later rig/export path has stable ids to attach
+// to and the workspace can report rig readiness truthfully instead of calling
+// every parts hierarchy animation-ready.
+const articulationContract = `
+ARTICULATION (character and hybrid subjects only):
+If — and only if — you classify the subject as "character" or "hybrid", also return an
+"articulation" object alongside "sockets". Omit the key entirely for an "object" subject,
+and omit it for a character whose reference does not support a defensible joint layout.
+
+"articulation": {
+  "joints": [{"id":"stableJointId","partId":"partId","parentJointId":null,"pivotSocket":"socketName"}],
+  "attachmentPartIds": ["partId"]
+}
+
+Rules, all enforced — a spec that breaks one is rejected outright:
+- Exactly ONE joint has "parentJointId": null. That is the root.
+- Every other joint's "parentJointId" names a joint declared EARLIER in the array, so the
+  graph reads root-first and cannot contain a cycle or a forward reference.
+- Every "partId" names a real part, and no part is driven by two joints.
+- "pivotSocket" names a real entry in "sockets" — the point the part rotates about. Add that
+  socket. The root may use null; every other joint needs one to be considered rig-ready.
+- "attachmentPartIds" lists parts that are CARRIED rather than articulated (packs, weapons,
+  hats, held props). A part may be an attachment or be driven by a joint, never both.
+
+This is an intent declaration, not a skeleton: do not invent skinning weights, a bind pose, or
+bones for parts the reference does not clearly show. A short, defensible graph beats a long
+speculative one, and omitting the key is better than guessing.
+`;
+
 export function buildThreejsGenerationPrompt({
   sourcePath,
   name,
@@ -109,7 +157,13 @@ ${feedback || 'Improve likeness, proportions, construction, and visible detail.'
 `
     : '';
 
-  return `You are a senior procedural 3D artist reconstructing one reference image as an animation-ready Three.js model.
+  // PortOS ships no skinning or skeletal-export path, so the brief no longer
+  // calls the result "animation-ready" — what it asks for is a model that comes
+  // apart cleanly, plus (for characters) an explicit declaration of what is
+  // meant to move.
+  const articulation = wantsArticulation(family, currentSpec) ? articulationContract : '';
+
+  return `You are a senior procedural 3D artist reconstructing one reference image as a cleanly decomposed Three.js model.
 
 REFERENCE IMAGE:
 - A multimodal API provider receives the image as an attached image.
@@ -143,5 +197,5 @@ QUALITY GATE:
   under-observed the reference.` : ''}
 
 ${geometryContract}
-${outputContract}`;
+${outputContract}${articulation}`;
 }

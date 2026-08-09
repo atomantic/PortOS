@@ -15,6 +15,7 @@ import {
   threejsSculptSpecSchema,
 } from '../../lib/threejsModel.js';
 import { buildThreejsCoverageFeedback, evaluateThreejsPartCoverage } from '../../lib/threejsModelCoverage.js';
+import { evaluateThreejsRigReadiness } from '../../lib/threejsModelRig.js';
 import { GENERAL_FAMILY_ID } from '../../lib/threejsModelFamilies.js';
 import { resolveCliEffort } from '../../lib/providerModels.js';
 import { getProviderById } from '../providers.js';
@@ -108,6 +109,11 @@ async function executeGeneration({
     // renders correctly from the generated camera, so it is recorded rather than
     // rejected — the user sees it and an unsteered refinement asks for depth.
     const flatness = evaluateThreejsFlatness(spec);
+    // Nothing PortOS generates is skinned, so what gets recorded is whether the
+    // spec declared an articulation graph a later rig path could attach to — and
+    // when it did not, the reason. A model with no graph reports not-ready with
+    // reasons rather than passing silently.
+    const rig = evaluateThreejsRigReadiness(spec);
     const completedAt = new Date().toISOString();
     const effectiveProvider = result.provider?.id || result.fallbackProvider?.id || provider.id;
     const effectiveModel = result.model || requestedModel || provider.defaultModel || null;
@@ -122,6 +128,7 @@ async function executeGeneration({
         spec,
         coverage,
         flatness,
+        rig,
         error: null,
         generationOperationId: null,
         generatedAt: completedAt,
@@ -140,6 +147,9 @@ async function executeGeneration({
     }
     if (flatness.warningCount > 0) {
       console.warn(`⚠️ Three.js model ${id} cross-section: ${flatness.flatIdentityDetailCount}/${flatness.identityDetailCount} identity feature(s) built only from flat parts`);
+    }
+    if (rig.articulationReady) {
+      console.log(`🦴 Three.js model ${id} declares an articulation graph: ${rig.jointCount} joint(s), ${rig.socketCount} pivot socket(s)`);
     }
   } catch (error) {
     console.error(`❌ Three.js model generation failed for ${id}: ${cleanError(error)}`);

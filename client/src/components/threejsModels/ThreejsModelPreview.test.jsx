@@ -300,3 +300,56 @@ describe('ThreejsModelPreview disassembly', () => {
     expect(container.querySelectorAll('meshStandardMaterial[emissive="#38bdf8"]')).toHaveLength(0);
   });
 });
+
+// The knife again, this time with a declared articulation graph: the handle is
+// the root and the blade pivots about a named socket.
+const articulatedKnifeSpec = () => ({
+  ...knifeSpec(),
+  sockets: [{ name: 'bladePivot', parentPartId: 'handle', position: [0, 0, 0], rotationDegrees: [0, 0, 0] }],
+  articulation: {
+    joints: [
+      { id: 'rootJoint', partId: 'handle', parentJointId: null, pivotSocket: null },
+      { id: 'bladeJoint', partId: 'blade', parentJointId: 'rootJoint', pivotSocket: 'bladePivot' },
+    ],
+    attachmentPartIds: [],
+  },
+});
+
+describe('ThreejsModelPreview articulation status', () => {
+  it('calls a spec with no articulation a static assembly, never animation-ready', () => {
+    renderPreview(<ThreejsModelPreview spec={knifeSpec()} />);
+    expect(screen.getByText('Static assembly')).toBeInTheDocument();
+    expect(screen.queryByText(/Articulation-ready/)).not.toBeInTheDocument();
+  });
+
+  it('reports a usable graph with its joint and pivot counts', () => {
+    renderPreview(<ThreejsModelPreview spec={articulatedKnifeSpec()} />);
+    expect(screen.getByText('Articulation-ready · 2 joints · 1 pivot')).toBeInTheDocument();
+  });
+
+  // Schema-valid but rig-useless: the child joint has no axis, so the badge must
+  // agree with the server's report instead of claiming a rig off mere presence.
+  it('stays static when a child joint names no pivot socket, and says how many joints it saw', () => {
+    const spec = articulatedKnifeSpec();
+    spec.articulation.joints[1].pivotSocket = null;
+    renderPreview(<ThreejsModelPreview spec={spec} />);
+    expect(screen.getByText('Static assembly · 2 joints declared')).toBeInTheDocument();
+  });
+
+  it('names the joint driving a picked part, and the fact when it has no pivot', () => {
+    const { container } = renderPreview(<ThreejsModelPreview spec={articulatedKnifeSpec()} />);
+
+    fireEvent.click(container.querySelector('group[name="Blade"] mesh'));
+    expect(screen.getByText('joint bladeJoint · pivot bladePivot')).toBeInTheDocument();
+
+    fireEvent.click(container.querySelector('group[name="Handle"] mesh'));
+    expect(screen.getByText('joint rootJoint · no pivot')).toBeInTheDocument();
+  });
+
+  it('renders a legacy spec with no articulation key without crashing the picker', () => {
+    const { container } = renderPreview(<ThreejsModelPreview spec={knifeSpec()} />);
+    fireEvent.click(container.querySelector('group[name="Handle"] mesh'));
+    expect(screen.getByText('Handle')).toBeInTheDocument();
+    expect(screen.queryByText(/^joint /)).not.toBeInTheDocument();
+  });
+});

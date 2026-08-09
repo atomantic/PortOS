@@ -45,6 +45,7 @@ export * from './validation.js';
 export * from './threejsModel.js';
 export * from './threejsModelCoverage.js';
 export * from './threejsModelFamilies.js';
+export * from './threejsModelRig.js';
 
 // === Story & narrative ===
 export * from './bibleExtractor.js';

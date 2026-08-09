@@ -18,6 +18,7 @@ import {
 } from '../services/api';
 import toast from '../components/ui/Toast';
 import { copyToClipboard } from '../lib/clipboard';
+import { summarizeThreejsArticulation } from '../lib/threejsRig';
 import { timeAgo } from '../utils/formatters';
 import { seedModelEffort } from '../utils/providers';
 
@@ -135,6 +136,61 @@ function FamilyChecklistPanel({ family }) {
           This list is a floor, not a ceiling — it is what this subject family is usually judged on,
           not the whole inventory. A component is marked accounted for when the spec names it
           anywhere, including a limitation explaining the reference does not show it.
+        </span>
+      </p>
+    </section>
+  );
+}
+
+/**
+ * Static-versus-articulation-ready status for the generated spec, plus the
+ * joint/pivot diagnostics behind it. Prefers the report the server wrote at
+ * generation time; a record from before that shipped has none, and degrades to
+ * an honest "static, and never evaluated" rather than borrowing a pass.
+ */
+function RigReadinessPanel({ rig, spec }) {
+  const derived = summarizeThreejsArticulation(spec);
+  const ready = rig ? rig.articulationReady === true : false;
+  const jointCount = rig ? rig.jointCount : derived.jointCount;
+  const socketCount = rig ? rig.socketCount : derived.socketCount;
+  const attachmentCount = rig ? rig.attachmentCount : derived.attachmentCount;
+  const reasons = Array.isArray(rig?.reasons) ? rig.reasons : [];
+  return (
+    <section className="rounded-xl border border-port-border bg-port-card p-4">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-xs font-medium uppercase tracking-wide text-gray-400">Rig readiness</h2>
+        <span className={ready
+          ? 'rounded bg-port-success/15 px-2 py-0.5 text-[10px] uppercase text-port-success'
+          : 'rounded bg-port-border px-2 py-0.5 text-[10px] uppercase text-gray-400'}
+        >
+          {ready ? 'Articulation-ready' : 'Static assembly'}
+        </span>
+      </div>
+      <p className="text-xs text-gray-400">
+        {jointCount} joint{jointCount === 1 ? '' : 's'} · {socketCount} pivot socket{socketCount === 1 ? '' : 's'}
+        {' · '}{attachmentCount} declared attachment{attachmentCount === 1 ? '' : 's'}
+      </p>
+      {!rig && (
+        <p className="mt-2 rounded-lg border border-port-border bg-port-bg/50 px-3 py-2 text-xs leading-relaxed text-gray-400">
+          This model was generated before rig readiness was reported, so it was never evaluated —
+          regenerate it to get a verdict.
+        </p>
+      )}
+      {reasons.length > 0 && (
+        <ul className="mt-2 space-y-2">
+          {reasons.map((reason) => (
+            <li key={reason} className="rounded-lg border border-port-border bg-port-bg/50 px-3 py-2 text-xs leading-relaxed text-gray-400">
+              {reason}
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="mt-3 flex items-start gap-1.5 text-[11px] leading-relaxed text-gray-500">
+        <Info className="mt-0.5 h-3 w-3 shrink-0" />
+        <span>
+          PortOS builds static assemblies. Articulation is a declaration of what is meant to move —
+          stable joint ids, one root, and a named pivot socket per joint — never a skeleton: nothing
+          here is skinned, bound to a bind pose, or exported as a rigged mesh.
         </span>
       </p>
     </section>
@@ -482,6 +538,13 @@ export default function ThreejsModelDetail() {
           footer={`A model can match its reference head-on and still be a stack of cardboard cut-outs, so this check counts how many identity-defining features are built only from flat parts.${
             flatnessFindings.length > 0 ? ' Refining without your own feedback will also ask for real depth.' : ''
           }`}
+        />
+      )}
+
+      {record.spec && (
+        <RigReadinessPanel
+          rig={record.rig && typeof record.rig === 'object' ? record.rig : null}
+          spec={record.spec}
         />
       )}
 
