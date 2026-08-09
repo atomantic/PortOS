@@ -84,6 +84,7 @@ export default function VideoGenGallery({
                     item={item}
                     onPreview={() => onPreview(item)}
                     onContinue={() => onContinue(v)}
+                    {...finishProps(v)}
                     onDelete={() => onDelete(v)}
                     onToggleHidden={() => onToggleHidden(v)}
                     {...getCardProps(item.key)}

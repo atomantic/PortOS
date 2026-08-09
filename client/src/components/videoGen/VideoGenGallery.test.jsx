@@ -23,14 +23,14 @@ const videoRecord = (over = {}) => ({
   ...over,
 });
 
-const renderGallery = ({ records, models, onFinish = vi.fn() }) => {
+const renderGallery = ({ records, models, hidden = [], showHidden = false, onFinish = vi.fn() }) => {
   render(
     <MemoryRouter>
       <VideoGenGallery
         galleryVisible={records}
-        galleryHidden={[]}
+        galleryHidden={hidden}
         favoritesOnly={false}
-        showHidden={false}
+        showHidden={showHidden}
         onToggleFavorites={vi.fn()}
         onToggleShowHidden={vi.fn()}
         onPreview={vi.fn()}
@@ -87,6 +87,17 @@ describe('VideoGenGallery — Finish action (#3696)', () => {
   it('omits Finish when the delivery model is not installed here', () => {
     renderGallery({ records: [videoRecord()], models: [DRAFT_MODEL] });
     expect(screen.queryByRole('button', { name: /Finish/i })).toBeNull();
+  });
+
+  it('offers Finish in the expanded hidden section too — a chain\'s first chunk is a real draft', () => {
+    const { onFinish } = renderGallery({
+      records: [],
+      hidden: [videoRecord({ id: 'rec-hidden', hidden: true })],
+      showHidden: true,
+      models: [DRAFT_MODEL, DELIVERY_MODEL],
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Finish/i }));
+    expect(onFinish.mock.calls[0][0].id).toBe('rec-hidden');
   });
 
   it('renders the gallery unchanged when no finish wiring is supplied at all', () => {

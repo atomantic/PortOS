@@ -859,6 +859,10 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
   const applyFinish = (item, deliveryModelId) => {
     if (!item || !deliveryModelId) return;
     applyRemix(item);
+    // Force the local backend: the delivery model is a local registry entry, so
+    // finishing while the form happens to be on the Grok backend would leave
+    // `isGrok` true and submit a Grok payload that ignores the model entirely.
+    setBackend('local');
     setModelId(deliveryModelId);
     setSteps('');
     setGuidanceScale('');

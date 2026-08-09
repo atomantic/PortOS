@@ -441,6 +441,21 @@ describe('useVideoGenForm', () => {
     expect(result.current.mode).toBe('text');
   });
 
+  it('applyFinish switches off the grok backend so the delivery model is what actually renders', async () => {
+    const { result } = render({ grokEnabled: true });
+    act(() => result.current.handleBackendChange('grok'));
+    expect(result.current.isGrok).toBe(true);
+
+    act(() => result.current.applyFinish({
+      prompt: 'a quiet street at dusk', modelId: MLX.id, seed: 424242, mode: 'text',
+    }, LTX2.id));
+
+    // Leaving the form on grok would submit a grok payload that ignores the
+    // local delivery model entirely.
+    expect(result.current.isGrok).toBe(false);
+    expect(result.current.modelId).toBe(LTX2.id);
+  });
+
   it('applyFinish is inert without a record or a delivery model — it never starts a render', async () => {
     const { result } = render();
     await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
