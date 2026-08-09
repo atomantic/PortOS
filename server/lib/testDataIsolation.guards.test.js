@@ -49,14 +49,17 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'child_process';
 import { readFileSync } from 'fs';
-import { join, dirname, relative } from 'path';
+import { join, dirname, relative, sep } from 'path';
 import { fileURLToPath } from 'url';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 // Derived, not hardcoded: this file quotes the forbidden spellings in its own
 // pattern assertions below, so a stale literal would let it report itself as the
 // sole offender after a rename.
-const SELF = relative(REPO_ROOT, fileURLToPath(import.meta.url));
+// `git ls-files` always prints POSIX separators; `relative()` yields backslashes
+// on Windows, so without the normalize the exemption misses and the guard fails
+// there reporting itself as the sole offender.
+const SELF = relative(REPO_ROOT, fileURLToPath(import.meta.url)).split(sep).join('/');
 
 // Deliberate exemptions. Both READ the live install on purpose and write nothing
 // into it, so neither can corrupt the user's data — the reason the rule exists.
@@ -81,17 +84,24 @@ const ALLOWED = new Set([
 //      where the `..` is only the module specifier of the `vi.mock` call. The
 //      cost is that a `join()` split across lines slips through — the empirical
 //      probe below is the backstop for that.
-//   2. A CONTIGUOUS climb inside one string (`'../data'`, `'../../data/x'`).
-//      Contiguity is what makes this one safe to match without a window: it
-//      can't span two unrelated string literals the way shape 1 could.
-// The trailing lookahead spares `data.reference` / `data-foo` / `dataDir`, and
-// the leading quote-or-separator class spares `'test-data'`.
+//   2. A CONTIGUOUS climb inside one string (`'../data'`, `'../../data/x'`,
+//      `'.././data'`). Contiguity is what makes this one safe to match without a
+//      window: it can't span two unrelated string literals the way shape 1 could.
+//      Relaxing it to "any quoted string that starts with a climb" would catch
+//      `join(__dirname, '../foo', 'data')` too, but measurably re-introduces the
+//      false positive shape 1 avoids — `creativeDirector/sceneEvaluator.test.js`
+//      mocks `PATHS: { videoThumbnails: '/data/video-thumbnails' }` on the same
+//      line as its `'../../lib/fileUtils.js'` specifier. One unreached spelling
+//      is a better trade than one standing false positive.
+// The trailing lookahead spares `data.reference` / `data-foo` / `dataDir`; the
+// leading quote-or-separator class spares `'test-data'`; both accept backticks
+// and Windows backslashes. `\??\.` tolerates optional chaining on the anchors.
 const REAL_DATA_ROOT_RE = new RegExp([
   '(?:',
-  '(?:process\\.cwd\\s*\\(\\)|PATHS\\.(?:root|installRoot)|[\'"`]\\.\\.[\'"`])',
+  '(?:process\\??\\.cwd\\s*(?:\\?\\.)?\\(\\)|PATHS\\??\\.(?:root|installRoot)|[\'"`]\\.\\.[/\\\\]?[\'"`])',
   '[^\\n;]{0,160}?[\'"`/\\\\]data(?![\\w.-])',
   '|',
-  '\\.\\.(?:[/\\\\]\\.\\.)*[/\\\\]data(?![\\w.-])',
+  '\\.\\.(?:[/\\\\]\\.{1,2})*[/\\\\]data(?![\\w.-])',
   ')',
 ].join(''));
 
@@ -141,6 +151,12 @@ describe('test-data isolation guard', () => {
     expect(scan('`${process.cwd()}/data/cos`')).toBe(true);
     expect(scan("join(__dirname, '../data/cos/missions')")).toBe(true);
     expect(scan("path.join(process.cwd(), '\\\\data\\\\cos')")).toBe(true);
+    expect(scan('path.join(process.cwd(), `data`)')).toBe(true);
+    expect(scan("path.join(__dirname, '../', 'data')")).toBe(true);
+    expect(scan("path.resolve(__dirname, '.././data')")).toBe(true);
+    expect(scan("PATHS?.root + '/data'")).toBe(true);
+    expect(scan("process?.cwd() + '/data'")).toBe(true);
+    expect(scan("process.cwd?.() + '/data'")).toBe(true);
   });
 
   it('spares the look-alikes that must stay legal', () => {
