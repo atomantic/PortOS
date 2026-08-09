@@ -17,10 +17,7 @@ function getTempRoot() {
 
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
-  return makePathsProxy(actual, {
-    dataRoot: () => getTempRoot(),
-    extraOverrides: (dataRoot) => ({ brain: join(dataRoot, 'brain') }),
-  });
+  return makePathsProxy(actual, { dataRoot: () => getTempRoot() });
 });
 
 // getInstanceId is used by create()/backfill; stub to a stable id.

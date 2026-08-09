@@ -5,10 +5,7 @@ import { mockNoPeerSync, mockNoPeers, mockPathsDataRoot } from '../lib/mockPaths
 // Real tmpdir backing the per-record store. `mockPathsDataRoot` redirects
 // PATHS.data so collectionStore lands under tempRoot/universes/. Everything
 // else from fileUtils (atomicWrite, readJSONFile, ensureDir) is the real impl.
-const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({
-  prefix: 'portos-universe-canon-',
-  extraOverrides: (root) => ({ imageRefs: `${root}/image-refs` }),
-});
+const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-universe-canon-' });
 afterAll(cleanup);
 
 vi.mock('../lib/fileUtils.js', async () => {

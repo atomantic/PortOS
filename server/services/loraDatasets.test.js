@@ -9,13 +9,7 @@ import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'lora-datasets-test-'));
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
-  makePathsProxy(await importOriginal(), {
-    dataRoot: TEST_DATA_ROOT,
-    extraOverrides: (root) => ({
-      loraDatasets: join(root, 'lora-datasets'),
-      images: join(root, 'images'),
-    }),
-  }));
+  makePathsProxy(await importOriginal(), { dataRoot: TEST_DATA_ROOT }));
 
 const getUniverse = vi.fn();
 vi.mock('./universeBuilder.js', () => ({ getUniverse: (...args) => getUniverse(...args) }));

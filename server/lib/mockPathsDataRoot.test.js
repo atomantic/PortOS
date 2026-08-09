@@ -1,7 +1,7 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import { existsSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, relative, sep } from 'path';
 import { createTempDataRoot, makePathsProxy, mockNoPeers, mockNoPeerSync, mockPathsDataRoot } from './mockPathsDataRoot.js';
 
 describe('mockPathsDataRoot', () => {
@@ -27,16 +27,50 @@ describe('mockPathsDataRoot', () => {
 
   describe('makePathsProxy', () => {
     const fakeActual = {
-      PATHS: { data: '/real/data', images: '/real/images', logs: '/real/logs' },
+      PATHS: {
+        data: join('/real', 'data'),
+        images: join('/real', 'data', 'images'),
+        cosAgents: join('/real', 'data', 'cos', 'agents'),
+        // Outside data/ — must survive untouched, like PATHS.root / slashdo /
+        // browserDownloads do in the real fileUtils.
+        logs: join('/real', 'logs'),
+        // A near-miss sibling: `data-archive` shares the `data` PREFIX but is
+        // not INSIDE data/, so it must not be re-rooted.
+        dataArchive: join('/real', 'data-archive'),
+      },
       ensureDir: () => 'ensureDir-fn',
       otherFn: 42,
     };
+    const TMP = join('/tmp', 'x');
 
-    it('overrides only PATHS.data by default and passes other PATHS keys through', () => {
-      const proxy = makePathsProxy(fakeActual, { dataRoot: '/tmp/x' });
-      expect(proxy.PATHS.data).toBe('/tmp/x');
-      expect(proxy.PATHS.images).toBe('/real/images');
-      expect(proxy.PATHS.logs).toBe('/real/logs');
+    it('re-roots every PATHS member that lives under the real data/ dir', () => {
+      const proxy = makePathsProxy(fakeActual, { dataRoot: TMP });
+      expect(proxy.PATHS.data).toBe(TMP);
+      expect(proxy.PATHS.images).toBe(join(TMP, 'images'));
+      expect(proxy.PATHS.cosAgents).toBe(join(TMP, 'cos', 'agents'));
+    });
+
+    it('leaves PATHS members outside data/ alone, including prefix near-misses', () => {
+      const proxy = makePathsProxy(fakeActual, { dataRoot: TMP });
+      expect(proxy.PATHS.logs).toBe(join('/real', 'logs'));
+      expect(proxy.PATHS.dataArchive).toBe(join('/real', 'data-archive'));
+    });
+
+    it('re-roots the real fileUtils PATHS so no member still points into the live install', async () => {
+      const { PATHS } = await import('./fileUtils.js');
+      const proxy = makePathsProxy({ PATHS }, { dataRoot: TMP });
+      const dataRooted = Object.entries(PATHS)
+        .filter(([, v]) => typeof v === 'string' && (v === PATHS.data || v.startsWith(PATHS.data + sep)));
+
+      // Guard against a vacuous assertion if PATHS is ever restructured.
+      expect(dataRooted.length).toBeGreaterThan(40);
+      for (const [key] of dataRooted) {
+        expect(`${key}=${proxy.PATHS[key]}`).toBe(`${key}=${join(TMP, relative(PATHS.data, PATHS[key]))}`);
+      }
+      // The four members that live outside data/ are untouched by construction.
+      for (const key of ['root', 'installRoot', 'slashdo', 'browserDownloads']) {
+        expect(proxy.PATHS[key]).toBe(PATHS[key]);
+      }
     });
 
     it('passes non-PATHS exports through untouched', () => {

@@ -33,14 +33,16 @@
  *   - `mockNoPeerSync(actual?, overrides?)` — shared `peerSync.js` mock guard
  *     that makes fire-and-forget record auto-subscribe a clean no-op in tests.
  *
- * Migration: tests that need MULTIPLE PATHS members redirected
- * (e.g. `images`, `videos`) can pass `extraOverrides` (object or function)
- * — the helper merges those on top of the `data: tempRoot` override.
+ * Every `PATHS` member that lives under the real `data/` is re-rooted at the
+ * temp dir automatically, so a suite that only wants the standard layout
+ * (`cos`, `brain`, `digitalTwin`, `images`, …) needs no `extraOverrides` at
+ * all. Pass `extraOverrides` (object or function) only when a member needs a
+ * target the default re-rooting wouldn't produce — it merges last.
  */
 
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, relative, sep } from 'path';
 
 /**
  * Allocate a unique temp dir suitable for use as `PATHS.data` in a test file.
@@ -62,10 +64,22 @@ export function createTempDataRoot(prefix = 'portos-test-') {
  *     (a `let tempRoot` that the per-test setup reassigns). The Proxy reads
  *     it through the getter so it always sees the current value.
  *
+ * EVERY `PATHS` member that lives under the real `data/` directory is re-rooted
+ * at `dataRoot`, preserving its relative layout (`PATHS.cos` →
+ * `<dataRoot>/cos`, `PATHS.cosAgents` → `<dataRoot>/cos/agents`, and so on).
+ * 45 of the 49 members are `join(INSTALL_ROOT, 'data/…')`, so redirecting only
+ * `data` left almost every disk-touching suite pointed at the live install —
+ * see #3683 / #3687. The members outside `data/` (`root`, `installRoot`,
+ * `slashdo`, `browserDownloads`) are untouched by construction.
+ *
  * `extraOverrides` is either:
- *   - a plain object — merged over `{ data: <resolved root> }`, or
+ *   - a plain object — merged over the re-rooted PATHS, or
  *   - a function `(dataRoot) => overridesObject` — for cases where the
  *     extra keys are derived (e.g. `images: join(dataRoot, 'images')`).
+ *
+ * Extras still merge LAST, so they remain the escape hatch for a member that
+ * needs a target the default re-rooting wouldn't produce — either a different
+ * temp location, or the real seeded directory pinned back in place.
  */
 export function makePathsProxy(actual, { dataRoot, extraOverrides = null, overrides = null } = {}) {
   const resolveRoot = typeof dataRoot === 'function' ? dataRoot : () => dataRoot;
@@ -74,7 +88,13 @@ export function makePathsProxy(actual, { dataRoot, extraOverrides = null, overri
     const extras = typeof extraOverrides === 'function'
       ? extraOverrides(root)
       : (extraOverrides || {});
-    return { ...actual.PATHS, data: root, ...extras };
+    const realData = actual.PATHS.data;
+    const rebased = Object.fromEntries(
+      Object.entries(actual.PATHS)
+        .filter(([, v]) => typeof v === 'string' && (v === realData || v.startsWith(realData + sep)))
+        .map(([k, v]) => [k, join(root, relative(realData, v))]),
+    );
+    return { ...actual.PATHS, ...rebased, data: root, ...extras };
   };
   return new Proxy(actual, {
     get(target, prop) {

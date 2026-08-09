@@ -24,10 +24,7 @@ const { TEMP_ROOT } = await vi.hoisted(async () => {
 
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
-  return makePathsProxy(actual, {
-    dataRoot: TEMP_ROOT,
-    extraOverrides: root => ({ cosAgents: join(root, 'cos/agents') }),
-  });
+  return makePathsProxy(actual, { dataRoot: TEMP_ROOT });
 });
 
 vi.mock('./cosAgentLifecycle.js', () => ({

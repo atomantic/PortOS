@@ -20,10 +20,7 @@ const songbookDir = () => join(getTempRoot(), 'brain', 'songbook');
 
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
-  return makePathsProxy(actual, {
-    dataRoot: () => getTempRoot(),
-    extraOverrides: (root) => ({ brainSongbook: join(root, 'brain', 'songbook') }),
-  });
+  return makePathsProxy(actual, { dataRoot: () => getTempRoot() });
 });
 
 vi.mock('../services/brainStorage.js', () => ({

@@ -7,10 +7,7 @@ import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'calendar-accounts-test-'));
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
-  makePathsProxy(await importOriginal(), {
-    dataRoot: TEST_DATA_ROOT,
-    extraOverrides: (root) => ({ calendar: join(root, 'calendar') }),
-  }));
+  makePathsProxy(await importOriginal(), { dataRoot: TEST_DATA_ROOT }));
 
 vi.mock('../lib/uuid.js', () => ({
   v4: vi.fn().mockReturnValue('test-uuid-1234'),

@@ -20,14 +20,10 @@ import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'app-activity-test-'));
 
-// appActivity.js reads PATHS.cos (data/cos), which is computed independently of
-// PATHS.data — so redirecting `data` alone leaves writes landing in the real
-// data/cos dir. Redirect `cos` too via extraOverrides.
+// appActivity.js reads PATHS.cos (data/cos) — re-rooted into the temp tree
+// along with every other data/-rooted PATHS member by makePathsProxy.
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
-  makePathsProxy(await importOriginal(), {
-    dataRoot: TEST_DATA_ROOT,
-    extraOverrides: (root) => ({ cos: join(root, 'cos') }),
-  }));
+  makePathsProxy(await importOriginal(), { dataRoot: TEST_DATA_ROOT }));
 
 const appActivity = await import('./appActivity.js');
 

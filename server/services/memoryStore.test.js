@@ -18,13 +18,7 @@ import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'memorystore-test-'));
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
-  makePathsProxy(await importOriginal(), {
-    dataRoot: TEST_DATA_ROOT,
-    extraOverrides: (root) => ({
-      cos: join(root, 'cos'),
-      memory: join(root, 'cos', 'memory'),
-    }),
-  }));
+  makePathsProxy(await importOriginal(), { dataRoot: TEST_DATA_ROOT }));
 
 // Pass-through mutex: no locking overhead in tests
 vi.mock('../lib/asyncMutex.js', () => ({

@@ -21,13 +21,10 @@ import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'weekly-digest-test-'));
 const DIGESTS_DIR = join(TEST_DATA_ROOT, 'cos', 'digests');
 
-// weeklyDigest.js anchors its store at PATHS.digests, computed independently of
-// PATHS.data — redirect it or digests land in the real install's data/cos.
+// weeklyDigest.js anchors its store at PATHS.digests — re-rooted into the temp
+// tree along with every other data/-rooted PATHS member by makePathsProxy.
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
-  makePathsProxy(await importOriginal(), {
-    dataRoot: TEST_DATA_ROOT,
-    extraOverrides: (root) => ({ digests: join(root, 'cos', 'digests') }),
-  }));
+  makePathsProxy(await importOriginal(), { dataRoot: TEST_DATA_ROOT }));
 
 const mock = vi.hoisted(() => ({
   agents: [],        // getAgents() — the live state index

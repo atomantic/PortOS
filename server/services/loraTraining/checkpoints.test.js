@@ -13,13 +13,7 @@ let dataRoot = tmpdir();
 // filesystem-touching helpers (preview analysis, zip extraction) operate on
 // fixtures instead of real run data.
 vi.mock('../../lib/fileUtils.js', async (importOriginal) =>
-  makePathsProxy(await importOriginal(), {
-    dataRoot: () => dataRoot,
-    extraOverrides: (root) => ({
-      trainingRuns: join(root, 'training-runs'),
-      loras: join(root, 'loras'),
-    }),
-  }));
+  makePathsProxy(await importOriginal(), { dataRoot: () => dataRoot }));
 
 const {
   listRunCheckpoints,

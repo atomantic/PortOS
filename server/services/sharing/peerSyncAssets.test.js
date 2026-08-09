@@ -12,10 +12,7 @@ let tempRoot = mkdtempSync(join(tmpdir(), 'portos-mv-assets-boot-'));
 
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
-  return makePathsProxy(actual, {
-    dataRoot: () => tempRoot,
-    extraOverrides: (root) => ({ music: join(root, 'music'), images: join(root, 'images') }),
-  });
+  return makePathsProxy(actual, { dataRoot: () => tempRoot });
 });
 
 // Tracks are db-primary; stub the dispatcher so the manifest builder never

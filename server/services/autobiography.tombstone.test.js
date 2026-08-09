@@ -20,10 +20,7 @@ const twinDir = join(tempRoot, 'digital-twin');
 
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
-  return makePathsProxy(actual, {
-    dataRoot: tempRoot,
-    extraOverrides: (root) => ({ digitalTwin: join(root, 'digital-twin') }),
-  });
+  return makePathsProxy(actual, { dataRoot: tempRoot });
 });
 
 // The prompt scheduler is the only reason autobiography.js touches these — none

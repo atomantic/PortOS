@@ -1,15 +1,10 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
-const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({
-  prefix: 'portos-taste-',
-  // taste-questionnaire binds PATHS.digitalTwin at module load; redirect it
-  // into the temp tree so tests never touch the real install profile.
-  extraOverrides: (dataRoot) => ({
-    digitalTwin: join(dataRoot, 'digital-twin'),
-  }),
-});
+// taste-questionnaire binds PATHS.digitalTwin at module load; makePathsProxy
+// re-roots it (and every other data/-rooted member) into the temp tree so tests
+// never touch the real install profile.
+const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-taste-' });
 
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');

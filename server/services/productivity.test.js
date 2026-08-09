@@ -24,14 +24,10 @@ const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'productivity-test-'));
 const COS_DIR = join(TEST_DATA_ROOT, 'cos');
 const PRODUCTIVITY_FILE = join(COS_DIR, 'productivity.json');
 
-// productivity.js anchors its store at PATHS.cos, which is computed
-// independently of PATHS.data — redirect both or writes land in the real
-// data/cos of the live install.
+// productivity.js anchors its store at PATHS.cos — re-rooted into the temp tree
+// along with every other data/-rooted PATHS member by makePathsProxy.
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
-  makePathsProxy(await importOriginal(), {
-    dataRoot: TEST_DATA_ROOT,
-    extraOverrides: (root) => ({ cos: join(root, 'cos') }),
-  }));
+  makePathsProxy(await importOriginal(), { dataRoot: TEST_DATA_ROOT }));
 
 const mock = vi.hoisted(() => ({ agents: [] }));
 

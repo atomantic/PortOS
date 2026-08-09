@@ -31,10 +31,9 @@ describe('browserService config persistence', () => {
       const actual = await importOriginal();
       return makePathsProxy(actual, {
         dataRoot: tempRoot,
-        extraOverrides: (root) => ({
-          browserProfile: join(root, 'browser-profile'),
-          browserDownloads: join(root, 'downloads'),
-        }),
+        // browserDownloads is ~/Downloads, NOT under data/ — the automatic
+        // re-rooting can't reach it, so it still needs an explicit override.
+        extraOverrides: (root) => ({ browserDownloads: join(root, 'downloads') }),
       });
     });
     return import('./browserService.js');

@@ -7,10 +7,7 @@ import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'message-accounts-test-'));
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
-  makePathsProxy(await importOriginal(), {
-    dataRoot: TEST_DATA_ROOT,
-    extraOverrides: (root) => ({ messages: join(root, 'messages') }),
-  }));
+  makePathsProxy(await importOriginal(), { dataRoot: TEST_DATA_ROOT }));
 
 vi.mock('../lib/uuid.js', () => ({
   v4: vi.fn().mockReturnValue('msg-uuid-5678'),

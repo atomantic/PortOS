@@ -15,16 +15,12 @@ import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js'
 
 // obsidian.js captures PATHS.brain at module load for its vaults file, so the
 // root is fixed for the whole file and per-test isolation comes from wiping the
-// dir in beforeEach. PATHS.brain is derived from INSTALL_ROOT rather than
-// PATHS.data, so it needs its own override.
+// dir in beforeEach.
 const tempRoot = createTempDataRoot('portos-obsidian-');
 
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
-  return makePathsProxy(actual, {
-    dataRoot: tempRoot,
-    extraOverrides: (root) => ({ brain: join(root, 'brain') }),
-  });
+  return makePathsProxy(actual, { dataRoot: tempRoot });
 });
 
 const { addVault, upsertNote, getNote } = await import('./obsidian.js');
