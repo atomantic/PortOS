@@ -930,6 +930,15 @@ export const createCosTaskSchema = z.object({
     v => v === 'true' ? true : v === 'false' ? false : v,
     z.boolean().optional()
   ),
+  // The slashdo catalog's deliverable posture (#3636): whether this run is
+  // EXPECTED to leave commits in its worktree. A report-shaped workflow
+  // (`/do:review`) carries `false` so the TUI idle reaper doesn't score its
+  // correctly-clean tree as `idle-no-changes`. Carried onto the task by
+  // `cosTaskStore.js` only on a strict boolean — absent means "no opinion".
+  worktreeChangesExpected: z.preprocess(
+    v => v === 'true' ? true : v === 'false' ? false : v,
+    z.boolean().optional()
+  ),
   reviewLoop: z.preprocess(
     v => v === 'true' ? true : v === 'false' ? false : v,
     z.boolean().optional()
@@ -1152,10 +1161,14 @@ export const generateWeeklyDigestSchema = z.object({
 // a tri-state: ABSENT means "leave the form's current toggle alone", `false`
 // means "turn it off". Collapsing absent to false would make every template
 // silently clear toggles it never intended to touch.
+// `.strict()`, so every run-shape key a built-in (or user-saved) template may
+// carry must be listed here — including the catalog's deliverable posture
+// `worktreeChangesExpected`, or saving such a template 400s.
 export const taskTemplateSettingsSchema = z.object({
   useWorktree: z.boolean().optional(),
   openPR: z.boolean().optional(),
   simplify: z.boolean().optional(),
+  worktreeChangesExpected: z.boolean().optional(),
 }).strict();
 
 export const createTaskTemplateSchema = z.object({

@@ -22,6 +22,7 @@ import {
   buildReviewerEffortNote,
   sanitizeTaskMetadata,
   codeReviewSettingsSchema,
+  taskTemplateSettingsSchema,
 } from './cosValidation.js';
 import { LOCAL_AGENT_REVIEWERS } from './slashdoInvocation.js';
 import { EFFORT_LEVELS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, ANTIGRAVITY_EFFORT_LEVELS } from './providerModels.js';
@@ -84,6 +85,30 @@ describe('cosValidation job taskMetadata.worktreeChangesExpected (#3102)', () =>
     expect(parsed.taskMetadata).toEqual({ useWorktree: true, worktreeChangesExpected: false });
     expect(createCosJobSchema.safeParse({ name: 'j', taskMetadata: { worktreeChangesExpected: 'nope' } }).success)
       .toBe(false);
+  });
+});
+
+describe('cosValidation quick-template deliverable posture (#3651)', () => {
+  it('taskTemplateSettingsSchema accepts worktreeChangesExpected (the block is .strict())', () => {
+    // taskTemplates.js copies the slashdo catalog posture onto each built-in
+    // template verbatim; a user saving such a template back would 400 if the
+    // strict settings block didn't declare the key.
+    const parsed = taskTemplateSettingsSchema.parse({ useWorktree: false, openPR: false, simplify: false, worktreeChangesExpected: false });
+    expect(parsed).toEqual({ useWorktree: false, openPR: false, simplify: false, worktreeChangesExpected: false });
+    expect(taskTemplateSettingsSchema.safeParse({ worktreeChangesExpected: true }).success).toBe(true);
+    expect(taskTemplateSettingsSchema.safeParse({ worktreeChangesExpected: 'nope' }).success).toBe(false);
+    expect(taskTemplateSettingsSchema.safeParse({ bogus: true }).success).toBe(false);
+  });
+
+  it('create-task accepts the boolean and the form-encoded string forms', () => {
+    expect(createCosTaskSchema.parse({ description: 'x', worktreeChangesExpected: false }).worktreeChangesExpected).toBe(false);
+    expect(createCosTaskSchema.parse({ description: 'x', worktreeChangesExpected: true }).worktreeChangesExpected).toBe(true);
+    expect(createCosTaskSchema.parse({ description: 'x', worktreeChangesExpected: 'false' }).worktreeChangesExpected).toBe(false);
+    expect(createCosTaskSchema.parse({ description: 'x', worktreeChangesExpected: 'true' }).worktreeChangesExpected).toBe(true);
+    // Absent must stay absent — cosTaskStore only stamps metadata on a strict
+    // boolean, so "no opinion" has to survive as undefined.
+    expect(createCosTaskSchema.parse({ description: 'x' }).worktreeChangesExpected).toBeUndefined();
+    expect(createCosTaskSchema.safeParse({ description: 'x', worktreeChangesExpected: 'nope' }).success).toBe(false);
   });
 });
 

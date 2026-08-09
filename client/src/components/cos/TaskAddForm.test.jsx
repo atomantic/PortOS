@@ -9,7 +9,8 @@ const api = vi.hoisted(() => ({
   // Back the reviewer table's Model column (useReviewerModelOptions).
   getLocalLlmStatus: vi.fn(),
   getProviders: vi.fn(),
-  applyCosTaskTemplate: vi.fn()
+  applyCosTaskTemplate: vi.fn(),
+  addCosTask: vi.fn()
 }));
 
 vi.mock('../../services/api', () => api);
@@ -118,5 +119,58 @@ describe('TaskAddForm quick templates', () => {
     // A template that pins no app must not clear the one already selected —
     // clearing it also silently reset the app's worktree/PR defaults.
     expect(screen.getByLabelText(/target application/i)).toHaveValue('example-app');
+  });
+});
+
+// #3651: the slashdo catalog's deliverable posture (`worktreeChangesExpected`,
+// #3636) rides the quick-template `settings` block the same way the run-shape
+// toggles do, so a `/do:review` queued from a template doesn't get scored
+// `idle-no-changes` by the TUI reaper for its (correct) clean tree.
+describe('TaskAddForm quick templates — deliverable posture', () => {
+  // Mirrors WORKFLOW_REPORTS_NO_CODE / WORKFLOW_OWNS_ITS_OWN_GIT in
+  // server/lib/slashdoCatalog.js, which taskTemplates.js copies verbatim.
+  const REPORTS_NO_CODE = { useWorktree: false, openPR: false, simplify: false, worktreeChangesExpected: false };
+  const OWNS_ITS_OWN_GIT = { useWorktree: false, openPR: false, simplify: false, worktreeChangesExpected: true };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getCodeReviewDefaults.mockResolvedValue(null);
+    api.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
+    api.getProviders.mockResolvedValue({ providers: [] });
+    api.applyCosTaskTemplate.mockResolvedValue({ success: true });
+    api.addCosTask.mockResolvedValue({ success: true });
+    api.getCosPopularTemplates.mockResolvedValue({
+      templates: [
+        { id: 'builtin-do-review', name: 'Review Changes', icon: '🔍', slashdoCommand: 'review', description: 'Review the changes', settings: REPORTS_NO_CODE, isBuiltin: true },
+        { id: 'builtin-do-release', name: 'Cut a Release', icon: '🚀', slashdoCommand: 'release', description: 'Cut a release', settings: OWNS_ITS_OWN_GIT, isBuiltin: true },
+        { id: 'user-abc', name: 'My Template', description: 'Do the thing', isBuiltin: false }
+      ]
+    });
+  });
+
+  const queueFromTemplate = async (templateName) => {
+    const user = userEvent.setup();
+    render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText('Quick Templates')).toBeInTheDocument());
+    await user.click(screen.getByText('Quick Templates'));
+    await user.click(screen.getByText(templateName));
+    await waitFor(() => expect(api.applyCosTaskTemplate).toHaveBeenCalled());
+    await user.click(screen.getByRole('button', { name: /^Add$/ }));
+    await waitFor(() => expect(api.addCosTask).toHaveBeenCalled());
+    return api.addCosTask.mock.calls.at(-1)[0];
+  };
+
+  it.each([
+    ['Review Changes', false],
+    ['Cut a Release', true]
+  ])('carries %s posture into the create-task payload ⇒ worktreeChangesExpected %s', async (templateName, expected) => {
+    const payload = await queueFromTemplate(templateName);
+    expect(payload.worktreeChangesExpected).toBe(expected);
+    expect(payload.slashdoCommand).toBe(templateName === 'Review Changes' ? 'review' : 'release');
+  });
+
+  it('omits the key entirely for a template that pins no posture', async () => {
+    const payload = await queueFromTemplate('My Template');
+    expect('worktreeChangesExpected' in payload).toBe(false);
   });
 });
