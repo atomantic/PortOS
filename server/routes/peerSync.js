@@ -153,6 +153,9 @@ router.get('/manifest', asyncHandler(async (req, res) => {
   if (!validKind(kind)) {
     throw new ServerError('invalid kind', { status: 400, code: 'VALIDATION_ERROR' });
   }
+  // Same per-peer gate as /record — a manifest for a category the peer isn't
+  // allowed to sync still leaks every record id + asset hash for that kind.
+  await authorizePeerPull(req, { recordKind: kind, route: `manifest ${kind}` });
   res.json({ records: await buildLocalManifest(kind) });
 }));
 
@@ -214,6 +217,10 @@ router.get('/cos-agent-archive', asyncHandler(async (req, res) => {
   if (!COS_ARCHIVE_DATE_RE.test(date) || !COS_AGENT_ID_RE.test(agentId) || !COS_ARCHIVE_FILES.includes(file)) {
     throw new ServerError('invalid archive path', { status: 400, code: 'VALIDATION_ERROR' });
   }
+  // Gate the bytes the same way /cos-history-manifest gates the listing —
+  // otherwise a peer denied the manifest could still fetch archives by guessing
+  // (or remembering) a path.
+  await authorizePeerPull(req, { route: 'cos-agent-archive' });
   const abs = join(PATHS.cos, 'agents', date, agentId, file);
   if (!existsSync(abs)) {
     throw new ServerError('archive not found', { status: 404, code: 'NOT_FOUND' });

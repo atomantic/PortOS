@@ -65,6 +65,11 @@ describe('peerPullAuthorization', () => {
       expect(readCallerInstanceId({ headers: { [PEER_INSTANCE_ID_HEADER]: 'unknown' } })).toBeNull();
       expect(readCallerInstanceId({ headers: { [PEER_INSTANCE_ID_HEADER]: ` ${PEER_A} ` } })).toBe(PEER_A);
     });
+
+    it('reads the first value when the header arrived twice', () => {
+      expect(readCallerInstanceId({ headers: { [PEER_INSTANCE_ID_HEADER]: [PEER_A, 'other'] } })).toBe(PEER_A);
+      expect(readCallerInstanceId({ headers: { [PEER_INSTANCE_ID_HEADER]: `${PEER_A}, other` } })).toBe(PEER_A);
+    });
   });
 
   describe('decidePeerPull', () => {

@@ -64,6 +64,19 @@ describe('peerHttpClient', () => {
       expect(calls[0].options.headers['X-PortOS-Instance-Id']).toBe('explicit');
     });
 
+    it('does not send the header twice when the caller overrides it in another casing', async () => {
+      await peerFetch('http://peer.example/x', { headers: { 'x-portos-instance-id': 'explicit' } });
+      const sent = Object.keys(calls[0].options.headers).filter((k) => k.toLowerCase() === 'x-portos-instance-id');
+      expect(sent).toEqual(['x-portos-instance-id']);
+      expect(calls[0].options.headers['x-portos-instance-id']).toBe('explicit');
+    });
+
+    it('does not send the Basic credential twice when the caller sets its own', async () => {
+      await peerFetch('http://peer.example/x', { headers: { authorization: 'Bearer t' } }, { auth: { password: 'pw' } });
+      const sent = Object.keys(calls[0].options.headers).filter((k) => k.toLowerCase() === 'authorization');
+      expect(sent).toEqual(['authorization']);
+    });
+
     it('omits the header entirely when this install has no identity yet', async () => {
       selfInstanceId = 'unknown';
       __resetSelfInstanceIdForTests();

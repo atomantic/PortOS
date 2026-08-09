@@ -815,6 +815,25 @@ describe('peer-sync routes', () => {
       expect(svc[fn]).not.toHaveBeenCalled();
     });
 
+    it('gates GET /manifest on the requested record kind', async () => {
+      vi.mocked(authorizePeerPull).mockRejectedValue(
+        Object.assign(new Error('peer not authorized for this record'), { status: 403, code: 'PEER_PULL_FORBIDDEN' })
+      );
+      const res = await request(buildApp()).get('/api/peer-sync/manifest?kind=series');
+      expect(res.status).toBe(403);
+      expect(integritySvc.buildLocalManifest).not.toHaveBeenCalled();
+      expect(authorizePeerPull).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ recordKind: 'series' }));
+    });
+
+    it('gates the CoS agent archive bytes, not just the manifest listing', async () => {
+      vi.mocked(authorizePeerPull).mockRejectedValue(
+        Object.assign(new Error('peer not authorized for this record'), { status: 403, code: 'PEER_PULL_FORBIDDEN' })
+      );
+      const res = await request(buildApp())
+        .get('/api/peer-sync/cos-agent-archive?date=2026-01-01&agentId=agent-1&file=metadata.json');
+      expect(res.status).toBe(403);
+    });
+
     it('gates the manifests on outbound only — no record kind', async () => {
       svc.buildMediaLibraryManifest.mockResolvedValue({ schemaVersion: 1, assets: [] });
       await request(buildApp()).get('/api/peer-sync/library-manifest');

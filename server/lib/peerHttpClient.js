@@ -64,15 +64,26 @@ export function __resetSelfInstanceIdForTests() {
  * keep working.
  */
 export async function peerFetch(url, options = {}, peer = null) {
+  const callerHeaders = options.headers || {};
   const finalOptions = {
     ...options,
     headers: {
-      ...await selfInstanceHeader(),
-      ...(peer ? peerAuthHeaders(peer) : {}),
-      ...(options.headers || {}),
+      ...dropOverridden({ ...await selfInstanceHeader(), ...(peer ? peerAuthHeaders(peer) : {}) }, callerHeaders),
+      ...callerHeaders,
     },
   };
   return url.startsWith('https://') ? httpsFetch(url, finalOptions) : fetch(url, finalOptions);
+}
+
+/**
+ * Drop injected headers the caller already set under ANY casing. Object spread
+ * is case-sensitive, so `{ 'X-PortOS-Instance-Id': a, 'x-portos-instance-id': b }`
+ * survives as two keys and fetch sends the value twice — which Express then
+ * hands the receiver as `"a, b"`, matching no registered peer.
+ */
+function dropOverridden(injected, callerHeaders) {
+  const callerKeys = new Set(Object.keys(callerHeaders).map((k) => k.toLowerCase()));
+  return Object.fromEntries(Object.entries(injected).filter(([k]) => !callerKeys.has(k.toLowerCase())));
 }
 
 /**

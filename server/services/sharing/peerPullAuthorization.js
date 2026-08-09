@@ -58,8 +58,13 @@ const WARNED_CALLERS_MAX = 500;
  * "unidentified" shape instead of three.
  */
 export function readCallerInstanceId(req) {
-  const raw = req?.headers?.[PEER_INSTANCE_ID_HEADER];
-  const value = typeof raw === 'string' ? raw.trim() : '';
+  const header = req?.headers?.[PEER_INSTANCE_ID_HEADER];
+  // A header sent twice (a proxy re-adding it, a caller overriding under a
+  // different casing) reaches Express as an array or a `"a, b"` string. Read
+  // the first value rather than collapsing to "unidentified" — the id is
+  // self-asserted either way, so nothing is gained by being strict here.
+  const raw = Array.isArray(header) ? header[0] : header;
+  const value = typeof raw === 'string' ? raw.split(',')[0].trim() : '';
   if (!value || value === UNKNOWN_INSTANCE_ID) return null;
   return value;
 }
