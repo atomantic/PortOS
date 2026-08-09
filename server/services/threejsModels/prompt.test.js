@@ -117,3 +117,20 @@ describe('buildThreejsGenerationPrompt articulation', () => {
     expect(character).toContain('ARTICULATION (character and hybrid subjects only)');
   });
 });
+
+describe('buildThreejsGenerationPrompt articulation gating fallbacks', () => {
+  it('falls back to the family signal for a subjectType this build does not know', () => {
+    // A newer peer or a hand-repaired record could carry a classification this
+    // build has no rule for; it must not qualify as a character by default.
+    const unknownUnderVehicle = build({
+      family: 'vehicle',
+      currentSpec: { schemaVersion: 1, name: 'Example Model', subjectType: 'creature-thing' },
+    });
+    expect(unknownUnderVehicle).not.toContain('ARTICULATION');
+    const unknownUnderCharacter = build({
+      family: 'character',
+      currentSpec: { schemaVersion: 1, name: 'Example Model', subjectType: 'creature-thing' },
+    });
+    expect(unknownUnderCharacter).toContain('ARTICULATION (character and hybrid subjects only)');
+  });
+});

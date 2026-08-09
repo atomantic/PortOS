@@ -92,6 +92,11 @@ simply omit a part you do not want rendered.
 `;
 
 const CHARACTER_FAMILY_ID = 'character';
+// Positive list, not "anything but object": the contract is requested for the
+// classifications it is written for, so a spec carrying a subjectType this build
+// does not know (a newer peer, a hand-repaired record, a later enum) falls back
+// to the family signal instead of silently qualifying as a character.
+const ARTICULATED_SUBJECT_TYPES = new Set(['character', 'hybrid']);
 
 // Requested ONLY when the subject could be a character. A chosen vehicle,
 // weapon, architecture, or device family is positive evidence that it is not,
@@ -100,7 +105,8 @@ const CHARACTER_FAMILY_ID = 'character';
 // family id resolves to `general` the way the checklist builder resolves it, so
 // a stale stored family cannot silently change which contract is requested.
 const wantsArticulation = (family, currentSpec) => {
-  if (currentSpec?.subjectType) return currentSpec.subjectType !== 'object';
+  if (currentSpec?.subjectType === 'object') return false;
+  if (ARTICULATED_SUBJECT_TYPES.has(currentSpec?.subjectType)) return true;
   const resolved = THREEJS_MODEL_FAMILY_IDS.includes(family) ? family : GENERAL_FAMILY_ID;
   return resolved === CHARACTER_FAMILY_ID || resolved === GENERAL_FAMILY_ID;
 };
