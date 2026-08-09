@@ -856,7 +856,16 @@ export function createProviderService(config = {}) {
       }
 
       if (Array.isArray(responseData.data)) {
-        return responseData.data.map(m => m.id);
+        // Entries are usually `{ id }`, but some OpenAI-compatible servers emit
+        // bare id strings (or key the name). `m.id` alone turned those into a
+        // list of `undefined` — a persisted, plausible-looking, entirely unusable
+        // catalog. Anything that still resolves to nothing means the shape isn't
+        // one we understand, so throw rather than save it.
+        const ids = responseData.data.map(m => (typeof m === 'string' ? m : (m?.id || m?.name)));
+        if (ids.some(id => typeof id !== 'string' || !id)) {
+          throw new Error('Model list response had "data" entries with no usable model id');
+        }
+        return ids;
       }
 
       if (Array.isArray(responseData.models)) {

@@ -49,8 +49,10 @@ describe('X browser handoffs', () => {
     await expect(openXHandoff({ kind: 'profile', value: 'example_user' })).resolves.toMatchObject({ pageId: 'page-3' });
     expect(closeCdpPage).not.toHaveBeenCalled();
 
-    // A close that itself fails must not mask the verification error.
-    closeCdpPage.mockRejectedValue(new Error('CDP socket closed'));
+    // A close that itself fails must not mask the verification error — including
+    // a rejection with a non-Error value, where reading `.message` inside the
+    // `finally` would replace the real error with a TypeError.
+    closeCdpPage.mockRejectedValue('CDP socket closed');
     navigateToUrlPinned.mockResolvedValue({ id: 'page-4', url: 'https://x.com/other_user' });
     await expect(openXHandoff({ kind: 'profile', value: 'example_user' }))
       .rejects.toThrow('different page than the one requested');

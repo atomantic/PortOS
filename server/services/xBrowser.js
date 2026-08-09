@@ -70,8 +70,11 @@ export async function openXHandoff({ kind, value = '' }) {
     verified = true;
   } finally {
     if (!verified) {
+      // `err?.message || String(err)`: a rejection with a non-Error value would
+      // make `err.message` throw from inside a `finally`, which REPLACES the
+      // verification error the caller needs to see with a bare TypeError.
       await closeCdpPage(page.id).catch((err) => {
-        console.error(`❌ Failed to close redirected X handoff tab ${page.id}: ${err.message}`);
+        console.error(`❌ Failed to close redirected X handoff tab ${page.id}: ${err?.message || String(err)}`);
       });
     }
   }

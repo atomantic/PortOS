@@ -1191,6 +1191,31 @@ describe('Provider Service', () => {
       expect(updated.models).toEqual([]);
     });
 
+    it('accepts bare-string data entries and throws on entries with no usable id', async () => {
+      // Some OpenAI-compatible servers emit `data: ["model-a"]` rather than
+      // `data: [{ id: 'model-a' }]`. Mapping `m.id` blindly persisted
+      // `[undefined]` — a plausible-looking, unusable catalog.
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ data: ['model-a', { name: 'model-b' }] }),
+      }));
+      const ok = await providerService.createProvider({
+        name: 'Bare List API', type: 'api', endpoint: 'https://api.generic.com/v1', allowCustomEndpoint: true,
+      });
+      expect((await providerService.refreshProviderModels(ok.id)).models).toEqual(['model-a', 'model-b']);
+
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ data: [{ object: 'model' }] }),
+      }));
+      const bad = await providerService.createProvider({
+        name: 'Idless API', type: 'api', endpoint: 'https://api.generic.com/v1', models: ['model-a'], allowCustomEndpoint: true,
+      });
+      const err = await providerService.refreshProviderModels(bad.id).catch(e => e);
+      expect(err.message).toMatch(/no usable model id/);
+      expect((await providerService.getProviderById(bad.id)).models).toEqual(['model-a']);
+    });
+
     it('throws and leaves the stored list untouched when a 200 body is not JSON', async () => {
       // A captive portal / login page / proxy error served as HTTP 200. Degrading
       // to `[]` here emptied the model dropdown while the UI toasted "Models
