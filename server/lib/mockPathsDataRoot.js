@@ -42,7 +42,7 @@
 
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
-import { join, relative, sep } from 'path';
+import { isAbsolute, join, relative, sep } from 'path';
 
 /**
  * Allocate a unique temp dir suitable for use as `PATHS.data` in a test file.
@@ -89,10 +89,21 @@ export function makePathsProxy(actual, { dataRoot, extraOverrides = null, overri
       ? extraOverrides(root)
       : (extraOverrides || {});
     const realData = actual.PATHS.data;
+    // Containment via `relative()` rather than a `startsWith(realData + sep)`
+    // prefix test: it normalizes a trailing separator on `realData` and mixed
+    // separators, and it rejects a sibling that merely shares the prefix
+    // (`data-archive` → `../data-archive`) instead of matching it.
+    const relIfInside = (v) => {
+      if (typeof v !== 'string') return null;
+      const rel = relative(realData, v);
+      if (rel === '') return '.';
+      return !rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel) ? rel : null;
+    };
     const rebased = Object.fromEntries(
       Object.entries(actual.PATHS)
-        .filter(([, v]) => typeof v === 'string' && (v === realData || v.startsWith(realData + sep)))
-        .map(([k, v]) => [k, join(root, relative(realData, v))]),
+        .map(([k, v]) => [k, relIfInside(v)])
+        .filter(([, rel]) => rel !== null)
+        .map(([k, rel]) => [k, join(root, rel)]),
     );
     return { ...actual.PATHS, ...rebased, data: root, ...extras };
   };
