@@ -165,7 +165,8 @@ Surveyed, and the answer is **not one PortOS can install today**.
   1.3B/14B**. Stock Wan 2.1 is not Krea Realtime: Krea's contribution is the
   *inference regime* (few-step self-forcing schedule, block-causal attention,
   persistent KV cache with recompute), which stock Wan pipelines do not implement.
-  No `krea` / `self-forcing` support was found there.
+  Its README enumerates supported families as Wan 2.1 and Wan 2.2 with no mention of
+  Krea, self-forcing, or realtime/autoregressive generation.
 - **`SceneWorks/mlx-gen`** (Apache-2.0, Rust): its public snapshot at `45428fa9`
   (2026-07-14) has `mlx-gen-wan` but **no** Krea Realtime support.
 - **`SceneWorks/inference`** @ `ca41d764` (2026-08-09) **does** contain a real native
@@ -180,11 +181,13 @@ Surveyed, and the answer is **not one PortOS can install today**.
 
 Why this still doesn't clear the bar for PortOS:
 
-- The crate is `version = "0.0.0"` and is **not published** — `crates.io` returns 403
-  (nonexistent) for `mlx-gen-krea-realtime`, `mlx-gen-wan`, and `mlx-gen`. Its
-  manifest uses `path = ".."` dependencies into a ~540 MB product monorepo, and its
-  `repository` field points at a *different* URL (`github.com/michaeltrefry/mlx-gen`)
-  than the repo it currently lives in.
+- The crate is `version = "0.0.0"` and is **not published**: `crates.io` reports
+  `crate 'mlx-gen-krea-realtime' does not exist` (and likewise `mlx-gen-wan`). Only
+  the umbrella name `mlx-gen` is registered there, itself at a placeholder `0.0.0`
+  with 21 downloads and last updated 2026-05-30 — i.e. a reserved name, not a
+  release. The crate's manifest uses `path = ".."` dependencies into a ~540 MB
+  product monorepo, and its `repository` field points at a *different* URL
+  (`github.com/michaeltrefry/mlx-gen`) than the repo it currently lives in.
 - Consuming it means checking out a large monorepo and building a Rust toolchain +
   MLX bindings from source. Every video runtime PortOS ships today (`mlx_video`,
   `ltx2`, `wan22`) installs as a pinned Python package into a venv with weights
