@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { existsSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import path from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
@@ -353,6 +353,133 @@ describe('Missions Service', () => {
       expect(stats).toHaveProperty('averageProgress');
 
       await deleteMission('test-stats-mission');
+    });
+  });
+
+  // #3690 — `loadMissions` used to hand every parsed `.json` straight through, so
+  // a hand-edited / half-written / older-shape record took out the whole Missions
+  // overview instead of one row. Fixtures are written with `writeFileSync`
+  // deliberately: the point is a record PortOS itself would never produce.
+  describe('malformed records on disk', () => {
+    const writeRaw = (file, contents) => {
+      mkdirSync(DATA_DIR, { recursive: true });
+      writeFileSync(path.join(DATA_DIR, file), contents);
+      invalidateCache();
+    };
+
+    it('does not throw on a record with no subTasks array', async () => {
+      writeRaw('test-no-subtasks.json', JSON.stringify({
+        id: 'test-no-subtasks',
+        appId: 'test-app',
+        name: 'No SubTasks',
+        status: 'active',
+        progress: 40
+      }));
+
+      const stats = await getStats();
+      expect(stats.totalMissions).toBe(1);
+      expect(stats.totalSubTasks).toBe(0);
+      expect(stats.completedSubTasks).toBe(0);
+      expect(stats.overallCompletion).toBe('0%');
+    });
+
+    it('never reports averageProgress as NaN for a non-numeric progress', async () => {
+      writeRaw('test-bad-progress.json', JSON.stringify({
+        id: 'test-bad-progress',
+        appId: 'test-app',
+        name: 'Bad Progress',
+        status: 'active',
+        progress: 'halfway',
+        subTasks: []
+      }));
+
+      const stats = await getStats();
+      expect(stats.averageProgress).toBe('0.0%');
+      expect(stats.averageProgress).not.toContain('NaN');
+    });
+
+    it('buckets a status-less record under a named key, not undefined', async () => {
+      writeRaw('test-no-status.json', JSON.stringify({
+        id: 'test-no-status',
+        appId: 'test-app',
+        name: 'No Status',
+        subTasks: []
+      }));
+
+      const stats = await getStats();
+      expect(Object.keys(stats.byStatus)).toEqual(['unknown']);
+      expect(stats.byStatus.unknown).toBe(1);
+    });
+
+    it.each([
+      ['an array', '[]'],
+      ['a bare string', '"just a string"'],
+      ['a number', '42'],
+      ['unparseable bytes', '{ not json at all']
+    ])('drops %s with one warning line naming the file, and keeps the good records', async (_label, contents) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      writeRaw('test-not-a-mission.json', contents);
+      await createMission({ id: 'test-good-mission', appId: 'test-app', name: 'Good Mission' });
+
+      const stats = await getStats();
+      expect(stats.totalMissions).toBe(1);
+
+      const dropWarnings = warn.mock.calls.filter(([msg]) =>
+        typeof msg === 'string' && msg.includes('test-not-a-mission.json')
+      );
+      expect(dropWarnings.length).toBe(1);
+      expect(dropWarnings[0][0]).toContain('⚠️');
+
+      warn.mockRestore();
+      await deleteMission('test-good-mission');
+    });
+
+    it('ignores non-object entries inside subTasks rather than throwing', async () => {
+      writeRaw('test-bad-subtask-entries.json', JSON.stringify({
+        id: 'test-bad-subtask-entries',
+        appId: 'test-app',
+        name: 'Bad SubTask Entries',
+        status: 'active',
+        progress: 50,
+        subTasks: [null, 'not-a-task', { id: 'a', status: 'completed' }, { id: 'b', status: 'pending' }]
+      }));
+
+      const stats = await getStats();
+      expect(stats.totalSubTasks).toBe(2);
+      expect(stats.completedSubTasks).toBe(1);
+      expect(stats.overallCompletion).toBe('50.0%');
+    });
+
+    it('preserves the unrelated fields of a record it normalizes', async () => {
+      writeRaw('test-partial-record.json', JSON.stringify({
+        id: 'test-partial-record',
+        appId: 'test-app',
+        name: 'Partial Record',
+        description: 'kept as-is'
+      }));
+
+      const mission = await getMission('test-partial-record');
+      expect(mission.description).toBe('kept as-is');
+      expect(mission.subTasks).toEqual([]);
+      expect(mission.goals).toEqual([]);
+      expect(mission.metrics).toEqual({ tasksGenerated: 0, tasksCompleted: 0, successRate: 0 });
+    });
+
+    // The normalized record has to survive the mutating paths too — `addSubTask`
+    // pushes onto `subTasks` and bumps `metrics.tasksGenerated`, both of which
+    // threw on a record that arrived without them.
+    it('lets a normalized record take a new sub-task', async () => {
+      writeRaw('test-normalized-mutation.json', JSON.stringify({
+        id: 'test-normalized-mutation',
+        appId: 'test-app',
+        name: 'Normalized Mutation',
+        status: 'active'
+      }));
+
+      const updated = await addSubTask('test-normalized-mutation', { description: 'First task' });
+      expect(updated.subTasks.length).toBe(1);
+      expect(updated.metrics.tasksGenerated).toBe(1);
     });
   });
 

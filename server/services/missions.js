@@ -16,6 +16,42 @@ const DATA_DIR = PATHS.missions
 // In-memory cache
 let missionsCache = null
 
+const isPlainObject = value =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+const DEFAULT_METRICS = { tasksGenerated: 0, tasksCompleted: 0, successRate: 0 }
+
+/**
+ * Coerce a parsed mission record into the shape every consumer assumes.
+ *
+ * `loadMissions` is the single door into this service — `getStats`,
+ * `completeSubTask`, `generateMissionTask` and `archiveCompletedMissions` all
+ * iterate the records it hands back and dereference `subTasks` / `goals` /
+ * `metrics` unguarded. Normalizing here (rather than scattering `?.length ?? 0`
+ * across the call sites) keeps "invalid" distinguishable from "legitimately
+ * empty": only the loader knows a record was malformed on disk, so only the
+ * loader can warn about it.
+ *
+ * @param {*} record - Parsed JSON from a mission file
+ * @returns {Object|null} - Normalized mission, or null if unusable
+ */
+function normalizeMission(record) {
+  if (!isPlainObject(record)) return null
+
+  return {
+    ...record,
+    status: typeof record.status === 'string' ? record.status : 'unknown',
+    progress: Number.isFinite(record.progress) ? record.progress : 0,
+    goals: Array.isArray(record.goals) ? record.goals : [],
+    subTasks: Array.isArray(record.subTasks)
+      ? record.subTasks.filter(isPlainObject)
+      : [],
+    metrics: isPlainObject(record.metrics)
+      ? { ...DEFAULT_METRICS, ...record.metrics }
+      : { ...DEFAULT_METRICS }
+  }
+}
+
 /**
  * Load all missions
  * @returns {Promise<Array>} - All missions
@@ -35,7 +71,12 @@ async function loadMissions() {
       .map(async file => {
         const content = await tryReadFile(path.join(DATA_DIR, file))
         if (!content) return null
-        return safeJSONParse(content, null, { context: `mission:${file}` })
+        const parsed = safeJSONParse(content, null, { context: `mission:${file}` })
+        const mission = normalizeMission(parsed)
+        // A file that parsed but isn't a usable mission object is dropped, not
+        // silently counted — name it so a corrupt record is visible.
+        if (!mission) console.warn(`⚠️ Skipping malformed mission record: ${file}`)
+        return mission
       })
   )
 
