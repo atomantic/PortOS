@@ -51,7 +51,8 @@ import { summarizeSignals } from './state.js';
 import { broadcast, providerOverrideOpts } from './session.js';
 import {
   DIAGNOSIS_MAX_FILED, SELF_IMPROVE_AREAS, buildDiagnosisStageVars, buildDiagnosisTask,
-  isActionableDiagnosis, shapeDiagnosis, terminalWarrantsDiagnosis,
+  diagnosisEnabled, isActionableDiagnosis, isAutomationSignal, shapeDiagnosis,
+  terminalWarrantsDiagnosis,
 } from './diagnosisCore.js';
 
 const OBSERVER_STAGE = 'pipeline-observer';
@@ -72,24 +73,21 @@ export const OBSERVER_MIN_CONFIDENCE = 0.7;
 // (single) beat on top, so a run makes at most MIDRUN + 1 observer calls.
 export const OBSERVER_MAX_MIDRUN_PASSES = 3;
 
-// The retained frame types that justify spending a MID-RUN pass. Narrower than
-// the full signal set: `verify:round`/`foundation:round` are loops working as
-// designed (a loop that never converges shows up as a pause, which the terminal
-// pass reads), and `note`/`revision:*` are informational. A retained
-// `check:complete` counts only when the check actually THREW — the retention
-// filter also keeps `skipped` frames, which are usually benign.
-const MIDRUN_TRIGGER_TYPES = new Set(['child:retry', 'child:escalate', 'step:skip', 'gap:filed']);
-const isMidrunTrigger = (s) => MIDRUN_TRIGGER_TYPES.has(s.type)
-  || (s.type === 'check:complete' && !!s.error);
+// What justifies spending a MID-RUN pass: the shared automation-misbehavior
+// classification (`diagnosisCore.js#isAutomationSignal`) plus `gap:filed` — a
+// filed gap is worth diagnosing the moment it happens, while the terminal
+// ladder already reaches it through the runState gap counters. Deliberately
+// narrower than the full retained set: `verify:round`/`foundation:round` are
+// loops working as designed (a loop that never converges shows up as a pause,
+// which the terminal pass reads), and `note`/`revision:*` are informational.
+const isMidrunTrigger = (s) => isAutomationSignal(s) || s.type === 'gap:filed';
 
 /**
  * Is the observer active for this run? Pure. Exported for the orchestrator's
  * postMortem supersession gate, so "observer on" means the same thing at both
  * decision points.
  */
-export const observerEnabled = (record) => !!record
-  && record.options?.observer === true
-  && record.mode === 'execute';
+export const observerEnabled = (record) => diagnosisEnabled(record, 'observer');
 
 /** The retained frames the run has emitted since the last observer pass. Pure. */
 export function freshSignals(record) {
@@ -100,19 +98,14 @@ export function freshSignals(record) {
  * Should the observer spend a pass after this step? Pure. Requires the opt-in,
  * a remaining mid-run pass, budget not already known-exhausted, and at least
  * one triggering frame past the cursor — a step that went cleanly costs
- * nothing. This runs after EVERY step, so the scan is by index (no slice
- * allocation on the happy path).
+ * nothing.
  */
 export function shouldObserveStep(record) {
   if (!observerEnabled(record)) return false;
   const rs = record.runState || {};
   if (rs.observerBudgetExhausted) return false;
   if ((rs.observerPassesRun || 0) >= OBSERVER_MAX_MIDRUN_PASSES) return false;
-  const signals = record.signals || [];
-  for (let i = rs.observerCursor || 0; i < signals.length; i += 1) {
-    if (isMidrunTrigger(signals[i])) return true;
-  }
-  return false;
+  return freshSignals(record).some(isMidrunTrigger);
 }
 
 /**

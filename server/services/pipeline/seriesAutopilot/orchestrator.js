@@ -305,8 +305,8 @@ export async function startSeriesAutopilot(sId, options = {}) {
           const pm = await postMortem('done', craftGapIssues || editorialCheckErrors
             ? `completed with ${craftGapIssues} filed craft gap(s) and ${editorialCheckErrors} errored check(s)`
             : null);
-          await persistMarker(sId, { status: 'done', runId, currentStep: null, craftGapIssues, craftGapFindings, editorialCheckErrors, selfImprove: pm.selfImprove, observer: pm.observer });
-          broadcast(sId, { type: 'complete', runId, steps: ordinal, craftGapIssues, craftGapFindings, editorialCheckErrors, editorialCheckErroredIds, selfImprove: pm.selfImprove, observer: pm.observer, completedAt: new Date().toISOString() });
+          await persistMarker(sId, { status: 'done', runId, currentStep: null, craftGapIssues, craftGapFindings, editorialCheckErrors, ...pm });
+          broadcast(sId, { type: 'complete', runId, steps: ordinal, craftGapIssues, craftGapFindings, editorialCheckErrors, editorialCheckErroredIds, ...pm, completedAt: new Date().toISOString() });
           console.log(`✅ autopilot complete — series=${sId.slice(0, 12)} steps=${ordinal}${craftGapIssues ? ` (${craftGapIssues} issue(s) with filed script-craft gaps)` : ''}${editorialCheckErrors ? ` (${editorialCheckErrors} editorial check(s) errored: ${editorialCheckErroredIds.join(', ')})` : ''}`);
           return;
         }
@@ -367,8 +367,8 @@ export async function startSeriesAutopilot(sId, options = {}) {
           // rides it (a client tears its stream down on `paused`). No-ops unless
           // the run opted into self-improvement.
           const pm = await postMortem('paused', `${step.kind}: ${result.reason}`);
-          await persistMarker(sId, { status: 'paused', runId, currentStep: step.kind, residualFindings: result.residual || [], lastError: result.reason, pauseKind: result.pauseKind || null, healthBreakdown: result.healthBreakdown || null, selfImprove: pm.selfImprove, observer: pm.observer });
-          broadcast(sId, { type: 'paused', runId, scope: step.kind, reason: result.reason, residualFindings: result.residual || [], pauseKind: result.pauseKind || null, healthBreakdown: result.healthBreakdown || null, selfImprove: pm.selfImprove, observer: pm.observer, completedAt: new Date().toISOString() });
+          await persistMarker(sId, { status: 'paused', runId, currentStep: step.kind, residualFindings: result.residual || [], lastError: result.reason, pauseKind: result.pauseKind || null, healthBreakdown: result.healthBreakdown || null, ...pm });
+          broadcast(sId, { type: 'paused', runId, scope: step.kind, reason: result.reason, residualFindings: result.residual || [], pauseKind: result.pauseKind || null, healthBreakdown: result.healthBreakdown || null, ...pm, completedAt: new Date().toISOString() });
           await notifyPause(record, sId, { reason: result.reason, pauseKind: result.pauseKind || null, currentStep: step.kind });
           // Only file the generic stalled task when the step didn't already file
           // a more specific gap (canon-undescribed, visual-no-pages, …) — else
@@ -402,8 +402,8 @@ export async function startSeriesAutopilot(sId, options = {}) {
       // ride the `error` frame + marker rather than arriving after the client
       // has torn its stream down.
       const pm = await postMortem('error', message);
-      await persistMarker(sId, { status: 'error', runId, lastError: message, selfImprove: pm.selfImprove, observer: pm.observer });
-      broadcast(sId, { type: 'error', runId, error: message, selfImprove: pm.selfImprove, observer: pm.observer, failedAt: new Date().toISOString() });
+      await persistMarker(sId, { status: 'error', runId, lastError: message, ...pm });
+      broadcast(sId, { type: 'error', runId, error: message, ...pm, failedAt: new Date().toISOString() });
       await fileGap(record, sId, {
         gapKind: 'run-error',
         summary: `The autonomous run failed and stopped: ${message}`,

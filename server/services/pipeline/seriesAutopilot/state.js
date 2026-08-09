@@ -5,6 +5,10 @@
  */
 
 import { EventEmitter } from 'events';
+// Safe to import at module evaluation: diagnosisCore is a deliberate LEAF
+// (lib/ helpers only), outside the session.js import cycle this file's header
+// warns about.
+import { diagnosisOptedIn } from './diagnosisCore.js';
 
 // runs: Map<seriesId, { runId, clients[], lastPayload, startPayload, cancelRequested,
 //   finished, cleanupTimer, startedAt, mode, options, runState, activeChild }>
@@ -76,13 +80,12 @@ export function isSignalFrame(payload) {
 /**
  * Record one broadcast frame onto the run's signal log. Called from `broadcast`
  * for EVERY frame of EVERY run, so the opt-out must come first and stay cheap: a
- * run that asked for neither the post-mortem (`selfImprove`) nor the observing
- * orchestrator (`observer`) — or a dry-run, which has no telemetry worth
- * diagnosing — does a few property reads and returns. True when retained.
+ * run that opted into no diagnosis pass (`diagnosisOptedIn` — which also
+ * excludes dry-runs, whose telemetry isn't worth diagnosing) does a few
+ * property reads and returns. True when retained.
  */
 export function noteSignal(run, payload) {
-  if (!run || run.mode !== 'execute') return false;
-  if (run.options?.selfImprove !== true && run.options?.observer !== true) return false;
+  if (!diagnosisOptedIn(run)) return false;
   if (!isSignalFrame(payload)) return false;
   if (!run.signals) run.signals = [];
   if (run.signals.length >= MAX_SIGNALS) {
