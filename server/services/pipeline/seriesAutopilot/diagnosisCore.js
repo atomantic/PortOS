@@ -36,6 +36,25 @@ export const SELF_IMPROVE_AREAS = Object.freeze([
   'editorial-check', 'pipeline-step', 'prompt', 'runner', 'config',
 ]);
 
+// The run-option flags that opt a run into diagnosis telemetry. The retention
+// gate (`state.js#noteSignal`) derives from this list, so a future diagnosis
+// consumer adds its flag HERE and its frames are retained — no third predicate
+// to remember in another file.
+const DIAGNOSIS_OPT_IN_FLAGS = Object.freeze(['selfImprove', 'observer']);
+
+/**
+ * Is this specific diagnosis pass enabled for the run? Pure. The single
+ * spelling of "opted in, and in execute mode" — a dry-run has no telemetry
+ * worth diagnosing. Consumed by `observerEnabled`, `shouldDiagnose`, and the
+ * retention gate, so the three sites can't drift.
+ */
+export const diagnosisEnabled = (run, flag) => !!run
+  && run.mode === 'execute'
+  && run.options?.[flag] === true;
+
+/** Did the run opt into ANY diagnosis pass (so its telemetry is worth retaining)? Pure. */
+export const diagnosisOptedIn = (run) => DIAGNOSIS_OPT_IN_FLAGS.some((flag) => diagnosisEnabled(run, flag));
+
 /**
  * Sanitize the LLM's diagnosis into the fixed shape both passes rely on.
  * Returns null when the payload can't be read as a verdict at all. Pure.
@@ -77,6 +96,17 @@ export function isActionableDiagnosis(diagnosis, minConfidence) {
     && !!diagnosis.proposedChange;
 }
 
+// The retained frame types that mean the automation itself misbehaved (vs the
+// loop/informational frames — `verify:round`, `note`, `revision:*` — which are
+// the system working). The ONE classification both evidence predicates derive
+// from: `hasAutomationSignals` (terminal) uses it as-is; the observer's mid-run
+// trigger adds `gap:filed` on top (see observer.js#isMidrunTrigger). A
+// `check:complete` frame counts only when the check actually THREW — the
+// retention filter also keeps `skipped` frames, which are usually benign.
+const AUTOMATION_SIGNAL_TYPES = new Set(['child:retry', 'child:escalate', 'step:skip']);
+export const isAutomationSignal = (s) => AUTOMATION_SIGNAL_TYPES.has(s.type)
+  || (s.type === 'check:complete' && !!s.error);
+
 /**
  * Did the run's telemetry say the AUTOMATION limped — a check that threw, a
  * filed craft gap, a retried/escalated child, a skipped step? Pure.
@@ -85,10 +115,7 @@ export function hasAutomationSignals(record) {
   const rs = record?.runState || {};
   if (rs.editorialCheckErroredIds?.size > 0) return true;
   if (rs.scriptCraftGapIssues?.size > 0) return true;
-  return (record?.signals || []).some((s) => (
-    s.type === 'child:retry' || s.type === 'child:escalate' || s.type === 'step:skip'
-    || (s.type === 'check:complete' && s.error)
-  ));
+  return (record?.signals || []).some(isAutomationSignal);
 }
 
 /**

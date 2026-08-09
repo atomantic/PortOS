@@ -38,8 +38,8 @@ const {
   buildObserverTask, runObserverPass, summarizeObserver,
   OBSERVER_MIN_CONFIDENCE, OBSERVER_MAX_MIDRUN_PASSES, OBSERVER_AREAS,
 } = await import('./observer.js');
-const { shapeDiagnosis, SELF_IMPROVE_AREAS } = await import('./selfImprove.js');
-const { noteSignal } = await import('./state.js');
+const { shapeDiagnosis, SELF_IMPROVE_AREAS, isAutomationSignal } = await import('./diagnosisCore.js');
+const { noteSignal, SIGNAL_FRAME_TYPES } = await import('./state.js');
 const { PORTOS_APP_ID } = await import('../../../lib/appIdentity.js');
 
 // Minimal run record shaped like the orchestrator's, with the observer knobs.
@@ -83,6 +83,17 @@ describe('signal retention for observer-only runs', () => {
     const run = makeRun();
     expect(noteSignal(run, { type: 'child:retry' })).toBe(true);
     expect(run.signals).toHaveLength(1);
+  });
+});
+
+describe('trigger/retention alignment', () => {
+  it('every frame type that can trigger a pass is also retained by noteSignal', () => {
+    // A trigger type missing from the retention set would never fire — the
+    // frame is dropped before the observer can see it — with no error anywhere.
+    const triggerTypes = ['child:retry', 'child:escalate', 'step:skip', 'gap:filed', 'check:complete'];
+    for (const type of triggerTypes) expect(SIGNAL_FRAME_TYPES.has(type)).toBe(true);
+    expect(isAutomationSignal({ type: 'check:complete', error: 'boom' })).toBe(true);
+    expect(isAutomationSignal({ type: 'check:complete' })).toBe(false);
   });
 });
 

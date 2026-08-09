@@ -58,7 +58,7 @@ import { getSeries } from '../series.js';
 import { summarizeSignals } from './state.js';
 import { broadcast, providerOverrideOpts } from './session.js';
 import {
-  SELF_IMPROVE_AREAS, buildDiagnosisStageVars, buildDiagnosisTask,
+  SELF_IMPROVE_AREAS, buildDiagnosisStageVars, buildDiagnosisTask, diagnosisEnabled,
   hasAutomationSignals, isActionableDiagnosis, shapeDiagnosis, terminalWarrantsDiagnosis,
 } from './diagnosisCore.js';
 
@@ -73,8 +73,7 @@ const SELF_IMPROVE_STAGE = 'pipeline-self-improve';
  * opt-in/execute predicate composed with the shared terminal ladder.
  */
 export function shouldDiagnose(record, outcome) {
-  if (!record || record.options?.selfImprove !== true || record.mode !== 'execute') return false;
-  return terminalWarrantsDiagnosis(record, outcome);
+  return diagnosisEnabled(record, 'selfImprove') && terminalWarrantsDiagnosis(record, outcome);
 }
 
 // A diagnosis below this confidence is dropped rather than filed — a speculative
