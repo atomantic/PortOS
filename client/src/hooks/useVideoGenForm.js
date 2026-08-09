@@ -846,6 +846,24 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
     }
   };
 
+  // Finish a draft (#3696): restore the draft's provenance exactly as Remix
+  // does, then switch to its declared delivery model. Steps/guidance are reset
+  // to the empty-string sentinel ("use the model's own defaults") rather than
+  // carried over — the draft's 4-step / guidance-1.0 sampler is the whole thing
+  // Finish is meant to leave behind, and copying it to the delivery model would
+  // reproduce the draft at full cost. The seed IS carried (applyRemix restores
+  // it), which is what makes the finished render the same composition.
+  //
+  // This only fills the form. Nothing is submitted — the user still has to
+  // press Generate, so no provider call fires off a gallery click.
+  const applyFinish = (item, deliveryModelId) => {
+    if (!item || !deliveryModelId) return;
+    applyRemix(item);
+    setModelId(deliveryModelId);
+    setSteps('');
+    setGuidanceScale('');
+  };
+
   // Repopulate the form from an in-flight (or queued) render restored via
   // /active, so a page reload doesn't lose what the running job is rendering.
   // The page owns the SSE re-attach; this only replays the params into state.
@@ -1137,7 +1155,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
     icStrength, setIcStrength,
     icSkipStage2, setIcSkipStage2,
     // Prefill + submit
-    applyRemix, applyResumedParams, buildGeneratePayload,
+    applyRemix, applyFinish, applyResumedParams, buildGeneratePayload,
   };
 }
 

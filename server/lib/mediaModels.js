@@ -16,6 +16,9 @@
  *       rather than guessing. Canonical fields (repo/revision/runtime/memoryGb/
  *       supportedModes/requiredWeights) are NOT duplicated inside it. Shipped
  *       values live in lib/videoDisclosure.js and are backfilled at load.
+ *       `finishModelId` (optional, issue #3696) names the delivery model a
+ *       fast draft entry finishes into — declared in lib/videoFinishProfiles.js,
+ *       backfilled at load, and validated (invalid edges are dropped, loudly).
  *   - video.defaultMacos / video.defaultWindows: id of the default model
  *   - image[]: { id, name, steps, guidance, broken? }
  *   - textEncoders[]: { id, label, repo, localPath? }
@@ -29,6 +32,7 @@ import { isPlainObject } from './objects.js';
 import { RUNNER_FAMILIES } from './runners.js';
 import { ServerError } from './errorHandler.js';
 import { applyVideoDisclosures } from './videoDisclosure.js';
+import { applyVideoFinishProfiles, sanitizeFinishProfiles } from './videoFinishProfiles.js';
 // fileUtils.ensureDir is async/Promise-returning; this module needs a
 // synchronous version because `loadMediaModels()` is called at import-time
 // from videoGen/imageGen modules, which can't await before exporting.
@@ -45,7 +49,10 @@ const DEFAULT_REGISTRY = {
     // (lib/videoDisclosure.js) to each entry, so the seed written on a fresh
     // install, the in-memory defaults, and data.reference/media-models.json all
     // carry the same disclosure without repeating it inline here.
-    macos: applyVideoDisclosures([
+    // `applyVideoFinishProfiles` attaches the shipped draft → delivery
+    // `finishModelId` edges (lib/videoFinishProfiles.js) the same way, so the
+    // Finish relationship is declared in one place instead of inline here.
+    macos: applyVideoFinishProfiles(applyVideoDisclosures([
       // notapalindrome's mlx-video-with-audio runtime — single PyPI package,
       // T2V/I2V only, FFLF degrades to last-frame conditioning (one --image arg).
       // LTX-2 (the older 42 GB model) stays deprecated — superseded by 2.3.
@@ -183,10 +190,10 @@ const DEFAULT_REGISTRY = {
         precision: 'fp32',
         deprecated: true,
       },
-    ]),
-    windows: applyVideoDisclosures([
+    ])),
+    windows: applyVideoFinishProfiles(applyVideoDisclosures([
       { id: 'ltx_video', name: 'LTX-Video 0.9.5 — T2V + I2V (~9.5 GB, auto-downloads)', runtime: 'mlx_video', steps: 25, guidance: 3.0 },
-    ]),
+    ])),
     defaultMacos: 'ltx23_distilled_q4',
     defaultWindows: 'ltx_video',
   },
@@ -660,8 +667,12 @@ const normalizeRegistry = (parsed) => {
       // that persisted their registry before `disclosure` existed pick it up
       // here without waiting for the migration, and both paths share the same
       // preservation guards (user value wins, forked repo keeps Unknown).
-      macos: applyVideoDisclosures(backfillRuntime(macosResult.entries)),
-      windows: applyVideoDisclosures(backfillRuntime(windowsResult.entries)),
+      // sanitizeFinishProfiles runs LAST (after the backfill and after the
+      // user's own entries are merged in) so an edge that points at a model
+      // this install deleted — or a hand-edited typo — is dropped with a
+      // warning instead of surfacing a Finish button targeting nothing.
+      macos: sanitizeFinishProfiles(applyVideoFinishProfiles(applyVideoDisclosures(backfillRuntime(macosResult.entries)))),
+      windows: sanitizeFinishProfiles(applyVideoFinishProfiles(applyVideoDisclosures(backfillRuntime(windowsResult.entries)))),
     },
     _shippedDefaults: {
       ...(safe._shippedDefaults || {}),

@@ -88,6 +88,7 @@ import { VIDEO_RESOLUTIONS } from '../lib/videoGenResolutions';
 import { GROK_VIDEO_DURATIONS, GROK_VIDEO_DEFAULT_DURATION } from '../lib/grokVideoClip.js';
 import ResolutionField from '../components/media/ResolutionField';
 import { VIDEO_EDGE_BOUNDS, IC_LORA_MODES } from '../lib/videoGenParams.js';
+import { finishTargetForRecord } from '../lib/videoFinish.js';
 
 const MODES = [
   { id: 'text',   label: 'Text',   icon: Type,       desc: 'Text-to-video' },
@@ -161,7 +162,7 @@ export default function VideoGen() {
     pickIcReferenceFile, pickIcReferenceVideoId,
     addIcReferenceImage, updateIcReferenceImage, removeIcReferenceImage,
     icStrength, setIcStrength, icSkipStage2, setIcSkipStage2,
-    applyRemix, applyResumedParams, buildGeneratePayload,
+    applyRemix, applyFinish, applyResumedParams, buildGeneratePayload,
   } = useVideoGenForm({ models, status, availableLoras, grokEnabled });
 
   // Image gallery — used by both the start and end frame pickers so the
@@ -263,6 +264,16 @@ export default function VideoGen() {
   const handleRemixVideo = (item) => {
     if (!item) return;
     applyRemix(item);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Finish a draft (#3696): same restore as Remix, but switched to the delivery
+  // model the draft's registry entry declares. Prefill only — the user presses
+  // Generate themselves.
+  const resolveFinishTarget = useCallback((raw) => finishTargetForRecord(raw, models), [models]);
+  const handleFinishVideo = (raw, target) => {
+    if (!raw || !target) return;
+    applyFinish(raw, target.id);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -1165,6 +1176,8 @@ export default function VideoGen() {
         onDelete={handleDeleteHistory}
         onToggleHidden={handleToggleHistoryHidden}
         getCardProps={getCardProps}
+        finishTargetFor={resolveFinishTarget}
+        onFinish={handleFinishVideo}
       />
 
       <MediaPreview

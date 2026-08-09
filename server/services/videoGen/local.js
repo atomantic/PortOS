@@ -29,7 +29,7 @@ import { findFfmpeg, safeUnder, generateThumbnail, optimizeForStreaming, upscale
 import { hfChildEnv } from '../../lib/hfToken.js';
 import { inspectModelCache, findCachedRepoFile } from '../../lib/hfCache.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
-import { makeVideoGenLineHandler, finalizeGeneratedVideo, isWatchdogSuccess, describeSignalDeath } from './generateVideoHelpers.js';
+import { makeVideoGenLineHandler, finalizeGeneratedVideo, isWatchdogSuccess, describeSignalDeath, describeRenderConditioning, RENDER_INPUTS_VERSION } from './generateVideoHelpers.js';
 import { assertSafeLoraFilename } from '../loras.js';
 import { isMlxVideoLtxLoraCapable } from '../../lib/runners.js';
 import {
@@ -1078,6 +1078,23 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // from `keyframes` even when caller omitted `mode`, so without this the
     // history entry would say 'text' for a multi-keyframe render.
     mode: mode || (hasMultiKeyframes ? 'fflf' : sourceImagePath ? 'image' : 'text'),
+    // Durable re-render provenance (#3696). `seed` above is ALWAYS the resolved
+    // seed (a caller-omitted seed was rolled into `actualSeed` before the child
+    // ever ran), so a random-seed render records the seed it actually used and
+    // a Finish re-render reproduces the same composition rather than re-rolling.
+    // `conditioning` inventories what else steered this render — empty means
+    // prompt + seed + dials are the whole input. `renderInputsVersion` is the
+    // marker that both are trustworthy; records without it are legacy and must
+    // not be assumed unconditioned. Neither field carries a staging path.
+    renderInputsVersion: RENDER_INPUTS_VERSION,
+    conditioning: describeRenderConditioning({
+      sourceImagePath: resolvedSourceImage,
+      lastImagePath: resolvedLastImage,
+      keyframes: resolvedKeyframes,
+      extendFromVideoPath,
+      audioFilePath,
+      icReferencePaths: resolvedIcReferencePaths,
+    }),
     // Stamp the experimental fast-path so A/B analysis can tell a two-stage
     // render apart from a user who happened to pick 8 steps — comparing it
     // against the default Standard render is the whole point of the knob.

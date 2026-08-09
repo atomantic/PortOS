@@ -219,6 +219,50 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
 }
 
 /**
+ * Version marker stamped on every history record written by this (finish-aware)
+ * writer — see `describeRenderConditioning`. It is the POSITIVE signal that the
+ * record's conditioning inventory is trustworthy: a legacy record written
+ * before #3696 carries no `renderInputsVersion` and no `conditioning`, which is
+ * indistinguishable from "this render used no conditioning" if you only look at
+ * the absence. Consumers (the client's Finish gate) must require this marker,
+ * so legacy/incomplete records degrade to "not finishable" instead of being
+ * wrongly assumed reproducible.
+ */
+export const RENDER_INPUTS_VERSION = 1;
+
+/**
+ * Inventory the conditioning inputs one render actually used, as a stable,
+ * sorted list of kind strings. An empty array means the render was driven by
+ * nothing but the prompt + seed + dials — i.e. fully reproducible from what the
+ * history record already stores, which is the precondition for Finish (#3696).
+ *
+ * Deliberately records KINDS, not paths: staging/temp upload paths are
+ * machine-specific and short-lived, and history is user-facing (the same reason
+ * IC references are stamped by basename). Recording the fact of conditioning is
+ * enough to answer "can this be re-rendered from the record alone?" — which is
+ * the only question this feeds.
+ *
+ * Pure. Tolerates missing/`null` fields (the common text-to-video call).
+ */
+export function describeRenderConditioning({
+  sourceImagePath = null,
+  lastImagePath = null,
+  keyframes = null,
+  extendFromVideoPath = null,
+  audioFilePath = null,
+  icReferencePaths = null,
+} = {}) {
+  const kinds = [];
+  if (sourceImagePath) kinds.push('image');
+  if (lastImagePath) kinds.push('lastImage');
+  if (Array.isArray(keyframes) && keyframes.length > 0) kinds.push('keyframes');
+  if (extendFromVideoPath) kinds.push('extend');
+  if (audioFilePath) kinds.push('audio');
+  if (Array.isArray(icReferencePaths) && icReferencePaths.length > 0) kinds.push('icReference');
+  return kinds.sort();
+}
+
+/**
  * Render a runtime fingerprint (either the `RUNTIME:` payload a helper script
  * emits — `{ runtime, versions, chip, os, python }` — or the Node-side
  * `hostRuntimeFingerprint()` block) as one human-readable line:

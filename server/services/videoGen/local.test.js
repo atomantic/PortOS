@@ -1579,6 +1579,11 @@ describe('generateVideo — close-handler resilience (issue #1334)', () => {
       makeVideoGenLineHandler: () => () => true,
       isWatchdogSuccess: () => false,
       finalizeGeneratedVideo: vi.fn(async () => { throw new Error('boom finalize'); }),
+      // Durable re-render inputs (#3696) — generateVideo reads both while
+      // building `meta`, so a partial mock has to carry them or every render
+      // in this file throws on the missing export.
+      describeRenderConditioning: () => [],
+      RENDER_INPUTS_VERSION: 1,
     }));
     const { generateVideo: gv } = await import('./local.js');
     const { videoGenEvents: events } = await import('./events.js');
@@ -2533,5 +2538,74 @@ describe('icLoraArgs — direct validation (#3100)', () => {
       icLoraWeightPath: '/mock/hf/snap/ingredients.safetensors',
       icReferencePaths: ['/mock/a.mp4', '/mock/b.mp4'],
     })).not.toThrow();
+  });
+});
+
+describe('generateVideo — durable re-render inputs (#3696)', () => {
+  // The `started` event spreads the same `meta` object finalizeGeneratedVideo
+  // later persists as the history record, so it's the observable surface for
+  // what a completed render would store — without having to drive the child
+  // process to a successful close.
+  const startedMetaFor = async (params) => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+    let started = null;
+    const onStarted = (e) => { started = e; };
+    videoGenEvents.on('started', onStarted);
+    await generateVideo({
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'a quiet street at dusk',
+      width: 512,
+      height: 512,
+      numFrames: 25,
+      fps: 24,
+      ...params,
+    });
+    videoGenEvents.off('started', onStarted);
+    const renderCall = spawnMock.mock.calls.find(
+      ([bin, args]) => String(bin).includes('.portos/ltx-2-mlx/.venv/bin/python3') && Array.isArray(args),
+    );
+    return { started, args: renderCall?.[1] || [] };
+  };
+
+  it('records the seed a random-seed render actually resolved to, matching the one the child got', async () => {
+    const { started, args } = await startedMetaFor({ jobId: 'finish-random-seed-test' });
+    // No seed was supplied — the record must still pin the resolved value, or
+    // a Finish re-render would roll a different composition.
+    expect(Number.isInteger(started.seed)).toBe(true);
+    expect(args[args.indexOf('--seed') + 1]).toBe(String(started.seed));
+    expect(started.renderInputsVersion).toBe(1);
+    expect(started.conditioning).toEqual([]);
+    expect(started.mode).toBe('text');
+  });
+
+  it('keeps an explicitly supplied seed verbatim', async () => {
+    const { started, args } = await startedMetaFor({ jobId: 'finish-explicit-seed-test', seed: 1234 });
+    expect(started.seed).toBe(1234);
+    expect(args[args.indexOf('--seed') + 1]).toBe('1234');
+  });
+
+  it('inventories conditioning for an image-to-video render (so Finish is not offered for it)', async () => {
+    const { started } = await startedMetaFor({
+      jobId: 'finish-i2v-conditioning-test',
+      mode: 'image',
+      sourceImagePath: '/mock/source.png',
+    });
+    expect(started.conditioning).toContain('image');
+    expect(started.mode).toBe('image');
+  });
+
+  it('inventories audio conditioning even though the mode still reads as text', async () => {
+    // The mode inference only looks at images/keyframes, so an audio-driven
+    // render with no explicit mode would otherwise be stamped `text` and look
+    // fully reproducible. The conditioning inventory is what catches it.
+    const { started } = await startedMetaFor({
+      jobId: 'finish-audio-conditioning-test',
+      audioFilePath: '/mock/song.wav',
+    });
+    expect(started.mode).toBe('text');
+    expect(started.conditioning).toEqual(['audio']);
   });
 });

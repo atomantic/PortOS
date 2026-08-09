@@ -253,7 +253,8 @@
           },
           "estimatedDownloadGb": 44.9,
           "reviewedAt": "2026-08-09"
-        }
+        },
+        "finishModelId": "wan22_t2v_a14b"
       },
       {
         "id": "wan22_i2v_a14b_lightning",

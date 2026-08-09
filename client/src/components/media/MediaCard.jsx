@@ -10,7 +10,10 @@ import { loraDisplayName } from './normalize';
 // the Image Gen page's recent gallery, the Video Gen page's recent renders,
 // and the Media History tab. Action visibility is opt-in — pass only the
 // callbacks you want rendered. Image-only actions (remix, send-to-video) and
-// video-only actions (continue) are auto-hidden when the kind doesn't match.
+// video-only actions (continue, finish) are auto-hidden when the kind doesn't
+// match. `onFinish` is passed only for a draft the caller already resolved a
+// delivery model for (see client/src/lib/videoFinish.js) — an image-conditioned
+// or legacy record gets no Finish button rather than a disabled one.
 export default function MediaCard({
   item,
   onPreview,
@@ -20,6 +23,8 @@ export default function MediaCard({
   onSendToVideo,
   onSendTo3d,
   onContinue,
+  onFinish,
+  finishTitle = 'Re-render this draft on its delivery model',
   onUpscale,
   onDelete,
   onToggleHidden,
@@ -198,6 +203,16 @@ export default function MediaCard({
                 title="Use last frame as Image Gen source"
               >
                 <ImageIcon className="w-3 h-3 shrink-0" /> <span className="truncate">Continue</span>
+              </button>
+            )}
+            {isVideo && onFinish && (
+              <button
+                type="button"
+                onClick={() => onFinish(item)}
+                className="shrink-0 px-1.5 py-1 bg-port-success/20 hover:bg-port-success/40 text-port-success text-[10px] rounded flex items-center justify-center gap-1"
+                title={finishTitle}
+              >
+                <Sparkles className="w-3 h-3 shrink-0" /> <span className="truncate">Finish</span>
               </button>
             )}
             {isVideo && onUpscale && !item.upscaledFrom && (

@@ -11,7 +11,21 @@ export default function VideoGenGallery({
   galleryVisible, galleryHidden, favoritesOnly, showHidden,
   onToggleFavorites, onToggleShowHidden,
   onPreview, onContinue, onUpscale, onDelete, onToggleHidden, getCardProps,
+  finishTargetFor, onFinish,
 }) {
+  // Finish (#3696) is offered per-card, and only when the stored record is a
+  // fully reproducible text-to-video draft whose declared delivery model is
+  // available here — `finishTargetFor` returns null otherwise and the button
+  // is simply absent. Clicking only prefills the form; the user still presses
+  // Generate, so no render is kicked off from the gallery.
+  const finishProps = (v) => {
+    const target = finishTargetFor?.(v) || null;
+    if (!target) return {};
+    return {
+      onFinish: () => onFinish?.(v, target),
+      finishTitle: `Re-render this draft on ${target.name || target.id} (same prompt and seed, delivery quality)`,
+    };
+  };
   return (
     <>
       {(galleryVisible.length > 0 || favoritesOnly) && (
@@ -37,6 +51,7 @@ export default function VideoGenGallery({
                     item={item}
                     onPreview={() => onPreview(item)}
                     onContinue={() => onContinue(v)}
+                    {...finishProps(v)}
                     onUpscale={() => onUpscale(v)}
                     onDelete={() => onDelete(v)}
                     onToggleHidden={() => onToggleHidden(v)}

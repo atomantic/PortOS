@@ -420,6 +420,37 @@ describe('useVideoGenForm', () => {
     expect(result.current.guidanceScale).toBe('');
   });
 
+  it('applyFinish keeps the draft seed but drops its sampler for the delivery model (#3696)', async () => {
+    const { result } = render();
+    act(() => result.current.applyFinish({
+      prompt: 'a quiet street at dusk', negativePrompt: 'blurry', modelId: MLX.id,
+      width: 768, height: 512, numFrames: 49, fps: 24, seed: 424242,
+      steps: 4, guidanceScale: 1, mode: 'text',
+    }, LTX2.id));
+
+    // The whole point: same prompt + same seed, rendered on the delivery model
+    // at ITS defaults ('' = "use the model's own steps/guidance") rather than
+    // the draft's 4-step / guidance-1.0 sampler.
+    expect(result.current.modelId).toBe(LTX2.id);
+    expect(result.current.seed).toBe('424242');
+    expect(result.current.prompt).toBe('a quiet street at dusk');
+    expect(result.current.negativePrompt).toBe('blurry');
+    expect(result.current.numFrames).toBe(49);
+    expect(result.current.steps).toBe('');
+    expect(result.current.guidanceScale).toBe('');
+    expect(result.current.mode).toBe('text');
+  });
+
+  it('applyFinish is inert without a record or a delivery model — it never starts a render', async () => {
+    const { result } = render();
+    await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
+    act(() => { result.current.setPrompt('untouched'); });
+    act(() => result.current.applyFinish(null, LTX2.id));
+    act(() => result.current.applyFinish({ prompt: 'x', modelId: MLX.id }, null));
+    expect(result.current.prompt).toBe('untouched');
+    expect(result.current.modelId).toBe(MLX.id);
+  });
+
   it('applyResumedParams restores an in-flight grok job to the grok backend', async () => {
     const { result } = render({ grokEnabled: true });
     act(() => result.current.applyResumedParams({

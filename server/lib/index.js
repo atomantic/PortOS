@@ -111,6 +111,7 @@ export * from './installLogger.js';
 export * from './kimi.js';
 export * from './mediaModels.js';
 export * from './videoDisclosure.js';
+export * from './videoFinishProfiles.js';
 export * from './promptPartials.js';
 export * from './promptRunner.js';
 export * from './promptSystemStages.js';

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { makeVideoGenLineHandler, isWatchdogSuccess, finalizeGeneratedVideo, parseByteProgress, formatBytes, formatDownloadMessage, describeSignalDeath, formatRuntimeFingerprint } from './generateVideoHelpers.js';
+import { makeVideoGenLineHandler, isWatchdogSuccess, finalizeGeneratedVideo, parseByteProgress, formatBytes, formatDownloadMessage, describeSignalDeath, formatRuntimeFingerprint, describeRenderConditioning, RENDER_INPUTS_VERSION } from './generateVideoHelpers.js';
 
 describe('parseByteProgress', () => {
   it('parses single byte value (e.g., "2.5G")', () => {
@@ -243,6 +243,58 @@ describe('finalizeGeneratedVideo runtime persistence', () => {
     });
     expect(saved).toHaveLength(1);
     expect('runtime' in saved[0]).toBe(false);
+  });
+
+  it('carries the durable re-render inputs through to the saved record (#3696)', async () => {
+    const job = { id: 'job-abcdef12', clients: [] };
+    let saved = null;
+    await finalizeGeneratedVideo({
+      ...baseCtx(job),
+      meta: {
+        ...baseCtx(job).meta,
+        seed: 424242,
+        mode: 'text',
+        renderInputsVersion: RENDER_INPUTS_VERSION,
+        conditioning: [],
+      },
+      actualSeed: 424242,
+      mutateHistory: async (fn) => { saved = await fn([]); return saved; },
+    });
+    expect(saved[0].seed).toBe(424242);
+    expect(saved[0].renderInputsVersion).toBe(RENDER_INPUTS_VERSION);
+    expect(saved[0].conditioning).toEqual([]);
+    // No staging/temp path may ride along on a user-facing history record.
+    expect(JSON.stringify(saved[0])).not.toMatch(/\/tmp\/|uploads/);
+  });
+});
+
+describe('describeRenderConditioning (#3696)', () => {
+  it('reports an empty inventory for a plain text-to-video render', () => {
+    expect(describeRenderConditioning()).toEqual([]);
+    expect(describeRenderConditioning({})).toEqual([]);
+    expect(describeRenderConditioning({ sourceImagePath: null, keyframes: [], icReferencePaths: [] })).toEqual([]);
+  });
+
+  it('names each conditioning input that steered the render', () => {
+    expect(describeRenderConditioning({ sourceImagePath: '/tmp/a.png' })).toEqual(['image']);
+    expect(describeRenderConditioning({ lastImagePath: '/tmp/z.png' })).toEqual(['lastImage']);
+    expect(describeRenderConditioning({ keyframes: [{ path: '/tmp/1.png' }] })).toEqual(['keyframes']);
+    expect(describeRenderConditioning({ extendFromVideoPath: '/data/videos/x.mp4' })).toEqual(['extend']);
+    expect(describeRenderConditioning({ audioFilePath: '/tmp/song.wav' })).toEqual(['audio']);
+    expect(describeRenderConditioning({ icReferencePaths: ['/tmp/ref.mp4'] })).toEqual(['icReference']);
+  });
+
+  it('returns a stable sorted list for a multi-input render', () => {
+    expect(describeRenderConditioning({
+      sourceImagePath: '/tmp/a.png',
+      lastImagePath: '/tmp/z.png',
+      audioFilePath: '/tmp/song.wav',
+    })).toEqual(['audio', 'image', 'lastImage']);
+  });
+
+  it('records kinds only — never the staging paths it was given', () => {
+    const kinds = describeRenderConditioning({ sourceImagePath: '/tmp/upload-9f3.png' });
+    expect(kinds.join(',')).not.toMatch(/tmp|9f3/);
   });
 });
 
