@@ -49,7 +49,7 @@ import { ensureDir, PATHS, sleep, tryReadFile } from '../lib/fileUtils.js';
 import { createToolExecution, startExecution, completeExecution, errorExecution } from './toolStateMachine.js';
 import { determineLane, acquire, release } from './executionLanes.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
-import { createAgentRun, checkForTaskCommit, completeAgentRun } from './agentRunTracking.js';
+import { createAgentRun, checkForTaskCommit } from './agentRunTracking.js';
 import { buildAgentPrompt, getAppWorkspace } from './agentPromptBuilder.js';
 import { isOllamaClaudeProvider, isClaudeCommand, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { canTypeSlashCommands } from '../lib/slashdoInvocation.js';
@@ -71,7 +71,11 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 // below them were retired with the `subAgentSpawner.js` barrel (#3450).
 import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
-import { cleanupAgentWorktree } from './agentWorktreeCleanup.js';
+// `releaseRetryHold` is imported STATICALLY here (the TUI/direct-CLI spawners
+// reach for it via `await import()` only because they sit BELOW this module and
+// a top-level import there would race the cycle) — this module already imports
+// `cleanupAgentWorktree` from the same file, so there is no new edge.
+import { cleanupAgentWorktree, releaseRetryHold } from './agentWorktreeCleanup.js';
 import { runAgentCompletionCleanup } from './agentCompletionCleanup.js';
 import { dispatchRecoveredTaskOutputHook, finalizeAgent, releaseAgentLane, stampLiExecutionVerdict } from './agentFinalization.js';
 import { extractFinalSummary } from './agentSummaryExtraction.js';
@@ -740,9 +744,10 @@ export async function spawnViaRunner(agentId, task, opts) {
   // because `runnerAgents` still holds the entry, `isAgentOwnedLocally` makes
   // the orphan sweep skip the record too, so the 3s timer above flips it to
   // `working` and it sits there for the life of the process. Finalize with the
-  // real error instead — same shape as the runner's own `agent:error` handling
-  // in subAgentSpawner.js. (The TUI arm of this dispatch owns the equivalent
-  // handling inside spawnTuiAgent, where `finish()` is the idempotent finalizer.)
+  // real error instead, through the ordinary finalizeAgent → releaseRetryHold
+  // chain so the TASK is transitioned too — see the catch below. (The TUI arm of
+  // this dispatch owns the equivalent handling inside spawnTuiAgent, where
+  // `finish()` is the idempotent finalizer that runs the same chain.)
   let result;
   try {
     result = await spawnAgentViaRunner({
@@ -770,11 +775,51 @@ export async function spawnViaRunner(agentId, task, opts) {
     clearTimeout(agentInfo.initializationTimeout);
     runnerAgents.delete(agentId);
     releaseAgentLane({ agentId, success: false, exitCode: 1, executionId, laneName, errorExecutionMessage: message });
-    // validationPassed is the null sentinel (#2344): no success criterion was
-    // ever evaluated, so this records "not declared" rather than a false
-    // "declared and failed".
-    await completeAgent(agentId, { success: false, validationPassed: null, error: message });
-    await completeAgentRun(runId, '', 1, 0, { message, category: 'runner-error' });
+    // Finalize through the SAME chokepoint every other ending uses (#3632).
+    // Finalizing the agent alone — which is all this used to do — left the TASK
+    // sitting `in_progress` holding its federation claim until the 15-minute
+    // orphan sweep, and that sweep is for orphans: it charges
+    // `orphanRetryCount` against MAX_ORPHAN_RETRIES and arms a 30-minute
+    // cooldown for a failure the task did not cause. finalizeAgent owns the
+    // task transition, execution tracking, and the per-type failure ledger;
+    // releaseRetryHold then flips the held retry to `pending` immediately (and
+    // `updateTask` strips the claim keys on the way out of `in_progress`), so
+    // the task is re-dequeuable the moment the rejection lands.
+    //
+    // `spawn-rejected` is its own reason, deliberately NOT the TUI's
+    // `spawn-error`: that one is `actionable` (→ the task is BLOCKED for a
+    // human), which is right when a PTY genuinely can't start but wrong for a
+    // runner that was merely unreachable for a moment. See its entry in
+    // COMPLETION_REASON_ANALYSES.
+    const errorAnalysis = analyzeAgentFailure('', task, model, {
+      completionReason: 'spawn-rejected',
+      completionError: message,
+    });
+    // validationPassed is the null sentinel (#2344), applied inside
+    // finalizeAgent: no success criterion was ever evaluated, so this records
+    // "not declared" rather than a false "declared and failed".
+    await finalizeAgent({
+      agentId,
+      task,
+      runId,
+      providerId: provider.id,
+      success: false,
+      exitCode: 1,
+      duration: 0,
+      outputBuffer: '',
+      errorAnalysis,
+      isTruthyMetaFn: isTruthyMeta,
+      error: message,
+      completionReason: 'spawn-rejected',
+      workspacePath,
+      // The agent never ran, so it cannot have opened a PR — skip the
+      // PR-claim verification entirely (it only applies to claimed successes).
+      prExpected: false,
+    }).catch(err => {
+      emitLog('error', `finalizeAgent threw for rejected spawn ${agentId}: ${err.message}`, { agentId, taskId: task.id, error: err.message });
+    });
+    await releaseRetryHold({ agentId, task, success: false })
+      .catch(err => emitLog('warn', `Retry-hold release failed for rejected spawn ${agentId}: ${err.message}`, { agentId, taskId: task.id }));
     emitLog('error', `Agent ${agentId} failed to spawn via runner: ${message}`, { agentId, taskId: task.id });
     cosEvents.emit('agent:error', { agentId, taskId: task.id, error: message });
     return null;

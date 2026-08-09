@@ -11,6 +11,14 @@
  * dispatch had the same hole with a shorter tail: the zombie reaper eventually
  * finalized it with a generic message that named no cause.)
  *
+ * The follow-on hole (#3632): that recovery finalized the AGENT with a bare
+ * `completeAgent` and never transitioned the TASK, so it sat `in_progress`
+ * holding its federation claim until the 15-minute orphan sweep — which treats
+ * it as an orphan, charging `orphanRetryCount` and arming a 30-minute cooldown
+ * for a failure the task did not cause. It now runs the same
+ * finalizeAgent → releaseRetryHold chain the TUI `finish()` does, which is
+ * pinned at the same seam in agentTuiSpawning.test.js.
+ *
  * Lives in its own file because agentLifecycle.test.js deliberately imports no
  * part of the orchestrator graph — it reads the source as a string. Driving the
  * real function needs the leaves mocked, which would change that file's whole
@@ -74,12 +82,20 @@ vi.mock('./agentTuiSpawning.js', () => ({
 
 vi.mock('./agentProviderResolution.js', () => ({ resolveAgentProviderAndModel: vi.fn() }));
 vi.mock('./agentWorkspacePrep.js', () => ({ prepareAgentWorkspace: vi.fn() }));
-vi.mock('./agentWorktreeCleanup.js', () => ({ cleanupAgentWorktree: vi.fn() }));
+vi.mock('./agentWorktreeCleanup.js', () => ({
+  cleanupAgentWorktree: vi.fn(),
+  releaseRetryHold: vi.fn().mockResolvedValue({}),
+}));
 vi.mock('./agentCompletionCleanup.js', () => ({ runAgentCompletionCleanup: vi.fn() }));
 vi.mock('./agentSummaryExtraction.js', () => ({ extractFinalSummary: vi.fn() }));
 vi.mock('./agentManagement.js', () => ({ handleOrphanedTask: vi.fn() }));
 vi.mock('./agentPromptBuilder.js', () => ({ buildAgentPrompt: vi.fn(), getAppWorkspace: vi.fn() }));
-vi.mock('./agentErrorAnalysis.js', () => ({ analyzeAgentFailure: vi.fn().mockReturnValue(null) }));
+// The real classification of a `spawn-rejected` reason (non-actionable, so the
+// task is budgeted a retry rather than blocked) is pinned in
+// agentErrorAnalysis.test.js; here we only need a stand-in object to follow.
+vi.mock('./agentErrorAnalysis.js', () => ({
+  analyzeAgentFailure: vi.fn().mockReturnValue({ category: 'startup-failure', actionable: false }),
+}));
 vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./instances.js', () => ({ ensureInstanceId: vi.fn().mockResolvedValue('instance-1') }));
 vi.mock('./toolStateMachine.js', () => ({
@@ -98,7 +114,10 @@ import { spawnViaRunner } from './agentLifecycle.js';
 import { spawnAgentViaRunner } from './cosRunnerClient.js';
 import { completeAgent, updateAgent } from './cosAgentLifecycle.js';
 import { completeAgentRun } from './agentRunTracking.js';
-import { releaseAgentLane } from './agentFinalization.js';
+import { finalizeAgent, releaseAgentLane } from './agentFinalization.js';
+import { releaseRetryHold } from './agentWorktreeCleanup.js';
+import { analyzeAgentFailure } from './agentErrorAnalysis.js';
+import { handleOrphanedTask } from './agentManagement.js';
 import { runnerAgents } from './agentState.js';
 
 const REJECTION = 'Command not allowed: grok. Permitted commands: claude, codex';
@@ -127,21 +146,64 @@ describe('spawnViaRunner — the runner rejects the spawn', () => {
     await expect(spawnViaRunner('agent-1', { id: 'task-1' }, runnerOpts())).resolves.toBeNull();
   });
 
-  it('finalizes the agent record with the runner\'s actual error', async () => {
+  it('finalizes through finalizeAgent with the runner\'s actual error, not a bare completeAgent', async () => {
     vi.mocked(spawnAgentViaRunner).mockRejectedValueOnce(new Error(REJECTION));
 
     await spawnViaRunner('agent-1', { id: 'task-1' }, runnerOpts());
 
-    expect(completeAgent).toHaveBeenCalledWith('agent-1', expect.objectContaining({
+    expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: 'agent-1',
+      runId: 'run-1',
+      providerId: 'grok-cli',
       success: false,
-      // No success criterion was ever evaluated — the null sentinel (#2344)
-      // keeps "never ran" out of the declared-and-failed bucket.
-      validationPassed: null,
+      exitCode: 1,
+      // Attributable: a rejected spawn is not an ordinary run failure, and the
+      // agent never ran so it cannot owe a PR.
+      completionReason: 'spawn-rejected',
+      prExpected: false,
       error: expect.stringContaining('Command not allowed: grok'),
     }));
-    expect(completeAgentRun).toHaveBeenCalledWith(
-      'run-1', '', 1, 0, expect.objectContaining({ category: 'runner-error' })
-    );
+    // finalizeAgent owns the completeAgent + completeAgentRun writes (with the
+    // #2344 null validation sentinel) — doing them here as well would double-write.
+    expect(completeAgent).not.toHaveBeenCalled();
+    expect(completeAgentRun).not.toHaveBeenCalled();
+  });
+
+  it('classifies the rejection under the spawn-rejected reason, carrying the runner message', async () => {
+    vi.mocked(spawnAgentViaRunner).mockRejectedValueOnce(new Error(REJECTION));
+
+    await spawnViaRunner('agent-1', { id: 'task-1' }, runnerOpts());
+
+    expect(analyzeAgentFailure).toHaveBeenCalledWith('', expect.objectContaining({ id: 'task-1' }), 'some-model', {
+      completionReason: 'spawn-rejected',
+      completionError: REJECTION,
+    });
+  });
+
+  it('releases the retry hold so the task returns to pending instead of waiting on the orphan sweep', async () => {
+    const task = { id: 'task-1' };
+    vi.mocked(spawnAgentViaRunner).mockRejectedValueOnce(new Error(REJECTION));
+
+    await spawnViaRunner('agent-1', task, runnerOpts());
+
+    // The seam the TUI path is pinned at (agentTuiSpawning.test.js). releaseRetryHold
+    // flips the held retry to `pending` in one write, and leaving `in_progress`
+    // is what strips the federation claim keys (cosTaskClaim.CLAIM_METADATA_KEYS).
+    expect(releaseRetryHold).toHaveBeenCalledWith({ agentId: 'agent-1', task, success: false });
+    // Ordering matters: finalizeAgent arms the hold, releaseRetryHold clears it.
+    expect(vi.mocked(finalizeAgent).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(releaseRetryHold).mock.invocationCallOrder[0]);
+    // The whole point: the orphan path — which charges `orphanRetryCount` and
+    // arms a 30-minute cooldown — is never reached for a spawn the task didn't cause.
+    expect(handleOrphanedTask).not.toHaveBeenCalled();
+  });
+
+  it('still finalizes when releaseRetryHold rejects — the orphan sweep is the fallback, not a crash', async () => {
+    vi.mocked(spawnAgentViaRunner).mockRejectedValueOnce(new Error(REJECTION));
+    vi.mocked(releaseRetryHold).mockRejectedValueOnce(new Error('task store unreadable'));
+
+    await expect(spawnViaRunner('agent-1', { id: 'task-1' }, runnerOpts())).resolves.toBeNull();
+    expect(finalizeAgent).toHaveBeenCalled();
   });
 
   it('drops the runnerAgents entry so the orphan sweep can see the record', async () => {
@@ -188,7 +250,8 @@ describe('spawnViaRunner — the runner rejects the spawn', () => {
     await expect(spawnViaRunner('agent-1', { id: 'task-1' }, runnerOpts())).resolves.toBe('agent-1');
 
     expect(updateAgent).toHaveBeenCalledWith('agent-1', { pid: 4242 });
-    expect(completeAgent).not.toHaveBeenCalled();
+    expect(finalizeAgent).not.toHaveBeenCalled();
+    expect(releaseRetryHold).not.toHaveBeenCalled();
     expect(runnerAgents.has('agent-1')).toBe(true);
   });
 });

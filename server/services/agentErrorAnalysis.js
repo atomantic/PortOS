@@ -657,6 +657,22 @@ export const COMPLETION_REASON_ANALYSES = {
     escalation: 'Confirm the required CLI/tool is installed and on PATH for the agent user (or fix the command), then approve the retry.',
     message: 'Failed to start the agent session',
     suggestedFix: 'The shell/PTY session could not be created. Check system resources and the provider command configuration.'
+  },
+  // The runner refused the spawn outright — a command missing from its
+  // allowlist, malformed cliArgs, or the runner simply unreachable. No child
+  // ever existed, so there is no transcript to classify and the rejection prose
+  // (carried in as `completionError`) is the whole diagnosis.
+  //
+  // Deliberately NOT actionable, unlike its `spawn-error` sibling above: a
+  // rejection is frequently just a briefly-unreachable runner, and blocking the
+  // task for a human would park work that a plain retry fixes. A genuinely
+  // misconfigured command still surfaces — it fails identically every attempt
+  // and blocks on MAX_TASK_RETRIES, with the runner's own message attached.
+  'spawn-rejected': {
+    category: 'spawn-error',
+    actionable: false,
+    message: 'The runner rejected the spawn',
+    suggestedFix: 'No agent process was ever created — the cos-runner refused the spawn or was unreachable. Check that the runner is up and that the provider command is on its allowlist; the task is requeued for a retry either way.'
   }
 };
 

@@ -877,6 +877,37 @@ describe('analyzeAgentFailure — runner completion reason (COMPLETION_REASON_AN
     expect(endsAwaitingUserInput(answeredEarly)).toBe(false);
   });
 
+  // #3632: the runner refused the spawn, so there is no transcript at all — the
+  // rejection prose is the entire diagnosis, and it must reach the analysis.
+  it('classifies a runner-rejected spawn from its reason alone, carrying the rejection prose', () => {
+    const rejection = 'Command not allowed: grok. Permitted commands: claude, codex';
+    const analysis = analyzeAgentFailure('', { id: 't' }, 'x', {
+      completionReason: 'spawn-rejected',
+      completionError: rejection,
+    });
+    expect(analysis.category).toBe('spawn-error');
+    expect(analysis.origin).toBe('runner');
+    expect(analysis.completionReason).toBe('spawn-rejected');
+    expect(analysis.snippet).toContain('Command not allowed: grok');
+  });
+
+  // The distinction from its `spawn-error` sibling is the whole point: an
+  // actionable verdict BLOCKS the task for a human, and a runner that was briefly
+  // unreachable does not warrant that. Non-actionable ⇒ resolveFailedTaskDecision
+  // budgets an ordinary retry (held for its resume pointer, then released).
+  it('leaves a runner-rejected spawn retryable rather than blocking the task', () => {
+    expect(COMPLETION_REASON_ANALYSES['spawn-rejected'].actionable).toBe(false);
+    expect(COMPLETION_REASON_ANALYSES['spawn-error'].actionable).toBe(true);
+
+    const analysis = analyzeAgentFailure('', { id: 't' }, 'x', {
+      completionReason: 'spawn-rejected',
+      completionError: 'runner unreachable',
+    });
+    const decision = resolveFailedTaskDecision({ id: 't', metadata: {} }, analysis, { agentId: 'agent-1' });
+    expect(decision.status).toBe('in_progress');
+    expect(decision.metadataUpdates.blockedReason).toBeUndefined();
+  });
+
   it('maps every reason to a category ERROR_PATTERNS already produces (no orphan taxonomy tokens)', () => {
     const known = new Set([...ERROR_PATTERNS.map(p => p.category), 'startup-failure']);
     for (const [reason, def] of Object.entries(COMPLETION_REASON_ANALYSES)) {
