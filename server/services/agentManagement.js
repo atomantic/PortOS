@@ -29,7 +29,7 @@ import { isRetryHeld, clearedRetryHoldMetadata } from '../lib/taskRetryHold.js';
 import { syncRunnerAgents } from './agentRunnerSync.js';
 import { flushRunnerOutputBatcher } from './agentRunnerOutputBatchers.js';
 import { completeAgentRun } from './agentRunTracking.js';
-import { committedDuringRun } from '../lib/gitCommitProbe.js';
+import { committedDuringRun, toEpochMs } from '../lib/gitCommitProbe.js';
 import { dispatchRecoveredTaskOutputHook } from './agentFinalization.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { readHostShutdownMarker, clearHostShutdownMarker, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
@@ -839,12 +839,9 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
   // Scoped to the dead run's OWN window (#3637): the retired task-id commit marker
   // was never emitted by anything, and an unbounded `git log` would credit this
   // task with any commit in the repo — including another agent's.
-  // Accepts both shapes the agent record can carry: the persisted ISO string
-  // (`registerAgent`) and a raw epoch-ms number. `Date.parse(1754696324000)`
-  // stringifies its argument and returns NaN, so a number MUST NOT go through it.
-  const orphanRunStartedAt = typeof agentStartedAt === 'number'
-    ? agentStartedAt
-    : Date.parse(agentStartedAt);
+  // Both shapes the agent record can carry — the persisted ISO string and a raw
+  // epoch-ms number (see toEpochMs for why a bare Date.parse drops the latter).
+  const orphanRunStartedAt = toEpochMs(agentStartedAt);
   const commitFound = Number.isFinite(orphanRunStartedAt)
     && await committedDuringRun(agentMetadata?.workspacePath || ROOT_DIR, orphanRunStartedAt);
   if (commitFound) {

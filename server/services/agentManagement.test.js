@@ -53,7 +53,8 @@ vi.mock('./cosEvents.js', () => ({
   emitLog: vi.fn()
 }));
 
-vi.mock('../lib/gitCommitProbe.js', () => ({
+vi.mock('../lib/gitCommitProbe.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   committedDuringRun: vi.fn().mockResolvedValue(false),
 }));
 vi.mock('./agentRunTracking.js', () => ({

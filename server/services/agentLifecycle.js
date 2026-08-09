@@ -50,7 +50,7 @@ import { createToolExecution, startExecution, completeExecution, errorExecution 
 import { determineLane, acquire, release } from './executionLanes.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { createAgentRun } from './agentRunTracking.js';
-import { committedDuringRun } from '../lib/gitCommitProbe.js';
+import { committedDuringRun, toEpochMs } from '../lib/gitCommitProbe.js';
 import { buildAgentPrompt, getAppWorkspace } from './agentPromptBuilder.js';
 import { isOllamaClaudeProvider, isClaudeCommand, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { canTypeSlashCommands } from '../lib/slashdoInvocation.js';
@@ -1002,7 +1002,9 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     // Post-execution validation: a non-zero exit that still left a commit inside
     // the run's own window DID the work (#3637 — the probe is the window, not a
     // task-id commit marker no agent ever emitted).
-    const runStartedAt = Date.parse(agent.startedAt);
+    // `runnerAgents` (in-memory) stamps `startedAt: Date.now()` — a NUMBER — while
+    // the persisted record stores an ISO string; toEpochMs handles both.
+    const runStartedAt = toEpochMs(agent.startedAt);
     let effectiveSuccess = success;
     if (!effectiveSuccess && task?.id) {
       const workspacePath = agent.workspacePath || ROOT_DIR;

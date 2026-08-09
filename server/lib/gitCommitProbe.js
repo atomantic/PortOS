@@ -58,6 +58,22 @@ export async function commitsSince(workspacePath, sinceMs) {
 }
 
 /**
+ * Coerce an agent record's `startedAt` to epoch ms, whichever shape it is in.
+ * The in-memory agent maps stamp `Date.now()` (a NUMBER); the persisted record
+ * stamps an ISO string. `Date.parse(1754696324000)` stringifies its argument and
+ * returns NaN, so a bare `Date.parse` silently drops the numeric half — and a
+ * dropped window means the commit probe is skipped for that whole spawn path.
+ *
+ * @returns {number} epoch ms, or NaN when there is no usable timestamp.
+ */
+export function toEpochMs(startedAt) {
+  if (typeof startedAt === 'number') return startedAt;
+  if (typeof startedAt === 'string') return Date.parse(startedAt);
+  if (startedAt instanceof Date) return startedAt.getTime();
+  return NaN;
+}
+
+/**
  * Boolean form of `commitsSince` — "did this run leave a commit behind?".
  * The shape every agent-completion path actually wants.
  */

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('./execGit.js', () => ({ execGit: vi.fn() }));
 
 import { execGit } from './execGit.js';
-import { commitsSince, committedDuringRun } from './gitCommitProbe.js';
+import { commitsSince, committedDuringRun, toEpochMs } from './gitCommitProbe.js';
 
 const SINCE = Date.parse('2026-08-08T18:23:30.000Z');
 
@@ -66,6 +66,31 @@ describe('commitsSince (#3637)', () => {
     vi.mocked(execGit).mockResolvedValue({ exitCode: 0, stdout: '0\n', stderr: '' });
     await commitsSince('/tmp/ws', SINCE);
     expect(execGit).toHaveBeenCalledWith(expect.anything(), '/tmp/ws', { ignoreExitCode: true, timeout: 10_000 });
+  });
+});
+
+describe('toEpochMs (#3637)', () => {
+  // The in-memory agent maps stamp `Date.now()` (a number); the persisted record
+  // stamps an ISO string. A bare `Date.parse` silently drops the numeric half —
+  // `Date.parse(1754696324000)` stringifies its argument and returns NaN — which
+  // would skip the commit probe for every live runner/TUI/CLI run.
+  it('passes a numeric epoch through untouched', () => {
+    expect(toEpochMs(1754696324000)).toBe(1754696324000);
+    expect(toEpochMs(0)).toBe(0);
+  });
+
+  it('parses the persisted ISO string', () => {
+    expect(toEpochMs('2026-08-09T00:00:00.000Z')).toBe(Date.parse('2026-08-09T00:00:00.000Z'));
+  });
+
+  it('accepts a Date instance', () => {
+    expect(toEpochMs(new Date(1754696324000))).toBe(1754696324000);
+  });
+
+  it('is NaN for anything unusable, so callers can gate on Number.isFinite', () => {
+    for (const bad of [null, undefined, {}, [], 'not-a-date']) {
+      expect(Number.isFinite(toEpochMs(bad))).toBe(false);
+    }
   });
 });
 
