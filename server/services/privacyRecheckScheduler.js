@@ -18,6 +18,7 @@ import { getSettings } from './settings.js';
 import { getUserTimezone } from '../lib/timezone.js';
 import { runScanPass } from './privacyScan.js';
 import { runOptOutPass } from './privacyOptOut.js';
+import { listSubjects } from './privacySubjects.js';
 
 const EVENT_ID = 'privacy-recheck';
 const DEFAULT_CRON = '0 4 * * 0'; // weekly, Sun 4am
@@ -45,11 +46,25 @@ export async function startPrivacyRecheckScheduler() {
         console.log('🛡️ Privacy recheck: disabled since registration — skipping run');
         return;
       }
-      console.log('🛡️ Privacy recheck: running scheduled scan + opt-out pass');
-      // Scan first (re-checks due cases + finds new exposure), then work the
-      // cases. Both are read-settings-driven and safe to re-run (idempotent).
-      await runScanPass();
-      await runOptOutPass();
+      // Run for EVERY consenting subject, not just `self` — a household member
+      // added to the Privacy Center gets the same scheduled upkeep (#3658). A
+      // subject with no consent row is skipped here (the engines would refuse
+      // them anyway); one subject's failure must not abort the others, and this
+      // handler runs OUTSIDE the request lifecycle, so the per-subject try/catch
+      // is the sanctioned exception to the no-try/catch rule.
+      const subjects = await listSubjects();
+      const consenting = subjects.filter((s) => (s.consentCount ?? 0) > 0);
+      console.log(`🛡️ Privacy recheck: running scheduled scan + opt-out pass for ${consenting.length} consenting subject(s)`);
+      for (const subject of consenting) {
+        try {
+          // Scan first (re-checks due cases + finds new exposure), then work the
+          // cases. Both are settings-driven and safe to re-run (idempotent).
+          await runScanPass({ subjectId: subject.id });
+          await runOptOutPass({ subjectId: subject.id });
+        } catch (err) {
+          console.error(`❌ Privacy recheck failed for subject ${subject.id}: ${err.message}`);
+        }
+      }
     },
     metadata: { source: 'privacyRecheckScheduler' },
   });

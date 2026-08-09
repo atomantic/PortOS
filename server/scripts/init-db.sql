@@ -1128,6 +1128,29 @@ CREATE TABLE IF NOT EXISTS lora_training_runs (
 CREATE INDEX IF NOT EXISTS idx_lora_training_runs_status ON lora_training_runs (status);
 CREATE INDEX IF NOT EXISTS idx_lora_training_runs_character ON lora_training_runs (character_id);
 
+-- Privacy Center: household subjects (issue #3658). Every person the Privacy
+-- Center works on behalf of — `self` plus any consenting household member
+-- (partner, child, parent). A TABLE rather than a free-text `subject` string so
+-- renames aren't lossy and scoping stays typed. Machine-local like the rest of
+-- the suite: no federation, no tombstones, hard deletes (which CASCADE the
+-- subject's vault/org/holding/change/case/consent rows). Created FIRST so the
+-- `subject_id` FKs below resolve. Mirrors the privacy blocks in
+-- server/lib/db/schema/privacy.js.
+CREATE TABLE IF NOT EXISTS privacy_subjects (
+  id UUID PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  relationship TEXT NOT NULL DEFAULT 'other',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+-- Seed the `self` row at a FIXED id (mirrored by SELF_SUBJECT_ID in
+-- server/lib/db/schema/privacy.js and PRIVACY_SELF_SUBJECT_ID in
+-- server/lib/privacyValidation.js) so every install names the same row without
+-- a lookup. Idempotent — an install that renamed it keeps its display_name.
+INSERT INTO privacy_subjects (id, display_name, relationship, created_at, updated_at)
+VALUES ('00000000-0000-4000-8000-000000000001', 'Me', 'self', NOW(), NOW())
+ON CONFLICT (id) DO NOTHING;
+
 -- Privacy Center: PII Vault (issue #2140, epic #2138). Encrypted-at-rest
 -- identity facts — `value_enc` is AES-256-GCM ciphertext (`v1:<iv>:<tag>:<ct>`,
 -- key from PRIVACY_VAULT_KEY; see server/lib/vaultCrypto.js). Plaintext is
@@ -1141,6 +1164,7 @@ CREATE INDEX IF NOT EXISTS idx_lora_training_runs_character ON lora_training_run
 -- app-side). Mirrors the privacy blocks in server/lib/db.js ensureSchema().
 CREATE TABLE IF NOT EXISTS privacy_vault_records (
   id UUID PRIMARY KEY,
+  subject_id UUID NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001' REFERENCES privacy_subjects (id) ON DELETE CASCADE,
   type TEXT NOT NULL,
   label TEXT NOT NULL DEFAULT '',
   value_enc TEXT NOT NULL,
@@ -1161,8 +1185,10 @@ CREATE INDEX IF NOT EXISTS idx_privacy_vault_records_type ON privacy_vault_recor
 CREATE TABLE IF NOT EXISTS privacy_consents (
   id UUID PRIMARY KEY,
   subject TEXT NOT NULL DEFAULT 'self',
+  subject_id UUID NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001' REFERENCES privacy_subjects (id) ON DELETE CASCADE,
   scope TEXT NOT NULL,
   method TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
   granted_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -1176,6 +1202,7 @@ CREATE TABLE IF NOT EXISTS privacy_consents (
 -- the privacy blocks in server/lib/db.js ensureSchema().
 CREATE TABLE IF NOT EXISTS privacy_orgs (
   id UUID PRIMARY KEY,
+  subject_id UUID NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001' REFERENCES privacy_subjects (id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   category TEXT NOT NULL DEFAULT 'other',
   website TEXT NOT NULL DEFAULT '',
@@ -1195,6 +1222,7 @@ CREATE INDEX IF NOT EXISTS idx_privacy_orgs_status ON privacy_orgs (status);
 -- holdings rows.
 CREATE TABLE IF NOT EXISTS privacy_org_holdings (
   org_id UUID NOT NULL REFERENCES privacy_orgs (id) ON DELETE CASCADE,
+  subject_id UUID NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001' REFERENCES privacy_subjects (id) ON DELETE CASCADE,
   vault_record_id UUID NOT NULL REFERENCES privacy_vault_records (id) ON DELETE CASCADE,
   status TEXT NOT NULL DEFAULT 'current',
   noted_at TIMESTAMPTZ DEFAULT NOW(),
@@ -1241,6 +1269,7 @@ CREATE INDEX IF NOT EXISTS idx_privacy_brokers_cluster_parent ON privacy_brokers
 -- its cases.
 CREATE TABLE IF NOT EXISTS privacy_broker_cases (
   id UUID PRIMARY KEY,
+  subject_id UUID NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001' REFERENCES privacy_subjects (id) ON DELETE CASCADE,
   broker_id TEXT NOT NULL REFERENCES privacy_brokers (id) ON DELETE CASCADE,
   state TEXT NOT NULL DEFAULT 'unscanned',
   found BOOLEAN,
@@ -1252,8 +1281,9 @@ CREATE TABLE IF NOT EXISTS privacy_broker_cases (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
--- One live case per broker in v1 (self-only subject).
-CREATE UNIQUE INDEX IF NOT EXISTS idx_privacy_broker_cases_broker ON privacy_broker_cases (broker_id);
+-- One live case per (broker, subject) — two household members are worked
+-- through the same broker independently (#3658).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_privacy_broker_cases_broker_subject ON privacy_broker_cases (broker_id, subject_id);
 -- "Which cases are due for a recheck" — the run-loop's primary query.
 CREATE INDEX IF NOT EXISTS idx_privacy_broker_cases_recheck ON privacy_broker_cases (next_recheck_at);
 
@@ -1269,6 +1299,7 @@ CREATE INDEX IF NOT EXISTS idx_privacy_broker_cases_recheck ON privacy_broker_ca
 -- the block in server/lib/db.js ensureSchema().
 CREATE TABLE IF NOT EXISTS privacy_change_events (
   id UUID PRIMARY KEY,
+  subject_id UUID NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001' REFERENCES privacy_subjects (id) ON DELETE CASCADE,
   vault_record_id UUID NOT NULL REFERENCES privacy_vault_records (id) ON DELETE CASCADE,
   replacement_record_id UUID REFERENCES privacy_vault_records (id) ON DELETE SET NULL,
   kind TEXT NOT NULL DEFAULT 'other',
@@ -1277,6 +1308,18 @@ CREATE TABLE IF NOT EXISTS privacy_change_events (
 );
 -- "Changes touching this record" — the inventory view groups by the old record.
 CREATE INDEX IF NOT EXISTS idx_privacy_change_events_vault_record ON privacy_change_events (vault_record_id);
+-- "Every record for subject X" — the primary list filter once a second
+-- household member exists (#3658).
+CREATE INDEX IF NOT EXISTS idx_privacy_vault_records_subject ON privacy_vault_records (subject_id);
+CREATE INDEX IF NOT EXISTS idx_privacy_orgs_subject ON privacy_orgs (subject_id);
+CREATE INDEX IF NOT EXISTS idx_privacy_change_events_subject ON privacy_change_events (subject_id);
+CREATE INDEX IF NOT EXISTS idx_privacy_consents_subject ON privacy_consents (subject_id);
+-- `self` always consents — the install owner IS the self subject, so the
+-- engine's no-consent-no-action guard must never refuse them (#3658).
+INSERT INTO privacy_consents (id, subject_id, scope, method, note, granted_at)
+SELECT gen_random_uuid(), '00000000-0000-4000-8000-000000000001', 'pii_vault', 'self',
+       'seeded: the install owner is the self subject', NOW()
+WHERE NOT EXISTS (SELECT 1 FROM privacy_consents WHERE subject_id = '00000000-0000-4000-8000-000000000001');
 
 -- Stacker News community stewardship. Credentials are isolated from account
 -- configuration; untrusted snapshots and all review transitions are auditable.

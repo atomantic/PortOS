@@ -13,9 +13,19 @@ vi.mock('./privacyBrokers.js', async (importOriginal) => {
 });
 vi.mock('./catalogIngestSources.js', () => ({ fetchUrlMainText: vi.fn(async () => null) }));
 vi.mock('./privacyVault.js', () => ({ listScanEligibleValues: vi.fn(async () => []) }));
+// #3658 consent gate — mocked so the pass runs without a DB, and so a test can
+// flip it to the refusing behaviour to prove the guard is engine-enforced.
+const SELF = '00000000-0000-4000-8000-000000000001';
+const { assertSubjectConsentMock } = vi.hoisted(() => ({
+  assertSubjectConsentMock: vi.fn(async (id) => ({ id: id || '00000000-0000-4000-8000-000000000001' })),
+}));
+vi.mock('./privacySubjects.js', () => ({
+  resolveSubjectId: (id) => id || SELF,
+  assertSubjectConsent: assertSubjectConsentMock,
+}));
 
 const {
-  parseCityState, buildSearchVectors, fillSearchUrl, classifyScanResult, scanBroker,
+  parseCityState, buildSearchVectors, fillSearchUrl, classifyScanResult, scanBroker, runScanPass,
 } = await import('./privacyScan.js');
 const brokers = await import('./privacyBrokers.js');
 
@@ -195,5 +205,37 @@ describe('scanBroker — classify → record wiring', () => {
     expect(res.skipped).toBe(true);
     expect(browserFetch).not.toHaveBeenCalled();
     expect(brokers.recordScanVerdict).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Consent gate (issue #3658) ─────────────────────────────────────────────
+// NO CONSENT, NO ACTION. The scan pass must refuse a subject with no consent row
+// BEFORE it decrypts a single vault value or fetches a single broker page — the
+// refusal lives in the service, not in the UI that hides the Scan button.
+describe('runScanPass consent gate — engine-enforced (#3658)', () => {
+  it('refuses a subject with no consent, before reading the vault', async () => {
+    assertSubjectConsentMock.mockImplementationOnce(async () => {
+      const err = new Error('no consent');
+      err.status = 403;
+      err.code = 'SUBJECT_CONSENT_REQUIRED';
+      throw err;
+    });
+    const vault = await import('./privacyVault.js');
+    vault.listScanEligibleValues.mockClear();
+    await expect(runScanPass({ subjectId: 'subject-2' }))
+      .rejects.toMatchObject({ code: 'SUBJECT_CONSENT_REQUIRED' });
+    expect(vault.listScanEligibleValues).not.toHaveBeenCalled();
+    expect(brokers.recordScanVerdict).not.toHaveBeenCalled();
+  });
+
+  it('checks consent for the resolved subject and scopes the vault read to it', async () => {
+    const vault = await import('./privacyVault.js');
+    vault.listScanEligibleValues.mockClear();
+    vault.listScanEligibleValues.mockResolvedValue([]);
+    const result = await runScanPass({ subjectId: 'subject-2' });
+    expect(assertSubjectConsentMock).toHaveBeenCalledWith('subject-2', { action: 'broker exposure scan' });
+    expect(vault.listScanEligibleValues).toHaveBeenCalledWith({ subjectId: 'subject-2' });
+    // No name vector ⇒ the pass short-circuits without touching a broker.
+    expect(result.reason).toBe('no_scan_vectors');
   });
 });

@@ -72,7 +72,21 @@ vi.mock('../services/privacyChanges.js', () => ({
   draftUpdateEmail: vi.fn(async () => ({ draftId: 'draft-1', status: 'draft' })),
 }));
 
+// Household subjects (#3658) — mocked so the route layer is exercised without a DB.
+const SELF = '00000000-0000-4000-8000-000000000001';
+vi.mock('../services/privacySubjects.js', () => ({
+  listSubjects: vi.fn(async () => [{ id: SELF, displayName: 'Me', relationship: 'self', isSelf: true, consentCount: 1, recordCount: 2 }]),
+  getSubject: vi.fn(async (id) => (id === SELF ? { id, displayName: 'Me', relationship: 'self', isSelf: true } : null)),
+  createSubject: vi.fn(async (input) => ({ id: 'c0ffee00-0000-4000-8000-0000000000a1', ...input, isSelf: false })),
+  updateSubject: vi.fn(async (id, patch) => ({ id, ...patch })),
+  deleteSubject: vi.fn(async () => ({ ok: true })),
+  listSubjectConsents: vi.fn(async () => [{ id: 'consent-1', scope: 'pii_vault', method: 'signed_form', note: '' }]),
+  recordConsent: vi.fn(async (input) => ({ id: 'consent-2', ...input })),
+  assertSubject: vi.fn(async (id) => ({ id })),
+}));
+
 const privacyRoutes = (await import('./privacy.js')).default;
+const subjectService = await import('../services/privacySubjects.js');
 const service = await import('../services/privacyVault.js');
 const orgService = await import('../services/privacyOrgs.js');
 const brokerService = await import('../services/privacyBrokers.js');
@@ -552,5 +566,81 @@ describe('privacy recheck schedule (#2146)', () => {
   it('PUT rejects a malformed cron / unknown key', async () => {
     expect((await request(makeApp()).put('/api/privacy/optout/schedule').send({ cronExpression: 'nope' })).status).toBe(400);
     expect((await request(makeApp()).put('/api/privacy/optout/schedule').send({ bogus: 1 })).status).toBe(400);
+  });
+});
+
+// ─── Household subjects (issue #3658) ──────────────────────────────────────
+
+describe('/api/privacy/subjects', () => {
+  it('lists subjects', async () => {
+    const res = await request(makeApp()).get('/api/privacy/subjects');
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({ id: SELF, isSelf: true, consentCount: 1 });
+  });
+
+  it('creates a subject and REQUIRES a consent method', async () => {
+    const ok = await request(makeApp()).post('/api/privacy/subjects')
+      .send({ displayName: 'Alex Example', relationship: 'partner', consentMethod: 'signed_form' });
+    expect(ok.status).toBe(201);
+    expect(subjectService.createSubject).toHaveBeenCalledWith({
+      displayName: 'Alex Example', relationship: 'partner', consentMethod: 'signed_form',
+    });
+
+    const missing = await request(makeApp()).post('/api/privacy/subjects')
+      .send({ displayName: 'Alex Example', relationship: 'partner' });
+    expect(missing.status).toBe(400);
+
+    const bogus = await request(makeApp()).post('/api/privacy/subjects')
+      .send({ displayName: 'Alex Example', consentMethod: 'telepathy' });
+    expect(bogus.status).toBe(400);
+  });
+
+  it('404s an unknown subject on read', async () => {
+    const res = await request(makeApp()).get(`/api/privacy/subjects/${VALID_UUID}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('updates and deletes a subject', async () => {
+    const put = await request(makeApp()).put(`/api/privacy/subjects/${VALID_UUID}`).send({ displayName: 'Renamed' });
+    expect(put.status).toBe(200);
+    expect(subjectService.updateSubject).toHaveBeenCalledWith(VALID_UUID, { displayName: 'Renamed' });
+
+    const del = await request(makeApp()).delete(`/api/privacy/subjects/${VALID_UUID}`);
+    expect(del.status).toBe(200);
+    expect(subjectService.deleteSubject).toHaveBeenCalledWith(VALID_UUID);
+  });
+
+  it('lists and appends consent rows', async () => {
+    const list = await request(makeApp()).get(`/api/privacy/subjects/${VALID_UUID}/consents`);
+    expect(list.status).toBe(200);
+    expect(list.body[0]).toMatchObject({ scope: 'pii_vault', method: 'signed_form' });
+
+    const post = await request(makeApp()).post(`/api/privacy/subjects/${VALID_UUID}/consents`)
+      .send({ scope: 'broker_optout', method: 'written', note: 'form on file' });
+    expect(post.status).toBe(201);
+    expect(subjectService.recordConsent).toHaveBeenCalledWith({
+      subjectId: VALID_UUID, scope: 'broker_optout', method: 'written', note: 'form on file',
+    });
+  });
+});
+
+describe('subject scoping on the existing endpoints (#3658)', () => {
+  it('threads ?subjectId= into the vault list', async () => {
+    const res = await request(makeApp()).get(`/api/privacy/vault?subjectId=${VALID_UUID}`);
+    expect(res.status).toBe(200);
+    expect(service.listVaultRecords).toHaveBeenCalledWith({ type: undefined, subjectId: VALID_UUID });
+  });
+
+  it('threads subjectId into the scan + opt-out passes', async () => {
+    await request(makeApp()).post('/api/privacy/scan').send({ subjectId: VALID_UUID });
+    expect(scanService.runScanPass).toHaveBeenCalledWith({ subjectId: VALID_UUID });
+
+    await request(makeApp()).post('/api/privacy/optout').send({ subjectId: VALID_UUID });
+    expect(optOutService.runOptOutPass).toHaveBeenCalledWith({ subjectId: VALID_UUID });
+  });
+
+  it('rejects a non-uuid subjectId at the API edge', async () => {
+    const res = await request(makeApp()).get('/api/privacy/vault?subjectId=not-a-uuid');
+    expect(res.status).toBe(400);
   });
 });

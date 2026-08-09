@@ -14,6 +14,18 @@ const { queryMock, withTransactionMock } = vi.hoisted(() => ({
 
 vi.mock('../lib/db.js', () => ({ query: queryMock, withTransaction: withTransactionMock }));
 
+// #3658: the subject scope resolves through privacySubjects; stubbed so these
+// DB-mocked tests keep asserting on the privacy_* SQL rather than a subject read.
+const SELF = '00000000-0000-4000-8000-000000000001';
+vi.mock('./privacySubjects.js', () => ({
+  resolveSubjectId: (id) => id || SELF,
+  assertSubject: vi.fn(async (id) => ({ id: id || SELF })),
+  assertSubjectConsent: vi.fn(async (id) => ({ id: id || SELF })),
+  recordConsent: vi.fn(async () => ({ id: 'consent-1' })),
+  listSubjects: vi.fn(async () => [{ id: SELF, consentCount: 1 }]),
+}));
+
+
 const {
   createOrg, listOrgs, getOrg, updateOrg, deleteOrg,
   getHoldingsForOrg, getOrgsHoldingRecord, setOrgHoldings, setHoldingsStatus, getHoldingsSummary,
@@ -32,7 +44,7 @@ function mockTransaction(handler) {
 }
 
 const orgRow = (overrides = {}) => ({
-  id: 'o1', name: 'Acme Bank', category: 'bank', website: 'https://acme.example',
+  id: 'o1', subject_id: SELF, name: 'Acme Bank', category: 'bank', website: 'https://acme.example',
   trust: 'trusted', status: 'active', contact: {}, social_account_id: null,
   notes: '', created_at: 'now', updated_at: 'now', ...overrides,
 });
@@ -43,10 +55,11 @@ describe('createOrg', () => {
     const org = await createOrg({ name: 'Acme Bank' });
     const [sql, params] = queryMock.mock.calls[0];
     expect(sql).toMatch(/INSERT INTO privacy_orgs/);
-    expect(params[1]).toBe('Acme Bank');
-    expect(params[2]).toBe('other'); // category default
-    expect(params[4]).toBe('trusted'); // trust default
-    expect(params[5]).toBe('active'); // status default
+    expect(params[1]).toBe(SELF); // subject scope defaults to `self` (#3658)
+    expect(params[2]).toBe('Acme Bank');
+    expect(params[3]).toBe('other'); // category default
+    expect(params[5]).toBe('trusted'); // trust default
+    expect(params[6]).toBe('active'); // status default
     expect(org.name).toBe('Acme Bank');
   });
 
@@ -54,7 +67,7 @@ describe('createOrg', () => {
     queryMock.mockResolvedValue({ rows: [orgRow()] });
     await createOrg({ name: 'Acme', contact: { email: 'a@b.com' } });
     const [, params] = queryMock.mock.calls[0];
-    expect(params[6]).toBe(JSON.stringify({ email: 'a@b.com' }));
+    expect(params[7]).toBe(JSON.stringify({ email: 'a@b.com' }));
   });
 
   it('never logs the org name — it is privacy-adjacent data, like the vault plaintext', async () => {
@@ -68,23 +81,30 @@ describe('createOrg', () => {
 });
 
 describe('listOrgs', () => {
-  it('lists with no filters', async () => {
+  it('lists with no filters, always scoped to a subject (#3658)', async () => {
     queryMock.mockResolvedValue({ rows: [orgRow()] });
     const orgs = await listOrgs();
     expect(orgs).toHaveLength(1);
     const [sql, params] = queryMock.mock.calls[0];
-    expect(sql).not.toMatch(/WHERE/);
-    expect(params).toEqual([]);
+    expect(sql).toMatch(/WHERE subject_id = \$1/);
+    expect(params).toEqual([SELF]);
   });
 
-  it('applies trust/status/category filters', async () => {
+  it('applies trust/status/category filters on top of the subject scope', async () => {
     queryMock.mockResolvedValue({ rows: [] });
     await listOrgs({ trust: 'unwanted', status: 'active', category: 'broker' });
     const [sql, params] = queryMock.mock.calls[0];
-    expect(sql).toMatch(/trust = \$1/);
-    expect(sql).toMatch(/status = \$2/);
-    expect(sql).toMatch(/category = \$3/);
-    expect(params).toEqual(['unwanted', 'active', 'broker']);
+    expect(sql).toMatch(/subject_id = \$1/);
+    expect(sql).toMatch(/trust = \$2/);
+    expect(sql).toMatch(/status = \$3/);
+    expect(sql).toMatch(/category = \$4/);
+    expect(params).toEqual([SELF, 'unwanted', 'active', 'broker']);
+  });
+
+  it('scopes to an explicit subject when one is given', async () => {
+    queryMock.mockResolvedValue({ rows: [] });
+    await listOrgs({ subjectId: 'subject-2' });
+    expect(queryMock.mock.calls[0][1]).toEqual(['subject-2']);
   });
 });
 
@@ -175,6 +195,7 @@ describe('setOrgHoldings', () => {
   it('deletes the complement and upserts the given set, all inside one transaction', async () => {
     const client = mockTransaction(async (sql) => {
       if (/FROM privacy_orgs WHERE id/.test(sql)) return { rows: [orgRow()] };
+      if (/FROM privacy_vault_records WHERE id = ANY/.test(sql)) return { rows: [] };
       if (/DELETE FROM privacy_org_holdings/.test(sql)) return { rows: [] };
       if (/INSERT INTO privacy_org_holdings/.test(sql)) return { rows: [] };
       throw new Error(`unexpected client query: ${sql}`);
@@ -185,7 +206,7 @@ describe('setOrgHoldings', () => {
     expect(deleteCall[1]).toEqual(['o1', ['v1', 'v2']]);
     const insertCalls = client.query.mock.calls.filter(([sql]) => /INSERT INTO privacy_org_holdings/.test(sql));
     expect(insertCalls).toHaveLength(2);
-    expect(insertCalls[1][1]).toEqual(['o1', 'v2', 'current']); // default status applied
+    expect(insertCalls[1][1]).toEqual(['o1', SELF, 'v2', 'current']); // subject stamped + default status applied
     expect(withTransactionMock).toHaveBeenCalledTimes(1);
   });
 
@@ -205,6 +226,7 @@ describe('setOrgHoldings', () => {
     const fkError = Object.assign(new Error('insert or update on table violates foreign key constraint'), { code: '23503' });
     mockTransaction(async (sql) => {
       if (/FROM privacy_orgs WHERE id/.test(sql)) return { rows: [orgRow()] };
+      if (/FROM privacy_vault_records WHERE id = ANY/.test(sql)) return { rows: [] };
       if (/DELETE FROM privacy_org_holdings/.test(sql)) return { rows: [] };
       if (/INSERT INTO privacy_org_holdings/.test(sql)) throw fkError;
       throw new Error(`unexpected client query: ${sql}`);

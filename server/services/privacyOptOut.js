@@ -20,6 +20,12 @@
  *     `confirmed_removed`.
  *
  * HARD GUARDRAILS (autonomy never overrides — mirrors unbroker):
+ *   - NO CONSENT, NO ACTION. `runOptOutPass` / `runVerificationPass` refuse to
+ *     act for a subject with no recorded consent row
+ *     (privacySubjects.assertSubjectConsent, #3658). Like the disclosure
+ *     allowlist below, the guard lives in the SERVICE — a scheduled recheck, a
+ *     direct API call, or a future agent path is refused exactly like a hidden
+ *     UI button would be.
  *   - Disclosure is limited to the FIXED allowlist ∩ the broker's declared
  *     disclosure_fields. The engine refuses to emit anything outside
  *     {full_name,email,phone,city,state,dob,listing_url} regardless of what a
@@ -46,6 +52,7 @@ import { createDraft, approveDraft } from './messageDrafts.js';
 import { listAccounts } from './messageAccounts.js';
 import { getMessages } from './messageSync.js';
 import { getSettings } from './settings.js';
+import { resolveSubjectId, assertSubjectConsent } from './privacySubjects.js';
 
 // ─── Disclosure guardrail (pure) ────────────────────────────────────────────
 
@@ -398,8 +405,13 @@ export function planOptOutActions(casesWithBroker = []) {
  */
 export async function runVerificationPass({
   now = new Date(), messagesProvider = getMessages, removalProbe = probeBroker, probeDeps = {},
+  subjectId,
 } = {}) {
-  const cases = await listBrokerCases();
+  // CONSENT GATE — the verification pass re-probes brokers for the subject, so
+  // it is gated exactly like the submission pass.
+  const resolvedSubjectId = resolveSubjectId(subjectId);
+  await assertSubjectConsent(resolvedSubjectId, { action: 'opt-out verification pass' });
+  const cases = await listBrokerCases({ subjectId: resolvedSubjectId });
   const advanced = [];
   const confirmed = [];
   // 1. submitted → verification_pending when a trusted confirmation email exists.
@@ -422,9 +434,9 @@ export async function runVerificationPass({
     }
   }
   // 2. verifying re-scan → confirmed_removed (not_found only) for verification_pending/awaiting_processing.
-  const toVerify = (await listBrokerCases()).filter((c) => c.state === 'verification_pending' || c.state === 'awaiting_processing');
+  const toVerify = (await listBrokerCases({ subjectId: resolvedSubjectId })).filter((c) => c.state === 'verification_pending' || c.state === 'awaiting_processing');
   if (toVerify.length) {
-    const scanValues = await listScanEligibleValues();
+    const scanValues = await listScanEligibleValues({ subjectId: resolvedSubjectId });
     const vectors = buildSearchVectors(scanValues);
     for (const c of toVerify) {
       const broker = await getBroker(c.brokerId);
@@ -455,21 +467,26 @@ export async function runVerificationPass({
  * `privacy.recheck.autoSubmitWebForms`, both default OFF). Deps injectable.
  */
 export async function runOptOutPass({
-  now = new Date(), settingsProvider = getSettings, deps = {}, runVerification = true,
+  now = new Date(), settingsProvider = getSettings, deps = {}, runVerification = true, subjectId,
 } = {}) {
+  // CONSENT GATE — BEFORE any vault read, broker fetch, or draft creation. NO
+  // CONSENT, NO ACTION: a subject without a recorded consent row is refused
+  // (403) here in the service, not merely in the UI.
+  const resolvedSubjectId = resolveSubjectId(subjectId);
+  await assertSubjectConsent(resolvedSubjectId, { action: 'broker opt-out pass' });
   const settings = await settingsProvider();
   const recheck = settings?.privacy?.recheck || {};
   const autoApprove = recheck.autoApproveOptOutEmails === true;
   const autoSubmit = recheck.autoSubmitWebForms === true;
 
-  const scanValues = await listScanEligibleValues();
+  const scanValues = await listScanEligibleValues({ subjectId: resolvedSubjectId });
   const payload = buildDisclosurePayload(scanValues);
   if (!payload.full_name) {
     console.log('📋 Opt-out pass aborted: no scan-eligible name in the vault');
-    return { submitted: [], skipped: 0, verification: null, reason: 'no_disclosure_identity' };
+    return { submitted: [], skipped: 0, verification: null, subjectId: resolvedSubjectId, reason: 'no_disclosure_identity' };
   }
 
-  const [brokers, cases] = await Promise.all([listBrokers({ enabled: true }), listBrokerCases()]);
+  const [brokers, cases] = await Promise.all([listBrokers({ enabled: true }), listBrokerCases({ subjectId: resolvedSubjectId })]);
   const brokerById = new Map(brokers.map((b) => [b.id, b]));
   const casesWithBroker = cases
     .map((c) => ({ case: c, broker: brokerById.get(c.brokerId) }))
@@ -499,11 +516,11 @@ export async function runOptOutPass({
   }
 
   const verification = runVerification
-    ? await runVerificationPass({ now, ...(deps.verification || {}) })
+    ? await runVerificationPass({ now, subjectId: resolvedSubjectId, ...(deps.verification || {}) })
     : null;
 
   console.log(`📋 Opt-out pass: ${submitted.length} actioned, ${skipped} skipped (autoApprove=${autoApprove}, autoSubmit=${autoSubmit})`);
-  return { submitted, skipped, verification, autonomy: { autoApprove, autoSubmit } };
+  return { submitted, skipped, verification, subjectId: resolvedSubjectId, autonomy: { autoApprove, autoSubmit } };
 }
 
 // ─── Human-task digest ──────────────────────────────────────────────────────
@@ -514,10 +531,11 @@ export async function runOptOutPass({
  * Each item carries the broker, the reason, the prepared disclosure, and the
  * playbook so the UI digest is an actionable checklist. Read-only.
  */
-export async function getOptOutDigest() {
+export async function getOptOutDigest({ subjectId } = {}) {
+  const resolvedSubjectId = resolveSubjectId(subjectId);
   const [human, blocked] = await Promise.all([
-    listBrokerCases({ state: 'human_task_queued' }),
-    listBrokerCases({ state: 'blocked' }),
+    listBrokerCases({ state: 'human_task_queued', subjectId: resolvedSubjectId }),
+    listBrokerCases({ state: 'blocked', subjectId: resolvedSubjectId }),
   ]);
   const toItem = (c) => ({
     caseId: c.id,
@@ -540,6 +558,7 @@ export async function getOptOutDigest() {
   const items = [...human.map(toItem), ...blocked.map(toItem)];
   return {
     total: items.length,
+    subjectId: resolvedSubjectId,
     humanTasks: human.length,
     blocked: blocked.length,
     items,

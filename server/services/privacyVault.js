@@ -26,12 +26,17 @@ import {
   encryptValue, decryptValue, ensureVaultKey, isVaultKeyConfigured, maskValue,
 } from '../lib/vaultCrypto.js';
 import { PRIVACY_SENSITIVE_TYPES, PRIVACY_SCAN_DEFAULT_TYPES } from '../lib/privacyValidation.js';
+import { resolveSubjectId, assertSubject, recordConsent } from './privacySubjects.js';
+
+// Re-exported so the pre-#3658 deep import `privacyVault.recordConsent` keeps
+// working; the consent trail itself now lives with the subjects that own it.
+export { recordConsent };
 
 // Everything EXCEPT value_enc — list/read responses never carry ciphertext.
 // DATE columns come back via to_char as plain 'YYYY-MM-DD' strings: node-postgres
 // otherwise parses DATE into a local-midnight JS Date, and re-serializing that
 // through toISOString() shifts the date back a day in UTC+N timezones.
-const RECORD_COLUMNS = `id, type, label, masked_value, status,
+const RECORD_COLUMNS = `id, subject_id, type, label, masked_value, status,
   to_char(valid_from, 'YYYY-MM-DD') AS valid_from,
   to_char(valid_to, 'YYYY-MM-DD') AS valid_to,
   share_with_twin, use_for_scans, notes, created_at, updated_at`;
@@ -40,6 +45,7 @@ function rowToRecord(row) {
   if (!row) return null;
   return {
     id: row.id,
+    subjectId: row.subject_id,
     type: row.type,
     label: row.label,
     maskedValue: row.masked_value,
@@ -66,33 +72,28 @@ export function resolveUseForScans(type, requested) {
   return PRIVACY_SCAN_DEFAULT_TYPES.includes(type);
 }
 
-/** Write an explicit consent row (subject defaults to 'self' for v1). */
-export async function recordConsent({ subject = 'self', scope, method }) {
-  const id = randomUUID();
-  await query(
-    `INSERT INTO privacy_consents (id, subject, scope, method, granted_at)
-     VALUES ($1, $2, $3, $4, NOW())`,
-    [id, subject, scope, method],
-  );
-  console.log(`📝 Recorded privacy consent ${id} (scope=${scope}, method=${method})`);
-  return { id, subject, scope, method };
-}
-
 export async function createVaultRecord(input) {
   await ensureVaultKey(); // self-heal a missing key on first write
+  // A bogus subjectId must 404 up front rather than trip a raw FK violation.
+  const subjectId = (await assertSubject(input.subjectId)).id;
   const id = randomUUID();
   const useForScans = resolveUseForScans(input.type, input.useForScans);
-  // First-ever record ⇒ write the consent row (audit trail for the opt-out engine).
-  const { rows: countRows } = await query(`SELECT COUNT(*)::int AS n FROM privacy_vault_records`);
-  const isFirstRecord = countRows[0].n === 0;
+  // First record FOR THIS SUBJECT ⇒ write the consent row (audit trail for the
+  // opt-out engine). Scoped per subject so a household member added directly
+  // through the vault still gets a consent row of their own rather than riding
+  // on `self`'s.
+  const { rows: countRows } = await query(
+    `SELECT COUNT(*)::int AS n FROM privacy_consents WHERE subject_id = $1`, [subjectId],
+  );
+  const needsConsent = countRows[0].n === 0;
   const { rows } = await query(
     `INSERT INTO privacy_vault_records
-       (id, type, label, value_enc, masked_value, status, valid_from, valid_to,
+       (id, subject_id, type, label, value_enc, masked_value, status, valid_from, valid_to,
         share_with_twin, use_for_scans, notes, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
      RETURNING ${RECORD_COLUMNS}`,
     [
-      id, input.type, input.label,
+      id, subjectId, input.type, input.label,
       encryptValue(input.value), maskValue(input.type, input.value),
       input.status ?? 'current',
       input.validFrom ?? null, input.validTo ?? null,
@@ -100,17 +101,26 @@ export async function createVaultRecord(input) {
       input.notes ?? '',
     ],
   );
-  if (isFirstRecord) {
-    await recordConsent({ scope: 'pii_vault', method: 'vault-record-create' });
+  if (needsConsent) {
+    await recordConsent({ subjectId, scope: 'pii_vault', method: 'vault-record-create' });
   }
-  console.log(`🔐 Created vault record ${id} (type=${input.type})`);
+  console.log(`🔐 Created vault record ${id} (subject=${subjectId}, type=${input.type})`);
   return rowToRecord(rows[0]);
 }
 
-export async function listVaultRecords({ type } = {}) {
-  const { rows } = type
-    ? await query(`SELECT ${RECORD_COLUMNS} FROM privacy_vault_records WHERE type = $1 ORDER BY created_at DESC`, [type])
-    : await query(`SELECT ${RECORD_COLUMNS} FROM privacy_vault_records ORDER BY created_at DESC`);
+export async function listVaultRecords({ type, subjectId } = {}) {
+  // Always scoped to ONE subject — an unscoped list would mix two household
+  // members' identity facts into one table, which is exactly what this scoping
+  // exists to prevent. Omitting subjectId means `self`, so every pre-#3658
+  // caller is unchanged.
+  const params = [resolveSubjectId(subjectId)];
+  const clauses = ['subject_id = $1'];
+  if (type) { params.push(type); clauses.push(`type = ${params.length}`); }
+  const { rows } = await query(
+    `SELECT ${RECORD_COLUMNS} FROM privacy_vault_records
+     WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC`,
+    params,
+  );
   return rows.map(rowToRecord);
 }
 
@@ -189,14 +199,16 @@ export async function revealValue(id) {
  * still list an old address). Plaintext is returned to the caller but never
  * logged — the count is.
  */
-export async function listScanEligibleValues() {
+export async function listScanEligibleValues({ subjectId } = {}) {
+  const resolvedSubjectId = resolveSubjectId(subjectId);
   const { rows } = await query(
     `SELECT id, type, value_enc, status,
        to_char(valid_from, 'YYYY-MM-DD') AS valid_from,
        to_char(valid_to, 'YYYY-MM-DD') AS valid_to
      FROM privacy_vault_records
-     WHERE use_for_scans = TRUE
+     WHERE use_for_scans = TRUE AND subject_id = $1
      ORDER BY type, created_at`,
+    [resolvedSubjectId],
   );
   const values = rows.map((row) => ({
     id: row.id,
@@ -206,16 +218,19 @@ export async function listScanEligibleValues() {
     validFrom: row.valid_from ?? null,
     validTo: row.valid_to ?? null,
   }));
-  console.log(`🔎 Assembled ${values.length} scan-eligible vault values`);
+  console.log(`🔎 Assembled ${values.length} scan-eligible vault values (subject=${resolvedSubjectId})`);
   return values;
 }
 
 /** Doctor-style readout: { keyConfigured, recordCounts: { <type>: n } }. */
-export async function getVaultStatus() {
+export async function getVaultStatus({ subjectId } = {}) {
+  const resolvedSubjectId = resolveSubjectId(subjectId);
   const { rows } = await query(
-    `SELECT type, COUNT(*)::int AS n FROM privacy_vault_records GROUP BY type ORDER BY type`,
+    `SELECT type, COUNT(*)::int AS n FROM privacy_vault_records
+     WHERE subject_id = $1 GROUP BY type ORDER BY type`,
+    [resolvedSubjectId],
   );
   const recordCounts = {};
   for (const row of rows) recordCounts[row.type] = row.n;
-  return { keyConfigured: isVaultKeyConfigured(), recordCounts };
+  return { keyConfigured: isVaultKeyConfigured(), subjectId: resolvedSubjectId, recordCounts };
 }

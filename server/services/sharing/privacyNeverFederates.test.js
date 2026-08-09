@@ -53,7 +53,7 @@ describe('privacy records never federate (ADR 2026-08-08, #2148)', () => {
   it('gives no privacy table a sync cursor or tombstone column', () => {
     // Sanity: if the filter ever matches nothing the assertions below are
     // vacuous, so pin the table count we expect to be guarding.
-    expect(privacyCreateTableStatements).toHaveLength(7);
+    expect(privacyCreateTableStatements).toHaveLength(8);
     for (const stmt of privacyCreateTableStatements) {
       const table = stmt.match(/privacy_[a-z_]+/i)?.[0];
       for (const column of FEDERATION_COLUMNS) {

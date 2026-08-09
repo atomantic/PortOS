@@ -15,7 +15,7 @@
 The Privacy Center (epic #2138) shipped Phases 1–8: an AES-256-GCM encrypted PII
 vault, a trusted-organization registry with per-field holdings, a
 change-of-address inventory, and an unbroker-style data-broker opt-out engine.
-All eight tables (`privacy_vault_records`, `privacy_consents`, `privacy_orgs`,
+All nine tables (`privacy_subjects`, `privacy_vault_records`, `privacy_consents`, `privacy_orgs`,
 `privacy_org_holdings`, `privacy_change_events`, `privacy_brokers`,
 `privacy_broker_cases`) are `db-primary` PostgreSQL and machine-local.
 

@@ -2,6 +2,10 @@
  * Privacy Center Routes — encrypted PII Vault + Trusted Organizations
  * registry REST surface (issues #2140, #2141).
  *
+ * Every record-bearing endpoint is scoped to ONE household subject via an
+ * optional `?subjectId=` (list/read) or body `subjectId` (create). Omitting it
+ * means the seeded `self` subject, so every pre-#3658 client keeps working.
+ *
  * Mounted at /api/privacy. Vault list/read responses carry `maskedValue`
  * only — `value_enc` and plaintext never leave the service except through
  * the ONE explicit reveal endpoint. Org holdings responses join the vault's
@@ -12,6 +16,12 @@ import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, isPaginationRequested, paginateArray } from '../lib/validation.js';
 import {
+  privacySubjectCreateSchema,
+  privacySubjectUpdateSchema,
+  privacySubjectIdParamsSchema,
+  privacySubjectConsentSchema,
+  privacyChangeListQuerySchema,
+  privacySubjectScopeQuerySchema,
   privacyVaultCreateSchema,
   privacyVaultUpdateSchema,
   privacyVaultListQuerySchema,
@@ -36,6 +46,16 @@ import {
   privacyOptOutVerifySchema,
   privacyRecheckConfigSchema,
 } from '../lib/privacyValidation.js';
+import {
+  listSubjects,
+  getSubject,
+  createSubject,
+  updateSubject,
+  deleteSubject,
+  listSubjectConsents,
+  recordConsent,
+  assertSubject,
+} from '../services/privacySubjects.js';
 import {
   createVaultRecord,
   listVaultRecords,
@@ -82,13 +102,66 @@ import {
 
 const router = Router();
 
-router.get('/status', asyncHandler(async (_req, res) => {
-  res.json(await getVaultStatus());
+// ─── Household subjects (issue #3658) ──────────────────────────────────────
+// The people the Privacy Center works on behalf of. `self` is seeded and
+// undeletable; every other subject requires a recorded consent method at
+// creation, and the scan/opt-out engines refuse to act without one.
+
+router.get('/subjects', asyncHandler(async (_req, res) => {
+  res.json(await listSubjects());
+}));
+
+router.post('/subjects', asyncHandler(async (req, res) => {
+  const data = validateRequest(privacySubjectCreateSchema, req.body);
+  res.status(201).json(await createSubject(data));
+}));
+
+router.get('/subjects/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(privacySubjectIdParamsSchema, req.params);
+  const subject = await getSubject(id);
+  if (!subject) throw new ServerError('Privacy subject not found', { status: 404, code: 'SUBJECT_NOT_FOUND' });
+  res.json(subject);
+}));
+
+router.put('/subjects/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(privacySubjectIdParamsSchema, req.params);
+  const patch = validateRequest(privacySubjectUpdateSchema, req.body);
+  res.json(await updateSubject(id, patch));
+}));
+
+// Hard DELETE — cascades the subject's vault records, orgs, holdings, change
+// events, broker cases, and consent rows (machine-local, no tombstones).
+router.delete('/subjects/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(privacySubjectIdParamsSchema, req.params);
+  res.json(await deleteSubject(id));
+}));
+
+router.get('/subjects/:id/consents', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(privacySubjectIdParamsSchema, req.params);
+  await assertSubject(id);
+  res.json(await listSubjectConsents(id));
+}));
+
+// Append a further consent row (e.g. the subject later agreed to broker
+// opt-outs). Append-only — there is no revoke endpoint: revoking consent means
+// deleting the subject, which hard-deletes their records.
+router.post('/subjects/:id/consents', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(privacySubjectIdParamsSchema, req.params);
+  const { scope, method, note } = validateRequest(privacySubjectConsentSchema, req.body);
+  await assertSubject(id);
+  res.status(201).json(await recordConsent({
+    subjectId: id, scope: scope ?? 'pii_vault', method, note,
+  }));
+}));
+
+router.get('/status', asyncHandler(async (req, res) => {
+  const { subjectId } = validateRequest(privacySubjectScopeQuerySchema, req.query);
+  res.json(await getVaultStatus({ subjectId }));
 }));
 
 router.get('/vault', asyncHandler(async (req, res) => {
-  const { type } = validateRequest(privacyVaultListQuerySchema, req.query);
-  const records = await listVaultRecords({ type });
+  const { type, subjectId } = validateRequest(privacyVaultListQuerySchema, req.query);
+  const records = await listVaultRecords({ type, subjectId });
   if (!isPaginationRequested(req.query)) return res.json(records);
   res.json(paginateArray(records, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
@@ -175,7 +248,8 @@ router.put('/orgs/:id/holdings', asyncHandler(async (req, res) => {
 // ─── Change-of-address events + inventory workflow (issue #2143) ────────────
 
 router.get('/changes', asyncHandler(async (req, res) => {
-  const events = await listChangeEvents();
+  const { subjectId } = validateRequest(privacyChangeListQuerySchema, req.query);
+  const events = await listChangeEvents({ subjectId });
   if (!isPaginationRequested(req.query)) return res.json(events);
   res.json(paginateArray(events, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
@@ -230,8 +304,8 @@ router.put('/brokers/:id', asyncHandler(async (req, res) => {
 }));
 
 router.get('/broker-cases', asyncHandler(async (req, res) => {
-  const { state } = validateRequest(privacyBrokerCaseListQuerySchema, req.query);
-  const cases = await listBrokerCases({ state });
+  const { state, subjectId } = validateRequest(privacyBrokerCaseListQuerySchema, req.query);
+  const cases = await listBrokerCases({ state, subjectId });
   if (!isPaginationRequested(req.query)) return res.json(cases);
   res.json(paginateArray(cases, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
@@ -251,14 +325,15 @@ router.post('/broker-cases/:id/transition', asyncHandler(async (req, res) => {
   res.json(await transitionCase(id, toState, reason === undefined ? {} : { reason }));
 }));
 
-router.get('/scan/status', asyncHandler(async (_req, res) => {
-  res.json(await getScanStatus());
+router.get('/scan/status', asyncHandler(async (req, res) => {
+  const { subjectId } = validateRequest(privacySubjectScopeQuerySchema, req.query);
+  res.json(await getScanStatus({ subjectId }));
 }));
 
 // User-triggered read-only exposure scan pass over enabled brokers.
 router.post('/scan', asyncHandler(async (req, res) => {
-  const { concurrency } = validateRequest(privacyScanStartSchema, req.body ?? {});
-  res.json(await runScanPass(concurrency ? { concurrency } : {}));
+  const { concurrency, subjectId } = validateRequest(privacyScanStartSchema, req.body ?? {});
+  res.json(await runScanPass({ ...(concurrency ? { concurrency } : {}), subjectId }));
 }));
 
 // ─── Opt-out automation engine (issue #2145) ───────────────────────────────
@@ -267,20 +342,24 @@ router.post('/scan', asyncHandler(async (req, res) => {
 // (web-form / email), poll verifications. Submission autonomy (auto-send /
 // auto-submit) is read from settings.privacy.recheck — both default OFF.
 router.post('/optout', asyncHandler(async (req, res) => {
-  const { runVerification } = validateRequest(privacyOptOutPassSchema, req.body ?? {});
-  res.json(await runOptOutPass(runVerification === undefined ? {} : { runVerification }));
+  const { runVerification, subjectId } = validateRequest(privacyOptOutPassSchema, req.body ?? {});
+  res.json(await runOptOutPass({
+    ...(runVerification === undefined ? {} : { runVerification }),
+    subjectId,
+  }));
 }));
 
 // User-triggered verification-only pass (inbox confirmation scan + removal re-scan).
 router.post('/optout/verify', asyncHandler(async (req, res) => {
-  validateRequest(privacyOptOutVerifySchema, req.body ?? {});
-  res.json(await runVerificationPass());
+  const { subjectId } = validateRequest(privacyOptOutVerifySchema, req.body ?? {});
+  res.json(await runVerificationPass({ subjectId }));
 }));
 
 // Human-task digest: cases that need a person (blocked walls, auto-submit-off
 // forms, fax/phone/gov-ID channels) with the prepared request + playbook.
-router.get('/optout/digest', asyncHandler(async (_req, res) => {
-  res.json(await getOptOutDigest());
+router.get('/optout/digest', asyncHandler(async (req, res) => {
+  const { subjectId } = validateRequest(privacySubjectScopeQuerySchema, req.query);
+  res.json(await getOptOutDigest({ subjectId }));
 }));
 
 // Recheck-schedule status: enabled, cron, autonomy toggles, next fire time.

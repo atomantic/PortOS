@@ -28,6 +28,7 @@ import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { resolveSubjectId } from './privacySubjects.js';
 
 // Cap on each registry fetch so a hung broker source can't stall a
 // user-triggered refresh indefinitely (both fetchers run under Promise.all).
@@ -401,13 +402,14 @@ export async function refreshBrokers({ fetchBadbool = defaultFetchBadbool, fetch
 
 // ─── Case ledger ────────────────────────────────────────────────────────────
 
-const CASE_COLUMNS = `id, broker_id, state, found, evidence, disclosed_fields,
+const CASE_COLUMNS = `id, subject_id, broker_id, state, found, evidence, disclosed_fields,
   channel, reason, next_recheck_at, created_at, updated_at`;
 
 function rowToCase(row) {
   if (!row) return null;
   return {
     id: row.id,
+    subjectId: row.subject_id,
     brokerId: row.broker_id,
     state: row.state,
     // Server-derived legal manual moves for this state — the client action
@@ -427,13 +429,16 @@ function rowToCase(row) {
   };
 }
 
-export async function listBrokerCases({ state } = {}) {
-  const clauses = [];
-  const params = [];
-  if (state) { params.push(state); clauses.push(`c.state = $${params.length}`); }
-  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+export async function listBrokerCases({ state, subjectId } = {}) {
+  // Always scoped to ONE subject (defaulting to `self`): two household members
+  // hold independent cases against the same broker, and the opt-out engine must
+  // never plan a submission for one using the other's ledger.
+  const params = [resolveSubjectId(subjectId)];
+  const clauses = ['c.subject_id = $1'];
+  if (state) { params.push(state); clauses.push(`c.state = ${params.length}`); }
+  const where = `WHERE ${clauses.join(' AND ')}`;
   const { rows } = await query(
-    `SELECT c.id, c.broker_id, c.state, c.found, c.evidence, c.disclosed_fields,
+    `SELECT c.id, c.subject_id, c.broker_id, c.state, c.found, c.evidence, c.disclosed_fields,
             c.channel, c.reason, c.next_recheck_at, c.created_at, c.updated_at,
             b.name AS broker_name, b.tier
      FROM privacy_broker_cases c
@@ -445,9 +450,10 @@ export async function listBrokerCases({ state } = {}) {
   return rows.map(rowToCase);
 }
 
-export async function getCaseForBroker(brokerId) {
+export async function getCaseForBroker(brokerId, { subjectId } = {}) {
   const { rows } = await query(
-    `SELECT ${CASE_COLUMNS} FROM privacy_broker_cases WHERE broker_id = $1`, [brokerId],
+    `SELECT ${CASE_COLUMNS} FROM privacy_broker_cases WHERE broker_id = $1 AND subject_id = $2`,
+    [brokerId, resolveSubjectId(subjectId)],
   );
   return rowToCase(rows[0]);
 }
@@ -457,15 +463,19 @@ export async function getCaseForBroker(brokerId) {
  * transitions the existing case. Enforces the state machine (a re-scan sets
  * `viaRescan`). Every write stamps `next_recheck_at`. Returns the case row.
  */
-export async function recordScanVerdict(brokerId, verdict, { evidence = {}, found = null, now = new Date() } = {}) {
+export async function recordScanVerdict(brokerId, verdict, { evidence = {}, found = null, now = new Date(), subjectId } = {}) {
   if (!SCAN_VERDICTS.includes(verdict)) {
     throw new ServerError(`Not a scan verdict: "${verdict}"`, { status: 400, code: 'INVALID_SCAN_VERDICT' });
   }
+  const resolvedSubjectId = resolveSubjectId(subjectId);
   return withTransaction(async (client) => {
     const broker = await client.query(`SELECT id FROM privacy_brokers WHERE id = $1`, [brokerId]);
     if (!broker.rows[0]) throw new ServerError('Broker not found', { status: 404, code: 'NOT_FOUND' });
+    // Keyed on the (broker, subject) pair — the ledger's unique index moved to
+    // that pair in #3658 so each household member gets their own case row.
     const existing = await client.query(
-      `SELECT id, state FROM privacy_broker_cases WHERE broker_id = $1 FOR UPDATE`, [brokerId],
+      `SELECT id, state FROM privacy_broker_cases WHERE broker_id = $1 AND subject_id = $2 FOR UPDATE`,
+      [brokerId, resolvedSubjectId],
     );
     const nextRecheck = computeNextRecheckAt(verdict, now);
     if (!existing.rows[0]) {
@@ -473,12 +483,12 @@ export async function recordScanVerdict(brokerId, verdict, { evidence = {}, foun
       const id = randomUUID();
       const { rows } = await client.query(
         `INSERT INTO privacy_broker_cases
-           (id, broker_id, state, found, evidence, next_recheck_at, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+           (id, subject_id, broker_id, state, found, evidence, next_recheck_at, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
          RETURNING ${CASE_COLUMNS}`,
-        [id, brokerId, verdict, found, JSON.stringify(evidence), nextRecheck],
+        [id, resolvedSubjectId, brokerId, verdict, found, JSON.stringify(evidence), nextRecheck],
       );
-      console.log(`🔎 Broker ${brokerId}: new case → ${verdict}`);
+      console.log(`🔎 Broker ${brokerId}: new case → ${verdict} (subject=${resolvedSubjectId})`);
       return rowToCase(rows[0]);
     }
     // Re-scan of an existing case. A settled verdict flipping is a rescan.
@@ -486,10 +496,10 @@ export async function recordScanVerdict(brokerId, verdict, { evidence = {}, foun
     const { rows } = await client.query(
       `UPDATE privacy_broker_cases
        SET state = $1, found = $2, evidence = $3, next_recheck_at = $4, updated_at = NOW()
-       WHERE broker_id = $5 RETURNING ${CASE_COLUMNS}`,
-      [verdict, found, JSON.stringify(evidence), nextRecheck, brokerId],
+       WHERE id = $5 RETURNING ${CASE_COLUMNS}`,
+      [verdict, found, JSON.stringify(evidence), nextRecheck, existing.rows[0].id],
     );
-    console.log(`🔎 Broker ${brokerId}: case ${existing.rows[0].state} → ${verdict}`);
+    console.log(`🔎 Broker ${brokerId}: case ${existing.rows[0].state} → ${verdict} (subject=${resolvedSubjectId})`);
     return rowToCase(rows[0]);
   });
 }
@@ -555,21 +565,29 @@ export async function forceRecheckCase(caseId, { now = new Date() } = {}) {
  * brokers, case counts per state, and how many cases are due for a recheck.
  * Seeds lazily so a fresh install reports the full curated broker count.
  */
-export async function getScanStatus({ now = new Date() } = {}) {
+export async function getScanStatus({ now = new Date(), subjectId } = {}) {
   await ensureSeeded();
+  const resolvedSubjectId = resolveSubjectId(subjectId);
   const [brokerCount, byState, due] = await Promise.all([
+    // The broker DATABASE is shared across subjects (it is a catalog, not
+    // per-person data) — only the CASE counts are subject-scoped.
     query(`SELECT COUNT(*)::int AS n FROM privacy_brokers WHERE enabled = TRUE`),
-    query(`SELECT state, COUNT(*)::int AS n FROM privacy_broker_cases GROUP BY state`),
+    query(
+      `SELECT state, COUNT(*)::int AS n FROM privacy_broker_cases
+       WHERE subject_id = $1 GROUP BY state`,
+      [resolvedSubjectId],
+    ),
     query(
       `SELECT COUNT(*)::int AS n FROM privacy_broker_cases
-       WHERE next_recheck_at IS NULL OR next_recheck_at <= $1`,
-      [now.toISOString()],
+       WHERE subject_id = $1 AND (next_recheck_at IS NULL OR next_recheck_at <= $2)`,
+      [resolvedSubjectId, now.toISOString()],
     ),
   ]);
   const caseCounts = {};
   for (const row of byState.rows) caseCounts[row.state] = row.n;
   return {
     enabledBrokers: brokerCount.rows[0].n,
+    subjectId: resolvedSubjectId,
     caseCounts,
     dueForRecheck: due.rows[0].n,
   };

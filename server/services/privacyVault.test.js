@@ -18,6 +18,16 @@ vi.mock('../lib/db.js', () => ({
   withTransaction: withTransactionMock,
 }));
 
+// #3658: the subject scope + consent trail live in privacySubjects; stubbed so
+// these DB-mocked tests keep asserting on the privacy_vault_records SQL.
+const SELF = '00000000-0000-4000-8000-000000000001';
+const { recordConsentMock } = vi.hoisted(() => ({ recordConsentMock: vi.fn(async () => ({ id: 'consent-1' })) }));
+vi.mock('./privacySubjects.js', () => ({
+  resolveSubjectId: (id) => id || SELF,
+  assertSubject: vi.fn(async (id) => ({ id: id || SELF })),
+  recordConsent: recordConsentMock,
+}));
+
 const {
   createVaultRecord, updateVaultRecord, revealValue, getVaultStatus, resolveUseForScans,
 } = await import('./privacyVault.js');
@@ -38,13 +48,15 @@ beforeEach(() => {
 });
 
 const insertedRow = (params) => ({
-  id: params[0], type: params[1], label: params[2], masked_value: params[4],
-  status: params[5], valid_from: params[6], valid_to: params[7],
-  share_with_twin: params[8], use_for_scans: params[9], notes: params[10],
+  id: params[0], subject_id: params[1], type: params[2], label: params[3], masked_value: params[5],
+  status: params[6], valid_from: params[7], valid_to: params[8],
+  share_with_twin: params[9], use_for_scans: params[10], notes: params[11],
   created_at: 'now', updated_at: 'now',
 });
 
-// queryMock playbook for createVaultRecord: COUNT probe → INSERT → (consent INSERT).
+// queryMock playbook for createVaultRecord: consent COUNT probe → INSERT.
+// `existingCount` is the subject's EXISTING CONSENT-row count (#3658): 0 means
+// this create also writes the subject's first consent row.
 function mockCreateFlow({ existingCount = 1 } = {}) {
   queryMock.mockImplementation(async (sql, params) => {
     if (/COUNT\(\*\)/.test(sql)) return { rows: [{ n: existingCount }] };
@@ -82,8 +94,9 @@ describe('createVaultRecord', () => {
     const record = await createVaultRecord({ type: 'ssn', label: 'My SSN', value: '123-45-6789' });
     const insert = queryMock.mock.calls.find(([sql]) => /INSERT INTO privacy_vault_records/.test(sql));
     const params = insert[1];
-    expect(params[3]).toMatch(/^v1:/); // value_enc
-    expect(params[4]).toBe('••••6789'); // masked_value
+    expect(params[1]).toBe(SELF); // subject scope defaults to `self` (#3658)
+    expect(params[4]).toMatch(/^v1:/); // value_enc
+    expect(params[5]).toBe('••••6789'); // masked_value
     expect(params).not.toContain('123-45-6789');
     expect(record.maskedValue).toBe('••••6789');
     expect(record.useForScans).toBe(false); // ssn is hard-false
@@ -97,15 +110,24 @@ describe('createVaultRecord', () => {
     expect(record.useForScans).toBe(true);
   });
 
-  it('writes a consent row on the FIRST record only', async () => {
+  it("writes a consent row on the subject's FIRST record only", async () => {
+    recordConsentMock.mockClear();
     mockCreateFlow({ existingCount: 0 });
     await createVaultRecord({ type: 'email', label: 'Main', value: 'a@b.com' });
-    expect(queryMock.mock.calls.some(([sql]) => /INSERT INTO privacy_consents/.test(sql))).toBe(true);
+    expect(recordConsentMock).toHaveBeenCalledWith({ subjectId: SELF, scope: 'pii_vault', method: 'vault-record-create' });
 
-    queryMock.mockClear();
+    recordConsentMock.mockClear();
     mockCreateFlow({ existingCount: 3 });
     await createVaultRecord({ type: 'email', label: 'Alt', value: 'c@d.com' });
-    expect(queryMock.mock.calls.some(([sql]) => /INSERT INTO privacy_consents/.test(sql))).toBe(false);
+    expect(recordConsentMock).not.toHaveBeenCalled();
+  });
+
+  it('scopes the record to an explicit household subject when one is given (#3658)', async () => {
+    mockCreateFlow();
+    const record = await createVaultRecord({ type: 'email', label: 'Main', value: 'a@b.com', subjectId: 'subject-2' });
+    const insert = queryMock.mock.calls.find(([sql]) => /INSERT INTO privacy_vault_records/.test(sql));
+    expect(insert[1][1]).toBe('subject-2');
+    expect(record.subjectId).toBe('subject-2');
   });
 });
 
@@ -164,6 +186,7 @@ describe('getVaultStatus', () => {
     queryMock.mockResolvedValue({ rows: [{ type: 'email', n: 2 }, { type: 'ssn', n: 1 }] });
     expect(await getVaultStatus()).toEqual({
       keyConfigured: true,
+      subjectId: SELF,
       recordCounts: { email: 2, ssn: 1 },
     });
   });

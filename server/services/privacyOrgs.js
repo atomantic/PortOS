@@ -21,14 +21,16 @@
 import { randomUUID } from 'crypto';
 import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { resolveSubjectId, assertSubject } from './privacySubjects.js';
 
-const ORG_COLUMNS = `id, name, category, website, trust, status, contact,
+const ORG_COLUMNS = `id, subject_id, name, category, website, trust, status, contact,
   social_account_id, notes, created_at, updated_at`;
 
 function rowToOrg(row) {
   if (!row) return null;
   return {
     id: row.id,
+    subjectId: row.subject_id,
     name: row.name,
     category: row.category,
     website: row.website,
@@ -45,6 +47,7 @@ function rowToOrg(row) {
 function rowToHolding(row) {
   return {
     orgId: row.org_id,
+    subjectId: row.subject_id,
     vaultRecordId: row.vault_record_id,
     status: row.status,
     notedAt: row.noted_at,
@@ -58,14 +61,16 @@ function rowToHolding(row) {
 }
 
 export async function createOrg(input) {
+  // A bogus subjectId must 404 up front rather than trip a raw FK violation.
+  const subjectId = (await assertSubject(input.subjectId)).id;
   const id = randomUUID();
   const { rows } = await query(
     `INSERT INTO privacy_orgs
-       (id, name, category, website, trust, status, contact, social_account_id, notes, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+       (id, subject_id, name, category, website, trust, status, contact, social_account_id, notes, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
      RETURNING ${ORG_COLUMNS}`,
     [
-      id, input.name,
+      id, subjectId, input.name,
       input.category ?? 'other', input.website ?? '',
       input.trust ?? 'trusted', input.status ?? 'active',
       JSON.stringify(input.contact ?? {}),
@@ -76,17 +81,18 @@ export async function createOrg(input) {
   // Log id/category only — the org NAME (bank, employer, medical provider, …)
   // is user-entered privacy-adjacent data and follows the same never-log
   // posture as the vault's plaintext values (see privacyVault.js header).
-  console.log(`🏢 Created privacy org ${id} (category=${input.category ?? 'other'})`);
+  console.log(`🏢 Created privacy org ${id} (subject=${subjectId}, category=${input.category ?? 'other'})`);
   return rowToOrg(rows[0]);
 }
 
-export async function listOrgs({ trust, status, category } = {}) {
-  const clauses = [];
-  const params = [];
+export async function listOrgs({ trust, status, category, subjectId } = {}) {
+  // Always scoped to ONE subject (defaulting to `self`) — see listVaultRecords.
+  const params = [resolveSubjectId(subjectId)];
+  const clauses = ['subject_id = $1'];
   if (trust) { params.push(trust); clauses.push(`trust = $${params.length}`); }
   if (status) { params.push(status); clauses.push(`status = $${params.length}`); }
   if (category) { params.push(category); clauses.push(`category = $${params.length}`); }
-  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const where = `WHERE ${clauses.join(' AND ')}`;
   const { rows } = await query(
     `SELECT ${ORG_COLUMNS} FROM privacy_orgs ${where} ORDER BY name ASC`,
     params,
@@ -138,7 +144,7 @@ export async function deleteOrg(id) {
  */
 export async function getHoldingsForOrg(orgId) {
   const { rows } = await query(
-    `SELECT h.org_id, h.vault_record_id, h.status, h.noted_at, h.updated_at,
+    `SELECT h.org_id, h.subject_id, h.vault_record_id, h.status, h.noted_at, h.updated_at,
             v.type, v.label, v.masked_value
      FROM privacy_org_holdings h
      JOIN privacy_vault_records v ON v.id = h.vault_record_id
@@ -152,7 +158,7 @@ export async function getHoldingsForOrg(orgId) {
 /** Which orgs hold vault record `vaultRecordId` — powers the inventory view. */
 export async function getOrgsHoldingRecord(vaultRecordId) {
   const { rows } = await query(
-    `SELECT h.org_id, h.vault_record_id, h.status, h.noted_at, h.updated_at,
+    `SELECT h.org_id, h.subject_id, h.vault_record_id, h.status, h.noted_at, h.updated_at,
             o.name AS org_name
      FROM privacy_org_holdings h
      JOIN privacy_orgs o ON o.id = h.org_id
@@ -183,10 +189,27 @@ export async function getOrgsHoldingRecord(vaultRecordId) {
  */
 export async function setOrgHoldings(orgId, holdings) {
   await withTransaction(async (client) => {
-    const { rows: orgRows } = await client.query(`SELECT id FROM privacy_orgs WHERE id = $1 FOR UPDATE`, [orgId]);
+    const { rows: orgRows } = await client.query(`SELECT id, subject_id FROM privacy_orgs WHERE id = $1 FOR UPDATE`, [orgId]);
     if (!orgRows[0]) throw new ServerError('Organization not found', { status: 404, code: 'NOT_FOUND' });
+    const subjectId = orgRows[0].subject_id;
 
     const ids = holdings.map((h) => h.vaultRecordId);
+    // A holding is "org X holds subject S's fact" — so the org and the vault
+    // record must belong to the SAME subject. Without this check a stale UI id
+    // could file one household member's address under another member's org,
+    // and the per-subject views would silently disagree with each other.
+    if (ids.length) {
+      const { rows: mismatched } = await client.query(
+        `SELECT id FROM privacy_vault_records WHERE id = ANY($1::uuid[]) AND subject_id <> $2`,
+        [ids, subjectId],
+      );
+      if (mismatched[0]) {
+        throw new ServerError(
+          `Vault record ${mismatched[0].id} belongs to a different privacy subject`,
+          { status: 400, code: 'SUBJECT_MISMATCH' },
+        );
+      }
+    }
     if (ids.length === 0) {
       await client.query(`DELETE FROM privacy_org_holdings WHERE org_id = $1`, [orgId]);
     } else {
@@ -199,11 +222,11 @@ export async function setOrgHoldings(orgId, holdings) {
         // deletion) trips the FK constraint — surface it as a clean 400
         // instead of a raw Postgres constraint-violation 500.
         await client.query(
-          `INSERT INTO privacy_org_holdings (org_id, vault_record_id, status, noted_at, updated_at)
-           VALUES ($1, $2, $3, NOW(), NOW())
+          `INSERT INTO privacy_org_holdings (org_id, subject_id, vault_record_id, status, noted_at, updated_at)
+           VALUES ($1, $2, $3, $4, NOW(), NOW())
            ON CONFLICT (org_id, vault_record_id)
-           DO UPDATE SET status = EXCLUDED.status, updated_at = NOW()`,
-          [orgId, h.vaultRecordId, h.status ?? 'current'],
+           DO UPDATE SET status = EXCLUDED.status, subject_id = EXCLUDED.subject_id, updated_at = NOW()`,
+          [orgId, subjectId, h.vaultRecordId, h.status ?? 'current'],
         ).catch((err) => {
           if (err?.code === '23503') {
             throw new ServerError(`Vault record ${h.vaultRecordId} not found`, { status: 400, code: 'VAULT_RECORD_NOT_FOUND' });
@@ -239,17 +262,20 @@ export async function setHoldingsStatus(vaultRecordId, fromStatus, toStatus) {
  * Accounts tab so it can badge "in org registry" without N per-account calls.
  * Returns `[{ socialAccountId, orgId, orgName }]`.
  */
-export async function getOrgsBySocialAccounts() {
+export async function getOrgsBySocialAccounts({ subjectId } = {}) {
   // Degrade gracefully to an empty index when Privacy Center isn't provisioned
   // yet (fresh install pre-migration) — the twin's Accounts tab calls this on
   // load, so a missing table must yield no badges rather than a 500.
   const { rows: tableRows } = await query(`SELECT to_regclass('public.privacy_orgs') AS orgs`);
   if (!tableRows[0]?.orgs) return [];
+  // Scoped to `self` by default: the Digital Twin models the install's owner,
+  // so a household member's orgs must not badge the twin's Accounts tab.
   const { rows } = await query(
     `SELECT id, name, social_account_id
      FROM privacy_orgs
-     WHERE social_account_id IS NOT NULL
+     WHERE social_account_id IS NOT NULL AND subject_id = $1
      ORDER BY name`,
+    [resolveSubjectId(subjectId)],
   );
   return rows.map((row) => ({
     socialAccountId: row.social_account_id,
@@ -259,21 +285,26 @@ export async function getOrgsBySocialAccounts() {
 }
 
 /** Per-org holding counts + per-vault-record org counts — powers the inventory view. */
-export async function getHoldingsSummary() {
+export async function getHoldingsSummary({ subjectId } = {}) {
+  const resolvedSubjectId = resolveSubjectId(subjectId);
   const [byOrg, byRecord] = await Promise.all([
     query(
       `SELECT o.id AS org_id, o.name AS org_name, COUNT(h.vault_record_id)::int AS holding_count
        FROM privacy_orgs o
        LEFT JOIN privacy_org_holdings h ON h.org_id = o.id
+       WHERE o.subject_id = $1
        GROUP BY o.id, o.name
        ORDER BY o.name`,
+      [resolvedSubjectId],
     ),
     query(
       `SELECT v.id AS vault_record_id, v.type, v.label, COUNT(h.org_id)::int AS org_count
        FROM privacy_vault_records v
        LEFT JOIN privacy_org_holdings h ON h.vault_record_id = v.id
+       WHERE v.subject_id = $1
        GROUP BY v.id, v.type, v.label
        ORDER BY v.type, v.label`,
+      [resolvedSubjectId],
     ),
   ]);
   return {

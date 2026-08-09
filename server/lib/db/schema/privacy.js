@@ -1,7 +1,56 @@
-// Privacy-suite DDL — vault records, consents, orgs, org holdings, brokers,
-// broker cases, and change events. Extracted verbatim from ensureSchemaImpl()
-// in server/lib/db.js (#2832); idempotent, runs on every boot.
+// Privacy-suite DDL — household subjects, vault records, consents, orgs, org
+// holdings, brokers, broker cases, and change events. Extracted verbatim from
+// ensureSchemaImpl() in server/lib/db.js (#2832); idempotent, runs on every boot.
+//
+// The seeded `self` subject. A FIXED uuid (not a random one) so the DDL below,
+// server/scripts/init-db.sql, and server/lib/privacyValidation.js's
+// SELF_SUBJECT_ID all name the same row on every install without a lookup.
+// Mirrors PRIVACY_SELF_SUBJECT_ID in server/lib/privacyValidation.js — change
+// both or neither.
+const SELF_SUBJECT_ID = '00000000-0000-4000-8000-000000000001';
+
+// The privacy tables that carry a `subject_id` scope column (issue #3658).
+// Each gets: ADD COLUMN IF NOT EXISTS → backfill NULLs to `self` → SET DEFAULT
+// → SET NOT NULL. All four steps are idempotent, so an existing install picks
+// the column up at boot and a fresh install (where the CREATE TABLE body below
+// already declares it) no-ops through them.
+const SUBJECT_SCOPED_TABLES = [
+    'privacy_vault_records',
+    'privacy_orgs',
+    'privacy_org_holdings',
+    'privacy_change_events',
+    'privacy_broker_cases',
+    'privacy_consents',
+];
+
+const subjectScopeUpgrades = SUBJECT_SCOPED_TABLES.flatMap((table) => [
+    `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS subject_id UUID REFERENCES privacy_subjects (id) ON DELETE CASCADE`,
+    `UPDATE ${table} SET subject_id = '${SELF_SUBJECT_ID}' WHERE subject_id IS NULL`,
+    `ALTER TABLE ${table} ALTER COLUMN subject_id SET DEFAULT '${SELF_SUBJECT_ID}'`,
+    `ALTER TABLE ${table} ALTER COLUMN subject_id SET NOT NULL`,
+]);
+
 export const privacyDdl = [
+    // ─── Privacy Center: household subjects (issue #3658) ────────────────────
+    // Every person the Privacy Center works on behalf of — `self` plus any
+    // consenting household member (partner, child, parent). A TABLE rather than
+    // a free-text `subject` string so renames aren't lossy and scoping stays
+    // typed. Machine-local like the rest of the suite: no federation, no
+    // tombstones, hard deletes (which CASCADE the subject's vault/org/holding/
+    // change/case/consent rows). Created FIRST so the FKs below resolve.
+    `CREATE TABLE IF NOT EXISTS privacy_subjects (
+      id UUID PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      relationship TEXT NOT NULL DEFAULT 'other',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    // Seed the `self` row at a fixed id. Idempotent — an install that has
+    // already renamed it keeps its own display_name.
+    `INSERT INTO privacy_subjects (id, display_name, relationship, created_at, updated_at)
+     VALUES ('${SELF_SUBJECT_ID}', 'Me', 'self', NOW(), NOW())
+     ON CONFLICT (id) DO NOTHING`,
+
     // ─── Privacy Center: PII Vault (issue #2140, epic #2138) ─────────────────
     // Encrypted-at-rest identity facts. `value_enc` is AES-256-GCM ciphertext
     // (`v1:<iv>:<tag>:<ct>`, key from PRIVACY_VAULT_KEY — lib/vaultCrypto.js);
@@ -16,6 +65,7 @@ export const privacyDdl = [
     // init-db.sql.
     `CREATE TABLE IF NOT EXISTS privacy_vault_records (
       id UUID PRIMARY KEY,
+      subject_id UUID NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001' REFERENCES privacy_subjects (id) ON DELETE CASCADE,
       type TEXT NOT NULL,
       label TEXT NOT NULL DEFAULT '',
       value_enc TEXT NOT NULL,
@@ -31,13 +81,18 @@ export const privacyDdl = [
     )`,
     // Type is the primary list filter (all addresses, all emails, ...).
     `CREATE INDEX IF NOT EXISTS idx_privacy_vault_records_type ON privacy_vault_records (type)`,
-    // Explicit consent audit rows (v1 subject is always 'self'); the broker
-    // opt-out engine builds on this trail. Append-only.
+    // Explicit consent audit rows, one per subject; the broker opt-out engine
+    // builds on this trail and REFUSES to act for a subject with no row here
+    // (privacySubjects.assertSubjectConsent, #3658). Append-only. The legacy
+    // free-text `subject` column is kept for the historical audit trail —
+    // `subject_id` is the FK the engine and every query scope on.
     `CREATE TABLE IF NOT EXISTS privacy_consents (
       id UUID PRIMARY KEY,
       subject TEXT NOT NULL DEFAULT 'self',
+      subject_id UUID NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001' REFERENCES privacy_subjects (id) ON DELETE CASCADE,
       scope TEXT NOT NULL,
       method TEXT NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
       granted_at TIMESTAMPTZ DEFAULT NOW()
     )`,
 
@@ -52,6 +107,7 @@ export const privacyDdl = [
     // Mirrors the privacy blocks in init-db.sql.
     `CREATE TABLE IF NOT EXISTS privacy_orgs (
       id UUID PRIMARY KEY,
+      subject_id UUID NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001' REFERENCES privacy_subjects (id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       category TEXT NOT NULL DEFAULT 'other',
       website TEXT NOT NULL DEFAULT '',
@@ -71,6 +127,7 @@ export const privacyDdl = [
     // its holdings rows.
     `CREATE TABLE IF NOT EXISTS privacy_org_holdings (
       org_id UUID NOT NULL REFERENCES privacy_orgs (id) ON DELETE CASCADE,
+      subject_id UUID NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001' REFERENCES privacy_subjects (id) ON DELETE CASCADE,
       vault_record_id UUID NOT NULL REFERENCES privacy_vault_records (id) ON DELETE CASCADE,
       status TEXT NOT NULL DEFAULT 'current',
       noted_at TIMESTAMPTZ DEFAULT NOW(),
@@ -121,6 +178,7 @@ export const privacyDdl = [
     // cascades its cases.
     `CREATE TABLE IF NOT EXISTS privacy_broker_cases (
       id UUID PRIMARY KEY,
+      subject_id UUID NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001' REFERENCES privacy_subjects (id) ON DELETE CASCADE,
       broker_id TEXT NOT NULL REFERENCES privacy_brokers (id) ON DELETE CASCADE,
       state TEXT NOT NULL DEFAULT 'unscanned',
       found BOOLEAN,
@@ -132,9 +190,13 @@ export const privacyDdl = [
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )`,
-    // One live case per broker in v1 (self-only subject) — unique so the
-    // scan-pass upsert can ON CONFLICT the broker id.
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_privacy_broker_cases_broker ON privacy_broker_cases (broker_id)`,
+    // One live case per (broker, subject) — two household members are worked
+    // through the same broker independently, so the uniqueness that used to be
+    // on `broker_id` alone is now on the pair (#3658). The single-column index
+    // is dropped so an existing install can widen without a manual step; the
+    // pair index is created by subjectScopeUpgrades below, AFTER `subject_id`
+    // exists on the table.
+    `DROP INDEX IF EXISTS idx_privacy_broker_cases_broker`,
     // "Which cases are due for a recheck" — the run-loop's primary query.
     `CREATE INDEX IF NOT EXISTS idx_privacy_broker_cases_recheck ON privacy_broker_cases (next_recheck_at)`,
 
@@ -150,6 +212,7 @@ export const privacyDdl = [
     // Mirrors the block in init-db.sql.
     `CREATE TABLE IF NOT EXISTS privacy_change_events (
       id UUID PRIMARY KEY,
+      subject_id UUID NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001' REFERENCES privacy_subjects (id) ON DELETE CASCADE,
       vault_record_id UUID NOT NULL REFERENCES privacy_vault_records (id) ON DELETE CASCADE,
       replacement_record_id UUID REFERENCES privacy_vault_records (id) ON DELETE SET NULL,
       kind TEXT NOT NULL DEFAULT 'other',
@@ -159,4 +222,29 @@ export const privacyDdl = [
     // "Changes touching this record" — the inventory groups by the old record.
     `CREATE INDEX IF NOT EXISTS idx_privacy_change_events_vault_record ON privacy_change_events (vault_record_id)`,
 
+    // ─── Household-subject scope upgrade (issue #3658) ───────────────────────
+    // Runs LAST: the CREATE TABLE bodies above already carry `subject_id` on a
+    // fresh install, so these are no-ops there. On an existing install they add
+    // the column, backfill every pre-existing row to `self`, and lock it down.
+    // Free-text context for a consent row (who witnessed it, where the signed
+    // form lives). Added with the table's subject scope (#3658).
+    `ALTER TABLE privacy_consents ADD COLUMN IF NOT EXISTS note TEXT NOT NULL DEFAULT ''`,
+    ...subjectScopeUpgrades,
+    // `self` always consents — the install owner IS the self subject, so the
+    // engine guard must never refuse them. Written once (guarded by NOT EXISTS)
+    // so an install that predates #3658 and never created a vault record still
+    // has a consent row, and so re-running the DDL never appends duplicates.
+    `INSERT INTO privacy_consents (id, subject_id, scope, method, note, granted_at)
+     SELECT gen_random_uuid(), '${SELF_SUBJECT_ID}', 'pii_vault', 'self',
+            'seeded: the install owner is the self subject', NOW()
+     WHERE NOT EXISTS (SELECT 1 FROM privacy_consents WHERE subject_id = '${SELF_SUBJECT_ID}')`,
+    // Now that `subject_id` exists on the case ledger, the per-(broker,subject)
+    // uniqueness the scan/opt-out upsert relies on.
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_privacy_broker_cases_broker_subject ON privacy_broker_cases (broker_id, subject_id)`,
+    // "Every record for subject X" — the primary list filter once a second
+    // household member exists.
+    `CREATE INDEX IF NOT EXISTS idx_privacy_vault_records_subject ON privacy_vault_records (subject_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_privacy_orgs_subject ON privacy_orgs (subject_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_privacy_change_events_subject ON privacy_change_events (subject_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_privacy_consents_subject ON privacy_consents (subject_id)`,
 ];

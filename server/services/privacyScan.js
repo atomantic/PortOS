@@ -12,6 +12,11 @@
  * render static HTML), escalating to the SSRF-pinned real-Chrome fetch
  * (`fetchUrlMainText`) only when the page needs JS. Both lanes are SSRF-vetted.
  *
+ * CONSENT: `runScanPass` refuses to probe ANY broker for a subject without a
+ * recorded consent row (privacySubjects.assertSubjectConsent) — the guard lives
+ * in the service, not the UI, so a scheduled recheck or a direct API call is
+ * refused exactly like a hidden button would be (#3658).
+ *
  * AI policy: this whole pass runs ONLY from a user-triggered endpoint or a
  * user-created cron (never at boot). LLM-assisted namesake disambiguation, if
  * added, is therefore inside a sanctioned user-triggered pass — v1 uses a pure
@@ -23,6 +28,7 @@ import { isSafeIngestUrl, isBlockedIngestHost } from '../lib/catalogValidation.j
 import { fetchUrlMainText } from './catalogIngestSources.js';
 import { listScanEligibleValues } from './privacyVault.js';
 import { listBrokers, listBrokerCases, recordScanVerdict } from './privacyBrokers.js';
+import { resolveSubjectId, assertSubjectConsent } from './privacySubjects.js';
 
 // Case states a scan pass may (re)touch: no case yet, or a settled SCAN verdict.
 // Cases mid-opt-out (optout_in_progress…awaiting_processing), confirmed_removed,
@@ -297,11 +303,12 @@ export async function probeBroker(broker, vectors, {
  */
 export async function scanBroker(broker, vectors, {
   fetchImpl = fetch, browserFetch = fetchUrlMainText, urlSafe = isScanUrlSafe, now = new Date(),
+  subjectId,
 } = {}) {
   const probed = await probeBroker(broker, vectors, { fetchImpl, browserFetch, urlSafe });
   if (probed.skipped) return { skipped: true, reason: probed.reason };
   const kase = await recordScanVerdict(broker.id, probed.verdict, {
-    evidence: probed.evidence, found: probed.found ?? null, now,
+    evidence: probed.evidence, found: probed.found ?? null, now, subjectId,
   });
   return kase;
 }
@@ -313,18 +320,23 @@ export async function scanBroker(broker, vectors, {
  *
  * Returns a summary { scanned, verdicts: {<verdict>: n}, skipped, brokers }.
  */
-export async function runScanPass({ concurrency = 3, fetchImpl = fetch, browserFetch = fetchUrlMainText, urlSafe = isScanUrlSafe, now = new Date() } = {}) {
-  const scanValues = await listScanEligibleValues();
+export async function runScanPass({ concurrency = 3, fetchImpl = fetch, browserFetch = fetchUrlMainText, urlSafe = isScanUrlSafe, now = new Date(), subjectId } = {}) {
+  // CONSENT GATE — BEFORE any vault read or broker fetch. A subject with no
+  // consent row on file is refused outright (403); the UI hiding the Scan button
+  // is not sufficient, since a cron/API/agent caller reaches this same function.
+  const resolvedSubjectId = resolveSubjectId(subjectId);
+  await assertSubjectConsent(resolvedSubjectId, { action: 'broker exposure scan' });
+  const scanValues = await listScanEligibleValues({ subjectId: resolvedSubjectId });
   const vectors = buildSearchVectors(scanValues);
   if ((vectors.names || []).length === 0) {
     console.log('🔎 Scan pass aborted: no scan-eligible name in the vault');
-    return { scanned: 0, verdicts: {}, skipped: 0, brokers: 0, reason: 'no_scan_vectors' };
+    return { scanned: 0, verdicts: {}, skipped: 0, brokers: 0, subjectId: resolvedSubjectId, reason: 'no_scan_vectors' };
   }
   const allBrokers = await listBrokers({ enabled: true });
   // Skip brokers whose case is owned by the opt-out engine, or whose settled
   // verdict isn't yet due for a recheck — the pass is idempotent + cheap to
   // re-run because of this filter.
-  const casesByBroker = new Map((await listBrokerCases()).map((c) => [c.brokerId, c]));
+  const casesByBroker = new Map((await listBrokerCases({ subjectId: resolvedSubjectId })).map((c) => [c.brokerId, c]));
   const nowMs = now.getTime();
   const brokers = allBrokers.filter((b) => {
     const kase = casesByBroker.get(b.id);
@@ -340,12 +352,12 @@ export async function runScanPass({ concurrency = 3, fetchImpl = fetch, browserF
   // don't hammer many hosts at once.
   for (let i = 0; i < brokers.length; i += concurrency) {
     const batch = brokers.slice(i, i + concurrency);
-    const results = await Promise.all(batch.map((b) => scanBroker(b, vectors, { fetchImpl, browserFetch, urlSafe, now })));
+    const results = await Promise.all(batch.map((b) => scanBroker(b, vectors, { fetchImpl, browserFetch, urlSafe, now, subjectId: resolvedSubjectId })));
     for (const r of results) {
       if (r?.skipped) { skipped += 1; continue; }
       if (r?.state) { verdicts[r.state] = (verdicts[r.state] || 0) + 1; scanned += 1; }
     }
   }
   console.log(`🔎 Scan pass complete: ${scanned} verdicts, ${skipped} skipped across ${brokers.length} brokers`);
-  return { scanned, verdicts, skipped, brokers: brokers.length };
+  return { scanned, verdicts, skipped, brokers: brokers.length, subjectId: resolvedSubjectId };
 }

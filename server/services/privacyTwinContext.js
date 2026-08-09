@@ -22,7 +22,7 @@
  */
 
 import { query } from '../lib/db.js';
-import { PRIVACY_SENSITIVE_TYPES } from '../lib/privacyValidation.js';
+import { PRIVACY_SENSITIVE_TYPES, PRIVACY_SELF_SUBJECT_ID } from '../lib/privacyValidation.js';
 // vaultCrypto is imported lazily (inside getPrivacyTwinContext) so merely
 // importing this module — which digital-twin-context.js does at top level —
 // doesn't eagerly evaluate vaultCrypto's install-root .env path resolution.
@@ -36,7 +36,9 @@ const REMOVED_BROKER_STATES = new Set(['removed', 'confirmed_removed', 'suppress
 
 /** One-line "Organizations on file" summary (counts by trust + category span). */
 async function buildOrgSummary() {
-  const { rows } = await query(`SELECT trust, category FROM privacy_orgs`);
+  // Scoped to `self`: the Digital Twin models the install's OWNER, so a
+  // household member's orgs/cases/records must never enter its prompt (#3658).
+  const { rows } = await query(`SELECT trust, category FROM privacy_orgs WHERE subject_id = $1`, [PRIVACY_SELF_SUBJECT_ID]);
   if (rows.length === 0) return '';
   const byTrust = {};
   const categories = new Set();
@@ -54,7 +56,7 @@ async function buildOrgSummary() {
 
 /** One-line data-broker opt-out posture (only when Phase 5/6 tables exist). */
 async function buildBrokerPosture() {
-  const { rows } = await query(`SELECT state FROM privacy_broker_cases`);
+  const { rows } = await query(`SELECT state FROM privacy_broker_cases WHERE subject_id = $1`, [PRIVACY_SELF_SUBJECT_ID]);
   if (rows.length === 0) return '';
   let removed = 0;
   for (const row of rows) if (REMOVED_BROKER_STATES.has(row.state)) removed += 1;
@@ -90,9 +92,10 @@ export async function getPrivacyTwinContext() {
     `SELECT type, label, status, value_enc
      FROM privacy_vault_records
      WHERE share_with_twin = true
+       AND subject_id = $2
        AND type <> ALL($1::text[])
      ORDER BY type, label`,
-    [PRIVACY_SENSITIVE_TYPES],
+    [PRIVACY_SENSITIVE_TYPES, PRIVACY_SELF_SUBJECT_ID],
   );
   if (records.length > 0) {
     const { decryptValue } = await import('../lib/vaultCrypto.js');

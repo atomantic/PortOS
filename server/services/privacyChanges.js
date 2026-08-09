@@ -29,10 +29,11 @@ import { ServerError } from '../lib/errorHandler.js';
 import { encryptValue, maskValue, ensureVaultKey } from '../lib/vaultCrypto.js';
 import { resolveUseForScans, getVaultRecord, revealValue } from './privacyVault.js';
 import { getOrg } from './privacyOrgs.js';
+import { resolveSubjectId } from './privacySubjects.js';
 import { listAccounts } from './messageAccounts.js';
 import { createDraft } from './messageDrafts.js';
 
-const EVENT_COLUMNS = `id, vault_record_id, replacement_record_id, kind, declared_at, note`;
+const EVENT_COLUMNS = `id, subject_id, vault_record_id, replacement_record_id, kind, declared_at, note`;
 
 // Holdings statuses that make up the per-event inventory (a `current` holding is
 // only relevant to a NEW record, not the change checklist).
@@ -65,6 +66,7 @@ function rowToEvent(row) {
   if (!row) return null;
   return {
     id: row.id,
+    subjectId: row.subject_id,
     vaultRecordId: row.vault_record_id,
     replacementRecordId: row.replacement_record_id,
     kind: row.kind,
@@ -104,8 +106,10 @@ export async function declareChange({ vaultRecordId, replacement, replacementRec
   // so the transaction body is pure DB work (a replacement is encrypted inside).
   if (replacement) await ensureVaultKey();
   return withTransaction(async (client) => {
+    // The event inherits its subject from the OLD record — a change is always
+    // "this person's fact changed", so there is no subjectId on the input.
     const { rows: oldRows } = await client.query(
-      `SELECT id, type FROM privacy_vault_records WHERE id = $1 FOR UPDATE`, [vaultRecordId],
+      `SELECT id, type, subject_id FROM privacy_vault_records WHERE id = $1 FOR UPDATE`, [vaultRecordId],
     );
     const oldRecord = oldRows[0];
     if (!oldRecord) throw new ServerError('Vault record not found', { status: 404, code: 'NOT_FOUND' });
@@ -114,10 +118,18 @@ export async function declareChange({ vaultRecordId, replacement, replacementRec
     let replacementId = null;
     if (replacementRecordId) {
       const { rows } = await client.query(
-        `SELECT id FROM privacy_vault_records WHERE id = $1`, [replacementRecordId],
+        `SELECT id, subject_id FROM privacy_vault_records WHERE id = $1`, [replacementRecordId],
       );
       if (!rows[0]) {
         throw new ServerError('Replacement vault record not found', { status: 400, code: 'REPLACEMENT_NOT_FOUND' });
+      }
+      // Retiring one person's address in favour of ANOTHER person's record is
+      // never a legitimate change — it would silently re-point their orgs.
+      if (rows[0].subject_id !== oldRecord.subject_id) {
+        throw new ServerError(
+          'Replacement vault record belongs to a different privacy subject',
+          { status: 400, code: 'SUBJECT_MISMATCH' },
+        );
       }
       replacementId = replacementRecordId;
     } else if (replacement) {
@@ -126,11 +138,11 @@ export async function declareChange({ vaultRecordId, replacement, replacementRec
       const useForScans = resolveUseForScans(type, replacement.useForScans);
       await client.query(
         `INSERT INTO privacy_vault_records
-           (id, type, label, value_enc, masked_value, status, valid_from, valid_to,
+           (id, subject_id, type, label, value_enc, masked_value, status, valid_from, valid_to,
             share_with_twin, use_for_scans, notes, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, 'current', $6, NULL, $7, $8, $9, NOW(), NOW())`,
+         VALUES ($1, $2, $3, $4, $5, $6, 'current', $7, NULL, $8, $9, $10, NOW(), NOW())`,
         [
-          replacementId, type, replacement.label,
+          replacementId, oldRecord.subject_id, type, replacement.label,
           encryptValue(replacement.value), maskValue(type, replacement.value),
           replacement.validFrom ?? null,
           replacement.shareWithTwin === true, useForScans, replacement.notes ?? '',
@@ -157,10 +169,10 @@ export async function declareChange({ vaultRecordId, replacement, replacementRec
     if (replacementId) {
       for (const row of flipped) {
         await client.query(
-          `INSERT INTO privacy_org_holdings (org_id, vault_record_id, status, noted_at, updated_at)
-           VALUES ($1, $2, 'current', NOW(), NOW())
+          `INSERT INTO privacy_org_holdings (org_id, subject_id, vault_record_id, status, noted_at, updated_at)
+           VALUES ($1, $2, $3, 'current', NOW(), NOW())
            ON CONFLICT (org_id, vault_record_id) DO UPDATE SET status = 'current', updated_at = NOW()`,
-          [row.org_id, replacementId],
+          [row.org_id, oldRecord.subject_id, replacementId],
         );
       }
     }
@@ -168,10 +180,10 @@ export async function declareChange({ vaultRecordId, replacement, replacementRec
     const eventId = randomUUID();
     const resolvedKind = kind ?? kindForType(oldRecord.type);
     const { rows: evRows } = await client.query(
-      `INSERT INTO privacy_change_events (id, vault_record_id, replacement_record_id, kind, declared_at, note)
-       VALUES ($1, $2, $3, $4, NOW(), $5)
+      `INSERT INTO privacy_change_events (id, subject_id, vault_record_id, replacement_record_id, kind, declared_at, note)
+       VALUES ($1, $2, $3, $4, $5, NOW(), $6)
        RETURNING ${EVENT_COLUMNS}`,
-      [eventId, vaultRecordId, replacementId, resolvedKind, note ?? ''],
+      [eventId, oldRecord.subject_id, vaultRecordId, replacementId, resolvedKind, note ?? ''],
     );
     console.log(`📮 Declared privacy change ${eventId} (kind=${resolvedKind}, orgs flipped=${flipped.length}, replacement=${replacementId ? 'yes' : 'none'})`);
     return rowToEvent(evRows[0]);
@@ -179,9 +191,9 @@ export async function declareChange({ vaultRecordId, replacement, replacementRec
 }
 
 /** List all change events, newest first, with per-event progress counts + masked old/new values. */
-export async function listChangeEvents() {
+export async function listChangeEvents({ subjectId } = {}) {
   const { rows } = await query(
-    `SELECT e.id, e.vault_record_id, e.replacement_record_id, e.kind, e.declared_at, e.note,
+    `SELECT e.id, e.subject_id, e.vault_record_id, e.replacement_record_id, e.kind, e.declared_at, e.note,
             ov.type AS old_type, ov.label AS old_label, ov.masked_value AS old_masked,
             rv.type AS new_type, rv.label AS new_label, rv.masked_value AS new_masked,
             COUNT(h.org_id) FILTER (WHERE h.status = 'update_pending')::int AS pending_count,
@@ -192,9 +204,10 @@ export async function listChangeEvents() {
      LEFT JOIN privacy_vault_records rv ON rv.id = e.replacement_record_id
      LEFT JOIN privacy_org_holdings h
        ON h.vault_record_id = e.vault_record_id AND h.status = ANY($1::text[])
+     WHERE e.subject_id = $2
      GROUP BY e.id, ov.type, ov.label, ov.masked_value, rv.type, rv.label, rv.masked_value
      ORDER BY e.declared_at DESC`,
-    [INVENTORY_STATUSES],
+    [INVENTORY_STATUSES, resolveSubjectId(subjectId)],
   );
   return rows.map((row) => ({
     ...rowToEvent(row),
