@@ -187,6 +187,31 @@ describe('Error Detection', () => {
       });
     });
 
+    // agentCliSpawning feeds stderr to the detector as `[stderr] ${text}`, so the
+    // host tag lands BEFORE the CLI's own gutter glyphs — a genuine banner on
+    // stderr must still bench.
+    it('promotes the banner behind the host [stderr] tag and gutter chrome', () => {
+      expect(detectImmediateFallbackSignal("[stderr]   ⎿  We're finishing verifying your account eligibility. This usually takes a moment. Please try again shortly.\n"))
+        .toMatchObject({ origin: 'provider' });
+    });
+
+    // A truncated stream window starts mid-line, and `^…/m` matches that slice
+    // boundary — so a quoted banner whose line prefix scrolled out of the window
+    // must NOT be promoted (that is the false-bench this gate exists to stop).
+    it('does not trust a slice boundary as a line start once the stream window has truncated', () => {
+      const detect = createImmediateFallbackSignalDetector({ maxBuffer: 160 });
+      detect(`${'x'.repeat(200)}: quoting the banner: `);
+      const result = detect("We're finishing verifying your account eligibility. This usually takes a moment. Please try again shortly.");
+      expect(result).toMatchObject({ category: ERROR_CATEGORIES.AUTH_ERROR, origin: 'output-scan' });
+    });
+
+    it('still promotes a gutter-rendered banner on its own line after the window truncated', () => {
+      const detect = createImmediateFallbackSignalDetector({ maxBuffer: 200 });
+      detect(`${'x'.repeat(300)}\n`);
+      const result = detect("  ⎿  We're finishing verifying your account eligibility. This usually takes a moment. Please try again shortly.\n");
+      expect(result).toMatchObject({ origin: 'provider' });
+    });
+
     it('promotes a real banner that arrives later in a buffer whose earlier mention is quoted', () => {
       const transcript = "I will check whether We're finishing verifying your account eligibility. This usually takes a moment. Please try again shortly. is still firing.\n⎿  We're finishing verifying your account eligibility. This usually takes a moment. Please try again shortly.\n";
       expect(detectImmediateFallbackSignal(transcript)).toMatchObject({ origin: 'provider' });

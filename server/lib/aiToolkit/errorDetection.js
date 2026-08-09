@@ -109,7 +109,12 @@ const WAIT_TIME_PATTERNS = [
 // line (`pattern: /…/`) puts real text before the banner on the same line, which
 // this prefix deliberately does NOT admit. Markdown list bullets (`- `, `* `) are
 // left out for the same reason: that is how an agent writes ABOUT a banner.
-const TUI_GUTTER_PREFIX = '^[\\s│┃╎⎿⏺●•]*(?:\\[stderr\\]\\s*)?';
+//
+// `[stderr]` is a host-added tag, not agent text: agentCliSpawning feeds stderr
+// to the detector as `[stderr] ${text}`, so it lands BEFORE the CLI's own gutter
+// glyphs. The alternation lets tag and gutter interleave in either order —
+// requiring gutter-then-tag would demote a genuine banner printed on stderr.
+const TUI_GUTTER_PREFIX = '^(?:[\\s│┃╎⎿⏺●•]|\\[stderr\\])*';
 
 /**
  * Signals that fail a run immediately so the task can pick a fallback provider.
@@ -305,14 +310,25 @@ export function analyzeError(errorText, exitCode = null) {
  * The marker is tested against the WHOLE buffered text rather than the matched
  * substring, mirroring `resolvePatternOrigin` in `agentErrorAnalysis.js`: a
  * pattern returns its LEFTMOST match, which may be a quoted mention even when
- * the real banner arrives later in the same buffer. Pure.
+ * the real banner arrives later in the same buffer.
+ *
+ * `lineStartTrusted: false` says index 0 of the text is a slice boundary rather
+ * than a real line start (the streaming detector keeps only a trailing window).
+ * A marker anchored with `^…/m` matches a slice boundary too, so a quoted
+ * banner whose line prefix fell out of the window would be promoted — the very
+ * false-bench this gate exists to prevent. When the boundary is untrusted the
+ * marker is tested only from the first newline on, so promotion needs a line
+ * start the buffer actually witnessed. Pure.
  */
-function resolveSignalOrigin(signal, text) {
-  if (signal.structuredMarker && !signal.structuredMarker.test(text || '')) return 'output-scan';
-  return 'provider';
+function resolveSignalOrigin(signal, text, lineStartTrusted) {
+  if (!signal.structuredMarker) return 'provider';
+  const value = text || '';
+  const firstNewline = value.indexOf('\n');
+  const markerText = lineStartTrusted ? value : (firstNewline === -1 ? '' : value.slice(firstNewline + 1));
+  return signal.structuredMarker.test(markerText) ? 'provider' : 'output-scan';
 }
 
-export function detectImmediateFallbackSignal(text) {
+export function detectImmediateFallbackSignal(text, { lineStartTrusted = true } = {}) {
   if (!text) return null;
   const value = String(text);
 
@@ -333,7 +349,7 @@ export function detectImmediateFallbackSignal(text) {
       suggestedFix: signal.suggestedFix,
       // Provider CHROME benches the provider host-side; text the agent itself
       // could have printed must not (#3631). See resolveSignalOrigin.
-      origin: resolveSignalOrigin(signal, value)
+      origin: resolveSignalOrigin(signal, value, lineStartTrusted)
     };
   }
 
@@ -342,12 +358,17 @@ export function detectImmediateFallbackSignal(text) {
 
 export function createImmediateFallbackSignalDetector({ maxBuffer = 512 } = {}) {
   let buffer = '';
+  // Once the window has dropped anything, buffer[0] is a slice boundary, not a
+  // line start — provenance must stop trusting it (see resolveSignalOrigin).
+  let truncated = false;
   const cap = Number.isFinite(maxBuffer) && maxBuffer > 0 ? maxBuffer : 512;
 
   return (chunk) => {
     if (!chunk) return null;
-    buffer = `${buffer}${String(chunk)}`.slice(-cap);
-    return detectImmediateFallbackSignal(buffer);
+    const next = `${buffer}${String(chunk)}`;
+    if (next.length > cap) truncated = true;
+    buffer = next.slice(-cap);
+    return detectImmediateFallbackSignal(buffer, { lineStartTrusted: !truncated });
   };
 }
 
