@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { rmSync } from 'fs';
+import { existsSync, rmSync } from 'fs';
 import path from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
@@ -27,9 +27,16 @@ afterAll(cleanup);
 
 // Dynamic import, not a static one: `missions.js` reads `PATHS.missions` into a
 // module-level const at load time, and a static import would run that load
-// BEFORE the `const tempRoot` line above — the mock factory would then close
-// over an uninitialized binding. Top-level await defers the load until after the
-// temp root exists.
+// BEFORE the `mockPathsDataRoot()` line above — the hoisted mock factory would
+// then close over an uninitialized `makeProxy`. Top-level await defers the load
+// until after it exists.
+//
+// So the static imports at the top of this file must never transitively reach
+// `../lib/fileUtils.js`, or the factory runs during their evaluation and throws
+// `Cannot access 'makeProxy' before initialization`. `vi.hoisted()` does NOT fix
+// that — it hoists above the imports too, putting `mockPathsDataRoot` itself in
+// TDZ (verified: `Cannot access '__vi_import_0__' before initialization`). Keep
+// new static imports here dependency-free, or make them dynamic as well.
 const {
   createMission,
   getMission,
@@ -399,8 +406,13 @@ describe('Missions Service — the suite is isolated from the checkout\'s real d
     expect(PATHS.missions).toBe(DATA_DIR);
   });
 
-  it('counts only the missions this suite created', async () => {
+  // Asserts WHERE the record landed, not just how many came back. A count alone
+  // would pass on a fresh checkout with the redirect removed — real
+  // `data/cos/missions` is empty there, so writing one and reading one back still
+  // gives 1. Only the path assertion fails in that case.
+  it('writes its missions under the temp root, and reads back only its own', async () => {
     await createMission({ id: 'test-isolation-probe', appId: 'test-app', name: 'Isolation Probe' });
+    expect(existsSync(path.join(DATA_DIR, 'test-isolation-probe.json'))).toBe(true);
     const stats = await getStats();
     expect(stats.totalMissions).toBe(1);
   });

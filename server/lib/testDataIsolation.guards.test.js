@@ -58,18 +58,42 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 // sole offender after a rename.
 const SELF = relative(REPO_ROOT, fileURLToPath(import.meta.url));
 
-// Deliberate exemption. `creativeDirectorPrompts.test.js` reads the INSTALLED
-// stage prompt in preference to the committed `data.reference/` seed on purpose:
-// the point is to catch drift between a locally-edited prompt and the code that
-// renders it. It falls back to the seed when `data/` is absent, so CI is stable,
-// and it only ever reads — it writes nothing into the user's data.
-const ALLOWED = new Set(['server/lib/creativeDirectorPrompts.test.js']);
+// Deliberate exemptions. Both READ the live install on purpose and write nothing
+// into it, so neither can corrupt the user's data — the reason the rule exists.
+//   - creativeDirectorPrompts.test.js reads the INSTALLED stage prompt in
+//     preference to the committed `data.reference/` seed, to catch drift between
+//     a locally-edited prompt and the code that renders it. Falls back to the
+//     seed when `data/` is absent, so CI is stable.
+//   - visionTest.integration.test.js is an opt-in integration test whose stated
+//     premise is the live install: it enumerates the user's own screenshots to
+//     feed a real vision model, and skips itself when the directory is absent.
+// A future false positive belongs here too — with a sentence saying why it's safe.
+const ALLOWED = new Set([
+  'server/lib/creativeDirectorPrompts.test.js',
+  'server/services/visionTest.integration.test.js',
+]);
 
-// An install-root anchor or a parent climb, joined to a `data` path segment.
+// Two shapes, because they need different bounds:
+//   1. An install-root anchor (`process.cwd()`, `PATHS.root`/`installRoot`) or a
+//      standalone `'..'` join argument, followed on the SAME LINE by a `data`
+//      path segment. The line bound matters: allowing newlines here matches the
+//      60 suites that mock `PATHS: { data: '/mock/data' }` across a few lines,
+//      where the `..` is only the module specifier of the `vi.mock` call. The
+//      cost is that a `join()` split across lines slips through — the empirical
+//      probe below is the backstop for that.
+//   2. A CONTIGUOUS climb inside one string (`'../data'`, `'../../data/x'`).
+//      Contiguity is what makes this one safe to match without a window: it
+//      can't span two unrelated string literals the way shape 1 could.
 // The trailing lookahead spares `data.reference` / `data-foo` / `dataDir`, and
-// the leading quote-or-slash class spares `'test-data'`.
-const REAL_DATA_ROOT_RE =
-  /(?:process\.cwd\(\)|PATHS\.(?:root|installRoot)|['"]\.\.['"])[^\n;]*?['"`/]data(?![\w.-])/;
+// the leading quote-or-separator class spares `'test-data'`.
+const REAL_DATA_ROOT_RE = new RegExp([
+  '(?:',
+  '(?:process\\.cwd\\s*\\(\\)|PATHS\\.(?:root|installRoot)|[\'"`]\\.\\.[\'"`])',
+  '[^\\n;]{0,160}?[\'"`/\\\\]data(?![\\w.-])',
+  '|',
+  '\\.\\.(?:[/\\\\]\\.\\.)*[/\\\\]data(?![\\w.-])',
+  ')',
+].join(''));
 
 // Scope to the test files the server runner globs (`server/vitest.config.js`).
 // Client tests run in jsdom and have no filesystem to leak into. Computed once —
@@ -105,14 +129,18 @@ describe('test-data isolation guard', () => {
     ].join('\n')).toEqual([]);
   });
 
-  it('would have caught both spellings that shipped', () => {
-    // A bypass probe, not a pattern unit test: these are the exact lines the two
-    // known instances carried, so a rule that stops matching them fails here
-    // instead of silently passing over a re-introduced leak.
+  it('would have caught every spelling found in this repo', () => {
+    // A bypass probe, not a pattern unit test: these are the exact lines the
+    // three known instances carried, so a rule that stops matching them fails
+    // here instead of silently passing over a re-introduced leak.
     expect(scan("const DATA_DIR = path.join(process.cwd(), 'data', 'cos', 'missions');")).toBe(true);
     expect(scan("const D = join(__HERE, '..', '..', 'data', 'prompts', 'stages');")).toBe(true);
+    expect(scan("const S = resolve(__dirname, '../../data/screenshots');")).toBe(true);
+    // Spellings not yet seen here, but a rename away from the ones above.
     expect(scan("join(PATHS.installRoot, 'data', 'runs')")).toBe(true);
     expect(scan('`${process.cwd()}/data/cos`')).toBe(true);
+    expect(scan("join(__dirname, '../data/cos/missions')")).toBe(true);
+    expect(scan("path.join(process.cwd(), '\\\\data\\\\cos')")).toBe(true);
   });
 
   it('spares the look-alikes that must stay legal', () => {
@@ -121,5 +149,9 @@ describe('test-data isolation guard', () => {
     expect(scan("join(tempRoot, 'data', 'cos')")).toBe(false);
     expect(scan("join(__HERE, '..', '..', 'data.reference', 'prompts')")).toBe(false);
     expect(scan("import { PATHS } from '../lib/fileUtils.js'")).toBe(false);
+    // A fake absolute path inside a mock factory. The `..` here belongs to the
+    // module specifier, not to a climb — matching this flags 1 real suite
+    // (creativeDirector/sceneEvaluator.test.js) for nothing.
+    expect(scan("vi.mock('../../lib/fileUtils.js', () => ({ PATHS: { videoThumbnails: '/data/video-thumbnails' } }));")).toBe(false);
   });
 });
