@@ -40,8 +40,10 @@ export default function usePersistedOptions(specs, persist) {
   const [values, setValues] = useState(() => Object.fromEntries(
     Object.entries(specsRef.current).map(([key, spec]) => [key, spec.defaultValue]),
   ));
-  // Live mirror so `collectOverrides` (called from an async start handler) never
-  // reads a stale closure of `values`.
+  // Live mirror so `collectOverrides` / `inputProps` (called from an async start
+  // handler, or in the same event frame as an edit) never read a stale value.
+  // `edit` and `hydrate` write it SYNCHRONOUSLY — waiting for the re-render would
+  // let a blur-then-click send the pre-edit value as the run's override.
   const valuesRef = useRef(values);
   valuesRef.current = values;
   // Per-field dirty flags. Until a field is edited its input shows a display
@@ -50,8 +52,9 @@ export default function usePersistedOptions(specs, persist) {
 
   const edit = useCallback((key, value) => {
     editedRef.current[key] = true;
-    setValues((prev) => ({ ...prev, [key]: value }));
-    // Persist OUTSIDE the state updater — an updater can run twice under
+    valuesRef.current = { ...valuesRef.current, [key]: value };
+    setValues(valuesRef.current);
+    // Persist OUTSIDE any state updater — an updater can run twice under
     // StrictMode and would double-fire the PATCH.
     if (specsRef.current[key]?.persistOnEdit) persistRef.current?.({ [key]: value });
   }, []);
@@ -59,19 +62,19 @@ export default function usePersistedOptions(specs, persist) {
   /** Apply loaded settings to every field the user hasn't edited. */
   const hydrate = useCallback((saved) => {
     const source = saved || {};
-    setValues((prev) => {
-      const next = { ...prev };
-      let changed = false;
-      for (const [key, spec] of Object.entries(specsRef.current)) {
-        if (editedRef.current[key]) continue;
-        const read = spec.read ? spec.read(source[key]) : source[key];
-        // `undefined` means absent-or-invalid — fall back to the default rather
-        // than letting a missing setting read as an intentional clear.
-        const value = read === undefined ? spec.defaultValue : read;
-        if (next[key] !== value) { changed = true; next[key] = value; }
-      }
-      return changed ? next : prev;
-    });
+    const next = { ...valuesRef.current };
+    let changed = false;
+    for (const [key, spec] of Object.entries(specsRef.current)) {
+      if (editedRef.current[key]) continue;
+      const read = spec.read ? spec.read(source[key]) : source[key];
+      // `undefined` means absent-or-invalid — fall back to the default rather
+      // than letting a missing setting read as an intentional clear.
+      const value = read === undefined ? spec.defaultValue : read;
+      if (next[key] !== value) { changed = true; next[key] = value; }
+    }
+    if (!changed) return; // no-op load — don't re-render
+    valuesRef.current = next;
+    setValues(next);
   }, []);
 
   /** `{ settingKey: clampedValue }` for the EDITED fields only. */

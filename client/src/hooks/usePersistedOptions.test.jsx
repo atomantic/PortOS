@@ -47,6 +47,19 @@ describe('usePersistedOptions', () => {
     expect(result.current.collectOverrides()).toEqual({ rounds: 20 });
   });
 
+  it('collects an edit made in the same frame, before React re-renders', () => {
+    const { result } = setup();
+    // A blur that edits and a click that starts the run can land in one batched
+    // frame; reading only the rendered `values` would send the pre-edit value.
+    let collected = null;
+    act(() => {
+      result.current.edit('rounds', 12);
+      collected = result.current.collectOverrides();
+      expect(result.current.inputProps('rounds').value).toBe(12);
+    });
+    expect(collected).toEqual({ rounds: 12 });
+  });
+
   it('sends an explicitly edited falsy value rather than dropping it', () => {
     const { result } = setup();
     act(() => result.current.hydrate({ rounds: 5, enabled: true }));
