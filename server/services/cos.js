@@ -374,6 +374,35 @@ export async function start() {
     metadata: { description: 'CoS rehabilitation check for skipped tasks' }
   });
 
+  // Pending-merge drain (30 min). `evaluateTasks` also sweeps opportunistically,
+  // but evaluation is event-driven — with no periodic evaluation timer that drain
+  // fires roughly once per restart, so a green merge-only PR opened while PortOS
+  // runs would sit at `ticks: 0` forever (#3630). This timer is the cadence
+  // `MAX_PENDING_MERGE_TICKS` is documented against, and it is deliberately NOT
+  // coupled to the `pr-watcher` task type — a disabled watcher must not strand
+  // queued merges. Same autonomy gate as the evaluateTasks call site: merging
+  // writes to a default branch, so it only runs when the user has CoS auto-run
+  // set to `execute` and the daemon is not paused.
+  const { PENDING_MERGE_SWEEP_INTERVAL_MS } = await import('./prWatcher.js');
+  scheduleEvent({
+    id: 'cos-pending-merge-sweep',
+    type: 'interval',
+    intervalMs: PENDING_MERGE_SWEEP_INTERVAL_MS,
+    handler: async () => {
+      const s = await loadState();
+      if (s.paused || getDomainMode(s.config, 'cos') !== 'execute') return;
+      const prWatcher = await import('./prWatcher.js');
+      const sweep = await prWatcher.sweepPendingMergePrs().catch((err) => {
+        console.warn(`⚠️ sweepPendingMergePrs failed: ${err?.message || err}`);
+        return null;
+      });
+      if (sweep && (sweep.merged || sweep.escalated || sweep.timedOut)) {
+        emitLog('info', `🤖 Pending merges: ${sweep.merged} merged, ${sweep.escalated} escalated, ${sweep.timedOut} timed out`);
+      }
+    },
+    metadata: { description: 'CoS pending merge-only PR drain' }
+  });
+
   // Register autonomous job schedules (individual timers per job)
   await registerJobSchedules();
 
@@ -420,6 +449,7 @@ export async function stop() {
   cancelEvent('cos-learning-insights');
   cancelEvent('cos-rehabilitation-check');
   cancelEvent('cos-improvement-check');
+  cancelEvent('cos-pending-merge-sweep');
   await unregisterJobSchedules();
 
   await withStateLock(async () => {

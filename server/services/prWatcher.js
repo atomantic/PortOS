@@ -46,9 +46,13 @@ import { PR_COMPLETIONS } from '../lib/prDisposition.js';
 // the cap. 200 matches the limit github.js#syncRepos already uses.
 const PR_LIST_LIMIT = 200;
 
-// A watcher tick normally runs every 30 minutes. Six hours is long enough for
-// an ordinary CI queue, while still surfacing a wedged provider or branch
-// protection rule before a merge-only PR silently leaks forever.
+// The pending-merge sweep runs on its own CoS timer (`cos-pending-merge-sweep`
+// in cos.js) every 30 minutes. Six hours is long enough for an ordinary CI
+// queue, while still surfacing a wedged provider or branch protection rule
+// before a merge-only PR silently leaks forever. cos.js drives its interval off
+// PENDING_MERGE_SWEEP_INTERVAL_MS so `MAX_PENDING_MERGE_TICKS` keeps mapping to
+// wall-clock hours rather than to restarts (#3630).
+export const PENDING_MERGE_SWEEP_INTERVAL_MS = 30 * 60 * 1000;
 export const MAX_PENDING_MERGE_TICKS = 12;
 
 const GREEN_CHECK_VERDICTS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);

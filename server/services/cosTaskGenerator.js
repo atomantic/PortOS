@@ -1187,9 +1187,13 @@ export async function evaluateTasks(options) {
     return s;
   });
 
-  // Drain merge-only PRs on the evaluation cadence rather than the `pr-watcher`
-  // task's, which most installs leave disabled — that coupling stranded every
-  // green PortOS-opened PR at `ticks: 0` forever. Runs BEFORE the agent-slot
+  // Drain merge-only PRs here rather than on the `pr-watcher` task's schedule,
+  // which most installs leave disabled — that coupling stranded every green
+  // PortOS-opened PR at `ticks: 0` forever. This is the OPPORTUNISTIC drain:
+  // evaluation is event-driven, so the cadence-bearing one is the
+  // `cos-pending-merge-sweep` timer in cos.js (#3630). Keeping it here costs
+  // nothing and makes `POST /api/cos/evaluate` do the obvious thing.
+  // Runs BEFORE the agent-slot
   // gate below because a deterministic merge claims no lane, so a full agent
   // roster must not also wedge the merge queue.
   //

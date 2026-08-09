@@ -37,6 +37,7 @@ import { dirname, join } from 'path';
 import { firstLine, isPerpetualRefillCandidate, perpetualRefillPlan } from './cos.js';
 import { canQueueImprovementTasks } from './cosState.js';
 import { createDequeueCapacity, isMissionTierEligible, isIdleTierEligible } from './cosDequeue.js';
+import { PENDING_MERGE_SWEEP_INTERVAL_MS, MAX_PENDING_MERGE_TICKS } from './prWatcher.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const COS_SRC = readFileSync(join(__dirname, 'cos.js'), 'utf-8');
@@ -1498,5 +1499,53 @@ describe('canQueueImprovementTasks — autonomous queuing gate', () => {
 
   it('coerces a falsy/undefined idleReviewEnabled to a boolean false', () => {
     expect(canQueueImprovementTasks(cfg(undefined, 'execute'))).toBe(false);
+  });
+});
+
+describe('pending-merge sweep — own timer, not the evaluation cadence (#3630)', () => {
+  // Evaluation is event-driven (cosState.js records that the periodic
+  // evaluateTasks timer was removed), so the drain inside evaluateTasks fires
+  // roughly once per restart. The cadence-bearing drain is a CoS interval job.
+  const sweepBlock = COS_SRC.slice(
+    COS_SRC.indexOf("id: 'cos-pending-merge-sweep'"),
+    COS_SRC.indexOf("id: 'cos-pending-merge-sweep'") + 1400
+  );
+
+  it('registers a cos-pending-merge-sweep interval job alongside the other CoS timers', () => {
+    expect(COS_SRC).toMatch(/id:\s*'cos-pending-merge-sweep'/);
+    expect(sweepBlock).toMatch(/type:\s*'interval'/);
+    expect(sweepBlock).toMatch(/sweepPendingMergePrs\(\)/);
+  });
+
+  it('drives the interval off PENDING_MERGE_SWEEP_INTERVAL_MS, not a local literal', () => {
+    expect(sweepBlock).toMatch(/intervalMs:\s*PENDING_MERGE_SWEEP_INTERVAL_MS/);
+    expect(COS_SRC).toMatch(/PENDING_MERGE_SWEEP_INTERVAL_MS\s*\}\s*=\s*await import\('\.\/prWatcher\.js'\)/);
+  });
+
+  it('gates the sweep on !paused AND cos auto-run === execute', () => {
+    expect(sweepBlock).toMatch(/s\.paused\s*\|\|\s*getDomainMode\(s\.config,\s*'cos'\)\s*!==\s*'execute'/);
+  });
+
+  it('cancels the timer with the other CoS jobs on stop()', () => {
+    const stopFn = extractFnBody(COS_SRC, COS_SRC.indexOf('export async function stop'));
+    expect(stopFn).toMatch(/cancelEvent\('cos-health-check'\)/);
+    expect(stopFn).toMatch(/cancelEvent\('cos-pending-merge-sweep'\)/);
+  });
+
+  it('keeps the opportunistic drain in evaluateTasks so the call site cannot be deleted silently', () => {
+    const evalFn = extractFnBody(GEN_SRC, GEN_SRC.indexOf('export async function evaluateTasks'));
+    expect(evalFn).toMatch(/sweepPendingMergePrs\(\)/);
+    expect(evalFn).toMatch(/!paused && getDomainMode\(state\.config, 'cos'\) === 'execute'/);
+  });
+
+  it('does NOT re-couple the drain to the pr-watcher task type', () => {
+    const watcherFn = extractFnBody(GEN_SRC, GEN_SRC.indexOf('async function resolvePrWatcherBlock'));
+    expect(watcherFn).not.toMatch(/sweepPendingMergePrs\(/);
+  });
+
+  it('maps MAX_PENDING_MERGE_TICKS back to wall-clock hours', () => {
+    const hours = (PENDING_MERGE_SWEEP_INTERVAL_MS * MAX_PENDING_MERGE_TICKS) / (60 * 60 * 1000);
+    expect(PENDING_MERGE_SWEEP_INTERVAL_MS).toBe(30 * 60 * 1000);
+    expect(hours).toBe(6);
   });
 });
