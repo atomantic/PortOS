@@ -289,6 +289,9 @@
   "pipeline-season-episodes": [
     "server/services/pipeline/arcPlanner/episodeSeedPass.js"
   ],
+  "pipeline-self-improve": [
+    "server/services/pipeline/seriesAutopilot/selfImprove.js"
+  ],
   "pipeline-series-concept-judge": [
     "server/services/pipeline/seriesGenerate.js"
   ],

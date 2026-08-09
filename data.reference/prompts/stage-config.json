@@ -499,6 +499,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-self-improve": {
+      "name": "Pipeline — Self-Improvement Diagnosis",
+      "description": "Post-mortem on a Series Autopilot run that ended badly (or limped to done): reads the run's own telemetry — convergence rounds, checks that threw, retried child runners, skipped steps, the terminal reason — and decides whether the fault is the STORY (needs human editorial work) or the PIPELINE (PortOS is missing an earlier editorial step, a stage prompt breaks its output contract, a runner swallows a failure, a gate can't do its job). Returns a { verdict, confidence, area, title, problem, evidence, proposedChange, risks } JSON diagnosis; a `pipeline` verdict above the confidence bar files a worktree-isolated CoS task against PortOS itself. Opt-in per run — never fires on a healthy run.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-manuscript-completeness": {
       "name": "Pipeline — Manuscript Completeness",
       "description": "Developmental editor pass over the ACTUAL drafted manuscript (comic script / prose / teleplay across all issues), not synopses. Surfaces what's missing to FINISH a near-complete draft: missing-content (beats/pages/scenes), arc-gap (themes/protagonist turns the draft doesn't yet deliver), character-gap (under-developed cast), pacing, and continuity. Returns categorized { severity, category, issueNumber, anchorQuote, location, problem, suggestion } findings — issueNumber + anchorQuote anchor each finding to a manuscript spot so the editor can jump to it; empty list means complete.",

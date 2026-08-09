@@ -49,6 +49,12 @@ const DEFAULT_REVISION_PLATEAU_DELTA = 0.3;
 const DEFAULT_FOUNDATION_GATE = true;
 const DEFAULT_FOUNDATION_THRESHOLD = 7.5;
 const DEFAULT_FOUNDATION_ROUNDS = 3;
+// Pipeline self-improvement — mirror the server defaults (both off). When on, a
+// run that ends badly diagnoses whether PortOS's own automation is at fault and
+// files a worktree-isolated CoS task against PortOS to fix it; auto-approve
+// decides only whether that task waits for a human before an agent picks it up.
+const DEFAULT_SELF_IMPROVE = false;
+const DEFAULT_SELF_IMPROVE_AUTO_APPROVE = false;
 // Threshold input: a [0,10] number (0.5 steps allowed — NOT integer-rounded like
 // the round clamps), blank/invalid → the default.
 const clampFoundationThreshold = (n, fallback) => {
@@ -195,6 +201,9 @@ function frameLabel(f) {
     }
     case 'render:queued': return `Queued draft render: ${f.target}`;
     case 'gap:filed': return `Filed CoS task (${f.gapKind})`;
+    // Pipeline self-improvement post-mortem. Only the START frame is live — the
+    // verdict rides the terminal frame (a client tears its stream down there).
+    case 'selfimprove:start': return `Diagnosing the pipeline (${f.signals} signal${f.signals === 1 ? '' : 's'})…`;
     // #1617 — immediate cancel ack; the active step finishes before `canceled`.
     case 'cancel:acknowledged': return 'Cancelling — finishing the active step…';
     case 'paused': return `Paused — ${f.reason}`;
@@ -213,6 +222,19 @@ const craftGapCaution = (n) => `${n} filed script-craft gap${n === 1 ? '' : 's'}
 // #1573 — a `done` run where an editorial check threw never evaluated that
 // dimension, so "complete" is qualified rather than "production-ready".
 const editorialCheckCaution = (n) => `${n} editorial check${n === 1 ? '' : 's'} errored — review before trusting "clean"`;
+
+// One line for a pipeline self-improvement verdict, shared by the run-ended
+// toast and the persisted-marker banner so the two can't drift. Null when the
+// pass didn't run or found nothing worth filing — there's nothing to say then.
+function selfImproveLine(si) {
+  if (!si || si.verdict !== 'pipeline') return null;
+  const what = si.title ? `: ${si.title}` : '';
+  if (si.duplicate) return `Pipeline fix already tracked (${si.area})${what}`;
+  if (!si.filed) return `Pipeline defect diagnosed (${si.area})${what} — filing it failed`;
+  return si.awaitingApproval
+    ? `Filed a PortOS fix task (${si.area})${what} — approve it in CoS to start the work`
+    : `Filed a PortOS fix task (${si.area})${what} — CoS will pick it up`;
+}
 
 function Findings({ items }) {
   if (!items?.length) return null;
@@ -281,6 +303,10 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const [foundationGate, setFoundationGate] = useState(DEFAULT_FOUNDATION_GATE);
   const [foundationThreshold, setFoundationThreshold] = useState(DEFAULT_FOUNDATION_THRESHOLD);
   const [foundationRounds, setFoundationRounds] = useState(DEFAULT_FOUNDATION_ROUNDS);
+  // Pipeline self-improvement. Persisted like the other options (saved default +
+  // per-run override) so an enabled diagnosis is reused on Resume.
+  const [selfImprove, setSelfImprove] = useState(DEFAULT_SELF_IMPROVE);
+  const [selfImproveAutoApprove, setSelfImproveAutoApprove] = useState(DEFAULT_SELF_IMPROVE_AUTO_APPROVE);
   // Per-field dirty flags. Until a field is edited its input shows a display
   // default we must NOT persist (that would clobber a higher saved setting on
   // the untouched gate). Tracked per-field so editing one gate never discards
@@ -298,6 +324,8 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const foundationGateEditedRef = useRef(false);
   const foundationThresholdEditedRef = useRef(false);
   const foundationRoundsEditedRef = useRef(false);
+  const selfImproveEditedRef = useRef(false);
+  const selfImproveApproveEditedRef = useRef(false);
   const [canon, setCanon] = useState(null);
   const [canonLoading, setCanonLoading] = useState(false);
   // Per-run provider/model override. '' = "use the series default", i.e. the
@@ -385,6 +413,8 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
         if (!foundationGateEditedRef.current) setFoundationGate(typeof pec.foundationGate === 'boolean' ? pec.foundationGate : DEFAULT_FOUNDATION_GATE);
         if (!foundationThresholdEditedRef.current) setFoundationThreshold(Number.isFinite(pec.foundationThreshold) ? pec.foundationThreshold : DEFAULT_FOUNDATION_THRESHOLD);
         if (!foundationRoundsEditedRef.current) setFoundationRounds(Number.isInteger(pec.maxFoundationRounds) ? pec.maxFoundationRounds : DEFAULT_FOUNDATION_ROUNDS);
+        if (!selfImproveEditedRef.current) setSelfImprove(typeof pec.selfImprove === 'boolean' ? pec.selfImprove : DEFAULT_SELF_IMPROVE);
+        if (!selfImproveApproveEditedRef.current) setSelfImproveAutoApprove(typeof pec.selfImproveAutoApprove === 'boolean' ? pec.selfImproveAutoApprove : DEFAULT_SELF_IMPROVE_AUTO_APPROVE);
         // Persisted readiness gate — display-only, drives the "saved default" label.
         setSavedGate(READINESS_GATE_LABELS[pec.readinessGate] ? pec.readinessGate : '');
       })
@@ -435,6 +465,23 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     revisionEnabledEditedRef.current = true;
     setRevisionEnabled(v);
     persistRounds({ revisionEnabled: v });
+  }, [persistRounds]);
+  // Self-improvement: both are boolean checkboxes, so they persist immediately on
+  // toggle (no blur) like notifyOnPause. Turning the diagnosis off also clears
+  // auto-approve, so re-enabling it later can't silently resume auto-approving
+  // PortOS code changes the user last consented to in a different context.
+  const editSelfImprove = useCallback((v) => {
+    selfImproveEditedRef.current = true;
+    setSelfImprove(v);
+    if (v) return void persistRounds({ selfImprove: true });
+    selfImproveApproveEditedRef.current = true;
+    setSelfImproveAutoApprove(false);
+    persistRounds({ selfImprove: false, selfImproveAutoApprove: false });
+  }, [persistRounds]);
+  const editSelfImproveAutoApprove = useCallback((v) => {
+    selfImproveApproveEditedRef.current = true;
+    setSelfImproveAutoApprove(v);
+    persistRounds({ selfImproveAutoApprove: v });
   }, [persistRounds]);
   const editRevisionMinCycles = useCallback((v) => { revisionMinEditedRef.current = true; setRevisionMinCycles(v); }, []);
   const editRevisionMaxCycles = useCallback((v) => { revisionMaxEditedRef.current = true; setRevisionMaxCycles(v); }, []);
@@ -508,6 +555,10 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     else if (latest.type === 'canceled') toast.success('Autopilot canceled');
     else if (latest.type === 'paused') toast.warning(`Autopilot paused — ${latest.reason || 'needs review'}`);
     else toast.error(latest.error || 'Autopilot failed');
+    // The self-improvement verdict rides the terminal frame; announce a filed
+    // PortOS fix separately so it isn't buried in the run's own outcome toast.
+    const siLine = selfImproveLine(latest.selfImprove);
+    if (siLine) toast(siLine);
   }, [active, latest, seriesId]);
 
   const start = useCallback(async () => {
@@ -542,6 +593,9 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     if (foundationGateEditedRef.current) roundOverrides.foundationGate = foundationGate;
     if (foundationThresholdEditedRef.current) roundOverrides.foundationThreshold = clampFoundationThreshold(foundationThreshold, DEFAULT_FOUNDATION_THRESHOLD);
     if (foundationRoundsEditedRef.current) roundOverrides.maxFoundationRounds = clampRound(foundationRounds, DEFAULT_FOUNDATION_ROUNDS);
+    // Self-improvement toggles persist + override like the other booleans.
+    if (selfImproveEditedRef.current) roundOverrides.selfImprove = selfImprove;
+    if (selfImproveApproveEditedRef.current) roundOverrides.selfImproveAutoApprove = selfImproveAutoApprove;
     if (Object.keys(roundOverrides).length) await persistRounds(roundOverrides);
     // Per-run readiness-gate override (#1580): send it ONLY when the user picked a
     // specific gate. Unlike the round inputs we never persist it — '' leaves the
@@ -575,7 +629,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     // effect can reject a stale terminal frame from the previous run.
     activeRunIdRef.current = res.runId || null;
     setActive(true);
-  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds, beatContinuityRounds, checkPauseThreshold, notifyOnPause, unlockForRun, revisionEnabled, revisionMinCycles, revisionMaxCycles, revisionPlateauDelta, foundationGate, foundationThreshold, foundationRounds, readinessGate, providerOverride, modelOverride, persistRounds]);
+  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds, beatContinuityRounds, checkPauseThreshold, notifyOnPause, unlockForRun, revisionEnabled, revisionMinCycles, revisionMaxCycles, revisionPlateauDelta, foundationGate, foundationThreshold, foundationRounds, selfImprove, selfImproveAutoApprove, readinessGate, providerOverride, modelOverride, persistRounds]);
 
   const cancel = useCallback(async () => {
     await cancelPipelineAutopilot(seriesId).catch(() => null);
@@ -849,6 +903,21 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
               </p>
             </>
           ) : null}
+          <label className="flex items-center gap-2 text-xs text-gray-300 pt-1 border-t border-port-border mt-1">
+            <input type="checkbox" checked={selfImprove} onChange={(e) => editSelfImprove(e.target.checked)} />
+            Improve the pipeline itself (diagnose PortOS when a run goes wrong)
+          </label>
+          {selfImprove ? (
+            <>
+              <label className="flex items-center gap-2 text-xs text-gray-300 pl-6">
+                <input type="checkbox" checked={selfImproveAutoApprove} onChange={(e) => editSelfImproveAutoApprove(e.target.checked)} />
+                Let CoS start the fix without asking me first
+              </label>
+              <p className="text-[11px] text-gray-500">
+                When a run pauses, errors, or finishes with an editorial check that threw or a step that had to be retried, it spends one call asking whether the fault is the <em>story</em> or the <em>pipeline</em> — a missing editorial step earlier in the process, a stage prompt breaking its contract, a runner swallowing a failure. A pipeline verdict files a CoS task against PortOS itself, worktree-isolated and PR-opening{selfImproveAutoApprove ? '' : ', awaiting your approval'}. A healthy run never spends anything here. Saved as the default and reused on Resume.
+              </p>
+            </>
+          ) : null}
           <p className="text-[11px] text-gray-500">
             Runs under the CoS auto-run autonomy domain. With it set to <em>dry-run</em>, this only previews the plan.
           </p>
@@ -951,6 +1020,11 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
             ) : null}
           </div>
           {ap.lastError && ap.status !== 'done' ? <p className="text-[11px] text-gray-400 mt-1">{ap.lastError}</p> : null}
+          {/* Pipeline self-improvement verdict for that run — the run's trouble
+              was the automation, and a PortOS fix task exists for it. */}
+          {selfImproveLine(ap.selfImprove) ? (
+            <p className="text-[11px] text-port-accent mt-1">🔧 {selfImproveLine(ap.selfImprove)}</p>
+          ) : null}
           <Findings items={ap.residualFindings} />
         </div>
         );

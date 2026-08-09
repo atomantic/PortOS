@@ -174,6 +174,9 @@ export const sanitizeAutopilot = (raw) => {
     // health API. Null on any non-health pause. Same transient-marker rationale
     // as pauseKind / craftGap*: no schema-gate bump.
     healthBreakdown: sanitizeHealthBreakdown(raw.healthBreakdown),
+    // Pipeline self-improvement verdict for the run that just ended (null unless
+    // the run opted in and its telemetry warranted a diagnosis).
+    selfImprove: sanitizeAutopilotSelfImprove(raw.selfImprove),
     updatedAt: isStr(raw.updatedAt) ? raw.updatedAt : null,
   };
 };
@@ -203,6 +206,27 @@ const sanitizeHealthBreakdown = (raw) => {
 // Coerce a marker counter to a non-negative integer, defaulting to 0 (so an
 // older marker that predates the field reads as "no gaps", not undefined).
 const toCount = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
+
+// Verdict of the opt-in pipeline self-improvement post-mortem, stamped onto the
+// terminal marker so the resume/status banner can say a PortOS fix task was
+// filed without re-reading the CoS task list. Null on every run that didn't opt
+// in (or whose telemetry was clean — the pass makes no LLM call then). Same
+// transient-marker rationale as pauseKind / craftGap*: no schema-gate bump.
+const SELF_IMPROVE_MARKER_VERDICTS = ['pipeline', 'content', 'none', 'unreadable'];
+const sanitizeAutopilotSelfImprove = (raw) => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (!SELF_IMPROVE_MARKER_VERDICTS.includes(raw.verdict)) return null;
+  return {
+    verdict: raw.verdict,
+    confidence: Number.isFinite(raw.confidence) ? Math.min(1, Math.max(0, raw.confidence)) : null,
+    area: trimTo(raw.area, 40) || null,
+    title: trimTo(raw.title, 160) || null,
+    taskId: trimTo(raw.taskId, 64) || null,
+    filed: raw.filed === true,
+    duplicate: raw.duplicate === true,
+    awaitingApproval: raw.awaitingApproval === true,
+  };
+};
 
 // Per-series editorial-check config overrides (#1591). Shape:
 //   { [checkId]: { [configKey]: number|string|boolean } }

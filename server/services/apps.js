@@ -2,6 +2,7 @@ import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import EventEmitter from 'events';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { NON_PM2_TYPES, usesPm2, isDesktopType } from './streamingDetect.js';
 import { listProcessesStrict } from './pm2.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from './taskSchedule.js';
@@ -14,8 +15,11 @@ import { certPaths } from '../../lib/certPaths.js';
 const DATA_DIR = PATHS.data;
 const APPS_FILE = join(DATA_DIR, 'apps.json');
 
-// Stable ID for the PortOS app — always present, never deletable
-export const PORTOS_APP_ID = 'portos-default';
+// Stable ID for the PortOS app — always present, never deletable. Defined in
+// `lib/appIdentity.js` so a caller that only needs to name PortOS (a CoS task's
+// target app, a scope check) can import it without this whole service graph;
+// re-exported here so every existing importer is unchanged.
+export { PORTOS_APP_ID };
 
 /**
  * Build the baseline PortOS app entry with repoPath resolved to the actual project root.

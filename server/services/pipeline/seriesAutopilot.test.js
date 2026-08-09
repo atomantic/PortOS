@@ -795,6 +795,30 @@ describe('resolveNextStep — unlock pre-pass ordering', () => {
   });
 });
 
+describe('resolveAutopilotSelfImprove (config gate)', () => {
+  const { resolveAutopilotSelfImprove } = autopilot;
+
+  it('defaults both OFF', () => {
+    expect(resolveAutopilotSelfImprove({}, null)).toEqual({ selfImprove: false, selfImproveAutoApprove: false });
+  });
+  it('per-run option wins over the persisted setting', () => {
+    expect(resolveAutopilotSelfImprove(
+      { selfImprove: true },
+      { pipelineEditorialChecks: { selfImprove: false, selfImproveAutoApprove: true } },
+    )).toEqual({ selfImprove: true, selfImproveAutoApprove: true });
+  });
+  it('falls back to the persisted setting when no per-run option', () => {
+    expect(resolveAutopilotSelfImprove({}, { pipelineEditorialChecks: { selfImprove: true } }))
+      .toEqual({ selfImprove: true, selfImproveAutoApprove: false });
+  });
+  it('resolves auto-approve independently of the diagnosis toggle', () => {
+    // A saved auto-approve must not imply the diagnosis is on — otherwise a
+    // stale setting would silently re-arm PortOS code changes.
+    expect(resolveAutopilotSelfImprove({}, { pipelineEditorialChecks: { selfImproveAutoApprove: true } }))
+      .toEqual({ selfImprove: false, selfImproveAutoApprove: true });
+  });
+});
+
 // CWQE Phase 7 (#2171) — iterate-to-quality revision loop.
 describe('resolveAutopilotRevision (config gate, #2171)', () => {
   const {

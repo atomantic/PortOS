@@ -14,7 +14,11 @@ vi.mock('../../services/api', () => ({
   getSettings: vi.fn(),
   patchSettingsSlice: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
+// The default export is CALLABLE (a neutral toast) as well as carrying the
+// typed helpers — the panel uses the bare call for the self-improvement line.
+vi.mock('../ui/Toast', () => ({
+  default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), warning: vi.fn() }),
+}));
 // Controllable SSE hook so tests don't touch EventSource. `sseLatest` lets a
 // test simulate a stale terminal frame left over from a previous run.
 let sseLatest = null;
@@ -48,6 +52,8 @@ beforeEach(() => {
   sseLatest = null;
   sseFrames = [];
   getPipelineAutopilotStatus.mockResolvedValue({ autopilot: null, active: false });
+  getPipelineSeries.mockResolvedValue(null);
+  listPipelineIssues.mockResolvedValue([]);
   startPipelineAutopilot.mockResolvedValue({ runId: 'r1', mode: 'execute', alreadyRunning: false });
   getSettings.mockResolvedValue({ pipelineEditorialChecks: {} });
   patchSettingsSlice.mockResolvedValue({});
@@ -468,6 +474,86 @@ describe('AutopilotPanel', () => {
     // The original Stop affordance is gone while cancelling.
     expect(screen.queryByRole('button', { name: /^stop$/i })).not.toBeInTheDocument();
     expect(screen.getByText(/finishing the active step/i)).toBeInTheDocument();
+  });
+
+  // Pipeline self-improvement — the opt-in that lets a run diagnose PortOS's own
+  // automation and file a fix task against it.
+  describe('pipeline self-improvement', () => {
+    it('is off by default and hides auto-approve until it is enabled', async () => {
+      renderPanel({ id: 's1', targetFormat: 'comic' });
+      await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+      fireEvent.click(screen.getByRole('button', { name: /options/i }));
+      const toggle = screen.getByLabelText(/improve the pipeline itself/i);
+      expect(toggle).not.toBeChecked();
+      expect(screen.queryByLabelText(/without asking me first/i)).not.toBeInTheDocument();
+      fireEvent.click(toggle);
+      expect(await screen.findByLabelText(/without asking me first/i)).toBeInTheDocument();
+      await waitFor(() => expect(patchSettingsSlice).toHaveBeenCalledWith(
+        'pipelineEditorialChecks', { selfImprove: true }, { silent: true },
+      ));
+    });
+
+    it('sends both toggles as per-run overrides once edited', async () => {
+      renderPanel({ id: 's1', targetFormat: 'comic' });
+      await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+      fireEvent.click(screen.getByRole('button', { name: /options/i }));
+      fireEvent.click(screen.getByLabelText(/improve the pipeline itself/i));
+      fireEvent.click(await screen.findByLabelText(/without asking me first/i));
+      fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
+      await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalledWith(
+        's1',
+        { includeVisual: true, fileGaps: false, selfImprove: true, selfImproveAutoApprove: true },
+        { silent: true },
+      ));
+    });
+
+    it('clears auto-approve when the diagnosis is turned back off', async () => {
+      // Otherwise a later re-enable would silently resume auto-approving PortOS
+      // code changes the user consented to in a different context.
+      getSettings.mockResolvedValue({ pipelineEditorialChecks: { selfImprove: true, selfImproveAutoApprove: true } });
+      renderPanel({ id: 's1', targetFormat: 'comic' });
+      await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+      fireEvent.click(screen.getByRole('button', { name: /options/i }));
+      await waitFor(() => expect(screen.getByLabelText(/without asking me first/i)).toBeChecked());
+      fireEvent.click(screen.getByLabelText(/improve the pipeline itself/i));
+      await waitFor(() => expect(patchSettingsSlice).toHaveBeenCalledWith(
+        'pipelineEditorialChecks', { selfImprove: false, selfImproveAutoApprove: false }, { silent: true },
+      ));
+    });
+
+    it('announces a filed PortOS fix from the terminal frame', async () => {
+      getPipelineAutopilotStatus.mockResolvedValue({ autopilot: { status: 'running', runId: 'r1' }, active: true });
+      sseLatest = {
+        type: 'paused', runId: 'r1', reason: 'editorial review ran out of rounds',
+        selfImprove: { verdict: 'pipeline', area: 'editorial-check', title: 'Check pleasantries at beat altitude', filed: true, awaitingApproval: true },
+      };
+      renderPanel({ id: 's1', targetFormat: 'comic' });
+      await waitFor(() => expect(toast).toHaveBeenCalledWith(
+        expect.stringMatching(/Filed a PortOS fix task \(editorial-check\).*approve it in CoS/i),
+      ));
+    });
+
+    it('shows the verdict on the persisted status banner', async () => {
+      renderPanel({
+        id: 's1',
+        targetFormat: 'comic',
+        autopilot: {
+          status: 'paused', runId: 'r1', currentStep: 'editorialReview', lastError: 'ran out of rounds',
+          selfImprove: { verdict: 'pipeline', area: 'runner', title: 'Retry budget is never applied', filed: true, awaitingApproval: false },
+        },
+      });
+      expect(await screen.findByText(/Filed a PortOS fix task \(runner\).*CoS will pick it up/i)).toBeInTheDocument();
+    });
+
+    it('says nothing when the verdict was that the story, not the code, needs work', async () => {
+      renderPanel({
+        id: 's1',
+        targetFormat: 'comic',
+        autopilot: { status: 'paused', runId: 'r1', selfImprove: { verdict: 'content', filed: false } },
+      });
+      await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+      expect(screen.queryByText(/PortOS fix task/i)).not.toBeInTheDocument();
+    });
   });
 
   it('renders canon readiness gaps with a link to the issue Nouns page', async () => {

@@ -204,6 +204,43 @@ export function resolveAutopilotRevision(options = {}, settings = null) {
   };
 }
 
+// Pipeline self-improvement — let a run diagnose the AUTOMATION, not just the
+// story. When a run ends badly (paused / errored) or finishes carrying unhealthy
+// telemetry (an editorial check that threw, a delegated child that had to be
+// retried, a convergence loop that never converged), the orchestrator can run
+// ONE meta-diagnosis pass over the run's own signal log and, when the verdict is
+// that PortOS itself is at fault (a missing editorial step earlier in the
+// pipeline, a prompt that keeps producing unusable output, a runner that
+// swallows a failure), file a CoS task against PortOS to fix it.
+//
+// Defaults OFF. It is a fresh burst of LLM spend AND it files work that changes
+// PortOS's own code, so it must be an explicit opt-in — a run with clean
+// telemetry never spends anything here even when enabled (see
+// `shouldDiagnose`). Per-run option wins, then the persisted
+// pipelineEditorialChecks setting, then the default.
+//
+// `selfImproveAutoApprove` decides what the filed task does next: OFF (default)
+// files it awaiting approval, so the user reads the proposed change before an
+// agent spends anything on it; ON files it auto-approved, so CoS picks it up and
+// ships the fix on its own. Either way the task is worktree-isolated and opens a
+// PR — an autonomous diagnosis never lands a commit on main unreviewed.
+export const DEFAULT_SELF_IMPROVE = false;
+export const DEFAULT_SELF_IMPROVE_AUTO_APPROVE = false;
+export function resolveAutopilotSelfImprove(options = {}, settings = null) {
+  const pec = settings?.pipelineEditorialChecks || {};
+  const bool = (o, s, fallback) => {
+    if (typeof o === 'boolean') return o;
+    if (typeof s === 'boolean') return s;
+    return fallback;
+  };
+  return {
+    selfImprove: bool(options?.selfImprove, pec?.selfImprove, DEFAULT_SELF_IMPROVE),
+    selfImproveAutoApprove: bool(
+      options?.selfImproveAutoApprove, pec?.selfImproveAutoApprove, DEFAULT_SELF_IMPROVE_AUTO_APPROVE,
+    ),
+  };
+}
+
 // Which provider/model do this run's LLM calls use? An explicit per-run
 // `providerOverride`/`modelOverride` wins (the Options picker, or the scheduler
 // mapping a schedule's provider/model); otherwise the run inherits the series'

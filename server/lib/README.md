@@ -249,6 +249,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
+| `appIdentity.js` | The baseline managed-app id (`PORTOS_APP_ID`) — importable without pulling in the `services/apps.js` graph (pm2, scheduler, settings) behind it. Re-exported by `apps.js`. |
 | `appResolver.js` | Fuzzy-match a spoken/typed phrase to a managed app (`{ id, name }`). Tiered exact → prefix → substring, used by voice tools that target a specific app. |
 | `capabilityMap.js` | Pure row builders for the Capability Map (per-integration status tiers + rollup); fed by `routes/capabilities.js`. |
 | `chiptuneRender.js` | Deterministic chiptune score → mono PCM → 16-bit WAV buffer (pure Node, no audio deps); `renderScoreToPcm` / `pcmToWavBuffer` / `renderScoreToWav`. |

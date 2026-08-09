@@ -117,6 +117,15 @@ const autopilotStartSchema = z.object({
   revisionMinCycles: z.number().int().min(1).max(MAX_CONVERGENCE_ROUNDS).optional(),
   revisionMaxCycles: z.number().int().min(1).max(MAX_CONVERGENCE_ROUNDS).optional(),
   revisionPlateauDelta: z.number().min(0).max(10).optional(),
+  // Pipeline self-improvement. When true, a run whose telemetry says the
+  // AUTOMATION limped (a pause, a run-ending error, an editorial check that
+  // threw, a retried child, a skipped step) spends one diagnosis call at its
+  // terminal and, on a pipeline verdict, files a PortOS fix task.
+  // `selfImproveAutoApprove` files that task auto-approved instead of awaiting
+  // human approval. Both fall back to the persisted
+  // pipelineEditorialChecks.selfImprove* setting, then off.
+  selfImprove: z.boolean().optional(),
+  selfImproveAutoApprove: z.boolean().optional(),
 });
 
 router.post('/series/:id/autopilot/start', asyncHandler(async (req, res) => {

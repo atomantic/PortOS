@@ -12,6 +12,7 @@ import { getSeries, updateSeries } from '../series.js';
 import * as volumeBeatsRunner from '../volumeBeatsRunner.js';
 import * as autoRunner from '../autoRunner.js';
 import { runs, autopilotEvents } from './state.js';
+import { noteSignal } from './selfImprove.js';
 
 // ---------------------------------------------------------------------------
 // Run registry helpers (mirror editorialAnalysisRunner.js).
@@ -60,6 +61,11 @@ export function broadcast(seriesId, payload) {
   const run = runs.get(seriesId);
   if (!run) return;
   broadcastSse(run, payload);
+  // Retain the diagnosable frames for the opt-in self-improvement pass. A single
+  // tap here (rather than instrumenting each step runner) means any telemetry
+  // frame a future step emits is diagnosable evidence for free. No-op unless the
+  // run opted in — see selfImprove.js#noteSignal.
+  noteSignal(run, payload);
   // Mirror every frame onto the in-process bus (CDO Phase 3, #2185) so a
   // server-side consumer (CD plan step) sees the same progress/pause/terminal
   // frames as an SSE client. Emit is best-effort — a listener throw must never

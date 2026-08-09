@@ -227,6 +227,7 @@ export * from './curatedGenomeMarkers.js';
 export * from './songCraftRef.js';
 
 // === Domain utilities ===
+export * from './appIdentity.js';
 export * from './appResolver.js';
 export * from './capabilityMap.js';
 export * from './chiptuneRender.js';
