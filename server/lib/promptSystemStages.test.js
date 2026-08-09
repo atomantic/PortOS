@@ -66,26 +66,15 @@ describe('shipped stage catalog parity', () => {
       .map((file) => file.slice(0, -'.md'.length)),
   );
 
-  // The ten Digital Twin stages tracked by #3644: config entry ships, template
-  // does not, so `buildPrompt()` throws "Template for <stage> not found" and
-  // every call site's `.catch(() => null)` fallback runs instead. Both lists
-  // below are asserted EXACTLY, not subtracted — so a new gap fails on the
-  // actual side and a gap that was closed (template authored, key deleted)
-  // fails on the expected side. #3644 lands when both are empty.
-  const STAGES_WITHOUT_SHIPPED_TEMPLATE = [
-    'soul-contradiction-detector',
-    'soul-enrichment',
-    'soul-enrichment-process',
-    'soul-test-generator',
-    'soul-test-scorer',
-    'soul-writing-analyzer',
-    'twin-confidence-analyzer',
-    'twin-import-analyzer',
-    'twin-trait-extractor',
-  ];
-  // Same #3644 debt from the other side: `twin-interview-analyze` is called by
-  // `digital-twin-import.js` but ships neither a config entry nor a template.
-  const CALL_SITES_WITHOUT_SHIPPED_CONFIG = ['twin-interview-analyze'];
+  // Both lists were the #3644 debt — ten Digital Twin stages whose config entry
+  // shipped without a template (so `buildPrompt()` threw "Template for <stage>
+  // not found" and every call site's `.catch(() => null)` fallback ran instead),
+  // plus `twin-interview-analyze`, which shipped neither half. #3644 authored all
+  // ten templates and the missing entry, so both are empty and stay that way:
+  // they are asserted EXACTLY, not subtracted, so a new gap fails on the actual
+  // side and a stale allowlist row fails on the expected side.
+  const STAGES_WITHOUT_SHIPPED_TEMPLATE = [];
+  const CALL_SITES_WITHOUT_SHIPPED_CONFIG = [];
 
   it('ships a stage-config entry for every system stage', () => {
     const missing = SYSTEM_STAGE_KEYS.filter((key) => !shipped[key]);

@@ -193,9 +193,9 @@
     },
     "soul-enrichment": {
       "name": "Soul Enrichment",
-      "description": "Generate follow-up questions to enrich soul documents",
+      "description": "Generate the next follow-up question to enrich soul documents (plain-text question, not JSON)",
       "model": "default",
-      "returnsJson": true,
+      "returnsJson": false,
       "variables": []
     },
     "soul-enrichment-process": {
@@ -264,6 +264,13 @@
     "twin-import-analyzer": {
       "name": "Twin Import Analyzer",
       "description": "Extract personality insights from imported external data",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "twin-interview-analyze": {
+      "name": "Twin Interview Analyzer",
+      "description": "Extract traits and suggested documents from a pasted personality assessment or interview transcript",
       "model": "default",
       "returnsJson": true,
       "variables": []
