@@ -388,7 +388,7 @@ const EDITORIAL_OUTPUT_RESERVE_TOKENS = 2_000;
  *
  * @param {string} seriesId
  * @param {Array<{check: object}>} enabled — the enabled (or previewed) checks
- * @param {object} [opts] — providerOverride/Default, modelOverride/Default, signal
+ * @param {object} [opts] — providerOverride/Default, modelOverride/Default, effortDefault, signal
  * @returns {Promise<{ series, baseCtx, resolvedSources }>}
  */
 export async function buildEditorialContext(seriesId, enabled, { providerOverride, providerDefault, modelOverride, modelDefault, effortDefault, signal, checkById = null } = {}) {

@@ -296,7 +296,6 @@ async function buildProseContextAugment(series, issue, options = {}) {
     providerDefault: options.providerIdDefault,
     modelOverride: options.model,
     modelDefault: options.modelIdDefault,
-    effortDefault: options.effortIdDefault,
   }).catch(() => ({ contextWindow: null }));
   const usableTokens = usableInputTokens({ contextWindow });
   const continuityChars = Math.max(0, Math.floor(usableTokens * CONTINUITY_BUDGET_FRACTION)) * CHARS_PER_TOKEN;

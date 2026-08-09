@@ -225,7 +225,6 @@ export async function analyzeManuscriptCompleteness(seriesId, options = {}) {
     providerDefault: options.providerDefault,
     modelOverride: options.modelOverride,
     modelDefault: options.modelDefault,
-    effortDefault: options.effortDefault,
   });
   const outputReserveTokens = withEdits
     ? COMPLETENESS_WITH_EDITS_OUTPUT_RESERVE_TOKENS
