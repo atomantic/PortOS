@@ -21,7 +21,7 @@ import {
   resolveAutopilotUnlockForRun, resolveAutopilotSelfImprove, resolveAutopilotObserver,
 } from './config.js';
 import { runSelfImproveDiagnosis } from './selfImprove.js';
-import { runObserverPass, summarizeObserver } from './observer.js';
+import { observerEnabled, runObserverPass, summarizeObserver } from './observer.js';
 import { VISUAL_DRAFT_ENABLED, summarizePlanCost } from './convergence.js';
 import { broadcast, broadcastStart, persistMarker, clearPauseNotice, notifyPause, fileGap, scheduleCleanup } from './session.js';
 import { resolveNextStep } from './stepResolver.js';
@@ -200,7 +200,11 @@ export async function startSeriesAutopilot(sId, options = {}) {
   // and file near-duplicate tasks under different dedup keys. Returns
   // `{ selfImprove, observer }` so each terminal spreads both marker fields.
   const postMortem = async (outcome, reason = null) => {
-    if (record.options.observer === true) {
+    if (observerEnabled(record)) {
+      // Let any in-flight mid-run pass land first — its frames must precede
+      // the terminal frame (SSE replays only the last payload), and its filing
+      // must be in the summary the marker persists.
+      await observerIdle();
       await runObserverPass(sId, record, { phase: 'terminal', outcome, reason })
         .catch((err) => {
           console.log(`⚠️ autopilot: observer terminal pass failed for ${sId.slice(0, 12)}: ${err.message}`);
@@ -217,13 +221,26 @@ export async function startSeriesAutopilot(sId, options = {}) {
 
   // Mid-run observer beat: after each completed step, spend one bounded
   // diagnosis pass when the step's fresh telemetry warrants it (see
-  // observer.js#shouldObserveStep — a clean step costs nothing). Best-effort
-  // like the post-mortem: observing must never break the run.
-  const observeStep = (step) => runObserverPass(sId, record, { phase: 'step', stepKind: step.kind })
-    .catch((err) => {
-      console.log(`⚠️ autopilot: observer pass failed for ${sId.slice(0, 12)}: ${err.message}`);
-      return null;
-    });
+  // observer.js#shouldObserveStep — a clean step costs nothing). NOT awaited in
+  // the step loop — the pass rides a per-run promise chain so a heavy-model
+  // diagnosis never stalls the next pipeline step (the whole point is fixing
+  // the pipeline WHILE the run continues); the gate re-evaluates when the
+  // chained pass actually runs, so back-to-back enqueues collapse into cheap
+  // no-ops once the first pass consumes the window. Best-effort like the
+  // post-mortem: observing must never break the run.
+  let observerChain = Promise.resolve();
+  const observeStep = (step) => {
+    if (!observerEnabled(record)) return;
+    observerChain = observerChain
+      .then(() => runObserverPass(sId, record, { phase: 'step', stepKind: step.kind }))
+      .catch((err) => {
+        console.log(`⚠️ autopilot: observer pass failed for ${sId.slice(0, 12)}: ${err.message}`);
+        return null;
+      });
+  };
+  // Every terminal awaits this before broadcasting: a pass landing after the
+  // terminal frame would clobber the SSE replay payload clients resume from.
+  const observerIdle = () => observerChain.catch(() => null);
 
   // Fire-and-forget coordinator. The try/catch is the permitted boundary use —
   // an unhandled LLM rejection here would crash the process on Node ≥15.
@@ -369,10 +386,12 @@ export async function startSeriesAutopilot(sId, options = {}) {
           return;
         }
         broadcast(sId, { type: 'step:complete', kind: step.kind, seasonId: step.seasonId, issueId: step.issueId, ordinal });
-        await observeStep(step);
+        observeStep(step);
       }
 
-      // Cancelled.
+      // Cancelled. No post-mortem (nothing to explain), but an in-flight
+      // observer pass must still land before the terminal frame.
+      await observerIdle();
       await persistMarker(sId, { status: 'paused', runId, currentStep: null, lastError: 'canceled by user' });
       broadcast(sId, { type: 'canceled', runId, steps: ordinal, completedAt: new Date().toISOString() });
       console.log(`🛑 autopilot canceled — series=${sId.slice(0, 12)} after ${ordinal} steps`);

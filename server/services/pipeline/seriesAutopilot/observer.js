@@ -31,7 +31,8 @@
  * When both options are enabled the observer SUPERSEDES the self-improve
  * terminal diagnosis (see orchestrator.js#postMortem) — same evidence, stronger
  * action policy; running both would double-bill one run's telemetry and file
- * near-duplicate tasks under different dedup keys.
+ * near-duplicate tasks under different dedup keys. The vocabulary, shape, and
+ * task/prompt frames shared with the post-mortem live in `diagnosisCore.js`.
  *
  * PRIVACY: identical contract to selfImprove.js — the prompt asks for a defect
  * report about PortOS's code, never the story, and every shaped field is
@@ -39,32 +40,28 @@
  * public PR. Manuscript text must not travel into that task.
  */
 
-import { PORTOS_APP_ID } from '../../../lib/appIdentity.js';
 import * as cosTaskStore from '../../cosTaskStore.js';
 import { getDomainBudgetStatus, recordDomainUsage } from '../../domainUsage.js';
-import { PR_COMPLETIONS } from '../../../lib/prDisposition.js';
 import { runStagedLLM } from '../../../lib/stageRunner.js';
 import { trimToClause } from '../../../lib/storyBible.js';
-import { slugify } from '../../../lib/planIds.js';
 import { getSettings } from '../../settings.js';
 import { buildEditorialCheckPlan } from '../editorial/checkRunner.js';
 import { getSeries } from '../series.js';
 import { summarizeSignals } from './state.js';
 import { broadcast, providerOverrideOpts } from './session.js';
-import { STEP_SEQUENCE, gateConfigOf, hasAutomationSignals, shapeDiagnosis } from './selfImprove.js';
+import {
+  DIAGNOSIS_MAX_FILED, SELF_IMPROVE_AREAS, buildDiagnosisStageVars, buildDiagnosisTask,
+  isActionableDiagnosis, shapeDiagnosis, terminalWarrantsDiagnosis,
+} from './diagnosisCore.js';
 
 const OBSERVER_STAGE = 'pipeline-observer';
 
-// SELF_IMPROVE_AREAS plus `ui` — the observer's fix can also be "the autopilot
+// The base vocabulary plus `ui` — the observer's fix can also be "the autopilot
 // panel is missing a knob the user needed", the one area the post-mortem never
 // files because a human triages its briefs and can make that call themselves.
-// A literal rather than a spread of the imported constant: this package's
-// import cycle through session.js (see the barrel's TDZ note) means selfImprove
-// may still be mid-evaluation when this module loads, so its consts are only
-// safe to touch at CALL time. observer.test.js pins the superset relation.
-export const OBSERVER_AREAS = Object.freeze([
-  'editorial-check', 'pipeline-step', 'prompt', 'runner', 'config', 'ui',
-]);
+// (Safe to derive with a spread: diagnosisCore is a leaf, outside this
+// package's session.js import cycle.)
+export const OBSERVER_AREAS = Object.freeze([...SELF_IMPROVE_AREAS, 'ui']);
 
 // Higher than SELF_IMPROVE_MIN_CONFIDENCE: nobody reads this brief before a
 // coding agent acts on it and merges the result, so a speculative diagnosis
@@ -85,10 +82,12 @@ const MIDRUN_TRIGGER_TYPES = new Set(['child:retry', 'child:escalate', 'step:ski
 const isMidrunTrigger = (s) => MIDRUN_TRIGGER_TYPES.has(s.type)
   || (s.type === 'check:complete' && !!s.error);
 
-// Ceiling on the per-run filing log carried to the terminal frame + marker.
-export const OBSERVER_MAX_FINDINGS = 5;
-
-const observerEnabled = (record) => !!record
+/**
+ * Is the observer active for this run? Pure. Exported for the orchestrator's
+ * postMortem supersession gate, so "observer on" means the same thing at both
+ * decision points.
+ */
+export const observerEnabled = (record) => !!record
   && record.options?.observer === true
   && record.mode === 'execute';
 
@@ -99,75 +98,58 @@ export function freshSignals(record) {
 
 /**
  * Should the observer spend a pass after this step? Pure. Requires the opt-in,
- * a remaining mid-run pass, and at least one triggering frame among the fresh
- * signals — a step that went cleanly costs nothing.
+ * a remaining mid-run pass, budget not already known-exhausted, and at least
+ * one triggering frame past the cursor — a step that went cleanly costs
+ * nothing. This runs after EVERY step, so the scan is by index (no slice
+ * allocation on the happy path).
  */
 export function shouldObserveStep(record) {
   if (!observerEnabled(record)) return false;
-  if ((record.runState?.observerPassesRun || 0) >= OBSERVER_MAX_MIDRUN_PASSES) return false;
-  return freshSignals(record).some(isMidrunTrigger);
+  const rs = record.runState || {};
+  if (rs.observerBudgetExhausted) return false;
+  if ((rs.observerPassesRun || 0) >= OBSERVER_MAX_MIDRUN_PASSES) return false;
+  const signals = record.signals || [];
+  for (let i = rs.observerCursor || 0; i < signals.length; i += 1) {
+    if (isMidrunTrigger(signals[i])) return true;
+  }
+  return false;
 }
 
 /**
- * Should the observer spend its terminal pass? Pure. Mirrors selfImprove's
- * shouldDiagnose: a pause or error always warrants it, a cancel never does, and
- * a `done` run qualifies only when its telemetry says the automation limped.
+ * Should the observer spend its terminal pass? Pure — the enable predicate
+ * composed with the shared terminal ladder (pause/error always, cancel never,
+ * `done` only when the automation limped).
  */
 export function shouldObserveTerminal(record, outcome) {
-  if (!observerEnabled(record)) return false;
-  if (outcome === 'paused' || outcome === 'error') return true;
-  if (outcome !== 'done') return false;
-  return hasAutomationSignals(record);
+  return observerEnabled(record) && terminalWarrantsDiagnosis(record, outcome);
 }
 
 /** Should this shaped diagnosis dispatch an agent? Pure — observer bar. */
 export function isDispatchable(diagnosis) {
-  return !!diagnosis
-    && diagnosis.verdict === 'pipeline'
-    && diagnosis.confidence >= OBSERVER_MIN_CONFIDENCE
-    && !!diagnosis.title
-    && !!diagnosis.proposedChange;
+  return isActionableDiagnosis(diagnosis, OBSERVER_MIN_CONFIDENCE);
 }
 
 /**
- * Shape the auto-approved CoS task for a dispatchable diagnosis. Pure. Same
- * one-line-description/dedup-key contract as buildSelfImproveTask (the brief
- * rides `context`; the first line is the dedup key, stable per (area, defect)
- * and deliberately not per-series). Differs in exactly one policy bit:
- * `approvalRequired: false` — the whole point of the observer is that the fix
- * lands without a human gate, which the user opted into by enabling it. The PR
- * still goes through the review loop before merging (REVIEW_THEN_MERGE).
+ * Shape the auto-approved CoS task for a dispatchable diagnosis. Pure. The
+ * dedup key/one-line-description contract and the brief layout live in
+ * `diagnosisCore.js#buildDiagnosisTask`; this supplies the observer's wording
+ * and its one deliberate policy divergence, `approvalRequired: false` — the
+ * whole point of the observer is that the fix lands without a human gate,
+ * which the user opted into by enabling it. The PR still goes through the
+ * review loop before merging.
  */
 export function buildObserverTask({ diagnosis, seriesId, seriesName, phase, outcome, outcomeReason, counts }) {
-  const slug = slugify(diagnosis.title);
-  const brief = [
-    `The autopilot's observing orchestrator diagnosed a PortOS pipeline defect mid-flight: ${diagnosis.title}`,
-    '',
-    diagnosis.problem,
-    '',
-    `Proposed change: ${diagnosis.proposedChange}`,
-  ];
-  if (diagnosis.risks) brief.push('', `Risks / things to be careful of: ${diagnosis.risks}`);
-  if (diagnosis.evidence.length) {
-    brief.push('', 'Evidence from the run telemetry:', ...diagnosis.evidence.map((e) => `- ${e}`));
-  }
-  brief.push(
-    '',
-    `Observed ${phase} during an autopilot run on series ${seriesId}${seriesName ? ` ("${seriesName}")` : ''}${outcome ? ` that ended \`${outcome}\`` : ''}${outcomeReason ? ` — ${trimToClause(outcomeReason, 500)}` : ''}.`,
-    `Signal counts: ${JSON.stringify(counts)}.`,
-    'This task is auto-approved and its PR will merge after the review loop — confirm the defect in the code before changing anything, keep the change minimal, and abandon it (close the task without a PR) if the defect does not reproduce in the source.',
-  );
-  return {
-    description: `Pipeline orchestrator improvement (${diagnosis.area}/${slug})`,
-    context: brief.join('\n').slice(0, 4000),
-    app: PORTOS_APP_ID,
-    priority: 'MEDIUM',
-    useWorktree: true,
-    openPR: true,
-    prCompletion: PR_COMPLETIONS.REVIEW_THEN_MERGE,
-    simplify: true,
+  return buildDiagnosisTask({
+    diagnosis,
+    descriptionPrefix: 'Pipeline orchestrator improvement',
+    leadLine: `The autopilot's observing orchestrator diagnosed a PortOS pipeline defect mid-flight: ${diagnosis.title}`,
+    tailLines: [
+      `Observed ${phase} during an autopilot run on series ${seriesId}${seriesName ? ` ("${seriesName}")` : ''}${outcome ? ` that ended \`${outcome}\`` : ''}${outcomeReason ? ` — ${trimToClause(outcomeReason, 500)}` : ''}.`,
+      `Signal counts: ${JSON.stringify(counts)}.`,
+      'This task is auto-approved and its PR will merge after the review loop — confirm the defect in the code before changing anything, keep the change minimal, and abandon it (close the task without a PR) if the defect does not reproduce in the source.',
+    ],
     approvalRequired: false,
-  };
+  });
 }
 
 /**
@@ -180,18 +162,27 @@ export function buildObserverTask({ diagnosis, seriesId, seriesName, phase, outc
  * when nothing was filed, else `{ area, title, taskId, filed, duplicate }`.
  */
 export async function runObserverPass(sId, record, { phase, stepKind = null, outcome = null, reason = null } = {}) {
-  const gate = phase === 'terminal' ? shouldObserveTerminal(record, outcome) : shouldObserveStep(record);
+  const terminal = phase === 'terminal';
+  const gate = terminal ? shouldObserveTerminal(record, outcome) : shouldObserveStep(record);
   if (!gate) return null;
 
-  const budget = await getDomainBudgetStatus('cos');
-  if (!budget.withinBudget) return null;
-
   const rs = record.runState || {};
+  const budget = await getDomainBudgetStatus('cos');
+  if (!budget.withinBudget) {
+    // Latch mid-run passes off for the rest of the run: without this, the
+    // untaken trigger frame keeps passing the gate and every remaining step
+    // re-reads the usage file just to learn "still no budget". The terminal
+    // pass deliberately ignores the latch — the day (and the budget) may have
+    // rolled over by then, and it re-checks exactly once.
+    if (!terminal) rs.observerBudgetExhausted = true;
+    return null;
+  }
+
   // A mid-run pass reads the window since the last pass (and consumes it — the
   // same frames are never billed twice); the terminal pass reads the whole
   // retained log, the way the post-mortem does.
-  const windowed = phase === 'terminal' ? (record.signals || []) : freshSignals(record);
-  if (phase !== 'terminal') {
+  const windowed = terminal ? (record.signals || []) : freshSignals(record);
+  if (!terminal) {
     rs.observerCursor = (record.signals || []).length;
     rs.observerPassesRun = (rs.observerPassesRun || 0) + 1;
   }
@@ -206,21 +197,10 @@ export async function runObserverPass(sId, record, { phase, stepKind = null, out
   broadcast(sId, { type: 'observer:start', runId: record.runId, phase, stepKind, signals: windowed.length });
 
   const { content } = await runStagedLLM(OBSERVER_STAGE, {
-    seriesName: series?.name || 'unknown',
-    targetFormat: series?.targetFormat || 'unknown',
-    phase: phase === 'terminal' ? `terminal (run ended \`${outcome}\`)` : `mid-run, after the \`${stepKind}\` step`,
+    ...buildDiagnosisStageVars(record, { series, checkPlan, signals: windowed, counts, dropped }),
+    phase: terminal ? `terminal (run ended \`${outcome}\`)` : `mid-run, after the \`${stepKind}\` step`,
     outcome: outcome || 'in-progress',
     outcomeReason: trimToClause(reason, 1000) || 'none',
-    stepSequence: STEP_SEQUENCE,
-    gateConfigJson: JSON.stringify(gateConfigOf(record.options || {}), null, 2),
-    enabledChecks: (checkPlan?.checks || []).map((c) => `${c.id} (${c.kind})`).join(', ') || 'none',
-    // Compact one-frame-per-line encoding, for the same token-cost reason as
-    // the self-improve pass.
-    signalsJson: windowed.map((s) => JSON.stringify(s)).join('\n').slice(0, 40_000),
-    signalCountsJson: JSON.stringify(counts, null, 2),
-    droppedSignals: dropped,
-    erroredChecks: [...(rs.editorialCheckErroredIds || [])].join(', ') || 'none',
-    craftGapIssues: rs.scriptCraftGapIssues?.size || 0,
     // What this run already filed, so a later pass proposes the NEXT fix
     // instead of re-describing the one already dispatched.
     priorFilings: (rs.observerFindings || []).map((f) => `${f.area}: ${f.title}`).join('\n') || 'none',
@@ -237,7 +217,7 @@ export async function runObserverPass(sId, record, { phase, stepKind = null, out
     diagnosis,
     seriesId: sId,
     seriesName: series?.name || null,
-    phase: phase === 'terminal' ? 'at the terminal' : `after the ${stepKind} step`,
+    phase: terminal ? 'at the terminal' : `after the ${stepKind} step`,
     outcome,
     outcomeReason: reason,
     counts,
@@ -254,7 +234,7 @@ export async function runObserverPass(sId, record, { phase, stepKind = null, out
   };
   if (result) {
     if (!rs.observerFindings) rs.observerFindings = [];
-    if (rs.observerFindings.length < OBSERVER_MAX_FINDINGS) rs.observerFindings.push(summary);
+    if (rs.observerFindings.length < DIAGNOSIS_MAX_FILED) rs.observerFindings.push(summary);
     broadcast(sId, { type: 'observer:filed', runId: record.runId, ...summary });
   }
   console.log(`👁️ autopilot observer — series=${sId.slice(0, 12)} area=${diagnosis.area} ${result ? (filed ? `dispatched ${result.id}` : 'duplicate of an open task') : 'filing failed'}`);

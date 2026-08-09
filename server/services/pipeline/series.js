@@ -22,6 +22,7 @@ import { sanitizeSeverityWeights, sanitizeBlockingSeverities } from '../../lib/e
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 import { persistedRenderPinFields } from '../../lib/renderTargets.js';
+import { DIAGNOSIS_MAX_FILED } from './seriesAutopilot/diagnosisCore.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes,
   deleteSyncBaseHash,
@@ -217,40 +218,36 @@ const toCount = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
 // diagnosed nothing filable — the producer only reports a `pipeline` verdict, so
 // that's the only shape this accepts. Same transient-marker rationale as
 // pauseKind / craftGap*: no schema-gate bump.
+// One bounded task-reference shape, shared by both diagnosis markers below —
+// they feed the same status banner, so the field caps must not drift.
+const sanitizeDiagnosisRef = (raw) => ({
+  area: trimTo(raw.area, 40) || null,
+  title: trimTo(raw.title, 160) || null,
+  taskId: trimTo(raw.taskId, 64) || null,
+  filed: raw.filed === true,
+  duplicate: raw.duplicate === true,
+});
+
 const sanitizeAutopilotSelfImprove = (raw) => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   if (raw.verdict !== 'pipeline') return null;
-  return {
-    verdict: 'pipeline',
-    area: trimTo(raw.area, 40) || null,
-    title: trimTo(raw.title, 160) || null,
-    taskId: trimTo(raw.taskId, 64) || null,
-    filed: raw.filed === true,
-    duplicate: raw.duplicate === true,
-  };
+  return { verdict: 'pipeline', ...sanitizeDiagnosisRef(raw) };
 };
 
 // Observing-orchestrator summary for the run that just ended: how many passes
 // it spent and which fix tasks it dispatched, so the status banner can report
 // "the pipeline is being fixed" without re-reading the CoS task list. The
 // producer (observer.js#summarizeObserver) only reports when at least one task
-// was filed, so an empty list reads as null. Same transient-marker rationale as
-// pauseKind / craftGap* / selfImprove: no schema-gate bump.
-const AUTOPILOT_OBSERVER_MAX_FILED = 5;
+// was filed, so an empty list reads as null. The cap is the producer's own
+// (DIAGNOSIS_MAX_FILED — diagnosisCore is a leaf, so this import can't cycle).
+// Same transient-marker rationale as pauseKind / craftGap* / selfImprove: no
+// schema-gate bump.
 const sanitizeAutopilotObserver = (raw) => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const filed = (Array.isArray(raw.filed) ? raw.filed : [])
-    .map((f) => (f && typeof f === 'object'
-      ? {
-        area: trimTo(f.area, 40) || null,
-        title: trimTo(f.title, 160) || null,
-        taskId: trimTo(f.taskId, 64) || null,
-        filed: f.filed === true,
-        duplicate: f.duplicate === true,
-      }
-      : null))
+    .map((f) => (f && typeof f === 'object' ? sanitizeDiagnosisRef(f) : null))
     .filter(Boolean)
-    .slice(0, AUTOPILOT_OBSERVER_MAX_FILED);
+    .slice(0, DIAGNOSIS_MAX_FILED);
   if (filed.length === 0) return null;
   return { passes: toCount(raw.passes), filed };
 };

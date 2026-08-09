@@ -150,9 +150,7 @@ describe('isDispatchable', () => {
     const shaped = shapeDiagnosis({ ...goodDiagnosis, area: 'ui' }, OBSERVER_AREAS);
     expect(shaped.area).toBe('ui');
     expect(isDispatchable(shaped)).toBe(true);
-    // OBSERVER_AREAS is a literal (not a spread of SELF_IMPROVE_AREAS — the
-    // session.js import cycle makes that a TDZ throw); pin the superset here.
-    for (const area of SELF_IMPROVE_AREAS) expect(OBSERVER_AREAS).toContain(area);
+    expect(OBSERVER_AREAS).toEqual([...SELF_IMPROVE_AREAS, 'ui']);
   });
 });
 
@@ -208,12 +206,18 @@ describe('runObserverPass (mid-run)', () => {
     expect(run.runState.observerPassesRun).toBe(0);
   });
 
-  it('spends nothing when the daily budget is exhausted', async () => {
+  it('spends nothing when the daily budget is exhausted, and latches mid-run passes off', async () => {
     budgetStatus = { withinBudget: false, exceeded: 'actions' };
     const run = makeRun({ signals: [{ type: 'child:retry' }] });
     const out = await runObserverPass('series-1', run, { phase: 'step', stepKind: 'textStages' });
     expect(out).toBeNull();
     expect(runStagedLLM).not.toHaveBeenCalled();
+    // The untaken trigger frame must not re-poll the usage file on every
+    // remaining step — the run is latched off for mid-run passes…
+    expect(run.runState.observerBudgetExhausted).toBe(true);
+    expect(shouldObserveStep(run)).toBe(false);
+    // …but the terminal pass re-checks once (the budget may have rolled over).
+    expect(shouldObserveTerminal(run, 'paused')).toBe(true);
   });
 
   it('dispatches an auto-approved task, bills one action and consumes the window', async () => {
