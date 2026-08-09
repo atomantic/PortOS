@@ -163,13 +163,14 @@ export async function startSeriesAutopilot(sId, options = {}) {
   };
   runs.set(sId, record);
 
-  // Shared `start` frame for both modes. `provider`/`model` are the run's
-  // resolved soft defaults — what the panel shows as "this run calls X / Y"; a
-  // stage pinned on the Prompts page still overrides them for that stage.
+  // Shared `start` frame for both modes. `provider`/`model`/`effort` are the
+  // run's resolved soft defaults — what the panel shows as "this run calls X / Y";
+  // a stage pinned on the Prompts page still overrides them for that stage.
   const startFrame = (target, extra = {}) => ({
     type: 'start', runId, mode, target,
     provider: runOptions.providerOverride ?? null,
     model: runOptions.modelOverride ?? null,
+    effort: runOptions.effortOverride ?? null,
     ...extra,
   });
 

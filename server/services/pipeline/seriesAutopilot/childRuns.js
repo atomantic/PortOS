@@ -165,6 +165,7 @@ export async function runFoundationGate(seriesId, record) {
     : DEFAULT_FOUNDATION_THRESHOLD;
   const providerId = record.options.providerOverride;
   const model = record.options.modelOverride;
+  const effort = record.options.effortOverride;
 
   // Convergence tracker keyed on the weighted score (higher is better) — invert
   // to a "distance below 10" so trackConvergence's fewer-is-better minimum logic
@@ -179,7 +180,7 @@ export async function runFoundationGate(seriesId, record) {
     // nothing) returns the cached score with no LLM call — this IS the fast-pass
     // that stops an already-clean foundation looping. A real change (any fix, or
     // a user edit) flips the pinned hash and re-judges automatically.
-    const snap = await judgeFoundation(seriesId, { providerId, model });
+    const snap = await judgeFoundation(seriesId, { providerId, model, effort });
     // A cached (content-hash unchanged) verdict did no LLM work — don't bill it.
     if (!snap.cached) await recordDomainUsage('cos', { actions: 1 });
     const score = snap.weightedScore ?? 0;
@@ -217,6 +218,7 @@ export async function runFoundationGate(seriesId, record) {
       providerOverride: providerId,
       modelOverride: model,
       ...seasonPreserveOpts(record),
+      effortOverride: effort,
     });
     await recordDomainUsage('cos', { actions: 1 });
     broadcast(seriesId, {

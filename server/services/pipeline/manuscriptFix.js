@@ -463,7 +463,7 @@ function mergeFixes(fixes) {
   return fixFromEdits(edits);
 }
 
-export async function generateManuscriptFix(seriesId, { commentId, providerOverride, providerDefault, modelOverride, modelDefault } = {}) {
+export async function generateManuscriptFix(seriesId, { commentId, providerOverride, providerDefault, modelOverride, modelDefault, effortDefault } = {}) {
   const series = await getSeries(seriesId);
   const comment = await getComment(seriesId, commentId);
   if (!comment) throw makeErr(`Comment not found: ${commentId}`, ERR_NOT_FOUND);
@@ -509,6 +509,7 @@ export async function generateManuscriptFix(seriesId, { commentId, providerOverr
     providerDefault,
     modelOverride,
     modelDefault,
+    effortDefault,
     returnsJson: true,
     source: 'pipeline-manuscript-fix',
   });

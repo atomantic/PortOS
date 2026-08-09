@@ -296,6 +296,7 @@ async function buildProseContextAugment(series, issue, options = {}) {
     providerDefault: options.providerIdDefault,
     modelOverride: options.model,
     modelDefault: options.modelIdDefault,
+    effortDefault: options.effortIdDefault,
   }).catch(() => ({ contextWindow: null }));
   const usableTokens = usableInputTokens({ contextWindow });
   const continuityChars = Math.max(0, Math.floor(usableTokens * CONTINUITY_BUDGET_FRACTION)) * CHARS_PER_TOKEN;
@@ -676,6 +677,9 @@ async function runStageLLMOnce(issueId, stageId, template, ctx, options) {
       // per-stage `model` pin, mirroring providerIdDefault. Route callers pass
       // model (hard); autopilot passes modelIdDefault (soft).
       modelDefault: options.modelIdDefault,
+      // Soft run-level reasoning effort (Series Autopilot, #3641): loses to a
+      // per-stage `effort` pin, and the runner clamps/drops it per provider.
+      effortDefault: options.effortIdDefault,
       source: 'pipeline-text-stage',
     });
   } catch (err) {

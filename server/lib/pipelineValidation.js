@@ -15,6 +15,7 @@ import { WORK_KINDS, WORK_STATUSES, ANALYSIS_KINDS } from './writersRoomPresets.
 import { ALL_STYLE_IDS, STYLE_ID } from './writersRoomStylePresets.js';
 import { BIBLE_LIMITS, RELATIONSHIP_LINK_TYPES, RELATIONSHIP_OPPOSITION_AXES, ATTACHMENT_ROLES } from './storyBible.js';
 import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from './aiToolkit/constants.js';
+import { EFFORT_LEVELS } from './providerModels.js';
 import { CHECK_SCOPES, CHECK_SEVERITIES } from './editorial/checkRegistry.js';
 import { SHOT_TYPES, SCREEN_DIRECTIONS } from './shotGrammar.js';
 
@@ -573,6 +574,16 @@ export const stageConfigUpdateSchema = z.object({
   // saved config, so schema parity is required in the same change.
   judgeProvider: z.string().nullable().optional(),
   judgeModel: z.string().nullable().optional(),
+  // Per-stage reasoning-effort pin (#3641). Optional and opt-in: with no pin the
+  // stage inherits a run-level `effortDefault` (Series Autopilot's run effort),
+  // then the provider's own config. Validated against the union of every accepted
+  // effort value across effort-capable CLIs — the runner clamps a level the chosen
+  // provider doesn't offer down its ladder. `null`/'' clears the pin. Without this
+  // key the `.strip()` below would silently drop a pin on save.
+  effort: z.preprocess(
+    (v) => (v === '' ? null : v),
+    z.enum(EFFORT_LEVELS).nullable().optional(),
+  ),
   // Multi-candidate draft gate (#2169, CWQE Phase 5). Opt-in, DEFAULT OFF
   // (draftAttempts 1 = single generation, no gate) because each extra attempt
   // multiplies generation + judge cost. When > 1, generateStage re-rolls a fresh

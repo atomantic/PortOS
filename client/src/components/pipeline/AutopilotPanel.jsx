@@ -18,7 +18,7 @@ import {
   getSettings,
   patchSettingsSlice,
 } from '../../services/api';
-import { providerDisplayName, providerModelLabel, assignmentModelOptions, resolveSeriesRunLlm } from '../../utils/providers';
+import { providerDisplayName, providerModelLabel, assignmentModelOptions, resolveSeriesRunLlm, resolveCliEffort } from '../../utils/providers';
 import ProviderModelSelector from '../ProviderModelSelector';
 import SeriesAutopilotSchedule from './SeriesAutopilotSchedule';
 
@@ -330,11 +330,16 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   // for one run must not silently re-point every other action on the series.
   const [providerOverride, setProviderOverride] = useState('');
   const [modelOverride, setModelOverride] = useState('');
+  // Per-run reasoning effort (#3641). Same per-run-only contract as the
+  // provider/model pin: '' = "use whatever the provider's config already bakes
+  // in". Sent as `effortOverride`, which the server threads as a SOFT run-level
+  // default — a stage with its own `effort` pin still wins.
+  const [effortOverride, setEffortOverride] = useState('');
   const [providers, setProviders] = useState([]);
   const [activeProviderId, setActiveProviderId] = useState(null);
-  // Provider/model the ACTIVE run reported on its start frame — what the live
-  // progress line names, so a run started elsewhere (or by the scheduler) still
-  // says which provider it is spending on.
+  // Provider/model/effort the ACTIVE run reported on its start frame — what the
+  // live progress line names, so a run started elsewhere (or by the scheduler)
+  // still says which provider (and how hard it thinks) it is spending on.
   const [runLlm, setRunLlm] = useState(null);
 
   useEffect(() => {
@@ -383,6 +388,12 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     () => assignmentModelOptions(null, providers, effProviderId),
     [providers, effProviderId],
   );
+  // What the picked effort ACTUALLY runs as: the server clamps a level the
+  // resolved provider/model doesn't offer down its ladder, and emits no flag at
+  // all for a provider with no effort control. Naming the clamped value (rather
+  // than the raw pick) keeps the copy honest — the same rule EffortSelect uses
+  // for its out-of-ladder option.
+  const effectiveEffort = resolveCliEffort(effortOverride, effProvider, effModel);
 
   // Load the persisted convergence-round defaults so the Options inputs reflect
   // the install's setting. The autopilot reads the same setting server-side, so
@@ -486,7 +497,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   // status payload's copy of it (see the re-attach effect below).
   const applyStartFrame = useCallback((f) => {
     setMode(f.mode || null);
-    setRunLlm({ provider: f.provider || null, model: f.model || null });
+    setRunLlm({ provider: f.provider || null, model: f.model || null, effort: f.effort || null });
     if (Array.isArray(f.plan)) setPlan(f.plan);
     if (f.planTotals) setPlanTotals(f.planTotals);
   }, []);
@@ -593,6 +604,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     const llmOverride = {
       ...(providerOverride ? { providerOverride } : {}),
       ...(modelOverride ? { modelOverride } : {}),
+      ...(effortOverride ? { effortOverride } : {}),
     };
     const res = await startPipelineAutopilot(seriesId, { includeVisual, fileGaps, ...roundOverrides, ...gateOverride, ...unlockOverride, ...llmOverride }, { silent: true })
       .catch((err) => { toast.error(err.message || 'Could not start autopilot'); return null; });
@@ -610,7 +622,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     // effect can reject a stale terminal frame from the previous run.
     activeRunIdRef.current = res.runId || null;
     setActive(true);
-  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds, beatContinuityRounds, checkPauseThreshold, notifyOnPause, unlockForRun, revisionEnabled, revisionMinCycles, revisionMaxCycles, revisionPlateauDelta, foundationGate, foundationThreshold, foundationRounds, selfImprove, readinessGate, providerOverride, modelOverride, persistRounds]);
+  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds, beatContinuityRounds, checkPauseThreshold, notifyOnPause, unlockForRun, revisionEnabled, revisionMinCycles, revisionMaxCycles, revisionPlateauDelta, foundationGate, foundationThreshold, foundationRounds, selfImprove, readinessGate, providerOverride, modelOverride, effortOverride, persistRounds]);
 
   const cancel = useCallback(async () => {
     await cancelPipelineAutopilot(seriesId).catch(() => null);
@@ -686,11 +698,17 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
             <p className="text-[11px] text-gray-400 leading-relaxed">
               This run calls{' '}
               <span className="text-gray-200 font-medium">{providerModelLabel(providers, effProviderId, effModel)}</span>
+              {effectiveEffort ? (
+                <> at <span className="text-gray-200 font-medium">{effectiveEffort}</span> reasoning effort</>
+              ) : null}
               . Stages pinned in{' '}
               <Link to="/prompts" className="text-port-accent hover:underline">Prompts</Link>{' '}
-              keep their own provider/model; reasoning effort isn&apos;t a per-run
-              control here — it comes from the provider&apos;s config on{' '}
-              <Link to="/ai" className="text-port-accent hover:underline">AI Providers</Link>.
+              keep their own provider/model/effort
+              {effectiveEffort ? '.' : (
+                <>; reasoning effort comes from the provider&apos;s config on{' '}
+                  <Link to="/ai" className="text-port-accent hover:underline">AI Providers</Link>.
+                </>
+              )}
             </p>
             {effProviderUnavailable ? (
               <p className="text-[11px] text-port-warning">
@@ -705,8 +723,10 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
                 effectiveProviderId={effProviderId}
                 selectedModel={modelOverride}
                 availableModels={providerModels}
-                onProviderChange={(id) => { setProviderOverride(id); setModelOverride(''); }}
+                onProviderChange={(id) => { setProviderOverride(id); setModelOverride(''); setEffortOverride(''); }}
                 onModelChange={setModelOverride}
+                effort={effortOverride}
+                onEffortChange={setEffortOverride}
                 label="Override provider for this run"
                 compact
                 alwaysShowModel
@@ -914,6 +934,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
           {runLlm?.provider || activeProviderId ? (
             <div className="mt-1 text-[11px] text-gray-500">
               on {providerModelLabel(providers, runLlm?.provider || activeProviderId, runLlm?.model)}
+              {runLlm?.effort ? ` at ${runLlm.effort} effort` : ''}
             </div>
           ) : null}
           {frames?.length ? (

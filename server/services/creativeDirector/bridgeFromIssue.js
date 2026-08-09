@@ -74,7 +74,7 @@ function deriveTeaserBrief(series, issue, proposal) {
  * create (mirrors sendToCreativeDirector's orphan-cleanup).
  *
  * @param {string} issueId
- * @param {{ providerDefault?: string, modelDefault?: string, name?: string,
+ * @param {{ providerDefault?: string, modelDefault?: string, effortDefault?: string, name?: string,
  *   aspectRatio?: string, quality?: string, targetDurationSeconds?: number }} [options]
  * @returns {Promise<{ project: object, proposal: object }>}
  */
@@ -107,6 +107,7 @@ export async function produceVideoFromIssue(issueId, options = {}) {
   const stageOpts = { source: 'pipeline-cd-teaser', returnsJson: true };
   if (options.providerDefault) stageOpts.providerDefault = options.providerDefault;
   if (options.modelDefault) stageOpts.modelDefault = options.modelDefault;
+  if (options.effortDefault) stageOpts.effortDefault = options.effortDefault;
   const { content } = await runStagedLLM(CD_BRIDGE_STAGE, variables, stageOpts);
   const proposal = shapeProposal(content);
   if (!proposal) {

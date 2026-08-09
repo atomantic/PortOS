@@ -227,10 +227,13 @@ async function buildManuscriptCorpus(seriesId) {
  *   - modelIdDefault — Series Autopilot's run model as a SOFT default (#1558):
  *     overrides the stage's tier value but loses to a deliberate explicit-model
  *     pin (and to the hard model). See stageRunner.resolveModelHint.
+ *   - effortIdDefault — Series Autopilot's run reasoning effort as a SOFT default
+ *     (#3641): loses to a per-stage `effort` pin, and the runner clamps it to (or
+ *     drops it for) whatever provider actually runs
  *   - force — re-segment even when the manuscript hash is unchanged
  *   - signal — AbortSignal checked before the persist
  */
-export async function generateReverseOutline(seriesId, { providerId, providerIdDefault, model, modelIdDefault, force = false, signal } = {}) {
+export async function generateReverseOutline(seriesId, { providerId, providerIdDefault, model, modelIdDefault, effortIdDefault, force = false, signal } = {}) {
   assertValidSeriesId(seriesId);
   const { corpus, byNumber } = await buildManuscriptCorpus(seriesId);
   if (!corpus.trim()) return { seriesId, status: 'no-content' };
@@ -271,6 +274,7 @@ export async function generateReverseOutline(seriesId, { providerId, providerIdD
     providerDefault: providerIdDefault,
     modelOverride: model,
     modelDefault: modelIdDefault,
+    effortDefault: effortIdDefault,
     source: 'pipeline-reverse-outline',
   });
 

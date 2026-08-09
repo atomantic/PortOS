@@ -22,6 +22,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { validateRequest, MAX_CONVERGENCE_ROUNDS } from '../../lib/validation.js';
+import { EFFORT_LEVELS } from '../../lib/providerModels.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
 import * as autopilot from '../../services/pipeline/seriesAutopilot.js';
 import { READINESS_GATES } from '../../services/pipeline/editorialScore.js';
@@ -31,6 +32,12 @@ const router = Router();
 
 const autopilotStartSchema = z.object({
   ...providerOverrideShape,
+  // Per-run reasoning effort (#3641). Soft, like the provider/model override: it
+  // applies to stages with no `effort` pin of their own, and stageRunner clamps it
+  // to the resolved provider ladder (dropping it entirely for a provider with no
+  // effort control). Validated against the union of every accepted level across
+  // effort-capable CLIs; '' (the UI "provider default" sentinel) means no override.
+  effortOverride: z.preprocess((v) => (v === '' ? undefined : v), z.enum(EFFORT_LEVELS).optional()),
   // Draft cover + all interior pages once a story is ready. Accepted now;
   // honored when VISUAL_DRAFT_ENABLED ships (Phase 2). Defaults true per the
   // product decision (whole-series, full draft visuals).

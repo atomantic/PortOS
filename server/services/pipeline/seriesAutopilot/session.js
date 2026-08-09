@@ -177,6 +177,10 @@ export async function notifyPause(record, sId, { reason, pauseKind = null, curre
 // stageRunner.resolveModelHint). Before #1558 the model was threaded as a hard
 // `modelOverride`, which let the run model beat even an explicit stage pin.
 //
+// The run's reasoning effort (#3641) rides the same soft channel as a third
+// dimension: `effortDefault` applies only to stages with no `stage.effort` pin,
+// and the runner clamps it to (or drops it for) whatever provider actually runs.
+//
 // Two shapes because the delegated services disagree on field names: the
 // arc/episode/verify passes take `providerDefault`/`modelDefault`; the child
 // runners (volumeBeatsRunner, autoRunner) and the `providerId`-style services
@@ -187,10 +191,12 @@ export async function notifyPause(record, sId, { reason, pauseKind = null, curre
 export const providerOverrideOpts = (record) => ({
   providerDefault: record.options.providerOverride,
   modelDefault: record.options.modelOverride,
+  effortDefault: record.options.effortOverride,
 });
 export const providerIdOpts = (record) => ({
   providerIdDefault: record.options.providerOverride,
   modelIdDefault: record.options.modelOverride,
+  effortIdDefault: record.options.effortOverride,
   // Multi-candidate draft gate (#2169): bill one cos action per re-roll and stop
   // re-rolling when the daily budget is spent. Only ever invoked by
   // generateStage's runDraftGate on a judgeable stage with draftAttempts > 1 — a

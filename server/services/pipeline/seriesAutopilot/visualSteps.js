@@ -210,7 +210,8 @@ export async function runProduceTeaser(sId, issueId, record) {
   try {
     const { produceVideoFromIssue } = await import('../../creativeDirector/bridgeFromIssue.js');
     // The treatment-from-prose LLM call runs through stageRunner's soft channel,
-    // so thread the run's provider/model as providerDefault/modelDefault.
+    // so thread the run's provider/model/effort as providerDefault/modelDefault/
+    // effortDefault.
     const { project } = await produceVideoFromIssue(issueId, providerOverrideOpts(record));
     await recordDomainUsage('cos', { actions: 1 });
     broadcast(sId, { type: 'teaser:produced', issueId, projectId: project?.id });

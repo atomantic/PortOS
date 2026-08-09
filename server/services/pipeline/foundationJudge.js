@@ -358,9 +358,11 @@ async function runFoundationJudgeStage(ctx, runOptions) {
  * @param {object} [opts]
  * @param {string} [opts.providerId]  explicit judge provider override
  * @param {string} [opts.model]       explicit judge model override
+ * @param {string} [opts.effort]      run-level reasoning effort (soft — a per-stage
+ *                                   `effort` pin still wins, #3641)
  * @param {boolean} [opts.force]      re-judge unchanged inputs
  */
-export async function judgeFoundation(seriesId, { providerId, model, force = false } = {}) {
+export async function judgeFoundation(seriesId, { providerId, model, effort, force = false } = {}) {
   assertValidSeriesId(seriesId);
   const series = await getSeries(seriesId);
   const universe = series?.universeId ? await getUniverse(series.universeId).catch(() => null) : null;
@@ -398,6 +400,7 @@ export async function judgeFoundation(seriesId, { providerId, model, force = fal
     returnsJson: true,
     providerOverride: judgeProvider.id,
     modelOverride: judgeModel,
+    effortDefault: effort,
     source: STAGE,
   });
 
@@ -524,7 +527,7 @@ async function refineWorld(universeId, { providerId, model }) {
  * `finding` is the judge's `{ gap, fix }` for the targeted dimension, threaded
  * into the structure resolve as a synthesized arc finding.
  */
-export async function applyFoundationFix(seriesId, dimension, { finding = {}, providerOverride, modelOverride, preserveDroppedSeasons = false } = {}) {
+export async function applyFoundationFix(seriesId, dimension, { finding = {}, providerOverride, modelOverride, effortOverride, preserveDroppedSeasons = false } = {}) {
   assertValidSeriesId(seriesId);
   const series = await getSeries(seriesId);
   const universeId = series?.universeId || null;
@@ -569,6 +572,7 @@ export async function applyFoundationFix(seriesId, dimension, { finding = {}, pr
       // is the third arc-rewriting path that could otherwise delete a volume.
       // Carry the same non-deletion guarantee the other two do.
       preserveDroppedSeasons,
+      effortDefault: effortOverride,
     });
     return { dimension, applied: r?.applied !== false };
   }

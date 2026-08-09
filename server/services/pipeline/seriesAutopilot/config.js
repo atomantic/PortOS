@@ -244,7 +244,12 @@ export function resolveAutopilotLlm(options = {}, series = null) {
     overrideProvider: options?.providerOverride,
     overrideModel: options?.modelOverride,
   });
-  return { providerOverride: provider, modelOverride: model };
+  // Reasoning effort (#3641) is per-run only — there is no series-level effort to
+  // inherit, so a blank choice stays undefined and each stage falls through to its
+  // own `effort` pin, then the provider's configured args. Threaded on the same
+  // soft channel as the provider/model (session.js#providerOverrideOpts →
+  // stageRunner's `effortDefault`), which clamps it per provider.
+  return { providerOverride: provider, modelOverride: model, effortOverride: options?.effortOverride || undefined };
 }
 
 // Effective "produce draft visuals?" decision. The `target` option overrides

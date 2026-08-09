@@ -115,3 +115,46 @@ it('warns when CoS autonomy is off', async () => {
   render(<SeriesAutopilotSchedule series={SERIES} {...providerProps()} />);
   expect(await screen.findByText(/CoS autonomy is off/)).toBeInTheDocument();
 });
+
+it('persists a per-schedule reasoning effort and names it in the consent copy (#3641)', async () => {
+  // `codex` is effort-capable, so the picker renders its ladder; the entry is
+  // stored as `effort` and the scheduler maps it to the run's effortOverride.
+  providerProps = () => ({
+    providers: [{ id: 'codex', name: 'Codex', models: ['gpt-5-codex'] }],
+    activeProviderId: 'codex',
+  });
+  getSettings.mockResolvedValue(settingsWith([
+    { seriesId: 's1', enabled: false, cron: '0 3 * * *', provider: 'codex' },
+  ]));
+  render(<SeriesAutopilotSchedule series={{ id: 's1', name: 'Test', llm: {} }} {...providerProps()} />);
+  fireEvent.change(await screen.findByLabelText('Thinking effort'), { target: { value: 'high' } });
+  await waitFor(() => expect(patchSettingsSlice).toHaveBeenCalledWith(
+    'seriesAutopilot',
+    { schedules: [expect.objectContaining({ seriesId: 's1', effort: 'high' })] },
+    { silent: true },
+  ));
+  expect(await screen.findByText(/reasoning effort/)).toBeInTheDocument();
+});
+
+it('drops a stored effort when the schedule provider changes (#3641)', async () => {
+  providerProps = () => ({
+    providers: [
+      { id: 'codex', name: 'Codex', models: ['gpt-5-codex'] },
+      { id: 'anthropic', name: 'Anthropic', models: ['claude-opus-4-8'] },
+    ],
+    activeProviderId: 'codex',
+  });
+  getSettings.mockResolvedValue(settingsWith([
+    { seriesId: 's1', enabled: false, cron: '0 3 * * *', provider: 'codex', effort: 'high' },
+  ]));
+  render(<SeriesAutopilotSchedule series={{ id: 's1', name: 'Test', llm: {} }} {...providerProps()} />);
+  fireEvent.change(
+    await screen.findByLabelText('Override provider for scheduled runs'),
+    { target: { value: 'anthropic' } },
+  );
+  await waitFor(() => expect(patchSettingsSlice).toHaveBeenCalledWith(
+    'seriesAutopilot',
+    { schedules: [expect.objectContaining({ provider: 'anthropic', effort: undefined })] },
+    { silent: true },
+  ));
+});

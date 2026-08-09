@@ -293,6 +293,38 @@ describe('AutopilotPanel', () => {
     );
   });
 
+  it('sends a picked reasoning effort as a per-run override and names it (#3641)', async () => {
+    renderPanel({ id: 's1', targetFormat: 'comic', llm: { provider: 'codex', model: 'gpt-5-codex' } });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: /options/i }));
+    fireEvent.change(await screen.findByLabelText('Thinking effort'), { target: { value: 'high' } });
+    const summary = await screen.findByText(/This run calls/i);
+    await waitFor(() => expect(summary).toHaveTextContent('high reasoning effort'));
+    fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
+    await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalledWith(
+      's1',
+      { includeVisual: true, fileGaps: false, effortOverride: 'high' },
+      { silent: true },
+    ));
+  });
+
+  it('clears a picked effort when the run provider changes (#3641)', async () => {
+    // Each provider has its own effort ladder, so a level picked for the old
+    // provider must not ride along to the new one.
+    renderPanel({ id: 's1', targetFormat: 'comic', llm: { provider: 'codex', model: 'gpt-5-codex' } });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: /options/i }));
+    fireEvent.change(await screen.findByLabelText('Thinking effort'), { target: { value: 'ultra' } });
+    fireEvent.change(screen.getByLabelText('Override provider for this run'), { target: { value: 'claude' } });
+    // This mock provider advertises no effort ladder, so the select hides itself —
+    // and the cleared state means nothing stale rides along on start.
+    await waitFor(() => expect(screen.queryByLabelText('Thinking effort')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
+    await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalledWith(
+      's1', { includeVisual: true, fileGaps: false, providerOverride: 'claude' }, { silent: true },
+    ));
+  });
+
   it('omits the provider override when left on the series default', async () => {
     renderPanel({ id: 's1', targetFormat: 'comic', llm: { provider: 'codex', model: 'gpt-5-codex' } });
     await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());

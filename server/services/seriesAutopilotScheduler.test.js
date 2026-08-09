@@ -143,6 +143,16 @@ describe('scheduled handler', () => {
     });
   });
 
+  it('maps a schedule effort to the run\'s effortOverride (#3641)', async () => {
+    const entry = { seriesId: 's1', enabled: true, cron: '0 3 * * *', provider: 'codex', effort: 'high' };
+    const handler = await registerAndGetHandler(entry);
+    getSettings.mockResolvedValue(withSchedules([entry]));
+    await handler();
+    expect(startSeriesAutopilot).toHaveBeenCalledWith('s1', {
+      providerOverride: 'codex', effortOverride: 'high',
+    });
+  });
+
   it('skips when the schedule was disabled since registration', async () => {
     const handler = await registerAndGetHandler({ seriesId: 's1', enabled: true, cron: '0 3 * * *' });
     getSettings.mockResolvedValue(withSchedules([{ seriesId: 's1', enabled: false, cron: '0 3 * * *' }]));

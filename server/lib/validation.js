@@ -616,6 +616,11 @@ export const seriesAutopilotScheduleSchema = z.object({
   timezone: z.string().min(1).max(64).optional(),
   provider: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).max(120).optional()),
   model: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).max(200).optional()),
+  // Optional per-schedule reasoning effort (#3641), mapped to the run's
+  // `effortOverride`. Validated against the union of accepted levels across
+  // effort-capable CLIs; the runner clamps a level the chosen provider doesn't
+  // offer and drops it for a provider with no effort control.
+  effort: z.preprocess((v) => (v === '' ? undefined : v), z.enum(EFFORT_LEVELS).optional()),
 }).strict();
 
 export const seriesAutopilotSettingsSchema = z.object({

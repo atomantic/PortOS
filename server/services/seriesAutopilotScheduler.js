@@ -41,7 +41,7 @@ const registered = new Set();
 // Signature of the last-synced registration inputs (which series, at what cron
 // + timezone). The `settings:updated` subscription fires on EVERY settings save;
 // this lets an unrelated save short-circuit instead of re-registering — and
-// re-computing next-run for — every series cron. provider/model are excluded
+// re-computing next-run for — every series cron. provider/model/effort are excluded
 // deliberately: they don't affect registration (the handler re-reads them per run).
 let lastSignature = null;
 
@@ -74,13 +74,14 @@ export function activeSchedules(settings) {
  * Only forwards the honored subset, dropping absent fields so the autopilot's
  * own per-run → persisted → default resolution still applies to everything the
  * schedule doesn't pin. The schedule stores user-facing `provider`/`model`; the
- * autopilot LLM calls read `providerOverride`/`modelOverride` (the pipeline's
- * provider-override convention), so map them here.
+ * autopilot LLM calls read `providerOverride`/`modelOverride`/`effortOverride`
+ * (the pipeline's provider-override convention), so map them here.
  */
 export function runOptionsFor(entry) {
   const opts = {};
   if (entry.provider) opts.providerOverride = entry.provider;
   if (entry.model) opts.modelOverride = entry.model;
+  if (entry.effort) opts.effortOverride = entry.effort;
   return opts;
 }
 

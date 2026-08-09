@@ -112,6 +112,26 @@ function resolveModelHint(stage, options = {}) {
   return options.modelOverride || stagePin || options.modelDefault || stageTier || null;
 }
 
+// Compose the reasoning-effort hint for a stage (#3641).
+//
+// Effort is symmetric with the PROVIDER dimension, not the model one: no stage
+// carries a default effort the way nearly every stage carries a model *tier*,
+// so `stage.effort` is always a deliberate opt-in pin and therefore beats the
+// blanket run-level default.
+//
+// Precedence, strongest first:
+//   1. effortOverride — hard per-call effort ("run THIS request at max")
+//   2. stage.effort   — a deliberate per-stage pin (stage-config.json)
+//   3. effortDefault  — the run-level soft default (Series Autopilot's run effort)
+//   4. null           — no flag emitted; the provider's own config decides
+//
+// The result is safe to pass unconditionally: `runPromptThroughProvider` clamps
+// it to the provider's (and, for Antigravity, the model's) ladder and drops it
+// entirely for a provider with no effort control.
+export function resolveEffortHint(stage, options = {}) {
+  return options.effortOverride || stage?.effort || options.effortDefault || null;
+}
+
 // A conservative-large window assumed for frontier CLI / cloud-API providers
 // that haven't declared one. 128K is below every current frontier model's real
 // ceiling (Claude/GPT/Gemini are ≥128K, often ~1M), so it means "a typical
@@ -401,6 +421,11 @@ export function extractJson(text, { promptToStrip } = {}) {
  *     hard modelOverride. See resolveModelHint for the full precedence — the model
  *     dimension is deliberately NOT symmetric with providerDefault because nearly
  *     every stage carries a tier value while stage.provider is opt-in.
+ *   - effortOverride: explicit per-call reasoning effort (hard), beats a stage pin
+ *   - effortDefault: blanket run-level reasoning effort (Series Autopilot's run
+ *     effort, #3641). Soft: it applies only to stages with no `stage.effort` pin.
+ *     Clamped to the provider's ladder and dropped for effort-incapable providers
+ *     by the runner, so it is safe to pass unconditionally. See resolveEffortHint.
  *   - timeoutOverride: explicit ms timeout, beats stage.timeout and the provider default
  *   - returnsJson: parse `content` via `extractJson` before returning
  *   - source: free-form tag persisted on the run record (e.g. 'pipeline-text-stage',
@@ -546,6 +571,10 @@ async function executeStagePrompt({ stage, label, prompt, options }) {
   const runResult2 = await runPromptThroughProvider({
     provider: effectiveProvider, model: effectiveModel, prompt, source: options.source || 'staged-llm', runId,
     timeout: effectiveTimeout,
+    // Reasoning effort (#3641). Always passed: the runner clamps it to the
+    // provider's ladder and omits the flag entirely for a provider with no
+    // effort control, so no capability check is needed here.
+    effort: resolveEffortHint(stage, options),
   });
   const { text } = runResult2;
   let finalRunId = runId;

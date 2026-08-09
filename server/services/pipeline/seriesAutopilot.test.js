@@ -295,6 +295,14 @@ describe('resolveAutopilotLlm — run provider/model resolution', () => {
     expect(autopilot.resolveAutopilotLlm({}, null))
       .toEqual({ providerOverride: undefined, modelOverride: undefined });
   });
+
+  it('stamps a per-run reasoning effort (#3641) — per-run only, nothing to inherit', () => {
+    expect(autopilot.resolveAutopilotLlm({ effortOverride: 'high' }, series))
+      .toEqual({ providerOverride: 'codex', modelOverride: 'gpt-x', effortOverride: 'high' });
+    // No series-level effort exists, so a blank pick stays unset and each stage
+    // falls through to its own pin, then the provider's configured args.
+    expect(autopilot.resolveAutopilotLlm({ effortOverride: '' }, series).effortOverride).toBeUndefined();
+  });
 });
 
 describe('resolveNextStep (pure)', () => {

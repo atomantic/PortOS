@@ -132,6 +132,9 @@ export async function startVolumeBeatsRun(seriesId, seasonId, options = {}) {
             // Soft run-level model default (Series Autopilot, #1558) — forwarded
             // alongside the hard model so a per-stage `model` pin still wins.
             modelIdDefault: options.modelIdDefault,
+            // Soft run-level reasoning effort (Series Autopilot, #3641) — same soft
+            // channel, so a per-stage `effort` pin still wins.
+            effortIdDefault: options.effortIdDefault,
           });
           generated += 1;
           broadcast({

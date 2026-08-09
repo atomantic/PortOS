@@ -3,7 +3,7 @@ import { CalendarClock, Loader2, AlertTriangle, Trash2 } from 'lucide-react';
 import { getSettings, patchSettingsSlice } from '../../services/apiSystem';
 import { getCosConfig } from '../../services/apiAgents';
 import { describeCron } from '../../utils/cronHelpers';
-import { providerDisplayName, providerModelLabel, assignmentModelOptions, resolveSeriesRunLlm } from '../../utils/providers';
+import { providerDisplayName, providerModelLabel, assignmentModelOptions, resolveSeriesRunLlm, resolveCliEffort } from '../../utils/providers';
 import BrailleSpinner from '../BrailleSpinner';
 import CronInput from '../CronInput';
 import ProviderModelSelector from '../ProviderModelSelector';
@@ -82,6 +82,11 @@ export default function SeriesAutopilotSchedule({ series, providers = [], active
     () => assignmentModelOptions(null, providers, effProviderId),
     [providers, effProviderId],
   );
+  // The level a pinned effort actually runs as — the server clamps one the
+  // resolved provider/model doesn't offer, and emits nothing for a provider with
+  // no effort control. Naming the clamped value keeps the consent copy honest.
+  const effProvider = providers.find((p) => p.id === effProviderId);
+  const effectiveEffort = resolveCliEffort(entry?.effort, effProvider, effModel);
 
   // Persist a mutated entry for this series, preserving every OTHER series'
   // schedule. Re-reads the freshest schedules array so a sibling series edited
@@ -117,8 +122,12 @@ export default function SeriesAutopilotSchedule({ series, providers = [], active
     }
     await persist({ ...entry, enabled });
   };
-  const setProvider = async (provider) => persist({ ...entry, provider: provider || undefined, model: undefined });
+  // Picking a provider clears the model AND the effort: both ladders are
+  // provider-specific (and Antigravity's is per-model), so a carried-over pin
+  // could name a level the new provider never offers.
+  const setProvider = async (provider) => persist({ ...entry, provider: provider || undefined, model: undefined, effort: undefined });
   const setModel = async (model) => persist({ ...entry, model: model || undefined });
+  const setEffort = async (effort) => persist({ ...entry, effort: effort || undefined });
 
   const removeSchedule = async () => {
     await persist(null);
@@ -183,6 +192,9 @@ export default function SeriesAutopilotSchedule({ series, providers = [], active
               <p className="text-[11px] text-gray-400 leading-relaxed">
                 Each scheduled run calls your AI provider automatically. It runs as{' '}
                 <span className="text-gray-200 font-medium">{providerModelLabel(providers, effProviderId, effModel)}</span>
+                {effectiveEffort ? (
+                  <> at <span className="text-gray-200 font-medium">{effectiveEffort}</span> reasoning effort</>
+                ) : null}
                 , and is gated by the CoS autonomy mode{' '}
                 <span className={`font-medium ${cosMode === 'off' ? 'text-port-error' : 'text-gray-200'}`}>{cosMode || 'execute'}</span>
                 {' '}and the CoS daily action budget{' '}
@@ -194,10 +206,13 @@ export default function SeriesAutopilotSchedule({ series, providers = [], active
                 <ProviderModelSelector
                   providers={providers}
                   selectedProviderId={entry?.provider ?? ''}
+                  effectiveProviderId={effProviderId}
                   selectedModel={entry?.model || ''}
                   availableModels={providerModels}
                   onProviderChange={setProvider}
                   onModelChange={setModel}
+                  effort={entry?.effort || ''}
+                  onEffortChange={setEffort}
                   label="Override provider for scheduled runs"
                   compact
                   alwaysShowModel

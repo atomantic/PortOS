@@ -1571,6 +1571,14 @@ describe('validation.js', () => {
       expect(out.judgeModel).toBe('heavy');
     });
 
+    it('preserves a per-stage effort pin (#3641) instead of stripping it', () => {
+      expect(stageConfigUpdateSchema.parse({ effort: 'high' }).effort).toBe('high');
+      // '' (the picker's "provider default" sentinel) and null both clear the pin.
+      expect(stageConfigUpdateSchema.parse({ effort: '' }).effort).toBeNull();
+      expect(stageConfigUpdateSchema.parse({ effort: null }).effort).toBeNull();
+      expect(stageConfigUpdateSchema.safeParse({ effort: 'turbo' }).success).toBe(false);
+    });
+
     it('accepts null judgeProvider/judgeModel as a cleared pin', () => {
       const out = stageConfigUpdateSchema.parse({ judgeProvider: null, judgeModel: null });
       expect(out.judgeProvider).toBeNull();
@@ -1863,6 +1871,20 @@ describe('seriesAutopilotSettingsSchema (#2174)', () => {
       schedules: [{ seriesId: 's1', cron: '0 3 * * *', provider: '', model: '' }],
     });
     expect(parsed.schedules[0]).toEqual({ seriesId: 's1', cron: '0 3 * * *', enabled: false });
+  });
+
+  it('accepts an optional per-schedule effort and rejects an unknown level (#3641)', () => {
+    const parsed = seriesAutopilotSettingsSchema.parse({
+      schedules: [{ seriesId: 's1', cron: '0 3 * * *', effort: 'high' }],
+    });
+    expect(parsed.schedules[0].effort).toBe('high');
+    // Blank is the picker's "provider default" sentinel, not a pin.
+    expect(seriesAutopilotSettingsSchema.parse({
+      schedules: [{ seriesId: 's1', cron: '0 3 * * *', effort: '' }],
+    }).schedules[0].effort).toBeUndefined();
+    expect(seriesAutopilotSettingsSchema.safeParse({
+      schedules: [{ seriesId: 's1', cron: '0 3 * * *', effort: 'turbo' }],
+    }).success).toBe(false);
   });
 });
 

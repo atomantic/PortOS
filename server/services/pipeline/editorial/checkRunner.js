@@ -391,7 +391,7 @@ const EDITORIAL_OUTPUT_RESERVE_TOKENS = 2_000;
  * @param {object} [opts] — providerOverride/Default, modelOverride/Default, signal
  * @returns {Promise<{ series, baseCtx, resolvedSources }>}
  */
-export async function buildEditorialContext(seriesId, enabled, { providerOverride, providerDefault, modelOverride, modelDefault, signal, checkById = null } = {}) {
+export async function buildEditorialContext(seriesId, enabled, { providerOverride, providerDefault, modelOverride, modelDefault, effortDefault, signal, checkById = null } = {}) {
   const series = await getSeries(seriesId);
   // Gate each fetch on EFFECTIVE sources — a check's own sources plus its declared
   // dependencies' (#1627) — so a dependency-consuming check pulls (and fingerprints)
@@ -493,6 +493,7 @@ export async function buildEditorialContext(seriesId, enabled, { providerOverrid
     providerDefault,
     modelOverride,
     modelDefault,
+    effortDefault,
     // The run's AbortSignal, so a multi-chunk LLM check can stop launching
     // further chunk calls mid-run (the runner only checks it before/after each
     // check.run()). Mirrors the per-chunk cancel check in the completeness pass.
@@ -500,19 +501,19 @@ export async function buildEditorialContext(seriesId, enabled, { providerOverrid
     // Injected LLM caller — keeps server/lib/editorial pure. Forwards the
     // provider/model overrides so an LLM check honors the autopilot's choice.
     callStagedLLM: (stage, vars, opts = {}) =>
-      runStagedLLM(stage, vars, { providerOverride, providerDefault, modelOverride, modelDefault, ...opts }),
+      runStagedLLM(stage, vars, { providerOverride, providerDefault, modelOverride, modelDefault, effortDefault, ...opts }),
     // Injected inline-prompt caller for user-defined checks (#1346) whose prompt
     // body is authored from the UI (no shipped stage template). Same provider/
     // model overrides as callStagedLLM so a custom check honors the run's choice.
     callInlineLLM: (prompt, opts = {}) =>
-      runInlineLLM(prompt, { providerOverride, providerDefault, modelOverride, modelDefault, ...opts }),
+      runInlineLLM(prompt, { providerOverride, providerDefault, modelOverride, modelDefault, effortDefault, ...opts }),
     // Inline-prompt caller that resolves the provider/model from a NAMED STAGE's
     // pin (#1403). The cross-chunk setup-summary call rides alongside a stage-
     // pinned manuscript check, so it must run on the SAME provider as that stage —
     // routing it through the active provider (plain callInlineLLM) could leak
     // manuscript text to a different (e.g. cloud) provider than the stage chose.
     callStageScopedInlineLLM: (stage, prompt, opts = {}) =>
-      runStageScopedInlineLLM(stage, prompt, { providerOverride, providerDefault, modelOverride, modelDefault, ...opts }),
+      runStageScopedInlineLLM(stage, prompt, { providerOverride, providerDefault, modelOverride, modelDefault, effortDefault, ...opts }),
     // Injected manuscript chunker — plans the stitched manuscript into chunks
     // sized to `stage`'s resolved provider context window (reusing the same
     // budgeter as the completeness pass), so a long series is fully reviewed
@@ -596,14 +597,15 @@ export async function buildEditorialContext(seriesId, enabled, { providerOverrid
  *   - checkIds: string[] — run only this subset (default: all enabled)
  *   - settings: object — pre-loaded settings (default: read fresh)
  *   - providerOverride / modelOverride — hard provider/model, forwarded to LLM checks
- *   - providerDefault / modelDefault — soft run-level default provider/model
- *     (Series Autopilot), forwarded to LLM checks (lose to a per-stage pin)
+ *   - providerDefault / modelDefault / effortDefault — soft run-level default
+ *     provider/model/reasoning effort (Series Autopilot), forwarded to LLM checks
+ *     (each loses to the matching per-stage pin)
  *   - signal: AbortSignal — checked between checks for cancellation
  *   - onProgress: (event) => void — { type: 'check:start'|'check:complete', ... }
  * @returns {Promise<{ runId, findings, perCheck, canceled }>}
  */
 export async function runEditorialChecks(seriesId, options = {}) {
-  const { checkIds = null, providerOverride, providerDefault, modelOverride, modelDefault, signal, onProgress } = options;
+  const { checkIds = null, providerOverride, providerDefault, modelOverride, modelDefault, effortDefault, signal, onProgress } = options;
   const settings = options.settings || await getSettings();
   const enabled = getEnabledChecks(settings, checkIds);
 
@@ -620,7 +622,7 @@ export async function runEditorialChecks(seriesId, options = {}) {
   // Build the shared context once — every check reads from this (extracted to
   // buildEditorialContext so the dry-run preview path reuses the exact same
   // provider-sized chunking + source resolution as a real run, #1607).
-  const { series, baseCtx, resolvedSources } = await buildEditorialContext(seriesId, enabled, { providerOverride, providerDefault, modelOverride, modelDefault, signal, checkById });
+  const { series, baseCtx, resolvedSources } = await buildEditorialContext(seriesId, enabled, { providerOverride, providerDefault, modelOverride, modelDefault, effortDefault, signal, checkById });
   // Overlay this series' per-check config overrides (#1591) onto the global
   // resolved config. The `needs*` gates inside the builder read only `check`
   // (config-independent); only the run loop consumes the merged config here.
