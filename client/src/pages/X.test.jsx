@@ -86,7 +86,7 @@ describe('X page', () => {
           latestSearchPostCount: null,
         },
       },
-      lastError: 'Could not read the X profile page — visibility checks are unknown, not negative. Retry the diagnostic.',
+      lastError: 'Could not read the X profile page, account search, Latest search — those checks are unknown, not negative. Retry the diagnostic.',
     }] });
     renderPage(`/x/${account.id}/health`);
     await screen.findByRole('heading', { name: 'Reach diagnostics for @example_user' });

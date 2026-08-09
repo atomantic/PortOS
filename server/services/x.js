@@ -122,23 +122,40 @@ export function deriveXDiagnostics({ accountUsername, profile = {}, latest = {},
   const configured = normalizeUsername(accountUsername);
   const profileUsername = safeUsername(profile.username);
   const profileRead = Boolean(profileUsername);
-  const latestPosts = Array.isArray(latest.posts) ? latest.posts : [];
-  const matchingPosts = latestPosts.filter((post) => safeUsername(post.authorHandle) === configured);
-  const observedInPeopleSearch = people.exactMatch === true || (Array.isArray(people.handles) && people.handles.map(safeUsername).includes(configured));
-  const observedOrUnknown = (observed) => observed || (profileRead ? false : null);
+
+  const peopleHandles = Array.isArray(people.handles) ? people.handles.map(safeUsername) : null;
+  const observedInPeopleSearch = people.exactMatch === true || Boolean(peopleHandles?.includes(configured));
+  // A People-search page that actually rendered always returns at least one @handle link, so an
+  // empty handle list is a shell — not "nobody by that name."
+  const peopleRead = observedInPeopleSearch || (peopleHandles !== null && peopleHandles.length > 0);
+
+  const latestPosts = Array.isArray(latest.posts) ? latest.posts : null;
+  const matchingPosts = (latestPosts || []).filter((post) => safeUsername(post.authorHandle) === configured);
+  // Zero results in Latest search is indistinguishable from a shell on its own, so the profile
+  // read is the corroborating signal: if that page rendered, an empty Latest search is a real
+  // observation; if it did not, the whole browser session is suspect and this stays unknown.
+  const latestRead = latestPosts !== null && (latestPosts.length > 0 || profileRead);
+
   return {
     profileRead,
+    peopleRead,
+    latestRead,
     profilePublic: profileRead ? profileUsername === configured : null,
     profileHandleMatches: profileRead ? profileUsername === configured : null,
-    appearsInPeopleSearch: observedOrUnknown(observedInPeopleSearch),
-    recentPostsInLatestSearch: observedOrUnknown(matchingPosts.length > 0),
-    latestSearchPostCount: (profileRead || matchingPosts.length > 0) ? matchingPosts.length : null,
+    appearsInPeopleSearch: peopleRead ? observedInPeopleSearch : null,
+    recentPostsInLatestSearch: latestRead ? matchingPosts.length > 0 : null,
+    latestSearchPostCount: latestRead ? matchingPosts.length : null,
     recommendationEligibility: 'unknown',
     checkedAt: new Date().toISOString(),
   };
 }
 
-export const PROFILE_READ_FAILED_ERROR = 'Could not read the X profile page — visibility checks are unknown, not negative. Retry the diagnostic.';
+// A read that came back as a shell must leave a trace: clearing `last_error` on the same write
+// that persists three Unknowns hides the reason they are unknown.
+export function buildXReadError({ profileRead, peopleRead, latestRead }) {
+  const unread = [!profileRead && 'profile page', !peopleRead && 'account search', !latestRead && 'Latest search'].filter(Boolean);
+  return unread.length ? `Could not read the X ${unread.join(', ')} — those checks are unknown, not negative. Retry the diagnostic.` : '';
+}
 
 const safeMetric = (value) => Number.isInteger(value) && value >= 0 && value <= MAX_INTEGER ? value : null;
 
@@ -182,8 +199,8 @@ async function syncAccountUnlocked(accountId) {
     latestSearch: { postCount: diagnostics.latestSearchPostCount },
   };
   const posts = mergePosts(profileResult.posts || [], latestPosts);
-  const readError = diagnostics.profileRead ? '' : PROFILE_READ_FAILED_ERROR;
-  if (readError) console.warn(`⚠️ X profile read returned no handle for @${account.username} — reporting visibility as unknown`);
+  const readError = buildXReadError(diagnostics);
+  if (readError) console.warn(`⚠️ X read for @${account.username} came back empty — reporting affected visibility checks as unknown`);
 
   await withTransaction(async (client) => {
     for (const post of posts) {

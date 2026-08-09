@@ -6,7 +6,7 @@ vi.mock('./xBrowser.js', () => ({ openXHandoff: vi.fn() }));
 
 const { query, withTransaction } = await import('../lib/db.js');
 const { executeXBrowserRead } = await import('../integrations/x/index.js');
-const { deriveXDiagnostics, syncAccount, PROFILE_READ_FAILED_ERROR } = await import('./x.js');
+const { buildXReadError, deriveXDiagnostics, syncAccount } = await import('./x.js');
 
 describe('X diagnostics', () => {
   it('distinguishes observable public/search reach from unknown recommendation eligibility', () => {
@@ -47,6 +47,38 @@ describe('X diagnostics', () => {
       recentPostsInLatestSearch: null,
       latestSearchPostCount: null,
       recommendationEligibility: 'unknown',
+    });
+  });
+
+  it('scores each read on its own evidence rather than collapsing them into the profile read', () => {
+    const searchesUnread = deriveXDiagnostics({
+      accountUsername: '@Example_User',
+      profile: { username: 'example_user' },
+      latest: {},
+      people: { handles: [] },
+    });
+
+    expect(searchesUnread).toMatchObject({
+      profileRead: true,
+      profilePublic: true,
+      appearsInPeopleSearch: null,
+      recentPostsInLatestSearch: null,
+      latestSearchPostCount: null,
+    });
+
+    const searchesRead = deriveXDiagnostics({
+      accountUsername: '@Example_User',
+      profile: {},
+      latest: { posts: [{ authorHandle: 'other_user', remoteId: '1' }] },
+      people: { handles: ['other_user'] },
+    });
+
+    expect(searchesRead).toMatchObject({
+      profileRead: false,
+      profilePublic: null,
+      appearsInPeopleSearch: false,
+      recentPostsInLatestSearch: false,
+      latestSearchPostCount: 0,
     });
   });
 
@@ -105,21 +137,25 @@ describe('syncAccount error reporting', () => {
     return { result, update };
   };
 
-  it('records a read failure instead of clearing last_error when the profile page is unreadable', async () => {
-    executeXBrowserRead.mockResolvedValue({ profile: { username: '' }, posts: [] });
+  it('records a read failure instead of clearing last_error when the pages come back empty', async () => {
+    executeXBrowserRead.mockResolvedValue({ profile: { username: '' }, posts: [], handles: [] });
 
     const { result, update } = await runSync();
 
     expect(result.diagnostics.profilePublic).toBeNull();
-    expect(update[1][2]).toBe(PROFILE_READ_FAILED_ERROR);
+    expect(update[1][2]).toBe(buildXReadError({ profileRead: false, peopleRead: false, latestRead: false }));
+    expect(update[1][2]).toMatch(/profile page, account search, Latest search/);
   });
 
-  it('clears last_error when the profile page read successfully', async () => {
-    executeXBrowserRead.mockResolvedValue({ profile: { username: 'example_user' }, posts: [] });
+  it('clears last_error when every page read successfully', async () => {
+    executeXBrowserRead.mockImplementation(async (name) => (name === 'people'
+      ? { handles: ['example_user'], exactMatch: true }
+      : { profile: { username: 'example_user' }, posts: [{ authorHandle: 'example_user', remoteId: '1' }] }));
 
     const { result, update } = await runSync();
 
     expect(result.diagnostics.profilePublic).toBe(true);
+    expect(result.diagnostics.appearsInPeopleSearch).toBe(true);
     expect(update[1][2]).toBe('');
   });
 });
