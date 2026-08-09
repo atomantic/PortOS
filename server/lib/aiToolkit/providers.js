@@ -855,22 +855,22 @@ export function createProviderService(config = {}) {
         throw new Error('Model list response was not valid JSON');
       }
 
-      if (Array.isArray(responseData.data)) {
-        // Entries are usually `{ id }`, but some OpenAI-compatible servers emit
-        // bare id strings (or key the name). `m.id` alone turned those into a
-        // list of `undefined` — a persisted, plausible-looking, entirely unusable
-        // catalog. Anything that still resolves to nothing means the shape isn't
-        // one we understand, so throw rather than save it.
-        const ids = responseData.data.map(m => (typeof m === 'string' ? m : (m?.id || m?.name)));
+      // Entries are usually `{ id }` under `data` and bare strings under
+      // `models`, but servers mix all four shapes. Returning them unmapped (or
+      // mapping `m.id` blindly) persisted raw objects / a list of `undefined` —
+      // a plausible-looking, entirely unusable catalog. Anything that still
+      // resolves to nothing means the shape isn't one we understand, so throw
+      // rather than save it, same posture as the unparseable-body case above.
+      const toModelIds = (entries, key) => {
+        const ids = entries.map(m => (typeof m === 'string' ? m : (m?.id || m?.name || m?.model)));
         if (ids.some(id => typeof id !== 'string' || !id)) {
-          throw new Error('Model list response had "data" entries with no usable model id');
+          throw new Error(`Model list response had "${key}" entries with no usable model id`);
         }
         return ids;
-      }
+      };
 
-      if (Array.isArray(responseData.models)) {
-        return responseData.models;
-      }
+      if (Array.isArray(responseData.data)) return toModelIds(responseData.data, 'data');
+      if (Array.isArray(responseData.models)) return toModelIds(responseData.models, 'models');
 
       throw new Error('Model list response had no recognizable "data" or "models" array');
     },

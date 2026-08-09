@@ -1216,6 +1216,30 @@ describe('Provider Service', () => {
       expect((await providerService.getProviderById(bad.id)).models).toEqual(['model-a']);
     });
 
+    it('normalizes object entries under "models" the same way as "data"', async () => {
+      // A non-Ollama gateway keying `models` with objects used to persist the raw
+      // objects as if they were model ids.
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ models: [{ id: 'model-a' }, 'model-b', { model: 'model-c' }] }),
+      }));
+      const ok = await providerService.createProvider({
+        name: 'Models Key API', type: 'api', endpoint: 'https://api.generic.com/v1', allowCustomEndpoint: true,
+      });
+      expect((await providerService.refreshProviderModels(ok.id)).models).toEqual(['model-a', 'model-b', 'model-c']);
+
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ models: [null] }),
+      }));
+      const bad = await providerService.createProvider({
+        name: 'Null Models API', type: 'api', endpoint: 'https://api.generic.com/v1', models: ['model-a'], allowCustomEndpoint: true,
+      });
+      const err = await providerService.refreshProviderModels(bad.id).catch(e => e);
+      expect(err.message).toMatch(/"models" entries with no usable model id/);
+      expect((await providerService.getProviderById(bad.id)).models).toEqual(['model-a']);
+    });
+
     it('throws and leaves the stored list untouched when a 200 body is not JSON', async () => {
       // A captive portal / login page / proxy error served as HTTP 200. Degrading
       // to `[]` here emptied the model dropdown while the UI toasted "Models
