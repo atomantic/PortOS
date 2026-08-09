@@ -42,10 +42,12 @@ export default function usePersistedOptions(specs, persist) {
   ));
   // Live mirror so `collectOverrides` / `inputProps` (called from an async start
   // handler, or in the same event frame as an edit) never read a stale value.
-  // `edit` and `hydrate` write it SYNCHRONOUSLY — waiting for the re-render would
-  // let a blur-then-click send the pre-edit value as the run's override.
+  // `edit` and `hydrate` are its ONLY writers and they write it SYNCHRONOUSLY —
+  // waiting for the re-render would let a blur-then-click send the pre-edit value
+  // as the run's override. Deliberately NOT re-assigned from `values` during
+  // render: an unrelated re-render queued between an edit and its flush would
+  // carry the pre-edit `values` and undo the synchronous write.
   const valuesRef = useRef(values);
-  valuesRef.current = values;
   // Per-field dirty flags. Until a field is edited its input shows a display
   // default we must NOT persist or send.
   const editedRef = useRef({});
