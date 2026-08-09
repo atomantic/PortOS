@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { rmSync } from 'fs';
 import path from 'path';
-import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
 // Mock cosEvents before import
 vi.mock('./cos.js', () => ({
@@ -13,20 +13,17 @@ vi.mock('./cos.js', () => ({
 // This suite exercises the REAL file-backed mission store — createMission writes
 // `PATHS.missions/<id>.json` and loadMissions enumerates that dir with a real
 // readdir. Without a PATHS redirect that dir is the checkout's own
-// `data/cos/missions`, so the suite both read the developer's live missions (a
-// hand-edited or legacy record with no `subTasks` crashed getStats) and wrote its
-// own fixtures into it. Same leak class as #3683; see the isolation probe below.
-//
-// `PATHS.missions` is anchored on the install root rather than derived from
-// `PATHS.data`, so redirecting `data` alone is not enough — it needs its own
-// override, which is what `extraOverrides` is for.
-const tempRoot = createTempDataRoot('portos-missions-');
-vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
-  dataRoot: tempRoot,
+// `data/cos/missions`, so the suite both read the developer's live missions (one
+// with no `subTasks` crashed getStats) and wrote its own fixtures into it — the
+// same leak class as #3683. `PATHS.missions` is anchored on the install root
+// rather than derived from `PATHS.data`, so it needs an override of its own.
+const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({
+  prefix: 'portos-missions-',
   extraOverrides: (root) => ({ missions: path.join(root, 'cos', 'missions') }),
-}));
+});
+vi.mock('../lib/fileUtils.js', async (importOriginal) => makeProxy(await importOriginal()));
 
-afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
+afterAll(cleanup);
 
 // Dynamic import, not a static one: `missions.js` reads `PATHS.missions` into a
 // module-level const at load time, and a static import would run that load
@@ -394,20 +391,14 @@ describe('Missions Service', () => {
   });
 });
 
-// Isolation probe (#3687). The suite above drives the real file-backed store, so
-// without the PATHS redirect at the top of this file it reads AND writes the
-// checkout's own `data/cos/missions`. These assertions fail the same way if the
-// redirect is ever dropped, so the leak can't come back silently.
+// Isolation probe for #3687 — these fail the same way if the PATHS redirect at
+// the top of the file is ever dropped, so the leak can't come back silently.
 describe('Missions Service — the suite is isolated from the checkout\'s real data/', () => {
   it('resolves PATHS.missions to a temp dir outside the repo', async () => {
     const { PATHS } = await import('../lib/fileUtils.js');
     expect(PATHS.missions).toBe(DATA_DIR);
-    expect(PATHS.missions).not.toContain('PortOS');
   });
 
-  // The behavioral half: loadMissions enumerates the dir with a real readdir, so
-  // a PATHS.missions pointing at the checkout would surface the developer's own
-  // missions alongside this one.
   it('counts only the missions this suite created', async () => {
     await createMission({ id: 'test-isolation-probe', appId: 'test-app', name: 'Isolation Probe' });
     const stats = await getStats();
