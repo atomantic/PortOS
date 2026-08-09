@@ -39,26 +39,24 @@ if (!dbReady) console.log(`⏭️  privacyVault.db.test.js skipped: ${skipReason
 
 describe.skipIf(!dbReady)('privacy vault DB round-trip', () => {
   let vault;
+  let subjects;
   const created = [];
-  let tableWasEmpty = false;
-  const testStart = new Date().toISOString();
+  const createdSubjects = [];
+  let selfSubjectId = '';
 
   beforeAll(async () => {
     vault = await import('./privacyVault.js');
-    const { rows } = await query(`SELECT COUNT(*)::int AS n FROM privacy_vault_records`);
-    tableWasEmpty = rows[0].n === 0;
+    subjects = await import('./privacySubjects.js');
+    selfSubjectId = (await import('../lib/privacyValidation.js')).PRIVACY_SELF_SUBJECT_ID;
   });
 
   afterAll(async () => {
     for (const id of created) {
       await query(`DELETE FROM privacy_vault_records WHERE id = $1`, [id]).catch(() => {});
     }
-    // Only consent rows this run could have created (first-record consent).
-    if (tableWasEmpty) {
-      await query(
-        `DELETE FROM privacy_consents WHERE scope = 'pii_vault' AND granted_at >= $1`,
-        [testStart],
-      ).catch(() => {});
+    // Household subjects created here cascade their own records + consent rows.
+    for (const id of createdSubjects) {
+      await query(`DELETE FROM privacy_subjects WHERE id = $1`, [id]).catch(() => {});
     }
     await close();
     if (originalKey === undefined) delete process.env.PRIVACY_VAULT_KEY;
@@ -81,18 +79,49 @@ describe.skipIf(!dbReady)('privacy vault DB round-trip', () => {
     expect(rows[0].value_enc).toMatch(/^v1:/);
   });
 
-  it('writes the first-record consent row', async () => {
-    // createVaultRecord above ran with the pre-test emptiness we captured.
-    const { rows } = await query(
-      `SELECT scope, method, subject FROM privacy_consents WHERE scope = 'pii_vault' AND granted_at >= $1`,
-      [testStart],
+  it('the seeded self subject always has consent, so a record adds no duplicate (#3658)', async () => {
+    // The boot DDL seeds a consent row for `self`, so the install owner is never
+    // refused by the engine guard and an ordinary create appends nothing.
+    expect(await subjects.hasActiveConsent(selfSubjectId)).toBe(true);
+    const before = await query(
+      `SELECT COUNT(*)::int AS n FROM privacy_consents WHERE subject_id = $1`, [selfSubjectId],
     );
-    if (tableWasEmpty) {
-      expect(rows.length).toBeGreaterThan(0);
-      expect(rows[0]).toMatchObject({ scope: 'pii_vault', method: 'vault-record-create', subject: 'self' });
-    } else {
-      expect(rows.length).toBe(0); // not the first record → no new consent
-    }
+    const record = await vault.createVaultRecord({
+      type: 'email', label: 'Consent probe', value: 'consent-probe@example.com',
+    });
+    created.push(record.id);
+    const after = await query(
+      `SELECT COUNT(*)::int AS n FROM privacy_consents WHERE subject_id = $1`, [selfSubjectId],
+    );
+    expect(after.rows[0].n).toBe(before.rows[0].n);
+  });
+
+  it('writes a household member first-record consent and scopes their records away from self (#3658)', async () => {
+    const subject = await subjects.createSubject({
+      displayName: 'Example Household Member', relationship: 'partner', consentMethod: 'signed_form',
+    });
+    createdSubjects.push(subject.id);
+
+    const consents = await subjects.listSubjectConsents(subject.id);
+    expect(consents).toHaveLength(1);
+    expect(consents[0]).toMatchObject({ scope: 'pii_vault', method: 'signed_form' });
+
+    const record = await vault.createVaultRecord({
+      type: 'email', label: 'Member email', value: 'member@example.com', subjectId: subject.id,
+    });
+    expect(record.subjectId).toBe(subject.id);
+
+    // Their record is invisible to a `self`-scoped list, and vice versa.
+    const theirs = await vault.listVaultRecords({ subjectId: subject.id });
+    expect(theirs.map((r) => r.id)).toContain(record.id);
+    const mine = await vault.listVaultRecords();
+    expect(mine.map((r) => r.id)).not.toContain(record.id);
+
+    // Deleting the subject hard-deletes their records by CASCADE (no tombstone).
+    await subjects.deleteSubject(subject.id);
+    createdSubjects.pop();
+    const { rows } = await query(`SELECT id FROM privacy_vault_records WHERE id = $1`, [record.id]);
+    expect(rows).toHaveLength(0);
   });
 
   it('lists masked records and filters by type', async () => {
