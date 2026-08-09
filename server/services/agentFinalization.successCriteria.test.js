@@ -1,7 +1,7 @@
 /**
  * Tests for `evaluateSuccessCriteria` (issue #2344) — the success-criteria
  * validation verdict finalizeAgent stamps onto every completion, distinct from
- * the runner's exit-code `success`. The `[task-<id>]` commit check is mocked so
+ * the runner's exit-code `success`. The run-window commit probe is mocked so
  * these run without git; the focus is the null-sentinel gating (no criterion
  * declared vs declared-and-checked).
  */
@@ -9,51 +9,58 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('./agentRunTracking.js', () => ({
-  checkForTaskCommit: vi.fn(),
-  // finalizeAgent's other imports from this module — stubbed so the graph loads.
+  // finalizeAgent's imports from this module — stubbed so the graph loads.
   createAgentRun: vi.fn(),
   completeAgentRun: vi.fn(),
 }));
+vi.mock('../lib/gitCommitProbe.js', () => ({
+  committedDuringRun: vi.fn(),
+}));
 
 import { evaluateSuccessCriteria, resolveProgrammaticIoVerdict, withOutputHookTimeout } from './agentFinalization.js';
-import { checkForTaskCommit } from './agentRunTracking.js';
+import { committedDuringRun } from '../lib/gitCommitProbe.js';
+
+// The run window every commit-criterion assertion below is evaluated against
+// (#3637). A criterion-declaring call MUST pass one — without a window there is
+// no way to attribute a commit to this run, and the verdict is the null sentinel.
+const STARTED_AT = Date.parse('2026-08-09T00:00:00.000Z');
 
 describe('evaluateSuccessCriteria (#2344)', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('returns null (no declared criterion) for interactive/user tasks', async () => {
     expect(await evaluateSuccessCriteria({ task: { id: 't1', taskType: 'user' }, workspacePath: '/w' })).toBeNull();
-    expect(checkForTaskCommit).not.toHaveBeenCalled();
+    expect(committedDuringRun).not.toHaveBeenCalled();
   });
 
   it('returns null for a user-terminated run — no criterion was evaluated', async () => {
     const out = await evaluateSuccessCriteria({ task: { id: 't1', taskType: 'internal' }, terminatedByUser: true, workspacePath: '/w' });
     expect(out).toBeNull();
-    expect(checkForTaskCommit).not.toHaveBeenCalled();
+    expect(committedDuringRun).not.toHaveBeenCalled();
   });
 
   it('returns null when there is no task id or no workspace to validate against', async () => {
     expect(await evaluateSuccessCriteria({ task: { taskType: 'internal' }, workspacePath: '/w' })).toBeNull();
     expect(await evaluateSuccessCriteria({ task: { id: 't1', taskType: 'internal' } })).toBeNull();
-    expect(checkForTaskCommit).not.toHaveBeenCalled();
+    expect(committedDuringRun).not.toHaveBeenCalled();
   });
 
   it('returns null for pipeline/media tasks (they deliver artifacts, not a commit)', async () => {
     expect(await evaluateSuccessCriteria({ task: { id: 't1', taskType: 'internal', metadata: { pipeline: true } }, workspacePath: '/w' })).toBeNull();
     expect(await evaluateSuccessCriteria({ task: { id: 't1', taskType: 'internal', metadata: { mediaJob: true } }, workspacePath: '/w' })).toBeNull();
-    expect(checkForTaskCommit).not.toHaveBeenCalled();
+    expect(committedDuringRun).not.toHaveBeenCalled();
   });
 
   it('never applies the commit criterion to a programmatic-I/O task (#2700)', async () => {
     // A layered-intelligence run is explicitly told NOT to commit or open a PR: it
     // writes `.agent-done` and its output hook does the filing. Checking for a
-    // `[task-<id>]` commit would stamp validationPassed:false on every correct run —
+    // commit would stamp validationPassed:false on every correct run —
     // and since a declared verdict OVERRIDES the runner's exit code in task-learning,
     // that recorded successful LI runs as failures and drove the type's success rate
     // to ~0.
     const task = { id: 't1', taskType: 'internal', metadata: { analysisType: 'layered-intelligence', selfImprovement: true } };
     await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true, hookResult: { ran: true, outcome: { action: 'filed' } } });
-    expect(checkForTaskCommit).not.toHaveBeenCalled();
+    expect(committedDuringRun).not.toHaveBeenCalled();
   });
 });
 
@@ -75,36 +82,36 @@ describe('evaluateSuccessCriteria — tracker-filing tasks (#3273)', () => {
 
   it('declares NO criterion when worktreeChangesExpected is false (forge tracker)', async () => {
     expect(await evaluateSuccessCriteria({ task: uxTask(false), workspacePath: '/w' })).toBeNull();
-    expect(checkForTaskCommit).not.toHaveBeenCalled();
+    expect(committedDuringRun).not.toHaveBeenCalled();
   });
 
   it('accepts the string form the TASKS.md round-trip produces', async () => {
     expect(await evaluateSuccessCriteria({ task: uxTask('false'), workspacePath: '/w' })).toBeNull();
-    expect(checkForTaskCommit).not.toHaveBeenCalled();
+    expect(committedDuringRun).not.toHaveBeenCalled();
   });
 
   it('still applies the commit criterion when the flag is TRUE (plan tracker)', async () => {
-    checkForTaskCommit.mockResolvedValue(true);
-    expect(await evaluateSuccessCriteria({ task: uxTask(true), workspacePath: '/w' })).toBe(true);
-    expect(checkForTaskCommit).toHaveBeenCalledWith('t1', '/w');
+    committedDuringRun.mockResolvedValue(true);
+    expect(await evaluateSuccessCriteria({ task: uxTask(true), workspacePath: '/w', startedAt: STARTED_AT })).toBe(true);
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
   });
 
   it('still applies the commit criterion when the flag is ABSENT', async () => {
-    checkForTaskCommit.mockResolvedValue(false);
-    expect(await evaluateSuccessCriteria({ task: uxTask(undefined), workspacePath: '/w' })).toBe(false);
-    expect(checkForTaskCommit).toHaveBeenCalledWith('t1', '/w');
+    committedDuringRun.mockResolvedValue(false);
+    expect(await evaluateSuccessCriteria({ task: uxTask(undefined), workspacePath: '/w', startedAt: STARTED_AT })).toBe(false);
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
   });
 
   it('retro-fixes reference-watch on a forge tracker (the same latent artifact)', async () => {
     const task = { id: 't2', taskType: 'internal', metadata: { analysisType: 'reference-watch', worktreeChangesExpected: false } };
     expect(await evaluateSuccessCriteria({ task, workspacePath: '/w' })).toBeNull();
-    expect(checkForTaskCommit).not.toHaveBeenCalled();
+    expect(committedDuringRun).not.toHaveBeenCalled();
   });
 
   it('resolves the archived-agent projection the same way as the live task', async () => {
     const task = { id: 't3', taskType: 'internal', metadata: { taskAnalysisType: 'ux', worktreeChangesExpected: false } };
     expect(await evaluateSuccessCriteria({ task, workspacePath: '/w' })).toBeNull();
-    expect(checkForTaskCommit).not.toHaveBeenCalled();
+    expect(committedDuringRun).not.toHaveBeenCalled();
   });
 
   it('does NOT let the flag exempt a non-tracker-filing type from its commit criterion', async () => {
@@ -113,10 +120,10 @@ describe('evaluateSuccessCriteria — tracker-filing tasks (#3273)', () => {
     // idle-complete clean-tree gate, not to disable success validation. Ungated,
     // a `security` run that exited 0 having committed nothing would be recorded
     // as a pass instead of the honest miss it is.
-    checkForTaskCommit.mockResolvedValue(false);
+    committedDuringRun.mockResolvedValue(false);
     const task = { id: 't4', taskType: 'internal', metadata: { analysisType: 'security', worktreeChangesExpected: false } };
-    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w' })).toBe(false);
-    expect(checkForTaskCommit).toHaveBeenCalledWith('t4', '/w');
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', startedAt: STARTED_AT })).toBe(false);
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
   });
 });
 
@@ -147,7 +154,7 @@ describe('evaluateSuccessCriteria — programmatic-I/O criterion (#2727)', () =>
   it('records an exit-0 run whose hook accepted the payload as a SUCCESS — no commit required', async () => {
     const hookResult = { ran: true, outcome: { app: 'a1', action: 'filed', reason: null } };
     expect(await evaluateSuccessCriteria({ task: liTask, workspacePath: '/w', success: true, hookResult })).toBe(true);
-    expect(checkForTaskCommit).not.toHaveBeenCalled();
+    expect(committedDuringRun).not.toHaveBeenCalled();
   });
 
   it('treats benign hook reasons (no-proposal, duplicate, scope-suppressed) as a SUCCESS', async () => {
@@ -196,7 +203,7 @@ describe('evaluateSuccessCriteria — programmatic-I/O criterion (#2727)', () =>
     expect(await evaluateSuccessCriteria({
       task, workspacePath: '/w', success: true, hookResult: { ran: true, threw: true }
     })).toBe(false);
-    expect(checkForTaskCommit).not.toHaveBeenCalled();
+    expect(committedDuringRun).not.toHaveBeenCalled();
   });
 });
 
@@ -298,33 +305,56 @@ describe('withOutputHookTimeout (#2727)', () => {
   });
 });
 
-describe('evaluateSuccessCriteria — commit criterion (#2344)', () => {
+/**
+ * The commit criterion (#2344), rebuilt on the run-window probe (#3637). The old
+ * criterion grepped for a task-id commit subject that NOTHING ever emitted,
+ * so it was unsatisfiable: every ordinary code-editing run recorded
+ * `validationPassed: false` regardless of what it did, and — because a declared
+ * verdict overrides the exit code in task-learning — its bucket filled with
+ * fabricated failures. These two cases are the whole fix: a run that committed
+ * inside its own window passes, a run that committed nothing fails.
+ */
+describe('evaluateSuccessCriteria — commit criterion (#2344, #3637)', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('passes an autonomous code run that COMMITTED during its window', async () => {
+    committedDuringRun.mockResolvedValueOnce(true);
+    expect(await evaluateSuccessCriteria({ task: { id: 't1', taskType: 'internal' }, workspacePath: '/w', startedAt: STARTED_AT })).toBe(true);
+    // Probed against the run's own window, NOT the whole repo history — a commit
+    // another agent pushed before this run began is not this run's work.
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
+  });
+
+  it('fails an autonomous code run that committed NOTHING (an honest miss, not null)', async () => {
+    committedDuringRun.mockResolvedValueOnce(false);
+    expect(await evaluateSuccessCriteria({ task: { id: 't2', taskType: 'internal' }, workspacePath: '/w', startedAt: STARTED_AT })).toBe(false);
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
+  });
 
   it('still applies the commit criterion to a NON-programmatic self-improvement task', async () => {
     // The exemption is keyed on the taskTypeHooks registry, not on selfImprovement —
     // an ordinary self-improve task still commits and must still be checked.
-    checkForTaskCommit.mockResolvedValueOnce(true);
+    committedDuringRun.mockResolvedValueOnce(true);
     const task = { id: 't1', taskType: 'internal', metadata: { analysisType: 'ui', selfImprovement: true } };
-    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w' })).toBe(true);
-    expect(checkForTaskCommit).toHaveBeenCalledWith('t1', '/w');
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', startedAt: STARTED_AT })).toBe(true);
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
   });
 
-  it('returns the commit-check verdict for an autonomous code task (criterion declared)', async () => {
-    checkForTaskCommit.mockResolvedValueOnce(true);
-    expect(await evaluateSuccessCriteria({ task: { id: 't1', taskType: 'internal' }, workspacePath: '/w' })).toBe(true);
-    expect(checkForTaskCommit).toHaveBeenCalledWith('t1', '/w');
-
-    // A clean run that produced NO commit is an honest miss (false, not null).
-    checkForTaskCommit.mockResolvedValueOnce(false);
-    expect(await evaluateSuccessCriteria({ task: { id: 't2', taskType: 'internal' }, workspacePath: '/w' })).toBe(false);
+  it('declares NO criterion (null) when the run window is missing or unusable', async () => {
+    // Without a window there is no way to attribute a commit to THIS run. The
+    // sentinel — never a manufactured `false`, which task-learning would treat as
+    // a real failure and let override the exit code.
+    for (const startedAt of [undefined, null, NaN, 'not-a-date']) {
+      expect(await evaluateSuccessCriteria({ task: { id: 't3', taskType: 'internal' }, workspacePath: '/w', startedAt })).toBeNull();
+    }
+    expect(committedDuringRun).not.toHaveBeenCalled();
   });
 });
 
 /**
  * gh/git COORDINATOR task types (#2696): branch-reconcile / issue-reconcile drive
  * their work through git+gh in the app's LIVE checkout (workspacePath IS set) and never
- * produce a `[task-<id>]` commit, so the commit criterion scored every successful run a
+ * produce a commit at all, so the commit criterion scored every successful run a
  * failure and drove their learning bucket to ~0% — the same artifact #2700 fixed for the
  * programmatic-I/O reasoning run. They must declare NO commit criterion (fall back to the
  * exit code), exactly like pipeline/media jobs.
@@ -334,12 +364,12 @@ describe('evaluateSuccessCriteria — gh/git coordinator exemption (#2696)', () 
 
   it('declares NO commit criterion for every non-committing coordinator type', async () => {
     // The structurally-no-commit coordinators: they run in the live checkout and deliver a
-    // git/gh/external side effect, never a [task-<id>] commit.
+    // git/gh/external side effect, never a commit.
     for (const analysisType of ['branch-reconcile', 'issue-reconcile', 'branch-cleanup', 'jira-status-report']) {
       const task = { id: 't1', taskType: 'internal', metadata: { analysisType } };
       expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBeNull();
     }
-    expect(checkForTaskCommit).not.toHaveBeenCalled();
+    expect(committedDuringRun).not.toHaveBeenCalled();
   });
 
   it('declares NO commit criterion for a PR follow-up (review-loop or merge-only)', async () => {
@@ -354,18 +384,18 @@ describe('evaluateSuccessCriteria — gh/git coordinator exemption (#2696)', () 
       const task = { id: 'sys-rl-1', taskType: 'internal', metadata };
       expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBeNull();
     }
-    expect(checkForTaskCommit).not.toHaveBeenCalled();
+    expect(committedDuringRun).not.toHaveBeenCalled();
   });
 
   it('STILL commit-checks committing self-improve types (jira-sprint-manager, do-replan)', async () => {
     // jira-sprint-manager commits + opens MRs; do-replan commits PLAN.md edits — their commit
     // criterion is real, so exempting them would MASK genuine failures. Must stay checked.
     for (const analysisType of ['jira-sprint-manager', 'do-replan']) {
-      checkForTaskCommit.mockResolvedValueOnce(true);
+      committedDuringRun.mockResolvedValueOnce(true);
       const task = { id: 't1', taskType: 'internal', metadata: { analysisType, selfImprovement: true } };
-      expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBe(true);
+      expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', startedAt: STARTED_AT, success: true })).toBe(true);
     }
-    expect(checkForTaskCommit).toHaveBeenCalledTimes(2);
+    expect(committedDuringRun).toHaveBeenCalledTimes(2);
   });
 
   it('exempts the ARCHIVED coordinator shape (metadata.taskAnalysisType) (#2696 codex)', async () => {
@@ -373,7 +403,7 @@ describe('evaluateSuccessCriteria — gh/git coordinator exemption (#2696)', () 
     // the archived agent shape too (agentLifecycle stamps taskAnalysisType).
     const task = { id: 't4', taskType: 'internal', metadata: { taskAnalysisType: 'branch-cleanup' } };
     expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBeNull();
-    expect(checkForTaskCommit).not.toHaveBeenCalled();
+    expect(committedDuringRun).not.toHaveBeenCalled();
   });
 
   it('exempts a coordinator typed on taskType alone, not just metadata.analysisType', async () => {
@@ -381,16 +411,16 @@ describe('evaluateSuccessCriteria — gh/git coordinator exemption (#2696)', () 
     // with the scheduled type at the top level is exempted the same way.
     const task = { id: 't2', taskType: 'branch-reconcile' };
     expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBeNull();
-    expect(checkForTaskCommit).not.toHaveBeenCalled();
+    expect(committedDuringRun).not.toHaveBeenCalled();
   });
 
   it('does NOT exempt accessibility — it is a fixing task that DOES commit (#2696 scope)', async () => {
     // accessibility's prompt ends "Test and commit changes": it makes code changes in a
     // worktree and commits, so its commit criterion is real and its 0% (if any) is a
     // genuine agent failure, NOT the coordinator artifact. Must stay commit-checked.
-    checkForTaskCommit.mockResolvedValueOnce(false);
+    committedDuringRun.mockResolvedValueOnce(false);
     const task = { id: 't3', taskType: 'internal', metadata: { analysisType: 'accessibility', selfImprovement: true } };
-    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBe(false);
-    expect(checkForTaskCommit).toHaveBeenCalledWith('t3', '/w');
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', startedAt: STARTED_AT, success: true })).toBe(false);
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
   });
 });

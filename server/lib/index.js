@@ -173,6 +173,7 @@ export * from './execGit.js';
 export * from './ffmpeg.js';
 export * from './ffmpegRenderGuard.js';
 export * from './gitArgs.js';
+export * from './gitCommitProbe.js';
 export * from './gitForge.js';
 export * from './gitOutputParsers.js';
 export * from './gitRemote.js';

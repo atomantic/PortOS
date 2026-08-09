@@ -687,7 +687,7 @@ async function resetOrphanedTasks({ bootRecovery = false } = {}) {
       }
       emitLog('info', `Found orphaned in_progress task ${task.id}, routing through retry handler`, { taskId: task.id });
       const deadAgent = lastAgentByTask.get(task.id);
-      await handleOrphanedTask(task.id, deadAgent?.id || 'unknown-reset', getTaskById, { agentMetadata: deadAgent?.metadata });
+      await handleOrphanedTask(task.id, deadAgent?.id || 'unknown-reset', getTaskById, { agentMetadata: deadAgent?.metadata, agentStartedAt: deadAgent?.startedAt });
     }
   };
 

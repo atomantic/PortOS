@@ -53,8 +53,10 @@ vi.mock('./cosEvents.js', () => ({
   emitLog: vi.fn()
 }));
 
+vi.mock('../lib/gitCommitProbe.js', () => ({
+  committedDuringRun: vi.fn().mockResolvedValue(false),
+}));
 vi.mock('./agentRunTracking.js', () => ({
-  checkForTaskCommit: vi.fn().mockResolvedValue(false),
   completeAgentRun: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -109,7 +111,8 @@ import { updateTask, addTask, getTaskById } from './cos.js';
 import { pauseAgentViaRunner } from './cosRunnerClient.js';
 import * as shellService from './shell.js';
 import { readHostShutdownMarker, clearHostShutdownMarker } from '../lib/hostShutdown.js';
-import { checkForTaskCommit, completeAgentRun } from './agentRunTracking.js';
+import { completeAgentRun } from './agentRunTracking.js';
+import { committedDuringRun } from '../lib/gitCommitProbe.js';
 import { activeAgents, runnerAgents, pausedAgents } from './agentState.js';
 
 describe('settleOrphanedCreativeDirectorRun — reap a dead CD agent run (#2705)', () => {
@@ -894,15 +897,30 @@ describe('orphan retries resume what the dead run left behind', () => {
   });
 
   it('checks for completed work in the orphaned agent’s actual workspace', async () => {
-    checkForTaskCommit.mockResolvedValueOnce(true);
+    committedDuringRun.mockResolvedValueOnce(true);
+    getTaskById.mockResolvedValue({ id: 'task-1', taskType: 'user', status: 'in_progress', metadata: {} });
+
+    await handleOrphanedTask('task-1', 'agent-dead', getTaskById, {
+      agentMetadata: { workspacePath: '/example-app' },
+      agentStartedAt: '2026-08-09T00:00:00.000Z',
+    });
+
+    expect(committedDuringRun).toHaveBeenCalledWith('/example-app', Date.parse('2026-08-09T00:00:00.000Z'));
+    expect(updateTask).toHaveBeenCalledWith('task-1', { status: 'completed' }, 'user');
+  });
+
+  // Without a run window there is nothing to attribute a commit to — probing an
+  // unbounded `git log` would credit this task with any commit already in the
+  // repo, including another agent's, and complete a task that did nothing (#3637).
+  it('skips the commit probe entirely when the dead run has no start time', async () => {
     getTaskById.mockResolvedValue({ id: 'task-1', taskType: 'user', status: 'in_progress', metadata: {} });
 
     await handleOrphanedTask('task-1', 'agent-dead', getTaskById, {
       agentMetadata: { workspacePath: '/example-app' },
     });
 
-    expect(checkForTaskCommit).toHaveBeenCalledWith('task-1', '/example-app');
-    expect(updateTask).toHaveBeenCalledWith('task-1', { status: 'completed' }, 'user');
+    expect(committedDuringRun).not.toHaveBeenCalled();
+    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user');
   });
 });
 
@@ -922,7 +940,7 @@ describe('the orphan sweep finishes an interrupted retry transition (#3373)', ()
     vi.clearAllMocks();
     getAgents.mockResolvedValue([]);
     resolveTaskResumePatch.mockResolvedValue({});
-    checkForTaskCommit.mockResolvedValue(false);
+    committedDuringRun.mockResolvedValue(false);
     activeAgents.clear();
     runnerAgents.clear();
   });
@@ -930,7 +948,7 @@ describe('the orphan sweep finishes an interrupted retry transition (#3373)', ()
   // `clearAllMocks` keeps implementations, so hand the commit check back in the
   // state the suites after this one expect (no queued verdict).
   afterEach(() => {
-    checkForTaskCommit.mockReset();
+    committedDuringRun.mockReset();
   });
 
   it('flips the held task to pending with the resume pointer and drops the marker', async () => {
@@ -969,11 +987,11 @@ describe('the orphan sweep finishes an interrupted retry transition (#3373)', ()
   // completing the task on that evidence would discard the granted retry.
   it('does not let the commit check complete a held task', async () => {
     getTaskById.mockResolvedValue(heldTask());
-    checkForTaskCommit.mockResolvedValue(true);
+    committedDuringRun.mockResolvedValue(true);
 
     await handleOrphanedTask('task-1', 'agent-dead', getTaskById, { agentMetadata: null });
 
-    expect(checkForTaskCommit).not.toHaveBeenCalled();
+    expect(committedDuringRun).not.toHaveBeenCalled();
     expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'pending' }), 'user');
   });
 

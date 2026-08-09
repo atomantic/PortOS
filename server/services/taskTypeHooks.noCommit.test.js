@@ -1,6 +1,6 @@
 /**
  * `declaresNoCommitCriterion` — which tasks are exempt from the
- * `[task-<id>]` commit success check.
+ * commit success check.
  *
  * The exemption drives provider/model learning buckets: a wrongly-included task
  * scores every SUCCESSFUL run as a validation miss (#2696/#3273), and a wrongly

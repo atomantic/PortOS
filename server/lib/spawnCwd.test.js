@@ -227,7 +227,6 @@ describe('every cwd-passing spawn pins PWD', () => {
   // pins, so they need no call of their own.
   const DELEGATES = new Map([
     ['services/appBuilder.js', 'bufferedSpawn'],
-    ['services/agentRunTracking.js', 'bufferedSpawn'],
   ]);
 
   // Files that pin by inlining the assignment instead of calling the shared

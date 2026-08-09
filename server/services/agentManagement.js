@@ -28,7 +28,8 @@ import { cleanupAgentWorktree, resolveTaskResumePatch } from './agentWorktreeCle
 import { isRetryHeld, clearedRetryHoldMetadata } from '../lib/taskRetryHold.js';
 import { syncRunnerAgents } from './agentRunnerSync.js';
 import { flushRunnerOutputBatcher } from './agentRunnerOutputBatchers.js';
-import { checkForTaskCommit, completeAgentRun } from './agentRunTracking.js';
+import { completeAgentRun } from './agentRunTracking.js';
+import { committedDuringRun } from '../lib/gitCommitProbe.js';
 import { dispatchRecoveredTaskOutputHook } from './agentFinalization.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { readHostShutdownMarker, clearHostShutdownMarker, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
@@ -669,7 +670,9 @@ export async function cleanupOrphanedAgents() {
           // its output.txt tail (capped since #3498, but not free), and the
           // worktree fields the resume pointer needs are stamped once at
           // registerAgent and never mutated.
-          orphanedTaskIds.push({ taskId: agent.taskId, agentId: agent.id, agentMetadata: agent.metadata });
+          // `startedAt` rides along too — it's the window the commit probe in
+          // handleOrphanedTask needs to tell this run's commits from the repo's.
+          orphanedTaskIds.push({ taskId: agent.taskId, agentId: agent.id, agentMetadata: agent.metadata, agentStartedAt: agent.startedAt });
         }
       }
     }
@@ -697,9 +700,10 @@ export async function cleanupOrphanedAgents() {
   // (see handleOrphanedTask). Runs AFTER cleanupAgentWorktree above so the resume
   // pointer reflects what actually survived — a dirty tree aborts removal, leaving
   // the whole worktree in place.
-  for (const { taskId, agentId, agentMetadata } of orphanedTaskIds) {
+  for (const { taskId, agentId, agentMetadata, agentStartedAt } of orphanedTaskIds) {
     await handleOrphanedTask(taskId, agentId, getTaskById, {
       agentMetadata,
+      agentStartedAt,
       // `|| null`, not a bare boolean: a plain `false` would hard-override the
       // per-agent breadcrumb fallback, leaving this — the path that handles
       // essentially all boot recovery — with the marker as its ONLY signal. The
@@ -748,13 +752,16 @@ export async function cleanupOrphanedAgents() {
  * @param {object} [options.agentMetadata] - the dead agent's registered metadata
  *   (`isWorktree` / `sourceWorkspace` / `worktreeBranch` / `workspacePath`), used
  *   to work out whether its branch or worktree is worth resuming.
+ * @param {string|number|null} [options.agentStartedAt] - when the dead run began. It is
+ *   the window for the commit probe below; without it the probe is skipped rather than
+ *   run unbounded, which would credit this task with any commit already in the repo (#3637).
  * @param {boolean|null} [options.interrupted] - the run died because PortOS itself
  *   was restarted, not because the agent failed. Such a run is requeued immediately
  *   WITHOUT charging orphan-retry budget or arming the orphan cooldown — see the
  *   retry-budget note below (#3202). Pass it when the caller knows (the orphan sweep
  *   reads the host-shutdown marker); leave it null to derive from `agentMetadata`.
  */
-export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agentMetadata = null, interrupted = null } = {}) {
+export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agentMetadata = null, agentStartedAt = null, interrupted = null } = {}) {
   // Callers that watched the agent die (the orphan sweep, which reads the
   // host-shutdown marker) say so explicitly. The ones that didn't —
   // `resetOrphanedTasks`, post-restart completion recovery — fall back to the
@@ -828,8 +835,13 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
     return;
   }
 
-  // Check if the agent actually committed work before treating as orphaned
-  const commitFound = await checkForTaskCommit(taskId, agentMetadata?.workspacePath || ROOT_DIR);
+  // Check if the agent actually committed work before treating as orphaned.
+  // Scoped to the dead run's OWN window (#3637): the retired task-id commit marker
+  // was never emitted by anything, and an unbounded `git log` would credit this
+  // task with any commit in the repo — including another agent's.
+  const orphanRunStartedAt = Date.parse(agentStartedAt);
+  const commitFound = Number.isFinite(orphanRunStartedAt)
+    && await committedDuringRun(agentMetadata?.workspacePath || ROOT_DIR, orphanRunStartedAt);
   if (commitFound) {
     emitLog('info', `✅ Orphaned agent ${agentId} actually completed work - commit found for task ${taskId}`, { taskId, agentId });
     await updateTask(taskId, { status: 'completed' }, task.taskType || 'user');

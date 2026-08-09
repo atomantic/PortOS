@@ -57,8 +57,10 @@ vi.mock('./agentErrorAnalysis.js', async (importOriginal) => ({
   resolveFailedTaskUpdate: vi.fn(async () => ({ status: 'pending', metadata: {} })),
   resolveTypeFailureSignal: vi.fn(() => ({ record: 'skip' })),
 }));
+vi.mock('../lib/gitCommitProbe.js', () => ({
+  committedDuringRun: vi.fn(async () => false),
+}));
 vi.mock('./agentRunTracking.js', () => ({
-  checkForTaskCommit: vi.fn(async () => false),
   createAgentRun: vi.fn(),
   completeAgentRun: vi.fn(async () => null),
 }));

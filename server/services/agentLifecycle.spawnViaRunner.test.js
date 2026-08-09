@@ -42,7 +42,6 @@ vi.mock('./cosAgentLifecycle.js', () => ({
 
 vi.mock('./agentRunTracking.js', () => ({
   createAgentRun: vi.fn().mockResolvedValue(undefined),
-  checkForTaskCommit: vi.fn().mockResolvedValue(false),
   completeAgentRun: vi.fn().mockResolvedValue(undefined),
 }));
 

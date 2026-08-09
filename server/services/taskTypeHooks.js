@@ -60,7 +60,7 @@ async function loadHookModule(taskType) {
 /**
  * Whether a task type routes through the programmatic-I/O path — i.e. its real
  * output is the `.agent-done` sentinel an output hook consumes, NOT a
- * `[task-<id>]` commit. Synchronous and import-free (a bare registry lookup), so
+ * commit. Synchronous and import-free (a bare registry lookup), so
  * it is safe to consult from hot paths like the agent finalize chain.
  *
  * This is what tells success-criteria validation that the commit criterion does
@@ -101,8 +101,8 @@ export function resolveTaskHookType(task) {
 /**
  * Scheduled COORDINATOR task types whose deliverable is a git/gh/external side effect —
  * a merged PR, a resolved conflict, a deleted branch, healed issue state, a status report
- * posted to Jira — NOT a `[task-<id>]` commit. Their agent runs in the app's LIVE checkout
- * (no worktree, no PR), so they DO have a workspacePath at finalize, and the `[task-<id>]`
+ * posted to Jira — NOT a commit. Their agent runs in the app's LIVE checkout
+ * (no worktree, no PR), so they DO have a workspacePath at finalize, and the task-id commit
  * commit criterion would score every SUCCESSFUL run as a failure and pin their learning
  * bucket at ~0% (#2696). They declare no commit criterion (fall back to the exit code),
  * exactly like pipeline/media jobs.
@@ -134,7 +134,7 @@ export const NON_COMMITTING_COORDINATOR_TASK_TYPES = new Set([
 ]);
 
 /**
- * Whether a task declares NO `[task-<id>]` commit criterion because it is a gh/git
+ * Whether a task declares NO commit criterion because it is a gh/git
  * coordinator (see NON_COMMITTING_COORDINATOR_TASK_TYPES).
  *
  * Resolves the type the SAME way extractTaskType (taskLearning/store.js) computes the
@@ -162,7 +162,7 @@ export function isNonCommittingCoordinatorTask(task) {
 }
 
 /**
- * Whether a task declares NO `[task-<id>]` commit criterion: the static
+ * Whether a task declares NO commit criterion: the static
  * coordinator set above, OR a TRACKER-FILING task whose dispatch derived
  * `worktreeChangesExpected: false` (cosTaskGenerator.js#resolveTrackerFilingBlock,
  * referenceRepos.js#triggerReferenceAnalysis).
@@ -192,7 +192,7 @@ export function isNonCommittingCoordinatorTask(task) {
  */
 export function declaresNoCommitCriterion(task) {
   if (isNonCommittingCoordinatorTask(task)) return true;
-  // A discarded worktree cannot leave a `[task-<id>]` commit behind by
+  // A discarded worktree cannot leave a commit behind by
   // construction — cleanup removes it without merging, and the prompt forbids
   // committing at all. Scoring the commit check against it marks every
   // SUCCESSFUL run a validation miss and drags that provider/model's learning

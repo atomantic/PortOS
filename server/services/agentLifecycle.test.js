@@ -316,9 +316,13 @@ describe('agentLifecycle — guard wiring', () => {
   // disk when the task is requeued. Without the dead agent's metadata,
   // handleOrphanedTask can't tell the retry what to resume, and it builds a fresh
   // worktree off the default branch and redoes work sitting right there.
+  //
+  // `startedAt` rides along for the same class of reason (#3637): it is the window
+  // the orphan path's commit probe needs, and without it the probe is skipped and a
+  // run that DID commit before dying is requeued as if it had produced nothing.
   it('the post-restart recovery path hands the dead agent’s metadata to the retry handler', () => {
     const body = recoveryBranchSource();
-    expect(body).toMatch(/handleOrphanedTask\([^)]*\{\s*agentMetadata: cosAgent\.metadata\s*\}\)/);
+    expect(body).toMatch(/handleOrphanedTask\([^)]*\{\s*agentMetadata: cosAgent\.metadata,\s*agentStartedAt: cosAgent\.startedAt\s*\}\)/);
   });
 });
 

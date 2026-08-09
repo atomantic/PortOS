@@ -13,7 +13,7 @@ import { declaresNoCommitCriterion } from '../taskTypeHooks.js';
 
 // A pre-#2696 gh/git coordinator run (branch-reconcile/issue-reconcile/branch-cleanup/
 // jira-status-report) carries a FOSSIL `result.validationPassed` — a boolean the old
-// `[task-<id>]` commit criterion stamped on a run that never makes such a commit (almost
+// commit criterion stamped on a run that never makes such a commit (almost
 // always `false`). recordTaskCompletion trusts a persisted boolean over the exit code, so
 // re-recording one verbatim would restore the very bucket migration 198 purged. These types
 // now declare NO commit criterion, so drop the fossil and let the exit-code success stand —

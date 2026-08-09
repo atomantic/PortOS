@@ -32,7 +32,8 @@ import { resolveProviderBench } from '../lib/providerCooldown.js';
 import { release } from './executionLanes.js';
 import { completeExecution, errorExecution } from './toolStateMachine.js';
 import { resolveFailedTaskUpdate, resolveTypeFailureSignal } from './agentErrorAnalysis.js';
-import { completeAgentRun, checkForTaskCommit } from './agentRunTracking.js';
+import { completeAgentRun } from './agentRunTracking.js';
+import { committedDuringRun } from '../lib/gitCommitProbe.js';
 import { canRunTaskOutputHookWithoutPayload, isProgrammaticIoTaskType, resolveTaskHookType, declaresNoCommitCriterion } from './taskTypeHooks.js';
 import { processAgentCompletion } from './agentCompletion.js';
 import { extractSimplifySummaries } from './agentSummaryExtraction.js';
@@ -62,16 +63,28 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
  * Evaluate a completed autonomous run against its DECLARED success criteria
  * (issue #2344). Distinct from the runner's exit-code `success`: it answers
  * "did the run actually produce the work it was supposed to?" using the one
- * machine-checkable criterion the CoS already relies on — a `[task-<id>]` commit.
+ * machine-checkable criterion the CoS can actually observe — did the run leave
+ * a commit behind inside its own run window (`committedDuringRun`)?
+ *
+ * That probe replaced a task-id commit-marker grep in #3637. NOTHING ever
+ * emitted that marker — no prompt, template, or slashdo command asked an agent
+ * to stamp a task id into a commit subject, and the root CLAUDE.md forbids
+ * exactly that shape of subject line — so the criterion was unsatisfiable and
+ * stamped `validationPassed: false` on every ordinary code-editing run,
+ * poisoning the task-learning buckets it feeds.
  *
  * Returns a null sentinel when NO criterion is declared (interactive/user tasks,
- * user-terminated runs, or a run with no task id / workspace to validate
- * against), so downstream telemetry never conflates "not declared" with
+ * user-terminated runs, or a run with no task id / workspace / run window to
+ * validate against), so downstream telemetry never conflates "not declared" with
  * "declared and failed". For autonomous tasks it verifies the commit on BOTH
  * success and failure — a clean exit that committed nothing is an honest miss,
- * and that is exactly the signal task-learning wants. `checkForTaskCommit` is
- * git-repo-gated, off the event loop, and hard-timeout-bounded, so a non-repo
- * workspace or a hung git degrades to "no commit" rather than stalling finalize.
+ * and that is exactly the signal task-learning wants. `committedDuringRun` is
+ * non-throwing and hard-timeout-bounded, so a non-repo workspace or a hung git
+ * degrades to "no commit" rather than stalling finalize.
+ *
+ * `startedAt` (epoch ms) bounds the window. A non-finite value means we can't
+ * tell this run's commits from anything already in the repo, so the criterion is
+ * undeclared (null) rather than a manufactured `false`.
  *
  * `hookResult` is the programmatic-I/O output-hook result (from
  * `dispatchTaskOutputHook`), which finalizeAgent resolves BEFORE calling this so
@@ -79,7 +92,7 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
  * runner's exit-code verdict that hook result is weighed against. Both are
  * absent/null for every other task shape.
  */
-export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, success = false, hookResult = null }) {
+export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null }) {
   if (terminatedByUser) return null;
   const taskType = task?.taskType || 'user';
   // The SCHEDULED type (`metadata.analysisType`) if any, else the queue category —
@@ -92,7 +105,7 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
   // pre-empted by the `!workspacePath` bail below (a hook that already ran and
   // threw is a real verdict even if the worktree is gone). Their prompts
   // explicitly FORBID committing or opening a PR (the worktree is discarded), so
-  // the `[task-<id>]` commit check would mark every correct run a failure (#2700).
+  // the commit criterion would mark every correct run a failure (#2700).
   // Judging them purely by exit code instead is also wrong: an exit-0 run whose
   // `.agent-done` sentinel was missing/malformed, or whose hook threw, produced
   // nothing usable and must be recorded as the failure it is (#2727).
@@ -102,7 +115,7 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
   // Interactive/user tasks declare no machine-checkable criterion; neither does
   // a run missing the task id or workspace needed to validate.
   if (taskType === 'user' || !task?.id || !workspacePath) return null;
-  // Pipeline/media tasks deliver artifacts, not a `[task-<id>]` commit — the
+  // Pipeline/media tasks deliver artifacts, not a commit — the
   // commit criterion doesn't apply, so don't mislabel a clean artifact run as a
   // validation miss (which would also pollute the correlation window). null =
   // no commit criterion declared for this task shape. Unlike programmatic-I/O
@@ -112,7 +125,7 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
   // gh/git/external COORDINATOR task types (NON_COMMITTING_COORDINATOR_TASK_TYPES in
   // taskTypeHooks.js — branch-reconcile/issue-reconcile/branch-cleanup/jira-status-report)
   // deliver their work as a side effect — a merged PR, a resolved conflict, a deleted
-  // branch, a posted report — and by design NEVER produce a `[task-<id>]` commit. Because
+  // branch, a posted report — and by design NEVER produce a commit. Because
   // their workspacePath IS set (the app's live checkout), the commit check above would
   // return false on every SUCCESSFUL run and drive their learning bucket to ~0% (#2696) —
   // the same artifact #2700 fixed for the programmatic-I/O reasoning run. They register no
@@ -129,7 +142,10 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
   // so the same type still gets its commit criterion on a `plan`-tracker app
   // where it legitimately commits PLAN.md items (#3273).
   if (declaresNoCommitCriterion(task)) return null;
-  return await checkForTaskCommit(task.id, workspacePath);
+  // No usable run window means no way to attribute a commit to THIS run — the
+  // sentinel, not a false verdict (#3637).
+  if (!Number.isFinite(startedAt)) return null;
+  return await committedDuringRun(workspacePath, startedAt);
 }
 
 /**
@@ -497,7 +513,20 @@ export async function finalizeAgent({
   completionReason,
   workspacePath = null,
   prExpected = false,
+  startedAt = null,
 }) {
+  // The run window the commit criterion is evaluated against (#3637). Callers
+  // that don't track their own start timestamp still know how long the run took,
+  // and `duration` is measured from the same instant, so derive it — a missing
+  // window would otherwise leave every such path permanently undeclared.
+  //
+  // `duration > 0`, not `>= 0`: the spawn-rejected path reports a zero-length
+  // run because the agent never started. A window that cannot contain a commit
+  // is not evidence of one, so it stays the null sentinel ("no criterion
+  // evaluated") rather than recording a run that never happened as a miss.
+  const runStartedAt = Number.isFinite(startedAt)
+    ? startedAt
+    : (Number.isFinite(duration) && duration > 0 ? Date.now() - duration : null);
   // #3358: a run whose task shape promised a PR is not successful until the
   // forge confirms one exists. Runs BEFORE the completion verdict is derived so
   // every downstream write (task status, learning telemetry, the "Completed
@@ -568,7 +597,7 @@ export async function finalizeAgent({
   // exit-code `success`, so task-learning telemetry can distinguish "ran clean
   // but produced nothing" from a genuine success. Best-effort — a validation
   // check failure must never block finalize (falls back to the null sentinel).
-  const validationPassed = await evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, success, hookResult })
+  const validationPassed = await evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, startedAt: runStartedAt, success, hookResult })
     .catch(err => {
       emitLog('warn', `⚠️ Success-criteria validation failed for ${agentId}: ${err.message}`, { agentId });
       return null;

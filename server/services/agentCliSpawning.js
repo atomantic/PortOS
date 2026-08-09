@@ -773,6 +773,8 @@ export async function spawnDirectly({
         completionReason: terminatedByUser ? 'user-terminated' : undefined,
         workspacePath,
         prExpected: directAgentOwnsPR,
+        // The run window the commit criterion is evaluated against (#3637).
+        startedAt: agentData?.startedAt ?? null,
       });
       if (finalized && typeof finalized.success === 'boolean') cleanupSuccess = finalized.success;
     } finally {

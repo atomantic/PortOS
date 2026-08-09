@@ -9,8 +9,8 @@ import { writeFile, mkdir } from 'fs/promises';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { recordSession } from './usage.js';
 import { recordCompletedRunUsage } from './usageReconciler.js';
-import { bufferedSpawn } from '../lib/bufferedSpawn.js';
-import { atomicWrite, ensureDir, pathExists, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { committedDuringRun } from '../lib/gitCommitProbe.js';
+import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 
 const RUNS_DIR = PATHS.runs;
 
@@ -70,35 +70,6 @@ export async function createAgentRun({ agentId, task, model, provider, workspace
 }
 
 /**
- * Check if a commit was made with the task ID.
- * Returns true if a recent commit contains [task-{taskId}].
- * Returns false if git command fails (not a repo, git not available, etc.)
- *
- * Async + buffered: `git log` on a large repo can block for 100ms–2s, and this
- * runs on the run-completion path of every failed CoS agent run — a `spawnSync`
- * here froze all in-flight SSE/socket traffic for that window. `bufferedSpawn`
- * runs it off the event loop with a hard timeout (a hung git is treated as
- * "no commit found" rather than stalling completion forever).
- */
-export async function checkForTaskCommit(taskId, workspacePath) {
-  // Check if it's a git repo first
-  const gitDir = join(workspacePath, '.git');
-  if (!(await pathExists(gitDir))) return false;
-
-  const searchPattern = `[task-${taskId}]`;
-  // --fixed-strings / -F: treat pattern as literal string, not regex. Without
-  // this, square brackets in `[task-123]` would be parsed as a character class
-  // and fail to match the literal commit message.
-  const result = await bufferedSpawn(
-    'git',
-    ['log', '--all', '--oneline', '--fixed-strings', '--grep', searchPattern, '-1'],
-    { cwd: workspacePath, timeoutMs: 10_000, shell: false },
-  );
-  if (!result.success) return false; // non-zero exit, spawn error, or timeout
-  return result.stdout.trim().length > 0;
-}
-
-/**
  * Complete a run entry with final results.
  *
  * `successOverride` (#3358) lets finalizeAgent record a run that exited 0 but
@@ -120,11 +91,15 @@ export async function completeAgentRun(runId, output, exitCode, duration, errorA
   metadata.duration = duration;
   metadata.exitCode = exitCode;
 
-  // Post-execution validation: check for task commit even if exit code is non-zero
+  // Post-execution validation: a non-zero exit that nonetheless left a commit
+  // behind DID the work (#3637 — the probe is the run window, not a marker in
+  // the commit subject, because nothing ever emitted such a marker). The window
+  // opens at the run's own startTime, so commits another agent pushed before
+  // this run began don't launder it into a success.
   let success = exitCode === 0;
+  const runStartedAt = Date.parse(metadata.startTime);
   if (!success && metadata.taskId && metadata.workspacePath) {
-    const commitFound = await checkForTaskCommit(metadata.taskId, metadata.workspacePath);
-    if (commitFound) {
+    if (await committedDuringRun(metadata.workspacePath, runStartedAt)) {
       console.log(`⚠️ Agent ${metadata.agentId} reported failure (exit ${exitCode}) but work completed - commit found for task ${metadata.taskId}`);
       success = true;
     }

@@ -62,8 +62,10 @@ vi.mock('./agentErrorAnalysis.js', () => ({
 }));
 
 const completeAgentRunMock = vi.fn(async () => null);
+vi.mock('../lib/gitCommitProbe.js', () => ({
+  committedDuringRun: vi.fn(async () => true),
+}));
 vi.mock('./agentRunTracking.js', () => ({
-  checkForTaskCommit: vi.fn(async () => true),
   createAgentRun: vi.fn(),
   completeAgentRun: (...args) => completeAgentRunMock(...args),
 }));

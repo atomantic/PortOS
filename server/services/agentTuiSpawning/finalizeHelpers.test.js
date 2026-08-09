@@ -13,9 +13,15 @@ vi.mock('../git.js', () => ({
 vi.mock('../agentErrorAnalysis.js', () => ({
   analyzeAgentFailure: vi.fn(),
 }));
+// The run-window commit probe moved to lib/gitCommitProbe.js (#3637); finalizeHelpers
+// re-exports it, so mock it at its new home.
+vi.mock('../../lib/gitCommitProbe.js', () => ({
+  commitsSince: vi.fn(),
+}));
 
 import * as git from '../git.js';
 import { analyzeAgentFailure } from '../agentErrorAnalysis.js';
+import { commitsSince as commitsSinceMock } from '../../lib/gitCommitProbe.js';
 import {
   readFileTail,
   worktreeHasChanges,
@@ -89,42 +95,13 @@ describe('finalizeHelpers', () => {
     });
   });
 
-  describe('commitsSince', () => {
-    const SINCE = Date.parse('2026-08-08T18:23:30.000Z');
-
-    it('counts commits inside the run window, scoped by committer date', async () => {
-      vi.mocked(git.execGit).mockResolvedValue({ exitCode: 0, stdout: '2\n', stderr: '' });
-      expect(await commitsSince('/tmp/ws', SINCE)).toBe(2);
-      expect(git.execGit).toHaveBeenCalledWith(
-        ['rev-list', '--count', '--since=2026-08-08T18:23:30.000Z', 'HEAD'],
-        '/tmp/ws',
-        { ignoreExitCode: true }
-      );
-    });
-
-    it('is 0 when nothing was committed during the run', async () => {
-      vi.mocked(git.execGit).mockResolvedValue({ exitCode: 0, stdout: '0\n', stderr: '' });
-      expect(await commitsSince('/tmp/ws', SINCE)).toBe(0);
-    });
-
-    // A repo with no commits yet makes `rev-list HEAD` exit non-zero with an
-    // empty stdout — parsing that as work would launder a no-op run.
-    it('is 0 on a non-zero git exit (no HEAD / broken checkout)', async () => {
-      vi.mocked(git.execGit).mockResolvedValue({ exitCode: 128, stdout: '', stderr: 'bad revision' });
-      expect(await commitsSince('/tmp/ws', SINCE)).toBe(0);
-    });
-
-    it('is 0 (never throws) when execGit rejects', async () => {
-      vi.mocked(git.execGit).mockRejectedValue(new Error('timeout'));
-      expect(await commitsSince('/tmp/ws', SINCE)).toBe(0);
-    });
-
-    it('is 0 for a bad path or a non-finite timestamp without touching git', async () => {
-      expect(await commitsSince(null, SINCE)).toBe(0);
-      expect(await commitsSince('/tmp/ws', undefined)).toBe(0);
-      expect(await commitsSince('/tmp/ws', NaN)).toBe(0);
-      expect(git.execGit).not.toHaveBeenCalled();
-    });
+  // The probe's own behavior (git args, exit-code/timeout handling) is covered by
+  // server/lib/gitCommitProbe.test.js — its new home (#3637). What matters HERE is
+  // that this module's historical entry point still resolves to it.
+  it('re-exports the run-window commit probe from its lib home', async () => {
+    vi.mocked(commitsSinceMock).mockResolvedValue(3);
+    expect(await commitsSince('/tmp/ws', 1)).toBe(3);
+    expect(commitsSince).toBe(commitsSinceMock);
   });
 
   describe('worktreeHasWorkEvidence', () => {
@@ -133,27 +110,28 @@ describe('finalizeHelpers', () => {
     it('is true on a dirty tree without consulting the commit log', async () => {
       vi.mocked(git.getStatus).mockResolvedValue({ clean: false });
       expect(await worktreeHasWorkEvidence('/tmp/ws', SINCE)).toBe(true);
-      expect(git.execGit).not.toHaveBeenCalled();
+      expect(commitsSinceMock).not.toHaveBeenCalled();
     });
 
     // The release-run regression: commit + push + open PR leaves a CLEAN tree,
     // which the uncommitted-changes-only gate scored as "produced no work".
     it('is true on a clean tree when the run committed something', async () => {
       vi.mocked(git.getStatus).mockResolvedValue({ clean: true });
-      vi.mocked(git.execGit).mockResolvedValue({ exitCode: 0, stdout: '1\n', stderr: '' });
+      vi.mocked(commitsSinceMock).mockResolvedValue(1);
       expect(await worktreeHasWorkEvidence('/tmp/ws', SINCE)).toBe(true);
+      expect(commitsSinceMock).toHaveBeenCalledWith('/tmp/ws', SINCE);
     });
 
     it('is false on a clean tree with no in-window commits', async () => {
       vi.mocked(git.getStatus).mockResolvedValue({ clean: true });
-      vi.mocked(git.execGit).mockResolvedValue({ exitCode: 0, stdout: '0\n', stderr: '' });
+      vi.mocked(commitsSinceMock).mockResolvedValue(0);
       expect(await worktreeHasWorkEvidence('/tmp/ws', SINCE)).toBe(false);
     });
 
     it('falls back to the dirty-tree signal alone when no window is given', async () => {
       vi.mocked(git.getStatus).mockResolvedValue({ clean: true });
+      vi.mocked(commitsSinceMock).mockResolvedValue(0);
       expect(await worktreeHasWorkEvidence('/tmp/ws')).toBe(false);
-      expect(git.execGit).not.toHaveBeenCalled();
     });
   });
 

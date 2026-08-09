@@ -644,6 +644,8 @@ export async function spawnTuiAgent({
         completionReason: reason,
         workspacePath,
         prExpected: agentOwnsPR,
+        // The run window the commit criterion is evaluated against (#3637).
+        startedAt: agentData?.startedAt ?? null,
       });
       if (finalized && typeof finalized.success === 'boolean') cleanupSuccess = finalized.success;
     } finally {

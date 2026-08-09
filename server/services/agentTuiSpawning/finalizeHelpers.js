@@ -12,12 +12,19 @@ import { join } from 'path';
 import { writeFile } from 'fs/promises';
 import * as git from '../git.js';
 import { readFileTail } from '../../lib/fileUtils.js';
+import { commitsSince } from '../../lib/gitCommitProbe.js';
 import { analyzeAgentFailure } from '../agentErrorAnalysis.js';
 
 // Re-exported so this module's existing importers (and its tests) keep their
 // entry point after the implementation moved to lib/fileUtils.js (#3498) —
 // `getAgent`'s transcript cap needed the same bounded tail read.
 export { readFileTail };
+
+// Same deal for the run-window commit probe: it moved to lib/gitCommitProbe.js
+// (#3637) once finalize's success-criteria evaluation, run completion, and
+// orphan recovery all needed the same answer, but this stays its historical
+// entry point.
+export { commitsSince };
 
 // Tail-read window for raw.txt at failure analysis. analyzeAgentFailure narrows
 // further (ANSI-stripped, last ~200 lines AND ≤16K chars), so reading the whole
@@ -38,32 +45,6 @@ export async function worktreeHasChanges(workspacePath) {
   if (!workspacePath || typeof workspacePath !== 'string') return false;
   const status = await git.getStatus(workspacePath).catch(() => null);
   return status && !status.clean;
-}
-
-/**
- * Count commits reachable from HEAD whose COMMITTER date falls inside the run
- * window. `git rev-list --since` filters on committer date, which is what makes
- * this a usable "did this agent commit anything?" probe: commits the agent
- * created (or rewrote via rebase) are stamped now, while commits merely pulled
- * in from the remote keep the committer date they were written with — usually
- * before the run started, so they don't count as this agent's work.
- *
- * Non-throwing: a repo with no commits yet (`rev-list HEAD` fails), a detached
- * or broken checkout, or a git timeout all return 0.
- */
-export async function commitsSince(workspacePath, sinceMs) {
-  if (!workspacePath || typeof workspacePath !== 'string') return 0;
-  if (!Number.isFinite(sinceMs)) return 0;
-  const since = new Date(sinceMs).toISOString();
-  // `ignoreExitCode` so a repo with no HEAD resolves to a non-zero exit we can
-  // read as "no commits" rather than rejecting — the house convention for
-  // probe-shaped git calls (see git.js `isRepo` / `getRemote`).
-  const result = await git
-    .execGit(['rev-list', '--count', `--since=${since}`, 'HEAD'], workspacePath, { ignoreExitCode: true })
-    .catch(() => null);
-  if (!result || result.exitCode !== 0) return 0;
-  const count = parseInt(result.stdout.trim(), 10);
-  return Number.isFinite(count) ? count : 0;
 }
 
 /**

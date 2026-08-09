@@ -91,6 +91,15 @@ vi.mock('./agentState.js', async (importOriginal) => ({
   unregisterSpawnedAgent: vi.fn(),
 }));
 
+// ONE execGit double behind BOTH entry points. The commit half of the
+// work-evidence probe moved to `lib/gitCommitProbe.js` (#3637), which reaches
+// `lib/execGit.js` directly rather than through `git.js`'s re-export — so mocking
+// only `git.js` would leave the probe shelling out to real git. Sharing the spy
+// keeps every `vi.mocked(gitService.execGit)` override in this file authoritative
+// for the probe too.
+const { execGitMock } = vi.hoisted(() => ({ execGitMock: vi.fn() }));
+vi.mock('../lib/execGit.js', () => ({ execGit: execGitMock }));
+
 vi.mock('./git.js', () => ({
   // Default: worktree has changes so idle-complete succeeds. Tests that want
   // to exercise the idle-no-changes failure path override via mockResolvedValueOnce.
@@ -99,7 +108,7 @@ vi.mock('./git.js', () => ({
   // `git rev-list --count --since=…` for the commit half of the work-evidence
   // probe. Default: zero commits during the run, so a clean tree still fails —
   // the commit-and-push test overrides this to a non-zero count.
-  execGit: vi.fn().mockResolvedValue({ exitCode: 0, stdout: '0\n', stderr: '' }),
+  execGit: execGitMock,
   // No owner-matched gh account by default → empty overlay (ambient auth kept).
   resolveForgeTokenEnv: vi.fn().mockResolvedValue({}),
 }));

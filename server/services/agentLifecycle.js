@@ -49,7 +49,8 @@ import { ensureDir, PATHS, sleep, tryReadFile } from '../lib/fileUtils.js';
 import { createToolExecution, startExecution, completeExecution, errorExecution } from './toolStateMachine.js';
 import { determineLane, acquire, release } from './executionLanes.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
-import { createAgentRun, checkForTaskCommit } from './agentRunTracking.js';
+import { createAgentRun } from './agentRunTracking.js';
+import { committedDuringRun } from '../lib/gitCommitProbe.js';
 import { buildAgentPrompt, getAppWorkspace } from './agentPromptBuilder.js';
 import { isOllamaClaudeProvider, isClaudeCommand, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { canTypeSlashCommands } from '../lib/slashdoInvocation.js';
@@ -488,7 +489,7 @@ async function runAgentSpawn(task) {
       taskQuotaBurnLimitingResetAt: Number(task.metadata?.quotaBurnLimitingResetAt) || null,
       // Same reason as taskLiProposal — a hand-picked projection, so this must be
       // listed explicitly. `declaresNoCommitCriterion` (taskTypeHooks.js) reads it
-      // to decide whether a run declared a `[task-<id>]` commit criterion at all,
+      // to decide whether a run declared a commit criterion at all,
       // and taskLearning's history backfill re-processes the ARCHIVED agent shape
       // through that same predicate. Without the projection an archived
       // tracker-filing run (reference-watch/ux on a github/gitlab/jira app) looks
@@ -920,7 +921,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
           // cleanup), so the worktree is still on disk, branch and all — without it
           // the retry builds a fresh tree off the default branch and redoes work
           // that is sitting right there.
-          await handleOrphanedTask(cosAgent.taskId, agentId, getTaskById, { agentMetadata: cosAgent.metadata });
+          await handleOrphanedTask(cosAgent.taskId, agentId, getTaskById, { agentMetadata: cosAgent.metadata, agentStartedAt: cosAgent.startedAt });
           // If orphan recovery settled the task into a terminal `blocked` state (retry budget
           // exhausted), the local completion already recorded the proposal failure — so stamp
           // the LI failure verdict here too (#2779, codex P2) or the originating peer would
@@ -998,11 +999,14 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
       outputBuffer = await readFile(outputFile, 'utf-8').catch(() => '');
     }
 
-    // Post-execution validation: check for task commit even if exit code is non-zero
+    // Post-execution validation: a non-zero exit that still left a commit inside
+    // the run's own window DID the work (#3637 — the probe is the window, not a
+    // task-id commit marker no agent ever emitted).
+    const runStartedAt = Date.parse(agent.startedAt);
     let effectiveSuccess = success;
     if (!effectiveSuccess && task?.id) {
       const workspacePath = agent.workspacePath || ROOT_DIR;
-      const commitFound = await checkForTaskCommit(task.id, workspacePath);
+      const commitFound = await committedDuringRun(workspacePath, runStartedAt);
       if (commitFound) {
         emitLog('warn', `Agent ${agentId} reported failure (exit ${exitCode}) but work completed - commit found for task ${task.id}`, { agentId, taskId: task.id, exitCode });
         effectiveSuccess = true;
@@ -1084,6 +1088,8 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
         isTruthyMetaFn: isTruthyMeta,
         workspacePath: agent.workspacePath || null,
         prExpected: runnerAgentOwnsPR,
+        // The run window the commit criterion is evaluated against (#3637).
+        startedAt: Number.isFinite(runStartedAt) ? runStartedAt : null,
       });
       if (finalized && typeof finalized.success === 'boolean') cleanupSuccess = finalized.success;
     } catch (err) {
