@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { createProviderStatusService } from './providerStatus.js';
+import { createProviderStatusService, usableFallbackModel } from './providerStatus.js';
 
 const TEST_DATA_DIR = join(process.cwd(), 'test-data-status');
 
@@ -358,6 +358,90 @@ describe('Provider Status Service', () => {
       );
 
       expect(result).toBeNull();
+    });
+  });
+
+  describe('getFallbackProvider — stale model pins', () => {
+    // A `fallbackModel` is set on the PRIMARY but resolved against the
+    // fallback, so a model bump on the fallback leaves the pin naming an id
+    // that provider no longer serves. Spending that pin sends the cascade's
+    // last retry at a model that isn't there.
+    const providersWithModels = (fallbackModel) => ({
+      'primary-provider': {
+        id: 'primary-provider',
+        enabled: true,
+        fallbackProvider: 'configured-fallback',
+        fallbackModel,
+      },
+      'configured-fallback': {
+        id: 'configured-fallback',
+        enabled: true,
+        models: ['claude-sonnet-5', 'claude-opus-5'],
+      },
+    });
+
+    it('drops a pin the fallback provider no longer lists', () => {
+      const result = statusService.getFallbackProvider(
+        'primary-provider',
+        providersWithModels('claude-opus-4-8')
+      );
+
+      expect(result.provider.id).toBe('configured-fallback');
+      // null ⇒ "let the fallback resolve its own default" — strictly better
+      // than baking a known-absent id into the spawned --model flag.
+      expect(result.model).toBeNull();
+    });
+
+    it('keeps a pin the fallback provider still lists', () => {
+      const result = statusService.getFallbackProvider(
+        'primary-provider',
+        providersWithModels('claude-opus-5')
+      );
+
+      expect(result.model).toBe('claude-opus-5');
+    });
+
+    it('drops a stale task-level pin too', () => {
+      const providers = {
+        'primary-provider': { id: 'primary-provider', enabled: true },
+        'task-fallback': {
+          id: 'task-fallback',
+          enabled: true,
+          models: ['claude-opus-5'],
+        },
+      };
+
+      const result = statusService.getFallbackProvider(
+        'primary-provider',
+        providers,
+        'task-fallback',
+        'claude-opus-4-8'
+      );
+
+      expect(result.source).toBe('task');
+      expect(result.model).toBeNull();
+    });
+  });
+
+  describe('usableFallbackModel', () => {
+    it('returns null for an empty pin', () => {
+      expect(usableFallbackModel({ id: 'p', models: ['a'] }, null)).toBeNull();
+      expect(usableFallbackModel({ id: 'p', models: ['a'] }, '')).toBeNull();
+    });
+
+    it('passes the pin through when the provider lists no models', () => {
+      // Local backends discover their models at runtime, and the UI offers a
+      // free-text pin when there is no list — nothing to validate against.
+      expect(usableFallbackModel({ id: 'ollama', models: [] }, 'llama3')).toBe('llama3');
+      expect(usableFallbackModel({ id: 'ollama' }, 'llama3')).toBe('llama3');
+    });
+
+    it('passes a listed pin through', () => {
+      expect(usableFallbackModel({ id: 'p', models: ['a', 'b'] }, 'b')).toBe('b');
+    });
+
+    it('drops an unlisted pin', () => {
+      expect(usableFallbackModel({ id: 'p', models: ['a', 'b'] }, 'c')).toBeNull();
     });
   });
 

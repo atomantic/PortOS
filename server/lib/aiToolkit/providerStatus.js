@@ -11,6 +11,42 @@ import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { atomicWrite } from './internal/atomicWrite.js';
 
+/**
+ * Gate a *configured* fallback-model pin against the fallback provider's own
+ * model list.
+ *
+ * `fallbackModel` (provider-level) and a task's fallback model are pins the
+ * user chose once and that then sit in `providers.json` / the task record
+ * forever. When the fallback provider's `models` list later moves on — a model
+ * bump migration retires an id, or the user curates the list by hand — the pin
+ * is left naming a model that provider no longer serves, and nothing downstream
+ * notices: `resolveEffectiveModel` only screens for empty/embedding ids, so the
+ * dead id gets baked straight into the spawned `--model` flag. That turns the
+ * one retry the cascade has left into a request against a model that isn't
+ * there.
+ *
+ * So: keep the pin only when the fallback provider actually lists it. Dropping
+ * it to `null` means "let the fallback resolve its own default", which is the
+ * same thing an unpinned fallback already does — strictly better than a model
+ * id known to be absent.
+ *
+ * Providers with no enumerable `models` (local backends that discover theirs at
+ * runtime, hand-typed ids in the free-text picker) have nothing to check
+ * against, so their pins pass through untouched.
+ *
+ * @param {object} provider — the chosen fallback provider
+ * @param {string|null|undefined} pinnedModel — the configured pin
+ * @returns {string|null}
+ */
+export function usableFallbackModel(provider, pinnedModel) {
+  if (!pinnedModel) return null;
+  const models = provider?.models;
+  if (!Array.isArray(models) || models.length === 0) return pinnedModel;
+  if (models.includes(pinnedModel)) return pinnedModel;
+  console.log(`⚠️ Fallback ${provider?.id || 'provider'} no longer lists pinned model ${pinnedModel} — using its own default instead`);
+  return null;
+}
+
 export function createProviderStatusService(config = {}) {
   const {
     dataDir = './data',
@@ -268,7 +304,7 @@ export function createProviderStatusService(config = {}) {
       if (taskFallbackId && taskFallbackId !== primaryProviderId) {
         const taskFallback = providers[taskFallbackId];
         if (taskFallback?.enabled && this.isAvailable(taskFallback.id)) {
-          return { provider: taskFallback, source: 'task', model: taskFallbackModelId || null };
+          return { provider: taskFallback, source: 'task', model: usableFallbackModel(taskFallback, taskFallbackModelId) };
         }
       }
 
@@ -280,7 +316,7 @@ export function createProviderStatusService(config = {}) {
       if (primaryProvider?.fallbackProvider && primaryProvider.fallbackProvider !== primaryProviderId) {
         const configuredFallback = providers[primaryProvider.fallbackProvider];
         if (configuredFallback?.enabled && this.isAvailable(configuredFallback.id)) {
-          return { provider: configuredFallback, source: 'provider', model: primaryProvider.fallbackModel || null };
+          return { provider: configuredFallback, source: 'provider', model: usableFallbackModel(configuredFallback, primaryProvider.fallbackModel) };
         }
       }
 
