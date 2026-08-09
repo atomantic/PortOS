@@ -1,22 +1,38 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { readdirSync, readFileSync } from 'node:fs';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { readdirSync, readFileSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { mockNoPeerSync, mockNoPeers } from '../../../lib/mockPathsDataRoot.js';
+import {
+  createTempDataRoot,
+  makePathsProxy,
+  mockNoPeerSync,
+  mockNoPeers,
+} from '../../../lib/mockPathsDataRoot.js';
 
 // File-backed store (same idiom as seriesAutopilot.test.js) so the REAL
 // series/issues services run against an in-memory map, not Postgres. Partial
 // mock — this suite loads `./session.js` transitively (for `broadcast`), which
 // pulls in the cos/apps graph, and those modules read fileUtils members the
 // autopilot itself never touches.
+//
+// PATHS.data is redirected at a temp dir too (#3683): the collection store
+// behind `listSeries()` enumerates `PATHS.data/pipeline-series/` with a REAL
+// readdir that the fileUtils overrides below never intercept, so on a populated
+// checkout the developer's own series leaked into the fixture and broke the
+// sole-universe ownership assertions. See the isolation probe at the bottom.
+const tempRoot = createTempDataRoot('portos-unlock-pass-');
 const fileStore = new Map();
-vi.mock('../../../lib/fileUtils.js', async (importOriginal) => ({
-  ...(await importOriginal()),
-  tryReadFile: vi.fn().mockResolvedValue(null),
-  ensureDir: vi.fn().mockResolvedValue(undefined),
-  atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
-  readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
+vi.mock('../../../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
+  dataRoot: tempRoot,
+  overrides: {
+    tryReadFile: vi.fn().mockResolvedValue(null),
+    ensureDir: vi.fn().mockResolvedValue(undefined),
+    atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
+    readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
+  },
 }));
+
+afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
 
 let uuidCounter = 0;
 vi.mock('crypto', async () => {
@@ -304,6 +320,35 @@ describe('unlockPass — end-to-end over the real series/issue services', () => 
     // The mutator still runs (that is how the freshest state is read), but it
     // must return null so updateUniverse short-circuits with no write.
     expect(universe.characters[0].locked).toBeUndefined();
+  });
+});
+
+// Isolation probe for #3683. The end-to-end suite above reaches `listSeries()`,
+// which enumerates PATHS.data/pipeline-series with a REAL readdir — the fileUtils
+// overrides do not intercept it. Before the PATHS redirect, the suite therefore
+// saw the developer's own series and two sole-universe assertions failed on any
+// checkout with a populated data/. These assertions fail the same way if the
+// redirect is ever dropped, so the leak can't come back silently.
+describe('unlockPass — the suite is isolated from the checkout\'s real data/', () => {
+  it('resolves PATHS.data to a temp dir outside the repo', async () => {
+    const { PATHS } = await import('../../../lib/fileUtils.js');
+    expect(PATHS.data).toBe(tempRoot);
+    expect(PATHS.data).not.toContain('PortOS');
+  });
+
+  it('anchors the series record directory under the temp root', () => {
+    expect(seriesSvc.seriesStore().recordDir('ser-probe')).toBe(join(tempRoot, 'pipeline-series', 'ser-probe'));
+  });
+
+  // The behavioral half: `listSeries()` must return the suite's own fixtures and
+  // nothing else. The store enumerates with a real `readdir` and only falls back
+  // to its in-process id set when the collection dir is ABSENT — so a real
+  // data/pipeline-series takes over the moment PATHS.data points at the
+  // checkout, replacing the fixtures with the developer's series.
+  it('lists only the series this suite created', async () => {
+    const mine = await seriesSvc.createSeries({ name: 'Isolation Probe', targetFormat: 'comic' });
+    const listed = await seriesSvc.listSeries();
+    expect(listed.map((s) => s.id)).toEqual([mine.id]);
   });
 });
 
