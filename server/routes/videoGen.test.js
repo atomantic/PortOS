@@ -277,6 +277,44 @@ describe('videoGen routes', () => {
       expect(r.body.missingPackages).toEqual(['mflux', 'mlx', 'mlx_video']);
       expect(r.body.reason).toMatch(/3 python packages missing/);
     });
+
+    // #3674 — the backend policy-scope wording is server-owned so the UI can't
+    // drift into ranking language ("less restrictive", "uncensored", …).
+    it('serializes the local + hosted backend disclosures', async () => {
+      const r = await request(app).get('/api/video-gen/status');
+      expect(r.body.backendDisclosures.map((b) => b.id)).toEqual(['local', 'grok']);
+      const local = r.body.backendDisclosures.find((b) => b.id === 'local');
+      expect(local.execution).toBe('local');
+      expect(local.facts.join(' ')).toMatch(/does not send your prompt/i);
+      expect(local.facts.join(' ')).toMatch(/no model-level prompt filter/i);
+      expect(local.facts.join(' ')).toMatch(/license/i);
+      const grok = r.body.backendDisclosures.find((b) => b.id === 'grok');
+      expect(grok.execution).toBe('hosted');
+      expect(grok.provider).toBe('xAI');
+      expect(grok.facts.join(' ')).toMatch(/sent to xAI/i);
+      for (const link of grok.links) expect(link.url).toMatch(/^https:\/\//);
+      for (const backend of r.body.backendDisclosures) {
+        expect([backend.summary, ...backend.facts].join(' '))
+          .not.toMatch(/uncensored|unrestricted|less restrictive/i);
+      }
+    });
+
+    it('passes each model entry through with its registry disclosure block', async () => {
+      videoGenService.listVideoModels.mockReturnValueOnce([
+        {
+          id: 'ltx2_unified',
+          name: 'LTX-2 Unified',
+          runtime: 'ltx2',
+          disclosure: { modelCardUrl: 'https://huggingface.co/example-org/example-video', reviewedAt: '2026-08-09' },
+        },
+        { id: 'custom', name: 'Custom', runtime: 'ltx2', source: 'user' },
+      ]);
+      const r = await request(app).get('/api/video-gen/status');
+      expect(r.body.models[0].disclosure.modelCardUrl).toBe('https://huggingface.co/example-org/example-video');
+      // Custom models carry no disclosure — the UI renders Unknown rather than
+      // inheriting a shipped model's licensing.
+      expect('disclosure' in r.body.models[1]).toBe(false);
+    });
   });
 
   describe('GET /setup/runtime-status', () => {

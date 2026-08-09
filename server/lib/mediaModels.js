@@ -8,7 +8,14 @@
  * cached at boot — there's no hot-reload).
  *
  * Schema (see seed defaults below for the full picture):
- *   - video.macos[], video.windows[]: { id, name, repo?, steps, guidance, broken? }
+ *   - video.macos[], video.windows[]: { id, name, repo?, steps, guidance, broken?, disclosure? }
+ *       `disclosure` is optional provenance/licensing metadata (issue #3674):
+ *       { modelCardUrl?, weightsLicense?: { name, url }, runtimeLicense?: { name, url },
+ *         estimatedDownloadGb?, reviewedAt? }. Every key is optional and an
+ *       absent key means "not established" — the UI renders it as Unknown
+ *       rather than guessing. Canonical fields (repo/revision/runtime/memoryGb/
+ *       supportedModes/requiredWeights) are NOT duplicated inside it. Shipped
+ *       values live in lib/videoDisclosure.js and are backfilled at load.
  *   - video.defaultMacos / video.defaultWindows: id of the default model
  *   - image[]: { id, name, steps, guidance, broken? }
  *   - textEncoders[]: { id, label, repo, localPath? }
@@ -21,6 +28,7 @@ import { PATHS, expandHome } from './fileUtils.js';
 import { isPlainObject } from './objects.js';
 import { RUNNER_FAMILIES } from './runners.js';
 import { ServerError } from './errorHandler.js';
+import { applyVideoDisclosures } from './videoDisclosure.js';
 // fileUtils.ensureDir is async/Promise-returning; this module needs a
 // synchronous version because `loadMediaModels()` is called at import-time
 // from videoGen/imageGen modules, which can't await before exporting.
@@ -33,7 +41,11 @@ const IS_WIN = process.platform === 'win32';
 const DEFAULT_REGISTRY = {
   _doc: 'PortOS media model registry. Edit to add models, tune defaults, or switch the text encoder. Restart the server to apply changes.',
   video: {
-    macos: [
+    // `applyVideoDisclosures` attaches the shipped provenance/licensing block
+    // (lib/videoDisclosure.js) to each entry, so the seed written on a fresh
+    // install, the in-memory defaults, and data.reference/media-models.json all
+    // carry the same disclosure without repeating it inline here.
+    macos: applyVideoDisclosures([
       // notapalindrome's mlx-video-with-audio runtime — single PyPI package,
       // T2V/I2V only, FFLF degrades to last-frame conditioning (one --image arg).
       // LTX-2 (the older 42 GB model) stays deprecated — superseded by 2.3.
@@ -171,10 +183,10 @@ const DEFAULT_REGISTRY = {
         precision: 'fp32',
         deprecated: true,
       },
-    ],
-    windows: [
+    ]),
+    windows: applyVideoDisclosures([
       { id: 'ltx_video', name: 'LTX-Video 0.9.5 — T2V + I2V (~9.5 GB, auto-downloads)', runtime: 'mlx_video', steps: 25, guidance: 3.0 },
-    ],
+    ]),
     defaultMacos: 'ltx23_distilled_q4',
     defaultWindows: 'ltx_video',
   },
@@ -644,8 +656,12 @@ const normalizeRegistry = (parsed) => {
     video: {
       ...DEFAULT_REGISTRY.video,
       ...safeVideo,
-      macos: backfillRuntime(macosResult.entries),
-      windows: backfillRuntime(windowsResult.entries),
+      // applyVideoDisclosures is the load-time twin of migration 237: installs
+      // that persisted their registry before `disclosure` existed pick it up
+      // here without waiting for the migration, and both paths share the same
+      // preservation guards (user value wins, forked repo keeps Unknown).
+      macos: applyVideoDisclosures(backfillRuntime(macosResult.entries)),
+      windows: applyVideoDisclosures(backfillRuntime(windowsResult.entries)),
     },
     _shippedDefaults: {
       ...(safe._shippedDefaults || {}),

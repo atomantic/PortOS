@@ -48,6 +48,7 @@ import ExtendPanel from '../components/videoGen/ExtendPanel';
 import IcLoraPanel from '../components/videoGen/IcLoraPanel';
 import AdvancedParamsPanel from '../components/videoGen/AdvancedParamsPanel';
 import RuntimeFingerprint from '../components/videoGen/RuntimeFingerprint';
+import ModelDisclosure from '../components/videoGen/ModelDisclosure';
 import ModelRepairBanner from '../components/videoGen/ModelRepairBanner';
 import VideoPreviewPanel from '../components/videoGen/VideoPreviewPanel';
 import VideoGenGallery from '../components/videoGen/VideoGenGallery';
@@ -1041,6 +1042,17 @@ export default function VideoGen() {
 
           </div>
           )}
+
+          {/* Provenance / licensing / policy-scope disclosure for the selected
+              backend + model (#3674). Sits directly below the backend and model
+              controls and updates with them; purely informational — it never
+              gates or alters a render. */}
+          <ModelDisclosure
+            backend={backend}
+            backendDisclosures={status?.backendDisclosures}
+            model={isGrok ? null : currentModel}
+            systemMemoryGb={status?.systemMemoryGb}
+          />
 
           {/* Sampler/output knobs live behind a closed-by-default disclosure so
               Generate stays above the fold — the sibling /media/image tab keeps

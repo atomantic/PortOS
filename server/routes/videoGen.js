@@ -16,6 +16,7 @@ import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.j
 import { uploadFields } from '../lib/multipart.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { grokVideoDurationSchema } from '../lib/validation.js';
+import { VIDEO_BACKEND_DISCLOSURES } from '../lib/videoDisclosure.js';
 import { IMAGE_GEN_MODE } from '../services/imageGen/modes.js';
 import { getSettings } from '../services/settings.js';
 import { checkPackages, isAllowedPython } from '../lib/pythonSetup.js';
@@ -302,8 +303,15 @@ router.get('/status', asyncHandler(async (_req, res) => {
     pythonPath: py,
     reason,
     missingPackages: missing,
+    // Each entry carries its optional `disclosure` block (provenance, weights/
+    // runtime licenses, pinned-snapshot download size) straight off the
+    // registry — absent for custom models, which the UI renders as Unknown.
     models: listVideoModels(),
     defaultModel: defaultVideoModelId(),
+    // Server-owned execution + policy scope per render backend (#3674). The
+    // client renders these strings verbatim so the wording can't drift between
+    // the two surfaces.
+    backendDisclosures: VIDEO_BACKEND_DISCLOSURES,
     // Authoritative list of bring-your-own-venv runtimes — lets the client
     // gate the install-banner probe without hardcoding the same Set.
     byovRuntimes: Object.keys(BYOV_RUNTIME_INFO),

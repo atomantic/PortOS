@@ -9,7 +9,20 @@
         "runtime": "mlx_video",
         "steps": 30,
         "guidance": 3,
-        "deprecated": true
+        "deprecated": true,
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/notapalindrome/ltx2-mlx-av",
+          "weightsLicense": {
+            "name": "MIT",
+            "url": "https://opensource.org/license/mit"
+          },
+          "runtimeLicense": {
+            "name": "MIT",
+            "url": "https://pypi.org/project/mlx-video-with-audio/"
+          },
+          "estimatedDownloadGb": 44.7,
+          "reviewedAt": "2026-08-09"
+        }
       },
       {
         "id": "ltx23_unified",
@@ -17,7 +30,16 @@
         "repo": "notapalindrome/ltx23-mlx-av",
         "runtime": "mlx_video",
         "steps": 25,
-        "guidance": 3
+        "guidance": 3,
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/notapalindrome/ltx23-mlx-av",
+          "runtimeLicense": {
+            "name": "MIT",
+            "url": "https://pypi.org/project/mlx-video-with-audio/"
+          },
+          "estimatedDownloadGb": 53.5,
+          "reviewedAt": "2026-08-09"
+        }
       },
       {
         "id": "ltx23_distilled_q4",
@@ -25,7 +47,16 @@
         "repo": "notapalindrome/ltx23-mlx-av-q4",
         "runtime": "mlx_video",
         "steps": 25,
-        "guidance": 3
+        "guidance": 3,
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/notapalindrome/ltx23-mlx-av-q4",
+          "runtimeLicense": {
+            "name": "MIT",
+            "url": "https://pypi.org/project/mlx-video-with-audio/"
+          },
+          "estimatedDownloadGb": 22.8,
+          "reviewedAt": "2026-08-09"
+        }
       },
       {
         "id": "ltx23_dgrauet_q4",
@@ -33,7 +64,20 @@
         "repo": "dgrauet/ltx-2.3-mlx-q4",
         "runtime": "ltx2",
         "steps": 8,
-        "guidance": 3
+        "guidance": 3,
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/dgrauet/ltx-2.3-mlx-q4",
+          "weightsLicense": {
+            "name": "Custom — see model card",
+            "url": "https://huggingface.co/dgrauet/ltx-2.3-mlx-q4"
+          },
+          "runtimeLicense": {
+            "name": "MIT",
+            "url": "https://github.com/dgrauet/ltx-2-mlx/blob/main/LICENSE"
+          },
+          "estimatedDownloadGb": 59.7,
+          "reviewedAt": "2026-08-09"
+        }
       },
       {
         "id": "ltx23_dgrauet_q8",
@@ -41,7 +85,20 @@
         "repo": "dgrauet/ltx-2.3-mlx-q8",
         "runtime": "ltx2",
         "steps": 8,
-        "guidance": 3
+        "guidance": 3,
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/dgrauet/ltx-2.3-mlx-q8",
+          "weightsLicense": {
+            "name": "Custom — see model card",
+            "url": "https://huggingface.co/dgrauet/ltx-2.3-mlx-q8"
+          },
+          "runtimeLicense": {
+            "name": "MIT",
+            "url": "https://github.com/dgrauet/ltx-2-mlx/blob/main/LICENSE"
+          },
+          "estimatedDownloadGb": 87.5,
+          "reviewedAt": "2026-08-09"
+        }
       },
       {
         "id": "wan22_ti2v_5b",
@@ -49,14 +106,34 @@
         "repo": "AbstractFramework/wan2.2-ti2v-5b-diffusers-8bit",
         "revision": "6875952a110b6bdbcfc00d72b1d89a8e02ab0fc3",
         "runtime": "wan22",
-        "supportedModes": ["text", "image"],
+        "supportedModes": [
+          "text",
+          "image"
+        ],
         "frameStride": 4,
-        "fpsOptions": [16, 20, 24],
+        "fpsOptions": [
+          16,
+          20,
+          24
+        ],
         "memoryGb": 24,
         "steps": 25,
         "guidance": 5,
         "flowShift": 3,
-        "solver": "unipc"
+        "solver": "unipc",
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/AbstractFramework/wan2.2-ti2v-5b-diffusers-8bit",
+          "weightsLicense": {
+            "name": "Apache-2.0",
+            "url": "https://www.apache.org/licenses/LICENSE-2.0"
+          },
+          "runtimeLicense": {
+            "name": "MIT",
+            "url": "https://github.com/lpalbou/mlx-gen/blob/main/LICENSE"
+          },
+          "estimatedDownloadGb": 18.2,
+          "reviewedAt": "2026-08-09"
+        }
       },
       {
         "id": "wan22_t2v_a14b",
@@ -64,15 +141,34 @@
         "repo": "AbstractFramework/wan2.2-t2v-a14b-diffusers-8bit",
         "revision": "39ee5f1f630789956f29f40b5c2c6d48c6e9a798",
         "runtime": "wan22",
-        "supportedModes": ["text"],
+        "supportedModes": [
+          "text"
+        ],
         "frameStride": 4,
-        "fpsOptions": [16, 20, 24],
+        "fpsOptions": [
+          16,
+          20,
+          24
+        ],
         "memoryGb": 48,
         "steps": 20,
         "guidance": 4,
         "guidance2": 3,
         "flowShift": 3,
-        "solver": "unipc"
+        "solver": "unipc",
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/AbstractFramework/wan2.2-t2v-a14b-diffusers-8bit",
+          "weightsLicense": {
+            "name": "Apache-2.0",
+            "url": "https://www.apache.org/licenses/LICENSE-2.0"
+          },
+          "runtimeLicense": {
+            "name": "MIT",
+            "url": "https://github.com/lpalbou/mlx-gen/blob/main/LICENSE"
+          },
+          "estimatedDownloadGb": 42.4,
+          "reviewedAt": "2026-08-09"
+        }
       },
       {
         "id": "wan22_i2v_a14b",
@@ -80,15 +176,34 @@
         "repo": "AbstractFramework/wan2.2-i2v-a14b-diffusers-8bit",
         "revision": "1a17fbea2649c576de844e08e79fe56296751efa",
         "runtime": "wan22",
-        "supportedModes": ["image"],
+        "supportedModes": [
+          "image"
+        ],
         "frameStride": 4,
-        "fpsOptions": [16, 20, 24],
+        "fpsOptions": [
+          16,
+          20,
+          24
+        ],
         "memoryGb": 48,
         "steps": 20,
         "guidance": 3.5,
         "guidance2": 3.5,
         "flowShift": 3,
-        "solver": "unipc"
+        "solver": "unipc",
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/AbstractFramework/wan2.2-i2v-a14b-diffusers-8bit",
+          "weightsLicense": {
+            "name": "Apache-2.0",
+            "url": "https://www.apache.org/licenses/LICENSE-2.0"
+          },
+          "runtimeLicense": {
+            "name": "MIT",
+            "url": "https://github.com/lpalbou/mlx-gen/blob/main/LICENSE"
+          },
+          "estimatedDownloadGb": 42.4,
+          "reviewedAt": "2026-08-09"
+        }
       },
       {
         "id": "wan22_t2v_a14b_lightning",
@@ -96,9 +211,15 @@
         "repo": "AbstractFramework/wan2.2-t2v-a14b-diffusers-8bit",
         "revision": "39ee5f1f630789956f29f40b5c2c6d48c6e9a798",
         "runtime": "wan22",
-        "supportedModes": ["text"],
+        "supportedModes": [
+          "text"
+        ],
         "frameStride": 4,
-        "fpsOptions": [16, 20, 24],
+        "fpsOptions": [
+          16,
+          20,
+          24
+        ],
         "memoryGb": 48,
         "steps": 4,
         "guidance": 1,
@@ -106,15 +227,33 @@
         "flowShift": 5,
         "solver": "euler",
         "samplerLocked": true,
-        "requiredWeights": [{
-          "repo": "lightx2v/Wan2.2-Lightning",
-          "revision": "18bccf8884ec0a078eed79785eb4ef13ea16ce1e",
-          "files": [
-            "Wan2.2-T2V-A14B-4steps-lora-rank64-Seko-V1.1/high_noise_model.safetensors",
-            "Wan2.2-T2V-A14B-4steps-lora-rank64-Seko-V1.1/low_noise_model.safetensors"
-          ],
-          "targetRoles": ["high_noise_transformer", "low_noise_transformer"]
-        }]
+        "requiredWeights": [
+          {
+            "repo": "lightx2v/Wan2.2-Lightning",
+            "revision": "18bccf8884ec0a078eed79785eb4ef13ea16ce1e",
+            "files": [
+              "Wan2.2-T2V-A14B-4steps-lora-rank64-Seko-V1.1/high_noise_model.safetensors",
+              "Wan2.2-T2V-A14B-4steps-lora-rank64-Seko-V1.1/low_noise_model.safetensors"
+            ],
+            "targetRoles": [
+              "high_noise_transformer",
+              "low_noise_transformer"
+            ]
+          }
+        ],
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/AbstractFramework/wan2.2-t2v-a14b-diffusers-8bit",
+          "weightsLicense": {
+            "name": "Apache-2.0",
+            "url": "https://www.apache.org/licenses/LICENSE-2.0"
+          },
+          "runtimeLicense": {
+            "name": "MIT",
+            "url": "https://github.com/lpalbou/mlx-gen/blob/main/LICENSE"
+          },
+          "estimatedDownloadGb": 44.9,
+          "reviewedAt": "2026-08-09"
+        }
       },
       {
         "id": "wan22_i2v_a14b_lightning",
@@ -122,9 +261,15 @@
         "repo": "AbstractFramework/wan2.2-i2v-a14b-diffusers-8bit",
         "revision": "1a17fbea2649c576de844e08e79fe56296751efa",
         "runtime": "wan22",
-        "supportedModes": ["image"],
+        "supportedModes": [
+          "image"
+        ],
         "frameStride": 4,
-        "fpsOptions": [16, 20, 24],
+        "fpsOptions": [
+          16,
+          20,
+          24
+        ],
         "memoryGb": 48,
         "steps": 4,
         "guidance": 1,
@@ -132,15 +277,33 @@
         "flowShift": 5,
         "solver": "euler",
         "samplerLocked": true,
-        "requiredWeights": [{
-          "repo": "lightx2v/Wan2.2-Lightning",
-          "revision": "18bccf8884ec0a078eed79785eb4ef13ea16ce1e",
-          "files": [
-            "Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1/high_noise_model.safetensors",
-            "Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1/low_noise_model.safetensors"
-          ],
-          "targetRoles": ["high_noise_transformer", "low_noise_transformer"]
-        }]
+        "requiredWeights": [
+          {
+            "repo": "lightx2v/Wan2.2-Lightning",
+            "revision": "18bccf8884ec0a078eed79785eb4ef13ea16ce1e",
+            "files": [
+              "Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1/high_noise_model.safetensors",
+              "Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1/low_noise_model.safetensors"
+            ],
+            "targetRoles": [
+              "high_noise_transformer",
+              "low_noise_transformer"
+            ]
+          }
+        ],
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/AbstractFramework/wan2.2-i2v-a14b-diffusers-8bit",
+          "weightsLicense": {
+            "name": "Apache-2.0",
+            "url": "https://www.apache.org/licenses/LICENSE-2.0"
+          },
+          "runtimeLicense": {
+            "name": "MIT",
+            "url": "https://github.com/lpalbou/mlx-gen/blob/main/LICENSE"
+          },
+          "estimatedDownloadGb": 44.9,
+          "reviewedAt": "2026-08-09"
+        }
       },
       {
         "id": "hunyuan_video",
@@ -151,7 +314,20 @@
         "steps": 30,
         "guidance": 6,
         "precision": "fp32",
-        "deprecated": true
+        "deprecated": true,
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/tencent/HunyuanVideo",
+          "weightsLicense": {
+            "name": "Tencent Hunyuan Community License",
+            "url": "https://huggingface.co/tencent/HunyuanVideo/blob/main/LICENSE"
+          },
+          "runtimeLicense": {
+            "name": "Tencent Hunyuan Community License",
+            "url": "https://github.com/gaurav-nelson/HunyuanVideo_MLX/blob/main/LICENSE.txt"
+          },
+          "estimatedDownloadGb": 39.8,
+          "reviewedAt": "2026-08-09"
+        }
       }
     ],
     "windows": [
@@ -160,7 +336,14 @@
         "name": "LTX-Video 0.9.5 — T2V + I2V (~9.5 GB, auto-downloads)",
         "runtime": "mlx_video",
         "steps": 25,
-        "guidance": 3
+        "guidance": 3,
+        "disclosure": {
+          "runtimeLicense": {
+            "name": "MIT",
+            "url": "https://pypi.org/project/mlx-video-with-audio/"
+          },
+          "reviewedAt": "2026-08-09"
+        }
       }
     ],
     "defaultMacos": "ltx23_distilled_q4",
