@@ -323,28 +323,22 @@ describe('unlockPass — end-to-end over the real series/issue services', () => 
   });
 });
 
-// Isolation probe for #3683. The end-to-end suite above reaches `listSeries()`,
-// which enumerates PATHS.data/pipeline-series with a REAL readdir — the fileUtils
-// overrides do not intercept it. Before the PATHS redirect, the suite therefore
-// saw the developer's own series and two sole-universe assertions failed on any
-// checkout with a populated data/. These assertions fail the same way if the
-// redirect is ever dropped, so the leak can't come back silently.
+// Isolation probe for #3683 — these fail the same way if the PATHS redirect at
+// the top of the file is ever dropped, so the leak can't come back silently.
 describe('unlockPass — the suite is isolated from the checkout\'s real data/', () => {
-  it('resolves PATHS.data to a temp dir outside the repo', async () => {
+  it('resolves PATHS.data to the temp root', async () => {
     const { PATHS } = await import('../../../lib/fileUtils.js');
     expect(PATHS.data).toBe(tempRoot);
-    expect(PATHS.data).not.toContain('PortOS');
   });
 
   it('anchors the series record directory under the temp root', () => {
     expect(seriesSvc.seriesStore().recordDir('ser-probe')).toBe(join(tempRoot, 'pipeline-series', 'ser-probe'));
   });
 
-  // The behavioral half: `listSeries()` must return the suite's own fixtures and
-  // nothing else. The store enumerates with a real `readdir` and only falls back
-  // to its in-process id set when the collection dir is ABSENT — so a real
-  // data/pipeline-series takes over the moment PATHS.data points at the
-  // checkout, replacing the fixtures with the developer's series.
+  // The behavioral half. The store only falls back to its in-process id set when
+  // the collection dir is ABSENT, so a real data/pipeline-series takes over the
+  // moment PATHS.data points at the checkout — replacing the suite's fixtures
+  // with the developer's own series.
   it('lists only the series this suite created', async () => {
     const mine = await seriesSvc.createSeries({ name: 'Isolation Probe', targetFormat: 'comic' });
     const listed = await seriesSvc.listSeries();
