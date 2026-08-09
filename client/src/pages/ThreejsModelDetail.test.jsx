@@ -340,3 +340,31 @@ describe('ThreejsModelDetail rig readiness', () => {
     expect(screen.queryByText('Rig readiness')).not.toBeInTheDocument();
   });
 });
+
+describe('ThreejsModelDetail rig readiness fallbacks', () => {
+  beforeEach(resetMocks);
+
+  // A report that reached this install without its counts must not print
+  // "undefined joints" — it falls back to what the spec itself declares.
+  it('counts from the spec when the stored report arrived without tallies', async () => {
+    getThreejsModel.mockResolvedValue({
+      ...baseRecord,
+      spec: {
+        ...baseRecord.spec,
+        articulation: {
+          joints: [
+            { id: 'rootJoint', partId: 'torso', parentJointId: null, pivotSocket: null },
+            { id: 'armJoint', partId: 'arm', parentJointId: 'rootJoint', pivotSocket: 'shoulder' },
+          ],
+          attachmentPartIds: ['pack'],
+        },
+      },
+      rig: { articulationReady: true, reasons: [] },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Rig readiness')).toBeInTheDocument());
+    expect(screen.getByText('2 joints · 1 pivot socket · 1 declared attachment')).toBeInTheDocument();
+    expect(screen.queryByText(/undefined/)).not.toBeInTheDocument();
+  });
+});

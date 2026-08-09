@@ -151,9 +151,13 @@ function FamilyChecklistPanel({ family }) {
 function RigReadinessPanel({ rig, spec }) {
   const derived = summarizeThreejsArticulation(spec);
   const ready = rig ? rig.articulationReady === true : false;
-  const jointCount = rig ? rig.jointCount : derived.jointCount;
-  const socketCount = rig ? rig.socketCount : derived.socketCount;
-  const attachmentCount = rig ? rig.attachmentCount : derived.attachmentCount;
+  // A report that arrived without its counts (an older or newer peer, a
+  // hand-repaired row) falls back to the spec rather than printing "undefined
+  // joints" — the same rule the coverage panel applies to its tallies.
+  const count = (key) => (Number.isFinite(rig?.[key]) ? rig[key] : derived[key]);
+  const jointCount = count('jointCount');
+  const socketCount = count('socketCount');
+  const attachmentCount = count('attachmentCount');
   const reasons = Array.isArray(rig?.reasons) ? rig.reasons : [];
   return (
     <section className="rounded-xl border border-port-border bg-port-card p-4">
