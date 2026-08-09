@@ -24,7 +24,7 @@ vi.mock('fs', () => ({
 }));
 
 // Not mocked — the shared launchable-workflow catalog is a pure constant list.
-const { SLASHDO_COMMAND_NAMES } = await import('../lib/slashdoCatalog.js');
+const { SLASHDO_COMMAND_NAMES, getSlashdoWorkflow } = await import('../lib/slashdoCatalog.js');
 
 // Import after mocking
 const { readJSONFile } = await import('../lib/fileUtils.js');
@@ -257,7 +257,14 @@ describe('taskTemplates service', () => {
       // Every one of these either writes no code at all or manages its own
       // worktree/PR, so none of them want PortOS to wrap another one around it.
       for (const t of slashdo) {
-        expect(t.settings).toEqual({ useWorktree: false, openPR: false, simplify: false });
+        expect(t.settings).toMatchObject({ useWorktree: false, openPR: false, simplify: false });
+      }
+      // …and each carries the catalog's deliverable posture verbatim (#3636), so
+      // the template surface can't quietly drop `worktreeChangesExpected` the way
+      // a hand-copied settings literal would. Which command gets which posture is
+      // pinned in `slashdoCatalog.test.js`; here we only assert the pass-through.
+      for (const t of slashdo) {
+        expect(t.settings).toBe(getSlashdoWorkflow(t.slashdoCommand).settings);
       }
       // The BARE command name is what is stored — a rendered `/do:x` string
       // would be Claude-only, and the provider is unknown at pick time.

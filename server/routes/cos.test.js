@@ -949,6 +949,31 @@ describe('CoS Routes', () => {
       expect(loadSlashdoCommand).not.toHaveBeenCalled();
     });
 
+    // #3636: the catalog posture's `worktreeChangesExpected` must reach the task,
+    // or the TUI idle reaper scores a report-shaped run's clean tree as
+    // `idle-no-changes` — exactly the failure the commit-probe widening left
+    // behind for plan-task / replan / review / scan.
+    it.each([
+      ['plan-task', false],
+      ['replan', false],
+      ['review', false],
+      ['scan', false],
+      ['push', true],
+      ['release', true],
+      ['better', true],
+      ['depfree', true]
+    ])('threads the catalog deliverable posture — %s ⇒ worktreeChangesExpected %s', async (command, expected) => {
+      getAppById.mockResolvedValue({ id: 'my-app', name: 'MyApp', type: 'web', repoPath: '/repo' });
+      cos.addTask.mockResolvedValue({ id: `task-wce-${command}`, status: 'pending' });
+
+      const response = await request(app)
+        .post('/api/cos/tasks/slashdo')
+        .send({ command, app: 'my-app' });
+
+      expect(response.status).toBe(200);
+      expect(cos.addTask.mock.calls.at(-1)[0].worktreeChangesExpected).toBe(expected);
+    });
+
     it('queues the SwiftUI audit for a Swift app', async () => {
       getAppById.mockResolvedValue({ id: 'my-ios', name: 'MyPhone', type: 'ios-native', repoPath: '/repo' });
       cos.addTask.mockResolvedValue({ id: 'task-sd-swift', status: 'pending' });
@@ -1018,6 +1043,50 @@ describe('CoS Routes', () => {
       // prompt builder append the whole /do:next body on top of the claim prompt).
       expect(taskData.slashdoCommand).toBeUndefined();
       expect(taskData.description).not.toContain('/do:');
+    });
+
+    // `next` is commit-shaped in the catalog, but the claim flow resolves the
+    // app's actual work tracker — a forge tracker files its outcome outside the
+    // repo, so its `worktreeChangesExpected` must override the catalog default
+    // rather than be masked by it (#3636).
+    it('lets the claim flow work-tracker posture override the catalog default for next', async () => {
+      getAppById.mockResolvedValue({ id: 'my-app', name: 'MyApp', repoPath: '/repo' });
+      buildClaimWorkTask.mockResolvedValue({
+        tracker: 'github',
+        source: 'config',
+        promptTaskType: 'claim-issue',
+        prompt: 'CLAIM ISSUE PROMPT',
+        taskMetadata: { useWorktree: false, openPR: false, worktreeChangesExpected: false }
+      });
+      cos.addTask.mockResolvedValue({ id: 'task-sd-next-wce', status: 'pending' });
+
+      const response = await request(app)
+        .post('/api/cos/tasks/slashdo')
+        .send({ command: 'next', app: 'my-app' });
+
+      expect(response.status).toBe(200);
+      expect(cos.addTask.mock.calls.at(-1)[0].worktreeChangesExpected).toBe(false);
+    });
+
+    // …and when the claim flow says nothing, the catalog's commit-shaped default
+    // stands, so a `/do:next` that shipped a PR still needs its commit evidence.
+    it('falls back to the catalog commit-shaped default when the claim flow omits the key', async () => {
+      getAppById.mockResolvedValue({ id: 'my-app', name: 'MyApp', repoPath: '/repo' });
+      buildClaimWorkTask.mockResolvedValue({
+        tracker: 'plan',
+        source: 'config',
+        promptTaskType: 'claim-work',
+        prompt: 'CLAIM PLAN PROMPT',
+        taskMetadata: { useWorktree: false, openPR: false }
+      });
+      cos.addTask.mockResolvedValue({ id: 'task-sd-next-default', status: 'pending' });
+
+      const response = await request(app)
+        .post('/api/cos/tasks/slashdo')
+        .send({ command: 'next', app: 'my-app' });
+
+      expect(response.status).toBe(200);
+      expect(cos.addTask.mock.calls.at(-1)[0].worktreeChangesExpected).toBe(true);
     });
 
     it('threads the run drawer settings — target/author-filter/reviewers into the claim prompt, provider/model/effort/simplify onto the task', async () => {

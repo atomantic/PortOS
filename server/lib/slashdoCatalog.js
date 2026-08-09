@@ -21,8 +21,8 @@
  * workflow for this host", this one answers "which workflows can be launched".
  */
 
-/**
- * The run-shape defaults every catalog entry implies. All ten workflows set
+/*
+ * The run-shape defaults a catalog entry implies. All ten workflows set
  * `useWorktree`/`openPR`/`simplify` to false, for two distinct reasons:
  *   - plan-task / replan / review / scan write no code at all, so there is
  *     nothing to isolate, PR, or simplify.
@@ -31,8 +31,32 @@
  *     and `release` must run from `main` in the primary checkout.
  * A key absent from `settings` means "leave the current toggle alone" (the
  * absent-vs-empty rule) — it does NOT mean false.
+ *
+ * The two postures below differ ONLY in `worktreeChangesExpected`, which declares
+ * the workflow's DELIVERABLE (#3636). The TUI idle reaper fails a run as
+ * `idle-no-changes` when the worktree is clean and no commit landed during the
+ * run (`worktreeHasWorkEvidence`), so a workflow whose output never touches the
+ * repo has to opt out — the reaper cannot see a filed issue or a printed report.
  */
-export const WORKFLOW_OWNS_ITS_OWN_GIT = Object.freeze({ useWorktree: false, openPR: false, simplify: false });
+
+/**
+ * Commit-shaped workflows: `next` / `better` / `better-swift` / `depfree` /
+ * `release` / `push` land a commit (usually behind their own PR), so the
+ * reaper's evidence probe covers them and the clean-tree gate stays armed.
+ */
+export const WORKFLOW_OWNS_ITS_OWN_GIT = Object.freeze({
+  useWorktree: false, openPR: false, simplify: false, worktreeChangesExpected: true,
+});
+
+/**
+ * Report-shaped workflows: `plan-task` / `replan` / `review` / `scan` deliver a
+ * filed issue or a printed report and write no code at all. A clean tree IS
+ * their success shape, so they opt out of the clean-tree gate the way
+ * `reference-watch` against a non-file work tracker already does (#3102).
+ */
+export const WORKFLOW_REPORTS_NO_CODE = Object.freeze({
+  useWorktree: false, openPR: false, simplify: false, worktreeChangesExpected: false,
+});
 
 /** App-type gates for the Agent Operations buttons. */
 export const SLASHDO_APP_TYPES = Object.freeze({
@@ -53,7 +77,9 @@ export const SLASHDO_APP_TYPES = Object.freeze({
  * @property {string} [templatePrompt] - trailing fragment appended to the
  *   template's description when the workflow needs a user-typed target
  *   (`Safety scan of: `). Absent ⇒ the description stands alone.
- * @property {Object} settings - implied run-shape toggles (see WORKFLOW_OWNS_ITS_OWN_GIT)
+ * @property {Object} settings - implied run-shape toggles; exactly one of
+ *   WORKFLOW_OWNS_ITS_OWN_GIT (commit-shaped) or WORKFLOW_REPORTS_NO_CODE
+ *   (report-shaped), per the workflow's deliverable
  * @property {string} appTypes - one of SLASHDO_APP_TYPES; gates the button only
  * @property {boolean} [configurable] - the button opens the run-settings drawer
  *   instead of queuing immediately
@@ -69,7 +95,7 @@ export const SLASHDO_WORKFLOWS = Object.freeze([
     icon: '📋',
     templateName: 'Plan a Task',
     templatePrompt: 'Investigate and file a decision-complete issue for: ',
-    settings: WORKFLOW_OWNS_ITS_OWN_GIT,
+    settings: WORKFLOW_REPORTS_NO_CODE,
     appTypes: SLASHDO_APP_TYPES.ANY,
   },
   {
@@ -92,7 +118,7 @@ export const SLASHDO_WORKFLOWS = Object.freeze([
     description: 'Audit the backlog, archive completed items, prune stale work',
     icon: '🗺️',
     templateName: 'Replan Backlog',
-    settings: WORKFLOW_OWNS_ITS_OWN_GIT,
+    settings: WORKFLOW_REPORTS_NO_CODE,
     appTypes: SLASHDO_APP_TYPES.ANY,
   },
   {
@@ -102,7 +128,7 @@ export const SLASHDO_WORKFLOWS = Object.freeze([
     description: 'Deep code review of the changed files',
     icon: '🔍',
     templateName: 'Review Changes',
-    settings: WORKFLOW_OWNS_ITS_OWN_GIT,
+    settings: WORKFLOW_REPORTS_NO_CODE,
     appTypes: SLASHDO_APP_TYPES.ANY,
   },
   {
@@ -163,7 +189,7 @@ export const SLASHDO_WORKFLOWS = Object.freeze([
     icon: '🔒',
     templateName: 'Safety Scan',
     templatePrompt: 'Read-only safety audit of: ',
-    settings: WORKFLOW_OWNS_ITS_OWN_GIT,
+    settings: WORKFLOW_REPORTS_NO_CODE,
     appTypes: SLASHDO_APP_TYPES.ANY,
   },
 ]);

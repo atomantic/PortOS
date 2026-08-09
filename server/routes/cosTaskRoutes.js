@@ -166,10 +166,15 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
   //   the rendered string was wrong for it (#3089's whole point).
   //
   // `workflow.settings` is the catalog's run-shape posture (see
-  // WORKFLOW_OWNS_ITS_OWN_GIT) — read from it rather than restating false/false,
-  // so a future entry that genuinely wants a PortOS-managed worktree gets one.
-  // `simplify` comes from the request (the run drawer's toggle), not the catalog.
-  const { useWorktree, openPR } = workflow.settings;
+  // WORKFLOW_OWNS_ITS_OWN_GIT / WORKFLOW_REPORTS_NO_CODE) — read from it rather
+  // than restating false/false, so a future entry that genuinely wants a
+  // PortOS-managed worktree gets one. `worktreeChangesExpected` declares the
+  // workflow's deliverable: false for the report-shaped four (plan-task /
+  // replan / review / scan), whose output is a filed issue or a printed report,
+  // so the TUI idle reaper doesn't score their clean tree `idle-no-changes`
+  // (#3636). `simplify` comes from the request (the run drawer's toggle), not
+  // the catalog.
+  const { useWorktree, openPR, worktreeChangesExpected } = workflow.settings;
   let shape;
   if (command === 'next') {
     const claim = await buildClaimWorkTask(appObj, { target, issueAuthorFilter, reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts });
@@ -183,14 +188,17 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
       // key. All current claim flows (plan-task / claim-issue / claim-issue-gitlab
       // / claim-issue-jira) self-manage their worktree + MR/PR, so false/false
       // stands; the spread stays for a future delegated type that needs
-      // CoS-managed isolation.
-      taskMetadata: { useWorktree, openPR, ...claim.taskMetadata },
+      // CoS-managed isolation. `worktreeChangesExpected` is one such key: the
+      // claim flow derives it from the app's RESOLVED work tracker (a file
+      // tracker commits its checklist, a forge tracker doesn't), which is more
+      // specific than the catalog's commit-shaped default, so the spread wins.
+      taskMetadata: { useWorktree, openPR, worktreeChangesExpected, ...claim.taskMetadata },
     };
   } else {
     shape = {
       description: `${workflow.label} for ${appObj.name} — ${workflow.description}`,
       slashdoCommand: command,
-      taskMetadata: { useWorktree, openPR },
+      taskMetadata: { useWorktree, openPR, worktreeChangesExpected },
     };
   }
 

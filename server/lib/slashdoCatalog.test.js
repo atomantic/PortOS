@@ -6,11 +6,13 @@ import {
   SLASHDO_COMMAND_NAMES,
   SLASHDO_WORKFLOWS,
   WORKFLOW_OWNS_ITS_OWN_GIT,
+  WORKFLOW_REPORTS_NO_CODE,
   getSlashdoWorkflow,
   slashdoWorkflowAppliesTo,
   slashdoWorkflowsForApp,
 } from './slashdoCatalog.js';
 import { isValidSlashdoCommand, SLASHDO_NAMESPACE } from './slashdoInvocation.js';
+import { sanitizeTaskMetadata } from './cosValidation.js';
 import { PATHS } from './fileUtils.js';
 
 describe('SLASHDO_WORKFLOWS', () => {
@@ -22,8 +24,43 @@ describe('SLASHDO_WORKFLOWS', () => {
       expect(w.detail).toBeTruthy();
       expect(w.icon).toBeTruthy();
       expect(w.templateName).toBeTruthy();
-      expect(w.settings).toBe(WORKFLOW_OWNS_ITS_OWN_GIT);
+      expect([WORKFLOW_OWNS_ITS_OWN_GIT, WORKFLOW_REPORTS_NO_CODE]).toContain(w.settings);
       expect(Object.values(SLASHDO_APP_TYPES)).toContain(w.appTypes);
+    }
+  });
+
+  // #3636: the posture a workflow carries declares its DELIVERABLE. The TUI idle
+  // reaper fails a clean-tree, no-commit run as `idle-no-changes`, which is
+  // correct for the six that land a commit and wrong for the four whose output is
+  // a filed issue or a printed report — the reaper cannot see either. Pinned
+  // per-command (not derived) so adding a workflow forces the author to decide.
+  it('carries the posture matching each workflow deliverable', () => {
+    const REPORT_SHAPED = new Set(['plan-task', 'replan', 'review', 'scan']);
+    for (const w of SLASHDO_WORKFLOWS) {
+      const expected = REPORT_SHAPED.has(w.command) ? WORKFLOW_REPORTS_NO_CODE : WORKFLOW_OWNS_ITS_OWN_GIT;
+      expect(w.settings, `${w.command} posture`).toBe(expected);
+    }
+    // Every command is classified — a new entry can't slip in unconsidered.
+    expect(SLASHDO_COMMAND_NAMES.filter(c => REPORT_SHAPED.has(c)).length).toBe(REPORT_SHAPED.size);
+  });
+
+  it('keeps the two postures differing only in worktreeChangesExpected', () => {
+    expect(WORKFLOW_OWNS_ITS_OWN_GIT).toEqual({
+      useWorktree: false, openPR: false, simplify: false, worktreeChangesExpected: true,
+    });
+    expect(WORKFLOW_REPORTS_NO_CODE).toEqual({
+      useWorktree: false, openPR: false, simplify: false, worktreeChangesExpected: false,
+    });
+    expect(Object.isFrozen(WORKFLOW_OWNS_ITS_OWN_GIT)).toBe(true);
+    expect(Object.isFrozen(WORKFLOW_REPORTS_NO_CODE)).toBe(true);
+  });
+
+  // The key must survive sanitizeTaskMetadata (#3102) or the posture is inert by
+  // the time the task is stored.
+  it('carries a worktreeChangesExpected value sanitizeTaskMetadata accepts', () => {
+    for (const posture of [WORKFLOW_OWNS_ITS_OWN_GIT, WORKFLOW_REPORTS_NO_CODE]) {
+      expect(sanitizeTaskMetadata({ worktreeChangesExpected: posture.worktreeChangesExpected }))
+        .toEqual({ worktreeChangesExpected: posture.worktreeChangesExpected });
     }
   });
 
