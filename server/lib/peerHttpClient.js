@@ -33,16 +33,45 @@ export function peerAuthHeaders(peer) {
   return { Authorization: `Basic ${token}` };
 }
 
+// Our own federation instance id, memoized after the first successful read.
+// Resolved through a DYNAMIC import because `services/instances.js` imports
+// this module — a static import back would close an evaluation-order cycle.
+// A failed/absent identity yields no header at all rather than the
+// `UNKNOWN_INSTANCE_ID` sentinel, so a receiver sees "unidentified" instead of
+// a bogus id it would then fail to resolve in its peer registry.
+let cachedSelfInstanceId = null;
+async function selfInstanceHeader() {
+  if (!cachedSelfInstanceId) {
+    const instances = await import('../services/instances.js').catch(() => null);
+    const id = await instances?.getInstanceId?.().catch(() => null);
+    if (typeof id === 'string' && id && id !== instances?.UNKNOWN_INSTANCE_ID) cachedSelfInstanceId = id;
+  }
+  return cachedSelfInstanceId ? { 'X-PortOS-Instance-Id': cachedSelfInstanceId } : {};
+}
+
+/** Test-support: drop the memoized instance id. */
+export function __resetSelfInstanceIdForTests() {
+  cachedSelfInstanceId = null;
+}
+
 /**
- * Fetch a peer URL. Pass the `peer` record (third arg) so a stored Basic-auth
- * credential is attached automatically; explicit `options.headers` still win
- * over the injected `Authorization` (they never collide in practice). The
- * `peer` arg is optional so existing two-arg callers keep working.
+ * Fetch a peer URL. Every hop identifies this install with
+ * `X-PortOS-Instance-Id` so the receiver can apply the user's per-peer sharing
+ * config to PULL requests (#3659) the way it already does to pushes. Pass the
+ * `peer` record (third arg) so a stored Basic-auth credential is attached too;
+ * explicit `options.headers` still win over both injected headers (they never
+ * collide in practice). The `peer` arg is optional so existing two-arg callers
+ * keep working.
  */
-export function peerFetch(url, options = {}, peer = null) {
-  const finalOptions = peer
-    ? { ...options, headers: { ...peerAuthHeaders(peer), ...(options.headers || {}) } }
-    : options;
+export async function peerFetch(url, options = {}, peer = null) {
+  const finalOptions = {
+    ...options,
+    headers: {
+      ...await selfInstanceHeader(),
+      ...(peer ? peerAuthHeaders(peer) : {}),
+      ...(options.headers || {}),
+    },
+  };
   return url.startsWith('https://') ? httpsFetch(url, finalOptions) : fetch(url, finalOptions);
 }
 

@@ -1,5 +1,21 @@
-import { describe, it, expect } from 'vitest';
-import { peerSocketOptions, peerSocketOptionsFor, peerFetch, peerAuthHeaders } from './peerHttpClient.js';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+// peerFetch resolves this install's federation identity through a dynamic
+// import of the instances service; stub it so the header assertions don't
+// depend on (or create) a real instance identity on disk.
+let selfInstanceId = 'self-instance-id';
+vi.mock('../services/instances.js', () => ({
+  getInstanceId: async () => selfInstanceId,
+  UNKNOWN_INSTANCE_ID: 'unknown',
+}));
+
+import {
+  peerSocketOptions,
+  peerSocketOptionsFor,
+  peerFetch,
+  peerAuthHeaders,
+  __resetSelfInstanceIdForTests,
+} from './peerHttpClient.js';
 
 describe('peerHttpClient', () => {
   it('peerSocketOptions disables cert validation for Socket.IO peer connections', () => {
@@ -11,6 +27,49 @@ describe('peerHttpClient', () => {
     await expect(peerFetch('http://127.0.0.1:1/should-not-exist', {
       signal: AbortSignal.timeout(50)
     })).rejects.toBeDefined();
+  });
+
+  describe('peerFetch headers', () => {
+    const realFetch = globalThis.fetch;
+    let calls;
+
+    beforeEach(() => {
+      selfInstanceId = 'self-instance-id';
+      __resetSelfInstanceIdForTests();
+      calls = [];
+      globalThis.fetch = async (url, options) => {
+        calls.push({ url, options });
+        return { ok: true };
+      };
+    });
+
+    afterEach(() => {
+      globalThis.fetch = realFetch;
+      __resetSelfInstanceIdForTests();
+    });
+
+    it('identifies this install with X-PortOS-Instance-Id on every hop', async () => {
+      await peerFetch('http://peer.example/api/peer-sync/record');
+      expect(calls[0].options.headers['X-PortOS-Instance-Id']).toBe('self-instance-id');
+    });
+
+    it('sends the instance id alongside the peer Basic credential', async () => {
+      await peerFetch('http://peer.example/api/peer-sync/record', {}, { auth: { username: 'alice', password: 'pw' } });
+      expect(calls[0].options.headers['X-PortOS-Instance-Id']).toBe('self-instance-id');
+      expect(calls[0].options.headers.Authorization).toBe(`Basic ${Buffer.from('alice:pw').toString('base64')}`);
+    });
+
+    it('lets explicit caller headers win', async () => {
+      await peerFetch('http://peer.example/x', { headers: { 'X-PortOS-Instance-Id': 'explicit' } });
+      expect(calls[0].options.headers['X-PortOS-Instance-Id']).toBe('explicit');
+    });
+
+    it('omits the header entirely when this install has no identity yet', async () => {
+      selfInstanceId = 'unknown';
+      __resetSelfInstanceIdForTests();
+      await peerFetch('http://peer.example/x');
+      expect(calls[0].options.headers['X-PortOS-Instance-Id']).toBeUndefined();
+    });
   });
 
   describe('peerAuthHeaders', () => {

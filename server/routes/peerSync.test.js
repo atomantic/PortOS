@@ -30,7 +30,15 @@ vi.mock('../services/sharing/sidecarSync.js', () => ({
   backfillMissingSidecars: vi.fn(),
 }));
 
+// The pull gate (#3659) reads the peer registry + settings from disk; mock it
+// so these route tests stay hermetic and can drive both the warn-only (default)
+// and strict outcomes explicitly.
+vi.mock('../services/sharing/peerPullAuthorization.js', () => ({
+  authorizePeerPull: vi.fn(),
+}));
+
 import * as svc from '../services/sharing/peerSync.js';
+import { authorizePeerPull } from '../services/sharing/peerPullAuthorization.js';
 import * as integritySvc from '../services/sharing/integrity.js';
 import * as sidecarSvc from '../services/sharing/sidecarSync.js';
 import peerSyncRoutes from './peerSync.js';
@@ -54,6 +62,8 @@ describe('peer-sync routes', () => {
     vi.clearAllMocks();
     integritySvc.buildLocalManifest.mockResolvedValue([]);
     integritySvc.getPeerIntegrity.mockResolvedValue({ available: false, reason: 'peer-not-found', records: [] });
+    // Default: warn-only mode resolves for every caller (nothing is blocked).
+    vi.mocked(authorizePeerPull).mockResolvedValue({ allowed: true, reason: null, peer: null, callerId: null });
   });
 
   describe('POST /api/peer-sync/push', () => {
@@ -773,6 +783,43 @@ describe('peer-sync routes', () => {
       expect((await request(buildApp()).get('/api/peer-sync/record?kind=issue&id=x')).status).toBe(400);
       expect((await request(buildApp()).get('/api/peer-sync/record?kind=universe&id=%20%20')).status).toBe(400);
       expect(svc.getRecordPayloadForPeer).not.toHaveBeenCalled();
+    });
+
+    it('runs the pull gate for the requested record kind (#3659)', async () => {
+      svc.getRecordPayloadForPeer.mockResolvedValue({ kind: 'universe', record: { id: 'u1' }, assetManifest: [], sourceInstanceId: 'me' });
+      await request(buildApp()).get('/api/peer-sync/record?kind=universe&id=u1');
+      expect(authorizePeerPull).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ recordKind: 'universe' }));
+    });
+
+    it('403s without reading the record when the gate rejects (strict mode)', async () => {
+      vi.mocked(authorizePeerPull).mockRejectedValue(
+        Object.assign(new Error('peer not authorized for this record'), { status: 403, code: 'PEER_PULL_FORBIDDEN' })
+      );
+      const res = await request(buildApp()).get('/api/peer-sync/record?kind=series&id=s1');
+      expect(res.status).toBe(403);
+      expect(svc.getRecordPayloadForPeer).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('manifest pull gate (#3659)', () => {
+    it.each([
+      ['/api/peer-sync/library-manifest', 'buildMediaLibraryManifest'],
+      ['/api/peer-sync/cos-history-manifest', 'buildCosHistoryManifest'],
+      ['/api/peer-sync/cos-tasks', 'buildCosTasksPayload'],
+    ])('403s %s without building the payload when the gate rejects', async (path, fn) => {
+      vi.mocked(authorizePeerPull).mockRejectedValue(
+        Object.assign(new Error('peer not authorized for this record'), { status: 403, code: 'PEER_PULL_FORBIDDEN' })
+      );
+      const res = await request(buildApp()).get(path);
+      expect(res.status).toBe(403);
+      expect(svc[fn]).not.toHaveBeenCalled();
+    });
+
+    it('gates the manifests on outbound only — no record kind', async () => {
+      svc.buildMediaLibraryManifest.mockResolvedValue({ schemaVersion: 1, assets: [] });
+      await request(buildApp()).get('/api/peer-sync/library-manifest');
+      expect(authorizePeerPull).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ route: 'library-manifest' }));
+      expect(vi.mocked(authorizePeerPull).mock.calls[0][1].recordKind).toBeUndefined();
     });
   });
 

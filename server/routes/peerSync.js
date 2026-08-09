@@ -56,6 +56,7 @@ import {
   PEER_SUBSCRIBABLE_KINDS,
 } from '../services/sharing/peerSync.js';
 import { buildLocalManifest, getPeerIntegrity } from '../services/sharing/integrity.js';
+import { authorizePeerPull } from '../services/sharing/peerPullAuthorization.js';
 
 const router = Router();
 
@@ -164,7 +165,10 @@ router.get('/manifest', asyncHandler(async (req, res) => {
 // per the threat model); the receiver gates the PULL on its own `fullSync` flag,
 // so advertising the manifest to any tailnet peer is safe (it's read-only and
 // the bytes are already served by the /data/* static mounts).
-router.get('/library-manifest', asyncHandler(async (_req, res) => {
+// The manifests aren't scoped to one record kind, so they gate on
+// `peerAllowsOutbound` alone (no `peerHasCategory`) — see peerPullAuthorization.js.
+router.get('/library-manifest', asyncHandler(async (req, res) => {
+  await authorizePeerPull(req, { route: 'library-manifest' });
   res.json(await buildMediaLibraryManifest());
 }));
 
@@ -176,7 +180,8 @@ router.get('/library-manifest', asyncHandler(async (_req, res) => {
 // sha256 }] }` over data/cos/agents/<date>/<agentId>/{metadata,output,prompt}.
 // Unauthenticated like every peer-sync route (Tailnet-only per the threat
 // model); the receiver gates the PULL on its own `fullSync` flag.
-router.get('/cos-history-manifest', asyncHandler(async (_req, res) => {
+router.get('/cos-history-manifest', asyncHandler(async (req, res) => {
+  await authorizePeerPull(req, { route: 'cos-history-manifest' });
   res.json(await buildCosHistoryManifest());
 }));
 
@@ -190,7 +195,8 @@ router.get('/cos-history-manifest', asyncHandler(async (_req, res) => {
 // (#1563) the receiver respects so a peer's fresh claim is never clobbered.
 // Unauthenticated like every peer-sync route (Tailnet-only per the threat model);
 // the receiver gates the MERGE on its own `fullSync` flag.
-router.get('/cos-tasks', asyncHandler(async (_req, res) => {
+router.get('/cos-tasks', asyncHandler(async (req, res) => {
+  await authorizePeerPull(req, { route: 'cos-tasks' });
   res.json(await buildCosTasksPayload());
 }));
 
@@ -229,6 +235,11 @@ router.get('/record', asyncHandler(async (req, res) => {
   if (!id) {
     throw new ServerError('id required', { status: 400, code: 'VALIDATION_ERROR' });
   }
+  // Honor the user's per-peer sharing config on the PULL direction too (#3659)
+  // — same `peerAllowsOutbound` + `peerHasCategory` predicates the push path
+  // uses, resolved from the caller's `X-PortOS-Instance-Id`. Warn-only until
+  // `federation.strictPullAuthorization` is turned on.
+  await authorizePeerPull(req, { recordKind: kind, route: `record ${kind}` });
   const payload = await getRecordPayloadForPeer(kind, id);
   if (!payload) {
     throw new ServerError('record not found', { status: 404, code: 'NOT_FOUND' });
