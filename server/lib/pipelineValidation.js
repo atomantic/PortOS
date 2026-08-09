@@ -273,6 +273,19 @@ export const pipelineEditorialChecksSettingsSchema = z.object({
   // code-editing task in PortOS. Optional + additive so older peers fall
   // through to off.
   selfImprove: z.boolean().optional(),
+  // Observing orchestrator — the continuous, self-dispatching sibling of
+  // selfImprove. When on, an autopilot run watches its own telemetry step by
+  // step and dispatches AUTO-APPROVED PortOS fix tasks (worktree + PR + review
+  // loop + merge, no human gate) as pipeline defects surface, so unattended
+  // runs continuously harden the pipeline itself. Defaults OFF (opt-in): it is
+  // fresh LLM spend AND standing consent for unattended changes to PortOS's own
+  // code — enabling it is that consent (see seriesAutopilot/observer.js for the
+  // structural guards: execute-mode only, budget-gated, pass-capped, raised
+  // confidence bar, full PR review loop). Persistable deliberately, unlike
+  // unlockForRun: a scheduled unattended run is exactly where the user wants
+  // the pipeline improving itself. Optional + additive so older peers fall
+  // through to off.
+  observer: z.boolean().optional(),
 }).strict();
 
 // Cursor-context payload for the CD-bridge suggest route — identical shape to

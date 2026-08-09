@@ -177,6 +177,9 @@ export const sanitizeAutopilot = (raw) => {
     // Pipeline self-improvement verdict for the run that just ended (null unless
     // the run opted in and its telemetry warranted a diagnosis).
     selfImprove: sanitizeAutopilotSelfImprove(raw.selfImprove),
+    // Observing-orchestrator activity for the run that just ended (null unless
+    // the run opted in and the observer dispatched at least one fix task).
+    observer: sanitizeAutopilotObserver(raw.observer),
     updatedAt: isStr(raw.updatedAt) ? raw.updatedAt : null,
   };
 };
@@ -225,6 +228,31 @@ const sanitizeAutopilotSelfImprove = (raw) => {
     filed: raw.filed === true,
     duplicate: raw.duplicate === true,
   };
+};
+
+// Observing-orchestrator summary for the run that just ended: how many passes
+// it spent and which fix tasks it dispatched, so the status banner can report
+// "the pipeline is being fixed" without re-reading the CoS task list. The
+// producer (observer.js#summarizeObserver) only reports when at least one task
+// was filed, so an empty list reads as null. Same transient-marker rationale as
+// pauseKind / craftGap* / selfImprove: no schema-gate bump.
+const AUTOPILOT_OBSERVER_MAX_FILED = 5;
+const sanitizeAutopilotObserver = (raw) => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const filed = (Array.isArray(raw.filed) ? raw.filed : [])
+    .map((f) => (f && typeof f === 'object'
+      ? {
+        area: trimTo(f.area, 40) || null,
+        title: trimTo(f.title, 160) || null,
+        taskId: trimTo(f.taskId, 64) || null,
+        filed: f.filed === true,
+        duplicate: f.duplicate === true,
+      }
+      : null))
+    .filter(Boolean)
+    .slice(0, AUTOPILOT_OBSERVER_MAX_FILED);
+  if (filed.length === 0) return null;
+  return { passes: toCount(raw.passes), filed };
 };
 
 // Per-series editorial-check config overrides (#1591). Shape:

@@ -131,6 +131,14 @@ const autopilotStartSchema = z.object({
   // That task always awaits human approval. Falls back to the persisted
   // pipelineEditorialChecks.selfImprove setting, then off.
   selfImprove: z.boolean().optional(),
+  // Observing orchestrator. When true, the run watches its own telemetry step
+  // by step and, when a step's fresh signals say the automation misbehaved,
+  // spends a bounded diagnosis call and dispatches an AUTO-APPROVED PortOS fix
+  // task — worktree-isolated, PR-opening, review-loop-then-merge, no human
+  // gate (the explicit opt-in IS the consent; see seriesAutopilot/observer.js).
+  // Supersedes the selfImprove terminal diagnosis when both are on. Falls back
+  // to the persisted pipelineEditorialChecks.observer setting, then off.
+  observer: z.boolean().optional(),
 });
 
 router.post('/series/:id/autopilot/start', asyncHandler(async (req, res) => {

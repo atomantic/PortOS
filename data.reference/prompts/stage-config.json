@@ -506,6 +506,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-observer": {
+      "name": "Pipeline — Observing Orchestrator",
+      "description": "In-flight observer for a Series Autopilot run (the continuous, self-dispatching sibling of the self-improve post-mortem): after a step whose fresh telemetry says the automation misbehaved — a retried/escalated child, a skipped step, an editorial check that threw, a filed gap — it reads the run's signal window and decides whether the fault is the STORY or the PIPELINE (a missing/misordered step, an ineffective loop, a broken check or prompt, a misconfigured gate, a missing option). Returns the same { verdict, confidence, area, title, problem, evidence, proposedChange, risks } JSON diagnosis at a HIGHER confidence bar: a `pipeline` verdict dispatches an AUTO-APPROVED, worktree-isolated CoS task that PRs and merges through the review loop without a human gate. Opt-in per run; bounded passes; never fires on a clean step.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-manuscript-completeness": {
       "name": "Pipeline — Manuscript Completeness",
       "description": "Developmental editor pass over the ACTUAL drafted manuscript (comic script / prose / teleplay across all issues), not synopses. Surfaces what's missing to FINISH a near-complete draft: missing-content (beats/pages/scenes), arc-gap (themes/protagonist turns the draft doesn't yet deliver), character-gap (under-developed cast), pacing, and continuity. Returns categorized { severity, category, issueNumber, anchorQuote, location, problem, suggestion } findings — issueNumber + anchorQuote anchor each finding to a manuscript spot so the editor can jump to it; empty list means complete.",

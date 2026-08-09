@@ -573,6 +573,70 @@ describe('AutopilotPanel', () => {
     });
   });
 
+  // Observing orchestrator — the opt-in that lets a run dispatch auto-approved
+  // pipeline fixes (PR + review loop + merge, no human gate) as it progresses.
+  describe('observing orchestrator', () => {
+    it('is off by default and persists the toggle on change', async () => {
+      renderPanel({ id: 's1', targetFormat: 'comic' });
+      await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+      fireEvent.click(screen.getByRole('button', { name: /options/i }));
+      const toggle = screen.getByLabelText(/observing orchestrator/i);
+      expect(toggle).not.toBeChecked();
+      fireEvent.click(toggle);
+      await waitFor(() => expect(patchSettingsSlice).toHaveBeenCalledWith(
+        'pipelineEditorialChecks', { observer: true }, { silent: true },
+      ));
+      // The explainer must say the quiet part out loud: fixes dispatch and
+      // merge without an approval step, and enabling this is the consent.
+      expect(await screen.findByText(/merges after the review loop with no approval step/i)).toBeInTheDocument();
+    });
+
+    it('sends the toggle as a per-run override once edited', async () => {
+      renderPanel({ id: 's1', targetFormat: 'comic' });
+      await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
+      fireEvent.click(screen.getByRole('button', { name: /options/i }));
+      fireEvent.click(screen.getByLabelText(/observing orchestrator/i));
+      fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
+      await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalledWith(
+        's1',
+        { includeVisual: true, fileGaps: false, observer: true },
+        { silent: true },
+      ));
+    });
+
+    it('renders a live observer:filed frame with the dispatched fix', async () => {
+      getPipelineAutopilotStatus.mockResolvedValue({ autopilot: { status: 'running' }, active: true });
+      sseLatest = { type: 'observer:filed', runId: 'r1', area: 'editorial-check', title: 'Check pleasantries at beat altitude', filed: true };
+      renderPanel({ id: 's1', targetFormat: 'comic' });
+      expect(await screen.findByText(/Orchestrator dispatched a pipeline fix \(editorial-check\): Check pleasantries at beat altitude/i)).toBeInTheDocument();
+    });
+
+    it('announces the dispatched fixes from the terminal frame', async () => {
+      getPipelineAutopilotStatus.mockResolvedValue({ autopilot: { status: 'running', runId: 'r1' }, active: true });
+      sseLatest = {
+        type: 'paused', runId: 'r1', reason: 'editorial review ran out of rounds',
+        observer: { passes: 2, filed: [{ area: 'runner', title: 'Retry budget is never applied', taskId: 't1', filed: true }] },
+      };
+      renderPanel({ id: 's1', targetFormat: 'comic' });
+      await waitFor(() => expect(toast).toHaveBeenCalledWith(
+        expect.stringMatching(/Orchestrator dispatched 1 pipeline fix.*review and merge on their own/i),
+      ));
+    });
+
+    it('lists the dispatched fixes on the persisted status banner', async () => {
+      renderPanel({
+        id: 's1',
+        targetFormat: 'comic',
+        autopilot: {
+          status: 'done', runId: 'r1',
+          observer: { passes: 1, filed: [{ area: 'pipeline-step', title: 'Verify beats before drafting text', taskId: 't1', filed: true }] },
+        },
+      });
+      expect(await screen.findByText(/Orchestrator dispatched 1 pipeline fix/i)).toBeInTheDocument();
+      expect(screen.getByText(/pipeline-step — Verify beats before drafting text/i)).toBeInTheDocument();
+    });
+  });
+
   it('renders canon readiness gaps with a link to the issue Nouns page', async () => {
     getPipelineSeriesCanonReadiness.mockResolvedValue({
       ready: false,

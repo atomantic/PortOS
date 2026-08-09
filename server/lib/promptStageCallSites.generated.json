@@ -258,6 +258,9 @@
   "pipeline-manuscript-fix": [
     "server/services/pipeline/manuscriptFix.js"
   ],
+  "pipeline-observer": [
+    "server/services/pipeline/seriesAutopilot/observer.js"
+  ],
   "pipeline-panel-editor": [
     "server/services/pipeline/readerPanel.js"
   ],
