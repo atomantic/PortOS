@@ -316,16 +316,20 @@ export function analyzeError(errorText, exitCode = null) {
  * than a real line start (the streaming detector keeps only a trailing window).
  * A marker anchored with `^…/m` matches a slice boundary too, so a quoted
  * banner whose line prefix fell out of the window would be promoted — the very
- * false-bench this gate exists to prevent. When the boundary is untrusted the
- * marker is tested only from the first newline on, so promotion needs a line
- * start the buffer actually witnessed. Pure.
+ * false-bench this gate exists to prevent. An untrusted boundary is therefore
+ * disqualified by prefixing a non-printing, non-line-terminator byte: every
+ * line start the buffer actually witnessed (JS `^…/m` honors a bare `\r` too,
+ * which is how a repainted TUI screen advances) still promotes, and nothing is
+ * discarded. Pure.
  */
+const UNTRUSTED_BOUNDARY = '\x00';
+
 function resolveSignalOrigin(signal, text, lineStartTrusted) {
   if (!signal.structuredMarker) return 'provider';
   const value = text || '';
-  const firstNewline = value.indexOf('\n');
-  const markerText = lineStartTrusted ? value : (firstNewline === -1 ? '' : value.slice(firstNewline + 1));
-  return signal.structuredMarker.test(markerText) ? 'provider' : 'output-scan';
+  return signal.structuredMarker.test(lineStartTrusted ? value : `${UNTRUSTED_BOUNDARY}${value}`)
+    ? 'provider'
+    : 'output-scan';
 }
 
 export function detectImmediateFallbackSignal(text, { lineStartTrusted = true } = {}) {

@@ -212,6 +212,16 @@ describe('Error Detection', () => {
       expect(result).toMatchObject({ origin: 'provider' });
     });
 
+    // A repainted TUI screen advances with a bare `\r` as often as a `\n`, and
+    // JS `^…/m` treats both as line starts — a banner behind a carriage return
+    // must still count as chrome.
+    it('promotes a banner that starts after a bare carriage return', () => {
+      const detect = createImmediateFallbackSignalDetector({ maxBuffer: 200 });
+      detect(`${'x'.repeat(300)}\r`);
+      expect(detect("⎿  We're finishing verifying your account eligibility. This usually takes a moment. Please try again shortly.\r"))
+        .toMatchObject({ origin: 'provider' });
+    });
+
     it('promotes a real banner that arrives later in a buffer whose earlier mention is quoted', () => {
       const transcript = "I will check whether We're finishing verifying your account eligibility. This usually takes a moment. Please try again shortly. is still firing.\n⎿  We're finishing verifying your account eligibility. This usually takes a moment. Please try again shortly.\n";
       expect(detectImmediateFallbackSignal(transcript)).toMatchObject({ origin: 'provider' });
