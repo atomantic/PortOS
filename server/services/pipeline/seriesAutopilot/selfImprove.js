@@ -28,14 +28,19 @@
  *     generated code-editing task in PortOS (layeredIntelligence's
  *     `buildHandoffTask`, `autoFixer`, `agentErrorAnalysis` all hard-code
  *     `approvalRequired: true`); the autonomy dial for this class of work is the
- *     CoS approval queue, not a per-series checkbox.
+ *     CoS approval queue, not a per-series checkbox. (The observing orchestrator
+ *     — `observer.js` — is the ONE deliberate exception: the user opts into its
+ *     unattended dispatch explicitly, and it supersedes this pass at the
+ *     terminal when both are enabled.)
  *
  * The signal log is captured passively: `state.js#noteSignal`, called from
  * `session.js#broadcast`, retains the same SSE frames the run already emits — so
  * a telemetry frame a future step adds becomes diagnosable evidence with no
  * extra instrumentation. It lives in `state.js` (the run-registry owner) rather
  * than here so this module can import the registry instead of the registry
- * importing the diagnosis.
+ * importing the diagnosis. The vocabulary, shape, and task/prompt frames shared
+ * with the observer live in `diagnosisCore.js` (a deliberate leaf — see its
+ * header) and are re-exported here for the existing import surface.
  *
  * PRIVACY: the diagnosis prompt asks for a defect report about PortOS's code and
  * prompts, explicitly NOT about the story — and `shapeDiagnosis` bounds every
@@ -43,209 +48,66 @@
  * PR. Manuscript text must not travel into that task.
  */
 
-import { PORTOS_APP_ID } from '../../../lib/appIdentity.js';
 import * as cosTaskStore from '../../cosTaskStore.js';
 import { getDomainBudgetStatus, recordDomainUsage } from '../../domainUsage.js';
-import { PR_COMPLETIONS } from '../../../lib/prDisposition.js';
 import { runStagedLLM } from '../../../lib/stageRunner.js';
 import { trimToClause } from '../../../lib/storyBible.js';
-import { slugify } from '../../../lib/planIds.js';
 import { getSettings } from '../../settings.js';
 import { buildEditorialCheckPlan } from '../editorial/checkRunner.js';
 import { getSeries } from '../series.js';
 import { summarizeSignals } from './state.js';
 import { broadcast, providerOverrideOpts } from './session.js';
+import {
+  SELF_IMPROVE_AREAS, buildDiagnosisStageVars, buildDiagnosisTask,
+  hasAutomationSignals, isActionableDiagnosis, shapeDiagnosis, terminalWarrantsDiagnosis,
+} from './diagnosisCore.js';
+
+// Re-export the shared diagnosis vocabulary under this module's established
+// import surface (tests and the barrel reach it here).
+export { SELF_IMPROVE_AREAS, hasAutomationSignals, shapeDiagnosis };
 
 const SELF_IMPROVE_STAGE = 'pipeline-self-improve';
 
 /**
- * Does this run carry evidence worth spending a diagnosis call on? Pure.
- *
- * `outcome` is the run's terminal disposition: 'done' | 'paused' | 'error'. A
- * cancel is never diagnosed — the user stopped it, so there is no failure to
- * explain. A pause or an error always is. A `done` run only qualifies when its
- * telemetry says the automation limped: a check threw, a child had to be
- * retried/escalated, a step was skipped, or the advisory craft gate filed gaps.
+ * Does this run carry evidence worth spending a diagnosis call on? Pure — the
+ * opt-in/execute predicate composed with the shared terminal ladder.
  */
 export function shouldDiagnose(record, outcome) {
   if (!record || record.options?.selfImprove !== true || record.mode !== 'execute') return false;
-  if (outcome === 'paused' || outcome === 'error') return true;
-  if (outcome !== 'done') return false;
-  return hasAutomationSignals(record);
+  return terminalWarrantsDiagnosis(record, outcome);
 }
-
-/**
- * Did the run's telemetry say the AUTOMATION limped — a check that threw, a
- * filed craft gap, a retried/escalated child, a skipped step? Pure. Shared with
- * the observing orchestrator (observer.js), whose terminal pass gates on the
- * same evidence.
- */
-export function hasAutomationSignals(record) {
-  const rs = record?.runState || {};
-  if (rs.editorialCheckErroredIds?.size > 0) return true;
-  if (rs.scriptCraftGapIssues?.size > 0) return true;
-  return (record?.signals || []).some((s) => (
-    s.type === 'child:retry' || s.type === 'child:escalate' || s.type === 'step:skip'
-    || (s.type === 'check:complete' && s.error)
-  ));
-}
-
-// The verdict vocabulary. `pipeline` is the only one that files anything (and the
-// only one this pass reports at all — see runSelfImproveDiagnosis); `content`
-// means the manuscript, not the code, needs work, and `none` means the run's
-// trouble was expected/benign.
-const SELF_IMPROVE_VERDICTS = Object.freeze(['pipeline', 'content', 'none']);
-
-// Where in PortOS the proposed fix belongs. Prefixes the filed task's dedup key
-// (see buildSelfImproveTask) and tells a reader which part of the system the
-// brief is about before they open it. Exported as the base vocabulary the
-// observing orchestrator (observer.js) extends.
-export const SELF_IMPROVE_AREAS = Object.freeze([
-  'editorial-check', 'pipeline-step', 'prompt', 'runner', 'config',
-]);
 
 // A diagnosis below this confidence is dropped rather than filed — a speculative
 // "maybe the pipeline?" is not worth a coding agent's time.
 export const SELF_IMPROVE_MIN_CONFIDENCE = 0.6;
 
 /**
- * Sanitize the LLM's diagnosis into the fixed shape the rest of this module
- * relies on. Returns null when the payload can't be read as a verdict at all.
- * Pure. `areas` is the accepted area vocabulary — the observer passes its
- * extended set; the default keeps the post-mortem's behavior unchanged.
- */
-export function shapeDiagnosis(raw, areas = SELF_IMPROVE_AREAS) {
-  if (!raw || typeof raw !== 'object') return null;
-  const verdict = SELF_IMPROVE_VERDICTS.includes(raw.verdict) ? raw.verdict : null;
-  if (!verdict) return null;
-  const confidence = Number.isFinite(raw.confidence)
-    ? Math.min(1, Math.max(0, raw.confidence))
-    : 0;
-  return {
-    verdict,
-    confidence,
-    area: areas.includes(raw.area) ? raw.area : 'pipeline-step',
-    title: trimToClause(raw.title, 160),
-    problem: trimToClause(raw.problem, 2000),
-    evidence: Array.isArray(raw.evidence)
-      ? raw.evidence.map((e) => trimToClause(e, 400)).filter(Boolean).slice(0, 8)
-      : [],
-    proposedChange: trimToClause(raw.proposedChange, 2000),
-    risks: trimToClause(raw.risks, 800),
-  };
-}
-
-/**
  * Should this shaped diagnosis produce a CoS task? Pure — a pipeline verdict
  * that clears the confidence bar and actually says what to change.
  */
 export function isFilable(diagnosis) {
-  return !!diagnosis
-    && diagnosis.verdict === 'pipeline'
-    && diagnosis.confidence >= SELF_IMPROVE_MIN_CONFIDENCE
-    && !!diagnosis.title
-    && !!diagnosis.proposedChange;
+  return isActionableDiagnosis(diagnosis, SELF_IMPROVE_MIN_CONFIDENCE);
 }
 
 /**
- * Shape the CoS task for a filable diagnosis. Pure, so the dedup key and the
- * agent-facing brief are testable without a task store.
- *
- * `description` is ONE LINE, and that is a hard requirement, not a style choice:
- * `generateTasksMarkdown` writes the description verbatim into a single
- * `- [ ] #id | PRIORITY | <description>` row (only *metadata* values go through
- * `escapeNewlines`). A multi-line description therefore spills its tail into
- * TASKS.md as stray un-parsed lines AND is truncated to its first line on the
- * next read — silently dropping the entire brief, so the agent would receive a
- * defect report with no defect in it. The brief lives in `context`, which is
- * newline-escaped and round-trips intact.
- *
- * That one line is also the dedup key (cosTaskStore matches on it, lowercased,
- * scoped to the app), so it carries the area AND a slug of the diagnosis itself.
- * Area alone would be wrong in both directions: it is deliberately NOT
- * per-series (the defect lives in shared PortOS code, so one open task should
- * cover it however many series hit it), but keying on the bucket would cap
- * PortOS at one open task per area forever and silently discard the next,
- * different `editorial-check` defect — and a task that ends up `blocked` counts
- * as a duplicate too, which would mute that area permanently. The slug is the
- * kebab-cased title, so the row stays readable in TASKS.md.
+ * Shape the approval-gated CoS task for a filable diagnosis. Pure. The dedup
+ * key/one-line-description contract and the brief layout live in
+ * `diagnosisCore.js#buildDiagnosisTask`; this supplies the post-mortem's
+ * wording and its `approvalRequired: true` policy (see the module header).
  */
 export function buildSelfImproveTask({ diagnosis, seriesId, seriesName, outcome, outcomeReason, counts }) {
-  const slug = slugify(diagnosis.title);
-  const brief = [
-    `Series Autopilot diagnosed a PortOS automation defect: ${diagnosis.title}`,
-    '',
-    diagnosis.problem,
-    '',
-    `Proposed change: ${diagnosis.proposedChange}`,
-  ];
-  if (diagnosis.risks) brief.push('', `Risks / things to be careful of: ${diagnosis.risks}`);
-  if (diagnosis.evidence.length) {
-    brief.push('', 'Evidence from the run telemetry:', ...diagnosis.evidence.map((e) => `- ${e}`));
-  }
-  brief.push(
-    '',
-    `Diagnosed from an autopilot run on series ${seriesId}${seriesName ? ` ("${seriesName}")` : ''} that ended \`${outcome}\`${outcomeReason ? ` — ${trimToClause(outcomeReason, 500)}` : ''}.`,
-    `Signal counts: ${JSON.stringify(counts)}.`,
-    'Confirm the defect in the code before changing anything: this brief is one LLM\'s read of a single run\'s telemetry, not a reproduction.',
-  );
-  return {
-    description: `Pipeline self-improvement (${diagnosis.area}/${slug})`,
-    context: brief.join('\n').slice(0, 4000),
-    app: PORTOS_APP_ID,
-    priority: 'MEDIUM',
-    // Always isolated, always via a PR, always approval-gated — see the module
-    // header. `approvalRequired` is honored only for internal tasks, which is
-    // why this files as one.
-    useWorktree: true,
-    openPR: true,
-    prCompletion: PR_COMPLETIONS.REVIEW_THEN_MERGE,
-    simplify: true,
+  return buildDiagnosisTask({
+    diagnosis,
+    descriptionPrefix: 'Pipeline self-improvement',
+    leadLine: `Series Autopilot diagnosed a PortOS automation defect: ${diagnosis.title}`,
+    tailLines: [
+      `Diagnosed from an autopilot run on series ${seriesId}${seriesName ? ` ("${seriesName}")` : ''} that ended \`${outcome}\`${outcomeReason ? ` — ${trimToClause(outcomeReason, 500)}` : ''}.`,
+      `Signal counts: ${JSON.stringify(counts)}.`,
+      'Confirm the defect in the code before changing anything: this brief is one LLM\'s read of a single run\'s telemetry, not a reproduction.',
+    ],
     approvalRequired: true,
-  };
+  });
 }
-
-// The conductor's step order, as prose the diagnosis prompt can reason over when
-// asked "is a step missing, and where would it go?". Mirrors resolveNextStep's
-// STEP comments — a step added there should gain a line here so the model isn't
-// told to add something that already exists. Exported for the observer's prompt,
-// which reasons over the same order.
-export const STEP_SEQUENCE = [
-  'generateArc — draft the whole-series arc + volumes',
-  'generateEpisodes — break each volume into issues',
-  'verifyArc — cross-volume synopsis continuity verify → resolve loop',
-  'foundationGate — weighted judge of world/characters/arc before drafting',
-  'beatSheet — per-volume beat sheets',
-  'beatContinuity — whole-manuscript beat-level continuity loop',
-  'textStages — per-issue prose + scripts',
-  'scriptVerify — structural page/panel parse gate + advisory craft gate',
-  'editorialReview — series-level manuscript completeness review → fix loop',
-  'reverseOutline — refresh scene segmentation for the checks that consume it',
-  'editorialChecks — registry-driven editorial checks (deterministic + LLM)',
-  'editorialHealthGate — readiness gate over open blocking findings',
-  'revisionCycle — opt-in iterate-to-quality adversarial cut + judge loop',
-  'canonVerify — every drawn canon noun has a description',
-  'visualDraft — queue draft renders for covers + interior pages',
-  'produceTeaser — opt-in Creative Director teaser video',
-].join('\n');
-
-// The run's effective gate configuration, as the diagnosis context. Only the
-// knobs that shape WHICH steps ran and how hard they tried — enough for the
-// model to tell "this gate is off" from "this gate ran and failed". Exported
-// for the observer, whose prompt carries the same context.
-export const gateConfigOf = (options) => ({
-  maxArcVerifyRounds: options.maxArcVerifyRounds,
-  maxBeatContinuityRounds: options.maxBeatContinuityRounds,
-  maxEditorialRounds: options.maxEditorialRounds,
-  maxFoundationRounds: options.maxFoundationRounds,
-  foundationGate: options.foundationGate,
-  foundationThreshold: options.foundationThreshold,
-  readinessGate: options.readinessGate,
-  checkFindingsPauseThreshold: options.checkFindingsPauseThreshold,
-  revisionEnabled: options.revisionEnabled,
-  includeVisual: options.includeVisual,
-  target: options.target,
-});
 
 /**
  * Run the meta-diagnosis at a run's terminal and file a PortOS task when the
@@ -278,22 +140,9 @@ export async function runSelfImproveDiagnosis(sId, record, { outcome, reason = n
   broadcast(sId, { type: 'selfimprove:start', runId: record.runId, outcome, signals: signals.length });
 
   const { content } = await runStagedLLM(SELF_IMPROVE_STAGE, {
-    seriesName: series?.name || 'unknown',
-    targetFormat: series?.targetFormat || 'unknown',
+    ...buildDiagnosisStageVars(record, { series, checkPlan, signals, counts, dropped }),
     outcome,
     outcomeReason: trimToClause(reason, 1000) || 'none',
-    stepSequence: STEP_SEQUENCE,
-    gateConfigJson: JSON.stringify(gateConfigOf(record.options || {}), null, 2),
-    enabledChecks: (checkPlan?.checks || []).map((c) => `${c.id} (${c.kind})`).join(', ') || 'none',
-    // One COMPACT frame per line, not a pretty-printed array: the frames are flat
-    // and scalar-only, so indenting them puts every key on its own line and
-    // roughly doubles the token count of the single expensive call this feature
-    // makes. One object per line reads the same to the model at half the cost.
-    signalsJson: signals.map((s) => JSON.stringify(s)).join('\n').slice(0, 40_000),
-    signalCountsJson: JSON.stringify(counts, null, 2),
-    droppedSignals: dropped,
-    erroredChecks: [...(record.runState?.editorialCheckErroredIds || [])].join(', ') || 'none',
-    craftGapIssues: record.runState?.scriptCraftGapIssues?.size || 0,
   }, { ...providerOverrideOpts(record), returnsJson: true, source: SELF_IMPROVE_STAGE });
   await recordDomainUsage('cos', { actions: 1 });
 

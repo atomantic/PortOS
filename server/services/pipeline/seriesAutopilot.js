@@ -77,6 +77,7 @@ export * from './seriesAutopilot/config.js';
 export * from './seriesAutopilot/convergence.js';
 export * from './seriesAutopilot/stepResolver.js';
 export * from './seriesAutopilot/session.js';
+export * from './seriesAutopilot/diagnosisCore.js';
 export * from './seriesAutopilot/selfImprove.js';
 export * from './seriesAutopilot/observer.js';
 export * from './seriesAutopilot/childRuns.js';
