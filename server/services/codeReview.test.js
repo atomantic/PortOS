@@ -340,6 +340,17 @@ describe('codeReview helpers', () => {
       expect(out.reviewerEfforts).toEqual({})
     })
 
+    it('strips only the unusable entries from a mixed effort map', async () => {
+      mockedSettings.current = { codeReview: { reviewers: ['codex', 'antigravity'] } }
+      const out = await resolveReviewLoopOptions(
+        { reviewerEfforts: { codex: 'minimal', antigravity: 'max' } },
+        testDeps,
+      )
+      // `minimal` is on codex's ladder and `max` is not on agy's — one bad entry
+      // must not take the whole map down with it.
+      expect(out.reviewerEfforts).toEqual({ codex: 'minimal' })
+    })
+
     it('drops a stale out-of-ladder scalar from the saved defaults', async () => {
       // settings.json is hand-editable, so the scalars are re-validated rather
       // than trusted — an unusable level must not surface as a pin.

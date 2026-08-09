@@ -218,6 +218,22 @@ describe('syncAccount error reporting', () => {
     await syncAccount('acct-1');
     expect(executeXBrowserRead).toHaveBeenCalledTimes(6);
   });
+
+  // The release lives in a `.finally()`, so a failed read must free the account
+  // too — otherwise the cached rejection is handed to every later sync and the
+  // account can never be retried without a restart.
+  it('releases the sync lock after a failed read so the account can be retried', async () => {
+    executeXBrowserRead.mockRejectedValue(new Error('browser session died'));
+    await expect(syncAccount('acct-1')).rejects.toThrow('browser session died');
+
+    executeXBrowserRead.mockImplementation(async (name) => (name === 'people'
+      ? { handles: ['example_user'], exactMatch: true }
+      : { profile: { username: 'example_user' }, posts: [] }));
+    const client = { query: vi.fn().mockResolvedValue({ rows: [] }) };
+    withTransaction.mockImplementation(async (callback) => callback(client));
+
+    await expect(syncAccount('acct-1')).resolves.toMatchObject({ ingested: 0 });
+  });
 });
 
 describe('reviewDraft state transitions', () => {
@@ -295,6 +311,16 @@ describe('openApprovedDraft approval gates', () => {
     const opened = await openApprovedDraft('draft-1');
     expect(openXHandoff).toHaveBeenCalledWith({ kind: 'compose', value: 'hello world' });
     expect(opened.state).toBe('opened');
+    // Both statements bind the id the caller asked for — the mock answers any
+    // SQL, so the parameter is what pins the lookup to the right draft.
+    const bound = query.mock.calls.filter(([sql]) => /x_drafts/.test(sql)).map(([, params]) => params[0]);
+    expect(bound).toEqual(['draft-1', 'draft-1']);
+  });
+
+  it('returns null for a draft id that does not exist', async () => {
+    mockDraft(null);
+    await expect(openApprovedDraft('draft-missing')).resolves.toBeNull();
+    expect(openXHandoff).not.toHaveBeenCalled();
   });
 
   // The 24h gate is the feature's safety story: an approval the user made
@@ -308,6 +334,7 @@ describe('openApprovedDraft approval gates', () => {
   it('still opens a draft approved just inside the 24h window', async () => {
     mockDraft(draftRow({ approved_at: new Date(Date.now() - 23 * 60 * 60 * 1000).toISOString() }));
     await expect(openApprovedDraft('draft-fresh')).resolves.toMatchObject({ state: 'opened' });
+    expect(openXHandoff).toHaveBeenCalledWith({ kind: 'compose', value: 'hello world' });
   });
 
   it('refuses an approved-state draft with no approval timestamp', async () => {
@@ -336,5 +363,19 @@ describe('openApprovedDraft approval gates', () => {
     const second = openApprovedDraft('draft-1');
     await Promise.all([first, second]);
     expect(openXHandoff).toHaveBeenCalledTimes(1);
+
+    // The lock releases once the run settles, so a later open is a fresh handoff.
+    await openApprovedDraft('draft-1');
+    expect(openXHandoff).toHaveBeenCalledTimes(2);
+  });
+
+  // Same `.finally()` release as syncAccount: a refused open must not leave the
+  // cached rejection behind for every later attempt on that draft.
+  it('releases the open lock after a refusal so a re-approved draft can open', async () => {
+    mockDraft(draftRow({ approved_at: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString() }));
+    await expect(openApprovedDraft('draft-1')).rejects.toThrow('X draft approval is stale');
+
+    mockDraft(draftRow());
+    await expect(openApprovedDraft('draft-1')).resolves.toMatchObject({ state: 'opened' });
   });
 });
