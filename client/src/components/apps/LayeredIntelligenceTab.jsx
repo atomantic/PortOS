@@ -5,6 +5,7 @@ import LayeredIntelligenceOutcomes from './LayeredIntelligenceOutcomes';
 import { filterSelectableModels } from '../../utils/providers';
 import { timeAgo } from '../../utils/formatters';
 import { formatLiReason, liReasonTone } from '../../utils/layeredIntelligenceReasons';
+import { INPUT_CLASS } from './constants';
 
 // The self-improvement loop's per-app config surface. Field set mirrors the
 // server schema (server/lib/validation.js `layeredIntelligenceConfigSchema`)
@@ -34,8 +35,6 @@ export const LI_SCOPES = [
   { id: 'loop-meta', label: 'Loop meta', portosOnly: true, hint: 'Improve the intelligence loop itself (PortOS only)' },
   { id: 'portos-self', label: 'PortOS self', portosOnly: true, hint: 'Improve PortOS itself (PortOS only)' }
 ];
-
-const INPUT_CLASS = 'w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden';
 
 // Common cadences for the interval select. Values are milliseconds; the schema
 // floor is 60_000 (1 minute). A stored non-preset value renders as "Custom".

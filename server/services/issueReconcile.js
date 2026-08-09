@@ -54,8 +54,7 @@ import { execGit } from '../lib/execGit.js';
 import { execGh, ensureForgeReachable } from './github.js';
 import { execGlab } from './gitlab.js';
 import { fetchMyCurrentSprintTickets } from './jira.js';
-import { getOriginInfo, readOriginRemoteUrl } from '../lib/gitRemote.js';
-import { hostToWorkTracker, hostFromOriginUrl, githubRepoSpec, githubApiHost } from '../lib/workTracker.js';
+import { resolveRepoForgeTarget } from '../lib/workTracker.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 
 // Bound the forge queries (single-user repos never realistically truncate at 200).
@@ -385,55 +384,23 @@ async function getGitlabState(repoPath, fullName) {
 }
 
 /**
- * Best-effort `group[/subgroup...]/project` display path from a GitLab origin
- * URL. Only cosmetic (it feeds the prompt header) — `glab` targets the project
- * from the repo cwd, not this string — so it degrades to the host classifier's
- * fullName or the raw origin URL rather than blocking the scan.
- */
-function gitlabProjectPath(originUrl) {
-  if (typeof originUrl !== 'string') return null;
-  // scheme://[user@]host[:port]/<path>  OR  [user@]host:<path>  — capture <path>,
-  // then strip a trailing `.git`.
-  const m = originUrl.trim().match(/^[a-zA-Z][\w+.-]*:\/\/(?:[^/@]+@)?[^/]+\/(.+)$/)
-    || originUrl.trim().match(/^(?:[^@/]+@)?[^/:]+:(.+)$/);
-  return m ? m[1].replace(/\.git$/i, '').replace(/\/$/, '') : null;
-}
-
-/**
  * Resolve the app's forge from its git origin host and fetch the corresponding
  * state. github.* → GitHub, gitlab.* → GitLab; any other remote (or no origin)
  * returns null so the caller skips without parking.
  *
- * GitHub is resolved via `githubRepoSpec` (github.com AND enterprise github.*),
- * mirroring prWatcher — `getOriginInfo().isGithub` is github.com-only and
- * silently skipped enterprise repos. That helper also needs a parsed `owner/repo`
- * to build the host-qualified `--repo` selector. GitLab is classified
- * straight off the origin HOST via the
- * subgroup-safe `hostFromOriginUrl`, NOT `getOriginInfo().fullName`: the latter's
- * strict `owner/repo` parse returns null for a nested `group/subgroup/project`
- * remote (the common GitLab layout), which would silently skip the scan even
- * though `glab` resolves the project from the cwd regardless.
+ * The origin→forge classification itself (enterprise-aware GitHub `--repo`
+ * selector, subgroup-safe GitLab host match) lives in `resolveRepoForgeTarget`
+ * so this scan and the app Issues tab can't drift on what counts as a queryable
+ * repo; only the state-fetching differs here.
  * @param {string} repoPath
  * @returns {Promise<object|null>}
  */
 async function getForgeState(repoPath) {
-  const origin = await getOriginInfo(repoPath).catch(() => null);
-  // GitHub (incl. enterprise): githubRepoSpec is the host-qualified
-  // `HOST/OWNER/REPO` --repo selector (deterministic on fork+upstream checkouts),
-  // or null when the origin isn't a resolvable GitHub repo.
-  const githubSpec = githubRepoSpec(origin);
-  if (githubSpec) return getGithubState(githubSpec, origin.fullName, githubApiHost(origin.host));
-
-  // GitLab: classify off the host (subgroup-safe). `glab` is cwd-based, so a
-  // display path is best-effort — prefer getOriginInfo's fullName, else derive the
-  // full project path from the URL, else fall back to the host.
-  const originUrl = await readOriginRemoteUrl(repoPath).catch(() => null);
-  const host = origin?.host || hostFromOriginUrl(originUrl);
-  if (hostToWorkTracker(host) === 'gitlab') {
-    const displayName = origin?.fullName || gitlabProjectPath(originUrl) || host;
-    return getGitlabState(repoPath, displayName);
-  }
-  return null;
+  const target = await resolveRepoForgeTarget(repoPath);
+  if (!target) return null;
+  if (target.forge === 'github') return getGithubState(target.repoSpec, target.fullName, target.apiHost);
+  // `glab` is cwd-based, so `fullName` here is only a display path.
+  return getGitlabState(repoPath, target.fullName);
 }
 
 /**

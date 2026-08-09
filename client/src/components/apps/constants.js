@@ -1,5 +1,10 @@
 export const NON_PM2_TYPES = new Set(['ios-native', 'macos-native', 'xcode', 'swift']);
 
+// The app-config text input / select styling. Shared so a restyle of these forms
+// is one edit rather than one per config surface. Must stay a COMPLETE literal
+// class string — Tailwind only sees classes it can read in source.
+export const INPUT_CLASS = 'w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden';
+
 // Mirrors DESKTOP_TYPES in server/services/streamingDetect.js — app types that run
 // a GUI/desktop process with no HTTP port (a game binary). Kept in sync by hand
 // (a parity test asserts the two Sets match); the server stays the source of truth
@@ -58,6 +63,9 @@ export const WORK_TRACKER_LABELS = Object.fromEntries(
 export const workItemNoun = (tracker) =>
   tracker === 'jira' ? 'ticket' : (tracker === 'github' || tracker === 'gitlab') ? 'issue' : 'item';
 
+// Overview first, then alphabetical. Every id is a real route segment
+// (`/apps/:appId/:tab`) so each tab is linkable, bookmarkable, and reachable
+// from ⌘K — see the routing rules in client/src/CLAUDE.md.
 export const APP_DETAIL_TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'automation', label: 'Automation' },
@@ -65,6 +73,8 @@ export const APP_DETAIL_TABS = [
   { id: 'documents', label: 'Documents' },
   { id: 'git', label: 'Git' },
   { id: 'gsd', label: 'GSD' },
+  { id: 'issues', label: 'Issues' },
+  { id: 'jira', label: 'JIRA' },
   { id: 'processes', label: 'Processes' },
   { id: 'references', label: 'References' },
   { id: 'tasks', label: 'Tasks' },

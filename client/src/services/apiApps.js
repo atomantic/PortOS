@@ -21,6 +21,12 @@ export const getAppWorkItems = (id, { issueAuthorFilter } = {}, options) => {
   const qs = issueAuthorFilter ? `?issueAuthorFilter=${encodeURIComponent(issueAuthorFilter)}` : '';
   return request(`/apps/${id}/work-items${qs}`, { silent: true, ...options });
 };
+// Every OPEN issue on the forge this app's git origin points at (GitHub via gh,
+// GitLab via glab): { forge, fullName, issues: [{ number, title, body, labels,
+// assignees, author, url, createdAt, updatedAt }], reason, transient }. Backs the
+// app Issues tab. Read-only; the tab owns its own error UI, so default to silent.
+export const getAppIssues = (id, options) =>
+  request(`/apps/${id}/issues`, { silent: true, ...options });
 // Effective Layered Intelligence config (self-improvement loop) for an app —
 // stored partial merged over the shipped defaults. Read-only; saved through
 // updateApp (the `layeredIntelligence` key routes to the merge helper server-
@@ -36,9 +42,13 @@ export const createApp = (data) => request('/apps', {
   method: 'POST',
   body: JSON.stringify(data)
 });
-export const updateApp = (id, data) => request(`/apps/${id}`, {
+// Partial update — the server shallow-merges, so a body carrying one slice (e.g.
+// `{ jira }` from the JIRA tab) leaves every other field untouched. Pass
+// `{ silent: true }` when the caller renders its own error UI.
+export const updateApp = (id, data, options = {}) => request(`/apps/${id}`, {
   method: 'PUT',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
 export const deleteApp = (id) => request(`/apps/${id}`, { method: 'DELETE' });
 

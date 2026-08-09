@@ -14,13 +14,17 @@ import { PROVIDER_TYPES } from '../../utils/providers';
 import { DEFAULT_PR_COMPLETION, PR_COMPLETION_OPTIONS, prCompletionOption } from '../cos/constants';
 import { WORK_TRACKER_OPTIONS, WORK_TRACKER_LABELS } from './constants';
 
+// JIRA is deliberately absent: its config moved to the app detail page's JIRA
+// tab (/apps/:id/jira), where it sits next to the sprint board it drives and has
+// the width the instance/project/board pickers need. This drawer therefore never
+// sends a `jira` key — the PUT shallow-merges server-side, so the stored config
+// is preserved untouched.
 const TABS = [
   { id: 'general', label: 'General' },
   { id: 'ports', label: 'Ports & TLS' },
   { id: 'commands', label: 'Commands' },
   { id: 'workflow', label: 'Workflow' },
   { id: 'intelligence', label: 'Intelligence' },
-  { id: 'jira', label: 'JIRA' },
   { id: 'datadog', label: 'DataDog' }
 ];
 const TAB_IDS = TABS.map(t => t.id);
@@ -32,10 +36,6 @@ const PORT_FIELDS = [
   ['apiPort', 'API Port'],
   ['tlsPort', 'TLS Port']
 ];
-
-// A JIRA issue key like CONTECH-1553 — used to tell "user typed a key to validate"
-// from "user is searching an epic by name" in the epic field.
-const EPIC_KEY_RE = /^[A-Za-z][A-Za-z0-9]*-\d+$/;
 
 export default function EditAppDrawer({ app, onClose, onSave }) {
   const [activeTab, setActiveTab] = useDrawerTab('appTab', 'general', TAB_IDS);
@@ -59,15 +59,6 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     defaultOpenPR: app.defaultOpenPR || false,
     defaultPrCompletion: app.defaultPrCompletion || DEFAULT_PR_COMPLETION,
     defaultUseWorktree: app.defaultUseWorktree || app.defaultOpenPR || false,
-    jiraEnabled: app.jira?.enabled || false,
-    jiraInstanceId: app.jira?.instanceId || '',
-    jiraProjectKey: app.jira?.projectKey || '',
-    jiraBoardId: app.jira?.boardId || '',
-    jiraIssueType: app.jira?.issueType || 'Task',
-    jiraLabels: (app.jira?.labels || []).join(', '),
-    jiraAssignee: app.jira?.assignee || '',
-    jiraEpicKey: app.jira?.epicKey || '',
-    jiraCreatePR: app.jira?.createPR !== false,
     datadogEnabled: app.datadog?.enabled || false,
     datadogInstanceId: app.datadog?.instanceId || '',
     datadogServiceName: app.datadog?.serviceName || '',
@@ -120,28 +111,12 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     }
   };
   const [workTrackerInfo, setWorkTrackerInfo] = useState(null);
-  const [jiraInstances, setJiraInstances] = useState([]);
   const [datadogInstances, setDatadogInstances] = useState([]);
-  const [jiraProjects, setJiraProjects] = useState([]);
-  const [loadingProjects, setLoadingProjects] = useState(false);
-  const [projectSearch, setProjectSearch] = useState('');
-  const [projectDropdownOpen, setProjectDropdownOpen] = useState(false);
-  const [jiraBoards, setJiraBoards] = useState([]);
-  const [loadingBoards, setLoadingBoards] = useState(false);
-  const [boardSprints, setBoardSprints] = useState([]);
-  const [epicResults, setEpicResults] = useState([]);
-  const [epicDropdownOpen, setEpicDropdownOpen] = useState(false);
-  const [epicValidation, setEpicValidation] = useState({ state: 'idle' });
 
   useEffect(() => {
-    const toInstances = (data) => data?.instances ? Object.values(data.instances) : [];
-    Promise.all([
-      api.getJiraInstances().then(toInstances).catch(() => []),
-      api.getDatadogInstances().then(toInstances).catch(() => [])
-    ]).then(([jira, datadog]) => {
-      setJiraInstances(jira);
-      setDatadogInstances(datadog);
-    });
+    api.getDatadogInstances()
+      .then(data => setDatadogInstances(data?.instances ? Object.values(data.instances) : []))
+      .catch(() => setDatadogInstances([]));
   }, []);
 
   useEffect(() => {
@@ -201,119 +176,6 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
   useEffect(() => loadLayeredIntelligence(), [loadLayeredIntelligence]);
 
   const updateLiConfig = (patch) => setLiConfig(prev => ({ ...(prev || {}), ...patch }));
-
-  useEffect(() => {
-    if (!formData.jiraInstanceId) {
-      setJiraProjects([]);
-      return;
-    }
-    setLoadingProjects(true);
-    api.getJiraProjects(formData.jiraInstanceId).then(projects => {
-      setJiraProjects(projects || []);
-    }).catch(() => setJiraProjects([])).finally(() => setLoadingProjects(false));
-  }, [formData.jiraInstanceId]);
-
-  useEffect(() => {
-    if (!formData.jiraInstanceId || formData.jiraAssignee) return;
-    const inst = jiraInstances.find(i => i.id === formData.jiraInstanceId);
-    if (inst?.email) {
-      setFormData(prev => ({ ...prev, jiraAssignee: inst.email }));
-    }
-  }, [formData.jiraInstanceId, jiraInstances, formData.jiraAssignee]);
-
-  // Detect the project's agile boards so the boardId is picked from live data
-  // instead of hand-typed (which is how a boardId goes stale across a migration).
-  useEffect(() => {
-    if (!formData.jiraInstanceId || !formData.jiraProjectKey) {
-      setJiraBoards([]);
-      return;
-    }
-    let cancelled = false;
-    setLoadingBoards(true);
-    api.getJiraBoards(formData.jiraInstanceId, formData.jiraProjectKey, { silent: true })
-      .then(boards => { if (!cancelled) setJiraBoards(boards || []); })
-      .catch(() => { if (!cancelled) setJiraBoards([]); })
-      .finally(() => { if (!cancelled) setLoadingBoards(false); });
-    return () => { cancelled = true; };
-  }, [formData.jiraInstanceId, formData.jiraProjectKey]);
-
-  // Show the selected board's active sprint as confirmation it's the right board.
-  useEffect(() => {
-    if (!formData.jiraInstanceId || !formData.jiraBoardId) {
-      setBoardSprints([]);
-      return;
-    }
-    let cancelled = false;
-    api.getJiraBoardSprints(formData.jiraInstanceId, formData.jiraBoardId, { silent: true })
-      .then(sprints => { if (!cancelled) setBoardSprints(sprints || []); })
-      .catch(() => { if (!cancelled) setBoardSprints([]); });
-    return () => { cancelled = true; };
-  }, [formData.jiraInstanceId, formData.jiraBoardId]);
-
-  // Validate the configured epic key still resolves as an Epic on this instance.
-  useEffect(() => {
-    const key = formData.jiraEpicKey.trim();
-    if (!formData.jiraInstanceId || !EPIC_KEY_RE.test(key)) {
-      setEpicValidation({ state: 'idle' });
-      return;
-    }
-    let cancelled = false;
-    setEpicValidation({ state: 'checking' });
-    const t = setTimeout(() => {
-      api.getJiraIssue(formData.jiraInstanceId, key, { silent: true })
-        .then(issue => {
-          if (cancelled) return;
-          const isEpic = (issue.issueType || '').toLowerCase() === 'epic';
-          setEpicValidation({ state: isEpic ? 'ok' : 'wrongtype', issue });
-        })
-        .catch(() => { if (!cancelled) setEpicValidation({ state: 'stale' }); });
-    }, 400);
-    return () => { cancelled = true; clearTimeout(t); };
-  }, [formData.jiraInstanceId, formData.jiraEpicKey]);
-
-  // When the epic field holds free text (not a key), search epics by name to pick one.
-  useEffect(() => {
-    const q = formData.jiraEpicKey.trim();
-    if (!formData.jiraInstanceId || !formData.jiraProjectKey || q.length < 2 || EPIC_KEY_RE.test(q)) {
-      setEpicResults([]);
-      return;
-    }
-    let cancelled = false;
-    const t = setTimeout(() => {
-      api.searchJiraEpics(formData.jiraInstanceId, formData.jiraProjectKey, q, { silent: true })
-        .then(results => { if (!cancelled) setEpicResults(results || []); })
-        .catch(() => { if (!cancelled) setEpicResults([]); });
-    }, 300);
-    return () => { cancelled = true; clearTimeout(t); };
-  }, [formData.jiraInstanceId, formData.jiraProjectKey, formData.jiraEpicKey]);
-
-  // Project-key combobox options: filter by the search box, sort by key, cap at
-  // 100. Derived once per render so the predicate isn't duplicated between the
-  // option list and the "no matching projects" empty-state check below.
-  const filteredJiraProjects = jiraProjects
-    .filter(proj => {
-      if (!projectSearch) return true;
-      const q = projectSearch.toLowerCase();
-      return proj.key.toLowerCase().includes(q) || proj.name.toLowerCase().includes(q);
-    })
-    .sort((a, b) => a.key.localeCompare(b.key))
-    .slice(0, 100);
-
-  // A saved boardId that isn't among the project's detected boards is stale
-  // (e.g. carried over from a Server instance after a Cloud migration).
-  const boardIsStale = !!formData.jiraBoardId && jiraBoards.length > 0
-    && !jiraBoards.some(b => String(b.id) === String(formData.jiraBoardId));
-  const activeSprint = boardSprints[0] || null;
-
-  // Changing the instance or project invalidates the selected board, so clear it
-  // in one place — every discrete instance/project change goes through these so no
-  // call site forgets the reset. Deliberately interaction-driven, NOT a projectKey
-  // effect: an effect would fire on mount with the saved projectKey and wipe the
-  // saved boardId before the boards fetch resolves, defeating stale-board detection.
-  const changeInstance = (jiraInstanceId) =>
-    setFormData(prev => ({ ...prev, jiraInstanceId, jiraProjectKey: '', jiraBoardId: '' }));
-  const selectProject = (jiraProjectKey) =>
-    setFormData(prev => ({ ...prev, jiraProjectKey, jiraBoardId: '' }));
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -388,17 +250,6 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       defaultUseWorktree: formData.defaultUseWorktree || formData.defaultOpenPR,
       defaultOpenPR: formData.defaultOpenPR,
       defaultPrCompletion: formData.defaultPrCompletion,
-      jira: formData.jiraEnabled ? {
-        enabled: true,
-        instanceId: formData.jiraInstanceId || undefined,
-        projectKey: formData.jiraProjectKey || undefined,
-        boardId: formData.jiraBoardId || undefined,
-        issueType: formData.jiraIssueType || 'Task',
-        labels: formData.jiraLabels ? formData.jiraLabels.split(',').map(s => s.trim()).filter(Boolean) : [],
-        assignee: formData.jiraAssignee || undefined,
-        epicKey: formData.jiraEpicKey.trim() || undefined,
-        createPR: formData.jiraCreatePR
-      } : { enabled: false },
       datadog: formData.datadogEnabled ? {
         enabled: true,
         instanceId: formData.datadogInstanceId || undefined,
@@ -445,9 +296,9 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       tabs={TABS}
       activeTab={activeTab}
       onTabChange={setActiveTab}
-      // The form is long-lived and an accidental Esc / backdrop click while
-      // editing nested JIRA pickers would lose state. Preserve the modal's
-      // no-accidental-dismiss behavior.
+      // The form is long-lived and spans several tabs, so an accidental Esc /
+      // backdrop click mid-edit would discard work across all of them. Preserve
+      // the modal's no-accidental-dismiss behavior.
       closeOnEsc={false}
       closeOnBackdrop={false}
     >
@@ -459,9 +310,9 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
 
         {/* The Drawer body remounts per active tab (key={currentTab}), so this
             entire form/footer subtree is torn down and rebuilt on every tab
-            switch. All mutable form state (formData, error, saving, the JIRA
-            project-picker state) therefore MUST live above the Drawer body in
-            this component — never in an uncontrolled input or subcomponent
+            switch. All mutable form state (formData, error, saving, the layered
+            intelligence working copy) therefore MUST live above the Drawer body
+            in this component — never in an uncontrolled input or subcomponent
             inside the form, or it would silently reset on tab switch. */}
         <form onSubmit={handleSubmit} className="space-y-4">
           {activeTab === 'general' && (
@@ -793,260 +644,6 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
               error={liError}
               onRetry={loadLayeredIntelligence}
             />
-          )}
-
-          {activeTab === 'jira' && (
-            <div className="space-y-3">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={formData.jiraEnabled}
-                  onChange={e => setFormData({ ...formData, jiraEnabled: e.target.checked })}
-                  className="rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
-                />
-                <span className="text-sm text-white">Enable JIRA Integration</span>
-              </label>
-
-              {formData.jiraEnabled && (
-                <>
-                  {jiraInstances.length === 0 ? (
-                    <Banner tone="warning" size="md">
-                      No JIRA instances configured. <Link to="/devtools/jira" className="underline hover:text-white">Configure JIRA</Link> first.
-                    </Banner>
-                  ) : (
-                    <>
-                      <div>
-                        <label htmlFor="edit-app-jira-instance" className="block text-sm text-gray-400 mb-1">JIRA Instance</label>
-                        <select
-                          id="edit-app-jira-instance"
-                          value={formData.jiraInstanceId}
-                          onChange={e => changeInstance(e.target.value)}
-                          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                        >
-                          <option value="">Select instance...</option>
-                          {jiraInstances.map(inst => (
-                            <option key={inst.id} value={inst.id}>{inst.name} ({inst.baseUrl})</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="relative">
-                        <label htmlFor="edit-app-jira-project" className="block text-sm text-gray-400 mb-1">Project Key</label>
-                        {loadingProjects ? (
-                          <div className="text-xs text-gray-500">Loading projects...</div>
-                        ) : jiraProjects.length > 0 ? (
-                          <div>
-                            <input
-                              id="edit-app-jira-project"
-                              type="text"
-                              value={projectDropdownOpen ? projectSearch : (
-                                formData.jiraProjectKey
-                                  ? `${formData.jiraProjectKey} - ${jiraProjects.find(p => p.key === formData.jiraProjectKey)?.name || ''}`
-                                  : ''
-                              )}
-                              onChange={e => {
-                                setProjectSearch(e.target.value);
-                                if (!projectDropdownOpen) setProjectDropdownOpen(true);
-                              }}
-                              onFocus={() => {
-                                setProjectDropdownOpen(true);
-                                setProjectSearch('');
-                              }}
-                              onBlur={() => setTimeout(() => setProjectDropdownOpen(false), 150)}
-                              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                              placeholder="Search projects..."
-                            />
-                            {formData.jiraProjectKey && !projectDropdownOpen && (
-                              <button
-                                type="button"
-                                onClick={() => selectProject('')}
-                                aria-label="Clear JIRA project"
-                                className="absolute right-2 top-8 text-gray-500 hover:text-white text-sm"
-                              >
-                                x
-                              </button>
-                            )}
-                            {projectDropdownOpen && (
-                              <div className="absolute z-50 w-full mt-1 bg-port-bg border border-port-border rounded-lg max-h-48 overflow-auto shadow-lg">
-                                {filteredJiraProjects
-                                  .map(proj => (
-                                    <button
-                                      key={proj.key}
-                                      type="button"
-                                      onMouseDown={e => {
-                                        e.preventDefault();
-                                        selectProject(proj.key);
-                                        setProjectDropdownOpen(false);
-                                        setProjectSearch('');
-                                      }}
-                                      className={`w-full text-left px-3 py-2 text-sm hover:bg-port-accent/20 ${
-                                        formData.jiraProjectKey === proj.key ? 'bg-port-accent/10 text-port-accent' : 'text-white'
-                                      }`}
-                                    >
-                                      <span className="font-mono">{proj.key}</span>
-                                      <span className="text-gray-400 ml-2">{proj.name}</span>
-                                    </button>
-                                  ))
-                                }
-                                {filteredJiraProjects.length === 0 && (
-                                  <div className="px-3 py-2 text-sm text-gray-500">No matching projects</div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <input
-                            id="edit-app-jira-project"
-                            type="text"
-                            value={formData.jiraProjectKey}
-                            onChange={e => setFormData({ ...formData, jiraProjectKey: e.target.value })}
-                            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                            placeholder="e.g. CONTECH"
-                          />
-                        )}
-                      </div>
-
-                      <div>
-                        <label htmlFor="edit-app-jira-board" className="block text-sm text-gray-400 mb-1">Board</label>
-                        {!formData.jiraProjectKey ? (
-                          <div className="text-xs text-gray-500">Select a project to detect its boards.</div>
-                        ) : loadingBoards ? (
-                          <div className="text-xs text-gray-500">Detecting boards…</div>
-                        ) : jiraBoards.length > 0 ? (
-                          <>
-                            <select
-                              id="edit-app-jira-board"
-                              value={formData.jiraBoardId}
-                              onChange={e => setFormData({ ...formData, jiraBoardId: e.target.value })}
-                              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                            >
-                              <option value="">Select board...</option>
-                              {jiraBoards.map(b => (
-                                <option key={b.id} value={String(b.id)}>{b.id} — {b.name} ({b.type})</option>
-                              ))}
-                              {boardIsStale && (
-                                <option value={formData.jiraBoardId}>{formData.jiraBoardId} — (not in this project)</option>
-                              )}
-                            </select>
-                            {boardIsStale ? (
-                              <p className="text-xs text-port-warning mt-1">⚠ Saved board {formData.jiraBoardId} isn&apos;t among this project&apos;s boards — pick a current one.</p>
-                            ) : formData.jiraBoardId && (
-                              <p className="text-xs text-gray-500 mt-1">
-                                {activeSprint ? `Active sprint: ${activeSprint.name}` : 'No active sprint on this board.'}
-                              </p>
-                            )}
-                          </>
-                        ) : (
-                          <>
-                            <input
-                              id="edit-app-jira-board"
-                              type="text"
-                              value={formData.jiraBoardId}
-                              onChange={e => setFormData({ ...formData, jiraBoardId: e.target.value })}
-                              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                              placeholder="e.g. 1294 (from JIRA board URL rapidView param)"
-                            />
-                            <p className="text-xs text-gray-500 mt-1">Couldn&apos;t auto-detect boards — enter the id manually (board URL <span className="font-mono">rapidView</span> param).</p>
-                          </>
-                        )}
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label htmlFor="edit-app-jira-issue-type" className="block text-sm text-gray-400 mb-1">Issue Type</label>
-                          <input
-                            id="edit-app-jira-issue-type"
-                            type="text"
-                            value={formData.jiraIssueType}
-                            onChange={e => setFormData({ ...formData, jiraIssueType: e.target.value })}
-                            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                            placeholder="Task"
-                          />
-                        </div>
-                        <div>
-                          <label htmlFor="edit-app-jira-assignee" className="block text-sm text-gray-400 mb-1">Assignee</label>
-                          <input
-                            id="edit-app-jira-assignee"
-                            type="text"
-                            value={formData.jiraAssignee}
-                            onChange={e => setFormData({ ...formData, jiraAssignee: e.target.value })}
-                            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                            placeholder="Optional"
-                          />
-                        </div>
-                      </div>
-
-                      <div>
-                        <label htmlFor="edit-app-jira-labels" className="block text-sm text-gray-400 mb-1">Labels (comma-separated)</label>
-                        <input
-                          id="edit-app-jira-labels"
-                          type="text"
-                          value={formData.jiraLabels}
-                          onChange={e => setFormData({ ...formData, jiraLabels: e.target.value })}
-                          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                          placeholder="e.g. cos-auto, feature"
-                        />
-                      </div>
-
-                      <div className="relative">
-                        <label htmlFor="edit-app-jira-epic" className="block text-sm text-gray-400 mb-1">Epic Key</label>
-                        <input
-                          id="edit-app-jira-epic"
-                          type="text"
-                          value={formData.jiraEpicKey}
-                          onChange={e => setFormData({ ...formData, jiraEpicKey: e.target.value })}
-                          onFocus={() => setEpicDropdownOpen(true)}
-                          onBlur={() => setTimeout(() => setEpicDropdownOpen(false), 150)}
-                          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                          placeholder="e.g. CONTECH-100, or type a name to search"
-                        />
-                        {epicDropdownOpen && epicResults.length > 0 && (
-                          <div className="absolute z-50 w-full mt-1 bg-port-bg border border-port-border rounded-lg max-h-48 overflow-auto shadow-lg">
-                            {epicResults.map(ep => (
-                              <button
-                                key={ep.key}
-                                type="button"
-                                onMouseDown={e => {
-                                  e.preventDefault();
-                                  setFormData({ ...formData, jiraEpicKey: ep.key });
-                                  setEpicDropdownOpen(false);
-                                }}
-                                className="w-full text-left px-3 py-2 text-sm hover:bg-port-accent/20 text-white"
-                              >
-                                <span className="font-mono">{ep.key}</span>
-                                <span className="text-gray-400 ml-2">{ep.summary}</span>
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                        {epicValidation.state !== 'idle' && (
-                          <p className={`text-xs mt-1 ${
-                            epicValidation.state === 'ok' ? 'text-port-success'
-                              : epicValidation.state === 'checking' ? 'text-gray-500'
-                                : 'text-port-warning'
-                          }`}>
-                            {epicValidation.state === 'checking' && 'Checking epic…'}
-                            {epicValidation.state === 'ok' && `✓ ${epicValidation.issue.key} · ${epicValidation.issue.summary}`}
-                            {epicValidation.state === 'wrongtype' && `⚠ ${epicValidation.issue.key} is a ${epicValidation.issue.issueType}, not an Epic`}
-                            {epicValidation.state === 'stale' && `⚠ ${formData.jiraEpicKey} doesn't resolve on this instance`}
-                          </p>
-                        )}
-                      </div>
-
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={formData.jiraCreatePR}
-                          onChange={e => setFormData({ ...formData, jiraCreatePR: e.target.checked })}
-                          className="rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
-                        />
-                        <span className="text-sm text-white">Create Pull Request on completion</span>
-                      </label>
-                    </>
-                  )}
-                </>
-              )}
-            </div>
           )}
 
           {activeTab === 'datadog' && (

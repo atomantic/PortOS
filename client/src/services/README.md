@@ -36,7 +36,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 
 | File | Purpose |
 |---|---|
-| `apiApps.js` | App CRUD + PM2 ops (start/stop/restart/logs) + local open actions (editor, Claude Code, folder, Xcode). |
+| `apiApps.js` | App CRUD + PM2 ops (start/stop/restart/logs) + local open actions (editor, Claude Code, folder, Xcode) + `getAppIssues` (open GitHub/GitLab issues for the Issues tab). |
 | `apiWorkspaceContexts.js` | Per-project working-context save/restore (branch, shells, tasks). |
 | `apiAccounts.js` | Platform accounts. |
 | `apiAgents.js` | Running-agent process management. |

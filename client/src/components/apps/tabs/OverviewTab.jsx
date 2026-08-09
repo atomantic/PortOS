@@ -1,10 +1,8 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router';
-import { FolderOpen, Gamepad2, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download, Tag, AlertTriangle, Rocket, Camera, Image, Sparkles } from 'lucide-react';
+import { FolderOpen, Gamepad2, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Download, Tag, AlertTriangle, Rocket, Camera, Image, Sparkles } from 'lucide-react';
 import toast from '../../ui/Toast';
 import { NON_PM2_TYPES } from '../constants';
-import BrailleSpinner from '../../BrailleSpinner';
-import KanbanBoard from '../../KanbanBoard';
 import ActivityLog from '../ActivityLog';
 import SlashDoPanel from '../SlashDoPanel';
 import Banner from '../../ui/Banner';
@@ -21,10 +19,6 @@ const SCRIPT_ICONS = {
 export default function OverviewTab({ app, onRefresh }) {
   const [refreshingConfig, setRefreshingConfig] = useState(false);
   const [archiving, setArchiving] = useState(false);
-  const [jiraTickets, setJiraTickets] = useState(null);
-  const [loadingTickets, setLoadingTickets] = useState(false);
-  const [ticketError, setTicketError] = useState(null);
-  const ticketRequestRef = useRef(0);
   const [installingScripts, setInstallingScripts] = useState(false);
   const [detectingIcon, setDetectingIcon] = useState(false);
   // Reverse lookup (#2991): sprite records that publish assets into this app.
@@ -36,27 +30,6 @@ export default function OverviewTab({ app, onRefresh }) {
   const { steps, isOperating, operationType, error, completed, startUpdate, startStandardize } = useAppOperation({ onComplete, appId: app?.id });
   const updating = isOperating && operationType === 'update';
   const standardizing = isOperating && operationType === 'standardize';
-
-  // Same sentinel contract as the /apps list (#3437): a failed fetch records a
-  // message instead of collapsing into `[]`, which read as "you have no sprint
-  // tickets" and offered no way to retry.
-  const loadSprintTickets = useCallback(() => {
-    if (!app?.jira?.enabled || !app.jira.instanceId || !app.jira.projectKey) return;
-    // Generation guard: a Retry (or a JIRA-config change) while an earlier
-    // request is still open must not let the older response land last.
-    const generation = ticketRequestRef.current + 1;
-    ticketRequestRef.current = generation;
-    const isCurrent = () => ticketRequestRef.current === generation;
-
-    setLoadingTickets(true);
-    setTicketError(null);
-    api.getMySprintTickets(app.jira.instanceId, app.jira.projectKey, { silent: true })
-      .then(tickets => { if (isCurrent()) setJiraTickets(Array.isArray(tickets) ? tickets : []); })
-      .catch(err => { if (isCurrent()) setTicketError(err?.message || 'Request failed'); })
-      .finally(() => { if (isCurrent()) setLoadingTickets(false); });
-  }, [app?.jira?.enabled, app?.jira?.instanceId, app?.jira?.projectKey]);
-
-  useEffect(() => { loadSprintTickets(); }, [loadSprintTickets]);
 
   // Load the sprite records bound to this app (empty for an app with none).
   useEffect(() => {
@@ -130,7 +103,9 @@ export default function OverviewTab({ app, onRefresh }) {
 
   return (
     <div className="space-y-6">
-      {/* Readable details/config zone — capped width so key/value pairs stay legible */}
+      {/* Capped width so key/value pairs stay legible. (JIRA config + the sprint
+          Kanban board, which needed the full page width, now live on the app's
+          own JIRA tab.) */}
       <div className="space-y-6 max-w-5xl">
       {/* Details Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
@@ -295,56 +270,6 @@ export default function OverviewTab({ app, onRefresh }) {
         </div>
       )}
 
-      {/* JIRA Integration */}
-      {app.jira?.enabled && (
-        <div>
-          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">JIRA Integration</div>
-          <div className="flex flex-wrap items-center gap-3 px-3 py-2 bg-port-card border border-port-border rounded-lg">
-            <Ticket size={16} className="text-blue-400 shrink-0" />
-            <span className="text-sm text-white font-mono">{app.jira.projectKey || '-'}</span>
-            {app.jira.issueType && <span className="text-xs text-gray-400">{app.jira.issueType}</span>}
-            {app.jira.createPR !== false && <span className="text-xs text-port-success">+ PR</span>}
-            {app.jira.labels?.length > 0 && (
-              <span className="text-xs text-cyan-400">{app.jira.labels.join(', ')}</span>
-            )}
-          </div>
-        </div>
-      )}
-      </div>{/* end readable details/config zone */}
-
-      {/* My Sprint Tickets — full width so the Kanban lifecycle isn't clipped */}
-      {app.jira?.enabled && app.jira.instanceId && app.jira.projectKey && (
-        <div>
-          <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">My Sprint Tickets</div>
-          {loadingTickets ? (
-            <div className="flex items-center gap-2 px-3 py-2 text-sm text-gray-400">
-              <BrailleSpinner text="" />
-              <span>Loading tickets...</span>
-            </div>
-          ) : ticketError ? (
-            <div className="flex flex-wrap items-center gap-3 px-3 py-2 bg-port-card border border-port-error/30 rounded-lg max-w-5xl">
-              <AlertTriangle size={16} className="text-port-error shrink-0" />
-              <span className="text-sm text-gray-300 min-w-0">Couldn&apos;t load sprint tickets — {ticketError}</span>
-              <button
-                onClick={loadSprintTickets}
-                className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
-                aria-label={`Retry loading sprint tickets for ${app.name}`}
-              >
-                <RefreshCw size={14} /> Retry
-              </button>
-            </div>
-          ) : jiraTickets?.length > 0 ? (
-            <KanbanBoard tickets={jiraTickets} instanceId={app.jira?.instanceId} onTicketsChange={setJiraTickets} appId={app.id} projectKey={app.jira?.projectKey} boardId={app.jira?.boardId} />
-          ) : (
-            <div className="px-3 py-2 text-sm text-gray-500 bg-port-card border border-port-border rounded-lg max-w-5xl">
-              No tickets assigned to you in the current sprint
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Actions zone — back to capped readable width */}
-      <div className="space-y-6 max-w-5xl">
       {/* Agent Operations */}
       <SlashDoPanel appId={app.id} appName={app.name} appType={app.type} />
 
@@ -415,7 +340,7 @@ export default function OverviewTab({ app, onRefresh }) {
 
       {/* Activity Log */}
       <ActivityLog steps={steps} error={error} completed={completed} />
-      </div>{/* end actions zone */}
+      </div>
     </div>
   );
 }

@@ -11,6 +11,7 @@
  *   xcode      — xcode-scripts/install
  *   icons      — icon serving + detection
  *   taskTypes  — per-app task-type overrides, work-tracker, layered-intelligence
+ *   issues     — open GitHub/GitLab issues for the Issues tab
  *   launch     — open-editor, open-claude, open-folder, open-xcode
  *   documents  — planning-doc read/list/commit
  *   agents     — recent CoS agent history
@@ -30,6 +31,7 @@ import viteTlsRoutes from './viteTls.js';
 import xcodeRoutes from './xcode.js';
 import iconRoutes from './icons.js';
 import taskTypeRoutes from './taskTypes.js';
+import issueRoutes from './issues.js';
 import launchRoutes from './launch.js';
 import documentRoutes from './documents.js';
 import agentRoutes from './agents.js';
@@ -43,6 +45,7 @@ router.use(viteTlsRoutes);
 router.use(xcodeRoutes);
 router.use(iconRoutes);
 router.use(taskTypeRoutes);
+router.use(issueRoutes);
 router.use(launchRoutes);
 router.use(documentRoutes);
 router.use(agentRoutes);

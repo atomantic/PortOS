@@ -5,9 +5,7 @@ import { MemoryRouter } from 'react-router';
 // Mock the API surface EditAppDrawer touches on mount, plus the work-tracker
 // resolver and the update path used on save.
 vi.mock('../../services/api', () => ({
-  getJiraInstances: vi.fn(),
   getDatadogInstances: vi.fn(),
-  getJiraProjects: vi.fn(),
   getAppWorkTracker: vi.fn(),
   getAppLayeredIntelligence: vi.fn(),
   getAppTaskTypes: vi.fn(),
@@ -44,9 +42,7 @@ async function openTab(name) {
 }
 
 beforeEach(() => {
-  api.getJiraInstances.mockResolvedValue({ instances: {} });
   api.getDatadogInstances.mockResolvedValue({ instances: {} });
-  api.getJiraProjects.mockResolvedValue([]);
   api.getAppWorkTracker.mockResolvedValue({
     configured: 'auto',
     resolved: 'github',
@@ -90,9 +86,15 @@ describe('EditAppDrawer tabbed layout', () => {
 
   it('renders all six section tabs', async () => {
     renderDrawer();
-    for (const label of ['General', 'Ports & TLS', 'Commands', 'Workflow', 'JIRA', 'DataDog']) {
+    for (const label of ['General', 'Ports & TLS', 'Commands', 'Workflow', 'Intelligence', 'DataDog']) {
       expect(await screen.findByRole('tab', { name: label })).toBeInTheDocument();
     }
+  });
+
+  it('has no JIRA tab — that config moved to the app detail page JIRA tab', async () => {
+    renderDrawer();
+    await screen.findByRole('tab', { name: 'General' });
+    expect(screen.queryByRole('tab', { name: 'JIRA' })).not.toBeInTheDocument();
   });
 });
 
@@ -135,6 +137,20 @@ describe('EditAppDrawer work tracker selector', () => {
     const [id, payload] = api.updateApp.mock.calls[0];
     expect(id).toBe('app-1');
     expect(payload.workTracker).toBe('gitlab');
+  });
+
+  it('omits `jira` from the save payload so a drawer save cannot clobber the JIRA tab config', async () => {
+    // The server shallow-merges the PUT, so an ABSENT `jira` key preserves the
+    // stored config. Sending `{ enabled: false }` (what the removed drawer tab
+    // did when its checkbox was unmounted) would silently disable an app's JIRA
+    // integration on an unrelated save.
+    renderDrawer({ app: { ...APP, jira: { enabled: true, instanceId: 'inst-1', projectKey: 'PROJ' } } });
+    await screen.findByLabelText('Name');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
+    expect(api.updateApp.mock.calls[0][1]).not.toHaveProperty('jira');
   });
 
   it('saves the selected default PR completion policy', async () => {

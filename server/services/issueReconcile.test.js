@@ -28,18 +28,11 @@ vi.mock('../lib/gitRemote.js', () => ({
   getOriginInfo: vi.fn(async () => ({ isGithub: true, host: 'github.com', fullName: 'atomantic/PortOS' })),
   readOriginRemoteUrl: vi.fn(async () => 'git@github.com:atomantic/PortOS.git'),
 }));
-// hostToWorkTracker is the canonical host→forge classifier. Import the REAL pure
-// implementation (partial mock) so the GitLab branch is exercised through the
-// exact mapping production uses — no drift-prone re-implementation here.
-vi.mock('../lib/workTracker.js', async (importActual) => {
-  const actual = await importActual();
-  return {
-    hostToWorkTracker: actual.hostToWorkTracker,
-    hostFromOriginUrl: actual.hostFromOriginUrl,
-    githubRepoSpec: actual.githubRepoSpec,
-    githubApiHost: actual.githubApiHost,
-  };
-});
+// workTracker.js is deliberately NOT mocked: `resolveRepoForgeTarget` is the
+// canonical origin→forge classifier, and its only effectful dependency is
+// gitRemote.js (mocked above). Running the real implementation is what exercises
+// the enterprise-GitHub and nested-subgroup-GitLab branches through the exact
+// mapping production uses — a re-implementation here would drift.
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { root: '/repo' },
   safeJSONParse: (raw, fallback) => { try { return JSON.parse(raw); } catch { return fallback; } },
@@ -422,8 +415,13 @@ describe('reconcile (GitLab forge)', () => {
     // Common GitLab layout `group/subgroup/project` — getOriginInfo's strict
     // owner/repo parse returns null, but the host still classifies as GitLab and
     // `glab` is cwd-based, so the scan must NOT be skipped. Host is classified off
-    // the origin URL via the real hostFromOriginUrl.
-    getOriginInfo.mockResolvedValue({ isGithub: false, host: null, fullName: null });
+    // the origin URL via the real hostFromOriginUrl. `originUrl` is part of
+    // getOriginInfo's real return shape on the unparseable-remote path (see
+    // gitRemote.js) — the resolver reads it rather than re-shelling to git.
+    getOriginInfo.mockResolvedValue({
+      isGithub: false, host: null, fullName: null,
+      originUrl: 'git@gitlab.com:group/subgroup/project.git',
+    });
     readOriginRemoteUrl.mockResolvedValue('git@gitlab.com:group/subgroup/project.git');
     mockGlab({
       issues: [{ iid: 42, title: 't', labels: ['in-progress'], assignees: [], web_url: 'u' }],

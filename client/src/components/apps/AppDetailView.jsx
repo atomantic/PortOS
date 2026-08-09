@@ -17,6 +17,8 @@ import AutomationTab from './tabs/AutomationTab';
 import DocumentsTab from './tabs/DocumentsTab';
 import GitTab from './tabs/GitTab';
 import GsdTab from './tabs/GsdTab';
+import IssuesTab from './tabs/IssuesTab';
+import JiraTab from './tabs/JiraTab';
 import ProcessesTab from './tabs/ProcessesTab';
 import ReferencesTab from './tabs/ReferencesTab';
 import DatadogTab from './tabs/DatadogTab';
@@ -250,6 +252,10 @@ export default function AppDetailView() {
         return <GitTab appId={appId} appName={app.name} repoPath={app.repoPath} />;
       case 'gsd':
         return <GsdTab appId={appId} repoPath={app.repoPath} />;
+      case 'issues':
+        return <IssuesTab appId={appId} appName={app.name} />;
+      case 'jira':
+        return <JiraTab app={app} onRefresh={fetchApp} />;
       case 'processes':
         return <ProcessesTab appId={app.id} pm2ProcessNames={app.pm2ProcessNames} />;
       case 'references':
