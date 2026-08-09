@@ -200,6 +200,11 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
         : {})
     }));
     setSlashdoCommand(template.slashdoCommand || '');
+    // Hidden posture, so it follows `slashdoCommand` (set unconditionally above)
+    // rather than the tri-state rule the three visible toggles use: with no UI
+    // control to reveal or correct it, a posture left over from a previous
+    // template would silently ride along on the next one the user picks.
+    setWorktreeChangesExpected(template.settings?.worktreeChangesExpected);
     const settings = template.settings;
     if (settings && typeof settings === 'object') {
       // Only when the template also moves the app — otherwise the effect never
@@ -208,7 +213,6 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       if (settings.useWorktree !== undefined) setUseWorktree(settings.useWorktree);
       if (settings.openPR !== undefined) setOpenPR(settings.openPR);
       if (settings.simplify !== undefined) setSimplify(settings.simplify);
-      if (settings.worktreeChangesExpected !== undefined) setWorktreeChangesExpected(settings.worktreeChangesExpected);
     }
     descriptionRef.current?.focus();
     await api.applyCosTaskTemplate(template.id).catch(() => {});

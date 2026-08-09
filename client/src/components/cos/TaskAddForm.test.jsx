@@ -173,4 +173,21 @@ describe('TaskAddForm quick templates — deliverable posture', () => {
     const payload = await queueFromTemplate('My Template');
     expect('worktreeChangesExpected' in payload).toBe(false);
   });
+
+  // Unlike the three visible toggles, the posture is hidden state — so picking a
+  // posture-pinning template and then a plain one must CLEAR it, not leave the
+  // first template's deliverable riding along invisibly on the second.
+  it('clears a previously applied posture when the next template pins none', async () => {
+    const user = userEvent.setup();
+    render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText('Quick Templates')).toBeInTheDocument());
+    await user.click(screen.getByText('Quick Templates'));
+    await user.click(screen.getByText('Cut a Release'));
+    await waitFor(() => expect(api.applyCosTaskTemplate).toHaveBeenCalled());
+    await user.click(screen.getByText('My Template'));
+    await waitFor(() => expect(api.applyCosTaskTemplate).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole('button', { name: /^Add$/ }));
+    await waitFor(() => expect(api.addCosTask).toHaveBeenCalled());
+    expect('worktreeChangesExpected' in api.addCosTask.mock.calls.at(-1)[0]).toBe(false);
+  });
 });
