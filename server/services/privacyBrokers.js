@@ -435,7 +435,7 @@ export async function listBrokerCases({ state, subjectId } = {}) {
   // never plan a submission for one using the other's ledger.
   const params = [resolveSubjectId(subjectId)];
   const clauses = ['c.subject_id = $1'];
-  if (state) { params.push(state); clauses.push(`c.state = ${params.length}`); }
+  if (state) { params.push(state); clauses.push(`c.state = $${params.length}`); }
   const where = `WHERE ${clauses.join(' AND ')}`;
   const { rows } = await query(
     `SELECT c.id, c.subject_id, c.broker_id, c.state, c.found, c.evidence, c.disclosed_fields,

@@ -294,7 +294,10 @@ export async function probeBroker(broker, vectors, {
 
 /**
  * Scan ONE broker for exposure and record the verdict. Thin wrapper over the
- * read-only probeBroker that then writes the ledger verdict. `deps` are
+ * read-only probeBroker that then writes the ledger verdict. Re-asserts the
+ * subject's consent even though runScanPass already did: this is an exported
+ * entry point, so a direct caller (route, agent, single-broker recheck) must not
+ * be able to reach a ledger write around the gate. One indexed SELECT per broker. `deps` are
  * injectable so tests never hit the network/browser:
  *   - `fetchImpl` (default global fetch) — the HTTP lane.
  *   - `browserFetch` (default fetchUrlMainText) — the JS-required escalation.
@@ -305,10 +308,12 @@ export async function scanBroker(broker, vectors, {
   fetchImpl = fetch, browserFetch = fetchUrlMainText, urlSafe = isScanUrlSafe, now = new Date(),
   subjectId,
 } = {}) {
+  const resolvedSubjectId = resolveSubjectId(subjectId);
+  await assertSubjectConsent(resolvedSubjectId, { action: `broker exposure scan (${broker?.id})` });
   const probed = await probeBroker(broker, vectors, { fetchImpl, browserFetch, urlSafe });
   if (probed.skipped) return { skipped: true, reason: probed.reason };
   const kase = await recordScanVerdict(broker.id, probed.verdict, {
-    evidence: probed.evidence, found: probed.found ?? null, now, subjectId,
+    evidence: probed.evidence, found: probed.found ?? null, now, subjectId: resolvedSubjectId,
   });
   return kase;
 }

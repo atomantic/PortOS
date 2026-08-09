@@ -146,12 +146,30 @@ describe('listSubjects', () => {
 });
 
 describe('recordConsent', () => {
-  it('scopes the row by subject_id and stores the note verbatim', async () => {
+  it('404s an unknown subject rather than emitting a raw FK violation', async () => {
     queryMock.mockResolvedValue({ rows: [] });
+    await expect(recordConsent({ subjectId: 's2', scope: 'pii_vault', method: 'written' }))
+      .rejects.toMatchObject({ status: 404, code: 'SUBJECT_NOT_FOUND' });
+  });
+
+  it("defaults the NOT NULL scope column when the caller omits it", async () => {
+    queryMock.mockImplementation(async (sql) => (/FROM privacy_subjects/.test(sql)
+      ? { rows: [subjectRow({ id: 's2' })] }
+      : { rows: [] }));
+    const consent = await recordConsent({ subjectId: 's2', method: 'verbal' });
+    const insert = queryMock.mock.calls.find(([q]) => /INSERT INTO privacy_consents/.test(q));
+    expect(insert[1][2]).toBe('pii_vault');
+    expect(consent.scope).toBe('pii_vault');
+  });
+
+  it('scopes the row by subject_id and stores the note verbatim', async () => {
+    queryMock.mockImplementation(async (sql) => (/FROM privacy_subjects/.test(sql)
+      ? { rows: [subjectRow({ id: 's2', relationship: 'partner' })] }
+      : { rows: [] }));
     const consent = await recordConsent({
       subjectId: 's2', scope: 'broker_optout', method: 'written', note: 'form filed 2026-01-01',
     });
-    const [sql, params] = queryMock.mock.calls[0];
+    const [sql, params] = queryMock.mock.calls.find(([q]) => /INSERT INTO privacy_consents/.test(q));
     expect(sql).toMatch(/INSERT INTO privacy_consents/);
     expect(params[1]).toBe('s2');
     expect(params[2]).toBe('broker_optout');

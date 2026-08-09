@@ -29,7 +29,7 @@ vi.mock('./privacySubjects.js', () => ({
 }));
 
 const {
-  createVaultRecord, updateVaultRecord, revealValue, getVaultStatus, resolveUseForScans,
+  createVaultRecord, listVaultRecords, updateVaultRecord, revealValue, getVaultStatus, resolveUseForScans,
 } = await import('./privacyVault.js');
 const { encryptValue } = await import('../lib/vaultCrypto.js');
 
@@ -128,6 +128,24 @@ describe('createVaultRecord', () => {
     const insert = queryMock.mock.calls.find(([sql]) => /INSERT INTO privacy_vault_records/.test(sql));
     expect(insert[1][1]).toBe('subject-2');
     expect(record.subjectId).toBe('subject-2');
+  });
+});
+
+describe('listVaultRecords', () => {
+  it('scopes to the subject and binds the type filter as $2 (not a literal)', async () => {
+    queryMock.mockResolvedValue({ rows: [] });
+    await listVaultRecords({ type: 'email' });
+    const [sql, params] = queryMock.mock.calls[0];
+    expect(sql).toMatch(/WHERE subject_id = \$1 AND type = \$2/);
+    expect(params).toEqual([SELF, 'email']);
+  });
+
+  it('omits the type clause when no type is given', async () => {
+    queryMock.mockResolvedValue({ rows: [] });
+    await listVaultRecords({ subjectId: 'subject-2' });
+    const [sql, params] = queryMock.mock.calls[0];
+    expect(sql).toMatch(/WHERE subject_id = \$1 ORDER BY/);
+    expect(params).toEqual(['subject-2']);
   });
 });
 

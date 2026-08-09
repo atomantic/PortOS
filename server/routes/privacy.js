@@ -148,10 +148,7 @@ router.get('/subjects/:id/consents', asyncHandler(async (req, res) => {
 router.post('/subjects/:id/consents', asyncHandler(async (req, res) => {
   const { id } = validateRequest(privacySubjectIdParamsSchema, req.params);
   const { scope, method, note } = validateRequest(privacySubjectConsentSchema, req.body);
-  await assertSubject(id);
-  res.status(201).json(await recordConsent({
-    subjectId: id, scope: scope ?? 'pii_vault', method, note,
-  }));
+  res.status(201).json(await recordConsent({ subjectId: id, scope, method, note }));
 }));
 
 router.get('/status', asyncHandler(async (req, res) => {

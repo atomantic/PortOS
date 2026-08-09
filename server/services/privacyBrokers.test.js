@@ -1,11 +1,19 @@
 /**
  * Pure-logic tests for the broker case state machine + recheck backoff +
- * refresh parsers (issue #2144). No DB — the DB round-trip lives in
- * privacyBrokers.db.test.js.
+ * refresh parsers (issue #2144), plus the subject-scoped case-list query shape
+ * (#3658). The DB is mocked (the pure tests don't touch it); the real DB
+ * round-trip lives in privacyBrokers.db.test.js.
  */
 
-import { describe, it, expect } from 'vitest';
-import {
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const { queryMock } = vi.hoisted(() => ({ queryMock: vi.fn() }));
+vi.mock('../lib/db.js', () => ({ query: queryMock, withTransaction: vi.fn() }));
+
+const SELF = '00000000-0000-4000-8000-000000000001';
+vi.mock('./privacySubjects.js', () => ({ resolveSubjectId: (id) => id || SELF }));
+
+const {
   CASE_STATES,
   SCAN_VERDICTS,
   assertTransition,
@@ -13,7 +21,28 @@ import {
   computeNextRecheckAt,
   parseCaRegistryCsv,
   parseBadboolList,
-} from './privacyBrokers.js';
+  listBrokerCases,
+} = await import('./privacyBrokers.js');
+
+beforeEach(() => queryMock.mockReset());
+
+describe('listBrokerCases — subject scoping (#3658)', () => {
+  it('always scopes to a subject and binds the state filter as $2 (not a literal)', async () => {
+    queryMock.mockResolvedValue({ rows: [] });
+    await listBrokerCases({ state: 'found' });
+    const [sql, params] = queryMock.mock.calls[0];
+    expect(sql).toMatch(/WHERE c\.subject_id = \$1 AND c\.state = \$2/);
+    expect(params).toEqual([SELF, 'found']);
+  });
+
+  it('scopes to an explicit subject with no state filter', async () => {
+    queryMock.mockResolvedValue({ rows: [] });
+    await listBrokerCases({ subjectId: 'subject-2' });
+    const [sql, params] = queryMock.mock.calls[0];
+    expect(sql).toMatch(/WHERE c\.subject_id = \$1\s/);
+    expect(params).toEqual(['subject-2']);
+  });
+});
 
 describe('assertTransition — valid paths', () => {
   it('allows every scan verdict from unscanned', () => {

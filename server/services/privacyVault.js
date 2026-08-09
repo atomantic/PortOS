@@ -115,7 +115,7 @@ export async function listVaultRecords({ type, subjectId } = {}) {
   // caller is unchanged.
   const params = [resolveSubjectId(subjectId)];
   const clauses = ['subject_id = $1'];
-  if (type) { params.push(type); clauses.push(`type = ${params.length}`); }
+  if (type) { params.push(type); clauses.push(`type = $${params.length}`); }
   const { rows } = await query(
     `SELECT ${RECORD_COLUMNS} FROM privacy_vault_records
      WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC`,

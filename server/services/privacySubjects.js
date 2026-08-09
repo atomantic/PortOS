@@ -59,19 +59,23 @@ export function resolveSubjectId(subjectId) {
   return subjectId ? String(subjectId).toLowerCase() : PRIVACY_SELF_SUBJECT_ID;
 }
 
-/** Write a consent row for a subject. Append-only audit trail. */
+/**
+ * Write a consent row for a subject. Append-only audit trail. Asserts the
+ * subject first so an unknown id is a clean 404 rather than a raw FK violation,
+ * and defaults `scope` (the column is NOT NULL and the API leaves it optional).
+ */
 export async function recordConsent({ subjectId, scope, method, note }) {
+  const resolved = (await assertSubject(subjectId)).id;
   const id = randomUUID();
-  const resolved = resolveSubjectId(subjectId);
   // The legacy free-text `subject` column keeps its DEFAULT 'self' — it is
   // frozen historical audit data; `subject_id` is the live scope (#3658).
   await query(
     `INSERT INTO privacy_consents (id, subject_id, scope, method, note, granted_at)
      VALUES ($1, $2, $3, $4, $5, NOW())`,
-    [id, resolved, scope, method, note ?? ''],
+    [id, resolved, scope ?? 'pii_vault', method, note ?? ''],
   );
-  console.log(`📝 Recorded privacy consent ${id} (subject=${resolved}, scope=${scope}, method=${method})`);
-  return { id, subjectId: resolved, scope, method, note: note ?? '' };
+  console.log(`📝 Recorded privacy consent ${id} (subject=${resolved}, scope=${scope ?? 'pii_vault'}, method=${method})`);
+  return { id, subjectId: resolved, scope: scope ?? 'pii_vault', method, note: note ?? '' };
 }
 
 // ─── Subject CRUD ───────────────────────────────────────────────────────────
