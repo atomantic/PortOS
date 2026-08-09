@@ -41,6 +41,7 @@ import {
   buildWrapUpProdMessage,
   MERGE_QUEUE_IDLE_TIMEOUT_MS,
   REVIEW_LOOP_IDLE_TIMEOUT_MS,
+  BACKGROUND_SHELL_IDLE_TIMEOUT_MS,
   READY_POLL_INTERVAL_MS,
   READY_IDLE_THRESHOLD_MS,
   PASTE_MARKER_POLL_MS,
@@ -48,6 +49,7 @@ import {
   createWorkActivityTracker,
   createMergeQueueTracker,
   createReviewLoopTracker,
+  createBackgroundShellTracker,
   createMcpBootTracker,
   MCP_BOOT_PASTE_DEADLINE_MS,
   MCP_BOOT_PASTE_RETRY_DELAY_MS,
@@ -335,6 +337,16 @@ export async function spawnTuiAgent({
   // isn't reaped as a false `idle-complete` success before it reaches the
   // merge gate (issue observed on agent-61508f36, PR #2084).
   const reviewLoop = createReviewLoopTracker();
+  // Latches once the TUI reports background shell commands still in flight.
+  // `/do:pr`'s self-review gate backgrounds each reviewer and waits to be
+  // re-invoked, and between completions the model returns to the prompt and the
+  // TUI emits NOTHING — a legitimate wait the default 3-minute window reaps as
+  // if the session were dead. The review-loop tracker above does not cover it:
+  // it keys on the multi-reviewer LOOP's banners, which only print when
+  // `configReviewLoop` is on (task-mslczmtr ran with it off and lost three
+  // consecutive attempts this way). See the BACKGROUND_SHELL_IDLE_TIMEOUT_MS
+  // declaration for the full incident.
+  const backgroundShell = createBackgroundShellTracker();
   // Latches once codex prints its MCP-server boot banner during startup. A user
   // with heavyweight interactive MCP servers in ~/.codex/config.toml (playwright
   // via npx, a node_repl with startup_timeout_sec=120) makes codex spend tens of
@@ -788,6 +800,15 @@ export async function spawnTuiAgent({
       if (promptSubmittedAt && stripped && !reviewLoop.active && reviewLoop.observe(stripped)) {
         emitLog('info', `TUI agent ${agentId} entered review loop — idle reaper extended to ${Math.round(REVIEW_LOOP_IDLE_TIMEOUT_MS / 60000)}min`, { agentId, phase: 'review-loop' });
         await updateAgent(agentId, { metadata: { phase: 'review-loop' } });
+      }
+      // Detect outstanding background shell commands so the idle reaper can
+      // extend its grace across the fully-silent stretch while the agent waits
+      // to be re-invoked on their completion (see backgroundShell declaration).
+      // Deliberately does NOT set `metadata.phase` — unlike merge-queue and
+      // review-loop, "has background work" is not a phase of the run, and
+      // overwriting the phase here would clobber a more specific one.
+      if (promptSubmittedAt && stripped && !backgroundShell.active && backgroundShell.observe(stripped)) {
+        emitLog('info', `TUI agent ${agentId} has background shells outstanding — idle reaper extended to ${Math.round(BACKGROUND_SHELL_IDLE_TIMEOUT_MS / 60000)}min`, { agentId });
       }
       lastOutputAt = now;
       if (firstOutputAt === null) firstOutputAt = lastOutputAt;
@@ -1357,7 +1378,9 @@ export async function spawnTuiAgent({
       ? Math.max(tuiConfig.idleTimeoutMs, MERGE_QUEUE_IDLE_TIMEOUT_MS)
       : reviewLoop.active
         ? Math.max(tuiConfig.idleTimeoutMs, REVIEW_LOOP_IDLE_TIMEOUT_MS)
-        : tuiConfig.idleTimeoutMs;
+        : backgroundShell.active
+          ? Math.max(tuiConfig.idleTimeoutMs, BACKGROUND_SHELL_IDLE_TIMEOUT_MS)
+          : tuiConfig.idleTimeoutMs;
     // Once within the LEAD window of the (possibly extended) reap deadline, keep
     // a reachability reading fresh (throttled, non-blocking) so the gate below
     // can read it synchronously and won't reap an agent that's only silent

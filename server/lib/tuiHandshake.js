@@ -732,6 +732,98 @@ export function createReviewLoopTracker() {
   };
 }
 
+// Extended idle threshold applied while the wrapped TUI still has BACKGROUND
+// SHELL COMMANDS outstanding. Observed 2026-08-09 (task-mslczmtr, three
+// consecutive attempts): the agent finished the feature, committed, pushed,
+// then ran `/do:pr`, which backgrounds each self-review reviewer (an Ollama
+// per-file pass, a headless `codex` pass over the branch diff) and waits to be
+// re-invoked on completion. Between those completions the model has NOTHING to
+// do, so it returns to the `❯` prompt and the TUI goes completely silent — no
+// spinner, no repaint, no PTY output at all. `idle` is measured off
+// `lastOutputAt`, so that legitimate wait is indistinguishable from a dead
+// session and the 3-minute default reaped all three attempts mid-review. The
+// branch ended up with three commits pushed and NO PR, twice recorded as
+// `pr-missing` and once as the actively misleading `idle-no-changes`.
+//
+// This is deliberately NOT covered by REVIEW_LOOP_IDLE_TIMEOUT_MS above: that
+// tracker keys on the multi-reviewer LOOP's banners (`Review plan: [`,
+// `Review pass N/M`), which only print when `configReviewLoop` is on. This run
+// had `configReviewLoop: false` — the reviewers came from `/do:pr`'s ordinary
+// self-review gate, which prints no such banner (verified: zero marker hits
+// across all three transcripts). Keying on the outstanding-shell footer covers
+// that gap and generalizes to ANY long background command, which is the real
+// invariant — an agent with async work still in flight is waiting, not dead.
+// 15 minutes mirrors the two graces above.
+export const BACKGROUND_SHELL_IDLE_TIMEOUT_MS = 900000;
+
+// The rendered footer Claude Code shows while background commands are still in
+// flight: `✻ Baked for 20s · 2 shells still running`. Anchored on the
+// digit-plus-noun shape rather than the bare phrase "still running" for the
+// same reason the review-loop patterns are anchored (see above) — a bare
+// substring would latch on any agent narrating about a running process. The
+// `\s*` between the count and the noun is not cosmetic: the TUI repaints
+// DIFFERENTIALLY, so a redraw that rewrites only the changed cells can drop
+// the separating space and emit `1shell still running` (exactly what the
+// 2026-08-09 agent-839255ca transcript contains — its ONLY rendering of the
+// footer). Requiring a literal space there would have missed that run entirely.
+//
+// Verified collision-free against the tracked tree (`git grep -niE
+// '[0-9]+ shells? still running'` matches nothing outside this feature's own
+// files), and a false positive would only extend the bounded idle window.
+const BACKGROUND_SHELL_PATTERN = /\d+\s*shells?\s+still\s+running/i;
+
+// Rolling tail cap for createBackgroundShellTracker's cross-chunk buffer. The
+// marker itself is ~22 chars, so this leaves generous headroom for intervening
+// chrome without growing unbounded over a long session.
+const BACKGROUND_SHELL_TAIL_CAP = 512;
+
+/**
+ * True when a chunk of ANSI-stripped TUI output shows the wrapped agent still
+ * has background shell commands in flight. Callers MUST pass stripped output.
+ * Non-string / empty input yields false.
+ *
+ * @param {string} strippedText — ANSI-stripped output (a chunk or accumulator).
+ * @returns {boolean}
+ */
+export function isBackgroundShellSignal(strippedText) {
+  if (typeof strippedText !== 'string' || !strippedText) return false;
+  return BACKGROUND_SHELL_PATTERN.test(strippedText);
+}
+
+/**
+ * Latching tracker for "this agent has background shell commands outstanding".
+ * Feed it each ANSI-stripped post-submit chunk via `observe(text)`; it becomes
+ * `active` the first time the outstanding-shell footer appears and STAYS active
+ * thereafter.
+ *
+ * Latching (rather than clearing when the shells finish) is deliberate and
+ * matches createMergeQueueTracker / createReviewLoopTracker: the failure mode
+ * is a session that goes ENTIRELY silent while waiting, so there is no later
+ * output in which to observe the footer's disappearance — a recency window
+ * would age the flag out at exactly the moment the grace is needed. The cost of
+ * over-latching is bounded on both ends: the extended window is still finite,
+ * and `tuiMaxRuntimeMs` remains the hard backstop.
+ *
+ * Uses the same rolling tail buffer as createReviewLoopTracker so a marker
+ * split across two `onData` chunks still appears whole on the next observation.
+ *
+ * @returns {{ observe: (strippedText: string) => boolean, readonly active: boolean }}
+ */
+export function createBackgroundShellTracker() {
+  let active = false;
+  let tail = '';
+  return {
+    observe(strippedText) {
+      if (active) return true;
+      if (typeof strippedText !== 'string' || !strippedText) return active;
+      tail = (tail + strippedText).slice(-BACKGROUND_SHELL_TAIL_CAP);
+      if (isBackgroundShellSignal(tail)) active = true;
+      return active;
+    },
+    get active() { return active; },
+  };
+}
+
 // ─── Codex MCP-server boot detection ──────────────────────────────────────
 //
 // Codex (unlike Claude Code) boots any MCP servers configured in the user's

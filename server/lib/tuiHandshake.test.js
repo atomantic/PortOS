@@ -18,6 +18,9 @@ import {
   REVIEW_LOOP_IDLE_TIMEOUT_MS,
   isReviewLoopSignal,
   createReviewLoopTracker,
+  BACKGROUND_SHELL_IDLE_TIMEOUT_MS,
+  isBackgroundShellSignal,
+  createBackgroundShellTracker,
   MCP_BOOT_PASTE_DEADLINE_MS,
   MCP_BOOT_PASTE_RETRY_DELAY_MS,
   isMcpBootSignal,
@@ -385,6 +388,66 @@ describe('tuiHandshake — review-loop idle suppression', () => {
     tracker.observe('Now starting the review loop. Review plan:');
     expect(tracker.active).toBe(false);
     expect(tracker.observe(' [claude, codex] (mode: series, stop-mode: all)')).toBe(true);
+    expect(tracker.active).toBe(true);
+  });
+});
+
+// Incident 2026-08-09, task-mslczmtr: three consecutive attempts were reaped
+// while `/do:pr`'s self-review gate waited on backgrounded reviewers (an Ollama
+// per-file pass, a headless codex pass). Between reviewer completions the model
+// sits at the prompt and the TUI emits NOTHING, so the 3-minute default fired
+// on a session that was working correctly. The branch ended with three commits
+// pushed and no PR. The review-loop tracker above did NOT cover it: that keys
+// on the multi-reviewer LOOP banners, which only print when configReviewLoop is
+// on — this run had it off (zero marker hits across all three transcripts).
+describe('tuiHandshake — background-shell idle grace (task-mslczmtr)', () => {
+  it('extends the idle timeout well past the default 3-minute window', () => {
+    expect(BACKGROUND_SHELL_IDLE_TIMEOUT_MS).toBe(900000);
+    expect(BACKGROUND_SHELL_IDLE_TIMEOUT_MS).toBeGreaterThan(DEFAULT_TUI_IDLE_TIMEOUT_MS);
+  });
+
+  it('isBackgroundShellSignal matches the outstanding-shell footer', () => {
+    expect(isBackgroundShellSignal('✻ Baked for 20s · 2 shells still running')).toBe(true);
+    expect(isBackgroundShellSignal('✻ Cooked for 2s · 1 shell still running')).toBe(true);
+    expect(isBackgroundShellSignal('SAUTÉED FOR 1M 8S · 3 SHELLS STILL RUNNING')).toBe(true);
+  });
+
+  // The TUI repaints DIFFERENTIALLY, so a redraw that rewrites only the changed
+  // cells can drop the space between the count and the noun. This exact string
+  // is the ONLY rendering of the footer in the agent-839255ca transcript — a
+  // pattern requiring a literal space would have missed that run entirely.
+  it('isBackgroundShellSignal tolerates the space dropped by a differential repaint', () => {
+    expect(isBackgroundShellSignal('✻ Baked for 34m 33s · 1shell still running')).toBe(true);
+  });
+
+  it('isBackgroundShellSignal ignores ordinary narration and non-strings', () => {
+    expect(isBackgroundShellSignal('the dev server is still running on :5555')).toBe(false);
+    expect(isBackgroundShellSignal('shells still running')).toBe(false);
+    expect(isBackgroundShellSignal('Ran 5 shell commands')).toBe(false);
+    expect(isBackgroundShellSignal('')).toBe(false);
+    expect(isBackgroundShellSignal(null)).toBe(false);
+    expect(isBackgroundShellSignal(undefined)).toBe(false);
+  });
+
+  it('createBackgroundShellTracker latches on first signal and stays active through silence', () => {
+    const tracker = createBackgroundShellTracker();
+    expect(tracker.active).toBe(false);
+    tracker.observe('implementing the fix, running the suite');
+    expect(tracker.active).toBe(false);
+    expect(tracker.observe('✻ Baked for 20s · 2 shells still running')).toBe(true);
+    expect(tracker.active).toBe(true);
+    // The silent reviewer wait is exactly when the grace is needed, so quiet
+    // chunks must not un-latch it.
+    tracker.observe('Standing by for the review to finish.');
+    tracker.observe('');
+    expect(tracker.active).toBe(true);
+  });
+
+  it('createBackgroundShellTracker latches on a marker split across two chunks', () => {
+    const tracker = createBackgroundShellTracker();
+    tracker.observe('✻ Baked for 20s · 2 shells');
+    expect(tracker.active).toBe(false);
+    expect(tracker.observe(' still running')).toBe(true);
     expect(tracker.active).toBe(true);
   });
 });
