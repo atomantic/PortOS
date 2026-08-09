@@ -103,6 +103,29 @@ const WAIT_TIME_PATTERNS = [
   /(\d+\s*day(?:s)?)?[,\s]*(\d+\s*hour(?:s)?)?[,\s]*(\d+\s*min(?:ute)?(?:s)?)?/i
 ];
 
+// TUI chrome renders a banner in an output gutter — leading whitespace plus the
+// box-drawing/bullet glyphs the CLIs draw (agy uses `⎿`, Claude Code `⏺`). An
+// agent *quoting* a banner in prose, a grep hit (`file.js:122: …`), or a source
+// line (`pattern: /…/`) puts real text before the banner on the same line, which
+// this prefix deliberately does NOT admit. Markdown list bullets (`- `, `* `) are
+// left out for the same reason: that is how an agent writes ABOUT a banner.
+const TUI_GUTTER_PREFIX = '^[\\s│┃╎⎿⏺●•]*(?:\\[stderr\\]\\s*)?';
+
+/**
+ * Signals that fail a run immediately so the task can pick a fallback provider.
+ *
+ * Provenance (#3631): a match is stamped `origin: 'provider'` — the whole gate
+ * `agentFinalization.js` uses to BENCH the provider for every subsequently
+ * dequeued task — only when the text is unambiguous provider chrome. When an
+ * entry's `pattern` can also match text the agent itself could have printed
+ * (quoting a banner in prose, `cat`-ing a prior run's `output.txt`, a grep hit
+ * over this file), an optional `structuredMarker` sub-pattern gates the
+ * promotion: without the marker the match falls through to
+ * `origin: 'output-scan'` — still a real failure that fails the run and routes
+ * to a fallback, just not evidence about the provider's health. This mirrors
+ * `resolvePatternOrigin` in PortOS's `agentErrorAnalysis.js`. An entry whose
+ * pattern has no loose alternative may omit `structuredMarker`.
+ */
 const IMMEDIATE_FALLBACK_SIGNALS = [
   {
     // Antigravity leaves its composer visible while Google verifies account
@@ -120,12 +143,24 @@ const IMMEDIATE_FALLBACK_SIGNALS = [
     // so that retry resolves onto a fallback rather than re-dying on the same
     // banner three seconds later.
     pattern: /We're finishing verifying your account eligibility\.\s*This usually takes a moment\. Please try again shortly\./i,
+    // The banner sentence is distinctive, but it is not chrome-ONLY: it matches
+    // anywhere in the stream, so an agent that merely quotes it (investigating
+    // this very failure mode, `cat`-ing a prior run's output, a grep hit over
+    // this file) used to bench a healthy provider for the full auth cooldown
+    // across every subsequently dequeued task (#3631). Promote to provider
+    // origin only when the banner opens its own line behind nothing but TUI
+    // gutter decoration — the shape agy actually renders.
+    structuredMarker: new RegExp(`${TUI_GUTTER_PREFIX}We're finishing verifying your account eligibility\\.`, 'im'),
     category: ERROR_CATEGORIES.AUTH_ERROR,
     message: 'Antigravity account eligibility is still being verified',
     suggestedFix: 'Antigravity account verification is still in progress — sidelining the provider briefly and retrying on a fallback.',
     actionable: false
   },
   {
+    // No `structuredMarker`: this pattern has no loose alternative to gate. It
+    // already requires the vendor-branded status line to OWN a whole line, so a
+    // quoted mention inside surrounding agent output never matches in the first
+    // place and the provider is left available (#3631).
     pattern: /^\s*(?:\[stderr\]\s*)?Now using extra usage\s*(?:\r?\n|$)/im,
     category: ERROR_CATEGORIES.USAGE_LIMIT,
     message: 'Provider switched to extra usage',
@@ -260,6 +295,23 @@ export function analyzeError(errorText, exitCode = null) {
   };
 }
 
+/**
+ * Resolve the provenance origin for a matched IMMEDIATE_FALLBACK_SIGNAL (#3631).
+ * Returns `'provider'` only when the signal declares no `structuredMarker` (its
+ * pattern is chrome-only on its own) or that marker appears in the text;
+ * otherwise `'output-scan'` — a genuine failure that still requires a fallback,
+ * but not evidence the provider is unhealthy.
+ *
+ * The marker is tested against the WHOLE buffered text rather than the matched
+ * substring, mirroring `resolvePatternOrigin` in `agentErrorAnalysis.js`: a
+ * pattern returns its LEFTMOST match, which may be a quoted mention even when
+ * the real banner arrives later in the same buffer. Pure.
+ */
+function resolveSignalOrigin(signal, text) {
+  if (signal.structuredMarker && !signal.structuredMarker.test(text || '')) return 'output-scan';
+  return 'provider';
+}
+
 export function detectImmediateFallbackSignal(text) {
   if (!text) return null;
   const value = String(text);
@@ -279,10 +331,9 @@ export function detectImmediateFallbackSignal(text) {
       // signal opts out when the provider says the condition clears on its own.
       actionable: signal.actionable !== false,
       suggestedFix: signal.suggestedFix,
-      // These banners are provider CHROME, not text an agent could have printed
-      // — the host benches the provider on a provider-origin failure, so saying
-      // so here is what routes the retry to a fallback (agentFinalization.js).
-      origin: 'provider'
+      // Provider CHROME benches the provider host-side; text the agent itself
+      // could have printed must not (#3631). See resolveSignalOrigin.
+      origin: resolveSignalOrigin(signal, value)
     };
   }
 

@@ -160,6 +160,38 @@ describe('Error Detection', () => {
       });
     });
 
+    // #3631: the banner sentence matches anywhere in the stream, so an agent that
+    // merely QUOTES it still fails its own run — but it must not be read as
+    // evidence about the provider's health, or one such transcript benches a
+    // healthy provider for every subsequently dequeued task.
+    it.each([
+      ['prose that quotes the banner', "The known failure mode is: We're finishing verifying your account eligibility. This usually takes a moment. Please try again shortly. — see errorDetection.js"],
+      ['a grep hit over a prior run\'s transcript', "data/cos/agents/agent-1/output.txt:412:  ⎿  We're finishing verifying your account eligibility. This usually takes a moment. Please try again shortly."],
+      ['a markdown bullet in an agent write-up', "- We're finishing verifying your account eligibility. This usually takes a moment. Please try again shortly.\n"],
+    ])('marks a quoted eligibility banner as output-scan (%s)', (_label, transcript) => {
+      const result = detectImmediateFallbackSignal(transcript);
+      expect(result).toMatchObject({
+        hasError: true,
+        category: ERROR_CATEGORIES.AUTH_ERROR,
+        // Still a real failure that routes to a fallback — just not provider chrome.
+        requiresFallback: true,
+        origin: 'output-scan'
+      });
+    });
+
+    it('still promotes the banner when it opens its own line behind TUI gutter chrome', () => {
+      const rendered = "reading the task brief…\n  ⎿  We're finishing verifying your account eligibility.\n This usually takes a moment. Please try again shortly.\r\n";
+      expect(detectImmediateFallbackSignal(rendered)).toMatchObject({
+        category: ERROR_CATEGORIES.AUTH_ERROR,
+        origin: 'provider'
+      });
+    });
+
+    it('promotes a real banner that arrives later in a buffer whose earlier mention is quoted', () => {
+      const transcript = "I will check whether We're finishing verifying your account eligibility. This usually takes a moment. Please try again shortly. is still firing.\n⎿  We're finishing verifying your account eligibility. This usually takes a moment. Please try again shortly.\n";
+      expect(detectImmediateFallbackSignal(transcript)).toMatchObject({ origin: 'provider' });
+    });
+
     it('buffers an Antigravity account-eligibility block across stream chunks', () => {
       const detect = createImmediateFallbackSignalDetector();
       expect(detect("We're finishing verifying your account eligibility. This usually ")).toBeNull();
@@ -179,6 +211,10 @@ describe('Error Detection', () => {
       // Signals stay actionable-by-default; only a signal the provider says
       // clears itself opts out.
       expect(result.actionable).toBe(true);
+    });
+
+    it('stamps the real extra-usage status line as provider chrome', () => {
+      expect(detectImmediateFallbackSignal('Now using extra usage\n')).toMatchObject({ origin: 'provider' });
     });
 
     it('does not match quoted prompt text in the middle of a line', () => {

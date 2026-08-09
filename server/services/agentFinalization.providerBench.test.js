@@ -109,6 +109,45 @@ describe('finalizeAgent provider sidelining', () => {
     expect(markProviderUsageLimitMock).not.toHaveBeenCalled();
   });
 
+  // #3631, the broad half of the same gate: `detectImmediateFallbackSignal` used to
+  // stamp `origin: 'provider'` unconditionally, so an agent that merely PRINTED one
+  // of these banners benched a healthy provider for every subsequently dequeued
+  // task. These drive the REAL detector — hand-stamping `origin` is exactly how the
+  // sibling regression shipped green.
+  it.each([
+    ['prose quoting the banner', "The known failure mode is: We're finishing verifying your account eligibility. This usually takes a moment. Please try again shortly. — see errorDetection.js"],
+    ['a grep hit over a prior run\'s transcript', "data/cos/agents/agent-1/output.txt:412:  ⎿  We're finishing verifying your account eligibility. This usually takes a moment. Please try again shortly."],
+    // The extra-usage status line has no loose alternative — quoting it inline
+    // does not even register as a signal, so there is nothing to bench on.
+    ['a quoted extra-usage status line', 'the tail showed "Now using extra usage" in a prior run'],
+  ])('does not bench when the agent merely printed the banner (%s)', async (_label, transcript) => {
+    const analysis = detectImmediateFallbackSignal(transcript);
+    expect(analysis?.origin ?? null).not.toBe('provider');
+    await failedRun(analysis);
+    expect(markProviderUnavailableMock).not.toHaveBeenCalled();
+    expect(markProviderUsageLimitMock).not.toHaveBeenCalled();
+  });
+
+  it('still benches when the eligibility banner arrives as the run\'s own terminal output', async () => {
+    const analysis = detectImmediateFallbackSignal(
+      "starting the task…\n  ⎿  We're finishing verifying your account eligibility.\n This usually takes a moment. Please try again shortly.\r\n"
+    );
+    expect(analysis).toMatchObject({ category: 'auth-error', origin: 'provider' });
+    await failedRun(analysis);
+    expect(markProviderUnavailableMock).toHaveBeenCalledWith('antigravity-tui', expect.objectContaining({
+      reason: 'auth-error',
+    }));
+  });
+
+  it('still benches on the real extra-usage status line', async () => {
+    const analysis = detectImmediateFallbackSignal('Now using extra usage\n');
+    expect(analysis).toMatchObject({ category: 'usage-limit', origin: 'provider' });
+    await failedRun(analysis, 'claude-code-tui');
+    expect(markProviderUsageLimitMock).toHaveBeenCalledWith('claude-code-tui', expect.objectContaining({
+      category: 'usage-limit',
+    }));
+  });
+
   // The provenance gate is only as good as what `analyzeAgentFailure` promotes to
   // `origin: 'provider'`. The case above hand-stamps that origin, which is exactly
   // how a real regression shipped green: Claude Code's actual banners classified as
