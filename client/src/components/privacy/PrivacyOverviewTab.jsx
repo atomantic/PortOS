@@ -4,12 +4,13 @@ import { ShieldCheck, ShieldAlert, KeyRound, Building2, ArrowRight, ShieldOff } 
 import { getPrivacyStatus, getPrivacyOrgs, getPrivacyScanStatus } from '../../services/api';
 import {
   VAULT_TYPES, ORG_TRUST_LEVELS, TRUST_TONE, labelFor, CASE_STATES, CASE_STATE_TONE,
+  privacyTabPath,
 } from './constants';
 
 // Broker case states surfaced on the Overview summary (#2146).
 const OVERVIEW_BROKER_STATES = ['found', 'optout_in_progress', 'human_task_queued', 'confirmed_removed'];
 
-export default function PrivacyOverviewTab() {
+export default function PrivacyOverviewTab({ subjectId }) {
   const navigate = useNavigate();
   const [status, setStatus] = useState(null);
   const [orgs, setOrgs] = useState([]);
@@ -17,13 +18,21 @@ export default function PrivacyOverviewTab() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.allSettled([getPrivacyStatus(), getPrivacyOrgs(), getPrivacyScanStatus()]).then(([s, o, b]) => {
+    setLoading(true);
+    Promise.allSettled([
+      getPrivacyStatus({ subjectId }), getPrivacyOrgs({}, { subjectId }),
+      getPrivacyScanStatus({ subjectId }),
+    ]).then(([s, o, b]) => {
       setStatus(s.status === 'fulfilled' ? s.value : { keyConfigured: false, recordCounts: {} });
       setOrgs(o.status === 'fulfilled' ? o.value : []);
       setScanStatus(b.status === 'fulfilled' ? b.value : { caseCounts: {}, enabledBrokers: 0 });
       setLoading(false);
     });
-  }, []);
+  }, [subjectId]);
+
+  // Cross-tab links carry the active subject so a drill-down never silently
+  // snaps back to `self`.
+  const goTo = (tab) => navigate(privacyTabPath(tab, subjectId));
 
   if (loading) return <div className="text-gray-500 text-sm py-8 text-center">Loading privacy status…</div>;
 
@@ -69,7 +78,7 @@ export default function PrivacyOverviewTab() {
 
         {/* Vault records */}
         <button
-          onClick={() => navigate('/privacy/vault')}
+          onClick={() => goTo('vault')}
           className="text-left bg-port-card border border-port-border rounded-lg p-5 hover:border-port-accent/50 transition-colors group"
         >
           <div className="flex items-center justify-between mb-3">
@@ -89,7 +98,7 @@ export default function PrivacyOverviewTab() {
 
         {/* Organizations */}
         <button
-          onClick={() => navigate('/privacy/organizations')}
+          onClick={() => goTo('organizations')}
           className="text-left bg-port-card border border-port-border rounded-lg p-5 hover:border-port-accent/50 transition-colors group"
         >
           <div className="flex items-center justify-between mb-3">
@@ -112,7 +121,7 @@ export default function PrivacyOverviewTab() {
 
       {/* Data-broker exposure summary (#2146) */}
       <button
-        onClick={() => navigate('/privacy/brokers')}
+        onClick={() => goTo('brokers')}
         className="w-full text-left bg-port-card border border-port-border rounded-lg p-5 hover:border-port-accent/50 transition-colors group"
       >
         <div className="flex items-center justify-between mb-3">
@@ -137,10 +146,10 @@ export default function PrivacyOverviewTab() {
       </button>
 
       <div className="flex flex-wrap gap-2">
-        <button onClick={() => navigate('/privacy/vault')} className="px-3 py-2 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80">
+        <button onClick={() => goTo('vault')} className="px-3 py-2 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80">
           Manage vault
         </button>
-        <button onClick={() => navigate('/privacy/organizations')} className="px-3 py-2 text-sm rounded border border-port-border text-gray-300 hover:text-white hover:bg-port-card">
+        <button onClick={() => goTo('organizations')} className="px-3 py-2 text-sm rounded border border-port-border text-gray-300 hover:text-white hover:bg-port-card">
           Manage organizations
         </button>
       </div>

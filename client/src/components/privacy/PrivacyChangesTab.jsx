@@ -104,7 +104,7 @@ function StatusGroup({ title, orgs, status, eventId, hasReplacement, onChanged }
   );
 }
 
-export default function PrivacyChangesTab() {
+export default function PrivacyChangesTab({ subjectId }) {
   const [events, setEvents] = useState([]);
   const [vaultRecords, setVaultRecords] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -115,12 +115,16 @@ export default function PrivacyChangesTab() {
 
   const load = useCallback(() => {
     setLoading(true);
-    Promise.allSettled([getPrivacyChanges(), getVaultRecords()]).then(([e, v]) => {
+    // A change event inherits its subject from the vault record it replaces, so
+    // scoping the record list is what keeps the Declare form on one person.
+    Promise.allSettled([
+      getPrivacyChanges({ subjectId }), getVaultRecords(undefined, { subjectId }),
+    ]).then(([e, v]) => {
       setEvents(e.status === 'fulfilled' ? e.value : []);
       setVaultRecords(v.status === 'fulfilled' ? v.value : []);
       setLoading(false);
     });
-  }, []);
+  }, [subjectId]);
 
   useEffect(() => { load(); }, [load]);
 

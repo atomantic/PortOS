@@ -36,7 +36,7 @@ function ChipFilter({ label, options, value, onChange }) {
   );
 }
 
-export default function PrivacyOrgsTab() {
+export default function PrivacyOrgsTab({ subjectId }) {
   const [orgs, setOrgs] = useState([]);
   const [vaultRecords, setVaultRecords] = useState([]);
   const [holdingsByOrg, setHoldingsByOrg] = useState({}); // orgId -> [holdings]
@@ -48,19 +48,26 @@ export default function PrivacyOrgsTab() {
 
   const load = useCallback(() => {
     setLoading(true);
-    Promise.allSettled([getPrivacyOrgs(), getVaultRecords()]).then(async ([o, v]) => {
-      const orgList = o.status === 'fulfilled' ? o.value : [];
-      setOrgs(orgList);
-      setVaultRecords(v.status === 'fulfilled' ? v.value : []);
-      // Fetch holdings per org (single-user scale — a handful of orgs).
-      const entries = await Promise.all(orgList.map(async (org) => {
-        const h = await getOrgHoldings(org.id, { silent: true }).catch(() => []);
-        return [org.id, h || []];
-      }));
-      setHoldingsByOrg(Object.fromEntries(entries));
-      setLoading(false);
-    });
-  }, []);
+    // Holdings depend only on the org list, so they chain off it directly — the
+    // vault read runs alongside rather than gating the fan-out.
+    const orgsThenHoldings = getPrivacyOrgs({}, { subjectId })
+      .then(async (orgList) => {
+        setOrgs(orgList);
+        // One request per org (single-user scale — a handful of orgs).
+        const entries = await Promise.all(orgList.map(async (org) => {
+          const h = await getOrgHoldings(org.id, { silent: true }).catch(() => []);
+          return [org.id, h || []];
+        }));
+        setHoldingsByOrg(Object.fromEntries(entries));
+      })
+      .catch(() => { setOrgs([]); setHoldingsByOrg({}); });
+
+    const vault = getVaultRecords(undefined, { subjectId })
+      .then((v) => setVaultRecords(v || []))
+      .catch(() => setVaultRecords([]));
+
+    Promise.all([orgsThenHoldings, vault]).then(() => setLoading(false));
+  }, [subjectId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -193,6 +200,7 @@ export default function PrivacyOrgsTab() {
       <OrgDrawer
         open={drawerOpen}
         org={editing}
+        subjectId={subjectId}
         vaultRecords={vaultRecords}
         onClose={() => setDrawerOpen(false)}
         onSaved={handleSaved}

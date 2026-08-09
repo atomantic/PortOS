@@ -2,6 +2,40 @@
 // the server Zod schemas in server/lib/privacyValidation.js — a mismatch would
 // let the UI offer a value the API rejects.
 
+// ── Household subjects (#3658) ──────────────────────────────────────────────
+// Mirrors PRIVACY_SELF_SUBJECT_ID — the seeded subject every pre-#3658 record
+// backfilled to. The UI treats it as undeletable and as the default scope.
+export const SELF_SUBJECT_ID = '00000000-0000-4000-8000-000000000001';
+
+// Mirrors PRIVACY_SUBJECT_RELATIONSHIPS.
+export const SUBJECT_RELATIONSHIPS = [
+  { id: 'self', label: 'Self' },
+  { id: 'partner', label: 'Partner' },
+  { id: 'child', label: 'Child' },
+  { id: 'parent', label: 'Parent' },
+  { id: 'dependent', label: 'Dependent' },
+  { id: 'other', label: 'Other' },
+];
+
+// Mirrors PRIVACY_CONSENT_METHODS — how this person's consent was captured.
+// The engine refuses to scan or submit opt-outs for a subject with no consent
+// row, so this is a required field when adding a household member.
+export const CONSENT_METHODS = [
+  { id: 'self', label: 'Self (my own data)' },
+  { id: 'verbal', label: 'Verbal' },
+  { id: 'written', label: 'Written' },
+  { id: 'signed_form', label: 'Signed form' },
+  { id: 'guardian', label: 'Guardian' },
+  { id: 'power_of_attorney', label: 'Power of attorney' },
+  { id: 'other', label: 'Other' },
+];
+
+// Mirrors PRIVACY_CONSENT_SCOPES.
+export const CONSENT_SCOPES = [
+  { id: 'pii_vault', label: 'PII vault' },
+  { id: 'broker_optout', label: 'Broker opt-out' },
+];
+
 export const VAULT_TYPES = [
   { id: 'legal_name', label: 'Legal name' },
   { id: 'address', label: 'Address' },
@@ -198,3 +232,14 @@ export const BROKER_CONFIDENCE = [
 ];
 
 export const labelFor = (list, id) => list.find((x) => x.id === id)?.label ?? id;
+
+// Shared form-input styling for the Privacy drawers (was copy-pasted verbatim
+// in each of them).
+export const INPUT_CLS = 'w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent';
+
+// Path to a Privacy tab under the active household subject (#3658). `self` is
+// the server's default scope, so it is elided from the URL. Deliberately drops
+// any other search param (e.g. the brokers tab's `?case=`) — a cross-tab link
+// must not reopen a drawer belonging to the tab you just left.
+export const privacyTabPath = (tab, subjectId) =>
+  `/privacy/${tab}${!subjectId || subjectId === SELF_SUBJECT_ID ? '' : `?subject=${subjectId}`}`;

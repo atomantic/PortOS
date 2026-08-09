@@ -19,7 +19,7 @@ function Toggle({ checked, disabled, onChange, label }) {
   );
 }
 
-export default function PrivacyVaultTab() {
+export default function PrivacyVaultTab({ subjectId }) {
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -30,12 +30,14 @@ export default function PrivacyVaultTab() {
 
   const load = useCallback(() => {
     setLoading(true);
-    Promise.allSettled([getVaultRecords(), getPrivacyStatus()]).then(([recs, status]) => {
+    Promise.allSettled([
+      getVaultRecords(undefined, { subjectId }), getPrivacyStatus({ subjectId }),
+    ]).then(([recs, status]) => {
       setRecords(recs.status === 'fulfilled' ? recs.value : []);
       if (status.status === 'fulfilled') setKeyConfigured(status.value.keyConfigured !== false);
       setLoading(false);
     });
-  }, []);
+  }, [subjectId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -204,6 +206,7 @@ export default function PrivacyVaultTab() {
       <VaultRecordDrawer
         open={drawerOpen}
         record={editing}
+        subjectId={subjectId}
         onClose={() => setDrawerOpen(false)}
         onSaved={handleSaved}
       />

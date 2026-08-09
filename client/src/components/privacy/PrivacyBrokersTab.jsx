@@ -32,7 +32,7 @@ function StatChip({ label, count, tone }) {
   );
 }
 
-export default function PrivacyBrokersTab() {
+export default function PrivacyBrokersTab({ subjectId }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const openCaseId = searchParams.get('case');
 
@@ -46,24 +46,36 @@ export default function PrivacyBrokersTab() {
   const [cronDraft, setCronDraft] = useState('');
   const [brokerListOpen, setBrokerListOpen] = useState(false);
 
+  // Cases, exposure counts, and the digest are per-subject — `load` is also the
+  // post-action refresh, so it runs after every scan/recheck/transition.
   const load = useCallback(() => {
     setLoading(true);
     Promise.allSettled([
-      getPrivacyScanStatus(), getPrivacyBrokerCases(), getPrivacyBrokers(),
-      getPrivacyOptOutDigest(), getPrivacyOptOutSchedule(),
-    ]).then(([s, c, b, d, sch]) => {
+      getPrivacyScanStatus({ subjectId }), getPrivacyBrokerCases(undefined, { subjectId }),
+      getPrivacyOptOutDigest({ subjectId }),
+    ]).then(([s, c, d]) => {
       setScanStatus(s.status === 'fulfilled' ? s.value : { enabledBrokers: 0, caseCounts: {}, dueForRecheck: 0 });
       setCases(c.status === 'fulfilled' ? c.value : []);
-      setBrokers(b.status === 'fulfilled' ? b.value : []);
       setDigest(d.status === 'fulfilled' ? d.value : { total: 0, humanTasks: 0, blocked: 0, items: [] });
+      setLoading(false);
+    });
+  }, [subjectId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  // The broker database and the recheck schedule are install-wide: they can't
+  // change when the subject does, and re-pulling the whole broker list on every
+  // case transition was pure waste.
+  const loadInstallWide = useCallback(() => {
+    Promise.allSettled([getPrivacyBrokers(), getPrivacyOptOutSchedule()]).then(([b, sch]) => {
+      setBrokers(b.status === 'fulfilled' ? b.value : []);
       const schVal = sch.status === 'fulfilled' ? sch.value : null;
       setSchedule(schVal);
       if (schVal) setCronDraft(schVal.cronExpression || '');
-      setLoading(false);
     });
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadInstallWide(); }, [loadInstallWide]);
 
   const brokerById = useMemo(() => new Map(brokers.map((b) => [b.id, b])), [brokers]);
   const caseCounts = scanStatus?.caseCounts || {};
@@ -76,8 +88,23 @@ export default function PrivacyBrokersTab() {
   const openCase = openCaseId ? cases.find((c) => c.id === openCaseId) : null;
 
   // ── Run controls (synchronous passes — gate both while either runs) ─────────
+  // The engine refuses to scan or submit for a subject with no active consent
+  // row (403 SUBJECT_CONSENT_REQUIRED). Its raw message names the subject UUID,
+  // so restate it as the action the user can actually take — the fix is
+  // recording consent, not retrying.
+  // Restate, don't replace: the code/status ride along so a future surface can
+  // act on the refusal (deep-link to Household, disable the button) instead of
+  // re-parsing a sentence.
+  const runPass = (fn) => fn({ silent: true, subjectId }).catch((err) => {
+    if (err?.code !== 'SUBJECT_CONSENT_REQUIRED') throw err;
+    const friendly = new Error('No consent on record for this person — add it under Household first');
+    friendly.code = err.code;
+    friendly.status = err.status;
+    throw friendly;
+  });
+
   const [scanNow, scanRunning] = useAsyncAction(async () => {
-    const r = await runPrivacyScan({ silent: true });
+    const r = await runPass(runPrivacyScan);
     load();
     const verdicts = Object.entries(r?.verdicts || {}).map(([k, v]) => `${v} ${labelFor(CASE_STATES, k).toLowerCase()}`).join(', ');
     toast.success(r?.reason === 'no_scan_vectors'
@@ -87,7 +114,7 @@ export default function PrivacyBrokersTab() {
   }, { errorMessage: 'Scan failed' });
 
   const [optOutNow, optOutRunning] = useAsyncAction(async () => {
-    const r = await runPrivacyOptOut({ silent: true });
+    const r = await runPass(runPrivacyOptOut);
     load();
     toast.success(r?.reason === 'no_disclosure_identity'
       ? 'Add a scan-eligible name to the vault to run an opt-out pass'
@@ -97,7 +124,7 @@ export default function PrivacyBrokersTab() {
 
   const [refreshList, refreshing] = useAsyncAction(async () => {
     const r = await refreshPrivacyBrokers({ silent: true });
-    load();
+    loadInstallWide();
     toast.success(`Broker list refreshed: ${r?.added || 0} new (${r?.fetched || 0} fetched)`);
     return r;
   }, { errorMessage: 'Broker refresh failed' });

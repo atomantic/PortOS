@@ -6,9 +6,7 @@ import {
   createPrivacyOrg, updatePrivacyOrg, getOrgHoldings, setOrgHoldings, getSocialAccounts,
 } from '../../services/api';
 import toast from '../ui/Toast';
-import { ORG_CATEGORIES, ORG_TRUST_LEVELS, ORG_STATUSES, VAULT_TYPES, labelFor } from './constants';
-
-const inputCls = 'w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent';
+import { ORG_CATEGORIES, ORG_TRUST_LEVELS, ORG_STATUSES, VAULT_TYPES, INPUT_CLS, labelFor } from './constants';
 
 const EMPTY = {
   name: '', category: 'other', website: '', trust: 'trusted', status: 'active',
@@ -26,7 +24,7 @@ const accountLabel = (a) => {
 // picker is a checkbox list over the user's vault records (masked values only).
 // Holdings are saved via the replace-set endpoint after the org exists (on
 // create we POST the org first, then set holdings against the returned id).
-export default function OrgDrawer({ open, org, vaultRecords, onClose, onSaved }) {
+export default function OrgDrawer({ open, org, subjectId, vaultRecords, onClose, onSaved }) {
   const editing = !!org;
   const [form, setForm] = useState(EMPTY);
   const [selected, setSelected] = useState(() => new Set()); // vaultRecordId set
@@ -86,9 +84,12 @@ export default function OrgDrawer({ open, org, vaultRecords, onClose, onSaved })
       socialAccountId: form.socialAccountId || null,
     };
 
+    // The org belongs to whichever household subject was in scope when it was
+    // created; the server rejects holdings that cross subjects, so it is not
+    // re-assignable on edit.
     const savedOrg = editing
       ? await updatePrivacyOrg(org.id, payload, { silent: true })
-      : await createPrivacyOrg(payload, { silent: true });
+      : await createPrivacyOrg({ ...payload, subjectId }, { silent: true });
     if (!savedOrg) return null;
 
     // Persist holdings (replace-set). Skip the call on create when nothing is selected.
@@ -116,36 +117,36 @@ export default function OrgDrawer({ open, org, vaultRecords, onClose, onSaved })
     >
       <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); save(); }}>
         <FormField label="Name">
-          <input type="text" value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="e.g. Acme Bank" className={inputCls} maxLength={200} />
+          <input type="text" value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="e.g. Acme Bank" className={INPUT_CLS} maxLength={200} />
         </FormField>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <FormField label="Category">
-            <select value={form.category} onChange={(e) => set('category', e.target.value)} className={inputCls}>
+            <select value={form.category} onChange={(e) => set('category', e.target.value)} className={INPUT_CLS}>
               {ORG_CATEGORIES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
             </select>
           </FormField>
           <FormField label="Trust">
-            <select value={form.trust} onChange={(e) => set('trust', e.target.value)} className={inputCls}>
+            <select value={form.trust} onChange={(e) => set('trust', e.target.value)} className={INPUT_CLS}>
               {ORG_TRUST_LEVELS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
             </select>
           </FormField>
           <FormField label="Status">
-            <select value={form.status} onChange={(e) => set('status', e.target.value)} className={inputCls}>
+            <select value={form.status} onChange={(e) => set('status', e.target.value)} className={INPUT_CLS}>
               {ORG_STATUSES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
             </select>
           </FormField>
         </div>
 
         <FormField label="Website">
-          <input type="text" value={form.website} onChange={(e) => set('website', e.target.value)} placeholder="https://…" className={inputCls} maxLength={2000} />
+          <input type="text" value={form.website} onChange={(e) => set('website', e.target.value)} placeholder="https://…" className={INPUT_CLS} maxLength={2000} />
         </FormField>
 
         <FormField label="Linked social account (Digital Twin)">
           <select
             value={form.socialAccountId}
             onChange={(e) => set('socialAccountId', e.target.value)}
-            className={inputCls}
+            className={INPUT_CLS}
           >
             <option value="">— None —</option>
             {/* Preserve a stale link (account since deleted) so the select isn't blank. */}
@@ -163,10 +164,10 @@ export default function OrgDrawer({ open, org, vaultRecords, onClose, onSaved })
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <FormField label="Contact email">
-            <input type="email" value={form.contactEmail} onChange={(e) => set('contactEmail', e.target.value)} className={inputCls} maxLength={320} />
+            <input type="email" value={form.contactEmail} onChange={(e) => set('contactEmail', e.target.value)} className={INPUT_CLS} maxLength={320} />
           </FormField>
           <FormField label="Contact phone">
-            <input type="tel" value={form.contactPhone} onChange={(e) => set('contactPhone', e.target.value)} className={inputCls} maxLength={64} />
+            <input type="tel" value={form.contactPhone} onChange={(e) => set('contactPhone', e.target.value)} className={INPUT_CLS} maxLength={64} />
           </FormField>
         </div>
 
@@ -189,7 +190,7 @@ export default function OrgDrawer({ open, org, vaultRecords, onClose, onSaved })
         </div>
 
         <FormField label="Notes">
-          <textarea value={form.notes} onChange={(e) => set('notes', e.target.value)} rows={3} className={inputCls} maxLength={5000} />
+          <textarea value={form.notes} onChange={(e) => set('notes', e.target.value)} rows={3} className={INPUT_CLS} maxLength={5000} />
         </FormField>
 
         <div className="flex items-center justify-end gap-2 pt-2">

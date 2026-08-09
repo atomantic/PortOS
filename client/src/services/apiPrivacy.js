@@ -6,12 +6,49 @@ import { request } from './apiCore.js';
 // UI (useAsyncAction, custom catch) can pass `{ silent: true }` per the toasting
 // convention.
 
+// Household subjects (#3658): every scoped read/write takes an optional
+// `subjectId` inside that same trailing `options` object, so no pre-#3658 caller
+// changed signature. The server resolves an absent `subjectId` to the seeded
+// `self` subject, so omitting it reproduces the single-subject v1 behavior
+// exactly. There is no "all subjects" mode — the API scopes to exactly one.
+const scoped = (path, { subjectId, ...rest } = {}, params = {}) => {
+  const qs = new URLSearchParams(
+    Object.entries({ ...params, subjectId }).filter(([, v]) => v != null && v !== ''),
+  ).toString();
+  return [qs ? `${path}?${qs}` : path, rest];
+};
+
+// POST bodies carry `subjectId` inline instead of as a query param.
+const scopedPost = (path, { subjectId, ...rest } = {}) => [path, {
+  method: 'POST',
+  ...(subjectId ? { body: JSON.stringify({ subjectId }) } : {}),
+  ...rest,
+}];
+
+// ── Household subjects (#3658) ──────────────────────────────────────────────
+/** All subjects, `self` first, each with `consentCount` + `recordCount`. */
+export const getPrivacySubjects = (options) => request('/privacy/subjects', options);
+/** Create: { displayName, relationship?, consentMethod, consentNote? } — consent is mandatory. */
+export const createPrivacySubject = (data, options) => request('/privacy/subjects', {
+  method: 'POST',
+  body: JSON.stringify(data),
+  ...options,
+});
+/** Hard delete — cascades this subject's vault records, orgs, changes, and cases. */
+export const deletePrivacySubject = (id, options) => request(`/privacy/subjects/${id}`, {
+  method: 'DELETE',
+  ...options,
+});
+/** Consent audit trail for one subject, newest first. */
+export const getPrivacySubjectConsents = (id, options) =>
+  request(`/privacy/subjects/${id}/consents`, options);
+
 // ── Status (doctor-style readout) ───────────────────────────────────────────
-export const getPrivacyStatus = (options) => request('/privacy/status', options);
+export const getPrivacyStatus = (options) => request(...scoped('/privacy/status', options));
 
 // ── Vault records ───────────────────────────────────────────────────────────
 export const getVaultRecords = (type, options) =>
-  request(`/privacy/vault${type ? `?type=${encodeURIComponent(type)}` : ''}`, options);
+  request(...scoped('/privacy/vault', options, { type }));
 export const getVaultRecord = (id, options) => request(`/privacy/vault/${id}`, options);
 export const createVaultRecord = (data, options) => request('/privacy/vault', {
   method: 'POST',
@@ -34,12 +71,8 @@ export const revealVaultRecord = (id, options) => request(`/privacy/vault/${id}/
 });
 
 // ── Trusted Organizations registry ──────────────────────────────────────────
-export const getPrivacyOrgs = (filters = {}, options) => {
-  const qs = new URLSearchParams(
-    Object.entries(filters).filter(([, v]) => v != null && v !== ''),
-  ).toString();
-  return request(`/privacy/orgs${qs ? `?${qs}` : ''}`, options);
-};
+export const getPrivacyOrgs = (filters = {}, options) =>
+  request(...scoped('/privacy/orgs', options, filters));
 export const getPrivacyOrg = (id, options) => request(`/privacy/orgs/${id}`, options);
 export const createPrivacyOrg = (data, options) => request('/privacy/orgs', {
   method: 'POST',
@@ -66,7 +99,7 @@ export const setOrgHoldings = (id, holdings, options) => request(`/privacy/orgs/
 });
 
 // ── Change-of-address events + inventory (#2143) ────────────────────────────
-export const getPrivacyChanges = (options) => request('/privacy/changes', options);
+export const getPrivacyChanges = (options) => request(...scoped('/privacy/changes', options));
 export const getPrivacyChange = (id, options) => request(`/privacy/changes/${id}`, options);
 // Declare a change: { vaultRecordId, replacement?|replacementRecordId?, kind?, note? }.
 export const declarePrivacyChange = (data, options) => request('/privacy/changes', {
@@ -99,7 +132,7 @@ export const refreshPrivacyBrokers = (options) => request('/privacy/brokers/refr
 });
 /** Case ledger rows (joined with broker name/tier). `state` filters when set. */
 export const getPrivacyBrokerCases = (state, options) =>
-  request(`/privacy/broker-cases${state ? `?state=${encodeURIComponent(state)}` : ''}`, options);
+  request(...scoped('/privacy/broker-cases', options, { state }));
 /** Force a case due for recheck now. */
 export const recheckPrivacyCase = (id, options) =>
   request(`/privacy/broker-cases/${id}/recheck`, { method: 'POST', ...options });
@@ -110,13 +143,13 @@ export const transitionPrivacyCase = (id, toState, reason, options) => request(`
   ...options,
 });
 /** Aggregate exposure readout: enabledBrokers, caseCounts (per state), dueForRecheck. */
-export const getPrivacyScanStatus = (options) => request('/privacy/scan/status', options);
-/** Run a read-only exposure scan pass over enabled brokers. */
-export const runPrivacyScan = (options) => request('/privacy/scan', { method: 'POST', ...options });
+export const getPrivacyScanStatus = (options) => request(...scoped('/privacy/scan/status', options));
+/** Run a read-only exposure scan pass over enabled brokers. Refused without consent. */
+export const runPrivacyScan = (options) => request(...scopedPost('/privacy/scan', options));
 /** Run one opt-out pass (submit found/indirect cases via the chosen lane, poll verifications). */
-export const runPrivacyOptOut = (options) => request('/privacy/optout', { method: 'POST', ...options });
+export const runPrivacyOptOut = (options) => request(...scopedPost('/privacy/optout', options));
 /** Human-task digest: cases needing a person (blocked / human-only channels). */
-export const getPrivacyOptOutDigest = (options) => request('/privacy/optout/digest', options);
+export const getPrivacyOptOutDigest = (options) => request(...scoped('/privacy/optout/digest', options));
 /** Recheck-schedule status: { enabled, cronExpression, autoApproveOptOutEmails, autoSubmitWebForms, nextRun }. */
 export const getPrivacyOptOutSchedule = (options) => request('/privacy/optout/schedule', options);
 /** Update the recheck cron + autonomy toggles; restarts the scheduler. Returns the new status. */

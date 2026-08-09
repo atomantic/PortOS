@@ -4,9 +4,7 @@ import FormField from '../ui/FormField';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { declarePrivacyChange } from '../../services/api';
 import toast from '../ui/Toast';
-import { VAULT_TYPES, CHANGE_KINDS, KIND_FOR_TYPE, labelFor } from './constants';
-
-const inputCls = 'w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent';
+import { VAULT_TYPES, CHANGE_KINDS, KIND_FOR_TYPE, INPUT_CLS, labelFor } from './constants';
 
 // Declare a change-of-address (or any field change): pick the OLD vault record,
 // enter the NEW value, and every org holding the old value flips to
@@ -73,7 +71,7 @@ export default function DeclareChangeDrawer({ open, vaultRecords, onClose, onDec
               id="declare-old-record"
               value={oldRecordId}
               onChange={(e) => setOldRecordId(e.target.value)}
-              className={inputCls}
+              className={INPUT_CLS}
             >
               {eligible.map((r) => (
                 <option key={r.id} value={r.id}>
@@ -94,7 +92,7 @@ export default function DeclareChangeDrawer({ open, vaultRecords, onClose, onDec
               value={label}
               onChange={(e) => setLabel(e.target.value)}
               placeholder="e.g. New home address"
-              className={inputCls}
+              className={INPUT_CLS}
               maxLength={200}
             />
           </FormField>
@@ -106,7 +104,7 @@ export default function DeclareChangeDrawer({ open, vaultRecords, onClose, onDec
               value={value}
               onChange={(e) => setValue(e.target.value)}
               placeholder="The new value (encrypted at rest)"
-              className={inputCls}
+              className={INPUT_CLS}
               maxLength={10000}
             />
           </FormField>
@@ -117,7 +115,7 @@ export default function DeclareChangeDrawer({ open, vaultRecords, onClose, onDec
               value={note}
               onChange={(e) => setNote(e.target.value)}
               rows={2}
-              className={inputCls}
+              className={INPUT_CLS}
               maxLength={5000}
             />
           </FormField>

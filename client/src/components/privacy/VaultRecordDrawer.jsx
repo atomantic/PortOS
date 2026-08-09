@@ -4,21 +4,19 @@ import FormField from '../ui/FormField';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { createVaultRecord, updateVaultRecord } from '../../services/api';
 import toast from '../ui/Toast';
-import { VAULT_TYPES, VAULT_STATUSES, SENSITIVE_TYPES } from './constants';
+import { VAULT_TYPES, VAULT_STATUSES, SENSITIVE_TYPES, INPUT_CLS } from './constants';
 
 // Create/edit a single encrypted vault record. Form state is hoisted into this
 // component (never left in uncontrolled inputs) per the drawer convention. On
 // edit the plaintext `value` is NOT prefilled (the list only ever holds the
 // masked value) — an empty value on edit means "leave the stored value
 // unchanged"; typing a new value re-encrypts it server-side.
-const inputCls = 'w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent';
-
 const EMPTY = {
   type: 'legal_name', label: '', value: '', status: 'current',
   validFrom: '', validTo: '', shareWithTwin: false, useForScans: null, notes: '',
 };
 
-export default function VaultRecordDrawer({ open, record, onClose, onSaved }) {
+export default function VaultRecordDrawer({ open, record, subjectId, onClose, onSaved }) {
   const editing = !!record;
   const [form, setForm] = useState(EMPTY);
 
@@ -64,7 +62,11 @@ export default function VaultRecordDrawer({ open, record, onClose, onSaved }) {
       if (form.value.trim()) payload.value = form.value;
       result = await updateVaultRecord(record.id, payload, { silent: true });
     } else {
-      result = await createVaultRecord({ type: form.type, value: form.value, ...payload }, { silent: true });
+      // The subject is fixed at creation by the active scope — like `type`, it is
+      // immutable afterwards (move a record by deleting and re-creating it).
+      result = await createVaultRecord({
+        type: form.type, value: form.value, ...payload, subjectId,
+      }, { silent: true });
     }
     if (result) {
       toast.success(editing ? 'Vault record updated' : 'Vault record created');
@@ -92,7 +94,7 @@ export default function VaultRecordDrawer({ open, record, onClose, onSaved }) {
             value={form.type}
             onChange={(e) => set('type', e.target.value)}
             disabled={editing}
-            className={`${inputCls} ${editing ? 'opacity-60 cursor-not-allowed' : ''}`}
+            className={`${INPUT_CLS} ${editing ? 'opacity-60 cursor-not-allowed' : ''}`}
           >
             {VAULT_TYPES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
           </select>
@@ -105,7 +107,7 @@ export default function VaultRecordDrawer({ open, record, onClose, onSaved }) {
             value={form.label}
             onChange={(e) => set('label', e.target.value)}
             placeholder="e.g. Home address"
-            className={inputCls}
+            className={INPUT_CLS}
             maxLength={200}
           />
         </FormField>
@@ -120,21 +122,21 @@ export default function VaultRecordDrawer({ open, record, onClose, onSaved }) {
             onChange={(e) => set('value', e.target.value)}
             placeholder={editing ? '••••••••' : ''}
             autoComplete="off"
-            className={inputCls}
+            className={INPUT_CLS}
           />
         </FormField>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <FormField label="Status">
-            <select value={form.status} onChange={(e) => set('status', e.target.value)} className={inputCls}>
+            <select value={form.status} onChange={(e) => set('status', e.target.value)} className={INPUT_CLS}>
               {VAULT_STATUSES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
             </select>
           </FormField>
           <FormField label="Valid from">
-            <input type="date" value={form.validFrom || ''} onChange={(e) => set('validFrom', e.target.value)} className={inputCls} />
+            <input type="date" value={form.validFrom || ''} onChange={(e) => set('validFrom', e.target.value)} className={INPUT_CLS} />
           </FormField>
           <FormField label="Valid to">
-            <input type="date" value={form.validTo || ''} onChange={(e) => set('validTo', e.target.value)} className={inputCls} />
+            <input type="date" value={form.validTo || ''} onChange={(e) => set('validTo', e.target.value)} className={INPUT_CLS} />
           </FormField>
         </div>
 
@@ -159,7 +161,7 @@ export default function VaultRecordDrawer({ open, record, onClose, onSaved }) {
             value={form.notes}
             onChange={(e) => set('notes', e.target.value)}
             rows={3}
-            className={inputCls}
+            className={INPUT_CLS}
             maxLength={5000}
           />
         </FormField>
