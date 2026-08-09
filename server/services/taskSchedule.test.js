@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 vi.mock('./cosEvents.js', () => ({
   cosEvents: { emit: vi.fn() },
@@ -185,6 +185,12 @@ describe('taskSchedule', () => {
     vi.clearAllMocks()
     // Default: no saved schedule → use defaults
     readJSONFile.mockResolvedValue(null)
+  })
+
+  // Cases that freeze the clock restore it here, so a failed assertion inside a
+  // faked-timer block can't leak fake time into every case that follows.
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   describe('INTERVAL_TYPES', () => {
@@ -1480,8 +1486,13 @@ describe('taskSchedule', () => {
     // only on the ≤1h fallback poll.
     describe('getUpcomingTasks — perpetual recheck boundary', () => {
       it('reports a perpetual task PARKED on every app as scheduled at the soonest recheck', async () => {
-        const nineAm = recentNineAm()
-        nineAm.setDate(nineAm.getDate() + 1) // next 9am (future)
+        // Clock frozen (#3693): this case compares two ABSOLUTE park timestamps,
+        // so on a real clock its verdict depended on when the suite ran — the
+        // next 9am is >30m out at 10am but only 15m out at 08:45, which flips
+        // which park is soonest and fails the assertion below.
+        vi.useFakeTimers()
+        vi.setSystemTime(new Date('2026-01-01T12:00:00Z'))
+        const nineAm = new Date('2026-01-02T09:00:00Z') // next 9am (future, well past `soon`)
         const soon = new Date(Date.now() + 30 * 60 * 1000).toISOString() // 30m out
         mockSchedule({
           tasks: { 'claim-issue': { type: 'perpetual', enabled: true, recheckCron: '0 9 * * *' } },
