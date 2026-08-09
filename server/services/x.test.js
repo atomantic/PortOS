@@ -363,19 +363,19 @@ describe('openApprovedDraft approval gates', () => {
     const second = openApprovedDraft('draft-1');
     await Promise.all([first, second]);
     expect(openXHandoff).toHaveBeenCalledTimes(1);
-
-    // The lock releases once the run settles, so a later open is a fresh handoff.
-    await openApprovedDraft('draft-1');
-    expect(openXHandoff).toHaveBeenCalledTimes(2);
   });
 
-  // Same `.finally()` release as syncAccount: a refused open must not leave the
-  // cached rejection behind for every later attempt on that draft.
-  it('releases the open lock after a refusal so a re-approved draft can open', async () => {
+  // Same `.finally()` release as syncAccount: a refusal must not leave a cached
+  // rejection behind as the answer to every later attempt on that draft. A
+  // leaked lock is observable without any state change — the second call would
+  // hand back the memoized promise instead of re-reading the draft.
+  it('releases the open lock after a refusal instead of memoizing the rejection', async () => {
     mockDraft(draftRow({ approved_at: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString() }));
+
+    await expect(openApprovedDraft('draft-1')).rejects.toThrow('X draft approval is stale');
     await expect(openApprovedDraft('draft-1')).rejects.toThrow('X draft approval is stale');
 
-    mockDraft(draftRow());
-    await expect(openApprovedDraft('draft-1')).resolves.toMatchObject({ state: 'opened' });
+    const reads = query.mock.calls.filter(([sql]) => /FROM x_drafts/.test(sql));
+    expect(reads).toHaveLength(2);
   });
 });
