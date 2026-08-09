@@ -109,6 +109,28 @@ describe('IssuesTab', () => {
     expect(screen.queryByText('Crash on save')).not.toBeInTheDocument();
   });
 
+  it('ignores a stale in-flight response when the app changes mid-request', async () => {
+    // Switching apps updates this component in place, so a slow first response
+    // must not land on top of the newer app's list.
+    let resolveFirst;
+    api.getAppIssues
+      .mockImplementationOnce(() => new Promise(res => { resolveFirst = res; }))
+      .mockResolvedValueOnce(okPayload([{ ...ISSUE, number: 99, title: 'Second app issue' }]));
+
+    const { rerender } = render(
+      <MemoryRouter><IssuesTab appId="app-1" appName="Widget" /></MemoryRouter>
+    );
+    rerender(
+      <MemoryRouter><IssuesTab appId="app-2" appName="Other" /></MemoryRouter>
+    );
+    expect(await screen.findByText('Second app issue')).toBeInTheDocument();
+
+    // The first app's response arrives late — it must be discarded.
+    resolveFirst(okPayload([ISSUE]));
+    await waitFor(() => expect(screen.getByText('Second app issue')).toBeInTheDocument());
+    expect(screen.queryByText('Crash on save')).not.toBeInTheDocument();
+  });
+
   it('says "couldn\'t reach" for a transient failure — never "no open issues"', async () => {
     api.getAppIssues.mockResolvedValue({
       forge: 'github', fullName: 'acme/widget', issues: [],

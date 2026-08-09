@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useId } from 'react';
+import { useState, useEffect, useCallback, useMemo, useId, useRef } from 'react';
 import { Link } from 'react-router';
 import {
   AlertTriangle, ChevronDown, ChevronRight, CircleDot, ExternalLink,
@@ -68,15 +68,26 @@ export default function IssuesTab({ appId, appName }) {
   // once the CoS task exists. Keyed by issue number so one claim can't disable
   // every other row's button.
   const [claims, setClaims] = useState({});
+  // Generation guard: a forge list can take seconds, so a Refresh (or a switch to
+  // a different app, which updates this component in place rather than
+  // remounting it) can leave an older request in flight. Without this, that older
+  // response lands last and shows one app's issues under another's Claim buttons.
+  const requestRef = useRef(0);
 
   const load = useCallback(async () => {
+    const generation = requestRef.current + 1;
+    requestRef.current = generation;
+    const isCurrent = () => requestRef.current === generation;
+
     setLoading(true);
     setError('');
     const result = await api.getAppIssues(appId).catch(err => {
-      setError(err?.message || 'Failed to load issues');
+      if (isCurrent()) setError(err?.message || 'Failed to load issues');
       return null;
     });
+    if (!isCurrent()) return;
     setLoading(false);
+    // A failed refresh keeps the last good list rather than blanking it.
     if (result) setData(result);
   }, [appId]);
 
