@@ -12,8 +12,12 @@ import { request } from './apiCore.js';
 // `self` subject, so omitting it reproduces the single-subject v1 behavior
 // exactly. There is no "all subjects" mode — the API scopes to exactly one.
 const scoped = (path, { subjectId, ...rest } = {}, params = {}) => {
+  // Only override when the caller actually passed one — a bare `subjectId` key
+  // here would clobber a `params.subjectId` with `undefined`, silently
+  // re-scoping `getPrivacyOrgs({ subjectId })` back to `self`.
   const qs = new URLSearchParams(
-    Object.entries({ ...params, subjectId }).filter(([, v]) => v != null && v !== ''),
+    Object.entries({ ...params, ...(subjectId === undefined ? {} : { subjectId }) })
+      .filter(([, v]) => v != null && v !== ''),
   ).toString();
   return [qs ? `${path}?${qs}` : path, rest];
 };

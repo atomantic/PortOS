@@ -1,5 +1,5 @@
 import { Users, Settings2 } from 'lucide-react';
-import { SUBJECT_RELATIONSHIPS, labelFor } from './constants';
+import { SELF_SUBJECT_ID, SUBJECT_RELATIONSHIPS, labelFor } from './constants';
 
 // Whose PII is on screen (#3658). The API scopes each read to ONE subject, so
 // this switcher IS the Privacy Center's subject filter, not a per-tab control.
@@ -9,7 +9,12 @@ import { SUBJECT_RELATIONSHIPS, labelFor } from './constants';
 // being ambiguous.
 export default function SubjectSwitcher({ subjects, subjectId, onChange, onManage }) {
   const active = subjects.find((s) => s.id === subjectId);
-  const isSelf = !active || active.isSelf;
+  // Derive "is this me?" from the id, NOT from the resolved row. The tabs fetch
+  // on `subjectId` immediately, so deciding from `active` would leave the bar
+  // styled as self — with no warning — for the whole window before the subject
+  // list arrives, while someone else's PII is already on screen. An id we can't
+  // resolve (stale `?subject=` deep link) is likewise not self.
+  const isSelf = subjectId === SELF_SUBJECT_ID;
 
   return (
     <div className={`flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg border ${
@@ -39,7 +44,7 @@ export default function SubjectSwitcher({ subjects, subjectId, onChange, onManag
 
       {!isSelf && (
         <span className="text-[11px] text-port-warning">
-          Viewing {active.displayName}&rsquo;s records — not your own
+          Viewing {active ? `${active.displayName}’s` : 'another household member’s'} records — not your own
         </span>
       )}
 

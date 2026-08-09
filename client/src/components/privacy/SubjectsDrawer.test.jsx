@@ -75,6 +75,24 @@ describe('SubjectsDrawer', () => {
     await waitFor(() => expect(screen.getByText(/scans and opt-outs are refused/i)).toBeInTheDocument());
   });
 
+  it('retries a failed consent read when the row is collapsed and reopened', async () => {
+    getPrivacySubjectConsents.mockRejectedValueOnce(new Error('network'));
+    renderDrawer();
+    const trigger = screen.getAllByRole('button', { name: /Consent record/i })[1];
+
+    fireEvent.click(trigger);
+    await waitFor(() => expect(screen.getByText(/Couldn’t load the consent record/i)).toBeInTheDocument());
+
+    // Collapse + reopen must re-fetch, not stay stuck on the failure forever.
+    getPrivacySubjectConsents.mockResolvedValueOnce([
+      { id: 'c-1', subjectId: 'sub-2', scope: 'pii_vault', method: 'verbal', note: '', grantedAt: null },
+    ]);
+    fireEvent.click(trigger);
+    fireEvent.click(trigger);
+    await waitFor(() => expect(screen.getByText(/Verbal/)).toBeInTheDocument());
+    expect(getPrivacySubjectConsents).toHaveBeenCalledTimes(2);
+  });
+
   it('warns that deleting a member cascades their records', async () => {
     deletePrivacySubject.mockResolvedValue({ ok: true });
     const onDeleted = vi.fn();

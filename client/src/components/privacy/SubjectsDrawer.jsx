@@ -37,10 +37,18 @@ function ConsentTrail({ subjectId }) {
       .catch(() => setConsents('error'));
   }, [open, consents, subjectId]);
 
+  // Collapsing clears a failed read so re-expanding retries. Without this the
+  // 'error' value is never null again, the fetch effect early-returns forever,
+  // and the row is stuck on the failure message for the drawer's lifetime.
+  const toggle = () => setOpen((o) => {
+    if (o && consents === 'error') setConsents(null);
+    return !o;
+  });
+
   return (
     <div className="mt-2">
       <button
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggle}
         className="inline-flex items-center gap-1 text-[11px] text-gray-500 hover:text-gray-300"
       >
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />} Consent record
