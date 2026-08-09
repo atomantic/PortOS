@@ -839,17 +839,31 @@ export function createProviderService(config = {}) {
         throw new Error(`HTTP ${response?.status || 'error'}`);
       }
 
-      const responseData = await response.json().catch(() => ({ data: [] }));
+      // THROW rather than degrade to `[]` — same posture as `_execCliModelList`.
+      // A 200 carrying a non-JSON body (an HTML login/captcha page, a proxy
+      // error page) or a shape with neither `data` nor `models` means the probe
+      // FAILED; returning an empty list makes that indistinguishable from a
+      // provider whose catalog is legitimately empty. `refreshProviderModels`
+      // persists whatever comes back and the UI toasts "Models refreshed", so
+      // the degraded path silently empties the model dropdown with no reason
+      // shown. Propagating the error leaves the stored list untouched and puts
+      // the real cause in the toast. A body that parses to a genuinely empty
+      // `data`/`models` array still returns `[]` — that distinction is the point.
+      const responseData = await response.json().catch(() => null);
 
-      if (responseData.data && Array.isArray(responseData.data)) {
+      if (!responseData || typeof responseData !== 'object') {
+        throw new Error('Model list response was not valid JSON');
+      }
+
+      if (Array.isArray(responseData.data)) {
         return responseData.data.map(m => m.id);
       }
 
-      if (responseData.models && Array.isArray(responseData.models)) {
+      if (Array.isArray(responseData.models)) {
         return responseData.models;
       }
 
-      return [];
+      throw new Error('Model list response had no recognizable "data" or "models" array');
     },
 
     async _refreshCLIProviderModels(provider) {

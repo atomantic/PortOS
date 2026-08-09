@@ -245,6 +245,14 @@ const normalizeIssues = (raw, numberKey, authorKey) => raw.map((r) => ({
 
 const GLAB_SELF_LOGIN_ARGS = ['api', 'user', '-q', '.username'];
 
+// Upper bound on the `--author <login>` queries the `collaborators` gate fans
+// out per detection pass. Each login costs one CLI round-trip, and this runs on
+// the perpetual-work cadence, so a repo with a large org-wide collaborator list
+// must not turn one detection into hundreds of `gh` shells. When the trusted set
+// exceeds the cap, the first N (you first, then the member listing order) are
+// queried and the truncation is LOGGED — never dropped silently.
+const MAX_COLLABORATOR_AUTHOR_QUERIES = 25;
+
 // Per-forge config for the shared issue detector. Each entry captures only what
 // differs between GitHub (`gh`) and GitLab (`glab`): the CLI + issue-list args,
 // how owner/self/collaborators mode resolves the author filter, the transient
@@ -419,11 +427,13 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self' } =
   // out-of-vocab value) = the @me security boundary. Transient resolver failures
   // skip this dispatch and retry next tick rather than parking a full cadence.
   let authorApplied = false;
-  // Trusted login set for `collaborators` mode (null on every other path). The
-  // gate is applied AFTER the list returns rather than as a `--author` arg —
-  // both CLIs take a single account there — so `authorApplied` is still set, and
-  // an empty post-filter list gets the same `no-authored-issues` treatment that
-  // tells the user to widen the filter.
+  // Trusted login set for `collaborators` mode (null on every other path).
+  // Neither CLI's `--author` accepts a SET, so the gate fans out into ONE
+  // `--author <login>` query per trusted login and merges (see below) — the same
+  // server-side-filtered shape `self`/`owner` use, so `--limit 100` bounds
+  // *authored* issues rather than paging the 100 oldest issues by any author.
+  // `authorApplied` is still set, so an empty merged list gets the same
+  // `no-authored-issues` treatment that tells the user to widen the filter.
   let trustedLogins = null;
   if (issueAuthorFilter === 'any') {
     // no --author filter
@@ -454,23 +464,53 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self' } =
     authorApplied = true;
   }
 
-  const res = await runCli(cfg.cli, args, repoPath);
-  if (res.code !== 0) return transient(cfg.listFail);
-  let raw;
-  try {
-    raw = JSON.parse(res.stdout || '[]');
-  } catch {
-    return transient(cfg.parseFail);
-  }
-  if (!Array.isArray(raw)) return transient(cfg.parseFail);
+  // One issue-list invocation: run it, parse it, and report the forge-flavored
+  // transient reason on any failure. Shared by the single-query paths and by the
+  // `collaborators` per-login fan-out below.
+  const listIssues = async (extraArgs = []) => {
+    const res = await runCli(cfg.cli, [...args, ...extraArgs], repoPath);
+    if (res.code !== 0) return { error: cfg.listFail };
+    let parsed;
+    try {
+      parsed = JSON.parse(res.stdout || '[]');
+    } catch {
+      return { error: cfg.parseFail };
+    }
+    if (!Array.isArray(parsed)) return { error: cfg.parseFail };
+    return { issues: cfg.normalize(parsed) };
+  };
 
-  let issues = cfg.normalize(raw);
-  // `collaborators` gate: keep only issues whose author is in the trusted set.
-  // An unresolvable author (missing/blank login) is DROPPED, never kept — the
-  // gate is a security boundary, so "can't tell who filed it" resolves to "not
-  // trusted". The query carried no `--author` on this path, so `raw.length` IS
-  // the unfiltered open count — remember it instead of re-listing below.
-  const knownOpenCount = trustedLogins ? raw.length : null;
+  let issues;
+  if (trustedLogins) {
+    // Fan out one server-side `--author` query per trusted login and merge by
+    // issue number. Post-filtering a single unfiltered page would silently hide
+    // a claimable collaborator-filed issue on any repo with more than
+    // `--limit 100` open issues (it would park with `no-authored-issues` while
+    // the same repo works fine under `self`).
+    const logins = [...trustedLogins];
+    const queried = logins.slice(0, MAX_COLLABORATOR_AUTHOR_QUERIES);
+    if (queried.length < logins.length) {
+      // Never silent: a truncated set means issues from the dropped logins are
+      // invisible this pass, which is exactly the failure mode being fixed.
+      console.warn(`⚠️ Collaborators author filter capped at ${queried.length} of ${logins.length} trusted logins — issues filed by the other ${logins.length - queried.length} are not listed this pass`);
+    }
+    const merged = new Map();
+    for (const login of queried) {
+      const out = await listIssues(['--author', login]);
+      if (out.error) return transient(out.error);
+      for (const issue of out.issues) merged.set(issue.number, issue);
+    }
+    issues = [...merged.values()];
+  } else {
+    const out = await listIssues();
+    if (out.error) return transient(out.error);
+    issues = out.issues;
+  }
+
+  // `collaborators` gate, belt-and-braces over the `--author` queries above:
+  // keep only issues whose author is in the trusted set. An unresolvable author
+  // (missing/blank login) is DROPPED, never kept — the gate is a security
+  // boundary, so "can't tell who filed it" resolves to "not trusted".
   if (trustedLogins) issues = issues.filter((i) => trustedLogins.has(i.authorLogin));
 
   if (issues.length === 0) {
@@ -483,8 +523,8 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self' } =
     // reason.)
     // Reporting a flat "no open issues" there hid a claimable queue behind a
     // full recheck park (the "open issues exist but the task still parked"
-    // failure this fixes). Recover the unfiltered count — free when the gate ran
-    // client-side, otherwise a re-probe WITHOUT the author filter — and if issues
+    // failure this fixes). Recover the unfiltered count with a re-probe WITHOUT
+    // the author filter — and if issues
     // exist, park with the actionable `no-authored-issues` reason + the real open
     // count so the user is told to widen the filter, not that there is nothing
     // to do. The count is raw open issues (any author), not claimable ones —
@@ -492,7 +532,7 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self' } =
     // when the other-authored issues are all blocked/assigned/epics. Counting
     // claimable ones would cost the full skip-list scan here.
     if (authorApplied) {
-      const openCount = knownOpenCount ?? (await countOpenIssuesUnfiltered(cfg, repoPath));
+      const openCount = await countOpenIssuesUnfiltered(cfg, repoPath);
       if (openCount > 0) return parked('no-authored-issues', openCount);
     }
     return parked('no-open-issues');

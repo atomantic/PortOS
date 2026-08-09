@@ -258,6 +258,36 @@ describe('merge-only PR watcher', () => {
     }));
     expect(readPendingMergePrs(mockApps.get('app1'))).toEqual([]);
   });
+
+  it('ticks an unreadable PR so a permanently-broken entry can time out', async () => {
+    // `gh pr view` fails (deleted PR / renamed repo / revoked token). Counting
+    // this cycle as an error but NOT as a tick re-queued the entry unchanged
+    // forever — MAX_PENDING_MERGE_TICKS never fired and it leaked in apps.json.
+    const app = pendingApp([pendingMerge({ ticks: 2 })]);
+    mockApps.set(app.id, app);
+    execGhMock.mockRejectedValueOnce(new Error('could not resolve to a PullRequest'));
+
+    const result = await processPendingMergePrs(app);
+
+    expect(result).toMatchObject({ ok: true, checked: 0, errors: 1, timedOut: 0 });
+    expect(readPendingMergePrs(mockApps.get('app1'))[0].ticks).toBe(3);
+  });
+
+  it('times out and notifies once a permanently-unreadable PR exhausts its tick budget', async () => {
+    const app = pendingApp([pendingMerge({ ticks: MAX_PENDING_MERGE_TICKS - 1 })]);
+    mockApps.set(app.id, app);
+    execGhMock.mockRejectedValueOnce(new Error('could not resolve to a PullRequest'));
+
+    const result = await processPendingMergePrs(app);
+
+    expect(result).toMatchObject({ ok: true, errors: 1, timedOut: 1 });
+    expect(addNotificationMock).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'agent_warning',
+      link: 'https://github.com/o/r/pull/88',
+      description: expect.stringContaining('could not be read from the forge'),
+    }));
+    expect(readPendingMergePrs(mockApps.get('app1'))).toEqual([]);
+  });
 });
 
 describe('sweepPendingMergePrs', () => {

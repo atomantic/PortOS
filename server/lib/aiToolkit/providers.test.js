@@ -1190,6 +1190,51 @@ describe('Provider Service', () => {
       expect(updated).not.toBeNull();
       expect(updated.models).toEqual([]);
     });
+
+    it('throws and leaves the stored list untouched when a 200 body is not JSON', async () => {
+      // A captive portal / login page / proxy error served as HTTP 200. Degrading
+      // to `[]` here emptied the model dropdown while the UI toasted "Models
+      // refreshed" — indistinguishable from the legitimately-empty case above.
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => { throw new SyntaxError('Unexpected token < in JSON at position 0'); },
+      }));
+
+      const p = await providerService.createProvider({
+        name: 'Garbled API',
+        type: 'api',
+        endpoint: 'https://api.generic.com/v1',
+        models: ['model-a', 'model-b'],
+        allowCustomEndpoint: true,
+      });
+
+      const err = await providerService.refreshProviderModels(p.id).catch(e => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(err.status).toBe(502);
+      expect(err.message).toMatch(/not valid JSON/);
+      expect((await providerService.getProviderById(p.id)).models).toEqual(['model-a', 'model-b']);
+    });
+
+    it('throws and leaves the stored list untouched when a 200 body has no recognizable shape', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ object: 'error', message: 'invalid api key' }),
+      }));
+
+      const p = await providerService.createProvider({
+        name: 'Shapeless API',
+        type: 'api',
+        endpoint: 'https://api.generic.com/v1',
+        models: ['model-a'],
+        allowCustomEndpoint: true,
+      });
+
+      const err = await providerService.refreshProviderModels(p.id).catch(e => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(err.status).toBe(502);
+      expect(err.message).toMatch(/data.*models/);
+      expect((await providerService.getProviderById(p.id)).models).toEqual(['model-a']);
+    });
   });
 
   describe('reserved-key prototype safety (#2521)', () => {

@@ -330,8 +330,22 @@ export async function processPendingMergePrs(app) {
     const key = pendingMergeKey(entry);
     const prView = await readPendingPullRequest(repoSpec, entry.prNumber);
     if (!prView) {
-      outcomes.set(key, entry);
+      // An unreadable PR is still a cycle this entry spent pending, so it has to
+      // tick. A PR whose `gh pr view` fails PERMANENTLY (deleted PR, renamed
+      // repo, revoked token) would otherwise be re-queued unchanged forever:
+      // MAX_PENDING_MERGE_TICKS never fires, the entry leaks in apps.json, and
+      // we re-shell to `gh` on every cadence with nothing surfaced to the user.
+      // `result.errors` accounting is unchanged — the cycle is both an error and
+      // a tick.
       result.errors += 1;
+      const unreadable = { ...entry, ticks: entry.ticks + 1 };
+      if (unreadable.ticks >= MAX_PENDING_MERGE_TICKS) {
+        await notifyPendingMergeTimeout(app, entry, 'it could not be read from the forge');
+        outcomes.set(key, null);
+        result.timedOut += 1;
+      } else {
+        outcomes.set(key, unreadable);
+      }
       continue;
     }
     result.checked += 1;

@@ -1,5 +1,5 @@
 import { isPrivateAddress } from '../lib/safeUrlFetch.js';
-import { navigateToUrlPinned } from './browserService.js';
+import { closeCdpPage, navigateToUrlPinned } from './browserService.js';
 
 const ORIGIN = 'https://x.com';
 const USERNAME_PATTERN = /^[A-Za-z0-9_]{1,15}$/;
@@ -59,6 +59,21 @@ export async function openXHandoff({ kind, value = '' }) {
     settleMs: 500,
     closeAfterRead: false,
   });
-  verifyFinalXPath(target, page.url);
+  // `closeAfterRead: false` means THIS function owns the tab from here on. If
+  // the final-path check rejects the landing page (an X redirect, a login wall),
+  // nobody downstream ever learns the page id — so close it here before the
+  // throw bubbles, or every failed handoff leaks a Chrome tab. try/finally, not
+  // try/catch: the verification error still bubbles to the error middleware.
+  let verified = false;
+  try {
+    verifyFinalXPath(target, page.url);
+    verified = true;
+  } finally {
+    if (!verified) {
+      await closeCdpPage(page.id).catch((err) => {
+        console.error(`❌ Failed to close redirected X handoff tab ${page.id}: ${err.message}`);
+      });
+    }
+  }
   return { pageId: page.id, url: page.url };
 }
