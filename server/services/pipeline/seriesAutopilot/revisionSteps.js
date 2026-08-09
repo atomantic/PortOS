@@ -34,7 +34,7 @@ export function meanQualityScore(seriesJudge) {
 // judging still to do, a cancel result, or null on completion.
 async function judgeAllEligible(sId, record, issues) {
   const eligible = eligibleIssues(issues);
-  const { providerOverride, modelOverride } = record.options;
+  const { providerOverride, modelOverride, effortOverride } = record.options;
   const pre = await getSeriesJudge(sId, { issues });
   const scoreById = new Map((pre.scores || []).map((s) => [s.issueId, s]));
   for (const issue of eligible) {
@@ -45,7 +45,7 @@ async function judgeAllEligible(sId, record, issues) {
     // A fresh judge WILL spend an LLM call — gate the budget first, then bill.
     const gate = await budgetPause();
     if (gate) return gate;
-    const snap = await judgeIssue(issue.id, { providerId: providerOverride, model: modelOverride }).catch((err) => {
+    const snap = await judgeIssue(issue.id, { providerId: providerOverride, model: modelOverride, effort: effortOverride }).catch((err) => {
       console.log(`⚠️ revision: judge failed for issue ${issue.id.slice(0, 12)}: ${err.message}`);
       return null;
     });
@@ -190,7 +190,7 @@ export async function runRevisionCycle(sId, record) {
     const appliedOutput = postIssue?.stages?.[stageId]?.output || '';
     const before = await budgetPause();
     if (before) return before;
-    const reJudge = await judgeIssue(weakestId, { stageId, force: true, providerId: record.options.providerOverride, model: record.options.modelOverride }).catch((err) => {
+    const reJudge = await judgeIssue(weakestId, { stageId, force: true, providerId: record.options.providerOverride, model: record.options.modelOverride, effort: record.options.effortOverride }).catch((err) => {
       console.log(`⚠️ revision: re-judge failed for issue ${weakestId.slice(0, 12)}: ${err.message}`);
       return null;
     });
@@ -213,7 +213,7 @@ export async function runRevisionCycle(sId, record) {
       // cycle re-judges it) when the budget is spent.
       const beforeRevertJudge = await budgetPause();
       if (!beforeRevertJudge) {
-        const rj = await judgeIssue(weakestId, { stageId, force: true, providerId: record.options.providerOverride, model: record.options.modelOverride }).catch(() => null);
+        const rj = await judgeIssue(weakestId, { stageId, force: true, providerId: record.options.providerOverride, model: record.options.modelOverride, effort: record.options.effortOverride }).catch(() => null);
         if (rj && rj.status === 'complete') await recordDomainUsage('cos', { actions: 1 });
       }
     }

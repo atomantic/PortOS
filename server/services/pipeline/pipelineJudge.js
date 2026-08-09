@@ -260,9 +260,11 @@ async function runJudgeStage(ctx, runOptions) {
  * @param {string} [opts.stageId]     writer stage to judge (default: prose→script)
  * @param {string} [opts.providerId]  explicit judge provider override
  * @param {string} [opts.model]       explicit judge model override
+ * @param {string} [opts.effort]      run-level reasoning effort (soft — a per-stage
+ *                                   `effort` pin still wins, #3641)
  * @param {boolean} [opts.force]      re-judge unchanged content
  */
-export async function judgeIssue(issueId, { stageId, providerId, model, force = false } = {}) {
+export async function judgeIssue(issueId, { stageId, providerId, model, effort, force = false } = {}) {
   assertValidIssueId(issueId);
   const issue = await getIssue(issueId);
   const picked = pickJudgeContent(issue, stageId);
@@ -307,6 +309,7 @@ export async function judgeIssue(issueId, { stageId, providerId, model, force = 
     returnsJson: true,
     providerOverride: judgeProvider.id,
     modelOverride: judgeModel,
+    effortDefault: effort,
     source: 'pipeline-judge-issue',
   });
 
