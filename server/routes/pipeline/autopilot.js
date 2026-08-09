@@ -121,11 +121,9 @@ const autopilotStartSchema = z.object({
   // AUTOMATION limped (a pause, a run-ending error, an editorial check that
   // threw, a retried child, a skipped step) spends one diagnosis call at its
   // terminal and, on a pipeline verdict, files a PortOS fix task.
-  // `selfImproveAutoApprove` files that task auto-approved instead of awaiting
-  // human approval. Both fall back to the persisted
-  // pipelineEditorialChecks.selfImprove* setting, then off.
+  // That task always awaits human approval. Falls back to the persisted
+  // pipelineEditorialChecks.selfImprove setting, then off.
   selfImprove: z.boolean().optional(),
-  selfImproveAutoApprove: z.boolean().optional(),
 });
 
 router.post('/series/:id/autopilot/start', asyncHandler(async (req, res) => {

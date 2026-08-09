@@ -77,7 +77,7 @@ export async function startSeriesAutopilot(sId, options = {}) {
     // terminal and file a PortOS fix task when the pipeline — not the story — is
     // what failed. Resolved here with the other gates so the signal tap in
     // `broadcast` sees the flag from the run's very first frame.
-    ...resolveAutopilotSelfImprove(options, settings),
+    selfImprove: resolveAutopilotSelfImprove(options, settings),
     // Run provider/model: per-run override → the series' own `series.llm` →
     // unset (stage pin / active provider downstream). Resolved ONCE here so the
     // manual run, a scheduled run and the UI's "this run calls X / Y" copy all

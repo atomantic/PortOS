@@ -37,9 +37,10 @@ vi.mock('../editorial/checkRunner.js', () => ({
 }));
 
 const {
-  isSignalFrame, noteSignal, summarizeSignals, shouldDiagnose, shapeDiagnosis, isFilable,
-  buildSelfImproveTask, runSelfImproveDiagnosis, MAX_SIGNALS, SELF_IMPROVE_MIN_CONFIDENCE,
+  shouldDiagnose, shapeDiagnosis, isFilable, buildSelfImproveTask, runSelfImproveDiagnosis,
+  SELF_IMPROVE_MIN_CONFIDENCE,
 } = await import('./selfImprove.js');
+const { isSignalFrame, noteSignal, summarizeSignals, MAX_SIGNALS } = await import('./state.js');
 const { PORTOS_APP_ID } = await import('../../../lib/appIdentity.js');
 
 // Minimal run record shaped like the orchestrator's, with the knobs each test needs.
@@ -187,7 +188,6 @@ describe('buildSelfImproveTask', () => {
     outcome: 'paused',
     outcomeReason: 'editorialReview: ran out of rounds',
     counts: { 'verify:round': 2 },
-    autoApprove: false,
     ...over,
   });
 
@@ -199,22 +199,26 @@ describe('buildSelfImproveTask', () => {
     expect(task.prCompletion).toBe('review-then-merge');
   });
 
-  it('keeps the dedup line stable per area, not per series', () => {
+  it('keeps the dedup line stable per defect, not per series', () => {
+    const firstLine = (t) => t.description.split('\n')[0];
     const a = build();
     const b = build({ seriesId: 'series-2', seriesName: 'Another Series', outcome: 'error' });
-    const firstLine = (t) => t.description.split('\n')[0];
     // The defect lives in shared PortOS code — one open task should cover it
     // however many series hit it, so cosTaskStore's first-line dedup must match.
     expect(firstLine(a)).toBe(firstLine(b));
     expect(firstLine(a)).toContain('editorial-check');
-    // A different area is different work and must NOT collapse onto it.
-    const other = build({ diagnosis: shapeDiagnosis({ ...goodDiagnosis, area: 'runner' }) });
-    expect(firstLine(other)).not.toBe(firstLine(a));
+    // A different area is different work and must NOT collapse onto it...
+    const otherArea = build({ diagnosis: shapeDiagnosis({ ...goodDiagnosis, area: 'runner' }) });
+    expect(firstLine(otherArea)).not.toBe(firstLine(a));
+    // ...and neither must a DIFFERENT defect in the same area. Keying on the
+    // bucket alone would cap PortOS at one open task per area forever and
+    // silently discard every later diagnosis in it.
+    const otherDefect = build({ diagnosis: shapeDiagnosis({ ...goodDiagnosis, title: 'Reverse outline is never refreshed before the checks' }) });
+    expect(firstLine(otherDefect)).not.toBe(firstLine(a));
   });
 
-  it('gates on approval unless the user opted into auto-approve', () => {
+  it('always awaits approval — an LLM diagnosis never dispatches a coding agent on its own', () => {
     expect(build().approvalRequired).toBe(true);
-    expect(build({ autoApprove: true }).approvalRequired).toBe(false);
   });
 
   it('carries the run provenance in context, not the manuscript', () => {
@@ -245,21 +249,29 @@ describe('runSelfImproveDiagnosis', () => {
     expect(runStagedLLM).toHaveBeenCalledWith('pipeline-self-improve', expect.any(Object), expect.objectContaining({ returnsJson: true }));
     expect(recordDomainUsage).toHaveBeenCalledWith('cos', { actions: 1 });
     expect(addTask).toHaveBeenCalledWith(expect.objectContaining({ app: PORTOS_APP_ID }), 'internal');
-    expect(out).toMatchObject({ verdict: 'pipeline', area: 'editorial-check', filed: true, awaitingApproval: true, taskId: 'sys-1' });
+    expect(out).toMatchObject({ verdict: 'pipeline', area: 'editorial-check', filed: true, taskId: 'sys-1' });
+    expect(addTask.mock.calls[0][0].approvalRequired).toBe(true);
   });
 
-  it('files nothing on a content verdict but still reports it', async () => {
+  it('reports nothing on a content verdict — the pipeline behaved', async () => {
     llmContent = { ...goodDiagnosis, verdict: 'content' };
     const out = await runSelfImproveDiagnosis('series-1', makeRun(), { outcome: 'error', reason: 'boom' });
     expect(addTask).not.toHaveBeenCalled();
-    expect(out).toMatchObject({ verdict: 'content', filed: false });
+    expect(out).toBeNull();
   });
 
-  it('reports an unreadable response instead of throwing', async () => {
+  it('swallows an unreadable response instead of throwing', async () => {
     llmContent = 'not json at all';
     const out = await runSelfImproveDiagnosis('series-1', makeRun(), { outcome: 'error', reason: 'boom' });
     expect(addTask).not.toHaveBeenCalled();
-    expect(out).toMatchObject({ verdict: 'unreadable', filed: false });
+    expect(out).toBeNull();
+  });
+
+  it('files nothing on a low-confidence pipeline verdict', async () => {
+    llmContent = { ...goodDiagnosis, confidence: 0.4 };
+    const out = await runSelfImproveDiagnosis('series-1', makeRun(), { outcome: 'paused', reason: 'x' });
+    expect(addTask).not.toHaveBeenCalled();
+    expect(out).toBeNull();
   });
 
   it('reports a duplicate as tracked, not newly filed', async () => {

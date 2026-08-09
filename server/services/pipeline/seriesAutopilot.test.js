@@ -798,24 +798,15 @@ describe('resolveNextStep — unlock pre-pass ordering', () => {
 describe('resolveAutopilotSelfImprove (config gate)', () => {
   const { resolveAutopilotSelfImprove } = autopilot;
 
-  it('defaults both OFF', () => {
-    expect(resolveAutopilotSelfImprove({}, null)).toEqual({ selfImprove: false, selfImproveAutoApprove: false });
+  it('defaults OFF', () => {
+    expect(resolveAutopilotSelfImprove({}, null)).toBe(false);
   });
   it('per-run option wins over the persisted setting', () => {
-    expect(resolveAutopilotSelfImprove(
-      { selfImprove: true },
-      { pipelineEditorialChecks: { selfImprove: false, selfImproveAutoApprove: true } },
-    )).toEqual({ selfImprove: true, selfImproveAutoApprove: true });
+    expect(resolveAutopilotSelfImprove({ selfImprove: true }, { pipelineEditorialChecks: { selfImprove: false } })).toBe(true);
+    expect(resolveAutopilotSelfImprove({ selfImprove: false }, { pipelineEditorialChecks: { selfImprove: true } })).toBe(false);
   });
   it('falls back to the persisted setting when no per-run option', () => {
-    expect(resolveAutopilotSelfImprove({}, { pipelineEditorialChecks: { selfImprove: true } }))
-      .toEqual({ selfImprove: true, selfImproveAutoApprove: false });
-  });
-  it('resolves auto-approve independently of the diagnosis toggle', () => {
-    // A saved auto-approve must not imply the diagnosis is on — otherwise a
-    // stale setting would silently re-arm PortOS code changes.
-    expect(resolveAutopilotSelfImprove({}, { pipelineEditorialChecks: { selfImproveAutoApprove: true } }))
-      .toEqual({ selfImprove: false, selfImproveAutoApprove: true });
+    expect(resolveAutopilotSelfImprove({}, { pipelineEditorialChecks: { selfImprove: true } })).toBe(true);
   });
 });
 

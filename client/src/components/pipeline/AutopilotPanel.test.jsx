@@ -479,45 +479,30 @@ describe('AutopilotPanel', () => {
   // Pipeline self-improvement — the opt-in that lets a run diagnose PortOS's own
   // automation and file a fix task against it.
   describe('pipeline self-improvement', () => {
-    it('is off by default and hides auto-approve until it is enabled', async () => {
+    it('is off by default and persists the toggle on change', async () => {
       renderPanel({ id: 's1', targetFormat: 'comic' });
       await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
       fireEvent.click(screen.getByRole('button', { name: /options/i }));
       const toggle = screen.getByLabelText(/improve the pipeline itself/i);
       expect(toggle).not.toBeChecked();
-      expect(screen.queryByLabelText(/without asking me first/i)).not.toBeInTheDocument();
       fireEvent.click(toggle);
-      expect(await screen.findByLabelText(/without asking me first/i)).toBeInTheDocument();
       await waitFor(() => expect(patchSettingsSlice).toHaveBeenCalledWith(
         'pipelineEditorialChecks', { selfImprove: true }, { silent: true },
       ));
+      // The filed task is always approval-gated — there is no auto-start knob.
+      expect(await screen.findByText(/waiting in your CoS approval queue/i)).toBeInTheDocument();
     });
 
-    it('sends both toggles as per-run overrides once edited', async () => {
+    it('sends the toggle as a per-run override once edited', async () => {
       renderPanel({ id: 's1', targetFormat: 'comic' });
       await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
       fireEvent.click(screen.getByRole('button', { name: /options/i }));
       fireEvent.click(screen.getByLabelText(/improve the pipeline itself/i));
-      fireEvent.click(await screen.findByLabelText(/without asking me first/i));
       fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
       await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalledWith(
         's1',
-        { includeVisual: true, fileGaps: false, selfImprove: true, selfImproveAutoApprove: true },
+        { includeVisual: true, fileGaps: false, selfImprove: true },
         { silent: true },
-      ));
-    });
-
-    it('clears auto-approve when the diagnosis is turned back off', async () => {
-      // Otherwise a later re-enable would silently resume auto-approving PortOS
-      // code changes the user consented to in a different context.
-      getSettings.mockResolvedValue({ pipelineEditorialChecks: { selfImprove: true, selfImproveAutoApprove: true } });
-      renderPanel({ id: 's1', targetFormat: 'comic' });
-      await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
-      fireEvent.click(screen.getByRole('button', { name: /options/i }));
-      await waitFor(() => expect(screen.getByLabelText(/without asking me first/i)).toBeChecked());
-      fireEvent.click(screen.getByLabelText(/improve the pipeline itself/i));
-      await waitFor(() => expect(patchSettingsSlice).toHaveBeenCalledWith(
-        'pipelineEditorialChecks', { selfImprove: false, selfImproveAutoApprove: false }, { silent: true },
       ));
     });
 
@@ -525,7 +510,7 @@ describe('AutopilotPanel', () => {
       getPipelineAutopilotStatus.mockResolvedValue({ autopilot: { status: 'running', runId: 'r1' }, active: true });
       sseLatest = {
         type: 'paused', runId: 'r1', reason: 'editorial review ran out of rounds',
-        selfImprove: { verdict: 'pipeline', area: 'editorial-check', title: 'Check pleasantries at beat altitude', filed: true, awaitingApproval: true },
+        selfImprove: { verdict: 'pipeline', area: 'editorial-check', title: 'Check pleasantries at beat altitude', filed: true },
       };
       renderPanel({ id: 's1', targetFormat: 'comic' });
       await waitFor(() => expect(toast).toHaveBeenCalledWith(
@@ -539,10 +524,10 @@ describe('AutopilotPanel', () => {
         targetFormat: 'comic',
         autopilot: {
           status: 'paused', runId: 'r1', currentStep: 'editorialReview', lastError: 'ran out of rounds',
-          selfImprove: { verdict: 'pipeline', area: 'runner', title: 'Retry budget is never applied', filed: true, awaitingApproval: false },
+          selfImprove: { verdict: 'pipeline', area: 'runner', title: 'Retry budget is never applied', filed: true },
         },
       });
-      expect(await screen.findByText(/Filed a PortOS fix task \(runner\).*CoS will pick it up/i)).toBeInTheDocument();
+      expect(await screen.findByText(/Filed a PortOS fix task \(runner\).*approve it in CoS/i)).toBeInTheDocument();
     });
 
     it('says nothing when the verdict was that the story, not the code, needs work', async () => {

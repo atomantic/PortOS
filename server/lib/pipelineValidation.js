@@ -267,11 +267,11 @@ export const pipelineEditorialChecksSettingsSchema = z.object({
   // prompt producing unusable output, a runner swallowing a failure — and files
   // a CoS task against PortOS itself to fix it. Defaults OFF (opt-in): it is
   // fresh LLM spend AND it queues work that changes PortOS's own code.
-  // `selfImproveAutoApprove` decides only whether that task waits for human
-  // approval; the task is worktree-isolated and PR-opening either way. Both
-  // optional + additive so older peers fall through to off.
+  // The filed task always awaits human approval, runs in a worktree and opens a
+  // PR — that is not configurable, matching every other autonomously generated
+  // code-editing task in PortOS. Optional + additive so older peers fall
+  // through to off.
   selfImprove: z.boolean().optional(),
-  selfImproveAutoApprove: z.boolean().optional(),
 }).strict();
 
 // Cursor-context payload for the CD-bridge suggest route — identical shape to

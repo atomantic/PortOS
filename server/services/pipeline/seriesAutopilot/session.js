@@ -11,8 +11,7 @@ import { addNotification, removeByMetadata, NOTIFICATION_TYPES, PRIORITY_LEVELS 
 import { getSeries, updateSeries } from '../series.js';
 import * as volumeBeatsRunner from '../volumeBeatsRunner.js';
 import * as autoRunner from '../autoRunner.js';
-import { runs, autopilotEvents } from './state.js';
-import { noteSignal } from './selfImprove.js';
+import { runs, autopilotEvents, noteSignal } from './state.js';
 
 // ---------------------------------------------------------------------------
 // Run registry helpers (mirror editorialAnalysisRunner.js).

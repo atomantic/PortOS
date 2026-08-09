@@ -19,11 +19,16 @@
  *  2. **One call per run, budget-gated.** The diagnosis is a single staged LLM
  *     call at the run's terminal, billed as one cos action and skipped when the
  *     daily budget is spent.
- *  3. **Deduped + worktree-isolated.** The filed task's first line is stable per
- *     `area`, so cosTaskStore's pending/in_progress dedup collapses the same
- *     diagnosis across runs and series into one open task. The task always runs
- *     in a worktree and opens a PR; `selfImproveAutoApprove` only decides whether
- *     a human approves it first, never whether it can land unreviewed.
+ *  3. **Deduped, approval-gated and worktree-isolated.** The filed task's first
+ *     line is stable per (area, defect), so cosTaskStore's dedup collapses the
+ *     same diagnosis across runs and series onto one open task. The task always
+ *     awaits human approval, runs in a worktree, and opens a PR — an LLM's
+ *     unverified read of one run's telemetry never dispatches a coding agent at
+ *     PortOS's own source unattended. That matches every other autonomously
+ *     generated code-editing task in PortOS (layeredIntelligence's
+ *     `buildHandoffTask`, `autoFixer`, `agentErrorAnalysis` all hard-code
+ *     `approvalRequired: true`); the autonomy dial for this class of work is the
+ *     CoS approval queue, not a per-series checkbox.
  *
  * The signal log is captured passively: `noteSignal` taps the same SSE frames
  * the run already broadcasts (`session.js#broadcast`), so a new telemetry frame
@@ -40,76 +45,15 @@ import * as cosTaskStore from '../../cosTaskStore.js';
 import { getDomainBudgetStatus, recordDomainUsage } from '../../domainUsage.js';
 import { PR_COMPLETIONS } from '../../../lib/prDisposition.js';
 import { runStagedLLM } from '../../../lib/stageRunner.js';
+import { trimToClause } from '../../../lib/storyBible.js';
+import { slugify } from '../../../lib/planIds.js';
 import { getSettings } from '../../settings.js';
 import { buildEditorialCheckPlan } from '../editorial/checkRunner.js';
 import { getSeries } from '../series.js';
+import { summarizeSignals } from './state.js';
 import { broadcast, providerOverrideOpts } from './session.js';
 
-export const SELF_IMPROVE_STAGE = 'pipeline-self-improve';
-
-// Frame types worth keeping as diagnosis evidence. Deliberately excludes the
-// high-volume happy-path frames (`step:start` / `step:complete` / `start`) — the
-// step SEQUENCE is reconstructable from the outcome, while these carry the
-// "something went sideways" detail a diagnosis actually reasons over. The
-// terminal frames (`paused` / `error` / `complete`) are excluded too: the
-// diagnosis runs BEFORE them, and their content arrives as the `outcome` +
-// `reason` arguments instead.
-export const SIGNAL_FRAME_TYPES = Object.freeze(new Set([
-  'note', 'step:skip', 'verify:round', 'resolve:round', 'check:complete',
-  'foundation:round', 'foundation:fix', 'child:retry', 'child:escalate',
-  'revision:cycle', 'revision:converged', 'gap:filed',
-]));
-
-// Ceiling on the retained signal log. A long series run emits a `verify:round`
-// per gate round and a `check:complete` per check per pass; past this the log is
-// counted, not stored, so a runaway run can't grow the record unbounded (or
-// blow the diagnosis prompt's context).
-export const MAX_SIGNALS = 200;
-
-// A `check:complete` frame is only evidence when the check misbehaved — a check
-// that ran and reported findings is the system working. Without this filter a
-// 40-check pass would flood the log with healthy frames and crowd out the
-// failures that matter.
-const isNoisyHealthyFrame = (payload) => payload?.type === 'check:complete'
-  && !payload.error && !payload.skipped;
-
-/**
- * Is this frame worth keeping as diagnosis evidence? Pure.
- */
-export function isSignalFrame(payload) {
-  if (!payload || typeof payload.type !== 'string') return false;
-  if (!SIGNAL_FRAME_TYPES.has(payload.type)) return false;
-  return !isNoisyHealthyFrame(payload);
-}
-
-/**
- * Record one broadcast frame onto the run's signal log. Called from `broadcast`
- * for EVERY frame, so it must stay cheap and total: it no-ops unless this run
- * opted into self-improvement and is actually executing (a dry-run has no
- * telemetry worth diagnosing). Returns true when the frame was retained.
- */
-export function noteSignal(run, payload) {
-  if (!run || run.options?.selfImprove !== true || run.mode !== 'execute') return false;
-  if (!isSignalFrame(payload)) return false;
-  if (!run.signals) run.signals = [];
-  if (run.signals.length >= MAX_SIGNALS) {
-    run.signalsDropped = (run.signalsDropped || 0) + 1;
-    return false;
-  }
-  run.signals.push(payload);
-  return true;
-}
-
-/**
- * Roll the retained log into the counts + entries the diagnosis prompt reads.
- * Pure over the run record.
- */
-export function summarizeSignals(run) {
-  const signals = run?.signals || [];
-  const counts = {};
-  for (const s of signals) counts[s.type] = (counts[s.type] || 0) + 1;
-  return { signals, counts, dropped: run?.signalsDropped || 0 };
-}
+const SELF_IMPROVE_STAGE = 'pipeline-self-improve';
 
 /**
  * Does this run carry evidence worth spending a diagnosis call on? Pure.
@@ -133,23 +77,22 @@ export function shouldDiagnose(record, outcome) {
   ));
 }
 
-// The verdict vocabulary. `pipeline` is the only one that files anything;
-// `content` means the manuscript (not the code) needs work, and `none` means the
-// run's trouble was expected/benign.
-export const SELF_IMPROVE_VERDICTS = Object.freeze(['pipeline', 'content', 'none']);
+// The verdict vocabulary. `pipeline` is the only one that files anything (and the
+// only one this pass reports at all — see runSelfImproveDiagnosis); `content`
+// means the manuscript, not the code, needs work, and `none` means the run's
+// trouble was expected/benign.
+const SELF_IMPROVE_VERDICTS = Object.freeze(['pipeline', 'content', 'none']);
 
-// Where in PortOS the proposed fix belongs. Doubles as the dedup key: the filed
-// task's first line carries the area, so repeat diagnoses of the same area
-// collapse onto one open task instead of one per run.
-export const SELF_IMPROVE_AREAS = Object.freeze([
+// Where in PortOS the proposed fix belongs. Prefixes the filed task's dedup key
+// (see buildSelfImproveTask) and tells a reader which part of the system the
+// brief is about before they open it.
+const SELF_IMPROVE_AREAS = Object.freeze([
   'editorial-check', 'pipeline-step', 'prompt', 'runner', 'config',
 ]);
 
-// A diagnosis below this confidence is reported on the frame but never filed —
-// a speculative "maybe the pipeline?" is not worth a coding agent's time.
+// A diagnosis below this confidence is dropped rather than filed — a speculative
+// "maybe the pipeline?" is not worth a coding agent's time.
 export const SELF_IMPROVE_MIN_CONFIDENCE = 0.6;
-
-const trimTo = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 
 /**
  * Sanitize the LLM's diagnosis into the fixed shape the rest of this module
@@ -167,13 +110,13 @@ export function shapeDiagnosis(raw) {
     verdict,
     confidence,
     area: SELF_IMPROVE_AREAS.includes(raw.area) ? raw.area : 'pipeline-step',
-    title: trimTo(raw.title, 160),
-    problem: trimTo(raw.problem, 2000),
+    title: trimToClause(raw.title, 160),
+    problem: trimToClause(raw.problem, 2000),
     evidence: Array.isArray(raw.evidence)
-      ? raw.evidence.map((e) => trimTo(e, 400)).filter(Boolean).slice(0, 8)
+      ? raw.evidence.map((e) => trimToClause(e, 400)).filter(Boolean).slice(0, 8)
       : [],
-    proposedChange: trimTo(raw.proposedChange, 2000),
-    risks: trimTo(raw.risks, 800),
+    proposedChange: trimToClause(raw.proposedChange, 2000),
+    risks: trimToClause(raw.risks, 800),
   };
 }
 
@@ -193,14 +136,19 @@ export function isFilable(diagnosis) {
  * Shape the CoS task for a filable diagnosis. Pure, so the dedup key and the
  * agent-facing brief are testable without a task store.
  *
- * The FIRST LINE is stable per area (cosTaskStore dedups on it, lowercased,
- * scoped to the app) — deliberately NOT per series, because the defect lives in
- * shared PortOS code and one open task should cover it however many series hit
- * it. The specifics live below the first line and in `context`.
+ * The FIRST LINE is the dedup key (cosTaskStore matches on it, lowercased,
+ * scoped to the app), so it carries the area AND a slug of the diagnosis itself.
+ * Area alone would be wrong in both directions: it is deliberately NOT
+ * per-series (the defect lives in shared PortOS code, so one open task should
+ * cover it however many series hit it), but keying on the bucket would cap
+ * PortOS at one open task per area forever and silently discard the next,
+ * different `editorial-check` defect — and a task that ends up `blocked` counts
+ * as a duplicate too, which would mute that area permanently.
  */
-export function buildSelfImproveTask({ diagnosis, seriesId, seriesName, outcome, outcomeReason, counts, autoApprove }) {
+export function buildSelfImproveTask({ diagnosis, seriesId, seriesName, outcome, outcomeReason, counts }) {
+  const slug = slugify(diagnosis.title);
   const lines = [
-    `Pipeline self-improvement (${diagnosis.area}) — Series Autopilot diagnosed a PortOS automation defect`,
+    `Pipeline self-improvement (${diagnosis.area}/${slug}) — Series Autopilot diagnosed a PortOS automation defect`,
     '',
     `**${diagnosis.title}**`,
     '',
@@ -219,7 +167,7 @@ export function buildSelfImproveTask({ diagnosis, seriesId, seriesName, outcome,
     seriesId,
     seriesName,
     outcome,
-    outcomeReason: trimTo(outcomeReason, 500),
+    outcomeReason: trimToClause(outcomeReason, 500),
     area: diagnosis.area,
     confidence: diagnosis.confidence,
     evidence: diagnosis.evidence,
@@ -230,14 +178,14 @@ export function buildSelfImproveTask({ diagnosis, seriesId, seriesName, outcome,
     context,
     app: PORTOS_APP_ID,
     priority: 'MEDIUM',
-    // Always isolated, always via a PR — an automated diagnosis never lands a
-    // commit on main. `approvalRequired` (honored only for internal tasks) is
-    // the one thing auto-approve changes.
+    // Always isolated, always via a PR, always approval-gated — see the module
+    // header. `approvalRequired` is honored only for internal tasks, which is
+    // why this files as one.
     useWorktree: true,
     openPR: true,
     prCompletion: PR_COMPLETIONS.REVIEW_THEN_MERGE,
     simplify: true,
-    approvalRequired: !autoApprove,
+    approvalRequired: true,
   };
 }
 
@@ -315,11 +263,15 @@ export async function runSelfImproveDiagnosis(sId, record, { outcome, reason = n
     seriesName: series?.name || 'unknown',
     targetFormat: series?.targetFormat || 'unknown',
     outcome,
-    outcomeReason: trimTo(reason, 1000) || 'none',
+    outcomeReason: trimToClause(reason, 1000) || 'none',
     stepSequence: STEP_SEQUENCE,
     gateConfigJson: JSON.stringify(gateConfigOf(record.options || {}), null, 2),
     enabledChecks: (checkPlan?.checks || []).map((c) => `${c.id} (${c.kind})`).join(', ') || 'none',
-    signalsJson: JSON.stringify(signals, null, 2).slice(0, 40_000),
+    // One COMPACT frame per line, not a pretty-printed array: the frames are flat
+    // and scalar-only, so indenting them puts every key on its own line and
+    // roughly doubles the token count of the single expensive call this feature
+    // makes. One object per line reads the same to the model at half the cost.
+    signalsJson: signals.map((s) => JSON.stringify(s)).join('\n').slice(0, 40_000),
     signalCountsJson: JSON.stringify(counts, null, 2),
     droppedSignals: dropped,
     erroredChecks: [...(record.runState?.editorialCheckErroredIds || [])].join(', ') || 'none',
@@ -328,12 +280,14 @@ export async function runSelfImproveDiagnosis(sId, record, { outcome, reason = n
   await recordDomainUsage('cos', { actions: 1 });
 
   const diagnosis = shapeDiagnosis(content);
+  // Nothing filable → nothing to report. A `content` / `none` verdict means the
+  // pipeline behaved, and a low-confidence guess is not worth a line of UI, so
+  // the terminal frame and the marker stay clean rather than carrying a
+  // "diagnosed nothing" payload no reader consumes. The log line is where an
+  // operator can still see the pass ran.
   if (!isFilable(diagnosis)) {
-    return {
-      verdict: diagnosis?.verdict || 'unreadable',
-      confidence: diagnosis?.confidence ?? null,
-      filed: false,
-    };
+    console.log(`🔧 autopilot self-improve — series=${sId.slice(0, 12)} nothing filed (verdict=${diagnosis?.verdict || 'unreadable'} confidence=${diagnosis?.confidence ?? '—'})`);
+    return null;
   }
 
   const task = buildSelfImproveTask({
@@ -343,7 +297,6 @@ export async function runSelfImproveDiagnosis(sId, record, { outcome, reason = n
     outcome,
     outcomeReason: reason,
     counts,
-    autoApprove: record.options?.selfImproveAutoApprove === true,
   });
   const result = await cosTaskStore.addTask(task, 'internal')
     .catch((err) => { console.log(`⚠️ autopilot: self-improve filing failed: ${err.message}`); return null; });
@@ -351,12 +304,12 @@ export async function runSelfImproveDiagnosis(sId, record, { outcome, reason = n
   console.log(`🔧 autopilot self-improve — series=${sId.slice(0, 12)} area=${diagnosis.area} ${result ? (filed ? `filed ${result.id}` : 'duplicate of an open task') : 'filing failed'}`);
   return {
     verdict: diagnosis.verdict,
-    confidence: diagnosis.confidence,
     area: diagnosis.area,
     title: diagnosis.title,
+    // The durable pointer from "this run" to "that task" — the console line above
+    // is not something a user can go read later.
     taskId: result?.id || null,
     filed,
     duplicate: !!result?.duplicate,
-    awaitingApproval: task.approvalRequired,
   };
 }

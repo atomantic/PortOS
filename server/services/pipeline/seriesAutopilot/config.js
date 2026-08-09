@@ -42,6 +42,17 @@ export const DEFAULT_FOUNDATION_GATE_ENABLED = true;
 // `maxChildRetries` option overrides it (plumbed through runOptions).
 export const MAX_CHILD_RETRIES = 1;
 
+// The one precedence rule every gate below follows for a BOOLEAN knob: an
+// explicit per-run option wins, then the persisted pipelineEditorialChecks
+// setting, then the module default. Hoisted so the file states it once — it was
+// open-coded in three resolvers and closed over twice more, which is how the
+// next gate ends up copying whichever variant it happened to land next to.
+const pickBool = (o, s, fallback) => {
+  if (typeof o === 'boolean') return o;
+  if (typeof s === 'boolean') return s;
+  return fallback;
+};
+
 // Resolve the effective round bounds for a run: an explicit per-run option wins,
 // then the persisted pipelineEditorialChecks setting, then the module default.
 // Returns integers only — a non-integer at any layer falls through to the next.
@@ -69,10 +80,8 @@ export function resolveAutopilotRounds(options = {}, settings = null) {
 // onto run options once at start so the loop, the dry-run plan, and a resume all
 // read the same effective values.
 export function resolveAutopilotFoundationGate(options = {}, settings = null) {
-  if (typeof options?.foundationGate === 'boolean') return options.foundationGate;
   const pec = settings?.pipelineEditorialChecks || {};
-  if (typeof pec?.foundationGate === 'boolean') return pec.foundationGate;
-  return DEFAULT_FOUNDATION_GATE_ENABLED;
+  return pickBool(options?.foundationGate, pec?.foundationGate, DEFAULT_FOUNDATION_GATE_ENABLED);
 }
 export function resolveAutopilotFoundationThreshold(options = {}, settings = null) {
   if (Number.isFinite(options?.foundationThreshold)) return options.foundationThreshold;
@@ -116,10 +125,8 @@ export function resolveAutopilotCheckPauseThreshold(options = {}, settings = nul
 // at every layer: per-run option wins, then the persisted setting, then true.
 export const DEFAULT_NOTIFY_ON_PAUSE = true;
 export function resolveAutopilotNotifyOnPause(options = {}, settings = null) {
-  if (typeof options?.notifyOnPause === 'boolean') return options.notifyOnPause;
   const pec = settings?.pipelineEditorialChecks || {};
-  if (typeof pec?.notifyOnPause === 'boolean') return pec.notifyOnPause;
-  return DEFAULT_NOTIFY_ON_PAUSE;
+  return pickBool(options?.notifyOnPause, pec?.notifyOnPause, DEFAULT_NOTIFY_ON_PAUSE);
 }
 
 // Autopilot → CD teaser deliverable (CDO Phase 3, #2185). Once a comic issue is
@@ -132,10 +139,8 @@ export function resolveAutopilotNotifyOnPause(options = {}, settings = null) {
 // all read the same effective flag.
 export const DEFAULT_PRODUCE_TEASER = false;
 export function resolveAutopilotProduceTeaser(options = {}, settings = null) {
-  if (typeof options?.produceTeaser === 'boolean') return options.produceTeaser;
   const pec = settings?.pipelineEditorialChecks || {};
-  if (typeof pec?.produceTeaser === 'boolean') return pec.produceTeaser;
-  return DEFAULT_PRODUCE_TEASER;
+  return pickBool(options?.produceTeaser, pec?.produceTeaser, DEFAULT_PRODUCE_TEASER);
 }
 
 // Does THIS run want to produce a teaser deliverable? Gated on the resolved
@@ -178,11 +183,6 @@ export const DEFAULT_REVISION_MAX_CYCLES = 2;
 export const DEFAULT_REVISION_PLATEAU_DELTA = 0.3;
 export function resolveAutopilotRevision(options = {}, settings = null) {
   const pec = settings?.pipelineEditorialChecks || {};
-  const bool = (o, s, fallback) => {
-    if (typeof o === 'boolean') return o;
-    if (typeof s === 'boolean') return s;
-    return fallback;
-  };
   const int = (o, s, fallback) => {
     if (Number.isInteger(o)) return o;
     if (Number.isInteger(s)) return s;
@@ -196,7 +196,7 @@ export function resolveAutopilotRevision(options = {}, settings = null) {
   const minCycles = int(options?.revisionMinCycles, pec?.revisionMinCycles, DEFAULT_REVISION_MIN_CYCLES);
   const maxCycles = int(options?.revisionMaxCycles, pec?.revisionMaxCycles, DEFAULT_REVISION_MAX_CYCLES);
   return {
-    revisionEnabled: bool(options?.revisionEnabled, pec?.revisionEnabled, DEFAULT_REVISION_ENABLED),
+    revisionEnabled: pickBool(options?.revisionEnabled, pec?.revisionEnabled, DEFAULT_REVISION_ENABLED),
     revisionMinCycles: Math.max(1, minCycles),
     // maxCycles never below minCycles — a misconfig can't strand the loop unable to run.
     revisionMaxCycles: Math.max(Math.max(1, minCycles), maxCycles),
@@ -219,26 +219,12 @@ export function resolveAutopilotRevision(options = {}, settings = null) {
 // `shouldDiagnose`). Per-run option wins, then the persisted
 // pipelineEditorialChecks setting, then the default.
 //
-// `selfImproveAutoApprove` decides what the filed task does next: OFF (default)
-// files it awaiting approval, so the user reads the proposed change before an
-// agent spends anything on it; ON files it auto-approved, so CoS picks it up and
-// ships the fix on its own. Either way the task is worktree-isolated and opens a
-// PR — an autonomous diagnosis never lands a commit on main unreviewed.
+// The filed task always awaits human approval and always opens a PR — see
+// selfImprove.js's header for why that isn't a knob.
 export const DEFAULT_SELF_IMPROVE = false;
-export const DEFAULT_SELF_IMPROVE_AUTO_APPROVE = false;
 export function resolveAutopilotSelfImprove(options = {}, settings = null) {
   const pec = settings?.pipelineEditorialChecks || {};
-  const bool = (o, s, fallback) => {
-    if (typeof o === 'boolean') return o;
-    if (typeof s === 'boolean') return s;
-    return fallback;
-  };
-  return {
-    selfImprove: bool(options?.selfImprove, pec?.selfImprove, DEFAULT_SELF_IMPROVE),
-    selfImproveAutoApprove: bool(
-      options?.selfImproveAutoApprove, pec?.selfImproveAutoApprove, DEFAULT_SELF_IMPROVE_AUTO_APPROVE,
-    ),
-  };
+  return pickBool(options?.selfImprove, pec?.selfImprove, DEFAULT_SELF_IMPROVE);
 }
 
 // Which provider/model do this run's LLM calls use? An explicit per-run

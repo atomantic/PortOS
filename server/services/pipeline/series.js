@@ -210,21 +210,20 @@ const toCount = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
 // Verdict of the opt-in pipeline self-improvement post-mortem, stamped onto the
 // terminal marker so the resume/status banner can say a PortOS fix task was
 // filed without re-reading the CoS task list. Null on every run that didn't opt
-// in (or whose telemetry was clean — the pass makes no LLM call then). Same
-// transient-marker rationale as pauseKind / craftGap*: no schema-gate bump.
-const SELF_IMPROVE_MARKER_VERDICTS = ['pipeline', 'content', 'none', 'unreadable'];
+// in, whose telemetry was clean (the pass makes no LLM call then), or that
+// diagnosed nothing filable — the producer only reports a `pipeline` verdict, so
+// that's the only shape this accepts. Same transient-marker rationale as
+// pauseKind / craftGap*: no schema-gate bump.
 const sanitizeAutopilotSelfImprove = (raw) => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  if (!SELF_IMPROVE_MARKER_VERDICTS.includes(raw.verdict)) return null;
+  if (raw.verdict !== 'pipeline') return null;
   return {
-    verdict: raw.verdict,
-    confidence: Number.isFinite(raw.confidence) ? Math.min(1, Math.max(0, raw.confidence)) : null,
+    verdict: 'pipeline',
     area: trimTo(raw.area, 40) || null,
     title: trimTo(raw.title, 160) || null,
     taskId: trimTo(raw.taskId, 64) || null,
     filed: raw.filed === true,
     duplicate: raw.duplicate === true,
-    awaitingApproval: raw.awaitingApproval === true,
   };
 };
 
