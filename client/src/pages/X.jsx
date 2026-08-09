@@ -225,10 +225,11 @@ export default function XPage() {
     const snapshot = selected?.profileSnapshot || {};
     const profile = snapshot.profile || {};
     const checks = snapshot.diagnostics || {};
+    const unreadDetail = 'The profile page did not return a handle, so this check could not be observed. Re-run the diagnostic.';
     const checkRows = [
-      { label: 'Public profile reachable', value: checks.profilePublic, detail: 'The profile page returned the configured handle.' },
-      { label: 'Exact account search', value: checks.appearsInPeopleSearch, detail: 'The handle appeared in X People search.' },
-      { label: 'Recent posts in Latest search', value: checks.recentPostsInLatestSearch, detail: `${formatCount(checks.latestSearchPostCount)} matching original post(s) were returned.` },
+      { label: 'Public profile reachable', value: checks.profilePublic, detail: checks.profilePublic === null ? unreadDetail : 'The profile page returned the configured handle.' },
+      { label: 'Exact account search', value: checks.appearsInPeopleSearch, detail: checks.appearsInPeopleSearch === null ? unreadDetail : 'The handle appeared in X People search.' },
+      { label: 'Recent posts in Latest search', value: checks.recentPostsInLatestSearch, detail: checks.recentPostsInLatestSearch === null ? unreadDetail : `${formatCount(checks.latestSearchPostCount)} matching original post(s) were returned.` },
       { label: 'Recommendation eligibility', value: null, detail: 'X does not expose a public yes/no recommendation-eligibility signal here.' },
     ];
     return <div className="space-y-4">

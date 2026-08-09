@@ -113,21 +113,32 @@ export async function deleteAccount(id) {
   return result.rowCount > 0;
 }
 
+// A browser read that returns an app shell, a rate-limit interstitial, or a page that rendered
+// late still resolves successfully with an empty profile. Reporting that as `false` manufactures
+// the shadowban verdict the feature exists to avoid — so an unread profile page means `null`
+// ("Unknown") for every check that a failed read could have silently emptied. A positive
+// observation is self-validating and stays `true` even when the profile page came back blank.
 export function deriveXDiagnostics({ accountUsername, profile = {}, latest = {}, people = {} }) {
   const configured = normalizeUsername(accountUsername);
   const profileUsername = safeUsername(profile.username);
+  const profileRead = Boolean(profileUsername);
   const latestPosts = Array.isArray(latest.posts) ? latest.posts : [];
   const matchingPosts = latestPosts.filter((post) => safeUsername(post.authorHandle) === configured);
+  const observedInPeopleSearch = people.exactMatch === true || (Array.isArray(people.handles) && people.handles.map(safeUsername).includes(configured));
+  const observedOrUnknown = (observed) => observed || (profileRead ? false : null);
   return {
-    profilePublic: Boolean(profileUsername && profileUsername === configured),
-    profileHandleMatches: Boolean(profileUsername && profileUsername === configured),
-    appearsInPeopleSearch: people.exactMatch === true || (Array.isArray(people.handles) && people.handles.map(safeUsername).includes(configured)),
-    recentPostsInLatestSearch: matchingPosts.length > 0,
-    latestSearchPostCount: matchingPosts.length,
+    profileRead,
+    profilePublic: profileRead ? profileUsername === configured : null,
+    profileHandleMatches: profileRead ? profileUsername === configured : null,
+    appearsInPeopleSearch: observedOrUnknown(observedInPeopleSearch),
+    recentPostsInLatestSearch: observedOrUnknown(matchingPosts.length > 0),
+    latestSearchPostCount: (profileRead || matchingPosts.length > 0) ? matchingPosts.length : null,
     recommendationEligibility: 'unknown',
     checkedAt: new Date().toISOString(),
   };
 }
+
+export const PROFILE_READ_FAILED_ERROR = 'Could not read the X profile page — visibility checks are unknown, not negative. Retry the diagnostic.';
 
 const safeMetric = (value) => Number.isInteger(value) && value >= 0 && value <= MAX_INTEGER ? value : null;
 
@@ -171,6 +182,8 @@ async function syncAccountUnlocked(accountId) {
     latestSearch: { postCount: diagnostics.latestSearchPostCount },
   };
   const posts = mergePosts(profileResult.posts || [], latestPosts);
+  const readError = diagnostics.profileRead ? '' : PROFILE_READ_FAILED_ERROR;
+  if (readError) console.warn(`⚠️ X profile read returned no handle for @${account.username} — reporting visibility as unknown`);
 
   await withTransaction(async (client) => {
     for (const post of posts) {
@@ -188,8 +201,8 @@ async function syncAccountUnlocked(accountId) {
       );
     }
     await client.query(
-      `UPDATE x_accounts SET profile_snapshot=$2,last_sync_at=NOW(),last_error='',updated_at=NOW() WHERE id=$1`,
-      [accountId, snapshot],
+      `UPDATE x_accounts SET profile_snapshot=$2,last_sync_at=NOW(),last_error=$3,updated_at=NOW() WHERE id=$1`,
+      [accountId, snapshot, readError],
     );
   });
   const [nextAccount, nextPosts] = await Promise.all([getAccount(accountId), listPosts(accountId)]);

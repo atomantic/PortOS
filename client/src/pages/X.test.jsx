@@ -74,6 +74,27 @@ describe('X page', () => {
     expect(screen.getByTestId('location')).toHaveTextContent(`/x/${account.id}/health`);
   });
 
+  it('renders a failed profile read as Unknown rather than a negative verdict', async () => {
+    api.getXAccounts.mockResolvedValue({ accounts: [{
+      ...account,
+      profileSnapshot: {
+        profile: {},
+        diagnostics: {
+          profilePublic: null,
+          appearsInPeopleSearch: null,
+          recentPostsInLatestSearch: null,
+          latestSearchPostCount: null,
+        },
+      },
+      lastError: 'Could not read the X profile page — visibility checks are unknown, not negative. Retry the diagnostic.',
+    }] });
+    renderPage(`/x/${account.id}/health`);
+    await screen.findByRole('heading', { name: 'Reach diagnostics for @example_user' });
+    expect(screen.getAllByText('Unknown')).toHaveLength(4);
+    expect(screen.queryByText('Not observed')).not.toBeInTheDocument();
+    expect(screen.getByText(/Could not read the X profile page/)).toBeInTheDocument();
+  });
+
   it('runs a manual diagnostic and keeps publishing out of the page workflow', async () => {
     const user = userEvent.setup();
     api.syncXAccount.mockResolvedValue({ account: { ...account, lastSyncAt: '2026-08-05T13:00:00.000Z' }, posts: [], ingested: 2 });
