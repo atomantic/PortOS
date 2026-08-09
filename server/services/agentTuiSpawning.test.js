@@ -1119,7 +1119,7 @@ describe('spawnTuiAgent runtime', () => {
     expect(gitService.execGit).toHaveBeenCalledWith(
       ['rev-list', '--count', expect.stringMatching(/^--since=\d{4}-/), 'HEAD'],
       '/tmp/ws',
-      { ignoreExitCode: true }
+      { ignoreExitCode: true, timeout: 10_000 }
     );
   });
 

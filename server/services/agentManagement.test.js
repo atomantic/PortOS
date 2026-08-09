@@ -909,6 +909,21 @@ describe('orphan retries resume what the dead run left behind', () => {
     expect(updateTask).toHaveBeenCalledWith('task-1', { status: 'completed' }, 'user');
   });
 
+  // `Date.parse(1754696324000)` stringifies its argument and returns NaN, which
+  // would silently skip the probe for any caller holding an epoch-ms start time.
+  it('accepts a raw epoch-ms start time, not just the persisted ISO string', async () => {
+    committedDuringRun.mockResolvedValueOnce(true);
+    getTaskById.mockResolvedValue({ id: 'task-1', taskType: 'user', status: 'in_progress', metadata: {} });
+
+    await handleOrphanedTask('task-1', 'agent-dead', getTaskById, {
+      agentMetadata: { workspacePath: '/example-app' },
+      agentStartedAt: 1754696324000,
+    });
+
+    expect(committedDuringRun).toHaveBeenCalledWith('/example-app', 1754696324000);
+    expect(updateTask).toHaveBeenCalledWith('task-1', { status: 'completed' }, 'user');
+  });
+
   // Without a run window there is nothing to attribute a commit to — probing an
   // unbounded `git log` would credit this task with any commit already in the
   // repo, including another agent's, and complete a task that did nothing (#3637).

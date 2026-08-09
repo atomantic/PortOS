@@ -16,7 +16,7 @@ describe('commitsSince (#3637)', () => {
     expect(execGit).toHaveBeenCalledWith(
       ['rev-list', '--count', '--since=2026-08-08T18:23:30.000Z', 'HEAD'],
       '/tmp/ws',
-      { ignoreExitCode: true }
+      { ignoreExitCode: true, timeout: 10_000 }
     );
   });
 
@@ -48,6 +48,24 @@ describe('commitsSince (#3637)', () => {
     expect(await commitsSince('/tmp/ws', undefined)).toBe(0);
     expect(await commitsSince('/tmp/ws', NaN)).toBe(0);
     expect(execGit).not.toHaveBeenCalled();
+  });
+
+  // `Number.isFinite` passes these, but `new Date(x).toISOString()` throws
+  // RangeError on them — which would break the non-throwing contract on a path
+  // that runs outside the request lifecycle.
+  it('is 0 (never throws) for a finite but out-of-range epoch', async () => {
+    // The Date range is ±8.64e15 ms; beyond it `toISOString()` throws.
+    expect(await commitsSince('/tmp/ws', 1e16)).toBe(0);
+    expect(await commitsSince('/tmp/ws', -1e16)).toBe(0);
+    expect(execGit).not.toHaveBeenCalled();
+  });
+
+  // The retired marker grep bounded its git at 10s; execGit's own default is 30s,
+  // and this runs on the agent-completion path, so the tighter bound is explicit.
+  it('bounds the git call at 10s rather than taking execGit’s 30s default', async () => {
+    vi.mocked(execGit).mockResolvedValue({ exitCode: 0, stdout: '0\n', stderr: '' });
+    await commitsSince('/tmp/ws', SINCE);
+    expect(execGit).toHaveBeenCalledWith(expect.anything(), '/tmp/ws', { ignoreExitCode: true, timeout: 10_000 });
   });
 });
 

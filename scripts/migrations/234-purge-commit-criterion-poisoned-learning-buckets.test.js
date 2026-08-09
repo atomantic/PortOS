@@ -103,6 +103,11 @@ describe('234-purge-commit-criterion-poisoned-learning-buckets (#3637)', () => {
     // must be exempt here too, or this migration would purge its honest history.
     expect(PRESERVED_BUCKETS.has('self-improve:branch-cleanup')).toBe(true);
     expect(PRESERVED_BUCKETS.has('self-improve:jira-status-report')).toBe(true);
+    // The bare form too: extractTaskType only prefixes a task carrying an
+    // `analysisType`, so a coordinator typed on `taskType` alone can land in an
+    // unprefixed bucket — and it was exempt from the old criterion either way.
+    expect(PRESERVED_BUCKETS.has('branch-reconcile')).toBe(true);
+    expect(selectPoisonedBuckets({ 'branch-reconcile': {}, 'auto-fix': {} })).toEqual(['auto-fix']);
     expect(selectPoisonedBuckets({ 'self-improve:branch-cleanup': {}, 'auto-fix': {} })).toEqual(['auto-fix']);
     expect(selectPoisonedBuckets(null)).toEqual([]);
     expect(selectPoisonedBuckets([])).toEqual([]);

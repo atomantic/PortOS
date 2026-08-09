@@ -34,12 +34,24 @@ import { execGit } from './execGit.js';
 export async function commitsSince(workspacePath, sinceMs) {
   if (!workspacePath || typeof workspacePath !== 'string') return 0;
   if (!Number.isFinite(sinceMs)) return 0;
-  const since = new Date(sinceMs).toISOString();
+  // `Number.isFinite` is not enough: a finite but out-of-range epoch (±1e15)
+  // makes `toISOString()` throw RangeError, which would break this function's
+  // non-throwing contract on a path that runs outside the request lifecycle.
+  const since = new Date(sinceMs);
+  if (Number.isNaN(since.getTime())) return 0;
   // `ignoreExitCode` so a repo with no HEAD resolves to a non-zero exit we can
   // read as "no commits" rather than rejecting — the house convention for
   // probe-shaped git calls (see git.js `isRepo` / `getRemote`).
-  const result = await execGit(['rev-list', '--count', `--since=${since}`, 'HEAD'], workspacePath, { ignoreExitCode: true })
-    .catch(() => null);
+  //
+  // `timeout` preserves the retired marker-grep's 10s bound rather than taking
+  // execGit's 30s default: this sits on the agent-completion path, and a git
+  // wedged on a locked index or a slow network mount must not hold finalize open
+  // for half a minute. A timeout rejects, which the catch below reads as 0.
+  const result = await execGit(
+    ['rev-list', '--count', `--since=${since.toISOString()}`, 'HEAD'],
+    workspacePath,
+    { ignoreExitCode: true, timeout: 10_000 },
+  ).catch(() => null);
   if (!result || result.exitCode !== 0) return 0;
   const count = parseInt(result.stdout.trim(), 10);
   return Number.isFinite(count) ? count : 0;

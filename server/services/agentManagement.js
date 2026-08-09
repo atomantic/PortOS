@@ -839,7 +839,12 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
   // Scoped to the dead run's OWN window (#3637): the retired task-id commit marker
   // was never emitted by anything, and an unbounded `git log` would credit this
   // task with any commit in the repo — including another agent's.
-  const orphanRunStartedAt = Date.parse(agentStartedAt);
+  // Accepts both shapes the agent record can carry: the persisted ISO string
+  // (`registerAgent`) and a raw epoch-ms number. `Date.parse(1754696324000)`
+  // stringifies its argument and returns NaN, so a number MUST NOT go through it.
+  const orphanRunStartedAt = typeof agentStartedAt === 'number'
+    ? agentStartedAt
+    : Date.parse(agentStartedAt);
   const commitFound = Number.isFinite(orphanRunStartedAt)
     && await committedDuringRun(agentMetadata?.workspacePath || ROOT_DIR, orphanRunStartedAt);
   if (commitFound) {

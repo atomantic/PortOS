@@ -67,6 +67,12 @@ export const PRESERVED_BUCKETS = new Set([
   'user-task',
   'self-improve:layered-intelligence', // migration 197
   ...[...NON_COMMITTING_COORDINATOR_TASK_TYPES].map((t) => `self-improve:${t}`), // migration 198
+  // The bare form too. extractTaskType prefixes any task carrying an
+  // `analysisType`, which a scheduled coordinator always does — but a task typed
+  // on `taskType` alone (a shape `isNonCommittingCoordinatorTask` recognizes and
+  // exempts) can land in a bucket without the prefix. Purging that would delete
+  // honest history for a run the old criterion never judged.
+  ...NON_COMMITTING_COORDINATOR_TASK_TYPES,
 ]);
 
 /** The buckets this migration would purge from a given `byTaskType` map. Pure. */
