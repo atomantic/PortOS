@@ -105,8 +105,9 @@ const ARTICULATED_SUBJECT_TYPES = new Set(['character', 'hybrid']);
 // family id resolves to `general` the way the checklist builder resolves it, so
 // a stale stored family cannot silently change which contract is requested.
 const wantsArticulation = (family, currentSpec) => {
-  if (currentSpec?.subjectType === 'object') return false;
-  if (ARTICULATED_SUBJECT_TYPES.has(currentSpec?.subjectType)) return true;
+  // A spec that has already been classified answers the question by itself; the
+  // family is only a guess about a subject nobody has looked at yet.
+  if (currentSpec?.subjectType) return ARTICULATED_SUBJECT_TYPES.has(currentSpec.subjectType);
   const resolved = THREEJS_MODEL_FAMILY_IDS.includes(family) ? family : GENERAL_FAMILY_ID;
   return resolved === CHARACTER_FAMILY_ID || resolved === GENERAL_FAMILY_ID;
 };

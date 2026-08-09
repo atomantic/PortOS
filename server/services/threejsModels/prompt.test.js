@@ -127,10 +127,12 @@ describe('buildThreejsGenerationPrompt articulation gating fallbacks', () => {
       currentSpec: { schemaVersion: 1, name: 'Example Model', subjectType: 'creature-thing' },
     });
     expect(unknownUnderVehicle).not.toContain('ARTICULATION');
+    // The spec's own classification wins over the family: an unrecognized one
+    // never qualifies, whatever the picker says.
     const unknownUnderCharacter = build({
       family: 'character',
       currentSpec: { schemaVersion: 1, name: 'Example Model', subjectType: 'creature-thing' },
     });
-    expect(unknownUnderCharacter).toContain('ARTICULATION (character and hybrid subjects only)');
+    expect(unknownUnderCharacter).not.toContain('ARTICULATION');
   });
 });
