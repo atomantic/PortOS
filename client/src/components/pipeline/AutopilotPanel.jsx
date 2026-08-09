@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import { usePipelineProgress } from '../../hooks/usePipelineProgress';
+import usePersistedOptions, { readBoolean, readInteger, readNumber } from '../../hooks/usePersistedOptions';
 import {
   startPipelineAutopilot,
   cancelPipelineAutopilot,
@@ -96,14 +97,98 @@ const clampDelta = (n, fallback) => {
   return Math.min(10, Math.max(0, v));
 };
 
+// Every option that follows the "saved default + per-run override" contract, as
+// ONE row each: the display default, how to read a saved value (undefined =
+// absent/invalid → the default), the clamp applied both on blur and when the
+// value is sent as an override, and whether editing persists immediately.
+// `persistOnEdit` is for controls with no blur event (checkboxes); the numeric
+// inputs persist from RoundInput's onBlur instead. Keyed by the SETTING key the
+// server reads, so a key can't drift between the load, the save and the run.
+// Per-run-only options (readiness gate, unlock pre-pass, provider/model/effort)
+// are deliberately NOT here — they are never persisted.
+const OPTION_SPECS = {
+  maxArcVerifyRounds: {
+    defaultValue: DEFAULT_ARC_ROUNDS,
+    read: readInteger,
+    clamp: (v) => clampRound(v, DEFAULT_ARC_ROUNDS),
+  },
+  maxEditorialRounds: {
+    defaultValue: DEFAULT_EDITORIAL_ROUNDS,
+    read: readInteger,
+    clamp: (v) => clampRound(v, DEFAULT_EDITORIAL_ROUNDS),
+  },
+  maxBeatContinuityRounds: {
+    defaultValue: DEFAULT_BEAT_CONTINUITY_ROUNDS,
+    read: readInteger,
+    clamp: (v) => clampRound(v, DEFAULT_BEAT_CONTINUITY_ROUNDS),
+  },
+  // #1613 — non-negative integer, no upper cap (0 = off).
+  checkFindingsPauseThreshold: {
+    defaultValue: DEFAULT_CHECK_PAUSE_THRESHOLD,
+    read: readInteger,
+    clamp: clampThreshold,
+  },
+  // #1615 — plain boolean, no clamp. Defaults ON.
+  notifyOnPause: {
+    defaultValue: DEFAULT_NOTIFY_ON_PAUSE,
+    read: readBoolean,
+    persistOnEdit: true,
+  },
+  // #2171 — revision loop: enable checkbox + cycle bounds + plateau delta.
+  revisionEnabled: {
+    defaultValue: DEFAULT_REVISION_ENABLED,
+    read: readBoolean,
+    persistOnEdit: true,
+  },
+  revisionMinCycles: {
+    defaultValue: DEFAULT_REVISION_MIN_CYCLES,
+    read: readInteger,
+    clamp: (v) => clampCycles(v, DEFAULT_REVISION_MIN_CYCLES),
+  },
+  revisionMaxCycles: {
+    defaultValue: DEFAULT_REVISION_MAX_CYCLES,
+    read: readInteger,
+    clamp: (v) => clampCycles(v, DEFAULT_REVISION_MAX_CYCLES),
+  },
+  revisionPlateauDelta: {
+    defaultValue: DEFAULT_REVISION_PLATEAU_DELTA,
+    read: readNumber,
+    clamp: (v) => clampDelta(v, DEFAULT_REVISION_PLATEAU_DELTA),
+  },
+  // #2176 — foundation gate (defaults ON) + weighted threshold + round bound.
+  foundationGate: {
+    defaultValue: DEFAULT_FOUNDATION_GATE,
+    read: readBoolean,
+    persistOnEdit: true,
+  },
+  foundationThreshold: {
+    defaultValue: DEFAULT_FOUNDATION_THRESHOLD,
+    read: readNumber,
+    clamp: (v) => clampFoundationThreshold(v, DEFAULT_FOUNDATION_THRESHOLD),
+  },
+  maxFoundationRounds: {
+    defaultValue: DEFAULT_FOUNDATION_ROUNDS,
+    read: readInteger,
+    clamp: (v) => clampRound(v, DEFAULT_FOUNDATION_ROUNDS),
+  },
+  // Pipeline self-improvement — boolean, off by default.
+  selfImprove: {
+    defaultValue: DEFAULT_SELF_IMPROVE,
+    read: readBoolean,
+    persistOnEdit: true,
+  },
+};
+
 // A single numeric field for the Options popover (round bounds + the pause
 // threshold). Allows '' mid-edit (so the field can be cleared) and clamps +
 // persists the chosen value on blur — but ONLY when the user actually changed it.
 // A bare focus+blur (tabbing through Options) must not persist the display
 // fallback or mark the field dirty, or it would clobber a saved limit before
 // settings load and block the load from applying it. `max` caps the input (null =
-// uncapped); `clamp(value, defaultValue)` defaults to the round clamp.
-function RoundInput({ id, label, settingKey, value, setValue, defaultValue, persist, max = ROUND_MAX, clamp = clampRound, min = ROUND_MIN, step }) {
+// uncapped). `settingKey` / `value` / `setValue` / `clamp` / `persist` come from
+// the option registry's `inputProps(key)` — the clamp is the option's own, so
+// what a blur saves is exactly what a run sends.
+function RoundInput({ id, label, settingKey, value, setValue, persist, max = ROUND_MAX, clamp, min = ROUND_MIN, step }) {
   const dirtyRef = useRef(false);
   return (
     <div className="flex items-center gap-2">
@@ -119,7 +204,7 @@ function RoundInput({ id, label, settingKey, value, setValue, defaultValue, pers
         onBlur={() => {
           if (!dirtyRef.current) return; // untouched — don't persist/clamp/mark dirty
           dirtyRef.current = false;
-          const v = clamp(value, defaultValue);
+          const v = clamp(value);
           setValue(v);
           persist({ [settingKey]: v });
         }}
@@ -265,61 +350,37 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const [showOpts, setShowOpts] = useState(false);
   const [includeVisual, setIncludeVisual] = useState(true);
   const [fileGaps, setFileGaps] = useState(false);
-  const [arcRounds, setArcRounds] = useState(DEFAULT_ARC_ROUNDS);
-  const [editorialRounds, setEditorialRounds] = useState(DEFAULT_EDITORIAL_ROUNDS);
-  const [beatContinuityRounds, setBeatContinuityRounds] = useState(DEFAULT_BEAT_CONTINUITY_ROUNDS);
+  // Persist a setting (clamped) so a later Resume picks it up server-side.
+  // patchSettingsSlice is a GET-merge-PUT, so two overlapping calls (a blur save
+  // racing start()'s save) can lose an update — a slow earlier PUT lands after a
+  // newer one and clobbers it. Serialize every write onto one tail promise so the
+  // cycles can't interleave; start() awaiting its own enqueued write transitively
+  // awaits any in-flight blur save. Returns the promise so start() can await it.
+  const persistTailRef = useRef(Promise.resolve());
+  const persistRounds = useCallback((patch) => {
+    const next = persistTailRef.current
+      .catch(() => {})
+      .then(() => patchSettingsSlice('pipelineEditorialChecks', patch, { silent: true }).catch(() => null));
+    persistTailRef.current = next;
+    return next;
+  }, []);
+  // Every persisted option (saved default + per-run override) in one registry —
+  // see OPTION_SPECS. The registry owns the state, the per-field dirty flags, the
+  // hydrate-if-untouched pass and the edited-only override collection, so adding
+  // an option is one spec row plus its control, not seven scattered edits.
+  const options = usePersistedOptions(OPTION_SPECS, persistRounds);
+  const opt = options.values;
   // Per-run readiness-gate override (#1580). '' = use the saved default (send
   // nothing). `savedGate` is the persisted gate, shown in the "saved default"
   // option label so the user knows what the fallback is.
   const [readinessGate, setReadinessGate] = useState('');
   const [savedGate, setSavedGate] = useState('');
-  // Editorial-checks pause threshold (#1613). 0 = off (default): pause the run
-  // when the editorial-checks pass surfaces ≥ N high findings. Persisted like the
-  // round inputs (saved default + per-run override), so a raised value is reused
-  // on Resume.
-  const [checkPauseThreshold, setCheckPauseThreshold] = useState(DEFAULT_CHECK_PAUSE_THRESHOLD);
-  // Pause-notification escalation (#1615). Persisted like the round inputs (saved
-  // default + per-run override) but defaults ON — toggling off silences the
-  // in-app pause banner. Persisted on change so the choice is reused on Resume.
-  const [notifyOnPause, setNotifyOnPause] = useState(DEFAULT_NOTIFY_ON_PAUSE);
-  // Iterate-to-quality revision loop (#2171). Persisted like the other options
-  // (saved default + per-run override) so a configured loop is reused on Resume.
-  const [revisionEnabled, setRevisionEnabled] = useState(DEFAULT_REVISION_ENABLED);
-  const [revisionMinCycles, setRevisionMinCycles] = useState(DEFAULT_REVISION_MIN_CYCLES);
-  const [revisionMaxCycles, setRevisionMaxCycles] = useState(DEFAULT_REVISION_MAX_CYCLES);
-  const [revisionPlateauDelta, setRevisionPlateauDelta] = useState(DEFAULT_REVISION_PLATEAU_DELTA);
   // Unlock-everything pre-pass. PER-RUN ONLY and never persisted (like
   // `readinessGate` below, unlike every other option here): it rewrites lock
   // state the user set by hand, and a saved default would be picked up by
   // scheduled unattended runs of every series. Always starts unticked, so
   // clearing locks is a fresh, deliberate choice each run.
   const [unlockForRun, setUnlockForRun] = useState(false);
-  // Foundation-quality gate (#2176) — enable toggle + weighted threshold + round
-  // bound. Persisted like the other options (saved default + per-run override).
-  const [foundationGate, setFoundationGate] = useState(DEFAULT_FOUNDATION_GATE);
-  const [foundationThreshold, setFoundationThreshold] = useState(DEFAULT_FOUNDATION_THRESHOLD);
-  const [foundationRounds, setFoundationRounds] = useState(DEFAULT_FOUNDATION_ROUNDS);
-  // Pipeline self-improvement. Persisted like the other options (saved default +
-  // per-run override) so an enabled diagnosis is reused on Resume.
-  const [selfImprove, setSelfImprove] = useState(DEFAULT_SELF_IMPROVE);
-  // Per-field dirty flags. Until a field is edited its input shows a display
-  // default we must NOT persist (that would clobber a higher saved setting on
-  // the untouched gate). Tracked per-field so editing one gate never discards
-  // the loaded value of the other. start() persists ONLY the edited fields; the
-  // untouched ones keep their on-disk value via patchSettingsSlice's merge.
-  const arcEditedRef = useRef(false);
-  const editorialEditedRef = useRef(false);
-  const beatContinuityEditedRef = useRef(false);
-  const checkPauseEditedRef = useRef(false);
-  const notifyEditedRef = useRef(false);
-  const revisionEnabledEditedRef = useRef(false);
-  const revisionMinEditedRef = useRef(false);
-  const revisionMaxEditedRef = useRef(false);
-  const revisionDeltaEditedRef = useRef(false);
-  const foundationGateEditedRef = useRef(false);
-  const foundationThresholdEditedRef = useRef(false);
-  const foundationRoundsEditedRef = useRef(false);
-  const selfImproveEditedRef = useRef(false);
   const [canon, setCanon] = useState(null);
   const [canonLoading, setCanonLoading] = useState(false);
   // Per-run provider/model override. '' = "use the series default", i.e. the
@@ -395,90 +456,26 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   // for its out-of-ladder option.
   const effectiveEffort = resolveCliEffort(effortOverride, effProvider, effModel);
 
-  // Load the persisted convergence-round defaults so the Options inputs reflect
-  // the install's setting. The autopilot reads the same setting server-side, so
-  // we never send these as per-run overrides — we just keep the UI in sync and
-  // persist edits back. Apply the fetched value only to fields the user hasn't
-  // already edited, so a slow load can't clobber a fast edit (per-field).
+  // Load the persisted option defaults so the Options controls reflect the
+  // install's settings. The autopilot reads the same settings server-side, so we
+  // never send an untouched option as a per-run override — we just keep the UI in
+  // sync and persist edits back. `hydrate` applies the fetched values only to
+  // fields the user hasn't already edited, so a slow load can't clobber a fast
+  // edit (per-field).
+  const { hydrate } = options;
   useEffect(() => {
     let canceled = false;
     getSettings({ silent: true })
       .then((s) => {
         if (canceled) return;
         const pec = s?.pipelineEditorialChecks || {};
-        if (!arcEditedRef.current) setArcRounds(Number.isInteger(pec.maxArcVerifyRounds) ? pec.maxArcVerifyRounds : DEFAULT_ARC_ROUNDS);
-        if (!editorialEditedRef.current) setEditorialRounds(Number.isInteger(pec.maxEditorialRounds) ? pec.maxEditorialRounds : DEFAULT_EDITORIAL_ROUNDS);
-        if (!beatContinuityEditedRef.current) setBeatContinuityRounds(Number.isInteger(pec.maxBeatContinuityRounds) ? pec.maxBeatContinuityRounds : DEFAULT_BEAT_CONTINUITY_ROUNDS);
-        if (!checkPauseEditedRef.current) setCheckPauseThreshold(Number.isInteger(pec.checkFindingsPauseThreshold) ? pec.checkFindingsPauseThreshold : DEFAULT_CHECK_PAUSE_THRESHOLD);
-        if (!notifyEditedRef.current) setNotifyOnPause(typeof pec.notifyOnPause === 'boolean' ? pec.notifyOnPause : DEFAULT_NOTIFY_ON_PAUSE);
-        if (!revisionEnabledEditedRef.current) setRevisionEnabled(typeof pec.revisionEnabled === 'boolean' ? pec.revisionEnabled : DEFAULT_REVISION_ENABLED);
-        if (!revisionMinEditedRef.current) setRevisionMinCycles(Number.isInteger(pec.revisionMinCycles) ? pec.revisionMinCycles : DEFAULT_REVISION_MIN_CYCLES);
-        if (!revisionMaxEditedRef.current) setRevisionMaxCycles(Number.isInteger(pec.revisionMaxCycles) ? pec.revisionMaxCycles : DEFAULT_REVISION_MAX_CYCLES);
-        if (!revisionDeltaEditedRef.current) setRevisionPlateauDelta(Number.isFinite(pec.revisionPlateauDelta) ? pec.revisionPlateauDelta : DEFAULT_REVISION_PLATEAU_DELTA);
-        if (!foundationGateEditedRef.current) setFoundationGate(typeof pec.foundationGate === 'boolean' ? pec.foundationGate : DEFAULT_FOUNDATION_GATE);
-        if (!foundationThresholdEditedRef.current) setFoundationThreshold(Number.isFinite(pec.foundationThreshold) ? pec.foundationThreshold : DEFAULT_FOUNDATION_THRESHOLD);
-        if (!foundationRoundsEditedRef.current) setFoundationRounds(Number.isInteger(pec.maxFoundationRounds) ? pec.maxFoundationRounds : DEFAULT_FOUNDATION_ROUNDS);
-        if (!selfImproveEditedRef.current) setSelfImprove(typeof pec.selfImprove === 'boolean' ? pec.selfImprove : DEFAULT_SELF_IMPROVE);
+        hydrate(pec);
         // Persisted readiness gate — display-only, drives the "saved default" label.
         setSavedGate(READINESS_GATE_LABELS[pec.readinessGate] ? pec.readinessGate : '');
       })
       .catch(() => null); // load failed → inputs keep defaults but start() only persists EDITED fields
     return () => { canceled = true; };
-  }, []);
-
-  // Persist a round setting (clamped) so a later Resume picks it up server-side.
-  // patchSettingsSlice is a GET-merge-PUT, so two overlapping calls (a blur save
-  // racing start()'s save) can lose an update — a slow earlier PUT lands after a
-  // newer one and clobbers it. Serialize every write onto one tail promise so the
-  // cycles can't interleave; start() awaiting its own enqueued write transitively
-  // awaits any in-flight blur save. Returns the promise so start() can await it.
-  const persistTailRef = useRef(Promise.resolve());
-  const persistRounds = useCallback((patch) => {
-    const next = persistTailRef.current
-      .catch(() => {})
-      .then(() => patchSettingsSlice('pipelineEditorialChecks', patch, { silent: true }).catch(() => null));
-    persistTailRef.current = next;
-    return next;
-  }, []);
-
-  // User edited an input — mark that field dirty so a late settings load can't
-  // overwrite it and so start() knows to persist it.
-  const editArcRounds = useCallback((v) => { arcEditedRef.current = true; setArcRounds(v); }, []);
-  const editEditorialRounds = useCallback((v) => { editorialEditedRef.current = true; setEditorialRounds(v); }, []);
-  const editBeatContinuityRounds = useCallback((v) => { beatContinuityEditedRef.current = true; setBeatContinuityRounds(v); }, []);
-  const editCheckPauseThreshold = useCallback((v) => { checkPauseEditedRef.current = true; setCheckPauseThreshold(v); }, []);
-  const editFoundationThreshold = useCallback((v) => { foundationThresholdEditedRef.current = true; setFoundationThreshold(v); }, []);
-  const editFoundationRounds = useCallback((v) => { foundationRoundsEditedRef.current = true; setFoundationRounds(v); }, []);
-  // Boolean toggle — persist immediately (like notifyOnPause) so the saved
-  // default tracks the choice and Resume reuses it.
-  const editFoundationGate = useCallback((v) => {
-    foundationGateEditedRef.current = true;
-    setFoundationGate(v);
-    persistRounds({ foundationGate: v });
-  }, [persistRounds]);
-  // Boolean checkbox — persist immediately on toggle (no blur event) so the saved
-  // default tracks the choice and Resume reuses it.
-  const editNotifyOnPause = useCallback((v) => {
-    notifyEditedRef.current = true;
-    setNotifyOnPause(v);
-    persistRounds({ notifyOnPause: v });
-  }, [persistRounds]);
-  // Revision loop (#2171): the enable checkbox persists immediately (no blur); the
-  // cycle bounds + plateau delta persist on blur via RoundInput like the others.
-  const editRevisionEnabled = useCallback((v) => {
-    revisionEnabledEditedRef.current = true;
-    setRevisionEnabled(v);
-    persistRounds({ revisionEnabled: v });
-  }, [persistRounds]);
-  // Boolean checkbox — persists immediately on toggle (no blur) like notifyOnPause.
-  const editSelfImprove = useCallback((v) => {
-    selfImproveEditedRef.current = true;
-    setSelfImprove(v);
-    persistRounds({ selfImprove: v });
-  }, [persistRounds]);
-  const editRevisionMinCycles = useCallback((v) => { revisionMinEditedRef.current = true; setRevisionMinCycles(v); }, []);
-  const editRevisionMaxCycles = useCallback((v) => { revisionMaxEditedRef.current = true; setRevisionMaxCycles(v); }, []);
-  const editRevisionPlateauDelta = useCallback((v) => { revisionDeltaEditedRef.current = true; setRevisionPlateauDelta(v); }, []);
+  }, [hydrate]);
 
   const { latest, frames } = usePipelineProgress(pipelineAutopilotSseUrl, [seriesId], { enabled: active });
 
@@ -558,36 +555,14 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     setStarting(true);
     setPlan(null);
     setPlanTotals(null);
-    // Collect ONLY the gates the user edited (clamped, real values — never the
-    // display defaults of untouched gates, which would mask a saved setting). Send
-    // them as per-run overrides AND persist them: the override makes the edit
-    // effective for THIS run even if the save fails (persist is best-effort,
-    // server precedence is per-run → setting → default), and the persist makes it
-    // the saved default for next time. Untouched gates send nothing, so the server
+    // ONLY the options the user edited (clamped, real values — never the display
+    // defaults of untouched options, which would mask a saved setting). Send them
+    // as per-run overrides AND persist them: the override makes the edit effective
+    // for THIS run even if the save fails (persist is best-effort, server
+    // precedence is per-run → setting → default), and the persist makes it the
+    // saved default for next time. Untouched options send nothing, so the server
     // resolves them from the persisted setting.
-    const roundOverrides = {};
-    if (arcEditedRef.current) roundOverrides.maxArcVerifyRounds = clampRound(arcRounds, DEFAULT_ARC_ROUNDS);
-    if (editorialEditedRef.current) roundOverrides.maxEditorialRounds = clampRound(editorialRounds, DEFAULT_EDITORIAL_ROUNDS);
-    if (beatContinuityEditedRef.current) roundOverrides.maxBeatContinuityRounds = clampRound(beatContinuityRounds, DEFAULT_BEAT_CONTINUITY_ROUNDS);
-    // #1613 — the editorial-checks pause threshold persists + overrides like the
-    // round inputs (clamps to a non-negative integer; 0 = off).
-    if (checkPauseEditedRef.current) roundOverrides.checkFindingsPauseThreshold = clampThreshold(checkPauseThreshold);
-    // #1615 — pause notification toggle persists + overrides like the others, but
-    // is a plain boolean (no clamp). Untouched sends nothing → server default (on).
-    if (notifyEditedRef.current) roundOverrides.notifyOnPause = notifyOnPause;
-    // #2171 — the revision-loop knobs persist + override like the round inputs.
-    if (revisionEnabledEditedRef.current) roundOverrides.revisionEnabled = revisionEnabled;
-    if (revisionMinEditedRef.current) roundOverrides.revisionMinCycles = clampCycles(revisionMinCycles, DEFAULT_REVISION_MIN_CYCLES);
-    if (revisionMaxEditedRef.current) roundOverrides.revisionMaxCycles = clampCycles(revisionMaxCycles, DEFAULT_REVISION_MAX_CYCLES);
-    if (revisionDeltaEditedRef.current) roundOverrides.revisionPlateauDelta = clampDelta(revisionPlateauDelta, DEFAULT_REVISION_PLATEAU_DELTA);
-    // #2176 — foundation gate. Persist + override like the other options, only
-    // when edited (untouched → server resolves from the persisted setting, then
-    // the default: gate ON / threshold 7.5 / 3 rounds).
-    if (foundationGateEditedRef.current) roundOverrides.foundationGate = foundationGate;
-    if (foundationThresholdEditedRef.current) roundOverrides.foundationThreshold = clampFoundationThreshold(foundationThreshold, DEFAULT_FOUNDATION_THRESHOLD);
-    if (foundationRoundsEditedRef.current) roundOverrides.maxFoundationRounds = clampRound(foundationRounds, DEFAULT_FOUNDATION_ROUNDS);
-    // Self-improvement persists + overrides like the other booleans.
-    if (selfImproveEditedRef.current) roundOverrides.selfImprove = selfImprove;
+    const roundOverrides = options.collectOverrides();
     if (Object.keys(roundOverrides).length) await persistRounds(roundOverrides);
     // Per-run readiness-gate override (#1580): send it ONLY when the user picked a
     // specific gate. Unlike the round inputs we never persist it — '' leaves the
@@ -622,7 +597,9 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     // effect can reject a stale terminal frame from the previous run.
     activeRunIdRef.current = res.runId || null;
     setActive(true);
-  }, [seriesId, includeVisual, fileGaps, arcRounds, editorialRounds, beatContinuityRounds, checkPauseThreshold, notifyOnPause, unlockForRun, revisionEnabled, revisionMinCycles, revisionMaxCycles, revisionPlateauDelta, foundationGate, foundationThreshold, foundationRounds, selfImprove, readinessGate, providerOverride, modelOverride, effortOverride, persistRounds]);
+    // `options` is the single dep for every persisted option — the registry reads
+    // live values through refs, so no option can be forgotten here.
+  }, [seriesId, includeVisual, fileGaps, unlockForRun, readinessGate, providerOverride, modelOverride, effortOverride, options, persistRounds]);
 
   const cancel = useCallback(async () => {
     await cancelPipelineAutopilot(seriesId).catch(() => null);
@@ -744,11 +721,11 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
             File CoS tasks for gaps it can&apos;t resolve
           </label>
           <label className="flex items-center gap-2 text-xs text-gray-300">
-            <input type="checkbox" checked={notifyOnPause} onChange={(e) => editNotifyOnPause(e.target.checked)} />
+            <input type="checkbox" checked={opt.notifyOnPause} onChange={(e) => options.edit('notifyOnPause', e.target.checked)} />
             Notify me when a run pauses (with a resume link)
           </label>
           <label className="flex items-center gap-2 text-xs text-gray-300">
-            <input type="checkbox" checked={foundationGate} onChange={(e) => editFoundationGate(e.target.checked)} />
+            <input type="checkbox" checked={opt.foundationGate} onChange={(e) => options.edit('foundationGate', e.target.checked)} />
             Judge the foundation (world / characters / arc) before drafting
           </label>
           <label className="flex items-center gap-2 text-xs text-gray-300">
@@ -764,56 +741,35 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
             <RoundInput
               id="autopilot-arc-rounds"
               label="Arc verify rounds"
-              settingKey="maxArcVerifyRounds"
-              value={arcRounds}
-              setValue={editArcRounds}
-              defaultValue={DEFAULT_ARC_ROUNDS}
-              persist={persistRounds}
+              {...options.inputProps('maxArcVerifyRounds')}
             />
             <RoundInput
               id="autopilot-beat-continuity-rounds"
               label="Beat continuity rounds"
-              settingKey="maxBeatContinuityRounds"
-              value={beatContinuityRounds}
-              setValue={editBeatContinuityRounds}
-              defaultValue={DEFAULT_BEAT_CONTINUITY_ROUNDS}
-              persist={persistRounds}
+              {...options.inputProps('maxBeatContinuityRounds')}
             />
             <RoundInput
               id="autopilot-editorial-rounds"
               label="Editorial rounds"
-              settingKey="maxEditorialRounds"
-              value={editorialRounds}
-              setValue={editEditorialRounds}
-              defaultValue={DEFAULT_EDITORIAL_ROUNDS}
-              persist={persistRounds}
+              {...options.inputProps('maxEditorialRounds')}
             />
           </div>
           <p className="text-[11px] text-gray-500">
             How many auto-resolve rounds each gate attempts before pausing for human review (0 skips the gate, max {ROUND_MAX}). Saved as the default and reused on Resume.
           </p>
-          {foundationGate ? (
+          {opt.foundationGate ? (
             <>
               <div className="flex flex-wrap gap-4 pt-1">
                 <RoundInput
                   id="autopilot-foundation-threshold"
                   label="Foundation threshold"
-                  settingKey="foundationThreshold"
-                  value={foundationThreshold}
-                  setValue={editFoundationThreshold}
-                  defaultValue={DEFAULT_FOUNDATION_THRESHOLD}
-                  persist={persistRounds}
+                  {...options.inputProps('foundationThreshold')}
                   max={10}
-                  clamp={clampFoundationThreshold}
                 />
                 <RoundInput
                   id="autopilot-foundation-rounds"
                   label="Foundation rounds"
-                  settingKey="maxFoundationRounds"
-                  value={foundationRounds}
-                  setValue={editFoundationRounds}
-                  defaultValue={DEFAULT_FOUNDATION_ROUNDS}
-                  persist={persistRounds}
+                  {...options.inputProps('maxFoundationRounds')}
                 />
               </div>
               <p className="text-[11px] text-gray-500">
@@ -844,59 +800,39 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
             <RoundInput
               id="autopilot-check-pause-threshold"
               label="Pause at high findings"
-              settingKey="checkFindingsPauseThreshold"
-              value={checkPauseThreshold}
-              setValue={editCheckPauseThreshold}
-              defaultValue={DEFAULT_CHECK_PAUSE_THRESHOLD}
-              persist={persistRounds}
+              {...options.inputProps('checkFindingsPauseThreshold')}
               max={null}
-              clamp={clampThreshold}
             />
           </div>
           <p className="text-[11px] text-gray-500">
             When the editorial-checks pass surfaces this many High findings (or more), the run pauses for review instead of proceeding. 0 = off. Saved as the default and reused on Resume.
           </p>
           <label className="flex items-center gap-2 text-xs text-gray-300 pt-1 border-t border-port-border mt-1">
-            <input type="checkbox" checked={revisionEnabled} onChange={(e) => editRevisionEnabled(e.target.checked)} />
+            <input type="checkbox" checked={opt.revisionEnabled} onChange={(e) => options.edit('revisionEnabled', e.target.checked)} />
             Iterate to quality (revise the weakest issue under a keep/revert score gate)
           </label>
-          {revisionEnabled ? (
+          {opt.revisionEnabled ? (
             <>
               <div className="flex flex-wrap gap-4 pt-1">
                 <RoundInput
                   id="autopilot-revision-min-cycles"
                   label="Min cycles"
-                  settingKey="revisionMinCycles"
-                  value={revisionMinCycles}
-                  setValue={editRevisionMinCycles}
-                  defaultValue={DEFAULT_REVISION_MIN_CYCLES}
-                  persist={persistRounds}
+                  {...options.inputProps('revisionMinCycles')}
                   min={1}
-                  clamp={clampCycles}
                 />
                 <RoundInput
                   id="autopilot-revision-max-cycles"
                   label="Max cycles"
-                  settingKey="revisionMaxCycles"
-                  value={revisionMaxCycles}
-                  setValue={editRevisionMaxCycles}
-                  defaultValue={DEFAULT_REVISION_MAX_CYCLES}
-                  persist={persistRounds}
+                  {...options.inputProps('revisionMaxCycles')}
                   min={1}
-                  clamp={clampCycles}
                 />
                 <RoundInput
                   id="autopilot-revision-plateau-delta"
                   label="Plateau Δ"
-                  settingKey="revisionPlateauDelta"
-                  value={revisionPlateauDelta}
-                  setValue={editRevisionPlateauDelta}
-                  defaultValue={DEFAULT_REVISION_PLATEAU_DELTA}
-                  persist={persistRounds}
+                  {...options.inputProps('revisionPlateauDelta')}
                   min={0}
                   max={10}
                   step={0.1}
-                  clamp={clampDelta}
                 />
               </div>
               <p className="text-[11px] text-gray-500">
@@ -905,10 +841,10 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
             </>
           ) : null}
           <label className="flex items-center gap-2 text-xs text-gray-300 pt-1 border-t border-port-border mt-1">
-            <input type="checkbox" checked={selfImprove} onChange={(e) => editSelfImprove(e.target.checked)} />
+            <input type="checkbox" checked={opt.selfImprove} onChange={(e) => options.edit('selfImprove', e.target.checked)} />
             Improve the pipeline itself (diagnose PortOS when a run goes wrong)
           </label>
-          {selfImprove ? (
+          {opt.selfImprove ? (
             <p className="text-[11px] text-gray-500">
               When a run pauses, errors, or finishes with an editorial check that threw or a step that had to be retried, it spends one call asking whether the fault is the <em>story</em> or the <em>pipeline</em> — a missing editorial step earlier in the process, a stage prompt breaking its contract, a runner swallowing a failure. A pipeline verdict files a CoS task against PortOS itself: worktree-isolated, PR-opening, and waiting in your CoS approval queue — it never starts on its own. A healthy run never spends anything here. Saved as the default and reused on Resume.
             </p>
