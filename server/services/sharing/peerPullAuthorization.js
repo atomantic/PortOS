@@ -46,6 +46,11 @@ export const PULL_DENY_CATEGORY = 'category-disabled';
 // is no id at all — so an install with three not-yet-upgraded peers logs once
 // for the absent-header case rather than once per request.
 const warnedCallers = new Set();
+// The key space is caller-supplied, so a peer sending a fresh random id per
+// request would grow this without bound. Recycle rather than cap-and-stop
+// warning: past this many distinct callers the throttle resets, which at worst
+// re-logs a line the user has already seen.
+const WARNED_CALLERS_MAX = 500;
 
 /**
  * Read the caller's self-asserted instance id off the request headers.
@@ -89,6 +94,7 @@ async function strictPullAuthorizationEnabled() {
 function warnOnce(decision, route) {
   const key = decision.callerId || PULL_DENY_UNIDENTIFIED;
   if (warnedCallers.has(key)) return;
+  if (warnedCallers.size >= WARNED_CALLERS_MAX) warnedCallers.clear();
   warnedCallers.add(key);
   const who = decision.peer?.name
     ? `peer "${decision.peer.name}"`
