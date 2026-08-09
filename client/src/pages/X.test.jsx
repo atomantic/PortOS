@@ -95,6 +95,21 @@ describe('X page', () => {
     expect(screen.getByText(/Could not read the X profile page/)).toBeInTheDocument();
   });
 
+  it('explains each unknown check by its own page rather than blaming the profile read', async () => {
+    api.getXAccounts.mockResolvedValue({ accounts: [{
+      ...account,
+      profileSnapshot: {
+        profile: { followers: 1 },
+        diagnostics: { profilePublic: true, appearsInPeopleSearch: null, recentPostsInLatestSearch: null, latestSearchPostCount: null },
+      },
+    }] });
+    renderPage(`/x/${account.id}/health`);
+    await screen.findByRole('heading', { name: 'Reach diagnostics for @example_user' });
+    expect(screen.getByText('The profile page returned the configured handle.')).toBeInTheDocument();
+    expect(screen.getByText(/The account search did not render/)).toBeInTheDocument();
+    expect(screen.getByText(/The Latest search did not render/)).toBeInTheDocument();
+  });
+
   it('runs a manual diagnostic and keeps publishing out of the page workflow', async () => {
     const user = userEvent.setup();
     api.syncXAccount.mockResolvedValue({ account: { ...account, lastSyncAt: '2026-08-05T13:00:00.000Z' }, posts: [], ingested: 2 });
