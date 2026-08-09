@@ -227,6 +227,24 @@ export function resolveAutopilotSelfImprove(options = {}, settings = null) {
   return pickBool(options?.selfImprove, pec?.selfImprove, DEFAULT_SELF_IMPROVE);
 }
 
+// Observing orchestrator — the continuous, self-dispatching sibling of the
+// self-improve post-mortem (see observer.js's header for the full contract).
+// When on, the run watches its own telemetry as it progresses; a step whose
+// fresh signals say the automation misbehaved spends a diagnosis call, and a
+// confident pipeline verdict files an AUTO-APPROVED CoS task that PRs and
+// merges without a human gate. Defaults OFF and must stay an explicit opt-in:
+// it is both fresh LLM spend and standing consent for unattended changes to
+// PortOS's own code. Per-run option wins, then the persisted
+// pipelineEditorialChecks setting, then the default — persistable like
+// selfImprove (a scheduled unattended run is exactly where the user wants the
+// pipeline hardening itself), unlike unlockForRun (which rewrites user-set
+// protection state and stays per-run only).
+export const DEFAULT_OBSERVER = false;
+export function resolveAutopilotObserver(options = {}, settings = null) {
+  const pec = settings?.pipelineEditorialChecks || {};
+  return pickBool(options?.observer, pec?.observer, DEFAULT_OBSERVER);
+}
+
 // Which provider/model do this run's LLM calls use? An explicit per-run
 // `providerOverride`/`modelOverride` wins (the Options picker, or the scheduler
 // mapping a schedule's provider/model); otherwise the run inherits the series'

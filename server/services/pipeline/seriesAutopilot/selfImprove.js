@@ -71,10 +71,20 @@ export function shouldDiagnose(record, outcome) {
   if (!record || record.options?.selfImprove !== true || record.mode !== 'execute') return false;
   if (outcome === 'paused' || outcome === 'error') return true;
   if (outcome !== 'done') return false;
-  const rs = record.runState || {};
+  return hasAutomationSignals(record);
+}
+
+/**
+ * Did the run's telemetry say the AUTOMATION limped — a check that threw, a
+ * filed craft gap, a retried/escalated child, a skipped step? Pure. Shared with
+ * the observing orchestrator (observer.js), whose terminal pass gates on the
+ * same evidence.
+ */
+export function hasAutomationSignals(record) {
+  const rs = record?.runState || {};
   if (rs.editorialCheckErroredIds?.size > 0) return true;
   if (rs.scriptCraftGapIssues?.size > 0) return true;
-  return (record.signals || []).some((s) => (
+  return (record?.signals || []).some((s) => (
     s.type === 'child:retry' || s.type === 'child:escalate' || s.type === 'step:skip'
     || (s.type === 'check:complete' && s.error)
   ));
@@ -88,8 +98,9 @@ const SELF_IMPROVE_VERDICTS = Object.freeze(['pipeline', 'content', 'none']);
 
 // Where in PortOS the proposed fix belongs. Prefixes the filed task's dedup key
 // (see buildSelfImproveTask) and tells a reader which part of the system the
-// brief is about before they open it.
-const SELF_IMPROVE_AREAS = Object.freeze([
+// brief is about before they open it. Exported as the base vocabulary the
+// observing orchestrator (observer.js) extends.
+export const SELF_IMPROVE_AREAS = Object.freeze([
   'editorial-check', 'pipeline-step', 'prompt', 'runner', 'config',
 ]);
 
@@ -100,9 +111,10 @@ export const SELF_IMPROVE_MIN_CONFIDENCE = 0.6;
 /**
  * Sanitize the LLM's diagnosis into the fixed shape the rest of this module
  * relies on. Returns null when the payload can't be read as a verdict at all.
- * Pure.
+ * Pure. `areas` is the accepted area vocabulary — the observer passes its
+ * extended set; the default keeps the post-mortem's behavior unchanged.
  */
-export function shapeDiagnosis(raw) {
+export function shapeDiagnosis(raw, areas = SELF_IMPROVE_AREAS) {
   if (!raw || typeof raw !== 'object') return null;
   const verdict = SELF_IMPROVE_VERDICTS.includes(raw.verdict) ? raw.verdict : null;
   if (!verdict) return null;
@@ -112,7 +124,7 @@ export function shapeDiagnosis(raw) {
   return {
     verdict,
     confidence,
-    area: SELF_IMPROVE_AREAS.includes(raw.area) ? raw.area : 'pipeline-step',
+    area: areas.includes(raw.area) ? raw.area : 'pipeline-step',
     title: trimToClause(raw.title, 160),
     problem: trimToClause(raw.problem, 2000),
     evidence: Array.isArray(raw.evidence)
@@ -196,8 +208,9 @@ export function buildSelfImproveTask({ diagnosis, seriesId, seriesName, outcome,
 // The conductor's step order, as prose the diagnosis prompt can reason over when
 // asked "is a step missing, and where would it go?". Mirrors resolveNextStep's
 // STEP comments — a step added there should gain a line here so the model isn't
-// told to add something that already exists.
-const STEP_SEQUENCE = [
+// told to add something that already exists. Exported for the observer's prompt,
+// which reasons over the same order.
+export const STEP_SEQUENCE = [
   'generateArc — draft the whole-series arc + volumes',
   'generateEpisodes — break each volume into issues',
   'verifyArc — cross-volume synopsis continuity verify → resolve loop',
@@ -218,8 +231,9 @@ const STEP_SEQUENCE = [
 
 // The run's effective gate configuration, as the diagnosis context. Only the
 // knobs that shape WHICH steps ran and how hard they tried — enough for the
-// model to tell "this gate is off" from "this gate ran and failed".
-const gateConfigOf = (options) => ({
+// model to tell "this gate is off" from "this gate ran and failed". Exported
+// for the observer, whose prompt carries the same context.
+export const gateConfigOf = (options) => ({
   maxArcVerifyRounds: options.maxArcVerifyRounds,
   maxBeatContinuityRounds: options.maxBeatContinuityRounds,
   maxEditorialRounds: options.maxEditorialRounds,

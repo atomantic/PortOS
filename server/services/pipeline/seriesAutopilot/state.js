@@ -76,11 +76,13 @@ export function isSignalFrame(payload) {
 /**
  * Record one broadcast frame onto the run's signal log. Called from `broadcast`
  * for EVERY frame of EVERY run, so the opt-out must come first and stay cheap: a
- * run that didn't ask for a post-mortem (or a dry-run, which has no telemetry
- * worth diagnosing) does two property reads and returns. True when retained.
+ * run that asked for neither the post-mortem (`selfImprove`) nor the observing
+ * orchestrator (`observer`) — or a dry-run, which has no telemetry worth
+ * diagnosing — does a few property reads and returns. True when retained.
  */
 export function noteSignal(run, payload) {
-  if (!run || run.options?.selfImprove !== true || run.mode !== 'execute') return false;
+  if (!run || run.mode !== 'execute') return false;
+  if (run.options?.selfImprove !== true && run.options?.observer !== true) return false;
   if (!isSignalFrame(payload)) return false;
   if (!run.signals) run.signals = [];
   if (run.signals.length >= MAX_SIGNALS) {
