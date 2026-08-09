@@ -282,6 +282,71 @@ describe('codeReview helpers', () => {
       const cleared = await resolveReviewLoopOptions({ reviewerMaxRounds: {} }, testDeps)
       expect(cleared.reviewerMaxRounds).toEqual({})
     })
+
+    // The effort map is the twin of the model map above and rides the same
+    // returned bundle. Dropping the `reviewerEfforts` key here silently disables
+    // every per-reviewer effort pin across the review loop, so these pin the key
+    // itself as much as the precedence.
+    it('assembles a reviewer-keyed effort map from the per-reviewer scalars', async () => {
+      mockedSettings.current = {
+        codeReview: {
+          reviewers: ['codex', 'claude'],
+          codexEffort: 'xhigh',
+          claudeEffort: 'high',
+        },
+      }
+      const out = await resolveReviewLoopOptions({}, testDeps)
+      expect(out.reviewerEfforts).toEqual({ codex: 'xhigh', claude: 'high' })
+    })
+
+    it('omits reviewers with no configured effort (absent = the reviewer\'s own default)', async () => {
+      mockedSettings.current = { codeReview: { reviewers: ['codex', 'claude'], codexEffort: 'high' } }
+      const out = await resolveReviewLoopOptions({}, testDeps)
+      expect(out.reviewerEfforts).toEqual({ codex: 'high' })
+    })
+
+    it('returns an empty effort map when no reviewer has one configured', async () => {
+      mockedSettings.current = { codeReview: { reviewers: ['copilot', 'codex'] } }
+      const out = await resolveReviewLoopOptions({}, testDeps)
+      expect(out.reviewerEfforts).toEqual({})
+    })
+
+    it('carries a local-LLM effort pin too, so a per-task one can reach the endpoint', async () => {
+      // `/api/code-review/local`'s own default reads the GLOBAL settings scalar
+      // and can't see a task-level pin, so the pin travels in this map instead.
+      mockedSettings.current = { codeReview: { reviewers: ['copilot', 'ollama'], ollamaEffort: 'low' } }
+      const out = await resolveReviewLoopOptions({}, testDeps)
+      expect(out.reviewerEfforts).toEqual({ ollama: 'low' })
+    })
+
+    it('lets a task-level effort map (including an explicitly empty one) override the defaults', async () => {
+      mockedSettings.current = { codeReview: { reviewers: ['codex'], codexEffort: 'high' } }
+      const pinned = await resolveReviewLoopOptions({ reviewerEfforts: { codex: 'minimal' } }, testDeps)
+      expect(pinned.reviewerEfforts).toEqual({ codex: 'minimal' })
+      // An explicit `{}` is a real "use each reviewer's own default effort for
+      // this task" choice, not an absent field.
+      const cleared = await resolveReviewLoopOptions({ reviewerEfforts: {} }, testDeps)
+      expect(cleared.reviewerEfforts).toEqual({})
+    })
+
+    it('drops an effort pin a reviewer\'s own ladder does not accept', async () => {
+      mockedSettings.current = { codeReview: { reviewers: ['antigravity', 'copilot'] } }
+      // `agy` really does reject `--effort max`, and `copilot` is a GitHub review
+      // with no effort control at all — both are dropped, not clamped.
+      const out = await resolveReviewLoopOptions(
+        { reviewerEfforts: { antigravity: 'max', copilot: 'high', '@bot': 'high' } },
+        testDeps,
+      )
+      expect(out.reviewerEfforts).toEqual({})
+    })
+
+    it('drops a stale out-of-ladder scalar from the saved defaults', async () => {
+      // settings.json is hand-editable, so the scalars are re-validated rather
+      // than trusted — an unusable level must not surface as a pin.
+      mockedSettings.current = { codeReview: { reviewers: ['antigravity'], antigravityEffort: 'ultra' } }
+      const out = await resolveReviewLoopOptions({}, testDeps)
+      expect(out.reviewerEfforts).toEqual({})
+    })
   })
 
   describe('runLocalCodeReview', () => {

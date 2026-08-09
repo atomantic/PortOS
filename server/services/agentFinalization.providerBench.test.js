@@ -9,6 +9,13 @@
  * carries `benchMs`, and finalizeAgent honors it via the generic
  * `markProviderUnavailable` marker so `resolveAgentProviderAndModel` routes the
  * retry to a fallback until the deadline auto-recovers the provider.
+ *
+ * Every case here builds its `errorAnalysis` by running a real transcript through
+ * `detectImmediateFallbackSignal` / `analyzeAgentFailure` rather than hand-stamping
+ * `{ category, origin }`. A hand-stamped origin is how a real regression shipped
+ * green (#3635): the detector was rewritten so Claude Code's genuine usage-limit
+ * banners classified as `output-scan`, the gate stopped benching, and this suite
+ * never noticed because it had asserted against a shape it had written itself.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -186,13 +193,14 @@ describe('finalizeAgent provider sidelining', () => {
   });
 
   it('leaves the usage-limit marker owning its own cooldown', async () => {
-    await failedRun({
-      hasError: true,
-      category: 'usage-limit',
-      origin: 'provider',
-      message: 'hit your usage limit',
-      requiresFallback: true,
-    }, 'claude-code-tui');
+    const analysis = analyzeAgentFailure(
+      'hit your usage limit · resets 6am\nthe transcript tail continues past the banner.',
+      { id: 'task-1' },
+      'claude',
+      {}
+    );
+    expect(analysis).toMatchObject({ category: 'usage-limit', origin: 'provider', requiresFallback: true });
+    await failedRun(analysis, 'claude-code-tui');
 
     // markUsageLimit parses its own window out of the provider's message, so it
     // keeps the dedicated marker rather than the flat per-category cooldown.
@@ -209,10 +217,17 @@ describe('finalizeAgent provider sidelining', () => {
   // loose alternatives (a bare "rate limit" / "quota exceeded" a failing test in
   // the agent's own workspace can print), and this gate used to key on the
   // category alone — so an agent's transcript could bench a healthy provider.
-  it.each(['auth-error', 'rate-limit', 'usage-limit'])(
+  // Each transcript below is text a task's OWN run can print.
+  it.each([
+    ['auth-error', 'Error: unauthorized while writing the snapshot fixture in the widget suite.\nmore output follows.'],
+    ['rate-limit', 'Error: the fixture asserted a rate limit banner renders for the widget list.\nmore output follows.'],
+    ['usage-limit', 'Error: quota exceeded for the fixture bucket while uploading the report artifact.\nmore output.'],
+  ])(
     'does not bench an output-scan %s that merely looks provider-ish',
-    async (category) => {
-      await failedRun({ hasError: true, category, origin: 'output-scan', message: 'looks provider-ish', requiresFallback: true });
+    async (category, transcript) => {
+      const analysis = analyzeAgentFailure(transcript, { id: 'task-1' }, 'claude', {});
+      expect(analysis).toMatchObject({ category, origin: 'output-scan' });
+      await failedRun(analysis);
       expect(markProviderUnavailableMock).not.toHaveBeenCalled();
       expect(markProviderUsageLimitMock).not.toHaveBeenCalled();
       // No marker fired, so the lazy active-provider lookup must stay unread.
@@ -221,15 +236,30 @@ describe('finalizeAgent provider sidelining', () => {
   );
 
   it('does not bench an ordinary agent-work failure', async () => {
-    await failedRun({ hasError: true, category: 'test-failure', origin: 'output-scan', message: 'suite failed' });
+    const analysis = analyzeAgentFailure(
+      'The suite reported a test failure in the widget list module. Review the assertions and retry.',
+      { id: 'task-1' },
+      'claude',
+      {}
+    );
+    expect(analysis).toMatchObject({ category: 'test-failure', origin: 'output-scan' });
+    await failedRun(analysis);
     expect(markProviderUnavailableMock).not.toHaveBeenCalled();
     expect(markProviderUsageLimitMock).not.toHaveBeenCalled();
   });
 
   // A bad model id is REQUEST-specific: benching would take the provider's other
-  // working models offline over one wrong id.
+  // working models offline over one wrong id. Driven through the real detector so
+  // the `origin: 'provider'` half of the case is the one the classifier assigns.
   it('does not bench a provider-origin model-not-found', async () => {
-    await failedRun({ hasError: true, category: 'model-not-found', origin: 'provider', message: 'no such model' });
+    const analysis = analyzeAgentFailure(
+      'API Error: 404 Not Found model: example-model-v1\nthe run stopped here without retrying.',
+      { id: 'task-1' },
+      'claude',
+      {}
+    );
+    expect(analysis).toMatchObject({ category: 'model-not-found', origin: 'provider' });
+    await failedRun(analysis);
     expect(markProviderUnavailableMock).not.toHaveBeenCalled();
   });
 
