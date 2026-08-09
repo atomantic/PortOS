@@ -183,6 +183,7 @@ export * from './goalFeatureMap.js';
 export * from './killWithEscalation.js';
 export * from './openFolder.js';
 export * from './processEnv.js';
+export * from './primaryCheckoutGuard.js';
 export * from './pythonSetup.js';
 export * from './vttTranscript.js';
 export * from './ytdlp.js';

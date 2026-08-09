@@ -32,6 +32,7 @@ vi.mock('../lib/fileUtils.js', async () => {
 
 vi.mock('./cosAgentLifecycle.js', () => ({
   getAgent: vi.fn(async () => ({ id: 'agent-example', status: 'running', metadata: {} })),
+  getAgentRecord: vi.fn(async () => ({ id: 'agent-example', status: 'running', metadata: {} })),
   updateAgent: vi.fn(async () => ({})),
   completeAgent: vi.fn(async () => ({})),
 }));

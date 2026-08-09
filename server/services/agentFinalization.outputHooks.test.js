@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 
 vi.mock('./cosAgentLifecycle.js', () => ({
   getAgent: vi.fn(),
+  getAgentRecord: vi.fn(async () => null),
   updateAgent: vi.fn(),
   completeAgent: vi.fn(),
 }));

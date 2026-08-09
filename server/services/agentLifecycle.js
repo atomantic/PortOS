@@ -51,6 +51,7 @@ import { determineLane, acquire, release } from './executionLanes.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { createAgentRun } from './agentRunTracking.js';
 import { committedDuringRun, toEpochMs } from '../lib/gitCommitProbe.js';
+import { capturePrimaryCheckoutState } from '../lib/primaryCheckoutGuard.js';
 import { buildAgentPrompt, getAppWorkspace } from './agentPromptBuilder.js';
 import { isOllamaClaudeProvider, isClaudeCommand, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { canTypeSlashCommands } from '../lib/slashdoInvocation.js';
@@ -431,10 +432,24 @@ async function runAgentSpawn(task) {
     //
     // `instanceId` was resolved up front via `ensureInstanceId()` for the claim
     // guard, and is reused here so the warm-path cached read happens once.
+    // The checkout the worktree was cut FROM (null for a non-worktree run, which
+    // works in the primary directly and so has nothing to protect).
+    const sourceWorkspace = worktreeInfo
+      ? (task.metadata?.app ? await getAppWorkspace(task.metadata.app) : ROOT_DIR)
+      : null;
+
     await registerAgent(agentId, task.id, {
       instanceId,
       workspacePath,
-      sourceWorkspace: worktreeInfo ? (task.metadata?.app ? await getAppWorkspace(task.metadata.app) : ROOT_DIR) : null,
+      sourceWorkspace,
+      // Branch-jack baseline (#3680): the primary checkout's branch + HEAD at the
+      // instant this worktree agent started. finalizeAgent re-reads it at the end
+      // of the run — every spawn mode funnels through that one chokepoint — and
+      // fails the run when the primary moved, instead of recording a silent
+      // "completed" for an agent that wrote unreviewed commits outside its
+      // worktree. Non-throwing: an unreadable checkout yields null, which the
+      // detector reads as "nothing to check".
+      primaryCheckoutBaseline: sourceWorkspace ? await capturePrimaryCheckoutState(sourceWorkspace) : null,
       worktreeBranch: worktreeInfo?.branchName || null,
       isWorktree: !!worktreeInfo,
       isPersistentWorktree: !!worktreeInfo?.isPersistentWorktree,

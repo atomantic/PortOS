@@ -24,7 +24,7 @@ import { emitLog } from './cosEvents.js';
 // `agentManagement.js`. This module is a LEAF that both transition modules
 // import, which puts it inside the facade's closure, so the facade is out of
 // reach here.
-import { getAgent, updateAgent, completeAgent } from './cosAgentLifecycle.js';
+import { getAgent, getAgentRecord, updateAgent, completeAgent } from './cosAgentLifecycle.js';
 import { updateTask } from './cos.js';
 import { getActiveProvider } from './providers.js';
 import { markProviderUsageLimit, markProviderUnavailable } from './providerStatus.js';
@@ -34,6 +34,7 @@ import { completeExecution, errorExecution } from './toolStateMachine.js';
 import { resolveFailedTaskUpdate, resolveTypeFailureSignal } from './agentErrorAnalysis.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { committedDuringRun } from '../lib/gitCommitProbe.js';
+import { detectPrimaryCheckoutDrift, PRIMARY_CHECKOUT_MUTATED_ESCALATION, PRIMARY_CHECKOUT_MUTATED_REASON } from '../lib/primaryCheckoutGuard.js';
 import { canRunTaskOutputHookWithoutPayload, getTaskOutputPayloadPredicate, isProgrammaticIoTaskType, resolveTaskHookType, declaresNoCommitCriterion } from './taskTypeHooks.js';
 import { processAgentCompletion } from './agentCompletion.js';
 import { extractSimplifySummaries } from './agentSummaryExtraction.js';
@@ -291,6 +292,47 @@ export async function verifyPrClaim({ task, workspacePath, success, prExpected }
 }
 
 /**
+ * Branch-jack check (#3680): did this WORKTREE agent commit to the primary
+ * checkout instead of its own worktree?
+ *
+ * Reads the `primaryCheckoutBaseline` that `agentLifecycle.js` stamped onto the
+ * agent record at spawn time and re-reads that checkout now. Living here rather
+ * than in the TUI spawner is what makes the guard apply to all three spawn modes
+ * — TUI `finish()`, direct-CLI `close`, and runner-mode `handleAgentCompletion`
+ * all funnel through `finalizeAgent` — without triplicating it.
+ *
+ * Non-worktree runs carry no baseline (they legitimately work IN the primary),
+ * so they short-circuit to "no drift" before any git call.
+ *
+ * @returns {Promise<{drifted: boolean, message?: string, suggestedFix?: string, category?: string}>}
+ */
+export async function checkPrimaryCheckoutDrift(agentId) {
+  const agent = await getAgentRecord(agentId).catch(() => null);
+  const baseline = agent?.metadata?.primaryCheckoutBaseline || null;
+  if (!baseline) return { drifted: false };
+  return await detectPrimaryCheckoutDrift(baseline, { agentBranch: agent?.metadata?.worktreeBranch || null });
+}
+
+/**
+ * The `errorAnalysis` shape for a detected branch-jack. `actionable` because a
+ * human has to decide whether to discard the primary's commits — a retry cannot
+ * repair this, and silently retrying would leave the mutated checkout in place.
+ */
+function primaryCheckoutDriftAnalysis(drift) {
+  return {
+    category: drift.category,
+    // Observed by the spawner from the checkout's own git state, not scraped out
+    // of the transcript — the same provenance rule the structural analyses use.
+    origin: 'runner',
+    completionReason: PRIMARY_CHECKOUT_MUTATED_REASON,
+    actionable: true,
+    escalation: PRIMARY_CHECKOUT_MUTATED_ESCALATION,
+    message: drift.message,
+    suggestedFix: drift.suggestedFix
+  };
+}
+
+/**
  * The `errorAnalysis` shape for a failed PR verification. Non-actionable so the
  * task RETRIES (a re-run can open the missing PR, or find the forge back) rather
  * than blocking on a first miss — `resolveFailedTaskDecision` still blocks it
@@ -541,8 +583,30 @@ export async function finalizeAgent({
         return { ok: true };
       });
 
-  const success = reportedSuccess && prVerdict.ok;
-  const errorAnalysis = prVerdict.ok ? reportedErrorAnalysis : prVerificationAnalysis(prVerdict);
+  // #3680: a worktree agent that committed to the PRIMARY checkout left
+  // unreviewed commits on an unprotected branch. Same posture as the PR check —
+  // a throw is not a verdict, so fall back to "no drift" rather than
+  // manufacturing a failure out of a check that never ran.
+  const drift = await checkPrimaryCheckoutDrift(agentId).catch(err => {
+    emitLog('warn', `⚠️ Primary-checkout drift check failed for ${agentId}: ${err.message}`, { agentId });
+    return { drifted: false };
+  });
+  if (drift.drifted) {
+    emitLog('warn', `⚠️ ${drift.message} — reported by ${agentId}; PortOS will not repair it automatically`, {
+      agentId, taskId: task?.id, category: drift.category
+    });
+  }
+  // A drift downgrade only OVERRIDES a run that would otherwise have been
+  // recorded a success. On a run that already failed, the original analysis is
+  // the better diagnosis of why it failed, and the branch-jack is already on the
+  // record via the warn above — replacing it would trade a real cause for a
+  // side effect. Same reason `terminatedByUser` keeps its own verdict.
+  const driftDowngrade = drift.drifted && reportedSuccess && !terminatedByUser;
+
+  const success = reportedSuccess && prVerdict.ok && !driftDowngrade;
+  const errorAnalysis = driftDowngrade
+    ? primaryCheckoutDriftAnalysis(drift)
+    : prVerdict.ok ? reportedErrorAnalysis : prVerificationAnalysis(prVerdict);
   if (!prVerdict.ok) {
     emitLog('warn', `⚠️ ${prVerdict.message} — recording ${agentId} as needs-attention (${prVerdict.category}) rather than complete`, {
       agentId, taskId: task?.id, branch: prVerdict.branch, category: prVerdict.category
@@ -612,8 +676,14 @@ export async function finalizeAgent({
   // A PR-verification downgrade carries its own error text + reason: without
   // them the agent card would render a bare "Failed" for a run that actually
   // did everything but land its PR (or simply couldn't reach the forge).
-  const finalError = prVerdict.ok ? error : prVerdict.message;
-  const finalCompletionReason = prVerdict.ok ? completionReason : prVerdict.category;
+  // A branch-jack downgrade (#3680) carries its own text + reason for the same
+  // reason the PR downgrade does, and outranks it: the run may well have opened
+  // its PR fine and still mutated the primary, and THAT is the thing a human has
+  // to act on.
+  const finalError = driftDowngrade ? drift.message : prVerdict.ok ? error : prVerdict.message;
+  const finalCompletionReason = driftDowngrade
+    ? PRIMARY_CHECKOUT_MUTATED_REASON
+    : prVerdict.ok ? completionReason : prVerdict.category;
 
   await completeAgent(agentId, {
     success,
@@ -630,7 +700,7 @@ export async function finalizeAgent({
     // Pass the downgrade explicitly: this run exited 0, so the run record would
     // otherwise keep saying "success" for the one run we just concluded did not
     // land its PR (#3358).
-    await completeAgentRun(runId, outputBuffer, exitCode, duration, errorAnalysis, prVerdict.ok ? null : false);
+    await completeAgentRun(runId, outputBuffer, exitCode, duration, errorAnalysis, prVerdict.ok && !driftDowngrade ? null : false);
   }
 
   // LI hand-off execution verdict (#2779): stamp the per-proposal execution outcome into

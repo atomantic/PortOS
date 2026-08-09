@@ -13,6 +13,7 @@ import { redactOutput } from '../lib/commandSecurity.js';
 import { stripAnsi } from '../lib/ansiStrip.js';
 import { retryHoldMetadata } from '../lib/taskRetryHold.js';
 import { isTruthyMeta } from './agentState.js';
+import { PRIMARY_CHECKOUT_MUTATED_CATEGORY, PRIMARY_CHECKOUT_MUTATED_ESCALATION, PRIMARY_CHECKOUT_MUTATED_REASON } from '../lib/primaryCheckoutGuard.js';
 
 // Max retries before blocking a task
 export const MAX_TASK_RETRIES = 3;
@@ -668,6 +669,21 @@ export const COMPLETION_REASON_ANALYSES = {
   // task for a human would park work that a plain retry fixes. A genuinely
   // misconfigured command still surfaces — it fails identically every attempt
   // and blocks on MAX_TASK_RETRIES, with the runner's own message attached.
+  // #3680: a worktree-isolated agent committed to the PRIMARY checkout instead
+  // of its worktree, leaving unreviewed commits on an unprotected branch. The
+  // finalize path (agentFinalization.js) builds a richer analysis naming the
+  // actual branch, commit count, and recovery command; this registration is the
+  // fallback for anything that re-analyzes the reason without that context (a
+  // recovered/archived run), and keeps the reason from falling through to a
+  // keyword sweep of the transcript. Reuses the existing `git-error` token
+  // rather than minting one, so the downstream taxonomies keep classifying it.
+  [PRIMARY_CHECKOUT_MUTATED_REASON]: {
+    category: PRIMARY_CHECKOUT_MUTATED_CATEGORY,
+    actionable: true,
+    escalation: PRIMARY_CHECKOUT_MUTATED_ESCALATION,
+    message: 'Worktree agent mutated the primary checkout',
+    suggestedFix: 'The agent was given its own git worktree and committed to the primary checkout anyway, so the primary is carrying commits nothing reviewed. The same work is almost certainly on the agent\'s branch too. Inspect the primary with `git log --oneline origin/<branch>..<branch>` and, once the content is confirmed preserved, restore it with `git reset --hard origin/<branch>` — PortOS will not run that for you, because it discards commits.'
+  },
   'spawn-rejected': {
     category: 'spawn-error',
     actionable: false,

@@ -32,6 +32,7 @@ vi.mock('./git.js', () => ({ resolveForgeForRepo: vi.fn(async () => ({ cli: 'gh'
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
 vi.mock('./cosAgentLifecycle.js', () => ({
   getAgent: vi.fn(async () => null),
+  getAgentRecord: vi.fn(async () => null),
   updateAgent: vi.fn(async () => null),
   completeAgent: vi.fn(async () => null),
 }));
