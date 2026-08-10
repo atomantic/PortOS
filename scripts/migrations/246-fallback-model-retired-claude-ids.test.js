@@ -1,5 +1,5 @@
 /**
- * Test for migration 240 — repair `fallbackModel` pins left dangling by the
+ * Test for migration 246 — repair `fallbackModel` pins left dangling by the
  * Claude tier bumps (058 / 153 / 206), which remapped the four tier pointers
  * but never `fallbackModel`. Picked up by server/vitest.config.js's
  * `../scripts/**\/*.test.js` glob.
@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import migration from './240-fallback-model-retired-claude-ids.js';
+import migration from './246-fallback-model-retired-claude-ids.js';
 
 const writeJson = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf-8'));
@@ -21,8 +21,8 @@ const BEDROCK_TUI_MODELS = [
   'global.anthropic.claude-opus-5[1m]',
 ];
 
-// The exact shape this install was found in: codex/codex-tui each pin a Claude
-// fallback model that migration 206 retired out from under them.
+// The shape the bug leaves behind: codex/codex-tui each pin a Claude fallback
+// model that migration 206 retired out from under them.
 const staleConfig = () => ({
   activeProvider: 'codex-tui',
   providers: {
@@ -43,12 +43,12 @@ const staleConfig = () => ({
   },
 });
 
-describe('migration 240 — repair retired fallbackModel pins', () => {
+describe('migration 246 — repair retired fallbackModel pins', () => {
   let rootDir;
   let providersPath;
 
   beforeEach(() => {
-    rootDir = mkdtempSync(join(tmpdir(), 'migration-240-'));
+    rootDir = mkdtempSync(join(tmpdir(), 'migration-246-'));
     mkdirSync(join(rootDir, 'data'), { recursive: true });
     providersPath = join(rootDir, 'data/providers.json');
   });
