@@ -135,8 +135,7 @@ export function foundationInputs(series, universe, issues = []) {
         logline: universe.logline || '',
         premise: universe.premise || '',
         styleNotes: universe.styleNotes || '',
-        categories: universe.categories || {},
-        compositeSheets: universe.compositeSheets || [],
+        influences: universe.influences || null,
         // Places/objects are rendered into the world summary the judge scores,
         // so a user edit to either must flip the pinned hash (otherwise a clean
         // verdict would wrongly fast-pass a changed world).
@@ -512,21 +511,11 @@ function renderWorldFoundation(universe) {
   const influences = universe.influences && typeof universe.influences === 'object'
     ? `Embrace: ${(universe.influences.embrace || []).join(', ') || '—'}; Avoid: ${(universe.influences.avoid || []).join(', ') || '—'}`
     : '(none)';
-  const categories = Object.entries(universe.categories || {})
-    .map(([name, category]) => {
-      const labels = (Array.isArray(category?.variations) ? category.variations : [])
-        .map((variation) => variation?.label)
-        .filter(Boolean)
-        .slice(0, 6);
-      return `${name}: ${labels.join(', ') || '(empty)'}`;
-    })
-    .join('\n');
   return [
     `Universe logline: ${universe.logline || '(none)'}`,
     `Universe premise: ${universe.premise || '(none)'}`,
     `Universe style: ${universe.styleNotes || '(none)'}`,
     `Influences: ${influences}`,
-    `Design systems:\n${categories || '(none)'}`,
     `Named canon: ${entities}`,
   ].join('\n');
 }
