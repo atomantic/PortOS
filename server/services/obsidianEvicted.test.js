@@ -232,8 +232,9 @@ describe('obsidian updateNote against an evicted note', () => {
  *
  * `deleteNote` was the third candidate for the #3706 treatment, on the theory
  * that `unlink` might materialize the way `link` does. Measured: it does not
- * (0.1 ms dataless at 512 KB and 5 MB, vs 884 ms to read the same 5 MB dataless
- * fixture), so the correct outcome is *no guard*. These pin that absence — a
+ * (0.1 ms dataless across three runs — two at 512 KB, one at 5 MB — vs 884 ms to
+ * read a separate 5 MB dataless fixture), so the correct outcome is *no guard*.
+ * These pin that absence — a
  * "for symmetry with updateNote" change has to argue with a test, because the
  * guard it would add is actively harmful: `materializeAndWait` would download
  * the whole file just to unlink it.

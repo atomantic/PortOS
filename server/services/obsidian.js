@@ -396,8 +396,10 @@ export async function deleteNote(vaultId, notePath) {
   // an evicted vnode. That is measured, not inferred from POSIX — `link` is pure
   // metadata too and it *does* materialize, so the analogy with `rename` was not
   // safe to lean on. On a freshly-evicted iCloud file `unlinkSync` returned in
-  // 0.1 ms at both 512 KB and 5 MB, versus 884 ms to `read` the same 5 MB
-  // dataless fixture. Deleting an offloaded note therefore cannot wedge the libuv
+  // 0.1 ms across three runs (two at 512 KB, one at 5 MB), versus 884 ms to
+  // `read` a separate, equally-sized 5 MB dataless fixture — a fresh subject per
+  // case, since the first materializing call heals the file. Deleting an
+  // offloaded note therefore cannot wedge the libuv
   // threadpool the way `updateNote`'s overwrite could, and guarding it would be
   // strictly worse than useless: the guard's own remedy is `materializeAndWait`,
   // i.e. downloading every byte of a file purely to throw it away.

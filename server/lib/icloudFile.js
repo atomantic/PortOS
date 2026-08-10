@@ -54,19 +54,22 @@
  *    "Unlink only drops a directory entry, so there is nothing to download" is
  *    the same shape of argument as the `O_TRUNC` one above, and `link` is pure
  *    metadata too yet it *does* materialize. Measured instead: `unlinkSync` on a
- *    freshly-evicted file returned in **0.1 ms** at both 512 KB and 5 MB — three
- *    runs of three — against **884 ms** for a `read` of the same 5 MB dataless
- *    fixture, and no download was issued. So delete paths need no screen.
+ *    freshly-evicted file returned in **0.1 ms** across three runs — two at
+ *    512 KB, one at 5 MB — against **884 ms** to `read` a separate, equally-sized
+ *    5 MB dataless fixture, and no download was issued. So delete paths need no
+ *    screen.
  *
  * ## Reproducing these measurements
  *
  * Eviction is the hard part, and it is NOT unavailable to a CLI: `brctl evict
- * <path>` works and is the mechanism used for all of the above. Like `brctl
- * download` (which the heal path below uses) it is absent from `brctl --help`
- * but fully functional; it refuses only when run as root. Everything else that
- * looks like it should work does not — `fileproviderctl` has no `evict`,
- * `chflags dataless` silently no-ops, and `FileManager.evictUbiquitousItem`
- * fails `NSCocoaErrorDomain 512` from an unentitled process. Verify the state
+ * <path>` works. It is the mechanism behind the `unlink` row (#3713); the rows
+ * above it were measured before `brctl evict` was known to work, by evicting
+ * through Finder's "Remove Download". Like `brctl download` (which the heal path
+ * below uses) it is absent from `brctl --help` but fully functional; it refuses
+ * only when run as root. Everything else that looks like it should work does
+ * not — `fileproviderctl` has no `evict`, `chflags dataless` silently no-ops,
+ * and `FileManager.evictUbiquitousItem` fails `NSCocoaErrorDomain 512` from an
+ * unentitled process. Verify the state
  * with `stat -f "blocks=%b flags=%Sf size=%z"`: evicted reads `blocks=0` and
  * `compressed,dataless`. Always time the syscall in a CHILD process with a hard
  * kill — a materialization that stalls cannot be cancelled — and use a fresh
