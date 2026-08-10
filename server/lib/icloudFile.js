@@ -20,6 +20,40 @@
  * Retry-on-error logic does NOT help here: a dataless read doesn't *fail*, it
  * *hangs*. The only safe move is to never issue the read in the first place.
  *
+ * ## Which syscalls actually materialize (measured, #3706)
+ *
+ * The trigger is the first **data access**, not the `open(2)`. Measured on
+ * macOS 26 (Darwin 25.5, APFS) against freshly-evicted iCloud files — a fresh
+ * subject per case, since the first materializing call heals the file:
+ *
+ * | syscall                          | materializes? | cost on a HEALTHY iCloud |
+ * |----------------------------------|---------------|--------------------------|
+ * | `stat`                           | no            | instant                  |
+ * | `open` — `'r'`, `'a'`, `'r+'`    | no            | 0 ms                     |
+ * | `rename`                         | no            | 0–1 ms                   |
+ * | `read`                           | **yes**       | ~900 ms                  |
+ * | `write` after `O_TRUNC` (`'w'`)  | **yes**       | ~820 ms                  |
+ * | `write` in append mode (`'a'`)   | **yes**       | ~690 ms                  |
+ * | `link` (hard link)               | **yes**       | —                        |
+ * | `clonefile` (`cp -c`)            | **yes**       | —                        |
+ *
+ * Two consequences that are easy to get wrong:
+ *
+ * 1. **`O_TRUNC` does NOT short-circuit materialization.** Truncating to zero
+ *    discards every byte the download would fetch, so "there is nothing to
+ *    materialize" is an appealing inference — and it is wrong. The same
+ *    `writeFile(path, content, 'utf-8')` cost 822 ms dataless and **1 ms** once
+ *    materialized, on the same path with only the dataless bit changed (a
+ *    non-iCloud local file: 0 ms). That ~800 ms is the download, not iCloud
+ *    write coordination. So a *write* path needs the same screen as a read path.
+ * 2. **Screening is free.** `stat` and `open` never materialize, so a guard
+ *    costs nothing on the healthy path — including `existsSync` precondition
+ *    checks, which can stay exactly where they are.
+ *
+ * `unlink` is deliberately absent above: it is untested. Do not assume it is
+ * free by analogy with `rename` — `link` is also pure metadata and it *does*
+ * materialize.
+ *
  * ## The screen
  *
  * `stat()` is safe — it does NOT trigger materialization and returns instantly
@@ -49,6 +83,7 @@ import { readFile, stat } from 'fs/promises';
 import { realpathSync } from 'fs';
 import { dirname } from 'path';
 import { spawn } from 'child_process';
+import { bufferedSpawn } from './bufferedSpawn.js';
 import { createSingleFlight } from './singleFlight.js';
 
 /** `err.code` on the rejection `readIfMaterialized` throws for an evicted file. */
@@ -195,6 +230,13 @@ const MAX_PENDING_DOWNLOADS = 4;
 export let DOWNLOAD_DEADLINE_MS = 120_000;
 export function _setDownloadDeadlineForTest(ms) { DOWNLOAD_DEADLINE_MS = ms; }
 
+// Default deadline for the AWAITED write-path materialize (`materializeAndWait`).
+// Much tighter than DOWNLOAD_DEADLINE_MS above because a caller is blocked on it:
+// a background heal can afford two minutes, a user's save cannot. Exposed (not
+// const) so tests don't wait on it.
+export let MATERIALIZE_TIMEOUT_MS = 20_000;
+export function _setMaterializeTimeoutForTest(ms) { MATERIALIZE_TIMEOUT_MS = ms; }
+
 /**
  * Fire-and-forget `brctl download <path>` so an evicted file heals in the
  * background. Detached + unref'd so a slow download can't keep the process
@@ -331,6 +373,67 @@ export function requestMaterialization(path, options = {}) {
     }
   });
   return true;
+}
+
+/**
+ * `brctl download <path>`, **awaited** and bounded by a timeout.
+ *
+ * The write-path counterpart to `requestMaterialization`. A read path can fire
+ * and forget because it refuses the read for this cycle and a later read retries;
+ * a *write* path has no such luxury — it must not silently skip the write, and it
+ * must not issue a blocking one either (measured: a write to a dataless file
+ * materializes, see the syscall table above). So it materializes first, waits for
+ * the result, and lets the caller fail loudly if that didn't work.
+ *
+ * Runs `brctl` in a child process, which is what makes the wait cancellable: the
+ * kernel write this replaces cannot be interrupted, but a wedged `brctl` is just
+ * a child that misses its deadline and gets killed. That is the whole point of
+ * routing through `brctl` rather than letting the write block.
+ *
+ * Resolves `true` only when `brctl` exited 0. **That means the download was
+ * ACCEPTED, not that the bytes are local** — `brctl` can return 0 before
+ * materialization completes. Always re-screen (or use a reader that re-screens)
+ * before trusting the file; never drop a subsequent guard on the strength of a
+ * `true` here.
+ *
+ * Never throws: every failure mode (missing `brctl`, timeout, non-zero exit)
+ * warns and resolves `false`.
+ *
+ * @param {string} path
+ * @param {object} [options]
+ * @param {string} [options.label='iCloud file'] - Label for log lines.
+ * @param {number} [options.timeoutMs=MATERIALIZE_TIMEOUT_MS] - Deadline for the child.
+ */
+export async function materializeAndWait(path, options = {}) {
+  const { label = 'iCloud file', timeoutMs = MATERIALIZE_TIMEOUT_MS } = options;
+  if (process.platform !== 'darwin' || !path) return false;
+  // try/catch at a child-process boundary (permitted by the repo's no-try/catch
+  // rule, and mirroring `requestMaterialization` above): `spawn` can throw
+  // SYNCHRONOUSLY on resource exhaustion (EMFILE), and `bufferedSpawn` lets that
+  // propagate rather than folding it into a result. A failed *heal* must never
+  // replace the caller's clean "still evicted, write refused" verdict with a
+  // spawn error — the write is correctly refused either way.
+  let result;
+  try {
+    result = await bufferedSpawn('brctl', ['download', path], { timeoutMs, shell: false });
+  } catch (err) {
+    result = { success: false, error: err };
+  }
+  if (result.success) return true;
+  if (result.error?.code === 'ENOENT') {
+    // Share the once-per-process flag with the fire-and-forget paths so the
+    // "brctl missing" warning fires at most once across all of them.
+    if (claimBrctlMissingWarning()) {
+      console.warn(`⚠️ brctl not found on PATH; ${label} on-demand materialize disabled`);
+    }
+  } else if (result.timedOut) {
+    console.warn(`⚠️ brctl download timed out after ${timeoutMs}ms for ${label}: ${path}`);
+  } else if (result.error) {
+    console.warn(`⚠️ brctl download failed for ${label}: ${result.error.message}`);
+  } else {
+    console.warn(`⚠️ brctl download exited ${result.code} for ${label}: ${path}`);
+  }
+  return false;
 }
 
 // N concurrent callers for the same path share ONE underlying read, so they

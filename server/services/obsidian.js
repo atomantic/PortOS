@@ -11,7 +11,7 @@ import { existsSync, realpathSync } from 'fs';
 import { join, relative, resolve, basename, dirname, extname, isAbsolute } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
-import { ICLOUD_NOT_MATERIALIZED, readIfMaterialized } from '../lib/icloudFile.js';
+import { ICLOUD_NOT_MATERIALIZED, isSuspectedDataless, materializeAndWait, readIfMaterialized } from '../lib/icloudFile.js';
 
 const VAULTS_FILE = join(PATHS.brain, 'obsidian-vaults.json');
 
@@ -279,6 +279,31 @@ export async function updateNote(vaultId, notePath, content) {
   if (!fullPath) return { error: 'INVALID_PATH' };
   if (!existsSync(fullPath)) return { error: 'NOTE_NOT_FOUND' };
 
+  // Overwriting an EVICTED note would block exactly like reading one — measured,
+  // not assumed: `writeFile`'s O_TRUNC does NOT skip materialization (822ms
+  // dataless vs 1ms materialized for the same call; see the syscall table in
+  // server/lib/icloudFile.js). Discarding every byte first is intuitively enough
+  // to make the download pointless, and the kernel disagrees.
+  //
+  // This matters beyond "a user clicked save": updateNote is reached from
+  // BACKGROUND mirrors via upsertNote — the Brain daily-log mirror and YouTube
+  // ingest — so a wedged iCloud could strand libuv threadpool slots with no user
+  // in the loop, which is the whole-UI outage #3704 fixed on the read side.
+  //
+  // A write must not silently skip, so unlike the read paths this materializes
+  // and WAITS (bounded, in a child process — cancellable, which the kernel write
+  // is not) rather than fire-and-forget. brctl exit 0 only means the download was
+  // accepted, so re-screen before trusting it and refuse if it's still dataless.
+  if (await isSuspectedDataless(fullPath)) {
+    await materializeAndWait(fullPath, { label: 'Obsidian note' });
+    if (await isSuspectedDataless(fullPath)) {
+      return {
+        error: 'NOTE_EVICTED',
+        message: 'This note is stored in iCloud and has not been downloaded to this Mac yet. A download was requested — try again shortly.'
+      };
+    }
+  }
+
   await writeFile(fullPath, content, 'utf-8');
   console.log(`📓 Updated note: ${notePath} in vault ${vault.name}`);
   return await getNote(vaultId, notePath, { includeBacklinks: false });
@@ -299,6 +324,11 @@ export async function createNote(vaultId, notePath, content = '') {
     return { error: 'NOTE_EXISTS', message: 'A note with this name already exists' };
   }
 
+  // No eviction guard here, deliberately (#3706): the `existsSync` above means
+  // this only ever writes a file that does NOT exist, and a file that does not
+  // exist cannot be dataless — there is nothing offloaded to materialize. The
+  // overwrite case is `updateNote`, which is guarded. Don't add a screen here
+  // "for symmetry"; it would cost a stat per created note and can never fire.
   await writeFile(fullPath, content, 'utf-8');
   console.log(`📓 Created note: ${notePath} in vault ${vault.name}`);
   return await getNote(vaultId, notePath, { includeBacklinks: false });

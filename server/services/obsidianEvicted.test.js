@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -28,6 +28,8 @@ vi.mock('../lib/fileUtils.js', async () => {
 
 // Only `evicted.md` is treated as offloaded; every other path reads for real, so
 // the assertions below distinguish "skipped that one note" from "read nothing".
+// `isSuspectedDataless` defaults to false so the reader tests below are unaffected
+// by the write-path guard; the write tests drive it per-case.
 vi.mock('../lib/icloudFile.js', () => ({
   ICLOUD_NOT_MATERIALIZED: 'ICLOUD_NOT_MATERIALIZED',
   readIfMaterialized: vi.fn(async (path) => {
@@ -36,9 +38,11 @@ vi.mock('../lib/icloudFile.js', () => ({
     }
     return readFile(path, 'utf-8');
   }),
+  isSuspectedDataless: vi.fn(async () => false),
+  materializeAndWait: vi.fn(async () => true),
 }));
 
-const { addVault, scanVault, searchNotes, getVaultTags, getVaultGraph, getNote } =
+const { addVault, scanVault, searchNotes, getVaultTags, getVaultGraph, getNote, updateNote, createNote, upsertNote } =
   await import('./obsidian.js');
 
 const VAULT_DIR = join(tempRoot, 'vault');
@@ -108,5 +112,115 @@ describe('obsidian readers with an evicted note', () => {
     const { readIfMaterialized } = await import('../lib/icloudFile.js');
     readIfMaterialized.mockRejectedValueOnce(Object.assign(new Error('boom'), { code: 'EIO' }));
     await expect(getNote(vaultId, 'readable.md')).rejects.toThrow('boom');
+  });
+});
+
+/**
+ * The WRITE side — #3706.
+ *
+ * Overwriting an evicted note blocks exactly like reading one: `writeFile`'s
+ * O_TRUNC does NOT skip materialization (measured — 822ms dataless vs 1ms
+ * materialized for the identical call). These pin that `updateNote` never issues
+ * that write, which is the whole defence: a blocked write cannot be cancelled,
+ * so the only safe move is not to make it.
+ *
+ * Assertions read the file back off disk rather than spying on `writeFile`, so
+ * they pin the OBSERVABLE outcome ("the note's bytes are untouched") instead of
+ * the current implementation's choice of fs call.
+ */
+describe('obsidian updateNote against an evicted note', () => {
+  const NOTE = 'readable.md';
+  const ORIGINAL = '---\ntags: [biology]\n---\nmitochondria here\n[[evicted]]\n';
+
+  beforeEach(async () => {
+    const icloud = await import('../lib/icloudFile.js');
+    icloud.isSuspectedDataless.mockReset().mockResolvedValue(false);
+    icloud.materializeAndWait.mockReset().mockResolvedValue(true);
+  });
+
+  it('refuses the write and leaves the note byte-for-byte intact', async () => {
+    const icloud = await import('../lib/icloudFile.js');
+    // Still dataless on the re-screen after materializing => refuse.
+    icloud.isSuspectedDataless.mockResolvedValue(true);
+
+    const result = await updateNote(vaultId, NOTE, 'REPLACEMENT');
+
+    expect(result.error).toBe('NOTE_EVICTED');
+    expect(result.message).toMatch(/iCloud/i);
+    // The load-bearing assertion: the blocking write was never issued.
+    expect(readFileSync(join(VAULT_DIR, NOTE), 'utf-8')).toBe(ORIGINAL);
+  });
+
+  it('materializes and WAITS rather than firing and forgetting', async () => {
+    const icloud = await import('../lib/icloudFile.js');
+    icloud.isSuspectedDataless.mockResolvedValue(true);
+
+    await updateNote(vaultId, NOTE, 'REPLACEMENT');
+
+    // A write must not silently skip, so unlike the read paths this one has to
+    // await the download before deciding — hence materializeAndWait, never
+    // requestMaterialization.
+    expect(icloud.materializeAndWait).toHaveBeenCalledTimes(1);
+    // realpath'd: resolveVaultPath resolves the vault root, and the temp dir is
+    // reached through /var -> /private/var on macOS.
+    expect(icloud.materializeAndWait).toHaveBeenCalledWith(
+      join(realpathSync(VAULT_DIR), NOTE),
+      expect.objectContaining({ label: 'Obsidian note' })
+    );
+  });
+
+  it('writes normally once materialization actually lands', async () => {
+    const icloud = await import('../lib/icloudFile.js');
+    // Dataless on the first screen, materialized on the re-screen.
+    icloud.isSuspectedDataless.mockResolvedValueOnce(true).mockResolvedValue(false);
+
+    const result = await updateNote(vaultId, NOTE, 'REPLACEMENT');
+
+    expect(result.error).toBeUndefined();
+    expect(readFileSync(join(VAULT_DIR, NOTE), 'utf-8')).toBe('REPLACEMENT');
+  });
+
+  it('re-screens instead of trusting brctl exit-0', async () => {
+    const icloud = await import('../lib/icloudFile.js');
+    icloud.isSuspectedDataless.mockResolvedValue(true);
+    // brctl exit-0 means the download was ACCEPTED, not that the bytes are local.
+    icloud.materializeAndWait.mockResolvedValue(true);
+
+    const result = await updateNote(vaultId, NOTE, 'REPLACEMENT');
+
+    // Trusting that `true` would issue the very write this guard exists to prevent.
+    expect(result.error).toBe('NOTE_EVICTED');
+    expect(icloud.isSuspectedDataless).toHaveBeenCalledTimes(2);
+  });
+
+  it('costs nothing on the healthy path — no materialize for a normal note', async () => {
+    const icloud = await import('../lib/icloudFile.js');
+
+    const result = await updateNote(vaultId, NOTE, 'REPLACEMENT');
+
+    expect(result.error).toBeUndefined();
+    expect(icloud.materializeAndWait).not.toHaveBeenCalled();
+    expect(readFileSync(join(VAULT_DIR, NOTE), 'utf-8')).toBe('REPLACEMENT');
+  });
+
+  it('createNote does not screen — a file that does not exist cannot be dataless', async () => {
+    const icloud = await import('../lib/icloudFile.js');
+
+    const result = await createNote(vaultId, 'brand-new.md', 'fresh');
+
+    expect(result.error).toBeUndefined();
+    // Pins the deliberate no-guard decision so a later "add it for symmetry"
+    // change has to argue with a test rather than slip through.
+    expect(icloud.isSuspectedDataless).not.toHaveBeenCalled();
+  });
+
+  it('upsertNote degrades to a skipped mirror, never a hang or a throw', async () => {
+    const icloud = await import('../lib/icloudFile.js');
+    icloud.isSuspectedDataless.mockResolvedValue(true);
+
+    // upsertNote is how the BACKGROUND mirrors (Brain daily log, YouTube ingest)
+    // reach updateNote — with no user in the loop, so it must fail quietly.
+    await expect(upsertNote(vaultId, NOTE, 'REPLACEMENT')).resolves.toBeNull();
+    expect(readFileSync(join(VAULT_DIR, NOTE), 'utf-8')).toBe(ORIGINAL);
   });
 });

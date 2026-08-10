@@ -7,12 +7,20 @@ const statMock = vi.fn();
 const readFileMock = vi.fn();
 const spawnMock = vi.fn();
 
-vi.mock('fs/promises', () => ({
+// Partial mocks (spread the original) rather than bare replacements: icloudFile
+// pulls in `bufferedSpawn` -> `spawnCwd` -> `fileUtils` for the awaited
+// `materializeAndWait`, and those need the real `execFile`/`fs/promises` exports.
+// A bare replacement makes the whole suite fail to import with "No X export is
+// defined on the mock", which looks like 39 broken assertions rather than one
+// missing export.
+vi.mock('fs/promises', async (importOriginal) => ({
+  ...await importOriginal(),
   stat: (...args) => statMock(...args),
   readFile: (...args) => readFileMock(...args),
 }));
 
-vi.mock('child_process', () => ({
+vi.mock('child_process', async (importOriginal) => ({
+  ...await importOriginal(),
   spawn: (...args) => spawnMock(...args),
 }));
 
@@ -512,5 +520,79 @@ describe('background download slot ownership', () => {
       killSpy.mockRestore();
       icloud._setDownloadDeadlineForTest(originalDeadline);
     }
+  });
+});
+
+/**
+ * The awaited, bounded write-path materialize (#3706).
+ *
+ * Distinct from `requestMaterialization` above in the one way that matters: a
+ * write path cannot fire-and-forget, because skipping a write silently loses the
+ * user's edit. So this one waits for brctl and reports whether it worked — and
+ * bounds the wait, since brctl is exactly what hangs when iCloud is wedged.
+ */
+describe('materializeAndWait', () => {
+  // Shaped for the shared bufferedSpawn helper, which reads child.stdout/stderr
+  // and resolves on `close`. (The suite's global beforeEach already pins
+  // platform=darwin and silences console; don't re-stub either here.)
+  const makeChild = (exitCode) => {
+    const noopStream = { on: vi.fn() };
+    const child = {
+      stdout: noopStream,
+      stderr: noopStream,
+      pid: 4242,
+      on: vi.fn(function (evt, cb) {
+        if (evt === 'close') setTimeout(() => cb(exitCode, null), 0);
+        return child;
+      }),
+      kill: vi.fn(),
+      unref: vi.fn(),
+    };
+    return child;
+  };
+
+  it('awaits brctl and resolves true on a clean exit', async () => {
+    spawnMock.mockReturnValue(makeChild(0));
+    await expect(icloud.materializeAndWait(ICLOUD_PATH)).resolves.toBe(true);
+    expect(spawnMock).toHaveBeenCalledWith('brctl', ['download', ICLOUD_PATH], expect.objectContaining({ shell: false }));
+  });
+
+  it('resolves false on a non-zero exit so the caller refuses the write', async () => {
+    spawnMock.mockReturnValue(makeChild(1));
+    await expect(icloud.materializeAndWait(ICLOUD_PATH)).resolves.toBe(false);
+  });
+
+  it('is inert off darwin — no child spawned', async () => {
+    platformSpy.mockReturnValue('linux');
+    await expect(icloud.materializeAndWait(ICLOUD_PATH)).resolves.toBe(false);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('resolves false for an empty path without spawning', async () => {
+    await expect(icloud.materializeAndWait('')).resolves.toBe(false);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('resolves false instead of THROWING when spawn fails synchronously', async () => {
+    // bufferedSpawn lets a synchronous spawn throw (EMFILE under load) propagate.
+    // Unguarded, that would surface from updateNote as a raw spawn error instead
+    // of the clean NOTE_EVICTED refusal — turning a handled degradation into a 500.
+    spawnMock.mockImplementation(() => { throw Object.assign(new Error('too many files'), { code: 'EMFILE' }); });
+    await expect(icloud.materializeAndWait(ICLOUD_PATH)).resolves.toBe(false);
+  });
+
+  it('shares the once-per-process brctl-missing warning with the read paths', async () => {
+    // Claiming it first (as a read path would) must silence the write path's copy,
+    // so an operator sees ONE "brctl not found" line per process, not one per caller.
+    expect(icloud.claimBrctlMissingWarning()).toBe(true);
+    spawnMock.mockImplementation(() => { throw Object.assign(new Error('nope'), { code: 'ENOENT' }); });
+    await expect(icloud.materializeAndWait(ICLOUD_PATH)).resolves.toBe(false);
+    expect(warnSpy.mock.calls.flat().join(' ')).not.toMatch(/brctl not found/);
+  });
+
+  it('does warn when the flag has NOT already been claimed', async () => {
+    spawnMock.mockImplementation(() => { throw Object.assign(new Error('nope'), { code: 'ENOENT' }); });
+    await expect(icloud.materializeAndWait(ICLOUD_PATH)).resolves.toBe(false);
+    expect(warnSpy.mock.calls.flat().join(' ')).toMatch(/brctl not found/);
   });
 });

@@ -14,8 +14,7 @@ import { stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { atomicWrite, safeJSONParse, readJSONFile, dataPath, ensureDir } from '../lib/fileUtils.js';
-import { bufferedSpawn } from '../lib/bufferedSpawn.js';
-import { ICLOUD_NOT_MATERIALIZED, claimBrctlMissingWarning, isEvictedStats, readIfMaterialized, requestMaterialization } from '../lib/icloudFile.js';
+import { ICLOUD_NOT_MATERIALIZED, isEvictedStats, materializeAndWait, readIfMaterialized, requestMaterialization } from '../lib/icloudFile.js';
 import { isPlainObject } from '../lib/objects.js';
 import { getSettings, settingsEvents } from './settings.js';
 
@@ -182,33 +181,22 @@ function icloudPlaceholderPath(path) {
 export let MATERIALIZE_TIMEOUT_MS = 20000;
 export function _setMaterializeTimeoutForTest(ms) { MATERIALIZE_TIMEOUT_MS = ms; }
 
-// Unlike pinAgainstEviction, this awaits brctl to completion via the shared
-// bufferedSpawn helper (timeout + kill-tree handled there). The timeout bounds a
-// hung download (file evicted AND device offline) so a single write can't block
-// forever. Resolves `true` only on a clean exit-0; every failure mode resolves
-// `false` and falls through to the caller's existing refuse-to-overwrite guard.
+// Unlike pinAgainstEviction, this awaits brctl to completion (timeout + kill-tree
+// handled inside the shared helper). The timeout bounds a hung download (file
+// evicted AND device offline) so a single write can't block forever. Resolves
+// `true` only on a clean exit-0; every failure mode resolves `false` and falls
+// through to the caller's existing refuse-to-overwrite guard.
+//
+// The mechanics live in `icloudFile.materializeAndWait` — Obsidian's `updateNote`
+// needs the identical awaited-and-bounded materialize (#3706), so the second
+// caller is what earned the extraction. The local `MATERIALIZE_TIMEOUT_MS` is
+// passed explicitly rather than relying on the lib's default so this service
+// keeps its own test hook.
 async function materializeNow(path) {
-  if (process.platform !== 'darwin' || !path) return false;
-  const result = await bufferedSpawn('brctl', ['download', path], {
+  return materializeAndWait(path, {
+    label: 'MortalLoom store',
     timeoutMs: MATERIALIZE_TIMEOUT_MS,
-    shell: false,
   });
-  if (result.success) return true;
-  if (result.error?.code === 'ENOENT') {
-    // brctl missing — claim the shared once-per-process flag in icloudFile so the
-    // "brctl not found" warning fires at most once across BOTH this write path and
-    // the fire-and-forget pin/read paths in requestMaterialization.
-    if (claimBrctlMissingWarning()) {
-      console.warn('⚠️ brctl not found on PATH; MortalLoom on-demand materialize disabled (refuse-to-overwrite guard remains)');
-    }
-  } else if (result.timedOut) {
-    console.warn(`⚠️ brctl download timed out after ${MATERIALIZE_TIMEOUT_MS}ms for MortalLoom store: ${path}`);
-  } else if (result.error) {
-    console.warn(`⚠️ brctl download failed for MortalLoom store: ${result.error.message}`);
-  } else {
-    console.warn(`⚠️ brctl download exited ${result.code} for MortalLoom store: ${path}`);
-  }
-  return false;
 }
 
 // Two flags, not one: the listener is durable (sync, idempotent) but the
