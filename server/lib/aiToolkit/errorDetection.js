@@ -228,6 +228,11 @@ export function createTerminalModelErrorDetector({ maxBuffer = 512 } = {}) {
   };
 }
 
+// A non-printing, non-line-terminator byte prefixed to a buffer whose index 0 is
+// a slice boundary rather than a witnessed line start, so a `^…/m` pattern
+// cannot match there. Full rationale on resolveSignalOrigin below.
+const UNTRUSTED_BOUNDARY = '\x00';
+
 // Claude Code retries transient provider failures inside the TUI. Let those
 // retries run: a line such as `Request timed out · Retrying … attempt 7/10` is
 // still recoverable and may eventually produce the requested response file.
@@ -240,11 +245,25 @@ export function createTerminalModelErrorDetector({ maxBuffer = 512 } = {}) {
 // ordinary generated prose mentioning a request timeout, nor an in-progress
 // retry banner. `\s*` between words also matches the cursor-positioned,
 // ANSI-stripped shape observed from the TUI (`Requesttimedout`).
-const TERMINAL_REQUEST_TIMEOUT_PATTERN = /^[\s\u00a0]*⎿[\s\u00a0]*Request\s*timed\s*out\.?[\s\u00a0]*$/im;
+//
+// The line must end with a REAL terminator (`\r` or `\n`) — `$` alone is a trap
+// here (#3715). The streaming detector re-tests a rolling buffer whose end is
+// always the newest byte received, so `$` also matched "the line so far",
+// making a PTY chunk that split right after `Request timed out`
+// indistinguishable from a finished line: the ` · Retrying in 38s · attempt
+// 3/10` suffix simply had not been delivered yet. With a 200x50 PTY repainting
+// on every countdown tick that split is a matter of time, not a rare race — and
+// it killed the very runs this detector exists to let keep retrying. Requiring
+// a terminator holds the candidate until the rest of the line lands; if that
+// turns out to be a retry suffix, the match never happens. Trailing horizontal
+// whitespace is tolerated, but `[^\S\r\n]` must not swallow the terminator.
+const TERMINAL_REQUEST_TIMEOUT_PATTERN = /^[\s\u00a0]*⎿[\s\u00a0]*Request\s*timed\s*out\.?[^\S\r\n]*[\r\n]/im;
 
-export function detectTerminalRequestTimeout(text) {
+export function detectTerminalRequestTimeout(text, { lineStartTrusted = true } = {}) {
   if (!text) return null;
-  const match = String(text).match(TERMINAL_REQUEST_TIMEOUT_PATTERN);
+  const value = String(text);
+  const match = (lineStartTrusted ? value : `${UNTRUSTED_BOUNDARY}${value}`)
+    .match(TERMINAL_REQUEST_TIMEOUT_PATTERN);
   if (!match) return null;
   return {
     hasError: true,
@@ -260,12 +279,30 @@ export function detectTerminalRequestTimeout(text) {
 
 export function createTerminalRequestTimeoutDetector({ maxBuffer = 512 } = {}) {
   let buffer = '';
+  // Mirrors createImmediateFallbackSignalDetector: once the window has dropped
+  // anything, buffer[0] is a slice boundary, not a line start, and the
+  // `^`-anchored pattern would happily match a fabricated one (a long line of
+  // agent prose sliced exactly before the gutter glyph). A TUI stream rolls a
+  // 512-char window within a second, so this matters in practice; the repaint
+  // loop re-delivers the real banner with its own line start moments later.
+  let truncated = false;
   const cap = Number.isFinite(maxBuffer) && maxBuffer > 0 ? maxBuffer : 512;
 
-  return (chunk) => {
-    if (!chunk) return null;
-    buffer = `${buffer}${String(chunk)}`.slice(-cap);
-    return detectTerminalRequestTimeout(buffer);
+  // `endOfStream` reports that no more bytes can arrive (the PTY exited), which
+  // is itself the terminator a held candidate was waiting for — nothing can
+  // still complete the last line into a `· Retrying …` banner. Synthesizing the
+  // newline there keeps the terminator requirement above from losing the case
+  // where the banner is the final thing painted before exit.
+  return (chunk, { endOfStream = false } = {}) => {
+    if (chunk) {
+      const next = `${buffer}${String(chunk)}`;
+      if (next.length > cap) truncated = true;
+      buffer = next.slice(-cap);
+    } else if (!endOfStream) return null;
+    return detectTerminalRequestTimeout(
+      endOfStream ? `${buffer}\n` : buffer,
+      { lineStartTrusted: !truncated },
+    );
   };
 }
 
@@ -364,8 +401,6 @@ export function analyzeError(errorText, exitCode = null) {
  * which is how a repainted TUI screen advances) still promotes, and nothing is
  * discarded. Pure.
  */
-const UNTRUSTED_BOUNDARY = '\x00';
-
 function resolveSignalOrigin(signal, text, lineStartTrusted) {
   if (!signal.structuredMarker) return 'provider';
   const value = text || '';

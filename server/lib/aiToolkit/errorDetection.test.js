@@ -352,6 +352,64 @@ describe('Error Detection', () => {
         exitCode: 124,
       });
     });
+
+    // #3715 — the whole-banner cases above all pass with a `$`-terminated
+    // pattern too. What broke in production was the SPLIT: the buffered
+    // detector re-tests a rolling buffer whose end is the newest byte, so
+    // "line so far ends at 'Request timed out'" looked exactly like a finished
+    // line and killed a run that was still happily retrying.
+    it('does NOT fire when a PTY chunk boundary lands right after "Request timed out"', () => {
+      const detect = createTerminalRequestTimeoutDetector();
+      expect(detect('  ⎿ Request timed out')).toBeNull();
+    });
+
+    it('discards a split candidate that the next chunk completes into a retry banner', () => {
+      const detect = createTerminalRequestTimeoutDetector();
+      expect(detect('  ⎿ Request timed out')).toBeNull();
+      expect(detect(' · Retrying in 38s · attempt 3/10\n')).toBeNull();
+      // …and the countdown repaint that follows is still not a terminal state.
+      expect(detect('  ⎿ Request timed out · Retrying in 37s · attempt 3/10\n')).toBeNull();
+    });
+
+    it('fires once the terminator for a split candidate finally arrives', () => {
+      const detect = createTerminalRequestTimeoutDetector();
+      expect(detect('  ⎿ Request timed out')).toBeNull();
+      expect(detect('\n')).toMatchObject({ category: ERROR_CATEGORIES.TIMEOUT, exitCode: 124 });
+    });
+
+    it('accepts a bare CR terminator (how a repainted TUI screen advances)', () => {
+      const detect = createTerminalRequestTimeoutDetector();
+      expect(detect('  ⎿ Request timed out\r')).toMatchObject({ exitCode: 124 });
+    });
+
+    it('treats end of stream as the terminator a held candidate was waiting for', () => {
+      const detect = createTerminalRequestTimeoutDetector();
+      expect(detect('  ⎿ Request timed out')).toBeNull();
+      // The PTY exited — nothing can still complete the line into a retry.
+      expect(detect(null, { endOfStream: true })).toMatchObject({ exitCode: 124 });
+    });
+
+    it('does not invent a match at end of stream when the last line is a retry banner', () => {
+      const detect = createTerminalRequestTimeoutDetector();
+      detect('  ⎿ Request timed out · Retrying in 38s · attempt 3/10');
+      expect(detect(null, { endOfStream: true })).toBeNull();
+    });
+
+    it('ignores a line start fabricated by the rolling window slice boundary', () => {
+      // One long line of agent prose quoting the banner, with the window sized so
+      // the slice lands EXACTLY on the gutter glyph. buffer[0] then looks like a
+      // line start the stream never witnessed — matching there would kill a
+      // healthy run over the agent's own output.
+      const banner = '⎿ Request timed out\n';
+      const detect = createTerminalRequestTimeoutDetector({ maxBuffer: banner.length });
+      expect(detect(`while investigating I saw ${banner}`)).toBeNull();
+    });
+
+    it('still fires on a real line start inside a window that has already rolled', () => {
+      const detect = createTerminalRequestTimeoutDetector({ maxBuffer: 32 });
+      detect('a long banner line of TUI chrome that overflows the window\n');
+      expect(detect('  ⎿ Request timed out\n')).toMatchObject({ exitCode: 124 });
+    });
   });
 
   describe('extractWaitTime', () => {

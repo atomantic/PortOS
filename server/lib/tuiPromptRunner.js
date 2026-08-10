@@ -297,6 +297,13 @@ ${prompt}`;
     lastResponseLen = txt.length;
     return false;
   };
+  // Stability doesn't apply once nothing can still be writing (hard timeout with
+  // the TUI wedged, or the PTY already gone): non-empty content is the whole
+  // answer by then.
+  const responseFileHasContent = async () => {
+    const txt = await tryReadFile(responseFilePath);
+    return typeof txt === 'string' && !!txt.trim();
+  };
 
   let readyTimer = null;
   let pasteEnterTimer = null;
@@ -413,6 +420,36 @@ ${prompt}`;
       }
     };
 
+    // A fallback signal means "this provider can't finish the job" — but the
+    // model may have ALREADY finished it. responseFileWatchTimer only finalizes
+    // after two 1s polls agree on the file size, so there is a ≥1s window where
+    // the response file is complete on disk and the run hasn't finalized. A
+    // signal painting inside that window used to finish({ success: false }),
+    // and since resolveTuiResponseText only reads the file when `success` is
+    // true, the finished response was discarded, the ANSI-stripped error screen
+    // was returned in its place, and a fallback tier re-ran an expensive stage
+    // (#3715). Check for a usable response file first — the same salvage net the
+    // hard-timeout path already has. While the PTY is alive the file must be
+    // size-stable (it could still be mid-write); once the process has exited
+    // nothing can still be writing, so non-empty is enough.
+    const finishWithFallbackSignal = async (signal, { processExited = false } = {}) => {
+      const salvaged = processExited
+        ? await responseFileHasContent()
+        : await responseFileSettled();
+      if (finalized) return;
+      if (salvaged) {
+        console.log(`📄 TUI run ${runId} salvaged its completed response file despite a fallback signal: ${signal.message}`);
+        await finish({ success: true, exitCode: 0, reason: 'fallback-signal-response-file' });
+        return;
+      }
+      await finish({
+        success: false,
+        exitCode: signal.exitCode ?? 1,
+        error: signal.message || 'Provider requires fallback',
+        reason: 'fallback-signal',
+      });
+    };
+
     ptyProcess.onData((data) => {
       const text = data.toString();
       rawBuffer += text;
@@ -435,11 +472,11 @@ ${prompt}`;
           || detectTerminalModelError(stripped)
           || detectTerminalRequestTimeout(stripped);
         if (fallbackSignal) {
-          finish({
-            success: false,
-            exitCode: fallbackSignal.exitCode ?? 1,
-            error: fallbackSignal.message || 'Provider requires fallback',
-            reason: 'fallback-signal'
+          // Fire-and-forget like every other finish() call from this PTY
+          // callback; finish() itself never rejects and the salvage read can't
+          // throw, so the catch is belt-and-braces for a callback boundary.
+          finishWithFallbackSignal(fallbackSignal).catch((err) => {
+            console.error(`❌ TUI run ${runId} fallback-signal handling failed: ${err?.message || err}`);
           });
           return;
         }
@@ -503,6 +540,19 @@ ${prompt}`;
       const canceled = killed && (stopRequested || hostInterrupted);
       const finalExitCode = typeof exitCode === 'number' ? exitCode : (killed ? 130 : 0);
       const success = !killed && finalExitCode === 0;
+      // The terminal-timeout detector holds a candidate banner until a real line
+      // terminator proves the line is finished (#3715). Process exit IS that
+      // proof — no further byte can turn `⎿ Request timed out` into a
+      // `· Retrying …` banner — so flush the held candidate here rather than
+      // letting a clean exit 0 scrape the error screen as model output (the
+      // exact failure the detector was added for).
+      const heldTimeout = success ? detectTerminalRequestTimeout(null, { endOfStream: true }) : null;
+      if (heldTimeout) {
+        finishWithFallbackSignal(heldTimeout, { processExited: true }).catch((err) => {
+          console.error(`❌ TUI run ${runId} exit-time timeout handling failed: ${err?.message || err}`);
+        });
+        return;
+      }
       // Always set an explicit error string when finishing as failure. The
       // toolkit's errorDetection (if enabled) will fill in `error` inside
       // finalizeRunRecord, but if it's absent we'd persist `success: false`
@@ -620,8 +670,7 @@ ${prompt}`;
       // triggering a pointless fallback retry. (The response-file watcher above
       // normally catches this within ~2s; this covers the boundary case where the
       // file lands right at the deadline or the watcher hadn't confirmed yet.)
-      const salvaged = await tryReadFile(responseFilePath);
-      if (typeof salvaged === 'string' && salvaged.trim()) {
+      if (await responseFileHasContent()) {
         finish({ success: true, exitCode: 0, reason: 'timeout-response-file' });
         return;
       }

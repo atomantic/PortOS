@@ -783,6 +783,104 @@ describe('executeTuiRun', () => {
       }));
     });
 
+    it('keeps retrying when a PTY chunk boundary splits the retry banner right after "Request timed out"', async () => {
+      const provider = { id: 'claude', type: 'tui', command: 'claude' };
+      const promise = executeTuiRun({ runId: 'run-split-retry', provider, prompt: 'a prompt long enough', workspacePath: TEST_WORKSPACE, timeout: 60000 });
+      await flushAsync();
+
+      const pty = ptyInstances[0];
+      // Ink repaints the countdown on every tick and the tty delivers those
+      // frames in sub-frame chunks, so a split inside the ~30-char window
+      // between "out" and " · Retrying" is routine. Before #3715 this first
+      // chunk ALONE finalized the run as exitCode 124 and burned a fallback
+      // tier — killing the retry sequence the detector exists to protect.
+      pty.emitData('  ⎿ Request timed out');
+      await flushAsync();
+      expect(pty.kill).not.toHaveBeenCalled();
+      expect(runnerMocks.finalizeRunRecord).not.toHaveBeenCalled();
+
+      pty.emitData(' · Retrying in 38s · attempt 3/10\n');
+      await flushAsync();
+      expect(pty.kill).not.toHaveBeenCalled();
+      expect(runnerMocks.finalizeRunRecord).not.toHaveBeenCalled();
+
+      // Retries do eventually exhaust — the genuinely terminal banner (its own
+      // complete line) must still fail the run.
+      pty.emitData('  ⎿ Request timed out\n');
+      await promise;
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        runId: 'run-split-retry',
+        success: false,
+        exitCode: 124,
+        extras: expect.objectContaining({ completionReason: 'fallback-signal' }),
+      }));
+    });
+
+    it('flushes a held terminal banner at PTY exit rather than scraping the error screen as a success', async () => {
+      const provider = { id: 'claude', type: 'tui', command: 'claude' };
+      const promise = executeTuiRun({ runId: 'run-exit-timeout', provider, prompt: 'a prompt long enough', workspacePath: TEST_WORKSPACE, timeout: 60000 });
+      await flushAsync();
+
+      const pty = ptyInstances[0];
+      // No terminator yet, so the candidate is held rather than acted on.
+      pty.emitData('  ⎿ Request timed out');
+      await flushAsync();
+      expect(runnerMocks.finalizeRunRecord).not.toHaveBeenCalled();
+
+      // Claude Code exits 0 with the error screen still up. Process exit is the
+      // terminator the held candidate was waiting for.
+      pty.emitExit({ exitCode: 0, signal: undefined });
+      await promise;
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        runId: 'run-exit-timeout',
+        success: false,
+        exitCode: 124,
+        extras: expect.objectContaining({ completionReason: 'fallback-signal' }),
+      }));
+    });
+
+    it('salvages a settled response file when a fallback signal paints inside the size-stability window', async () => {
+      vi.useFakeTimers({
+        toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+      });
+      const provider = { id: 'claude', type: 'tui', command: 'claude', tuiPromptDelayMs: 50 };
+      const runId = 'run-signal-salvage';
+      const promise = executeTuiRun({ runId, provider, prompt: 'write the review then finish up properly', workspacePath: TEST_WORKSPACE, timeout: 60000 });
+      await flushAsync();
+
+      const pty = ptyInstances[0];
+      pty.emitData('claude code ready> ');
+      await vi.advanceTimersByTimeAsync(2000); // paste → response-file watcher armed
+      await vi.advanceTimersByTimeAsync(4000); // enter
+
+      const runDir = join(runsTmpDirRef.current, runId);
+      await mkdir(runDir, { recursive: true });
+      await writeFile(join(runDir, 'tui-response.txt'), 'the finished review body');
+      // Poll 1 only seeds the size-stability baseline — the run is NOT finalized
+      // yet even though the complete answer is already on disk.
+      await vi.advanceTimersByTimeAsync(1100);
+      expect(runnerMocks.finalizeRunRecord).not.toHaveBeenCalled();
+
+      // A follow-up provider request times out and paints the terminal banner
+      // inside that ≥1s window. Failing here would discard the finished
+      // response (resolveTuiResponseText only reads the file on success) and
+      // re-run an expensive stage on a fallback provider.
+      pty.emitData('\n  ⎿ Request timed out\n');
+      await flushAsync();
+      await promise;
+
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        runId,
+        success: true,
+        exitCode: 0,
+        output: 'the finished review body',
+        extras: expect.objectContaining({
+          completionReason: 'fallback-signal-response-file',
+          usedResponseFile: true,
+        }),
+      }));
+    });
+
     it('finishes with reason "exit" + exitCode 0 when the PTY closes cleanly', async () => {
       const provider = { id: 'claude', type: 'tui', command: 'echo' };
       const promise = executeTuiRun({ runId: 'run-exit', provider, prompt: 'a prompt long enough', workspacePath: TEST_WORKSPACE, onData: undefined, onComplete: undefined, timeout: 60000 });
