@@ -820,7 +820,10 @@ const CRAFT_REPAIR_MAX_ATTEMPTS = 2;
 // A repair prompt's JSON sections shed the least load-bearing material first,
 // then trim the free-text fields that remain, so the payload stays VALID JSON at
 // every tier — a mid-object slice would hand the model a parse error instead of
-// a smaller brief.
+// a smaller brief. That is the one way these differ from `renderArc`, which is
+// plain text and hard-clamps: below the JSON skeleton's own size (a few hundred
+// chars of keys and notes) these renderers overshoot the budget rather than
+// emitting something unparseable. The real budgets are 12,000.
 const JSON_TRUNCATION_MARK = '… [truncated to fit the prompt budget]';
 function fitJsonToBudget(payload, trimKeys, maxChars) {
   const shrunk = { ...payload };
@@ -872,6 +875,14 @@ function renderRepairSeriesJson(series, maxChars = REPAIR_SERIES_MAX_CHARS) {
       })),
       omitted: 'styleGuide and character-arc detail omitted to fit the prompt budget; see the outline section',
     },
+    // The arcs are named in full in the outline section, so the last structural
+    // tier keeps only their count — after this only the brief's own free text is
+    // left, which `fitJsonToBudget` can trim.
+    {
+      ...base,
+      characterArcCount: arcs.length,
+      omitted: 'styleGuide and every character arc omitted to fit the prompt budget; see the outline section',
+    },
   ];
   for (const tier of tiers) {
     const rendered = JSON.stringify(tier, null, 2);
@@ -898,19 +909,26 @@ const compactRosterCharacter = (character) => ({
 // not how large each one is — six characters with long personality/background/
 // relationship prose still run to tens of KB. So the last tier caps every string
 // field on the batch itself, halving the cap until the payload fits.
-const CHARACTER_FIELD_CAP_START = 1_200;
-const CHARACTER_FIELD_CAP_FLOOR = 40;
-const truncateField = (value, cap) => (
-  typeof value === 'string' && value.length > cap
-    ? `${value.slice(0, Math.max(0, cap - JSON_TRUNCATION_MARK.length))}${JSON_TRUNCATION_MARK}`
-    : value
-);
-const capCharacterFields = (character, cap) => Object.fromEntries(
-  Object.entries(character || {}).map(([key, value]) => [
-    key,
-    Array.isArray(value) ? value.map((entry) => truncateField(entry, cap)) : truncateField(value, cap),
-  ]),
-);
+// An explicit ladder rather than a halving loop: a loop guarded on `>= floor`
+// steps 1_200 → … → 75 → 37 and exits WITHOUT ever trying the floor itself.
+const CHARACTER_FIELD_CAPS = Object.freeze([1_200, 600, 300, 150, 75, 40]);
+const truncateField = (value, cap) => {
+  if (typeof value !== 'string' || value.length <= cap) return value;
+  // Below the marker's own length the marker would be the longer string — slice
+  // bare rather than "truncating" a field into a longer one.
+  if (cap <= JSON_TRUNCATION_MARK.length) return value.slice(0, Math.max(0, cap));
+  return `${value.slice(0, cap - JSON_TRUNCATION_MARK.length)}${JSON_TRUNCATION_MARK}`;
+};
+// Recursive so a nested shape (an array of objects, an object-valued field)
+// cannot smuggle uncapped prose past the budget.
+const capValue = (value, cap) => {
+  if (Array.isArray(value)) return value.map((entry) => capValue(entry, cap));
+  if (value && typeof value === 'object') return capCharacterFields(value, cap);
+  return truncateField(value, cap);
+};
+function capCharacterFields(character, cap) {
+  return Object.fromEntries(Object.entries(character || {}).map(([key, value]) => [key, capValue(value, cap)]));
+}
 
 function renderRepairCharactersJson(payload, maxChars = REPAIR_CHARACTERS_MAX_CHARS) {
   const render = (value) => JSON.stringify(value, null, 2);
@@ -922,12 +940,21 @@ function renderRepairCharactersJson(payload, maxChars = REPAIR_CHARACTERS_MAX_CH
   // falls back to the compact spine when even the tightest cap does not fit.
   if (Array.isArray(payload)) {
     let rendered = full;
-    for (let cap = CHARACTER_FIELD_CAP_START; cap >= CHARACTER_FIELD_CAP_FLOOR; cap = Math.floor(cap / 2)) {
+    for (const cap of CHARACTER_FIELD_CAPS) {
       rendered = render(payload.map((character) => capCharacterFields(character, cap)));
       if (rendered.length <= maxChars) return rendered;
     }
-    const compact = render(payload.map(compactRosterCharacter));
-    return compact.length <= maxChars ? compact : rendered;
+    // Floor: the compact spine at the tightest cap, shedding trailing members
+    // until it fits. The budget is a hard contract, so a cast large enough to
+    // overrun even that loses members rather than the bound.
+    const spine = payload.map((character) => capCharacterFields(compactRosterCharacter(character), CHARACTER_FIELD_CAPS.at(-1)));
+    let kept = spine.length;
+    rendered = render(spine);
+    while (kept > 0 && rendered.length > maxChars) {
+      kept -= 1;
+      rendered = render(spine.slice(0, kept));
+    }
+    return rendered;
   }
 
   const targets = Array.isArray(payload?.targetCharacters) ? payload.targetCharacters : [];
@@ -936,30 +963,42 @@ function renderRepairCharactersJson(payload, maxChars = REPAIR_CHARACTERS_MAX_CH
   const rosterNote = (kept) => (kept === compactRoster.length
     ? 'Roster compacted to name/role/want/need to fit the prompt budget.'
     : `Roster compacted and limited to ${kept} of ${compactRoster.length} members to fit the prompt budget.`);
-  const build = (kept, cap) => render({
-    targetCharacters: cap ? targets.map((character) => capCharacterFields(character, cap)) : targets,
+  const buildTargets = (cap, spine) => {
+    const shaped = spine ? targets.map(compactRosterCharacter) : targets;
+    return cap ? shaped.map((character) => capCharacterFields(character, cap)) : shaped;
+  };
+  const targetNote = (cap, spine) => {
+    if (spine) return `Batch compacted to name/role/want/need and truncated at ${cap} characters to fit the prompt budget.`;
+    return cap ? `Character fields over ${cap} characters were truncated to fit the prompt budget.` : undefined;
+  };
+  const build = (kept, cap, spine = false) => render({
+    targetCharacters: buildTargets(cap, spine),
     fullSeriesRoster: compactRoster.slice(0, kept),
     rosterNote: rosterNote(kept),
-    ...(cap ? { targetNote: `Character fields over ${cap} characters were truncated to fit the prompt budget.` } : {}),
+    ...(targetNote(cap, spine) ? { targetNote: targetNote(cap, spine) } : {}),
   });
 
   // At a given field cap, keep as many roster members as fit. The batch under
   // repair outranks the roster, so the cap only tightens once even an empty
   // roster cannot make room.
-  const bestFit = (cap) => {
+  const bestFit = (cap, spine = false) => {
     let kept = compactRoster.length;
-    let rendered = build(kept, cap);
+    let rendered = build(kept, cap, spine);
     while (kept > 0 && rendered.length > maxChars) {
       kept -= 1;
-      rendered = build(kept, cap);
+      rendered = build(kept, cap, spine);
     }
     return rendered;
   };
 
   let rendered = bestFit(null);
-  for (let cap = CHARACTER_FIELD_CAP_START; rendered.length > maxChars && cap >= CHARACTER_FIELD_CAP_FLOOR; cap = Math.floor(cap / 2)) {
+  for (const cap of CHARACTER_FIELD_CAPS) {
+    if (rendered.length <= maxChars) return rendered;
     rendered = bestFit(cap);
   }
+  // Floor: compact the batch itself to the spine. Lossy for the characters under
+  // repair, which is why it is last, but the budget is a hard contract.
+  if (rendered.length > maxChars) rendered = bestFit(CHARACTER_FIELD_CAPS.at(-1), true);
   return rendered;
 }
 

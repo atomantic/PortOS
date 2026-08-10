@@ -514,6 +514,72 @@ describe('foundation repair prompt — bounded series seed and cast', () => {
     expect(JSON.parse(__testing.renderRepairCharactersJson(payload))).toEqual(payload);
   });
 
+  // The tiered degradation has to bottom out at a hard bound, not merely get
+  // closer to one — sweep cast size × field size × budget, including budgets far
+  // below one character's worth of prose.
+  it('never exceeds the character budget for any cast size or field size', () => {
+    for (const castSize of [0, 1, 6, 40, 120]) {
+      for (const fieldSize of [10, 200, 1_500, 6_000]) {
+        const members = Array.from({ length: castSize }, (_, i) => ({
+          ...castMember(i, fieldSize),
+          secrets: ['s'.repeat(fieldSize)],
+          // A nested object-in-array shape must not smuggle prose past the cap.
+          transitions: [{ kind: 'decision', label: 'l'.repeat(fieldSize) }],
+        }));
+        for (const maxChars of [2_000, 12_000]) {
+          const object = __testing.renderRepairCharactersJson(
+            { targetCharacters: members.slice(0, 6), fullSeriesRoster: members },
+            maxChars,
+          );
+          const array = __testing.renderRepairCharactersJson(members, maxChars);
+          const label = `cast=${castSize} field=${fieldSize} maxChars=${maxChars}`;
+          expect(object.length, `object ${label}`).toBeLessThanOrEqual(maxChars);
+          expect(array.length, `array ${label}`).toBeLessThanOrEqual(maxChars);
+          expect(() => JSON.parse(object), `object ${label}`).not.toThrow();
+          expect(() => JSON.parse(array), `array ${label}`).not.toThrow();
+        }
+      }
+    }
+  });
+
+  it('never exceeds the series budget for any arc count or free-text size', () => {
+    for (const arcCount of [0, 1, 18, 200]) {
+      for (const textSize of [10, 2_000, 20_000]) {
+        const series = {
+          id: 'ser-1', name: 'Example Series', targetFormat: 'novella', issueCountTarget: 24,
+          premise: 'p'.repeat(textSize), styleNotes: 'n'.repeat(textSize),
+          styleGuide: { voiceExemplars: [{ passage: 'g'.repeat(textSize), note: 'note' }] },
+          characterArcs: Array.from({ length: arcCount }, (_, i) => ({
+            characterId: `chr-${i}`, characterName: `Cast ${i}`,
+            want: 'w'.repeat(textSize), need: 'n'.repeat(textSize),
+            transitions: [{ kind: 'decision', label: 'l'.repeat(textSize) }],
+          })),
+        };
+        for (const maxChars of [2_000, 12_000]) {
+          const rendered = __testing.renderRepairSeriesJson(series, maxChars);
+          const label = `arcs=${arcCount} text=${textSize} maxChars=${maxChars}`;
+          expect(rendered.length, label).toBeLessThanOrEqual(maxChars);
+          expect(() => JSON.parse(rendered), label).not.toThrow();
+        }
+      }
+    }
+  });
+
+  // Unlike `renderArc` (plain text, hard-clamped), the JSON sections cannot slice
+  // their way under an arbitrarily small budget without handing the model a parse
+  // error. Below the structural floor they emit the smallest VALID payload they
+  // can and overshoot — pinned here so the asymmetry is a decision, not a
+  // surprise. The real budgets are 12,000, orders of magnitude above the floor.
+  it('emits valid JSON rather than a corrupt slice when the budget is below the structural floor', () => {
+    const cast = __testing.renderRepairCharactersJson({ targetCharacters: [], fullSeriesRoster: [] }, 40);
+    const series = __testing.renderRepairSeriesJson({ id: 'ser-1', name: 'S', premise: 'p'.repeat(9_000) }, 40);
+    expect(() => JSON.parse(cast)).not.toThrow();
+    expect(() => JSON.parse(series)).not.toThrow();
+    // The floor is the JSON skeleton itself (keys + the notes naming what was cut).
+    expect(cast.length).toBeLessThan(500);
+    expect(series.length).toBeLessThan(500);
+  });
+
   it('caps the flat (non-character-dimension) cast array by size too', () => {
     const array = Array.from({ length: 60 }, (_, i) => ({ id: `chr-${i}`, name: `Cast ${i}`, background: 'b'.repeat(900) }));
     const rendered = __testing.renderRepairCharactersJson(array);
