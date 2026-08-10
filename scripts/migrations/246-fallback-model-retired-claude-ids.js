@@ -104,7 +104,14 @@ export default {
 
       // The pin is resolved against the fallback PROVIDER, not this one — so
       // that is the model list it has to survive.
-      const target = providers[provider.fallbackProvider];
+      // `Object.hasOwn` for the same reason as `replacementFor` below: `providers`
+      // comes from `JSON.parse` and still inherits `Object.prototype`, so a
+      // `fallbackProvider` of `constructor`/`toString` would otherwise resolve to
+      // a prototype member instead of reading as "provider is gone".
+      const targetId = provider.fallbackProvider;
+      const target = typeof targetId === 'string' && Object.hasOwn(providers, targetId)
+        ? providers[targetId]
+        : null;
       if (!target) continue;
 
       if (lists(target, pinned)) continue; // still resolves — leave it alone

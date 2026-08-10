@@ -123,6 +123,16 @@ describe('migration 246 — repair retired fallbackModel pins', () => {
     expect(readJson(providersPath).providers.codex.fallbackModel).toBe('claude-opus-4-8');
   });
 
+  it('skips a fallbackProvider named after an Object.prototype member', async () => {
+    const config = staleConfig();
+    config.providers.codex.fallbackProvider = 'constructor';
+    writeJson(providersPath, config);
+
+    await migration.up({ rootDir });
+
+    expect(readJson(providersPath).providers.codex.fallbackModel).toBe('claude-opus-4-8');
+  });
+
   it('does not rewrite the file when nothing is stale', async () => {
     const config = staleConfig();
     config.providers.codex.fallbackModel = 'claude-opus-5';
