@@ -90,9 +90,9 @@ afterEach(() => {
 });
 
 describe('readStore', () => {
-  it('returns null when the store is absent (readFile ENOENT, no placeholder)', async () => {
+  it('returns null when the store is absent (readFile ENOENT)', async () => {
     readFileMock.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-    existsResult = false; // no `.icloud` placeholder shadowing the path
+    existsResult = false;
     const result = await store.readStore();
     expect(result).toBeNull();
     expect(console.warn).not.toHaveBeenCalled(); // a missing store is normal, not warn-worthy
@@ -189,7 +189,7 @@ describe('mlArrayIfEnabled', () => {
     });
 
     it('returns null (no throw) when the store is genuinely absent, even under strict', async () => {
-      // ENOENT + no placeholder shadow: never written by either device → trustworthy empty.
+      // ENOENT: never written by either device → trustworthy empty.
       readFileMock.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
       existsResult = false;
       await expect(store.mlArrayIfEnabled('goals', { strict: true })).resolves.toBeNull();
@@ -225,21 +225,17 @@ describe('mlArrayIfEnabled', () => {
       await expect(store.mlArrayIfEnabled('goals')).resolves.toBeNull();
     });
 
-    it('throws under strict when a legacy .icloud placeholder shadows an offloaded store', async () => {
-      // readFile reports ENOENT (real path offloaded) but the `.MortalLoom.json.icloud`
-      // placeholder is present: the store exists, just evicted. Must not read as
-      // trustworthy-absent — the read is attempted first, then the placeholder probe
-      // reclassifies it as unreadable.
+    it('treats ENOENT as trustworthy-absent under strict regardless of sibling paths (#3716)', async () => {
+      // The read path no longer probes for a pre-APFS `.MortalLoom.json.icloud`
+      // sibling — that representation does not occur on supported macOS (measured:
+      // zero placeholders across 223 iCloud containers holding 373 evicted files).
+      // ENOENT is therefore an unqualified "no file," never a reclassify-to-
+      // unreadable. Eviction cannot reach this branch: a dataless file keeps its
+      // path and rejects with ICLOUD_NOT_MATERIALIZED instead.
       readFileMock.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-      existsResult = true; // the placeholder existsSync probe returns true
-      await expect(store.mlArrayIfEnabled('goals', { strict: true }))
-        .rejects.toThrow(/unreadable/i);
-    });
-
-    it('non-strict treats a placeholder-shadowed store as null (fall through)', async () => {
-      readFileMock.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-      existsResult = true;
-      await expect(store.mlArrayIfEnabled('goals')).resolves.toBeNull();
+      existsResult = true; // what the removed placeholder probe would have read as "present"
+      await expect(store.mlArrayIfEnabled('goals', { strict: true })).resolves.toBeNull();
+      expect(console.warn).not.toHaveBeenCalled();
     });
 
     it('non-strict swallows an unreadable store (unchanged): returns null', async () => {
@@ -355,12 +351,12 @@ describe('updateStore', () => {
   });
 
   it('seeds a fresh store when the file disappears between existsSync and read (ENOENT race)', async () => {
-    // existsSync sequence: (1) inside readStoreAtPath → true (read attempted),
-    // (2) post-read check in updateStore's guard → false (file vanished),
-    // (3) `.icloud` placeholder probe → false (no shadowing placeholder).
-    // The post-read recheck must discriminate this from a transient/corrupt
-    // case so we don't reject a legitimate seed.
-    existsQueue.push(true, false, false);
+    // The read is attempted unconditionally (no existsSync gate — see
+    // readStoreAtPathResult) and reports ENOENT, so updateStore's guard makes the
+    // only existsSync call in the path: → false (file vanished). The post-read
+    // recheck must discriminate this from a transient/corrupt case so we don't
+    // reject a legitimate seed.
+    existsQueue.push(false);
     readFileMock.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
     writeFileMock.mockResolvedValue(undefined);
     const result = await store.updateStore((s) => {
@@ -372,12 +368,12 @@ describe('updateStore', () => {
   });
 
   it('refuses to overwrite when file was absent initially but appears unreadable mid-call (reverse race)', async () => {
-    // existsSync sequence: (1) inside readStoreAtPath → false (file absent at
-    // the start of the read), (2) post-read check in updateStore's guard →
-    // true (iCloud just finished downloading the file). Even though we'd be
-    // happy to seed a fresh store, the now-present file's content is unknown,
-    // so we must not blindly clobber it.
-    existsQueue.push(false, true);
+    // The read runs first and finds nothing (file absent at the start of the
+    // read); updateStore's guard then makes the only existsSync call → true
+    // (iCloud just finished downloading the file). Even though we'd be happy to
+    // seed a fresh store, the now-present file's content is unknown, so we must
+    // not blindly clobber it.
+    existsQueue.push(true);
     writeFileMock.mockResolvedValue(undefined);
     await expect(
       store.updateStore((s) => { s.goals.push({ id: 'should-not-write' }); })
@@ -476,31 +472,32 @@ describe('updateStore — iCloud on-demand materialize (darwin)', () => {
     );
   });
 
-  it('materializes an `.icloud` placeholder shadowing the real path instead of seeding fresh', async () => {
-    // Legacy eviction renamed MortalLoom.json → .MortalLoom.json.icloud, so the
-    // real path reads absent. Seeding a fresh store would bury real data — we
-    // must download the placeholder and write the recovered store instead.
-    // existsSync order: (1) readStoreAtPath path=false, (2) ternary path=false,
-    // (3) placeholder=true, (4) post-materialize re-read path=true.
-    existsQueue.push(false, false, true, true);
-    let materialized = false;
-    readFileMock.mockImplementation(async () => {
-      if (!materialized) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-      return JSON.stringify({ goals: [{ id: 'recovered' }] });
-    });
-    spawnMock.mockReturnValue(makeMaterializeChild(0, () => { materialized = true; }));
+  it('seeds an absent path without a second existsSync probe for an `.icloud` placeholder (#3716)', async () => {
+    // The overwrite guard used to fall back to `existsSync(.MortalLoom.json.icloud)`
+    // whenever the real path was absent, and refuse the seed (paying a brctl
+    // download) if that sibling existed. That representation does not occur on
+    // supported macOS, so the probe is gone and an absent path just seeds.
+    //
+    // existsSync consumption is the assertion. The guard now makes exactly ONE
+    // call (path → false, seed). The old code made three — a placeholder probe in
+    // the read path, the guard's path check, then the guard's placeholder probe —
+    // so it would consume the queued `true` last, refuse the seed and spawn brctl.
+    // Restoring the old ternary makes this test fail (spawn called, no write),
+    // which is what makes it a bypass probe rather than a restatement.
+    existsQueue.push(false, false, true);
+    readFileMock.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    writeFileMock.mockResolvedValue(undefined);
 
     const result = await store.updateStore((s) => {
-      s.goals.push({ id: 'added' });
+      s.goals.push({ id: 'seeded' });
       return s.goals.length;
     });
 
-    // brctl is asked to download the REAL path, not the placeholder.
-    expect(spawnMock).toHaveBeenCalledWith('brctl', ['download', '/icloud/MortalLoom.json'], expect.objectContaining({ shell: false }));
-    expect(result).toBe(2);
+    expect(result).toBe(1);
+    expect(spawnMock).not.toHaveBeenCalled();
     expect(writeFileMock).toHaveBeenCalledTimes(1);
     const written = JSON.parse(writeFileMock.mock.calls[0][1]);
-    expect(written.goals).toEqual([{ id: 'recovered' }, { id: 'added' }]);
+    expect(written.goals).toEqual([{ id: 'seeded' }]);
   });
 
   it('does not materialize (no spawn) when seeding a genuinely new file', async () => {

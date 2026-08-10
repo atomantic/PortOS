@@ -330,13 +330,14 @@ export async function createNote(vaultId, notePath, content = '') {
   // The overwrite case is `updateNote`, which is guarded. Don't add a screen here
   // "for symmetry"; it would cost a stat per created note and can never fire.
   //
-  // This covers the modern APFS representation only. The LEGACY representation —
-  // an evicted file replaced by a sibling `.<name>.md.icloud` placeholder, which
-  // `mortalLoomStore` still checks for (`icloudPlaceholderPath`) — is NOT handled:
-  // `existsSync(fullPath)` is false for a placeholder-shadowed note, so this
-  // creates a fresh file beside the placeholder rather than refusing. Tracked
-  // separately; it predates #3706 and needs its own decision about whether vaults
-  // ever see placeholders on current macOS.
+  // The modern APFS dataless vnode is the ONLY eviction representation there is
+  // to handle (#3716). macOS' pre-APFS mechanism instead replaced the note with a
+  // sibling `.<name>.md.icloud` stub, which `existsSync(fullPath)` cannot see — so
+  // this would create a fresh file beside it and shadow the offloaded note. That
+  // representation was measured as non-occurring (zero placeholders across 223
+  // iCloud containers holding 373 evicted files, macOS 26 / APFS), and the probe
+  // `mortalLoomStore` used to carry for it was deleted rather than copied here.
+  // See the "only ONE representation" section in server/lib/icloudFile.js.
   await writeFile(fullPath, content, 'utf-8');
   console.log(`📓 Created note: ${notePath} in vault ${vault.name}`);
   return await getNote(vaultId, notePath, { includeBacklinks: false });

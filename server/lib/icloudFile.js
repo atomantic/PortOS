@@ -77,6 +77,27 @@
  * persistent read/write outage for that one file, not corruption. Callers that
  * must degrade gracefully (a vault walk) skip the file and report a skipped
  * count; callers that must not silently succeed (a store write) fail loudly.
+ *
+ * ## There is only ONE representation to screen for (measured, #3716)
+ *
+ * macOS' pre-APFS eviction mechanism did not leave the path in place: it
+ * *replaced* `Foo.json` with a hidden sibling `.Foo.json.icloud` stub, so
+ * `existsSync(Foo.json)` reported false while real data sat there offloaded.
+ * That representation needs a completely different guard — an `existsSync` on
+ * the sibling — because the dataless `stat()` screen above can never see it.
+ *
+ * It does not occur. Measured on macOS 26 (Darwin 25.5, APFS): across 223 iCloud
+ * ubiquity containers holding 373 evicted files, **every** evicted file was
+ * dataless and **zero** `.icloud` placeholders existed anywhere under the iCloud
+ * root (or under the home dir at large). `mortalLoomStore` used to carry a
+ * placeholder probe — added speculatively as belt-and-suspenders alongside a real
+ * *dataless* incident, never observed firing — and #3716 removed it rather than
+ * copying it into `obsidian.js` as a second unreachable branch.
+ *
+ * So: an absent path is genuinely absent, and ENOENT is a trustworthy "no file."
+ * If a placeholder is ever actually observed on a supported macOS, the probe
+ * belongs HERE as a shared helper wired into `mortalLoomStore.updateStore` and
+ * `obsidian.createNote` together — never in only one of them.
  */
 
 import { readFile, stat } from 'fs/promises';

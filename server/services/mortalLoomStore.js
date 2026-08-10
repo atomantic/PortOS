@@ -9,7 +9,7 @@
  */
 
 import { homedir } from 'os';
-import { join, dirname, basename } from 'path';
+import { join } from 'path';
 import { stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
@@ -137,22 +137,18 @@ function pinAgainstEviction(path) {
 
 // === On-demand (blocking) materialization for the write path ===
 
-// macOS' older eviction mechanism renames `Foo.json` to a hidden
-// `.Foo.json.icloud` placeholder, after which `existsSync(Foo.json)` reports
-// false even though real data is sitting there evicted. Detecting the
-// placeholder lets updateStore() refuse to seed a fresh store on top of it
-// (which would shadow the real data) and materialize it instead. Modern macOS
-// uses dataless files (path stays present) so this is belt-and-suspenders, but
-// the silent-data-loss cost if it ever fires is exactly what this module's
-// overwrite guard exists to prevent.
-function icloudPlaceholderPath(path) {
-  return join(dirname(path), `.${basename(path)}.icloud`);
-}
+// Eviction has exactly ONE representation this module has to handle: the modern
+// APFS dataless vnode, where the path stays present and `readIfMaterialized`'s
+// `stat()` screen catches it. This module used to also probe for macOS' pre-APFS
+// `.MortalLoom.json.icloud` sibling stub; #3716 measured that representation as
+// non-occurring and removed the probe — see the "only ONE representation"
+// section in server/lib/icloudFile.js. An absent path is therefore genuinely
+// absent here, safe to seed.
 
 // Unlike the fire-and-forget pinAgainstEviction() at boot, the write path needs
 // to KNOW an evicted file is materialized before deciding whether refusing to
 // overwrite is warranted. `brctl download <path>` asks iCloud to materialize a
-// dataless (Optimize-Mac-Storage-evicted) file or an `.icloud` placeholder.
+// dataless (Optimize-Mac-Storage-evicted) file.
 //
 // CRITICAL: exit 0 means the download was ACCEPTED/QUEUED, NOT that the bytes are
 // local. brctl can return 0 before materialization completes, and returns 0 even
@@ -162,9 +158,8 @@ function icloudPlaceholderPath(path) {
 // keeps the caller's subsequent re-read safe is `readStoreAtPathResult`: it calls
 // `readIfMaterialized`, which REJECTS rather than issuing a blocking read for a
 // file it can't safely read — a still-dataless file rejects with
-// ICLOUD_NOT_MATERIALIZED (its `Stats.blocks` screen); an absent path shadowed by
-// a legacy `.icloud` placeholder surfaces as ENOENT — and `readStoreAtPathResult`
-// catches both and yields `store: null` (which `readStoreAtPath` unwraps). Either
+// ICLOUD_NOT_MATERIALIZED (its `Stats.blocks` screen) — and `readStoreAtPathResult`
+// catches that and yields `store: null` (which `readStoreAtPath` unwraps). Either
 // way the store stays null and the caller refuses to overwrite, so a false-
 // positive `true` from here can't truncate data. (It does not eliminate the
 // bounded eviction race documented in `readIfMaterialized`, which can still
@@ -348,23 +343,18 @@ async function readStoreAtPathResult(path) {
   // `brctl download` so the next cycle succeeds.
   const raw = await withTransientRetry(() => readIfMaterialized(path, { label: 'MortalLoom store' })).catch((err) => {
     if (err.code === ICLOUD_NOT_MATERIALIZED) {
-      // Present but evicted — never a trustworthy empty. Same classification as
-      // the legacy `.icloud` placeholder case below, so a strict read reports
+      // Present but evicted — never a trustworthy empty, so a strict read reports
       // `unavailable` and updateStore's guard refuses to seed over real data.
       console.warn(`⚠️ MortalLoom store evicted from local storage; skipping read until iCloud materializes it: ${path}`);
       unreadable = true;
       return null;
     }
     if (err.code === 'ENOENT') {
-      // Genuinely absent — UNLESS a legacy `.MortalLoom.json.icloud` placeholder
-      // shadows the real path, which means the store EXISTS but is offloaded under
-      // macOS's older rename-based eviction (the case updateStore's overwrite
-      // guard also checks). Treat that as present-but-unreadable so a strict read
-      // refuses to report a trustworthy empty for a store it has not actually
-      // read. This also covers an offload that races in after the read began.
-      // Silent either way — a missing store is normal, not warn-worthy. The read
-      // side never blocks on `brctl` to materialize (that stays updateStore's job).
-      if (existsSync(icloudPlaceholderPath(path))) unreadable = true;
+      // Genuinely absent, and trustworthy as such: eviction cannot surface here.
+      // A dataless file keeps its path and rejects with ICLOUD_NOT_MATERIALIZED
+      // above, and the pre-APFS placeholder representation that WOULD read as
+      // ENOENT does not occur (#3716 — see server/lib/icloudFile.js). Silent —
+      // a missing store is normal, not warn-worthy.
       return null;
     }
     // Any other error (EACCES/EIO/EAGAIN/EDEADLK/unknown errno) is a store we could
@@ -386,8 +376,8 @@ async function readStoreAtPathResult(path) {
 /**
  * Store object or `null` — the pre-#2742 shape, kept for callers (readStore,
  * updateStore) that only need the parsed store and derive their own
- * absent-vs-unreadable handling (updateStore does its own existsSync +
- * placeholder check for the overwrite guard).
+ * absent-vs-unreadable handling (updateStore does its own existsSync check for
+ * the overwrite guard).
  */
 async function readStoreAtPath(path) {
   return (await readStoreAtPathResult(path)).store;
@@ -410,19 +400,18 @@ export async function updateStore(mutator) {
   const path = await resolvePath();
   let store = await readStoreAtPath(path);
   // The overwrite guard is based solely on post-read state, not a pre-read
-  // snapshot. readStoreAtPath returns null for four reasons; we only care
+  // snapshot. readStoreAtPath returns null for several reasons; we only care
   // about the *currently observable* state when deciding whether it's safe
   // to write:
-  //   (1) file does not exist now (and no `.icloud` placeholder shadows it) →
-  //       safe to seed a fresh store (whether it was absent the whole time,
-  //       disappeared mid-call, or never appeared in the first place).
+  //   (1) file does not exist now → safe to seed a fresh store (whether it was
+  //       absent the whole time, disappeared mid-call, or never appeared in the
+  //       first place). An absent path is unambiguously absent: the only eviction
+  //       representation that would hide real data behind a false `existsSync` is
+  //       the pre-APFS `.icloud` placeholder, which does not occur (#3716).
   //   (2) file exists now but parsed to a non-plain-object value → unreadable
   //       (transient iCloud read failure, corrupt JSON, or unexpected shape
   //       like a top-level array which JSON.stringify would silently drop).
-  //   (3) the real path is absent but an `.icloud` placeholder is shadowing it
-  //       → the file was evicted under the legacy rename mechanism and real
-  //       data is sitting there unmaterialized; seeding fresh would bury it.
-  // For (2) and (3) the most common cause on macOS is iCloud eviction
+  // For (2) the most common cause on macOS is iCloud eviction
   // (Optimize-Mac-Storage made the file dataless and the sub-200ms transient
   // retry isn't long enough to materialize it). Before refusing — which blocks
   // the user's write — force a BLOCKING `brctl download` and re-read once. This
@@ -432,18 +421,15 @@ export async function updateStore(mutator) {
   // survive to the throw. Without this guard, the iCloud transient-failure
   // tolerance in readStoreAtPath would let updateStore silently truncate a
   // momentarily unreadable iCloud file.
-  const unsafeToSeed = existsSync(path)
-    ? !isPlainObject(store)
-    : existsSync(icloudPlaceholderPath(path));
+  const unsafeToSeed = existsSync(path) && !isPlainObject(store);
   if (unsafeToSeed) {
     // `materializeNow` resolving `true` only means brctl ACCEPTED the download
     // request (exit 0), NOT that the bytes are local — see its docblock. Do NOT
     // remove the re-read's screening on the strength of that `true`: `readStoreAtPath`
     // → `readStoreAtPathResult` calls `readIfMaterialized`, which REJECTS instead of
     // issuing a blocking read for a file it can't safely read — a still-dataless file
-    // rejects on the `stat()` re-screen, an absent-but-placeholder-shadowed path
-    // surfaces as ENOENT — and `readStoreAtPathResult` catches both and returns
-    // `store: null`. Either way store stays null and we refuse to overwrite rather
+    // rejects on the `stat()` re-screen — and `readStoreAtPathResult` catches that
+    // and returns `store: null`. Either way store stays null and we refuse rather
     // than reading blindly (which is what would risk stranding a threadpool slot).
     const materialized = await materializeNow(path);
     if (materialized) {
