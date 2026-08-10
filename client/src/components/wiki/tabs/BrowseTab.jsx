@@ -10,7 +10,8 @@ import { timeAgo, formatBytes } from '../../../utils/formatters';
 import { WIKI_CATEGORIES } from '../constants.jsx';
 import BrailleSpinner from '../../BrailleSpinner';
 import OfflineNotesNotice from '../../OfflineNotesNotice.jsx';
-import { useForceSaveGate } from '../../../hooks/useForceSaveGate.js';
+import { useNoteSave } from '../../../hooks/useNoteSave.js';
+import ForceSaveNoteRow from '../../ForceSaveNoteRow.jsx';
 
 const WIKI_FOLDERS = WIKI_CATEGORIES.map(c => ({ key: c.folder, label: c.label, icon: c.icon, color: c.textClass }));
 const RAW_FOLDERS = [{ key: 'raw', label: 'Raw Sources', icon: FolderOpen, color: 'text-gray-400' }];
@@ -20,7 +21,6 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
   const [selectedNote, setSelectedNote] = useState(null);
   const [noteContent, setNoteContent] = useState('');
   const [editing, setEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [loadingNote, setLoadingNote] = useState(false);
   const [expandedFolders, setExpandedFolders] = useState(new Set(['wiki/sources', 'wiki/entities', 'wiki/concepts']));
   const [activeSection, setActiveSection] = useState('wiki');
@@ -31,12 +31,12 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
   const [confirmDelete, setConfirmDelete] = useState(null);
   const editorRef = useRef(null);
 
-  // Escape hatch for a note the iCloud dataless screen refuses to save (#3717).
-  const {
-    isArmed: isForceSaveArmed,
-    recordFailure: recordEvictedSave,
-    reset: resetForceSave
-  } = useForceSaveGate();
+  // Owns the write plus the iCloud force-save escape hatch (#3717).
+  const { saving, save, forceOffered, dismissForce } = useNoteSave({
+    vaultId,
+    notePath: selectedNote?.path || null,
+    content: noteContent
+  });
 
   // Handle deep-link from overview
   useEffect(() => {
@@ -56,26 +56,15 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
     setLoadingNote(false);
   };
 
-  // `force` bypasses the server's iCloud dataless screen and is ONLY ever passed
-  // from the "Save anyway" override the gate arms after two consecutive
-  // NOTE_EVICTED refusals (#3717) — never from the Save button or ⌘S.
-  const handleSaveNote = async ({ force = false } = {}) => {
-    if (!selectedNote) return;
-    const notePath = selectedNote.path;
-    setSaving(true);
-    const data = await api.updateNote(vaultId, notePath, noteContent, { force })
-      .catch((err) => {
-        if (err?.code === 'NOTE_EVICTED') recordEvictedSave(notePath);
-        return null;
-      });
-    setSaving(false);
-    if (data) {
-      resetForceSave();
-      setSelectedNote(data);
-      setEditing(false);
-      toast.success('Note saved');
-      onRefresh();
-    }
+  // `force` is ONLY ever passed by <ForceSaveNoteRow>'s confirm (#3717) — never
+  // by the Save button or ⌘S.
+  const handleSaveNote = async (options) => {
+    const data = await save(options);
+    if (!data) return;
+    setSelectedNote(data);
+    setEditing(false);
+    toast.success('Note saved');
+    onRefresh();
   };
 
   const handleDeleteNote = async (notePath) => {
@@ -298,19 +287,11 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
               />
             )}
 
-            {/* Force-save escape hatch: only after two consecutive iCloud refusals (#3717) */}
-            {isForceSaveArmed(selectedNote.path) && (
-              <InlineConfirmRow
-                variant="separator"
-                tone="warning"
-                question="iCloud keeps reporting this note as not downloaded, so saving is refused. Write it anyway?"
-                confirmText="Save anyway"
-                confirmTitle="Bypass the iCloud download check and write this note"
-                cancelText="Keep waiting"
-                onConfirm={() => handleSaveNote({ force: true })}
-                onCancel={resetForceSave}
-              />
-            )}
+            <ForceSaveNoteRow
+              offered={forceOffered}
+              onConfirm={() => handleSaveNote({ force: true })}
+              onCancel={dismissForce}
+            />
 
             {/* Note content */}
             <div className="flex-1 min-h-0 overflow-auto flex">

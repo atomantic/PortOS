@@ -86,6 +86,33 @@ describe('PUT /api/notes/vaults/:id/note force pass-through', () => {
     expect(obsidian.updateNote).toHaveBeenCalledWith('v1', 'a.md', 'hi', { force: true });
   });
 
+  it('forwards the stalled verdict so only a hopeless refusal can arm the override', async () => {
+    obsidian.updateNote.mockResolvedValue({
+      error: 'NOTE_EVICTED',
+      stalled: true,
+      message: 'iCloud changed nothing',
+    });
+
+    const res = await request(app).put('/api/notes/vaults/v1/note?path=a.md').send({ content: 'hi' });
+
+    expect(res.status).toBe(503);
+    // Without this the client can only guess, and would arm "Save anyway" during
+    // a genuine in-flight download — the blocking write the guard prevents.
+    expect(res.body.context).toEqual({ stalled: true });
+  });
+
+  it('says stalled:false for a refusal a retry can still clear', async () => {
+    obsidian.updateNote.mockResolvedValue({
+      error: 'NOTE_EVICTED',
+      stalled: false,
+      message: 'download in progress',
+    });
+
+    const res = await request(app).put('/api/notes/vaults/v1/note?path=a.md').send({ content: 'hi' });
+
+    expect(res.body.context).toEqual({ stalled: false });
+  });
+
   it('rejects a non-boolean force rather than coercing it', async () => {
     const res = await request(app).put('/api/notes/vaults/v1/note?path=a.md').send({ content: 'hi', force: 'yes' });
 

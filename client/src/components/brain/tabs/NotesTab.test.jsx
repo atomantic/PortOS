@@ -148,7 +148,11 @@ describe('NotesTab header touch targets', () => {
  */
 describe('NotesTab iCloud force save', () => {
   const NOTE = { path: 'a.md', name: 'a', folder: '', size: 12, tags: [], modifiedAt: new Date().toISOString() };
-  const evicted = () => Object.assign(new Error('evicted'), { code: 'NOTE_EVICTED' });
+  // A refusal the server flags as `stalled` — its own before/after check found
+  // the download moved nothing, so retrying provably cannot clear it. Only this
+  // shape may arm the override.
+  const evicted = ({ stalled = true } = {}) =>
+    Object.assign(new Error('evicted'), { code: 'NOTE_EVICTED', context: { stalled } });
 
   const openEditor = async () => {
     await renderTab();
@@ -200,6 +204,19 @@ describe('NotesTab iCloud force save', () => {
 
   it('does not arm on an unrelated failure', async () => {
     api.updateNote.mockRejectedValue(Object.assign(new Error('nope'), { code: 'INVALID_PATH' }));
+    await openEditor();
+
+    await clickSave();
+    await clickSave();
+
+    expect(screen.queryByRole('button', { name: 'Save anyway' })).toBeNull();
+  });
+
+  it('does not arm while a download is genuinely in flight', async () => {
+    // The transient case: waiting IS the right answer, and forcing here would
+    // issue the blocking write the guard exists to prevent. An impatient user
+    // clicking Save twice must not be handed the override.
+    api.updateNote.mockRejectedValue(evicted({ stalled: false }));
     await openEditor();
 
     await clickSave();

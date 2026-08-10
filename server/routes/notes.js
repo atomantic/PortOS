@@ -39,7 +39,15 @@ function throwOnError(result, fallbackMessage) {
   if (result?.error) {
     throw new ServerError(result.message || result.error, {
       status: errorStatus(result.error),
-      code: result.error
+      code: result.error,
+      // `stalled` is the service's verdict that this refusal is NOT transient —
+      // the download changed nothing, so no amount of retrying clears it. It
+      // rides the standard `context` channel (sanitized here, re-attached by
+      // `apiCore.request` as `err.context`) because it is the only thing allowed
+      // to arm the force-save override: a client-side retry counter would arm it
+      // during a genuine in-flight download too, handing the user exactly the
+      // blocking write this guard exists to prevent (#3717).
+      ...(result.stalled === undefined ? {} : { context: { stalled: result.stalled } })
     });
   }
   if (result === null) {

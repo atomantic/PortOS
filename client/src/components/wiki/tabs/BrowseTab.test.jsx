@@ -73,7 +73,10 @@ describe('BrowseTab responsive list/detail', () => {
  * here, and it must stay shut until the same page has been refused twice.
  */
 describe('BrowseTab iCloud force save', () => {
-  const evicted = () => Object.assign(new Error('evicted'), { code: 'NOTE_EVICTED' });
+  // Only a refusal the server flags as `stalled` (retrying cannot help) may arm
+  // the override; a transient one must not.
+  const evicted = ({ stalled = true } = {}) =>
+    Object.assign(new Error('evicted'), { code: 'NOTE_EVICTED', context: { stalled } });
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -116,6 +119,16 @@ describe('BrowseTab iCloud force save', () => {
 
   it('does not arm on an unrelated save failure', async () => {
     api.updateNote.mockRejectedValue(Object.assign(new Error('nope'), { code: 'INVALID_PATH' }));
+    await openEditor();
+
+    await clickSave();
+    await clickSave();
+
+    expect(screen.queryByRole('button', { name: 'Save anyway' })).toBeNull();
+  });
+
+  it('does not arm while a download is genuinely in flight', async () => {
+    api.updateNote.mockRejectedValue(evicted({ stalled: false }));
     await openEditor();
 
     await clickSave();
