@@ -31,13 +31,14 @@
  * | `stat`                           | no            | instant                  |
  * | `open` — `'r'`, `'a'`, `'r+'`    | no            | 0 ms                     |
  * | `rename`                         | no            | 0–1 ms                   |
+ * | `unlink`                         | no            | 0 ms                     |
  * | `read`                           | **yes**       | ~900 ms                  |
  * | `write` after `O_TRUNC` (`'w'`)  | **yes**       | ~820 ms                  |
  * | `write` in append mode (`'a'`)   | **yes**       | ~690 ms                  |
  * | `link` (hard link)               | **yes**       | —                        |
  * | `clonefile` (`cp -c`)            | **yes**       | —                        |
  *
- * Two consequences that are easy to get wrong:
+ * Three consequences that are easy to get wrong:
  *
  * 1. **`O_TRUNC` does NOT short-circuit materialization.** Truncating to zero
  *    discards every byte the download would fetch, so "there is nothing to
@@ -49,10 +50,27 @@
  * 2. **Screening is free.** `stat` and `open` never materialize, so a guard
  *    costs nothing on the healthy path — including `existsSync` precondition
  *    checks, which can stay exactly where they are.
+ * 3. **`unlink` is free — but that is a measurement, not an inference** (#3713).
+ *    "Unlink only drops a directory entry, so there is nothing to download" is
+ *    the same shape of argument as the `O_TRUNC` one above, and `link` is pure
+ *    metadata too yet it *does* materialize. Measured instead: `unlinkSync` on a
+ *    freshly-evicted file returned in **0.1 ms** at both 512 KB and 5 MB — three
+ *    runs of three — against **884 ms** for a `read` of the same 5 MB dataless
+ *    fixture, and no download was issued. So delete paths need no screen.
  *
- * `unlink` is deliberately absent above: it is untested. Do not assume it is
- * free by analogy with `rename` — `link` is also pure metadata and it *does*
- * materialize.
+ * ## Reproducing these measurements
+ *
+ * Eviction is the hard part, and it is NOT unavailable to a CLI: `brctl evict
+ * <path>` works and is the mechanism used for all of the above. Like `brctl
+ * download` (which the heal path below uses) it is absent from `brctl --help`
+ * but fully functional; it refuses only when run as root. Everything else that
+ * looks like it should work does not — `fileproviderctl` has no `evict`,
+ * `chflags dataless` silently no-ops, and `FileManager.evictUbiquitousItem`
+ * fails `NSCocoaErrorDomain 512` from an unentitled process. Verify the state
+ * with `stat -f "blocks=%b flags=%Sf size=%z"`: evicted reads `blocks=0` and
+ * `compressed,dataless`. Always time the syscall in a CHILD process with a hard
+ * kill — a materialization that stalls cannot be cancelled — and use a fresh
+ * subject per case, since the first materializing call heals the file.
  *
  * ## The screen
  *

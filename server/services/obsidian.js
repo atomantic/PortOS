@@ -392,6 +392,15 @@ export async function deleteNote(vaultId, notePath) {
   if (!fullPath) return { error: 'INVALID_PATH' };
   if (!existsSync(fullPath)) return { error: 'NOTE_NOT_FOUND' };
 
+  // No dataless screen here, deliberately (#3713): `unlink` does NOT materialize
+  // an evicted vnode. That is measured, not inferred from POSIX — `link` is pure
+  // metadata too and it *does* materialize, so the analogy with `rename` was not
+  // safe to lean on. On a freshly-evicted iCloud file `unlinkSync` returned in
+  // 0.1 ms at both 512 KB and 5 MB, versus 884 ms to `read` the same 5 MB
+  // dataless fixture. Deleting an offloaded note therefore cannot wedge the libuv
+  // threadpool the way `updateNote`'s overwrite could, and guarding it would be
+  // strictly worse than useless: the guard's own remedy is `materializeAndWait`,
+  // i.e. downloading every byte of a file purely to throw it away.
   await unlink(fullPath);
   console.log(`📓 Deleted note: ${notePath} from vault ${vault.name}`);
   return true;

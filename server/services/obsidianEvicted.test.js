@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -42,8 +42,10 @@ vi.mock('../lib/icloudFile.js', () => ({
   materializeAndWait: vi.fn(async () => true),
 }));
 
-const { addVault, scanVault, searchNotes, getVaultTags, getVaultGraph, getNote, updateNote, createNote, upsertNote } =
-  await import('./obsidian.js');
+const {
+  addVault, scanVault, searchNotes, getVaultTags, getVaultGraph,
+  getNote, updateNote, createNote, upsertNote, deleteNote
+} = await import('./obsidian.js');
 
 const VAULT_DIR = join(tempRoot, 'vault');
 let vaultId;
@@ -222,5 +224,43 @@ describe('obsidian updateNote against an evicted note', () => {
     // reach updateNote — with no user in the loop, so it must fail quietly.
     await expect(upsertNote(vaultId, NOTE, 'REPLACEMENT')).resolves.toBeNull();
     expect(readFileSync(join(VAULT_DIR, NOTE), 'utf-8')).toBe(ORIGINAL);
+  });
+});
+
+/**
+ * The DELETE side — #3713.
+ *
+ * `deleteNote` was the third candidate for the #3706 treatment, on the theory
+ * that `unlink` might materialize the way `link` does. Measured: it does not
+ * (0.1 ms dataless at 512 KB and 5 MB, vs 884 ms to read the same 5 MB dataless
+ * fixture), so the correct outcome is *no guard*. These pin that absence — a
+ * "for symmetry with updateNote" change has to argue with a test, because the
+ * guard it would add is actively harmful: `materializeAndWait` would download
+ * the whole file just to unlink it.
+ */
+describe('obsidian deleteNote against an evicted note', () => {
+  beforeEach(async () => {
+    const icloud = await import('../lib/icloudFile.js');
+    icloud.isSuspectedDataless.mockReset().mockResolvedValue(true);
+    icloud.materializeAndWait.mockReset().mockResolvedValue(true);
+  });
+
+  it('deletes an evicted note outright — no screen, no download', async () => {
+    const icloud = await import('../lib/icloudFile.js');
+
+    // The screen is mocked to report EVERY path dataless; the delete must still
+    // go through, because the unlink it issues cannot block.
+    await expect(deleteNote(vaultId, 'evicted.md')).resolves.toBe(true);
+
+    expect(existsSync(join(VAULT_DIR, 'evicted.md'))).toBe(false);
+    expect(icloud.isSuspectedDataless).not.toHaveBeenCalled();
+    expect(icloud.materializeAndWait).not.toHaveBeenCalled();
+  });
+
+  it('still reports NOTE_NOT_FOUND for a path with nothing at it', async () => {
+    // The existsSync precondition is a stat, which never materializes, so it
+    // keeps working unchanged on an evicted vault.
+    const result = await deleteNote(vaultId, 'no-such-note.md');
+    expect(result.error).toBe('NOTE_NOT_FOUND');
   });
 });
