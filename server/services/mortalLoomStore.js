@@ -89,8 +89,10 @@ export function defaultStorePath() { return DEFAULT_ICLOUD_PATH; }
 // macOS Optimize-Mac-Storage can evict iCloud files. When that happens the
 // path still appears to exist (placeholder), but `readFile` returns EAGAIN
 // because the read triggers an async download that doesn't return inline.
-// `brctl download <path>` is the documented verb to materialize the file
-// now. It does NOT set a persistent retention flag against future eviction
+// `brctl download <path>` is the verb that materializes the file now. It is
+// undocumented — absent from `brctl --help`, like its `evict` counterpart (see
+// server/lib/icloudFile.js) — but present on every stock macOS and functional.
+// It does NOT set a persistent retention flag against future eviction
 // (that requires Finder's "Keep Downloaded" or undocumented `brctl unevict`),
 // so re-eviction under future disk pressure is still possible — the retry-
 // on-EAGAIN path handles that case. Best-effort, fire-and-forget; on
