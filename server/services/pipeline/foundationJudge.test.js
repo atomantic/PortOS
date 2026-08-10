@@ -226,6 +226,19 @@ describe('foundationInputsHash + staleness — fast-pass pinning', () => {
     expect(foundationInputsHash({ ...series, characterArcs: [{ characterId: 'chr-1', want: 'belong' }] }, null, [issue])).not.toBe(base);
     expect(foundationInputsHash({ ...series, styleNotes: 'lyrical' }, null, [issue])).not.toBe(base);
   });
+  it('ignores noncanonical visual design assets but tracks narrative influences', () => {
+    const base = { logline: 'A city pays for magic with memory.' };
+    const withVisualAssets = {
+      ...base,
+      categories: { rituals: { variations: [{ label: 'The Naming Tax', prompt: 'visual prompt tokens' }] } },
+      compositeSheets: [{ id: 'sheet-1', prompt: 'contact sheet prompt tokens' }],
+    };
+    expect(foundationInputsHash({}, base)).toBe(foundationInputsHash({}, withVisualAssets));
+    expect(foundationInputsHash({}, base)).not.toBe(foundationInputsHash({}, {
+      ...base,
+      influences: { embrace: ['labor songs'], avoid: ['cosmic abstraction'] },
+    }));
+  });
   it('isFoundationStale flags a complete snapshot whose pinned hash drifted', () => {
     expect(isFoundationStale({ status: 'complete', sourceInputsHash: 'a' }, 'b')).toBe(true);
     expect(isFoundationStale({ status: 'complete', sourceInputsHash: 'a' }, 'a')).toBe(false);
@@ -367,7 +380,7 @@ describe('foundation repair prompt — bounded outline', () => {
 });
 
 describe('foundation judge context — complete planning altitude', () => {
-  it('shows the world bible premise and design systems that world repair can change', () => {
+  it('shows narrative canon but omits noncanonical visual prompt families the repair cannot change', () => {
     const ctx = __testing.buildFoundationContext({
       series: { name: 'Example Series', seasons: [] },
       universe: {
@@ -380,7 +393,7 @@ describe('foundation judge context — complete planning altitude', () => {
       contentMax: 30_000,
     });
     expect(ctx.worldEntitiesSummary).toContain('Every spell erases one shared fact.');
-    expect(ctx.worldEntitiesSummary).toContain('rituals: The Naming Tax');
+    expect(ctx.worldEntitiesSummary).not.toContain('The Naming Tax');
     expect(ctx.characterRoster).toContain('wound: Abandoned during the Naming Tax');
   });
 
