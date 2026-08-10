@@ -9,6 +9,12 @@ import InlineConfirmRow from './ui/InlineConfirmRow';
  * the guard, which is why this is a row the user has to answer and never an
  * automatic retry.
  *
+ * The copy names the cost of being wrong on purpose. `brctl` exit 0 means the
+ * download was accepted, not that the bytes are local, so even a stalled verdict
+ * does not PROVE the file is on this Mac — and if it isn't, the forced write
+ * blocks a libuv thread uninterruptibly. The user can only weigh "Save anyway"
+ * against "Keep waiting" if the prompt says that out loud.
+ *
  * Renders nothing when not offered, so callers can drop it in unconditionally.
  * Shared by Brain Notes and the Wiki browser — the same lockout is reachable
  * from both, and the copy must not drift between them.
@@ -19,7 +25,7 @@ export default function ForceSaveNoteRow({ offered, onConfirm, onCancel }) {
     <InlineConfirmRow
       variant="separator"
       tone="warning"
-      question="iCloud keeps reporting this note as not downloaded, so saving is refused. Write it anyway?"
+      question="iCloud says this note isn't downloaded, but asking it to download changed nothing. If the note really is on this Mac, saving is safe — if it isn't, PortOS may stop responding until you restart it. Write it anyway?"
       confirmText="Save anyway"
       confirmTitle="Bypass the iCloud download check and write this note"
       cancelText="Keep waiting"

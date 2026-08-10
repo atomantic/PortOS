@@ -87,6 +87,70 @@ describe('useNoteSave', () => {
     expect(result.current.forceOffered).toBe(false);
   });
 
+  it('does not carry an armed override to a same-named note in another vault', async () => {
+    // Vaults routinely share basenames (index.md, README.md, daily notes). Keying
+    // on the path alone would render the override over a different file that was
+    // never screened, and confirming it would force-write THAT one.
+    api.updateNote.mockRejectedValue(evicted());
+    const { result, rerender } = renderHook(props => useNoteSave(props), {
+      initialProps: { vaultId: 'v1', notePath: 'index.md', content: 'body' },
+    });
+
+    await failTwice(result);
+    expect(result.current.forceOffered).toBe(true);
+
+    rerender({ vaultId: 'v2', notePath: 'index.md', content: 'body' });
+
+    expect(result.current.forceOffered).toBe(false);
+  });
+
+  it('disarms when the editor reopens the note, so a stale override never greets the user', async () => {
+    api.updateNote.mockRejectedValue(evicted());
+    const { result, rerender } = setup('a.md');
+    await failTwice(result);
+    expect(result.current.forceOffered).toBe(true);
+
+    // Close the note, then reopen it — no save has been attempted since.
+    rerender({ vaultId: 'v1', notePath: null, content: '' });
+    rerender({ vaultId: 'v1', notePath: 'a.md', content: 'body' });
+
+    expect(result.current.forceOffered).toBe(false);
+  });
+
+  it('refuses to stack a second write while one is in flight', async () => {
+    // The click that matters is "Save anyway" on a note that may genuinely be
+    // evicted: that write blocks uninterruptibly, so a second one strands another
+    // libuv thread for the life of the process. `saving` can't guard this — the
+    // setState hasn't repainted the disabled button yet.
+    let release;
+    api.updateNote.mockReturnValue(new Promise(resolve => { release = resolve; }));
+    const { result } = setup();
+
+    let first;
+    let second;
+    await act(async () => {
+      first = result.current.save({ force: true });
+      second = result.current.save({ force: true });
+    });
+
+    expect(api.updateNote).toHaveBeenCalledTimes(1);
+    await expect(second).resolves.toBeNull();
+
+    await act(async () => { release({ path: 'a.md' }); await first; });
+    expect(api.updateNote).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts a new save once the previous one settles', async () => {
+    api.updateNote.mockResolvedValue({ path: 'a.md' });
+    const { result } = setup();
+
+    await act(async () => { await result.current.save(); });
+    await act(async () => { await result.current.save(); });
+
+    // The re-entrancy guard must release on settle, or the editor is save-once.
+    expect(api.updateNote).toHaveBeenCalledTimes(2);
+  });
+
   it('closes the override on a successful save', async () => {
     api.updateNote.mockRejectedValue(evicted());
     const { result } = setup();

@@ -320,14 +320,17 @@ export async function updateNote(vaultId, notePath, content, { force = false } =
     console.warn(`⚠️ force-save bypassing the iCloud dataless screen for note: ${notePath}`);
   } else if (await isSuspectedDataless(fullPath)) {
     // Snapshot before/after so the refusal can say something TRUE about retrying.
-    // This is deliberately messaging-only: the verdict stays the re-screen below,
-    // which is already the strictest form of "did it actually materialize" —
+    // This does NOT gate the server's own write decision — that stays the
+    // re-screen below — but it IS the client's sole arming signal for the
+    // force-save override (see `throwOnError` in server/routes/notes.js), so
+    // loosening how `stalled` is computed widens the bypass. The re-screen is
+    // already the strictest form of "did it actually materialize" —
     // `blocks` moving off zero IS the completion signal, so gating the write on
     // `mtime` too would only let a still-dataless file through when a metadata
     // sync touched it (#3717 option 1, taken for the message and rejected for the
     // guard).
     const before = await stat(fullPath).catch(() => null);
-    await materializeAndWait(fullPath, { label: 'Obsidian note' });
+    const materialized = await materializeAndWait(fullPath, { label: 'Obsidian note' });
     if (await isSuspectedDataless(fullPath)) {
       const after = await stat(fullPath).catch(() => null);
       // Unknown (a stat failed) counts as "moved": never claim a download is
@@ -335,12 +338,21 @@ export async function updateNote(vaultId, notePath, content, { force = false } =
       const moved = !before || !after
         || before.blocks !== after.blocks
         || before.mtimeMs !== after.mtimeMs;
+      // Only "brctl succeeded AND nothing changed" proves retrying is futile —
+      // that is the signature of a download with nothing to fetch. A `false`
+      // here means the heal did NOT succeed (timed out against a wedged iCloud,
+      // exited non-zero, `brctl` missing, or a non-iCloud File Provider path
+      // brctl can't speak to), and every one of those also leaves blocks/mtime
+      // untouched. Reporting those as stalled would arm the force-save override
+      // on a genuinely evicted note and hand the user the uninterruptible write
+      // this guard exists to prevent — so they stay retryable.
+      const stalled = materialized && !moved;
       return {
         error: 'NOTE_EVICTED',
-        stalled: !moved,
-        message: moved
-          ? 'This note is stored in iCloud and has not been downloaded to this Mac yet. A download is in progress — try again shortly.'
-          : 'This note looks offloaded to iCloud, but asking iCloud to download it changed nothing, so waiting will not help. If the note really is on this Mac, save it again and choose "Save anyway".'
+        stalled,
+        message: stalled
+          ? 'This note looks offloaded to iCloud, but asking iCloud to download it changed nothing, so waiting will not help. If the note really is on this Mac, save it again and choose "Save anyway".'
+          : 'This note is stored in iCloud and has not been downloaded to this Mac yet. A download was requested — try again shortly.'
       };
     }
   }

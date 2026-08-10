@@ -272,6 +272,23 @@ describe('obsidian updateNote against an evicted note', () => {
     expect(result.message).toMatch(/Save anyway/);
   });
 
+  it('is not stalled when the materialize itself failed', async () => {
+    const icloud = await import('../lib/icloudFile.js');
+    icloud.isSuspectedDataless.mockResolvedValue(true);
+    // `materializeAndWait` resolves false for a timeout against a wedged iCloud,
+    // a non-zero exit, a missing `brctl`, or a File Provider path brctl can't
+    // speak to. Every one of those ALSO leaves blocks/mtime untouched, so
+    // "nothing moved" alone would call a genuinely evicted note hopeless and arm
+    // the force-save override on it — handing the user the uninterruptible write.
+    icloud.materializeAndWait.mockResolvedValue(false);
+
+    const result = await updateNote(vaultId, NOTE, 'REPLACEMENT');
+
+    expect(result.error).toBe('NOTE_EVICTED');
+    expect(result.stalled).toBe(false);
+    expect(result.message).toMatch(/try again shortly/i);
+  });
+
   it('still says "try again shortly" when the download actually moved the file', async () => {
     const icloud = await import('../lib/icloudFile.js');
     icloud.isSuspectedDataless.mockResolvedValue(true);
