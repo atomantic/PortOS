@@ -20,7 +20,7 @@ import { REVIEW_STOP_MODES, normalizeReviewers, normalizeReviewUsernames, normal
 import { isPlainObject } from '../lib/objects.js';
 import { PR_COMPLETIONS, PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
 import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY } from '../lib/taskRetryHold.js';
-import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS } from '../lib/taskPauseHold.js';
+import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, isAgentPausedTask, resolvePausedTaskResume, retirePausedAgent } from '../lib/taskPauseHold.js';
 import { REQUEUED_AT_KEY } from '../lib/taskRequeue.js';
 import { loadState, withStateLock, ROOT_DIR } from './cosState.js';
 import { cosEvents } from './cosEvents.js';
@@ -510,9 +510,64 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
 }
 
 /**
- * Update an existing task
+ * Update an existing task.
+ *
+ * Wraps the persisted write with the rest of the pause release (#3730). Dropping
+ * `PAUSE_METADATA_KEYS` on the blocked transition (below) stops a revived task from
+ * advertising a pause it no longer has, but a pause is not only bookkeeping: the run
+ * that paused left a branch — usually a whole worktree — behind, and the resumed run
+ * has to be POINTED at it or it starts clean and redoes that work. Resolving that
+ * pointer lived in `resumeAgent`, so the Resume dialog resumed properly while every
+ * other door into `blocked(agent-paused) → pending` (the Tasks-tab status toggle's
+ * bare `{ status: 'pending' }`, and `reviveBlockedTask` on behalf of on-demand Run /
+ * pipeline advance / Creative Director / manual job trigger / voice dispatch) still
+ * spawned a second agent on a clean workspace. Owning it at the transition fixes
+ * them all, and future callers by construction.
+ *
+ * The resolve runs BEFORE the lock and the retire AFTER it. Both reach the agent
+ * layer through the registered adapter, and `retirePausedAgent` writes agent state
+ * via `completeAgent` — which takes the same non-reentrant `withStateLock`, so
+ * running either inside would deadlock. Resolving first is also what keeps the task
+ * from ever being `pending` (spawnable) without its pointer.
  */
 export async function updateTask(taskId, updates, taskType = 'user', { now = Date.now() } = {}) {
+  const release = await preparePauseRelease(taskId, updates);
+  const result = await writeTaskUpdate(taskId, release ? { ...updates, metadata: release.metadata } : updates, taskType, { now });
+  if (release && !result?.error) {
+    await retirePausedAgent(release.agentId, taskId, result?.metadata?.existingBranch || null);
+  }
+  return result;
+}
+
+/**
+ * Is this update releasing a user pause, and if so what does the resumed run need?
+ *
+ * `null` for every other update — including a paused task moving to any status but
+ * `pending` (terminating a paused task is not a resume; nothing to point at, and the
+ * record's retirement belongs to whatever terminated it), and a pending flip on a
+ * task nobody paused. `pausedAgentId` is required: without it there is no record to
+ * resolve a pointer from or retire, so the flip is an ordinary unblock.
+ */
+async function preparePauseRelease(taskId, updates) {
+  if (updates?.status !== 'pending') return null;
+  const task = await getTaskById(taskId).catch(() => null);
+  if (!isAgentPausedTask(task)) return null;
+  const agentId = task.metadata?.pausedAgentId;
+  if (!agentId) return null;
+
+  // Fails open to "start clean" the way every other resume-pointer caller does:
+  // un-blocking the task matters more than resuming it in place, and the worktree
+  // stays on disk for a human either way.
+  const pointer = await resolvePausedTaskResume(task).catch(err => {
+    console.error(`❌ Resume pointer for task ${taskId} could not be resolved: ${err.message}`);
+    return {};
+  });
+  // The caller's own metadata still wins — the Resume dialog's provider/model/context
+  // overrides, and a caller that resolved a pointer itself.
+  return { agentId, metadata: { ...pointer, ...(updates.metadata || {}) } };
+}
+
+async function writeTaskUpdate(taskId, updates, taskType, { now }) {
   return withStateLock(async () => {
   const state = await loadState();
   const filePath = taskType === 'user'

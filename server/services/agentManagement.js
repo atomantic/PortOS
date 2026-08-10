@@ -16,7 +16,7 @@ import { emitLog } from './cosEvents.js';
 // live", which is the thing this sequencing keeps removing.
 import { completeAgent, updateAgent, getAgents, getAgentRecord } from './cosAgentLifecycle.js';
 import { updateTask, addTask, getTaskById, reviveBlockedTask, evaluateTasks } from './cos.js';
-import { AGENT_PAUSED_CATEGORY, pauseMetadata, clearedPauseMetadata, isAgentPausedTask, isResumablePausedTask } from '../lib/taskPauseHold.js';
+import { AGENT_PAUSED_CATEGORY, pauseMetadata, isAgentPausedTask, isResumablePausedTask, registerPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { terminateAgentViaRunner, killAgentViaRunner, pauseAgentViaRunner, getAgentStatsFromRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
@@ -96,6 +96,47 @@ async function terminateRunnerAgent(agentId, runnerFn, errorMessage, blockedReas
   }
   return result;
 }
+
+// The agent-addressed half of the pause release (#3730). `updateTask` drops the
+// pause bookkeeping whenever a task leaves `blocked`, but the resumed run also has
+// to be POINTED at the branch/worktree the paused run left behind — and resolving
+// that needs the paused agent's record. `cosTaskStore.js` cannot import this module
+// (static cycle, see `agentImportCycles.test.js`), so it reaches these two steps
+// through the registration below, the way `sharing/recordEvents.js` registers its
+// subscription adapter. That is what makes the Tasks-tab status toggle and
+// `reviveBlockedTask` resume in place instead of spawning clean, not just the
+// Resume dialog.
+registerPauseReleaseAdapter({
+  /**
+   * Same `resolveTaskResumePatch` every other dead-run path uses, addressed by the
+   * agent the task's own pause bookkeeping names.
+   */
+  resolvePausedTaskResume: async (task) => {
+    const agentId = task?.metadata?.pausedAgentId;
+    if (!agentId) return {};
+    const agent = await getAgentRecord(agentId).catch(() => null);
+    return resolveTaskResumePatch({ task, agentId, agentMetadata: agent?.metadata || null });
+  },
+
+  /**
+   * Retire the paused record the moment its task is running again, rather than
+   * leaving the card stranded until the next `retireStrandedPausedAgents` sweep.
+   * Guarded on the record still being `paused`, and it writes the SAME verdict
+   * `resumeAgent` would — so whichever of the two fires first, the record reads
+   * identically and the other is a no-op through `completeAgent`'s idempotence.
+   */
+  retirePausedAgent: async (agentId, taskId, branchName) => {
+    const agent = await getAgentRecord(agentId).catch(() => null);
+    if (agent?.status !== 'paused') return;
+    pausedAgents.delete(agentId);
+    await completeAgent(agentId, {
+      success: false,
+      resumed: true,
+      resumedTaskId: taskId,
+      error: resumeSummary(agentId, { taskId, mode: 'requeued', branchName })
+    });
+  }
+});
 
 async function markPausedTask(agentInfo, agentId, pausedAt, reason) {
   const task = agentInfo?.task || (agentInfo?.taskId ? await getTaskById(agentInfo.taskId).catch(() => null) : null);
@@ -286,7 +327,7 @@ export async function resumeAgent(agentId, overrides = {}) {
   let resumed;
   switch (mode) {
     case 'requeued':
-      resumed = await requeuePausedTask({ task, taskType, agentId, agentMetadata: agent.metadata, overrides });
+      resumed = await requeuePausedTask({ task, taskType, overrides });
       break;
     case 'new-task':
       resumed = await replacePausedTask({ agentId, task, taskType, overrides });
@@ -340,38 +381,32 @@ function resumeSummary(agentId, { taskId, mode, branchName }) {
  * spawnable before it is pointed, or the dequeue `completeAgent` triggers could
  * grab it mid-transition and start clean.
  *
+ * Since #3730 this is a thin agent-addressed wrapper contributing ONLY the dialog's
+ * overrides: the pointer, the pause release, and the record's retirement belong to
+ * `cosTaskStore.updateTask`, which performs them for every caller of the flip.
+ *
  * Through `reviveBlockedTask`, the shared address for "an explicit dispatch path
  * un-blocks a blocked task": on top of updateTask's blocked-transition clear it
  * resets the spawn/orphan retry budgets, so a task paused near the MAX_TOTAL_SPAWNS
  * ceiling doesn't resume straight into `max-spawns`.
  */
-async function requeuePausedTask({ task, taskType, agentId, agentMetadata, overrides }) {
-  // Fails open to "start clean" the way every other resume-pointer caller does:
-  // requeueing the task matters more than resuming it, and the worktree stays on
-  // disk for a human either way.
-  const pointer = await resolveTaskResumePatch({ task, agentId, agentMetadata }).catch(err => {
-    emitLog('warn', `Resume pointer for task ${task.id} could not be resolved: ${err.message}`, { taskId: task.id, agentId });
-    return {};
-  });
-
-  const metadata = {
-    ...pointer,
-    ...resumeOverrideMetadata(overrides, task.metadata?.context),
-    // The pause `markPausedTask` stamped, released in the same patch that consumes
-    // it (the pointer above is computed FROM it). `updateTask` drops these on the
-    // blocked transition anyway — this keeps the write self-contained.
-    ...clearedPauseMetadata()
-  };
-
-  // `pending` is non-terminal, so the pointer written here survives the write
+async function requeuePausedTask({ task, taskType, overrides }) {
+  // Only the dialog's edits. The resume pointer and the pause release belong to
+  // `updateTask` (#3730) so every OTHER door into this flip gets them too — resolving
+  // them here as well would run the same git probe twice per Resume click and put a
+  // second copy of the rule where it can drift.
+  //
+  // `pending` is non-terminal, so the pointer that write lands survives it
   // (updateTask only strips a resume pointer on a terminal status).
-  const result = await reviveBlockedTask(task.id, { metadata }, taskType);
+  const result = await reviveBlockedTask(task.id, {
+    metadata: resumeOverrideMetadata(overrides, task.metadata?.context)
+  }, taskType);
   if (result?.error) {
     throw new ServerError(`Failed to requeue task ${task.id}: ${result.error}`, {
       status: 500, code: 'AGENT_RESUME_FAILED'
     });
   }
-  return { taskId: task.id, mode: 'requeued', branchName: pointer.existingBranch || null };
+  return { taskId: task.id, mode: 'requeued', branchName: result?.metadata?.existingBranch || null };
 }
 
 /**

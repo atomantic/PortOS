@@ -117,6 +117,7 @@ import { readHostShutdownMarker, clearHostShutdownMarker } from '../lib/hostShut
 import { completeAgentRun } from './agentRunTracking.js';
 import { committedDuringRun } from '../lib/gitCommitProbe.js';
 import { activeAgents, runnerAgents, pausedAgents } from './agentState.js';
+import { hasPauseReleaseAdapter, resolvePausedTaskResume, retirePausedAgent } from '../lib/taskPauseHold.js';
 
 describe('settleOrphanedCreativeDirectorRun — reap a dead CD agent run (#2705)', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -688,31 +689,27 @@ describe('resumeAgent — requeues the paused agent\'s own task', () => {
     });
   });
 
-  it('flips the SAME task back to pending carrying the resume pointer — no new task', async () => {
+  it('flips the SAME task back to pending — no new task', async () => {
     const result = await resumeAgent('agent-paused-1');
 
     expect(result).toMatchObject({ success: true, taskId: 'task-abc', mode: 'requeued' });
     expect(addTask).not.toHaveBeenCalled();
-    expect(reviveBlockedTask).toHaveBeenCalledWith('task-abc', {
-      metadata: expect.objectContaining({
-        existingBranch: 'cos/task-abc/agent-paused-1',
-        resumedFromAgentId: 'agent-paused-1',
-        resumeWorktreePath: '/tmp/worktrees/agent-paused-1',
-      }),
-    }, 'user');
+    // ONLY the dialog's overrides (none here). Since #3730 the resume pointer and
+    // the pause release are `updateTask`'s, so the Tasks-tab toggle and every other
+    // door into this flip get them too — see the adapter suite below and
+    // cosTaskStore.test.js for the transition itself.
+    expect(reviveBlockedTask).toHaveBeenCalledWith('task-abc', { metadata: {} }, 'user');
     // Through reviveBlockedTask, NOT a raw updateTask: it also resets the
     // spawn/orphan budgets, so a task paused near MAX_TOTAL_SPAWNS doesn't resume
     // straight into `max-spawns`.
     expect(updateTask).not.toHaveBeenCalled();
   });
 
-  it('clears the spent pause bookkeeping with undefined (which updateTask deletes), not null', async () => {
-    await resumeAgent('agent-paused-1');
-    const { metadata } = reviveBlockedTask.mock.calls[0][1];
-    for (const key of ['pausedAt', 'pausedAgentId', 'resumeWorkspacePath', 'resumeRunId']) {
-      expect(metadata).toHaveProperty(key);
-      expect(metadata[key]).toBeUndefined();
-    }
+  it('reports the branch the shared transition resumed on', async () => {
+    reviveBlockedTask.mockResolvedValueOnce({ metadata: { existingBranch: 'cos/task-abc/agent-paused-1' } });
+    await expect(resumeAgent('agent-paused-1')).resolves.toMatchObject({
+      mode: 'requeued', branchName: 'cos/task-abc/agent-paused-1',
+    });
   });
 
   it('retires the paused agent record so it stops showing as paused', async () => {
@@ -750,16 +747,8 @@ describe('resumeAgent — requeues the paused agent\'s own task', () => {
   });
 
   it('still requeues (clean) when the paused run left nothing resumable behind', async () => {
-    resolveTaskResumePatch.mockResolvedValue({});
-    const result = await resumeAgent('agent-paused-1');
-    expect(result).toMatchObject({ mode: 'requeued', branchName: null });
-    expect(reviveBlockedTask.mock.calls[0][1].metadata).not.toHaveProperty('existingBranch');
-  });
-
-  it('requeues clean rather than failing when the pointer cannot be resolved', async () => {
-    resolveTaskResumePatch.mockRejectedValue(new Error('git exploded'));
-    await expect(resumeAgent('agent-paused-1')).resolves.toMatchObject({ mode: 'requeued' });
-    expect(reviveBlockedTask).toHaveBeenCalled();
+    reviveBlockedTask.mockResolvedValueOnce({ metadata: {} });
+    await expect(resumeAgent('agent-paused-1')).resolves.toMatchObject({ mode: 'requeued', branchName: null });
   });
 
   it('throws 404 for an unknown agent and 409 for one that is not paused', async () => {
@@ -841,6 +830,69 @@ describe('resumeAgent — requeues the paused agent\'s own task', () => {
   it('falls back to a fresh task when the task was deleted outright', async () => {
     getTaskById.mockResolvedValue(null);
     await expect(resumeAgent('agent-paused-1')).resolves.toMatchObject({ mode: 'new-task' });
+  });
+});
+
+// ─── Pause-release adapter (#3730) ────────────────────────────────────────────
+//
+// The agent-addressed half `cosTaskStore.updateTask` calls through, registered at
+// this module's load. Exercised via the lib accessors — the same address the task
+// store uses — so a registration that silently stops happening fails here. It is
+// what makes an unblock from ANY door resume on the preserved worktree, not just
+// the Resume dialog.
+
+describe('pause-release adapter registration', () => {
+  const PAUSED_AGENT = {
+    id: 'agent-paused-9',
+    status: 'paused',
+    taskId: 'task-xyz',
+    metadata: { isWorktree: true, worktreeBranch: 'cos/task-xyz/agent-paused-9', workspacePath: '/tmp/worktrees/agent-paused-9' },
+  };
+  const PAUSED_TASK = {
+    id: 'task-xyz',
+    status: 'blocked',
+    metadata: { blockedCategory: 'agent-paused', pausedAgentId: 'agent-paused-9' },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pausedAgents.clear();
+    getAgentRecord.mockResolvedValue(PAUSED_AGENT);
+  });
+
+  it('is wired at module load', () => {
+    expect(hasPauseReleaseAdapter()).toBe(true);
+  });
+
+  it('resolves the pointer from the agent the task names', async () => {
+    resolveTaskResumePatch.mockResolvedValue({ existingBranch: 'cos/task-xyz/agent-paused-9' });
+    await expect(resolvePausedTaskResume(PAUSED_TASK)).resolves.toMatchObject({ existingBranch: 'cos/task-xyz/agent-paused-9' });
+    expect(resolveTaskResumePatch).toHaveBeenCalledWith({
+      task: PAUSED_TASK, agentId: 'agent-paused-9', agentMetadata: PAUSED_AGENT.metadata,
+    });
+  });
+
+  it('resolves empty when the task names no paused agent', async () => {
+    await expect(resolvePausedTaskResume({ id: 't', metadata: {} })).resolves.toEqual({});
+    expect(resolveTaskResumePatch).not.toHaveBeenCalled();
+  });
+
+  it('retires the paused record immediately, with the verdict resumeAgent would write', async () => {
+    pausedAgents.set('agent-paused-9', { pausedAt: 'now' });
+    await retirePausedAgent('agent-paused-9', 'task-xyz', 'cos/task-xyz/agent-paused-9');
+    expect(pausedAgents.has('agent-paused-9')).toBe(false);
+    expect(markAgentComplete).toHaveBeenCalledWith('agent-paused-9', {
+      success: false,
+      resumed: true,
+      resumedTaskId: 'task-xyz',
+      error: 'Resumed agent agent-paused-9 — task task-xyz requeued on cos/task-xyz/agent-paused-9',
+    });
+  });
+
+  it('is a no-op when the record is no longer paused — the second retire must not re-complete it', async () => {
+    getAgentRecord.mockResolvedValue({ ...PAUSED_AGENT, status: 'completed' });
+    await retirePausedAgent('agent-paused-9', 'task-xyz', null);
+    expect(markAgentComplete).not.toHaveBeenCalled();
   });
 });
 

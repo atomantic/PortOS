@@ -77,3 +77,55 @@ export function isAgentPausedTask(task) {
 export function isResumablePausedTask(task, agentId) {
   return isAgentPausedTask(task) && !!agentId && task.metadata?.pausedAgentId === agentId;
 }
+
+// === Pause-release adapter (registration-based) ============================
+//
+// Releasing the hold is not only a metadata clear (#3730). The run that paused
+// left a branch and often a worktree behind, and the resumed run has to be POINTED
+// at them or it starts clean and redoes the work — the exact symptom the resume fix
+// removed for the Resume dialog and nowhere else. Resolving that pointer needs the
+// paused agent's RECORD, which lives in the agent graph; `cosTaskStore.js` cannot
+// import it (static cycle, see `services/agentImportCycles.test.js`). So the
+// agent-addressed half is injected: `agentManagement.js` registers it at module
+// load, the way `services/sharing/recordEvents.js` registers its subscription
+// adapter. Until registration every call is a silent no-op — which is what the task
+// store's own unit suites want: no agent graph pulled in, nothing to mock.
+
+let pauseReleaseAdapter = null;
+
+/** `agentManagement.js` registers the real implementation at module load. */
+export function registerPauseReleaseAdapter(adapter) {
+  pauseReleaseAdapter = adapter;
+}
+
+/** Whether the agent-side half is wired. */
+export function hasPauseReleaseAdapter() {
+  return pauseReleaseAdapter !== null;
+}
+
+/** Test-only: detach the adapter so later suites see the unregistered state. */
+export function __resetPauseReleaseAdapter() {
+  pauseReleaseAdapter = null;
+}
+
+/**
+ * What did the paused run leave behind? The resume-pointer patch
+ * (`existingBranch` / `resumeWorktreePath` / `resumedFromAgentId`) for the agent
+ * `task.metadata.pausedAgentId` names, or `{}` when there is nothing to adopt.
+ * Awaited BEFORE the task's own write, so the task is never `pending` — and
+ * therefore spawnable — without its pointer.
+ */
+export async function resolvePausedTaskResume(task) {
+  return (await pauseReleaseAdapter?.resolvePausedTaskResume?.(task)) || {};
+}
+
+/**
+ * Retire the paused record now that its task is running again — immediately, rather
+ * than leaving it to the next `retireStrandedPausedAgents` sweep, so the paused card
+ * disappears when the user un-blocks the task instead of up to a sweep interval
+ * later. Called AFTER the task write: retirement emits `agent:completed`, whose
+ * handler dequeues, so the task must already be `pending` and pointed first.
+ */
+export async function retirePausedAgent(agentId, taskId, branchName) {
+  return pauseReleaseAdapter?.retirePausedAgent?.(agentId, taskId, branchName);
+}

@@ -9,7 +9,7 @@
  *    was extracted) that pin the first-line dedup + per-app dedup scope.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync as realReadFileSync } from 'node:fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -116,7 +116,7 @@ import {
   DEFAULT_FAILURE_TASK_MAX_AGE_MS,
   __resetTaskCache
 } from './cosTaskStore.js';
-import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS } from '../lib/taskPauseHold.js';
+import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, registerPauseReleaseAdapter, __resetPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
 
 const USER_FILE = '/root/TASKS.md';
@@ -704,6 +704,125 @@ describe('cosTaskStore.updateTask', () => {
     for (const key of PAUSE_METADATA_KEYS) {
       expect(revived.metadata[key]).toBeUndefined();
     }
+  });
+
+  // ─── Resuming in place, from ANY door (#3730) ──────────────────────────────
+  //
+  // Clearing the hold above stops a revived task from advertising a pause it no
+  // longer has, but a pause is not only bookkeeping: the run that paused left a
+  // branch (usually a whole worktree) behind, and the resumed run has to be POINTED
+  // at it or it starts clean and redoes the work. That resolve lived in
+  // `resumeAgent`, so the Resume dialog resumed properly while the Tasks-tab status
+  // toggle and `reviveBlockedTask` — the shared address for on-demand Run, pipeline
+  // advance, Creative Director, manual job trigger and voice dispatch — still spawned
+  // a second agent on a clean workspace. These drive each entry point.
+  describe('releasing a user pause resumes in place', () => {
+    let calls;
+    const POINTER = { existingBranch: 'cos/task-p/agent-paused-1', resumeWorktreePath: '/tmp/wt', resumedFromAgentId: 'agent-paused-1' };
+
+    const plantPausedTask = async (id) => {
+      await addTask({ description: `paused ${id}`, id }, 'user');
+      await updateTask(id, {
+        status: 'blocked',
+        metadata: {
+          blockedCategory: AGENT_PAUSED_CATEGORY,
+          blockedReason: 'Paused by user',
+          pausedAt: '2026-08-10T00:00:00.000Z',
+          pausedAgentId: 'agent-paused-1',
+          resumeWorkspacePath: '/tmp/wt',
+          resumeRunId: 'run-1',
+        },
+      }, 'user');
+      return id;
+    };
+
+    const expectResumedInPlace = (task) => {
+      expect(task.status).toBe('pending');
+      expect(task.metadata).toMatchObject(POINTER);
+      for (const key of [...PAUSE_METADATA_KEYS, 'blockedCategory']) {
+        expect(task.metadata[key]).toBeUndefined();
+      }
+      expect(calls.retired).toEqual([['agent-paused-1', task.id, POINTER.existingBranch]]);
+    };
+
+    beforeEach(() => {
+      calls = { resolved: [], retired: [], statusAtRetire: [] };
+      registerPauseReleaseAdapter({
+        resolvePausedTaskResume: async (task) => { calls.resolved.push(task.id); return POINTER; },
+        retirePausedAgent: async (agentId, taskId, branchName) => {
+          calls.retired.push([agentId, taskId, branchName]);
+          calls.statusAtRetire.push((await getTaskById(taskId))?.status);
+        },
+      });
+    });
+    afterEach(() => __resetPauseReleaseAdapter());
+
+    it('resumes on the preserved worktree from a bare status flip (the Tasks-tab toggle)', async () => {
+      const id = await plantPausedTask('task-pause-toggle');
+      expectResumedInPlace(await updateTask(id, { status: 'pending' }, 'user'));
+    });
+
+    it('resumes on the preserved worktree from reviveBlockedTask (the five dispatch paths)', async () => {
+      const id = await plantPausedTask('task-pause-revive');
+      expectResumedInPlace(await reviveBlockedTask(id, { metadata: { context: 'from the dispatcher' } }, 'user'));
+    });
+
+    it("keeps the caller's own metadata alongside the pointer", async () => {
+      const id = await plantPausedTask('task-pause-overrides');
+      const revived = await reviveBlockedTask(id, { metadata: { provider: 'claude', context: 'extra' } }, 'user');
+      expect(revived.metadata).toMatchObject({ provider: 'claude', context: 'extra', existingBranch: POINTER.existingBranch });
+    });
+
+    // The task must never be `pending` (spawnable) without its pointer, and the
+    // retirement — whose `agent:completed` triggers a dequeue — must not run until
+    // the pointed task is on disk.
+    it('resolves the pointer BEFORE the write and retires the record AFTER it', async () => {
+      const id = await plantPausedTask('task-pause-order');
+      await updateTask(id, { status: 'pending' }, 'user');
+      expect(calls.resolved).toEqual([id]);
+      expect(calls.statusAtRetire).toEqual(['pending']);
+    });
+
+    it('still un-blocks (clean) when the pointer cannot be resolved', async () => {
+      registerPauseReleaseAdapter({
+        resolvePausedTaskResume: async () => { throw new Error('git exploded'); },
+        retirePausedAgent: async (agentId, taskId, branchName) => calls.retired.push([agentId, taskId, branchName]),
+      });
+      const id = await plantPausedTask('task-pause-boom');
+      const revived = await updateTask(id, { status: 'pending' }, 'user');
+      expect(revived.status).toBe('pending');
+      expect(revived.metadata.existingBranch).toBeUndefined();
+      expect(revived.metadata.pausedAgentId).toBeUndefined();
+      expect(calls.retired).toEqual([['agent-paused-1', id, null]]);
+    });
+
+    it('leaves a differently-blocked task alone', async () => {
+      await addTask({ description: 'not paused', id: 'task-not-paused' }, 'user');
+      await updateTask('task-not-paused', { status: 'blocked', metadata: { blockedCategory: 'max-spawns' } }, 'user');
+      await reviveBlockedTask('task-not-paused', {}, 'user');
+      expect(calls.resolved).toEqual([]);
+      expect(calls.retired).toEqual([]);
+    });
+
+    // Terminating a paused task is not a resume — nothing to point at, nothing to
+    // continue, and the record's retirement belongs to whatever terminated it.
+    it('leaves a paused task moving to a terminal status alone', async () => {
+      const id = await plantPausedTask('task-pause-terminal');
+      await updateTask(id, { status: 'completed' }, 'user');
+      expect(calls.resolved).toEqual([]);
+      expect(calls.retired).toEqual([]);
+    });
+
+    // The bookkeeping names the agent to resolve against and retire. Without it the
+    // flip is an ordinary unblock, not a resume.
+    it('treats a paused task with no pausedAgentId as an ordinary unblock', async () => {
+      await addTask({ description: 'orphan pause', id: 'task-pause-noagent' }, 'user');
+      await updateTask('task-pause-noagent', { status: 'blocked', metadata: { blockedCategory: AGENT_PAUSED_CATEGORY } }, 'user');
+      const revived = await updateTask('task-pause-noagent', { status: 'pending' }, 'user');
+      expect(revived.status).toBe('pending');
+      expect(calls.resolved).toEqual([]);
+      expect(calls.retired).toEqual([]);
+    });
   });
 
   // The pointer is spent once a task is done or parked for a human: a PERPETUAL
