@@ -70,13 +70,21 @@ export const EFFORT_SELECTABLE_REVIEWERS = Object.freeze(Object.keys(REVIEWER_EF
 // Reviewer slug aliases. `gemini` is the historical name for the Antigravity CLI.
 const REVIEWER_ALIASES = { gemini: 'antigravity' };
 
+// The canonical slug for a reviewer token: lower-cased, trimmed, aliases resolved.
+// `''` for a non-string. `@username` tokens ride through as-is (they're no
+// reviewer slug, so no lookup keyed on this can match one). Exported because any
+// caller that keys behavior on "is this the Antigravity reviewer?" must resolve
+// the `gemini` alias the same way the ladder lookup below does.
+export const normalizeReviewerSlug = (reviewer) => {
+  if (typeof reviewer !== 'string') return '';
+  const slug = reviewer.trim().toLowerCase();
+  return REVIEWER_ALIASES[slug] || slug;
+};
+
 // The ladder for one reviewer token, or `null` when it takes no effort. Accepts
 // the `gemini` alias and `@username` tokens (both → null for the latter).
-export const reviewerEffortLevels = (reviewer) => {
-  if (typeof reviewer !== 'string') return null;
-  const slug = reviewer.trim().toLowerCase();
-  return REVIEWER_EFFORT_LEVELS[REVIEWER_ALIASES[slug] || slug] || null;
-};
+export const reviewerEffortLevels = (reviewer) =>
+  REVIEWER_EFFORT_LEVELS[normalizeReviewerSlug(reviewer)] || null;
 
 // Characters that are STRUCTURAL in slashdo's emitted `--review-with` token and
 // have no escape inside the `[<model>]` selector, so the server drops an id

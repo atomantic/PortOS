@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as api from '../services/api';
-import { filterSelectableModels, selectableModelsForProvider, isAntigravityProvider, isGrokBuildCli } from '../utils/providers';
+import { filterSelectableModels, selectableModelsForProvider, isAntigravityProvider, isGrokBuildCli, antigravityModelEffortLevels } from '../utils/providers';
 import { LOCAL_LLM_REVIEWERS, MODEL_SELECTABLE_REVIEWERS } from '../components/cos/constants';
+import { reviewerEffortLevels, normalizeReviewerSlug } from '../lib/reviewerPins';
 
 /**
  * Selectable model ids per model-taking reviewer, for `ReviewerPicker`'s Model
@@ -31,7 +32,13 @@ import { LOCAL_LLM_REVIEWERS, MODEL_SELECTABLE_REVIEWERS } from '../components/c
  * yet" from "genuinely no options" (an empty list is a real answer, not a
  * pre-fetch placeholder).
  *
- * @returns {{ optionsByReviewer: Record<string, string[]>, freeText: Record<string, boolean>, unavailable: Record<string, boolean>, loaded: boolean, reviewers: string[] }}
+ * `modelEffortLevels(reviewer, model)` narrows a reviewer's effort ladder by its
+ * PINNED MODEL, because `agy` validates the model/effort PAIR (`gemini-3.1-pro`
+ * has no `medium` tier) — see #3733. Only `antigravity` narrows today; every other
+ * reviewer returns its static ladder. Lives here rather than in the picker so the
+ * picker keeps doing no fetching of its own.
+ *
+ * @returns {{ optionsByReviewer: Record<string, string[]>, freeText: Record<string, boolean>, unavailable: Record<string, boolean>, modelEffortLevels: (reviewer: string, model?: string|null) => readonly string[]|null, loaded: boolean, reviewers: string[] }}
  */
 export default function useReviewerModelOptions() {
   const [localStatus, setLocalStatus] = useState(null);
@@ -93,8 +100,27 @@ export default function useReviewerModelOptions() {
       grok: providerTiers((p) => p.id === 'grok-cli', isGrokBuildCli),
     };
 
+    // The agy provider's RAW catalog — one id per effort tier
+    // (`gemini-3.6-flash-low|-medium|-high`), which is exactly what the narrowing
+    // reads. Deliberately NOT `optionsByReviewer.antigravity`: that list has
+    // already had the suffixes collapsed away, so it carries no tier information.
+    const antigravityCatalog = (providers || []).find(isAntigravityProvider)?.models || [];
+    // The effort ladder a reviewer offers ONCE ITS MODEL IS PINNED. `agy` validates
+    // the pair, so a model with no `-medium` sibling must not offer `medium`
+    // (#3733). `antigravityModelEffortLevels` returns null for "can't tell" — empty
+    // catalog, unset model, or the configured-default sentinel — and the full
+    // static ladder stands there, the same null-means-fall-back contract
+    // `effortLevelsForProvider` uses. `[]` is a real answer: that model has no
+    // effort tiers at all.
+    const modelEffortLevels = (reviewer, model = null) => {
+      const ladder = reviewerEffortLevels(reviewer);
+      if (!ladder || normalizeReviewerSlug(reviewer) !== 'antigravity') return ladder;
+      return antigravityModelEffortLevels(model, antigravityCatalog) ?? ladder;
+    };
+
     return {
       optionsByReviewer,
+      modelEffortLevels,
       // A local backend's id list is authoritative (we probed it), so keep those
       // pickers a closed `<select>`. Every CLI reviewer is free-text: `claude` for
       // the Ollama-backed / Bedrock-form cases above, `codex`/`antigravity`/`grok`

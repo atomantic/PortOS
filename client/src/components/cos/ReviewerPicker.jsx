@@ -255,11 +255,23 @@ export default function ReviewerPicker({
   // The Effort cell. Only EFFORT_SELECTABLE_REVIEWERS get one, and each offers
   // only its own CLI's ladder — copilot has no CLI, grok's takes no effort flag,
   // and a `@username` reviewer is a person.
+  //
+  // The ladder is narrowed by the row's PINNED MODEL where the CLI validates the
+  // pair: `agy` rejects `gemini-3.1-pro --effort medium`, so offering `medium`
+  // there would store and emit an invocation it refuses (#3733). The narrowing
+  // needs the provider catalog, which the caller already fetched — falling back to
+  // the static ladder when it didn't, so a caller that passes no `modelOptions`
+  // keeps a working (just unnarrowed) select rather than losing the cell.
   const renderEffortCell = (token) => {
-    const levels = reviewerEffortLevels(token);
-    if (!levels?.length) return renderNoPinCell(`${labelFor(token)} has no reasoning-effort control`);
     const subject = labelFor(token);
     const stored = efforts.get(token) ?? '';
+    const ladder = reviewerEffortLevels(token);
+    if (!ladder?.length) return renderNoPinCell(`${subject} has no reasoning-effort control`);
+    const levels = modelOptions?.modelEffortLevels?.(token, models.get(token)) ?? ladder;
+    // A pinned model whose catalog lists NO tiers still renders the select when
+    // something is stored, so a pin made before the model changed (or on another
+    // machine) stays visible and clearable rather than vanishing behind the dash.
+    if (!levels.length && !stored) return renderNoPinCell(`${subject}'s pinned model offers no reasoning-effort tiers`);
     return renderPinSelect({
       selectId: `${id}-effort-${token}`,
       value: stored,

@@ -477,5 +477,62 @@ describe('ReviewerPicker', () => {
         render(<ReviewerPicker reviewers={['codex']} reviewerEfforts={{ Codex: 'high' }} onChange={() => {}} />);
         expect(screen.getByLabelText('Reasoning effort for Codex')).toHaveValue('high');
       });
+
+      // #3733: agy validates the model/effort PAIR, so the ladder narrows by the
+      // row's pinned model. `modelEffortLevels` is the caller's accessor (see
+      // useReviewerModelOptions) — stubbed here the way the real hook behaves.
+      describe('narrowed by the pinned model', () => {
+        const tiersByModel = {
+          'gemini-3.1-pro': ['high'],
+          'gemini-3.6-flash': ['low', 'high'],
+          'claude-sonnet-4-6': [],
+        };
+        const narrowing = {
+          optionsByReviewer: { antigravity: Object.keys(tiersByModel) },
+          freeText: { antigravity: true },
+          unavailable: {},
+          loaded: true,
+          modelEffortLevels: (reviewer, model) => (reviewer === 'antigravity'
+            ? (tiersByModel[model] ?? ['low', 'medium', 'high'])
+            : ['low', 'medium', 'high'])
+        };
+
+        it('offers only the tiers the pinned model actually has', () => {
+          render(<ReviewerPicker reviewers={['antigravity']} reviewerModels={{ antigravity: 'gemini-3.1-pro' }} modelOptions={narrowing} onChange={() => {}} />);
+          expect(screen.getByRole('option', { name: 'high' })).toBeInTheDocument();
+          // The pair agy rejects — the whole point of the narrowing.
+          expect(screen.queryByRole('option', { name: 'medium' })).not.toBeInTheDocument();
+        });
+
+        it('keeps the full ladder when no model is pinned', () => {
+          render(<ReviewerPicker reviewers={['antigravity']} modelOptions={narrowing} onChange={() => {}} />);
+          expect(screen.getByRole('option', { name: 'medium' })).toBeInTheDocument();
+        });
+
+        it('falls back to the static ladder when the caller passes no modelOptions', () => {
+          render(<ReviewerPicker reviewers={['antigravity']} reviewerModels={{ antigravity: 'gemini-3.1-pro' }} onChange={() => {}} />);
+          expect(screen.getByRole('option', { name: 'medium' })).toBeInTheDocument();
+        });
+
+        it('drops the Effort control for a pinned model with no tiers at all', () => {
+          render(<ReviewerPicker reviewers={['antigravity']} reviewerModels={{ antigravity: 'claude-sonnet-4-6' }} modelOptions={narrowing} onChange={() => {}} />);
+          expect(screen.queryByLabelText('Reasoning effort for Antigravity')).not.toBeInTheDocument();
+        });
+
+        it('still renders a STORED pin under a tier-less model so it stays clearable', () => {
+          const onChange = vi.fn();
+          render(<ReviewerPicker reviewers={['antigravity']} reviewerModels={{ antigravity: 'claude-sonnet-4-6' }} reviewerEfforts={{ antigravity: 'high' }} modelOptions={narrowing} onChange={onChange} />);
+          const select = screen.getByLabelText('Reasoning effort for Antigravity');
+          expect(select).toHaveValue('high');
+          fireEvent.change(select, { target: { value: '' } });
+          expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewerEfforts: {} }));
+        });
+
+        it('keeps a stored tier the pinned model dropped visible as unsupported', () => {
+          render(<ReviewerPicker reviewers={['antigravity']} reviewerModels={{ antigravity: 'gemini-3.1-pro' }} reviewerEfforts={{ antigravity: 'medium' }} modelOptions={narrowing} onChange={() => {}} />);
+          expect(screen.getByLabelText('Reasoning effort for Antigravity')).toHaveValue('medium');
+          expect(screen.getByRole('option', { name: 'medium (unsupported)' })).toBeInTheDocument();
+        });
+      });
     });
 });

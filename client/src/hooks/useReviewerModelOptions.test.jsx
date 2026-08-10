@@ -74,6 +74,50 @@ describe('useReviewerModelOptions', () => {
     expect(result.current.optionsByReviewer.grok).toEqual(['stale-tui-id']);
   });
 
+  // #3733: `agy` validates the model/effort PAIR, so the Effort cell's ladder has
+  // to come from the pinned model's own tiers, not the static low|medium|high.
+  describe('modelEffortLevels', () => {
+    const levelsFor = async (reviewer, model) => {
+      const { result } = renderHook(() => useReviewerModelOptions());
+      await waitFor(() => expect(result.current.loaded).toBe(true));
+      return result.current.modelEffortLevels(reviewer, model);
+    };
+
+    it('narrows the antigravity ladder to the pinned model\'s catalog tiers', async () => {
+      expect(await levelsFor('antigravity', 'gemini-3.1-pro')).toEqual(['high']);
+      expect(await levelsFor('antigravity', 'gemini-3.6-flash')).toEqual(['low', 'high']);
+    });
+
+    it('narrows through a legacy effort-suffixed pin', async () => {
+      expect(await levelsFor('antigravity', 'gemini-3.1-pro-high')).toEqual(['high']);
+    });
+
+    it('resolves the gemini alias to the antigravity narrowing', async () => {
+      expect(await levelsFor('gemini', 'gemini-3.1-pro')).toEqual(['high']);
+    });
+
+    it('reports no tiers for a model the catalog lists without any', async () => {
+      expect(await levelsFor('antigravity', 'claude-sonnet-4-6')).toEqual([]);
+    });
+
+    it('falls back to the full ladder for an unset model or the configured default', async () => {
+      expect(await levelsFor('antigravity', '')).toEqual(['low', 'medium', 'high']);
+      expect(await levelsFor('antigravity', 'antigravity-configured-default')).toEqual(['low', 'medium', 'high']);
+    });
+
+    it('falls back to the full ladder when the catalog never loaded', async () => {
+      getProviders.mockRejectedValue(new Error('offline'));
+      expect(await levelsFor('antigravity', 'gemini-3.1-pro')).toEqual(['low', 'medium', 'high']);
+    });
+
+    it('leaves every other reviewer on its static ladder', async () => {
+      expect(await levelsFor('codex', 'gpt-5.6-sol')).toContain('ultra');
+      expect(await levelsFor('claude', 'gemini-3.1-pro')).toContain('max');
+      expect(await levelsFor('copilot', null)).toBeNull();
+      expect(await levelsFor('@octocat', null)).toBeNull();
+    });
+  });
+
   it('degrades to empty option lists when the provider fetch fails', async () => {
     getProviders.mockRejectedValue(new Error('offline'));
     const { result } = renderHook(() => useReviewerModelOptions());
