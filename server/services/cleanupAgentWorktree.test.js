@@ -833,10 +833,12 @@ describe('cleanupAgentWorktree - openPR path', () => {
   });
 
   // The two maps narrow against SEPARATE rosters (EFFORT_SELECTABLE_REVIEWERS vs
-  // MODEL_SELECTABLE_REVIEWERS). Their memberships coincide today — they last
-  // diverged over `antigravity`, which took an effort but no model until #3728 —
-  // so this pins that each map is narrowed independently: an effort pin on a
-  // reviewer with no model pin (and vice versa) must survive this hop intact.
+  // MODEL_SELECTABLE_REVIEWERS), and their memberships genuinely differ: `grok`
+  // takes `--model` but has no effort flag (#3729), the mirror of `antigravity`,
+  // which took an effort but no model until #3728. So this pins that each map is
+  // narrowed independently: an effort pin on a reviewer with no model pin (and
+  // vice versa) must survive this hop intact, and a pin on the roster the reviewer
+  // is absent from is dropped.
   it('narrows each pin map on its own roster', async () => {
     git.push.mockResolvedValue(undefined);
     git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/61' });
@@ -844,18 +846,21 @@ describe('cleanupAgentWorktree - openPR path', () => {
     addTask.mockResolvedValue({ id: 'sys-rl-eff' });
 
     await cleanupAgentWorktree('agent-1', true, {
-      openPR: true, requestCopilotReview: true, reviewers: ['copilot', 'antigravity', 'claude'],
-      reviewerModels: { claude: 'qwen2.5:7b' },
-      // `codex` isn't in the reviewer list; `copilot` has no effort control at all.
-      reviewerEfforts: { antigravity: 'high', claude: 'xhigh', codex: 'low', copilot: 'high' },
+      openPR: true, requestCopilotReview: true, reviewers: ['copilot', 'antigravity', 'claude', 'grok'],
+      reviewerModels: { claude: 'qwen2.5:7b', grok: 'grok-code-fast-1' },
+      // `codex` isn't in the reviewer list; `copilot` has no effort control at all,
+      // and neither does `grok` — its CLI takes no effort flag.
+      reviewerEfforts: { antigravity: 'high', claude: 'xhigh', codex: 'low', copilot: 'high', grok: 'high' },
       description: 'Build',
       originalTask: { id: 'task-orig', priority: 'MEDIUM', metadata: { app: 'sparsetree' }, description: 'Build' }
     });
 
     const [followUp] = addTask.mock.calls[0];
+    // `grok` is a listed reviewer but takes no effort, so its effort pin is dropped…
     expect(followUp.metadata.reviewLoopReviewerEfforts).toEqual({ antigravity: 'high', claude: 'xhigh' });
-    // The model map narrows on its own roster and is unaffected by the effort pins.
-    expect(followUp.metadata.reviewLoopReviewerModels).toEqual({ claude: 'qwen2.5:7b' });
+    // …while its MODEL pin survives: the model map narrows on its own roster and is
+    // unaffected by the effort pins.
+    expect(followUp.metadata.reviewLoopReviewerModels).toEqual({ claude: 'qwen2.5:7b', grok: 'grok-code-fast-1' });
   });
 
   it('drops the effort map entirely when no effort-capable reviewer is in the list', async () => {

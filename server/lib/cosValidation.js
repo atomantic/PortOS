@@ -43,11 +43,14 @@ export const LOCAL_LLM_REVIEWERS = ['lmstudio', 'ollama'];
 // Ollama-backed `claude` (see isOllamaClaudeProvider) where `--model` selects the
 // local Ollama model. `antigravity` runs `agy --model <id>`; an effort-suffixed
 // agy id is reconciled with the effort pin by `pairReviewerModelsAndEfforts`.
+// `grok` runs `grok --model <id>` (slashdo's `grok[<model>]` bracket); it takes a
+// model but NO effort, which is why this roster and EFFORT_SELECTABLE_REVIEWERS
+// are genuinely different sets rather than two names for one list.
 // Copilot/local-LLM reviewers are excluded — the former has no CLI, the latter
 // get their model injected server-side by `POST /api/code-review/local`. Add a
 // reviewer here when its CLI gains model selection; the `<reviewer>Model`
 // settings scalar is generated from this roster (codeReviewSettingsSchema).
-export const MODEL_CAPABLE_CLI_REVIEWERS = ['codex', 'claude', 'antigravity'];
+export const MODEL_CAPABLE_CLI_REVIEWERS = ['codex', 'claude', 'antigravity', 'grok'];
 // Every reviewer whose model the user can PICK in the UI: the model-capable CLIs
 // above (threaded into the follow-up prompt as `<reviewer> --model <id>`) plus the
 // local-LLM backends (whose id is injected server-side by

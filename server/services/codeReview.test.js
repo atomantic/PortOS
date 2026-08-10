@@ -31,6 +31,7 @@ import {
   __resetCodeReviewDefaultsCache,
   __resetReviewerCliInstalledCache,
 } from './codeReview.js'
+import { MODEL_SELECTABLE_REVIEWERS } from '../lib/cosValidation.js'
 
 // Minimal stand-ins for the deps resolveReviewLoopOptions is handed by its
 // callers (agentCliSpawning / agentCompletionCleanup) — kept trivial so the
@@ -71,14 +72,11 @@ describe('codeReview helpers', () => {
       ollamaEffort: null,
     }
     // Same for every model-selectable reviewer — `antigravity` joined the roster
-    // when agy's `--model` became pinnable (#3728).
-    const NO_MODELS = {
-      lmstudioModel: null,
-      ollamaModel: null,
-      codexModel: null,
-      claudeModel: null,
-      antigravityModel: null,
-    }
+    // when agy's `--model` became pinnable (#3728), `grok` when `grok --model`
+    // did (#3729). Derived from the roster, because `pickCodeReviewDefaults`
+    // derives its keys the same way: a hand-listed copy would have to be edited
+    // in lockstep with every future addition and says nothing extra when it is.
+    const NO_MODELS = Object.fromEntries(MODEL_SELECTABLE_REVIEWERS.map((r) => [`${r}Model`, null]))
     it('returns the hardcoded fallback when settings has no codeReview slice', () => {
       expect(pickCodeReviewDefaults(null)).toEqual({
         reviewers: ['copilot'],
@@ -149,6 +147,7 @@ describe('codeReview helpers', () => {
           codexModel: 'gpt-5.6-sol',
           claudeModel: 'qwen2.5:7b',
           antigravityModel: 'gemini-3.6-flash',
+          grokModel: 'grok-code-fast-1',
         },
       })
       expect(out).toEqual({
@@ -166,6 +165,7 @@ describe('codeReview helpers', () => {
         codexModel: 'gpt-5.6-sol',
         claudeModel: 'qwen2.5:7b',
         antigravityModel: 'gemini-3.6-flash',
+        grokModel: 'grok-code-fast-1',
         ...NO_EFFORTS,
       })
     })

@@ -26,8 +26,10 @@ import {
  */
 
 // CLI reviewers whose binary takes a `--model <id>` tier. Mirror of
-// MODEL_CAPABLE_CLI_REVIEWERS (`antigravity` runs `agy --model <id>`).
-export const MODEL_CAPABLE_CLI_REVIEWERS = ['codex', 'claude', 'antigravity'];
+// MODEL_CAPABLE_CLI_REVIEWERS (`antigravity` runs `agy --model <id>`, `grok` runs
+// `grok --model <id>` — the latter takes a model but no effort, so this roster is
+// deliberately wider than EFFORT_SELECTABLE_REVIEWERS below).
+export const MODEL_CAPABLE_CLI_REVIEWERS = ['codex', 'claude', 'antigravity', 'grok'];
 
 // The local-LLM backends, which take both a model and an effort.
 export const LOCAL_LLM_REVIEWERS = ['lmstudio', 'ollama'];

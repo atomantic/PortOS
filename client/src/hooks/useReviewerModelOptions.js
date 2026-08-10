@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as api from '../services/api';
-import { filterSelectableModels, selectableModelsForProvider, isAntigravityProvider } from '../utils/providers';
+import { filterSelectableModels, selectableModelsForProvider, isAntigravityProvider, isGrokBuildCli } from '../utils/providers';
 import { LOCAL_LLM_REVIEWERS, MODEL_SELECTABLE_REVIEWERS } from '../components/cos/constants';
 
 /**
@@ -12,9 +12,9 @@ import { LOCAL_LLM_REVIEWERS, MODEL_SELECTABLE_REVIEWERS } from '../components/c
  * Two sources, because the two reviewer kinds are different things:
  * - `lmstudio` / `ollama` ids come from `/api/local-llm/status`, so they reflect
  *   what's actually installed rather than a provider's stale stored `models`.
- * - `codex` / `claude` / `antigravity` tiers come from the provider catalog
- *   (`/api/providers`) — these are CLI reviewers, not local backends, so there's
- *   nothing to probe.
+ * - `codex` / `claude` / `antigravity` / `grok` tiers come from the provider
+ *   catalog (`/api/providers`) — these are CLI reviewers, not local backends, so
+ *   there's nothing to probe.
  *
  * The `claude` list spans BOTH usage modes: the `claude-code` provider tiers and
  * the installed Ollama ids (an Ollama-backed `claude` CLI, where `--model` selects
@@ -60,9 +60,12 @@ export default function useReviewerModelOptions() {
       .filter(Boolean);
     // `match` is a predicate rather than an id so a reviewer whose provider can be
     // recognized by more than its shipped id (an `agy` configured by path) uses the
-    // same predicate the rest of the app does.
-    const providerTiers = (match) => {
-      const provider = (providers || []).find(match);
+    // same predicate the rest of the app does. Several matchers = preference order:
+    // `grok` names one binary that ships as BOTH a `cli` and a `tui` provider, and
+    // the reviewer is spawned non-interactively, so the CLI's catalog wins — the
+    // broad predicate is the fallback for an install that only kept the TUI.
+    const providerTiers = (...matchers) => {
+      const provider = matchers.reduce((found, match) => found || (providers || []).find(match), null);
       if (!provider) return [];
       // `models` may be empty on a CLI provider configured with only a
       // defaultModel — `[]` is truthy, so a bare `||` wouldn't fall through.
@@ -83,17 +86,23 @@ export default function useReviewerModelOptions() {
       // Ollama-backed `claude`. Deduped, order-preserving.
       claude: Array.from(new Set([...providerTiers((p) => p.id === 'claude-code'), ...ollama].filter(Boolean))),
       antigravity: providerTiers(isAntigravityProvider),
+      // The shipped grok provider carries only the configured-default sentinel,
+      // which `filterSelectableModels` strips — so this is legitimately `[]` until
+      // the user lists real ids on the provider. The Model cell stays useful
+      // regardless because grok, like every CLI reviewer, is free-text.
+      grok: providerTiers((p) => p.id === 'grok-cli', isGrokBuildCli),
     };
 
     return {
       optionsByReviewer,
       // A local backend's id list is authoritative (we probed it), so keep those
       // pickers a closed `<select>`. Every CLI reviewer is free-text: `claude` for
-      // the Ollama-backed / Bedrock-form cases above, `codex`/`antigravity` because
-      // their catalogs are stored snapshots that can lag a newly-released tier (an
-      // agy pin may also be typed effort-suffixed — the server splits it). Derived
-      // from the rosters so a reviewer added to either one can't silently default to
-      // the wrong control.
+      // the Ollama-backed / Bedrock-form cases above, `codex`/`antigravity`/`grok`
+      // because their catalogs are stored snapshots that can lag a newly-released
+      // tier — grok's shipped catalog holds no real id at all, so a typed id is the
+      // ONLY way to pin one (an agy pin may also be typed effort-suffixed — the
+      // server splits it). Derived from the rosters so a reviewer added to either
+      // one can't silently default to the wrong control.
       freeText: Object.fromEntries(
         MODEL_SELECTABLE_REVIEWERS.map((r) => [r, !LOCAL_LLM_REVIEWERS.includes(r)])
       ),

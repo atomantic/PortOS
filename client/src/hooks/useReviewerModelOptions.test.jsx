@@ -24,6 +24,10 @@ const providers = [
       'gemini-3.1-pro-high',
     ],
   },
+  // One `grok` binary ships as both a TUI and a CLI provider; the reviewer is
+  // spawned non-interactively, so the CLI's catalog is the one it should offer.
+  { id: 'grok-tui', type: 'tui', command: 'grok', models: ['stale-tui-id'] },
+  { id: 'grok-cli', type: 'cli', command: 'grok', models: ['grok-configured-default', 'grok-code-fast-1'] },
 ];
 
 describe('useReviewerModelOptions', () => {
@@ -51,6 +55,23 @@ describe('useReviewerModelOptions', () => {
     // Free-text: the stored catalog lags new tiers, and a typed suffixed id is
     // still valid (the server splits it back apart).
     expect(result.current.freeText.antigravity).toBe(true);
+  });
+
+  // #3729: `grok --model <id>` is real, so the grok row gets a Model cell too.
+  it('sources grok options from the CLI provider, not the TUI, and drops the sentinel', async () => {
+    const { result } = renderHook(() => useReviewerModelOptions());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.optionsByReviewer.grok).toEqual(['grok-code-fast-1']);
+    // Free-text: the shipped grok catalog is sentinel-only, so a typed id is
+    // often the only way to pin one.
+    expect(result.current.freeText.grok).toBe(true);
+  });
+
+  it('falls back to a TUI-only grok install for its catalog', async () => {
+    getProviders.mockResolvedValue({ providers: [providers.find((p) => p.id === 'grok-tui')] });
+    const { result } = renderHook(() => useReviewerModelOptions());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.optionsByReviewer.grok).toEqual(['stale-tui-id']);
   });
 
   it('degrades to empty option lists when the provider fetch fails', async () => {

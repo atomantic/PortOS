@@ -16,6 +16,8 @@ import {
   MODEL_CAPABLE_CLI_REVIEWERS,
   MODEL_SELECTABLE_REVIEWERS,
   pairReviewerModelsAndEfforts,
+  reviewerModelsFromDefaults,
+  buildReviewWithArgs,
   LOCAL_LLM_EFFORT_LEVELS,
   reviewerEffortLevels,
   normalizeReviewerEfforts,
@@ -390,5 +392,34 @@ describe('per-reviewer model pins', () => {
     pairReviewerModelsAndEfforts(models, efforts);
     expect(models).toEqual({ antigravity: 'gemini-3.6-flash-high' });
     expect(efforts).toEqual({});
+  });
+
+  // #3729: `grok --model <id>` is real and slashdo accepts a `grok[<model>]`
+  // bracket, but `grok` was absent from the roster, so every grok review ran on
+  // the CLI's own default and the picker rendered "Grok takes no model".
+  it('keeps a grok model pin on the code-review settings slice', () => {
+    expect(codeReviewSettingsSchema.parse({ grokModel: 'grok-code-fast-1' }).grokModel)
+      .toBe('grok-code-fast-1');
+    // Structural characters would corrupt the emitted `grok[<model>]` token.
+    expect(codeReviewSettingsSchema.parse({ grokModel: 'a]b' }).grokModel).toBeUndefined();
+    expect(codeReviewSettingsSchema.parse({ grokModel: '  ' }).grokModel).toBeUndefined();
+  });
+
+  it('carries a grok model through the task schema, sanitizer and defaults adapter', () => {
+    expect(createCosTaskSchema.parse({ description: 'x', reviewerModels: { grok: 'grok-code-fast-1' } }).reviewerModels)
+      .toEqual({ grok: 'grok-code-fast-1' });
+    expect(sanitizeTaskMetadata({ reviewerModels: { grok: 'grok-code-fast-1', copilot: 'x' } }))
+      .toEqual({ reviewerModels: { grok: 'grok-code-fast-1' } });
+    expect(reviewerModelsFromDefaults({ grokModel: 'grok-code-fast-1' })).toEqual({ grok: 'grok-code-fast-1' });
+  });
+
+  it('emits the grok pin as a slashdo bracket, and never splits an effort off it', () => {
+    expect(buildReviewWithArgs(['grok'], { reviewerModels: { grok: 'grok-code-fast-1' } }))
+      .toBe('--review-with grok[grok-code-fast-1]');
+    // Only agy bakes an effort into the model id. A grok id passes through whole,
+    // and grok gains no effort pin from having one — its CLI takes no effort flag.
+    expect(pairReviewerModelsAndEfforts({ grok: 'grok-code-fast-1' }, {}))
+      .toEqual({ reviewerModels: { grok: 'grok-code-fast-1' }, reviewerEfforts: {} });
+    expect(reviewerEffortLevels('grok')).toBeNull();
   });
 });
