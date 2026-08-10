@@ -1678,8 +1678,15 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
   const chainFps = Number(rest.fps) > 0 ? Number(rest.fps) : 24;
   // Latents each chained chunk asks ExtendPipeline to append. buildLtx2Args
   // derives the same number from the same numFrames; the trim below subtracts
-  // the pixel frames they decode to, so the two have to stay in step.
-  const chunkExtendLatents = extendLatentFrames(rest.numFrames);
+  // the pixel frames they decode to, so the two have to stay in step —
+  // INCLUDING when the caller omitted numFrames. `numFrames` is optional on
+  // the route, and generateVideo resolves the same default before deriving
+  // `--extend-frames`; resolving it there but not here made the orchestrator
+  // assume an 8-frame extension against a ~120-frame one, so the prefix trim
+  // would have kept 8 frames of each hop and thrown the rest away.
+  const chunkExtendLatents = extendLatentFrames(
+    rest.numFrames ?? chainModel.defaultFrames ?? DEFAULT_NUM_FRAMES,
+  );
 
   const chainState = { stopped: false };
   activeChain = chainState;
@@ -2178,6 +2185,9 @@ export async function stitchVideos(videoIds, opts = {}) {
   });
 
   const listFile = join(tmpdir(), `concat-${id}.txt`);
+  // Set before the write, not after: `writeFile` creates and truncates the
+  // file before it writes, so a failure partway through still leaves one on
+  // disk to clean up. Unlinking a file that was never created is a no-op here.
   let listFileWritten = false;
   const writeConcatList = async () => {
     // ffmpeg concat-demuxer escape: per its docs, single quotes in filenames
@@ -2186,8 +2196,8 @@ export async function stitchVideos(videoIds, opts = {}) {
     // `C:\foo\bar.mp4`, that corrupts the path. Normalize to forward slashes
     // (which ffmpeg accepts on Windows just fine) before quoting.
     const escapeForConcat = (p) => p.replace(/\\/g, '/').replace(/'/g, "'\\''");
-    await writeFile(listFile, videoPaths.map((p) => `file '${escapeForConcat(p)}'`).join('\n'));
     listFileWritten = true;
+    await writeFile(listFile, videoPaths.map((p) => `file '${escapeForConcat(p)}'`).join('\n'));
   };
 
   const outFilename = `${filenamePrefix}-${id}.mp4`;
@@ -2206,9 +2216,12 @@ export async function stitchVideos(videoIds, opts = {}) {
     proc.on('error', (err) => reject(new ServerError(`ffmpeg failed to spawn: ${err.message}`, { status: 500, code: 'FFMPEG_FAILED' })));
   });
 
+  // Inputs with a real cut, as opposed to the measurement-only entries. Zero
+  // means the demuxer can do the job.
+  const cutCount = trimPlan.filter((t) => t?.startFrame > 0).length;
   // Tracks whether the cuts actually made it into the output, so `numFrames`
   // below reports the timeline that exists rather than the one we asked for.
-  let trimsApplied = trimPlan.some((t) => t?.startFrame > 0);
+  let trimsApplied = cutCount > 0;
   // Use a try/finally so the concat list temp file is cleaned up even when
   // ffmpeg rejects — otherwise it leaks one file per failed stitch.
   try {
@@ -2234,13 +2247,15 @@ export async function stitchVideos(videoIds, opts = {}) {
         // inputs were never re-encoded, so they're still in codec lockstep and
         // the stream-copy concat below can salvage the clip. The cost is the
         // echoed context replaying at each trimmed seam.
-        console.log(`⚠️ Trimmed concat failed (${failure.message}) — falling back to a stream copy; ${trimPlan.filter(Boolean).length} seam(s) will repeat their context`);
+        console.log(`⚠️ Trimmed concat failed (${failure.message}) — falling back to a stream copy; ${cutCount} seam(s) will repeat their context`);
         trimsApplied = false;
       }
     }
     if (!trimsApplied) {
       await writeConcatList();
-      await runFfmpeg(['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', '-y', outPath]);
+      // This one is fatal — its rejection is what the caller surfaces — so it
+      // needs the cause even more than the survivable run above does.
+      await runFfmpeg(['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', '-y', outPath], { captureStderr: true });
     }
     await optimizeForStreaming(outPath);
   } finally {

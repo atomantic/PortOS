@@ -561,6 +561,20 @@ describe('generateChainedVideo — continuation strategy (context window vs last
     expect(stitched?.numFrames).toBe(FIRST_FILE_FRAMES + (HOP_FILE_FRAMES - EXPECTED_PREFIX_START));
   });
 
+  it('resolves the default frame count before sizing the echo, like the render does', async () => {
+    // numFrames is optional on the route, and generateVideo falls back to
+    // DEFAULT_NUM_FRAMES (121 → 15 latents → 120 new pixel frames) before it
+    // derives --extend-frames. The orchestrator has to fall back identically:
+    // reading the raw request instead makes it assume a 1-latent, 8-frame
+    // extension, so it would call all but 8 frames of every hop "echo" and
+    // cut the hop's actual footage out of the timeline.
+    const DEFAULT_HOP_FILE_FRAMES = 145; // a 25-frame echo + 120 new frames
+    const { renders, concat } = await runChain({ numFrames: undefined }, 2, [121, DEFAULT_HOP_FILE_FRAMES]);
+    expect(flagValue(renders[1], '--extend-frames')).toBe('15');
+    const graph = concat[concat.indexOf('-filter_complex') + 1];
+    expect(graph).toMatch(/\[1:v\]trim=start_frame=25,/);
+  });
+
   it('never conditions the next hop on the echo the stitch is about to drop', async () => {
     // A window bigger than the chunk's own new footage (121 requested vs 24
     // rendered) clamps to the start of the file — which, now that the file
