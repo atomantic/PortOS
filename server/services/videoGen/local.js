@@ -1684,8 +1684,14 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
   // `--extend-frames`; resolving it there but not here made the orchestrator
   // assume an 8-frame extension against a ~120-frame one, so the prefix trim
   // would have kept 8 frames of each hop and thrown the rest away.
+  // Optional-chained on purpose: `videoChainUnsupportedError` waves an
+  // unresolvable model through (an unknown runtime resolves to the base mode
+  // set, which includes 'image'), so a model removed between enqueue and
+  // dispatch reaches here as null. Falling back keeps the chain's first chunk
+  // the thing that reports it — generateVideo throws a 400 "Unknown video
+  // model: X" — instead of a null-deref out of the dispatcher.
   const chunkExtendLatents = extendLatentFrames(
-    rest.numFrames ?? chainModel.defaultFrames ?? DEFAULT_NUM_FRAMES,
+    rest.numFrames ?? chainModel?.defaultFrames ?? DEFAULT_NUM_FRAMES,
   );
 
   const chainState = { stopped: false };
@@ -2203,16 +2209,19 @@ export async function stitchVideos(videoIds, opts = {}) {
   const outFilename = `${filenamePrefix}-${id}.mp4`;
   const outPath = join(PATHS.videos, outFilename);
 
-  // `captureStderr` is for the run whose failure is SURVIVABLE — the fallback
-  // below turns it into a log line, and "Stitch failed" alone can't tell a
-  // filter-graph parse error from a full disk.
+  // `captureStderr` keeps the last line of ffmpeg's own diagnostics on the
+  // error, so a failure reads as something other than a bare "Stitch failed" —
+  // which can't tell a filter-graph parse error from a full disk. Split on \r
+  // as well as \n: ffmpeg separates its progress lines with a bare carriage
+  // return, so a failure mid-encode would otherwise trail a run of them behind
+  // the line that matters.
   const runFfmpeg = (args, { captureStderr = false } = {}) => new Promise((resolve, reject) => {
     const proc = spawn(ffmpeg, args, { env: safeChildProcessEnv(), stdio: captureStderr ? ['ignore', 'ignore', 'pipe'] : 'ignore' });
     let tail = '';
     proc.stderr?.on('data', (d) => { tail = `${tail}${d}`.slice(-400); });
     proc.on('close', (code) => code === 0
       ? resolve()
-      : reject(new ServerError(`Stitch failed${tail ? `: ${tail.trim().split('\n').pop()}` : ''}`, { status: 500, code: 'FFMPEG_FAILED' })));
+      : reject(new ServerError(`Stitch failed${tail ? `: ${tail.split(/[\r\n]+/).filter(Boolean).pop()?.trim() || ''}` : ''}`, { status: 500, code: 'FFMPEG_FAILED' })));
     proc.on('error', (err) => reject(new ServerError(`ffmpeg failed to spawn: ${err.message}`, { status: 500, code: 'FFMPEG_FAILED' })));
   });
 
