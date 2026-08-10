@@ -23,6 +23,7 @@ export { default as useContainerWidth } from './useContainerWidth.js';
 export { default as useEscapeKey } from './useEscapeKey.js';
 export { default as useFieldDraft } from './useFieldDraft.js';
 export { default as useFocusTrap } from './useFocusTrap.js';
+export { default as useForceSaveGate } from './useForceSaveGate.js';
 export { default as useImageGenQueue } from './useImageGenQueue.js';
 export { default as useImageRenderSettings } from './useImageRenderSettings.js';
 export { default as useUserTimezone } from './useUserTimezone.js';

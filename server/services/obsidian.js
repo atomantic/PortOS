@@ -271,7 +271,18 @@ export async function getNote(vaultId, notePath, { includeBacklinks = true } = {
   };
 }
 
-export async function updateNote(vaultId, notePath, content) {
+/**
+ * Overwrite an existing note.
+ *
+ * @param {string} vaultId
+ * @param {string} notePath - vault-relative path.
+ * @param {string} content
+ * @param {object} [options]
+ * @param {boolean} [options.force=false] - Bypass the iCloud dataless screen and
+ *   issue the write regardless. **Only ever set from a deliberate user action**
+ *   (see the escape-hatch note below); background mirrors must leave it off.
+ */
+export async function updateNote(vaultId, notePath, content, { force = false } = {}) {
   const vault = await getVaultById(vaultId);
   if (!vault) return { error: 'VAULT_NOT_FOUND' };
 
@@ -294,12 +305,42 @@ export async function updateNote(vaultId, notePath, content) {
   // and WAITS (bounded, in a child process — cancellable, which the kernel write
   // is not) rather than fire-and-forget. brctl exit 0 only means the download was
   // accepted, so re-screen before trusting it and refuse if it's still dataless.
-  if (await isSuspectedDataless(fullPath)) {
+  //
+  // ## The escape hatch (#3717)
+  //
+  // The screen infers "dataless" from `size > 0 && blocks === 0`, which also
+  // matches a genuinely-local sparse or `decmpfs`-compressed file. On a read that
+  // false positive self-limits; on this write path it was PERMANENT — `brctl`
+  // exits 0 with nothing to fetch, the re-screen still says dataless, and the
+  // note could never be saved again from the UI. `force` restores the user's
+  // agency. It re-admits exactly one blocking write, which is what this guard
+  // exists to prevent — so it must only ever arrive from an explicit click, never
+  // as a retry default, and never from `upsertNote`'s background mirrors.
+  if (force) {
+    console.warn(`⚠️ force-save bypassing the iCloud dataless screen for note: ${notePath}`);
+  } else if (await isSuspectedDataless(fullPath)) {
+    // Snapshot before/after so the refusal can say something TRUE about retrying.
+    // This is deliberately messaging-only: the verdict stays the re-screen below,
+    // which is already the strictest form of "did it actually materialize" —
+    // `blocks` moving off zero IS the completion signal, so gating the write on
+    // `mtime` too would only let a still-dataless file through when a metadata
+    // sync touched it (#3717 option 1, taken for the message and rejected for the
+    // guard).
+    const before = await stat(fullPath).catch(() => null);
     await materializeAndWait(fullPath, { label: 'Obsidian note' });
     if (await isSuspectedDataless(fullPath)) {
+      const after = await stat(fullPath).catch(() => null);
+      // Unknown (a stat failed) counts as "moved": never claim a download is
+      // hopeless on evidence we don't have.
+      const moved = !before || !after
+        || before.blocks !== after.blocks
+        || before.mtimeMs !== after.mtimeMs;
       return {
         error: 'NOTE_EVICTED',
-        message: 'This note is stored in iCloud and has not been downloaded to this Mac yet. A download was requested — try again shortly.'
+        stalled: !moved,
+        message: moved
+          ? 'This note is stored in iCloud and has not been downloaded to this Mac yet. A download is in progress — try again shortly.'
+          : 'This note looks offloaded to iCloud, but asking iCloud to download it changed nothing, so waiting will not help. If the note really is on this Mac, save it again and choose "Save anyway".'
       };
     }
   }

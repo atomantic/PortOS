@@ -42,7 +42,11 @@ export const createNoteSchema = z.object({
 });
 
 export const updateNoteSchema = z.object({
-  content: z.string().max(500000)
+  content: z.string().max(500000),
+  // Deliberate user override for a false-positive iCloud dataless screen (#3717):
+  // bypass the screen and issue the write. Defaults off so every ordinary save —
+  // and every background mirror — keeps the refuse-to-block guard.
+  force: z.boolean().optional().default(false)
 });
 
 export const searchQuerySchema = z.object({

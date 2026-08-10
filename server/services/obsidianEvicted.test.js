@@ -216,6 +216,80 @@ describe('obsidian updateNote against an evicted note', () => {
     expect(icloud.isSuspectedDataless).not.toHaveBeenCalled();
   });
 
+  /**
+   * The force-save escape hatch — #3717.
+   *
+   * The screen infers dataless from `size > 0 && blocks === 0`, which also matches
+   * a genuinely-local sparse/compressed file. On this write path that false
+   * positive was PERMANENT (brctl exits 0 with nothing to fetch, the re-screen
+   * still says dataless, forever), so the note could never be saved again. These
+   * pin the way out, and pin that it stays shut unless someone explicitly opens it.
+   */
+  it('force writes the note past a screen that will never clear', async () => {
+    const icloud = await import('../lib/icloudFile.js');
+    icloud.isSuspectedDataless.mockResolvedValue(true);
+
+    const result = await updateNote(vaultId, NOTE, 'REPLACEMENT', { force: true });
+
+    expect(result.error).toBeUndefined();
+    expect(readFileSync(join(VAULT_DIR, NOTE), 'utf-8')).toBe('REPLACEMENT');
+  });
+
+  it('force skips the screen entirely rather than re-running a hopeless materialize', async () => {
+    const icloud = await import('../lib/icloudFile.js');
+    icloud.isSuspectedDataless.mockResolvedValue(true);
+
+    await updateNote(vaultId, NOTE, 'REPLACEMENT', { force: true });
+
+    // The whole point of the override is that the user has asserted the file is
+    // local; paying another bounded brctl wait first would just re-add the delay
+    // the lockout is made of.
+    expect(icloud.materializeAndWait).not.toHaveBeenCalled();
+    expect(icloud.isSuspectedDataless).not.toHaveBeenCalled();
+  });
+
+  it('force is opt-in — an absent or false flag still refuses', async () => {
+    const icloud = await import('../lib/icloudFile.js');
+    icloud.isSuspectedDataless.mockResolvedValue(true);
+
+    expect((await updateNote(vaultId, NOTE, 'A')).error).toBe('NOTE_EVICTED');
+    expect((await updateNote(vaultId, NOTE, 'B', {})).error).toBe('NOTE_EVICTED');
+    expect((await updateNote(vaultId, NOTE, 'C', { force: false })).error).toBe('NOTE_EVICTED');
+    expect(readFileSync(join(VAULT_DIR, NOTE), 'utf-8')).toBe(ORIGINAL);
+  });
+
+  it('does not promise a retry when the download changed nothing', async () => {
+    const icloud = await import('../lib/icloudFile.js');
+    icloud.isSuspectedDataless.mockResolvedValue(true);
+
+    // The note on disk is an ordinary local file, so brctl cannot move `blocks`
+    // or `mtime` — exactly the false-positive lockout. Telling the user to "try
+    // again shortly" here is a lie; nothing is in flight.
+    const result = await updateNote(vaultId, NOTE, 'REPLACEMENT');
+
+    expect(result.stalled).toBe(true);
+    expect(result.message).not.toMatch(/try again shortly/i);
+    expect(result.message).toMatch(/Save anyway/);
+  });
+
+  it('still says "try again shortly" when the download actually moved the file', async () => {
+    const icloud = await import('../lib/icloudFile.js');
+    icloud.isSuspectedDataless.mockResolvedValue(true);
+    // A real in-flight download changes the file on disk. Grow it far enough that
+    // `blocks` has to move whatever the filesystem's block size is, rather than
+    // leaning on sub-millisecond mtime resolution.
+    icloud.materializeAndWait.mockImplementation(async () => {
+      writeFileSync(join(VAULT_DIR, NOTE), 'x'.repeat(256 * 1024));
+      return true;
+    });
+
+    const result = await updateNote(vaultId, NOTE, 'REPLACEMENT');
+
+    expect(result.error).toBe('NOTE_EVICTED');
+    expect(result.stalled).toBe(false);
+    expect(result.message).toMatch(/try again shortly/i);
+  });
+
   it('upsertNote degrades to a skipped mirror, never a hang or a throw', async () => {
     const icloud = await import('../lib/icloudFile.js');
     icloud.isSuspectedDataless.mockResolvedValue(true);

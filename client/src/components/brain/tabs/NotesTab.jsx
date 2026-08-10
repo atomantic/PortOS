@@ -24,6 +24,7 @@ import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import FolderPicker from '../../FolderPicker';
 import { timeAgo, formatBytes } from '../../../utils/formatters';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
+import { useForceSaveGate } from '../../../hooks/useForceSaveGate.js';
 import { clickableProps } from '../../../lib/a11yKeyboard.js';
 import OfflineNotesNotice from '../../OfflineNotesNotice.jsx';
 
@@ -71,6 +72,13 @@ export default function NotesTab() {
 
   // Confirm delete
   const { isConfirming: isConfirmingDelete, requestDelete, cancelDelete } = useConfirmDelete();
+
+  // Escape hatch for a note the iCloud dataless screen refuses to save (#3717).
+  const {
+    isArmed: isForceSaveArmed,
+    recordFailure: recordEvictedSave,
+    reset: resetForceSave
+  } = useForceSaveGate();
 
   const searchRef = useRef(null);
   const editorRef = useRef(null);
@@ -153,12 +161,21 @@ export default function NotesTab() {
     setLoadingNote(false);
   };
 
-  const handleSaveNote = async () => {
+  // `force` bypasses the server's iCloud dataless screen and is ONLY ever passed
+  // from the "Save anyway" override the gate arms after two consecutive
+  // NOTE_EVICTED refusals (#3717) — never from the Save button or ⌘S.
+  const handleSaveNote = async ({ force = false } = {}) => {
     if (!selectedNote) return;
+    const notePath = selectedNote.path;
     setSaving(true);
-    const data = await api.updateNote(selectedVaultId, selectedNote.path, noteContent).catch(() => null);
+    const data = await api.updateNote(selectedVaultId, notePath, noteContent, { force })
+      .catch((err) => {
+        if (err?.code === 'NOTE_EVICTED') recordEvictedSave(notePath);
+        return null;
+      });
     setSaving(false);
     if (data) {
+      resetForceSave();
       setSelectedNote(data);
       setEditing(false);
       toast.success('Note saved');
@@ -477,7 +494,7 @@ export default function NotesTab() {
                 {editing ? (
                   <>
                     <button
-                      onClick={handleSaveNote}
+                      onClick={() => handleSaveNote()}
                       disabled={saving}
                       className="flex items-center gap-1 px-3 py-1.5 rounded bg-port-accent text-white text-sm hover:bg-port-accent/80 disabled:opacity-50"
                     >
@@ -518,6 +535,20 @@ export default function NotesTab() {
                 question="Delete this note permanently?"
                 onConfirm={() => handleDeleteNote(selectedNote.path)}
                 onCancel={cancelDelete}
+              />
+            )}
+
+            {/* Force-save escape hatch: only after two consecutive iCloud refusals (#3717) */}
+            {isForceSaveArmed(selectedNote.path) && (
+              <InlineConfirmRow
+                variant="separator"
+                tone="warning"
+                question="iCloud keeps reporting this note as not downloaded, so saving is refused. Write it anyway?"
+                confirmText="Save anyway"
+                confirmTitle="Bypass the iCloud download check and write this note"
+                cancelText="Keep waiting"
+                onConfirm={() => handleSaveNote({ force: true })}
+                onCancel={resetForceSave}
               />
             )}
 

@@ -109,6 +109,16 @@ describe('notesValidation', () => {
       expect(updateNoteSchema.safeParse({ content: '' }).success).toBe(true);
       expect(updateNoteSchema.safeParse({ content: 'updated' }).success).toBe(true);
     });
+
+    // #3717: `force` re-admits the blocking write the iCloud screen exists to
+    // prevent, so it must default OFF and must not be reachable by coercion —
+    // a truthy string in a stray body would silently disarm the guard.
+    it('defaults force off and only accepts a real boolean', () => {
+      expect(updateNoteSchema.safeParse({ content: 'x' }).data.force).toBe(false);
+      expect(updateNoteSchema.safeParse({ content: 'x', force: true }).data.force).toBe(true);
+      expect(updateNoteSchema.safeParse({ content: 'x', force: 'true' }).success).toBe(false);
+      expect(updateNoteSchema.safeParse({ content: 'x', force: 1 }).success).toBe(false);
+    });
   });
 
   describe('searchQuerySchema', () => {

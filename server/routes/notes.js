@@ -22,9 +22,12 @@ import {
 const router = Router();
 
 const NOT_FOUND_CODES = new Set(['VAULT_NOT_FOUND', 'NOTE_NOT_FOUND']);
-// The note exists but iCloud has evicted its bytes — a transient condition that
-// heals once the background `brctl download` completes, so it's 503 (retry me),
-// not 404 (gone) or 400 (your request was wrong).
+// The note exists but iCloud reports its bytes as evicted — usually transient
+// (it heals once the background `brctl download` completes), so 503, not 404
+// (gone) or 400 (your request was wrong). Not ALWAYS transient: the screen can
+// false-positive on a genuinely-local sparse/compressed file, which no amount of
+// retrying clears — the service says so in the message and the UI offers a
+// force-save override on the second refusal (#3717).
 const UNAVAILABLE_CODES = new Set(['NOTE_EVICTED']);
 const errorStatus = (code) => {
   if (NOT_FOUND_CODES.has(code)) return 404;
@@ -114,8 +117,8 @@ router.post('/vaults/:id/note', asyncHandler(async (req, res) => {
 
 router.put('/vaults/:id/note', asyncHandler(async (req, res) => {
   const { path } = validateRequest(notePathSchema, req.query);
-  const { content } = validateRequest(updateNoteSchema, req.body);
-  const result = await obsidian.updateNote(req.params.id, path, content);
+  const { content, force } = validateRequest(updateNoteSchema, req.body);
+  const result = await obsidian.updateNote(req.params.id, path, content, { force });
   throwOnError(result);
   res.json(result);
 }));

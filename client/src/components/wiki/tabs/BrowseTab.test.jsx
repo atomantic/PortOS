@@ -66,3 +66,61 @@ describe('BrowseTab responsive list/detail', () => {
     await waitFor(() => expect(screen.getByText('Select a page to view')).toBeInTheDocument());
   });
 });
+
+/**
+ * The iCloud force-save escape hatch — #3717. Mirrored from NotesTab: the same
+ * lockout is reachable from the wiki editor, so the same way out has to be wired
+ * here, and it must stay shut until the same page has been refused twice.
+ */
+describe('BrowseTab iCloud force save', () => {
+  const evicted = () => Object.assign(new Error('evicted'), { code: 'NOTE_EVICTED' });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getNote.mockResolvedValue(sampleNote);
+  });
+
+  const openEditor = async () => {
+    renderTab();
+    fireEvent.click(screen.getByText('Example Source'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+  };
+
+  const clickSave = async () => {
+    const before = api.updateNote.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: /Save/ }));
+    await waitFor(() => expect(api.updateNote.mock.calls.length).toBe(before + 1));
+  };
+
+  it('arms "Save anyway" only on the second refusal, and only it forces', async () => {
+    api.updateNote.mockRejectedValue(evicted());
+    await openEditor();
+
+    await clickSave();
+    expect(screen.queryByRole('button', { name: 'Save anyway' })).toBeNull();
+
+    await clickSave();
+    const forceAnyway = await screen.findByRole('button', { name: 'Save anyway' });
+    // An ordinary save must never carry `force` — that would make the override
+    // the retry default and re-admit the blocking write with no user decision.
+    for (const call of api.updateNote.mock.calls) {
+      expect(call[3]).toEqual({ force: false });
+    }
+
+    api.updateNote.mockResolvedValue(sampleNote);
+    fireEvent.click(forceAnyway);
+    await waitFor(() => expect(api.updateNote).toHaveBeenLastCalledWith(
+      'v1', 'wiki/sources/example.md', sampleNote.content, { force: true }
+    ));
+  });
+
+  it('does not arm on an unrelated save failure', async () => {
+    api.updateNote.mockRejectedValue(Object.assign(new Error('nope'), { code: 'INVALID_PATH' }));
+    await openEditor();
+
+    await clickSave();
+    await clickSave();
+
+    expect(screen.queryByRole('button', { name: 'Save anyway' })).toBeNull();
+  });
+});

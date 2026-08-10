@@ -30,10 +30,14 @@ export const createNote = (vaultId, path, content = '') => request(`/notes/vault
   body: JSON.stringify({ path, content })
 });
 
-export const updateNote = (vaultId, path, content) =>
+// `force` bypasses the server's iCloud dataless screen (#3717). Only ever pass
+// it from an explicit user click on the "Save anyway" override — never as an
+// automatic retry.
+export const updateNote = (vaultId, path, content, { force = false, ...options } = {}) =>
   request(`/notes/vaults/${vaultId}/note?path=${encodeURIComponent(path)}`, {
     method: 'PUT',
-    body: JSON.stringify({ content })
+    body: JSON.stringify({ content, force }),
+    ...options
   });
 
 export const deleteNote = (vaultId, path) =>

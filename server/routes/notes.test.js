@@ -14,6 +14,7 @@ import { request } from '../lib/testHelper.js';
 vi.mock('../services/obsidian.js', () => ({
   getNote: vi.fn(),
   scanVault: vi.fn(),
+  updateNote: vi.fn(),
 }));
 
 const obsidian = await import('../services/obsidian.js');
@@ -28,6 +29,7 @@ app.use(errorMiddleware);
 beforeEach(() => {
   obsidian.getNote.mockReset();
   obsidian.scanVault.mockReset();
+  obsidian.updateNote.mockReset();
 });
 
 describe('GET /api/notes/vaults/:id/note error mapping', () => {
@@ -57,6 +59,38 @@ describe('GET /api/notes/vaults/:id/note error mapping', () => {
     const res = await request(app).get('/api/notes/vaults/v1/note?path=a.md');
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('INVALID_PATH');
+  });
+});
+
+/**
+ * The force-save escape hatch (#3717). The dataless screen can false-positive on
+ * a genuinely-local sparse/compressed file, and on the write path that used to be
+ * an unrecoverable lockout. `force` is the way back — so the handler must pass it
+ * through verbatim AND must default it off, or every background save inherits it.
+ */
+describe('PUT /api/notes/vaults/:id/note force pass-through', () => {
+  it('defaults force to false when the body omits it', async () => {
+    obsidian.updateNote.mockResolvedValue({ path: 'a.md' });
+
+    const res = await request(app).put('/api/notes/vaults/v1/note?path=a.md').send({ content: 'hi' });
+
+    expect(res.status).toBe(200);
+    expect(obsidian.updateNote).toHaveBeenCalledWith('v1', 'a.md', 'hi', { force: false });
+  });
+
+  it('forwards an explicit force:true', async () => {
+    obsidian.updateNote.mockResolvedValue({ path: 'a.md' });
+
+    await request(app).put('/api/notes/vaults/v1/note?path=a.md').send({ content: 'hi', force: true });
+
+    expect(obsidian.updateNote).toHaveBeenCalledWith('v1', 'a.md', 'hi', { force: true });
+  });
+
+  it('rejects a non-boolean force rather than coercing it', async () => {
+    const res = await request(app).put('/api/notes/vaults/v1/note?path=a.md').send({ content: 'hi', force: 'yes' });
+
+    expect(res.status).toBe(400);
+    expect(obsidian.updateNote).not.toHaveBeenCalled();
   });
 });
 
