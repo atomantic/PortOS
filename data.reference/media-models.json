@@ -419,7 +419,6 @@
         "name": "HunyuanVideo (13B — fp32-only on MPS, ~4-8 hr per render)",
         "repo": "tencent/HunyuanVideo",
         "runtime": "hunyuan",
-        "mode": "t2v",
         "steps": 30,
         "guidance": 6,
         "precision": "fp32",

@@ -48,9 +48,9 @@ export default function AdvancedParamsPanel({
   // and the audio flags don't apply there.
   const showAudioFlags = mode !== 'a2v';
   const showModelAudioControls = showAudioFlags && supportsVideoAudioControls(currentModel);
-  const showChunks = mode !== 'a2v'
-    && (!Array.isArray(currentModel?.supportedModes)
-      || currentModel.supportedModes.includes('image'));
+  // Chunk chaining seeds chunk N+1 from chunk N's last frame, so it needs i2v —
+  // the same predicate the picker uses, not a second reading of supportedModes.
+  const showChunks = mode !== 'a2v' && isModelAllowedForMode(currentModel, 'image');
   // ltx2 extend conditions on the source's latent rather than a single frame,
   // so image strength is meaningless for it.
   const showImageStrength = mode === 'image' || (mode === 'extend' && currentModel?.runtime !== 'ltx2');

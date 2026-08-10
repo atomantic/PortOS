@@ -164,17 +164,16 @@ export const icResolutionIssue = (spec, width, height) => {
   return `${spec.label} mode needs a resolution divisible by ${scale} (its reference encoder downscales by ${scale}); got ${width}×${height}.`;
 };
 
-// Mode-compatibility predicate for the Model dropdown. a2v and the IC-LoRA
-// remix modes require the ltx2 runtime (dgrauet's pipeline) — the legacy
-// mlx_video pipeline has no audio-conditioned mode and no IC pipeline, and
-// Wan/Hunyuan don't either. Server enforces the same rules in
-// routes/videoGen.js (A2V_REQUIRES_LTX2 / IC_LORA_REQUIRES_LTX2); filtering
-// client-side keeps the dropdown honest so the user can't pick a doomed model.
+// The one mode-compatibility predicate — used by the Model dropdown and by
+// every "can this model do i2v?" gate on the page. a2v and the IC-LoRA remix
+// modes stay runtime-gated because they're ltx2 pipeline capabilities rather
+// than per-entry facts (the remix ids come from the IC-LoRA weight registry);
+// the server enforces the same rules in routes/videoGen.js (A2V_REQUIRES_LTX2 /
+// IC_LORA_REQUIRES_LTX2). Every other mode is answered by `supportedModes`,
+// which the server resolves for EVERY entry (server/lib/videoModeProfiles.js,
+// #3737), so an absent list means the payload didn't come from the registry.
 export const isModelAllowedForMode = (model, mode) => {
   if (!model) return false;
   if (mode === 'a2v' || isIcLoraMode(mode)) return model.runtime === 'ltx2';
-  if (Array.isArray(model.supportedModes) && model.supportedModes.length > 0) {
-    return Array.isArray(model.supportedModes) && model.supportedModes.includes(mode);
-  }
-  return true;
+  return Array.isArray(model.supportedModes) && model.supportedModes.includes(mode);
 };

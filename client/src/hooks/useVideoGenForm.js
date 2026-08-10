@@ -972,8 +972,10 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
     || currentModel?.runtime !== 'ltx2'
     || !!icResolutionIssue(icSpec, width, height)
   );
-  const modelSupportsChaining = !Array.isArray(currentModel?.supportedModes)
-    || currentModel.supportedModes.includes('image');
+  // Chaining seeds each chunk from the previous one's last frame, so it needs
+  // i2v — asked through the shared predicate so the picker, this gate and the
+  // server's videoChainUnsupportedError can't answer differently.
+  const modelSupportsChaining = isModelAllowedForMode(currentModel, 'image');
   // The single predicate for "this request really chains" — keyframes, IC
   // references and a2v each anchor a SINGLE clip, so the route pins them to one
   // chunk (KEYFRAMES_CHUNKS_CONFLICT / IC_LORA_CHUNKS_CONFLICT). Derived once so

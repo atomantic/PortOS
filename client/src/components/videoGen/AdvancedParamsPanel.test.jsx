@@ -2,9 +2,13 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import AdvancedParamsPanel from './AdvancedParamsPanel';
 
+// Every model reaching the client carries a server-resolved `supportedModes`
+// (server/lib/videoModeProfiles.js, #3737) — fixtures carry it as payloads do.
+const MLX_MODES = ['text', 'image', 'fflf', 'extend'];
+
 const baseProps = {
   mode: 'text',
-  currentModel: { steps: 30, guidance: 3.0 },
+  currentModel: { steps: 30, guidance: 3.0, runtime: 'mlx_video', supportedModes: MLX_MODES },
   numFrames: 121, onNumFramesChange: vi.fn(),
   chunks: 1, onChunksChange: vi.fn(), keyframesActive: false,
   chunkPrompts: [], onChunkPromptChange: vi.fn(), chainingActive: false,
@@ -126,12 +130,12 @@ describe('AdvancedParamsPanel', () => {
   });
 
   it('hides image strength for an ltx2 extend render', () => {
-    const { unmount } = renderPanel({ mode: 'extend', currentModel: { runtime: 'ltx2' } });
+    const { unmount } = renderPanel({ mode: 'extend', currentModel: { runtime: 'ltx2', supportedModes: MLX_MODES } });
     fireEvent.click(toggle());
     expect(screen.queryByLabelText('Image Strength')).toBeNull();
     unmount();
 
-    renderPanel({ mode: 'extend', currentModel: { runtime: 'mlx_video' } });
+    renderPanel({ mode: 'extend', currentModel: { runtime: 'mlx_video', supportedModes: MLX_MODES } });
     fireEvent.click(toggle());
     expect(screen.getByLabelText('Image Strength')).toBeTruthy();
   });
@@ -159,7 +163,7 @@ describe('AdvancedParamsPanel', () => {
   });
 
   it('keeps the long-render Extend guidance for models that support Extend', () => {
-    renderPanel({ numFrames: 313, currentModel: { runtime: 'ltx2' } });
+    renderPanel({ numFrames: 313, currentModel: { runtime: 'ltx2', supportedModes: MLX_MODES } });
     fireEvent.click(toggle());
     expect(screen.getByText(/Past 241 frames/i)).toBeInTheDocument();
   });

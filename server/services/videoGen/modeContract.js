@@ -13,7 +13,8 @@
  * and each caller decides only what to do first: the route unlinks its staged
  * uploads, the render path just throws.
  *
- * Dependency-free apart from the error leaf, which keeps it importable from
+ * Dependency-free apart from the error leaf and the registry's pure per-runtime
+ * mode table (`lib/videoModeProfiles.js`), which keeps it importable from
  * `prepareParams.js` without dragging in `local.js` — the module suites mock
  * `local.js` wholesale, and a mocked rule table is no rule table at all.
  *
@@ -34,12 +35,15 @@
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
+import { VIDEO_RUNTIME_MODES, resolveVideoSupportedModes } from '../../lib/videoModeProfiles.js';
 
 // H3's fl2va path conditions on up to two keyframes anchored at the first and
 // last latent frame — so text, image (first only) and FFLF (first + last) all
 // run, while extend / a2v / IC-remix and the ltx2 multi-keyframe array (which
 // pins arbitrary frame indices H3 has no anchor for) still have no equivalent.
-export const MINIMAX_H3_MODES = Object.freeze(['text', 'image', 'fflf']);
+// Re-exported from the registry's per-runtime table (#3737) so the ceiling and
+// the backfilled `supportedModes` can't drift into two different answers.
+export const MINIMAX_H3_MODES = VIDEO_RUNTIME_MODES.minimax_h3;
 
 // Message defaults, used for any rule a runtime row doesn't phrase itself. Each
 // takes `{ model, requestedMode, allowedModes }` so a new runtime can adopt the
@@ -64,9 +68,9 @@ const VIDEO_MODE_CONTRACTS = Object.freeze({
   wan22: {
     codePrefix: 'WAN22',
     chainCode: 'WAN22_CHAIN_REQUIRES_IMAGE_MODE',
-    // No ceiling: MLX-Gen's Wan CLI takes whatever the profile declares, and an
-    // entry with no `supportedModes` at all declares nothing — so it renders
-    // nothing, which is how both wan22 boundaries have always read it.
+    // No ceiling: MLX-Gen's Wan CLI takes whatever the profile declares, and
+    // resolveVideoSupportedModes narrows an entry that declares nothing to the
+    // wan22 row (text + image) rather than leaving it unconstrained.
     modeCeiling: null,
     // The wan22 lane rejects multi-keyframe / extend / audio / IC inputs by
     // runtime elsewhere (KEYFRAMES_REQUIRE_LTX2, A2V_REQUIRES_LTX2,
@@ -114,10 +118,11 @@ const isPresent = (value) => (Array.isArray(value) ? value.length > 0 : Boolean(
  * runtime that declares no row — ltx2, mlx_video and hunyuan gate their modes
  * through their own helpers).
  *
- * `supportedModes` comes off the registry entry so the picker and the API agree
- * even on an install whose `data/media-models.json` was hand-edited or narrowed;
- * a row's `modeCeiling` stays the ceiling, because an entry can't declare a mode
- * the helper has no arguments for.
+ * `supportedModes` comes off the registry entry (resolved from the runtime table
+ * when the entry declares none) so the picker and the API agree even on an
+ * install whose `data/media-models.json` was hand-edited or narrowed; a row's
+ * `modeCeiling` stays the ceiling, because an entry can't declare a mode the
+ * helper has no arguments for.
  *
  * @param {object} opts
  * @param {object} opts.model - registry entry (`runtime`, `name`, `supportedModes`)
@@ -146,10 +151,10 @@ export const videoModeContractError = ({
   const { codePrefix, modeCeiling, extraConditioningUnsupported } = contract;
   const messages = { ...DEFAULT_MESSAGES, ...contract.messages };
   const requestedMode = mode || (hasFirstImage ? 'image' : 'text');
-  const declaredModes = model?.supportedModes;
-  const allowedModes = Array.isArray(declaredModes)
-    ? (modeCeiling ? declaredModes.filter((m) => modeCeiling.includes(m)) : declaredModes)
-    : (modeCeiling ?? []);
+  const declaredModes = resolveVideoSupportedModes(model);
+  const allowedModes = modeCeiling
+    ? declaredModes.filter((m) => modeCeiling.includes(m))
+    : declaredModes;
   const ctx = { model, requestedMode, allowedModes, sourceResolved };
   const fail = (key, code) => new ServerError(messages[key](ctx), { status: 400, code });
 
@@ -189,12 +194,13 @@ export const videoModeContractError = ({
  * needs image-to-video on any runtime. Returns a ServerError for a model that
  * lacks it, else null.
  *
- * An entry with no declared `supportedModes` is permitted — unset means
- * "unconstrained", not "text-only" — and both boundaries must read it that way,
- * which is why this is one function rather than a rule re-typed per runtime.
+ * An entry that declares no `supportedModes` resolves them from its runtime
+ * (lib/videoModeProfiles.js) rather than being waved through as unconstrained,
+ * so both boundaries and the client's picker read one answer — which is why this
+ * is one function rather than a rule re-typed per runtime.
  */
 export const videoChainUnsupportedError = (model) => {
-  if (!Array.isArray(model?.supportedModes) || model.supportedModes.includes('image')) return null;
+  if (resolveVideoSupportedModes(model).includes('image')) return null;
   return new ServerError(
     `${model.name} cannot generate chunks > 1 because continuation requires image-to-video support.`,
     {

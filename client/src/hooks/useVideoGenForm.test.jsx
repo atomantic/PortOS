@@ -15,8 +15,12 @@ const { useVideoGenForm } = await import('./useVideoGenForm.js');
 // legacy path that extends from an extracted last frame.
 // `lastFrameAnchored` is server-decorated onto every model by listVideoModels()
 // (from LAST_FRAME_ANCHORED_RUNTIMES) — fixtures carry it as the payload does.
-const LTX2 = { id: 'ltx2-model', name: 'LTX-2.3', runtime: 'ltx2', lastFrameAnchored: true };
-const MLX = { id: 'mlx-model', name: 'LTX distilled', runtime: 'mlx_video', lastFrameAnchored: false };
+// `supportedModes` likewise: the registry resolves it for EVERY entry at load
+// (server/lib/videoModeProfiles.js, #3737), so a model that reaches the client
+// without one is not a shape the picker has to handle.
+const RUNTIME_MODES = ['text', 'image', 'fflf', 'extend'];
+const LTX2 = { id: 'ltx2-model', name: 'LTX-2.3', runtime: 'ltx2', lastFrameAnchored: true, supportedModes: RUNTIME_MODES };
+const MLX = { id: 'mlx-model', name: 'LTX distilled', runtime: 'mlx_video', lastFrameAnchored: false, supportedModes: RUNTIME_MODES };
 const WAN_T2V = { id: 'wan-t2v', name: 'Wan T2V', runtime: 'wan22', supportedModes: ['text'], frameStride: 4 };
 const WAN_TI2V = { id: 'wan-ti2v', name: 'Wan TI2V', runtime: 'wan22', supportedModes: ['text', 'image'], frameStride: 4 };
 const H3 = {

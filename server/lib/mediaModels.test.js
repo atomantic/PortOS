@@ -107,6 +107,67 @@ describe('mediaModels registry', () => {
     expect(h3.termsGate.id).toBe('minimax-h3-community-license-2026-08-02');
   });
 
+  // #3737: capability has to be answerable off the entry, or every consumer
+  // re-derives it from `runtime` string comparisons and the two ends drift.
+  describe('supportedModes resolution (#3737)', () => {
+    it('resolves supportedModes for every entry this platform can run', async () => {
+      const { getVideoModels } = await import('./mediaModels.js');
+      for (const entry of getVideoModels()) {
+        expect(Array.isArray(entry.supportedModes), entry.id).toBe(true);
+        expect(entry.supportedModes.length, entry.id).toBeGreaterThan(0);
+      }
+    });
+
+    it('ships a runtime table row for every runtime in the seed, on both platforms', async () => {
+      const { VIDEO_RUNTIME_MODES } = await import('./videoModeProfiles.js');
+      const { loadMediaModels } = await import('./mediaModels.js');
+      const { video } = loadMediaModels();
+      for (const entry of [...video.macos, ...video.windows]) {
+        expect(Object.keys(VIDEO_RUNTIME_MODES), entry.id).toContain(entry.runtime);
+      }
+    });
+
+    it('retires the hunyuan legacy `mode: t2v` field for a text-only contract', async () => {
+      const { loadMediaModels, getVideoModels } = await import('./mediaModels.js');
+      expect(loadMediaModels().video.macos.find((m) => m.id === 'hunyuan_video').mode).toBeUndefined();
+      const hunyuan = getVideoModels().find((m) => m.id === 'hunyuan_video');
+      // Windows ships no hunyuan entry, so only assert where it's runnable.
+      if (hunyuan) expect(hunyuan.supportedModes).toEqual(['text']);
+    });
+
+    it('is derived on read — never persisted back into the registry file', async () => {
+      const { loadMediaModels, getVideoModels } = await import('./mediaModels.js');
+      loadMediaModels();
+      expect(getVideoModels().every((m) => Array.isArray(m.supportedModes))).toBe(true);
+      // A persisted copy would read back as a *declared* list, freezing this
+      // install's built-ins against any later correction to VIDEO_RUNTIME_MODES.
+      const onDisk = JSON.parse(readFileSync(registryFile, 'utf-8'));
+      const mlx = [...onDisk.video.macos, ...onDisk.video.windows]
+        .find((m) => m.runtime === 'mlx_video');
+      expect(mlx.supportedModes).toBeUndefined();
+    });
+
+    it('keeps a user entry that declares its own list, and resolves one that does not', async () => {
+      const platform = process.platform === 'win32' ? 'windows' : 'macos';
+      writeFileSync(registryFile, JSON.stringify({
+        video: {
+          macos: [], windows: [], defaultMacos: 'custom-narrow', defaultWindows: 'custom-narrow',
+          [platform]: [
+            { id: 'custom-narrow', name: 'Custom', runtime: 'mlx_video', supportedModes: ['text'], source: 'user' },
+            { id: 'custom-bare', name: 'Bare', runtime: 'mlx_video', source: 'user' },
+          ],
+        },
+        // Non-empty so the deletion-survives-upgrade union doesn't re-append
+        // the built-ins over the two entries under test.
+        _shippedDefaults: { video: { macos: ['custom-narrow', 'custom-bare'], windows: ['custom-narrow', 'custom-bare'] } },
+      }));
+      const { getVideoModels } = await import('./mediaModels.js');
+      const byId = new Map(getVideoModels().map((m) => [m.id, m]));
+      expect(byId.get('custom-narrow').supportedModes).toEqual(['text']);
+      expect(byId.get('custom-bare').supportedModes).toEqual(['text', 'image', 'fflf', 'extend']);
+    });
+  });
+
   it('hides models with broken === current platform', async () => {
     const here = process.platform === 'win32' ? 'windows' : 'macos';
     const elsewhere = process.platform === 'win32' ? 'macos' : 'windows';
@@ -828,6 +889,12 @@ describe('user model entry mutators (#2124)', () => {
     const onDisk = JSON.parse(readFileSync(registryFile, 'utf-8'));
     const inList = [...onDisk.video.macos, ...onDisk.video.windows].some((m) => m.id === 'hf-test-video');
     expect(inList).toBe(true);
+    // The mutators bypass normalizeRegistry, so the mode backfill has to run
+    // here too — otherwise the new model carries no supportedModes and the
+    // picker (which no longer reads "absent" as "everything") hides it in every
+    // mode until the next restart.
+    expect(getVideoModels().find((m) => m.id === 'hf-test-video').supportedModes)
+      .toEqual(['text', 'image', 'fflf', 'extend']);
   });
 
   it('adds a user image entry', async () => {

@@ -51,9 +51,20 @@ describe('isModelAllowedForMode', () => {
   it('rejects a null model', () => {
     expect(isModelAllowedForMode(null, 'text')).toBe(false);
   });
-  it('allows general runtimes for non-a2v modes', () => {
-    expect(isModelAllowedForMode({ runtime: 'mlx_video' }, 'text')).toBe(true);
-    expect(isModelAllowedForMode({ runtime: 'ltx2' }, 'image')).toBe(true);
+  it('allows general runtimes for the modes their entry resolves', () => {
+    // The server resolves supportedModes onto EVERY entry at load
+    // (server/lib/videoModeProfiles.js) — these are the mlx_video / ltx2 rows.
+    const mlx = { runtime: 'mlx_video', supportedModes: ['text', 'image', 'fflf', 'extend'] };
+    const ltx2 = { runtime: 'ltx2', supportedModes: ['text', 'image', 'fflf', 'extend'] };
+    expect(isModelAllowedForMode(mlx, 'text')).toBe(true);
+    expect(isModelAllowedForMode(ltx2, 'image')).toBe(true);
+  });
+  it('rejects every mode for a model that resolved no supportedModes (#3737)', () => {
+    // "Declares nothing" used to mean "supports everything", which offered FFLF
+    // on runtimes that silently drop the second keyframe. Post-backfill an
+    // absent list can only mean a payload that never came from the registry.
+    expect(isModelAllowedForMode({ runtime: 'mlx_video' }, 'text')).toBe(false);
+    expect(isModelAllowedForMode({ runtime: 'mlx_video', supportedModes: [] }, 'text')).toBe(false);
   });
   it('filters Wan models by their declared text/image capabilities', () => {
     const ti2v = { runtime: 'wan22', supportedModes: ['text', 'image'] };

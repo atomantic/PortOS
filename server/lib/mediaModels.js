@@ -19,6 +19,10 @@
  *       `finishModelId` (optional, issue #3696) names the delivery model a
  *       fast draft entry finishes into — declared in lib/videoFinishProfiles.js,
  *       backfilled at load, and validated (invalid edges are dropped, loudly).
+ *       `supportedModes` (issue #3737) is resolved for EVERY entry by
+ *       getVideoModels() from lib/videoModeProfiles.js's per-runtime table when
+ *       the entry doesn't declare its own, so no consumer has to treat "absent"
+ *       as "supports everything". A declared list always wins.
  *   - video.defaultMacos / video.defaultWindows: id of the default model
  *   - image[]: { id, name, steps, guidance, broken? }
  *   - textEncoders[]: { id, label, repo, localPath? }
@@ -33,6 +37,7 @@ import { RUNNER_FAMILIES } from './runners.js';
 import { ServerError } from './errorHandler.js';
 import { applyVideoDisclosures } from './videoDisclosure.js';
 import { applyVideoFinishProfiles, sanitizeFinishProfiles } from './videoFinishProfiles.js';
+import { applyVideoSupportedModes } from './videoModeProfiles.js';
 // fileUtils.ensureDir is async/Promise-returning; this module needs a
 // synchronous version because `loadMediaModels()` is called at import-time
 // from videoGen/imageGen modules, which can't await before exporting.
@@ -259,7 +264,6 @@ const DEFAULT_REGISTRY = {
         name: 'HunyuanVideo (13B — fp32-only on MPS, ~4-8 hr per render)',
         repo: 'tencent/HunyuanVideo',
         runtime: 'hunyuan',
-        mode: 't2v',
         steps: 30,
         guidance: 6.0,
         precision: 'fp32',
@@ -1023,10 +1027,15 @@ export const removeUserModelEntry = (id) => {
 const platformBroken = (broken) =>
   broken === true || (typeof broken === 'string' && broken === (IS_WIN ? 'windows' : 'macos'));
 
+// `supportedModes` is resolved HERE rather than in normalizeRegistry (#3737):
+// deriving on read covers the load path, the user-model mutators (which bypass
+// normalizeRegistry) and peer-synced entries in one place, and keeps the derived
+// list out of data/media-models.json — a persisted copy would read back as a
+// *declared* list that no later correction to VIDEO_RUNTIME_MODES could reach.
 export const getVideoModels = () => {
   const reg = loadMediaModels();
   const list = IS_WIN ? (reg.video.windows || []) : (reg.video.macos || []);
-  return list.filter((m) => !platformBroken(m.broken));
+  return applyVideoSupportedModes(list.filter((m) => !platformBroken(m.broken)));
 };
 
 export const getDefaultVideoModelId = () => {

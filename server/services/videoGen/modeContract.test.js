@@ -40,8 +40,12 @@ describe('videoModeContractError — wan22 codes and messages', () => {
     expect(err.message).toContain('Example Wan Profile does not support image-to-video');
   });
 
-  it('treats an entry with no declared supportedModes as declaring nothing', () => {
-    expect(videoModeContractError({ model: wan(undefined), mode: 'text' }))
+  // #3737: an entry that declares nothing resolves its runtime's modes rather
+  // than declaring nothing — otherwise the server rejects in every mode while
+  // the picker (which resolves the same table) offers the model in two.
+  it('resolves an entry with no declared supportedModes from its runtime', () => {
+    expect(videoModeContractError({ model: wan(undefined), mode: 'text' })).toBeNull();
+    expect(videoModeContractError({ model: wan(undefined), mode: 'fflf' }))
       .toMatchObject({ code: 'WAN22_MODE_UNSUPPORTED' });
   });
 
