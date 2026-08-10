@@ -19,6 +19,7 @@ import {
   buildIngestNote,
   buildAgentTaskContext,
   cancelYoutubeIngest,
+  resolveObsidianPointer,
   __testing,
 } from './youtubeIngest.js';
 
@@ -256,5 +257,42 @@ describe('buildIngestNote frontmatter safety', () => {
       capturedAt: '2026-08-05T12:00:00.000Z',
     });
     expect(note).toContain('title: "Storytelling: the eight principles"');
+  });
+});
+
+/**
+ * The index records ONE note location per video, and putIngest MERGES — so an
+ * explicit `obsidian: null` erases the prior pointer and strands the note where
+ * deleteIngest can never unlink it. #3706 made that reachable on a healthy vault
+ * by giving updateNote a transient failure (an iCloud-evicted note is refused,
+ * which upsertNote reports as the same null a hard failure gives).
+ */
+describe('resolveObsidianPointer', () => {
+  const prior = { obsidian: { path: 'Consumed/YouTube/2026-01-15 talk.md', vaultId: 'v1' } };
+
+  it('records the new location when the mirror succeeded', () => {
+    expect(resolveObsidianPointer({
+      written: 'Consumed/YouTube/2026-03-01 talk.md', vaultId: 'v1', notePath: 'x.md', prior,
+    })).toEqual({ path: 'Consumed/YouTube/2026-03-01 talk.md', vaultId: 'v1' });
+  });
+
+  it('KEEPS the prior pointer when an attempted mirror failed', () => {
+    // The evicted-note case: without this the existing note is orphaned and the
+    // next re-ingest mints a second note at a fresh dated path.
+    expect(resolveObsidianPointer({
+      written: null, vaultId: 'v1', notePath: 'Consumed/YouTube/2026-01-15 talk.md', prior,
+    })).toEqual(prior.obsidian);
+  });
+
+  it('nulls out when NO mirror was attempted (no vault configured)', () => {
+    // notePath null means we never tried — an explicit null is the honest record,
+    // not a failure being papered over.
+    expect(resolveObsidianPointer({ written: null, vaultId: null, notePath: null, prior })).toBeNull();
+  });
+
+  it('nulls out when an attempt failed and there is no prior pointer to keep', () => {
+    expect(resolveObsidianPointer({
+      written: null, vaultId: 'v1', notePath: 'x.md', prior: null,
+    })).toBeNull();
   });
 });

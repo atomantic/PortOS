@@ -159,6 +159,31 @@ async function loadIndex() {
 // everything.
 const NEW_INGEST = { transcript: null, obsidian: null, video: null, audio: null, taskId: null, agentPrompt: null, incomplete: null };
 
+/**
+ * Decide what the ingest index should record for the Obsidian mirror.
+ *
+ * `putIngest` MERGES (`{...existing, ...patch}`), so writing an explicit
+ * `obsidian: null` erases `prior.obsidian.path` — stranding the existing note
+ * where `deleteIngest` can never unlink it, and letting the next re-ingest mint a
+ * second note at a fresh dated path. That is exactly the orphan the note-path
+ * reuse in `runIngest` exists to prevent.
+ *
+ * So a mirror that was ATTEMPTED and FAILED keeps the old pointer. This became
+ * reachable when `updateNote` gained a TRANSIENT failure (NOTE_EVICTED, #3706):
+ * a note iCloud has offloaded is refused, and `upsertNote` reports that as the
+ * same `null` a hard failure gives — so without this, one evicted note would
+ * silently orphan itself on the next ingest.
+ *
+ * Nulling out is still correct when no mirror was attempted at all (no vault
+ * configured / autoSync off): there is no attempt whose failure we'd be papering
+ * over, and an explicit null is the honest record.
+ */
+export function resolveObsidianPointer({ written, vaultId, notePath, prior }) {
+  if (written) return { path: written, vaultId };
+  if (notePath && prior?.obsidian) return prior.obsidian;
+  return null;
+}
+
 async function putIngest(videoId, patch) {
   return indexMutex(async () => {
     const index = await loadIndex();
@@ -658,7 +683,7 @@ export async function startYoutubeIngest({
               ? await obsidian.upsertNote(vaultId, notePath, markdown)
                 .catch((err) => { console.error(`📓 Obsidian sync failed for ${meta.videoId}: ${err.message}`); return null; })
               : null;
-            if (written) landed.obsidian = { path: written, vaultId };
+            landed.obsidian = resolveObsidianPointer({ written, vaultId, notePath, prior });
           }
         } else {
           // Not fatal — the user still gets the link record, the activity event,

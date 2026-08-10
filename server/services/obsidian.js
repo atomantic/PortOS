@@ -324,11 +324,19 @@ export async function createNote(vaultId, notePath, content = '') {
     return { error: 'NOTE_EXISTS', message: 'A note with this name already exists' };
   }
 
-  // No eviction guard here, deliberately (#3706): the `existsSync` above means
-  // this only ever writes a file that does NOT exist, and a file that does not
-  // exist cannot be dataless — there is nothing offloaded to materialize. The
-  // overwrite case is `updateNote`, which is guarded. Don't add a screen here
+  // No dataless screen here, deliberately (#3706): the `existsSync` above means
+  // this only ever writes a file that does NOT exist, and a path with no file at
+  // it cannot be a dataless vnode — there is nothing offloaded to materialize.
+  // The overwrite case is `updateNote`, which is guarded. Don't add a screen here
   // "for symmetry"; it would cost a stat per created note and can never fire.
+  //
+  // This covers the modern APFS representation only. The LEGACY representation —
+  // an evicted file replaced by a sibling `.<name>.md.icloud` placeholder, which
+  // `mortalLoomStore` still checks for (`icloudPlaceholderPath`) — is NOT handled:
+  // `existsSync(fullPath)` is false for a placeholder-shadowed note, so this
+  // creates a fresh file beside the placeholder rather than refusing. Tracked
+  // separately; it predates #3706 and needs its own decision about whether vaults
+  // ever see placeholders on current macOS.
   await writeFile(fullPath, content, 'utf-8');
   console.log(`📓 Created note: ${notePath} in vault ${vault.name}`);
   return await getNote(vaultId, notePath, { includeBacklinks: false });

@@ -334,4 +334,53 @@ describe('brainJournal', () => {
       expect(callOrder).toEqual(['start-1', 'end-1', 'start-2', 'end-2']);
     });
   });
+
+  /**
+   * #3706 fallout: an evicted note now costs up to MATERIALIZE_TIMEOUT_MS (20s)
+   * before upsertNote refuses it, and this bulk resync is a FOREGROUND request
+   * over up to 10,000 entries — so an unavailable vault must not turn "Re-sync
+   * all entries now" into a multi-hour request nobody can cancel.
+   */
+  describe('resyncAllToObsidian — circuit breaker', () => {
+    // Valid consecutive calendar dates (a bare day counter would mint 2026-03-32).
+    const isoDay = (i) => new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10);
+
+    beforeEach(async () => {
+      // autoSync:false while seeding — appendJournal fires its OWN fire-and-forget
+      // mirror per entry, which would double the call count. resyncAllToObsidian
+      // passes force:true, so it still runs.
+      await journal.updateSettings({ obsidianVaultId: 'v1', autoSync: false, obsidianFolder: 'Daily Log' });
+    });
+
+    it('stops after a run of consecutive failures instead of grinding through every entry', async () => {
+      for (let i = 0; i < 40; i += 1) await journal.appendJournal(isoDay(i), `day ${i}`);
+      obsidian.upsertNote.mockClear();
+      obsidian.upsertNote.mockResolvedValue(null);   // vault unavailable for every entry
+
+      const stats = await journal.resyncAllToObsidian();
+
+      expect(stats.stoppedEarly).toBe(true);
+      // Bailed at the threshold rather than attempting all 40.
+      expect(obsidian.upsertNote).toHaveBeenCalledTimes(25);
+      expect(stats.synced).toBe(0);
+    });
+
+    it('does not trip on scattered failures among successes', async () => {
+      for (let i = 0; i < 30; i += 1) await journal.appendJournal(isoDay(i), `day ${i}`);
+      // Every third entry fails — never 25 in a row, so the run must complete.
+      obsidian.upsertNote.mockClear();
+      let n = 0;
+      obsidian.upsertNote.mockImplementation(async () => {
+        n += 1;
+        return n % 3 === 0 ? null : 'Daily Log/note.md';
+      });
+
+      const stats = await journal.resyncAllToObsidian();
+
+      expect(stats.stoppedEarly).toBe(false);
+      expect(obsidian.upsertNote).toHaveBeenCalledTimes(30);
+      expect(stats.synced + stats.skipped).toBe(30);
+    });
+  });
+
 });

@@ -469,6 +469,10 @@ async function removeFromObsidian(entry) {
  * vault. Used when the user first points the daily log at a vault or changes
  * which vault it targets.
  */
+// Consecutive failed upserts that mean "the vault is gone", not "this entry is odd".
+// Sized so an ordinary transient blip cannot trip it but a systemic outage does.
+const MAX_CONSECUTIVE_RESYNC_SKIPS = 25;
+
 export async function resyncAllToObsidian() {
   const settings = await getSettings();
   if (!settings.obsidianVaultId) return { synced: 0, skipped: 0 };
@@ -476,13 +480,33 @@ export async function resyncAllToObsidian() {
   const { records } = await listJournals({ limit: 10000, includeContent: true });
   let synced = 0;
   let skipped = 0;
+  let consecutiveSkips = 0;
+  let stoppedEarly = false;
   for (const entry of records) {
     // force:true so this bulk resync still writes even when the user has
     // turned off the per-write autoSync — they explicitly clicked "Re-sync
     // all entries now", which is the manual-sync escape hatch.
     const path = await syncToObsidian(entry, { force: true }).catch(() => null);
-    if (path) synced += 1;
-    else skipped += 1;
+    if (path) {
+      synced += 1;
+      consecutiveSkips = 0;
+      continue;
+    }
+    skipped += 1;
+    consecutiveSkips += 1;
+    // Circuit breaker. This is a FOREGROUND request over up to 10,000 entries,
+    // and an evicted note now costs up to MATERIALIZE_TIMEOUT_MS (20s) before it
+    // is refused (#3706) — so a wedged iCloud or an unplugged vault would turn
+    // "Re-sync all entries now" into a multi-hour request the user cannot cancel.
+    // A run of failures means the VAULT is unavailable, not that one entry is
+    // odd: inside this loop a null is always a failed upsert (the vault is
+    // configured, and force:true bypasses the autoSync check), so there is no
+    // legitimate run of skips to confuse it with. Stop and report instead.
+    if (consecutiveSkips >= MAX_CONSECUTIVE_RESYNC_SKIPS) {
+      stoppedEarly = true;
+      console.warn(`⚠️ Daily-log resync stopped after ${consecutiveSkips} consecutive failures — vault unavailable?`);
+      break;
+    }
   }
-  return { synced, skipped };
+  return { synced, skipped, stoppedEarly };
 }
