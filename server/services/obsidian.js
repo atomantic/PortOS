@@ -338,14 +338,20 @@ export async function updateNote(vaultId, notePath, content, { force = false } =
       const moved = !before || !after
         || before.blocks !== after.blocks
         || before.mtimeMs !== after.mtimeMs;
-      // Only "brctl succeeded AND nothing changed" proves retrying is futile —
-      // that is the signature of a download with nothing to fetch. A `false`
-      // here means the heal did NOT succeed (timed out against a wedged iCloud,
-      // exited non-zero, `brctl` missing, or a non-iCloud File Provider path
-      // brctl can't speak to), and every one of those also leaves blocks/mtime
-      // untouched. Reporting those as stalled would arm the force-save override
-      // on a genuinely evicted note and hand the user the uninterruptible write
-      // this guard exists to prevent — so they stay retryable.
+      // "brctl succeeded AND nothing changed" is the signature of a download with
+      // nothing to fetch. A `false` here means the heal did NOT succeed (timed out
+      // against a wedged iCloud, exited non-zero, `brctl` missing, or a non-iCloud
+      // File Provider path brctl can't speak to), and every one of those also
+      // leaves blocks/mtime untouched. Reporting those as stalled would arm the
+      // force-save override on a genuinely evicted note and hand the user the
+      // uninterruptible write this guard exists to prevent — so they stay retryable.
+      //
+      // This narrows the false-positive window; it does not close it. `brctl` can
+      // exit 0 while a real download is still in flight (see the return contract
+      // on `materializeAndWait`), so a note whose bytes land after this check
+      // still reports stalled once. That is why `stalled` only ever *offers* the
+      // override — after a second round, behind a click that names the risk — and
+      // never bypasses anything on its own.
       const stalled = materialized && !moved;
       return {
         error: 'NOTE_EVICTED',

@@ -117,6 +117,19 @@ describe('BrowseTab iCloud force save', () => {
     ));
   });
 
+  it('hides the override once the user leaves edit mode', async () => {
+    api.updateNote.mockRejectedValue(evicted());
+    await openEditor();
+
+    await clickSave();
+    await clickSave();
+    expect(await screen.findByRole('button', { name: 'Save anyway' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Save anyway' })).toBeNull());
+  });
+
   it('does not arm on an unrelated save failure', async () => {
     api.updateNote.mockRejectedValue(Object.assign(new Error('nope'), { code: 'INVALID_PATH' }));
     await openEditor();

@@ -202,6 +202,21 @@ describe('NotesTab iCloud force save', () => {
     expect(api.updateNote).toHaveBeenLastCalledWith('vault-1', 'a.md', 'body', { force: true });
   });
 
+  it('hides the override once the user leaves edit mode', async () => {
+    // Outside edit mode there is no buffer the user meant to write, so a stray
+    // "Save anyway" click would issue the risky forced write for nothing.
+    api.updateNote.mockRejectedValue(evicted());
+    await openEditor();
+
+    await clickSave();
+    await clickSave();
+    expect(screen.getByRole('button', { name: 'Save anyway' })).toBeInTheDocument();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Close editor' })); });
+
+    expect(screen.queryByRole('button', { name: 'Save anyway' })).toBeNull();
+  });
+
   it('does not arm on an unrelated failure', async () => {
     api.updateNote.mockRejectedValue(Object.assign(new Error('nope'), { code: 'INVALID_PATH' }));
     await openEditor();

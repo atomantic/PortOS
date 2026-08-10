@@ -527,8 +527,11 @@ export default function NotesTab() {
               />
             )}
 
+            {/* Editor-only: outside edit mode there is no buffer the user meant to
+                write, and a stray "Save anyway" click would still issue the risky
+                forced write. */}
             <ForceSaveNoteRow
-              offered={forceOffered}
+              offered={editing && forceOffered}
               onConfirm={() => handleSaveNote({ force: true })}
               onCancel={dismissForce}
             />
