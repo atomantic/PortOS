@@ -3,7 +3,7 @@ import { writeFileSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { verifyVideoPlayable, safeUnder, runFfmpegProcess, hasAudioStream } from './ffmpeg.js';
+import { verifyVideoPlayable, safeUnder, runFfmpegProcess, hasAudioStream, buildTrimConcatArgs } from './ffmpeg.js';
 
 describe('verifyVideoPlayable', () => {
   let tmpDir;
@@ -167,5 +167,76 @@ describe('safeUnder', () => {
     expect(safeUnder('/tmp/portos-root', null)).toBeNull();
     expect(safeUnder('/tmp/portos-root', undefined)).toBeNull();
     expect(safeUnder('/tmp/portos-root', 42)).toBeNull();
+  });
+});
+
+describe('buildTrimConcatArgs', () => {
+  const CLIPS = [
+    { path: '/v/a.mp4', startFrame: 0 },
+    { path: '/v/b.mp4', startFrame: 9 },
+  ];
+  const graphOf = (args) => args[args.indexOf('-filter_complex') + 1];
+
+  it('needs at least two inputs to concat', () => {
+    expect(buildTrimConcatArgs({ inputs: [CLIPS[0]], outPath: '/v/out.mp4' })).toBeNull();
+    expect(buildTrimConcatArgs({ inputs: [], outPath: '/v/out.mp4' })).toBeNull();
+    expect(buildTrimConcatArgs({ inputs: null, outPath: '/v/out.mp4' })).toBeNull();
+  });
+
+  it('trims only the inputs that carry an offset, and maps them in order', () => {
+    const args = buildTrimConcatArgs({ inputs: CLIPS, outPath: '/v/out.mp4', width: 512, height: 288, fps: 24 });
+    expect(args.slice(0, 4)).toEqual(['-i', '/v/a.mp4', '-i', '/v/b.mp4']);
+    const graph = graphOf(args);
+    // The untrimmed input still gets normalized + PTS-rebased, but no `trim`.
+    expect(graph).toContain('[0:v]scale=512:288:force_original_aspect_ratio=decrease,pad=512:288:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24,setpts=PTS-STARTPTS[v0]');
+    expect(graph).toContain('trim=start_frame=9,setpts=PTS-STARTPTS[v1]');
+    expect(graph).toContain('[v0][v1]concat=n=2:v=1:a=0[outv]');
+    expect(args.slice(-2)).toEqual(['-y', '/v/out.mp4']);
+  });
+
+  it('omits geometry and rate filters it has no usable value for', () => {
+    // A caller that can't name a canonical size/rate gets no normalization
+    // rather than `scale=undefined:undefined`, which ffmpeg rejects outright.
+    const graph = graphOf(buildTrimConcatArgs({ inputs: CLIPS, outPath: '/v/out.mp4' }));
+    expect(graph).not.toContain('scale=');
+    expect(graph).not.toContain('fps=');
+    expect(graph).not.toContain('undefined');
+    expect(graph).not.toContain('NaN');
+    // The trim itself is a frame index, so it survives the missing rate.
+    expect(graph).toContain('trim=start_frame=9');
+  });
+
+  it('adds a matching audio leg per input when every input has audio', () => {
+    const args = buildTrimConcatArgs({ inputs: CLIPS, outPath: '/v/out.mp4', width: 512, height: 288, fps: 24, withAudio: true });
+    const graph = graphOf(args);
+    // atrim takes seconds: 9 frames at 24fps.
+    expect(graph).toContain('atrim=start=0.375000');
+    expect(graph).toContain('aformat=sample_fmts=fltp:channel_layouts=stereo');
+    expect(graph).toContain('[v0][a0][v1][a1]concat=n=2:v=1:a=1[outv][outa]');
+    expect(args).toContain('-c:a');
+    expect(args).not.toContain('-an');
+  });
+
+  it('drops audio rather than desyncing it when a trim has no frame rate to convert with', () => {
+    // `atrim` is timestamp-based; without an fps the audio would keep frames
+    // the video leg just cut, so the whole track goes rather than drift.
+    const graph = graphOf(buildTrimConcatArgs({ inputs: CLIPS, outPath: '/v/out.mp4', withAudio: true }));
+    expect(graph).not.toContain(':a]');
+    expect(graph).toContain('concat=n=2:v=1:a=0[outv]');
+  });
+
+  it('keeps audio on a rate-less concat when nothing is being trimmed', () => {
+    const untrimmed = [{ path: '/v/a.mp4' }, { path: '/v/b.mp4', startFrame: 0 }];
+    const graph = graphOf(buildTrimConcatArgs({ inputs: untrimmed, outPath: '/v/out.mp4', withAudio: true }));
+    expect(graph).toContain('concat=n=2:v=1:a=1[outv][outa]');
+    expect(graph).not.toContain('atrim');
+  });
+
+  it('clamps a negative or non-numeric offset to no trim at all', () => {
+    const graph = graphOf(buildTrimConcatArgs({
+      inputs: [{ path: '/v/a.mp4', startFrame: -5 }, { path: '/v/b.mp4', startFrame: 'nope' }],
+      outPath: '/v/out.mp4',
+    }));
+    expect(graph).not.toContain('trim=start_frame');
   });
 });

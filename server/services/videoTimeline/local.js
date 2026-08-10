@@ -3,10 +3,12 @@
  *
  * Lets users compose multiple already-generated video clips into a single
  * output video with per-clip in/out trim and drag-drop ordering. Distinct
- * from videoGen/local.js#stitchVideos: that one is stream-copy concat (no
- * trim, requires identical codec/dims). This one re-encodes through a
- * filter_complex graph so trims, mixed-audio inputs, and dim mismatches
- * across LTX-2 model versions all work safely.
+ * from videoGen/local.js#stitchVideos: that one is a stream-copy concat by
+ * default (requires identical codec/dims), and only reaches a filter graph —
+ * via lib/ffmpeg.js#buildTrimConcatArgs — when a chained render hands it
+ * leading-frame cuts. This one always re-encodes through a filter_complex
+ * graph, with per-clip in AND out points, so trims, mixed-audio inputs, and
+ * dim mismatches across LTX-2 model versions all work safely.
  *
  * Projects persist to data/video-projects.json. Output entries land in the
  * existing data/video-history.json with a `timelineProjectId` flag so

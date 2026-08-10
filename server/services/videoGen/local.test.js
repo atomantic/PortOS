@@ -116,7 +116,7 @@ vi.mock('../../lib/sseUtils.js', () => ({
   PYTHON_NOISE_RE: /^\s*$/,
 }));
 
-vi.mock('../../lib/ffmpeg.js', () => ({
+vi.mock('../../lib/ffmpeg.js', async () => ({
   findFfmpeg: vi.fn(async () => '/usr/bin/ffmpeg'),
   safeUnder: vi.fn((base, file) => (file ? join(base, file) : null)),
   generateThumbnail: vi.fn(async () => 'thumb.jpg'),
@@ -124,13 +124,15 @@ vi.mock('../../lib/ffmpeg.js', () => ({
   upscaleVideo2x: vi.fn(async () => ({ ok: true })),
   extractEvaluationFrames: vi.fn(async () => []),
   // Chained renders on a window-continuity runtime probe each chunk's length
-  // and cut two clips from it (the echoed-context trim and the next hop's
-  // conditioning window). 25 matches the numFrames the chain tests render, so
-  // the prefix math below lands on a realistic value.
-  H264_ENCODE_ARGS: ['-c:v', 'libx264'],
-  AAC_ENCODE_ARGS: ['-c:a', 'aac'],
+  // and cut the next hop's conditioning window from it. 25 matches the
+  // numFrames the chain tests render, so the prefix math below lands on a
+  // realistic value.
   probeFrameCount: vi.fn(async () => 25),
   trimVideoFromFrame: vi.fn(async (_videoPath, outPath) => ({ ok: true, outPath })),
+  hasAudioStream: vi.fn(async () => false),
+  // The real builder is pure and covered by ffmpeg.test.js; keep it real here
+  // so the chain tests assert on the argv that actually reaches ffmpeg.
+  buildTrimConcatArgs: (await vi.importActual('../../lib/ffmpeg.js')).buildTrimConcatArgs,
 }));
 
 // hfChildEnv() carries the resolved token over the inherited child env; mocking here
@@ -168,6 +170,9 @@ vi.mock('fs/promises', () => ({
   unlink: vi.fn(async () => {}),
   writeFile: vi.fn(async () => {}),
   copyFile: vi.fn(async () => {}),
+  // Unused by the code under test, but lib/ffmpeg.js imports it and the ffmpeg
+  // mock above pulls the real module in for buildTrimConcatArgs.
+  rename: vi.fn(async () => {}),
 }));
 
 // Fake EventEmitter-like process that completes immediately with exit code 0.
@@ -296,17 +301,19 @@ async function runChainAndCaptureArgs(chainParams, totalChunks) {
 describe('generateChainedVideo — continuation strategy (context window vs last frame)', () => {
   // numFrames=25 → extendLatentFrames(25) = 3 latents = 24 new pixel frames,
   // and probeFrameCount is mocked at 25. So for each rendered chunk:
-  //   echoed context prefix = 25 − 24 = 1 frame (chunk 0 is never trimmed)
-  //   chunk 0's 22-frame window starts at 25 − 22 = 3
-  //   a TRIMMED chunk is 24 frames, so its window starts at 24 − 22 = 2
-  // The 2-vs-3 difference is the point: the orchestrator probes each chunk
-  // once and subtracts the trim, so it can't cut the window from a stale
-  // pre-trim length (which would hand the next hop a short window).
+  //   echoed context prefix = 25 − 24 = 1 frame (chunk 0 has none)
+  //   the 22-frame conditioning window starts at 25 − 22 = 3
+  // The chunk files are never rewritten, so that index is measured against the
+  // full render on every hop: index 3 of a windowed chunk is frame 2 of its own
+  // new footage, i.e. the same frames the old pre-trim path cut at index 2 of a
+  // shortened file. What the floor at `contextPrefix` guarantees is that the
+  // window can never reach back into the echo the stitch is about to drop.
   const CHUNK_FRAMES = 25;
   const EXPECTED_EXTEND_LATENTS = 3;
   const EXPECTED_PREFIX_START = 1;
-  const WINDOW_START_UNTRIMMED = 3;
-  const WINDOW_START_TRIMMED = 2;
+  const WINDOW_START = 3;
+  // 25 + (25−1) + (25−1) once the echoes come out of the timeline.
+  const STITCHED_FRAMES_3_CHUNKS = 73;
 
   const flagValue = (args, flag) => (Array.isArray(args) && args.includes(flag)
     ? args[args.indexOf(flag) + 1] : null);
@@ -321,17 +328,21 @@ describe('generateChainedVideo — continuation strategy (context window vs last
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const { trimVideoFromFrame, probeFrameCount } = await import('../../lib/ffmpeg.js');
     const { spawn } = await import('child_process');
-    const { readJSONFile } = await import('../../lib/fileUtils.js');
+    const { readJSONFile, atomicWrite } = await import('../../lib/fileUtils.js');
     vi.mocked(spawnDetached).mockClear();
     vi.mocked(trimVideoFromFrame).mockClear();
     vi.mocked(probeFrameCount).mockClear();
     vi.mocked(spawn).mockClear();
+    vi.mocked(atomicWrite).mockClear();
 
     // extractLastFrame and stitchVideos both look their inputs up in history;
-    // feed the chunk ids back as they start so the chain can advance.
+    // feed the chunk ids back as they start so the chain can advance. The
+    // geometry matters: stitchVideos reads the canonical width/height/fps for
+    // its filter graph off the first entry, and sums numFrames for the
+    // stitched record.
     const innerJobIds = [];
     vi.mocked(readJSONFile).mockImplementation(async () =>
-      innerJobIds.map((id) => ({ id, filename: `${id}.mp4` })),
+      innerJobIds.map((id) => ({ id, filename: `${id}.mp4`, width: 512, height: 512, fps: 24, numFrames: CHUNK_FRAMES })),
     );
     videoGenEvents.on('started', (e) => innerJobIds.push(e.generationId));
 
@@ -367,11 +378,20 @@ describe('generateChainedVideo — continuation strategy (context window vs last
     await new Promise((r) => setTimeout(r, 100));
     videoGenEvents.removeAllListeners('started');
 
+    const spawns = vi.mocked(spawn).mock.calls;
     return {
       innerJobIds,
       renders: vi.mocked(spawnDetached).mock.calls.map(([, args]) => args),
       trims: vi.mocked(trimVideoFromFrame).mock.calls,
-      spawns: vi.mocked(spawn).mock.calls,
+      spawns,
+      // The one ffmpeg run that assembles the timeline — either a concat
+      // demuxer invocation or the trim-bearing filter graph that replaces it.
+      concat: (spawns.find(([, args]) => Array.isArray(args)
+        && (args.includes('concat') || args.some((a) => typeof a === 'string' && a.includes('concat=n=')))) || [])[1] || null,
+      // The stitched history entry, read off the history write it triggers.
+      stitched: vi.mocked(atomicWrite).mock.calls
+        .flatMap(([, payload]) => (Array.isArray(payload) ? payload : []))
+        .find((entry) => entry?.chainedFrom) || null,
     };
   }
 
@@ -394,38 +414,100 @@ describe('generateChainedVideo — continuation strategy (context window vs last
     expect(spawns.filter(([, args]) => Array.isArray(args) && args.includes('-sseof'))).toHaveLength(0);
   });
 
-  it('cuts the echoed context back off each windowed chunk before stitching', async () => {
+  it('cuts the echoed context out of the timeline in the stitch, not out of the chunk files', async () => {
     // extend_from_video returns `source + extension`, so every hop after the
     // first opens with a replay of its conditioning window. Left in, the
-    // stitched clip repeats ~1s of footage at every seam.
-    const { innerJobIds, trims } = await runChain({}, 3);
+    // stitched clip repeats ~1s of footage at every seam. Cutting it in the
+    // concat's own filter graph costs nothing on top of the timeline encode
+    // that a trimmed concat needs anyway, where pre-trimming each chunk file
+    // would add a whole x264 pass per hop AND grade the trimmed chunks
+    // differently from the untrimmed chunk 0.
+    const { innerJobIds, trims, concat, stitched } = await runChain({}, 3);
 
     const chunkPath = (i) => join(MOCK_PATHS.videos, `${innerJobIds[i]}.mp4`);
-    const trimFor = (src, dest) => trims.find(([from, to]) => from === src && to === dest);
 
-    // Chunk 0 is never trimmed — nothing precedes it in the timeline.
-    expect(trims.some(([, to]) => to === chunkPath(0))).toBe(false);
-    // Chunks 1 and 2 are trimmed in place, dropping only the echoed prefix.
-    for (const i of [1, 2]) {
-      const trim = trimFor(chunkPath(i), chunkPath(i));
-      expect(trim).toBeTruthy();
-      expect(trim[2]).toMatchObject({ startFrame: EXPECTED_PREFIX_START });
+    // No chunk file is rewritten — the archived per-chunk entries stay exactly
+    // what the model rendered.
+    expect(trims.some(([from, to]) => from === to)).toBe(false);
+    for (const i of [0, 1, 2]) {
+      expect(trims.some(([, to]) => to === chunkPath(i))).toBe(false);
     }
-    // And each hop's conditioning window is cut from the tail into tmpdir —
-    // off the chunk's post-trim length, not the length it was probed at.
-    const windowStart = (i) => trimFor(chunkPath(i), join(tmpdir(), `chaincontext-${innerJobIds[i]}.mp4`))?.[2]?.startFrame;
-    expect(windowStart(0)).toBe(WINDOW_START_UNTRIMMED);
-    expect(windowStart(1)).toBe(WINDOW_START_TRIMMED);
+
+    // Instead the offsets ride in the concat graph: chunk 0 whole, chunks 1+
+    // starting after their echoed prefix.
+    const graph = concat[concat.indexOf('-filter_complex') + 1];
+    expect(graph).toContain('[0:v]');
+    expect(graph).not.toMatch(/\[0:v\][^;]*trim=start_frame/);
+    for (const i of [1, 2]) {
+      expect(graph).toMatch(new RegExp(`\\[${i}:v\\][^;]*trim=start_frame=${EXPECTED_PREFIX_START}`));
+    }
+    expect(graph).toContain('concat=n=3:v=1:a=0[outv]');
+    // And the stitched record reports the timeline that exists, not the sum of
+    // what each chunk was rendered at.
+    expect(stitched?.numFrames).toBe(STITCHED_FRAMES_3_CHUNKS);
+
+    // Each hop's conditioning window is still cut from the tail into tmpdir.
+    const windowStart = (i) => trims
+      .find(([from, to]) => from === chunkPath(i) && to === join(tmpdir(), `chaincontext-${innerJobIds[i]}.mp4`))?.[2]?.startFrame;
+    expect(windowStart(0)).toBe(WINDOW_START);
+    expect(windowStart(1)).toBe(WINDOW_START);
   });
 
-  it('re-encodes the concat once a chunk has been trimmed', async () => {
-    // A trimmed chunk was re-encoded, so it no longer shares codec parameters
-    // with its untrimmed siblings and the demuxer's `-c copy` can't be trusted.
-    const { spawns } = await runChain({}, 2);
-    const concat = spawns.find(([, args]) => Array.isArray(args) && args.includes('-f') && args.includes('concat'));
-    expect(concat).toBeTruthy();
-    expect(concat[1]).toContain('libx264');
-    expect(concat[1].join(' ')).not.toContain('-c copy');
+  it('encodes the timeline exactly once for an N-chunk chain', async () => {
+    // The whole point: (N−1) chunk encodes + 1 timeline encode collapses to 1.
+    const { spawns, concat } = await runChain({}, 3);
+    const encodes = spawns.filter(([, args]) => Array.isArray(args) && args.includes('libx264'));
+    expect(encodes).toHaveLength(1);
+    expect(encodes[0][1]).toBe(concat);
+    // A trim-bearing concat can't stream-copy, and it can't use the demuxer
+    // either — the demuxer has no way to express a per-input offset.
+    expect(concat.join(' ')).not.toContain('-c copy');
+    expect(concat).not.toContain('-f');
+  });
+
+  it('falls back to a stream copy when the trimmed filter graph fails, rather than losing the chain', async () => {
+    // The pre-trim implementation degraded to a repeated seam when a chunk
+    // trim failed, because failing there would have discarded every chunk
+    // already rendered. Moving the cut into the concat has to keep that: the
+    // untrimmed chunks were never re-encoded, so they're still in codec
+    // lockstep and the demuxer can still assemble them.
+    const { spawn } = await import('child_process');
+    const failingProc = () => {
+      const listeners = {};
+      const proc = {
+        pid: 12345,
+        stdout: { on: vi.fn() },
+        stderr: { on: vi.fn() },
+        on(event, fn) { listeners[event] = fn; return proc; },
+        kill: vi.fn(),
+      };
+      setImmediate(() => listeners.close?.(1, null));
+      return proc;
+    };
+    vi.mocked(spawn).mockImplementation((_bin, args) => (
+      Array.isArray(args) && args.includes('-filter_complex') ? failingProc() : makeProc()
+    ));
+    try {
+      const { spawns, stitched } = await runChain({}, 3);
+      const concats = spawns.map(([, args]) => args).filter(Array.isArray);
+      expect(concats.some((args) => args.includes('-filter_complex'))).toBe(true);
+      // …and the salvage run, which is the plain demuxer stream copy.
+      const copy = concats.find((args) => args.includes('-f') && args.includes('copy'));
+      expect(copy).toBeTruthy();
+      // The echoes are still in the output, so the record must say so rather
+      // than reporting the trimmed length we asked for and never got.
+      expect(stitched?.numFrames).toBe(CHUNK_FRAMES * 3);
+    } finally {
+      vi.mocked(spawn).mockImplementation(() => makeProc());
+    }
+  });
+
+  it('keeps the graph video-only when the chunks carry no audio stream', async () => {
+    // Referencing `[k:a]` against a silent input aborts the whole ffmpeg run,
+    // and AI renders are silent unless the model generated a soundtrack.
+    const { concat } = await runChain({}, 2);
+    expect(concat.join(' ')).not.toContain(':a]');
+    expect(concat).toContain('-an');
   });
 
   it('probes each chunk once rather than re-reading it after the trim', async () => {
@@ -444,17 +526,31 @@ describe('generateChainedVideo — continuation strategy (context window vs last
     expect(cut[2]).toMatchObject({ startFrame: CHUNK_FRAMES - 8 });
   });
 
+  it('never conditions the next hop on the echo the stitch is about to drop', async () => {
+    // A window bigger than the chunk's own new footage (121 requested vs 24
+    // rendered) clamps to the start of the file — which, now that the file
+    // still holds its echoed prefix, would hand the next hop a replay of the
+    // chunk BEFORE it. The window start floors at the prefix instead.
+    const { innerJobIds, trims } = await runChain({ contextFrames: 121 }, 3);
+    const windowStart = (i) => trims
+      .find(([, to]) => to === join(tmpdir(), `chaincontext-${innerJobIds[i]}.mp4`))?.[2]?.startFrame;
+    // Chunk 0 has no echo, so its whole render is fair game as a window.
+    expect(windowStart(0)).toBe(0);
+    expect(windowStart(1)).toBe(EXPECTED_PREFIX_START);
+  });
+
   it('contextFrames: 0 opts back into last-frame chaining', async () => {
     // 0 is a real value, distinct from "unset" — it's how a user gets the
     // historical single-still hop back on a runtime that could do better.
-    const { renders, trims, spawns } = await runChain({ contextFrames: 0 }, 2);
+    const { renders, trims, concat } = await runChain({ contextFrames: 0 }, 2);
 
     expect(flagValue(renders[1], '--mode')).toBe('image');
     expect(flagValue(renders[1], '--extend-from-video')).toBeNull();
-    // Nothing is trimmed, so the concat keeps the stream-copy fast path.
+    // No offsets to apply, so the concat keeps the demuxer stream-copy fast
+    // path — the same one the hand-stitch from Media History takes.
     expect(trims).toHaveLength(0);
-    const concat = spawns.find(([, args]) => Array.isArray(args) && args.includes('concat'));
-    expect(concat[1]).toContain('copy');
+    expect(concat).toContain('copy');
+    expect(concat).not.toContain('-filter_complex');
   });
 
   it('falls back to last-frame chaining on a runtime with no extend pipeline', async () => {

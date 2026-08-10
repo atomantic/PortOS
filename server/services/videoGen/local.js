@@ -28,7 +28,7 @@ import { getVideoModels, getDefaultVideoModelId, getTextEncoderRepo } from '../.
 import {
   findFfmpeg, safeUnder, generateThumbnail, optimizeForStreaming, upscaleVideo2x,
   extractEvaluationFrames, probeFrameCount, trimVideoFromFrame,
-  H264_ENCODE_ARGS, AAC_ENCODE_ARGS,
+  hasAudioStream, buildTrimConcatArgs,
 } from '../../lib/ffmpeg.js';
 import {
   resolveContextFrames, resolveContinuityStrategy, extendLatentFrames,
@@ -1635,8 +1635,10 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
 //     scene's MOTION, not just its final pose. Requires a runtime with an
 //     extend pipeline (ltx2 today) and applies whatever mode the chain started
 //     in. Because extend returns `source + extension`, each windowed chunk
-//     opens with an echo of the window; that echo is measured and cut back off
-//     before the stitch, so the timeline holds each frame exactly once.
+//     opens with an echo of the window; that echo is measured and dropped
+//     inside the stitch's concat filter graph, so the timeline holds each
+//     frame exactly once while the chunk files stay as the model rendered
+//     them.
 //   'frame' — the historical hop: extract chunk N's last frame and run chunk
 //     N+1 as image-to-video off that still. What every other runtime gets, and
 //     what `contextFrames: 0` opts back into.
@@ -1698,12 +1700,12 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
   // grew with the chain. Written under tmpdir and deleted when the chain ends.
   let currentContextClip = null;
   const contextClipPaths = [];
-  // Post-trim frame count for each chunk we cut a context prefix off. Two jobs:
-  // a non-empty map means at least one chunk was re-encoded (so the concat can
-  // no longer stream-copy), and it tells stitchVideos the real lengths — the
-  // chunks' own history entries record the frame count that was RENDERED, which
-  // is a render parameter Remix reuses, not a measurement of the trimmed file.
-  const trimmedFrameCounts = new Map();
+  // Echoed-context cut for each chunk that has one: where the chunk's own new
+  // footage starts, and how many frames it therefore contributes. Handed to
+  // stitchVideos, which applies the cuts in its concat filter graph — the
+  // chunk files themselves are never rewritten, so the chain pays exactly one
+  // encode (the stitch) instead of one per chunk plus the stitch.
+  const chunkTrims = new Map();
   // First chunk always preserves the user's mode (text, image, fflf or extend)
   // and is never trimmed: in an extend chain its output is `source clip +
   // extension`, and the source clip belongs in the result exactly once — here.
@@ -1846,33 +1848,25 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
       const chunkPath = join(PATHS.videos, `${chunkId}.mp4`);
 
       if (continuity === 'window') {
-        // One probe serves both cuts below. The trim rewrites chunkPath, so
-        // `frames` is decremented rather than re-probed — `ffmpeg trim` keeps
-        // exactly [prefix, total), which makes the new length arithmetic, and
-        // probeFrameCount can fall back to a full decode pass.
+        // One probe serves both cuts below. Neither rewrites chunkPath, so the
+        // count stays valid for both — worth keeping to one call because
+        // probeFrameCount falls back to a full decode pass when the container
+        // header carries no nb_frames.
         // eslint-disable-next-line no-await-in-loop
-        let frames = await probeFrameCount(chunkPath);
+        const frames = await probeFrameCount(chunkPath);
 
         // A window hop's render is `context window + new frames`. The window is
         // the tail of the chunk before it, which the stitched timeline already
-        // holds, so cut it back off before this chunk joins the concat. Measured
-        // from the RENDERED length rather than from the window we supplied: the
-        // VAE snaps the encoded context up to a latent boundary, so the echo is
-        // usually a few frames longer than what we handed in.
+        // holds, so record where the new footage starts and let the stitch drop
+        // the echo in its filter graph. Measured from the RENDERED length rather
+        // than from the window we supplied: the VAE snaps the encoded context up
+        // to a latent boundary, so the echo is usually a few frames longer than
+        // what we handed in.
+        let contextPrefix = 0;
         if (i > 0) {
-          const prefix = contextPrefixFrames({ totalFrames: frames, extendLatents: chunkExtendLatents });
-          if (prefix > 0) {
-            // eslint-disable-next-line no-await-in-loop
-            const trim = await trimVideoFromFrame(chunkPath, chunkPath, { startFrame: prefix, fps: chainFps });
-            if (trim.ok) {
-              frames -= prefix;
-              trimmedFrameCounts.set(chunkId, frames);
-            } else {
-              // Degrade rather than throw away the whole chain: an untrimmed
-              // chunk costs the viewer a ~1s repeat at one seam, where failing
-              // here would discard every chunk already rendered.
-              console.log(`⚠️ Chunk ${i + 1}/${totalChunks} context trim failed, seam will repeat ${prefix} frames: ${trim.reason}`);
-            }
+          contextPrefix = contextPrefixFrames({ totalFrames: frames, extendLatents: chunkExtendLatents });
+          if (contextPrefix > 0) {
+            chunkTrims.set(chunkId, { startFrame: contextPrefix, frames: frames - contextPrefix });
           } else {
             console.log(`⚠️ Chunk ${i + 1}/${totalChunks} context prefix unmeasurable (frames=${frames ?? 'unknown'}), leaving it untrimmed`);
           }
@@ -1894,7 +1888,11 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
           const contextPath = join(tmpdir(), `chaincontext-${chunkId}.mp4`);
           // eslint-disable-next-line no-await-in-loop
           const cut = await trimVideoFromFrame(chunkPath, contextPath, {
-            startFrame: tailWindowStartFrame({ totalFrames: frames, frames: windowFrames }),
+            // Floored at the echo the stitch is going to drop: the window must
+            // come from this chunk's OWN footage, never from the replay of the
+            // one before it. (The chunk file still holds that replay now that
+            // the cut happens at stitch time.)
+            startFrame: Math.max(contextPrefix, tailWindowStartFrame({ totalFrames: frames, frames: windowFrames })),
             fps: chainFps,
           });
           if (!cut.ok) {
@@ -1929,13 +1927,9 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
       // from — the individual chunk entries only ever hold their own resolved
       // prompt, which loses which of them were explicit beats vs. fallbacks.
       chunkPrompts: chunkPrompts?.some(Boolean) ? chunkPrompts : null,
-      // A trimmed chunk was re-encoded, so it no longer shares an identical
-      // codec/parameter set with its untrimmed siblings and the concat
-      // demuxer's `-c copy` fast path can't be trusted across the mix.
-      reencode: trimmedFrameCounts.size > 0,
-      // Trimmed chunks are shorter on disk than the frame count they were
-      // rendered at, so the stitched duration can't just sum the chunk records.
-      frameCounts: trimmedFrameCounts.size ? trimmedFrameCounts : null,
+      // Echoed-context prefixes to cut out of each windowed chunk as the
+      // timeline is assembled, rather than by pre-encoding the chunk files.
+      trims: chunkTrims.size ? chunkTrims : null,
     }).catch((err) => ({ error: err.message }));
     if (stitched?.error) {
       await setHistoryItemsHidden(chunkIds, true);
@@ -2105,10 +2099,14 @@ export async function sampleEvaluationFrames(jobId, count = 5) {
 }
 
 // Concat selected videos (preserving order) into a single MP4. Uses ffmpeg's
-// concat demuxer, stream-copy by default, so it's fast and lossless — but the
+// concat demuxer with a stream copy, so it's fast and lossless — but the
 // inputs must then share codec/resolution. The Media History page already only
-// lets users stitch from a single model so this holds in practice; a caller
-// whose inputs have been re-encoded out of lockstep passes `reencode: true`.
+// lets users stitch from a single model so this holds in practice.
+//
+// A caller that needs leading frames dropped from some inputs passes `trims`
+// instead; that switches to a concat FILTER GRAPH, which applies the cuts and
+// the concat in one encode. Nothing else reaches the filter graph, so the
+// hand-stitch path from Media History keeps its stream-copy fast path.
 //
 // `opts` lets the chained-render code reuse the same ffmpeg path with a
 // different identity (id, filename prefix, history-link key, prompt, per-chunk
@@ -2122,18 +2120,19 @@ export async function stitchVideos(videoIds, opts = {}) {
     // Per-chunk prompt beats to record on the stitched entry (#3695) — chained
     // renders only; a hand-stitched clip has no beats.
     chunkPrompts = null,
-    // Normalize every input through one encoder instead of stream-copying.
-    // Required when the inputs no longer share identical codec parameters —
-    // the chained-render context trim re-encodes the chunks it cuts, and the
-    // concat demuxer's `-c copy` needs its inputs to match exactly. Costs an
-    // encode pass over the whole timeline, so it stays opt-in.
-    reencode = false,
-    // Optional `Map<videoId, frames>` overriding what an input contributes to
-    // the stitched entry's `numFrames`. A history entry's `numFrames` is the
-    // count the clip was RENDERED at — a render parameter Remix reuses — so a
-    // caller that shortened a file on disk reports the real length here instead
-    // of rewriting that record and changing what a Remix of it would produce.
-    frameCounts = null,
+    // Optional `Map<videoId, { startFrame, frames }>` — leading frames to drop
+    // from an input, and the frame count it contributes once they're gone.
+    //
+    // A chained render's windowed chunks open with an echo of the tail window
+    // they were conditioned on, which the timeline already holds. Cutting that
+    // echo in this concat's filter graph costs nothing beyond the timeline
+    // encode; pre-trimming each chunk file instead would add one full encode
+    // per chunk and re-grade the trimmed chunks relative to their siblings.
+    //
+    // `frames` feeds the stitched entry's `numFrames`, because a history
+    // entry's own `numFrames` is the count the clip was RENDERED at — a render
+    // parameter Remix reuses, not a measurement of what it contributes here.
+    trims = null,
   } = opts;
   if (!Array.isArray(videoIds) || videoIds.length < 2) {
     throw new ServerError('Need at least 2 videos to stitch', { status: 400, code: 'VALIDATION_ERROR' });
@@ -2156,37 +2155,77 @@ export async function stitchVideos(videoIds, opts = {}) {
     if (!existsSync(p)) throw new ServerError(`Missing: ${basename(p)}`, { status: 404, code: 'NOT_FOUND' });
   }
 
+  // Leading-frame cut per input, in `videos` order. A zero/absent offset means
+  // the input joins whole; any non-zero offset routes the whole concat through
+  // the filter graph, since only that path can express a cut.
+  const trimPlan = videos.map((v) => {
+    const startFrame = Math.max(0, Math.floor(Number(trims?.get?.(v.id)?.startFrame) || 0));
+    if (startFrame <= 0) return null;
+    const frames = Number(trims.get(v.id).frames);
+    return { startFrame, frames: Number.isFinite(frames) && frames >= 0 ? frames : null };
+  });
+
   const listFile = join(tmpdir(), `concat-${id}.txt`);
-  // ffmpeg concat-demuxer escape: per its docs, single quotes in filenames
-  // must be replaced with `'\''`. Inside quoted strings ffmpeg also treats
-  // backslash as an escape character — on Windows where paths are
-  // `C:\foo\bar.mp4`, that corrupts the path. Normalize to forward slashes
-  // (which ffmpeg accepts on Windows just fine) before quoting.
-  const escapeForConcat = (p) => p.replace(/\\/g, '/').replace(/'/g, "'\\''");
-  await writeFile(listFile, videoPaths.map((p) => `file '${escapeForConcat(p)}'`).join('\n'));
+  let listFileWritten = false;
+  const writeConcatList = async () => {
+    // ffmpeg concat-demuxer escape: per its docs, single quotes in filenames
+    // must be replaced with `'\''`. Inside quoted strings ffmpeg also treats
+    // backslash as an escape character — on Windows where paths are
+    // `C:\foo\bar.mp4`, that corrupts the path. Normalize to forward slashes
+    // (which ffmpeg accepts on Windows just fine) before quoting.
+    const escapeForConcat = (p) => p.replace(/\\/g, '/').replace(/'/g, "'\\''");
+    await writeFile(listFile, videoPaths.map((p) => `file '${escapeForConcat(p)}'`).join('\n'));
+    listFileWritten = true;
+  };
 
   const outFilename = `${filenamePrefix}-${id}.mp4`;
   const outPath = join(PATHS.videos, outFilename);
 
+  const runFfmpeg = (args) => new Promise((resolve, reject) => {
+    const proc = spawn(ffmpeg, args, { env: safeChildProcessEnv(), stdio: 'ignore' });
+    proc.on('close', (code) => code === 0 ? resolve() : reject(new ServerError('Stitch failed', { status: 500, code: 'FFMPEG_FAILED' })));
+    proc.on('error', (err) => reject(new ServerError(`ffmpeg failed to spawn: ${err.message}`, { status: 500, code: 'FFMPEG_FAILED' })));
+  });
+
+  // Tracks whether the trims actually made it into the output, so `numFrames`
+  // below reports the timeline that exists rather than the one we asked for.
+  let trimsApplied = trimPlan.some(Boolean);
   // Use a try/finally so the concat list temp file is cleaned up even when
   // ffmpeg rejects — otherwise it leaks one file per failed stitch.
   try {
-    await new Promise((resolve, reject) => {
-      const codecArgs = reencode
-        // Matches trimVideoFromFrame's encoder so a trimmed chunk isn't
-        // re-graded relative to its untrimmed siblings. `-c:a` is safe to pass
-        // unconditionally — ffmpeg ignores it when the concatenated inputs
-        // carry no audio stream at all (every chunk in a chain shares one
-        // model and one audio setting, so they're never mixed).
-        ? [...H264_ENCODE_ARGS, ...AAC_ENCODE_ARGS]
-        : ['-c', 'copy'];
-      const proc = spawn(ffmpeg, ['-f', 'concat', '-safe', '0', '-i', listFile, ...codecArgs, '-y', outPath], { env: safeChildProcessEnv(), stdio: 'ignore' });
-      proc.on('close', (code) => code === 0 ? resolve() : reject(new ServerError('Stitch failed', { status: 500, code: 'FFMPEG_FAILED' })));
-      proc.on('error', (err) => reject(new ServerError(`ffmpeg failed to spawn: ${err.message}`, { status: 500, code: 'FFMPEG_FAILED' })));
-    });
+    if (trimsApplied) {
+      const args = buildTrimConcatArgs({
+        inputs: videoPaths.map((path, i) => ({ path, startFrame: trimPlan[i]?.startFrame || 0 })),
+        outPath,
+        // Canonical geometry/rate for the graph's normalization filters. Taken
+        // from the first input the same way modelId/seed are below — every
+        // caller that reaches here stitches one model's own output.
+        width: videos[0].width,
+        height: videos[0].height,
+        fps: videos[0].fps,
+        // `concat=a=1` needs an audio leg from EVERY input; one silent clip in
+        // the set makes the whole graph video-only.
+        withAudio: (await Promise.all(videoPaths.map((p) => hasAudioStream(p)))).every(Boolean),
+      });
+      const failure = args
+        ? await runFfmpeg(args).then(() => null, (err) => err)
+        : new Error('could not build the concat filter graph');
+      if (failure) {
+        // Degrade rather than throw away a whole chained render: the untrimmed
+        // inputs were never re-encoded, so they're still in codec lockstep and
+        // the stream-copy concat below can salvage the clip. The cost is the
+        // echoed context replaying at each trimmed seam.
+        console.log(`⚠️ Trimmed concat failed (${failure.message}) — falling back to a stream copy; ${trimPlan.filter(Boolean).length} seam(s) will repeat their context`);
+        trimsApplied = false;
+      }
+    }
+    if (!trimsApplied) {
+      await writeConcatList();
+      await runFfmpeg(['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', '-y', outPath]);
+    }
     await optimizeForStreaming(outPath);
   } finally {
-    await unlink(listFile).catch(() => {});
+    if (listFileWritten) await unlink(listFile).catch(() => {});
   }
 
   const thumb = await generateThumbnail(outPath, id);
@@ -2199,7 +2238,9 @@ export async function stitchVideos(videoIds, opts = {}) {
     seed: videos[0].seed ?? 0,
     width: videos[0].width,
     height: videos[0].height,
-    numFrames: videos.reduce((sum, v) => sum + (frameCounts?.get(v.id) ?? v.numFrames ?? 0), 0),
+    numFrames: videos.reduce((sum, v, i) => sum + (
+      (trimsApplied ? trimPlan[i]?.frames : null) ?? v.numFrames ?? 0
+    ), 0),
     fps: videos[0].fps,
     filename: outFilename,
     thumbnail: thumb,

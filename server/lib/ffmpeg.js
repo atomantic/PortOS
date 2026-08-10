@@ -447,6 +447,81 @@ export const trimVideoFromFrame = async (videoPath, outPath, { startFrame, fps }
   return installEncodedVideo(encodePath, videoPath, 'trimmed');
 };
 
+// Build the ffmpeg argv that concatenates a list of clips where SOME of them
+// must drop a leading run of frames first (`startFrame > 0`).
+//
+// Why a filter graph rather than trimming the files and running the concat
+// demuxer over them: a frame-index trim can't be stream-copied, so cutting
+// each clip in place costs one full encode per clip — and it also knocks the
+// trimmed clips out of codec lockstep with the untrimmed ones, forcing the
+// concat itself to re-encode too. Doing the cut inside the concat's own graph
+// collapses all of that into the single timeline encode that was going to
+// happen anyway, and leaves the source clips byte-identical on disk.
+//
+// Mirrors the shape `services/videoTimeline/local.js` renders projects with —
+// including the belt-and-suspenders normalization. `scale`+`pad`+`setsar` and
+// `fps=` on the video leg, `aresample`+`aformat` on the audio leg, are what
+// keep ffmpeg from aborting the whole run with "Input link parameters do not
+// match" when the inputs disagree even slightly. `width`/`height`/`fps` are
+// each applied only when they resolve to a usable number, so a caller that
+// doesn't know a canonical value simply gets no normalization for it rather
+// than an `undefined` in the graph.
+//
+// `withAudio` must be true only when EVERY input carries an audio stream
+// (`hasAudioStream`): `concat=a=1` needs an audio leg from each input, and
+// referencing `[k:a]` on a silent clip aborts the run. A mixed set takes the
+// video-only graph, which is what a chain of silent AI renders wants anyway.
+export const buildTrimConcatArgs = ({ inputs, outPath, width, height, fps, withAudio = false }) => {
+  const clips = Array.isArray(inputs) ? inputs : [];
+  if (clips.length < 2) return null;
+  const canonW = Number(width);
+  const canonH = Number(height);
+  const rate = Number(fps);
+  const hasDims = Number.isFinite(canonW) && canonW > 0 && Number.isFinite(canonH) && canonH > 0;
+  const hasRate = Number.isFinite(rate) && rate > 0;
+  // An audio leg on a trimmed input needs `atrim`'s start TIMESTAMP, which
+  // only exists if we know the frame rate. Without one, drop the audio rather
+  // than emit a graph whose audio and video are offset from each other.
+  const trimsAudio = clips.some((c) => Math.floor(Number(c?.startFrame) || 0) > 0);
+  const audio = Boolean(withAudio) && (hasRate || !trimsAudio);
+
+  const filters = [];
+  const concatStreams = [];
+  clips.forEach((clip, i) => {
+    const startFrame = Math.max(0, Math.floor(Number(clip?.startFrame) || 0));
+    const video = [
+      ...(hasDims ? [`scale=${canonW}:${canonH}:force_original_aspect_ratio=decrease,pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2,setsar=1`] : []),
+      ...(hasRate ? [`fps=${rate}`] : []),
+      ...(startFrame > 0 ? [`trim=start_frame=${startFrame}`] : []),
+      'setpts=PTS-STARTPTS',
+    ];
+    filters.push(`[${i}:v]${video.join(',')}[v${i}]`);
+    if (audio) {
+      const track = [
+        'aresample=48000',
+        'aformat=sample_fmts=fltp:channel_layouts=stereo',
+        // The frame index converts exactly because these are CFR renders.
+        ...(startFrame > 0 ? [`atrim=start=${(startFrame / rate).toFixed(6)}`] : []),
+        'asetpts=PTS-STARTPTS',
+      ];
+      filters.push(`[${i}:a]${track.join(',')}[a${i}]`);
+    }
+    concatStreams.push(audio ? `[v${i}][a${i}]` : `[v${i}]`);
+  });
+  filters.push(`${concatStreams.join('')}concat=n=${clips.length}:v=1:a=${audio ? 1 : 0}[outv]${audio ? '[outa]' : ''}`);
+
+  return [
+    ...clips.flatMap((clip) => ['-i', clip.path]),
+    '-filter_complex', filters.join(';'),
+    '-map', '[outv]',
+    ...(audio ? ['-map', '[outa]'] : []),
+    ...H264_ENCODE_ARGS,
+    ...(audio ? AAC_ENCODE_ARGS : ['-an']),
+    '-movflags', '+faststart',
+    '-y', outPath,
+  ];
+};
+
 // 2× Lanczos upscale of an MP4 in place. Doubles width and height while
 // preserving the exact aspect ratio and the audio track. Used as a quick
 // post-render export option for LTX renders that come out at sub-720p
