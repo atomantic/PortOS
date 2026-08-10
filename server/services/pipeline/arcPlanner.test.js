@@ -825,28 +825,138 @@ describe('arcPlanner — resolveVerifyIssues', () => {
     expect((await issuesSvc.getIssue(ep.id)).seasonId).toBe(v1.id);
   });
 
-  it('drops orphans to null seasonId when no replacement can be matched', async () => {
+  it('treats an empty seasons[] as a no-op, not a volume wipe (#3724 sparse patch)', async () => {
+    // `seasons[]` is a SPARSE patch list: a resolve round that edits nothing at
+    // the volume level leaves the lineup — and every episode under it — alone.
+    // Before #3724 this same response deleted the only volume and dropped its
+    // issue into the ungrouped bucket.
     const s = await setupSeries();
     await seriesSvc.updateSeries(s.id, { arc: { logline: 'L' } });
     const oldS = await seasonsSvc.createSeason(s.id, { title: 'Only Season', episodeCountTarget: 3 });
     const i1 = await issuesSvc.createIssue({ seriesId: s.id, seasonId: oldS.id, title: 'Orphan' });
 
-    // LLM returns zero seasons — nothing to remap to, issue should go ungrouped.
     stageRunnerSpy = vi.fn(async () => ({
       content: {
-        arc: { logline: 'L2', summary: 'S', themes: [], protagonistArc: '' },
+        arc: { resolves: ['f1'], logline: 'L2', summary: 'S', themes: [], protagonistArc: '' },
         seasons: [],
-        notes: 'collapsed',
+        notes: 'recommend collapsing Only Season — not doing it here',
       },
       runId: 'r', providerId: 'p', model: 'm',
     }));
 
-    await planner.resolveVerifyIssues(s.id, {
+    const out = await planner.resolveVerifyIssues(s.id, {
       findings: [{ severity: 'medium', problem: 'X', suggestion: 'Y' }],
     });
 
-    const finalI1 = await issuesSvc.getIssue(i1.id);
-    expect(finalI1.seasonId).toBeNull();
+    expect(out.series.arc.logline).toBe('L2'); // the targeted arc edit still lands
+    expect(out.series.seasons.map((x) => x.id)).toEqual([oldS.id]);
+    expect((await issuesSvc.getIssue(i1.id)).seasonId).toBe(oldS.id);
+  });
+
+  it('leaves volumes the response omits exactly as they are', async () => {
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, { arc: { logline: 'L' } });
+    const v1 = await seasonsSvc.createSeason(s.id, { number: 1, title: 'Vol 1', synopsis: 'v1 original', episodeCountTarget: 3 });
+    const v2 = await seasonsSvc.createSeason(s.id, { number: 2, title: 'Vol 2', synopsis: 'v2 original', episodeCountTarget: 3 });
+
+    stageRunnerSpy = vi.fn(async () => ({
+      content: {
+        arc: { resolves: ['f1'], logline: 'L2', summary: 'S', themes: [], protagonistArc: '' },
+        // Only volume 2 was edited — volume 1 isn't in the response at all.
+        seasons: [{ resolves: ['f1'], id: v2.id, number: 2, title: 'Vol 2', synopsis: 'v2 rewritten' }],
+        notes: '',
+      },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+
+    const out = await planner.resolveVerifyIssues(s.id, {
+      findings: [{ severity: 'high', problem: 'volume 2 drops the mentor', suggestion: 'pay it off' }],
+    });
+
+    expect(out.series.seasons.map((x) => x.id)).toEqual([v1.id, v2.id]);
+    expect(out.series.seasons[0].synopsis).toBe('v1 original'); // untouched
+    expect(out.series.seasons[1].synopsis).toBe('v2 rewritten');
+  });
+
+  it('drops arc / volume / episode edits that name no input finding', async () => {
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, { arc: { logline: 'L', summary: 'original summary' } });
+    const v1 = await seasonsSvc.createSeason(s.id, { number: 1, title: 'Vol 1', synopsis: 'v1 original', episodeCountTarget: 2 });
+    const v2 = await seasonsSvc.createSeason(s.id, { number: 2, title: 'Vol 2', synopsis: 'v2 original', episodeCountTarget: 2 });
+    const issue = await issuesSvc.createIssue({ seriesId: s.id, seasonId: v1.id, title: 'Ep' });
+    await issuesSvc.updateStage(issue.id, 'idea', { input: 'ep original', status: 'empty' });
+    const fresh = await issuesSvc.getIssue(issue.id);
+
+    stageRunnerSpy = vi.fn(async () => ({
+      content: {
+        // Untargeted arc rewrite — dropped. `resolves` naming an id the round
+        // never handed out counts as naming nothing.
+        arc: { resolves: ['f9'], logline: 'HIJACKED', summary: 'HIJACKED', themes: [], protagonistArc: '' },
+        seasons: [
+          { resolves: ['f1'], id: v1.id, number: 1, title: 'Vol 1', synopsis: 'v1 rewritten' },
+          { resolves: [], id: v2.id, number: 2, title: 'Vol 2', synopsis: 'v2 collateral rewrite' },
+        ],
+        episodes: [{ seasonNumber: 1, episodeNumber: fresh.number, synopsis: 'ep collateral rewrite' }],
+        notes: '',
+      },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+
+    const out = await planner.resolveVerifyIssues(s.id, {
+      findings: [{ severity: 'high', problem: 'volume 1 stages the eclipse twice', suggestion: 'fix' }],
+    });
+
+    expect(out.series.arc.logline).toBe('L');
+    expect(out.series.arc.summary).toBe('original summary');
+    expect(out.series.seasons[0].synopsis).toBe('v1 rewritten'); // the one targeted edit lands
+    expect(out.series.seasons[1].synopsis).toBe('v2 original');
+    expect(out.episodesResolved).toEqual([]);
+    expect((await issuesSvc.getIssue(issue.id)).stages.idea.input).toBe('ep original');
+  });
+
+  it('applies an unkeyed response as a legacy patch (install still on the pre-#3724 prompt)', async () => {
+    // A customized `pipeline-arc-resolve.md` never gets migration 245, so its
+    // model can't know about `resolves`. Dropping everything would silently turn
+    // auto-resolve into a round-burning no-op — those responses apply unkeyed,
+    // still under the safer sparse-patch semantics.
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, { arc: { logline: 'L' } });
+    const v1 = await seasonsSvc.createSeason(s.id, { number: 1, title: 'Vol 1', synopsis: 'v1 original', episodeCountTarget: 2 });
+
+    stageRunnerSpy = vi.fn(async () => ({
+      content: {
+        arc: { logline: 'L2', summary: 'S', themes: [], protagonistArc: '' },
+        seasons: [{ id: v1.id, number: 1, title: 'Vol 1', synopsis: 'v1 rewritten' }],
+        notes: '',
+      },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+
+    const out = await planner.resolveVerifyIssues(s.id, {
+      findings: [{ severity: 'high', problem: 'X', suggestion: 'Y' }],
+    });
+
+    expect(out.series.arc.logline).toBe('L2');
+    expect(out.series.seasons[0].synopsis).toBe('v1 rewritten');
+  });
+
+  it('renders findings into the prompt stamped with stable findingIds', async () => {
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, { arc: { logline: 'L' } });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { arc: { resolves: ['f2'], logline: 'L2', summary: 'S' }, seasons: [], notes: '' },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+
+    await planner.resolveVerifyIssues(s.id, {
+      findings: [
+        { severity: 'high', problem: 'first defect', suggestion: '' },
+        { severity: 'high', problem: 'second defect', suggestion: '' },
+      ],
+    });
+
+    const { findingsJson } = stageRunnerSpy.mock.calls[0][1];
+    expect(JSON.parse(findingsJson).map((f) => f.findingId)).toEqual(['f1', 'f2']);
   });
 
   it('preserves series.arc.readerMap when the resolve LLM does not author one', async () => {
@@ -1029,6 +1139,54 @@ describe('arcPlanner — resolveVerifyIssues', () => {
     expect(out.episodesResolved[0].skipped).toBe('no-match');
     const updated = await issuesSvc.getIssue(issue.id);
     expect(updated.stages.idea.input).toBe('season 1 synopsis'); // NOT overwritten
+  });
+});
+
+describe('selectFindingKeyedEdits (pure resolve-edit filter, #3724)', () => {
+  const findings = [{ problem: 'a' }, { problem: 'b' }];
+  const select = (content) => planner.selectFindingKeyedEdits(content, findings);
+
+  it('keeps edits naming an input finding and drops the rest', () => {
+    const out = select({
+      arc: { resolves: ['f2'], logline: 'x' },
+      seasons: [{ resolves: ['f1'] }, { resolves: ['f7'] }, { resolves: [] }],
+      episodes: [{ resolves: ['f1'] }, {}],
+    });
+    expect(out.legacy).toBe(false);
+    expect(out.arc?.logline).toBe('x');
+    expect(out.arcDropped).toBe(false);
+    expect(out.seasons).toHaveLength(1);
+    expect(out.seasonsDropped).toBe(2);
+    expect(out.episodes).toHaveLength(1);
+    expect(out.episodesDropped).toBe(1);
+  });
+
+  it('normalizes ids (case + whitespace) and ignores non-string entries', () => {
+    const out = select({ seasons: [{ resolves: [' F1 ', 42, null, 'f1'] }] });
+    expect(out.seasons).toHaveLength(1);
+  });
+
+  it('drops an untargeted arc block while keeping the volumes that are targeted', () => {
+    const out = select({ arc: { resolves: [] }, seasons: [{ resolves: ['f1'] }] });
+    expect(out.arc).toBeNull();
+    expect(out.arcDropped).toBe(true);
+    expect(out.seasons).toHaveLength(1);
+  });
+
+  it('falls back to legacy (apply-all) only when NOTHING in the response declares resolves', () => {
+    const legacy = select({ arc: { logline: 'x' }, seasons: [{ id: 's1' }], episodes: [{ synopsis: 'y' }] });
+    expect(legacy).toMatchObject({ legacy: true, arcDropped: false, seasonsDropped: 0, episodesDropped: 0 });
+    expect(legacy.arc?.logline).toBe('x');
+    // One keyed entry proves the model is on the new contract — the unkeyed
+    // siblings in the SAME response are then genuine drops, not legacy.
+    expect(select({ seasons: [{ resolves: ['f1'] }, { id: 's2' }] }))
+      .toMatchObject({ legacy: false, seasonsDropped: 1 });
+  });
+
+  it('tolerates a missing/garbage response', () => {
+    expect(select(null)).toMatchObject({ legacy: true, arc: null, seasons: [], episodes: [] });
+    expect(select({ arc: 'not an object', seasons: 'nope', episodes: [null, 3] }))
+      .toMatchObject({ arc: null, seasons: [], episodes: [] });
   });
 });
 

@@ -1444,6 +1444,15 @@ describe('isResolveRegression (pure resolve-round damage check)', () => {
     )).toBe(true);
   });
 
+  it('matches a restatement that only re-words the OPENING clause', () => {
+    // The narrow shape a leading-prefix fingerprint misses: same defect, same
+    // place, but the verifier opens the sentence differently on the second call.
+    expect(sameFinding(
+      f('the mentor subplot introduced in the opening never pays off', 'V3'),
+      f('nothing ever pays off the mentor subplot introduced in the opening', 'V3'),
+    )).toBe(true);
+  });
+
   it('matches a re-punctuated, re-cased, re-pluralized restatement', () => {
     expect(sameFinding(
       { severity: 'high', location: 'V1', problem: 'Both volumes stage the first eclipse.' },

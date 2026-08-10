@@ -661,12 +661,52 @@ export function matchIssueForEpisodeEdit(issues, seasonIdByNumber, edit) {
     : issues.find((i) => i.number === edit.episodeNumber);
 }
 
+// ---------------------------------------------------------------------------
+// Finding-keyed resolve edits (#3724). The resolve pass used to hand the LLM a
+// bare finding list and take back a whole-arc rewrite, with nothing tying a
+// proposed edit to the finding it was supposed to close — so a round handed ONE
+// finding could legitimately rewrite every volume, and each untargeted rewrite
+// was a fresh chance to author the contradiction the next verify files as a new
+// blocker. Findings now go out stamped with a stable index-based id and every
+// edit has to name at least one of them in `resolves[]`.
+// ---------------------------------------------------------------------------
+
+/** The stable id a finding is rendered under, by its position in the round's list. Pure. */
+export const findingIdAt = (index) => `f${index + 1}`;
+
+/** Copy the round's findings with their `findingId` stamped on for the prompt. Pure. */
+export const stampFindingIds = (findings) => (Array.isArray(findings) ? findings : [])
+  .map((f, i) => ({ findingId: findingIdAt(i), ...f }));
+
+/** The set of ids a round's edits are allowed to name. Pure. */
+export const findingIdSet = (findings) => new Set(
+  (Array.isArray(findings) ? findings : []).map((_, i) => findingIdAt(i)),
+);
+
+/**
+ * Read one proposed edit's `resolves[]` against the round's valid finding ids.
+ * Returns `{ declared, matched }`: `declared` says the edit carried a
+ * `resolves` array at all (absent = the model is running a pre-#3724 prompt,
+ * which the caller treats as legacy rather than as a drop), `matched` is the
+ * de-duplicated list of input findings it actually names. Pure.
+ */
+export function matchResolvedFindings(raw, validIds) {
+  const declared = Array.isArray(raw?.resolves);
+  if (!declared) return { declared: false, matched: [] };
+  const matched = [];
+  for (const entry of raw.resolves) {
+    const id = typeof entry === 'string' ? entry.trim().toLowerCase() : '';
+    if (id && validIds.has(id) && !matched.includes(id)) matched.push(id);
+  }
+  return { declared: true, matched };
+}
+
 export async function buildResolveContext(series, findings, preloadedWorld) {
   const ctx = await buildVerifyContext(series, preloadedWorld);
   const structure = recommendStructure(series.issueCountTarget);
   return {
     ...ctx,
-    findingsJson: JSON.stringify(findings, null, 2),
+    findingsJson: JSON.stringify(stampFindingIds(findings), null, 2),
     recommendedStructure: structure
       ? describeStructure(structure)
       : '(no target episode count set)',

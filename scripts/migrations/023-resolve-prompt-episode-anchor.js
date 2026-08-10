@@ -27,6 +27,7 @@ import { makePromptReplaceMigration } from './_lib.js';
 // maintaining local copies.
 export const ACCEPTED_OLD_MD5 = {
   'pipeline-arc-resolve.md': [
+    'cc27b4da1d1a13c35e35d1c2d6183815', // post-123 / pre-245 — the episodes[] channel, before edits had to name a finding
     '5b340885c6e8f8afc63424d6b5bc7eb7', // post-023 / pre-123 — episode-synopsis anchor, the hash this migration originally produced
     '8e348f3d1894382889f9f0ee7d5c6792', // post-019 (worldCanonText) shipped — current pre-023
     'a8677bbe1eb38f871fb152a5b0fec7c6', // pre-019 (pre-canon), still in setup-data.js OLD list
@@ -39,7 +40,7 @@ export const ACCEPTED_OLD_MD5 = {
 // drift-catch test stays green against the live data.reference sample; a fresh
 // install at the pre-123 hash still advances cleanly via the accepted-OLD list.
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-arc-resolve.md': 'cc27b4da1d1a13c35e35d1c2d6183815',
+  'pipeline-arc-resolve.md': '8bb134554c122d1583c479ab3010e53d', // post-245 (finding-keyed sparse patches)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

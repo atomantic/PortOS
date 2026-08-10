@@ -74,7 +74,7 @@ The recommended structure for this issue budget is **{{recommendedStructure}}** 
 
 ## Findings to resolve
 
-The verification pass flagged these problems. Resolve **every** one of them in your output:
+The verification pass flagged these problems. Resolve **every** one of them in your output. Each finding carries a `findingId` (`f1`, `f2`, …) — every edit you return must name the finding(s) it closes by that id:
 
 ```json
 {{findingsJson}}
@@ -88,8 +88,9 @@ The verification pass flagged these problems. Resolve **every** one of them in y
 4. **Character contradictions** — adjust the offending volume's `synopsis` (or the protagonist arc) so the contradiction disappears. Do not silently delete the contradicting beat — replace it with one that preserves the dramatic intent.
 5. **Dropped subplots** — add the missing payoff to a later volume's `synopsis` or `endingHook`, OR remove the dangling setup from the earlier volume if the payoff would derail the arc.
 6. **Unresolved finale hooks / theme drift** — surface the missing theme or arc payoff in the final volume's `synopsis`.
-7. **Preserve volume `id`** for every existing volume you keep. Only assign no `id` to brand-new volumes you are adding. If you remove a volume, simply omit it from the response — the server will reconcile child issues separately.
+7. **Preserve volume `id`** for every existing volume you edit. Only assign no `id` to brand-new volumes you are adding. Never delete a volume — if a finding could only be resolved by removing one, write that in the `notes` field instead of doing it.
 8. **Correct an episode synopsis when the contradiction *originates* in that episode.** Sometimes a finding can't be fixed at the volume level because the wrong content lives in a specific episode's `synopsis` — e.g. an episode stages an event that a later volume reserves as its own "first" occurrence, or a promised through-line silently disappears from the episodes that should carry it. In those cases the only convergent fix is to rewrite the offending episode's `synopsis` so it stops contradicting the rest of the arc. Return those rewrites in the `episodes[]` output array below, keyed by `seasonNumber` + `episodeNumber`. These are early planning synopses (no script has been drafted yet), so editing them is safe and is preferred over papering over the conflict at the volume level. Rules: edit an episode synopsis ONLY when a finding genuinely originates there; make the smallest change that removes the contradiction while preserving the episode's dramatic purpose; never delete an episode (omit it from `episodes[]` to leave it untouched). If a finding could only be resolved by removing issues entirely, write that in the `notes` field instead of doing it.
+9. **Return only the records you actually edited, and key every one of them to a finding.** `seasons[]` and `episodes[]` are SPARSE patch lists: include a volume only if you rewrote it, an episode only if you rewrote it, and the `arc` block only if you rewrote the arc itself. Every entry — including `arc` — carries `resolves: ["f2", ...]`, the ids of the findings that edit closes. An edit that names no finding is discarded by the server, so do not return untouched records "for completeness": that is the single biggest source of NEW contradictions, because every untargeted rewrite is a chance to break something the verification pass had not flagged.
 
 ## Output contract
 
@@ -98,6 +99,7 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
 ```json
 {
   "arc": {
+    "resolves": ["f1"],
     "logline": "string",
     "summary": "string (~500 words, multi-paragraph; escape newlines as \\n)",
     "themes": ["string", "..."],
@@ -105,6 +107,7 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
   },
   "seasons": [
     {
+      "resolves": ["f1", "f3"],
       "id": "sea-... (omit only for brand-new volumes)",
       "number": 1,
       "title": "string",
@@ -117,15 +120,18 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
   ],
   "episodes": [
     {
+      "resolves": ["f2"],
       "seasonNumber": 2,
       "episodeNumber": 13,
       "synopsis": "string (the corrected episode synopsis — only for episodes whose own content caused a finding)"
     }
   ],
-  "notes": "string (optional — flag any finding you could only partially resolve, and explain why. Empty string if every finding is fully addressed.)"
+  "notes": "string (optional — flag any finding you could only partially resolve, and explain why. Empty string if every finding is fully addressed. Also name any volume or issue you believe should be DELETED, since you must not delete one yourself.)"
 }
 ```
 
-The `seasons[]` array must be the FULL list of volumes you want the series to have after the resolve — not a delta. Any current volume not in the response is treated as removed.
+The `seasons[]` array is a SPARSE list of volume rewrites — include only the volumes you actually edited, each carrying its `resolves` ids. Volumes you don't list are left exactly as they are; nothing is deleted by omission. Omit the array entirely (or leave it empty) when no volume needed editing.
 
 The `episodes[]` array is a SPARSE list of episode-synopsis corrections — include only the episodes you actually rewrote (per rule 8). Omit the array entirely (or leave it empty) when every finding was resolved at the arc/volume level. Episodes you don't list are left exactly as they are.
+
+Omit the `arc` block entirely when the arc itself needed no rewrite. Every field you do include in a record you're editing must be complete — the server keeps the stored value for any field you leave out, but it does not merge two halves of a sentence.

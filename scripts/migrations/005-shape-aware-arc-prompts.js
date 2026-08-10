@@ -40,6 +40,7 @@ export const ACCEPTED_OLD_MD5 = {
     '50c68a29c3ebc275db3095d06bd87100', // post-005 / pre-172 (structure rules)
   ],
   'pipeline-arc-resolve.md': [
+    'cc27b4da1d1a13c35e35d1c2d6183815', // post-123 / pre-245 — the episodes[] channel, before edits had to name a finding
     '87bc5c01f1a8a97b681727a38b05edc6', // pre-005 (original)
     'a8677bbe1eb38f871fb152a5b0fec7c6', // post-005 / pre-019 — the hash this migration originally produced
     '8e348f3d1894382889f9f0ee7d5c6792', // post-019 / pre-023
@@ -52,7 +53,7 @@ export const NEW_SHIPPED_MD5 = {
   'pipeline-arc-verify.md':      '36aa70cdfc25d7549573a4d556e7702c', // post-019
   'pipeline-volume-verify.md':   '49458d36700cb94e34806d536ffe2940', // post-019
   'pipeline-season-episodes.md': 'a88e8e78a949b7aaf500d03314e2ea0b', // post-172 (structure rules)
-  'pipeline-arc-resolve.md':     'cc27b4da1d1a13c35e35d1c2d6183815', // post-123 (episodes[] correction channel)
+  'pipeline-arc-resolve.md':     '8bb134554c122d1583c479ab3010e53d', // post-245 (finding-keyed sparse patches)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({
