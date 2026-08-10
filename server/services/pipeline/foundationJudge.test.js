@@ -347,16 +347,178 @@ describe('renderArc — episode-list budget', () => {
     }
   });
 
-  it('drops every episode rather than throwing when the spine alone overruns the budget', () => {
-    const out = __testing.renderArc(bigSeries, manyIssues, { maxChars: 10 });
+  it('drops volume synopses, keeping the loglines, when the spine alone overruns the budget', () => {
+    // 30 volumes of long synopses: the spine overruns on its own, so tier 2 fires.
+    const wideSeries = {
+      ...bigSeries,
+      seasons: Array.from({ length: 30 }, (_, i) => ({
+        id: `sea-${i + 1}`, number: i + 1, title: `V${i + 1}`, logline: 'VL',
+        synopsis: 'z'.repeat(300), endingHook: 'EH',
+      })),
+    };
+    const out = __testing.renderArc(wideSeries, manyIssues, { maxChars: 4_000 });
+    expect(out.length).toBeLessThanOrEqual(4_000);
     expect(out).toContain('Logline: AL');
+    expect(out).toContain('  V1 V1: VL');
+    expect(out).not.toContain('    Synopsis: ');
     expect(out).not.toContain('#1 Ep 1:');
-    expect(out).toContain('[40 later episode synopsis lines omitted to fit the prompt budget]');
+    expect(out).toContain('[60 volume synopsis lines omitted to fit the prompt budget]');
+  });
+
+  it('never exceeds the budget even when the volume loglines alone do not fit', () => {
+    const out = __testing.renderArc(bigSeries, manyIssues, { maxChars: 120 });
+    expect(out.length).toBeLessThanOrEqual(120);
+    expect(out).toContain('Logline: AL');
+    expect(out).toContain('[series plan truncated to fit the prompt budget]');
   });
 
   it('keeps the singular form when exactly one episode is dropped', () => {
     const oneOver = __testing.renderArc(bigSeries, manyIssues.slice(0, 2), { maxChars: 800 });
     expect(oneOver).toContain('[1 later episode synopsis line omitted to fit the prompt budget]');
+  });
+
+  // Property test: the budget is a hard contract, so sweep the shape of the
+  // series (volume count × episode count × arc count) against a sweep of budgets
+  // rather than asserting a handful of hand-picked cases. Budgets deliberately
+  // include values below the length of the fixed arc header and below the
+  // truncation marker itself, which are the inputs the tiered degradation cannot
+  // satisfy by dropping lines.
+  it('never returns more than maxChars for any volume/episode/arc shape', () => {
+    const budgets = [0, 1, 20, 47, 60, 120, 400, 1_000, 4_000, 12_000];
+    for (const volumeCount of [0, 1, 3, 12, 40]) {
+      for (const episodesPerVolume of [0, 1, 5, 20]) {
+        for (const arcCount of [0, 2, 25]) {
+          const seasons = Array.from({ length: volumeCount }, (_, i) => ({
+            id: `sea-${i + 1}`, number: i + 1, title: `Volume ${i + 1}`,
+            logline: 'l'.repeat(80), synopsis: 's'.repeat(250), endingHook: 'h'.repeat(60),
+          }));
+          const series = {
+            arc: { logline: 'a'.repeat(90), summary: 'b'.repeat(200), themes: ['t1', 't2'], protagonistArc: 'p'.repeat(80), shape: 'rise' },
+            seasons,
+            characterArcs: Array.from({ length: arcCount }, (_, i) => ({
+              characterId: `chr-${i}`, characterName: `Cast ${i}`,
+              startState: 'x'.repeat(40), endState: 'y'.repeat(40), want: 'w'.repeat(40), need: 'n'.repeat(40),
+            })),
+          };
+          const issues = seasons.flatMap((season, s) => Array.from({ length: episodesPerVolume }, (_, e) => ({
+            number: s * episodesPerVolume + e + 1,
+            seasonId: season.id,
+            title: `Ep ${e + 1}`,
+            stages: { idea: { input: 'e'.repeat(300) } },
+          })));
+          for (const maxChars of budgets) {
+            const out = __testing.renderArc(series, issues, { maxChars });
+            expect(
+              out.length,
+              `volumes=${volumeCount} episodes=${episodesPerVolume} arcs=${arcCount} maxChars=${maxChars}`,
+            ).toBeLessThanOrEqual(maxChars);
+          }
+          // Unbudgeted renders stay complete — the tiers must not leak into the default.
+          const full = __testing.renderArc(series, issues);
+          expect(full).not.toContain('to fit the prompt budget');
+        }
+      }
+    }
+  });
+});
+
+describe('foundation repair prompt — bounded series seed and cast', () => {
+  const bigSeries = () => ({
+    id: 'ser-1',
+    name: 'Example Series',
+    premise: 'p'.repeat(2_000),
+    targetFormat: 'novella',
+    issueCountTarget: 24,
+    styleNotes: 'n'.repeat(1_500),
+    styleGuide: {
+      voiceExemplars: Array.from({ length: 6 }, (_, i) => ({ passage: 'g'.repeat(1_200), note: `note ${i}` })),
+      voiceAntiExemplars: Array.from({ length: 6 }, (_, i) => ({ passage: 'x'.repeat(1_200), note: `anti ${i}` })),
+    },
+    characterArcs: Array.from({ length: 18 }, (_, i) => ({
+      characterId: `chr-${i}`, characterName: `Cast ${i}`,
+      want: 'w'.repeat(60), need: 'n'.repeat(60),
+      startState: 's'.repeat(400), endState: 'e'.repeat(400),
+      transitions: Array.from({ length: 6 }, (_, t) => ({ kind: 'decision', atIssue: t, label: 'l'.repeat(120) })),
+    })),
+  });
+
+  it('drops style-guide exemplars first, then character-arc detail, to fit the series budget', () => {
+    const rendered = __testing.renderRepairSeriesJson(bigSeries());
+    expect(rendered.length).toBeLessThanOrEqual(__testing.REPAIR_SERIES_MAX_CHARS);
+    expect(() => JSON.parse(rendered)).not.toThrow();
+    const parsed = JSON.parse(rendered);
+    // The brief itself is unconditional.
+    expect(parsed.premise).toBe('p'.repeat(2_000));
+    expect(parsed.styleNotes).toBe('n'.repeat(1_500));
+    expect(parsed.targetFormat).toBe('novella');
+    expect(parsed.issueCountTarget).toBe(24);
+    expect(parsed.styleGuide).toBeUndefined();
+    // Arcs survive as the want/need spine; the transition beats do not.
+    expect(parsed.characterArcs).toHaveLength(18);
+    expect(parsed.characterArcs[0].transitions).toBeUndefined();
+    expect(parsed.omitted).toMatch(/omitted to fit the prompt budget/);
+  });
+
+  it('leaves a small series seed byte-identical to the unbudgeted render', () => {
+    const small = { id: 'ser-1', name: 'S', premise: 'P', targetFormat: 'novella', issueCountTarget: 6, styleNotes: 'SN', styleGuide: { voiceExemplars: [] }, characterArcs: [] };
+    const parsed = JSON.parse(__testing.renderRepairSeriesJson(small));
+    expect(parsed.styleGuide).toEqual({ voiceExemplars: [] });
+    expect(parsed.omitted).toBeUndefined();
+  });
+
+  it('trims free-text fields as a floor when the brief alone overruns, keeping valid JSON', () => {
+    const rendered = __testing.renderRepairSeriesJson({ id: 'ser-1', name: 'S', premise: 'p'.repeat(5_000), styleNotes: 'n'.repeat(5_000) }, 2_000);
+    expect(rendered.length).toBeLessThanOrEqual(2_000);
+    expect(() => JSON.parse(rendered)).not.toThrow();
+    expect(rendered).toContain('truncated to fit the prompt budget');
+  });
+
+  const castMember = (i, size) => ({
+    id: `chr-${i}`, name: `Cast ${i}`, role: 'lead',
+    personality: 'q'.repeat(size), background: 'b'.repeat(size), relationships: 'r'.repeat(size),
+    want: 'w'.repeat(60), need: 'n'.repeat(60), ghost: 'g'.repeat(size), wound: 'o'.repeat(size),
+  });
+
+  it('caps the candidate cast by size, compacting the full roster before dropping members', () => {
+    const payload = {
+      targetCharacters: Array.from({ length: 6 }, (_, i) => castMember(i, 200)),
+      fullSeriesRoster: Array.from({ length: 40 }, (_, i) => castMember(i, 200)),
+    };
+    const rendered = __testing.renderRepairCharactersJson(payload);
+    expect(rendered.length).toBeLessThanOrEqual(__testing.REPAIR_CHARACTERS_MAX_CHARS);
+    const parsed = JSON.parse(rendered);
+    // The batch under repair keeps every field intact — it outranks the roster.
+    expect(parsed.targetCharacters).toHaveLength(6);
+    expect(parsed.targetCharacters[0].background).toBe('b'.repeat(200));
+    // The roster degrades to the differentiation spine.
+    expect(parsed.fullSeriesRoster.length).toBeGreaterThan(0);
+    expect(parsed.fullSeriesRoster[0]).toEqual({ id: 'chr-0', name: 'Cast 0', role: 'lead', want: 'w'.repeat(60), need: 'n'.repeat(60) });
+    expect(parsed.rosterNote).toMatch(/fit the prompt budget/);
+  });
+
+  it('truncates the batch\'s own fields when six full characters alone overrun the budget', () => {
+    const payload = {
+      targetCharacters: Array.from({ length: 6 }, (_, i) => castMember(i, 1_500)),
+      fullSeriesRoster: Array.from({ length: 40 }, (_, i) => castMember(i, 1_500)),
+    };
+    const rendered = __testing.renderRepairCharactersJson(payload);
+    expect(rendered.length).toBeLessThanOrEqual(__testing.REPAIR_CHARACTERS_MAX_CHARS);
+    const parsed = JSON.parse(rendered);
+    expect(parsed.targetCharacters).toHaveLength(6);
+    expect(parsed.targetCharacters[0].background).toContain('truncated to fit the prompt budget');
+    expect(parsed.targetNote).toMatch(/truncated to fit the prompt budget/);
+  });
+
+  it('leaves an already-small cast payload untouched', () => {
+    const payload = { targetCharacters: [{ id: 'chr-1', name: 'A' }], fullSeriesRoster: [{ id: 'chr-1', name: 'A' }] };
+    expect(JSON.parse(__testing.renderRepairCharactersJson(payload))).toEqual(payload);
+  });
+
+  it('caps the flat (non-character-dimension) cast array by size too', () => {
+    const array = Array.from({ length: 60 }, (_, i) => ({ id: `chr-${i}`, name: `Cast ${i}`, background: 'b'.repeat(900) }));
+    const rendered = __testing.renderRepairCharactersJson(array);
+    expect(rendered.length).toBeLessThanOrEqual(__testing.REPAIR_CHARACTERS_MAX_CHARS);
+    expect(Array.isArray(JSON.parse(rendered))).toBe(true);
   });
 });
 
@@ -384,9 +546,78 @@ describe('foundation repair prompt — bounded outline', () => {
     const [, vars] = stageRunner.runStagedLLM.mock.calls.at(-1);
     // 60 × ~500 chars of synopsis would be ~30KB unbudgeted — the exact shape
     // that burned both the primary and fallback TUI provider's full timeout.
-    expect(vars.outline.length).toBeLessThanOrEqual(__testing.REPAIR_OUTLINE_MAX_CHARS + 200);
+    expect(vars.outline.length).toBeLessThanOrEqual(__testing.REPAIR_OUTLINE_MAX_CHARS);
     expect(vars.outline).toContain('omitted to fit the prompt budget');
     expect(vars.outline).toContain('  V1 V1: VL');
+  });
+
+  // Regression for the 72,404-char character-foundation prompt that burned a CLI
+  // runner's full 5-minute wall clock without emitting a byte (#3726).
+  describe('character foundation — whole-prompt budget', () => {
+    const seasons = Array.from({ length: 8 }, (_, i) => ({
+      id: `sea-${i + 1}`, number: i + 1, title: `Volume ${i + 1}`,
+      logline: 'l'.repeat(120), synopsis: 's'.repeat(900), endingHook: 'h'.repeat(200),
+    }));
+    const cast = Array.from({ length: 18 }, (_, i) => ({
+      id: `chr-${i}`, name: `Cast ${i}`, role: 'lead',
+      personality: 'q'.repeat(700), background: 'b'.repeat(700), relationships: 'r'.repeat(700),
+      want: 'w'.repeat(150), need: 'n'.repeat(150), ghost: 'g'.repeat(500), wound: 'o'.repeat(500),
+      lie: 'x'.repeat(300), coreTheme: 'c'.repeat(200), motivations: 'm'.repeat(400),
+      speechPattern: 'p'.repeat(200), arcType: 'positive', secrets: ['z'.repeat(300)],
+    }));
+
+    beforeEach(() => {
+      const series = {
+        id: 'ser-1', name: 'Example Series', universeId: 'uni-1',
+        premise: 'p'.repeat(2_500), targetFormat: 'novella', issueCountTarget: 40,
+        styleNotes: 'n'.repeat(1_800),
+        seasons,
+        styleGuide: {
+          voiceExemplars: Array.from({ length: 6 }, () => ({ passage: 'g'.repeat(1_200), note: 'note' })),
+          voiceAntiExemplars: Array.from({ length: 6 }, () => ({ passage: 'x'.repeat(1_200), note: 'anti' })),
+        },
+        characterArcs: cast.map((character) => ({
+          characterId: character.id, characterName: character.name,
+          want: character.want, need: character.need,
+          startState: 'a'.repeat(400), endState: 'e'.repeat(400),
+          transitions: Array.from({ length: 6 }, (_, t) => ({ kind: 'decision', atIssue: t + 1, label: 'l'.repeat(150) })),
+        })),
+      };
+      const universe = { id: 'uni-1', characters: cast };
+      seriesSvc.getSeries.mockResolvedValue(series);
+      universeBuilder.getUniverse.mockResolvedValue(universe);
+      universeBuilder.updateUniverse.mockImplementation(async (id, mutator) => ({ id, ...(mutator(universe) || {}) }));
+      issuesSvc.listIssues.mockResolvedValue(seasons.flatMap((season, s) => Array.from({ length: 10 }, (_, e) => ({
+        number: s * 10 + e + 1, seasonId: season.id, title: `Ep ${e + 1}`,
+        stages: { idea: { input: 'y'.repeat(600) } },
+      }))));
+      stageRunner.runStagedLLM.mockResolvedValue({ content: { characters: [], characterArcs: [] } });
+    });
+
+    it('keeps every stage prompt under 45,000 chars for 8 volumes / 18 characters / a full style guide', async () => {
+      await applyFoundationFix('ser-1', 'character', { finding: { gap: 'blank lead', fix: 'build the causal chain' } });
+
+      const calls = stageRunner.runStagedLLM.mock.calls.filter(([name]) => name === 'pipeline-character-foundation');
+      expect(calls.length).toBeGreaterThan(0);
+      for (const [, vars] of calls) {
+        const total = Object.values(vars).reduce((sum, value) => sum + String(value ?? '').length, 0);
+        expect(total).toBeLessThan(45_000);
+        expect(vars.seriesJson.length).toBeLessThanOrEqual(__testing.REPAIR_SERIES_MAX_CHARS);
+        expect(vars.charactersJson.length).toBeLessThanOrEqual(__testing.REPAIR_CHARACTERS_MAX_CHARS);
+        expect(vars.outline.length).toBeLessThanOrEqual(__testing.REPAIR_OUTLINE_MAX_CHARS);
+      }
+    });
+
+    it('requests a 10-minute timeout so a CLI provider is not killed by the 300s default', async () => {
+      await applyFoundationFix('ser-1', 'character', { finding: { gap: 'blank lead', fix: 'build the causal chain' } });
+
+      expect(__testing.CHARACTER_FOUNDATION_TIMEOUT_MS).toBe(600_000);
+      expect(stageRunner.runStagedLLM).toHaveBeenCalledWith(
+        'pipeline-character-foundation',
+        expect.anything(),
+        expect.objectContaining({ timeoutOverride: 600_000 }),
+      );
+    });
   });
 });
 

@@ -451,18 +451,39 @@ function repairableSeriesFoundationCharacters(characters, series, issues = []) {
 
 const joinedLength = (lines) => lines.reduce((total, line) => total + line.length + 1, 0);
 
+const pluralLines = (count) => (count === 1 ? 'line' : 'lines');
+
+// Last-resort clamp for `renderArc`. Every tier above it drops WHOLE lines so the
+// render stays coherent, but a budget smaller than the arc header itself (or a
+// series with more volume loglines than the budget has room for) can still
+// overrun — and `maxChars` is a hard contract, not a target. Slice, and keep the
+// marker only when there is room for it.
+const ARC_TRUNCATION_NOTE = '\n[series plan truncated to fit the prompt budget]';
+function clampArcToBudget(text, maxChars) {
+  if (!Number.isFinite(maxChars) || text.length <= maxChars) return text;
+  if (maxChars <= ARC_TRUNCATION_NOTE.length) return text.slice(0, Math.max(0, maxChars));
+  return `${text.slice(0, maxChars - ARC_TRUNCATION_NOTE.length)}${ARC_TRUNCATION_NOTE}`;
+}
+
 /**
  * Render the synopsis-level series plan: arc header, per-volume loglines and
  * synopses, the episode list under each volume, and the authored character arcs.
  *
- * `maxChars` bounds the result. The per-episode synopsis list is the ONLY part
- * that grows without bound — a series gains episodes forever, and everything
- * else is fixed by the volume count — so the budget is spent by dropping WHOLE
- * episode lines from the end, keeping the plan spine (arc, volumes, authored
- * character arcs) intact and naming how many were left out. That degrades to a
- * coherent outline the model can still reason over, unlike slicing the rendered
- * text mid-sentence. Earliest episodes survive a tight budget because that's
- * where a character arc's opening transitions hang.
+ * `maxChars` is a HARD bound on the result, spent in tiers so the render always
+ * degrades to something coherent rather than being sliced mid-sentence:
+ *
+ *   1. Drop WHOLE episode synopsis lines from the end. Earliest episodes survive
+ *      a tight budget because that's where a character arc's opening transitions
+ *      hang.
+ *   2. If the spine alone (arc header + every volume's logline/synopsis/hook +
+ *      the authored character arcs) still overruns, drop the per-volume synopsis
+ *      and ending-hook lines, keeping `V# title: logline` so the volume order and
+ *      shape survive. Every episode goes with them.
+ *   3. Slice, as a floor, when even the loglines cannot fit — a caller that set a
+ *      budget gets a smaller string, never a longer one.
+ *
+ * Each tier names what it left out, so the model can tell a short plan from a
+ * budgeted one.
  *
  * Unbudgeted (the default) the output is byte-identical to the pre-budget
  * render, so the foundation judge's own section-level truncation is unchanged.
@@ -483,15 +504,13 @@ function renderArc(series, issues = [], { maxChars = Infinity, includeArcTransit
     `Volumes (${seasons.length}):`,
   ];
   const volumes = seasons.map((season) => {
-    const spine = [
-      `  V${season.number ?? '?'} ${season.title || ''}: ${season.logline || '(no logline)'}`,
-      `    Synopsis: ${season.synopsis || '(none)'}`,
-    ];
-    if (season.endingHook) spine.push(`    Ending hook: ${season.endingHook}`);
+    const logline = `  V${season.number ?? '?'} ${season.title || ''}: ${season.logline || '(no logline)'}`;
+    const detail = [`    Synopsis: ${season.synopsis || '(none)'}`];
+    if (season.endingHook) detail.push(`    Ending hook: ${season.endingHook}`);
     const episodes = orderedIssues
       .filter((issue) => issue?.seasonId === season.id)
       .map((issue) => `    #${issue.number ?? '?'} ${issue.title || 'Untitled'}: ${issue?.stages?.idea?.input || '(no synopsis)'}`);
-    return { spine, episodes };
+    return { logline, detail, episodes };
   });
   const characterArcs = Array.isArray(series?.characterArcs) ? series.characterArcs : [];
   const tail = ['', `Authored character arcs (${characterArcs.length}):`];
@@ -503,15 +522,26 @@ function renderArc(series, issues = [], { maxChars = Infinity, includeArcTransit
     }
   }
 
-  // The spine is unconditional; episodes fill whatever is left. `remaining` goes
-  // negative when the spine alone overruns the budget, which drops every episode
-  // rather than throwing — a caller that set a budget wants a smaller prompt, not
-  // a failed render.
-  let remaining = maxChars - joinedLength([...head, ...volumes.flatMap((v) => v.spine), ...tail]);
+  // Tier 1: the full spine is unconditional; episodes fill whatever is left.
+  const fullSpine = [...head, ...volumes.flatMap((volume) => [volume.logline, ...volume.detail]), ...tail];
+  let remaining = maxChars - joinedLength(fullSpine);
+  const notes = [];
+  // Tier 2: the spine alone overruns, so the per-volume synopsis/hook lines go
+  // and every episode goes with them — dropping craft detail to make room for
+  // episode lines would invert the priority the tiers exist to express.
+  const withDetail = remaining >= 0;
+  if (!withDetail) {
+    const droppedDetail = volumes.reduce((total, volume) => total + volume.detail.length, 0);
+    if (droppedDetail > 0) {
+      notes.push(`  [${droppedDetail} volume synopsis ${pluralLines(droppedDetail)} omitted to fit the prompt budget]`);
+    }
+    remaining = -1;
+  }
   let omitted = 0;
   const lines = [...head];
   for (const volume of volumes) {
-    lines.push(...volume.spine);
+    lines.push(volume.logline);
+    if (withDetail) lines.push(...volume.detail);
     for (const episode of volume.episodes) {
       if (episode.length + 1 <= remaining) {
         lines.push(episode);
@@ -521,9 +551,9 @@ function renderArc(series, issues = [], { maxChars = Infinity, includeArcTransit
       }
     }
   }
-  if (omitted > 0) lines.push(`  [${omitted} later episode synopsis line${omitted === 1 ? '' : 's'} omitted to fit the prompt budget]`);
-  lines.push(...tail);
-  return lines.join('\n');
+  if (omitted > 0) lines.push(`  [${omitted} later episode synopsis ${pluralLines(omitted)} omitted to fit the prompt budget]`);
+  lines.push(...notes, ...tail);
+  return clampArcToBudget(lines.join('\n'), maxChars);
 }
 
 function renderWorldFoundation(universe) {
@@ -767,7 +797,171 @@ const CHARACTER_FOUNDATION_BATCH_SIZE = 6;
 // material a reasoning model will chew through before the wall clock runs out,
 // not how much its context can hold.
 const REPAIR_OUTLINE_MAX_CHARS = 12_000;
+
+// The outline cap above only ever bound ONE of the repair prompt's three large
+// sections. A real character-foundation run built a 72KB prompt — 35KB of raw
+// series seed, 18KB of outline, 15KB of candidate cast — and burned a CLI
+// runner's full wall clock without emitting a byte. Each section now carries its
+// own budget so the total lands near 40K chars, which the stage demonstrably
+// completes within. Same reasoning as the outline cap: fixed rather than
+// window-derived, because the binding constraint is how much material a
+// reasoning model chews through before the clock runs out, not context size.
+const REPAIR_SERIES_MAX_CHARS = 12_000;
+const REPAIR_CHARACTERS_MAX_CHARS = 12_000;
+
+// The character-foundation stage reasons over the whole ensemble at once, so it
+// is the slowest repair stage by a wide margin. The runner's 300s default is
+// what actually killed the 72KB run; TUI providers already default to 10
+// minutes (`providers.js`), and this gives a CLI provider the same headroom.
+const CHARACTER_FOUNDATION_TIMEOUT_MS = 600_000;
+
 const CRAFT_REPAIR_MAX_ATTEMPTS = 2;
+
+// A repair prompt's JSON sections shed the least load-bearing material first,
+// then trim the free-text fields that remain, so the payload stays VALID JSON at
+// every tier — a mid-object slice would hand the model a parse error instead of
+// a smaller brief.
+const JSON_TRUNCATION_MARK = '… [truncated to fit the prompt budget]';
+function fitJsonToBudget(payload, trimKeys, maxChars) {
+  const shrunk = { ...payload };
+  let rendered = JSON.stringify(shrunk, null, 2);
+  while (rendered.length > maxChars) {
+    const key = trimKeys
+      .filter((candidate) => typeof shrunk[candidate] === 'string' && shrunk[candidate].length > 0)
+      .sort((a, b) => shrunk[b].length - shrunk[a].length)[0];
+    // Nothing left that is safe to trim (structural ids/counts only) — return the
+    // smallest valid JSON we can build rather than corrupting it with a slice.
+    if (!key) return rendered;
+    const keep = Math.max(0, shrunk[key].length - Math.max(rendered.length - maxChars, 1) - JSON_TRUNCATION_MARK.length);
+    shrunk[key] = keep > 0 ? `${shrunk[key].slice(0, keep)}${JSON_TRUNCATION_MARK}` : '';
+    rendered = JSON.stringify(shrunk, null, 2);
+  }
+  return rendered;
+}
+
+// Drop the style guide's exemplars first — they are craft-dimension material and
+// tell a character or world repair nothing — then flatten the authored character
+// arcs to their want/need spine, which the outline section already renders in
+// full. `premise` / `targetFormat` / `issueCountTarget` / `styleNotes` are the
+// brief itself and stay unconditional.
+function renderRepairSeriesJson(series, maxChars = REPAIR_SERIES_MAX_CHARS) {
+  const base = {
+    id: series?.id,
+    name: series?.name,
+    premise: series?.premise,
+    targetFormat: series?.targetFormat,
+    issueCountTarget: series?.issueCountTarget,
+    styleNotes: series?.styleNotes,
+  };
+  const arcs = Array.isArray(series?.characterArcs) ? series.characterArcs : [];
+  const trimKeys = ['styleNotes', 'premise'];
+  const tiers = [
+    { ...base, styleGuide: series?.styleGuide, characterArcs: series?.characterArcs },
+    {
+      ...base,
+      characterArcs: series?.characterArcs,
+      omitted: 'styleGuide (craft exemplars) omitted to fit the prompt budget',
+    },
+    {
+      ...base,
+      characterArcs: arcs.map((arc) => ({
+        characterId: arc?.characterId,
+        characterName: arc?.characterName,
+        want: arc?.want,
+        need: arc?.need,
+      })),
+      omitted: 'styleGuide and character-arc detail omitted to fit the prompt budget; see the outline section',
+    },
+  ];
+  for (const tier of tiers) {
+    const rendered = JSON.stringify(tier, null, 2);
+    if (rendered.length <= maxChars) return rendered;
+  }
+  return fitJsonToBudget(tiers.at(-1), trimKeys, maxChars);
+}
+
+// The full-ensemble roster is the unbounded half of the character payload:
+// `CHARACTER_FOUNDATION_BATCH_SIZE` bounds `targetCharacters`, but
+// `fullSeriesRoster` carries every cast member with every framework field, so it
+// grows with the series. Compact the roster to the differentiation spine before
+// dropping members — the roster exists so the batch can differentiate and keep
+// relationships straight, which a name/role/want/need line still supports.
+const compactRosterCharacter = (character) => ({
+  id: character?.id,
+  name: character?.name,
+  role: character?.role,
+  want: character?.want || '',
+  need: character?.need || '',
+});
+
+// `CHARACTER_FOUNDATION_BATCH_SIZE` bounds how MANY characters a batch carries,
+// not how large each one is — six characters with long personality/background/
+// relationship prose still run to tens of KB. So the last tier caps every string
+// field on the batch itself, halving the cap until the payload fits.
+const CHARACTER_FIELD_CAP_START = 1_200;
+const CHARACTER_FIELD_CAP_FLOOR = 40;
+const truncateField = (value, cap) => (
+  typeof value === 'string' && value.length > cap
+    ? `${value.slice(0, Math.max(0, cap - JSON_TRUNCATION_MARK.length))}${JSON_TRUNCATION_MARK}`
+    : value
+);
+const capCharacterFields = (character, cap) => Object.fromEntries(
+  Object.entries(character || {}).map(([key, value]) => [
+    key,
+    Array.isArray(value) ? value.map((entry) => truncateField(entry, cap)) : truncateField(value, cap),
+  ]),
+);
+
+function renderRepairCharactersJson(payload, maxChars = REPAIR_CHARACTERS_MAX_CHARS) {
+  const render = (value) => JSON.stringify(value, null, 2);
+  const full = render(payload);
+  if (full.length <= maxChars) return full;
+
+  // The flat array shape (non-character dimensions) is ALL batch — there is no
+  // roster to shed — so it trims field text rather than dropping fields, and only
+  // falls back to the compact spine when even the tightest cap does not fit.
+  if (Array.isArray(payload)) {
+    let rendered = full;
+    for (let cap = CHARACTER_FIELD_CAP_START; cap >= CHARACTER_FIELD_CAP_FLOOR; cap = Math.floor(cap / 2)) {
+      rendered = render(payload.map((character) => capCharacterFields(character, cap)));
+      if (rendered.length <= maxChars) return rendered;
+    }
+    const compact = render(payload.map(compactRosterCharacter));
+    return compact.length <= maxChars ? compact : rendered;
+  }
+
+  const targets = Array.isArray(payload?.targetCharacters) ? payload.targetCharacters : [];
+  const roster = Array.isArray(payload?.fullSeriesRoster) ? payload.fullSeriesRoster : [];
+  const compactRoster = roster.map(compactRosterCharacter);
+  const rosterNote = (kept) => (kept === compactRoster.length
+    ? 'Roster compacted to name/role/want/need to fit the prompt budget.'
+    : `Roster compacted and limited to ${kept} of ${compactRoster.length} members to fit the prompt budget.`);
+  const build = (kept, cap) => render({
+    targetCharacters: cap ? targets.map((character) => capCharacterFields(character, cap)) : targets,
+    fullSeriesRoster: compactRoster.slice(0, kept),
+    rosterNote: rosterNote(kept),
+    ...(cap ? { targetNote: `Character fields over ${cap} characters were truncated to fit the prompt budget.` } : {}),
+  });
+
+  // At a given field cap, keep as many roster members as fit. The batch under
+  // repair outranks the roster, so the cap only tightens once even an empty
+  // roster cannot make room.
+  const bestFit = (cap) => {
+    let kept = compactRoster.length;
+    let rendered = build(kept, cap);
+    while (kept > 0 && rendered.length > maxChars) {
+      kept -= 1;
+      rendered = build(kept, cap);
+    }
+    return rendered;
+  };
+
+  let rendered = bestFit(null);
+  for (let cap = CHARACTER_FIELD_CAP_START; rendered.length > maxChars && cap >= CHARACTER_FIELD_CAP_FLOOR; cap = Math.floor(cap / 2)) {
+    rendered = bestFit(cap);
+  }
+  return rendered;
+}
 
 function craftRepairViolations(proposal) {
   const guide = proposal?.styleGuide;
@@ -837,24 +1031,16 @@ async function runFoundationRepair(series, issues, dimension, finding, character
       dimension,
       phase: options.phase || (dimension === 'character' ? 'post-arc reconciliation' : 'foundation repair'),
       foundationFindingJson: JSON.stringify(findingPayload, null, 2),
-      seriesJson: JSON.stringify({
-        id: series.id,
-        name: series.name,
-        premise: series.premise,
-        targetFormat: series.targetFormat,
-        issueCountTarget: series.issueCountTarget,
-        styleNotes: series.styleNotes,
-        styleGuide: series.styleGuide,
-        characterArcs: series.characterArcs,
-      }, null, 2),
+      seriesJson: renderRepairSeriesJson(series),
       outline: renderArc(series, issues, { maxChars: REPAIR_OUTLINE_MAX_CHARS }),
-      charactersJson: JSON.stringify(charactersPayload, null, 2),
+      charactersJson: renderRepairCharactersJson(charactersPayload),
     }, {
       returnsJson: true,
       providerDefault: options.providerId,
       modelDefault: options.model,
       effortDefault: options.effort,
       source: stage,
+      ...(stage === CHARACTER_FOUNDATION_STAGE ? { timeoutOverride: CHARACTER_FOUNDATION_TIMEOUT_MS } : {}),
     });
     const proposal = result?.content && typeof result.content === 'object' ? result.content : {};
     if (dimension !== 'craft') return proposal;
@@ -1252,7 +1438,12 @@ export const __testing = {
   buildFoundationContext,
   renderArc,
   renderCharacterLine,
+  renderRepairSeriesJson,
+  renderRepairCharactersJson,
   REPAIR_OUTLINE_MAX_CHARS,
+  REPAIR_SERIES_MAX_CHARS,
+  REPAIR_CHARACTERS_MAX_CHARS,
+  CHARACTER_FOUNDATION_TIMEOUT_MS,
   CHARACTER_FOUNDATION_BATCH_SIZE,
   FRAMEWORK_STRING_FIELDS,
 };
