@@ -445,7 +445,10 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
   // volume it touches is a chance to author the contradiction the next verify
   // files as a brand-new blocker.
   const edits = selectFindingKeyedEdits(content, findings);
-  if (edits.legacy) {
+  // Only worth saying when there is actually something to apply unkeyed — a
+  // response that proposed NO edits reads as legacy too, and warning about a
+  // stale prompt there would be a lie.
+  if (edits.legacy && (edits.arc || edits.seasons.length || edits.episodes.length)) {
     console.log(`⚠️ arc-resolve: response carries no resolves[] — applying it unkeyed (installed pipeline-arc-resolve.md predates #3724)`);
   }
   if (edits.arcDropped) {
