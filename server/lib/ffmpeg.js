@@ -489,20 +489,25 @@ export const buildTrimConcatArgs = ({ inputs, outPath, width, height, fps, withA
   const concatStreams = [];
   clips.forEach((clip, i) => {
     const startFrame = Math.max(0, Math.floor(Number(clip?.startFrame) || 0));
+    // `trim` leads the chain on purpose. `start_frame` is an index into the
+    // frames the filter SEES, so cutting before `fps=` resamples keeps it an
+    // index into the source — which is what the caller measured with
+    // `probeFrameCount`. It also means the discarded frames never get scaled
+    // or padded, which on a windowed chain is roughly half of every chunk.
     const video = [
-      ...(hasDims ? [`scale=${canonW}:${canonH}:force_original_aspect_ratio=decrease,pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2,setsar=1`] : []),
-      ...(hasRate ? [`fps=${rate}`] : []),
       ...(startFrame > 0 ? [`trim=start_frame=${startFrame}`] : []),
       'setpts=PTS-STARTPTS',
+      ...(hasDims ? [`scale=${canonW}:${canonH}:force_original_aspect_ratio=decrease,pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2,setsar=1`] : []),
+      ...(hasRate ? [`fps=${rate}`] : []),
     ];
     filters.push(`[${i}:v]${video.join(',')}[v${i}]`);
     if (audio) {
       const track = [
-        'aresample=48000',
-        'aformat=sample_fmts=fltp:channel_layouts=stereo',
         // The frame index converts exactly because these are CFR renders.
         ...(startFrame > 0 ? [`atrim=start=${(startFrame / rate).toFixed(6)}`] : []),
         'asetpts=PTS-STARTPTS',
+        'aresample=48000',
+        'aformat=sample_fmts=fltp:channel_layouts=stereo',
       ];
       filters.push(`[${i}:a]${track.join(',')}[a${i}]`);
     }

@@ -299,21 +299,26 @@ async function runChainAndCaptureArgs(chainParams, totalChunks) {
 // ─── tests ───────────────────────────────────────────────────────────────────
 
 describe('generateChainedVideo — continuation strategy (context window vs last frame)', () => {
-  // numFrames=25 → extendLatentFrames(25) = 3 latents = 24 new pixel frames,
-  // and probeFrameCount is mocked at 25. So for each rendered chunk:
-  //   echoed context prefix = 25 − 24 = 1 frame (chunk 0 has none)
-  //   the 22-frame conditioning window starts at 25 − 22 = 3
-  // The chunk files are never rewritten, so that index is measured against the
-  // full render on every hop: index 3 of a windowed chunk is frame 2 of its own
-  // new footage, i.e. the same frames the old pre-trim path cut at index 2 of a
-  // shortened file. What the floor at `contextPrefix` guarantees is that the
-  // window can never reach back into the echo the stitch is about to drop.
+  // numFrames=25 → extendLatentFrames(25) = 3 latents = 24 new pixel frames.
+  //
+  // The probe is mocked to the lengths a real chain produces, NOT to the
+  // rendered numFrames: chunk 0 is a plain 25-frame text render, but a windowed
+  // hop returns `context + extension`, so its FILE is 49 frames — 24 new ones
+  // behind a 25-frame echo of the window it was conditioned on. That gap is the
+  // whole reason the stitch can't fall back on a chunk's own history
+  // `numFrames`, and mocking both at 25 would hide it.
   const CHUNK_FRAMES = 25;
+  const HOP_FILE_FRAMES = 49;
   const EXPECTED_EXTEND_LATENTS = 3;
-  const EXPECTED_PREFIX_START = 1;
-  const WINDOW_START = 3;
-  // 25 + (25−1) + (25−1) once the echoes come out of the timeline.
+  // 49 − 24 new frames = a 25-frame echo to drop.
+  const EXPECTED_PREFIX_START = 25;
+  // The 22-frame window off chunk 0 (25 − 22) and off a hop (49 − 22).
+  const WINDOW_START_FIRST = 3;
+  const WINDOW_START_HOP = 27;
+  // 25 + (49−25) + (49−25) once the echoes come out of the timeline…
   const STITCHED_FRAMES_3_CHUNKS = 73;
+  // …versus the 123 frames actually on the timeline if the cuts don't land.
+  const UNTRIMMED_FRAMES_3_CHUNKS = 123;
 
   const flagValue = (args, flag) => (Array.isArray(args) && args.includes(flag)
     ? args[args.indexOf(flag) + 1] : null);
@@ -324,7 +329,7 @@ describe('generateChainedVideo — continuation strategy (context window vs last
    * and the raw child_process spawns (which is where both extractLastFrame's
    * `-sseof` seek and the final concat show up).
    */
-  async function runChain(chainParams, totalChunks) {
+  async function runChain(chainParams, totalChunks, probeFrames = null) {
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const { trimVideoFromFrame, probeFrameCount } = await import('../../lib/ffmpeg.js');
     const { spawn } = await import('child_process');
@@ -334,6 +339,15 @@ describe('generateChainedVideo — continuation strategy (context window vs last
     vi.mocked(probeFrameCount).mockClear();
     vi.mocked(spawn).mockClear();
     vi.mocked(atomicWrite).mockClear();
+    // Chunk 0 is a plain render; every hop after it comes back as
+    // `context + extension`. The orchestrator probes each chunk exactly once,
+    // in order, so the call index is the chunk index. `probeFrames` overrides
+    // the sequence for chains whose chunk 0 isn't a plain render either.
+    let probeCall = 0;
+    vi.mocked(probeFrameCount).mockImplementation(async () => {
+      const i = probeCall++;
+      return probeFrames ? probeFrames[Math.min(i, probeFrames.length - 1)] : (i === 0 ? CHUNK_FRAMES : HOP_FILE_FRAMES);
+    });
 
     // extractLastFrame and stitchVideos both look their inputs up in history;
     // feed the chunk ids back as they start so the chain can advance. The
@@ -449,12 +463,16 @@ describe('generateChainedVideo — continuation strategy (context window vs last
     // Each hop's conditioning window is still cut from the tail into tmpdir.
     const windowStart = (i) => trims
       .find(([from, to]) => from === chunkPath(i) && to === join(tmpdir(), `chaincontext-${innerJobIds[i]}.mp4`))?.[2]?.startFrame;
-    expect(windowStart(0)).toBe(WINDOW_START);
-    expect(windowStart(1)).toBe(WINDOW_START);
+    expect(windowStart(0)).toBe(WINDOW_START_FIRST);
+    expect(windowStart(1)).toBe(WINDOW_START_HOP);
   });
 
-  it('encodes the timeline exactly once for an N-chunk chain', async () => {
-    // The whole point: (N−1) chunk encodes + 1 timeline encode collapses to 1.
+  it('runs no whole-chunk encode pass — the timeline encode is the only one', async () => {
+    // The whole point: (N−1) whole-chunk encodes + 1 timeline encode collapses
+    // to just the timeline encode. (The per-hop conditioning-window cut is
+    // still an encode, but of ~22 frames, and it goes through the mocked
+    // trimVideoFromFrame rather than spawn — the sibling test above is what
+    // pins that it never touches a chunk file.)
     const { spawns, concat } = await runChain({}, 3);
     const encodes = spawns.filter(([, args]) => Array.isArray(args) && args.includes('libx264'));
     expect(encodes).toHaveLength(1);
@@ -494,9 +512,11 @@ describe('generateChainedVideo — continuation strategy (context window vs last
       // …and the salvage run, which is the plain demuxer stream copy.
       const copy = concats.find((args) => args.includes('-f') && args.includes('copy'));
       expect(copy).toBeTruthy();
-      // The echoes are still in the output, so the record must say so rather
-      // than reporting the trimmed length we asked for and never got.
-      expect(stitched?.numFrames).toBe(CHUNK_FRAMES * 3);
+      // The echoes are still in the output, so the record must say so — and
+      // "so" is the chunks' MEASURED lengths (25 + 49 + 49), not the numFrames
+      // they were rendered at, which understates an extend render's file by
+      // the whole context window.
+      expect(stitched?.numFrames).toBe(UNTRIMMED_FRAMES_3_CHUNKS);
     } finally {
       vi.mocked(spawn).mockImplementation(() => makeProc());
     }
@@ -524,6 +544,21 @@ describe('generateChainedVideo — continuation strategy (context window vs last
     const { innerJobIds, trims } = await runChain({ contextFrames: 8 }, 2);
     const cut = trims.find(([, to]) => to === join(tmpdir(), `chaincontext-${innerJobIds[0]}.mp4`));
     expect(cut[2]).toMatchObject({ startFrame: CHUNK_FRAMES - 8 });
+  });
+
+  it('measures the untrimmed first chunk too, instead of trusting the count it was rendered at', async () => {
+    // In an extend chain chunk 0's output is `user clip + extension`, so its
+    // file is far longer than the numFrames its history entry records — and
+    // nothing trims it, so no cut forces a measurement. It still has to be
+    // measured, or the stitched entry's duration is short by the whole source
+    // clip and a Remix off it re-renders at the wrong length.
+    const FIRST_FILE_FRAMES = 60;
+    const { stitched } = await runChain({
+      mode: 'extend',
+      extendFromVideoPath: join(MOCK_PATHS.videos, 'original-video.mp4'),
+    }, 2, [FIRST_FILE_FRAMES, HOP_FILE_FRAMES]);
+    // 60 whole + (49 − 25) after the hop's echo comes out.
+    expect(stitched?.numFrames).toBe(FIRST_FILE_FRAMES + (HOP_FILE_FRAMES - EXPECTED_PREFIX_START));
   });
 
   it('never conditions the next hop on the echo the stitch is about to drop', async () => {

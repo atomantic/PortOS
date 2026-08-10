@@ -188,8 +188,10 @@ describe('buildTrimConcatArgs', () => {
     expect(args.slice(0, 4)).toEqual(['-i', '/v/a.mp4', '-i', '/v/b.mp4']);
     const graph = graphOf(args);
     // The untrimmed input still gets normalized + PTS-rebased, but no `trim`.
-    expect(graph).toContain('[0:v]scale=512:288:force_original_aspect_ratio=decrease,pad=512:288:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24,setpts=PTS-STARTPTS[v0]');
-    expect(graph).toContain('trim=start_frame=9,setpts=PTS-STARTPTS[v1]');
+    expect(graph).toContain('[0:v]setpts=PTS-STARTPTS,scale=512:288:force_original_aspect_ratio=decrease,pad=512:288:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24[v0]');
+    // `trim` leads, so `start_frame` indexes the SOURCE frames the caller
+    // measured — not whatever `fps=` would have resampled them into.
+    expect(graph).toContain('[1:v]trim=start_frame=9,setpts=PTS-STARTPTS,scale=');
     expect(graph).toContain('[v0][v1]concat=n=2:v=1:a=0[outv]');
     expect(args.slice(-2)).toEqual(['-y', '/v/out.mp4']);
   });

@@ -1865,12 +1865,16 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
         let contextPrefix = 0;
         if (i > 0) {
           contextPrefix = contextPrefixFrames({ totalFrames: frames, extendLatents: chunkExtendLatents });
-          if (contextPrefix > 0) {
-            chunkTrims.set(chunkId, { startFrame: contextPrefix, frames: frames - contextPrefix });
-          } else {
+          if (contextPrefix <= 0) {
             console.log(`⚠️ Chunk ${i + 1}/${totalChunks} context prefix unmeasurable (frames=${frames ?? 'unknown'}), leaving it untrimmed`);
           }
         }
+        // Record the measurement even when there's nothing to cut (chunk 0, or
+        // an unmeasurable prefix). An extend render's file is `source +
+        // extension`, so a chunk's own history `numFrames` — the count it was
+        // REQUESTED at — understates what it contributes to the timeline, and
+        // that's the only other number the stitch could fall back on.
+        if (frames != null) chunkTrims.set(chunkId, { startFrame: contextPrefix, frames: frames - contextPrefix });
 
         if (i < totalChunks - 1) {
           // Cut the next hop's conditioning window off this chunk's tail. Both
@@ -2129,9 +2133,13 @@ export async function stitchVideos(videoIds, opts = {}) {
     // encode; pre-trimming each chunk file instead would add one full encode
     // per chunk and re-grade the trimmed chunks relative to their siblings.
     //
-    // `frames` feeds the stitched entry's `numFrames`, because a history
-    // entry's own `numFrames` is the count the clip was RENDERED at — a render
-    // parameter Remix reuses, not a measurement of what it contributes here.
+    // Both numbers are MEASUREMENTS of the file, which is why they have to
+    // come from the caller: a history entry's own `numFrames` is the count the
+    // clip was RENDERED at — a render parameter Remix reuses — and an extend
+    // render's output is `source + extension`, so its file is materially
+    // longer than that. `startFrame: 0` is therefore meaningful on its own:
+    // "no cut, but here is the real length." Only a non-zero offset routes the
+    // concat through the filter graph.
     trims = null,
   } = opts;
   if (!Array.isArray(videoIds) || videoIds.length < 2) {
@@ -2155,14 +2163,18 @@ export async function stitchVideos(videoIds, opts = {}) {
     if (!existsSync(p)) throw new ServerError(`Missing: ${basename(p)}`, { status: 404, code: 'NOT_FOUND' });
   }
 
-  // Leading-frame cut per input, in `videos` order. A zero/absent offset means
-  // the input joins whole; any non-zero offset routes the whole concat through
-  // the filter graph, since only that path can express a cut.
+  // Measured cut + contribution per input, in `videos` order. A zero offset
+  // means the input joins whole (the entry is then purely a length
+  // measurement); any non-zero offset routes the whole concat through the
+  // filter graph, since only that path can express a cut.
   const trimPlan = videos.map((v) => {
-    const startFrame = Math.max(0, Math.floor(Number(trims?.get?.(v.id)?.startFrame) || 0));
-    if (startFrame <= 0) return null;
-    const frames = Number(trims.get(v.id).frames);
-    return { startFrame, frames: Number.isFinite(frames) && frames >= 0 ? frames : null };
+    const entry = trims?.get?.(v.id);
+    if (!entry) return null;
+    const frames = Number(entry.frames);
+    return {
+      startFrame: Math.max(0, Math.floor(Number(entry.startFrame) || 0)),
+      frames: Number.isFinite(frames) && frames >= 0 ? frames : null,
+    };
   });
 
   const listFile = join(tmpdir(), `concat-${id}.txt`);
@@ -2181,15 +2193,22 @@ export async function stitchVideos(videoIds, opts = {}) {
   const outFilename = `${filenamePrefix}-${id}.mp4`;
   const outPath = join(PATHS.videos, outFilename);
 
-  const runFfmpeg = (args) => new Promise((resolve, reject) => {
-    const proc = spawn(ffmpeg, args, { env: safeChildProcessEnv(), stdio: 'ignore' });
-    proc.on('close', (code) => code === 0 ? resolve() : reject(new ServerError('Stitch failed', { status: 500, code: 'FFMPEG_FAILED' })));
+  // `captureStderr` is for the run whose failure is SURVIVABLE — the fallback
+  // below turns it into a log line, and "Stitch failed" alone can't tell a
+  // filter-graph parse error from a full disk.
+  const runFfmpeg = (args, { captureStderr = false } = {}) => new Promise((resolve, reject) => {
+    const proc = spawn(ffmpeg, args, { env: safeChildProcessEnv(), stdio: captureStderr ? ['ignore', 'ignore', 'pipe'] : 'ignore' });
+    let tail = '';
+    proc.stderr?.on('data', (d) => { tail = `${tail}${d}`.slice(-400); });
+    proc.on('close', (code) => code === 0
+      ? resolve()
+      : reject(new ServerError(`Stitch failed${tail ? `: ${tail.trim().split('\n').pop()}` : ''}`, { status: 500, code: 'FFMPEG_FAILED' })));
     proc.on('error', (err) => reject(new ServerError(`ffmpeg failed to spawn: ${err.message}`, { status: 500, code: 'FFMPEG_FAILED' })));
   });
 
-  // Tracks whether the trims actually made it into the output, so `numFrames`
+  // Tracks whether the cuts actually made it into the output, so `numFrames`
   // below reports the timeline that exists rather than the one we asked for.
-  let trimsApplied = trimPlan.some(Boolean);
+  let trimsApplied = trimPlan.some((t) => t?.startFrame > 0);
   // Use a try/finally so the concat list temp file is cleaned up even when
   // ffmpeg rejects — otherwise it leaks one file per failed stitch.
   try {
@@ -2208,7 +2227,7 @@ export async function stitchVideos(videoIds, opts = {}) {
         withAudio: (await Promise.all(videoPaths.map((p) => hasAudioStream(p)))).every(Boolean),
       });
       const failure = args
-        ? await runFfmpeg(args).then(() => null, (err) => err)
+        ? await runFfmpeg(args, { captureStderr: true }).then(() => null, (err) => err)
         : new Error('could not build the concat filter graph');
       if (failure) {
         // Degrade rather than throw away a whole chained render: the untrimmed
@@ -2238,9 +2257,17 @@ export async function stitchVideos(videoIds, opts = {}) {
     seed: videos[0].seed ?? 0,
     width: videos[0].width,
     height: videos[0].height,
-    numFrames: videos.reduce((sum, v, i) => sum + (
-      (trimsApplied ? trimPlan[i]?.frames : null) ?? v.numFrames ?? 0
-    ), 0),
+    // What each input actually contributes. A measured plan wins over the
+    // entry's own `numFrames` either way — but when the cuts didn't make it
+    // into the output, the input contributes its WHOLE measured length
+    // (`startFrame + frames`), not the trimmed length we asked for.
+    numFrames: videos.reduce((sum, v, i) => {
+      const plan = trimPlan[i];
+      const measured = plan?.frames == null
+        ? null
+        : (trimsApplied ? plan.frames : plan.startFrame + plan.frames);
+      return sum + (measured ?? v.numFrames ?? 0);
+    }, 0),
     fps: videos[0].fps,
     filename: outFilename,
     thumbnail: thumb,
