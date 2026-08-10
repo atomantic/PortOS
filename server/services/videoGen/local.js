@@ -60,7 +60,7 @@ import {
   pickDeathFingerprint,
 } from './runtimes.js';
 import { loadHistory, saveHistory, mutateVideoHistory } from './history.js';
-import { miniMaxH3InputError, videoChainUnsupportedError } from './modeContract.js';
+import { videoModeContractError, videoChainUnsupportedError, VIDEO_MODE_GATED_RUNTIMES } from './modeContract.js';
 // Re-export the extracted runtime + history surface so existing deep imports
 // (`from '../videoGen/local.js'`) keep resolving every symbol they used to.
 export * from './runtimes.js';
@@ -532,24 +532,34 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
   return { bin: LTX2_VENV_PYTHON, args };
 };
 
+// The render-side adapter for the shared mode/source contract: `prepareParams`
+// wants the error value (it unlinks staged uploads first), this path just
+// throws, and it names its inputs by resolved path rather than by presence.
+// EVERY gated runtime goes through here — do not re-type a mode rule.
+const assertRenderModeContract = ({
+  model, mode, sourceImagePath, lastImagePath, keyframes,
+  extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths,
+}) => {
+  const err = videoModeContractError({
+    model,
+    mode,
+    hasFirstImage: !!sourceImagePath,
+    hasLastImage: !!lastImagePath,
+    keyframes,
+    extendFromVideo: extendFromVideoPath,
+    audioFile: audioFilePath,
+    audioStartSec,
+    icReferences: icReferencePaths,
+  });
+  if (err) throw err;
+};
+
 // Build args for the pinned MLX-Gen Wan CLI. The helper itself never downloads:
 // all base + profile weights must already be present through the UI flow.
 const buildWan22Args = ({ model, wanModelPath, wanRequiredWeights, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, mode, outputPath }) => {
   assertByovRuntimeInstalled('wan22');
   const requestedMode = mode || (sourceImagePath ? 'image' : 'text');
-  const supportedModes = Array.isArray(model.supportedModes) ? model.supportedModes : [];
-  if (!supportedModes.includes(requestedMode)) {
-    throw new ServerError(
-      `${model.name} does not support ${requestedMode}-to-video. Choose a compatible Wan model.`,
-      { status: 400, code: 'WAN22_MODE_UNSUPPORTED' },
-    );
-  }
-  if (requestedMode === 'text' && sourceImagePath) {
-    throw new ServerError(
-      'Wan 2.2 text-to-video cannot consume a source image — switch to image mode or remove the source.',
-      { status: 400, code: 'WAN22_TEXT_MODE_SOURCE_CONFLICT' },
-    );
-  }
+  assertRenderModeContract({ model, mode, sourceImagePath });
   const args = [
     WAN22_HELPER_SCRIPT,
     '--model-repo', wanModelPath,
@@ -567,15 +577,8 @@ const buildWan22Args = ({ model, wanModelPath, wanRequiredWeights, prompt, negat
   if (model.guidance2 != null) args.push('--guidance-2', String(model.guidance2));
   if (model.flowShift != null) args.push('--flow-shift', String(model.flowShift));
   if (model.solver) args.push('--solver', model.solver);
-  if (requestedMode === 'image') {
-    if (!sourceImagePath) {
-      throw new ServerError(
-        'Wan 2.2 image-to-video requires a source image — upload one before running this model.',
-        { status: 400, code: 'WAN22_I2V_REQUIRES_IMAGE' },
-      );
-    }
-    args.push('--image', sourceImagePath);
-  }
+  // The contract above already rejected image mode without a source.
+  if (requestedMode === 'image') args.push('--image', sourceImagePath);
   for (const weight of wanRequiredWeights) {
     args.push('--lora-path', weight.path);
     args.push('--lora-target-role', weight.role);
@@ -586,27 +589,9 @@ const buildWan22Args = ({ model, wanModelPath, wanRequiredWeights, prompt, negat
 // Build args for PipeNetwork's pinned MiniMax H3 MLX port. The helper resolves
 // only exact, already-cached HF revisions; every network download remains an
 // explicit Video Gen UI action guarded by the model's terms acknowledgement.
-const assertMiniMaxH3SupportedInputs = ({
-  model, mode, sourceImagePath, lastImagePath, keyframes,
-  extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths,
-}) => {
-  const err = miniMaxH3InputError({
-    mode,
-    hasFirstImage: !!sourceImagePath,
-    hasLastImage: !!lastImagePath,
-    supportedModes: model?.supportedModes,
-    keyframes,
-    extendFromVideo: extendFromVideoPath,
-    audioFile: audioFilePath,
-    audioStartSec,
-    icReferences: icReferencePaths,
-  });
-  if (err) throw err;
-};
-
 const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath }) => {
   assertByovRuntimeInstalled('minimax_h3');
-  assertMiniMaxH3SupportedInputs({
+  assertRenderModeContract({
     model,
     mode,
     sourceImagePath,
@@ -878,52 +863,31 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     && !isVideoModelTermsAccepted(model, acceptedVideoModelTerms(await getSettings()))) {
     throw videoModelTermsError(model);
   }
-  // Validate H3's mode contract before cache lookups, image resize, or staging
+  // Validate the mode contract before cache lookups, image resize, or staging
   // work. Internal producers and persisted/retried jobs bypass route
   // preparation, so silently dropping one of these inputs here would render a
-  // materially different video than the caller requested.
-  if (model.runtime === 'minimax_h3') {
-    // Promote before checking, mirroring wan22 below: the route sets both
-    // fields, but a direct caller that only staged `uploadedTempPath` would
-    // otherwise pass the mode guard and then render text-only with its image
-    // dropped.
-    sourceImagePath ||= uploadedTempPath;
-    assertMiniMaxH3SupportedInputs({
-      model,
-      mode,
-      sourceImagePath,
-      lastImagePath,
-      keyframes,
-      extendFromVideoPath,
-      audioFilePath,
-      audioStartSec,
-      icReferencePaths,
-    });
-  }
+  // materially different video than the caller requested. Ungated runtimes
+  // (ltx2 / mlx_video / hunyuan) fall through untouched.
+  //
+  // Promote before checking: the route sets both fields, but a direct caller
+  // that only staged `uploadedTempPath` would otherwise pass the mode guard and
+  // then render text-only with its image dropped.
+  if (VIDEO_MODE_GATED_RUNTIMES.has(model.runtime)) sourceImagePath ||= uploadedTempPath;
+  assertRenderModeContract({
+    model,
+    mode,
+    sourceImagePath,
+    lastImagePath,
+    keyframes,
+    extendFromVideoPath,
+    audioFilePath,
+    audioStartSec,
+    icReferencePaths,
+  });
   numFrames = numFrames ?? model.defaultFrames ?? DEFAULT_NUM_FRAMES;
   let wanModelPath = null;
   const wanRequiredWeights = [];
   if (model.runtime === 'wan22') {
-    sourceImagePath ||= uploadedTempPath;
-    const requestedMode = mode || (sourceImagePath ? 'image' : 'text');
-    if (!Array.isArray(model.supportedModes) || !model.supportedModes.includes(requestedMode)) {
-      throw new ServerError(
-        `${model.name} does not support ${requestedMode}-to-video. Choose a compatible Wan model.`,
-        { status: 400, code: 'WAN22_MODE_UNSUPPORTED' },
-      );
-    }
-    if (requestedMode === 'image' && !sourceImagePath) {
-      throw new ServerError(
-        'Wan 2.2 image-to-video requires a source image — upload one before running this model.',
-        { status: 400, code: 'WAN22_I2V_REQUIRES_IMAGE' },
-      );
-    }
-    if (requestedMode === 'text' && sourceImagePath) {
-      throw new ServerError(
-        'Wan 2.2 text-to-video cannot consume a source image — switch to image mode or remove the source.',
-        { status: 400, code: 'WAN22_TEXT_MODE_SOURCE_CONFLICT' },
-      );
-    }
     const frameStride = Number(model.frameStride);
     if (Number.isFinite(frameStride) && frameStride > 0 && (Number(numFrames) - 1) % frameStride !== 0) {
       throw new ServerError(

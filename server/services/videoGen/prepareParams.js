@@ -52,7 +52,7 @@ import {
 } from './local.js';
 // Straight from the leaf, not through local.js: the suites that exercise this
 // module mock local.js wholesale, and a mocked rule table would assert nothing.
-import { miniMaxH3InputError, videoChainUnsupportedError } from './modeContract.js';
+import { videoModeContractError, videoChainUnsupportedError } from './modeContract.js';
 
 /**
  * Best-effort unlink of every multipart temp file the parser wrote before the
@@ -408,25 +408,33 @@ async function resolvePreparedParams({
       throw chainError;
     }
   }
-  // MiniMax H3's released MLX path is fixed-24fps, joint A/V and CFG-distilled,
-  // and conditions on at most two keyframes (first / last latent frame). Fail
-  // before queue persistence so a direct API caller cannot enqueue a request
-  // whose controls the runtime would silently ignore.
+  // Mode ↔ source pairing for every gated runtime, resolved through the one
+  // contract the render boundary also throws from (#3736), so the two entry
+  // points can't disagree about which shapes are legal or which code they
+  // return. Runs before durable upload staging, keeping rejection cleanup cheap.
+  const hasDeclaredFirstImage = Boolean(uploads.sourceImage || body.sourceImageFile);
+  const hasDeclaredLastImage = Boolean(uploads.lastImage || body.lastImageFile);
+  // Pinned here rather than re-derived at the resolved pass below: once a
+  // declared gallery pick fails to resolve, "was this an i2v request?" can only
+  // be answered from what the caller declared.
+  const declaredMode = body.mode || (hasDeclaredFirstImage ? 'image' : 'text');
+  const modeContractError = videoModeContractError({
+    model: effectiveModel,
+    mode: declaredMode,
+    hasFirstImage: hasDeclaredFirstImage,
+    hasLastImage: hasDeclaredLastImage,
+    keyframes: body.keyframes,
+    extendFromVideo: body.extendFromVideoId,
+  });
+  if (modeContractError) {
+    await cleanupStaged();
+    throw modeContractError;
+  }
+  // MiniMax H3's released MLX path is fixed-24fps, joint A/V and CFG-distilled.
+  // These are the runtime's non-mode controls; the mode gate above already ran.
+  // Fail before queue persistence so a direct API caller cannot enqueue a
+  // request whose controls the runtime would silently ignore.
   if (effectiveModel?.runtime === 'minimax_h3') {
-    // Same rule table the render boundary throws from, so the two entry points
-    // can't disagree about which shapes are legal or which code they return.
-    const h3InputError = miniMaxH3InputError({
-      mode: body.mode,
-      hasFirstImage: Boolean(uploads.sourceImage || body.sourceImageFile),
-      hasLastImage: Boolean(uploads.lastImage || body.lastImageFile),
-      supportedModes: effectiveModel.supportedModes,
-      keyframes: body.keyframes,
-      extendFromVideo: body.extendFromVideoId,
-    });
-    if (h3InputError) {
-      await cleanupStaged();
-      throw h3InputError;
-    }
     if (body.negativePrompt?.trim()) {
       await cleanupStaged();
       throw new ServerError(
@@ -465,40 +473,11 @@ async function resolvePreparedParams({
       );
     }
   }
-  // Wan profiles have narrower mode + temporal-shape contracts than the
-  // shared request schema can express. Mirror the worker's guards here so a
-  // direct API caller cannot persist a job that is already known to fail.
-  // This runs before durable upload staging, keeping rejection cleanup cheap.
-  let wanRequestedMode = null;
+  // Wan profiles have a narrower temporal-shape contract than the shared
+  // request schema can express (the mode side is the shared gate above). Mirror
+  // the worker's frame-grid guard here so a direct API caller cannot persist a
+  // job that is already known to fail.
   if (effectiveModel?.runtime === 'wan22') {
-    const hasDeclaredSource = Boolean(uploads.sourceImage || body.sourceImageFile);
-    const requestedMode = body.mode
-      || (uploads.sourceImage || body.sourceImageFile ? 'image' : 'text');
-    wanRequestedMode = requestedMode;
-    const supportedModes = Array.isArray(effectiveModel.supportedModes)
-      ? effectiveModel.supportedModes
-      : [];
-    if (!supportedModes.includes(requestedMode)) {
-      await cleanupStaged();
-      throw new ServerError(
-        `${effectiveModel.name} does not support ${requestedMode}-to-video. Choose a compatible Wan model.`,
-        { status: 400, code: 'WAN22_MODE_UNSUPPORTED' },
-      );
-    }
-    if (requestedMode === 'image' && !hasDeclaredSource) {
-      await cleanupStaged();
-      throw new ServerError(
-        'Wan 2.2 image-to-video requires a source image — upload one before running this model.',
-        { status: 400, code: 'WAN22_I2V_REQUIRES_IMAGE' },
-      );
-    }
-    if (requestedMode === 'text' && hasDeclaredSource) {
-      await cleanupStaged();
-      throw new ServerError(
-        'Wan 2.2 text-to-video cannot consume a source image — switch to image mode or remove the source.',
-        { status: 400, code: 'WAN22_TEXT_MODE_SOURCE_CONFLICT' },
-      );
-    }
     const numFrames = body.numFrames != null ? Number(body.numFrames) : DEFAULT_NUM_FRAMES;
     const frameStride = Number(effectiveModel.frameStride);
     if (Number.isFinite(frameStride) && frameStride > 0 && (numFrames - 1) % frameStride !== 0) {
@@ -536,12 +515,21 @@ async function resolvePreparedParams({
   } else if (body.sourceImageFile) {
     sourceImagePath = resolveGalleryImage(body.sourceImageFile);
   }
-  if (effectiveModel?.runtime === 'wan22' && wanRequestedMode === 'image' && !sourceImagePath) {
+  // Re-run the same contract now that the gallery pick has been resolved to a
+  // real path: the pre-staging pass only saw that a filename was *declared*, so
+  // a stale/missing gallery entry would otherwise fall through to a text render.
+  const resolvedModeError = videoModeContractError({
+    model: effectiveModel,
+    mode: declaredMode,
+    hasFirstImage: Boolean(sourceImagePath),
+    hasLastImage: hasDeclaredLastImage,
+    sourceResolved: true,
+    keyframes: body.keyframes,
+    extendFromVideo: body.extendFromVideoId,
+  });
+  if (resolvedModeError) {
     await cleanupStaged();
-    throw new ServerError(
-      'Wan 2.2 image-to-video requires a resolvable source image — choose an existing gallery image or upload one.',
-      { status: 400, code: 'WAN22_I2V_REQUIRES_IMAGE' },
-    );
+    throw resolvedModeError;
   }
   // Music Video director-board renders are always i2v FROM the scene's reference
   // frame (#1760 Phase 1). resolveGalleryImage returns null for a missing/invalid
