@@ -218,7 +218,6 @@ export default function Timeline() {
             type="button"
             onClick={() => setShowImports((v) => !v)}
             aria-expanded={showImports}
-            aria-controls="timeline-import-panels"
             className="inline-flex items-center gap-1.5 rounded border border-port-border bg-port-card px-2.5 py-1.5 text-xs text-gray-400 hover:border-port-accent hover:text-gray-200"
           >
             <Download size={14} />
@@ -227,11 +226,7 @@ export default function Timeline() {
         </div>
       </div>
 
-      {showImports && (
-        <div id="timeline-import-panels">
-          <TimelineImportPanels onImported={() => setReloadKey((k) => k + 1)} />
-        </div>
-      )}
+      {showImports && <TimelineImportPanels onImported={() => setReloadKey((k) => k + 1)} />}
 
       <Histogram histogram={histogram} />
 
