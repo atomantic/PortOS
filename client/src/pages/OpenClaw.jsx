@@ -28,12 +28,12 @@ import {
   Paperclip,
   Image as ImageIcon,
   X,
-  Upload,
-  ClipboardPaste
+  ChevronDown,
+  ChevronRight,
+  SlidersHorizontal
 } from 'lucide-react';
 import AppContextPicker from '../components/AppContextPicker';
 import FilePickerButton from '../components/ui/FilePickerButton';
-import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 import * as api from '../services/apiOpenClaw';
 import * as coreApi from '../services/api';
 import { formatDateTime } from '../utils/formatters';
@@ -130,6 +130,12 @@ export default function OpenClaw() {
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [pageError, setPageError] = useState('');
   const [showOlderChats, setShowOlderChats] = useState(false);
+  // Below `lg` the side panel (runtime status + sessions) would stack above the
+  // conversation and push the composer off-screen, so it's collapsed by default
+  // and toggled from the header. On `lg`+ it's always visible.
+  const [showSidePanel, setShowSidePanel] = useState(false);
+  const [showRuntimeDetails, setShowRuntimeDetails] = useState(false);
+  const [showContextFields, setShowContextFields] = useState(false);
   // sending is hoisted to the component so both hooks share the same boolean without a
   // circular hook dependency: useOpenClawAttachments reads it; useOpenClawStream updates it.
   const [sending, setSending] = useState(false);
@@ -252,6 +258,17 @@ export default function OpenClaw() {
     loadMessages(selectedSessionId);
   }, [loadMessages, selectedSessionId, status?.configured]);
 
+  const handleSelectSession = useCallback((sessionId) => {
+    if (sending || sessionId === selectedSessionIdRef.current) return;
+    setSelectedSessionId(sessionId);
+    setShowSidePanel(false);
+  }, [sending]);
+
+  const activeContextCount = useMemo(
+    () => Object.values(context).filter(value => String(value || '').trim()).length,
+    [context]
+  );
+
   const handleComposerKeyDown = (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
       event.preventDefault();
@@ -263,22 +280,26 @@ export default function OpenClaw() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-3 border-b border-port-border p-4">
-        <h1 className="text-2xl font-bold text-white">Settings</h1>
-      </div>
-
-      <SettingsTabsHeader activeTab="openclaw" />
-
-      <div className="flex flex-col gap-4 border-b border-port-border p-4 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-port-border p-4">
         <div className="flex items-center gap-3">
-          <Bot className="h-8 w-8 text-port-accent" />
+          <Bot className="h-7 w-7 shrink-0 text-port-accent" />
           <div>
             <h1 className="text-xl font-bold text-white">OpenClaw</h1>
-            <p className="text-sm text-gray-500">Operator chat surface with streaming, context, and attachments.</p>
+            <p className="hidden text-sm text-gray-500 sm:block">Operator chat surface with streaming, context, and attachments.</p>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowSidePanel(current => !current)}
+            aria-expanded={showSidePanel}
+            className="inline-flex items-center gap-2 rounded-lg border border-port-border bg-port-card px-3 py-2 text-sm text-gray-200 transition-colors hover:border-gray-500 hover:text-white lg:hidden"
+          >
+            <MessageSquareText size={16} />
+            Sessions
+            <span className="text-xs text-gray-500">{sessions.length}</span>
+          </button>
           <span className={`inline-flex items-center rounded-full border px-3 py-1 text-sm font-medium ${runtimeState.classes}`}>
             {runtimeState.label}
           </span>
@@ -295,20 +316,27 @@ export default function OpenClaw() {
       </div>
 
       <div className="grid min-h-0 flex-1 gap-4 overflow-hidden p-4 lg:grid-cols-[320px_minmax(0,1fr)]">
-        <aside className="flex min-h-0 flex-col gap-4">
+        <aside className={`min-h-0 flex-col gap-4 ${showSidePanel ? 'flex' : 'hidden lg:flex'}`}>
           <section className="rounded-xl border border-port-border bg-port-card p-4">
-            <div className="mb-3 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowRuntimeDetails(current => !current)}
+              aria-expanded={showRuntimeDetails}
+              className="flex w-full items-center gap-2 text-left text-gray-400 transition-colors hover:text-white"
+            >
               <PlugZap size={16} className="text-port-accent" />
               <h2 className="text-sm font-semibold text-white">Runtime Status</h2>
-            </div>
+              <span className="ml-auto text-xs">{status?.label || 'OpenClaw Runtime'}</span>
+              {showRuntimeDetails ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </button>
 
-            {statusLoading ? (
-              <div className="flex items-center gap-2 text-sm text-gray-400">
+            {!showRuntimeDetails ? null : statusLoading ? (
+              <div className="mt-3 flex items-center gap-2 text-sm text-gray-400">
                 <RefreshCw size={14} className="animate-spin" />
                 Loading runtime status…
               </div>
             ) : (
-              <div className="space-y-2 text-sm text-gray-300">
+              <div className="mt-3 space-y-2 text-sm text-gray-300">
                 <div className="flex justify-between gap-3">
                   <span className="text-gray-500">Label</span>
                   <span className="text-right text-white">{status?.label || 'OpenClaw Runtime'}</span>
@@ -366,10 +394,7 @@ export default function OpenClaw() {
                         key={session.id}
                         type="button"
                         disabled={sending}
-                        onClick={() => {
-                          if (sending || isActive) return;
-                          setSelectedSessionId(session.id);
-                        }}
+                        onClick={() => handleSelectSession(session.id)}
                         className={`block w-full border-b border-port-border px-4 py-3 text-left transition-colors last:border-b-0 ${
                           isActive ? 'bg-port-accent/10 text-white' : 'text-gray-300 hover:bg-port-border/20 hover:text-white'
                         } ${sending ? 'cursor-not-allowed opacity-60' : ''}`}
@@ -401,10 +426,7 @@ export default function OpenClaw() {
                             key={session.id}
                             type="button"
                             disabled={sending}
-                            onClick={() => {
-                              if (sending || isActive) return;
-                              setSelectedSessionId(session.id);
-                            }}
+                            onClick={() => handleSelectSession(session.id)}
                             className={`block w-full border-t border-port-border/60 px-4 py-3 text-left transition-colors ${
                               isActive ? 'bg-port-accent/10 text-white' : 'text-gray-400 hover:bg-port-border/20 hover:text-white'
                             } ${sending ? 'cursor-not-allowed opacity-60' : ''}`}
@@ -517,8 +539,22 @@ export default function OpenClaw() {
             )}
           </div>
 
-          <form onSubmit={handleSend} className="border-t border-port-border p-4">
-            <div className="mb-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <form onSubmit={handleSend} className="shrink-0 border-t border-port-border p-4">
+            <button
+              type="button"
+              onClick={() => setShowContextFields(current => !current)}
+              aria-expanded={showContextFields}
+              className="mb-3 inline-flex items-center gap-2 text-xs text-gray-400 transition-colors hover:text-white"
+            >
+              <SlidersHorizontal size={14} />
+              Context
+              {activeContextCount > 0 && (
+                <span className="rounded-full bg-port-accent/20 px-2 py-0.5 text-port-accent">{activeContextCount}</span>
+              )}
+              {showContextFields ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </button>
+
+            <div className={`mb-3 gap-3 md:grid-cols-2 xl:grid-cols-3 ${showContextFields ? 'grid' : 'hidden'}`}>
               <AppContextPicker
                 apps={apps}
                 value={context.appId}
@@ -558,7 +594,7 @@ export default function OpenClaw() {
                   : 'border-port-border bg-port-bg/20'
               }`}
             >
-              <label className="mb-2 block text-sm font-medium text-white" htmlFor="openclaw-composer">
+              <label className="sr-only" htmlFor="openclaw-composer">
                 Send message
               </label>
               <textarea
@@ -567,26 +603,11 @@ export default function OpenClaw() {
                 onChange={(event) => setComposer(event.target.value)}
                 onPaste={handlePaste}
                 onKeyDown={handleComposerKeyDown}
-                rows={4}
+                rows={3}
                 placeholder={status?.configured ? 'Send a message, paste an image, or drop files here…' : 'OpenClaw is not configured'}
                 disabled={!status?.configured || !selectedSessionId || sending}
                 className="w-full resize-none rounded-lg border border-port-border bg-port-bg px-3 py-3 text-sm text-white focus:border-port-accent focus:outline-hidden disabled:cursor-not-allowed disabled:opacity-60"
               />
-
-              <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-gray-400">
-                <span className="inline-flex items-center gap-1">
-                  <Upload size={12} />
-                  drag & drop
-                </span>
-                <span className="inline-flex items-center gap-1">
-                  <ClipboardPaste size={12} />
-                  paste screenshots
-                </span>
-                <span className="inline-flex items-center gap-1">
-                  <Paperclip size={12} />
-                  files + images
-                </span>
-              </div>
             </div>
 
             {attachments.length > 0 && (
