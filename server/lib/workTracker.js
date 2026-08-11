@@ -512,12 +512,11 @@ export async function resolveRepoForgeTarget(repoPath, { preferredForge = null }
  * @param {{repoPath?: string}} [options] - `repoPath` override for a caller that
  *   scans a checkout other than `app.repoPath` (the app record supplies the pin,
  *   the override supplies the checkout).
- * @returns {Promise<{tracker:string, workTracker:object, target:object|null}>}
+ * @returns {Promise<{tracker:string, target:object|null}>}
  */
 export async function resolveAppForgeTarget(app, { repoPath = null } = {}) {
-  const workTracker = await resolveAppWorkTracker(app).catch(() => ({ resolved: 'plan', host: null, forge: null }));
-  const tracker = workTracker.resolved;
+  const { resolved: tracker } = await resolveAppWorkTracker(app).catch(() => ({ resolved: 'plan' }));
   const preferredForge = (tracker === 'github' || tracker === 'gitlab') ? tracker : null;
   const target = await resolveRepoForgeTarget(repoPath || app?.repoPath, { preferredForge });
-  return { tracker, workTracker, target };
+  return { tracker, target };
 }
