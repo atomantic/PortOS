@@ -400,6 +400,17 @@ async function getGitlabState(repoPath, fullName) {
  * exactly as it is listed there. Without the app (a bare-`repoPath` caller, e.g.
  * a direct `reconcile()` on the PortOS checkout) there is no pin to honor and
  * host detection alone decides.
+ *
+ * Only the resolved TARGET is used, deliberately — this scan does NOT adopt the
+ * Issues tab's extra `tracker === target.forge` gate, and a plan/jira-tracked app
+ * on a forge origin is still scanned. The two answer different questions: the tab
+ * must show exactly what its Claim button would act on, so listing the other forge
+ * would be a lie, whereas a zombie (open + in-progress, PR/MR merged, no live
+ * claim) is a fact about the repo's ACTUAL forge no matter where the app's claims
+ * are filed — and refusing to scan would silently park a scheduled task that
+ * reconciles fine today. The pin only ever ADDS reach here (a custom host that
+ * host detection alone can't classify); it never redirects the scan away from the
+ * origin's own forge.
  * @param {string} repoPath
  * @param {object|null} [app] - managed app record supplying the forge pin
  * @returns {Promise<object|null>}

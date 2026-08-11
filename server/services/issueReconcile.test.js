@@ -332,6 +332,20 @@ describe('reconcile', () => {
     expect(execGlab.mock.calls[0][1]).toBe('/repo');
   });
 
+  it('still scans a plan-tracked app on a forge origin (a zombie is a fact about the repo, not about where claims are filed)', async () => {
+    // Deliberately NOT the Issues tab's gate: the tab must show only what its
+    // Claim button acts on, but refusing to scan here would park a scheduled
+    // issue-reconcile task that reconciles this repo fine today.
+    mockGh({
+      issues: [{ number: 42, title: 't', labels: [{ name: 'in-progress' }], assignees: [], url: 'u' }],
+      merged: [{ number: 50, headRefName: 'x', body: 'Refs #42' }],
+      open: [],
+    });
+    const result = await reconcile('/repo', { app: { repoPath: '/repo', workTracker: 'plan' } });
+    expect(result.forge).toBe('github');
+    expect(result.zombies.map((z) => z.number)).toEqual([42]);
+  });
+
   it('returns null (transient) when the issue list query fails', async () => {
     execGh.mockImplementation(async (argv) => {
       if (argv[0] === 'issue') return null; // load-bearing query failed
