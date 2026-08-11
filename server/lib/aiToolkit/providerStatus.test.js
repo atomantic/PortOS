@@ -28,7 +28,7 @@ describe('Provider Status Service', () => {
   });
 
   afterEach(async () => {
-    await rm(TEST_DATA_DIR, { recursive: true, force: true });
+    if (TEST_DATA_DIR) await rm(TEST_DATA_DIR, { recursive: true, force: true });
   });
 
   describe('getStatus', () => {

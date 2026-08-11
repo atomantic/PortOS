@@ -46,7 +46,7 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
     process.env.PATH = originalPath;
     await rm(fakePathDir, { recursive: true, force: true });
     vi.mocked(execFile).mockReset();
-    await rm(TEST_DATA_DIR, { recursive: true, force: true });
+    if (TEST_DATA_DIR) await rm(TEST_DATA_DIR, { recursive: true, force: true });
   });
 
   const setPlatform = (value) => Object.defineProperty(process, 'platform', { value, configurable: true });

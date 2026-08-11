@@ -126,20 +126,26 @@ const scan = (source) => REAL_DATA_ROOT_RE.test(source);
 // leaves the directory behind as untracked cruft, which is then one `git add -A`
 // away from an unrelated commit (#3823 — it reached a claim branch once).
 //
-// The match is narrow on purpose: a cwd anchor joined to a QUOTED literal path
-// segment, which is what naming a directory looks like. Reading cwd as a value
-// (`workspacePath: process.cwd()`, `repoPath: process.cwd()`) stays legal — those
-// pass the checkout to code under test rather than writing into it, and account
-// for every remaining occurrence in the suite.
-// `H` is horizontal whitespace only: a `\s*` here would span the newline in a
-// multi-line argument list (`process.cwd(),\n  'some string arg'`) and flag call
-// sites that merely pass cwd as one argument among several.
-const CWD = 'process\\??\\.cwd[^\\S\\n]*(?:\\?\\.)?\\(\\)';
+// The match is narrow on purpose: a cwd anchor turned INTO a path, which is what
+// naming a directory looks like. Reading cwd as a value (`workspacePath:
+// process.cwd()`, `repoPath: process.cwd()`) stays legal — those pass the
+// checkout to code under test rather than writing into it, and account for every
+// remaining occurrence in the suite.
+//
+// The join/resolve prefix on the first shape is load-bearing: without it, the
+// pattern is just "cwd, then a comma, then a string" and it flags every ordinary
+// two-argument call that happens to take cwd first (`readFileSync(process.cwd(),
+// 'utf8')`). With the call named, the argument list may safely span lines —
+// a prettier-split `join(\n  process.cwd(),\n  'test-data',\n)` is the same bug.
+// The concatenation shapes stay single-line and accept a path-ish first
+// character, so `process.cwd() + 'fixtures'` is caught while a log line like
+// `'cwd=' + process.cwd() + ', done'` is not.
+const CWD = 'process\\??\\.cwd\\s*(?:\\?\\.)?\\(\\)';
 const H = '[^\\S\\n]*';
 const CWD_FIXTURE_DIR_RE = new RegExp([
-  `${CWD}${H},${H}[\`'"]`,        // join(process.cwd(), 'fixture-dir')
-  `${CWD}${H}\\+${H}[\`'"][/\\\\]`, // process.cwd() + '/fixture-dir'
-  `\\$\\{${CWD}\\}[/\\\\]`,       // `${process.cwd()}/fixture-dir`
+  `(?:join|resolve)\\s*\\(\\s*${CWD}\\s*,\\s*[\`'"]`, // join(process.cwd(), 'fixture-dir')
+  `${CWD}${H}\\+${H}[\`'"][/\\\\\\w.-]`,              // process.cwd() + '/fixture-dir'
+  `\\$\\{${CWD}\\}[/\\\\\\w.-]`,                      // `${process.cwd()}/fixture-dir`
 ].join('|'));
 
 const scanCwdFixture = (source) => CWD_FIXTURE_DIR_RE.test(source);
@@ -184,14 +190,26 @@ describe('test-data isolation guard', () => {
     expect(scanCwdFixture("const TEST_DATA_DIR = join(process.cwd(), 'test-data-status');")).toBe(true);
     expect(scanCwdFixture("const TEST_DATA_DIR = join(process.cwd(), 'test-data-cli-resolve');")).toBe(true);
     expect(scanCwdFixture("path.join(process.cwd(), `fixtures`)")).toBe(true);
+    expect(scanCwdFixture("path.resolve(process.cwd(), 'fixtures')")).toBe(true);
     expect(scanCwdFixture("process.cwd() + '/scratch'")).toBe(true);
+    expect(scanCwdFixture("process.cwd() + 'scratch'")).toBe(true);
     expect(scanCwdFixture('`${process.cwd()}/scratch`')).toBe(true);
+    // A formatter-split argument list is the same bug, so the named-call shape
+    // deliberately spans lines.
+    expect(scanCwdFixture("join(\n      process.cwd(),\n      'test-data',\n    )")).toBe(true);
     // Passing the checkout to code under test is the legitimate use, and is what
     // every surviving occurrence in the suite does.
     expect(scanCwdFixture('workspacePath: process.cwd(),')).toBe(false);
     expect(scanCwdFixture('const TEST_WORKSPACE = process.cwd();')).toBe(false);
     expect(scanCwdFixture('getAppWorkspace.mockResolvedValue(process.cwd());')).toBe(false);
     expect(scanCwdFixture("const dir = await mkdtemp(join(tmpdir(), 'portos-x-'));")).toBe(false);
+    // An ordinary two-argument call that happens to take cwd first is not a
+    // path build — requiring the join/resolve name is what keeps these out.
+    expect(scanCwdFixture("readFileSync(process.cwd(), 'utf8')")).toBe(false);
+    expect(scanCwdFixture("execFileSync('git', args, { cwd: process.cwd() }, 'x')")).toBe(false);
+    // Interpolating cwd into prose is not a path build either.
+    expect(scanCwdFixture("console.log('cwd=' + process.cwd() + ', done')")).toBe(false);
+    expect(scanCwdFixture('`ran in ${process.cwd()} — ok`')).toBe(false);
   });
 
   it('would have caught every spelling found in this repo', () => {

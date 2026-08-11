@@ -20,7 +20,7 @@ describe('Provider Service', () => {
   });
 
   afterEach(async () => {
-    await rm(TEST_DATA_DIR, { recursive: true, force: true });
+    if (TEST_DATA_DIR) await rm(TEST_DATA_DIR, { recursive: true, force: true });
   });
 
   it('should create a provider', async () => {
