@@ -5,8 +5,11 @@ import { Dna, Palette, Link2, Lightbulb, ArrowRight, Target } from 'lucide-react
 import {
   getGenomeHealthCorrelations,
   getInsightThemes,
-  getInsightNarrative
+  getInsightNarrative,
+  refreshInsightThemes,
+  refreshInsightNarrative
 } from '../services/api';
+import { useAsyncAction } from '../hooks/useAsyncAction';
 import GenomeHealthTab from '../components/insights/GenomeHealthTab';
 import TasteIdentityTab from '../components/insights/TasteIdentityTab';
 import CrossDomainTab from '../components/insights/CrossDomainTab';
@@ -36,12 +39,23 @@ function SummaryCardSkeleton() {
   );
 }
 
-function OverviewTab() {
+export function OverviewTab() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [genomeData, setGenomeData] = useState(null);
   const [themesData, setThemesData] = useState(null);
   const [narrativeData, setNarrativeData] = useState(null);
+
+  // Empty cards carry the action that produces their content, so the user never
+  // has to go hunting for a control the copy names (#3787).
+  const [generateThemes, generatingThemes] = useAsyncAction(
+    () => refreshInsightThemes(undefined, undefined, { silent: true }).then(setThemesData),
+    { errorMessage: 'Failed to generate identity themes' }
+  );
+  const [analyzePatterns, analyzing] = useAsyncAction(
+    () => refreshInsightNarrative(undefined, undefined, { silent: true }).then(setNarrativeData),
+    { errorMessage: 'Failed to analyze cross-domain patterns' }
+  );
 
   useEffect(() => {
     Promise.allSettled([
@@ -77,6 +91,9 @@ function OverviewTab() {
   // Taste-Identity card data
   const themesAvailable = themesData?.available;
   const firstTheme = themesAvailable ? themesData.themes?.[0] : null;
+  // A missing taste profile is a prerequisite the user fills elsewhere; anything
+  // else just means themes haven't been generated from it yet.
+  const needsTasteProfile = !themesAvailable && themesData?.reason === 'no_taste_data';
 
   // Cross-Domain card data
   const narrativeAvailable = narrativeData?.available;
@@ -97,11 +114,14 @@ function OverviewTab() {
         ? topMarker.name ?? topMarker.rsid
         : genomeAvailable
           ? 'All markers reviewed'
-          : 'No genome data uploaded',
+          : 'Upload a raw genome file to see which of your markers line up with your blood work.',
       badge: topMarker
         ? <ConfidenceBadge level={topMarker.confidence?.level ?? 'unknown'} label={topMarker.confidence?.label} />
         : null,
-      sources: genomeData?.sources ?? []
+      sources: genomeData?.sources ?? [],
+      action: genomeAvailable
+        ? null
+        : { label: 'Upload genome', onClick: () => navigate('/meatspace/genome') }
     },
     {
       tabId: 'taste-identity',
@@ -115,11 +135,22 @@ function OverviewTab() {
         ? firstTheme.title
         : themesAvailable
           ? 'Themes loaded'
-          : 'Complete taste profile to begin',
+          : needsTasteProfile
+            ? 'Answer the taste questionnaire to surface the patterns connecting your aesthetics, media, food, and values.'
+            : 'Turn your taste profile into named identity themes you can read across domains.',
       badge: firstTheme
         ? <ConfidenceBadge level={firstTheme.strength === 'tentative' ? 'weak' : firstTheme.strength ?? 'unknown'} label={firstTheme.strength} />
         : null,
-      sources: []
+      sources: [],
+      action: themesAvailable
+        ? null
+        : needsTasteProfile
+          ? { label: 'Complete taste profile', onClick: () => navigate('/digital-twin/taste') }
+          : {
+            label: generatingThemes ? 'Generating…' : 'Generate themes',
+            onClick: generateThemes,
+            disabled: generatingThemes
+          }
     },
     {
       tabId: 'cross-domain',
@@ -131,9 +162,16 @@ function OverviewTab() {
         : 'Not yet generated',
       topInsight: firstSentence
         ? `${firstSentence}.`
-        : 'Click Refresh to analyze patterns across all your data',
+        : 'Synthesize your genome, health, and taste data into one connected narrative.',
       badge: null,
-      sources: []
+      sources: [],
+      action: narrativeAvailable
+        ? null
+        : {
+          label: analyzing ? 'Analyzing…' : 'Analyze now',
+          onClick: analyzePatterns,
+          disabled: analyzing
+        }
     }
   ];
 
@@ -144,25 +182,32 @@ function OverviewTab() {
       </p>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {cards.map(({ tabId, label, icon: Icon, iconColor, stat, topInsight, badge, sources }) => (
-          <button
+        {cards.map(({ tabId, label, icon: Icon, iconColor, stat, topInsight, badge, sources, action }) => (
+          <div
             key={tabId}
-            onClick={() => navigate(`/insights/${tabId}`)}
-            className="text-left bg-port-card border border-port-border rounded-lg p-6 hover:border-port-accent/50 hover:bg-port-card/80 transition-all group"
+            className="flex flex-col bg-port-card border border-port-border rounded-lg p-6 hover:border-port-accent/50 transition-all group"
           >
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <Icon size={20} className={iconColor} />
-                <span className="text-sm font-semibold text-white">{label}</span>
+            {/* The summary is the drill-in target; the action below it is a
+                separate control, so neither is nested inside the other. */}
+            <button
+              type="button"
+              onClick={() => navigate(`/insights/${tabId}`)}
+              className="text-left flex-1"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <Icon size={20} className={iconColor} />
+                  <span className="text-sm font-semibold text-white">{label}</span>
+                </div>
+                <ArrowRight size={16} className="text-gray-600 group-hover:text-port-accent transition-colors" />
               </div>
-              <ArrowRight size={16} className="text-gray-600 group-hover:text-port-accent transition-colors" />
-            </div>
 
-            <div className="text-xl font-bold text-white mb-1">{stat}</div>
+              <div className="text-xl font-bold text-white mb-1">{stat}</div>
 
-            <p className="text-xs text-gray-400 leading-relaxed mb-3 line-clamp-2">{topInsight}</p>
+              <p className="text-xs text-gray-400 leading-relaxed line-clamp-2">{topInsight}</p>
+            </button>
 
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between mt-3">
               {badge ?? <span />}
               {sources.length > 0 && (
                 <div className="flex gap-1">
@@ -172,7 +217,18 @@ function OverviewTab() {
                 </div>
               )}
             </div>
-          </button>
+
+            {action && (
+              <button
+                type="button"
+                onClick={action.onClick}
+                disabled={action.disabled}
+                className="mt-3 w-full px-3 py-2 rounded-lg text-sm font-medium bg-port-accent/10 text-port-accent hover:bg-port-accent/20 disabled:opacity-50 transition-colors"
+              >
+                {action.label}
+              </button>
+            )}
+          </div>
         ))}
       </div>
     </div>

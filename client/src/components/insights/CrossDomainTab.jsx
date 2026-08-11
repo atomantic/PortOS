@@ -46,7 +46,7 @@ export default function CrossDomainTab() {
           No cross-domain narrative generated yet.
         </p>
         <p className="text-gray-500 text-xs max-w-sm mb-6">
-          Click Refresh to analyze patterns across all your data — genome health correlations, taste identity themes, and biometric trends — and synthesize a unified personal narrative.
+          Generating one reads across all your data — genome health correlations, taste identity themes, and biometric trends — and synthesizes a unified personal narrative.
         </p>
         <button
           onClick={handleRefresh}

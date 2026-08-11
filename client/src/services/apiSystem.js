@@ -341,14 +341,16 @@ export const createGitBackup = (repoPath) => request('/standardize/backup', {
 
 // Insights
 export const getInsightThemes = () => request('/insights/themes');
-export const refreshInsightThemes = (providerId, model) => request('/insights/themes/refresh', {
+export const refreshInsightThemes = (providerId, model, options = {}) => request('/insights/themes/refresh', {
   method: 'POST',
-  body: JSON.stringify({ providerId, model })
+  body: JSON.stringify({ providerId, model }),
+  ...options
 });
 export const getInsightNarrative = () => request('/insights/narrative');
-export const refreshInsightNarrative = (providerId, model) => request('/insights/narrative/refresh', {
+export const refreshInsightNarrative = (providerId, model, options = {}) => request('/insights/narrative/refresh', {
   method: 'POST',
-  body: JSON.stringify({ providerId, model })
+  body: JSON.stringify({ providerId, model }),
+  ...options
 });
 
 // Goal effectiveness scorecard (#2157)
