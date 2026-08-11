@@ -1,5 +1,5 @@
 import { useState, useEffect, useId } from 'react';
-import { Save, Plus, X, Play, ShieldOff } from 'lucide-react';
+import { Save, Plus, X, Play, ShieldOff, ChevronDown, ChevronRight } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import ToggleSwitch from '../ToggleSwitch';
@@ -45,7 +45,9 @@ export function BackupTab() {
   const [destPath, setDestPath] = useState('');
   const [savedDestPath, setSavedDestPath] = useState('');
   const [enabled, setEnabled] = useState(false);
+  const [savedEnabled, setSavedEnabled] = useState(false);
   const [cronExpression, setCronExpression] = useState('0 2 * * *');
+  const [savedCronExpression, setSavedCronExpression] = useState('0 2 * * *');
   const [excludePaths, setExcludePaths] = useState([]);
   const [savedExcludePaths, setSavedExcludePaths] = useState([]);
   const [disabledDefaultExcludes, setDisabledDefaultExcludes] = useState([]);
@@ -57,6 +59,10 @@ export function BackupTab() {
   const [snapshots, setSnapshots] = useState([]);
   const [restoreTarget, setRestoreTarget] = useState(null); // snapshotId pending confirm
   const [restorePreview, setRestorePreview] = useState(null); // dry-run result
+  // The default-exclusions catalog is a 15+ row reference list the user rarely
+  // edits — collapsed by default so the fields they came to change (destination,
+  // enabled, schedule) and the action bar are what the tab actually shows.
+  const [showDefaultExcludes, setShowDefaultExcludes] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -71,8 +77,12 @@ export function BackupTab() {
         const savedDisabled = asArray(backup.disabledDefaultExcludes);
         setDestPath(saved);
         setSavedDestPath(saved);
-        setEnabled(backup.enabled ?? false);
-        setCronExpression(backup.cronExpression || '0 2 * * *');
+        const savedEnabledValue = backup.enabled ?? false;
+        const savedCron = backup.cronExpression || '0 2 * * *';
+        setEnabled(savedEnabledValue);
+        setSavedEnabled(savedEnabledValue);
+        setCronExpression(savedCron);
+        setSavedCronExpression(savedCron);
         setExcludePaths(savedExcludes);
         setSavedExcludePaths(savedExcludes);
         setDisabledDefaultExcludes(savedDisabled);
@@ -91,6 +101,8 @@ export function BackupTab() {
     try {
       await updateSettings({ backup: { destPath, enabled, cronExpression, excludePaths, disabledDefaultExcludes } }, { silent: true });
       setSavedDestPath(destPath);
+      setSavedEnabled(enabled);
+      setSavedCronExpression(cronExpression);
       setSavedExcludePaths(excludePaths);
       setSavedDisabledDefaultExcludes(disabledDefaultExcludes);
       toast.success('Settings saved');
@@ -162,6 +174,8 @@ export function BackupTab() {
   }
 
   const dirty = destPath !== savedDestPath
+    || enabled !== savedEnabled
+    || cronExpression !== savedCronExpression
     || !sameSet(excludePaths, savedExcludePaths)
     || !sameSet(disabledDefaultExcludes, savedDisabledDefaultExcludes);
   const canRun = !!savedDestPath && !running && !saving && !dirty;
@@ -172,6 +186,25 @@ export function BackupTab() {
       : dirty
         ? 'Save your changes before running — the backup uses saved settings.'
         : 'Run a backup snapshot now using saved settings';
+
+  // Per-default row state, derived once so the collapsed summary count and the
+  // expanded rows can never disagree about what is actually being excluded.
+  // Custom excludes can shadow a default via exact match (`loras/...`) OR a
+  // broader pattern (`loras/`, `loras/**`, `/cos/`). The broader check is
+  // necessary because rsync still applies the custom pattern even when the
+  // default toggle says "included".
+  const defaultExcludeRows = defaultExcludes.map((d) => {
+    const shadowingCustom = excludePaths.find(p => shadowsDefault(p, d.path));
+    const defaultActive = !(d.overridable && disabledDefaultExcludes.includes(d.path));
+    return {
+      ...d,
+      shadowingCustom,
+      isExcluded: defaultActive || !!shadowingCustom,
+      shadowedByCustom: !defaultActive && !!shadowingCustom,
+    };
+  });
+  const skippedCount = defaultExcludeRows.filter(r => r.isExcluded).length;
+  const includedCount = defaultExcludeRows.length - skippedCount;
 
   const renderPgStatus = () => {
     if (!pgBackup) return <span className="text-gray-500">No backup run yet</span>;
@@ -275,49 +308,49 @@ export function BackupTab() {
         <p className="text-xs text-gray-500">Default: 2:00 AM daily</p>
       </div>
 
-      {defaultExcludes.length > 0 && (
+      {defaultExcludeRows.length > 0 && (
         <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <ShieldOff size={14} className="text-gray-500" />
-            <span className="block text-sm text-gray-400">Default Exclusions</span>
-          </div>
-          <p className="text-xs text-gray-500">Built-in paths skipped by default to keep snapshots small. Overridable entries (large re-downloadable assets) can be re-enabled below; fixed entries hold ephemeral data and stay off.</p>
-          <ul className="space-y-1.5 mt-1">
-            {defaultExcludes.map((d, i) => {
-              const isDisabled = disabledDefaultExcludes.includes(d.path);
-              // Custom excludes can shadow a default via exact match (`loras/...`)
-              // OR a broader pattern (`loras/`, `loras/**`, `/cos/`). The broader
-              // check is necessary because rsync still applies the custom pattern
-              // even when the default toggle says "included".
-              const shadowingCustom = excludePaths.find(p => shadowsDefault(p, d.path));
-              const defaultActive = !(d.overridable && isDisabled);
-              const isExcluded = defaultActive || !!shadowingCustom;
-              const shadowedByCustom = !defaultActive && !!shadowingCustom;
-              return (
-                <li key={i} className="flex items-start gap-2 text-xs">
-                  {d.overridable ? (
-                    <ToggleSwitch
-                      enabled={!isExcluded}
-                      onChange={() => toggleDefaultExclude(d.path)}
-                      size="sm"
-                      ariaLabel={isExcluded ? `Include ${d.path} in backups` : `Exclude ${d.path} from backups`}
-                      className="mt-0.5"
-                    />
-                  ) : (
-                    <span className="inline-flex items-center justify-center w-12 h-7 shrink-0 text-gray-600" title="Always excluded — cannot be backed up">
-                      <ShieldOff size={14} />
+          <button
+            type="button"
+            onClick={() => setShowDefaultExcludes(v => !v)}
+            aria-expanded={showDefaultExcludes}
+            className="flex items-center gap-2 w-full text-left text-sm text-gray-400 hover:text-white transition-colors"
+          >
+            {showDefaultExcludes ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
+            <ShieldOff size={14} className="text-gray-500 shrink-0" />
+            <span>Default exclusions — {skippedCount} path{skippedCount === 1 ? '' : 's'} skipped</span>
+            {includedCount > 0 && <span className="text-xs text-port-success/80">({includedCount} re-included)</span>}
+          </button>
+          {showDefaultExcludes && (
+            <>
+              <p className="text-xs text-gray-500">Built-in paths skipped by default to keep snapshots small. Overridable entries (large re-downloadable assets) can be re-enabled below; fixed entries hold ephemeral data and stay off.</p>
+              <ul className="space-y-1.5 mt-1">
+                {defaultExcludeRows.map((d, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs">
+                    {d.overridable ? (
+                      <ToggleSwitch
+                        enabled={!d.isExcluded}
+                        onChange={() => toggleDefaultExclude(d.path)}
+                        size="sm"
+                        ariaLabel={d.isExcluded ? `Include ${d.path} in backups` : `Exclude ${d.path} from backups`}
+                        className="mt-0.5"
+                      />
+                    ) : (
+                      <span className="inline-flex items-center justify-center w-12 h-7 shrink-0 text-gray-600" title="Always excluded — cannot be backed up">
+                        <ShieldOff size={14} />
+                      </span>
+                    )}
+                    <code className={`px-1.5 py-0.5 bg-port-bg border rounded shrink-0 ${d.isExcluded ? 'text-gray-300 border-port-border' : 'text-port-success border-port-success/30'}`}>{d.path}</code>
+                    <span className="text-gray-500">
+                      {d.reason}
+                      {!d.isExcluded && <span className="text-port-success/80 ml-1">(included)</span>}
+                      {d.shadowedByCustom && <span className="text-port-warning ml-1">(still excluded via Additional Exclude Paths — remove <code>{d.shadowingCustom}</code> below)</span>}
                     </span>
-                  )}
-                  <code className={`px-1.5 py-0.5 bg-port-bg border rounded shrink-0 ${isExcluded ? 'text-gray-300 border-port-border' : 'text-port-success border-port-success/30'}`}>{d.path}</code>
-                  <span className="text-gray-500">
-                    {d.reason}
-                    {!isExcluded && <span className="text-port-success/80 ml-1">(included)</span>}
-                    {shadowedByCustom && <span className="text-port-warning ml-1">(still excluded via Additional Exclude Paths — remove <code>{shadowingCustom}</code> below)</span>}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </div>
       )}
 
@@ -397,7 +430,11 @@ export function BackupTab() {
         </div>
       </Modal>
 
-      <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-port-border">
+      {/* Sticky action bar — Save and Run Backup Now stay reachable no matter how
+          far the exclusions/snapshot lists push the page, and the bar carries the
+          unsaved-changes state so an edit at the top of the tab is never
+          committed blind. Negative margins bleed it to the card edges. */}
+      <div className="sticky bottom-0 z-20 flex flex-wrap items-center gap-2 -mx-4 sm:-mx-6 -mb-4 sm:-mb-6 px-4 sm:px-6 py-3 bg-port-card/95 sm:backdrop-blur border-t border-port-border rounded-b-xl">
         <button
           onClick={handleSave}
           disabled={saving}
@@ -415,6 +452,9 @@ export function BackupTab() {
           {running ? <BrailleSpinner /> : <Play size={16} />}
           {running ? 'Running…' : 'Run Backup Now'}
         </button>
+        <span className="text-xs text-gray-500" aria-live="polite">
+          {saving ? 'Saving…' : dirty ? 'Unsaved changes' : ''}
+        </span>
       </div>
     </div>
   );

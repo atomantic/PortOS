@@ -254,6 +254,81 @@ describe('BackupTab', () => {
       await act(async () => { resolveSave({}); });
       expect(screen.getByRole('button', { name: /Run Backup Now/i }).disabled).toBe(false);
     });
+
+    // `enabled` and `cronExpression` are saved by the same PATCH as destPath, so
+    // they belong in the dirty check too — otherwise a user flips the schedule
+    // and Run Backup Now stays live against the stale saved value.
+    it('disables Run Backup Now while the Enabled toggle is edited-but-unsaved', async () => {
+      await renderTab();
+      expect(screen.getByRole('button', { name: /Run Backup Now/i }).disabled).toBe(false);
+
+      fireEvent.click(screen.getByRole('switch', { name: /Scheduled backups/i }));
+
+      const runBtn = screen.getByRole('button', { name: /Run Backup Now/i });
+      expect(runBtn.disabled).toBe(true);
+      expect(runBtn.title).toMatch(/Save your changes before running/i);
+    });
+
+    it('disables Run Backup Now while the cron schedule is edited-but-unsaved', async () => {
+      updateSettings.mockResolvedValue({});
+      await renderTab();
+
+      fireEvent.change(screen.getByLabelText(/Schedule \(cron\)/i), { target: { value: '30 3 * * *' } });
+      expect(screen.getByRole('button', { name: /Run Backup Now/i }).disabled).toBe(true);
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+      });
+
+      expect(screen.getByRole('button', { name: /Run Backup Now/i }).disabled).toBe(false);
+    });
+  });
+
+  describe('action bar + default-exclusions disclosure', () => {
+    const EXCLUDES = [
+      { path: '/cache', reason: 'Regenerable cache', overridable: false },
+      { path: '/models', reason: 'Large re-downloadable assets', overridable: true },
+    ];
+
+    it('surfaces an unsaved-changes hint next to Save and clears it on save', async () => {
+      updateSettings.mockResolvedValue({});
+      await renderTab();
+      expect(screen.queryByText(/Unsaved changes/i)).toBeNull();
+
+      fireEvent.change(screen.getByLabelText(/Destination Path/i), { target: { value: '/backups/edited' } });
+      expect(screen.getByText(/Unsaved changes/i)).toBeTruthy();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+      });
+      expect(screen.queryByText(/Unsaved changes/i)).toBeNull();
+    });
+
+    it('collapses the default-exclusions catalog behind a disclosure summarizing the count', async () => {
+      getBackupStatus.mockResolvedValue({ status: 'never', defaultExcludes: EXCLUDES, pgBackup: null });
+      await renderTab();
+
+      const disclosure = screen.getByRole('button', { name: /Default exclusions/i });
+      expect(disclosure.getAttribute('aria-expanded')).toBe('false');
+      expect(disclosure.textContent).toMatch(/2 paths skipped/);
+      // Collapsed: the per-path rows (and their toggles) are not in the DOM, so
+      // the tab's actionable content isn't pushed below the fold.
+      expect(screen.queryByRole('switch', { name: /Include \/models in backups/i })).toBeNull();
+
+      fireEvent.click(disclosure);
+      expect(disclosure.getAttribute('aria-expanded')).toBe('true');
+      expect(screen.getByRole('switch', { name: /Include \/models in backups/i })).toBeTruthy();
+    });
+
+    it('counts a re-included default as no longer skipped in the collapsed summary', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: ['/models'] } });
+      getBackupStatus.mockResolvedValue({ status: 'never', defaultExcludes: EXCLUDES, pgBackup: null });
+      await renderTab();
+
+      const disclosure = screen.getByRole('button', { name: /Default exclusions/i });
+      expect(disclosure.textContent).toMatch(/1 path skipped/);
+      expect(disclosure.textContent).toMatch(/1 re-included/);
+    });
   });
 
   describe('Run Now — backup-already-running skip path', () => {
