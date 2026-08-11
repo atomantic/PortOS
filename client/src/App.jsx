@@ -131,6 +131,7 @@ const PipelineManuscriptEditor = lazyWithReload(() => import('./pages/PipelineMa
 const PipelineExport = lazyWithReload(() => import('./pages/PipelineExport'));
 const PipelineIssue = lazyWithReload(() => import('./pages/PipelineIssue'));
 const Login = lazyWithReload(() => import('./pages/Login'));
+const NotFound = lazyWithReload(() => import('./pages/NotFound'));
 
 // Loading fallback for lazy-loaded pages
 const PageLoader = () => (
@@ -191,6 +192,10 @@ const MEDIA_CREATIVE_DIRECTOR_PREFIX = /^\/media\/creative-director/;
 const MEDIA_SPRITES_PREFIX = /^\/media\/sprites/;
 const MEDIA_MUSIC_VIDEO_PREFIX = /^\/media\/music-video/;
 const MEDIA_3D_PREFIX = /^\/media\/3d/;
+// The annotator lives under the Media shell (/media/annotate). A bare /annotate
+// is what a bookmark, a typed URL, or a half-remembered path lands on — alias it
+// rather than letting the catch-all swallow it (issue #3793).
+const ANNOTATE_PREFIX = /^\/annotate/;
 
 // Normalize a tab-less /creative-director/:id URL to its overview tab while
 // preserving any query string + hash. A bare `<Navigate to="overview">` would
@@ -327,6 +332,8 @@ export default function App() {
           <Route path="timeline" element={<Timeline />} />
           <Route path="timeline/:date" element={<Timeline />} />
           <Route path="openclaw" element={<OpenClawPage />} />
+          <Route path="annotate" element={<PrefixRedirect from={ANNOTATE_PREFIX} to="/media/annotate" />} />
+          <Route path="annotate/:mediaKey" element={<PrefixRedirect from={ANNOTATE_PREFIX} to="/media/annotate" />} />
           <Route path="datadog" element={<Navigate to="/devtools/datadog" replace />} />
           <Route path="jira" element={<Navigate to="/devtools/jira" replace />} />
           <Route path="devtools/jira" element={<Jira />} />
@@ -491,7 +498,7 @@ export default function App() {
           <Route path="agents" element={<Agents />} />
           <Route path="agents/:agentId" element={<Agents />} />
           <Route path="agents/:agentId/:tab" element={<Agents />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="*" element={<NotFound />} />
         </Route>
       </Routes>
     </Suspense>

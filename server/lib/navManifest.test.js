@@ -312,6 +312,7 @@ const APP_JSX = path.join(REPO_ROOT, 'client/src/App.jsx');
 // the nav manifest — reached via an in-page button or as a create-mode sentinel,
 // not from ⌘K / voice / the sidebar.
 const NAV_COVERAGE_OPT_OUT = new Map([
+  ['/*', 'catch-all 404 page — reached only by an unmatched URL, never a destination'],
   ['/apps/create', 'create-app form, reached via the "New App" button on /apps'],
   ['/creative-commission/new', 'create-commission drawer, reached via the "New Commission" button on /creative-commission'],
   ['/feature-agents/create', 'create-agent form, reached via the "New Agent" button'],

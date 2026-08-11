@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams, Link, useNavigate } from 'react-router';
-import { Pencil, Eraser, Undo2, Trash2, Save, Download, ArrowLeft, ImageOff, Wand2, Loader2 } from 'lucide-react';
+import { Pencil, Eraser, Undo2, Trash2, Save, Download, ArrowLeft, ImageOff, Images, Wand2, Loader2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
 import AnnotationCanvas from '../components/media/AnnotationCanvas';
 import { useAsyncAction } from '../hooks/useAsyncAction';
+import { uuidv4 } from '../lib/uuid';
 import { undoStrokes, clampSize, DEFAULT_COLOR, DEFAULT_SIZE, MIN_SIZE, MAX_SIZE } from '../lib/sketchCanvas';
 import { getMediaSketch, saveMediaSketch, getRegenAvailability, rerenderWithAnnotations } from '../services/api';
 
@@ -200,9 +201,29 @@ export default function MediaAnnotate() {
         </Link>
         <div className="mt-6 bg-port-card border border-port-border rounded-xl p-8 text-center">
           <ImageOff className="w-8 h-8 mx-auto mb-2 text-gray-600" />
-          {mediaKey
-            ? 'Only generated images or blank-canvas sketches can be annotated. This link points at an unsupported or missing item.'
-            : 'Open a generated image from Media History or a Collection and choose “Annotate” to draw over it.'}
+          <p className="text-gray-300 font-medium">
+            {mediaKey ? 'That media is no longer available' : 'Nothing selected to annotate'}
+          </p>
+          <p className="mt-2">
+            {mediaKey
+              ? 'Only generated images or blank-canvas sketches can be annotated. This link points at an unsupported or missing item.'
+              : 'Draw over a generated image to mark it up (and optionally re-render it guided by your marks), or start from an empty canvas.'}
+          </p>
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+            <Link
+              to="/media/history"
+              className="px-3 py-1.5 text-sm bg-port-accent text-white rounded hover:bg-port-accent/80 inline-flex items-center gap-1.5"
+            >
+              <Images className="w-4 h-4" /> Choose media
+            </Link>
+            <button
+              type="button"
+              onClick={() => navigate(`/media/annotate/${encodeURIComponent(`sketch:${uuidv4()}`)}`)}
+              className="px-3 py-1.5 text-sm bg-port-card border border-port-border text-gray-200 rounded hover:bg-port-border inline-flex items-center gap-1.5"
+            >
+              <Pencil className="w-4 h-4" /> Blank canvas
+            </button>
+          </div>
         </div>
       </div>
     );
