@@ -1,19 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { chmod, mkdir, rm, writeFile } from 'fs/promises';
-import { existsSync } from 'fs';
+import { chmod, mkdtemp, rm, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import { createProviderService, isOllamaBackedProvider } from './providers.js';
 
-const TEST_DATA_DIR = join(process.cwd(), 'test-data');
+// Temp dir, NOT `join(process.cwd(), …)` — see providerStatus.test.js (#3823).
+let TEST_DATA_DIR;
 
 describe('Provider Service', () => {
   let providerService;
 
   beforeEach(async () => {
-    // Create test data directory
-    if (!existsSync(TEST_DATA_DIR)) {
-      await mkdir(TEST_DATA_DIR, { recursive: true });
-    }
+    TEST_DATA_DIR = await mkdtemp(join(tmpdir(), 'portos-providers-'));
 
     providerService = createProviderService({
       dataDir: TEST_DATA_DIR,
@@ -22,10 +20,7 @@ describe('Provider Service', () => {
   });
 
   afterEach(async () => {
-    // Clean up test data
-    if (existsSync(TEST_DATA_DIR)) {
-      await rm(TEST_DATA_DIR, { recursive: true });
-    }
+    await rm(TEST_DATA_DIR, { recursive: true, force: true });
   });
 
   it('should create a provider', async () => {

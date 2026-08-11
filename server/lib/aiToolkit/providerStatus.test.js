@@ -1,19 +1,20 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdir, rm } from 'fs/promises';
-import { existsSync } from 'fs';
+import { mkdtemp, rm } from 'fs/promises';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import { createProviderStatusService, usableFallbackModel } from './providerStatus.js';
 
-const TEST_DATA_DIR = join(process.cwd(), 'test-data-status');
+// Temp dir, NOT `join(process.cwd(), …)` — a cwd-rooted fixture dir lands inside
+// the checkout, and the afterEach cleanup only runs when the worker survives the
+// file. A killed/timed-out worker left `server/test-data-status/` behind as
+// untracked cruft, which was once swept into an unrelated commit (#3823).
+let TEST_DATA_DIR;
 
 describe('Provider Status Service', () => {
   let statusService;
 
   beforeEach(async () => {
-    // Create test data directory
-    if (!existsSync(TEST_DATA_DIR)) {
-      await mkdir(TEST_DATA_DIR, { recursive: true });
-    }
+    TEST_DATA_DIR = await mkdtemp(join(tmpdir(), 'portos-provider-status-'));
 
     statusService = createProviderStatusService({
       dataDir: TEST_DATA_DIR,
@@ -27,10 +28,7 @@ describe('Provider Status Service', () => {
   });
 
   afterEach(async () => {
-    // Clean up test data
-    if (existsSync(TEST_DATA_DIR)) {
-      await rm(TEST_DATA_DIR, { recursive: true });
-    }
+    await rm(TEST_DATA_DIR, { recursive: true, force: true });
   });
 
   describe('getStatus', () => {
