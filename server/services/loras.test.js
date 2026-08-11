@@ -657,3 +657,57 @@ describe('installFromHuggingface', () => {
     expect(existsSync(join(tmpLoras, 'lora-fal-ltx2.3-audio-reactive-lora-hf.safetensors'))).toBe(false);
   });
 });
+
+describe('LoRA key layout', () => {
+  const writeLora = async (name, header) => {
+    const fs = await import('fs/promises');
+    await fs.mkdir(tmpLoras, { recursive: true });
+    await fs.writeFile(join(tmpLoras, name), validSafetensors(header));
+  };
+
+  it('classifies and backfills keyLayout into the sidecar on list', async () => {
+    const fs = await import('fs/promises');
+    await writeLora('lora-comfy.safetensors', {
+      'diffusion_model.transformer_blocks.0.attn1.to_k.lora_A.weight': { dtype: 'F16', shape: [32, 2048], data_offsets: [0, 1] },
+    });
+    const list = await lorasService.listLoras();
+    expect(list.find((l) => l.filename === 'lora-comfy.safetensors').keyLayout).toBe('comfyui');
+    // Sidecar write is fire-and-forget; let the microtask queue drain.
+    await new Promise((r) => setTimeout(r, 10));
+    const sidecar = JSON.parse(await fs.readFile(join(tmpLoras, 'lora-comfy.safetensors.metadata.json'), 'utf-8'));
+    expect(sidecar.keyLayout).toBe('comfyui');
+  });
+
+  it('prefers the stored sidecar layout over re-reading the header', async () => {
+    const fs = await import('fs/promises');
+    await fs.mkdir(tmpLoras, { recursive: true });
+    // Unreadable file — a header read would yield null, so a 'comfyui' result
+    // can only have come from the sidecar.
+    await fs.writeFile(join(tmpLoras, 'lora-stored.safetensors'), 'garbage');
+    await fs.writeFile(join(tmpLoras, 'lora-stored.safetensors.metadata.json'), JSON.stringify({
+      filename: 'lora-stored.safetensors', keyLayout: 'comfyui',
+    }));
+    const list = await lorasService.listLoras();
+    expect(list.find((l) => l.filename === 'lora-stored.safetensors').keyLayout).toBe('comfyui');
+    expect(await lorasService.getLoraKeyLayout('lora-stored.safetensors')).toBe('comfyui');
+  });
+
+  it('reports null (not not_a_lora) when the header is unreadable', async () => {
+    const fs = await import('fs/promises');
+    await fs.mkdir(tmpLoras, { recursive: true });
+    await fs.writeFile(join(tmpLoras, 'lora-corrupt.safetensors'), 'garbage');
+    const list = await lorasService.listLoras();
+    expect(list.find((l) => l.filename === 'lora-corrupt.safetensors').keyLayout).toBe(null);
+    expect(await lorasService.getLoraKeyLayout('lora-corrupt.safetensors')).toBe(null);
+    // Nothing persisted — a later read may succeed.
+    expect(existsSync(join(tmpLoras, 'lora-corrupt.safetensors.metadata.json'))).toBe(false);
+  });
+
+  it('getLoraKeyLayout classifies from the header when no sidecar exists', async () => {
+    await writeLora('lora-kohya.safetensors', {
+      'lora_unet_transformer_blocks_0_attn1_to_k.lora_down.weight': { dtype: 'F16', shape: [32, 2048], data_offsets: [0, 1] },
+      'lora_unet_transformer_blocks_0_attn1_to_k.lora_up.weight': { dtype: 'F16', shape: [2048, 32], data_offsets: [1, 2] },
+    });
+    expect(await lorasService.getLoraKeyLayout('lora-kohya.safetensors')).toBe('kohya');
+  });
+});

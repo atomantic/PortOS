@@ -166,6 +166,15 @@ vi.mock('fs', () => ({
   statSync: vi.fn(() => ({ size: 1000 })),
 }));
 
+// LoRA key-layout gate (resolveVideoLoras). `null` = undetermined, which is
+// the permissive default so the pre-existing LoRA-threading tests below still
+// reach the spawn path; the gate's own tests set a layout explicitly.
+const loraLayoutState = vi.hoisted(() => ({ layout: null }));
+vi.mock('../loras.js', () => ({
+  assertSafeLoraFilename: vi.fn(),
+  getLoraKeyLayout: vi.fn(async () => loraLayoutState.layout),
+}));
+
 vi.mock('fs/promises', () => ({
   unlink: vi.fn(async () => {}),
   writeFile: vi.fn(async () => {}),
@@ -3074,5 +3083,64 @@ describe('generateVideo — history-calibrated ETA (#3801)', () => {
     // Half the frames → half the work → half the time.
     expect(started.etaMs).toBe(300_000);
     expect(started.etaBasis).toBe('proportional');
+  });
+});
+
+describe('resolveVideoLoras — safetensors key-layout gate', () => {
+  let resolveVideoLoras;
+  beforeEach(async () => {
+    vi.resetModules();
+    loraLayoutState.layout = null;
+    ({ resolveVideoLoras } = await import('./local.js'));
+  });
+  afterEach(() => { loraLayoutState.layout = null; });
+
+  it('resolves bare and ComfyUI layouts (the two the loader can fuse)', async () => {
+    for (const layout of ['bare', 'comfyui']) {
+      loraLayoutState.layout = layout;
+      expect(await resolveVideoLoras([{ filename: 'style.safetensors', scale: 0.7 }])).toEqual([
+        { path: join(MOCK_PATHS.loras, 'style.safetensors'), strength: 0.7, filename: 'style.safetensors' },
+      ]);
+    }
+  });
+
+  it('rejects a kohya-layout LoRA with an actionable 400 naming the layout', async () => {
+    loraLayoutState.layout = 'kohya';
+    await expect(resolveVideoLoras([{ filename: 'style.safetensors', scale: 1.0 }]))
+      .rejects.toMatchObject({ status: 400, code: 'LORA_LAYOUT_UNSUPPORTED' });
+    await expect(resolveVideoLoras([{ filename: 'style.safetensors' }]))
+      .rejects.toThrow(/kohya/i);
+  });
+
+  it('rejects diffusers/PEFT and non-LoRA files too', async () => {
+    loraLayoutState.layout = 'diffusers';
+    await expect(resolveVideoLoras([{ filename: 'style.safetensors' }])).rejects.toThrow(/diffusers/i);
+    loraLayoutState.layout = 'not_a_lora';
+    await expect(resolveVideoLoras([{ filename: 'ckpt.safetensors' }])).rejects.toThrow(/no LoRA tensors/i);
+  });
+
+  it('rejects the whole render when ANY selected LoRA is un-fusable', async () => {
+    const layouts = { 'ok.safetensors': 'comfyui', 'bad.safetensors': 'kohya' };
+    const { getLoraKeyLayout } = await import('../loras.js');
+    vi.mocked(getLoraKeyLayout).mockImplementation(async (f) => layouts[f] ?? null);
+    await expect(resolveVideoLoras([
+      { filename: 'ok.safetensors' }, { filename: 'bad.safetensors' },
+    ])).rejects.toThrow(/bad\.safetensors/);
+    vi.mocked(getLoraKeyLayout).mockImplementation(async () => loraLayoutState.layout);
+  });
+
+  it('passes an undetermined layout through rather than blocking the render', async () => {
+    loraLayoutState.layout = null;
+    const resolved = await resolveVideoLoras([{ filename: 'mystery.safetensors' }]);
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0].strength).toBe(1.0);
+  });
+
+  it('returns [] for no LoRAs without consulting the layout', async () => {
+    const { getLoraKeyLayout } = await import('../loras.js');
+    vi.mocked(getLoraKeyLayout).mockClear();
+    expect(await resolveVideoLoras([])).toEqual([]);
+    expect(await resolveVideoLoras(undefined)).toEqual([]);
+    expect(getLoraKeyLayout).not.toHaveBeenCalled();
   });
 });

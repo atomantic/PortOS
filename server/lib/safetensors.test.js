@@ -7,6 +7,10 @@ import {
   readSafetensorsHeader,
   detectFlux2VariantFromHeader,
   detectFlux2Variant,
+  classifyLoraKeyLayoutFromHeader,
+  classifyLoraKeyLayout,
+  videoLoraLayoutIssue,
+  LORA_KEY_LAYOUTS,
 } from './safetensors.js';
 
 // Build a valid safetensors file buffer from a header object: 8-byte LE u64
@@ -111,5 +115,104 @@ describe('detectFlux2Variant (file)', () => {
   it('returns null for a non-safetensors file', async () => {
     const p = writeTmp('bad.safetensors', Buffer.from('garbage'));
     expect(await detectFlux2Variant(p)).toBeNull();
+  });
+});
+
+describe('classifyLoraKeyLayoutFromHeader', () => {
+  it('classifies bare module-path lora_A/lora_B keys', () => {
+    expect(classifyLoraKeyLayoutFromHeader({
+      'transformer_blocks.0.attn1.to_k.lora_A.weight': { shape: [32, 2048] },
+      'transformer_blocks.0.attn1.to_k.lora_B.weight': { shape: [2048, 32] },
+    })).toBe(LORA_KEY_LAYOUTS.BARE);
+  });
+
+  it('classifies ComfyUI diffusion_model.-prefixed keys', () => {
+    expect(classifyLoraKeyLayoutFromHeader({
+      'diffusion_model.transformer_blocks.0.attn1.to_k.lora_A.weight': { shape: [32, 2048] },
+      'diffusion_model.transformer_blocks.0.attn1.to_k.lora_B.weight': { shape: [2048, 32] },
+    })).toBe(LORA_KEY_LAYOUTS.COMFYUI);
+  });
+
+  it('classifies diffusers/PEFT wrapper prefixes', () => {
+    expect(classifyLoraKeyLayoutFromHeader({
+      'transformer.single_transformer_blocks.0.attn.to_out.lora_A.weight': { shape: [32, 3072] },
+      'transformer.single_transformer_blocks.0.attn.to_out.lora_B.weight': { shape: [3072, 32] },
+    })).toBe(LORA_KEY_LAYOUTS.DIFFUSERS);
+    expect(classifyLoraKeyLayoutFromHeader({
+      'base_model.model.blocks.0.attn.q.lora_A.weight': { shape: [16, 1024] },
+    })).toBe(LORA_KEY_LAYOUTS.DIFFUSERS);
+  });
+
+  it('classifies kohya lora_unet_ + lora_down/lora_up keys', () => {
+    expect(classifyLoraKeyLayoutFromHeader({
+      'lora_unet_transformer_blocks_0_attn1_to_k.alpha': { shape: [] },
+      'lora_unet_transformer_blocks_0_attn1_to_k.lora_down.weight': { shape: [32, 2048] },
+      'lora_unet_transformer_blocks_0_attn1_to_k.lora_up.weight': { shape: [2048, 32] },
+    })).toBe(LORA_KEY_LAYOUTS.KOHYA);
+  });
+
+  it('calls a diffusion_model.-prefixed lora_down/lora_up file kohya, not comfyui', () => {
+    // Real-world shape: the ComfyUI prefix is present but the rank pair is
+    // kohya's, so an lora_A/lora_B fuser matches nothing.
+    expect(classifyLoraKeyLayoutFromHeader({
+      'diffusion_model.transformer_blocks.0.attn1.to_k.alpha': { shape: [] },
+      'diffusion_model.transformer_blocks.0.attn1.to_k.lora_down.weight': { shape: [32, 2048] },
+      'diffusion_model.transformer_blocks.0.attn1.to_k.lora_up.weight': { shape: [2048, 32] },
+    })).toBe(LORA_KEY_LAYOUTS.KOHYA);
+  });
+
+  it('picks the dominant layout in a mixed-layout file', () => {
+    const header = {
+      'diffusion_model.transformer_blocks.0.attn1.to_k.lora_down.weight': { shape: [32, 2048] },
+      'diffusion_model.transformer_blocks.0.attn1.to_k.lora_up.weight': { shape: [2048, 32] },
+      'lora_unet_transformer_blocks_0_attn1_to_k.lora_down.weight': { shape: [32, 2048] },
+      'lora_unet_transformer_blocks_0_attn1_to_k.lora_up.weight': { shape: [2048, 32] },
+      'diffusion_model.transformer_blocks.1.attn1.to_k.lora_A.weight': { shape: [32, 2048] },
+    };
+    expect(classifyLoraKeyLayoutFromHeader(header)).toBe(LORA_KEY_LAYOUTS.KOHYA);
+  });
+
+  it('returns not_a_lora for a header with no LoRA tensors', () => {
+    expect(classifyLoraKeyLayoutFromHeader({
+      'transformer_blocks.0.attn1.to_k.weight': { shape: [2048, 2048] },
+      __metadata__: { format: 'pt' },
+    })).toBe(LORA_KEY_LAYOUTS.NOT_A_LORA);
+  });
+
+  it('returns null (undetermined, NOT not_a_lora) for an unparsable header', () => {
+    expect(classifyLoraKeyLayoutFromHeader(null)).toBeNull();
+    expect(classifyLoraKeyLayoutFromHeader('nope')).toBeNull();
+  });
+});
+
+describe('classifyLoraKeyLayout (file)', () => {
+  it('reads + classifies in one call', async () => {
+    const p = writeTmp('comfy.safetensors', makeFile({
+      'diffusion_model.transformer_blocks.0.attn1.to_k.lora_A.weight': { shape: [32, 2048] },
+    }));
+    expect(await classifyLoraKeyLayout(p)).toBe(LORA_KEY_LAYOUTS.COMFYUI);
+  });
+
+  it('returns null for a non-safetensors file', async () => {
+    const p = writeTmp('garbage.safetensors', Buffer.from('garbage'));
+    expect(await classifyLoraKeyLayout(p)).toBeNull();
+  });
+});
+
+describe('videoLoraLayoutIssue', () => {
+  it('passes the two fusable layouts', () => {
+    expect(videoLoraLayoutIssue(LORA_KEY_LAYOUTS.BARE)).toBeNull();
+    expect(videoLoraLayoutIssue(LORA_KEY_LAYOUTS.COMFYUI)).toBeNull();
+  });
+
+  it('is permissive when the layout is undetermined', () => {
+    expect(videoLoraLayoutIssue(null)).toBeNull();
+    expect(videoLoraLayoutIssue(undefined)).toBeNull();
+  });
+
+  it('names the layout and the reason for un-fusable files', () => {
+    expect(videoLoraLayoutIssue(LORA_KEY_LAYOUTS.KOHYA)).toMatch(/kohya/i);
+    expect(videoLoraLayoutIssue(LORA_KEY_LAYOUTS.DIFFUSERS)).toMatch(/diffusers/i);
+    expect(videoLoraLayoutIssue(LORA_KEY_LAYOUTS.NOT_A_LORA)).toMatch(/no LoRA tensors/i);
   });
 });

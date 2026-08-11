@@ -95,3 +95,125 @@ export const detectFlux2VariantFromHeader = (header) => {
  */
 export const detectFlux2Variant = async (path) =>
   detectFlux2VariantFromHeader(await readSafetensorsHeader(path));
+
+/**
+ * LoRA safetensors key layouts.
+ *
+ * Downloaded LoRAs ship in several mutually incompatible key conventions, and
+ * a runtime that fuses one layout silently no-ops (or renders noise) on
+ * another. The layout is fully determined by the tensor names in the header,
+ * so we classify it once at install time instead of discovering it as an
+ * opaque failure deep inside a Python render.
+ *
+ * - `bare`      — module paths with no wrapper prefix:
+ *                 `transformer_blocks.0.attn1.to_k.lora_A.weight`
+ * - `comfyui`   — the same paths under a `diffusion_model.` prefix (what
+ *                 ComfyUI-targeted LTX-2 / WAN LoRAs ship as). The LTX-2 MLX
+ *                 loader strips that prefix itself, so it is fusable.
+ * - `diffusers` — PEFT/diffusers wrapper prefixes (`transformer.`,
+ *                 `base_model.model.`, `unet.`, `text_encoder…`). Fusable for
+ *                 diffusers-based image runners, NOT for the LTX-2 video
+ *                 loader (whose keys carry no such prefix).
+ * - `kohya`     — kohya_ss / LyCORIS training output: `lora_down.weight` +
+ *                 `lora_up.weight` pairs (usually with `lora_unet_…`
+ *                 underscore-flattened module names and per-module `alpha`
+ *                 scalars). Never fusable by an `lora_A`/`lora_B` reader.
+ * - `not_a_lora`— header parsed fine but holds no LoRA tensors at all (a full
+ *                 checkpoint, a VAE, an embedding).
+ *
+ * `null` (rather than a member of this map) is the "couldn't determine"
+ * sentinel — an unreadable/corrupt/non-safetensors file. Callers must NOT
+ * treat it as `not_a_lora`.
+ */
+export const LORA_KEY_LAYOUTS = Object.freeze({
+  BARE: 'bare',
+  COMFYUI: 'comfyui',
+  DIFFUSERS: 'diffusers',
+  KOHYA: 'kohya',
+  NOT_A_LORA: 'not_a_lora',
+});
+
+export const LORA_KEY_LAYOUT_VALUES = Object.freeze(Object.values(LORA_KEY_LAYOUTS));
+
+// `lora_A` / `lora_B` (diffusers/PEFT rank pair) anywhere in a dotted key.
+const LORA_AB_RE = /(^|\.)lora_(A|B)(\.|$)/;
+// kohya/LyCORIS rank pair. Also matched under a `diffusion_model.` prefix —
+// real-world LTX-2 LoRAs ship `diffusion_model.<path>.lora_down.weight`, which
+// looks ComfyUI-shaped but is NOT fusable by an lora_A/lora_B reader.
+const LORA_DOWN_UP_RE = /(^|\.)lora_(down|up)(\.|$)/;
+// kohya's underscore-flattened module namespace (`lora_unet_…`, `lora_te1_…`).
+const KOHYA_PREFIX_RE = /^lora_(unet|te\d*)_/;
+// diffusers / PEFT wrapper prefixes.
+const DIFFUSERS_PREFIX_RE = /^(transformer|base_model|unet|text_encoder\w*)\./;
+
+/**
+ * Classify the LoRA key layout of a parsed safetensors header. Returns one of
+ * `LORA_KEY_LAYOUTS`, or `null` when the header is missing/unparsable.
+ *
+ * Mixed files exist (a kohya LoRA that also ships a `diffusion_model.`-prefixed
+ * copy of the same deltas), so each tensor votes and the winner is the most
+ * common layout. Ties resolve toward the least-fusable layout — refusing a
+ * render with a clear reason beats emitting noise.
+ */
+export const classifyLoraKeyLayoutFromHeader = (header) => {
+  if (!header || typeof header !== 'object') return null;
+  const counts = {
+    [LORA_KEY_LAYOUTS.KOHYA]: 0,
+    [LORA_KEY_LAYOUTS.DIFFUSERS]: 0,
+    [LORA_KEY_LAYOUTS.COMFYUI]: 0,
+    [LORA_KEY_LAYOUTS.BARE]: 0,
+  };
+  for (const name of Object.keys(header)) {
+    if (name === '__metadata__') continue;
+    if (KOHYA_PREFIX_RE.test(name) || LORA_DOWN_UP_RE.test(name)) {
+      counts[LORA_KEY_LAYOUTS.KOHYA] += 1;
+      continue;
+    }
+    // Everything below needs an actual rank tensor — bare `alpha` scalars and
+    // non-LoRA tensors carry no layout signal of their own.
+    if (!LORA_AB_RE.test(name)) continue;
+    if (name.startsWith('diffusion_model.')) counts[LORA_KEY_LAYOUTS.COMFYUI] += 1;
+    else if (DIFFUSERS_PREFIX_RE.test(name)) counts[LORA_KEY_LAYOUTS.DIFFUSERS] += 1;
+    else counts[LORA_KEY_LAYOUTS.BARE] += 1;
+  }
+  // Object.keys order here is the tie-break order (least fusable first).
+  let winner = null;
+  let best = 0;
+  for (const [layout, n] of Object.entries(counts)) {
+    if (n > best) {
+      best = n;
+      winner = layout;
+    }
+  }
+  return winner || LORA_KEY_LAYOUTS.NOT_A_LORA;
+};
+
+/**
+ * Convenience: read a file and classify its LoRA key layout in one call.
+ * Returns a `LORA_KEY_LAYOUTS` value, or `null` when the file can't be read.
+ */
+export const classifyLoraKeyLayout = async (path) =>
+  classifyLoraKeyLayoutFromHeader(await readSafetensorsHeader(path));
+
+// Layouts the LTX-2 MLX loader can actually fuse. Its fuser pairs
+// `<module>.lora_A.weight` with `<module>.lora_B.weight` after stripping a
+// leading `diffusion_model.` — so bare and ComfyUI-prefixed files work, and
+// nothing else does.
+const VIDEO_FUSABLE_LAYOUTS = new Set([LORA_KEY_LAYOUTS.BARE, LORA_KEY_LAYOUTS.COMFYUI]);
+
+/**
+ * Why a layout can't be fused into the LTX-2 video transformer, as a
+ * user-facing phrase — or `null` when it is fusable. `null` layout (couldn't
+ * classify) is deliberately permissive: an unreadable header is not evidence
+ * of an unusable file, and the caller already checked the file exists.
+ */
+export const videoLoraLayoutIssue = (layout) => {
+  if (layout == null || VIDEO_FUSABLE_LAYOUTS.has(layout)) return null;
+  if (layout === LORA_KEY_LAYOUTS.KOHYA) {
+    return 'it uses the kohya/LyCORIS key layout (lora_down/lora_up + alpha), which the LTX-2 loader cannot fuse — it only reads lora_A/lora_B pairs. Re-export it in the ComfyUI (diffusion_model.*) layout, or pick a LoRA published for ComfyUI';
+  }
+  if (layout === LORA_KEY_LAYOUTS.DIFFUSERS) {
+    return 'it uses the diffusers/PEFT key layout, whose alpha/rank scale is not stored in the file — applying it to the video transformer would be guesswork. Use a LoRA published for ComfyUI (diffusion_model.*) instead';
+  }
+  return 'it contains no LoRA tensors at all — this looks like a checkpoint or embedding, not a LoRA';
+};

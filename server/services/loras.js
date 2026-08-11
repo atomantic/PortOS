@@ -52,7 +52,12 @@ import {
   pickHfLoraFile,
 } from '../lib/huggingfaceLora.js';
 import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, composeCompatKey } from '../lib/runners.js';
-import { detectFlux2Variant } from '../lib/safetensors.js';
+import {
+  classifyLoraKeyLayout,
+  classifyLoraKeyLayoutFromHeader,
+  detectFlux2VariantFromHeader,
+  readSafetensorsHeader,
+} from '../lib/safetensors.js';
 import { getHfToken } from '../lib/hfToken.js';
 import { getSettings } from './settings.js';
 
@@ -128,17 +133,36 @@ export const listLoras = async () => {
       // Civitai metadata). Persist a header-detected value back so the header
       // is read at most once per LoRA. Mirrors the "re-derive runnerFamily on
       // read" healing above.
+      //
+      // Both header-derived fields below share ONE lazy header read (a LoRA
+      // whose sidecar already answers never opens the file), and they heal the
+      // sidecar through a SINGLE patch — two fire-and-forget patches would
+      // read-modify-write the same sidecar concurrently and drop one field.
+      let headerPromise = null;
+      const readHeaderOnce = () => {
+        if (!headerPromise) headerPromise = readSafetensorsHeader(_fullPath);
+        return headerPromise;
+      };
+      const backfill = {};
       let fluxVariant = null;
       if (runnerFamily === RUNNER_FAMILIES.FLUX2) {
         fluxVariant = sidecar?.fluxVariant || flux2VariantFromBaseModel(baseModel);
         if (!fluxVariant) {
-          fluxVariant = await detectFlux2Variant(_fullPath);
-          if (fluxVariant) {
-            // Best-effort cache — never block or fail the list on a write error.
-            patchLoraSidecar(filename, { fluxVariant }).catch(() => {});
-          }
+          fluxVariant = detectFlux2VariantFromHeader(await readHeaderOnce());
+          if (fluxVariant) backfill.fluxVariant = fluxVariant;
         }
       }
+      // Safetensors key layout ('bare'/'comfyui'/'diffusers'/'kohya'/
+      // 'not_a_lora'). Backfilled for LoRAs installed before installs recorded
+      // it. `null` means "couldn't read the header", which we deliberately
+      // don't persist: it's not a classification, and a later read may succeed.
+      let keyLayout = sidecar?.keyLayout || null;
+      if (!keyLayout) {
+        keyLayout = classifyLoraKeyLayoutFromHeader(await readHeaderOnce());
+        if (keyLayout) backfill.keyLayout = keyLayout;
+      }
+      // Best-effort cache — never block or fail the list on a write error.
+      if (Object.keys(backfill).length > 0) patchLoraSidecar(filename, backfill).catch(() => {});
       // The picker matches this against the selected model's `loraCompatKey`.
       // FLUX.2 → size-specific (or bare 'flux2' when size is unknown, so it
       // still shows for both sizes); every other family → its runner id.
@@ -156,6 +180,7 @@ export const listLoras = async () => {
         huggingface: sidecar?.huggingface || null,
         runnerFamily,
         fluxVariant,
+        keyLayout,
         loraCompatKey,
         triggerWords: sidecar?.triggerWords || [],
         // Coerce non-finite values (NaN, Infinity, missing/malformed sidecar
@@ -241,6 +266,30 @@ export const patchLoraSidecar = async (filename, patch) => {
   const next = { ...current, ...patch, filename };
   await atomicWrite(sidecarPath(filename), JSON.stringify(next, null, 2) + '\n');
   return next;
+};
+
+// Stamp the classified safetensors key layout onto a freshly-built sidecar so
+// consumers (the video-LoRA fusion gate) never have to re-read the header.
+// Omits the field entirely when classification fails — a `null` there would be
+// indistinguishable from "already classified as nothing" and would defeat the
+// heal-on-read backfill in listLoras().
+const withKeyLayout = async (sidecar, destPath) => {
+  const keyLayout = await classifyLoraKeyLayout(destPath);
+  return keyLayout ? { ...sidecar, keyLayout } : sidecar;
+};
+
+/**
+ * Resolve one LoRA's safetensors key layout: the sidecar value when present,
+ * else classified from the file header. Returns `null` when the header can't
+ * be read (the "couldn't determine" sentinel — NOT `'not_a_lora'`).
+ *
+ * Deliberately does not persist a header-derived value: the callers are render
+ * hot paths, and listLoras() already owns the backfill-and-cache duty.
+ */
+export const getLoraKeyLayout = async (filename) => {
+  const sidecar = await readSidecar(filename);
+  if (sidecar?.keyLayout) return sidecar.keyLayout;
+  return classifyLoraKeyLayout(join(PATHS.loras, filename));
 };
 
 // Resolve the active Civitai API key — either from settings (`civitai.apiKey`)
@@ -478,9 +527,9 @@ export const installFromCivitai = async (input, { fetchImpl = fetch } = {}) => {
   });
   await verifyDownloadedLora(destPath, { expectedSha256: file?.hashes?.SHA256 || null, source: 'civitai' });
 
-  const sidecar = buildSidecar({ model, version, file, filename });
+  const sidecar = await withKeyLayout(buildSidecar({ model, version, file, filename }), destPath);
   await atomicWrite(sidecarPath(filename), JSON.stringify(sidecar, null, 2) + '\n');
-  console.log(`✅ Installed Civitai LoRA: ${filename}`);
+  console.log(`✅ Installed Civitai LoRA: ${filename} [layout=${sidecar.keyLayout || 'unknown'}]`);
   return sidecar;
 };
 
@@ -561,8 +610,11 @@ export const installFromHuggingface = async (input, { fetchImpl = fetch, onProgr
   // sha256 compare available for this path).
   await verifyDownloadedLora(destPath, { source: 'huggingface' });
 
-  const sidecar = buildHfLoraSidecar({ repo, revision, file, model, family, filename });
+  const sidecar = await withKeyLayout(
+    buildHfLoraSidecar({ repo, revision, file, model, family, filename }),
+    destPath,
+  );
   await atomicWrite(sidecarPath(filename), JSON.stringify(sidecar, null, 2) + '\n');
-  console.log(`✅ Installed HuggingFace LoRA: ${filename}`);
+  console.log(`✅ Installed HuggingFace LoRA: ${filename} [layout=${sidecar.keyLayout || 'unknown'}]`);
   return sidecar;
 };

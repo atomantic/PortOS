@@ -22,6 +22,7 @@ import { spawnDetached } from '../../lib/detachedSpawn.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { createLineReader } from '../../lib/streamLines.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { videoLoraLayoutIssue } from '../../lib/safetensors.js';
 import { videoGenEvents } from './events.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { getVideoModels, getDefaultVideoModelId, getTextEncoderRepo } from '../../lib/mediaModels.js';
@@ -38,7 +39,7 @@ import { hfChildEnv } from '../../lib/hfToken.js';
 import { inspectModelCache, findCachedRepoFile } from '../../lib/hfCache.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { makeVideoGenLineHandler, finalizeGeneratedVideo, isWatchdogSuccess, describeSignalDeath, describeRenderConditioning, RENDER_INPUTS_VERSION } from './generateVideoHelpers.js';
-import { assertSafeLoraFilename } from '../loras.js';
+import { assertSafeLoraFilename, getLoraKeyLayout } from '../loras.js';
 import { isMlxVideoLtxLoraCapable } from '../../lib/runners.js';
 import {
   isVideoModelTermsAccepted, acceptedVideoModelTerms, videoModelTermsGateId, videoModelTermsError,
@@ -296,17 +297,36 @@ export const resolveT2vTwoStageOverride = ({
 // Python FileNotFoundError deep inside the render. Returns [] for no LoRAs.
 // Only the ltx2 runtime consumes the result; buildArgs rejects LoRAs on the
 // other runtimes before this is even reached for a doomed job.
-export const resolveVideoLoras = (loras) => {
+//
+// Also gates on the safetensors KEY LAYOUT. The loader fuses `lora_A`/`lora_B`
+// pairs after stripping a leading `diffusion_model.`, so a kohya (lora_down/
+// lora_up) or diffusers/PEFT-prefixed file matches nothing: the render burns
+// minutes of GPU time and comes back as an un-LoRA'd (or noisy) clip with no
+// error anywhere. Refuse it up front with the layout named.
+export const resolveVideoLoras = async (loras) => {
   if (!Array.isArray(loras) || loras.length === 0) return [];
-  return loras.map((l) => {
+  const out = [];
+  for (const l of loras) {
     assertSafeLoraFilename(l?.filename);
     const path = join(PATHS.loras, l.filename);
     if (!existsSync(path)) {
       throw new ServerError(`LoRA not found: ${l.filename}`, { status: 400, code: 'LORA_NOT_FOUND' });
     }
+    const layout = await getLoraKeyLayout(l.filename);
+    const issue = videoLoraLayoutIssue(layout);
+    if (issue) {
+      throw new ServerError(
+        `LoRA "${l.filename}" can't be used for video: ${issue}.`,
+        { status: 400, code: 'LORA_LAYOUT_UNSUPPORTED' },
+      );
+    }
+    if (layout == null) {
+      console.log(`⚠️ LoRA key layout undetermined for ${l.filename} — fusing anyway`);
+    }
     const strength = Number.isFinite(l?.scale) ? l.scale : 1.0;
-    return { path, strength, filename: l.filename };
-  });
+    out.push({ path, strength, filename: l.filename });
+  }
+  return out;
 };
 
 // Build the spawn args for dgrauet's ltx-2-mlx runtime via our Python helper.
@@ -960,7 +980,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // missing/typo'd LoRA fails with a clean 400 before any GPU work. buildArgs
   // rejects LoRAs on non-ltx2 runtimes (the route also guards), so this is a
   // no-op there.
-  const resolvedLoras = resolveVideoLoras(loras);
+  const resolvedLoras = await resolveVideoLoras(loras);
 
   // IC-LoRA remix: resolve the per-mode weight before any GPU work. A cached
   // weight resolves to the exact file inside the HF snapshot; an un-cached one
