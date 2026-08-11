@@ -3093,7 +3093,13 @@ describe('resolveVideoLoras — safetensors key-layout gate', () => {
     loraLayoutState.layout = null;
     ({ resolveVideoLoras } = await import('./local.js'));
   });
-  afterEach(() => { loraLayoutState.layout = null; });
+  afterEach(async () => {
+    loraLayoutState.layout = null;
+    // Restore the shared mock here rather than inline, so a failing assertion
+    // in a per-filename test can't leak its implementation into the next one.
+    const { getLoraKeyLayout } = await import('../loras.js');
+    vi.mocked(getLoraKeyLayout).mockImplementation(async () => loraLayoutState.layout);
+  });
 
   it('resolves bare and ComfyUI layouts (the two the loader can fuse)', async () => {
     for (const layout of ['bare', 'comfyui']) {
@@ -3126,7 +3132,6 @@ describe('resolveVideoLoras — safetensors key-layout gate', () => {
     await expect(resolveVideoLoras([
       { filename: 'ok.safetensors' }, { filename: 'bad.safetensors' },
     ])).rejects.toThrow(/bad\.safetensors/);
-    vi.mocked(getLoraKeyLayout).mockImplementation(async () => loraLayoutState.layout);
   });
 
   it('passes an undetermined layout through rather than blocking the render', async () => {

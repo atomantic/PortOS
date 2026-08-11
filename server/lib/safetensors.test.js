@@ -10,7 +10,9 @@ import {
   classifyLoraKeyLayoutFromHeader,
   classifyLoraKeyLayout,
   videoLoraLayoutIssue,
+  isKnownLoraKeyLayout,
   LORA_KEY_LAYOUTS,
+  LORA_KEY_LAYOUT_VALUES,
 } from './safetensors.js';
 
 // Build a valid safetensors file buffer from a header object: 8-byte LE u64
@@ -214,5 +216,23 @@ describe('videoLoraLayoutIssue', () => {
     expect(videoLoraLayoutIssue(LORA_KEY_LAYOUTS.KOHYA)).toMatch(/kohya/i);
     expect(videoLoraLayoutIssue(LORA_KEY_LAYOUTS.DIFFUSERS)).toMatch(/diffusers/i);
     expect(videoLoraLayoutIssue(LORA_KEY_LAYOUTS.NOT_A_LORA)).toMatch(/no LoRA tensors/i);
+  });
+});
+
+describe('classifyLoraKeyLayoutFromHeader — casing', () => {
+  it('recognizes lowercase lora_a/lora_b rank tensors', () => {
+    expect(classifyLoraKeyLayoutFromHeader({
+      'diffusion_model.transformer_blocks.0.attn1.to_k.lora_a.weight': { shape: [32, 2048] },
+      'diffusion_model.transformer_blocks.0.attn1.to_k.lora_b.weight': { shape: [2048, 32] },
+    })).toBe(LORA_KEY_LAYOUTS.COMFYUI);
+  });
+});
+
+describe('isKnownLoraKeyLayout', () => {
+  it('accepts every declared layout and rejects anything else', () => {
+    for (const layout of LORA_KEY_LAYOUT_VALUES) expect(isKnownLoraKeyLayout(layout)).toBe(true);
+    expect(isKnownLoraKeyLayout('peft')).toBe(false);
+    expect(isKnownLoraKeyLayout(null)).toBe(false);
+    expect(isKnownLoraKeyLayout(undefined)).toBe(false);
   });
 });

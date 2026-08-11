@@ -15,6 +15,10 @@ build/
 data/*
 !data/.gitkeep
 
+# Scratch dir the provider-status suite writes under server/ while it runs —
+# transient, but long-lived enough for a concurrent `git add -A` to catch it.
+server/test-data-status/
+
 # Environment files
 .env
 .env.local

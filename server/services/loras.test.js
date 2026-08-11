@@ -711,3 +711,19 @@ describe('LoRA key layout', () => {
     expect(await lorasService.getLoraKeyLayout('lora-kohya.safetensors')).toBe('kohya');
   });
 });
+
+describe('LoRA key layout — stored value validation', () => {
+  it('re-classifies when the sidecar holds an unrecognized layout string', async () => {
+    const fs = await import('fs/promises');
+    await fs.mkdir(tmpLoras, { recursive: true });
+    await fs.writeFile(join(tmpLoras, 'lora-bogus.safetensors'), validSafetensors({
+      'diffusion_model.transformer_blocks.0.attn1.to_k.lora_A.weight': { dtype: 'F16', shape: [32, 2048], data_offsets: [0, 1] },
+    }));
+    await fs.writeFile(join(tmpLoras, 'lora-bogus.safetensors.metadata.json'), JSON.stringify({
+      filename: 'lora-bogus.safetensors', keyLayout: 'peft-ish',
+    }));
+    expect(await lorasService.getLoraKeyLayout('lora-bogus.safetensors')).toBe('comfyui');
+    const list = await lorasService.listLoras();
+    expect(list.find((l) => l.filename === 'lora-bogus.safetensors').keyLayout).toBe('comfyui');
+  });
+});

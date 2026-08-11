@@ -56,6 +56,7 @@ import {
   classifyLoraKeyLayout,
   classifyLoraKeyLayoutFromHeader,
   detectFlux2VariantFromHeader,
+  isKnownLoraKeyLayout,
   readSafetensorsHeader,
 } from '../lib/safetensors.js';
 import { getHfToken } from '../lib/hfToken.js';
@@ -156,7 +157,10 @@ export const listLoras = async () => {
       // 'not_a_lora'). Backfilled for LoRAs installed before installs recorded
       // it. `null` means "couldn't read the header", which we deliberately
       // don't persist: it's not a classification, and a later read may succeed.
-      let keyLayout = sidecar?.keyLayout || null;
+      // Validate the stored value: a sidecar hand-edited (or written by a
+      // future version that knows a layout this one doesn't) must fall back to
+      // re-classifying, not propagate a string nothing downstream understands.
+      let keyLayout = isKnownLoraKeyLayout(sidecar?.keyLayout) ? sidecar.keyLayout : null;
       if (!keyLayout) {
         keyLayout = classifyLoraKeyLayoutFromHeader(await readHeaderOnce());
         if (keyLayout) backfill.keyLayout = keyLayout;
@@ -288,7 +292,7 @@ const withKeyLayout = async (sidecar, destPath) => {
  */
 export const getLoraKeyLayout = async (filename) => {
   const sidecar = await readSidecar(filename);
-  if (sidecar?.keyLayout) return sidecar.keyLayout;
+  if (isKnownLoraKeyLayout(sidecar?.keyLayout)) return sidecar.keyLayout;
   return classifyLoraKeyLayout(join(PATHS.loras, filename));
 };
 

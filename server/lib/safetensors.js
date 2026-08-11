@@ -135,14 +135,25 @@ export const LORA_KEY_LAYOUTS = Object.freeze({
 
 export const LORA_KEY_LAYOUT_VALUES = Object.freeze(Object.values(LORA_KEY_LAYOUTS));
 
+/**
+ * Is `layout` one of the layouts this module actually knows? Callers that read
+ * a layout back out of persisted state (a LoRA sidecar) must validate before
+ * trusting it — an unrecognized string would otherwise fall through
+ * `videoLoraLayoutIssue`'s known cases and get reported as "no LoRA tensors".
+ */
+export const isKnownLoraKeyLayout = (layout) => LORA_KEY_LAYOUT_VALUES.includes(layout);
+
 // `lora_A` / `lora_B` (diffusers/PEFT rank pair) anywhere in a dotted key.
-const LORA_AB_RE = /(^|\.)lora_(A|B)(\.|$)/;
+// Case-insensitive: some trainers emit lowercase `lora_a`/`lora_b` (upstream's
+// own LTX trainer normalizes exactly that spelling on export), and treating
+// those as "no rank tensors" would misreport a usable LoRA as `not_a_lora`.
+const LORA_AB_RE = /(^|\.)lora_(A|B)(\.|$)/i;
 // kohya/LyCORIS rank pair. Also matched under a `diffusion_model.` prefix —
 // real-world LTX-2 LoRAs ship `diffusion_model.<path>.lora_down.weight`, which
 // looks ComfyUI-shaped but is NOT fusable by an lora_A/lora_B reader.
-const LORA_DOWN_UP_RE = /(^|\.)lora_(down|up)(\.|$)/;
+const LORA_DOWN_UP_RE = /(^|\.)lora_(down|up)(\.|$)/i;
 // kohya's underscore-flattened module namespace (`lora_unet_…`, `lora_te1_…`).
-const KOHYA_PREFIX_RE = /^lora_(unet|te\d*)_/;
+const KOHYA_PREFIX_RE = /^lora_(unet|te\d*)_/i;
 // diffusers / PEFT wrapper prefixes.
 const DIFFUSERS_PREFIX_RE = /^(transformer|base_model|unet|text_encoder\w*)\./;
 
