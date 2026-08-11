@@ -40,6 +40,7 @@ export function BackupTab() {
   const destPathId = useId();
   const cronId = useId();
   const additionalExcludeId = useId();
+  const defaultExcludesPanelId = useId();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [destPath, setDestPath] = useState('');
@@ -193,12 +194,19 @@ export function BackupTab() {
   // broader pattern (`loras/`, `loras/**`, `/cos/`). The broader check is
   // necessary because rsync still applies the custom pattern even when the
   // default toggle says "included".
+  // `defaultActive` (is this default still switched on?) is what the row's
+  // ToggleSwitch binds to, NOT the effective `isExcluded` — a shadowing custom
+  // exclude keeps the path out of the backup while the user's override is on,
+  // and binding the switch to the effective state made such a row look
+  // untoggled and silently dropped the override on the next click. The
+  // "(still excluded via …)" note carries the effective state instead.
   const defaultExcludeRows = defaultExcludes.map((d) => {
     const shadowingCustom = excludePaths.find(p => shadowsDefault(p, d.path));
     const defaultActive = !(d.overridable && disabledDefaultExcludes.includes(d.path));
     return {
       ...d,
       shadowingCustom,
+      defaultActive,
       isExcluded: defaultActive || !!shadowingCustom,
       shadowedByCustom: !defaultActive && !!shadowingCustom,
     };
@@ -314,6 +322,7 @@ export function BackupTab() {
             type="button"
             onClick={() => setShowDefaultExcludes(v => !v)}
             aria-expanded={showDefaultExcludes}
+            aria-controls={defaultExcludesPanelId}
             className="flex items-center gap-2 w-full text-left text-sm text-gray-400 hover:text-white transition-colors"
           >
             {showDefaultExcludes ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
@@ -322,17 +331,17 @@ export function BackupTab() {
             {includedCount > 0 && <span className="text-xs text-port-success/80">({includedCount} re-included)</span>}
           </button>
           {showDefaultExcludes && (
-            <>
+            <div id={defaultExcludesPanelId} className="space-y-2">
               <p className="text-xs text-gray-500">Built-in paths skipped by default to keep snapshots small. Overridable entries (large re-downloadable assets) can be re-enabled below; fixed entries hold ephemeral data and stay off.</p>
               <ul className="space-y-1.5 mt-1">
                 {defaultExcludeRows.map((d, i) => (
                   <li key={i} className="flex items-start gap-2 text-xs">
                     {d.overridable ? (
                       <ToggleSwitch
-                        enabled={!d.isExcluded}
+                        enabled={!d.defaultActive}
                         onChange={() => toggleDefaultExclude(d.path)}
                         size="sm"
-                        ariaLabel={d.isExcluded ? `Include ${d.path} in backups` : `Exclude ${d.path} from backups`}
+                        ariaLabel={`Include ${d.path} in backups`}
                         className="mt-0.5"
                       />
                     ) : (
@@ -349,7 +358,7 @@ export function BackupTab() {
                   </li>
                 ))}
               </ul>
-            </>
+            </div>
           )}
         </div>
       )}

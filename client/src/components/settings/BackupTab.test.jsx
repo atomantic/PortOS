@@ -329,6 +329,23 @@ describe('BackupTab', () => {
       expect(disclosure.textContent).toMatch(/1 path skipped/);
       expect(disclosure.textContent).toMatch(/1 re-included/);
     });
+
+    // The switch reports the user's own override, not the effective rsync
+    // outcome: a custom exclude that shadows a re-included default still keeps
+    // the path out of the backup, but the toggle must stay ON so clicking it
+    // doesn't silently drop the override while appearing to do nothing.
+    it('keeps a re-included default toggled on even when a custom exclude shadows it', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: ['models/'], disabledDefaultExcludes: ['/models'] } });
+      getBackupStatus.mockResolvedValue({ status: 'never', defaultExcludes: EXCLUDES, pgBackup: null });
+      await renderTab();
+
+      fireEvent.click(screen.getByRole('button', { name: /Default exclusions/i }));
+
+      const toggle = screen.getByRole('switch', { name: /Include \/models in backups/i });
+      expect(toggle.getAttribute('aria-checked')).toBe('true');
+      // The effective state is surfaced in prose instead.
+      expect(screen.getByText(/still excluded via Additional Exclude Paths/i)).toBeTruthy();
+    });
   });
 
   describe('Run Now — backup-already-running skip path', () => {
