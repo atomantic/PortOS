@@ -20,7 +20,7 @@ vi.mock('../hooks/useErrorNotifications', () => ({ useErrorNotifications: () => 
 vi.mock('../hooks/useSharingNotifications', () => ({ useSharingNotifications: () => {} }));
 vi.mock('../hooks/useAgentFeedbackToast', () => ({ useAgentFeedbackToast: () => {} }));
 vi.mock('../hooks/useAIStatusNotifications', () => ({ useAIStatusNotifications: () => {} }));
-vi.mock('../hooks/useUpdateChecker', () => ({ useUpdateChecker: () => {} }));
+vi.mock('./UpdateBanners', () => ({ default: () => null }));
 vi.mock('../hooks/useNotifications', () => ({
   useNotifications: () => ({
     notifications: [],

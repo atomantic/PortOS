@@ -109,7 +109,7 @@ import { useNotifications } from '../hooks/useNotifications';
 import { useAgentFeedbackToast } from '../hooks/useAgentFeedbackToast';
 import { useOnDemandTaskToast } from '../hooks/useOnDemandTaskToast';
 import { useSharingNotifications } from '../hooks/useSharingNotifications';
-import { useUpdateChecker } from '../hooks/useUpdateChecker';
+import UpdateBanners from './UpdateBanners';
 import { useAIStatusNotifications } from '../hooks/useAIStatusNotifications';
 import { useNavWorkingSet } from '../hooks/useNavWorkingSet.js';
 import { useSidebarApps } from '../hooks/useSidebarApps.js';
@@ -533,9 +533,6 @@ export default function Layout() {
 
   // Live AI operation status (model loads, "calling LM Studio…", etc.)
   useAIStatusNotifications();
-
-  // Check for PortOS updates and show toast when available
-  useUpdateChecker();
 
   // Notifications for user task alerts
   const {
@@ -1195,6 +1192,10 @@ export default function Layout() {
             <VoiceToggleButton />
           </div>
         </header>
+
+        {/* Update / out-of-sync advisories — inline (document flow) so they
+            push the page instead of covering a bottom-anchored composer (#3786) */}
+        <UpdateBanners />
 
         {/* Main content */}
         {(() => {
