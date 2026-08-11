@@ -120,9 +120,12 @@ export const fitRenderCost = (samples) => {
   const sumXY = samples.reduce((a, s, i) => a + xs[i] * s.durationMs, 0);
   const sumXX = xs.reduce((a, x) => a + x * x, 0);
   const denom = n * sumXX - sumX * sumX;
-  // Zero denominator = every sample has the same work units, so the fit is a
-  // vertical line with no recoverable slope.
-  if (denom === 0) return null;
+  // A vanishing denominator = every sample has (near enough) the same work
+  // units, so the fit is a vertical line with no recoverable slope. Compared
+  // against a relative epsilon rather than exactly 0: identical inputs still
+  // leave float dust in `n·Σx² − (Σx)²`, and dividing by 1e-9 of dust yields
+  // an astronomical slope that would be reported as a confident ETA of years.
+  if (!(denom > n * sumXX * 1e-12)) return null;
   const perUnitMs = ((n * sumXY - sumX * sumY) / denom) / WORK_FIT_SCALE;
   if (!Number.isFinite(perUnitMs) || perUnitMs <= 0) return null;
   const fixedMs = (sumY - perUnitMs * WORK_FIT_SCALE * sumX) / n;

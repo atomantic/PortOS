@@ -61,6 +61,12 @@ describe('fitRenderCost', () => {
     expect(fitRenderCost(samples)).toBeNull();
   });
 
+  it('refuses to fit identical real-scale work units, where the denominator is float dust rather than 0', () => {
+    const work = 768 * 512 * 121 * 30;
+    const samples = [1_000_000, 1_200_000, 1_400_000].map((ms) => ({ workUnits: work, durationMs: ms }));
+    expect(fitRenderCost(samples)).toBeNull();
+  });
+
   it('rejects a non-positive slope (noise, not a cost curve)', () => {
     const samples = [{ workUnits: 10, durationMs: 900 }, { workUnits: 20, durationMs: 600 }, { workUnits: 30, durationMs: 300 }];
     expect(fitRenderCost(samples)).toBeNull();
