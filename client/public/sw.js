@@ -49,9 +49,13 @@ const CACHE_VERSION = 'v1';
 const SHELL_CACHE = `portos-shell-${CACHE_VERSION}`;
 const ASSET_CACHE = `portos-assets-${CACHE_VERSION}`;
 const STATIC_CACHE = `portos-static-${CACHE_VERSION}`;
-const FONT_CACHE = `portos-fonts-${CACHE_VERSION}`;
 
-const CURRENT_CACHES = new Set([SHELL_CACHE, ASSET_CACHE, STATIC_CACHE, FONT_CACHE]);
+// No font cache: the webfonts are self-hosted under /fonts/ (see
+// src/index.css), so they are same-origin and already covered by
+// STATIC_PATH_RE below. The old `portos-fonts-*` cache existed only for the
+// public font CDN this no longer talks to; leaving it out of CURRENT_CACHES
+// means the activate-time cleanup deletes whatever is left in it.
+const CURRENT_CACHES = new Set([SHELL_CACHE, ASSET_CACHE, STATIC_CACHE]);
 
 // Stable key the offline shell is stored under, independent of the request URL
 // (every SPA navigation resolves to the same index.html on the server).
@@ -108,11 +112,6 @@ const ASSET_CACHE_MAX_ENTRIES = 120;
 // fonts, icons, the PWA manifest, sky textures, the logo. Matched by path.
 const STATIC_PATH_RE = /^\/(fonts|sky)\//;
 const STATIC_FILE_RE = /^\/(manifest\.json|favicon\.(?:ico|svg)|apple-touch-icon\.png|icon-\d+\.png|portos-logo\.png)$/;
-
-// External font hosts — cache-first is a big low-bandwidth win (Google serves
-// these with long max-age already, but the browser HTTP cache is evicted more
-// aggressively than a named SW cache).
-const FONT_HOSTS = new Set(['fonts.googleapis.com', 'fonts.gstatic.com']);
 
 // Matches the `/assets/...` references (entry chunk + modulepreload deps + CSS)
 // in the shell HTML. The set these produce is the boot JS/CSS the app can't
@@ -203,16 +202,10 @@ self.addEventListener('fetch', (event) => {
     return; // Malformed URL — let the browser handle it.
   }
 
-  const isSameOrigin = url.origin === self.location.origin;
-
-  // External font stylesheets + font files: cache-first.
-  if (FONT_HOSTS.has(url.hostname)) {
-    event.respondWith(cacheFirst(request, FONT_CACHE));
-    return;
-  }
-
-  // Never touch other cross-origin requests.
-  if (!isSameOrigin) return;
+  // Never touch cross-origin requests. Nothing the app loads is cross-origin
+  // any more now that the webfonts are self-hosted, so this is a hard bail
+  // rather than a branch on the way to one.
+  if (url.origin !== self.location.origin) return;
 
   // Never cache dynamic / real-time / large-media routes. Let them hit the
   // network directly (also preserves HTTP Range for /data media).
@@ -346,9 +339,10 @@ async function cacheFirst(request, cacheName, maxEntries) {
   const cached = await cache.match(request);
   if (cached) return cached;
   const response = await fetch(request);
-  // Cache successful basic/opaque responses. Opaque (cross-origin fonts) can't
-  // be inspected but are safe to store and replay.
-  if (response && (response.ok || response.type === 'opaque')) {
+  // Every caller is same-origin now (the cross-origin font hosts are gone —
+  // the webfonts are self-hosted), so responses are always inspectable and
+  // `ok` is the whole test; an opaque response can no longer reach here.
+  if (response && response.ok) {
     await cache.put(request, response.clone());
     if (maxEntries) trimCache(cache, maxEntries);
   }

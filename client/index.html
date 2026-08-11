@@ -10,38 +10,14 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.json" />
     <meta name="theme-color" content="#01051F" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <!-- Webfonts load NON-render-blocking. Only the `lumen-glass-day` theme puts
-         Inter / IBM Plex Mono at the front of its font stack, and every stack in
-         portosThemes.js falls back to system fonts — so these are a progressive
-         enhancement, never a boot dependency.
-
-         A plain `<link rel="stylesheet">` here is render-blocking against a
-         THIRD-PARTY host, which is the wrong trade for PortOS: an install runs on
-         a private Tailscale network and is expected to work with no route to the
-         public internet (that is the whole point of the offline app-shell service
-         worker in public/sw.js). When fonts.googleapis.com is unreachable — no
-         WAN, a DNS sinkhole, an outbound firewall — the browser holds rendering
-         until the request times out, so the app is a blank white page for ~60s on
-         EVERY load, service worker or not.
-
-         `media="print"` makes the stylesheet non-matching, so it downloads
-         without blocking the first paint; `onload` flips it to `all` to apply it
-         once it actually arrives. If it never arrives, nothing is delayed and the
-         system-font fallback stands. -->
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
-      media="print"
-      onload="this.media='all'; this.onload=null;"
-    />
-    <noscript>
-      <link
-        rel="stylesheet"
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
-      />
-    </noscript>
+    <!-- No webfont <link> here, deliberately. Inter and IBM Plex Mono are
+         SELF-HOSTED from /fonts/ and declared with @font-face in src/index.css
+         (same as GeistPixel for CyberCity). A PortOS install runs on a private
+         Tailscale network with no assumed route to the public internet, so a
+         font pulled from a public CDN simply never arrives and four theme
+         stacks silently fall back to system fonts. Same-origin fonts are served
+         by the install itself, so the intended typography renders with zero WAN
+         — and every boot drops a third-party request. See #3812. -->
   </head>
   <body>
     <div id="root"></div>

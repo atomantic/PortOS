@@ -112,6 +112,80 @@
   --port-chart-grid: 64 64 64;
 }
 
+/* Self-hosted UI/mono webfonts.
+ *
+ * Four theme stacks in themes/portosThemes.js front `Inter`, and one fronts
+ * `IBM Plex Mono`. These used to come from fonts.googleapis.com, which never
+ * resolves on the private-Tailscale install PortOS is designed for — so the
+ * intended typography was simply never seen offline. Vendored under
+ * public/fonts/ instead (see #3812), matching the GeistPixel precedent below.
+ *
+ * Only the weights the stacks actually use are shipped (Inter 400/500/600/700,
+ * IBM Plex Mono 400/500/600), woff2 only — every browser PortOS targets
+ * supports it. Both families are SIL Open Font License 1.1; each family's
+ * license text sits beside the files as public/fonts/<Family>-OFL.txt.
+ *
+ * Subsetting: latin + latin-ext, the same tradeoff Google's default subset
+ * makes, to keep the payload near 275KB total. A character outside that range
+ * falls back per-glyph to the next family in the stack (every stack in
+ * portosThemes.js ends in a system font), so it degrades rather than tofus.
+ */
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/Inter-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/Inter-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/Inter-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/Inter-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Mono';
+  src: url('/fonts/IBMPlexMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Mono';
+  src: url('/fonts/IBMPlexMono-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Mono';
+  src: url('/fonts/IBMPlexMono-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* Geist Pixel font for CyberCity */
 @font-face {
   font-family: 'GeistPixelSquare';
