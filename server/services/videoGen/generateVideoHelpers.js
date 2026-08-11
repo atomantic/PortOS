@@ -98,6 +98,12 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
   // be formatted as "Downloading model · first run · X.X GB" during downloads.
   let currentPhase = 'starting';
   let isDownloading = false;
+  // History-calibrated wall-clock estimate for this render (#3801), stamped on
+  // the job by generateVideo. Repeated on every progress frame so a client that
+  // subscribed mid-render still learns it, and so the estimate can't be lost to
+  // a missed `started` event. Omitted entirely when there is no estimate — an
+  // absent key, never `etaMs: 0`, which a UI would render as "done".
+  const etaField = () => (Number.isFinite(job?.etaMs) ? { etaMs: job.etaMs } : {});
 
   return (raw) => {
     const line = raw.trim();
@@ -167,7 +173,7 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
         // it to the client instead of falling back to the synthesized
         // "Rendering step X/Y" (which hides useful labels like "Loading
         // model" emitted at stage boundaries).
-        videoGenEvents.emit('progress', { generationId: jobId, progress: step / total, step, totalSteps: total, message: label || undefined });
+        videoGenEvents.emit('progress', { generationId: jobId, progress: step / total, step, totalSteps: total, message: label || undefined, ...etaField() });
         return true;
       }
       // Bare phase marker (e.g. STAGE:load-pipeline, STAGE:from-pretrained) —
@@ -211,7 +217,7 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
       // (`60%|██████    | 6/10 [00:30<00:20, ...]`) is terminal noise that
       // would clobber the last meaningful STATUS/STAGE line on every
       // percent update. Client renders the percentage separately.
-      videoGenEvents.emit('progress', { generationId: jobId, progress: pct });
+      videoGenEvents.emit('progress', { generationId: jobId, progress: pct, ...etaField() });
       return true;
     }
     return false;
@@ -366,8 +372,10 @@ export function isWatchdogSuccess({ completionWatchdogFired, idleStallFired = fa
  * @param {object} ctx.meta - the history-entry metadata built up-front
  * @param {number} ctx.actualSeed
  * @param {(mutator: (h: Array) => Array) => Promise<Array>} ctx.mutateHistory - serialized read-modify-write on the shared history file (mutateVideoHistory)
+ * @param {number} [ctx.startedAtMs] - Date.now() captured just before the child
+ *   spawned. Defaults to `job.renderStartedAtMs`, which generateVideo stamps.
  */
-export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory }) {
+export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory, startedAtMs = job?.renderStartedAtMs }) {
   job.status = 'complete';
   await optimizeForStreaming(outputPath);
   const thumbnail = await generateThumbnail(outputPath, jobId);
@@ -380,8 +388,25 @@ export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename,
   // self-documents the exact ltx/mlx/torch + chip + OS stack it rendered on.
   // Absent (sentinel) when the runtime didn't emit one — e.g. the bare
   // `mlx_video.generate_av` path we don't control.
+  //
+  // Wall-clock render timing (#3801) is what makes a future render estimable:
+  // videoGen/eta.js calibrates its cost model purely from these measurements.
+  // Stamped ONLY when we actually observed the spawn instant — an entry with
+  // no `renderMs` is an explicit absent sentinel that the estimator skips,
+  // which is why the timing spread is conditional rather than defaulted to 0
+  // (a zero-duration sample would drag every estimate toward "instant").
+  // The window measured is spawn → output finalized, i.e. what the user waits
+  // through, including the thumbnail/faststart tail above.
+  const startMs = Number(startedAtMs);
+  const timing = Number.isFinite(startMs) && startMs > 0
+    ? {
+      renderMs: Date.now() - startMs,
+      renderStartedAt: new Date(startMs).toISOString(),
+      renderCompletedAt: new Date().toISOString(),
+    }
+    : {};
   await mutateHistory((history) => {
-    history.unshift({ ...meta, thumbnail, ...(job.runtime ? { runtime: job.runtime } : {}) });
+    history.unshift({ ...meta, thumbnail, ...timing, ...(job.runtime ? { runtime: job.runtime } : {}) });
     return history;
   });
   console.log(`✅ Video generated [${jobId.slice(0, 8)}]: ${filename}`);

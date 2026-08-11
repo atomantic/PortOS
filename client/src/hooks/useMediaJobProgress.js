@@ -15,8 +15,13 @@ import useMounted from './useMounted';
  *   {
  *     status: 'unknown' | 'queued' | 'running' | 'completed' | 'failed' | 'canceled',
  *     progress, statusMsg, step, totalSteps, currentImage,
- *     filename, path, error,
+ *     filename, path, error, etaMs,
  *   }
+ *
+ * `etaMs` is the server's history-calibrated wall-clock estimate for the whole
+ * render (#3801) — video gen only, and only once that install has measured a
+ * comparable render. It stays `null` when the server sent no estimate, which
+ * consumers must render as "unknown" rather than as a finished countdown.
  *
  * Initial state is hydrated from GET /api/media-jobs/:id so navigating
  * back to a page mid-render picks up the in-flight job's snapshot
@@ -29,6 +34,7 @@ const INITIAL_STATE = Object.freeze({
   step: 0,
   totalSteps: null,
   currentImage: null,
+  etaMs: null,
   filename: null,
   path: null,
   error: null,
@@ -78,8 +84,12 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
       if (data.generationId !== jobId) return;
       setState((prev) => {
         const totalSteps = data.totalSteps ?? prev.totalSteps;
-        if (prev.status === 'running' && totalSteps === prev.totalSteps) return prev;
-        return { ...prev, status: 'running', totalSteps };
+        // `etaMs: null` on the wire is the server saying "no estimate for this
+        // shape" — an intentional value, not an absent key, so it must clear a
+        // stale estimate rather than fall through to `prev`.
+        const etaMs = data.etaMs !== undefined ? data.etaMs : prev.etaMs;
+        if (prev.status === 'running' && totalSteps === prev.totalSteps && etaMs === prev.etaMs) return prev;
+        return { ...prev, status: 'running', totalSteps, etaMs };
       });
     };
     // Diffusion runners throttle `currentImage` but still emit identical
@@ -97,6 +107,7 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
           step: data.step ?? prev.step,
           totalSteps: data.totalSteps ?? prev.totalSteps,
           currentImage: data.currentImage ?? prev.currentImage,
+          etaMs: data.etaMs !== undefined ? data.etaMs : prev.etaMs,
         };
         if (
           next.status === prev.status
@@ -105,6 +116,7 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
           && next.step === prev.step
           && next.totalSteps === prev.totalSteps
           && next.currentImage === prev.currentImage
+          && next.etaMs === prev.etaMs
         ) return prev;
         return next;
       });

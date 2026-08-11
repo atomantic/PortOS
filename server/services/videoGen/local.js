@@ -69,10 +69,12 @@ import {
 } from './runtimes.js';
 import { loadHistory, saveHistory, mutateVideoHistory } from './history.js';
 import { videoModeContractError, videoChainUnsupportedError, VIDEO_MODE_GATED_RUNTIMES } from './modeContract.js';
+import { estimateRenderMs } from './eta.js';
 // Re-export the extracted runtime + history surface so existing deep imports
 // (`from '../videoGen/local.js'`) keep resolving every symbol they used to.
 export * from './runtimes.js';
 export * from './modeContract.js';
+export * from './eta.js';
 export { loadHistory, saveHistory, mutateVideoHistory };
 
 // LoRA wrapper for the notapalindrome `mlx_video` runtime. The stock
@@ -1290,8 +1292,26 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     throw err;
   }
 
-  console.log(`🎬 Generating video [${jobId.slice(0, 8)}]: ${modelId} ${w}x${h} frames=${parsedNumFrames} steps=${actualSteps}`);
-  videoGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps, ...meta });
+  // History-calibrated wall-clock estimate (#3801). `null` when this install
+  // has never measured a render on this model — an explicit "no estimate"
+  // sentinel the UI must render as "unknown", never as 0 or a guess. Stamped
+  // on the job so every progress frame can carry it alongside step progress.
+  const etaEstimate = estimateRenderMs({
+    history: await loadHistory(),
+    modelId,
+    width: w,
+    height: h,
+    numFrames: parsedNumFrames,
+    steps: actualSteps,
+  });
+  job.etaMs = etaEstimate ? etaEstimate.etaMs : null;
+  const etaFields = etaEstimate
+    ? { etaMs: etaEstimate.etaMs, etaBasis: etaEstimate.basis, etaSampleCount: etaEstimate.sampleCount }
+    : { etaMs: null };
+  job.renderStartedAtMs = Date.now();
+
+  console.log(`🎬 Generating video [${jobId.slice(0, 8)}]: ${modelId} ${w}x${h} frames=${parsedNumFrames} steps=${actualSteps} eta=${etaEstimate ? `${Math.round(etaEstimate.etaMs / 1000)}s (${etaEstimate.basis}, n=${etaEstimate.sampleCount})` : 'unknown'}`);
+  videoGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps, ...meta, ...etaFields });
 
   // Clear PYTHONPATH so the child uses the venv's own site-packages instead
   // of the parent shell's PYTHONPATH. Setting to `undefined` in a spread does
@@ -1694,6 +1714,29 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
     rest.numFrames ?? chainModel?.defaultFrames ?? DEFAULT_NUM_FRAMES,
   );
 
+  // Chain-level wall-clock estimate (#3801). Every chunk is a full render that
+  // pays the fixed per-render cost again, so the chain estimate is the
+  // per-chunk estimate times the chunk count — `chunks` is handed to the
+  // estimator rather than folding the chain into one oversized render.
+  // The dimension/step defaults mirror generateVideo's own resolution (its
+  // `width = 768, height = 512` parameter defaults and the samplerLocked step
+  // rule); the estimator returns null on anything it can't resolve, so a drift
+  // here degrades to "no estimate" rather than to a wrong number.
+  const chainSteps = chainModel?.samplerLocked
+    ? chainModel.steps
+    : (rest.steps ? Number(rest.steps) : chainModel?.steps);
+  const chainEta = estimateRenderMs({
+    history: await loadHistory(),
+    modelId: rest.modelId || defaultVideoModelId(),
+    width: rest.width ?? 768,
+    height: rest.height ?? 512,
+    numFrames: rest.numFrames ?? chainModel?.defaultFrames ?? DEFAULT_NUM_FRAMES,
+    steps: chainSteps,
+    chunks: totalChunks,
+  });
+  const chainEtaField = chainEta ? { etaMs: chainEta.etaMs } : {};
+  console.log(`🎬 Chained video [${outerJobId.slice(0, 8)}]: ${totalChunks} chunks, eta=${chainEta ? `${Math.round(chainEta.etaMs / 1000)}s (${chainEta.basis}, n=${chainEta.sampleCount})` : 'unknown'}`);
+
   const chainState = { stopped: false };
   activeChain = chainState;
 
@@ -1738,6 +1781,9 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
         step: typeof e.step === 'number' ? e.step : undefined,
         totalSteps: typeof e.totalSteps === 'number' ? e.totalSteps : undefined,
         message: `Chunk ${i + 1}/${totalChunks}${e.message ? ` — ${e.message}` : ''}`,
+        // Chain-level estimate, NOT the inner chunk's — the outer id's
+        // consumers are watching the whole chain's clock.
+        ...chainEtaField,
       });
       broadcastSse(outerJob, {
         type: 'progress',

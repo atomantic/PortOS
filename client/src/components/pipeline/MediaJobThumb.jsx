@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { AlertCircle, Ban, Loader2 } from 'lucide-react';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
+import { formatDurationMs } from '../../utils/formatters';
 
 /**
  * Small thumbnail strip for a single mediaJobQueue job. Used by the
@@ -33,7 +34,7 @@ export default function MediaJobThumb({
   // a poster, so keep the live subscription path for video.
   const hasStaticFallback = !!fallbackFilename && kind === 'image';
   const liveJobId = hasStaticFallback ? null : jobId;
-  const { status, progress, step, totalSteps, currentImage, filename, error } =
+  const { status, progress, step, totalSteps, currentImage, filename, error, etaMs } =
     useMediaJobProgress(liveJobId, { kind });
   const [missing, setMissing] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -175,6 +176,13 @@ export default function MediaJobThumb({
   // otherwise a spinner with step counter. The base64 currentImage is the
   // freshly-decoded latent frame from the diffusion loop.
   const pct = totalSteps ? Math.round((step / totalSteps) * 100) : Math.round((progress || 0) * 100);
+  // Remaining wall-clock, from the server's history-calibrated estimate for the
+  // whole render (#3801) scaled by how much is left. Absent whenever the server
+  // sent no estimate — a 15–40 minute render showing only "20%" is exactly the
+  // case this exists for, but a fabricated countdown would be worse than none.
+  const remainingMs = Number.isFinite(etaMs) && etaMs > 0
+    ? Math.max(0, Math.round(etaMs * (1 - Math.min(1, Math.max(0, pct / 100)))))
+    : null;
   return (
     <div className={`relative ${isFill ? 'w-full min-h-[200px]' : dims} bg-port-bg rounded overflow-hidden border border-port-border`}>
       {currentImage ? (
@@ -190,7 +198,7 @@ export default function MediaJobThumb({
       )}
       {pct > 0 && (
         <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-[9px] text-white text-center py-0.5 font-mono">
-          {pct}%
+          {pct}%{remainingMs != null ? ` · ~${formatDurationMs(remainingMs)} left` : ''}
         </div>
       )}
     </div>

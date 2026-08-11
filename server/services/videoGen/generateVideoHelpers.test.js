@@ -120,6 +120,21 @@ describe('makeVideoGenLineHandler', () => {
   const sseFrames = () => sse.mock.calls.map((c) => c[1]);
   const eventsOfType = (t) => emitted.filter((e) => e.type === t).map((e) => e.payload);
 
+  it('repeats the job ETA on every progress frame, and omits it when absent (#3801)', () => {
+    // No estimate on the job → the key must be absent, never etaMs: 0.
+    handle('STAGE:inference:step:5:30:Rendering');
+    handle('60%|██████    | 6/10');
+    expect(eventsOfType('progress').every((p) => !('etaMs' in p))).toBe(true);
+
+    emitted.length = 0;
+    job.etaMs = 1_800_000;
+    handle('STAGE:inference:step:6:30:Rendering');
+    handle('70%|███████   | 7/10');
+    const progress = eventsOfType('progress');
+    expect(progress).toHaveLength(2);
+    expect(progress.every((p) => p.etaMs === 1_800_000)).toBe(true);
+  });
+
   it('suppresses blank + python-noise lines without emitting', () => {
     expect(handle('')).toBe(true);
     expect(handle('   ')).toBe(true);
@@ -265,6 +280,31 @@ describe('finalizeGeneratedVideo runtime persistence', () => {
     expect(saved[0].conditioning).toEqual([]);
     // No staging/temp path may ride along on a user-facing history record.
     expect(JSON.stringify(saved[0])).not.toMatch(/\/tmp\/|uploads/);
+  });
+
+  it('stamps wall-clock render timing so future renders are estimable (#3801)', async () => {
+    const job = { id: 'job-abcdef12', clients: [], renderStartedAtMs: Date.now() - 5000 };
+    let saved = null;
+    await finalizeGeneratedVideo({
+      ...baseCtx(job),
+      mutateHistory: async (fn) => { saved = await fn([]); return saved; },
+    });
+    expect(saved[0].renderMs).toBeGreaterThanOrEqual(5000);
+    expect(Date.parse(saved[0].renderStartedAt)).toBe(job.renderStartedAtMs);
+    expect(Date.parse(saved[0].renderCompletedAt)).toBeGreaterThanOrEqual(job.renderStartedAtMs);
+  });
+
+  it('omits render timing entirely when the spawn instant was never observed (#3801)', async () => {
+    const job = { id: 'job-abcdef12', clients: [] };
+    let saved = null;
+    await finalizeGeneratedVideo({
+      ...baseCtx(job),
+      mutateHistory: async (fn) => { saved = await fn([]); return saved; },
+    });
+    // Absent, NOT renderMs: 0 — a zero-duration sample would poison the
+    // estimator's cost model.
+    expect('renderMs' in saved[0]).toBe(false);
+    expect('renderStartedAt' in saved[0]).toBe(false);
   });
 });
 

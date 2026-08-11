@@ -3014,3 +3014,65 @@ describe('generateVideo — durable re-render inputs (#3696)', () => {
     expect(started.conditioning).toEqual(['audio']);
   });
 });
+
+describe('generateVideo — history-calibrated ETA (#3801)', () => {
+  const startedFor = async (history, params = {}) => {
+    const { readJSONFile } = await import('../../lib/fileUtils.js');
+    vi.mocked(readJSONFile).mockImplementation(async () => history);
+    let started = null;
+    const onStarted = (e) => { started = e; };
+    videoGenEvents.on('started', onStarted);
+    await generateVideo({
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'a quiet street at dusk',
+      width: 512,
+      height: 512,
+      numFrames: 25,
+      fps: 24,
+      ...params,
+    });
+    videoGenEvents.off('started', onStarted);
+    return started;
+  };
+
+  const timedRecord = (renderMs, over = {}) => ({
+    modelId: 'ltx2_unified',
+    width: 512,
+    height: 512,
+    numFrames: 25,
+    steps: 30,
+    renderMs,
+    createdAt: '2026-08-01T00:00:00.000Z',
+    ...over,
+  });
+
+  it('reports an explicit null ETA on a fresh install with no measured renders', async () => {
+    const started = await startedFor([], { jobId: 'eta-no-history' });
+    // null, not 0 and not omitted — the client must be able to tell "unknown"
+    // apart from "about to finish".
+    expect(started.etaMs).toBeNull();
+    expect('etaBasis' in started).toBe(false);
+  });
+
+  it('estimates from a same-shape measured render and labels the basis', async () => {
+    const history = [timedRecord(1_200_000), timedRecord(1_200_000, { createdAt: '2026-07-30T00:00:00.000Z' })];
+    const started = await startedFor(history, { jobId: 'eta-measured' });
+    expect(started.etaMs).toBe(1_200_000);
+    expect(started.etaBasis).toBe('measured');
+    expect(started.etaSampleCount).toBe(2);
+  });
+
+  it('ignores measurements from a different model', async () => {
+    const history = [timedRecord(1_200_000, { modelId: 'some_other_model' })];
+    expect((await startedFor(history, { jobId: 'eta-other-model' })).etaMs).toBeNull();
+  });
+
+  it('scales a differently-shaped measurement by pixels × frames × steps', async () => {
+    const history = [timedRecord(600_000, { numFrames: 50 })];
+    const started = await startedFor(history, { jobId: 'eta-scaled' });
+    // Half the frames → half the work → half the time.
+    expect(started.etaMs).toBe(300_000);
+    expect(started.etaBasis).toBe('proportional');
+  });
+});

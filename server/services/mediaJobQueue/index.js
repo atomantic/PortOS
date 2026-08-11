@@ -593,10 +593,15 @@ function makeGenDispatcher(emitter, job, handlers) {
     // them (LoRA training does) so the client plots a loss curve and keys
     // sample thumbnails by step instead of re-parsing the message string.
     // Additive + presence-guarded — image/video gen omit them, unaffected.
+    // `etaMs` (video gen, #3801) rides along the same way: a history-calibrated
+    // wall-clock estimate for the whole render. Presence-guarded on purpose —
+    // an install with no matching measurement emits no key at all, which the
+    // UI must show as "unknown" rather than as a zero countdown.
     const addStepFields = (payload) => {
       if (typeof e.step === 'number') payload.step = e.step;
       if (typeof e.totalSteps === 'number') payload.totalSteps = e.totalSteps;
       if (typeof e.loss === 'number') payload.loss = e.loss;
+      if (typeof e.etaMs === 'number') payload.etaMs = e.etaMs;
     };
     if (hasProgress) {
       const payload = { type: 'progress', progress: e.progress };
