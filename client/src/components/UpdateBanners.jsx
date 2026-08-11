@@ -9,7 +9,9 @@ import * as api from '../services/api';
 // push the page down instead of floating over a bottom-anchored composer.
 export default function UpdateBanners() {
   const navigate = useNavigate();
-  const { update, outOfSync, ignoreUpdate, dismissUpdate, dismissOutOfSync } = useUpdateChecker();
+  const {
+    update, outOfSync, ignoreUpdate, dismissUpdate, clearOutOfSync, dismissOutOfSync
+  } = useUpdateChecker();
 
   if (!update && !outOfSync) return null;
 
@@ -27,7 +29,7 @@ export default function UpdateBanners() {
             <div className="flex gap-2">
               <button
                 type="button"
-                onClick={goToUpdate}
+                onClick={() => { clearOutOfSync(); goToUpdate(); }}
                 className="px-2 py-1 bg-port-warning text-black text-xs rounded hover:bg-port-warning/80"
               >
                 Reconcile

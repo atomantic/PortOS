@@ -85,6 +85,37 @@ describe('UpdateBanners', () => {
     expect(screen.queryByText(/Install out of sync/)).toBeNull();
   });
 
+  it('Reconcile navigates and clears the advisory for this session only', async () => {
+    getUpdateStatus.mockResolvedValue({
+      installState: { outOfSync: true, currentCommit: 'abc123' }
+    });
+    renderBanners();
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconcile' }));
+    expect(navigate).toHaveBeenCalledWith('/apps/portos-default/update');
+    // Cleared so it doesn't hover over the very page you reconcile from…
+    await waitFor(() => expect(screen.queryByText(/Install out of sync/)).toBeNull());
+    // …but NOT marked handled: the install is still out of sync until update.sh runs.
+    expect(localStorage.getItem(__internal.OUT_OF_SYNC_DISMISS_KEY)).toBeNull();
+    cleanup();
+    renderBanners();
+    expect(await screen.findByText(/Install out of sync/)).toBeTruthy();
+  });
+
+  it('does not re-raise an ignored version from a racing socket broadcast', async () => {
+    getUpdateStatus.mockResolvedValue({
+      updateAvailable: true,
+      currentVersion: '1.0.0',
+      latestRelease: { version: '1.1.0' }
+    });
+    renderBanners();
+    fireEvent.click(await screen.findByRole('button', { name: 'Ignore' }));
+    await waitFor(() => expect(screen.queryByText(/Update available/)).toBeNull());
+    act(() => {
+      handlers.get('portos:update:available')?.({ currentVersion: '1.0.0', latestVersion: '1.1.0' });
+    });
+    expect(screen.queryByText(/Update available/)).toBeNull();
+  });
+
   it('re-raises out-of-sync after a later pull moves the commit', async () => {
     localStorage.setItem(__internal.OUT_OF_SYNC_DISMISS_KEY, 'abc123');
     getUpdateStatus.mockResolvedValue({
