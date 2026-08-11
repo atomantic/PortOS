@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import {
   CalendarClock, ChevronLeft, ChevronRight, Mail, MailOpen, Send,
@@ -137,7 +137,26 @@ export default function Timeline() {
   // The bulk-backfill importers are one-time setup affordances, so they stay
   // behind a collapsed disclosure instead of outranking the day's activity
   // (#3789). The empty-day state offers the same toggle for discoverability.
+  // They stay MOUNTED (hidden) rather than conditionally rendered, so collapsing
+  // the disclosure mid-upload can't discard a picked file, a preview, or an
+  // in-flight import's result.
   const [showImports, setShowImports] = useState(false);
+  const importsRef = useRef(null);
+  // The disclosure opens above the day's content, so the empty-state shortcut
+  // (which sits below it) scrolls the panels into view — otherwise it expands
+  // off-screen and looks like nothing happened.
+  const scrollToImportsRef = useRef(false);
+  const scrollToImports = () => importsRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  const revealImports = () => {
+    if (showImports) return scrollToImports();
+    scrollToImportsRef.current = true;
+    setShowImports(true);
+  };
+  useEffect(() => {
+    if (!showImports || !scrollToImportsRef.current) return;
+    scrollToImportsRef.current = false;
+    scrollToImports();
+  }, [showImports]);
 
   useEffect(() => {
     let active = true;
@@ -212,12 +231,13 @@ export default function Timeline() {
             </button>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm text-gray-400">{dayLabel}</span>
           <button
             type="button"
             onClick={() => setShowImports((v) => !v)}
             aria-expanded={showImports}
+            aria-controls="timeline-import-panels"
             className="inline-flex items-center gap-1.5 rounded border border-port-border bg-port-card px-2.5 py-1.5 text-xs text-gray-400 hover:border-port-accent hover:text-gray-200"
           >
             <Download size={14} />
@@ -226,7 +246,12 @@ export default function Timeline() {
         </div>
       </div>
 
-      {showImports && <TimelineImportPanels onImported={() => setReloadKey((k) => k + 1)} />}
+      {/* `hidden` (the attribute, on a wrapper carrying no display class of its
+          own) keeps the panels mounted while collapsed — a Tailwind `hidden`
+          class on the grid itself would fight the grid display utility. */}
+      <div id="timeline-import-panels" ref={importsRef} hidden={!showImports}>
+        <TimelineImportPanels onImported={() => setReloadKey((k) => k + 1)} />
+      </div>
 
       <Histogram histogram={histogram} />
 
@@ -245,16 +270,17 @@ export default function Timeline() {
         <div className="rounded border border-dashed border-port-border py-12 text-center text-gray-500">
           No recorded activity on this day.
           <div className="mt-1 text-xs">Activity populates as your message and calendar accounts sync.</div>
-          {!showImports && (
+          <div>
             <button
               type="button"
-              onClick={() => setShowImports(true)}
+              onClick={revealImports}
+              aria-controls="timeline-import-panels"
               className="mt-3 inline-flex items-center gap-1.5 rounded border border-port-border bg-port-card px-3 py-1.5 text-xs text-gray-300 hover:border-port-accent hover:text-gray-100"
             >
               <Download size={14} />
               Backfill from an export
             </button>
-          )}
+          </div>
         </div>
       ) : (
         <div className="flex flex-col gap-2 pb-6">
