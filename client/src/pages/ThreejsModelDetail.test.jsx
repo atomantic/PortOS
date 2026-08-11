@@ -176,6 +176,65 @@ describe('ThreejsModelDetail cross-section gate', () => {
   });
 });
 
+describe('ThreejsModelDetail cross-part penetration gate', () => {
+  beforeEach(resetMocks);
+
+  it('lists the buried-part finding and says an unsteered refinement will target it', async () => {
+    getThreejsModel.mockResolvedValue({
+      ...baseRecord,
+      penetration: {
+        errorCount: 1,
+        warningCount: 0,
+        noteCount: 0,
+        evaluatedPartCount: 4,
+        comparedPairCount: 3,
+        undecidedPairCount: 0,
+        findings: [{
+          code: 'buried-part',
+          severity: 'error',
+          partIds: ['lens', 'body'],
+          message: '1 part(s) are entirely inside another part they are not attached to or parented under ("Lens" inside "Body").',
+        }],
+      },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Cross-part penetration')).toBeInTheDocument());
+    expect(screen.getByText('1 part(s) are entirely inside another part they are not attached to or parented under ("Lens" inside "Body").')).toBeInTheDocument();
+    expect(screen.getByText('1 error · 0 warning · 0 note')).toBeInTheDocument();
+    expect(screen.getByText(/each part to get its own volume/)).toBeInTheDocument();
+  });
+
+  it('does not promise a refinement for an undecided note alone', async () => {
+    getThreejsModel.mockResolvedValue({
+      ...baseRecord,
+      penetration: {
+        errorCount: 0,
+        warningCount: 0,
+        noteCount: 1,
+        findings: [{
+          code: 'undecided-contact',
+          severity: 'note',
+          partIds: ['peg', 'body'],
+          message: '1 unrelated part pair(s) overlap partially ("Peg" and "Body" (22%)).',
+        }],
+      },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Cross-part penetration')).toBeInTheDocument());
+    expect(screen.queryByText(/each part to get its own volume/)).not.toBeInTheDocument();
+  });
+
+  it('hides the section for a record generated before the gate existed', async () => {
+    getThreejsModel.mockResolvedValue({ ...baseRecord, penetration: null });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Example Beacon')).toBeInTheDocument());
+    expect(screen.queryByText('Cross-part penetration')).not.toBeInTheDocument();
+  });
+});
+
 describe('ThreejsModelDetail subject family', () => {
   beforeEach(resetMocks);
 

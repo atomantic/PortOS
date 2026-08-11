@@ -15,6 +15,7 @@ import {
   threejsSculptSpecSchema,
 } from '../../lib/threejsModel.js';
 import { buildThreejsCoverageFeedback, evaluateThreejsPartCoverage } from '../../lib/threejsModelCoverage.js';
+import { buildThreejsPenetrationFeedback, evaluateThreejsPenetration } from '../../lib/threejsModelPenetration.js';
 import { evaluateThreejsRigReadiness } from '../../lib/threejsModelRig.js';
 import { GENERAL_FAMILY_ID } from '../../lib/threejsModelFamilies.js';
 import { resolveCliEffort } from '../../lib/providerModels.js';
@@ -109,6 +110,10 @@ async function executeGeneration({
     // renders correctly from the generated camera, so it is recorded rather than
     // rejected — the user sees it and an unsteered refinement asks for depth.
     const flatness = evaluateThreejsFlatness(spec);
+    // And likewise for a spec whose parts are modelled inside each other: it
+    // still renders, and from the hero angle it still looks right, so the
+    // finding is recorded and fed back rather than thrown away.
+    const penetration = evaluateThreejsPenetration(spec);
     // Nothing PortOS generates is skinned, so what gets recorded is whether the
     // spec declared an articulation graph a later rig path could attach to — and
     // when it did not, the reason. A model with no graph reports not-ready with
@@ -128,6 +133,7 @@ async function executeGeneration({
         spec,
         coverage,
         flatness,
+        penetration,
         rig,
         error: null,
         generationOperationId: null,
@@ -147,6 +153,9 @@ async function executeGeneration({
     }
     if (flatness.warningCount > 0) {
       console.warn(`⚠️ Three.js model ${id} cross-section: ${flatness.flatIdentityDetailCount}/${flatness.identityDetailCount} identity feature(s) built only from flat parts`);
+    }
+    if (penetration.errorCount > 0 || penetration.warningCount > 0) {
+      console.warn(`⚠️ Three.js model ${id} cross-part penetration: ${penetration.errorCount} error, ${penetration.warningCount} warning finding(s) over ${penetration.comparedPairCount} compared pair(s)`);
     }
     if (rig.articulationReady) {
       console.log(`🦴 Three.js model ${id} declares an articulation graph: ${rig.jointCount} joint(s), ${rig.socketCount} pivot socket(s)`);
@@ -204,12 +213,14 @@ export async function startGeneration(id, {
   const startedAt = new Date().toISOString();
   const effectivePrompt = prompt ?? current.prompt ?? '';
   // A refinement the user did not steer aims at what the last pass measurably
-  // got wrong — the promises it did not build, and the identity parts it built
-  // without a cross-section — instead of a generic "improve it". Both are sent
-  // when both fired: they are independent defects with independent remedies.
+  // got wrong — the promises it did not build, the identity parts it built
+  // without a cross-section, and the parts it modelled inside each other —
+  // instead of a generic "improve it". All are sent when all fired: they are
+  // independent defects with independent remedies.
   const effectiveFeedback = (feedback || '').trim() || [
     buildThreejsCoverageFeedback(current.coverage),
     buildThreejsFlatnessFeedback(current.flatness),
+    buildThreejsPenetrationFeedback(current.penetration),
   ].filter(Boolean).join('\n\n');
   // Absent (`undefined`) keeps whatever the record already had; an explicit
   // `null` — what the picker's "Default effort" choice sends — clears it.

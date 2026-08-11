@@ -84,6 +84,11 @@ export async function createModel(input) {
     // an older record reads back undefined, which every consumer treats as
     // "not evaluated" rather than "passed".
     flatness: null,
+    // Cross-part penetration findings for `spec`, written alongside it by
+    // `evaluateThreejsPenetration`. Same additive-field contract as `coverage`
+    // and `flatness`: an older record reads back undefined, which every consumer
+    // treats as "not evaluated" rather than "no parts interpenetrate".
+    penetration: null,
     // Rig-readiness report for `spec`, written alongside it by
     // `evaluateThreejsRigReadiness`. Same additive-field contract as `coverage`
     // and `flatness`: a record written before this shipped reads back undefined,

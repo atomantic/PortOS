@@ -352,6 +352,11 @@ export default function ThreejsModelDetail() {
   // the same as passing it — the panel is omitted rather than shown clean.
   const coverageFindings = Array.isArray(record.coverage?.findings) ? record.coverage.findings : null;
   const flatnessFindings = Array.isArray(record.flatness?.findings) ? record.flatness.findings : null;
+  const penetrationFindings = Array.isArray(record.penetration?.findings) ? record.penetration.findings : null;
+  // Undecided contact is a note the reader is meant to judge, never something a
+  // refinement is told to fix — so the footer only promises a refinement when
+  // there is an actual defect above it.
+  const penetrationDefects = countSeverities(penetrationFindings || []);
   const coverageErrors = countSeverities(coverageFindings || []).error;
   // Only present when the generation ran with a family — a record generated
   // under `general` (or before families shipped) has no checklist to render.
@@ -541,6 +546,19 @@ export default function ThreejsModelDetail() {
           cleanLabel="Identity parts carry real depth"
           footer={`A model can match its reference head-on and still be a stack of cardboard cut-outs, so this check counts how many identity-defining features are built only from flat parts.${
             flatnessFindings.length > 0 ? ' Refining without your own feedback will also ask for real depth.' : ''
+          }`}
+        />
+      )}
+
+      {penetrationFindings && (
+        <GatePanel
+          title="Cross-part penetration"
+          findings={penetrationFindings}
+          cleanLabel="No unrelated parts share the same space"
+          footer={`Parts modelled inside each other look correct from the hero angle and fall apart the moment the model is orbited, so this check compares every unrelated pair by volume. Parts parented together or declared as attachments are exempt — embedding is what those relationships are for.${
+            penetrationDefects.error + penetrationDefects.warning > 0
+              ? ' Refining without your own feedback will also ask for each part to get its own volume.'
+              : ''
           }`}
         />
       )}
