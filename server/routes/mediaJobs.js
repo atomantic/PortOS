@@ -111,6 +111,9 @@ function sanitizeJob(job) {
     position: job.position,
     progress: job.progress,
     statusMsg: job.statusMsg,
+    // History-calibrated render ETA (#3801); undefined when the gen produced
+    // no estimate, which the client renders as "unknown".
+    etaMs: job.etaMs,
     error: job.error,
     result: job.result,
     params: safeParams,

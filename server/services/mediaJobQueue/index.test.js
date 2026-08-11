@@ -288,6 +288,23 @@ describe('mediaJobQueue', () => {
     expect(persisted.statusMsg).toBe('Completed');
   });
 
+  it('retains the render ETA on the job record so a reload gets it back (#3801)', async () => {
+    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'how long' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'running');
+
+    videoGenEvents.emit('progress', { generationId: job.jobId, progress: 0.1, etaMs: 1_800_000 });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId)?.etaMs === 1_800_000);
+    // A later frame without the field must not wipe the retained estimate —
+    // the client hydrates from this record on reload.
+    videoGenEvents.emit('progress', { generationId: job.jobId, progress: 0.2 });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId)?.progress === 0.2);
+    expect(mediaJobQueue.getJob(job.jobId).etaMs).toBe(1_800_000);
+
+    videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'completed');
+  });
+
   it('forwards structured step/totalSteps/loss onto the SSE wire', async () => {
     // The LoRA training live gallery reads loss + step off the progress/preview
     // SSE frames to plot a curve and key sample thumbnails by step. The

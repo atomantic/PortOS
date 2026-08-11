@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 
 const handlers = new Map();
+const mediaJob = { current: { status: 'running' } };
 vi.mock('../services/socket', () => ({
   default: {
     on: (event, fn) => { handlers.set(event, fn); },
@@ -9,7 +10,7 @@ vi.mock('../services/socket', () => ({
   },
 }));
 vi.mock('../services/apiMediaJobs', () => ({
-  getMediaJob: vi.fn(async () => ({ status: 'running' })),
+  getMediaJob: vi.fn(async () => mediaJob.current),
 }));
 
 import useMediaJobProgress from './useMediaJobProgress';
@@ -17,7 +18,7 @@ import useMediaJobProgress from './useMediaJobProgress';
 const fire = (event, payload) => act(() => { handlers.get(event)?.(payload); });
 
 describe('useMediaJobProgress — render ETA (#3801)', () => {
-  beforeEach(() => { handlers.clear(); });
+  beforeEach(() => { handlers.clear(); mediaJob.current = { status: 'running' }; });
 
   it('starts with no estimate', async () => {
     const { result } = renderHook(() => useMediaJobProgress('job-1', { kind: 'video' }));
@@ -49,6 +50,12 @@ describe('useMediaJobProgress — render ETA (#3801)', () => {
     fire('video-gen:started', { generationId: 'job-1', etaMs: 600_000 });
     fire('video-gen:started', { generationId: 'job-1', etaMs: null });
     expect(result.current.etaMs).toBeNull();
+  });
+
+  it('hydrates the estimate from the queue snapshot on reload', async () => {
+    mediaJob.current = { status: 'running', progress: 0.3, etaMs: 900_000 };
+    const { result } = renderHook(() => useMediaJobProgress('job-1', { kind: 'video' }));
+    await waitFor(() => expect(result.current.etaMs).toBe(900_000));
   });
 
   it('ignores events for a different job', async () => {

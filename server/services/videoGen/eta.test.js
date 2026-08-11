@@ -66,6 +66,20 @@ describe('fitRenderCost', () => {
     expect(fitRenderCost(samples)).toBeNull();
   });
 
+  it('stays numerically stable on real-scale, closely-spaced work units', () => {
+    // ~1e9 work units per render: squaring these overflows the exactly-
+    // representable integer range, so an unscaled normal-equation fit
+    // catastrophically cancels and returns a garbage slope.
+    const samples = [97, 105, 113].map((frames) => {
+      const w = 768 * 512 * frames * 30;
+      return { workUnits: w, durationMs: 2e-6 * w + 90_000 };
+    });
+    const fit = fitRenderCost(samples);
+    expect(fit.perUnitMs).toBeCloseTo(2e-6, 12);
+    expect(fit.fixedMs).toBeGreaterThan(89_000);
+    expect(fit.fixedMs).toBeLessThan(91_000);
+  });
+
   it('clamps a negative intercept to zero instead of estimating below zero', () => {
     // ms = 5·work − 100 → intercept would be negative.
     const samples = [40, 60, 80].map((w) => ({ workUnits: w, durationMs: 5 * w - 100 }));
@@ -144,6 +158,12 @@ describe('estimateRenderMs', () => {
     for (const chunks of [0, -3, NaN, undefined, 'two']) {
       expect(estimateRenderMs({ history, ...target, chunks }).chunks).toBe(1);
     }
+  });
+
+  it('returns null rather than a zero estimate when the samples round to nothing', () => {
+    // A sub-millisecond measurement rounds to 0, and 0 is the one number this
+    // must never report — the contract is "no estimate" instead.
+    expect(estimateRenderMs({ history: [rec({ renderMs: 0.4 })], ...target })).toBeNull();
   });
 
   it('prefers recent measurements when the shape repeats many times', () => {

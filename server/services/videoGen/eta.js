@@ -46,6 +46,10 @@ const EXACT_SAMPLE_LIMIT = 5;
 // A linear fit needs enough spread to separate slope from intercept. Below
 // this it overfits noise and can produce an absurd (even negative) intercept.
 const MIN_FIT_SAMPLES = 3;
+// Divisor applied to work units before the least-squares sums, so `x²` stays
+// far inside the exactly-representable integer range. Purely numerical — it
+// cancels out of the returned slope.
+const WORK_FIT_SCALE = 1e6;
 
 /**
  * Sampler work for one render, in arbitrary but consistent units.
@@ -103,18 +107,27 @@ export const timedRenderSamples = (history, modelId) => {
 export const fitRenderCost = (samples) => {
   if (!Array.isArray(samples) || samples.length < MIN_FIT_SAMPLES) return null;
   const n = samples.length;
-  const sumX = samples.reduce((a, s) => a + s.workUnits, 0);
+  // Work units are ~1e9 for a real render, so `x²` would land near 1e18 —
+  // past the 2^53 integer-exact range of a double. `n·Σx² − (Σx)²` then
+  // subtracts two ~1e20 values whose low bits are already gone, which is
+  // catastrophic cancellation exactly when the samples are close together
+  // (the common case: a few renders at neighboring frame counts). Fitting in
+  // scaled units keeps every intermediate comfortably exact; the slope is
+  // rescaled back on the way out so the returned units are unchanged.
+  const xs = samples.map((s) => s.workUnits / WORK_FIT_SCALE);
+  const sumX = xs.reduce((a, x) => a + x, 0);
   const sumY = samples.reduce((a, s) => a + s.durationMs, 0);
-  const sumXY = samples.reduce((a, s) => a + s.workUnits * s.durationMs, 0);
-  const sumXX = samples.reduce((a, s) => a + s.workUnits * s.workUnits, 0);
+  const sumXY = samples.reduce((a, s, i) => a + xs[i] * s.durationMs, 0);
+  const sumXX = xs.reduce((a, x) => a + x * x, 0);
   const denom = n * sumXX - sumX * sumX;
   // Zero denominator = every sample has the same work units, so the fit is a
   // vertical line with no recoverable slope.
   if (denom === 0) return null;
-  const perUnitMs = (n * sumXY - sumX * sumY) / denom;
+  const perUnitMs = ((n * sumXY - sumX * sumY) / denom) / WORK_FIT_SCALE;
   if (!Number.isFinite(perUnitMs) || perUnitMs <= 0) return null;
-  const fixedMs = Math.max(0, (sumY - perUnitMs * sumX) / n);
-  return { perUnitMs, fixedMs };
+  const fixedMs = (sumY - perUnitMs * WORK_FIT_SCALE * sumX) / n;
+  if (!Number.isFinite(fixedMs)) return null;
+  return { perUnitMs, fixedMs: Math.max(0, fixedMs) };
 };
 
 /**
@@ -141,13 +154,23 @@ export const estimateRenderMs = ({ history, modelId, width, height, numFrames, s
   const samples = timedRenderSamples(history, modelId);
   if (!samples.length) return null;
 
-  const finish = (perChunkMs, basis, sampleCount) => ({
-    etaMs: Math.round(perChunkMs * chunkCount),
-    perChunkMs: Math.round(perChunkMs),
-    chunks: chunkCount,
-    basis,
-    sampleCount,
-  });
+  // Final backstop: an estimate that isn't a positive finite number is not an
+  // estimate. Returning 0 (or NaN, or a negative) here would be worse than
+  // returning nothing, because every consumer reads a number as truth.
+  const finish = (perChunkMs, basis, sampleCount) => {
+    if (!Number.isFinite(perChunkMs) || perChunkMs <= 0) return null;
+    const etaMs = Math.round(perChunkMs * chunkCount);
+    // Checked AFTER rounding: a sub-millisecond estimate is positive but
+    // rounds to 0, and 0 is the one number this must never report.
+    if (etaMs <= 0) return null;
+    return {
+      etaMs,
+      perChunkMs: Math.round(perChunkMs),
+      chunks: chunkCount,
+      basis,
+      sampleCount,
+    };
+  };
 
   // 1. A real measurement of this exact shape overrides the model.
   const exact = samples
@@ -160,10 +183,10 @@ export const estimateRenderMs = ({ history, modelId, width, height, numFrames, s
 
   // 2. Linear fit — recovers the per-chunk fixed cost along with the slope.
   const fit = fitRenderCost(recent);
-  if (fit) return finish(fit.perUnitMs * workUnits + fit.fixedMs, 'linear', recent.length);
+  const fitted = fit ? finish(fit.perUnitMs * workUnits + fit.fixedMs, 'linear', recent.length) : null;
+  if (fitted) return fitted;
 
   // 3. Proportional — median rate, no separable fixed cost.
   const rate = median(recent.map((s) => s.durationMs / s.workUnits));
-  if (!Number.isFinite(rate) || rate <= 0) return null;
   return finish(rate * workUnits, 'proportional', recent.length);
 };

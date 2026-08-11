@@ -69,6 +69,9 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
         status: job.status || 'unknown',
         progress: typeof job.progress === 'number' ? job.progress : prev.progress,
         statusMsg: job.statusMsg || prev.statusMsg,
+        // Reload mid-render: the queue retained the estimate, so the ETA comes
+        // back immediately instead of after the next (minutes-away) step.
+        etaMs: typeof job.etaMs === 'number' ? job.etaMs : prev.etaMs,
         filename: job.result?.filename || prev.filename,
         path: job.result?.path || prev.path,
         error: job.error || prev.error,

@@ -196,7 +196,10 @@ export default function MediaJobThumb({
           <Loader2 size={14} className="animate-spin text-port-accent" />
         </div>
       )}
-      {pct > 0 && (
+      {/* Also shown at 0% when an estimate exists: the pre-step phase (weight
+          load, text encode) is minutes long and is exactly when the bar was
+          previously blank. */}
+      {(pct > 0 || remainingMs != null) && (
         <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-[9px] text-white text-center py-0.5 font-mono">
           {pct}%{remainingMs != null ? ` · ~${formatDurationMs(remainingMs)} left` : ''}
         </div>

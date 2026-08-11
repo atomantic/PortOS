@@ -282,8 +282,8 @@ async function persistImpl() {
     ...archive,
   ];
   // Strip non-serializable bits.
-  const serializable = live.map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg }) =>
-    ({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg }),
+  const serializable = live.map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs }) =>
+    ({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs }),
   );
   await atomicWrite(JOBS_FILE, { jobs: serializable });
 }
@@ -741,6 +741,13 @@ async function runJob(job) {
       }
       if (typeof payload.message === 'string' && payload.message.length > 0) {
         job.statusMsg = payload.message;
+        didUpdatePersistedProgress = true;
+      }
+      // Retain the render ETA (#3801) on the job so a browser that reloads
+      // mid-render gets it back from GET /api/media-jobs/:id instead of
+      // waiting minutes for the next progress frame to re-deliver it.
+      if (typeof payload.etaMs === 'number' && payload.etaMs !== job.etaMs) {
+        job.etaMs = payload.etaMs;
         didUpdatePersistedProgress = true;
       }
       if (didUpdatePersistedProgress) scheduleProgressPersist();
