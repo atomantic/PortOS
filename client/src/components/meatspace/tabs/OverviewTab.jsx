@@ -7,6 +7,7 @@ import DeathClockCountdown from '../../DeathClockCountdown';
 import ProvenanceChip from '../../ui/ProvenanceChip';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 import { clickableProps } from '../../../lib/a11yKeyboard.js';
+import { formatWeight, formatPercent } from '../../../utils/formatters.js';
 
 function HealthTile({ icon: Icon, iconColor, label, metrics, onClick }) {
   return (
@@ -202,7 +203,9 @@ export default function OverviewTab() {
   const hLean = healthBody?.lean_body_mass;
   const useHealth = hWeight?.date && (!manualBody?.date || hWeight.date > manualBody.date);
   const latestBody = useHealth
-    ? { weightLbs: Math.round(hWeight.value * 10) / 10, fatPct: hFat ? Math.round(hFat.value * 1000) / 10 : null, leanLbs: hLean ? Math.round(hLean.value * 10) / 10 : null }
+    // Rounding is the display layer's job (formatWeight/formatPercent below);
+    // only the fraction → percent conversion happens here.
+    ? { weightLbs: hWeight.value, fatPct: hFat ? hFat.value * 100 : null, leanLbs: hLean ? hLean.value : null }
     : manualBody;
   const latestBlood = blood?.tests?.[blood.tests.length - 1] ?? null;
   const latestEpigenetic = epigenetic?.tests?.[epigenetic.tests.length - 1] ?? null;
@@ -266,10 +269,10 @@ export default function OverviewTab() {
           label="Body"
           onClick={() => navigate('/meatspace/body')}
           metrics={[
-            { label: 'Weight', value: latestBody?.weightLbs ? `${latestBody.weightLbs} lbs` : '—' },
-            { label: 'Body fat', value: latestBody?.fatPct != null ? `${latestBody.fatPct}%` : '—' },
+            { label: 'Weight', value: formatWeight(latestBody?.weightLbs) },
+            { label: 'Body fat', value: formatPercent(latestBody?.fatPct) },
             { label: latestBody?.leanLbs ? 'Lean' : 'Muscle',
-              value: latestBody?.leanLbs ? `${latestBody.leanLbs} lbs` : latestBody?.musclePct != null ? `${latestBody.musclePct}%` : '—' },
+              value: latestBody?.leanLbs ? formatWeight(latestBody.leanLbs) : formatPercent(latestBody?.musclePct) },
           ]}
         />
         <HealthTile

@@ -2,7 +2,58 @@ import { describe, it, expect } from 'vitest';
 import {
   formatContextLength, formatDurationMin, formatDurationMs, formatEventDateTime, timeAgo,
   formatCooldown, parseSizeGb, recommendedRamGb, parseTimeoutMs, formatDurationSec, middleTruncate,
+  formatWeight, formatPercent,
 } from './formatters.js';
+
+describe('formatWeight', () => {
+  it('rounds unit-conversion float noise to one decimal', () => {
+    expect(formatWeight(170.35000000000002)).toBe('170.4 lbs');
+    expect(formatWeight(88.88888)).toBe('88.9 lbs');
+  });
+
+  it('drops trailing zeros instead of padding', () => {
+    expect(formatWeight(180)).toBe('180 lbs');
+    expect(formatWeight(180.0000001)).toBe('180 lbs');
+  });
+
+  it('honors unit, decimals, and fallback overrides', () => {
+    expect(formatWeight(77.2345, { unit: 'kg' })).toBe('77.2 kg');
+    expect(formatWeight(77.2345, { unit: 'kg', decimals: 2 })).toBe('77.23 kg');
+    expect(formatWeight(12.345, { unit: '' })).toBe('12.3');
+  });
+
+  it('falls back for missing or non-numeric values', () => {
+    expect(formatWeight(null)).toBe('—');
+    expect(formatWeight(undefined)).toBe('—');
+    expect(formatWeight('')).toBe('—');
+    expect(formatWeight('heavy')).toBe('—');
+    expect(formatWeight(NaN)).toBe('—');
+    expect(formatWeight(Infinity)).toBe('—');
+    expect(formatWeight(null, { fallback: 'n/a' })).toBe('n/a');
+  });
+
+  it('keeps a legitimate zero rather than treating it as missing', () => {
+    expect(formatWeight(0)).toBe('0 lbs');
+  });
+
+  it('accepts numeric strings', () => {
+    expect(formatWeight('170.35000000000002')).toBe('170.4 lbs');
+  });
+});
+
+describe('formatPercent', () => {
+  it('rounds float noise and suffixes a percent sign', () => {
+    expect(formatPercent(18.400000000000002)).toBe('18.4%');
+    expect(formatPercent(42)).toBe('42%');
+    expect(formatPercent(0)).toBe('0%');
+  });
+
+  it('honors decimals and fallback overrides', () => {
+    expect(formatPercent(18.4567, { decimals: 2 })).toBe('18.46%');
+    expect(formatPercent(undefined)).toBe('—');
+    expect(formatPercent(null, { fallback: '?' })).toBe('?');
+  });
+});
 
 describe('formatDurationSec', () => {
   it('formats seconds as M:SS with a zero-padded seconds field', () => {

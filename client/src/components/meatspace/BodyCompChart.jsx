@@ -5,6 +5,7 @@ import {
 import * as api from '../../services/api';
 import BrailleSpinner from '../BrailleSpinner';
 import useChartColors from '../../hooks/useChartColors.js';
+import { formatWeight, formatPercent } from '../../utils/formatters.js';
 
 export default function BodyCompChart() {
   const chartColors = useChartColors();
@@ -54,7 +55,7 @@ export default function BodyCompChart() {
         <p className="text-gray-400 mb-1">{label}</p>
         {payload.map(p => (
           <p key={p.dataKey} style={{ color: p.color }}>
-            {p.name}: {p.value}{p.dataKey === 'weight' ? ' lbs' : '%'}
+            {p.name}: {p.dataKey === 'weight' ? formatWeight(p.value) : formatPercent(p.value)}
           </p>
         ))}
       </div>

@@ -136,6 +136,55 @@ export function formatCompactCount(n) {
 }
 
 /**
+ * Round a number to `decimals` places and drop trailing zeros
+ * (170.35000000000002 → 170.4, 170.0 → 170). Returns null for
+ * non-finite input so callers can render their own fallback.
+ * @param {number|string|null|undefined} value
+ * @param {number} decimals
+ * @returns {number|null}
+ */
+function roundForDisplay(value, decimals) {
+  // `Number(null)` and `Number('')` are both 0, which would render a missing
+  // measurement as a real "0 lbs" — reject the absent cases before coercing.
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return parseFloat(n.toFixed(decimals));
+}
+
+/**
+ * Format a body weight for display. Unit-converted weights arrive as raw
+ * binary floats (e.g. 170.35000000000002), which read as false precision and
+ * blow out a tile's line — round to one decimal by default and suffix the unit.
+ * @param {number|string|null|undefined} value - Weight in `unit`
+ * @param {object} [options]
+ * @param {string} [options.unit='lbs'] - Unit suffix
+ * @param {number} [options.decimals=1] - Decimal places to keep
+ * @param {string} [options.fallback='—'] - Rendered when the value is missing/invalid
+ * @returns {string} e.g. "170.4 lbs"
+ */
+export function formatWeight(value, { unit = 'lbs', decimals = 1, fallback = '—' } = {}) {
+  const n = roundForDisplay(value, decimals);
+  if (n === null) return fallback;
+  return unit ? `${n} ${unit}` : `${n}`;
+}
+
+/**
+ * Format a percentage for display, rounding away float noise the same way
+ * `formatWeight` does (18.400000000000002 → "18.4%").
+ * @param {number|string|null|undefined} value - Percentage (already 0–100)
+ * @param {object} [options]
+ * @param {number} [options.decimals=1] - Decimal places to keep
+ * @param {string} [options.fallback='—'] - Rendered when the value is missing/invalid
+ * @returns {string} e.g. "18.4%"
+ */
+export function formatPercent(value, { decimals = 1, fallback = '—' } = {}) {
+  const n = roundForDisplay(value, decimals);
+  if (n === null) return fallback;
+  return `${n}%`;
+}
+
+/**
  * Format bytes as a human-readable string
  * @param {number} bytes - Size in bytes
  * @param {number} decimals - Number of decimal places
