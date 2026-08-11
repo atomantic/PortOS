@@ -259,15 +259,14 @@ export default function OpenClaw() {
   }, [loadMessages, selectedSessionId, status?.configured]);
 
   const handleSelectSession = useCallback((sessionId) => {
-    if (sending || sessionId === selectedSessionIdRef.current) return;
-    setSelectedSessionId(sessionId);
+    if (sending) return;
+    // Re-tapping the active session is still a dismissal of the mobile panel,
+    // so the side panel closes even when the selection doesn't change.
+    if (sessionId !== selectedSessionIdRef.current) setSelectedSessionId(sessionId);
     setShowSidePanel(false);
   }, [sending]);
 
-  const activeContextCount = useMemo(
-    () => Object.values(context).filter(value => String(value || '').trim()).length,
-    [context]
-  );
+  const activeContextCount = Object.values(context).filter(value => String(value || '').trim()).length;
 
   const handleComposerKeyDown = (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
