@@ -13,6 +13,30 @@ const HEALTH_STYLE = {
   critical: { color: 'text-port-error', bg: 'bg-port-error/10', icon: XCircle, label: 'Critical' }
 };
 
+// Every alert names its own next step. The server tags each warning with a
+// `type` (server/routes/systemHealth.js), so the banner can carry the link that
+// actually resolves it instead of leaving the user to hunt for the right page.
+// `forge` is intentionally absent — its message already embeds gh's own remedy
+// text and there is no in-app page that fixes it.
+const REMEDIATION = {
+  disk: { to: '/data', label: 'Disk usage breakdown' },
+  memory: { to: '/devtools/processes', label: 'All processes' },
+  cpu: { to: '/devtools/processes', label: 'All processes' },
+  process: { to: '/devtools/processes', label: 'All processes' },
+  restarts: { to: '/devtools/processes', label: 'All processes' },
+  apps: { to: '/apps', label: 'Apps' },
+  database: { to: '/settings/database', label: 'Database settings' },
+};
+
+// Drill-in links shown directly under the alerts so at least one next step is
+// above the fold at phone widths (375px), where the metric cards alone push
+// every control off-screen.
+const DRILL_INS = [
+  { to: '/data', label: 'Disk usage breakdown' },
+  { to: '/devtools/processes', label: 'All processes' },
+  { to: '/apps', label: 'Apps' },
+];
+
 function pctTone(pct, warn, critical) {
   if (pct >= critical) return 'text-port-error';
   if (pct >= warn) return 'text-port-warning';
@@ -114,11 +138,27 @@ export default function SystemHealthPage() {
 
         {health.warnings.length > 0 && (
           <section className="space-y-2">
-            {health.warnings.map((w, i) => (
-              <Banner key={i} tone="warning" size="md" icon={AlertTriangle} align="center">{w.message}</Banner>
-            ))}
+            {health.warnings.map((w, i) => {
+              const remedy = REMEDIATION[w.type];
+              return (
+                <Banner key={`${w.type}-${i}`} tone="warning" size="md" icon={AlertTriangle} align="start">
+                  <div>{w.message}</div>
+                  {remedy && (
+                    <Link to={remedy.to} className="inline-block mt-1 font-medium underline underline-offset-2 hover:no-underline">
+                      {remedy.label} →
+                    </Link>
+                  )}
+                </Banner>
+              );
+            })}
           </section>
         )}
+
+        <nav aria-label="System drill-downs" className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+          {DRILL_INS.map(link => (
+            <Link key={link.to} to={link.to} className="text-port-accent hover:text-port-accent/80">{link.label} →</Link>
+          ))}
+        </nav>
 
         <section className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <ResourceCard
@@ -171,10 +211,8 @@ export default function SystemHealthPage() {
           ) : (
             <p className="text-gray-500 text-sm">No PM2 processes reporting.</p>
           )}
-          <div className="mt-3 flex items-center gap-3 text-xs">
+          <div className="mt-3 text-xs">
             <Link to="/devtools/processes" className="text-port-accent hover:text-port-accent/80">All processes →</Link>
-            <Link to="/apps" className="text-port-accent hover:text-port-accent/80">Apps →</Link>
-            <Link to="/data" className="text-port-accent hover:text-port-accent/80">Disk usage breakdown →</Link>
           </div>
         </section>
 
