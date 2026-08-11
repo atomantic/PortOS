@@ -28,7 +28,10 @@ describe('migration 255 — character visual foundation', () => {
     );
     expect(architect).toContain('physicalDescription` must be 50–100 words');
     expect(architect).toContain('"colorPalette"');
-    expect(judge).toContain('blank render identity');
+    // Migration 256 widened the phrase from "blank render identity" to
+    // "blank profile/render identity" — the render-identity requirement this
+    // migration shipped survived, so assert the surviving substring.
+    expect(judge).toContain('render identity is still an incomplete character foundation');
     expect(judge).toContain('cannot score above 5');
   });
 });

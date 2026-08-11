@@ -23,11 +23,12 @@ export const ACCEPTED_OLD_MD5 = {
   'pipeline-arc-resolve.md': [
     'cc27b4da1d1a13c35e35d1c2d6183815', // post-123 / pre-245 — the episodes[] channel, before edits had to name a finding
     '5b340885c6e8f8afc63424d6b5bc7eb7', // pre-123 (episodes forbidden)
+    '96f73a7e90526d65ef2bb100fb1cd4bf', // post-251 (field-sparse bounded patches), superseded by 254
   ],
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-arc-resolve.md': '96f73a7e90526d65ef2bb100fb1cd4bf', // post-251 (field-sparse bounded patches)
+  'pipeline-arc-resolve.md': '31eca76b68f40de1b93734fe9bc9f4bb', // post-254 (character arcs)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

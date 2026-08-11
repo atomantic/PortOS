@@ -22,11 +22,14 @@ const md5 = (str) => {
 // `buildPromptDriftTables` sweep picks up this file's hashes from a single
 // source of truth instead of re-mirroring them by hand.
 export const ACCEPTED_OLD_MD5 = {
-  'writers-room-places.md': '7f1f80eb63d67a21161994cde115045e',
+  'writers-room-places.md': [
+    '7f1f80eb63d67a21161994cde115045e',
+    '24a33628cc94d80fa5ca60831d973daf', // this migration's own body, superseded by 022
+  ],
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'writers-room-places.md': '24a33628cc94d80fa5ca60831d973daf',
+  'writers-room-places.md': 'a7f68e51dd6b4421d20f5bd9d855d9b4', // post-022 (setting → place rename)
 };
 
 export default {
@@ -59,7 +62,7 @@ export default {
         continue;
       }
 
-      if (existingMd5 !== ACCEPTED_OLD_MD5[filename]) {
+      if (!ACCEPTED_OLD_MD5[filename].includes(existingMd5)) {
         console.warn(
           `⚠️  places extraction prompt ${filename} has been customized — skipping auto-update.\n` +
           `   To pick up the new intExt / timeOfDay fields, diff:\n` +

@@ -11,11 +11,15 @@
 import { makePromptReplaceMigration } from './_lib.js';
 
 export const ACCEPTED_OLD_MD5 = {
-  'pipeline-character-foundation.md': ['f1c0b75a8161c0bc7f26752d148a5c1c'],
+  'pipeline-character-foundation.md': [
+    'f1c0b75a8161c0bc7f26752d148a5c1c',
+    'd6c449c06de73a0868141c899b26e52c', // superseded by 255 (visual foundation)
+    '04419e382f3b46ed92bfaaa1d4f39e13', // superseded by 256 (series-linked cast)
+  ],
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-character-foundation.md': 'd6c449c06de73a0868141c899b26e52c',
+  'pipeline-character-foundation.md': 'b7d2bac347e11171606f4c6acfcd32e1', // post-256 (series-linked cast)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

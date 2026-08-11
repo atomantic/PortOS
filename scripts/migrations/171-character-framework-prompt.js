@@ -27,12 +27,15 @@ import { makePromptReplaceMigration } from './_lib.js';
 
 // Pre-change shipped hash (the current shipped body before #2175 remainder).
 export const ACCEPTED_OLD_MD5 = {
-  'universe-character-expand.md': ['67b6e73ed47f318451a730088b4cff14'], // post-027
+  'universe-character-expand.md': [
+    '67b6e73ed47f318451a730088b4cff14', // post-027
+    '177b6e4e8bdf445308cf8ac423cd5ad8', // superseded by 257 (complete expand fields)
+  ],
 };
 
 // Post-change shipped hash (character framework fields added).
 export const NEW_SHIPPED_MD5 = {
-  'universe-character-expand.md': '177b6e4e8bdf445308cf8ac423cd5ad8',
+  'universe-character-expand.md': '924fe8836f3014873d1789e98e997db2', // post-257 (complete expand fields)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({
