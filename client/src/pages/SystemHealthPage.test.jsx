@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const HEALTH = {
@@ -71,11 +71,11 @@ describe('SystemHealthPage remediation links', () => {
     ]));
     renderPage();
 
-    await screen.findByText('GitHub CLI unusable (unauthenticated)');
+    const banner = (await screen.findByText('GitHub CLI unusable (unauthenticated)')).closest('div');
+    expect(within(banner).queryByRole('link')).toBeNull();
+    // The drill-in nav is unaffected — it always offers its three destinations.
     const nav = screen.getByRole('navigation', { name: 'System drill-downs' });
-    // Only the drill-in nav's three links exist — the forge alert adds none.
     expect(within(nav).getAllByRole('link')).toHaveLength(3);
-    expect(screen.getAllByRole('link')).toHaveLength(4);
   });
 
   it('renders the drill-in links above the metric cards', async () => {
@@ -84,6 +84,6 @@ describe('SystemHealthPage remediation links', () => {
 
     const nav = await screen.findByRole('navigation', { name: 'System drill-downs' });
     const cards = screen.getByText('Memory').closest('section');
-    await waitFor(() => expect(nav.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy());
+    expect(nav.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

@@ -30,12 +30,9 @@ const REMEDIATION = {
 
 // Drill-in links shown directly under the alerts so at least one next step is
 // above the fold at phone widths (375px), where the metric cards alone push
-// every control off-screen.
-const DRILL_INS = [
-  { to: '/data', label: 'Disk usage breakdown' },
-  { to: '/devtools/processes', label: 'All processes' },
-  { to: '/apps', label: 'Apps' },
-];
+// every control off-screen. Derived from REMEDIATION so a link's label and
+// destination can't drift between the banner and the nav.
+const DRILL_INS = ['disk', 'process', 'apps'].map(type => REMEDIATION[type]);
 
 function pctTone(pct, warn, critical) {
   if (pct >= critical) return 'text-port-error';
@@ -141,7 +138,7 @@ export default function SystemHealthPage() {
             {health.warnings.map((w, i) => {
               const remedy = REMEDIATION[w.type];
               return (
-                <Banner key={`${w.type}-${i}`} tone="warning" size="md" icon={AlertTriangle} align="start">
+                <Banner key={`${w.type || 'warning'}-${i}`} tone="warning" size="md" icon={AlertTriangle} align="start">
                   <div>{w.message}</div>
                   {remedy && (
                     <Link to={remedy.to} className="inline-block mt-1 font-medium underline underline-offset-2 hover:no-underline">
