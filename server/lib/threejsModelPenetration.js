@@ -346,19 +346,17 @@ function sampleSolid(bounds, contains, divisions) {
   const [min, max] = bounds;
   const step = [0, 1, 2].map((axis) => (max[axis] - min[axis]) / divisions);
   const kept = [];
-  let total = 0;
   for (let i = 0; i < divisions; i += 1) {
     const x = min[0] + (step[0] * (i + 0.5));
     for (let j = 0; j < divisions; j += 1) {
       const y = min[1] + (step[1] * (j + 0.5));
       for (let k = 0; k < divisions; k += 1) {
-        total += 1;
         const point = [x, y, min[2] + (step[2] * (k + 0.5))];
         if (contains(point)) kept.push(point);
       }
     }
   }
-  return { kept, total };
+  return kept;
 }
 
 /** Deterministic stride down to at most `limit` entries, endpoints included. */
@@ -393,15 +391,15 @@ function collectVolumes(spec) {
       if (solid && inverse) {
         const sampled = solid.contains
           ? sampleSolid(solid.bounds, solid.contains, SAMPLE_GRID)
-          : { kept: customVertexPoints(part.geometry), total: 0 };
+          : customVertexPoints(part.geometry);
         // A shape too thin to catch a cell centre gets one finer pass before it
         // is written off — a narrow torus or a shallow extrude is a real solid,
         // not an unmeasurable one.
-        const refined = solid.contains && sampled.kept.length === 0
+        const refined = solid.contains && sampled.length === 0
           ? sampleSolid(solid.bounds, solid.contains, RETRY_GRID)
           : sampled;
-        if (refined.kept.length > 0) {
-          const worldSamples = strideDown(refined.kept, MAX_PAIR_SAMPLES)
+        if (refined.length > 0) {
+          const worldSamples = strideDown(refined, MAX_PAIR_SAMPLES)
             .map((point) => applyTransform(transform, point));
           const corners = [];
           for (const x of [solid.bounds[0][0], solid.bounds[1][0]]) {
