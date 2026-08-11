@@ -1714,6 +1714,15 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
     rest.numFrames ?? chainModel?.defaultFrames ?? DEFAULT_NUM_FRAMES,
   );
 
+  const chainState = { stopped: false };
+  activeChain = chainState;
+
+  // Hold an outer job entry so attachSseClient(outerJobId) wires up against
+  // the same SSE stream the queue sees. Without this, /api/video-gen/:id/events
+  // attached at the outer id would 404 because no `jobs` map entry exists.
+  const outerJob = { id: outerJobId, clients: [], status: 'running' };
+  jobs.set(outerJobId, outerJob);
+
   // Chain-level wall-clock estimate (#3801). Every chunk is a full render that
   // pays the fixed per-render cost again, so the chain estimate is the
   // per-chunk estimate times the chunk count — `chunks` is handed to the
@@ -1722,6 +1731,9 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
   // `width = 768, height = 512` parameter defaults and the samplerLocked step
   // rule); the estimator returns null on anything it can't resolve, so a drift
   // here degrades to "no estimate" rather than to a wrong number.
+  // Deliberately placed AFTER `activeChain`/`jobs` are registered: it is the
+  // first await in this function, and a cancel arriving during the history
+  // read must still find the chain to stop.
   const chainSteps = chainModel?.samplerLocked
     ? chainModel.steps
     : (rest.steps ? Number(rest.steps) : chainModel?.steps);
@@ -1736,15 +1748,6 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
   });
   const chainEtaField = chainEta ? { etaMs: chainEta.etaMs } : {};
   console.log(`🎬 Chained video [${outerJobId.slice(0, 8)}]: ${totalChunks} chunks, eta=${chainEta ? `${Math.round(chainEta.etaMs / 1000)}s (${chainEta.basis}, n=${chainEta.sampleCount})` : 'unknown'}`);
-
-  const chainState = { stopped: false };
-  activeChain = chainState;
-
-  // Hold an outer job entry so attachSseClient(outerJobId) wires up against
-  // the same SSE stream the queue sees. Without this, /api/video-gen/:id/events
-  // attached at the outer id would 404 because no `jobs` map entry exists.
-  const outerJob = { id: outerJobId, clients: [], status: 'running' };
-  jobs.set(outerJobId, outerJob);
 
   const chunkIds = [];
   let currentSource = rest.sourceImagePath;

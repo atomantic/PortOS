@@ -26,6 +26,12 @@
  *      fresh install has no measurements by definition.
  *
  * Everything here is pure — `history` is passed in, never read from disk.
+ *
+ * Deliberately NOT in the shape key: mode (t2v / i2v / fflf / extend) and
+ * LoRAs. They do move render cost, but folding them in would fragment an
+ * install's already-small sample set into buckets too thin to fit — and the
+ * resulting variance is ordinary estimate noise, whereas an over-narrow key
+ * produces "no estimate" for renders we could have called within a minute.
  */
 
 // Only the most recent N same-model records feed a fit. Older runs drift away
