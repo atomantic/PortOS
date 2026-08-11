@@ -91,9 +91,12 @@ export function OverviewTab() {
   // Taste-Identity card data
   const themesAvailable = themesData?.available;
   const firstTheme = themesAvailable ? themesData.themes?.[0] : null;
-  // A missing taste profile is a prerequisite the user fills elsewhere; anything
-  // else just means themes haven't been generated from it yet.
-  const needsTasteProfile = !themesAvailable && themesData?.reason === 'no_taste_data';
+  // A missing taste profile is a prerequisite the user fills elsewhere; only an
+  // explicit `not_generated` means the profile is there and just needs themes.
+  // Anything else — including a failed fetch, where `themesData` is null — routes
+  // to the profile, which is harmless either way, rather than offering a generate
+  // that would fail for a user with no profile.
+  const needsTasteProfile = !themesAvailable && themesData?.reason !== 'not_generated';
 
   // Cross-Domain card data
   const narrativeAvailable = narrativeData?.available;
@@ -204,7 +207,9 @@ export function OverviewTab() {
 
               <div className="text-xl font-bold text-white mb-1">{stat}</div>
 
-              <p className="text-xs text-gray-400 leading-relaxed line-clamp-2">{topInsight}</p>
+              {/* A <span> rather than a <p>: only phrasing content is valid
+                  inside the <button> this summary sits in. */}
+              <span className="block text-xs text-gray-400 leading-relaxed line-clamp-2">{topInsight}</span>
             </button>
 
             <div className="flex items-center justify-between mt-3">

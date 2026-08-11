@@ -61,6 +61,15 @@ describe('Insights OverviewTab empty cards', () => {
     expect(navigateMock).toHaveBeenCalledWith('/digital-twin/taste');
   });
 
+  it('falls back to the taste-profile deep link when the themes fetch fails', async () => {
+    // A rejected fetch leaves `themesData` null — offering "Generate themes"
+    // there would fail for anyone who has no profile yet.
+    getInsightThemes.mockResolvedValue(null);
+    renderOverview();
+    expect(await screen.findByText('Complete taste profile')).toBeTruthy();
+    expect(screen.queryByText('Generate themes')).toBeNull();
+  });
+
   it('generates themes in place once a taste profile exists', async () => {
     getInsightThemes.mockResolvedValue({ available: false, reason: 'not_generated' });
     refreshInsightThemes.mockResolvedValue({
