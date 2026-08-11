@@ -30,6 +30,10 @@ describe('formatWeight', () => {
     expect(formatWeight(NaN)).toBe('—');
     expect(formatWeight(Infinity)).toBe('—');
     expect(formatWeight(null, { fallback: 'n/a' })).toBe('n/a');
+    // Values that coerce to 0 must not render as a real measurement.
+    expect(formatWeight('   ')).toBe('—');
+    expect(formatWeight(false)).toBe('—');
+    expect(formatWeight([])).toBe('—');
   });
 
   it('keeps a legitimate zero rather than treating it as missing', () => {

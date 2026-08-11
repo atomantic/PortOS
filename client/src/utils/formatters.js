@@ -144,9 +144,12 @@ export function formatCompactCount(n) {
  * @returns {number|null}
  */
 function roundForDisplay(value, decimals) {
-  // `Number(null)` and `Number('')` are both 0, which would render a missing
-  // measurement as a real "0 lbs" — reject the absent cases before coercing.
-  if (value === null || value === undefined || value === '') return null;
+  // `Number(null)`, `Number('')`, `Number('   ')` and `Number(false)` are all 0,
+  // which would render a missing measurement as a real "0 lbs" — accept only a
+  // number or a non-blank numeric string before coercing.
+  const isNumeric = typeof value === 'number'
+    || (typeof value === 'string' && value.trim() !== '');
+  if (!isNumeric) return null;
   const n = Number(value);
   if (!Number.isFinite(n)) return null;
   return parseFloat(n.toFixed(decimals));
