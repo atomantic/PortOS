@@ -13,7 +13,7 @@
 import { randomUUID } from 'crypto';
 import { PATHS, ensureDir, resolveImageRef } from '../../lib/fileUtils.js';
 import {
-  pruneStaleReferenceSheets, mergePreservedSheetPointers, isStr, trimTo,
+  BIBLE_KEYS, pruneStaleReferenceSheets, mergePreservedSheetPointers, isStr, trimTo,
 } from '../../lib/storyBible.js';
 import { store } from './storeFacade.js';
 import {
@@ -304,9 +304,6 @@ export async function insertUniverseWithId(input = {}) {
   return next;
 }
 
-// Canon array keys carrying bible entries that project to catalog rows.
-const CANON_ARRAY_KEYS = ['characters', 'places', 'objects'];
-
 // Compare two canon entries for CONTENT equality, ignoring `updatedAt` (the
 // field we're deciding whether to bump). A cheap stable-stringify is enough —
 // entries are small plain objects and a false "changed" only costs a redundant
@@ -324,7 +321,7 @@ function canonEntryContentEqual(a, b) {
 // their old timestamp so this never manufactures projection churn.
 function stampChangedCanonEntries(prev, next) {
   const nowMs = Date.now();
-  for (const key of CANON_ARRAY_KEYS) {
+  for (const key of BIBLE_KEYS) {
     const nextList = Array.isArray(next[key]) ? next[key] : null;
     if (!nextList) continue;
     const prevById = new Map(
@@ -452,7 +449,7 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
       'imageMode', 'imageModelId',
       // Canon entity arrays — patched wholesale (the sanitizer reruns
       // sanitizeBibleList so per-entry shape is enforced on every save).
-      'characters', 'places', 'objects',
+      ...BIBLE_KEYS,
       // Share-bucket origin metadata (importer sets it; user clears via wholesale null).
       'origin',
       // Local-only "don't sync" marker — see sanitizeTemplate. The safety
@@ -549,7 +546,7 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
     // stale. (The characters array was already remapped above for sheet
     // pointers — this preserves a different field and composes cleanly.)
     if (!isMutator) {
-      for (const canonKey of ['characters', 'places', 'objects']) {
+      for (const canonKey of BIBLE_KEYS) {
         if (Array.isArray(scalarPatch[canonKey]) && Array.isArray(cur[canonKey])) {
           scalarPatch[canonKey] = preserveImageRefsById(scalarPatch[canonKey], cur[canonKey]);
         }

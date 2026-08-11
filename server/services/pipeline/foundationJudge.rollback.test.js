@@ -68,6 +68,9 @@ vi.mock('./series.js', async (importActual) => ({
   }),
 }));
 
+// Imported after the mocks (which are hoisted above the TEST_DATA_ROOT literal)
+// so the mocked `PATHS.data` is in place before the store modules read it.
+const { BIBLE_KEYS } = await import('../../lib/storyBible.js');
 const { createUniverse, getUniverse, updateUniverse, PREMISE_MAX } = await import('../universeBuilder.js');
 const {
   snapshotFoundationState,
@@ -97,6 +100,7 @@ async function seedFoundation() {
     styleNotes: 'style before',
     influences: { embrace: ['Example'], avoid: [] },
     characters: CAST,
+    places: [{ name: 'Example Gatehouse', description: 'a shuttered relay station', imageRefs: ['gate-1.png'] }],
   });
   seriesState = {
     id: 'ser-1',
@@ -198,6 +202,53 @@ describe('restoreFoundationState — against the real universe write path', () =
     // An authored field differing → still caught.
     expect(mismatchedFoundationFields(snap(entry), snap({ ...volatile, need: 'something else' })))
       .toEqual(['universe.characters']);
+  });
+
+  it('strips the write-path-owned fields from EVERY canon array, not just characters', () => {
+    const { comparableUniverseFields } = __testing;
+    const owned = {
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      referenceSheetImageRef: 'a.png',
+      referenceSheets: { front: 'f.png' },
+      imageRefs: ['a.png'],
+    };
+    // No `characters` key at all — the old `characters`-only guard bailed out
+    // here and returned every other canon array with its owned fields intact.
+    const universe = {
+      logline: 'L',
+      ...Object.fromEntries(BIBLE_KEYS
+        .filter((key) => key !== 'characters')
+        .map((key) => [key, [{ id: `${key}-1`, name: `Example ${key}`, ...owned }]])),
+    };
+
+    const comparable = comparableUniverseFields(universe);
+
+    expect(comparable.logline).toBe('L');
+    for (const key of BIBLE_KEYS.filter((k) => k !== 'characters')) {
+      expect(Object.keys(comparable[key][0]).sort()).toEqual(['id', 'name']);
+    }
+  });
+
+  it('tolerates the write path re-stamping a NON-character canon entry', async () => {
+    const universe = await seedFoundation();
+    const before = await getUniverse(universe.id);
+
+    // A worldbuilding repair rewriting an existing place — the same shape of
+    // edit a character repair makes, on the canon array the character-only
+    // stripping used to miss.
+    await updateUniverse(universe.id, (latest) => ({
+      places: latest.places.map((p) => ({ ...p, description: `${p.description} (rewritten by the repair)` })),
+    }));
+    // ...and the faithful undo, which is itself a content change.
+    await updateUniverse(universe.id, () => ({ places: structuredClone(before.places) }));
+    const after = await getUniverse(universe.id);
+
+    const { comparableUniverseFields } = __testing;
+    // Authored content came back byte-for-byte once the owned fields are gone.
+    expect(comparableUniverseFields(after).places).toEqual(comparableUniverseFields(before).places);
+    // ...and the reason a raw comparison would have failed: the LWW clock moved.
+    expect(Date.parse(after.places[0].updatedAt))
+      .toBeGreaterThan(Date.parse(before.places[0].updatedAt));
   });
 
   it('distinguishes an absent checkpoint field from a null one', () => {

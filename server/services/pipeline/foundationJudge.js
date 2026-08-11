@@ -43,7 +43,7 @@ import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextB
 import { getStage } from '../promptService.js';
 import { composeStyleNotes, sanitizeStyleGuide, STYLE_GUIDE_LIMITS } from '../../lib/styleGuide.js';
 import { renderCharacterArcsForPrompt, sanitizeCharacterArcList } from '../../lib/seriesCharacterArc.js';
-import { BIBLE_SOURCE, sanitizeCharacter } from '../../lib/storyBible.js';
+import { BIBLE_KEYS, BIBLE_SOURCE, sanitizeCharacter } from '../../lib/storyBible.js';
 import { renderEntitiesSummary } from '../../lib/universePromptRenderers.js';
 import { getUniverse, updateUniverse } from '../universeBuilder.js';
 import { isBlankString, isBlankArray } from '../universeCharacterExpand.js';
@@ -1490,10 +1490,18 @@ const comparableCanonEntry = (entry) => {
   return rest;
 };
 
+// Walk EVERY canon array the bible defines, not just `characters`. The write
+// path (`stampChangedCanonEntries` in universeBuilder/crud.js) stamps
+// `updatedAt` across all of `BIBLE_KEYS`, so the moment a canon array beyond
+// `characters` joins FOUNDATION_UNIVERSE_SNAPSHOT_FIELDS the same false
+// "restored foundation fields did not match the checkpoint" pause would return.
 const comparableUniverseFields = (universe) => {
   if (!universe || typeof universe !== 'object') return universe ?? null;
-  if (!Array.isArray(universe.characters)) return universe;
-  return { ...universe, characters: universe.characters.map(comparableCanonEntry) };
+  const comparable = { ...universe };
+  for (const key of BIBLE_KEYS) {
+    if (Array.isArray(comparable[key])) comparable[key] = comparable[key].map(comparableCanonEntry);
+  }
+  return comparable;
 };
 
 // `undefined` (field absent from the record) is NOT the same as `null` — the
@@ -1740,5 +1748,7 @@ export const __testing = {
   CHARACTER_FOUNDATION_BATCH_SIZE,
   FRAMEWORK_STRING_FIELDS,
   mismatchedFoundationFields,
+  comparableUniverseFields,
   CANON_WRITE_PATH_OWNED_FIELDS,
+  FOUNDATION_UNIVERSE_SNAPSHOT_FIELDS,
 };
