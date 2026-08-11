@@ -2,17 +2,11 @@ import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import {
   CalendarClock, ChevronLeft, ChevronRight, Mail, MailOpen, Send,
-  CalendarDays, Music, Play, MessageSquare, Activity, MapPin, Globe,
+  CalendarDays, Music, Play, MessageSquare, Activity, MapPin, Globe, Download,
 } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
-import SpotifyImportPanel from '../components/timeline/SpotifyImportPanel';
-import TakeoutLocationImportPanel from '../components/timeline/TakeoutLocationImportPanel';
-import DiscordImportPanel from '../components/timeline/DiscordImportPanel';
-import WhatsappImportPanel from '../components/timeline/WhatsappImportPanel';
-import BrowserHistoryImportPanel from '../components/timeline/BrowserHistoryImportPanel';
-import YoutubeImportPanel from '../components/timeline/YoutubeImportPanel';
-import GmailMboxImportPanel from '../components/timeline/GmailMboxImportPanel';
+import TimelineImportPanels, { IMPORT_SOURCE_COUNT } from '../components/timeline/TimelineImportPanels';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
 import { formatClockTime, formatDurationSec } from '../utils/formatters';
@@ -140,6 +134,10 @@ export default function Timeline() {
   const [loading, setLoading] = useState(true);
   // Bumped after a bulk import lands so the current day view re-fetches.
   const [reloadKey, setReloadKey] = useState(0);
+  // The bulk-backfill importers are one-time setup affordances, so they stay
+  // behind a collapsed disclosure instead of outranking the day's activity
+  // (#3789). The empty-day state offers the same toggle for discoverability.
+  const [showImports, setShowImports] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -214,16 +212,26 @@ export default function Timeline() {
             </button>
           )}
         </div>
-        <div className="text-sm text-gray-400">{dayLabel}</div>
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-400">{dayLabel}</span>
+          <button
+            type="button"
+            onClick={() => setShowImports((v) => !v)}
+            aria-expanded={showImports}
+            aria-controls="timeline-import-panels"
+            className="inline-flex items-center gap-1.5 rounded border border-port-border bg-port-card px-2.5 py-1.5 text-xs text-gray-400 hover:border-port-accent hover:text-gray-200"
+          >
+            <Download size={14} />
+            Import history ({IMPORT_SOURCE_COUNT})
+          </button>
+        </div>
       </div>
 
-      <GmailMboxImportPanel onImported={() => setReloadKey((k) => k + 1)} />
-      <SpotifyImportPanel onImported={() => setReloadKey((k) => k + 1)} />
-      <TakeoutLocationImportPanel onImported={() => setReloadKey((k) => k + 1)} />
-      <DiscordImportPanel onImported={() => setReloadKey((k) => k + 1)} />
-      <WhatsappImportPanel onImported={() => setReloadKey((k) => k + 1)} />
-      <BrowserHistoryImportPanel onImported={() => setReloadKey((k) => k + 1)} />
-      <YoutubeImportPanel onImported={() => setReloadKey((k) => k + 1)} />
+      {showImports && (
+        <div id="timeline-import-panels">
+          <TimelineImportPanels onImported={() => setReloadKey((k) => k + 1)} />
+        </div>
+      )}
 
       <Histogram histogram={histogram} />
 
@@ -242,6 +250,16 @@ export default function Timeline() {
         <div className="rounded border border-dashed border-port-border py-12 text-center text-gray-500">
           No recorded activity on this day.
           <div className="mt-1 text-xs">Activity populates as your message and calendar accounts sync.</div>
+          {!showImports && (
+            <button
+              type="button"
+              onClick={() => setShowImports(true)}
+              className="mt-3 inline-flex items-center gap-1.5 rounded border border-port-border bg-port-card px-3 py-1.5 text-xs text-gray-300 hover:border-port-accent hover:text-gray-100"
+            >
+              <Download size={14} />
+              Backfill from an export
+            </button>
+          )}
         </div>
       ) : (
         <div className="flex flex-col gap-2 pb-6">
