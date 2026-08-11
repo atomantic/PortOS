@@ -33,7 +33,10 @@ import { safeReadStorage, safeRemoveStorage } from '../lib/safeStorage.js';
 import {
   RINGS,
   ENERGY,
+  STATUS_FILTER_IDS,
+  STATUS_FILTER_LABELS,
   contactStatus,
+  matchesStatusFilter,
   ringFor,
   energyFor,
   tagsToArray,
@@ -42,15 +45,19 @@ import {
 
 const STORAGE_KEY = 'portos-tribe-v1';
 
+// Care Queue leads: the page's headline metric is the overdue count, so arrival
+// lands on the people who need a touch (each row carries the Touch button) rather
+// than on the full roster (#3791).
 const TABS = [
+  { id: 'care', label: 'Care Queue', icon: Clock },
   { id: 'circle', label: 'Circle', icon: Network },
   { id: 'map', label: 'Map', icon: Orbit },
-  { id: 'care', label: 'Care Queue', icon: Clock },
   { id: 'focus', label: 'Focus', icon: Heart },
 ];
 
 const TAB_IDS = TABS.map((tab) => tab.id);
-const DEFAULT_TAB = 'circle';
+const DEFAULT_TAB = 'care';
+const DEFAULT_STATUS = 'all';
 
 const emptyDraft = () => ({
   id: null,
@@ -67,6 +74,13 @@ const emptyDraft = () => ({
   nextMove: '',
   notes: '',
 });
+
+// Default values are omitted from the URL so `/tribe` stays clean.
+function withParam(params, key, value, defaultValue) {
+  if (value === defaultValue) params.delete(key);
+  else params.set(key, value);
+  return params;
+}
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
@@ -90,18 +104,35 @@ function clearLegacyContacts() {
   safeRemoveStorage(STORAGE_KEY);
 }
 
-function StatTile({ icon: Icon, label, value, detail, className = '' }) {
-  return (
-    <div className={`border border-port-border bg-port-card rounded p-4 min-w-0 ${className}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-xs uppercase tracking-wide text-gray-500">{label}</p>
-          <p className="mt-1 text-2xl font-semibold text-white">{value}</p>
-          {detail && <p className="mt-1 text-xs text-gray-500 truncate">{detail}</p>}
-        </div>
-        <Icon size={20} className="shrink-0 text-port-accent" aria-hidden="true" />
+// A tile that names the user's task (`Needs Care`) is the fastest route into it,
+// so tiles with an `onClick` render as real buttons that filter the list; the
+// rest stay inert text (#3791).
+function StatTile({ icon: Icon, label, value, detail, onClick, active = false, className = '' }) {
+  const body = (
+    <div className="flex items-start justify-between gap-2">
+      <div className="min-w-0">
+        <p className="text-xs uppercase tracking-wide text-gray-500">{label}</p>
+        <p className="mt-1 text-xl font-semibold text-white sm:text-2xl">{value}</p>
+        {detail && <p className="mt-1 text-xs text-gray-500 truncate">{detail}</p>}
       </div>
+      <Icon size={20} className="shrink-0 text-port-accent" aria-hidden="true" />
     </div>
+  );
+  const base = `rounded p-3 min-w-0 text-left sm:p-4 bg-port-card border ${className}`;
+
+  if (!onClick) {
+    return <div className={`${base} border-port-border`}>{body}</div>;
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`${base} w-full transition-colors ${active ? 'border-port-accent/70 ring-1 ring-port-accent/30' : 'border-port-border hover:border-port-accent/50'}`}
+    >
+      {body}
+    </button>
   );
 }
 
@@ -727,25 +758,29 @@ function OutreachQueue() {
   );
 }
 
-function CareQueue({ contacts, onSelect, onLogTouch, onNew }) {
+function CareQueue({ contacts, statusFilter, onStatusFilterChange, onSelect, onLogTouch, onNew }) {
   // External people are outside the tribe — no care cadence is owed, so they
   // never appear in the queue (otherwise their null daysRemaining would sort
   // them to the top alongside genuinely-overdue contacts). Memoized + status
   // computed once per contact (instead of twice per comparison in the sort).
   const queue = useMemo(() => contacts
-    .filter((contact) => contact.ring !== 'external')
+    .filter((contact) => contact.ring !== 'external' && matchesStatusFilter(contact, statusFilter))
     .map((contact) => {
       const score = contactStatus(contact).daysRemaining;
       return { contact, score: score == null ? -999 : score };
     })
     .sort((a, b) => a.score - b.score)
-    .map(({ contact }) => contact), [contacts]);
+    .map(({ contact }) => contact), [contacts, statusFilter]);
 
-  if (!queue.length) return <EmptyState onNew={onNew} />;
+  // A filtered-to-empty queue is a success state ("nobody is overdue"), not the
+  // "no relationships yet" onboarding empty — only show the latter when the whole
+  // roster is empty.
+  if (!queue.length && statusFilter === DEFAULT_STATUS) return <EmptyState onNew={onNew} />;
 
   return (
     <div className="grid gap-3">
-      {queue.map((contact) => (
+      <StatusFilterBar statusFilter={statusFilter} onChange={onStatusFilterChange} />
+      {queue.length ? queue.map((contact) => (
         <ContactCard
           key={contact.id}
           contact={contact}
@@ -753,6 +788,34 @@ function CareQueue({ contacts, onSelect, onLogTouch, onNew }) {
           onSelect={() => onSelect(contact)}
           onLogTouch={() => onLogTouch(contact.id)}
         />
+      )) : (
+        <div className="rounded border border-port-border bg-port-card p-8 text-center text-sm text-gray-500">
+          Nobody is in the {STATUS_FILTER_LABELS[statusFilter].toLowerCase()} bucket right now.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Care-state filter shared by the Care Queue and the Circle roster — the same
+// buckets the summary tiles route into, so a tile click and this bar stay in sync.
+function StatusFilterBar({ statusFilter, onChange }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Care filter">
+      {STATUS_FILTER_IDS.map((id) => (
+        <button
+          key={id}
+          type="button"
+          onClick={() => onChange(id)}
+          aria-pressed={statusFilter === id}
+          className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+            statusFilter === id
+              ? 'border-port-accent/70 bg-port-accent/10 text-port-accent'
+              : 'border-port-border text-gray-400 hover:text-white'
+          }`}
+        >
+          {STATUS_FILTER_LABELS[id]}
+        </button>
       ))}
     </div>
   );
@@ -837,12 +900,26 @@ export default function Tribe() {
       const prevRaw = prev.get('tab');
       const prevTab = TAB_IDS.includes(prevRaw) ? prevRaw : DEFAULT_TAB;
       const resolved = typeof next === 'function' ? next(prevTab) : next;
-      const params = new URLSearchParams(prev);
-      if (resolved === DEFAULT_TAB) params.delete('tab');
-      else params.set('tab', resolved);
-      return params;
+      return withParam(new URLSearchParams(prev), 'tab', resolved, DEFAULT_TAB);
     }, { replace: true });
   };
+  // The care-state filter lives in the URL too (`?status=overdue`), so "show me
+  // the 17 overdue people" is shareable and survives a reload.
+  const rawStatus = searchParams.get('status');
+  const statusFilter = STATUS_FILTER_IDS.includes(rawStatus) ? rawStatus : DEFAULT_STATUS;
+  const setStatusFilter = (next) => {
+    setSearchParams((prev) => withParam(new URLSearchParams(prev), 'status', next, DEFAULT_STATUS), { replace: true });
+  };
+  // Jump from a summary tile straight into the queue it describes; clicking the
+  // active tile again clears back to everyone.
+  const focusStatus = (next) => {
+    const resolved = statusFilter === next ? DEFAULT_STATUS : next;
+    setSearchParams((prev) => {
+      const params = withParam(new URLSearchParams(prev), 'status', resolved, DEFAULT_STATUS);
+      return resolved === DEFAULT_STATUS ? params : withParam(params, 'tab', 'care', DEFAULT_TAB);
+    }, { replace: true });
+  };
+  const [ringsOpen, setRingsOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   // Bumped by every "Add / new relationship" trigger so the form can be
@@ -946,6 +1023,7 @@ export default function Tribe() {
     const normalized = query.trim().toLowerCase();
     return contacts.filter((contact) => {
       if (ringFilter !== 'all' && contact.ring !== ringFilter) return false;
+      if (!matchesStatusFilter(contact, statusFilter)) return false;
       if (!normalized) return true;
       const haystack = [
         contact.name,
@@ -957,7 +1035,7 @@ export default function Tribe() {
       ].join(' ').toLowerCase();
       return haystack.includes(normalized);
     });
-  }, [contacts, query, ringFilter]);
+  }, [contacts, query, ringFilter, statusFilter]);
 
   // overdue/soon already exclude external (its status state is 'external', not in
   // these lists). Capacity is the Dunbar tribe horizon, so it excludes external too.
@@ -1056,6 +1134,7 @@ export default function Tribe() {
   const clearFilters = () => {
     setQuery('');
     setRingFilter('all');
+    setStatusFilter(DEFAULT_STATUS);
   };
 
   const actions = (
@@ -1089,25 +1168,53 @@ export default function Tribe() {
           )}
           {!loading && (
             <>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <StatTile icon={Users} label="Relationships" value={contacts.length} detail={externalCount ? `${supportCount} support · ${externalCount} external` : `${supportCount} support ring`} />
-            <StatTile icon={Clock} label="Needs Care" value={overdueCount} detail="missing or overdue" />
-            <StatTile icon={Calendar} label="Coming Up" value={soonCount} detail="due within 7 days" />
+            <StatTile
+              icon={Clock}
+              label="Needs Care"
+              value={overdueCount}
+              detail="missing or overdue"
+              onClick={() => focusStatus('overdue')}
+              active={statusFilter === 'overdue'}
+            />
+            <StatTile
+              icon={Calendar}
+              label="Coming Up"
+              value={soonCount}
+              detail="due within 7 days"
+              onClick={() => focusStatus('soon')}
+              active={statusFilter === 'soon'}
+            />
             <StatTile icon={Heart} label="Capacity" value={`${tribeCount}/150`} detail="village horizon" />
           </div>
 
           {activeTab === 'circle' && (
             <div className="grid gap-4 xl:grid-cols-[310px_minmax(0,1fr)_minmax(330px,420px)]">
+              {/* Five ring meters are a dashboard, not the task — below xl they
+                  collapse behind a disclosure so the search field and the first
+                  people stay on the first screen (#3791). */}
               <aside className="grid content-start gap-3">
-                {RINGS.map((ring) => (
-                  <RingMeter
-                    key={ring.id}
-                    ring={ring}
-                    contacts={contacts}
-                    active={ringFilter === ring.id}
-                    onClick={() => setRingFilter(ringFilter === ring.id ? 'all' : ring.id)}
-                  />
-                ))}
+                <button
+                  type="button"
+                  onClick={() => setRingsOpen((open) => !open)}
+                  aria-expanded={ringsOpen}
+                  className="flex items-center justify-between gap-2 rounded border border-port-border bg-port-card px-3 py-2 text-sm text-gray-300 hover:text-white xl:hidden"
+                >
+                  <span>Ring capacity</span>
+                  <span className="text-xs text-gray-500">{ringsOpen ? 'Hide' : 'Show'}</span>
+                </button>
+                <div className={`content-start gap-3 xl:grid ${ringsOpen ? 'grid' : 'hidden'}`}>
+                  {RINGS.map((ring) => (
+                    <RingMeter
+                      key={ring.id}
+                      ring={ring}
+                      contacts={contacts}
+                      active={ringFilter === ring.id}
+                      onClick={() => setRingFilter(ringFilter === ring.id ? 'all' : ring.id)}
+                    />
+                  ))}
+                </div>
               </aside>
 
               <section className="min-w-0">
@@ -1132,7 +1239,7 @@ export default function Tribe() {
                       {RINGS.map((ring) => <option key={ring.id} value={ring.id}>{ring.label}</option>)}
                     </select>
                   </label>
-                  {(query || ringFilter !== 'all') && (
+                  {(query || ringFilter !== 'all' || statusFilter !== DEFAULT_STATUS) && (
                     <button
                       type="button"
                       onClick={clearFilters}
@@ -1143,6 +1250,10 @@ export default function Tribe() {
                       <X size={16} aria-hidden="true" />
                     </button>
                   )}
+                </div>
+
+                <div className="mb-3">
+                  <StatusFilterBar statusFilter={statusFilter} onChange={setStatusFilter} />
                 </div>
 
                 {contacts.length === 0 ? (
@@ -1204,6 +1315,8 @@ export default function Tribe() {
                 <OutreachQueue />
                 <CareQueue
                   contacts={contacts}
+                  statusFilter={statusFilter}
+                  onStatusFilterChange={setStatusFilter}
                   onSelect={(contact) => { selectContact(contact); setActiveTab('circle'); }}
                   onLogTouch={logTouch}
                   onNew={startNewRelationship}

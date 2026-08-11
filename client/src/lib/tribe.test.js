@@ -12,6 +12,9 @@ import {
   tagsToArray,
   tagsToInput,
   initialsFor,
+  STATUS_FILTER_IDS,
+  STATUS_FILTER_LABELS,
+  matchesStatusFilter,
 } from './tribe.js';
 
 describe('tribe ring/energy lookups', () => {
@@ -113,5 +116,46 @@ describe('contactStatus / daysBetween', () => {
     expect(s.state).toBe('external');
     expect(s.daysRemaining).toBeNull();
     expect(STATUS_HEX.external).toMatch(/^#[0-9a-f]{6}$/i);
+  });
+});
+
+describe('matchesStatusFilter', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-19T12:00:00'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const overdue = { lastContact: '2026-06-01', cadenceDays: 7 };
+  const soon = { lastContact: '2026-06-15', cadenceDays: 10 };
+  const steady = { lastContact: '2026-06-18', cadenceDays: 45 };
+  const missing = { cadenceDays: 45 };
+
+  it('all matches everyone', () => {
+    expect([overdue, soon, steady, missing].every((c) => matchesStatusFilter(c, 'all'))).toBe(true);
+  });
+
+  it('overdue covers both overdue and never-contacted people', () => {
+    expect(matchesStatusFilter(overdue, 'overdue')).toBe(true);
+    expect(matchesStatusFilter(missing, 'overdue')).toBe(true);
+    expect(matchesStatusFilter(soon, 'overdue')).toBe(false);
+    expect(matchesStatusFilter(steady, 'overdue')).toBe(false);
+  });
+
+  it('soon is only the 7-day window', () => {
+    expect(matchesStatusFilter(soon, 'soon')).toBe(true);
+    expect(matchesStatusFilter(overdue, 'soon')).toBe(false);
+    expect(matchesStatusFilter(steady, 'soon')).toBe(false);
+  });
+
+  it('an unknown filter id degrades to all rather than hiding everyone', () => {
+    expect(matchesStatusFilter(steady, 'bogus')).toBe(true);
+  });
+
+  it('every filter id carries a label', () => {
+    expect(STATUS_FILTER_IDS).toEqual(['all', 'overdue', 'soon']);
+    expect(STATUS_FILTER_IDS.every((id) => Boolean(STATUS_FILTER_LABELS[id]))).toBe(true);
   });
 });

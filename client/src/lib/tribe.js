@@ -58,6 +58,31 @@ export function contactStatus(contact) {
   return { label: dueLabel, tone, state, daysRemaining };
 }
 
+// Care-state filters shared by the Tribe page's summary tiles, roster list, and
+// care queue, so "Needs Care 17" and the list it filters to can never disagree.
+// `all` is the identity filter (null state list = match everything).
+export const STATUS_FILTERS = {
+  all: null,
+  overdue: ['missing', 'overdue'],
+  soon: ['soon'],
+};
+
+export const STATUS_FILTER_IDS = Object.keys(STATUS_FILTERS);
+
+export const STATUS_FILTER_LABELS = {
+  all: 'Everyone',
+  overdue: 'Needs care',
+  soon: 'Coming up',
+};
+
+// Unknown filter ids degrade to `all` rather than hiding everyone — a stale deep
+// link should still show the roster.
+export function matchesStatusFilter(contact, filter) {
+  const states = STATUS_FILTERS[filter];
+  if (!states) return true;
+  return states.includes(contactStatus(contact).state);
+}
+
 // Status → SVG stroke color for the circle-map nodes.
 export const STATUS_HEX = {
   missing: '#9ca3af',
