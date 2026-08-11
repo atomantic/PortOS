@@ -280,9 +280,27 @@ function describeSolid(geometry) {
     case 'lathe': {
       // The profile is revolved about Y, so a sample is inside when its
       // (radius, height) lands in the profile polygon. Three.js sweeps an open
-      // polyline; closing it back to the first point is the only solid that
-      // polyline can bound.
-      const profile = geometry.points;
+      // POLYLINE, which does not name a solid on its own — there are two ways to
+      // close it, and which one is right depends on the profile:
+      //
+      // - Closing it back to its first point is the cross-section reading, and
+      //   the correct one for a wall drawn as a loop (a cup, a rim, a tyre).
+      // - Closing it through the axis is the silhouette reading, correct for a
+      //   profile drawn once from bottom to top (a vase, a spun cone).
+      //
+      // A loop encloses area, and a silhouette closed on itself encloses none —
+      // which is what tells the two apart. Without the fallback the whole
+      // silhouette case (including every two-point profile, the smallest one the
+      // schema allows) degenerates to a zero-area polygon that nothing is ever
+      // inside, and the part would drop out of the gate unmeasured.
+      const closed = geometry.points;
+      const doubledArea = closed.reduce((total, [x1, y1], index) => {
+        const [x2, y2] = closed[(index + 1) % closed.length];
+        return total + ((x1 * y2) - (x2 * y1));
+      }, 0);
+      const profile = Math.abs(doubledArea) / 2 > EPSILON
+        ? closed
+        : [...closed, [0, closed[closed.length - 1][1]], [0, closed[0][1]]];
       const [minRadius, maxRadius] = ringMinMax(profile, 0);
       const [minHeight, maxHeight] = ringMinMax(profile, 1);
       const widest = Math.max(Math.abs(minRadius), Math.abs(maxRadius));
@@ -524,6 +542,10 @@ export function evaluateThreejsPenetration(spec) {
     // that buried forty parts produces one readable instruction, and `pairs`
     // below still carries every one of them for the UI.
     const names = ranked.map(({ subject, container }) => `"${subject.name}" inside "${container.name}"`);
+    // Distinct buried parts, not pairs: one part swallowed by two overlapping
+    // containers is one invisible part reported twice, and counting the pairs
+    // would tell the user they have two.
+    const buriedCount = new Set(ranked.map(({ subject }) => subject.id)).size;
     findings.push({
       code: 'buried-part',
       severity: 'error',
@@ -533,7 +555,7 @@ export function evaluateThreejsPenetration(spec) {
         containerPartId: container.id,
         fraction: Number(fraction.toFixed(3)),
       })),
-      message: `${ranked.length} part(s) are entirely inside another part they are not attached to or parented under (${listSpecNames(names)}). Nothing of them can ever be seen from any angle — move each one out to the surface it belongs on, scale it to the part it sits against, or delete it and drop the detail it claims.`,
+      message: `${buriedCount} part(s) are entirely inside another part they are not attached to or parented under (${listSpecNames(names)}). Nothing of them can ever be seen from any angle — move each one out to the surface it belongs on, scale it to the part it sits against, or delete it and drop the detail it claims.`,
     });
   }
 

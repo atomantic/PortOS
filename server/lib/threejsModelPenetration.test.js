@@ -209,6 +209,52 @@ describe('evaluateThreejsPenetration', () => {
     expect(penetration.findings).toEqual([]);
   });
 
+  it('measures a two-point lathe silhouette instead of dropping it as unmeasurable', () => {
+    // The smallest profile the schema allows draws a spun cone from bottom to
+    // top. Closed back on itself it encloses no area at all, so the solid has to
+    // be closed through the axis or the part never enters the gate.
+    const penetration = evaluateThreejsPenetration(makeSpec({
+      parts: [
+        part('spike', { type: 'lathe', points: [[1.5, -2], [0, 2]] }),
+        part('pip', box(0.4), { position: [0, -1.5, 0] }),
+      ],
+    }));
+    expect(penetration.evaluatedPartCount).toBe(2);
+    expect(codes(penetration)).toContain('buried-part');
+    expect(finding(penetration, 'buried-part').pairs[0]).toMatchObject({ partId: 'pip', containerPartId: 'spike' });
+  });
+
+  it('measures a tube along its path rather than filling its bounding box', () => {
+    // The corner of the tube's bounding box is nowhere near the swept path, so a
+    // box-only gate would call the cube buried.
+    const tube = { type: 'tube', path: [[-3, 0, 0], [0, 0, 0], [3, 0, 0]], radius: 0.5 };
+    const penetration = evaluateThreejsPenetration(makeSpec({
+      parts: [
+        part('cable', tube),
+        part('clampOn', box(0.4), { position: [0, 0.2, 0] }),
+        part('clear', box(0.4), { position: [0, 3, 0] }),
+      ],
+    }));
+    expect(finding(penetration, 'buried-part').pairs).toEqual([
+      expect.objectContaining({ partId: 'clampOn', containerPartId: 'cable' }),
+    ]);
+  });
+
+  it('counts distinct buried parts rather than container pairs', () => {
+    // One pip inside two overlapping hulls is ONE invisible part, reported
+    // against two containers.
+    const penetration = evaluateThreejsPenetration(makeSpec({
+      parts: [
+        part('hullA', box(6)),
+        part('hullB', box(6), { position: [0.5, 0, 0] }),
+        part('pip', box(0.4)),
+      ],
+    }));
+    const buried = finding(penetration, 'buried-part');
+    expect(buried.pairs).toHaveLength(2);
+    expect(buried.message).toMatch(/^1 part\(s\) are entirely inside/);
+  });
+
   it('measures a torus as a ring rather than as a filled disc', () => {
     const penetration = evaluateThreejsPenetration(makeSpec({
       parts: [
