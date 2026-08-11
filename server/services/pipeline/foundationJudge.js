@@ -1750,5 +1750,4 @@ export const __testing = {
   mismatchedFoundationFields,
   comparableUniverseFields,
   CANON_WRITE_PATH_OWNED_FIELDS,
-  FOUNDATION_UNIVERSE_SNAPSHOT_FIELDS,
 };
