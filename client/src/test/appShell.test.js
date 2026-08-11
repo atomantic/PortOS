@@ -95,8 +95,11 @@ describe('self-hosted webfonts', () => {
     // is the subtle regression this pins.
     const declared = [...css.matchAll(/@font-face\s*\{([^}]*)\}/g)]
       .map((m) => m[1])
+      // Tolerate `'Inter'`, `"Inter"` and bare `Inter` — a single-quote-only
+      // match would read a reformatted-but-correct block as family `undefined`
+      // and fail with a missing weight instead of the real problem.
       .map((block) => ({
-        family: block.match(/font-family:\s*'([^']+)'/)?.[1],
+        family: block.match(/font-family:\s*['"]?([^'";]+)['"]?/)?.[1]?.trim(),
         weight: Number(block.match(/font-weight:\s*(\d+)/)?.[1]),
       }))
       .filter((d) => d.family === 'Inter' || d.family === 'IBM Plex Mono');
