@@ -488,3 +488,36 @@ export async function resolveRepoForgeTarget(repoPath, { preferredForge = null }
   }
   return null;
 }
+
+/**
+ * Composed `resolveAppWorkTracker` + `resolveRepoForgeTarget` for callers that
+ * hold the managed-app record (not just a bare `repoPath`): resolve the app's
+ * work tracker, then resolve its forge target with that tracker supplied as the
+ * `preferredForge` pin.
+ *
+ * This composition exists so a feature can't accidentally drop the pin. Threading
+ * it by hand is what left the issue-reconcile scan blind to a self-hosted forge
+ * whose hostname doesn't spell out "github."/"gitlab." while the app's Issues tab
+ * listed it fine (issue #3767) — the pin only matters for exactly those hosts, so
+ * a missing one fails silently on every ordinary github.com/gitlab.com app.
+ *
+ * `preferredForge` is passed ONLY for a github/gitlab tracker: a plan/jira app has
+ * no forge pin to honor, and passing its tracker through would be meaningless.
+ * `target` is still resolved for those apps (the origin may well be a forge) so a
+ * caller that only wants the queryable repo doesn't have to special-case them —
+ * callers that must gate on the tracker read `tracker` and decide.
+ *
+ * Never throws — both halves degrade to null rather than rejecting.
+ * @param {object} app - managed app record (needs `repoPath`, `workTracker`)
+ * @param {{repoPath?: string}} [options] - `repoPath` override for a caller that
+ *   scans a checkout other than `app.repoPath` (the app record supplies the pin,
+ *   the override supplies the checkout).
+ * @returns {Promise<{tracker:string, workTracker:object, target:object|null}>}
+ */
+export async function resolveAppForgeTarget(app, { repoPath = null } = {}) {
+  const workTracker = await resolveAppWorkTracker(app).catch(() => ({ resolved: 'plan', host: null, forge: null }));
+  const tracker = workTracker.resolved;
+  const preferredForge = (tracker === 'github' || tracker === 'gitlab') ? tracker : null;
+  const target = await resolveRepoForgeTarget(repoPath || app?.repoPath, { preferredForge });
+  return { tracker, workTracker, target };
+}

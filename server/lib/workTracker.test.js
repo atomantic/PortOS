@@ -1,4 +1,15 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// gitRemote is the ONLY effectful dependency of the async resolvers below, so
+// mocking it lets `resolveAppForgeTarget` run its real composition (tracker
+// resolution + forge-target pin) rather than a re-implementation.
+vi.mock('./gitRemote.js', () => ({
+  getOriginInfo: vi.fn(async () => null),
+  readOriginRemoteUrl: vi.fn(async () => null),
+}));
+
+import { getOriginInfo, readOriginRemoteUrl } from './gitRemote.js';
+import { resolveAppForgeTarget } from './workTracker.js';
 import {
   WORK_TRACKERS,
   CONCRETE_WORK_TRACKERS,
@@ -226,5 +237,78 @@ describe('workTrackerLabel', () => {
     }
     expect(workTrackerLabel('github')).toBe('GitHub Issues');
     expect(workTrackerLabel('unmapped-value')).toBe('unmapped-value');
+  });
+});
+
+// The composed helper exists so no caller has to remember to thread the pin
+// through by hand — the failure mode it prevents (issue #3767) is invisible on
+// an ordinary github.com/gitlab.com origin and only bites self-hosted hosts.
+describe('resolveAppForgeTarget', () => {
+  const CUSTOM = { host: 'git.example-corp.com', fullName: 'acme/widget', url: 'git@git.example-corp.com:acme/widget.git' };
+
+  const useOrigin = ({ host, fullName, url, isGithub = false }) => {
+    getOriginInfo.mockResolvedValue({ isGithub, host, fullName });
+    readOriginRemoteUrl.mockResolvedValue(url);
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useOrigin({ host: 'github.com', fullName: 'acme/widget', url: 'git@github.com:acme/widget.git', isGithub: true });
+  });
+
+  it('resolves an auto-tracked github.com app the same as the two-step call', async () => {
+    const { tracker, target } = await resolveAppForgeTarget({ repoPath: '/repo', workTracker: 'auto' });
+    expect(tracker).toBe('github');
+    expect(target).toMatchObject({ forge: 'github', fullName: 'acme/widget', repoSpec: 'github.com/acme/widget' });
+  });
+
+  it('honors a github pin on a custom-hostname enterprise origin the host regex misses', async () => {
+    useOrigin(CUSTOM);
+    // Without the pin this origin is "not a forge" — the whole point of the helper.
+    const { tracker, target } = await resolveAppForgeTarget({ repoPath: '/repo', workTracker: 'github' });
+    expect(tracker).toBe('github');
+    expect(target).toMatchObject({
+      forge: 'github',
+      fullName: 'acme/widget',
+      repoSpec: 'git.example-corp.com/acme/widget',
+      apiHost: 'git.example-corp.com',
+    });
+  });
+
+  it('honors a gitlab pin on a custom-hostname self-hosted origin', async () => {
+    useOrigin(CUSTOM);
+    const { tracker, target } = await resolveAppForgeTarget({ repoPath: '/repo', workTracker: 'gitlab' });
+    expect(tracker).toBe('gitlab');
+    // `glab` targets the project from its cwd, so there is no repoSpec.
+    expect(target).toMatchObject({ forge: 'gitlab', repoSpec: null });
+  });
+
+  it('passes NO pin for a plan/jira tracker, so a custom host stays unresolved', async () => {
+    useOrigin(CUSTOM);
+    for (const workTracker of ['plan', 'jira']) {
+      const { tracker, target } = await resolveAppForgeTarget({ repoPath: '/repo', workTracker });
+      expect(tracker).toBe(workTracker);
+      expect(target).toBeNull();
+    }
+  });
+
+  it('still resolves the forge target for a plan/jira app on a real forge origin (caller gates on tracker)', async () => {
+    const { tracker, target } = await resolveAppForgeTarget({ repoPath: '/repo', workTracker: 'jira' });
+    expect(tracker).toBe('jira');
+    expect(target).toMatchObject({ forge: 'github' });
+  });
+
+  it('takes the pin from the app but scans the repoPath override', async () => {
+    useOrigin(CUSTOM);
+    await resolveAppForgeTarget({ repoPath: '/app-repo', workTracker: 'github' }, { repoPath: '/scanned-repo' });
+    expect(getOriginInfo).toHaveBeenCalledWith('/scanned-repo');
+    // The tracker read still comes from the app record's own checkout.
+    expect(readOriginRemoteUrl).toHaveBeenCalledWith('/app-repo');
+  });
+
+  it('degrades to plan + null target when the app has no repo at all', async () => {
+    const { tracker, target } = await resolveAppForgeTarget({});
+    expect(tracker).toBe('plan');
+    expect(target).toBeNull();
   });
 });

@@ -2309,7 +2309,10 @@ async function resolveIssueReconcileBlock(app, taskType, metadata, taskSchedule)
   const jira = (wt?.resolved === 'jira' && app.jira?.enabled && app.jira?.instanceId && app.jira?.projectKey)
     ? { instanceId: app.jira.instanceId, projectKey: app.jira.projectKey }
     : null;
-  const result = await reconcile(app.repoPath, { jira }).catch((err) => {
+  // Pass the app itself, not just `jira`: the forge scan needs its `workTracker`
+  // pin to reach a self-hosted github/gitlab whose hostname matches neither
+  // auto-detection pattern (issue #3767).
+  const result = await reconcile(app.repoPath, { jira, app }).catch((err) => {
     emitLog('warn', `issue-reconcile pre-step failed for ${app.name}: ${err.message}`, { appId: app.id });
     return null;
   });

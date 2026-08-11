@@ -24,7 +24,7 @@
 
 import { execGh, ensureForgeReachable } from './github.js';
 import { execGlab } from './gitlab.js';
-import { resolveAppWorkTracker, resolveRepoForgeTarget } from '../lib/workTracker.js';
+import { resolveAppForgeTarget } from '../lib/workTracker.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 
 // Single-user repos never realistically exceed this; `glab` caps a page at 100.
@@ -155,8 +155,12 @@ async function fetchGitlabIssues(repoPath) {
  * The forge-target probe needs the RESOLVED tracker first (see
  * `resolveRepoForgeTarget`'s `preferredForge`, which lets an explicitly-pinned
  * github/gitlab tracker reach a self-hosted forge whose hostname doesn't spell
- * out "github."/"gitlab."), so the two reads run sequentially rather than
- * overlapping — and are skipped entirely for a plan/jira-tracked app.
+ * out "github."/"gitlab."), so both reads run through the composed
+ * `resolveAppForgeTarget` rather than being threaded by hand here — the same
+ * helper `issueReconcile.js` uses, so the tab and the zombie scan can't drift on
+ * which forge a pinned custom-host app resolves to. It resolves the target even
+ * for a plan/jira tracker (one extra origin read); the tracker gate below still
+ * refuses to list anything for those, since a claim wouldn't touch it.
  *
  * @param {object} app - managed app record (needs `repoPath`, `workTracker`)
  * @returns {Promise<{forge:'github'|'gitlab'|null, tracker:string|null, fullName:string|null, issues:object[], reason:string, transient:boolean, remedy:string|null}>}
@@ -165,14 +169,12 @@ export async function listAppIssues(app) {
   const base = { forge: null, tracker: null, fullName: null, issues: [], transient: false, remedy: null };
   if (!app?.repoPath) return { ...base, reason: 'no-repo-path' };
 
-  const wt = await resolveAppWorkTracker(app);
-  const tracker = wt.resolved;
+  const { tracker, target } = await resolveAppForgeTarget(app);
 
   // PLAN.md / JIRA apps have no forge issue list — and, more importantly, no
   // claim this tab could honestly offer.
   if (tracker !== 'github' && tracker !== 'gitlab') return { ...base, tracker, reason: 'tracker-not-a-forge' };
 
-  const target = await resolveRepoForgeTarget(app.repoPath, { preferredForge: tracker });
   if (!target) return { ...base, tracker, reason: 'unsupported-forge' };
   // Explicitly tracking one forge from the other's remote: we can't query the
   // configured tracker (no selector for it) and must not silently list the

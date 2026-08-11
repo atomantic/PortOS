@@ -293,6 +293,45 @@ describe('reconcile', () => {
     expect(repoArgs.every((r) => r === 'github.acme.example/acme/app')).toBe(true);
   });
 
+  it('scans a custom-hostname self-hosted forge when the app pins workTracker (issue #3767)', async () => {
+    // Neither `github.*` nor `gitlab.*` — no hostname heuristic can classify a
+    // self-hosted forge, so the app's own pin is the only signal. Without the
+    // `app` handoff this repo reads as "not a forge" and the zombie scan skips
+    // silently, while the app's Issues tab lists the very same issues.
+    getOriginInfo.mockResolvedValue({ isGithub: false, host: 'git.example-corp.com', fullName: 'acme/widget' });
+    readOriginRemoteUrl.mockResolvedValue('git@git.example-corp.com:acme/widget.git');
+    mockGh({
+      issues: [{ number: 42, title: 't', labels: [{ name: 'in-progress' }], assignees: [], url: 'u' }],
+      merged: [{ number: 50, headRefName: 'x', body: 'Refs #42' }],
+      open: [],
+    });
+
+    // Same repo, no pin → skip (the pre-fix behavior, kept honest here).
+    expect(await reconcile('/repo')).toBeNull();
+
+    const result = await reconcile('/repo', { app: { repoPath: '/repo', workTracker: 'github' } });
+    expect(result.forge).toBe('github');
+    expect(result.zombies.map((z) => z.number)).toEqual([42]);
+    const repoArgs = execGh.mock.calls.map((c) => c[0][c[0].indexOf('--repo') + 1]);
+    expect(repoArgs.every((r) => r === 'git.example-corp.com/acme/widget')).toBe(true);
+  });
+
+  it('scans a custom-hostname self-hosted GitLab when the app pins workTracker (issue #3767)', async () => {
+    getOriginInfo.mockResolvedValue({ isGithub: false, host: 'git.example-corp.com', fullName: 'acme/widget' });
+    readOriginRemoteUrl.mockResolvedValue('git@git.example-corp.com:acme/widget.git');
+    mockGlab({
+      issues: [{ iid: 42, title: 't', labels: ['in-progress'], assignees: [], web_url: 'u' }],
+      merged: [{ iid: 7, source_branch: 'claim/issue-42', description: 'Refs #42', web_url: 'm' }],
+      open: [],
+    });
+
+    const result = await reconcile('/repo', { app: { repoPath: '/repo', workTracker: 'gitlab' } });
+    expect(result.forge).toBe('gitlab');
+    expect(result.zombies.map((z) => z.number)).toEqual([42]);
+    // glab is cwd-routed — it must run in the scanned checkout.
+    expect(execGlab.mock.calls[0][1]).toBe('/repo');
+  });
+
   it('returns null (transient) when the issue list query fails', async () => {
     execGh.mockImplementation(async (argv) => {
       if (argv[0] === 'issue') return null; // load-bearing query failed

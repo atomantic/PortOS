@@ -54,7 +54,7 @@ import { execGit } from '../lib/execGit.js';
 import { execGh, ensureForgeReachable } from './github.js';
 import { execGlab } from './gitlab.js';
 import { fetchMyCurrentSprintTickets } from './jira.js';
-import { resolveRepoForgeTarget } from '../lib/workTracker.js';
+import { resolveAppForgeTarget, resolveRepoForgeTarget } from '../lib/workTracker.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 
 // Bound the forge queries (single-user repos never realistically truncate at 200).
@@ -392,11 +392,24 @@ async function getGitlabState(repoPath, fullName) {
  * selector, subgroup-safe GitLab host match) lives in `resolveRepoForgeTarget`
  * so this scan and the app Issues tab can't drift on what counts as a queryable
  * repo; only the state-fetching differs here.
+ *
+ * When the caller has the managed-app record it passes it as `app`, which routes
+ * through the composed `resolveAppForgeTarget` — the SAME entry point the Issues
+ * tab uses — so an app explicitly pinned to github/gitlab on a self-hosted host
+ * whose name matches neither pattern (`git.example-corp.com`) is scanned here
+ * exactly as it is listed there. Without the app (a bare-`repoPath` caller, e.g.
+ * a direct `reconcile()` on the PortOS checkout) there is no pin to honor and
+ * host detection alone decides.
  * @param {string} repoPath
+ * @param {object|null} [app] - managed app record supplying the forge pin
  * @returns {Promise<object|null>}
  */
-async function getForgeState(repoPath) {
-  const target = await resolveRepoForgeTarget(repoPath);
+async function getForgeState(repoPath, app = null) {
+  // repoPath stays authoritative over app.repoPath — the app record is here for
+  // its `workTracker` pin, not to redirect the scan at a different checkout.
+  const target = app
+    ? (await resolveAppForgeTarget(app, { repoPath })).target
+    : await resolveRepoForgeTarget(repoPath);
   if (!target) return null;
   if (target.forge === 'github') return getGithubState(target.repoSpec, target.fullName, target.apiHost);
   // `glab` is cwd-based, so `fullName` here is only a display path.
@@ -454,16 +467,18 @@ async function getJiraState(_repoPath, jira) {
  * is passed in. Otherwise the GitHub/GitLab forge is resolved from the origin host.
  *
  * @param {string} repoPath
- * @param {{ activeAgentIssueNums?: Set<number|string>, jira?: { instanceId:string, projectKey:string } }} [ctx]
+ * @param {{ activeAgentIssueNums?: Set<number|string>, jira?: { instanceId:string, projectKey:string }, app?: object }} [ctx]
  *   `activeAgentIssueNums` — issue numbers / ticket KEYs an active CoS agent is
  *   currently claiming (from agent metadata); suppresses zombie classification for
  *   one whose agent is still running. `jira` — routes to the JIRA gatherer.
+ *   `app` — the managed-app record, whose `workTracker` pin lets a self-hosted
+ *   forge on a non-matching hostname still resolve (see `getForgeState`).
  * @returns {Promise<{forge:string, fullName:string, issues:object[]}|null>}
  */
-export async function gatherIssueState(repoPath, { activeAgentIssueNums = new Set(), jira = null } = {}) {
+export async function gatherIssueState(repoPath, { activeAgentIssueNums = new Set(), jira = null, app = null } = {}) {
   const isJira = Boolean(jira?.instanceId && jira?.projectKey);
   const [state, liveClaimIds] = await Promise.all([
-    isJira ? getJiraState(repoPath, jira) : getForgeState(repoPath),
+    isJira ? getJiraState(repoPath, jira) : getForgeState(repoPath, app),
     isJira ? getLiveClaimTicketKeys(repoPath) : getLiveClaimIssueNums(repoPath),
   ]);
   if (!state) return null;
@@ -504,13 +519,13 @@ export async function gatherIssueState(repoPath, { activeAgentIssueNums = new Se
  * I/O to gatherIssueState).
  *
  * @param {string} [repoPath=PATHS.root]
- * @param {{ activeAgentIssueNums?: Set<number|string>, jira?: { instanceId:string, projectKey:string } }} [opts]
+ * @param {{ activeAgentIssueNums?: Set<number|string>, jira?: { instanceId:string, projectKey:string }, app?: object }} [opts]
  * @returns {Promise<{ forge:string, fullName:string, zombies:object[], stalled:object[], live:object[] }|null>}
  *   null on unsupported remote (not GitHub/GitLab, no JIRA config) / transient
  *   failure (skip, don't park).
  */
-export async function reconcile(repoPath = PATHS.root, { activeAgentIssueNums = new Set(), jira = null } = {}) {
-  const gathered = await gatherIssueState(repoPath, { activeAgentIssueNums, jira });
+export async function reconcile(repoPath = PATHS.root, { activeAgentIssueNums = new Set(), jira = null, app = null } = {}) {
+  const gathered = await gatherIssueState(repoPath, { activeAgentIssueNums, jira, app });
   if (!gathered) return null;
   const classified = classifyIssues(gathered.issues);
   return {
