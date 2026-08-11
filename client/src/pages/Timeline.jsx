@@ -146,7 +146,9 @@ export default function Timeline() {
   // (which sits below it) scrolls the panels into view — otherwise it expands
   // off-screen and looks like nothing happened.
   const scrollToImportsRef = useRef(false);
-  const scrollToImports = () => importsRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  // `nearest` scrolls the minimum needed, so the date controls just above stay
+  // on screen instead of being pushed off by a top-aligned scroll.
+  const scrollToImports = () => importsRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
   const revealImports = () => {
     if (showImports) return scrollToImports();
     scrollToImportsRef.current = true;
@@ -274,6 +276,7 @@ export default function Timeline() {
             <button
               type="button"
               onClick={revealImports}
+              aria-expanded={showImports}
               aria-controls="timeline-import-panels"
               className="mt-3 inline-flex items-center gap-1.5 rounded border border-port-border bg-port-card px-3 py-1.5 text-xs text-gray-300 hover:border-port-accent hover:text-gray-100"
             >
