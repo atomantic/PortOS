@@ -45,6 +45,21 @@ describe('CollapsibleSection', () => {
     expect(screen.queryByText(': Wedding, Rainy day')).not.toBeInTheDocument();
   });
 
+  it('lets the label shrink once the summary is no longer beside it', () => {
+    render(
+      <CollapsibleSection label="Outfits" summary=": Wedding">body</CollapsibleSection>,
+    );
+    const button = screen.getByRole('button', { name: /Outfits/ });
+    const label = screen.getByText('Outfits');
+    expect(label).toHaveClass('shrink-0');
+
+    // Expanded hides the summary, so nothing competes for the line and a long
+    // label must be free to wrap rather than overflow the header.
+    fireEvent.click(button);
+    expect(label).toHaveClass('min-w-0');
+    expect(label).not.toHaveClass('shrink-0');
+  });
+
   it('honors defaultOpen', () => {
     render(
       <CollapsibleSection label="Analysis Summary" defaultOpen>

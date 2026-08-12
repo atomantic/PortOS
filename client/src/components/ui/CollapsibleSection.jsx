@@ -11,9 +11,10 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 // to one line instead of wrapping into a paragraph-tall header on a phone.
 //
 // Deliberately NOT here: a per-site `text-left` (the base-layer rule in
-// index.css already left-aligns wrapped flex-button labels), animation,
-// nesting support, or a controlled `open`/`onOpenChange` pair — every current
-// call site owns its open state internally.
+// index.css already left-aligns wrapped flex-button labels), animation, or
+// nesting support. Open state defaults to internal — the controlled
+// `open`/`onOpenChange` pair below is opt-in for the one call site that has to
+// drive it from outside the header.
 //
 // `size` picks between the tones that already exist in the app rather than
 // unifying them; pick the one that matches the call site's neighbours.
@@ -80,10 +81,11 @@ export default function CollapsibleSection({
       >
         <Chevron size={tone.iconSize} className="shrink-0" />
         {Icon ? <Icon size={tone.iconSize} className="shrink-0" /> : null}
-        {/* The label only refuses to shrink when there's a summary competing
-            for the same line — otherwise a long standalone label would
-            overflow the header instead of wrapping. */}
-        <span className={`${summary ? 'shrink-0' : 'min-w-0'} ${tone.label}`.trim()}>{label}</span>
+        {/* The label only refuses to shrink while a summary is actually on the
+            line beside it — otherwise (no summary, or expanded so the summary
+            is hidden) a long label would overflow the header instead of
+            wrapping. */}
+        <span className={`${summary && !open ? 'shrink-0' : 'min-w-0'} ${tone.label}`.trim()}>{label}</span>
         {summary && !open
           ? <span className={`min-w-0 truncate ${tone.summary}`.trim()}>{summary}</span>
           : null}
