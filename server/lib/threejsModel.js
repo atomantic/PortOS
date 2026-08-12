@@ -711,6 +711,198 @@ export function buildThreejsFlatnessFeedback(flatness) {
   ].join('\n');
 }
 
+// Material-plausibility gate. `threejsMaterialSchema` bounds every PBR channel
+// to what Three.js itself accepts, which says nothing about whether the values
+// describe the substance the material is named for: metalness 0.9 oak and
+// transmission 1.0 steel both parse, and both light completely wrong.
+//
+// The priors below are per-family plausible ranges, keyed off tokens in the
+// material's own id — the only name a material carries in the spec. Matching is
+// deliberately conservative: a material keys a prior only when exactly ONE
+// family's keywords appear in it, so an unrecognized id (`mat_primary`) or a
+// genuinely mixed one (`wood_metal_trim`) produces no feedback rather than a
+// wrong one. That trade is affordable because this gate NEVER clamps — a
+// stylized model is entitled to break every prior here, and the only cost of a
+// missed match is a skipped hint.
+//
+// Bounds are stated only where a family really constrains the channel, and only
+// in the direction it constrains: `undefined` is "this family says nothing",
+// which is different from a bound of 0. Channels left out entirely (thickness,
+// iridescence, anisotropy, emissive) are art direction, not substance.
+const MATERIAL_FAMILY_PRIORS = [
+  {
+    family: 'metal',
+    keywords: ['metal', 'metallic', 'steel', 'iron', 'chrome', 'brass', 'bronze', 'copper', 'aluminum', 'aluminium', 'silver', 'gold', 'gilt', 'titanium', 'pewter', 'nickel', 'alloy', 'gunmetal'],
+    // The one family with a metalness FLOOR: a bare metal surface that is not
+    // metallic is the single most common way a generated spec reads as plastic.
+    channels: { metalness: [0.6, 1], roughness: [0.02, 0.6], transmission: [0, 0.05], sheen: [0, 0.1] },
+  },
+  {
+    family: 'wood',
+    keywords: ['wood', 'wooden', 'timber', 'oak', 'walnut', 'birch', 'maple', 'pine', 'mahogany', 'teak', 'bamboo', 'plank', 'lumber'],
+    channels: { metalness: [0, 0.15], roughness: [0.35, 1], transmission: [0, 0.05], sheen: [0, 0.3] },
+  },
+  {
+    family: 'plastic',
+    keywords: ['plastic', 'abs', 'pvc', 'nylon', 'resin', 'acrylic', 'vinyl', 'polymer', 'polycarbonate'],
+    channels: { metalness: [0, 0.1], roughness: [0.05, 0.95], ior: [1.3, 1.8] },
+  },
+  {
+    family: 'glass',
+    keywords: ['glass', 'crystal', 'lens', 'glazing', 'pane', 'windshield', 'quartz'],
+    // The transmission floor is the point of this entry: opaque "glass" is the
+    // mirror image of the metalness case above.
+    channels: { metalness: [0, 0.1], roughness: [0, 0.35], transmission: [0.4, 1], ior: [1.3, 1.9] },
+  },
+  {
+    family: 'fabric',
+    keywords: ['fabric', 'cloth', 'cotton', 'linen', 'wool', 'velvet', 'silk', 'canvas', 'denim', 'textile', 'felt', 'upholstery', 'curtain'],
+    channels: { metalness: [0, 0.1], roughness: [0.5, 1], clearcoat: [0, 0.2], transmission: [0, 0.15] },
+  },
+  {
+    family: 'ceramic',
+    keywords: ['ceramic', 'porcelain', 'clay', 'terracotta', 'tile', 'earthenware'],
+    channels: { metalness: [0, 0.1], roughness: [0.03, 0.7], transmission: [0, 0.2], ior: [1.3, 1.9] },
+  },
+  {
+    family: 'rubber',
+    keywords: ['rubber', 'tire', 'tyre', 'tread', 'silicone', 'neoprene', 'gasket'],
+    channels: { metalness: [0, 0.1], roughness: [0.5, 1], clearcoat: [0, 0.2], transmission: [0, 0.05] },
+  },
+  {
+    family: 'stone',
+    keywords: ['stone', 'rock', 'granite', 'marble', 'concrete', 'cement', 'slate', 'brick', 'asphalt', 'sandstone'],
+    channels: { metalness: [0, 0.15], roughness: [0.3, 1], transmission: [0, 0.1] },
+  },
+  {
+    family: 'leather',
+    keywords: ['leather', 'suede', 'hide'],
+    channels: { metalness: [0, 0.1], roughness: [0.3, 0.95], transmission: [0, 0.05] },
+  },
+  {
+    family: 'paper',
+    keywords: ['paper', 'cardboard', 'carton', 'paperboard', 'parchment'],
+    channels: { metalness: [0, 0.1], roughness: [0.5, 1], transmission: [0, 0.2] },
+  },
+];
+
+const MATERIAL_KEYWORD_FAMILIES = new Map(
+  MATERIAL_FAMILY_PRIORS.flatMap((prior) => prior.keywords.map((keyword) => [keyword, prior]))
+);
+
+// `basic` is unlit, so none of these channels reach the renderer at all; the
+// physical-only ones are parsed for every type but only forwarded by
+// `type: 'physical'` (see `createMaterial`). Reporting a channel that cannot
+// affect the render would be a finding the user can do nothing useful with.
+const MATERIAL_CHANNELS_BY_TYPE = {
+  basic: [],
+  standard: ['metalness', 'roughness'],
+  physical: ['metalness', 'roughness', 'clearcoat', 'ior', 'transmission', 'sheen'],
+};
+
+/**
+ * Split a material id into lowercase word tokens, breaking on separators AND on
+ * camelCase boundaries so `oakTrim` and `oak_trim` tokenize the same. A trailing
+ * plural is folded in as an extra candidate token rather than replacing the
+ * original, so `planks` matches `plank` without `abs` losing its own keyword.
+ */
+const tokenizeMaterialId = (id) => {
+  const words = String(id || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  const tokens = new Set(words);
+  for (const word of words) {
+    if (word.length > 3 && word.endsWith('s')) tokens.add(word.slice(0, -1));
+  }
+  return [...tokens];
+};
+
+/**
+ * The single family a material id names, or `null` when it names none or more
+ * than one. Ambiguity is deliberately NOT resolved by precedence — picking one
+ * of two competing substances is how a prior table starts producing confident
+ * nonsense.
+ */
+const matchMaterialFamily = (id) => {
+  const matched = new Set();
+  for (const token of tokenizeMaterialId(id)) {
+    const prior = MATERIAL_KEYWORD_FAMILIES.get(token);
+    if (prior) matched.add(prior);
+  }
+  return matched.size === 1 ? [...matched][0] : null;
+};
+
+/**
+ * Report PBR channels whose values are implausible for the substance a material
+ * id names. Advisory ONLY — nothing here rewrites a spec, because a stylized
+ * model may legitimately break every prior in the table.
+ *
+ * @param {object} spec a spec that has already passed `threejsSculptSpecSchema`
+ * @returns {{findings: Array, errorCount: number, warningCount: number, noteCount: number,
+ *   materialCount: number, matchedMaterialCount: number, implausibleMaterialCount: number}}
+ */
+export function evaluateThreejsMaterialPlausibility(spec) {
+  const materials = (spec?.materials && typeof spec.materials === 'object') ? spec.materials : {};
+  const findings = [];
+  let matched = 0;
+
+  for (const [id, material] of Object.entries(materials)) {
+    const prior = matchMaterialFamily(id);
+    if (!prior) continue;
+    matched += 1;
+    const channels = MATERIAL_CHANNELS_BY_TYPE[material?.type] || MATERIAL_CHANNELS_BY_TYPE.standard;
+    const offenders = [];
+    for (const channel of channels) {
+      const range = prior.channels[channel];
+      const value = material?.[channel];
+      // A stored spec predating a channel reads back undefined — unevaluated,
+      // not out of range.
+      if (!range || typeof value !== 'number' || !Number.isFinite(value)) continue;
+      const [min, max] = range;
+      if (value >= min && value <= max) continue;
+      offenders.push({ channel, value, min, max });
+    }
+    if (offenders.length === 0) continue;
+    findings.push({
+      code: 'implausible-material-values',
+      severity: 'warning',
+      materialIds: [id],
+      family: prior.family,
+      channels: offenders,
+      message: `Material "${id}" reads as ${prior.family}, but ${offenders
+        .map(({ channel, value, min, max }) => `${channel} ${value} is outside the ${min}–${max} a ${prior.family} surface normally sits in`)
+        .join(', and ')}. Re-derive those channels from the substance (or rename the material if it is not ${prior.family} at all) — unless the look is deliberately stylized, in which case leave it.`,
+    });
+  }
+
+  return {
+    findings,
+    errorCount: 0,
+    warningCount: findings.length,
+    noteCount: 0,
+    materialCount: Object.keys(materials).length,
+    matchedMaterialCount: matched,
+    implausibleMaterialCount: findings.length,
+  };
+}
+
+/**
+ * Default refinement feedback derived from a stored material-plausibility
+ * result. Returns '' when every recognized material is plausible, so the caller
+ * falls through to whatever other feedback it has.
+ */
+export function buildThreejsMaterialFeedback(plausibility) {
+  const warnings = (plausibility?.findings || []).filter((finding) => finding.severity === 'warning');
+  if (warnings.length === 0) return '';
+  return [
+    'The previous pass gave some materials values that do not match the substance they are named for:',
+    ...warnings.map((finding, index) => `${index + 1}. ${finding.message}`),
+    'Set each channel from what the surface actually is — bare metal is metallic and fairly smooth, wood and stone are rough dielectrics, glass transmits — and keep any deliberate stylization you still want.',
+  ].join('\n');
+}
+
 const toIdentifier = (name) => {
   const words = String(name || 'Procedural').replace(/[^A-Za-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
   const joined = words.map((word) => word[0].toUpperCase() + word.slice(1)).join('') || 'Procedural';

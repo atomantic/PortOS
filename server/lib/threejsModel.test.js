@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   buildThreejsFactorySource,
   buildThreejsFlatnessFeedback,
+  buildThreejsMaterialFeedback,
   evaluateThreejsFlatness,
+  evaluateThreejsMaterialPlausibility,
   storedThreejsSculptSpecSchema,
   threejsGeometrySchema,
   threejsSculptSpecSchema,
@@ -736,5 +738,124 @@ describe('buildThreejsFactorySource articulation', () => {
     }
     expect(thrown?.status).toBe(400);
     expect(thrown?.message).toMatch(/not a joint declared before it/);
+  });
+});
+
+// The plausibility gate reads materials only, so the fixture keeps the shared
+// crate hierarchy and swaps the material map. Every material is parsed through
+// the real schema first, so a fixture can never assert on a value the authoring
+// contract would have rejected anyway.
+const materialSpec = (materials) => threejsSculptSpecSchema.parse({
+  ...validSpec(),
+  materials,
+  parts: [{ ...validSpec().parts[0], children: [], material: Object.keys(materials)[0] }],
+  sockets: [],
+  detailInventory: [{
+    feature: 'Crate body silhouette',
+    evidence: 'Visible in the reference image.',
+    implementationPartIds: ['crateBody'],
+    priority: 'identity',
+  }],
+});
+
+describe('evaluateThreejsMaterialPlausibility', () => {
+  it('flags metallic wood and names the channel, the value, and the plausible range', () => {
+    const result = evaluateThreejsMaterialPlausibility(materialSpec({
+      oakPanel: { type: 'standard', color: '#8b5a2b', metalness: 0.9, roughness: 0.7 },
+    }));
+    expect(result.warningCount).toBe(1);
+    expect(result.errorCount).toBe(0);
+    expect(result.matchedMaterialCount).toBe(1);
+    const [finding] = result.findings;
+    expect(finding.code).toBe('implausible-material-values');
+    expect(finding.family).toBe('wood');
+    expect(finding.materialIds).toEqual(['oakPanel']);
+    expect(finding.channels).toEqual([{ channel: 'metalness', value: 0.9, min: 0, max: 0.15 }]);
+    expect(finding.message).toContain('metalness 0.9');
+    expect(finding.message).toContain('0–0.15');
+  });
+
+  it('flags a transmissive metal and an opaque glass — the two directions of the same error', () => {
+    const result = evaluateThreejsMaterialPlausibility(materialSpec({
+      steelPlate: { type: 'physical', color: '#8a8f98', metalness: 0.95, roughness: 0.3, transmission: 1 },
+      windowGlass: { type: 'physical', color: '#cfe8ff', metalness: 0, roughness: 0.05, transmission: 0 },
+    }));
+    expect(result.warningCount).toBe(2);
+    expect(result.findings.map((finding) => finding.family)).toEqual(['metal', 'glass']);
+    expect(result.findings[0].channels[0].channel).toBe('transmission');
+    expect(result.findings[1].channels[0]).toMatchObject({ channel: 'transmission', value: 0, min: 0.4 });
+  });
+
+  it('flags bare metal that is not metallic at all', () => {
+    const result = evaluateThreejsMaterialPlausibility(materialSpec({
+      brassFitting: { type: 'standard', color: '#d4af37', metalness: 0, roughness: 0.3 },
+    }));
+    expect(result.findings[0].channels).toEqual([{ channel: 'metalness', value: 0, min: 0.6, max: 1 }]);
+  });
+
+  it('reports every offending channel of one material in a single finding', () => {
+    const result = evaluateThreejsMaterialPlausibility(materialSpec({
+      rubberTire: { type: 'physical', color: '#1b1b1b', metalness: 0.5, roughness: 0.05, clearcoat: 1 },
+    }));
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].channels.map((entry) => entry.channel)).toEqual(['metalness', 'roughness', 'clearcoat']);
+  });
+
+  it('stays silent on plausible materials, unrecognized ids, and mixed-substance ids', () => {
+    const result = evaluateThreejsMaterialPlausibility(materialSpec({
+      oakPanel: { type: 'standard', color: '#8b5a2b', metalness: 0, roughness: 0.7 },
+      primarySurface: { type: 'standard', color: '#334155', metalness: 0.9, roughness: 0.05 },
+      woodAndMetalTrim: { type: 'standard', color: '#8b5a2b', metalness: 0.9, roughness: 0.05 },
+    }));
+    expect(result.findings).toEqual([]);
+    expect(result.materialCount).toBe(3);
+    // Only the plausible oak matched a family — the other two were skipped.
+    expect(result.matchedMaterialCount).toBe(1);
+  });
+
+  it('tokenizes camelCase, separators, and plurals the same way', () => {
+    for (const id of ['oakPlanks', 'oak_planks', 'oak-planks-01']) {
+      const result = evaluateThreejsMaterialPlausibility(materialSpec({
+        [id]: { type: 'standard', color: '#8b5a2b', metalness: 0.9, roughness: 0.7 },
+      }));
+      expect(result.findings[0]?.family).toBe('wood');
+    }
+  });
+
+  it('ignores channels the material type never forwards to Three.js', () => {
+    // `transmission` is physical-only and `basic` is unlit, so neither material
+    // renders the implausible value it carries.
+    const result = evaluateThreejsMaterialPlausibility(materialSpec({
+      steelPanel: { type: 'standard', color: '#8a8f98', metalness: 0.9, roughness: 0.3, transmission: 1 },
+      chromeDecal: { type: 'basic', color: '#8a8f98', metalness: 0, roughness: 1 },
+    }));
+    expect(result.findings).toEqual([]);
+  });
+
+  it('returns a clean result for a missing spec', () => {
+    expect(evaluateThreejsMaterialPlausibility(null)).toMatchObject({
+      findings: [],
+      materialCount: 0,
+      matchedMaterialCount: 0,
+    });
+  });
+});
+
+describe('buildThreejsMaterialFeedback', () => {
+  it('returns empty for a missing or clean plausibility result', () => {
+    expect(buildThreejsMaterialFeedback(null)).toBe('');
+    expect(buildThreejsMaterialFeedback({ findings: [] })).toBe('');
+  });
+
+  it('turns the warnings into a numbered instruction naming each material', () => {
+    const feedback = buildThreejsMaterialFeedback(evaluateThreejsMaterialPlausibility(materialSpec({
+      oakPanel: { type: 'standard', color: '#8b5a2b', metalness: 0.9, roughness: 0.7 },
+      steelPlate: { type: 'standard', color: '#8a8f98', metalness: 0, roughness: 0.3 },
+    })));
+    expect(feedback).toContain('do not match the substance');
+    expect(feedback).toContain('1. ');
+    expect(feedback).toContain('2. ');
+    expect(feedback).toContain('oakPanel');
+    expect(feedback).toContain('steelPlate');
   });
 });

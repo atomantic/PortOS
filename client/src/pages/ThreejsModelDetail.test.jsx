@@ -235,6 +235,63 @@ describe('ThreejsModelDetail cross-part penetration gate', () => {
   });
 });
 
+describe('ThreejsModelDetail material plausibility gate', () => {
+  beforeEach(resetMocks);
+
+  const implausible = {
+    materialCount: 3,
+    matchedMaterialCount: 2,
+    implausibleMaterialCount: 1,
+    errorCount: 0,
+    warningCount: 1,
+    noteCount: 0,
+    findings: [{
+      code: 'implausible-material-values',
+      severity: 'warning',
+      materialIds: ['oakPanel'],
+      family: 'wood',
+      channels: [{ channel: 'metalness', value: 0.9, min: 0, max: 0.15 }],
+      message: 'Material "oakPanel" reads as wood, but metalness 0.9 is outside the 0–0.15 a wood surface normally sits in.',
+    }],
+  };
+
+  it('lists the finding and says an unsteered refinement will target it', async () => {
+    getThreejsModel.mockResolvedValue({ ...baseRecord, materialPlausibility: implausible });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Material plausibility')).toBeInTheDocument());
+    expect(screen.getByText(implausible.findings[0].message)).toBeInTheDocument();
+    expect(screen.getByText('0 error · 1 warning · 0 note')).toBeInTheDocument();
+    expect(screen.getByText(/values that match the substance/)).toBeInTheDocument();
+  });
+
+  it('separates a clean pass from one where no material named a substance', async () => {
+    getThreejsModel.mockResolvedValue({
+      ...baseRecord,
+      materialPlausibility: { materialCount: 2, matchedMaterialCount: 2, findings: [] },
+    });
+    const { unmount } = renderDetail();
+    await waitFor(() => expect(screen.getByText('Recognized materials match their substance')).toBeInTheDocument());
+    expect(screen.queryByText(/values that match the substance/)).not.toBeInTheDocument();
+    unmount();
+
+    getThreejsModel.mockResolvedValue({
+      ...baseRecord,
+      materialPlausibility: { materialCount: 2, matchedMaterialCount: 0, findings: [] },
+    });
+    renderDetail();
+    await waitFor(() => expect(screen.getByText('No material named a substance to check')).toBeInTheDocument());
+  });
+
+  it('hides the section for a record generated before the gate existed', async () => {
+    getThreejsModel.mockResolvedValue({ ...baseRecord, materialPlausibility: null });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Example Beacon')).toBeInTheDocument());
+    expect(screen.queryByText('Material plausibility')).not.toBeInTheDocument();
+  });
+});
+
 describe('ThreejsModelDetail subject family', () => {
   beforeEach(resetMocks);
 

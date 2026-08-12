@@ -11,7 +11,9 @@ import { extractJson } from '../../lib/jsonExtract.js';
 import {
   buildThreejsFactorySource,
   buildThreejsFlatnessFeedback,
+  buildThreejsMaterialFeedback,
   evaluateThreejsFlatness,
+  evaluateThreejsMaterialPlausibility,
   threejsSculptSpecSchema,
 } from '../../lib/threejsModel.js';
 import { buildThreejsCoverageFeedback, evaluateThreejsPartCoverage } from '../../lib/threejsModelCoverage.js';
@@ -114,6 +116,11 @@ async function executeGeneration({
     // still renders, and from the hero angle it still looks right, so the
     // finding is recorded and fed back rather than thrown away.
     const penetration = evaluateThreejsPenetration(spec);
+    // And likewise for a spec whose materials parse cleanly but describe the
+    // wrong substance — metalness 0.9 oak, transmission 1.0 steel. Advisory by
+    // construction: a stylized model is entitled to break the priors, so the
+    // finding is recorded and fed back and nothing is ever clamped.
+    const materialPlausibility = evaluateThreejsMaterialPlausibility(spec);
     // Nothing PortOS generates is skinned, so what gets recorded is whether the
     // spec declared an articulation graph a later rig path could attach to — and
     // when it did not, the reason. A model with no graph reports not-ready with
@@ -135,6 +142,7 @@ async function executeGeneration({
         flatness,
         penetration,
         rig,
+        materialPlausibility,
         error: null,
         generationOperationId: null,
         generatedAt: completedAt,
@@ -156,6 +164,9 @@ async function executeGeneration({
     }
     if (penetration.errorCount > 0 || penetration.warningCount > 0) {
       console.warn(`⚠️ Three.js model ${id} cross-part penetration: ${penetration.errorCount} error, ${penetration.warningCount} warning finding(s) over ${penetration.comparedPairCount} compared pair(s)`);
+    }
+    if (materialPlausibility.warningCount > 0) {
+      console.warn(`⚠️ Three.js model ${id} material plausibility: ${materialPlausibility.implausibleMaterialCount} of ${materialPlausibility.matchedMaterialCount} recognized material(s) carry values their substance does not support`);
     }
     if (rig.articulationReady) {
       console.log(`🦴 Three.js model ${id} declares an articulation graph: ${rig.jointCount} joint(s), ${rig.socketCount} pivot socket(s)`);
@@ -214,13 +225,15 @@ export async function startGeneration(id, {
   const effectivePrompt = prompt ?? current.prompt ?? '';
   // A refinement the user did not steer aims at what the last pass measurably
   // got wrong — the promises it did not build, the identity parts it built
-  // without a cross-section, and the parts it modelled inside each other —
+  // without a cross-section, the parts it modelled inside each other, and the
+  // materials whose values contradict the substance they are named for —
   // instead of a generic "improve it". All are sent when all fired: they are
   // independent defects with independent remedies.
   const effectiveFeedback = (feedback || '').trim() || [
     buildThreejsCoverageFeedback(current.coverage),
     buildThreejsFlatnessFeedback(current.flatness),
     buildThreejsPenetrationFeedback(current.penetration),
+    buildThreejsMaterialFeedback(current.materialPlausibility),
   ].filter(Boolean).join('\n\n');
   // Absent (`undefined`) keeps whatever the record already had; an explicit
   // `null` — what the picker's "Default effort" choice sends — clears it.

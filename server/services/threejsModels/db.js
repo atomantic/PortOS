@@ -95,6 +95,11 @@ export async function createModel(input) {
     // which every consumer renders as an unevaluated STATIC assembly — never as
     // "articulation-ready".
     rig: null,
+    // Material-plausibility findings for `spec`, written alongside it by
+    // `evaluateThreejsMaterialPlausibility`. Same additive-field contract as
+    // `coverage` and `flatness`: an older record reads back undefined, which
+    // every consumer treats as "not evaluated" rather than "plausible".
+    materialPlausibility: null,
     error: null,
     generationOperationId: null,
     runs: [],

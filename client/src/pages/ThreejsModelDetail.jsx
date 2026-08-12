@@ -353,6 +353,9 @@ export default function ThreejsModelDetail() {
   const coverageFindings = Array.isArray(record.coverage?.findings) ? record.coverage.findings : null;
   const flatnessFindings = Array.isArray(record.flatness?.findings) ? record.flatness.findings : null;
   const penetrationFindings = Array.isArray(record.penetration?.findings) ? record.penetration.findings : null;
+  const materialFindings = Array.isArray(record.materialPlausibility?.findings)
+    ? record.materialPlausibility.findings
+    : null;
   // Undecided contact is a note the reader is meant to judge, never something a
   // refinement is told to fix — so the footer only promises a refinement when
   // there is an actual defect above it.
@@ -558,6 +561,21 @@ export default function ThreejsModelDetail() {
           footer={`Parts modelled inside each other look correct from the hero angle and fall apart the moment the model is orbited, so this check compares every unrelated pair by volume. Parts parented together or declared as attachments are exempt — embedding is what those relationships are for.${
             penetrationDefects.error + penetrationDefects.warning > 0
               ? ' Refining without your own feedback will also ask for each part to get its own volume.'
+              : ''
+          }`}
+        />
+      )}
+
+      {materialFindings && (
+        <GatePanel
+          title="Material plausibility"
+          findings={materialFindings}
+          cleanLabel={record.materialPlausibility?.matchedMaterialCount > 0
+            ? 'Recognized materials match their substance'
+            : 'No material named a substance to check'}
+          footer={`Every channel here is already inside what Three.js accepts, so this check asks the other question: whether the values suit the substance the material is named for — metallic wood and opaque glass both parse. Only materials whose id names exactly one substance are checked, and nothing is ever adjusted.${
+            materialFindings.length > 0
+              ? ' Refining without your own feedback will also ask for values that match the substance — keep any deliberate stylization in your own feedback.'
               : ''
           }`}
         />
