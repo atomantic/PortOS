@@ -104,11 +104,27 @@ const emptyToUndefined = (inner) => z.preprocess(
   inner
 );
 
+// A `YYYY-MM-DD` string can match the shape and still name a day that doesn't
+// exist (`2026-02-30`). `Date.parse` rolls those over instead of failing, so
+// round-trip the parts — otherwise Postgres is the one that rejects the date,
+// as a 500 rather than a 400.
+const isRealCalendarDate = (v) => {
+  const [year, month, day] = v.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month - 1
+    && parsed.getUTCDate() === day;
+};
+
 // `startDate`/`endDate` reach Postgres as `created_at >= $n` bind params, so a
-// bare calendar date is as usable as a full timestamp — accept either.
+// bare calendar date is as usable as a full timestamp — accept either. The
+// datetime branch allows a `+HH:MM` offset, not just a `Z` suffix, since either
+// is a legitimate serialization of the same instant.
 const dateBoundary = z.union([
-  z.string().datetime(),
-  z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'must be an ISO datetime or YYYY-MM-DD date')
+  z.string().datetime({ offset: true }),
+  z.string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'must be an ISO datetime or YYYY-MM-DD date')
+    .refine(isRealCalendarDate, 'must be a real calendar date')
 ]);
 
 // List/filter query schema (GET /api/memory — validated against req.query).
@@ -116,8 +132,8 @@ const dateBoundary = z.union([
 // has always enforced via parsePagination's maxLimit.
 export const memoryListSchema = z.object({
   types: csvList(z.array(memoryTypeEnum).optional()),
-  categories: csvList(z.array(z.string()).optional()),
-  tags: csvList(z.array(z.string()).optional()),
+  categories: csvList(z.array(z.string().max(100)).optional()),
+  tags: csvList(z.array(z.string().max(50)).optional()),
   status: emptyToUndefined(memoryStatusEnum.optional().default('active')),
   appId: emptyToUndefined(z.string().max(100).optional()),
   limit: numeric(z.number().int().min(1).max(500).optional().default(50)),
@@ -131,6 +147,10 @@ export const memoryTimelineSchema = z.object({
   startDate: emptyToUndefined(dateBoundary.optional()),
   endDate: emptyToUndefined(dateBoundary.optional()),
   types: csvList(z.array(memoryTypeEnum).optional()),
+  // Both timeline backends filter on appId (including the `__not_brain`
+  // sentinel the CoS Memory tab uses); it was unreachable while the handler
+  // hand-built its options object.
+  appId: emptyToUndefined(z.string().max(100).optional()),
   limit: numeric(z.number().int().min(1).max(500).optional().default(100))
 });
 

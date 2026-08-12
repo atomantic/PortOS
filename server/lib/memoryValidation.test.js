@@ -391,6 +391,22 @@ describe('memoryValidation.js', () => {
     it('should reject a malformed date boundary', () => {
       expect(memoryTimelineSchema.safeParse({ startDate: 'last tuesday' }).success).toBe(false);
     });
+
+    it('should reject a date that matches the shape but is not a real day', () => {
+      expect(memoryTimelineSchema.safeParse({ startDate: '2026-02-30' }).success).toBe(false);
+      expect(memoryTimelineSchema.safeParse({ startDate: '2026-13-01' }).success).toBe(false);
+      expect(memoryTimelineSchema.safeParse({ startDate: '2024-02-29' }).success).toBe(true);
+    });
+
+    it('should accept a datetime with a UTC offset', () => {
+      expect(memoryTimelineSchema.safeParse({ startDate: '2026-01-01T00:00:00+02:00' }).success).toBe(true);
+    });
+
+    it('should accept an appId filter', () => {
+      const result = memoryTimelineSchema.safeParse({ appId: '__not_brain' });
+      expect(result.success).toBe(true);
+      expect(result.data.appId).toBe('__not_brain');
+    });
   });
 
   describe('memoryExtractSchema', () => {

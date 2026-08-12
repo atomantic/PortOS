@@ -267,6 +267,34 @@ describe('Memory Routes', () => {
       expect(response.status).toBe(400);
       expect(getMemories).not.toHaveBeenCalled();
     });
+
+    it('should reject an unknown sortBy', async () => {
+      const response = await request(app).get('/api/memory?sortBy=unknown');
+
+      expect(response.status).toBe(400);
+      expect(getMemories).not.toHaveBeenCalled();
+    });
+
+    it('should reject an unknown sortOrder', async () => {
+      const response = await request(app).get('/api/memory?sortOrder=up');
+
+      expect(response.status).toBe(400);
+      expect(getMemories).not.toHaveBeenCalled();
+    });
+
+    it('should reject a negative offset', async () => {
+      const response = await request(app).get('/api/memory?offset=-1');
+
+      expect(response.status).toBe(400);
+      expect(getMemories).not.toHaveBeenCalled();
+    });
+
+    it('should reject an unknown status', async () => {
+      const response = await request(app).get('/api/memory?status=deleted');
+
+      expect(response.status).toBe(400);
+      expect(getMemories).not.toHaveBeenCalled();
+    });
   });
 
   // ===========================================================================
@@ -308,6 +336,22 @@ describe('Memory Routes', () => {
 
     it('should reject a limit above the 500 ceiling', async () => {
       const response = await request(app).get('/api/memory/timeline?limit=501');
+
+      expect(response.status).toBe(400);
+      expect(getTimeline).not.toHaveBeenCalled();
+    });
+
+    it('should forward the appId filter to the backend', async () => {
+      getTimeline.mockResolvedValue({});
+
+      const response = await request(app).get('/api/memory/timeline?appId=__not_brain');
+
+      expect(response.status).toBe(200);
+      expect(getTimeline).toHaveBeenCalledWith({ appId: '__not_brain', limit: 100 });
+    });
+
+    it('should reject a date that matches the shape but is not a real day', async () => {
+      const response = await request(app).get('/api/memory/timeline?startDate=2026-02-30');
 
       expect(response.status).toBe(400);
       expect(getTimeline).not.toHaveBeenCalled();
