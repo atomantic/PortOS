@@ -11,7 +11,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Loader2, ImagePlus, ImageUp, WandSparkles, Lock, Unlock, Shirt, Plus, Trash2, X, ChevronDown, ChevronRight, Star, Square, BookOpen, ScanText } from 'lucide-react';
+import { Loader2, ImagePlus, ImageUp, WandSparkles, Lock, Unlock, Shirt, Plus, Trash2, X, Star, Square, BookOpen, ScanText } from 'lucide-react';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import useRowDraft from '../../hooks/useRowDraft';
 import useFieldDraft from '../../hooks/useFieldDraft';
@@ -24,6 +24,7 @@ import ObjectAttachmentsEditor from '../universe/ObjectAttachmentsEditor';
 import CharacterReferenceSheetPanel from '../universe/CharacterReferenceSheetPanel';
 import CharacterLoraChip from '../loraTraining/CharacterLoraChip';
 import Pill from '../ui/Pill';
+import CollapsibleSection from '../ui/CollapsibleSection';
 import { BIBLE_LIMITS } from '../../lib/bibleLimits';
 
 // Place metadata enums — kept in lock-step with `PLACE_INT_EXT` and
@@ -147,62 +148,63 @@ function RevealTimingField({ entry, editable, onPatch }) {
     );
   }
   return (
-    <details className="mt-2 group">
-      <summary className="cursor-pointer list-none flex items-center gap-1 text-[10px] uppercase tracking-wider text-gray-500 hover:text-gray-300">
-        <ChevronRight size={11} className="shrink-0 group-open:hidden" />
-        <ChevronDown size={11} className="hidden shrink-0 group-open:inline" />
-        Reveal timing (spoiler scoping)
-        {gated ? <span className="ml-1 text-port-warning normal-case tracking-normal">· gated</span> : null}
-      </summary>
-      <div className="mt-1.5 space-y-2 pl-3 border-l border-port-border">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex flex-col gap-0.5">
-            <label htmlFor={`${idBase}-issue`} className="text-[10px] uppercase tracking-wider text-gray-500">
-              Reveal in issue #
-            </label>
-            <input
-              id={`${idBase}-issue`}
-              type="number"
-              min={1}
-              max={BIBLE_LIMITS.REVEAL_ISSUE_MAX}
-              value={Number.isInteger(entry.revealIssue) ? entry.revealIssue : ''}
-              onChange={(e) => {
-                const v = e.target.value.trim();
-                const n = v === '' ? null : Math.trunc(Number(v));
-                onPatch({ revealIssue: Number.isInteger(n) && n >= 1 ? n : null });
-              }}
-              placeholder="—"
-              className="w-20 px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-gray-200"
-            />
-          </div>
-          <label htmlFor={`${idBase}-spoiler`} className="flex items-center gap-1.5 text-[11px] text-gray-400 mt-3">
-            <input
-              id={`${idBase}-spoiler`}
-              type="checkbox"
-              checked={entry.spoiler === true}
-              onChange={(e) => onPatch({ spoiler: e.target.checked })}
-              className="accent-port-warning"
-            />
-            Hard spoiler (never in drafting)
-          </label>
-        </div>
+    <CollapsibleSection
+      className="mt-2"
+      label={
+        <>
+          Reveal timing (spoiler scoping)
+          {gated ? <span className="ml-1 text-port-warning normal-case tracking-normal">· gated</span> : null}
+        </>
+      }
+      bodyClassName="mt-1.5 space-y-2 pl-3 border-l border-port-border"
+    >
+      <div className="flex flex-wrap items-center gap-3">
         <div className="flex flex-col gap-0.5">
-          <label htmlFor={`${idBase}-surface`} className="text-[10px] uppercase tracking-wider text-gray-500">
-            Surface descriptor (pre-reveal stand-in)
+          <label htmlFor={`${idBase}-issue`} className="text-[10px] uppercase tracking-wider text-gray-500">
+            Reveal in issue #
           </label>
-          <textarea
-            id={`${idBase}-surface`}
-            value={surfaceDraft.value}
-            onChange={surfaceDraft.onChange}
-            onBlur={surfaceDraft.onBlur}
-            rows={2}
-            maxLength={BIBLE_LIMITS.SURFACE_DESCRIPTOR_MAX}
-            placeholder="What the world looks like BEFORE the reveal (e.g. &quot;the locked east wing&quot;). Substituted into drafting context until the reveal issue."
-            className="w-full px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-gray-200 whitespace-pre-wrap"
+          <input
+            id={`${idBase}-issue`}
+            type="number"
+            min={1}
+            max={BIBLE_LIMITS.REVEAL_ISSUE_MAX}
+            value={Number.isInteger(entry.revealIssue) ? entry.revealIssue : ''}
+            onChange={(e) => {
+              const v = e.target.value.trim();
+              const n = v === '' ? null : Math.trunc(Number(v));
+              onPatch({ revealIssue: Number.isInteger(n) && n >= 1 ? n : null });
+            }}
+            placeholder="—"
+            className="w-20 px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-gray-200"
           />
         </div>
+        <label htmlFor={`${idBase}-spoiler`} className="flex items-center gap-1.5 text-[11px] text-gray-400 mt-3">
+          <input
+            id={`${idBase}-spoiler`}
+            type="checkbox"
+            checked={entry.spoiler === true}
+            onChange={(e) => onPatch({ spoiler: e.target.checked })}
+            className="accent-port-warning"
+          />
+          Hard spoiler (never in drafting)
+        </label>
       </div>
-    </details>
+      <div className="flex flex-col gap-0.5">
+        <label htmlFor={`${idBase}-surface`} className="text-[10px] uppercase tracking-wider text-gray-500">
+          Surface descriptor (pre-reveal stand-in)
+        </label>
+        <textarea
+          id={`${idBase}-surface`}
+          value={surfaceDraft.value}
+          onChange={surfaceDraft.onChange}
+          onBlur={surfaceDraft.onBlur}
+          rows={2}
+          maxLength={BIBLE_LIMITS.SURFACE_DESCRIPTOR_MAX}
+          placeholder="What the world looks like BEFORE the reveal (e.g. &quot;the locked east wing&quot;). Substituted into drafting context until the reveal issue."
+          className="w-full px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-gray-200 whitespace-pre-wrap"
+        />
+      </div>
+    </CollapsibleSection>
   );
 }
 
@@ -211,21 +213,15 @@ function RevealTimingField({ entry, editable, onPatch }) {
 // card stays terse by default — the user opens it only when filling in
 // novelist / graphic-novelist fields or generating a reference sheet.
 function CharacterDetailsToggle({ children }) {
-  const [open, setOpen] = useState(false);
-  const Chevron = open ? ChevronDown : ChevronRight;
   return (
-    <div className="mt-2">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1 text-[10px] uppercase tracking-wider text-gray-500 hover:text-white"
-      >
-        <Chevron size={10} className="shrink-0" />
-        <BookOpen size={10} className="shrink-0" />
-        Character details {open ? '' : '+ reference sheet'}
-      </button>
-      {open ? <div>{children}</div> : null}
-    </div>
+    <CollapsibleSection
+      className="mt-2"
+      icon={BookOpen}
+      label="Character details"
+      summary="+ reference sheet"
+    >
+      {children}
+    </CollapsibleSection>
   );
 }
 
@@ -301,6 +297,8 @@ function WardrobeRow({ wardrobe, editable, onCommit, onRemove }) {
 // `stripIdOnPromote` stays false to keep WardrobeRow mounted across the
 // swap and preserve sibling draft buffers.
 function WardrobeSection({ wardrobes, editable, onChange }) {
+  // Kept local (rather than folded into CollapsibleSection's internal state)
+  // because "Add outfit" has to force the section open from outside the header.
   const [open, setOpen] = useState(false);
   const { merged, addRow, updateRow, removeRow } = usePendingListRows({
     persisted: wardrobes,
@@ -312,8 +310,7 @@ function WardrobeSection({ wardrobes, editable, onChange }) {
 
   if (!editable && merged.length === 0) return null;
 
-  const Chevron = open ? ChevronDown : ChevronRight;
-  const summary = merged.map((w) => w.name).filter(Boolean).join(', ');
+  const names = merged.map((w) => w.name).filter(Boolean).join(', ');
 
   const addOne = () => {
     setOpen(true);
@@ -321,42 +318,34 @@ function WardrobeSection({ wardrobes, editable, onChange }) {
   };
 
   return (
-    <div className="mt-2">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1 text-[10px] uppercase tracking-wider text-gray-500 hover:text-white"
-      >
-        <Chevron size={10} className="shrink-0" />
-        <Shirt size={10} className="shrink-0" />
-        <span className="shrink-0">Outfits ({merged.length})</span>
-        {/* One clipped line — the joined outfit names are long enough to wrap
-            into a paragraph-tall collapsed header on a phone. */}
-        {summary && !open ? <span className="min-w-0 truncate">: {summary}</span> : null}
-      </button>
-      {open ? (
-        <div className="mt-1.5 pl-3 border-l border-port-border space-y-1.5">
-          {merged.map((w, i) => (
-            <WardrobeRow
-              key={w.id || i}
-              wardrobe={w}
-              editable={editable}
-              onCommit={(nextRow) => updateRow(i, nextRow)}
-              onRemove={() => removeRow(i)}
-            />
-          ))}
-          {editable ? (
-            <button
-              type="button"
-              onClick={addOne}
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500"
-            >
-              <Plus size={10} /> Add outfit
-            </button>
-          ) : null}
-        </div>
+    <CollapsibleSection
+      className="mt-2"
+      icon={Shirt}
+      label={`Outfits (${merged.length})`}
+      summary={names ? `: ${names}` : ''}
+      open={open}
+      onOpenChange={setOpen}
+      bodyClassName="mt-1.5 pl-3 border-l border-port-border space-y-1.5"
+    >
+      {merged.map((w, i) => (
+        <WardrobeRow
+          key={w.id || i}
+          wardrobe={w}
+          editable={editable}
+          onCommit={(nextRow) => updateRow(i, nextRow)}
+          onRemove={() => removeRow(i)}
+        />
+      ))}
+      {editable ? (
+        <button
+          type="button"
+          onClick={addOne}
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500"
+        >
+          <Plus size={10} /> Add outfit
+        </button>
       ) : null}
-    </div>
+    </CollapsibleSection>
   );
 }
 

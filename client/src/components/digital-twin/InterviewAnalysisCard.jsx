@@ -1,20 +1,22 @@
-import { useState } from 'react';
-import { ChevronDown, ChevronRight, FileText, TrendingUp, Layers, BarChart3 } from 'lucide-react';
+import { FileText, TrendingUp, Layers, BarChart3 } from 'lucide-react';
+import CollapsibleSection from '../ui/CollapsibleSection';
 
-function CollapsibleSection({ title, icon: Icon, children, defaultOpen = false }) {
-  const [open, setOpen] = useState(defaultOpen);
+// Local wrapper so the four call sites below keep the card's rounded-border
+// chrome and `title`-named prop while the toggle behaviour (and aria-expanded)
+// comes from the shared primitive.
+function AnalysisSection({ title, icon, children, defaultOpen = false }) {
   return (
-    <div className="border border-port-border rounded-lg overflow-hidden">
-      <button
-        onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-300 hover:bg-port-bg transition-colors"
-      >
-        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        <Icon size={14} />
-        <span>{title}</span>
-      </button>
-      {open && <div className="px-3 pb-3 text-sm">{children}</div>}
-    </div>
+    <CollapsibleSection
+      size="lg"
+      icon={icon}
+      label={title}
+      defaultOpen={defaultOpen}
+      className="border border-port-border rounded-lg overflow-hidden"
+      buttonClassName="px-3 py-2"
+      bodyClassName="px-3 pb-3 text-sm"
+    >
+      {children}
+    </CollapsibleSection>
   );
 }
 
@@ -62,7 +64,7 @@ export default function InterviewAnalysisCard({ analysisResult }) {
       {/* Collapsible sections */}
       <div className="space-y-1">
         {traitCount > 0 && (
-          <CollapsibleSection title="Trait Updates" icon={BarChart3}>
+          <AnalysisSection title="Trait Updates" icon={BarChart3}>
             <div className="space-y-2">
               {traitsUpdated.bigFive && (
                 <div>
@@ -106,11 +108,11 @@ export default function InterviewAnalysisCard({ analysisResult }) {
                 </div>
               )}
             </div>
-          </CollapsibleSection>
+          </AnalysisSection>
         )}
 
         {dimensionCount > 0 && (
-          <CollapsibleSection title="New Dimensions" icon={Layers}>
+          <AnalysisSection title="New Dimensions" icon={Layers}>
             <div className="space-y-2">
               {newDimensions.map((dim, i) => (
                 <div key={i} className="bg-port-bg rounded p-2">
@@ -125,11 +127,11 @@ export default function InterviewAnalysisCard({ analysisResult }) {
                 </div>
               ))}
             </div>
-          </CollapsibleSection>
+          </AnalysisSection>
         )}
 
         {(docsCreatedCount > 0 || docsUpdatedCount > 0) && (
-          <CollapsibleSection title="Document Changes" icon={FileText}>
+          <AnalysisSection title="Document Changes" icon={FileText}>
             <div className="space-y-1">
               {(documentsCreated || []).map((f, i) => (
                 <div key={`c-${i}`} className="text-xs text-port-success">+ {f}</div>
@@ -138,13 +140,13 @@ export default function InterviewAnalysisCard({ analysisResult }) {
                 <div key={`u-${i}`} className="text-xs text-port-warning">~ {f}</div>
               ))}
             </div>
-          </CollapsibleSection>
+          </AnalysisSection>
         )}
 
         {rawAnalysis && (
-          <CollapsibleSection title="Analysis Summary" icon={TrendingUp} defaultOpen>
+          <AnalysisSection title="Analysis Summary" icon={TrendingUp} defaultOpen>
             <p className="text-xs text-gray-300 whitespace-pre-wrap">{rawAnalysis}</p>
-          </CollapsibleSection>
+          </AnalysisSection>
         )}
       </div>
     </div>

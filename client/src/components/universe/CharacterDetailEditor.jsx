@@ -10,9 +10,8 @@
  * only knows the field shape.
  */
 
-import { useState } from 'react';
 import {
-  ChevronDown, ChevronRight, Plus, Trash2, WandSparkles, Loader2,
+  Plus, Trash2, WandSparkles, Loader2,
   Palette, Hand, Smile, Package, BookOpen, Eye, Activity, Users, Swords,
   Drama, KeyRound,
 } from 'lucide-react';
@@ -21,6 +20,7 @@ import useFieldDraft from '../../hooks/useFieldDraft';
 import useRowDraft from '../../hooks/useRowDraft';
 import usePendingListRows from '../../hooks/usePendingListRows';
 import VoicePicker from '../voice/VoicePicker';
+import CollapsibleSection from '../ui/CollapsibleSection';
 
 const SECTIONS = Object.freeze([
   {
@@ -219,23 +219,22 @@ function ListRow({ row, idx, columns, swatchHex, onChange, onDelete, disabled })
   );
 }
 
-function CollapsibleSection({ icon: Icon, label, summary, defaultOpen = false, children }) {
-  const [open, setOpen] = useState(defaultOpen);
-  const Chevron = open ? ChevronDown : ChevronRight;
+// Local wrapper over the shared primitive so the three call sites below keep
+// their boxed chrome (bordered card, header/body padding) in one place.
+function BoxedSection({ icon, label, summary, defaultOpen = false, children }) {
   return (
-    <div className="rounded border border-port-border bg-port-bg/50">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center gap-1.5 px-2 py-1.5 text-[10px] uppercase tracking-wider text-gray-400 hover:text-white"
-      >
-        <Chevron size={11} className="shrink-0" />
-        <Icon size={11} className="shrink-0" />
-        <span className="shrink-0 text-gray-300">{label}</span>
-        {summary && !open ? <span className="min-w-0 text-gray-500 normal-case truncate">— {summary}</span> : null}
-      </button>
-      {open ? <div className="px-2.5 pb-2.5 pt-1 space-y-2">{children}</div> : null}
-    </div>
+    <CollapsibleSection
+      size="md"
+      icon={icon}
+      label={label}
+      summary={summary ? `— ${summary}` : ''}
+      defaultOpen={defaultOpen}
+      className="rounded border border-port-border bg-port-bg/50"
+      buttonClassName="px-2 py-1.5"
+      bodyClassName="px-2.5 pb-2.5 pt-1 space-y-2"
+    >
+      {children}
+    </CollapsibleSection>
   );
 }
 
@@ -285,7 +284,7 @@ function ListSectionEditor({ section, entry, onPatchList, disabled }) {
     ? 'empty'
     : `${merged.length} ${merged.length === 1 ? section.singular : section.singular + 's'}`;
   return (
-    <CollapsibleSection
+    <BoxedSection
       icon={section.icon}
       label={section.label}
       summary={summary}
@@ -322,7 +321,7 @@ function ListSectionEditor({ section, entry, onPatchList, disabled }) {
       >
         <Plus size={10} /> {section.addLabel}
       </button>
-    </CollapsibleSection>
+    </BoxedSection>
   );
 }
 
@@ -480,7 +479,7 @@ function RelationshipsSection({ entry, characters, onPatch, disabled }) {
     ? 'empty'
     : `${links.length} link${links.length === 1 ? '' : 's'}${oppositionCount ? ` · ${oppositionCount} opposing` : ''}`;
   return (
-    <CollapsibleSection icon={Users} label="Relationships" summary={summary}>
+    <BoxedSection icon={Users} label="Relationships" summary={summary}>
       {/* Always render existing rows — even with no other cast — so a stale
           link (its target was deleted, leaving this the only character) stays
           removable/repointable instead of being stranded behind the add-cast
@@ -512,7 +511,7 @@ function RelationshipsSection({ entry, characters, onPatch, disabled }) {
           <Plus size={10} /> Add relationship
         </button>
       )}
-    </CollapsibleSection>
+    </BoxedSection>
   );
 }
 
@@ -529,7 +528,7 @@ function ArcFrameworkControls({ entry, onPatch, disabled, idPrefix }) {
   const setCount = SLIDER_AXES.reduce((n, a) => n + (typeof entry[a] === 'string' ? 0 : (sliders[a] != null ? 1 : 0)), 0);
   const summary = `${entry.arcType || 'no arc'}${setCount ? ` · ${setCount}/3 sliders` : ''}`;
   return (
-    <CollapsibleSection icon={Drama} label="Arc type & sliders" summary={summary}>
+    <BoxedSection icon={Drama} label="Arc type & sliders" summary={summary}>
       <div className="space-y-0.5">
         <label htmlFor={arcId} className="block text-[10px] uppercase tracking-wider text-gray-500">
           Arc type
@@ -588,7 +587,7 @@ function ArcFrameworkControls({ entry, onPatch, disabled, idPrefix }) {
           </div>
         );
       })}
-    </CollapsibleSection>
+    </BoxedSection>
   );
 }
 
@@ -619,7 +618,7 @@ export default function CharacterDetailEditor({ entry, onPatch, onExpand, expand
       ) : null}
 
       {SECTIONS.map((section) => (
-        <CollapsibleSection
+        <BoxedSection
           key={section.key}
           icon={section.icon}
           label={section.label}
@@ -645,7 +644,7 @@ export default function CharacterDetailEditor({ entry, onPatch, onExpand, expand
               previewText={entry.name ? `Hi, I'm ${entry.name}. This is how I sound.` : undefined}
             />
           ) : null}
-        </CollapsibleSection>
+        </BoxedSection>
       ))}
 
       <ArcFrameworkControls
