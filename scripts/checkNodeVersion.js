@@ -23,6 +23,8 @@
  * and is asserted to be >= this floor, not equal to it.
  */
 
+import { pathToFileURL } from 'url';
+
 /** The hard floor. Changing the version means changing exactly this string. */
 export const MIN_NODE = '22.12.0';
 
@@ -74,7 +76,9 @@ export function assertNodeVersion({
   return false;
 }
 
-// Runnable directly: `node scripts/checkNodeVersion.js`.
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+// Runnable directly: `node scripts/checkNodeVersion.js`. pathToFileURL rather
+// than a `file://` template so a repo path containing a space or a non-ASCII
+// character still matches (it percent-encodes; the template does not).
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   assertNodeVersion();
 }
