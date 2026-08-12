@@ -74,25 +74,64 @@ export const memorySearchSchema = z.object({
   offset: z.number().int().min(0).optional().default(0)
 });
 
-// List/filter query schema
+// ---------------------------------------------------------------------------
+// Query-string coercion
+//
+// The list/timeline schemas below validate `req.query`, where every value
+// arrives as a string: arrays are comma-separated (`?types=fact,learning`, the
+// shape `client/src/services/apiMemory.js` sends) and numbers are digits. These
+// preprocessors accept both the query form and the already-parsed form so the
+// same schema still validates a JSON body. An empty param (`?types=`) becomes
+// `undefined` — "not filtered" — rather than an empty list or a NaN.
+// ---------------------------------------------------------------------------
+
+const csvList = (inner) => z.preprocess((v) => {
+  if (typeof v !== 'string') return v;
+  const parts = v.split(',').map((s) => s.trim()).filter(Boolean);
+  return parts.length > 0 ? parts : undefined;
+}, inner);
+
+const numeric = (inner) => z.preprocess((v) => {
+  if (typeof v !== 'string') return v;
+  const trimmed = v.trim();
+  if (trimmed === '') return undefined;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : v;
+}, inner);
+
+const emptyToUndefined = (inner) => z.preprocess(
+  (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+  inner
+);
+
+// `startDate`/`endDate` reach Postgres as `created_at >= $n` bind params, so a
+// bare calendar date is as usable as a full timestamp — accept either.
+const dateBoundary = z.union([
+  z.string().datetime(),
+  z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'must be an ISO datetime or YYYY-MM-DD date')
+]);
+
+// List/filter query schema (GET /api/memory — validated against req.query).
+// `limit` caps at 500 to match the timeline schema and the ceiling this route
+// has always enforced via parsePagination's maxLimit.
 export const memoryListSchema = z.object({
-  types: z.array(memoryTypeEnum).optional(),
-  categories: z.array(z.string()).optional(),
-  tags: z.array(z.string()).optional(),
-  status: memoryStatusEnum.optional().default('active'),
-  appId: z.string().max(100).optional(),
-  limit: z.number().int().min(1).max(100).optional().default(50),
-  offset: z.number().int().min(0).optional().default(0),
-  sortBy: z.enum(['createdAt', 'updatedAt', 'importance', 'accessCount']).optional().default('createdAt'),
-  sortOrder: z.enum(['asc', 'desc']).optional().default('desc')
+  types: csvList(z.array(memoryTypeEnum).optional()),
+  categories: csvList(z.array(z.string()).optional()),
+  tags: csvList(z.array(z.string()).optional()),
+  status: emptyToUndefined(memoryStatusEnum.optional().default('active')),
+  appId: emptyToUndefined(z.string().max(100).optional()),
+  limit: numeric(z.number().int().min(1).max(500).optional().default(50)),
+  offset: numeric(z.number().int().min(0).optional().default(0)),
+  sortBy: emptyToUndefined(z.enum(['createdAt', 'updatedAt', 'importance', 'accessCount']).optional().default('createdAt')),
+  sortOrder: emptyToUndefined(z.enum(['asc', 'desc']).optional().default('desc'))
 });
 
-// Timeline query schema
+// Timeline query schema (GET /api/memory/timeline — validated against req.query)
 export const memoryTimelineSchema = z.object({
-  startDate: z.string().datetime().optional(),
-  endDate: z.string().datetime().optional(),
-  types: z.array(memoryTypeEnum).optional(),
-  limit: z.number().int().min(1).max(500).optional().default(100)
+  startDate: emptyToUndefined(dateBoundary.optional()),
+  endDate: emptyToUndefined(dateBoundary.optional()),
+  types: csvList(z.array(memoryTypeEnum).optional()),
+  limit: numeric(z.number().int().min(1).max(500).optional().default(100))
 });
 
 // Memory extraction request schema (from agent output)

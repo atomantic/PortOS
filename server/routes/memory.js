@@ -25,18 +25,7 @@ const router = Router();
 
 // GET /api/memory - List memories with filters
 router.get('/', asyncHandler(async (req, res) => {
-  const { limit, offset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 500 });
-  const options = {
-    types: req.query.types ? req.query.types.split(',') : undefined,
-    categories: req.query.categories ? req.query.categories.split(',') : undefined,
-    tags: req.query.tags ? req.query.tags.split(',') : undefined,
-    status: req.query.status || 'active',
-    appId: req.query.appId || undefined,
-    limit,
-    offset,
-    sortBy: req.query.sortBy || 'createdAt',
-    sortOrder: req.query.sortOrder || 'desc'
-  };
+  const options = validateRequest(memoryListSchema, req.query);
 
   const result = await memory.getMemories(options);
   res.json(result);
@@ -62,13 +51,7 @@ router.get('/tags', asyncHandler(async (req, res) => {
 
 // GET /api/memory/timeline - Get timeline view
 router.get('/timeline', asyncHandler(async (req, res) => {
-  const { limit } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 500 });
-  const options = {
-    startDate: req.query.startDate,
-    endDate: req.query.endDate,
-    types: req.query.types ? req.query.types.split(',') : undefined,
-    limit
-  };
+  const options = validateRequest(memoryTimelineSchema, req.query);
 
   const timeline = await memory.getTimeline(options);
   res.json(timeline);

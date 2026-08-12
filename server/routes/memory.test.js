@@ -45,7 +45,7 @@ vi.mock('../services/memorySync.js', () => ({
   applyRemoteChanges: vi.fn()
 }));
 
-import { ensureBackend } from '../services/memoryBackend.js';
+import { ensureBackend, getMemories, getTimeline } from '../services/memoryBackend.js';
 import { checkHealth } from '../lib/db.js';
 import * as memorySync from '../services/memorySync.js';
 
@@ -203,6 +203,114 @@ describe('Memory Routes', () => {
       expect(memorySync.applyRemoteChanges).toHaveBeenCalledWith(
         expect.arrayContaining([expect.objectContaining({ id: '00000000-0000-0000-0000-000000000001', type: 'fact', content: 'synced memory' })])
       );
+    });
+  });
+
+  // ===========================================================================
+  // LIST
+  // ===========================================================================
+
+  describe('GET /api/memory', () => {
+    it('should pass schema defaults through when no filters are given', async () => {
+      getMemories.mockResolvedValue({ memories: [], total: 0 });
+
+      const response = await request(app).get('/api/memory');
+
+      expect(response.status).toBe(200);
+      expect(getMemories).toHaveBeenCalledWith({
+        status: 'active',
+        limit: 50,
+        offset: 0,
+        sortBy: 'createdAt',
+        sortOrder: 'desc'
+      });
+    });
+
+    it('should split csv filters and coerce numeric params', async () => {
+      getMemories.mockResolvedValue({ memories: [], total: 0 });
+
+      const response = await request(app)
+        .get('/api/memory?types=fact,learning&categories=codebase&tags=a,b&status=archived&appId=brain&limit=10&offset=5&sortBy=importance&sortOrder=asc');
+
+      expect(response.status).toBe(200);
+      expect(getMemories).toHaveBeenCalledWith({
+        types: ['fact', 'learning'],
+        categories: ['codebase'],
+        tags: ['a', 'b'],
+        status: 'archived',
+        appId: 'brain',
+        limit: 10,
+        offset: 5,
+        sortBy: 'importance',
+        sortOrder: 'asc'
+      });
+    });
+
+    it('should reject a limit above the 500 ceiling', async () => {
+      const response = await request(app).get('/api/memory?limit=501');
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/Validation failed/);
+      expect(getMemories).not.toHaveBeenCalled();
+    });
+
+    it('should reject an unknown memory type', async () => {
+      const response = await request(app).get('/api/memory?types=fact,nonsense');
+
+      expect(response.status).toBe(400);
+      expect(getMemories).not.toHaveBeenCalled();
+    });
+
+    it('should reject a non-numeric limit instead of silently defaulting', async () => {
+      const response = await request(app).get('/api/memory?limit=abc');
+
+      expect(response.status).toBe(400);
+      expect(getMemories).not.toHaveBeenCalled();
+    });
+  });
+
+  // ===========================================================================
+  // TIMELINE
+  // ===========================================================================
+
+  describe('GET /api/memory/timeline', () => {
+    it('should pass the default limit through', async () => {
+      getTimeline.mockResolvedValue({});
+
+      const response = await request(app).get('/api/memory/timeline');
+
+      expect(response.status).toBe(200);
+      expect(getTimeline).toHaveBeenCalledWith({ limit: 100 });
+    });
+
+    it('should pass validated date range, types and limit', async () => {
+      getTimeline.mockResolvedValue({});
+
+      const response = await request(app)
+        .get('/api/memory/timeline?startDate=2026-01-01T00:00:00.000Z&endDate=2026-01-31&types=fact&limit=5');
+
+      expect(response.status).toBe(200);
+      expect(getTimeline).toHaveBeenCalledWith({
+        startDate: '2026-01-01T00:00:00.000Z',
+        endDate: '2026-01-31',
+        types: ['fact'],
+        limit: 5
+      });
+    });
+
+    it('should reject a malformed date boundary', async () => {
+      const response = await request(app).get('/api/memory/timeline?startDate=yesterday');
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/Validation failed/);
+      expect(getTimeline).not.toHaveBeenCalled();
+    });
+
+    it('should reject a limit above the 500 ceiling', async () => {
+      const response = await request(app).get('/api/memory/timeline?limit=501');
+
+      expect(response.status).toBe(400);
+      expect(getTimeline).not.toHaveBeenCalled();
     });
   });
 });

@@ -307,6 +307,51 @@ describe('memoryValidation.js', () => {
     it('should reject invalid sortOrder', () => {
       expect(memoryListSchema.safeParse({ sortOrder: 'random' }).success).toBe(false);
     });
+
+    it('should coerce query-string values', () => {
+      const result = memoryListSchema.safeParse({
+        types: 'fact,learning',
+        categories: 'codebase, workflow',
+        tags: 'a,b',
+        limit: '25',
+        offset: '10'
+      });
+      expect(result.success).toBe(true);
+      expect(result.data.types).toEqual(['fact', 'learning']);
+      expect(result.data.categories).toEqual(['codebase', 'workflow']);
+      expect(result.data.tags).toEqual(['a', 'b']);
+      expect(result.data.limit).toBe(25);
+      expect(result.data.offset).toBe(10);
+    });
+
+    it('should treat empty query params as unset', () => {
+      const result = memoryListSchema.safeParse({
+        types: '', categories: '', tags: '', status: '', appId: '', limit: '', offset: '', sortBy: '', sortOrder: ''
+      });
+      expect(result.success).toBe(true);
+      expect(result.data.types).toBeUndefined();
+      expect(result.data.appId).toBeUndefined();
+      expect(result.data.status).toBe('active');
+      expect(result.data.limit).toBe(50);
+      expect(result.data.sortBy).toBe('createdAt');
+    });
+
+    it('should reject a non-numeric limit', () => {
+      expect(memoryListSchema.safeParse({ limit: 'abc' }).success).toBe(false);
+    });
+
+    it('should reject limit over 500', () => {
+      expect(memoryListSchema.safeParse({ limit: 501 }).success).toBe(false);
+      expect(memoryListSchema.safeParse({ limit: '501' }).success).toBe(false);
+    });
+
+    it('should accept limit at the 500 ceiling', () => {
+      expect(memoryListSchema.safeParse({ limit: '500' }).data.limit).toBe(500);
+    });
+
+    it('should reject an unknown memory type in the csv list', () => {
+      expect(memoryListSchema.safeParse({ types: 'fact,nonsense' }).success).toBe(false);
+    });
   });
 
   describe('memoryTimelineSchema', () => {
@@ -328,6 +373,23 @@ describe('memoryValidation.js', () => {
 
     it('should reject limit over 500', () => {
       expect(memoryTimelineSchema.safeParse({ limit: 501 }).success).toBe(false);
+    });
+
+    it('should coerce query-string values', () => {
+      const result = memoryTimelineSchema.safeParse({ types: 'fact', limit: '7' });
+      expect(result.success).toBe(true);
+      expect(result.data.types).toEqual(['fact']);
+      expect(result.data.limit).toBe(7);
+    });
+
+    it('should accept a bare calendar date boundary', () => {
+      const result = memoryTimelineSchema.safeParse({ startDate: '2026-01-01', endDate: '2026-01-31' });
+      expect(result.success).toBe(true);
+      expect(result.data.startDate).toBe('2026-01-01');
+    });
+
+    it('should reject a malformed date boundary', () => {
+      expect(memoryTimelineSchema.safeParse({ startDate: 'last tuesday' }).success).toBe(false);
     });
   });
 
