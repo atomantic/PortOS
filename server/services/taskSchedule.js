@@ -1436,6 +1436,26 @@ async function checkRunAfterDeps(schedule, taskType, appId = null) {
 }
 
 /**
+ * Shared due/cooldown evaluation for the fixed-cadence interval types
+ * (DAILY, WEEKLY, CUSTOM), which differ only in their base interval and the
+ * reason-string prefix (`label`). Reason strings are persisted and compared
+ * elsewhere, so they must come out byte-identical to what each case produced
+ * before this was extracted (e.g. `'daily-due'`, `'weekly-cooldown-adjusted'`).
+ */
+async function evaluateFixedInterval(taskType, baseIntervalMs, label, timeSinceLastRun, lastRun, buildResult) {
+  const learningAdjustment = await getPerformanceAdjustedInterval(taskType, baseIntervalMs);
+  const adjustedInterval = learningAdjustment.adjustedIntervalMs;
+  if (timeSinceLastRun >= adjustedInterval) {
+    return buildResult(true, learningAdjustment.adjusted ? `${label}-due-adjusted` : `${label}-due`, baseIntervalMs, { learningAdjustment });
+  }
+  return buildResult(false, learningAdjustment.adjusted ? `${label}-cooldown-adjusted` : `${label}-cooldown`, baseIntervalMs, {
+    learningAdjustment, nextRunIn: adjustedInterval - timeSinceLastRun,
+    nextRunAt: new Date(lastRun + adjustedInterval).toISOString(),
+    baseIntervalMs, adjustedIntervalMs: adjustedInterval
+  });
+}
+
+/**
  * Check if a task type should run for a specific app (or globally)
  */
 export async function shouldRunTask(taskType, appId = null) {
@@ -1520,35 +1540,13 @@ export async function shouldRunTask(taskType, appId = null) {
       result = { shouldRun: true, reason: 'rotation' };
       break;
 
-    case INTERVAL_TYPES.DAILY: {
-      const learningAdjustment = await getPerformanceAdjustedInterval(taskType, DAY);
-      const adjustedInterval = learningAdjustment.adjustedIntervalMs;
-      if (timeSinceLastRun >= adjustedInterval) {
-        result = buildResult(true, learningAdjustment.adjusted ? 'daily-due-adjusted' : 'daily-due', DAY, { learningAdjustment });
-      } else {
-        result = buildResult(false, learningAdjustment.adjusted ? 'daily-cooldown-adjusted' : 'daily-cooldown', DAY, {
-          learningAdjustment, nextRunIn: adjustedInterval - timeSinceLastRun,
-          nextRunAt: new Date(lastRun + adjustedInterval).toISOString(),
-          baseIntervalMs: DAY, adjustedIntervalMs: adjustedInterval
-        });
-      }
+    case INTERVAL_TYPES.DAILY:
+      result = await evaluateFixedInterval(taskType, DAY, 'daily', timeSinceLastRun, lastRun, buildResult);
       break;
-    }
 
-    case INTERVAL_TYPES.WEEKLY: {
-      const learningAdjustment = await getPerformanceAdjustedInterval(taskType, WEEK);
-      const adjustedInterval = learningAdjustment.adjustedIntervalMs;
-      if (timeSinceLastRun >= adjustedInterval) {
-        result = buildResult(true, learningAdjustment.adjusted ? 'weekly-due-adjusted' : 'weekly-due', WEEK, { learningAdjustment });
-      } else {
-        result = buildResult(false, learningAdjustment.adjusted ? 'weekly-cooldown-adjusted' : 'weekly-cooldown', WEEK, {
-          learningAdjustment, nextRunIn: adjustedInterval - timeSinceLastRun,
-          nextRunAt: new Date(lastRun + adjustedInterval).toISOString(),
-          baseIntervalMs: WEEK, adjustedIntervalMs: adjustedInterval
-        });
-      }
+    case INTERVAL_TYPES.WEEKLY:
+      result = await evaluateFixedInterval(taskType, WEEK, 'weekly', timeSinceLastRun, lastRun, buildResult);
       break;
-    }
 
     case INTERVAL_TYPES.ONCE:
       result = appExecution.count === 0
@@ -1564,17 +1562,7 @@ export async function shouldRunTask(taskType, appId = null) {
       // A per-app numeric intervalMs override wins over the global custom interval
       // (handler-backed tasks store their per-app cadence there).
       const baseInterval = (hasCustomIntervalMs ? perAppIntervalMs : interval.intervalMs) || DAY;
-      const learningAdjustment = await getPerformanceAdjustedInterval(taskType, baseInterval);
-      const adjustedInterval = learningAdjustment.adjustedIntervalMs;
-      if (timeSinceLastRun >= adjustedInterval) {
-        result = buildResult(true, learningAdjustment.adjusted ? 'custom-due-adjusted' : 'custom-due', baseInterval, { learningAdjustment });
-      } else {
-        result = buildResult(false, learningAdjustment.adjusted ? 'custom-cooldown-adjusted' : 'custom-cooldown', baseInterval, {
-          learningAdjustment, nextRunIn: adjustedInterval - timeSinceLastRun,
-          nextRunAt: new Date(lastRun + adjustedInterval).toISOString(),
-          baseIntervalMs: baseInterval, adjustedIntervalMs: adjustedInterval
-        });
-      }
+      result = await evaluateFixedInterval(taskType, baseInterval, 'custom', timeSinceLastRun, lastRun, buildResult);
       break;
     }
 

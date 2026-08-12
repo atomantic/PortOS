@@ -366,60 +366,69 @@ export async function autoSubscribeRecordToAllPeers(recordKind, recordId) {
  * imports merge entry points from universeBuilder / pipeline.series).
  */
 /**
+ * Per-kind lister thunks for `listRecordsForKind` below. Each entry mirrors the
+ * exact error handling the kind had before this was table-ized — every lister
+ * here still swallows its own failure with `.catch(() => [])`. Universe/series
+ * are wrapped so their `import()` stays lazy, invoked only when that kind is
+ * actually requested — the map's own construction imports nothing.
+ *
+ * Null-prototype so a lookup can only ever hit a kind defined here. The
+ * if/else chain this replaced matched nothing for a name like `toString` or
+ * `constructor` and fell through to an empty list; a plain object literal would
+ * instead resolve the inherited Object.prototype method and call it, so the
+ * `?? []` fallback below would never fire and the caller's `.filter` would
+ * throw. Keeps an unrecognized kind behaving exactly as it did before.
+ */
+const RECORD_KIND_LISTERS = {
+  __proto__: null,
+  // Dynamic-imported to avoid a static cycle (peerSync already imports its
+  // merge entry point).
+  universe: async () => {
+    const { listUniverses } = await import('../universeBuilder.js');
+    return listUniverses({ includeDeleted: false }).catch(() => []);
+  },
+  // Dynamic-imported to avoid a static cycle (peerSync already imports its
+  // merge entry point).
+  series: async () => {
+    const { listSeries } = await import('../pipeline/series.js');
+    return listSeries({ includeDeleted: false }).catch(() => []);
+  },
+  mediaCollection: () => listCollections({ includeDeleted: false }).catch(() => []),
+  author: () => listAuthors({ includeDeleted: false }).catch(() => []),
+  artist: () => listArtists({ includeDeleted: false }).catch(() => []),
+  album: () => listAlbums({ includeDeleted: false }).catch(() => []),
+  track: () => listTracks({ includeDeleted: false }).catch(() => []),
+  creativeDirectorProject: () => listProjects({ includeDeleted: false }).catch(() => []),
+  moodBoard: () => listBoards({ includeDeleted: false }).catch(() => []),
+  // Live works as { id, updatedAt } (full-sync coverage compares updatedAt to
+  // detect a stale confirmed push; bare {id} stubs would report a changed
+  // manuscript as fully mirrored). Without this branch, enabling the
+  // writersRoomWorks category (or full-sync) would backfill nothing.
+  writersRoomWork: () => listWorksForSync().catch(() => []),
+  // Live folders as { id, updatedAt } (#1645) — same coverage-compare reason
+  // as works. Body-less, so no asset/body manifest backfill.
+  writersRoomFolder: () => listFoldersForSync().catch(() => []),
+  // Live exercises as { id, updatedAt } (#1645). updatedAt is derived from
+  // finishedAt ?? startedAt in the facade so coverage keys on the wire value.
+  writersRoomExercise: () => listExercisesForSync().catch(() => []),
+  musicVideoProject: () => listMusicVideoProjects({ includeDeleted: false }).catch(() => []),
+  // Live feedback reactions as { id, updatedAt } (#2686) — same coverage-compare
+  // reason as folders. Body-less, so no asset manifest backfill.
+  commissionFeedback: () => listCommissionFeedbackForSync().catch(() => []),
+  // Live commission briefs as { id, updatedAt } (#2686). Body-less on the wire
+  // (schedule/runs/assignment stripped), so no asset manifest backfill.
+  creativeCommission: () => listCommissionsForSync().catch(() => []),
+};
+
+/**
  * List the local, non-deleted, non-ephemeral records of a subscribable kind —
  * the candidate set for both the back-subscribe sweep and full-sync coverage
  * diffing. Ephemeral records are dropped because they can never push (the wire
  * sanitizer short-circuits them) and a sub for one would leave an orphan row.
- * Universe/series listers are dynamic-imported to avoid a static cycle
- * (peerSync already imports their merge entry points).
+ * An unrecognized recordKind yields no records, same as before table-izing.
  */
 async function listRecordsForKind(recordKind) {
-  let records = [];
-  if (recordKind === 'universe') {
-    const { listUniverses } = await import('../universeBuilder.js');
-    records = await listUniverses({ includeDeleted: false }).catch(() => []);
-  } else if (recordKind === 'series') {
-    const { listSeries } = await import('../pipeline/series.js');
-    records = await listSeries({ includeDeleted: false }).catch(() => []);
-  } else if (recordKind === 'mediaCollection') {
-    records = await listCollections({ includeDeleted: false }).catch(() => []);
-  } else if (recordKind === 'author') {
-    records = await listAuthors({ includeDeleted: false }).catch(() => []);
-  } else if (recordKind === 'artist') {
-    records = await listArtists({ includeDeleted: false }).catch(() => []);
-  } else if (recordKind === 'album') {
-    records = await listAlbums({ includeDeleted: false }).catch(() => []);
-  } else if (recordKind === 'track') {
-    records = await listTracks({ includeDeleted: false }).catch(() => []);
-  } else if (recordKind === 'creativeDirectorProject') {
-    records = await listProjects({ includeDeleted: false }).catch(() => []);
-  } else if (recordKind === 'moodBoard') {
-    records = await listBoards({ includeDeleted: false }).catch(() => []);
-  } else if (recordKind === 'writersRoomWork') {
-    // Live works as { id, updatedAt } (full-sync coverage compares updatedAt to
-    // detect a stale confirmed push; bare {id} stubs would report a changed
-    // manuscript as fully mirrored). Without this branch, enabling the
-    // writersRoomWorks category (or full-sync) would backfill nothing.
-    records = await listWorksForSync().catch(() => []);
-  } else if (recordKind === 'writersRoomFolder') {
-    // Live folders as { id, updatedAt } (#1645) — same coverage-compare reason
-    // as works. Body-less, so no asset/body manifest backfill.
-    records = await listFoldersForSync().catch(() => []);
-  } else if (recordKind === 'writersRoomExercise') {
-    // Live exercises as { id, updatedAt } (#1645). updatedAt is derived from
-    // finishedAt ?? startedAt in the facade so coverage keys on the wire value.
-    records = await listExercisesForSync().catch(() => []);
-  } else if (recordKind === 'musicVideoProject') {
-    records = await listMusicVideoProjects({ includeDeleted: false }).catch(() => []);
-  } else if (recordKind === 'commissionFeedback') {
-    // Live feedback reactions as { id, updatedAt } (#2686) — same coverage-compare
-    // reason as folders. Body-less, so no asset manifest backfill.
-    records = await listCommissionFeedbackForSync().catch(() => []);
-  } else if (recordKind === 'creativeCommission') {
-    // Live commission briefs as { id, updatedAt } (#2686). Body-less on the wire
-    // (schedule/runs/assignment stripped), so no asset manifest backfill.
-    records = await listCommissionsForSync().catch(() => []);
-  }
+  const records = await (RECORD_KIND_LISTERS[recordKind]?.() ?? []);
   return records.filter(r => r?.ephemeral !== true && isNonEmptyStr(r?.id));
 }
 

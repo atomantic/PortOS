@@ -468,6 +468,110 @@ export function SingleNavRow({ item, collapsed, active, badgeCount, pinned, onTo
   );
 }
 
+// Routes whose main content owns its own internal scroll region and needs the
+// bare full-width `<main>` (relative overflow-hidden) instead of the default
+// padded+scrolling one. Checked in order: exact path, then prefix, then
+// regex — see `isFullWidthRoute` below.
+const EXACT_FULL_WIDTH_PATHS = [
+  '/character',
+  '/ai',
+  '/devtools/flows',
+  '/ask',
+  // OpenClaw lives under the Settings nav group; it's a full-bleed
+  // chat surface (sidebar + message pane) that owns its own internal
+  // scroll, so it needs the bare full-width main like the other
+  // Settings pages (/ai, /prompts, /settings/*).
+  '/openclaw',
+  '/prompts',
+  '/review',
+  '/shell',
+  // Tribe is a full-bleed two-pane page that owns its own internal
+  // scroll (PageHeader + a `flex-1 overflow-auto` main); keep it out
+  // of the default padded+scrolling main or it double-pads and clips.
+  '/tribe',
+  // Rapid Reader is a full-bleed brain sub-page: full-width PageHeader
+  // over an internal `flex-1 overflow-auto` scroll region.
+  '/rapid-reader',
+  // Timeline (/timeline and /timeline/:date) is a full-bleed brain
+  // sub-page: full-width PageHeader over an internal `flex-1
+  // overflow-auto` scroll region that wraps the centered max-w-4xl
+  // content — keep it out of the default padded main or it double-pads.
+  '/timeline',
+];
+
+const FULL_WIDTH_PATH_PREFIXES = [
+  '/ask/',
+  '/calendar',
+  // Only the Catalog DETAIL editor (/catalog/{type}/{id}) and the
+  // Ingest page (/catalog/ingest) are full-width — they own their
+  // own scroll. The /catalog list/index page stays scrolling-default.
+  '/catalog/',
+  '/cos',
+  // Both the Creative Director index and its detail editor manage
+  // their own internal scroll (flex-col h-full + overflow-auto body),
+  // so they need the bare full-width main — same as when they lived
+  // under the /media tabs.
+  '/creative-director',
+  '/brain',
+  '/digital-twin',
+  '/feature-agents',
+  '/goals',
+  '/insights',
+  '/meatspace',
+  '/media',
+  '/messages',
+  '/local-llm/',
+  '/pipeline/issues/',
+  '/pipeline/series/',
+  '/post',
+  '/settings',
+  // Round EDITOR (/rounds/:id) and the Learning Guide (/rounds/guide)
+  // are full-width and own their own scroll; the bare /rounds index
+  // (list + create form) takes the normal padded+scrolling main.
+  '/rounds/',
+  '/wiki',
+  // Only the universe EDITOR (/universes/:id, /universes/new) is
+  // full-width — it manages its own scroll. The /universes index
+  // (list/table) takes the normal padded+scrolling main, mirroring
+  // the Series Pipeline index (/pipeline is not full-width either).
+  '/universes/',
+  // Story Builder DETAIL (/story-builder/:id/:step) is a full-width
+  // stepper that owns its own scroll; the bare /story-builder index
+  // (list + create form) takes the normal padded+scrolling main.
+  '/story-builder/',
+  '/writers-room',
+  '/agents',
+  '/shell/',
+  '/city',
+  '/timeline/',
+  // Every SongBook route — index (/songbook), import (/songbook/import),
+  // and viewer (/songbook/:id) — is full-bleed and owns its own scroll
+  // (flex-col h-full + an internal overflow-auto region; the viewer adds
+  // its autoscroll container). They share the standard bordered
+  // PageHeader bar over that scroll region.
+  '/songbook',
+];
+
+const FULL_WIDTH_PATH_REGEXES = [
+  // Only Game DETAIL workspaces own an internal scroll region; the
+  // bare /game index stays on the normal padded page layout.
+  /^\/game\/[^/]+\/?$/,
+  // Only the App DETAIL editor (/apps/:id, /apps/:id/:tab) is
+  // full-width and owns its own scroll; the Add App form
+  // (/apps/create) is a plain scrolling page and must stay OUT of
+  // full-width, or its content clips below the fold (it has no
+  // internal overflow-y-auto container). The trailing (?:\/|$) +
+  // create(?:\/|$) lookahead also excludes the trailing-slash URL
+  // /apps/create/ (React Router treats it as the same route).
+  /^\/apps\/(?!create(?:\/|$))[^/]+(?:\/|$)/,
+];
+
+function isFullWidthRoute(pathname) {
+  return EXACT_FULL_WIDTH_PATHS.includes(pathname) ||
+    FULL_WIDTH_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix)) ||
+    FULL_WIDTH_PATH_REGEXES.some((re) => re.test(pathname));
+}
+
 export default function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -1199,91 +1303,7 @@ export default function Layout() {
 
         {/* Main content */}
         {(() => {
-          const isFullWidth = location.pathname === '/character' ||
-            location.pathname === '/ai' ||
-            location.pathname === '/devtools/flows' ||
-            location.pathname === '/ask' ||
-            location.pathname.startsWith('/ask/') ||
-            location.pathname.startsWith('/calendar') ||
-            // Only the Catalog DETAIL editor (/catalog/{type}/{id}) and the
-            // Ingest page (/catalog/ingest) are full-width — they own their
-            // own scroll. The /catalog list/index page stays scrolling-default.
-            location.pathname.startsWith('/catalog/') ||
-            location.pathname.startsWith('/cos') ||
-            // Both the Creative Director index and its detail editor manage
-            // their own internal scroll (flex-col h-full + overflow-auto body),
-            // so they need the bare full-width main — same as when they lived
-            // under the /media tabs.
-            location.pathname.startsWith('/creative-director') ||
-            location.pathname.startsWith('/brain') ||
-            location.pathname.startsWith('/digital-twin') ||
-            location.pathname.startsWith('/feature-agents') ||
-            // Only Game DETAIL workspaces own an internal scroll region; the
-            // bare /game index stays on the normal padded page layout.
-            /^\/game\/[^/]+\/?$/.test(location.pathname) ||
-            location.pathname.startsWith('/goals') ||
-            location.pathname.startsWith('/insights') ||
-            location.pathname.startsWith('/meatspace') ||
-            location.pathname.startsWith('/media') ||
-            location.pathname.startsWith('/messages') ||
-            location.pathname.startsWith('/local-llm/') ||
-            // OpenClaw lives under the Settings nav group; it's a full-bleed
-            // chat surface (sidebar + message pane) that owns its own internal
-            // scroll, so it needs the bare full-width main like the other
-            // Settings pages (/ai, /prompts, /settings/*).
-            location.pathname === '/openclaw' ||
-            location.pathname.startsWith('/pipeline/issues/') ||
-            location.pathname.startsWith('/pipeline/series/') ||
-            location.pathname.startsWith('/post') ||
-            location.pathname === '/prompts' ||
-            location.pathname === '/review' ||
-            location.pathname.startsWith('/settings') ||
-            // Round EDITOR (/rounds/:id) and the Learning Guide (/rounds/guide)
-            // are full-width and own their own scroll; the bare /rounds index
-            // (list + create form) takes the normal padded+scrolling main.
-            location.pathname.startsWith('/rounds/') ||
-            location.pathname.startsWith('/wiki') ||
-            // Only the universe EDITOR (/universes/:id, /universes/new) is
-            // full-width — it manages its own scroll. The /universes index
-            // (list/table) takes the normal padded+scrolling main, mirroring
-            // the Series Pipeline index (/pipeline is not full-width either).
-            location.pathname.startsWith('/universes/') ||
-            // Story Builder DETAIL (/story-builder/:id/:step) is a full-width
-            // stepper that owns its own scroll; the bare /story-builder index
-            // (list + create form) takes the normal padded+scrolling main.
-            location.pathname.startsWith('/story-builder/') ||
-            location.pathname.startsWith('/writers-room') ||
-            location.pathname.startsWith('/agents') ||
-            location.pathname === '/shell' ||
-            location.pathname.startsWith('/shell/') ||
-            location.pathname.startsWith('/city') ||
-            // Tribe is a full-bleed two-pane page that owns its own internal
-            // scroll (PageHeader + a `flex-1 overflow-auto` main); keep it out
-            // of the default padded+scrolling main or it double-pads and clips.
-            location.pathname === '/tribe' ||
-            // Rapid Reader is a full-bleed brain sub-page: full-width PageHeader
-            // over an internal `flex-1 overflow-auto` scroll region.
-            location.pathname === '/rapid-reader' ||
-            // Timeline (/timeline and /timeline/:date) is a full-bleed brain
-            // sub-page: full-width PageHeader over an internal `flex-1
-            // overflow-auto` scroll region that wraps the centered max-w-4xl
-            // content — keep it out of the default padded main or it double-pads.
-            location.pathname === '/timeline' ||
-            location.pathname.startsWith('/timeline/') ||
-            // Only the App DETAIL editor (/apps/:id, /apps/:id/:tab) is
-            // full-width and owns its own scroll; the Add App form
-            // (/apps/create) is a plain scrolling page and must stay OUT of
-            // full-width, or its content clips below the fold (it has no
-            // internal overflow-y-auto container). The trailing (?:\/|$) +
-            // create(?:\/|$) lookahead also excludes the trailing-slash URL
-            // /apps/create/ (React Router treats it as the same route).
-            /^\/apps\/(?!create(?:\/|$))[^/]+(?:\/|$)/.test(location.pathname) ||
-            // Every SongBook route — index (/songbook), import (/songbook/import),
-            // and viewer (/songbook/:id) — is full-bleed and owns its own scroll
-            // (flex-col h-full + an internal overflow-auto region; the viewer adds
-            // its autoscroll container). They share the standard bordered
-            // PageHeader bar over that scroll region.
-            location.pathname.startsWith('/songbook');
+          const isFullWidth = isFullWidthRoute(location.pathname);
           return (
             <main id="main-content" className={`flex-1 min-h-0 print:overflow-visible print:min-h-0 ${isFullWidth ? 'relative overflow-hidden' : 'overflow-auto p-4 md:p-6'}`}>
               <Outlet />
