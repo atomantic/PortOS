@@ -1065,8 +1065,9 @@ const PARK_FIELDS = ['parkedUntil', 'parkReason', 'parkActionableCount', 'parkCo
  * is a step a future park path can forget — and a stale non-zero dispatch count
  * makes the NEXT fresh drain cap out early, which looks exactly like the task
  * silently doing nothing. Note `dispatchCount` is deliberately NOT in
- * `PARK_FIELDS`: `clearPerpetualPark` runs mid-drain, and zeroing the counter
- * there would reset the budget before every dispatch, so the cap could never fire.
+ * `PARK_FIELDS`: `recordPerpetualDispatch` clears those fields mid-drain on every
+ * dispatch, and zeroing the counter there would reset the budget before every
+ * dispatch, so the cap could never fire.
  */
 export async function parkPerpetual(taskType, appId = null, { reason = null, actionableCount = 0, counts = null, signature, dispatchCount } = {}) {
   const schedule = await loadSchedule();
@@ -1195,19 +1196,6 @@ export async function recordPerpetualDispatch(taskType, appId = null, signature)
   record.perpetualDispatchCount = count;
   await saveSchedule(schedule);
   return count;
-}
-
-/**
- * Clear a perpetual task's park so the drain resumes (its work-detector found
- * actionable work). No-op (and no write) when there's nothing parked.
- */
-export async function clearPerpetualPark(taskType, appId = null) {
-  const schedule = await loadSchedule();
-  const record = resolveExecutionRecord(schedule, taskType, appId);
-  if (!record || record.parkedUntil == null) return false;
-  for (const field of PARK_FIELDS) delete record[field];
-  await saveSchedule(schedule);
-  return true;
 }
 
 /**

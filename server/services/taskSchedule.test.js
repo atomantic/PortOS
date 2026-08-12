@@ -120,7 +120,6 @@ import {
   getScheduleStatus,
   computePerpetualRecheckAt,
   parkPerpetual,
-  clearPerpetualPark,
   resetPerpetualForManualRun,
   getPerpetualParkInfo,
   isPerpetualParkActive,
@@ -1610,7 +1609,7 @@ describe('taskSchedule', () => {
       })
     })
 
-    describe('parkPerpetual / clearPerpetualPark', () => {
+    describe('parkPerpetual / perpetual park state', () => {
       it('parkPerpetual stamps parkedUntil + reason on the per-app record', async () => {
         mockSchedule({ tasks: { 'claim-issue': { type: 'perpetual', enabled: true, recheckIntervalMs: 3600000 } } })
         const record = await parkPerpetual('claim-issue', 'app-1', { reason: 'no-actionable-issues', actionableCount: 0, counts: { open: 40, inFlight: 2, filtered: 38 } })
@@ -1663,21 +1662,21 @@ describe('taskSchedule', () => {
         expect(record.parkCounts).toBeUndefined()
       })
 
-      it('clearPerpetualPark returns true when a park existed', async () => {
+      // The mid-drain unpark is recordPerpetualDispatch's job (it clears the park
+      // fields in the same write it spends a dispatch) — there is no separate
+      // clear-only path any more, so a resumed drain can never forget to spend
+      // one and slip the cap.
+      it('recordPerpetualDispatch clears an existing park as it spends a dispatch', async () => {
         const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
         mockSchedule({
           tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
-          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0, parkedUntil: future } } } }
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {
+            'app-1': { lastRun: null, count: 0, parkedUntil: future, parkReason: 'no-actionable-issues', perpetualDispatchCount: 2 }
+          } } }
         })
-        expect(await clearPerpetualPark('claim-issue', 'app-1')).toBe(true)
-      })
-
-      it('clearPerpetualPark is a no-op (false) when nothing is parked', async () => {
-        mockSchedule({
-          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
-          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {} } }
-        })
-        expect(await clearPerpetualPark('claim-issue', 'app-1')).toBe(false)
+        expect(await recordPerpetualDispatch('claim-issue', 'app-1', null)).toBe(3)
+        expect(await isPerpetualParkActive('claim-issue', 'app-1')).toBe(false)
+        expect(await getPerpetualParkInfo('claim-issue', 'app-1')).toBeNull()
       })
 
       it('resetPerpetualForManualRun drops the park, the convergence signature, AND the dispatch count', async () => {

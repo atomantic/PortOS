@@ -45,7 +45,6 @@ vi.mock('./taskSchedule.js', () => ({
   getTaskInterval: vi.fn(async () => ({ type: 'weekly', taskMetadata: { readOnly: false } })),
   stripManagedAgentOptionsFromOverride: vi.fn((_type, meta) => meta),
   recordExecution: vi.fn(async () => {}),
-  clearPerpetualPark: vi.fn(async () => {}),
   parkPerpetual: vi.fn(async () => {}),
   // This is a FULL-REPLACEMENT mock (no importActual spread), so it is the entire
   // taskSchedule surface this suite sees — it has to track the real module's drain
