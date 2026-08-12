@@ -162,7 +162,10 @@ async function findNestedClaudeMdFiles(workspaceDir) {
         if (NESTED_CLAUDE_MD_SKIP_DIRS.has(entry.name)) continue;
         if (NESTED_CLAUDE_MD_SKIP_PATHS.has(rel)) continue;
         subdirs.push({ path: join(dir, entry.name), rel });
-      } else if (entry.name === 'CLAUDE.md' && relDir && entry.isFile()) {
+        // Symlinked directories are deliberately NOT followed — a link back up
+        // the tree would loop, and the depth cap alone wouldn't make the result
+        // meaningful. A symlinked CLAUDE.md *file* is still read (below).
+      } else if (entry.name === 'CLAUDE.md' && relDir) {
         found.push(rel);
         if (found.length >= NESTED_CLAUDE_MD_MAX_FILES) return;
       }
