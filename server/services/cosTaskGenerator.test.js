@@ -1165,7 +1165,7 @@ describe('resolveReconcileDrainGate', () => {
     const ts = fakeSchedule({ signature: 'a:NEEDS_PR:none', dispatchCount: 1 });
     expect(await resolveReconcileDrainGate(ts, 'branch-reconcile', app, ctx())).toBe(false);
     expect(ts.parkPerpetual).toHaveBeenCalledWith('branch-reconcile', 'app-1', {
-      reason: 'no-progress', actionableCount: 1, signature: null, dispatchCount: 0
+      reason: 'no-progress', actionableCount: 1, signature: null
     });
     expect(ts.recordPerpetualDispatch).not.toHaveBeenCalled();
   });
@@ -1195,12 +1195,18 @@ describe('applyPerpetualDrainCap', () => {
   const app = { id: 'app-1', name: 'App One' };
   const perpetual = (over = {}) => ({ type: 'perpetual', ...over });
 
-  it('parks drain-cap once the budget is spent, zeroing signature + counter in the park write', async () => {
+  it('parks drain-cap once the budget is spent, clearing the signature in the park write', async () => {
     const ts = fakeSchedule(5);
     expect(await applyPerpetualDrainCap(app, 'branch-reconcile', perpetual({ drainDispatchCap: 5 }), ts)).toEqual({ skip: true });
+    // The counter is zeroed by parkPerpetual's default — every park ends a window.
     expect(ts.parkPerpetual).toHaveBeenCalledWith('branch-reconcile', 'app-1', {
-      reason: 'drain-cap', signature: null, dispatchCount: 0
+      reason: 'drain-cap', signature: null
     });
+  });
+
+  it('reads a hand-edited numeric string as the cap rather than silently unbounding the guard', async () => {
+    const ts = fakeSchedule(5);
+    expect(await applyPerpetualDrainCap(app, 'branch-reconcile', perpetual({ drainDispatchCap: '5' }), ts)).toEqual({ skip: true });
   });
 
   it('spends exactly CAP dispatches before capping', async () => {
@@ -1213,7 +1219,7 @@ describe('applyPerpetualDrainCap', () => {
 
   // The whole reason the cap is per-type: an uncapped claim drain must keep going.
   it('never parks a perpetual type with no cap configured, however many hops it has taken', async () => {
-    for (const drainDispatchCap of [undefined, null, 'nope']) {
+    for (const drainDispatchCap of [undefined, null, '', 'nope', 0, -1]) {
       const ts = fakeSchedule(500);
       expect(await applyPerpetualDrainCap(app, 'claim-issue', perpetual({ drainDispatchCap }), ts)).toEqual({ skip: false });
       expect(ts.parkPerpetual).not.toHaveBeenCalled();
@@ -1260,14 +1266,23 @@ describe('the drain cap has exactly one implementation, at the choke point', () 
     }
   });
 
-  it('the work gate spends a dispatch on the actionable path and zeroes the budget when it parks', () => {
+  // The counter must move for the non-reconcile drains or their cap could never
+  // fire — but it must move ONLY when a task is really produced. Gates that run
+  // after the work gate can still return null (applyPlanIdMetadata skips plan-task
+  // when every unchecked item is in-flight), so charging the budget inside the gate
+  // would exhaust a capped drain on evaluations alone.
+  it('the work gate defers its dispatch spend to the caller, which charges it only once a task is certain', () => {
     const start = GEN_SRC.indexOf('async function applyPerpetualWorkGate');
     const gate = GEN_SRC.slice(start, GEN_SRC.indexOf('\n}', start));
-    // Without this the counter never moves for the non-reconcile drains and their
-    // cap (when one is configured) could never fire.
-    expect(gate).toContain('recordPerpetualDispatch(taskType, app.id, null)');
-    // A terminal park must not leave a stale count for the next drain window.
-    expect(gate).toMatch(/parkPerpetual\(taskType, app\.id, \{[^}]*dispatchCount: 0[^}]*\}\)/);
+    expect(gate).toContain('spendDispatch: true');
+    expect(gate, 'the gate must not charge the budget itself').not.toContain('recordPerpetualDispatch');
+
+    const genStart = GEN_SRC.indexOf('export async function generateManagedAppImprovementTaskForType');
+    const body = GEN_SRC.slice(genStart, GEN_SRC.indexOf('return task;', genStart));
+    const spendIdx = body.indexOf('if (perpetualGate.spendDispatch) await taskSchedule.recordPerpetualDispatch(taskType, app.id, null)');
+    expect(spendIdx, 'the choke point must spend the deferred dispatch').toBeGreaterThan(-1);
+    // Every `return null` gate must precede it — planId is the last one.
+    expect(body.indexOf('planMeta.skipReason')).toBeLessThan(spendIdx);
   });
 });
 

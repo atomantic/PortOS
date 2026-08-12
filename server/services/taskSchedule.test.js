@@ -1767,14 +1767,19 @@ describe('taskSchedule', () => {
         expect(rec.parkReason).toBe('drain-cap')
       })
 
-      it('parkPerpetual leaves the dispatch budget alone when the option is omitted', async () => {
+      // Inverted deliberately (#3848): omitting the option used to PRESERVE the
+      // count. A park ends the drain window by definition, so zeroing the budget is
+      // the invariant, not something each call site has to opt into — the churn
+      // detector's park (agentChurn.js) is exactly the caller that forgot, leaving
+      // the next window to cap early on a spend it never made.
+      it('parkPerpetual zeroes the dispatch budget even when the caller omits dispatchCount', async () => {
         mockSchedule({
           tasks: { 'claim-issue': { type: 'perpetual', enabled: true, recheckIntervalMs: 3600000 } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0, perpetualDispatchCount: 4 } } } }
         })
-        await parkPerpetual('claim-issue', 'app-1', { reason: 'no-actionable-issues', actionableCount: 0 })
+        await parkPerpetual('claim-issue', 'app-1', { reason: 'churn-detected', actionableCount: 12 })
         const rec = JSON.parse(writeFile.mock.calls.at(-1)[1]).executions['task:claim-issue'].perApp['app-1']
-        expect(rec.perpetualDispatchCount).toBe(4)
+        expect(rec.perpetualDispatchCount).toBeUndefined()
       })
 
       it('resetPerpetualForManualRun is a no-op (false) when nothing is cached', async () => {

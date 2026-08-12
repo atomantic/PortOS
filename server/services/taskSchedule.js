@@ -1064,12 +1064,18 @@ const PARK_FIELDS = ['parkedUntil', 'parkReason', 'parkActionableCount', 'parkCo
  * to land them in the same write it lands the park. A second await after this one
  * is a step a future park path can forget — and a stale non-zero dispatch count
  * makes the NEXT fresh drain cap out early, which looks exactly like the task
- * silently doing nothing. Note `dispatchCount` is deliberately NOT in
- * `PARK_FIELDS`: `recordPerpetualDispatch` clears those fields mid-drain on every
- * dispatch, and zeroing the counter there would reset the budget before every
- * dispatch, so the cap could never fire.
+ * silently doing nothing.
+ *
+ * `dispatchCount` therefore DEFAULTS to 0: a park ends the drain window by
+ * definition, so zeroing the budget is the invariant, not an opt-in every caller
+ * has to remember. (The churn detector's park in agentChurn.js is exactly the
+ * caller that forgot, leaving the next window to cap early on a spend it never
+ * made.) Note `dispatchCount` is still deliberately NOT in `PARK_FIELDS`:
+ * `recordPerpetualDispatch` clears those fields mid-drain on every dispatch, and
+ * zeroing the counter there would reset the budget before every dispatch, so the
+ * cap could never fire.
  */
-export async function parkPerpetual(taskType, appId = null, { reason = null, actionableCount = 0, counts = null, signature, dispatchCount } = {}) {
+export async function parkPerpetual(taskType, appId = null, { reason = null, actionableCount = 0, counts = null, signature, dispatchCount = 0 } = {}) {
   const schedule = await loadSchedule();
   const interval = schedule.tasks[taskType] || {};
   const parkedUntil = await computePerpetualRecheckAt(interval);

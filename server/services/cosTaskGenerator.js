@@ -2147,11 +2147,19 @@ async function resolveClaimWorkRouting(app, taskType, metadata, taskSchedule) {
  * the 'perpetual' interval — excluding branch-/issue-reconcile, whose own scan
  * IS the detector — a programmatic detector decides whether there's anything to
  * claim BEFORE building the (expensive) prompt or burning an agent:
- *   - actionable → clear any park, stamp metadata.perpetual (skip cooldown), proceed;
+ *   - actionable → stamp metadata.perpetual (skip cooldown), proceed;
  *   - idle (definitive) → PARK on the recheck cadence, skip;
  *   - transient probe failure → skip WITHOUT parking so the next tick retries.
- * The detector keys on the RESOLVED promptTaskType. Returns `{ skip }` and
- * mutates `metadata.perpetual` on the actionable path.
+ * The detector keys on the RESOLVED promptTaskType. Returns `{ skip, spendDispatch }`
+ * and mutates `metadata.perpetual` on the actionable path.
+ *
+ * `spendDispatch` is the caller's cue to call `recordPerpetualDispatch` (which
+ * clears the park and spends one unit of the type's `drainDispatchCap` budget in a
+ * single write) — deliberately NOT done here. Gates that run AFTER this one can
+ * still return null with no agent ever spawned (`applyPlanIdMetadata` skips
+ * plan-task when every unchecked item is in-flight or blocked), and charging the
+ * budget for a task that was never created would exhaust a capped drain on
+ * evaluations alone, parking it for `drain-cap` without a single dispatch.
  */
 async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, interval, taskSchedule, { ignoreTaskId = null } = {}) {
   if (interval.type !== taskSchedule.INTERVAL_TYPES.PERPETUAL
@@ -2166,16 +2174,11 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
     ignoreTaskId
   });
   if (detection.actionable) {
-    // Spend one dispatch from the type's `drainDispatchCap` budget (and clear the
-    // park in the same write — recordPerpetualDispatch does both). These drains
-    // carry no actionable signature (only the reconcile scans produce one), so
-    // pass null: the counter is the ONLY convergence brake they have besides the
-    // detector going idle, and without an increment here the shared cap gate in
-    // applyPerpetualDrainCap would read a budget that never moves.
-    await taskSchedule.recordPerpetualDispatch(taskType, app.id, null);
     recordPerpetualTransient(taskType, app.id, null);
     metadata.perpetual = true;
-    return { skip: false };
+    // The dispatch is SPENT BY THE CALLER, once a task is certain — see the note
+    // on `spendDispatch` in the JSDoc above.
+    return { skip: false, spendDispatch: true };
   }
   if (detection.transient) {
     emitLog('debug', `Perpetual ${taskType} skip for ${app.name} (transient: ${detection.reason})`, { appId: app.id });
@@ -2195,9 +2198,9 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
   const counts = detection.total != null
     ? { open: detection.total, inFlight: detection.inFlightCount ?? 0, filtered: detection.filteredCount ?? 0 }
     : null;
-  // Terminal park — zero the dispatch budget in the same write, so the next drain
-  // window starts fresh instead of capping early on a previous window's spend.
-  await taskSchedule.parkPerpetual(taskType, app.id, { reason: detection.reason, actionableCount: detection.count, counts, dispatchCount: 0 });
+  // Terminal park — parkPerpetual zeroes the dispatch budget in the same write, so
+  // the next drain window starts fresh instead of capping early on this one's spend.
+  await taskSchedule.parkPerpetual(taskType, app.id, { reason: detection.reason, actionableCount: detection.count, counts });
   emitLog('info', `Perpetual ${taskType} parked for ${app.name}: ${detection.reason}`, { appId: app.id });
   return { skip: true };
 }
@@ -2224,14 +2227,19 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
  */
 export async function applyPerpetualDrainCap(app, taskType, interval, taskSchedule) {
   if (interval.type !== taskSchedule.INTERVAL_TYPES.PERPETUAL) return { skip: false };
-  const cap = interval.drainDispatchCap;
-  // Absent/null (and any non-numeric hand-edit) ⇒ unbounded.
-  if (!Number.isFinite(cap)) return { skip: false };
+  // Coerce before validating: this key is not on the schedule route's allowlist, so
+  // the only way it arrives non-numeric is a hand-edited schedule.json, where `"5"`
+  // is the likeliest shape and reading it as "no cap" would silently unbound the
+  // runaway guard. Anything that still isn't a positive finite number — absent,
+  // null, `""`, `"soon"`, 0, negative — means UNBOUNDED, i.e. exactly the behavior
+  // of a type that never configured the key.
+  const cap = Number(interval.drainDispatchCap ?? NaN);
+  if (!Number.isFinite(cap) || cap <= 0) return { skip: false };
   const { dispatchCount } = await taskSchedule.getPerpetualDrainState(taskType, app.id);
   if (dispatchCount < cap) return { skip: false };
   // One write lands the park, the cleared signature, and the zeroed budget — a
   // terminal park must never leave a stale count for the next window.
-  await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'drain-cap', signature: null, dispatchCount: 0 });
+  await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'drain-cap', signature: null });
   emitLog('info', `Perpetual ${taskType} parked for ${app.name}: ${dispatchCount} consecutive dispatches reached the drain cap of ${cap} — will re-drive on next recheck`, { appId: app.id });
   return { skip: true };
 }
@@ -2284,9 +2292,9 @@ export async function resolveReconcileDrainGate(taskSchedule, taskType, app, { s
   const { signature: lastSignature } = await taskSchedule.getPerpetualDrainState(taskType, app.id);
   if (signature === lastSignature) {
     // The park fields, the cleared signature, and the zeroed dispatch budget land
-    // in ONE write, so no terminal park can leave a stale count behind for the
-    // next drain window to trip over.
-    await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'no-progress', actionableCount, signature: null, dispatchCount: 0 });
+    // in ONE write (the budget by parkPerpetual's default), so no terminal park
+    // can leave a stale count behind for the next drain window to trip over.
+    await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'no-progress', actionableCount, signature: null });
     emitLog('info', `${label} parked for ${app.name}: ${actionableCount} ${unit} unchanged since last run (no progress — will re-drive on next recheck)`, { appId: app.id });
     return false;
   }
@@ -2367,7 +2375,7 @@ async function resolveBranchReconcileBlock(app, taskType, metadata, taskSchedule
     // clearing the progress signature so a fresh set later dispatches and zeroing the
     // dispatch budget — this drain converged, so the next one gets a full one.
     const reason = heldLive.length ? 'branches-held-by-live-owners' : 'no-in-flight-branches';
-    await taskSchedule.parkPerpetual(taskType, app.id, { reason, actionableCount: 0, signature: null, dispatchCount: 0 });
+    await taskSchedule.parkPerpetual(taskType, app.id, { reason, actionableCount: 0, signature: null });
     // Surface merged branches held back by a protection guard so a lingering
     // worktree isn't an invisible "cleaned 0".
     const heldSuffix = countSuffix(
@@ -2435,7 +2443,7 @@ async function resolveIssueReconcileBlock(app, taskType, metadata, taskSchedule)
     emitLog('info', `🧟 issue-reconcile ${app.name}: ${result.stalled.length} stalled in-progress issue(s) with no merged PR (left for human/branch-reconcile)`, { appId: app.id, analysisType: taskType });
   }
   if (result.zombies.length === 0) {
-    await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'no-zombie-issues', actionableCount: 0, signature: null, dispatchCount: 0 });
+    await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'no-zombie-issues', actionableCount: 0, signature: null });
     emitLog('info', `🧟 issue-reconcile parked for ${app.name}: no zombie issues`, { appId: app.id });
     return { skip: true };
   }
@@ -2837,6 +2845,14 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     }
     metadata[key] = value;
   }
+  // Every gate has now passed and a task is certain, so the perpetual drain can
+  // finally be charged for this hop (and its park cleared). Sits beside
+  // `updateAppActivity` for the same reason that call does: both are "a task was
+  // really produced" side effects, and every `return null` above must skip them.
+  // The reconcile drains spend theirs inside their own block, which no later gate
+  // can skip (their types are outside PLAN_PICK_TASK_TYPES / pr-watcher /
+  // reference-watch), so they are already charged only on real dispatches.
+  if (perpetualGate.spendDispatch) await taskSchedule.recordPerpetualDispatch(taskType, app.id, null);
   await updateAppActivity(app.id, { lastImprovementType: taskType });
   emitLog('info', `Generating improvement task for ${app.name}: ${taskType}`, { appId: app.id, analysisType: taskType });
 
