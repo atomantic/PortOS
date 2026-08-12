@@ -37,7 +37,7 @@ const EXPECTED_STAGE_OLD = {
   'pipeline-script-verify.md': ['ed6c8101644cfe56a100eb6bfe3587f3'],
   'pipeline-extract-scenes.md': ['59fa5ee305ce53d91eb15224d8b546d3', 'c51fb208568d0d903eb43b437478b0ba'],
   'writers-room-places.md': ['24a33628cc94d80fa5ca60831d973daf', '7f1f80eb63d67a21161994cde115045e'],
-  'universe-character-expand.md': ['ef109eb8e12ddb664c11c790271b5139', '67b6e73ed47f318451a730088b4cff14'],
+  'universe-character-expand.md': ['ef109eb8e12ddb664c11c790271b5139', '67b6e73ed47f318451a730088b4cff14', '177b6e4e8bdf445308cf8ac423cd5ad8'],
   'story-builder-idea-expand.md': ['778c86e2caa120856c36e4d5a4da3355', 'a23939626a226f7420cebfb45d47950c'],
   'pipeline-editorial-analysis.md': ['14d9879697c66d51830cc798040d5369'],
   'pipeline-manuscript-completeness.md': ['4f2b95778aed85f5fc461d71eb461b79', 'e6858c74ab2cead752d388e3f428406c', '1ee5ac936fbf1d365e0eaea99bcf1e77', 'cec8faeb75dfff74e41b8221145c2e92'],
@@ -50,8 +50,8 @@ const EXPECTED_STAGE_OLD = {
   'cd-treatment.md': ['2ffa482e7bfb6fe8b7224505fedbf712', '16d0ef6a7fd2533719a846019122ebee', '95b7685690ecfee4f682b0293b790277'],
   'cd-plan.md': ['3ce871196a8fd04781b71b6780e89c86', '0768d6809645c2c1fe73cacae9740fe9'],
   'pipeline-series-generate.md': ['bc72731124a2bd6304362f4402c6305d'],
-  'pipeline-character-foundation.md': ['f1c0b75a8161c0bc7f26752d148a5c1c', 'cda34127b40754ddbcc8544e3d82572b'],
-  'pipeline-judge-foundation.md': ['74c0244e641dcf7a73e9c83123ebdee9', '4c0bd349ff4d329048c9f4ac068745d4'],
+  'pipeline-character-foundation.md': ['f1c0b75a8161c0bc7f26752d148a5c1c', 'cda34127b40754ddbcc8544e3d82572b', 'd6c449c06de73a0868141c899b26e52c', '04419e382f3b46ed92bfaaa1d4f39e13'],
+  'pipeline-judge-foundation.md': ['74c0244e641dcf7a73e9c83123ebdee9', '4c0bd349ff4d329048c9f4ac068745d4', 'edf7850d0c724c63761bc9fb667227d9', '02a8e9215ba534b333f3a29f11f3ac4f'],
 };
 const EXPECTED_STAGE_NEW = {
   'pipeline-idea-expansion.md': 'd6fa86a435f978336661dcabca67258f',
@@ -68,7 +68,7 @@ const EXPECTED_STAGE_NEW = {
   'pipeline-extract-scenes.md': '9f404b0c4721b23932a6d2dcfc1fba43',
   'writers-room-places.md': 'a7f68e51dd6b4421d20f5bd9d855d9b4',
   'cos-agent-briefing.md': 'a01c81d3a7f4ac0ca9e8d5137735c0e3',
-  'universe-character-expand.md': '177b6e4e8bdf445308cf8ac423cd5ad8',
+  'universe-character-expand.md': '924fe8836f3014873d1789e98e997db2',
   'story-builder-idea-expand.md': 'c12d76fefaaded2838023065bfc94bb0',
   'pipeline-editorial-analysis.md': 'daeb02bd54b0c099b21af659c6298cfe',
   'pipeline-manuscript-completeness.md': 'fd26f928c33803c12878a1bfb8561ece',
@@ -80,8 +80,8 @@ const EXPECTED_STAGE_NEW = {
   'cd-treatment.md': 'd940eadfb406ce584f0e244032f33382',
   'cd-plan.md': 'ef0d96f6ebde43af6c4579969d31cfb7',
   'pipeline-series-generate.md': '21352c21ed6d4edb7a4b7c32704eff55',
-  'pipeline-character-foundation.md': 'd6c449c06de73a0868141c899b26e52c',
-  'pipeline-judge-foundation.md': 'edf7850d0c724c63761bc9fb667227d9',
+  'pipeline-character-foundation.md': 'b7d2bac347e11171606f4c6acfcd32e1',
+  'pipeline-judge-foundation.md': 'e44b6c50d741bbd21fc86f481684c410',
 };
 const EXPECTED_PARTIAL_OLD = {
   'bible-deference.md': ['218f0e85643609ed85a12b1ccc7b5a8d'],
@@ -96,11 +96,35 @@ const EXPECTED_PARTIAL_NEW = {
 const sortValues = (map) =>
   Object.fromEntries(Object.entries(map).map(([k, v]) => [k, [...v].sort()]));
 
+// A deep-equal on 28 keys reports only "expected { …(28) } to deeply equal
+// { …(28) }", which reads as an unrelated regression on whatever PR happens to
+// inherit it — three PRs were triaged past this break before it was traced to
+// `main`. Name the files and hashes that actually moved, and say what to do.
+const describeDrift = (actual, expected) =>
+  [...new Set([...Object.keys(actual), ...Object.keys(expected)])]
+    .map((file) => ({ file, was: expected[file], now: actual[file] }))
+    .filter(({ was, now }) => String(was) !== String(now))
+    .map(({ file, was, now }) => `  ${file}: baseline ${was ?? '(absent)'} -> migrations ship ${now ?? '(absent)'}`);
+
+const expectMatchesBaseline = (actual, expected, label) => {
+  const drifted = describeDrift(actual, expected);
+  expect(
+    drifted.length === 0 ||
+      `${label} drifted from the baseline in scripts/setup-data-drift.test.js:\n${drifted.join('\n')}\n` +
+        'A prompt migration shipped a new body without carrying this baseline with it. ' +
+        'Point the baseline at the shipped hash and add the superseded hash to that file\'s accepted-old set.',
+  ).toBe(true);
+};
+
 describe('buildPromptDriftTables', () => {
   it('reproduces the full stage drift table the hand-mirror used to carry', async () => {
     const { stages } = await buildPromptDriftTables(migrationsDir);
-    expect(stages.newMap).toEqual(EXPECTED_STAGE_NEW);
-    expect(sortValues(stages.oldMap)).toEqual(sortValues(EXPECTED_STAGE_OLD));
+    expectMatchesBaseline(stages.newMap, EXPECTED_STAGE_NEW, 'Current stage-prompt hashes');
+    expectMatchesBaseline(
+      sortValues(stages.oldMap),
+      sortValues(EXPECTED_STAGE_OLD),
+      'Accepted-old stage-prompt hashes',
+    );
     expect(stages.files.sort()).toEqual(Object.keys(EXPECTED_STAGE_NEW).sort());
   });
 
