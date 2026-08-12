@@ -19,6 +19,7 @@ import { PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { extractTaskType, loadLearningData } from './taskLearning/store.js';
 import { NON_COMMITTING_COORDINATOR_TASK_TYPES } from './taskTypeHooks.js';
 import { runCli } from './layeredIntelligence/runCli.js';
+import { formatDurationShort } from './autonomousJobs/selfDiagnostics.js';
 
 // Tight window: the failure mode is a burst overnight, not a busy week of
 // legitimate drain. Eight completions is already more than a healthy
@@ -116,16 +117,6 @@ export function buildChurnIssueTitle(taskType) {
   return `CoS churn: ${taskType} is looping on short-lived executions`;
 }
 
-function formatDuration(ms) {
-  if (!Number.isFinite(ms) || ms < 0) return '—';
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  const sec = Math.round(ms / 1000);
-  if (sec < 60) return `${sec}s`;
-  const min = Math.floor(sec / 60);
-  const rem = sec % 60;
-  return rem ? `${min}m ${rem}s` : `${min}m`;
-}
-
 function formatWindow(ms) {
   const hours = Math.round((Number(ms) || 0) / 3600000);
   return hours <= 1 ? '1h' : `${hours}h`;
@@ -144,12 +135,12 @@ export function buildChurnIssueBody({ taskType, churn, signatureRepeatCount = nu
     `**Task type:** \`${taskType || 'unknown'}\``,
     `**Signal:** ${churn?.reason || 'unknown'}`,
     `**Runs in last ${windowLabel}:** ${churn?.windowCompleted ?? 0}`,
-    `**Short-lived (< ${formatDuration(SHORT_LIVED_MS)}):** ${churn?.shortLivedCount ?? 0}`
+    `**Short-lived (< ${formatDurationShort(SHORT_LIVED_MS)}):** ${churn?.shortLivedCount ?? 0}`
       + (churn?.shortLivedSampleSize
         ? ` of ${churn.shortLivedSampleSize} timed runs`
         : ' (no per-run duration recorded — used completion spacing)'),
-    `**Median duration:** ${formatDuration(churn?.medianDurationMs)}`,
-    `**Median gap between completions:** ${formatDuration(churn?.medianGapMs)}`
+    `**Median duration:** ${formatDurationShort(churn?.medianDurationMs)}`,
+    `**Median gap between completions:** ${formatDurationShort(churn?.medianGapMs)}`
   ];
   if (Number.isFinite(signatureRepeatCount) && signatureRepeatCount > 1) {
     lines.push(`**Same-finding park count:** ${signatureRepeatCount} (the actionable set did not change)`);
