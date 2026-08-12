@@ -36,7 +36,9 @@ import usePreviewRoute from '../../../hooks/usePreviewRoute';
 import Drawer from '../../Drawer';
 import ImageGenSettingsForm from '../../imageGen/ImageGenSettingsForm';
 import ExtractCanonButton from './ExtractCanonButton';
-import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../../../lib/imageGenBackends';
+import {
+  applyRecordRenderPin, deriveAvailableBackends, IMAGE_GEN_MODE, renderTargetPin, RENDER_TARGET,
+} from '../../../lib/imageGenBackends';
 import {
   PIPELINE_IMAGE_DEFAULTS,
   readPipelineImageSettings,
@@ -248,7 +250,11 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
   useEffect(() => {
     let cancelled = false;
     Promise.all([
-      getSettings().catch(() => ({})),
+      // `null` on failure, NOT `{}` — a `{}` stand-in derives an empty backend
+      // list, which `renderPinLadder` reads as "loaded, nothing enabled" and
+      // uses to suppress every pin. A settings fetch that failed must not look
+      // like an install with no backends.
+      getSettings().catch(() => null),
       listImageModels().catch(() => []),
     ]).then(([s, modelList]) => {
       if (cancelled) return;
@@ -284,7 +290,24 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
     });
   }, [setSearchParams]);
 
-  const renderOpts = useMemo(() => pipelineImageCfgToRenderOpts(imageCfg), [imageCfg]);
+  // Comic pages and covers send an EXPLICIT `mode`, which outranks every pin on
+  // the server ladder (`resolveRenderTargetConfig`) — so the series' own render
+  // pin has to be folded in here or it does nothing (#3840). Ladder: the
+  // series' pin, then the Pipeline-visuals `renderDefaults` pin, then the saved
+  // stage config. `imageCfg` stays the raw saved config so the settings drawer
+  // keeps editing the install-wide default rather than a pin-overridden value.
+  // Backends pass as `null` until settings land — `[]` means "loaded, nothing
+  // enabled" and would suppress the pin entirely (see renderPinLadder).
+  const renderCfg = useMemo(
+    () => applyRecordRenderPin(
+      imageCfg,
+      [series, renderTargetPin(sysSettings, RENDER_TARGET.PIPELINE_VISUAL)],
+      sysSettings ? availableBackends : null,
+    ),
+    [imageCfg, sysSettings, availableBackends, series?.imageMode, series?.imageModelId],
+  );
+
+  const renderOpts = useMemo(() => pipelineImageCfgToRenderOpts(renderCfg), [renderCfg]);
 
   // Front + back cover live on stages.comicPages.cover / .backCover; both
   // persist alongside the page renders. Each owns a draft string separate
@@ -485,7 +508,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
             type="button"
             onClick={openImageSettings}
             className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-port-card border border-port-border text-gray-300 text-xs hover:border-port-accent/50 hover:text-white"
-            title={`Image gen settings — backend: ${imageCfg.mode}`}
+            title={`Image gen settings — backend: ${renderCfg.mode}${renderCfg.mode === imageCfg.mode ? '' : ' (pinned by the series or the pipeline-visual default)'}`}
           >
             <SettingsIcon size={12} /> Image gen
           </button>

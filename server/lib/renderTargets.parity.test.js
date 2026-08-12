@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
+import { RENDER_TARGET, RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 import {
   CLOUD_IMAGE_GEN_MODES, EDIT_INCAPABLE_IMAGE_MODES, IMAGE_GEN_MODES,
 } from '../services/imageGen/modes.js';
@@ -24,6 +24,7 @@ import { cloudPromptRequired, maxInputImages } from '../services/imageGen/cloudP
 // lucide-react, which is not installed in the server CI job (this exact import
 // broke main's CI when Phase 2 landed pointing at imageGenBackends).
 import {
+  RENDER_TARGET as CLIENT_RENDER_TARGET,
   RENDER_TARGET_OPTIONS as CLIENT_OPTIONS,
   RENDER_TARGET_BACKEND_AUTO as CLIENT_AUTO,
   I2I_CAPABLE_MODES as CLIENT_I2I_CAPABLE,
@@ -49,6 +50,16 @@ describe('render-target client mirror parity (#3231)', () => {
     for (const id of RENDER_TARGETS) {
       expect(client.has(id) || DELIBERATELY_UNLISTED.has(id),
         `server render target "${id}" is neither in client RENDER_TARGET_OPTIONS nor allowlisted as deliberately unlisted`).toBe(true);
+    }
+  });
+
+  // The client's named-id map is the subset of targets the CLIENT resolves
+  // itself via `renderTargetPin`. A drifting id there is worse than a drifting
+  // option label: the pin silently reads an absent `settings.renderDefaults`
+  // key and every render falls through to the install default with no error.
+  it('every client RENDER_TARGET id matches the server constant of the same name', () => {
+    for (const [name, id] of Object.entries(CLIENT_RENDER_TARGET)) {
+      expect(RENDER_TARGET[name], `client RENDER_TARGET.${name} has no server counterpart`).toBe(id);
     }
   });
 

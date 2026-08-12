@@ -21,6 +21,7 @@
 - Merge follow-ups already stranded that way are revived on upgrade, so the pull requests they left open finally land. Their blocking reason was exempt from both the failed-task reaper and the automatic retry, so they would otherwise have sat blocked forever.
 - Task metadata that has no value is no longer written to the task file at all. Any unset field previously became the literal word "null", which every reader then saw as a real value — the same class of bug as the blocked merge follow-up above. Task files an older version already wrote are repaired on read.
 - Blocking a task that exists to merge a pull request now raises a notification naming that PR, so it can be landed by hand instead of going unnoticed. This covers every way a task can get blocked, not just the one fixed above.
+- A series' pinned image backend now actually renders its comic pages and covers. The pin was saved on the series and honoured by first-pass portraits, but the comic stage sent the install-wide default as an explicit choice — which outranks any pin — so a series pinned to one backend quietly rendered every page and cover on another. The Pipeline visuals default from Settings → Image Gen now applies to these renders too, and a pin naming a backend you have since turned off falls back instead of failing the render.
 
 ## Changed
 

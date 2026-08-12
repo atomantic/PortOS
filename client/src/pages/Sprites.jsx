@@ -8,7 +8,7 @@ import {
   generateSpriteWalk, generateSpriteTrack, generateSpriteReference, listSpriteThumbnails,
 } from '../services/apiSprites.js';
 import { getSettings } from '../services/apiSystem.js';
-import { deriveAvailableBackends } from '../lib/imageGenBackends.js';
+import { deriveAvailableBackends, renderPinLadder } from '../lib/imageGenBackends.js';
 import ReferenceWorkflow from '../components/sprites/ReferenceWorkflow.jsx';
 import WalkWorkflow from '../components/sprites/WalkWorkflow.jsx';
 import TrackWorkflow from '../components/sprites/TrackWorkflow.jsx';
@@ -226,13 +226,20 @@ export default function Sprites() {
   // available, so a pinned-but-since-disabled backend degrades to the server
   // ladder's graceful fallback instead of being sent as an explicit (and
   // erroring) body.mode. Unpinned records keep the current page mode.
+  // `imageBackends || []` rather than `imageBackends`: `renderPinLadder` reads
+  // `null` as "availability unknown, don't gate", but this seat is a one-way
+  // seed into page state — a pin applied before the backend list lands would
+  // stick even if that backend turns out to be disabled. The effect re-runs
+  // once `imageBackends` loads, so gating on the loaded list loses nothing.
   const detailPinMode = detail?.record?.imageMode || '';
   const detailRecordId = detail?.record?.id || '';
+  const seedPinMode = useMemo(
+    () => renderPinLadder([{ imageMode: detailPinMode }], imageBackends || []).mode,
+    [detailPinMode, imageBackends],
+  );
   useEffect(() => {
-    if (detailPinMode && (imageBackends || []).some((b) => b.id === detailPinMode)) {
-      setImageMode(detailPinMode);
-    }
-  }, [detailPinMode, detailRecordId, imageBackends]);
+    if (seedPinMode) setImageMode(seedPinMode);
+  }, [seedPinMode, detailRecordId]);
 
   // Run ids the walk selection has approved. An approved run's strip/frames
   // never move on disk (approval is recorded in the selection, not the path),

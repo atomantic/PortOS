@@ -55,6 +55,7 @@ export const RENDER_TARGET_BACKEND_AUTO = 'auto';
 // bound to the server's RENDER_TARGETS by renderTargets.parity.test.js.
 export const RENDER_TARGET = Object.freeze({
   UNIVERSE_BIBLE: 'universe-bible',
+  PIPELINE_VISUAL: 'pipeline-visual',
 });
 export const RENDER_TARGET_OPTIONS = Object.freeze([
   { id: 'universe-bible', label: 'Universe Bible & canon renders' },
