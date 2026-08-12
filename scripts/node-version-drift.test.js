@@ -69,22 +69,34 @@ describe('Node version floor has exactly one owner (issue #3863)', () => {
     // Both shell gates check major AND minor: a bare `-lt 22` would wave through
     // 22.0–22.11, which is below the real floor. They run before any Node script
     // in the `./setup.sh` path, so their literals must track MIN_NODE exactly.
+    // A floor whose minor is 0 needs no minor comparison — the major one already
+    // covers it — so that half is only required when MIN_MINOR is non-zero.
+    const assertShellGate = (body, label, majorRe, minorRe) => {
+      const major = body.match(majorRe);
+      expect(major, `${label} no longer contains its major Node gate`).toBeTruthy();
+      expect(Number(major[1])).toBe(MIN_MAJOR);
+      const minor = body.match(minorRe);
+      if (MIN_MINOR === 0) return;
+      expect(minor, `${label} no longer contains its minor Node gate`).toBeTruthy();
+      expect(Number(minor[1])).toBe(MIN_MINOR);
+    };
+
     it('setup.sh gates on the full MIN_NODE floor', () => {
-      const sh = read('setup.sh');
-      const major = sh.match(/"\$NODE_MAJOR"\s+-lt\s+(\d+)/);
-      const minor = sh.match(/"\$NODE_MINOR"\s+-lt\s+(\d+)/);
-      expect(major, 'setup.sh no longer contains a `$NODE_MAJOR -lt <n>` gate').toBeTruthy();
-      expect(minor, 'setup.sh no longer contains a `$NODE_MINOR -lt <n>` gate').toBeTruthy();
-      expect([Number(major[1]), Number(minor[1])]).toEqual([MIN_MAJOR, MIN_MINOR]);
+      assertShellGate(
+        read('setup.sh'),
+        'setup.sh',
+        /"\$NODE_MAJOR"\s+-lt\s+(\d+)/,
+        /"\$NODE_MINOR"\s+-lt\s+(\d+)/
+      );
     });
 
     it('setup.ps1 gates on the full MIN_NODE floor', () => {
-      const ps1 = read('setup.ps1');
-      const major = ps1.match(/\$majorVersion\s+-lt\s+(\d+)/);
-      const minor = ps1.match(/\$minorVersion\s+-lt\s+(\d+)/);
-      expect(major, 'setup.ps1 no longer contains a `$majorVersion -lt <n>` gate').toBeTruthy();
-      expect(minor, 'setup.ps1 no longer contains a `$minorVersion -lt <n>` gate').toBeTruthy();
-      expect([Number(major[1]), Number(minor[1])]).toEqual([MIN_MAJOR, MIN_MINOR]);
+      assertShellGate(
+        read('setup.ps1'),
+        'setup.ps1',
+        /\$majorVersion\s+-lt\s+(\d+)/,
+        /\$minorVersion\s+-lt\s+(\d+)/
+      );
     });
 
     it.each(MANIFESTS)('%s declares engines.node = the floor', (rel) => {
@@ -110,14 +122,21 @@ describe('Node version floor has exactly one owner (issue #3863)', () => {
       })
         .split('\0')
         .filter(Boolean);
-      const pins = workflows.flatMap((rel) =>
-        [...read(rel).matchAll(/node-version:\s*['"]?(\d+(?:\.[\dx]+)*)/g)].map((m) => ({
-          rel,
-          pin: m[1],
-        }))
-      );
-      // Sanity: without this the loop below would pass vacuously.
+      // `v?` so a `node-version: 'v24'` spelling is read, not skipped — an
+      // unparsed pin would drop out of the loop instead of failing it.
+      const pinsIn = (body) =>
+        [...body.matchAll(/node-version:\s*['"]?v?(\d+(?:\.[\dx]+)*)/g)].map((m) => m[1]);
+      const pins = workflows.flatMap((rel) => pinsIn(read(rel)).map((pin) => ({ rel, pin })));
+
+      // Sanity: without these the loop below could pass vacuously — globally if
+      // nothing parsed at all, per-file if one workflow's pins stopped parsing.
       expect(pins.length).toBeGreaterThan(0);
+      for (const rel of workflows) {
+        const body = read(rel);
+        if (!/actions\/setup-node/.test(body)) continue;
+        expect(pinsIn(body).length, `${rel} uses setup-node but no node-version was parsed`)
+          .toBeGreaterThan(0);
+      }
       for (const { rel, pin } of pins) {
         // Compare the whole pin, not just its major: `22.10.0` shares MIN_NODE's
         // major and is still below the floor.

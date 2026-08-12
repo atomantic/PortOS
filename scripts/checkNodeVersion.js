@@ -95,7 +95,12 @@ if (invokedPath) {
       return p;
     }
   };
-  if (resolve(fileURLToPath(import.meta.url)) === resolve(invokedPath)) {
+  // Case-fold on the case-insensitive filesystems (APFS, NTFS): there the two
+  // spellings can differ only in case and still name the same file, and a
+  // strict comparison would silently skip the check.
+  const caseFold = process.platform === 'win32' || process.platform === 'darwin';
+  const normalize = (p) => (caseFold ? resolve(p).toLowerCase() : resolve(p));
+  if (normalize(fileURLToPath(import.meta.url)) === normalize(invokedPath)) {
     assertNodeVersion();
   }
 }

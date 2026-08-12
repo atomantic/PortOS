@@ -24,10 +24,15 @@ fi
 # of `npm run setup` below; scripts/node-version-drift.test.js keeps the two
 # literals in sync. The duplication buys a clear message before any Node script
 # runs at all.
-NODE_MAJOR=$(node -v | cut -d'v' -f2 | cut -d'.' -f1)
-NODE_MINOR=$(node -v | cut -d'v' -f2 | cut -d'.' -f2)
+# Strip the leading `v` by parameter expansion rather than `cut -d'v'`, which
+# would yield an empty field (and an "integer expression expected" error below)
+# on a build whose `node -v` omits it.
+NODE_RAW=$(node -v)
+NODE_VER=${NODE_RAW#v}
+NODE_MAJOR=$(echo "$NODE_VER" | cut -d'.' -f1)
+NODE_MINOR=$(echo "$NODE_VER" | cut -d'.' -f2)
 if [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt 12 ]; }; then
-    echo "Node.js 22.12+ required (found $(node -v)) — see .nvmrc"
+    echo "Node.js 22.12+ required (found v$NODE_VER) — see .nvmrc"
     exit 1
 fi
 
