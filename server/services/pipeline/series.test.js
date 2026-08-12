@@ -929,6 +929,25 @@ describe('pipeline series service', () => {
       });
       expect(b.runDiscardedFindings).toEqual([]);
     });
+
+    it('bounds foundationDiscardedFindings per dimension and drops empty keys (#3835)', () => {
+      const many = Array.from({ length: 40 }, (_, i) => ({ severity: 'high', location: `V${i}`, problem: `hole ${i}` }));
+      const a = svc.sanitizeAutopilot({
+        status: 'paused',
+        foundationDiscardedFindings: { character: many, structure: [], craft: 'nope' },
+      });
+      expect(a.foundationDiscardedFindings.character).toHaveLength(20);
+      expect(a.foundationDiscardedFindings.character[0]).toEqual(many[0]);
+      expect(a.foundationDiscardedFindings).not.toHaveProperty('structure');
+      expect(a.foundationDiscardedFindings).not.toHaveProperty('craft');
+      // A marker written before the field existed resumes with an empty bank —
+      // there is no flat set to key by dimension, so there is nothing to fall
+      // back to (unlike runDiscardedFindings above).
+      expect(svc.sanitizeAutopilot({ status: 'paused' }).foundationDiscardedFindings).toEqual({});
+      expect(svc.sanitizeAutopilot({
+        status: 'paused', foundationDiscardedFindings: ['flat'],
+      }).foundationDiscardedFindings).toEqual({});
+    });
   });
 
   describe('sanitizeAutopilot resumeOptions', () => {

@@ -2148,6 +2148,111 @@ describe('autopilot conductor', () => {
     expect(applyFoundationFix.mock.calls.filter(([, d]) => d === 'worldbuilding')).toHaveLength(2);
   });
 
+  it('foundation gate: a third attempt carries BOTH earlier rejections for its dimension (#3835)', async () => {
+    // The evidence-loss #3829/#3832 closed for the arc gate: the foundation gate
+    // kept only the LAST rejection per dimension, so a dimension that rejected
+    // two different repairs handed the next one evidence of only the second and
+    // the editor was free to re-author the first.
+    const snap = (weightedScore, characterScore, characterGap) => ({
+      seriesId: 'ser-example', status: 'complete', weightedScore,
+      dimensions: {
+        worldbuilding: { score: 9, gap: 'The ration authority is unnamed.', fix: 'Name it.' },
+        character: { score: characterScore, gap: characterGap, fix: `repair ${characterGap}` },
+        structure: { score: 9, gap: 'The charter handoff is thin.', fix: 'Stage the handoff.' },
+        craft: { score: 9, gap: 'The panel grammar is thin.', fix: 'Add panel rules.' },
+      },
+    });
+    const standing = 'The visitor has no defined body scale or metabolic support needs.';
+    const firstRejected = 'The mentor subplot vanishes entirely after the second issue.';
+    const surfaced = 'Every core cast member shares one identical grief reflex.';
+    const secondRejected = 'The finale resolves offstage inside a single unread letter.';
+    judgeFoundation
+      // R1: character is the weak target → repair #1.
+      .mockImplementationOnce(async () => snap(6, 5, standing))
+      // R2: repair #1 left character WORSE → reverted, rejection banked → repair #2.
+      .mockImplementationOnce(async () => snap(5.5, 4, firstRejected))
+      // R3: repair #2 earned its keep (5 → 6) → repair #3 from the new state.
+      .mockImplementationOnce(async () => snap(6.5, 6, surfaced))
+      // R4: repair #3 regressed → reverted, second rejection banked → repair #4.
+      .mockImplementationOnce(async () => snap(6, 5, secondRejected))
+      // R5: repair #4 cleared the gate.
+      .mockImplementationOnce(async () => snap(9, 9, 'clean'));
+
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxFoundationRounds: 5 });
+    await waitFor(runFinished(seriesId));
+
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+    const characterRepairs = applyFoundationFix.mock.calls.filter(([, d]) => d === 'character');
+    expect(characterRepairs).toHaveLength(4);
+    const avoided = characterRepairs[3][2].avoidFindings.map((f) => f.problem);
+    // BOTH rejected candidates, not just the most recent one — and the accepted
+    // repair in between did not wipe the first: a candidate the gate rejected is
+    // still a candidate it rejected.
+    expect(avoided).toEqual(expect.arrayContaining([secondRejected, firstRejected]));
+    // The gap this call is being ASKED to close is filtered out — telling the
+    // editor both "fix this" and "never author this" is contradictory.
+    expect(avoided).not.toContain(surfaced);
+  });
+
+  it('foundation gate: stamps its per-dimension rollback history on the pause marker (#3835)', async () => {
+    const stalled = {
+      seriesId: 'ser-example', status: 'complete', weightedScore: 6,
+      dimensions: {
+        worldbuilding: { score: 9, gap: 'The ration authority is unnamed.', fix: 'Name it.' },
+        character: { score: 5, gap: 'The mentor subplot vanishes entirely after the second issue.', fix: 'Restore it.' },
+        structure: { score: 9, gap: 'The charter handoff is thin.', fix: 'Stage the handoff.' },
+        craft: { score: 9, gap: 'The panel grammar is thin.', fix: 'Add panel rules.' },
+      },
+    };
+    judgeFoundation.mockImplementation(async () => stalled);
+
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxFoundationRounds: 5 });
+    await waitFor(runFinished(seriesId));
+
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('paused');
+    // Keyed by dimension so a resumed gate hands each editor back its OWN
+    // history — a rejected character rewrite is no reason for the structure
+    // editor to avoid anything.
+    const { foundationDiscardedFindings } = (await seriesSvc.getSeries(seriesId)).autopilot;
+    expect(Object.keys(foundationDiscardedFindings)).toEqual(['character']);
+    expect(foundationDiscardedFindings.character).toEqual(expect.arrayContaining([
+      expect.objectContaining({ problem: stalled.dimensions.character.gap }),
+    ]));
+  });
+
+  it('foundation gate: seeds a resumed run with the dimension history the pause carried (#3835)', async () => {
+    const carried = [{ severity: 'high', location: 'character (weight 25%, scored 4)', problem: 'The mentor subplot vanishes entirely after the second issue.' }];
+    const snap = (weightedScore, characterScore) => ({
+      seriesId: 'ser-example', status: 'complete', weightedScore,
+      dimensions: {
+        worldbuilding: { score: 9, gap: 'The ration authority is unnamed.', fix: 'Name it.' },
+        character: { score: characterScore, gap: 'The visitor has no defined body scale or metabolic support needs.', fix: 'Author it.' },
+        structure: { score: 9, gap: 'The charter handoff is thin.', fix: 'Stage the handoff.' },
+        craft: { score: 9, gap: 'The panel grammar is thin.', fix: 'Add panel rules.' },
+      },
+    });
+    judgeFoundation
+      .mockImplementationOnce(async () => snap(6, 5))
+      .mockImplementationOnce(async () => snap(9, 9));
+
+    const { seriesId } = await seedComplete();
+    await seriesSvc.updateSeries(seriesId, {
+      autopilot: {
+        status: 'paused', currentStep: 'foundationGate',
+        foundationDiscardedFindings: { character: carried },
+      },
+    });
+    await autopilot.startSeriesAutopilot(seriesId, { maxFoundationRounds: 5 });
+    await waitFor(runFinished(seriesId));
+
+    // A resume starts a fresh gate with an empty bank, so without the carry the
+    // very repair the paused run reverted is free to come straight back.
+    const [, , options] = applyFoundationFix.mock.calls.find(([, d]) => d === 'character');
+    expect(options.avoidFindings.map((f) => f.problem)).toEqual([carried[0].problem]);
+  });
+
   it('foundation gate: gives a newly exposed gap at the same score its own repair window', async () => {
     const snap = (gap, score = 7) => ({
       seriesId: 'ser-example', status: 'complete', weightedScore: score,

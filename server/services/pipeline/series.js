@@ -242,6 +242,26 @@ const sanitizeAutopilotFindings = (raw, limit) => (Array.isArray(raw)
     .slice(0, limit)
   : []);
 
+// How many repair targets may carry their own discarded history. The foundation
+// gate keys by dimension and there are a fixed handful of those, so this only
+// ever bounds a marker written by a peer that knows dimensions this one doesn't.
+const AUTOPILOT_DISCARDED_KEYS_MAX = 12;
+
+// The keyed form of the above, for a gate whose repairs are owned by independent
+// targets (the foundation gate's dimensions): each key keeps its own bounded
+// history, and a key whose findings all fail sanitization is dropped rather than
+// persisted as an empty bucket.
+const sanitizeAutopilotKeyedFindings = (raw, limit) => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out = {};
+  for (const [key, findings] of Object.entries(raw).slice(0, AUTOPILOT_DISCARDED_KEYS_MAX)) {
+    const name = trimTo(key, 80);
+    const bounded = sanitizeAutopilotFindings(findings, limit);
+    if (name && bounded.length > 0) out[name] = bounded;
+  }
+  return out;
+};
+
 export const sanitizeAutopilot = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
   const status = AUTOPILOT_STATUSES.includes(raw.status) ? raw.status : 'idle';
@@ -268,6 +288,17 @@ export const sanitizeAutopilot = (raw) => {
     // reverts it, so the history can never be empty while the last round isn't.
     runDiscardedFindings: sanitizeAutopilotFindings(
       raw.runDiscardedFindings ?? raw.discardedFindings,
+      AUTOPILOT_DISCARDED_MAX,
+    ),
+    // The same resume evidence for the foundation gate, which banks PER
+    // DIMENSION because its repairs are owned by independent editors: a rejected
+    // character rewrite is no reason for the structure editor to avoid anything
+    // (#3835). No `discardedFindings` fallback here — that field is flat and
+    // dimension-less, so there is nothing to key an older marker's set under;
+    // an install that paused before this field existed simply resumes with the
+    // in-run accumulation only, exactly as it does today.
+    foundationDiscardedFindings: sanitizeAutopilotKeyedFindings(
+      raw.foundationDiscardedFindings,
       AUTOPILOT_DISCARDED_MAX,
     ),
     lastError: trimTo(raw.lastError, AUTOPILOT_ERROR_MAX) || null,

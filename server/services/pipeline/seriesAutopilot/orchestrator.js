@@ -82,6 +82,16 @@ export async function startSeriesAutopilot(sId, options = {}) {
     ? seriesRecord.autopilot
     : null;
   const priorArcAvoidFindings = arcPause?.runDiscardedFindings || [];
+  // Same carry for the foundation gate, keyed by dimension (#3835). A resume
+  // starts a fresh gate with an empty bank, so without this the very repair the
+  // paused run reverted is free to come straight back — the loss #3832 closed
+  // for the arc gate. Only read off a pause that came FROM the foundation gate:
+  // evidence describing dimension gaps means nothing to another step's repairs.
+  const foundationPause = seriesRecord?.autopilot?.status === 'paused'
+    && seriesRecord.autopilot.currentStep === 'foundationGate'
+    ? seriesRecord.autopilot
+    : null;
+  const priorFoundationAvoidFindings = foundationPause?.foundationDiscardedFindings || {};
   const autoSelectModels = resolveAutopilotAutoSelectModels(options, settings);
   const modelPerformance = autoSelectModels
     ? await getModelPerformanceReport().catch((err) => {
@@ -125,6 +135,7 @@ export async function startSeriesAutopilot(sId, options = {}) {
       judge: judgeRouteExplicit,
     },
     priorArcAvoidFindings,
+    priorFoundationAvoidFindings,
     // Run provider/model: per-run override → the series' own `series.llm` →
     // unset (stage pin / active provider downstream). Resolved ONCE here so the
     // manual run, a scheduled run and the UI's "this run calls X / Y" copy all
@@ -440,6 +451,10 @@ export async function startSeriesAutopilot(sId, options = {}) {
             // that gate emits it. `discardedFindings` above stays scoped to the
             // round that was reverted last, which is what the panel renders.
             runDiscardedFindings: result.runDiscarded || [],
+            // The foundation gate's equivalent, keyed by dimension because its
+            // repairs are owned by independent editors (#3835). Same posture:
+            // resume evidence, not rendered.
+            foundationDiscardedFindings: result.foundationDiscarded || {},
             pauseKind: result.pauseKind || null,
             healthBreakdown: result.healthBreakdown || null,
             ...pm,

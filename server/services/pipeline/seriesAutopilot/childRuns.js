@@ -30,6 +30,7 @@ import {
   foundationRepairMissed, regressionPauseReason, sameFinding, containsFinding, isBlockingSetRegression,
   isIsolatedFixSafe,
 } from './convergence.js';
+import { createDiscardedBank } from './discardedEvidence.js';
 import { broadcast, budgetPause, providerOverrideOpts, providerIdOpts, roleLlm, seasonPreserveOpts } from './session.js';
 import { recordModelOutcome } from './modelPerformance.js';
 import { requiredScriptStages, textReady } from './stepResolver.js';
@@ -203,7 +204,7 @@ async function verifyArcBlocking(seriesId, record, { spineOnly }) {
  * resolve after a successful isolation gets too. Computing it once up front
  * made every attempt repeat the prompt the previous one had just failed with.
  */
-async function isolateArcFindings(seriesId, record, { scope, round, spineOnly, baseline, avoidFindings, bankDiscarded, attemptsLeft }) {
+async function isolateArcFindings(seriesId, record, { scope, round, spineOnly, baseline, bank, attemptsLeft }) {
   // The last verification that DESCRIBES THE STORE: it advances only on an
   // accepted patch, because a rejected one is rolled straight back to the state
   // its predecessor verified. So later targets are judged against what the
@@ -230,7 +231,7 @@ async function isolateArcFindings(seriesId, record, { scope, round, spineOnly, b
     // target for this pass, so the whole set — not just `target` — is what the
     // avoid list is filtered against; the resolver is never told to both fix
     // and avoid the same finding.
-    const avoid = avoidFindings([], blocking());
+    const avoid = bank.avoid([], blocking());
     const resolved = await resolveArcFindings(seriesId, record, { findings: [target], avoid, spineOnly });
     const verified = await verifyArcBlocking(seriesId, record, { spineOnly });
     if (verified.outcome) {
@@ -259,7 +260,7 @@ async function isolateArcFindings(seriesId, record, { scope, round, spineOnly, b
       // same evidence a whole-set rollback banks, at single-finding grain.
       // Without this the pass paid a resolve + a verify to learn something no
       // later attempt (or the round that follows) ever hears about.
-      bankDiscarded(discardedSet(verified.blocking));
+      bank.record(discardedSet(verified.blocking));
     }
     broadcast(seriesId, {
       type: 'resolve:isolate', scope, round, attempt: attempts,
@@ -285,12 +286,23 @@ async function isolateArcFindings(seriesId, record, { scope, round, spineOnly, b
  * the first.
  */
 export async function runArcVerify(seriesId, record, opts = {}) {
-  const runDiscarded = [];
-  const outcome = await runArcVerifyRounds(seriesId, record, { ...opts, runDiscarded });
-  return outcome?.pause ? { ...outcome, runDiscarded: discardedSet(runDiscarded) } : outcome;
+  // Every blocker set THIS gate has discarded, newest first (see
+  // `createDiscardedBank`). A rollback's evidence used to reach only the
+  // corrective retry that immediately followed it: the next ordinary resolve
+  // rebuilt its avoid list from scratch, so once a retry landed on a non-worse
+  // but still-blocked state the resolver was free to re-author the exact rewrite
+  // the gate had just reverted — the observed 2 → 1 → 5 (revert) → 1 → 2
+  // (revert, out of retries) stall. Seeded with whatever a prior pause carried,
+  // so a gate resumed twice still stamps the WHOLE history rather than only what
+  // this run threw away.
+  const bank = createDiscardedBank(Array.isArray(record.options.priorArcAvoidFindings)
+    ? record.options.priorArcAvoidFindings
+    : []);
+  const outcome = await runArcVerifyRounds(seriesId, record, { ...opts, bank });
+  return outcome?.pause ? { ...outcome, runDiscarded: bank.all() } : outcome;
 }
 
-async function runArcVerifyRounds(seriesId, record, { spineOnly = false, runDiscarded }) {
+async function runArcVerifyRounds(seriesId, record, { spineOnly = false, bank }) {
   const maxRounds = Number.isInteger(record.options.maxArcVerifyRounds)
     ? record.options.maxArcVerifyRounds
     : MAX_ARC_VERIFY_ROUNDS;
@@ -304,46 +316,6 @@ async function runArcVerifyRounds(seriesId, record, { spineOnly = false, runDisc
   // from a spine round misreports the failure to both the status line and the
   // stall-diagnosis prompt that replays these frames.
   const scope = spineOnly ? 'arcSpine' : 'arc';
-  const priorAvoid = Array.isArray(record.options.priorArcAvoidFindings)
-    ? record.options.priorArcAvoidFindings
-    : [];
-  // Every blocker set THIS gate has already discarded, newest first. A
-  // rollback's evidence used to reach only the corrective retry that immediately
-  // followed it: the next ordinary resolve rebuilt its avoid list from scratch,
-  // so once a retry landed on a non-worse but still-blocked state the resolver
-  // was free to re-author the exact rewrite the gate had just reverted — the
-  // observed 2 → 1 → 5 (revert) → 1 → 2 (revert, out of retries) stall.
-  // Records a discarded blocker set as this gate's newest evidence. Called at
-  // the moment a rewrite is thrown away — the rollback, the rewind, an isolated
-  // patch's revert — so no exit has to remember to do it on that path's behalf.
-  const bankDiscarded = (current = []) => {
-    runDiscarded.unshift(...current.filter((finding) => !containsFinding(runDiscarded, finding)));
-  };
-  // Builds the avoid list for ONE resolve call and banks that call's own newest
-  // evidence into the history, so this is where a rejected candidate stops being
-  // the retry's private knowledge. Preserves cross-Resume evidence and this run's
-  // earlier rollbacks underneath. `discardedSet` keeps the provider prompt bounded
-  // exactly like the persisted marker — `current` leads so the newest evidence is
-  // never the part that gets cut at that bound.
-  const avoidFindings = (current = [], active = []) => {
-    const avoid = discardedSet([
-      // The caller's own discarded set stays whole because its restatements
-      // describe the exact candidate that was just rejected and are intentional
-      // retry evidence.
-      ...current,
-      // A latent defect from a rejected candidate can later be found in the
-      // restored checkpoint itself. Once it is a CURRENT target, telling the
-      // resolver both "fix this" and "avoid this" is contradictory, so the
-      // carried-over evidence is filtered against what this call is fixing —
-      // and against `current`, which routinely restates an earlier rollback's
-      // findings the history above already holds.
-      ...[...runDiscarded, ...priorAvoid].filter((candidate) => (
-        !containsFinding(active, candidate) && !containsFinding(current, candidate)
-      )),
-    ]);
-    bankDiscarded(current);
-    return avoid;
-  };
   let convergence = { best: null, sinceBest: 0 };
   let changed = false;
   // Lowest verified blocker set seen in this gate, paired with the exact arc /
@@ -412,7 +384,7 @@ async function runArcVerifyRounds(seriesId, record, { spineOnly = false, runDisc
       const rollbackTarget = bestVerified || lastResolve;
       const rollback = await restoreArcState(seriesId, rollbackTarget.snapshot);
       const discarded = discardedSet(blocking);
-      bankDiscarded(discarded);
+      bank.record(discarded);
       // Neither second chance is worth its LLM call without a round left to
       // VERIFY what it wrote: spending one on the final round would bill a
       // rewrite nothing ever checks, and would fall out of the loop past every
@@ -464,7 +436,7 @@ async function runArcVerifyRounds(seriesId, record, { spineOnly = false, runDisc
         if (beforeRetry) return beforeRetry;
         const retried = await resolveArcFindings(seriesId, record, {
           findings: rollbackTarget.blocking,
-          avoid: avoidFindings(discarded, rollbackTarget.blocking),
+          avoid: bank.avoid(discarded, rollbackTarget.blocking),
           spineOnly,
         });
         if (retried?.applied !== false) changed = true;
@@ -485,8 +457,7 @@ async function runArcVerifyRounds(seriesId, record, { spineOnly = false, runDisc
         const isolated = await isolateArcFindings(seriesId, record, {
           scope, round, spineOnly,
           baseline: rollbackTarget.blocking,
-          avoidFindings,
-          bankDiscarded,
+          bank,
           attemptsLeft: isolationLeft,
         });
         isolationLeft -= isolated.attempts;
@@ -550,7 +521,7 @@ async function runArcVerifyRounds(seriesId, record, { spineOnly = false, runDisc
       if (isNewBest || !bestVerified) return { residual: blocking, discarded: [] };
       await restoreArcState(seriesId, bestVerified.snapshot);
       const discarded = discardedSet(blocking);
-      bankDiscarded(discarded);
+      bank.record(discarded);
       return { residual: bestVerified.blocking, discarded };
     };
     if (round === maxRounds) {
@@ -581,7 +552,7 @@ async function runArcVerifyRounds(seriesId, record, { spineOnly = false, runDisc
     // only place they can actually close a finding.
     const resolved = await resolveArcFindings(seriesId, record, {
       findings: blocking,
-      avoid: avoidFindings([], blocking),
+      avoid: bank.avoid([], blocking),
       spineOnly,
     });
     if (resolved?.applied === false) {
@@ -737,6 +708,17 @@ export async function runCharacterFoundation(seriesId, record) {
 // counts against maxFoundationRounds and the per-dimension stall patience, and
 // carries a note describing what was reverted so it can change strategy.
 export async function runFoundationGate(seriesId, record) {
+  // Same one-exit stamping as `runArcVerify` (#3829), for the same reason: every
+  // pause the loop can produce owes the next run the whole gate's evidence, and
+  // spelling that at each `return` is how the forwarded ones get missed. Keyed
+  // by dimension — a rejected character repair says nothing about a structure
+  // attempt — and seeded with what a prior pause carried.
+  const bank = createDiscardedBank(record.options.priorFoundationAvoidFindings);
+  const outcome = await runFoundationRounds(seriesId, record, { bank });
+  return outcome?.pause ? { ...outcome, foundationDiscarded: bank.byKey() } : outcome;
+}
+
+async function runFoundationRounds(seriesId, record, { bank }) {
   const maxRounds = Number.isInteger(record.options.maxFoundationRounds)
     ? record.options.maxFoundationRounds
     : MAX_FOUNDATION_ROUNDS;
@@ -765,9 +747,14 @@ export async function runFoundationGate(seriesId, record) {
   // layer, but an unchanged target cannot keep edits by moving the problem.
   let pendingRepair = null;
   // What the last REJECTED (and reverted) attempt for a dimension looked like:
-  // the strategy note and discarded findings handed to its next attempt, plus
-  // the rewind notice to report if that dimension ends up exhausting its
-  // patience. Cleared as soon as an attempt for that dimension earns its keep.
+  // the strategy note describing what was just reverted, the set that attempt
+  // discarded (what the pause renders), plus the rewind notice to report if that
+  // dimension ends up exhausting its patience. Deliberately last-only — the note
+  // and the rewind notice describe ONE reverted attempt and go stale the moment
+  // the dimension keeps a repair. The accumulating evidence a retry must avoid
+  // authoring lives in `bank` instead, which is not cleared by an accepted
+  // repair: a candidate this gate already rejected is still a candidate it
+  // rejected, and the arc gate keeps its history for the same reason (#3835).
   const rejectionByDimension = new Map();
   // A terminal pause for `dimension`, folding in its last rewind when it had
   // one: the state being handed back is that checkpoint, and saying so is the
@@ -875,6 +862,10 @@ export async function runFoundationGate(seriesId, record) {
         // read) from re-buying a score the gate is holding.
         const rollback = await restoreFoundationState(seriesId, rejectedSnapshot, { judge: rejectedJudge });
         const discarded = discardedSet(residualFindings(snap.dimensions));
+        // Bank it the moment it is thrown away, not when the next repair reads
+        // it — an unverified restore returns below without ever reaching a
+        // retry, and its evidence still belongs to the resume.
+        bank.record(discarded, dimension);
         broadcast(seriesId, {
           type: 'foundation:rollback', round, dimension,
           targetBefore: beforeTargetScore, targetAfter: afterTargetScore,
@@ -908,9 +899,10 @@ export async function runFoundationGate(seriesId, record) {
         ({ score, gate, weak } = readFoundationVerdict(snap, threshold));
         console.log(`↩️ foundation ${dimension} repair reverted — series=${seriesId.slice(0, 12)} round=${round}: ${copy.missed}`);
       } else {
-        // A kept repair clears the dimension's rejection history: the next
-        // attempt is working from different content, so a stale "this failed"
-        // note would misdirect it.
+        // A kept repair clears the dimension's last-rejection NOTE: the next
+        // attempt is working from different content, so a stale "this failed,
+        // try another angle" strategy line would misdirect it. The banked
+        // evidence survives — those candidates were still rejected.
         rejectionByDimension.delete(dimension);
       }
     }
@@ -1013,10 +1005,21 @@ export async function runFoundationGate(seriesId, record) {
       ...(snap.dimensions?.[weak.dimension] || {}),
       ...(priorRejection ? { retryReason: priorRejection.note } : {}),
     };
+    // EVERY candidate this dimension has discarded, not just the last one — a
+    // dimension that rejected two different repairs used to hand the third
+    // evidence of only the second, leaving the repairer free to re-author the
+    // first. Filtered against the gap this call is being asked to close, which
+    // a rejected attempt's residual set routinely restates: telling the editor
+    // both "fix this" and "do not author this" is contradictory.
+    const avoidFindings = bank.avoid(
+      [],
+      residualFindings({ [weak.dimension]: snap.dimensions?.[weak.dimension] }),
+      weak.dimension,
+    );
     try {
       fix = await applyFoundationFix(seriesId, weak.dimension, {
         finding: repairFinding,
-        avoidFindings: priorRejection?.discarded,
+        avoidFindings,
         providerOverride: creativeLlm.providerOverride,
         modelOverride: creativeLlm.modelOverride,
         judgeProviderDefault: judgeLlm.providerOverride,
