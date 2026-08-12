@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Plus, Search } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
 import { listMediaCollections, createMediaCollection } from '../../services/api';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosition.js';
+import useClickOutside from '../../hooks/useClickOutside.js';
+import useEscapeKey from '../../hooks/useEscapeKey.js';
 import { applyCollectionView } from '../../lib/mediaCollectionList.js';
 
 // Shared popover shell for the list-pick-or-create pickers:
@@ -96,6 +98,7 @@ export default function CollectionPickerShell({
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
   const {
+    triggerRef,
     popoverRef: menuRef,
     style,
   } = usePopoverPosition({
@@ -112,10 +115,14 @@ export default function CollectionPickerShell({
     contentDeps: [collectionsState, query, excludeId],
   });
 
-  // Parents may pass inline arrow handlers — read through a ref so the
-  // event-listener effect doesn't tear down on every parent render.
-  const onCloseRef = useRef(onClose);
-  useEffect(() => { onCloseRef.current = onClose; });
+  // Close on outside-click / Escape — placement and scroll/resize reflow are
+  // owned by usePopoverPosition. The menu is portaled to <body>, so the trigger
+  // and the panel both have to count as "inside": that's the array form of
+  // useClickOutside. `triggerRef` mirrors the caller's `anchorRef` when one was
+  // passed, so this works in either mode. Both hooks read the handler through a
+  // ref, so the inline arrow doesn't resubscribe on every parent render.
+  useClickOutside([triggerRef, menuRef], open, () => onClose?.());
+  useEscapeKey(open, () => onClose?.());
 
   // When the parent owns `collections`, mirror it into local state on each
   // change so the same render path works for both modes.
@@ -150,25 +157,6 @@ export default function CollectionPickerShell({
     const base = excludeId ? collectionsState.filter((c) => c.id !== excludeId) : collectionsState;
     return orderItems(base, query);
   }, [collectionsState, query, excludeId, orderItems]);
-
-  // Close on outside-click / Escape — placement and scroll/resize reflow are
-  // owned by usePopoverPosition; this effect only handles dismissal.
-  useEffect(() => {
-    if (!open) return undefined;
-    const close = () => onCloseRef.current?.();
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
-    const onAway = (e) => {
-      const onTrigger = anchorRef?.current?.contains(e.target);
-      const onMenu = menuRef.current?.contains(e.target);
-      if (!onTrigger && !onMenu) close();
-    };
-    document.addEventListener('keydown', onKey);
-    document.addEventListener('mousedown', onAway);
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      document.removeEventListener('mousedown', onAway);
-    };
-  }, [open, anchorRef, menuRef]);
 
   const updateCollections = useCallback((updater) => {
     setCollectionsState((prev) => {

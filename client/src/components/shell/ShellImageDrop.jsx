@@ -5,6 +5,7 @@ import FilePickerButton from '../ui/FilePickerButton';
 import FormField from '../ui/FormField';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosition.js';
 import useEscapeKey from '../../hooks/useEscapeKey';
+import useClickOutside from '../../hooks/useClickOutside.js';
 import { IMAGE_ACCEPT, validateImageFile } from '../../utils/fileUpload';
 import { formatBytes } from '../../utils/formatters';
 import toast from '../ui/Toast';
@@ -123,22 +124,11 @@ export default function ShellImageDrop({ onSend, placement = 'below' }) {
 
   useEscapeKey(open, close);
 
-  // Click-outside is hand-rolled rather than `useClickOutside` (and NOT an
-  // oversight): that hook decides "outside" from a SINGLE ref, and this panel is
-  // portaled to <body>, so it isn't a descendant of the trigger container — the
-  // hook would treat every click on the textarea as outside and close the
-  // composer mid-typing. Two refs have to be consulted. Same shape as the other
-  // portaled popover, ThemeSwitcher.jsx.
-  useEffect(() => {
-    if (!open) return undefined;
-    const onMouseDown = (e) => {
-      const inTrigger = containerRef.current?.contains(e.target);
-      const inPanel = popoverRef.current?.contains(e.target);
-      if (!inTrigger && !inPanel) close();
-    };
-    document.addEventListener('mousedown', onMouseDown);
-    return () => document.removeEventListener('mousedown', onMouseDown);
-  }, [open, close, popoverRef]);
+  // This panel is portaled to <body>, so it isn't a descendant of the trigger
+  // container — a single-ref containment check would read every click on the
+  // textarea as outside and close the composer mid-typing. Both refs have to
+  // count as "inside", which is what the array form of useClickOutside does.
+  useClickOutside([containerRef, popoverRef], open, close);
 
   return (
     <div className="relative shrink-0" ref={containerRef}>

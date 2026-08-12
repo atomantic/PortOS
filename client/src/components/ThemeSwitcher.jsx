@@ -1,9 +1,11 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, Palette } from 'lucide-react';
 import { useThemeContext } from './ThemeContext';
 import { getFamilyIcon } from '../themes/familyIcons';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../hooks/usePopoverPosition.js';
+import useClickOutside from '../hooks/useClickOutside.js';
+import useEscapeKey from '../hooks/useEscapeKey.js';
 
 const MENU_WIDTH = 288;
 
@@ -18,28 +20,11 @@ export default function ThemeSwitcher({ position = 'above', className = '' }) {
   } = usePopoverPosition({ open, width: MENU_WIDTH, minWidth: 180, gap: 8, position });
 
   // Close on outside-click / Escape — the popover-position hook owns placement
-  // and reflow; this component still owns its own dismiss semantics.
-  useEffect(() => {
-    if (!open) return undefined;
-
-    const onMouseDown = (e) => {
-      const clickedTrigger = containerRef.current?.contains(e.target);
-      const clickedMenu = menuRef.current?.contains(e.target);
-      if (!clickedTrigger && !clickedMenu) setOpen(false);
-    };
-
-    const onKeyDown = (e) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-
-    document.addEventListener('mousedown', onMouseDown);
-    document.addEventListener('keydown', onKeyDown);
-
-    return () => {
-      document.removeEventListener('mousedown', onMouseDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [open, menuRef]);
+  // and reflow; this component still owns its own dismiss semantics. The menu is
+  // portaled to <body>, so both the trigger container and the panel have to count
+  // as "inside" — that's what the array form of useClickOutside is for.
+  useClickOutside([containerRef, menuRef], open, () => setOpen(false));
+  useEscapeKey(open, () => setOpen(false));
 
   return (
     <div ref={containerRef} className={`relative ${className}`}>
