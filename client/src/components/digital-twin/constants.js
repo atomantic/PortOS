@@ -33,28 +33,66 @@ import {
   UserRound
 } from 'lucide-react';
 
-// Main navigation tabs
+// Main navigation sections, ordered by the group they belong to (see
+// SECTION_GROUPS below). This array stays FLAT and stays the single registry of
+// section ids: `server/lib/navManifest.test.js` scrapes `id:` out of it to prove
+// every section is addressable as `/digital-twin/<id>` from ⌘K and voice, and
+// its extractor stops at the first `];` — so a nested array here would silently
+// truncate the guard. Grouping therefore lives in a separate constant.
 export const TABS = [
+  // Profile
   { id: 'overview', label: 'Overview', icon: Heart },
-  { id: 'documents', label: 'Documents', icon: FileText },
-  { id: 'test', label: 'Test', icon: CheckCircle },
-  { id: 'personality', label: 'Personality', icon: Brain },
-  { id: 'enrich', label: 'Enrich', icon: Sparkles },
-  { id: 'taste', label: 'Taste', icon: Palette },
-  { id: 'accounts', label: 'Accounts', icon: Globe },
   { id: 'identity', label: 'Identity', icon: Fingerprint },
   { id: 'personas', label: 'Personas', icon: Drama },
   { id: 'goals', label: 'Goals', icon: Target },
+  { id: 'taste', label: 'Taste', icon: Palette },
+  // Sources
+  { id: 'documents', label: 'Documents', icon: FileText },
+  { id: 'import', label: 'Import', icon: Upload },
+  { id: 'accounts', label: 'Accounts', icon: Globe },
   { id: 'interview', label: 'Interview', icon: MessageSquare },
+  { id: 'autobiography', label: 'Autobiography', icon: PenLine },
+  { id: 'enrich', label: 'Enrich', icon: Sparkles },
+  // Assessment
+  { id: 'test', label: 'Test', icon: CheckCircle },
+  { id: 'personality', label: 'Personality', icon: Brain },
+  // Presence
   { id: 'voice', label: 'Voice', icon: Mic },
   { id: 'appearance', label: 'Appearance', icon: Camera },
-  { id: 'autobiography', label: 'Autobiography', icon: PenLine },
-  { id: 'import', label: 'Import', icon: Upload },
   { id: 'avatar-bio', label: 'Avatar Bio', icon: UserRound },
+  // Legacy
   { id: 'export', label: 'Export', icon: Download },
   { id: 'legacy', label: 'Legacy', icon: Package },
   { id: 'time-capsule', label: 'Time Capsule', icon: Archive }
 ];
+
+// Two-level nav taxonomy (#3795). 19 sections in one flat strip stopped working
+// as navigation, so they collapse into five groups keyed on what the user is
+// doing to the twin — the only axis inferable without already knowing the
+// feature names. The group is always DERIVED from the section id in the URL
+// (`sectionGroupId`), never stored, so `/digital-twin/:tab` deep links, ⌘K, and
+// voice `ui_navigate` keep addressing sections directly.
+export const SECTION_GROUPS = [
+  { id: 'profile', label: 'Profile', icon: Fingerprint, sectionIds: ['overview', 'identity', 'personas', 'goals', 'taste'] },
+  { id: 'sources', label: 'Sources', icon: FileText, sectionIds: ['documents', 'import', 'accounts', 'interview', 'autobiography', 'enrich'] },
+  { id: 'assessment', label: 'Assessment', icon: CheckCircle, sectionIds: ['test', 'personality'] },
+  { id: 'presence', label: 'Presence', icon: Mic, sectionIds: ['voice', 'appearance', 'avatar-bio'] },
+  { id: 'legacy', label: 'Legacy', icon: Archive, sectionIds: ['export', 'legacy', 'time-capsule'] }
+];
+
+const TABS_BY_ID = new Map(TABS.map((t) => [t.id, t]));
+
+// The group's sections as full tab objects, in group order.
+export function groupSections(group) {
+  return group.sectionIds.map((id) => TABS_BY_ID.get(id)).filter(Boolean);
+}
+
+// Which group owns a section id. Falls back to the first group so an unknown or
+// stale `:tab` still renders a coherent nav (the page itself falls back to the
+// Overview body for the same input).
+export function sectionGroupId(sectionId) {
+  return SECTION_GROUPS.find((g) => g.sectionIds.includes(sectionId))?.id ?? SECTION_GROUPS[0].id;
+}
 
 // Document category configurations
 export const DOCUMENT_CATEGORIES = {

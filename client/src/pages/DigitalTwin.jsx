@@ -4,11 +4,11 @@ import * as api from '../services/api';
 import { Heart } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
-import TabPills from '../components/ui/TabPills';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { sameJsonShape } from '../lib/sameJsonShape';
 
-import { TABS, getHealthColor, getHealthLabel } from '../components/digital-twin/constants';
+import SectionNav from '../components/digital-twin/SectionNav';
+import { TABS, SECTION_GROUPS, getHealthColor, getHealthLabel } from '../components/digital-twin/constants';
 
 // Lazy-load tab bodies so opening any one tab doesn't pull in all 17 — a user
 // typically views 1–2 of them. The page itself is already a lazy route chunk.
@@ -35,7 +35,10 @@ const TimeCapsuleTab = lazy(() => import('../components/digital-twin/tabs/TimeCa
 export default function DigitalTwin() {
   const { tab } = useParams();
   const navigate = useNavigate();
-  const activeTab = tab || 'overview';
+  // A stale/unknown `:tab` already fell through to the Overview body; resolve it
+  // to `overview` up front so the nav agrees with what's rendered instead of
+  // showing no section selected under the first group.
+  const activeTab = TABS.some((t) => t.id === tab) ? tab : 'overview';
 
   // Let errors throw — `useAutoRefetch` preserves the last-good data on
   // transient failures. `silent: true` keeps the 30s poll from spamming
@@ -116,8 +119,7 @@ export default function DigitalTwin() {
           bodyClassName="p-4"
           titleWidthClass="w-40"
           showSubtitle
-          subtitleOnMobile
-          tabs={TABS.length}
+          tabs={SECTION_GROUPS.length}
           cards={3}
           sidebar={false}
         />
@@ -128,12 +130,15 @@ export default function DigitalTwin() {
   return (
     <div className="absolute inset-0 flex flex-col">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 gap-3 border-b border-port-border">
+      {/* The header and nav together used to eat the whole first screen at
+          375x812 (#3795), so below `sm` the padding tightens and the subtitle
+          drops — it's decoration, and the actions below it are not. */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between px-4 py-2 sm:p-4 gap-1 sm:gap-3 border-b border-port-border">
         <div className="flex items-center gap-3">
-          <Heart className="w-8 h-8 text-pink-500 shrink-0" />
+          <Heart className="w-6 h-6 sm:w-8 sm:h-8 text-pink-500 shrink-0" />
           <div>
-            <h1 className="text-xl font-bold text-white">Digital Twin</h1>
-            <p className="text-sm text-gray-500">Identity scaffold for AI interactions</p>
+            <h1 className="text-lg sm:text-xl font-bold text-white">Digital Twin</h1>
+            <p className="hidden sm:block text-sm text-gray-500">Identity scaffold for AI interactions</p>
           </div>
         </div>
 
@@ -158,13 +163,7 @@ export default function DigitalTwin() {
         )}
       </div>
 
-      <TabPills
-        tabs={TABS}
-        activeTab={activeTab}
-        onChange={handleTabChange}
-        hideLabelOnMobile
-        ariaLabel="Digital Twin sections"
-      />
+      <SectionNav activeSection={activeTab} onChange={handleTabChange} />
 
       {/* Tab content */}
       <div className="flex-1 overflow-auto p-4">
