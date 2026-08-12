@@ -18,6 +18,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | Dev setup (PostgreSQL required), code conventions |
 | [GITHUB_ACTIONS.md](./GITHUB_ACTIONS.md) | CI and release workflows |
 | [VERSIONING.md](./VERSIONING.md) | SemVer + release process (`/do:release`) |
+| [SELF_UPDATE.md](./SELF_UPDATE.md) | Fork-aware self-update flow — release polling, `FORK_SYNC_REQUIRED`, fork sync |
 | [DEPS.md](./DEPS.md) | Dependency audit — every third-party package and its verdict |
 | [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) | Common runtime issues, known issues |
 | [GOALS_OPERATIONAL.md](./GOALS_OPERATIONAL.md) | Runtime operating principles the CoS agent reads (parsed by `goalProgress.js`) |

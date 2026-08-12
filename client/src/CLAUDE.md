@@ -13,6 +13,12 @@ These apply to React/Vite client code. Universal constraints (functional program
 - **Alphabetical navigation** - sidebar nav items in `Layout.jsx` are alphabetically ordered after the Dashboard+CyberCity top section and separator; children within collapsible sections are also alphabetical
 - **Reactive UI updates** - after mutations (delete, create, update), update local state directly instead of refetching the entire list from the server. Use `setState(prev => prev.filter(...))` or similar patterns for immediate feedback
 
+## API errors and save gating
+
+- **Silent vs. toasting API requests.** The `request()` helper in `client/src/services/apiCore.js` toasts errors by default. When a caller already owns its error UI — via `useAsyncAction` (which toasts on throw) or a `.catch(() => fallback)` that intentionally swallows the failure — pass `{ silent: true }` so the toast fires from one layer only. Give new API wrappers an `options` parameter so callers can opt in. **Custom catch ⇒ `silent: true`**, or the user sees two toasts back to back; no custom toast ⇒ omit `silent` and let the helper handle it.
+- **"Run Now" actions gate on saved state, not the form input.** When a settings page has a companion "Run this now" button that triggers server work reading *server-side* settings, gate the button on the *saved* value: track a parallel `saved*` state per dependent setting, update it on successful save, and disable the action while the form is dirty or a save is in flight. A tooltip-only warning is missed on touch and produces "I edited X and ran, but X didn't apply" bugs.
+- **In-flight saves gate dependent actions, not just the form.** When a field's PATCH is async and a button triggers server work that reads that field (auto-run, regenerate), disable the button while the PATCH is in flight — not merely while the input is dirty. Otherwise the user picks a value, the input clears, and they click before the server has persisted it. Track a `<field>Saving` boolean, set it before the PATCH, clear it in `.finally()`. Canonical example: `lengthProfileSaving` in `client/src/pages/PipelineIssue.jsx`.
+
 ## Routing and deep linking
 
 - **Linkable routes for all views** - tabbed pages use URL params, not local state (e.g., `/devtools/history` not `/devtools` with tab state)
