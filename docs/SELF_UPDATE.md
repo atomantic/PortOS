@@ -2,7 +2,7 @@
 
 How PortOS notices a new release and updates itself. PortOS is distributed software — many people run it, and a large share run it from a **personal fork**, so every step here is fork-aware. Breaking that assumption produces silent no-op updates.
 
-Code: `server/services/updateChecker.js`, `server/routes/update.js`, `server/lib/gitRemote.js`, `update.sh` / `update.ps1`, `client/src/components/settings/UpdateTab.jsx`.
+Code: `server/services/updateChecker.js`, `server/routes/update.js`, `server/lib/gitRemote.js`, `update.sh` / `update.ps1`, `client/src/components/apps/tabs/UpdateTab.jsx`.
 
 ## Release polling always targets upstream
 
@@ -21,7 +21,7 @@ The release-notification poll **always queries the upstream `atomantic/PortOS`**
 To prevent that confusion, `POST /api/update/execute` rejects fork runs with **412 `FORK_SYNC_REQUIRED`** unless either:
 
 - the request body sets `acknowledgeFork: true`, or
-- `lastForkSync.fullName` matches `remoteInfo.fullName` and is less than 10 minutes old.
+- `lastForkSync.fullName` matches `remoteInfo.fullName` (compared case-insensitively — GitHub owner/repo names are) and is less than 10 minutes old. The service computes this once as `status.forkSyncFresh` from `FORK_SYNC_FRESHNESS_MS`; the route and the UI both read that flag rather than re-implementing the time math.
 
 ## Syncing a fork
 
