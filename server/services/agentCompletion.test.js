@@ -4,7 +4,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('./cosAgentLifecycle.js', () => ({
   updateAgent: vi.fn().mockResolvedValue(undefined)
 }));
-vi.mock('./cos.js', () => ({
+// getConfig moved to cosState.js (cos.js re-exports it) to break an import
+// cycle, and agentCompletion.js imports it from there — so this mock has to
+// name cosState.js or it intercepts nothing and the real loadState() runs,
+// reading data/cos/ and asserting against the running install's config.
+// importOriginal keeps cosState's other exports intact; only getConfig is stubbed.
+vi.mock('./cosState.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   getConfig: vi.fn().mockResolvedValue({ appReviewCooldownMs: 1800000 })
 }));
 vi.mock('./appActivity.js', () => ({
