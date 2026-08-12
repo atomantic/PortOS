@@ -786,9 +786,18 @@ const MATERIAL_FAMILY_PRIORS = [
   },
 ];
 
-const MATERIAL_KEYWORD_FAMILIES = new Map(
-  MATERIAL_FAMILY_PRIORS.flatMap((prior) => prior.keywords.map((keyword) => [keyword, prior]))
-);
+// A keyword claimed by two families would silently resolve to whichever entry
+// is declared last, which is exactly the confident-nonsense the ambiguity rule
+// above exists to prevent — so a collision fails at import rather than at
+// review time.
+const MATERIAL_KEYWORD_FAMILIES = MATERIAL_FAMILY_PRIORS.reduce((map, prior) => {
+  for (const keyword of prior.keywords) {
+    const owner = map.get(keyword);
+    if (owner) throw new Error(`material family keyword "${keyword}" is claimed by both ${owner.family} and ${prior.family}`);
+    map.set(keyword, prior);
+  }
+  return map;
+}, new Map());
 
 // `basic` is unlit, so none of these channels reach the renderer at all; the
 // physical-only ones are parsed for every type but only forwarded by
@@ -841,7 +850,7 @@ const matchMaterialFamily = (id) => {
  *
  * @param {object} spec a spec that has already passed `threejsSculptSpecSchema`
  * @returns {{findings: Array, errorCount: number, warningCount: number, noteCount: number,
- *   materialCount: number, matchedMaterialCount: number, implausibleMaterialCount: number}}
+ *   materialCount: number, matchedMaterialCount: number}}
  */
 export function evaluateThreejsMaterialPlausibility(spec) {
   const materials = (spec?.materials && typeof spec.materials === 'object') ? spec.materials : {};
@@ -882,9 +891,10 @@ export function evaluateThreejsMaterialPlausibility(spec) {
     errorCount: 0,
     warningCount: findings.length,
     noteCount: 0,
+    // One finding per implausible material, so `warningCount` is also the count
+    // of materials that failed — no separate tally that could disagree with it.
     materialCount: Object.keys(materials).length,
     matchedMaterialCount: matched,
-    implausibleMaterialCount: findings.length,
   };
 }
 

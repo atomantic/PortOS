@@ -241,7 +241,6 @@ describe('ThreejsModelDetail material plausibility gate', () => {
   const implausible = {
     materialCount: 3,
     matchedMaterialCount: 2,
-    implausibleMaterialCount: 1,
     errorCount: 0,
     warningCount: 1,
     noteCount: 0,

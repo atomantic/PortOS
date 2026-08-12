@@ -166,7 +166,7 @@ async function executeGeneration({
       console.warn(`⚠️ Three.js model ${id} cross-part penetration: ${penetration.errorCount} error, ${penetration.warningCount} warning finding(s) over ${penetration.comparedPairCount} compared pair(s)`);
     }
     if (materialPlausibility.warningCount > 0) {
-      console.warn(`⚠️ Three.js model ${id} material plausibility: ${materialPlausibility.implausibleMaterialCount} of ${materialPlausibility.matchedMaterialCount} recognized material(s) carry values their substance does not support`);
+      console.warn(`⚠️ Three.js model ${id} material plausibility: ${materialPlausibility.warningCount} of ${materialPlausibility.matchedMaterialCount} recognized material(s) carry values their substance does not support`);
     }
     if (rig.articulationReady) {
       console.log(`🦴 Three.js model ${id} declares an articulation graph: ${rig.jointCount} joint(s), ${rig.socketCount} pivot socket(s)`);
