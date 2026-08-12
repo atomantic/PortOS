@@ -10,7 +10,9 @@ import {
   MUSE_STATE_SEQUENCES,
   MUSE_ANIMATION_FALLBACK,
   MUSE_SPEAKING_GESTURE,
-  MUSE_ROOT_MOTION_CLIPS
+  MUSE_ROOT_MOTION_CLIPS,
+  MODEL_CAPABLE_CLI_REVIEWERS,
+  reviewerLabel
 } from './constants';
 
 // These mirror the server's domainBudgets/domainAutonomy helpers so the UI's
@@ -103,5 +105,26 @@ describe('getDomainMode (existing helper, sanity)', () => {
     expect(getDomainMode(undefined, 'cos')).toBe(DEFAULT_DOMAIN_MODE);
     expect(getDomainMode({ domainAutonomy: { cos: 'bogus' } }, 'cos')).toBe(DEFAULT_DOMAIN_MODE);
     expect(getDomainMode({ domainAutonomy: { cos: 'off' } }, 'cos')).toBe('off');
+  });
+});
+
+// The Code Review Defaults help text renders one label per MODEL_CAPABLE_CLI_REVIEWERS
+// entry (#3839). A roster addition with no matching REVIEWER_OPTIONS row would fall
+// back to the raw slug and print "the codex, Claude, … reviewers" in the panel.
+describe('reviewerLabel', () => {
+  it('gives every model-capable CLI reviewer a display label', () => {
+    for (const slug of MODEL_CAPABLE_CLI_REVIEWERS) {
+      const label = reviewerLabel(slug);
+      expect(label).toBeTruthy();
+      expect(label).not.toBe(slug);
+    }
+  });
+
+  it('resolves the gemini alias to Antigravity', () => {
+    expect(reviewerLabel('gemini')).toBe(reviewerLabel('antigravity'));
+  });
+
+  it('passes an @username token through unchanged', () => {
+    expect(reviewerLabel('@octocat')).toBe('@octocat');
   });
 });

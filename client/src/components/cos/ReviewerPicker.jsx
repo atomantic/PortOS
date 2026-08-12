@@ -12,10 +12,10 @@ import {
   cleanReviewUsername,
   normalizeReviewUsernames,
   reviewerEffortLevels,
+  reviewerLabel,
   sanitizeReviewerModelInput
 } from './constants';
 
-const labelFor = (value) => REVIEWER_OPTIONS.find(o => o.value === value)?.label || value;
 const normalizeReviewerValue = (value) => value === 'gemini' ? 'antigravity' : value;
 
 /**
@@ -150,7 +150,7 @@ export default function ReviewerPicker({
       tone="warning"
       size="xs"
       className="shrink-0"
-      title={`${labelFor(token)}'s CLI binary wasn't found on this machine. It still runs (federation-wide config), but the review loop here will report it unsatisfied until it's installed.`}
+      title={`${reviewerLabel(token)}'s CLI binary wasn't found on this machine. It still runs (federation-wide config), but the review loop here will report it unsatisfied until it's installed.`}
     >
       not installed
     </Pill>
@@ -263,7 +263,7 @@ export default function ReviewerPicker({
   // the static ladder when it didn't, so a caller that passes no `modelOptions`
   // keeps a working (just unnarrowed) select rather than losing the cell.
   const renderEffortCell = (token) => {
-    const subject = labelFor(token);
+    const subject = reviewerLabel(token);
     const stored = efforts.get(token) ?? '';
     const ladder = reviewerEffortLevels(token);
     if (!ladder?.length) return renderNoPinCell(`${subject} has no reasoning-effort control`);
@@ -348,8 +348,8 @@ export default function ReviewerPicker({
   // messaging so a pre-fetch render doesn't accuse a healthy backend of being
   // empty.
   const renderModelCell = (token) => {
-    if (!MODEL_SELECTABLE_REVIEWERS.includes(token)) return renderNoPinCell(`${labelFor(token)} takes no model`);
-    const subject = labelFor(token);
+    if (!MODEL_SELECTABLE_REVIEWERS.includes(token)) return renderNoPinCell(`${reviewerLabel(token)} takes no model`);
+    const subject = reviewerLabel(token);
     const value = models.get(token) ?? '';
     const options = modelOptions?.optionsByReviewer?.[token] || [];
     const inputId = `${id}-model-${token}`;
@@ -493,7 +493,7 @@ export default function ReviewerPicker({
                       disabled={disabled || index === 0}
                       onClick={() => move(index, -1)}
                       className="text-gray-500 hover:text-white disabled:opacity-30 disabled:hover:text-gray-500"
-                      aria-label={`Move ${labelFor(value)} earlier`}
+                      aria-label={`Move ${reviewerLabel(value)} earlier`}
                     >
                       <ChevronUp size={12} />
                     </button>
@@ -502,13 +502,13 @@ export default function ReviewerPicker({
                       disabled={disabled || index === selected.length - 1}
                       onClick={() => move(index, 1)}
                       className="text-gray-500 hover:text-white disabled:opacity-30 disabled:hover:text-gray-500"
-                      aria-label={`Move ${labelFor(value)} later`}
+                      aria-label={`Move ${reviewerLabel(value)} later`}
                     >
                       <ChevronDown size={12} />
                     </button>
                   </div>
                   <span className="flex items-center gap-1 min-w-0 col-span-2 sm:col-span-1">
-                    <span className="text-xs text-gray-300 truncate">{labelFor(value)}</span>
+                    <span className="text-xs text-gray-300 truncate">{reviewerLabel(value)}</span>
                     {renderInstalledBadge(value)}
                   </span>
                   <span className={CELL_LABEL_CLASS}>Model</span>
@@ -517,19 +517,19 @@ export default function ReviewerPicker({
                   <div className="min-w-0">{renderEffortCell(value)}</div>
                   <span className={CELL_LABEL_CLASS}>Optional</span>
                   <div>
-                    {renderOptToggle(value, labelFor(value), isOptional(value)
-                      ? `${labelFor(value)} is non-blocking (~opt): an inconclusive verdict from it won't block the merge. Click to make it blocking.`
-                      : `${labelFor(value)} gates the merge. Click to make it non-blocking (~opt) — its inconclusive verdicts won't block the merge (a hard failure still does).`)}
+                    {renderOptToggle(value, reviewerLabel(value), isOptional(value)
+                      ? `${reviewerLabel(value)} is non-blocking (~opt): an inconclusive verdict from it won't block the merge. Click to make it blocking.`
+                      : `${reviewerLabel(value)} gates the merge. Click to make it non-blocking (~opt) — its inconclusive verdicts won't block the merge (a hard failure still does).`)}
                   </div>
                   <span className={CELL_LABEL_CLASS}>Max iterations</span>
-                  <div>{renderMaxRounds(value, labelFor(value))}</div>
+                  <div>{renderMaxRounds(value, reviewerLabel(value))}</div>
                   <div className="col-span-2 sm:col-span-1 justify-self-end">
                     <button
                       type="button"
                       disabled={disabled}
                       onClick={() => remove(value)}
                       className="text-gray-500 hover:text-port-error"
-                      aria-label={`Remove ${labelFor(value)}`}
+                      aria-label={`Remove ${reviewerLabel(value)}`}
                     >
                       <X size={12} />
                     </button>

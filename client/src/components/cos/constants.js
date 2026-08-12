@@ -13,6 +13,7 @@ import {
   Newspaper,
   ChartGantt
 } from 'lucide-react';
+import { normalizeReviewerSlug } from '../../lib/reviewerPins';
 
 export const TABS = [
   { id: 'briefing', label: 'Briefing', icon: Newspaper },
@@ -208,6 +209,13 @@ export const REVIEWER_OPTIONS = [
   { value: 'lmstudio', label: 'LM Studio', description: 'Local LM Studio model reviews the diff (set model on AI Providers)' },
   { value: 'ollama', label: 'Ollama', description: 'Local Ollama model reviews the diff (set model on AI Providers)' }
 ];
+// The display label for a reviewer token — the one place UI copy turns a
+// reviewer slug into prose, so a roster addition renders everywhere without a
+// literal edit. Resolves the `gemini` alias; an `@username` (or any token with no
+// option row) falls through to itself.
+export const reviewerLabel = (value) =>
+  REVIEWER_OPTIONS.find(o => o.value === normalizeReviewerSlug(value))?.label || value;
+
 // The per-reviewer PIN vocabularies (which reviewers take a model or an effort,
 // and the values each accepts) live in `client/src/lib/reviewerPins.js` and are
 // re-exported here so existing imports keep working. They are NOT defined in this

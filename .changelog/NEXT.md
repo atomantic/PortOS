@@ -25,3 +25,4 @@
 ## Changed
 
 - Notification panel placement now goes through the shared popover-positioning hook that the theme switcher beside it already used, so it clamps into the viewport and flips above/below on its own instead of relying on hand-written positioning.
+- The Code Review Defaults panel now names every CLI reviewer in its help text, generated from the reviewer roster itself — the sentence used to spell them out by hand and fell behind twice as new reviewers shipped, telling users their CLI reviewers ran a different way than they do.

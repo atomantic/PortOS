@@ -8,7 +8,16 @@ import { reviewerModelsFromDefaults, reviewerModelsToDefaults, reviewerEffortsFr
 import {
   DEFAULT_REVIEWERS,
   DEFAULT_REVIEW_STOP_MODE,
+  MODEL_CAPABLE_CLI_REVIEWERS,
+  reviewerLabel,
 } from '../cos/constants';
+
+// The CLI reviewers named in the help text below, derived from the roster the
+// schema and `pickCodeReviewDefaults` generate from rather than spelled out — the
+// literal sentence drifted twice as reviewers shipped (#3839). Adding a reviewer
+// to MODEL_CAPABLE_CLI_REVIEWERS now updates this copy with no edit here.
+const CLI_REVIEWER_LIST = new Intl.ListFormat('en', { style: 'long', type: 'conjunction' })
+  .format(MODEL_CAPABLE_CLI_REVIEWERS.map(reviewerLabel));
 
 // Global Code Review Defaults — the chain the Review Loop uses when a task or
 // task-type config didn't pin its own reviewers. Lives at the top of the AI
@@ -80,7 +89,7 @@ export default function CodeReviewDefaultsPanel() {
         <h2 className="text-base font-semibold text-white">Code Review Defaults</h2>
       </div>
       <p className="text-xs text-gray-500">
-        Default Review Loop reviewer chain — used by ad-hoc CoS tasks and task-type schedules that haven't pinned their own. Local-LLM reviewers route the diff through PortOS's local code-review endpoint; the Codex, Claude, Antigravity, and Grok reviewers invoke their CLI directly. Each runs the model pinned on its row (Claude also supports an Ollama-backed CLI for local-only setups — type one of your installed Ollama models).
+        Default Review Loop reviewer chain — used by ad-hoc CoS tasks and task-type schedules that haven't pinned their own. Local-LLM reviewers route the diff through PortOS's local code-review endpoint; the {CLI_REVIEWER_LIST} reviewers invoke their CLI directly. Each runs the model pinned on its row (Claude also supports an Ollama-backed CLI for local-only setups — type one of your installed Ollama models).
       </p>
 
       {loading ? (
