@@ -2359,7 +2359,9 @@ describe('getClaudeMdContext — nested CLAUDE.md discovery (#3866)', () => {
     // Ignored trees: each carries a CLAUDE.md that must NOT be spliced.
     writeClaudeMd('node_modules/some-dep', '# Vendored dep rules');
     writeClaudeMd('data/cos/worktrees/claim-issue-1', '# Runtime worktree rules');
+    // Submodule / vendored checkout — recognized by its own `.git`, not by path.
     writeClaudeMd('lib/slashdo', '# Submodule rules');
+    writeFileSync(join(workspace, 'lib/slashdo/.git'), 'gitdir: ../../.git/modules/slashdo\n');
     writeClaudeMd('.hidden', '# Dot dir rules');
     // Past the depth cap (depth 6): a/b/c/d/e/f/CLAUDE.md.
     writeClaudeMd('a/b/c/d/e/f', '# Too deep rules');
@@ -2398,6 +2400,18 @@ describe('getClaudeMdContext — nested CLAUDE.md discovery (#3866)', () => {
     expect(section).not.toContain('Submodule rules');
     expect(section).not.toContain('Dot dir rules');
     expect(section).not.toContain('Too deep rules');
+  });
+
+  it('recognizes a submodule by its own .git, not by a hardcoded path', async () => {
+    // `lib/slashdo` above is skipped only because it carries a `.git`. A sibling
+    // under the same parent, with no `.git`, must still be spliced — otherwise
+    // the skip is really matching `lib/` and the structural check is vacuous.
+    writeClaudeMd('lib/inhouse', '# In-house lib rules');
+    const section = await getClaudeMdContext(workspace);
+    expect(section).toContain('### Project Instructions (lib/inhouse/CLAUDE.md)');
+    expect(section).toContain('In-house lib rules');
+    expect(section).not.toContain('Submodule rules');
+    rmSync(join(workspace, 'lib/inhouse'), { recursive: true, force: true });
   });
 
   it('caps the number of nested files spliced', async () => {

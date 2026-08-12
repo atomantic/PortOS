@@ -123,14 +123,14 @@ const NESTED_CLAUDE_MD_MAX_DEPTH = 5;
 const NESTED_CLAUDE_MD_MAX_FILES = 10;
 const NESTED_CLAUDE_MD_MAX_DIRS = 2000;
 // Dot-directories are skipped wholesale (covers `.git`), so these are the
-// non-dot trees that are either vendored, generated, or runtime state.
+// non-dot trees that are either vendored, generated, or runtime state. The list
+// is deliberately polyglot: an agent workspace is any app PortOS manages, not
+// just this repo, so a Rust `target/` or a Go `vendor/` would otherwise burn the
+// directory budget on generated files.
 const NESTED_CLAUDE_MD_SKIP_DIRS = new Set([
   'node_modules', 'data', 'data.reference', 'dist', 'build', 'coverage',
-  'out', 'venv', '__pycache__',
+  'out', 'obj', 'bin', 'target', 'vendor', 'tmp', 'venv', 'Pods', '__pycache__',
 ]);
-// Workspace-relative paths skipped by exact match — `lib/slashdo` is a git
-// submodule carrying its own CLAUDE.md that is not this project's instructions.
-const NESTED_CLAUDE_MD_SKIP_PATHS = new Set(['lib/slashdo']);
 
 /**
  * Collect workspace-relative paths of nested `CLAUDE.md` files (the root one is
@@ -152,6 +152,12 @@ async function findNestedClaudeMdFiles(workspaceDir) {
 
     const entries = await readdir(dir, { withFileTypes: true }).catch(() => null);
     if (!entries) return;
+    // A nested directory carrying its own `.git` is a submodule or vendored
+    // checkout (`lib/slashdo` here) — its CLAUDE.md is that project's
+    // instructions, not this workspace's. Detected structurally rather than by
+    // an allowlist of paths, which would silently stop matching the moment the
+    // workspace root is something other than this repo's root.
+    if (depth > 0 && entries.some((entry) => entry.name === '.git')) return;
     const sorted = [...entries].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
     const subdirs = [];
@@ -160,7 +166,6 @@ async function findNestedClaudeMdFiles(workspaceDir) {
       if (entry.isDirectory()) {
         if (entry.name.startsWith('.')) continue;
         if (NESTED_CLAUDE_MD_SKIP_DIRS.has(entry.name)) continue;
-        if (NESTED_CLAUDE_MD_SKIP_PATHS.has(rel)) continue;
         subdirs.push({ path: join(dir, entry.name), rel });
         // Symlinked directories are deliberately NOT followed — a link back up
         // the tree would loop, and the depth cap alone wouldn't make the result
