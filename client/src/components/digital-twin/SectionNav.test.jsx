@@ -33,6 +33,11 @@ describe('digital-twin section taxonomy', () => {
     expect(sectionGroupId('not-a-section')).toBe(SECTION_GROUPS[0].id);
   });
 
+  it('yields an empty section list for an unknown group instead of throwing', () => {
+    expect(groupSections(undefined)).toEqual([]);
+    expect(groupSections({ id: 'nope' })).toEqual([]);
+  });
+
   it('expands a group to its tab objects in declared order', () => {
     const sources = groupSections(SECTION_GROUPS.find((g) => g.id === 'sources'));
     expect(sources.map((t) => t.id)).toEqual(['documents', 'import', 'accounts', 'interview', 'autobiography', 'enrich']);

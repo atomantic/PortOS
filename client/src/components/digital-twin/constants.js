@@ -80,11 +80,18 @@ export const SECTION_GROUPS = [
   { id: 'legacy', label: 'Legacy', icon: Archive, sectionIds: ['export', 'legacy', 'time-capsule'] }
 ];
 
+// Resolved once at module load: both constants are static, so the nav never
+// re-walks them per render.
 const TABS_BY_ID = new Map(TABS.map((t) => [t.id, t]));
+const GROUP_SECTIONS = new Map(SECTION_GROUPS.map((g) => [
+  g.id,
+  g.sectionIds.map((id) => TABS_BY_ID.get(id)).filter(Boolean),
+]));
 
-// The group's sections as full tab objects, in group order.
+// The group's sections as full tab objects, in group order. An unknown group
+// yields an empty list rather than throwing.
 export function groupSections(group) {
-  return group.sectionIds.map((id) => TABS_BY_ID.get(id)).filter(Boolean);
+  return GROUP_SECTIONS.get(group?.id) ?? [];
 }
 
 // Which group owns a section id. Falls back to the first group so an unknown or
