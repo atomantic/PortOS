@@ -1954,6 +1954,49 @@ function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW
  * return this IS a Claude session, so `/simplify` and `/do:pr` are both safe to
  * emit without a second provider check.
  */
+/**
+ * Resolve the review-loop invocation shared by buildTuiCompletionSection and
+ * buildCliCompletionSection: the normalized reviewer usernames, the
+ * `--review-with ...` argument text, and the effort-pin note. Both callers
+ * used to re-derive this identical trio from the same 8-field reviewer-config
+ * bundle independently.
+ */
+function resolveReviewInvocation({ willOpenPR, runsReviewLoop, reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, reviewStopMode, reviewerApplies }) {
+  const reviewUsernames = normalizeReviewUsernames(usernames);
+  const reviewArgs = willOpenPR
+    ? (runsReviewLoop ? buildReviewWithArgs(reviewers, { stopMode: reviewStopMode, reviewerApplies, usernames: reviewUsernames, optionalReviewers, reviewerMaxRounds, reviewerModels }) : '--review-with none')
+    : '';
+  // Effort pins can't ride `--review-with` (no suffix for them in slashdo's
+  // grammar), so they're stated as an instruction on the invocation instead.
+  const effortNote = willOpenPR && runsReviewLoop ? buildReviewerEffortNote(reviewers, reviewerEfforts) : '';
+  return { reviewUsernames, reviewArgs, effortNote };
+}
+
+/**
+ * The `.agent-done` sentinel-write instruction block shared by
+ * buildTuiCompletionSection and buildManualTuiCompletionSection: the "write a
+ * short summary, then stop" instruction plus the fenced heredoc template.
+ * Returns the lines to splice into the caller's own line array — output must
+ * stay byte-identical since this is agent-facing prompt text.
+ */
+function buildSentinelWriteSteps(stepNumber, sentinelPath, sentinelTail) {
+  return [
+    `${stepNumber}. Write a short markdown summary (~5–15 lines) to the completion sentinel, then stop — this sentinel is the done signal. PortOS polls it every 2s, finalizes the run, and closes the session for you. Do NOT run \`/quit\` (it's a UI command, not something you can invoke) and do NOT wait for anything after writing the sentinel.`,
+    '',
+    '   ```bash',
+    `   cat > "${sentinelPath}" <<'EOF'`,
+    '   ## Summary',
+    '   <one-sentence statement of what was accomplished>',
+    '',
+    '   ## Changes',
+    '   - <key file or area>: <what changed and why>',
+    '',
+    sentinelTail,
+    '   EOF',
+    '   ```'
+  ];
+}
+
 function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, simplifyEnabled, sentinelPath, slashdoFree = false, branchName = null, baseBranch = null, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewerEfforts = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
   const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
   const runsReviewLoop = prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE;
@@ -1964,13 +2007,10 @@ function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.M
     return buildManualTuiCompletionSection({ willOpenPR, prCompletion, simplifyEnabled, sentinelPath, branchName, baseBranch, leavePrOpen });
   }
   const cmd = willOpenPR ? '/do:pr' : '/do:push';
-  const reviewUsernames = normalizeReviewUsernames(usernames);
   // `/do:pr` may inherit a saved `review-with` default. Explicitly opt out
   // when the task's Review Loop control is off so that default cannot start a
   // Copilot (or other external) review unexpectedly.
-  const reviewArgs = willOpenPR
-    ? (runsReviewLoop ? buildReviewWithArgs(reviewers, { stopMode: reviewStopMode, reviewerApplies, usernames: reviewUsernames, optionalReviewers, reviewerMaxRounds, reviewerModels }) : '--review-with none')
-    : '';
+  const { reviewUsernames, reviewArgs, effortNote } = resolveReviewInvocation({ willOpenPR, runsReviewLoop, reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, reviewStopMode, reviewerApplies });
   // A saved slashdo `merge: true` default would otherwise merge a PR that must
   // stay open — dropping our own merge steps isn't enough, `/do:pr` has to be
   // told not to merge (see lib/prDisposition.js).
@@ -1983,9 +2023,6 @@ function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.M
         ? ' — `/do:pr` runs the Copilot review loop after the PR opens.'
         : ` — \`/do:pr\` runs the review loop for ${reviewerListLabel} in order after the PR opens.`)
     : (willOpenPR ? ' — external review is disabled for this task.' : '');
-  // Effort pins can't ride `--review-with` (no suffix for them in slashdo's
-  // grammar), so they're stated as an instruction on the invocation instead.
-  const effortNote = willOpenPR && runsReviewLoop ? buildReviewerEffortNote(reviewers, reviewerEfforts) : '';
   // Reached only for a Claude TUI (a non-Claude one took the slashdoFree branch
   // above), so `/simplify` — a Claude Code built-in — is invokable here.
   const simplifyStep = simplifyEnabled ? '1. `/simplify`' : '1. (simplify disabled — skip)';
@@ -2006,19 +2043,7 @@ function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.M
     `2. \`${cmd}${reviewerArg}\`${reviewSuffix}`,
     ...(effortNote ? [`   ${effortNote}`] : []),
     ...merge.lines,
-    `${sentinelStep}. Write a short markdown summary (~5–15 lines) to the completion sentinel, then stop — this sentinel is the done signal. PortOS polls it every 2s, finalizes the run, and closes the session for you. Do NOT run \`/quit\` (it's a UI command, not something you can invoke) and do NOT wait for anything after writing the sentinel.`,
-    '',
-    '   ```bash',
-    `   cat > "${sentinelPath}" <<'EOF'`,
-    '   ## Summary',
-    '   <one-sentence statement of what was accomplished>',
-    '',
-    '   ## Changes',
-    '   - <key file or area>: <what changed and why>',
-    '',
-    sentinelTail,
-    '   EOF',
-    '   ```'
+    ...buildSentinelWriteSteps(sentinelStep, sentinelPath, sentinelTail)
   ].join('\n');
 }
 
@@ -2068,21 +2093,7 @@ function buildManualTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLET
     lines.push(`${step++}. Do NOT push this worktree branch yourself. PortOS will merge it back after completion.`);
   }
 
-  lines.push(
-    `${step}. Write a short markdown summary (~5–15 lines) to the completion sentinel, then stop — this sentinel is the done signal. PortOS polls it every 2s, finalizes the run, and closes the session for you. Do NOT run \`/quit\` (it's a UI command, not something you can invoke) and do NOT wait for anything after writing the sentinel.`,
-    '',
-    '   ```bash',
-    `   cat > "${sentinelPath}" <<'EOF'`,
-    '   ## Summary',
-    '   <one-sentence statement of what was accomplished>',
-    '',
-    '   ## Changes',
-    '   - <key file or area>: <what changed and why>',
-    '',
-    sentinelTail,
-    '   EOF',
-    '   ```',
-  );
+  lines.push(...buildSentinelWriteSteps(step, sentinelPath, sentinelTail));
 
   return lines.join('\n');
 }
@@ -2100,16 +2111,13 @@ function buildManualTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLET
 function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, hasSlashdo = false, simplifyEnabled = false, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewerEfforts = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
   const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
   const runsReviewLoop = prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE;
-  const reviewUsernames = normalizeReviewUsernames(usernames);
   if (hasSlashdo && worktreeInfo && willOpenPR) {
     const lines = ['## Completion', 'When finished, run these in order:'];
     let step = 1;
     if (simplifyEnabled) {
       lines.push(`${step++}. \`/simplify\` — review the changed code for reuse, quality, and efficiency, and fix any findings.`);
     }
-    const reviewArgs = runsReviewLoop
-      ? buildReviewWithArgs(reviewers, { stopMode: reviewStopMode, reviewerApplies, usernames: reviewUsernames, optionalReviewers, reviewerMaxRounds, reviewerModels })
-      : '--review-with none';
+    const { reviewUsernames, reviewArgs, effortNote } = resolveReviewInvocation({ willOpenPR, runsReviewLoop, reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, reviewStopMode, reviewerApplies });
     // `--no-merge` overrides a saved slashdo `merge: true` default, which would
     // otherwise merge a PR this task must leave open (see lib/prDisposition.js).
     const reviewerArg = (reviewArgs ? ` ${reviewArgs}` : '') + ((leavePrOpen || policyLeavesOpen) ? ' --no-merge' : '');
@@ -2121,7 +2129,6 @@ function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR
     lines.push(`${step++}. \`/do:pr${reviewerArg}\` — commits your changes, pushes the branch, and opens a pull request against the default branch ${completionNote}`);
     // Effort pins have no `--review-with` suffix to ride, so they're stated as an
     // instruction on the invocation instead (see buildReviewerEffortNote).
-    const effortNote = runsReviewLoop ? buildReviewerEffortNote(reviewers, reviewerEfforts) : '';
     if (effortNote) lines.push(`   ${effortNote}`);
     // Merge steps follow — review-gated with a loop, CI-gated without one — unless
     // this PR is a human's to land (JIRA-tracked; see lib/prDisposition.js).

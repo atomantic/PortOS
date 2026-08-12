@@ -15,17 +15,16 @@
  * - cosHealthMonitor.js  — daemon health checks (PM2/memory, auto-restart)
  */
 
-import { readFile, writeFile, readdir, rm } from 'fs/promises';
+import { readFile, writeFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { v4 as uuidv4 } from '../lib/uuid.js';
 import { getActiveProvider } from './providers.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 import { isRetryHeld, isStaleRetryHold } from '../lib/taskRetryHold.js';
 import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, clearStaleActiveAgents } from './appActivity.js';
 import { getActiveApps } from './apps.js';
 import { getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights } from './taskLearning.js';
-import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats } from './eventScheduler.js';
+import { schedule as scheduleEvent, cancel as cancelEvent } from './eventScheduler.js';
 import { generateProactiveTasks as generateMissionTasks } from './missions.js';
 import { recordJobExecution } from './autonomousJobs.js';
 import { atomicWrite, safeJSONParse, sleep } from '../lib/fileUtils.js';
@@ -39,7 +38,7 @@ import { getDomainBudgetStatus } from './domainUsage.js';
 import { useRunner } from './agentState.js';
 
 // Shared state management (extracted to avoid circular deps)
-import { loadState, saveState, withStateLock, ensureDirectories, isImprovementEnabled, canQueueImprovementTasks, AGENTS_DIR, REPORTS_DIR, SCRIPTS_DIR, ROOT_DIR, isDaemonRunning, setDaemonRunning } from './cosState.js';
+import { loadState, saveState, withStateLock, ensureDirectories, isImprovementEnabled, canQueueImprovementTasks, SCRIPTS_DIR, isDaemonRunning, setDaemonRunning } from './cosState.js';
 
 // Events and logging (canonical source: cosEvents.js)
 import { cosEvents, emitLog } from './cosEvents.js';
@@ -74,7 +73,7 @@ export { runHealthCheck, getHealthStatus };
 // backward compat with `import * as cos` and the cos route handlers. The store
 // emits `tasks:changed`; init() below turns that into tryImmediateSpawn /
 // dequeueNextTask so the spawn-side logic stays here, not in the store.
-import { firstLine, PRIORITY_VALUES, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks } from './cosTaskStore.js';
+import { firstLine, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks } from './cosTaskStore.js';
 export { firstLine, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks };
 import { ensureInstanceId } from './instances.js';
 import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner } from './cosTaskClaim.js';
@@ -172,13 +171,9 @@ export async function getStatus() {
   };
 }
 
-/**
- * Get current configuration
- */
-export async function getConfig() {
-  const state = await loadState();
-  return state.config;
-}
+// Get current configuration (moved to cosState.js to break an import cycle;
+// re-exported here for backward compat with `import * as cos`).
+export { getConfig } from './cosState.js';
 
 /**
  * Update configuration

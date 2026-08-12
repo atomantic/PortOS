@@ -6,7 +6,7 @@
  */
 
 import { updateAgent } from './cosAgentLifecycle.js';
-import { getConfig } from './cos.js';
+import { getConfig } from './cosState.js';
 import { startAppCooldown, markAppReviewCompleted } from './appActivity.js';
 import { emitLog } from './cosEvents.js';
 import { extractAndStoreMemories } from './memoryExtractor.js';

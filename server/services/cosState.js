@@ -146,6 +146,14 @@ export function canQueueImprovementTasks(state) {
   return Boolean(state.config.idleReviewEnabled) && getDomainMode(state.config, 'cos') === 'execute';
 }
 
+/**
+ * Get current configuration
+ */
+export async function getConfig() {
+  const state = await loadState();
+  return state.config;
+}
+
 export async function loadState() {
   if (stateCache) return stateCache;
 
