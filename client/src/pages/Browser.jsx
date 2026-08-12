@@ -15,7 +15,7 @@ import {
 import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';
 import { FormField } from '../components/ui/FormField';
-import { formatBytes, formatDateTime } from '../utils/formatters';
+import { formatBytes, formatDateTime, formatDurationMs } from '../utils/formatters';
 
 const POLL_INTERVAL = 5000;
 
@@ -28,15 +28,7 @@ function deriveMacAppBundle(chromePath) {
 
 function formatUptime(timestamp) {
   if (!timestamp) return '-';
-  const ms = Date.now() - timestamp;
-  const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ${minutes % 60}m`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ${hours % 24}h`;
+  return formatDurationMs(Date.now() - timestamp);
 }
 
 export default function BrowserPage() {

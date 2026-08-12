@@ -7,6 +7,7 @@ import { existsSync } from 'fs';
 import { createTailscaleServers } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
 import { getBuildId, getStampedIndexHtml } from './lib/buildId.js';
+import { PORTS } from './lib/ports.js';
 
 import alertsRoutes from './routes/alerts.js';
 import appleHealthRoutes from './routes/appleHealth.js';
@@ -156,7 +157,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 5555;
+const PORT = process.env.PORT || PORTS.API;
 const HOST = process.env.HOST || '0.0.0.0';
 
 // Delegates HTTPS / HTTP-mirror wiring to lib/tailscale-https.js — see there.
