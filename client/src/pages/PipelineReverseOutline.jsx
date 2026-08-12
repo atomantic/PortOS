@@ -21,6 +21,7 @@ import {
   pipelineReverseOutlineSseUrl,
 } from '../services/api';
 import { usePipelineProgress } from '../hooks/usePipelineProgress';
+import useUrlParams from '../hooks/useUrlParams';
 import { buildPlotlineGrid, sceneComponentCount } from '../lib/reverseOutlineGrid.js';
 
 const RUN_ENDED = new Set(['complete', 'canceled', 'cancelled', 'error']);
@@ -33,7 +34,9 @@ export default function PipelineReverseOutline() {
   const [loading, setLoading] = useState(true);
   const [active, setActive] = useState(false);
   const [starting, setStarting] = useState(false);
-  const [selected, setSelected] = useState(null); // selected scene (detail panel)
+  // Scene selection lives in the URL (`?scene=<sceneId>`) so the open detail
+  // panel is shareable, bookmarkable, and survives a reload.
+  const [searchParams, updateParams] = useUrlParams();
   const activeRunIdRef = useRef(null);
 
   // Load series + outline, and re-attach to an in-flight run on (re)mount.
@@ -81,7 +84,8 @@ export default function PipelineReverseOutline() {
 
   const handleGenerate = async (force) => {
     setStarting(true);
-    setSelected(null);
+    // The regenerated outline mints new scene ids — drop the stale selection.
+    updateParams({ scene: null }, { replace: true });
     // Await the POST so the run is registered server-side BEFORE the SSE
     // subscription connects — otherwise the progress stream 404s on attach.
     const res = await generateReverseOutline(seriesId, { force }, { silent: true }).catch((err) => {
@@ -111,6 +115,10 @@ export default function PipelineReverseOutline() {
   const hasOutline = outline?.status === 'complete' && scenes.length > 0;
   const busy = active || starting;
   const { rows } = buildPlotlineGrid(scenes, plotlines);
+  // A stale/deleted `?scene=` id resolves to null — the detail panel falls back
+  // to its "click a marker" placeholder instead of rendering a blank card.
+  const selected = scenes.find((s) => s.id === searchParams.get('scene')) || null;
+  const handleSelect = (scene) => updateParams({ scene: scene.id });
 
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6">
@@ -161,7 +169,7 @@ export default function PipelineReverseOutline() {
       ) : (
         <div className="flex flex-col gap-4">
           <PlotlineLegend rows={rows} />
-          <PlotlineGrid rows={rows} scenes={scenes} selected={selected} onSelect={setSelected} />
+          <PlotlineGrid rows={rows} scenes={scenes} selected={selected} onSelect={handleSelect} />
           <SceneDetail scene={selected} plotlines={plotlines} seriesId={seriesId} navigate={navigate} />
           <p className="text-xs text-gray-500">
             {scenes.length} scenes · {plotlines.length} plotlines
