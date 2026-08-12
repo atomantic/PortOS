@@ -291,7 +291,7 @@ Track your biological self alongside your digital one.
 
 ### Requirements
 
-- Node.js 22.12 or later (24 is what CI and `.nvmrc` use; Vite 8 requires ≥20.19)
+- Node.js 22.12 or later (24 is what CI and `.nvmrc` use; Vite 8 requires ≥20.19). `npm run setup`, `npm start` and `npm run dev` check this first and stop immediately on an older Node — a bare `npm install` only warns, so use the commands below.
 - Git
 - PostgreSQL, either installed locally or available through Docker. PortOS requires a healthy database; the setup command provisions the supported local or Docker-backed instance.
 

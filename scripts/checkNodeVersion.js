@@ -23,7 +23,8 @@
  * and is asserted to be >= this floor, not equal to it.
  */
 
-import { pathToFileURL } from 'url';
+import { realpathSync } from 'fs';
+import { fileURLToPath } from 'url';
 
 /** The hard floor. Changing the version means changing exactly this string. */
 export const MIN_NODE = '22.12.0';
@@ -76,9 +77,25 @@ export function assertNodeVersion({
   return false;
 }
 
-// Runnable directly: `node scripts/checkNodeVersion.js`. pathToFileURL rather
-// than a `file://` template so a repo path containing a space or a non-ASCII
-// character still matches (it percent-encodes; the template does not).
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  assertNodeVersion();
+// Runnable directly: `node scripts/checkNodeVersion.js`.
+//
+// Both sides are realpath'd before comparing. Node's ESM loader resolves
+// symlinks when it builds `import.meta.url`, but `process.argv[1]` is whatever
+// the caller typed — so a repo reached through a symlinked parent (a checkout
+// under a symlinked home, /tmp → /private/tmp on macOS, a symlinked worktree)
+// makes the two spellings differ and the gate would silently no-op, exiting 0
+// on an unsupported Node. fileURLToPath/realpathSync also handle paths with
+// spaces or non-ASCII characters, which a `file://` string template does not.
+const invokedPath = process.argv[1];
+if (invokedPath) {
+  const resolve = (p) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return p;
+    }
+  };
+  if (resolve(fileURLToPath(import.meta.url)) === resolve(invokedPath)) {
+    assertNodeVersion();
+  }
 }
