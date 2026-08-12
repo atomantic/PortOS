@@ -37,7 +37,9 @@ const readJson = (rel) => JSON.parse(read(rel));
  * and clears a 22.12 floor; `22.10.0` names a real version and does not.
  */
 function pinSatisfiesFloor(pin) {
-  const raw = String(pin).trim();
+  // Strip a leading `v` before the shape test below, or `v22.10.0` would read
+  // as "no explicit minor" and be waved through as a release-line pin.
+  const raw = String(pin).trim().replace(/^v/, '');
   const [major] = parseVersion(raw);
   if (major !== MIN_MAJOR) return major > MIN_MAJOR;
   if (!/^\d+\.\d/.test(raw)) return true;
@@ -61,6 +63,7 @@ describe('Node version floor has exactly one owner (issue #3863)', () => {
     expect(pinSatisfiesFloor('22')).toBe(true); // the 22 line resolves above 22.12
     expect(pinSatisfiesFloor('22.12.0')).toBe(true);
     expect(pinSatisfiesFloor('22.10.0')).toBe(false);
+    expect(pinSatisfiesFloor('v22.10.0')).toBe(false);
     expect(pinSatisfiesFloor('20.19.0')).toBe(false);
     expect(pinSatisfiesFloor('18')).toBe(false);
   });

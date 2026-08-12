@@ -85,5 +85,6 @@ describe('assertNodeVersion', () => {
   it('does not double up the v prefix', () => {
     expect(unsupportedNodeMessage('v18.0.0')).toContain('found v18.0.0');
     expect(unsupportedNodeMessage('18.0.0')).toContain('found v18.0.0');
+    expect(unsupportedNodeMessage(' v18.0.0 ')).toContain('found v18.0.0');
   });
 });

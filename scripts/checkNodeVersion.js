@@ -57,7 +57,7 @@ export function satisfiesMinNode(version = process.versions.node) {
 
 /** The one-line failure message, mirroring the shape the shell gates print. */
 export function unsupportedNodeMessage(version = process.versions.node) {
-  return `Node.js ${MIN_NODE}+ required (found v${String(version).replace(/^v/, '')}) — see .nvmrc`;
+  return `Node.js ${MIN_NODE}+ required (found v${String(version).trim().replace(/^v/, '')}) — see .nvmrc`;
 }
 
 /**
