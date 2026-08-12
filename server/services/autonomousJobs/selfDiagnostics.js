@@ -94,6 +94,8 @@ export function computeFailingCategories(byTaskType, { minCompleted = 1, now = D
  * Distinct from `fileUtils.formatDuration` (which floors to whole minutes and
  * renders sub-minute as "0m") and the client `formatDurationMs`: diagnostics
  * durations are often seconds, and absent must read as `—`, not a zero duration.
+ * SHARED — also renders the churn issue body in `services/agentChurn.js`
+ * (`buildChurnIssueBody`). Changing the output here changes both filed issues.
  */
 export function formatDurationShort(ms) {
   if (!Number.isFinite(ms) || ms < 0) return '—'

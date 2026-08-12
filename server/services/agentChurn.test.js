@@ -118,6 +118,47 @@ describe('churn issue copy', () => {
     expect(body).not.toMatch(/\/Users\//);
     expect(body).not.toMatch(/origin\//);
   });
+
+  // The durations are rendered by `formatDurationShort`, which agentChurn shares
+  // with selfDiagnostics. Pin the rendered strings here so a diagnostics-motivated
+  // tweak to that formatter can't silently reword the auto-filed churn issue.
+  it('renders the durations through the shared short-duration formatter', () => {
+    const body = buildChurnIssueBody({
+      taskType: 'self-improve:branch-reconcile',
+      churn: {
+        reason: 'short-lived-burst',
+        windowCompleted: 24,
+        windowMs: CHURN_WINDOW_MS,
+        shortLivedCount: 24,
+        shortLivedSampleSize: 24,
+        medianDurationMs: 90_000,
+        medianGapMs: 8 * MIN
+      },
+      generatedAt: '2026-08-12T08:00:00.000Z'
+    });
+    expect(body).toContain('**Short-lived (< 5m):** 24 of 24 timed runs');
+    expect(body).toContain('**Median duration:** 1m 30s');
+    expect(body).toContain('**Median gap between completions:** 8m');
+  });
+
+  it('renders absent durations as the em-dash sentinel', () => {
+    const body = buildChurnIssueBody({
+      taskType: 'self-improve:branch-reconcile',
+      churn: {
+        reason: 'rapid-succession',
+        windowCompleted: 12,
+        windowMs: CHURN_WINDOW_MS,
+        shortLivedCount: 0,
+        shortLivedSampleSize: 0,
+        medianDurationMs: null,
+        medianGapMs: null
+      },
+      generatedAt: '2026-08-12T08:00:00.000Z'
+    });
+    expect(body).toContain('**Median duration:** —');
+    expect(body).toContain('**Median gap between completions:** —');
+    expect(body).toContain('(no per-run duration recorded — used completion spacing)');
+  });
 });
 
 describe('shouldFileChurnAlert', () => {
