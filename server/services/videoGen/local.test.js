@@ -170,6 +170,17 @@ vi.mock('fs', () => ({
   statSync: vi.fn(() => ({ size: 1000 })),
 }));
 
+// Whether the installed MiniMax H3 checkout can apply LoRAs to its quantized
+// DiT. Really a spawned python probe; stubbed here so the render-path tests
+// drive both verdicts without the shared child_process mock (which resolves
+// every spawn successfully) silently reporting "capable".
+const h3LoraState = vi.hoisted(() => ({ capable: false }));
+vi.mock('./runtimes.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  byovRuntimeLoraCapable: vi.fn((runtime) => runtime === 'minimax_h3' && h3LoraState.capable),
+  resolveByovRuntimeLoraCapable: vi.fn(async (runtime) => runtime === 'minimax_h3' && h3LoraState.capable),
+}));
+
 // LoRA key-layout gate (resolveVideoLoras). `null` = undetermined, which is
 // the permissive default so the pre-existing LoRA-threading tests below still
 // reach the spawn path; the gate's own tests set a layout explicitly.
@@ -2153,6 +2164,75 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     expect(options.env).not.toHaveProperty('HF_TOKEN');
     expect(options.env).not.toHaveProperty('HUGGING_FACE_HUB_TOKEN');
     expect(hfChildEnv).not.toHaveBeenCalled();
+  });
+});
+
+// H3's DiT is quantized, so LoRAs ride along only if the installed runner
+// applies them at render time from quantization metadata. That is a property of
+// the pinned checkout, so the verdict comes from a probe — and the render path
+// must honor it in both directions rather than blanket-rejecting the runtime.
+describe('MiniMax H3 user LoRAs', () => {
+  const h3Render = (jobId) => generateVideo({
+    jobId,
+    modelId: 'minimax_h3_8bit',
+    prompt: 'a fox watches the rain',
+    width: 512, height: 320, numFrames: 141, fps: 24, mode: 'text',
+    loras: [{ filename: 'fox.safetensors', scale: 0.8 }],
+  });
+
+  afterEach(() => { h3LoraState.capable = false; });
+
+  it('rejects LoRAs with an H3-specific reason when the runner has no applicator', async () => {
+    h3LoraState.capable = false;
+    await expect(h3Render('h3-lora-blocked')).rejects.toMatchObject({
+      code: 'MINIMAX_H3_LORA_UNSUPPORTED',
+      status: 400,
+    });
+  });
+
+  it('forwards each LoRA as a paired --lora/--lora-scale once the runner proves capable', async () => {
+    h3LoraState.capable = true;
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      jobId: 'h3-lora-ok',
+      modelId: 'minimax_h3_8bit',
+      prompt: 'a fox watches the rain',
+      width: 512, height: 320, numFrames: 141, fps: 24, mode: 'text',
+      loras: [{ filename: 'fox.safetensors', scale: 0.8 }, { filename: 'rain.safetensors', scale: 0.5 }],
+    });
+
+    const [, args] = spawnMock.mock.calls.find(([, a]) => (
+      Array.isArray(a) && a.some((arg) => String(arg).endsWith('/generate_minimax_h3.py'))
+    ));
+    expect(args.flatMap((arg, i) => (
+      arg === '--lora' ? [[args[i + 1], args[i + 2] === '--lora-scale' ? args[i + 3] : 'UNPAIRED']] : []
+    ))).toEqual([
+      [expect.stringContaining('fox.safetensors'), '0.8'],
+      [expect.stringContaining('rain.safetensors'), '0.5'],
+    ]);
+  });
+
+  it('emits no LoRA argv on a plain H3 render', async () => {
+    h3LoraState.capable = true;
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      jobId: 'h3-no-lora',
+      modelId: 'minimax_h3_8bit',
+      prompt: 'a fox watches the rain',
+      width: 512, height: 320, numFrames: 141, fps: 24, mode: 'text',
+    });
+
+    const [, args] = spawnMock.mock.calls.find(([, a]) => (
+      Array.isArray(a) && a.some((arg) => String(arg).endsWith('/generate_minimax_h3.py'))
+    ));
+    expect(args).not.toContain('--lora');
+    expect(args).not.toContain('--lora-scale');
   });
 });
 

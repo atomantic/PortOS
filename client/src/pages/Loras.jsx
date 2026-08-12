@@ -40,6 +40,7 @@ const RUNNER_LABEL = {
   [RUNNER_FAMILIES.HIDREAM]: 'HiDream',
   [RUNNER_FAMILIES.QWEN]: 'Qwen',
   [VIDEO_LORA_FAMILIES.LTX_VIDEO]: 'LTX-Video',
+  [VIDEO_LORA_FAMILIES.MINIMAX_H3]: 'MiniMax H3',
 };
 const RUNNER_BADGE_CLASS = {
   [RUNNER_FAMILIES.MFLUX]: 'bg-port-accent/20 text-port-accent border-port-accent/30',
@@ -49,6 +50,7 @@ const RUNNER_BADGE_CLASS = {
   [RUNNER_FAMILIES.HIDREAM]: 'bg-rose-600/20 text-rose-300 border-rose-500/30',
   [RUNNER_FAMILIES.QWEN]: 'bg-sky-600/20 text-sky-300 border-sky-500/30',
   [VIDEO_LORA_FAMILIES.LTX_VIDEO]: 'bg-fuchsia-600/20 text-fuchsia-300 border-fuchsia-500/30',
+  [VIDEO_LORA_FAMILIES.MINIMAX_H3]: 'bg-teal-600/20 text-teal-300 border-teal-500/30',
 };
 
 // Image/Video filter applied to BOTH the suggestion panel and the installed
@@ -1089,9 +1091,9 @@ function LoraCard({ lora, onDelete, deleting, deleteConfirm }) {
   const civitai = lora.civitai;
   // The gen pages read ?lora=<filename> as a preselect hint via query string;
   // keeps the manager → gen handoff URL-driven (deep-linkable). Video-family
-  // LoRAs (ltx-video) deep-link to Video Gen — routing them to Image Gen would
-  // preselect an LTX adapter into an incompatible image render.
-  const isVideoLora = family === VIDEO_LORA_FAMILIES.LTX_VIDEO;
+  // LoRAs (ltx-video, minimax-h3) deep-link to Video Gen — routing them to Image
+  // Gen would preselect a video adapter into an incompatible image render.
+  const isVideoLora = isVideoLoraFamily(family);
   const testHref = `${isVideoLora ? '/media/video' : '/media/image'}?lora=${encodeURIComponent(lora.filename)}`;
   // The confirm pair also stays mounted while the delete is in flight (the hook
   // disarms the moment it fires), so the spinner replaces the row rather than

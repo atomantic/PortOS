@@ -29,6 +29,17 @@ vi.mock('child_process', async (importOriginal) => ({
   spawn: installProcess.spawn,
 }));
 
+// The enqueue gate resolves the runtime's LoRA capability for real (it is
+// imported straight from the leaf so a mocked service can't fake it), which
+// would spawn a venv python — and the suite's shared spawn mock reports every
+// child as a clean exit, i.e. "capable". Pin the verdict explicitly so each
+// test states the capability it is exercising.
+const loraCapability = vi.hoisted(() => ({ capable: false }));
+vi.mock('../services/videoGen/runtimes.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  resolveByovRuntimeLoraCapable: vi.fn(async (runtime) => runtime === 'minimax_h3' && loraCapability.capable),
+}));
+
 vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn(async () => ({ imageGen: { local: { pythonPath: '/usr/bin/python3' } } })),
   updateSettingsWith: vi.fn(async (mutate) => mutate({ imageGen: { local: { pythonPath: '/usr/bin/python3' } } })),
@@ -97,6 +108,7 @@ vi.mock('../services/videoGen/local.js', () => ({
   isByovRuntimeReady: vi.fn(async () => false),
   isByovRuntimeCurrent: vi.fn(async () => false),
   invalidateByovReadyCache: vi.fn(),
+  invalidateByovLoraCapabilityCache: vi.fn(),
   invalidateRuntimeFingerprintCache: vi.fn(),
   // /status now surfaces a runtime block (host chip/os + per-runtime versions).
   // Mock returns a fixed shape so the status test can assert it's wired through.
@@ -254,6 +266,7 @@ describe('isAudioMime', () => {
 describe('videoGen routes', () => {
   let app;
   beforeEach(() => {
+    loraCapability.capable = false;
     app = express();
     app.use(express.json());
     app.use('/api/video-gen', videoGenRoutes);
@@ -801,6 +814,55 @@ describe('videoGen routes', () => {
       });
       expect(r.status).toBe(400);
       expect(r.body.code).toBe('LORAS_REQUIRE_LTX2');
+    });
+
+    // H3 CAN take LoRAs — it's the pinned runner that can't apply them to the
+    // quantized DiT. "Use an LTX-2.x model" would be wrong advice, so the
+    // rejection carries its own code and reason.
+    it('rejects LoRAs on an H3 model whose runtime has no applicator, with an H3-specific code', async () => {
+      videoGenService.listVideoModels.mockReturnValueOnce([
+        { id: 'minimax_h3_8bit', name: 'MiniMax H3', runtime: 'minimax_h3', defaultFrames: 141, frameOptions: [141], fpsOptions: [24], runtimeLoraCapable: false },
+      ]);
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'clip',
+        modelId: 'minimax_h3_8bit',
+        loraFilenames: ['a.safetensors'],
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('MINIMAX_H3_LORA_UNSUPPORTED');
+    });
+
+    // The decoration is a SYNC cache read, so a capable install still reports
+    // `runtimeLoraCapable: false` until the probe lands. The gate must resolve
+    // it rather than trust that snapshot — otherwise the first LoRA render after
+    // boot is refused and only succeeds on a retry.
+    it('resolves the probe rather than trusting a cold decoration on the model payload', async () => {
+      loraCapability.capable = true;
+      videoGenService.listVideoModels.mockReturnValueOnce([
+        { id: 'minimax_h3_8bit', name: 'MiniMax H3', runtime: 'minimax_h3', defaultFrames: 141, frameOptions: [141], fpsOptions: [24], runtimeLoraCapable: false },
+      ]);
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'clip',
+        modelId: 'minimax_h3_8bit',
+        loraFilenames: ['a.safetensors'],
+      });
+      expect(r.status).toBe(200);
+    });
+
+    it('accepts LoRAs on an H3 model once the runtime probe proved it capable', async () => {
+      loraCapability.capable = true;
+      videoGenService.listVideoModels.mockReturnValueOnce([
+        { id: 'minimax_h3_8bit', name: 'MiniMax H3', runtime: 'minimax_h3', defaultFrames: 141, frameOptions: [141], fpsOptions: [24], runtimeLoraCapable: true },
+      ]);
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'clip',
+        modelId: 'minimax_h3_8bit',
+        loraFilenames: ['a.safetensors'],
+      });
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        params: expect.objectContaining({ loras: [{ filename: 'a.safetensors', scale: 1.0 }] }),
+      }));
     });
 
     it('strips path-traversal segments from sourceImageFile via basename + prefix-check', async () => {

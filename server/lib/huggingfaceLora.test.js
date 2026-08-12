@@ -103,6 +103,23 @@ describe('detectVideoLoraFamily', () => {
     expect(detectVideoLoraFamily({ repo: 'someone/cool-lora', model: { cardData: { base_model: 'Lightricks/LTX-Video' } } }))
       .toBe(VIDEO_LORA_FAMILIES.LTX_VIDEO);
   });
+  it('classifies MiniMax H3 repos as minimax-h3', () => {
+    expect(detectVideoLoraFamily({ repo: 'someone/minimax-h3-character-lora' })).toBe(VIDEO_LORA_FAMILIES.MINIMAX_H3);
+    expect(detectVideoLoraFamily({ repo: 'someone/opaque', model: { cardData: { base_model: 'MiniMaxAI/MiniMax-H3' } } }))
+      .toBe(VIDEO_LORA_FAMILIES.MINIMAX_H3);
+    expect(detectVideoLoraFamily({ repo: 'someone/opaque', model: { tags: ['minimax h3', 'lora'] } }))
+      .toBe(VIDEO_LORA_FAMILIES.MINIMAX_H3);
+  });
+  it('needs the minimax maker token — a bare "h3" version suffix must not mis-tag', () => {
+    expect(detectVideoLoraFamily({ repo: 'someone/style-h3' })).toBe(null);
+    expect(detectVideoLoraFamily({ repo: 'someone/h3-anime-lora', model: { tags: ['sdxl'] } })).toBe(null);
+  });
+  it('prefers H3 over LTX when an H3 card also name-drops LTX', () => {
+    expect(detectVideoLoraFamily({
+      repo: 'someone/minimax-h3-lora',
+      model: { cardData: { base_model: 'MiniMaxAI/MiniMax-H3' }, tags: ['ltx-video'] },
+    })).toBe(VIDEO_LORA_FAMILIES.MINIMAX_H3);
+  });
   it('returns null for unrelated repos (e.g. an image SDXL LoRA)', () => {
     expect(detectVideoLoraFamily({ repo: 'someone/sdxl-anime-lora', model: { tags: ['sdxl'] } })).toBe(null);
   });

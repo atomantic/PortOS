@@ -36,6 +36,7 @@ export const RUNNER_FAMILIES = Object.freeze({
 // `ltx-video` video model without any change there.
 export const VIDEO_LORA_FAMILIES = Object.freeze({
   LTX_VIDEO: 'ltx-video',
+  MINIMAX_H3: 'minimax-h3',
 });
 
 // Predicate: is this LoRA family a video family (vs. an image RUNNER_FAMILIES
@@ -45,6 +46,13 @@ export const VIDEO_LORA_FAMILIES = Object.freeze({
 // client/src/lib/runnerFamilies.js.
 const VIDEO_LORA_FAMILY_SET = new Set(Object.values(VIDEO_LORA_FAMILIES));
 export const isVideoLoraFamily = (family) => VIDEO_LORA_FAMILY_SET.has(family);
+
+// The family an INSTALLED LoRA belongs to. `loraCompatKey` is the refined key
+// (e.g. flux2-9b) written by the importer; `runnerFamily` is the coarse legacy
+// field a pre-sidecar install may be the only thing carrying. One helper so the
+// `||` fallback can't drift between the pickers, the family filters, and the
+// deep-link handoff. Mirrored to client/src/lib/runnerFamilies.js.
+export const loraFamilyOf = (lora) => lora?.loraCompatKey || lora?.runnerFamily || null;
 
 // A LoRA-quantization marker (`q4` / `q8`) in a model's id/repo/name. Anchored
 // on a leading boundary (so it doesn't match inside `seq4uence`) and a trailing
@@ -77,12 +85,20 @@ export const isMlxVideoLtxLoraCapable = (model) => {
 //   - notapalindrome's `mlx_video` on a non-quantized LTX-2.x model — fused
 //     offline into the transformer weights (see isMlxVideoLtxLoraCapable +
 //     scripts/generate_av_lora.py).
+//   - `minimax_h3`, but ONLY when the installed runner can apply LoRAs to the
+//     quantized DiT at runtime. That is a property of the pinned checkout, not
+//     of the model entry, so it can't be derived here: listVideoModels()
+//     decorates each model with `runtimeLoraCapable` from the probe in
+//     services/videoGen/runtimes.js and this reads it off the payload (the same
+//     shape as `lastFrameAnchored`). An undecorated model therefore reads as
+//     "not capable" — the gate fails closed.
 // The wan22 / hunyuan runtimes (and quantized mlx_video models) have no LoRA
 // path, so they return null ("no LoRA support") and the VideoGen picker hides.
-export const videoLoraFamily = (model) =>
-  (model?.runtime === 'ltx2' || isMlxVideoLtxLoraCapable(model))
-    ? VIDEO_LORA_FAMILIES.LTX_VIDEO
-    : null;
+export const videoLoraFamily = (model) => {
+  if (model?.runtime === 'ltx2' || isMlxVideoLtxLoraCapable(model)) return VIDEO_LORA_FAMILIES.LTX_VIDEO;
+  if (model?.runtime === 'minimax_h3' && model?.runtimeLoraCapable === true) return VIDEO_LORA_FAMILIES.MINIMAX_H3;
+  return null;
+};
 
 // Convenience predicate helpers — match the semantics of the existing
 // `isFlux2()` / `isZImage()` / `isErnie()` exports in `mediaModels.js`

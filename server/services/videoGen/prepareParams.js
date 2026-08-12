@@ -54,6 +54,7 @@ import {
 // Straight from the leaf, not through local.js: the suites that exercise this
 // module mock local.js wholesale, and a mocked rule table would assert nothing.
 import { videoModeContractError, videoChainUnsupportedError } from './modeContract.js';
+import { resolveByovRuntimeLoraCapable, videoLoraUnsupportedError } from './runtimes.js';
 
 /**
  * Best-effort unlink of every multipart temp file the parser wrote before the
@@ -792,15 +793,23 @@ async function resolvePreparedParams({
   // Video LoRAs fuse on two runtimes: dgrauet's `ltx2` (via the pipeline's
   // _pending_loras hook, see scripts/generate_ltx2.py) and non-quantized
   // LTX-2.x `mlx_video` models (merged offline by scripts/generate_av_lora.py).
+  // `minimax_h3` applies them at runtime, but only if the installed checkout
+  // implements a quant-aware applicator — listVideoModels() decorates that
+  // probe result as `runtimeLoraCapable`, which videoLoraFamily() reads.
   // videoLoraFamily() returns null for everything else (wan22 / hunyuan /
   // quantized mlx_video) — reject up-front so a bad modelId can't enqueue a
   // doomed job that only fails in the worker.
-  if (loras && effectiveModel && !videoLoraFamily(effectiveModel)) {
-    await cleanupStaged();
-    throw new ServerError(
-      `LoRAs aren't supported on this model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}" — use an LTX-2.x model (dgrauet ltx2, or the bf16 Unified Beta).`,
-      { status: 400, code: 'LORAS_REQUIRE_LTX2' },
-    );
+  if (loras && effectiveModel) {
+    // `runtimeLoraCapable` was decorated from a SYNC cache read, which is false
+    // on a cold cache. Resolve the probe before rejecting, or the first LoRA
+    // render after boot on a capable install would be refused and only heal on
+    // retry. Re-derive the flag from the settled verdict rather than trusting
+    // the snapshot the model list was built from.
+    const runtimeLoraCapable = await resolveByovRuntimeLoraCapable(effectiveModel.runtime);
+    if (!videoLoraFamily({ ...effectiveModel, runtimeLoraCapable })) {
+      await cleanupStaged();
+      throw videoLoraUnsupportedError(effectiveModel, effectiveModelId);
+    }
   }
 
   // a2v and the IC remix modes both anchor a single render (audio track /

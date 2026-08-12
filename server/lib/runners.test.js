@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
-import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, videoLoraFamily, isMlxVideoLtxLoraCapable, isMflux, isFlux2, isZImage, isErnie, isHiDream, isQwen, flux2VariantFromModel, loraCompatKey, composeCompatKey } from './runners.js';
+import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, videoLoraFamily, isMlxVideoLtxLoraCapable, loraFamilyOf, isMflux, isFlux2, isZImage, isErnie, isHiDream, isQwen, flux2VariantFromModel, loraCompatKey, composeCompatKey } from './runners.js';
 
 const __dirname_self = dirname(fileURLToPath(import.meta.url));
 const CLIENT_MIRROR_PATH = join(__dirname_self, '..', '..', 'client', 'src', 'lib', 'runnerFamilies.js');
@@ -50,9 +50,25 @@ describe('RUNNER_FAMILIES', () => {
 });
 
 describe('VIDEO_LORA_FAMILIES / videoLoraFamily', () => {
-  it('exports the canonical ltx-video family id, frozen', () => {
+  it('exports the canonical video family ids, frozen', () => {
     expect(VIDEO_LORA_FAMILIES.LTX_VIDEO).toBe('ltx-video');
+    expect(VIDEO_LORA_FAMILIES.MINIMAX_H3).toBe('minimax-h3');
     expect(Object.isFrozen(VIDEO_LORA_FAMILIES)).toBe(true);
+  });
+
+  // H3's quantized DiT can only take LoRAs if the INSTALLED runner applies them
+  // at runtime, which no model field can express — listVideoModels() decorates
+  // the probe result as `runtimeLoraCapable` and this reads it. Anything short of
+  // a literal `true` must read as not capable so the gate fails closed.
+  it('maps minimax_h3 to a family only when the runtime probe proved it capable', () => {
+    expect(videoLoraFamily({ runtime: 'minimax_h3', runtimeLoraCapable: true })).toBe('minimax-h3');
+    expect(videoLoraFamily({ runtime: 'minimax_h3', runtimeLoraCapable: false })).toBe(null);
+    // undecorated payload (older peer, unprobed cache) → closed
+    expect(videoLoraFamily({ runtime: 'minimax_h3' })).toBe(null);
+    // truthy-but-not-true must not open the gate
+    expect(videoLoraFamily({ runtime: 'minimax_h3', runtimeLoraCapable: 'yes' })).toBe(null);
+    // the flag alone never grants a family to a runtime with no LoRA path
+    expect(videoLoraFamily({ runtime: 'wan22', runtimeLoraCapable: true })).toBe(null);
   });
 
   it('maps the ltx2 runtime + non-quantized LTX-2.x mlx_video models to a LoRA family', () => {
@@ -91,6 +107,14 @@ describe('VIDEO_LORA_FAMILIES / videoLoraFamily', () => {
     expect(isMlxVideoLtxLoraCapable(null)).toBe(false);
   });
 
+  it('loraFamilyOf prefers the refined compat key over the legacy coarse field', () => {
+    expect(loraFamilyOf({ loraCompatKey: 'flux2-9b', runnerFamily: 'flux2' })).toBe('flux2-9b');
+    // pre-sidecar install: only the coarse field survives
+    expect(loraFamilyOf({ runnerFamily: 'ltx-video' })).toBe('ltx-video');
+    expect(loraFamilyOf({})).toBe(null);
+    expect(loraFamilyOf(null)).toBe(null);
+  });
+
   it('composeCompatKey leaves the ltx-video family bare (no variant)', () => {
     expect(composeCompatKey('ltx-video', null)).toBe('ltx-video');
     expect(composeCompatKey('ltx-video', '9b')).toBe('ltx-video');
@@ -99,8 +123,11 @@ describe('VIDEO_LORA_FAMILIES / videoLoraFamily', () => {
   it('client mirror carries the video family + helpers', () => {
     const text = readFileSync(CLIENT_MIRROR_PATH, 'utf-8');
     expect(text).toMatch(/LTX_VIDEO:\s*'ltx-video'/);
+    expect(text).toMatch(/MINIMAX_H3:\s*'minimax-h3'/);
+    expect(text).toMatch(/runtimeLoraCapable === true/);
     expect(text).toMatch(/export const videoLoraFamily/);
     expect(text).toMatch(/export const isMlxVideoLtxLoraCapable/);
+    expect(text).toMatch(/export const loraFamilyOf/);
   });
 });
 

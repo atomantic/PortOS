@@ -40,7 +40,7 @@ import { inspectModelCache, findCachedRepoFile } from '../../lib/hfCache.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { makeVideoGenLineHandler, finalizeGeneratedVideo, isWatchdogSuccess, describeSignalDeath, describeRenderConditioning, RENDER_INPUTS_VERSION } from './generateVideoHelpers.js';
 import { assertSafeLoraFilename, getLoraKeyLayout } from '../loras.js';
-import { isMlxVideoLtxLoraCapable } from '../../lib/runners.js';
+import { videoLoraFamily } from '../../lib/runners.js';
 import {
   isVideoModelTermsAccepted, acceptedVideoModelTerms, videoModelTermsGateId, videoModelTermsError,
 } from '../../lib/videoDisclosure.js';
@@ -63,6 +63,9 @@ import {
   HUNYUAN_REPO_DIR,
   BYOV_RUNTIME_INFO,
   BYOV_VIDEO_RUNTIMES,
+  byovRuntimeLoraCapable,
+  resolveByovRuntimeLoraCapable,
+  videoLoraUnsupportedError,
   modelAnchorsLastFrame,
   assertByovRuntimeInstalled,
   invalidateByovReadyCache,
@@ -151,14 +154,24 @@ export const VIDEO_MODELS = Object.fromEntries(getVideoModels().map((m) => [m.id
 // Resolve a model by id from the LIVE registry (getVideoModels reads the
 // hot-reloadable cache), falling back to the boot snapshot. This is what the
 // render path uses so a runtime-added model resolves without a server restart.
-export const resolveVideoModel = (modelId) =>
-  getVideoModels().find((m) => m.id === modelId) || VIDEO_MODELS[modelId] || null;
+// Attach the runtime capabilities a model entry can't express on its own:
+// whether an FFLF last frame is a real anchor, and whether the *installed* BYOV
+// runner can apply user LoRAs (H3's DiT is quantized, so that depends on the
+// pinned checkout — see runtimes.js `loraProbeArgs`). Both are declared in
+// runtimes.js and surfaced here so the Video Gen form and videoLoraFamily() read
+// them off the model instead of keeping their own lists. Applied by BOTH model
+// resolvers, so the render path and the API payload can never disagree about
+// what a model supports.
+const decorateVideoModel = (m) => (m ? {
+  ...m,
+  lastFrameAnchored: modelAnchorsLastFrame(m),
+  runtimeLoraCapable: byovRuntimeLoraCapable(m.runtime),
+} : m);
 
-// Decorated with the one runtime capability the client can't derive: whether an
-// FFLF last frame is a real anchor. Declared in runtimes.js, surfaced here so
-// the Video Gen form reads it off the model instead of keeping its own list.
-export const listVideoModels = () => getVideoModels()
-  .map((m) => ({ ...m, lastFrameAnchored: modelAnchorsLastFrame(m) }));
+export const resolveVideoModel = (modelId) =>
+  decorateVideoModel(getVideoModels().find((m) => m.id === modelId) || VIDEO_MODELS[modelId] || null);
+
+export const listVideoModels = () => getVideoModels().map(decorateVideoModel);
 
 export const defaultVideoModelId = () => getDefaultVideoModelId();
 
@@ -618,7 +631,7 @@ const buildWan22Args = ({ model, wanModelPath, wanRequiredWeights, prompt, negat
 // Build args for PipeNetwork's pinned MiniMax H3 MLX port. The helper resolves
 // only exact, already-cached HF revisions; every network download remains an
 // explicit Video Gen UI action guarded by the model's terms acknowledgement.
-const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath }) => {
+const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, loras }) => {
   assertByovRuntimeInstalled('minimax_h3');
   assertRenderModeContract({
     model,
@@ -697,6 +710,11 @@ const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numF
   // the canvas as the geometry anchor, so a first-frame image must lead.
   if (sourceImagePath) args.push('--image', sourceImagePath, '--anchor', 'first');
   if (lastImagePath) args.push('--image', lastImagePath, '--anchor', 'last');
+  // Runtime (never fused) application — each --lora needs its own --lora-scale,
+  // in the same order, mirroring the --image/--anchor pairing above. buildArgs
+  // has already rejected LoRAs unless the probe proved this checkout can apply
+  // them to the quantized DiT (see runtimes.js `loraProbeArgs`).
+  for (const l of loras ?? []) args.push('--lora', l.path, '--lora-scale', String(l.strength));
   return { bin: MINIMAX_H3_VENV_PYTHON, args };
 };
 
@@ -756,26 +774,29 @@ const buildArgs = ({ pythonPath, modelId, model, wanModelPath, wanRequiredWeight
     );
   }
   const hasLoras = Array.isArray(loras) && loras.length > 0;
-  // Defense-in-depth: LoRAs fuse only on ltx2 (handled above) or a non-quantized
-  // LTX-2.x mlx_video model (the wrapper below), and the wrapper path is
-  // macOS/mlx-only. The route already rejects other runtimes, but a non-route
-  // caller (test, queue replay) — or a Windows install with a hand-edited/synced
-  // mlx_video LTX-2.x entry — could reach here. Fail clearly rather than fall
+  // Defense-in-depth: LoRAs run only where videoLoraFamily() says they can —
+  // ltx2 (handled above), a non-quantized LTX-2.x mlx_video model (the wrapper
+  // below), or a minimax_h3 checkout whose probe proved a quant-aware
+  // applicator. All of those macOS/mlx-only. The route already rejects the rest,
+  // but a non-route caller (test, queue replay) — or a Windows install with a
+  // hand-edited/synced entry — could reach here. Fail clearly rather than fall
   // through to the IS_WIN generate_win.py branch below, which would silently drop
   // the LoRAs and produce a base render the user thinks is LoRA-styled.
-  if (hasLoras && (!isMlxVideoLtxLoraCapable(model) || IS_WIN)) {
-    throw new ServerError(
-      IS_WIN
-        ? `LoRA fusion runs through the macOS-only mlx_video path; model "${modelId}" can't fuse LoRAs on Windows.`
-        : `LoRAs aren't supported on this model. Model "${modelId}" runs on "${model.runtime || 'mlx_video'}".`,
-      { status: 400, code: 'LORAS_REQUIRE_LTX2' },
-    );
+  // The same predicate the enqueue gate uses, off the same decorated model, so
+  // the two can't disagree — and the reason text comes from one factory.
+  if (hasLoras && (!videoLoraFamily(model) || IS_WIN)) {
+    throw IS_WIN
+      ? new ServerError(
+        `LoRA fusion runs through the macOS-only mlx_video path; model "${modelId}" can't fuse LoRAs on Windows.`,
+        { status: 400, code: 'LORAS_REQUIRE_LTX2' },
+      )
+      : videoLoraUnsupportedError(model, modelId);
   }
   if (model.runtime === 'wan22') {
     return buildWan22Args({ model, wanModelPath, wanRequiredWeights, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, mode, outputPath });
   }
   if (model.runtime === 'minimax_h3') {
-    return buildMiniMaxH3Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath });
+    return buildMiniMaxH3Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, loras });
   }
   if (model.runtime === 'hunyuan') {
     return buildHunyuanArgs({ model, prompt, negativePrompt, width, height, numFrames, steps, guidance, seed, outputPath });
@@ -981,6 +1002,10 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // rejects LoRAs on non-ltx2 runtimes (the route also guards), so this is a
   // no-op there.
   const resolvedLoras = await resolveVideoLoras(loras);
+  // Resolve the runtime's LoRA capability BEFORE buildArgs, which reads it
+  // synchronously. Without this the render would hit a cold cache and reject a
+  // LoRA the installed runner can actually apply (the sync read fails closed).
+  if (resolvedLoras.length) await resolveByovRuntimeLoraCapable(model.runtime);
 
   // IC-LoRA remix: resolve the per-mode weight before any GPU work. A cached
   // weight resolves to the exact file inside the HF snapshot; an un-cached one

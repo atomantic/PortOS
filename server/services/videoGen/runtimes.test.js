@@ -16,7 +16,9 @@ vi.mock('child_process', async (importOriginal) => ({
 }));
 
 import {
-  invalidateByovReadyCache, isByovRuntimeReady, isPinnedSourceStatusClean, modelAnchorsLastFrame,
+  byovRuntimeLoraCapable, invalidateByovLoraCapabilityCache, invalidateByovReadyCache,
+  isByovRuntimeReady, isPinnedSourceStatusClean, modelAnchorsLastFrame,
+  resolveByovRuntimeLoraCapable,
 } from './runtimes.js';
 
 const REVISION = 'fcd9e9b79a1d6018d91ac477c0968de1fa067e49';
@@ -32,8 +34,17 @@ const statusChild = (stdout) => {
   return child;
 };
 
+// Exit-code-only probe child (no stdout), for the LoRA capability probe.
+const exitChild = (code) => {
+  const child = new EventEmitter();
+  child.kill = vi.fn();
+  queueMicrotask(() => child.emit('close', code));
+  return child;
+};
+
 beforeEach(() => {
   invalidateByovReadyCache();
+  invalidateByovLoraCapabilityCache();
   runtimeMocks.existsSync.mockReset().mockReturnValue(true);
   runtimeMocks.spawn.mockReset();
 });
@@ -68,6 +79,66 @@ describe('isByovRuntimeReady', () => {
 
     expect(runtimeMocks.spawn).toHaveBeenCalledTimes(1);
     expect(runtimeMocks.spawn.mock.calls[0][0]).toBe('git');
+  });
+});
+
+// H3's DiT is quantized, so whether a LoRA can ride along is a property of the
+// installed checkout, not the model entry — hence a probe rather than a
+// hardcoded predicate. The gate must fail CLOSED until that probe has answered.
+describe('MiniMax H3 LoRA capability', () => {
+  it('reports capable when the runner exposes a quant-aware applicator', async () => {
+    runtimeMocks.spawn.mockImplementationOnce(() => exitChild(0));
+    await expect(resolveByovRuntimeLoraCapable('minimax_h3')).resolves.toBe(true);
+    expect(byovRuntimeLoraCapable('minimax_h3')).toBe(true);
+  });
+
+  it('reports not capable when the pinned checkout has no LoRA applicator', async () => {
+    runtimeMocks.spawn.mockImplementationOnce(() => exitChild(1));
+    await expect(resolveByovRuntimeLoraCapable('minimax_h3')).resolves.toBe(false);
+    expect(byovRuntimeLoraCapable('minimax_h3')).toBe(false);
+  });
+
+  it('caches both outcomes so the probe runs once per process', async () => {
+    runtimeMocks.spawn.mockImplementationOnce(() => exitChild(0));
+    await resolveByovRuntimeLoraCapable('minimax_h3');
+    await resolveByovRuntimeLoraCapable('minimax_h3');
+    expect(runtimeMocks.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares one in-flight probe across concurrent callers', async () => {
+    runtimeMocks.spawn.mockImplementationOnce(() => exitChild(0));
+    const [a, b] = await Promise.all([
+      resolveByovRuntimeLoraCapable('minimax_h3'),
+      resolveByovRuntimeLoraCapable('minimax_h3'),
+    ]);
+    expect([a, b]).toEqual([true, true]);
+    expect(runtimeMocks.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not cache a verdict for an uninstalled runtime', async () => {
+    runtimeMocks.existsSync.mockReturnValue(false);
+    await expect(resolveByovRuntimeLoraCapable('minimax_h3')).resolves.toBe(false);
+    expect(runtimeMocks.spawn).not.toHaveBeenCalled();
+
+    runtimeMocks.existsSync.mockReturnValue(true);
+    runtimeMocks.spawn.mockImplementationOnce(() => exitChild(0));
+    await expect(resolveByovRuntimeLoraCapable('minimax_h3')).resolves.toBe(true);
+  });
+
+  it('reads as not capable while the probe is still in flight, and warms the cache', async () => {
+    runtimeMocks.spawn.mockImplementationOnce(() => exitChild(0));
+    // Cold read: unknown must NOT be mistaken for a probed `true`.
+    expect(byovRuntimeLoraCapable('minimax_h3')).toBe(false);
+    // ...but it kicked off the probe, so the next read reflects the truth.
+    await resolveByovRuntimeLoraCapable('minimax_h3');
+    expect(byovRuntimeLoraCapable('minimax_h3')).toBe(true);
+    expect(runtimeMocks.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['ltx2', 'wan22', 'hunyuan'])('never probes %s, which has no LoRA runtime path', async (runtime) => {
+    await expect(resolveByovRuntimeLoraCapable(runtime)).resolves.toBe(false);
+    expect(byovRuntimeLoraCapable(runtime)).toBe(false);
+    expect(runtimeMocks.spawn).not.toHaveBeenCalled();
   });
 });
 

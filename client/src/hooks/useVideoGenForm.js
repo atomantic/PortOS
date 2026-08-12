@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router';
 import toast from '../components/ui/Toast';
 import { extractLastFrame } from '../services/api';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
-import { videoLoraFamily, VIDEO_LORA_FAMILIES } from '../lib/runnerFamilies';
+import { videoLoraFamily, isVideoLoraFamily, loraFamilyOf, VIDEO_LORA_FAMILIES } from '../lib/runnerFamilies';
 import { randomSeed } from '../lib/genUtils';
 import { VIDEO_RESOLUTIONS, snapAspectToImage } from '../lib/videoGenResolutions';
 import { clampImageEdge } from '../lib/imageGenResolutions';
@@ -277,13 +277,17 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
       // Wait for `models` to load before deciding (the LoRA library usually
       // loads first); the mode is still the default 'text', with which every
       // ltx2 model is compatible, so the modelId-validation effect won't undo
-      // this. A non-ltx2 LoRA needs no switch (the image picker tolerates it).
-      const isVideoLora = (match.loraCompatKey || match.runnerFamily) === VIDEO_LORA_FAMILIES.LTX_VIDEO;
+      // this. A non-video LoRA needs no switch (the image picker tolerates it).
+      // Family-agnostic on BOTH sides: an incoming H3 LoRA must be recognized as
+      // video (else the Test handoff from /media/loras lands in the no-op
+      // branch), and the model it switches to must be one whose family matches,
+      // not an ltx2 model that would reject it.
+      const incomingFamily = loraFamilyOf(match);
       const cur = models.find((m) => m.id === modelId);
-      if (isVideoLora && !videoLoraFamily(cur)) {
+      if (isVideoLoraFamily(incomingFamily) && videoLoraFamily(cur) !== incomingFamily) {
         if (!models.length) return; // re-runs when models loads (in deps)
-        const ltx2Model = models.find((m) => m.runtime === 'ltx2');
-        if (ltx2Model) setModelId(ltx2Model.id);
+        const compatible = models.find((m) => videoLoraFamily(m) === incomingFamily);
+        if (compatible) setModelId(compatible.id);
       }
       setSelectedLoras((prev) => prev.find((s) => s.filename === fromUrl) ? prev : [...prev, {
         filename: match.filename,
@@ -401,31 +405,42 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
   // Video LoRAs always carry an explicit `ltx-video` family (HF import sets it),
   // so an exact-match filter here is the correct strict mode.
   const videoLoras = useMemo(
-    () => (loraFamily
-      ? availableLoras.filter((l) => (l.loraCompatKey || l.runnerFamily) === loraFamily)
-      : []),
+    () => (loraFamily ? availableLoras.filter((l) => loraFamilyOf(l) === loraFamily) : []),
     [availableLoras, loraFamily],
   );
 
-  // Installed LTX-video LoRAs regardless of the selected model's runtime. When
-  // the user picks an LTX-2.x model whose runtime can't fuse LoRAs (a quantized
-  // mlx_video model — loraFamily is null), the picker is correctly hidden, but
-  // silently doing so reads as a bug. Use this to explain *why* the LoRA is
-  // unavailable and point at the models that CAN run it. The `/ltx-?2/i` scope
-  // matches the server's LTX-2.x capability family (see isMlxVideoLtxLoraCapable)
-  // so the hint never fires for a non-LTX-2.x model where the advice wouldn't apply.
-  const installedVideoLoras = useMemo(
-    () => availableLoras.filter(
-      (l) => (l.loraCompatKey || l.runnerFamily) === VIDEO_LORA_FAMILIES.LTX_VIDEO,
-    ),
-    [availableLoras],
-  );
-  // Gated on the quantized-mlx_video case specifically (runtime mlx_video +
-  // loraFamily null = a quantized LTX-2.x model) so the hint copy's "quantized
-  // runtime isn't supported yet" wording always matches what triggered it.
-  const showLtxLoraUnsupportedHint = !loraFamily && installedVideoLoras.length > 0
-    && currentModel?.runtime === 'mlx_video'
-    && /ltx-?2/i.test(`${currentModel?.id || ''} ${currentModel?.repo || ''} ${currentModel?.name || ''}`);
+  // Installed video LoRAs bucketed by family, regardless of the selected model.
+  // One pass instead of one filter per family, and the source for the
+  // "why is the picker gone" hint below.
+  const installedVideoLorasByFamily = useMemo(() => {
+    const buckets = new Map();
+    for (const l of availableLoras) {
+      const family = loraFamilyOf(l);
+      if (!isVideoLoraFamily(family)) continue;
+      buckets.set(family, (buckets.get(family) || 0) + 1);
+    }
+    return buckets;
+  }, [availableLoras]);
+
+  // When the picker is hidden but the user HAS a LoRA of the family the selected
+  // model's runtime would use, silently hiding it reads as a bug — say why, and
+  // say the right why. The two cases need different advice, so the hint carries
+  // its own copy: a quantized mlx_video LTX-2.x model is fixed by switching
+  // models, while H3 is blocked by its pinned runner and switching models is
+  // wrong advice. `null` when there is nothing useful to explain.
+  const loraUnavailableHint = useMemo(() => {
+    if (loraFamily) return null;
+    const ltxCount = installedVideoLorasByFamily.get(VIDEO_LORA_FAMILIES.LTX_VIDEO) || 0;
+    // Scoped to LTX-2.x mlx_video (see isMlxVideoLtxLoraCapable) so the copy's
+    // "quantized runtime" wording always matches what triggered it.
+    if (ltxCount > 0 && currentModel?.runtime === 'mlx_video'
+      && /ltx-?2/i.test(`${currentModel?.id || ''} ${currentModel?.repo || ''} ${currentModel?.name || ''}`)) {
+      return { count: ltxCount, kind: 'ltx' };
+    }
+    const h3Count = installedVideoLorasByFamily.get(VIDEO_LORA_FAMILIES.MINIMAX_H3) || 0;
+    if (h3Count > 0 && currentModel?.runtime === 'minimax_h3') return { count: h3Count, kind: 'minimax_h3' };
+    return null;
+  }, [loraFamily, installedVideoLorasByFamily, currentModel]);
 
   // Multi-keyframe availability + validation. Keyframes are an ltx2-runtime
   // primitive (the route 400s with KEYFRAMES_REQUIRE_LTX2 otherwise), so the
@@ -1188,7 +1203,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
     stylePreset, setStylePreset,
     // Model
     modelId, handleModelChange, currentModel, visibleModels,
-    loraFamily, videoLoras, installedVideoLoras, showLtxLoraUnsupportedHint,
+    loraFamily, videoLoras, loraUnavailableHint,
     selectedLoras, setSelectedLoras,
     // Sampler / output
     width, height, handleResolutionChange,

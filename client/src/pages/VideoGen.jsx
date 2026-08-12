@@ -145,7 +145,7 @@ export default function VideoGen() {
     mode, handleModeChange,
     prompt, setPrompt, negativePrompt, setNegativePrompt, stylePreset, setStylePreset,
     modelId, handleModelChange, currentModel, visibleModels,
-    loraFamily, videoLoras, installedVideoLoras, showLtxLoraUnsupportedHint,
+    loraFamily, videoLoras, loraUnavailableHint,
     selectedLoras, setSelectedLoras,
     width, height, handleResolutionChange,
     numFrames, setNumFrames, fps, setFps, chunks, setChunks,
@@ -1073,9 +1073,13 @@ export default function VideoGen() {
             {/* LTX model that can't fuse LoRAs (quantized mlx_video — q4/q8) with
                 compatible LoRAs on disk: explain the absence instead of hiding
                 silently, and point at the models that CAN run them. */}
-            {showLtxLoraUnsupportedHint && (
+            {loraUnavailableHint && (
               <div className="col-span-2 sm:col-span-3 rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-2 text-xs text-port-warning leading-snug">
-                You have {installedVideoLoras.length} LTX video LoRA{installedVideoLoras.length === 1 ? '' : 's'} installed, but <strong className="font-semibold">{currentModel?.name}</strong> can't fuse LoRAs (its quantized <code>mlx_video</code> runtime isn't supported yet). Switch to the <strong className="font-semibold">LTX-2.3 Unified Beta</strong> (bf16) or an <strong className="font-semibold">LTX-2.3 dgrauet (Q4/Q8)</strong> model to use them.
+                {loraUnavailableHint.kind === 'ltx' ? (
+                  <>You have {loraUnavailableHint.count} LTX video LoRA{loraUnavailableHint.count === 1 ? '' : 's'} installed, but <strong className="font-semibold">{currentModel?.name}</strong> can't fuse LoRAs (its quantized <code>mlx_video</code> runtime isn't supported yet). Switch to the <strong className="font-semibold">LTX-2.3 Unified Beta</strong> (bf16) or an <strong className="font-semibold">LTX-2.3 dgrauet (Q4/Q8)</strong> model to use them.</>
+                ) : (
+                  <>You have {loraUnavailableHint.count} MiniMax H3 LoRA{loraUnavailableHint.count === 1 ? '' : 's'} installed, but the installed H3 runtime can't apply them — its DiT is quantized, so LoRAs need a runner that applies them at render time from quantization metadata. Upgrade the <strong className="font-semibold">MiniMax H3</strong> runtime from the model setup panel once a build that supports it is pinned.</>
+                )}
               </div>
             )}
 

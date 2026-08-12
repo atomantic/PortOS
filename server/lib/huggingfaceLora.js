@@ -183,15 +183,26 @@ export const modelClassificationBlob = ({ repo, model } = {}) => {
 export const LTX_VIDEO_RE = /\bltx[\s._-]?v?(?:ideo)?\b|\bltx[\s._-]?2/;
 export const looksLikeLtxVideo = (blob) => LTX_VIDEO_RE.test(blob) || /ltxvideo/.test(blob);
 
+// `minimax h3` / `minimax-h3` / `MiniMaxAI/MiniMax-H3` all collapse to H3.
+// Requires the `minimax` maker token so a bare "h3" (a common version suffix)
+// can't mis-tag an unrelated adapter into a family whose runtime would reject
+// its key layout at render time.
+export const MINIMAX_H3_RE = /\bminimax[\s._-]?h[\s._-]?3\b/;
+export const looksLikeMiniMaxH3 = (blob) => MINIMAX_H3_RE.test(blob);
+
 // Detect the PortOS video-LoRA family for an HF repo. LTX-2 / LTX-Video LoRAs
-// (fal, Lightricks) map to the `ltx-video` family — the only video family with
-// a working runtime today. Looks at the repo id, HF tags, and the card's
-// `base_model`. Returns a VIDEO_LORA_FAMILIES value or null (unrecognized →
-// the installer surfaces a clear error rather than mis-tagging it).
+// (fal, Lightricks) map to `ltx-video`; MiniMax H3 LoRAs map to `minimax-h3`,
+// which only renders once the installed H3 runtime proves it can apply LoRAs to
+// its quantized DiT (see services/videoGen/runtimes.js). Looks at the repo id,
+// HF tags, and the card's `base_model`. Returns a VIDEO_LORA_FAMILIES value or
+// null (unrecognized → the installer surfaces a clear error rather than
+// mis-tagging it).
 export const detectVideoLoraFamily = ({ repo, model } = {}) => {
-  if (looksLikeLtxVideo(modelClassificationBlob({ repo, model }))) {
-    return VIDEO_LORA_FAMILIES.LTX_VIDEO;
-  }
+  const blob = modelClassificationBlob({ repo, model });
+  // H3 first: an H3 adapter card can name LTX among comparison models, and the
+  // LTX pattern is the looser of the two.
+  if (looksLikeMiniMaxH3(blob)) return VIDEO_LORA_FAMILIES.MINIMAX_H3;
+  if (looksLikeLtxVideo(blob)) return VIDEO_LORA_FAMILIES.LTX_VIDEO;
   return null;
 };
 

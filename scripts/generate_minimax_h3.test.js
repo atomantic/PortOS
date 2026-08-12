@@ -73,7 +73,7 @@ describe('generate_minimax_h3.py', () => {
   it('rejects zero dimensions at the execution boundary', () => {
     const output = runPython(`${importRunner}\n${[
       'from types import SimpleNamespace',
-      'args = SimpleNamespace(fps=24, width=0, height=320, num_frames=124, steps=8, image=[], anchor=[])',
+      'args = SimpleNamespace(fps=24, width=0, height=320, num_frames=124, steps=8, lora=[], lora_scale=[], image=[], anchor=[])',
       'try:',
       '    runner.validate_args(args)',
       'except SystemExit as exc:',
@@ -92,7 +92,7 @@ describe('generate_minimax_h3.py', () => {
   ])('rejects mismatched keyframe anchors (%j / %j)', (images, anchors, pattern) => {
     const output = runPython(`${importRunner}\n${[
       'from types import SimpleNamespace',
-      `args = SimpleNamespace(fps=24, width=512, height=320, num_frames=124, steps=8, image=${JSON.stringify(images)}, anchor=${JSON.stringify(anchors)})`,
+      `args = SimpleNamespace(fps=24, width=512, height=320, num_frames=124, steps=8, lora=[], lora_scale=[], image=${JSON.stringify(images)}, anchor=${JSON.stringify(anchors)})`,
       'try:',
       '    runner.validate_args(args)',
       'except SystemExit as exc:',
@@ -106,11 +106,31 @@ describe('generate_minimax_h3.py', () => {
   it('accepts a paired first/last keyframe request', () => {
     const output = runPython(`${importRunner}\n${[
       'from types import SimpleNamespace',
-      'args = SimpleNamespace(fps=24, width=512, height=320, num_frames=124, steps=8, image=["a.png", "b.png"], anchor=["first", "last"])',
+      'args = SimpleNamespace(fps=24, width=512, height=320, num_frames=124, steps=8, lora=[], lora_scale=[], image=["a.png", "b.png"], anchor=["first", "last"])',
       'runner.validate_args(args)',
       'print("ok")',
     ].join('\n')}`);
     expect(output.trim()).toBe('ok');
+  });
+
+  // An unpaired --lora/--lora-scale would apply the wrong strength (or none) to
+  // an adapter, and a missing file would only surface after the ~83 GB load.
+  it.each([
+    [['a.safetensors'], [], /one --lora-scale per --lora/i],
+    [['a.safetensors', 'b.safetensors'], [0.8], /one --lora-scale per --lora/i],
+    [['/nonexistent/a.safetensors'], [0.8], /LoRA file is missing/i],
+  ])('rejects mismatched or missing LoRA arguments (%j / %j)', (loras, scales, pattern) => {
+    const output = runPython(`${importRunner}\n${[
+      'from types import SimpleNamespace',
+      `args = SimpleNamespace(fps=24, width=512, height=320, num_frames=124, steps=8, image=[], anchor=[], lora=${JSON.stringify(loras)}, lora_scale=${JSON.stringify(scales)})`,
+      'try:',
+      '    runner.validate_args(args)',
+      'except SystemExit as exc:',
+      '    print(str(exc))',
+      'else:',
+      '    raise SystemExit("bad LoRA args were accepted")',
+    ].join('\n')}`);
+    expect(output).toMatch(pattern);
   });
 
   // Reading the keyframes happens before the ~83 GB load, so a bad path costs

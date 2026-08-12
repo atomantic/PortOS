@@ -17,6 +17,7 @@ export const RUNNER_FAMILIES = Object.freeze({
 // LoRAs are imported from HuggingFace. Mirror of server/lib/runners.js.
 export const VIDEO_LORA_FAMILIES = Object.freeze({
   LTX_VIDEO: 'ltx-video',
+  MINIMAX_H3: 'minimax-h3',
 });
 
 // Predicate: is this LoRA family a video family (vs. an image RUNNER_FAMILIES
@@ -25,6 +26,13 @@ export const VIDEO_LORA_FAMILIES = Object.freeze({
 // server/lib/runners.js.
 const VIDEO_LORA_FAMILY_SET = new Set(Object.values(VIDEO_LORA_FAMILIES));
 export const isVideoLoraFamily = (family) => VIDEO_LORA_FAMILY_SET.has(family);
+
+// The family an INSTALLED LoRA belongs to. `loraCompatKey` is the refined key
+// (e.g. flux2-9b) written by the importer; `runnerFamily` is the coarse legacy
+// field a pre-sidecar install may be the only thing carrying. One helper so the
+// `||` fallback can't drift between the pickers, the family filters, and the
+// deep-link handoff. Mirror of server/lib/runners.js#loraFamilyOf.
+export const loraFamilyOf = (lora) => lora?.loraCompatKey || lora?.runnerFamily || null;
 
 // A LoRA-quantization marker (`q4` / `q8`) in a model's id/repo/name. Leading
 // boundary + trailing non-digit lookahead catches delimited (`-q4`, `q8_0`) and
@@ -46,12 +54,17 @@ export const isMlxVideoLtxLoraCapable = (model) => {
 
 // Map a video model (carries `runtime`, not `runner`) to its LoRA family. Both
 // the dgrauet `ltx2` runtime and non-quantized LTX-2.x `mlx_video` models fuse
-// user LoRAs; everything else returns null so the VideoGen picker hides itself.
+// user LoRAs. `minimax_h3` can take them only when the *installed* runner can
+// apply them to the quantized DiT at runtime — a property of the pinned
+// checkout that the client can't derive, so the server decorates each model
+// with `runtimeLoraCapable` and this reads it off the payload. Everything else
+// returns null so the VideoGen picker hides itself.
 // Mirror of server/lib/runners.js#videoLoraFamily.
-export const videoLoraFamily = (model) =>
-  (model?.runtime === 'ltx2' || isMlxVideoLtxLoraCapable(model))
-    ? VIDEO_LORA_FAMILIES.LTX_VIDEO
-    : null;
+export const videoLoraFamily = (model) => {
+  if (model?.runtime === 'ltx2' || isMlxVideoLtxLoraCapable(model)) return VIDEO_LORA_FAMILIES.LTX_VIDEO;
+  if (model?.runtime === 'minimax_h3' && model?.runtimeLoraCapable === true) return VIDEO_LORA_FAMILIES.MINIMAX_H3;
+  return null;
+};
 
 // FLUX.2 Klein ships in two sizes with different transformer hidden dims (4B =
 // 3072, 9B = 4096), so a LoRA trained for one can't load on the other. The

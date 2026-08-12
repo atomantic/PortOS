@@ -55,6 +55,10 @@ def parse_args() -> argparse.Namespace:
                         help="keyframe conditioning image (repeatable, max 2)")
     parser.add_argument("--anchor", action="append", default=[], choices=["first", "last"],
                         help="latent anchor for each --image, in the same order")
+    parser.add_argument("--lora", action="append", default=[],
+                        help="user LoRA safetensors applied at runtime (repeatable)")
+    parser.add_argument("--lora-scale", action="append", type=float, default=[],
+                        help="strength for each --lora, in the same order")
     parser.add_argument("--output", required=True)
     return parser.parse_args()
 
@@ -205,6 +209,14 @@ def validate_args(args: argparse.Namespace) -> None:
     # anchor would silently overwrite one keyframe's position with another's.
     if len(set(args.anchor)) != len(args.anchor):
         raise SystemExit(f"MiniMax H3 anchors must be distinct; got {args.anchor}.")
+    if len(args.lora_scale) != len(args.lora):
+        raise SystemExit(
+            f"MiniMax H3 needs one --lora-scale per --lora; got {len(args.lora)} LoRAs "
+            f"and {len(args.lora_scale)} scales."
+        )
+    for path in args.lora:
+        if not Path(path).is_file():
+            raise SystemExit(f"LoRA file is missing: {path}")
 
 
 def load_keyframes(paths: list[str]) -> list:
@@ -285,6 +297,21 @@ def main() -> int:
             # The Qwen3-VL vision tower is only loaded when a keyframe needs
             # encoding — a text-only run keeps skipping it.
             load_vision=bool(images),
+        )
+
+    # Runtime LoRA application — never a fuse. The DiT is quantized, so the
+    # applicator has to take each layer's logical dims from the quantization
+    # metadata (packed-uint32 storage shapes match no LoRA) and add the deltas
+    # during the forward pass. PortOS only ever passes --lora when its capability
+    # probe has already confirmed this module exists, so an ImportError here is a
+    # real contract violation and should surface, not be swallowed.
+    if args.lora:
+        print("STAGE:apply-loras", file=sys.stderr, flush=True)
+        from minimax_h3_mlx.lora import apply_loras
+
+        apply_loras(
+            pipe.transformer,
+            [{"path": p, "scale": s} for p, s in zip(args.lora, args.lora_scale)],
         )
 
     print("STAGE:inference", file=sys.stderr, flush=True)

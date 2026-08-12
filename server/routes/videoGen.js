@@ -34,6 +34,7 @@ import {
   isByovRuntimeReady,
   isByovRuntimeCurrent,
   invalidateByovReadyCache,
+  invalidateByovLoraCapabilityCache,
   invalidateRuntimeFingerprintCache,
   resolveRuntimeFingerprint,
   loadHistory,
@@ -492,6 +493,7 @@ router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
   // a stale "true" from before a deliberate cleanup. Same for the cached
   // runtime fingerprint — a reinstall can bump ltx/mlx/torch versions.
   invalidateByovReadyCache(info.id);
+  invalidateByovLoraCapabilityCache(info.id);
   invalidateRuntimeFingerprintCache(info.id);
 
   const scriptPath = join(PATHS.root, 'scripts', 'setup-image-video.sh');

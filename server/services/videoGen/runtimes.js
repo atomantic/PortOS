@@ -16,6 +16,7 @@ import { homedir, cpus, type as osType, release as osRelease } from 'os';
 import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
+import { createSingleFlight } from '../../lib/singleFlight.js';
 
 // Path to the dgrauet/ltx-2-mlx venv populated by `INSTALL_LTX2=1
 // scripts/setup-image-video.sh`. Used when a model entry has
@@ -37,6 +38,7 @@ export const WAN22_EXPECTED_REVISION = '2452f0c12edcc8886eebf15772205ce9c417a618
 export const MINIMAX_H3_VENV_PYTHON = join(homedir(), '.portos', 'minimax-h3-mlx', '.venv', 'bin', 'python3');
 export const MINIMAX_H3_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_minimax_h3.py');
 export const MINIMAX_H3_RUNTIME_PROBE_SCRIPT = join(PATHS.root, 'scripts', 'minimax_h3_runtime_probe.py');
+export const MINIMAX_H3_LORA_PROBE_SCRIPT = join(PATHS.root, 'scripts', 'minimax_h3_lora_probe.py');
 export const MINIMAX_H3_REPO_DIR = join(homedir(), '.portos', 'minimax-h3-mlx');
 export const MINIMAX_H3_EXPECTED_REVISION = 'fcd9e9b79a1d6018d91ac477c0968de1fa067e49';
 
@@ -84,6 +86,17 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     // registers only the source package namespace; it never prepends the whole
     // checkout, where an untracked root module could shadow a locked venv dep.
     probeArgs: [MINIMAX_H3_RUNTIME_PROBE_SCRIPT, MINIMAX_H3_REPO_DIR],
+    // Separate, OPTIONAL capability probe: can this checkout apply LoRAs to the
+    // quantized DiT at runtime? H3's shipped weights are 8-bit, so a LoRA can
+    // only ride along if the runner reads logical layer dims from the
+    // quantization metadata and adds deltas in the forward pass (fusing into
+    // packed-uint32 weights is not possible). The pinned revision has no LoRA
+    // code at all, so this probe fails today and LoRAs stay rejected with a
+    // precise reason — advancing the pin to a revision that satisfies the
+    // contract (see scripts/minimax_h3_lora_probe.py) opens the gate with no
+    // code change here. Absence of this key means "runtime can never take
+    // LoRAs", which is the correct answer for wan22 / hunyuan.
+    loraProbeArgs: [MINIMAX_H3_LORA_PROBE_SCRIPT, MINIMAX_H3_REPO_DIR],
     fingerprintPackages: ['mlx', 'mlx-metal', 'mlx-vlm', 'transformers', 'huggingface-hub'],
   },
   hunyuan: {
@@ -171,8 +184,16 @@ export async function isByovRuntimeReady(runtimeId) {
   // earlier successful probe.
   if (info.expectedRevision && !await isByovRuntimeCurrent(runtimeId)) return false;
   if (readyCache.get(runtimeId) === true) return true;
-  const probeOk = await new Promise((resolve) => {
-    const child = spawn(info.venvPython, info.probeArgs || ['-c', info.importProbe], {
+  const probeOk = await runVenvProbe(info.venvPython, info.probeArgs || ['-c', info.importProbe]);
+  if (probeOk) readyCache.set(runtimeId, true);
+  return probeOk;
+}
+
+// Spawn one exit-code-only probe in a BYOV venv. Bounded (30s SIGKILL) so a
+// wedged import can't pin a request open; any spawn/exit failure is `false`.
+function runVenvProbe(venvPython, args) {
+  return new Promise((resolve) => {
+    const child = spawn(venvPython, args, {
       env: safeChildProcessEnv(),
       stdio: ['ignore', 'ignore', 'ignore'],
     });
@@ -180,8 +201,73 @@ export async function isByovRuntimeReady(runtimeId) {
     child.on('close', (code) => { clearTimeout(timer); resolve(code === 0); });
     child.on('error', () => { clearTimeout(timer); resolve(false); });
   });
-  if (probeOk) readyCache.set(runtimeId, true);
-  return probeOk;
+}
+
+// Probed LoRA-capability verdicts per runtime. Booleans only — a missing entry
+// is "never probed", which is deliberately NOT the same as a probed `false`:
+// the sync accessor below must tell "we don't know yet" from "we asked and this
+// runner can't". Both outcomes are cached once resolved (a checkout can't grow a
+// LoRA applicator without a reinstall, and the install route invalidates); the
+// concurrent-probe coalescing lives in the single-flight, not in this Map.
+const loraCapabilityCache = new Map();
+const loraProbeFlight = createSingleFlight();
+export function invalidateByovLoraCapabilityCache(runtimeId) {
+  if (runtimeId) loraCapabilityCache.delete(runtimeId); else loraCapabilityCache.clear();
+}
+
+// Authoritative (async) answer: may this runtime take user LoRAs? Runtimes with
+// no `loraProbeArgs` can never take them. An installed-but-unprobed runtime runs
+// the probe once; the result is cached for the life of the process. An
+// uninstalled runtime is NOT cached, matching isByovRuntimeReady's policy that
+// negatives stay re-checkable so a finished install reflects immediately.
+export async function resolveByovRuntimeLoraCapable(runtimeId) {
+  const info = BYOV_RUNTIME_INFO[runtimeId];
+  if (!info?.loraProbeArgs) return false;
+  const cached = loraCapabilityCache.get(runtimeId);
+  if (cached !== undefined) return cached;
+  if (!existsSync(info.venvPython)) return false;
+  return loraProbeFlight.run(runtimeId, async () => {
+    const capable = await runVenvProbe(info.venvPython, info.loraProbeArgs);
+    loraCapabilityCache.set(runtimeId, capable);
+    return capable;
+  });
+}
+
+// Sync read of the same fact, for the sync paths that decorate model payloads
+// (decorateVideoModel in local.js). Only a probed verdict counts — an unprobed
+// runtime reads as "not capable", so the gate fails CLOSED and the UI never
+// offers a LoRA control the render would then refuse. Warms the cache in the
+// background so the next read reflects the truth; every path that REJECTS on
+// this awaits resolveByovRuntimeLoraCapable() first, so it never decides on a
+// cold read.
+export function byovRuntimeLoraCapable(runtimeId) {
+  const cached = loraCapabilityCache.get(runtimeId);
+  if (cached !== undefined) return cached;
+  // Skip the warm when the venv isn't there: resolve would return an uncached
+  // `false` anyway, so this would allocate a promise per call, forever.
+  const info = BYOV_RUNTIME_INFO[runtimeId];
+  if (info?.loraProbeArgs && existsSync(info.venvPython)) {
+    resolveByovRuntimeLoraCapable(runtimeId).catch(() => {});
+  }
+  return false;
+}
+
+// Single user-facing reason a video model can't take LoRAs. Lives here, beside
+// the capability data it reads, so the enqueue gate (prepareParams) and the
+// render gate (local.js buildArgs) can't drift into telling the user two
+// different stories — and so a future probe-gated runtime adds one branch, not
+// two more copies of a paragraph.
+export function videoLoraUnsupportedError(model, modelId) {
+  if (model?.runtime === 'minimax_h3') {
+    return new ServerError(
+      `The installed MiniMax H3 runtime cannot apply LoRAs. Model "${modelId}" has a quantized DiT, so LoRAs need a runner that applies them at render time from quantization metadata — the pinned checkout has no such applicator. Upgrade the H3 runtime from Video Gen once a build that supports it is pinned.`,
+      { status: 400, code: 'MINIMAX_H3_LORA_UNSUPPORTED' },
+    );
+  }
+  return new ServerError(
+    `LoRAs aren't supported on this model. Model "${modelId}" runs on "${model?.runtime || 'mlx_video'}" — use an LTX-2.x model (dgrauet ltx2, or the bf16 Unified Beta).`,
+    { status: 400, code: 'LORAS_REQUIRE_LTX2' },
+  );
 }
 
 // Resolve a checkout's exact revision without trusting a mutable tag/branch.

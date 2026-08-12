@@ -3,6 +3,7 @@ import toast from '../components/ui/Toast';
 import { updateMusicVideoProject } from '../services/apiMusicVideo.js';
 import { getVideoGenStatus, listLorasFull } from '../services/apiImageVideo.js';
 import useVideoModelTerms from './useVideoModelTerms.js';
+import { loraFamilyOf, VIDEO_LORA_FAMILIES } from '../lib/runnerFamilies';
 
 const isLtx23 = (model) => !!model
   && model.runtime === 'ltx2'
@@ -67,7 +68,7 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
   const audioReactiveModels = models.filter(isLtx23);
   const audioReactiveLoras = loras.filter((lora) =>
     /audio-reactive/i.test(`${lora.filename} ${lora.name || ''}`)
-    && (lora.loraCompatKey || lora.runnerFamily) === 'ltx-video');
+    && loraFamilyOf(lora) === VIDEO_LORA_FAMILIES.LTX_VIDEO);
   const detectedAudioReactiveLora = loras.find((lora) =>
     lora.filename === settings.audioReactiveLora)
     || audioReactiveLoras.find((lora) =>
