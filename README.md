@@ -1,3 +1,5 @@
+
+
 <p align="center">
   <img src="./docs/media/portos-logo.png" alt="PortOS logo" width="160" />
 </p>
@@ -305,7 +307,7 @@ PortOS binds to `0.0.0.0` so you can access it from any device on your Tailscale
 
 | Layer | Technologies |
 |-------|-------------|
-| **Frontend** | React 18, Vite, Tailwind CSS, Three.js, xterm.js |
+| **Frontend** | React 19, Vite, Tailwind CSS, Three.js, xterm.js |
 | **Backend** | Express.js, Socket.IO, PM2, Zod validation |
 | **Data** | PostgreSQL + pgvector (primary datastore — mandatory), JSON files for binary assets and synced/ephemeral state ([storage contract](./docs/STORAGE.md)) |
 | **AI** | Claude Code, Codex, Antigravity CLI, Kimi Code, Ollama, LM Studio (via the in-tree AI toolkit, `server/lib/aiToolkit/`) |
