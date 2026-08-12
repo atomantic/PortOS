@@ -1002,10 +1002,13 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // rejects LoRAs on non-ltx2 runtimes (the route also guards), so this is a
   // no-op there.
   const resolvedLoras = await resolveVideoLoras(loras);
-  // Resolve the runtime's LoRA capability BEFORE buildArgs, which reads it
-  // synchronously. Without this the render would hit a cold cache and reject a
-  // LoRA the installed runner can actually apply (the sync read fails closed).
-  if (resolvedLoras.length) await resolveByovRuntimeLoraCapable(model.runtime);
+  // `model` was decorated from a SYNC cache read, which is false on a cold
+  // cache. Resolve the probe and re-decorate from the settled verdict before
+  // buildArgs reads it off the snapshot — otherwise the first LoRA render after
+  // boot is refused on a capable install and only heals on retry.
+  const loraCapableModel = resolvedLoras.length
+    ? { ...model, runtimeLoraCapable: await resolveByovRuntimeLoraCapable(model.runtime) }
+    : model;
 
   // IC-LoRA remix: resolve the per-mode weight before any GPU work. A cached
   // weight resolves to the exact file inside the HF snapshot; an un-cached one
@@ -1317,7 +1320,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // logic of the spawn-error handler so failure modes converge.
   let bin, args;
   try {
-    ({ bin, args } = buildArgs({ pythonPath, modelId, model, wanModelPath, wanRequiredWeights, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, stage2Steps: actualStage2Steps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, outputPath, loras: resolvedLoras, icReferencePaths: resolvedIcReferencePaths, icLoraWeightPath, icStrength: actualIcStrength, icAttentionStrength: actualIcAttentionStrength, icSkipStage2 }));
+    ({ bin, args } = buildArgs({ pythonPath, modelId, model: loraCapableModel, wanModelPath, wanRequiredWeights, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, stage2Steps: actualStage2Steps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, outputPath, loras: resolvedLoras, icReferencePaths: resolvedIcReferencePaths, icLoraWeightPath, icStrength: actualIcStrength, icAttentionStrength: actualIcAttentionStrength, icSkipStage2 }));
   } catch (err) {
     job.status = 'error';
     const reason = err.message || 'Failed to build video gen args';

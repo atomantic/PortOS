@@ -174,10 +174,14 @@ vi.mock('fs', () => ({
 // DiT. Really a spawned python probe; stubbed here so the render-path tests
 // drive both verdicts without the shared child_process mock (which resolves
 // every spawn successfully) silently reporting "capable".
-const h3LoraState = vi.hoisted(() => ({ capable: false }));
+// `cached` is the SYNC read (false on a cold cache even for a capable install);
+// `capable` is the settled probe verdict. They are separate so a test can pin
+// the cold-cache case, where the two legitimately disagree.
+const h3LoraState = vi.hoisted(() => ({ capable: false, cached: null }));
 vi.mock('./runtimes.js', async (importOriginal) => ({
   ...await importOriginal(),
-  byovRuntimeLoraCapable: vi.fn((runtime) => runtime === 'minimax_h3' && h3LoraState.capable),
+  byovRuntimeLoraCapable: vi.fn((runtime) => runtime === 'minimax_h3'
+    && (h3LoraState.cached ?? h3LoraState.capable)),
   resolveByovRuntimeLoraCapable: vi.fn(async (runtime) => runtime === 'minimax_h3' && h3LoraState.capable),
 }));
 
@@ -2180,7 +2184,26 @@ describe('MiniMax H3 user LoRAs', () => {
     loras: [{ filename: 'fox.safetensors', scale: 0.8 }],
   });
 
-  afterEach(() => { h3LoraState.capable = false; });
+  afterEach(() => { h3LoraState.capable = false; h3LoraState.cached = null; });
+
+  // The model is decorated from the sync cache read, so on a capable install the
+  // FIRST LoRA render after boot sees `runtimeLoraCapable: false`. buildArgs must
+  // decide from the settled probe, not that stale snapshot, or the render is
+  // refused and only succeeds on a retry.
+  it('renders on a cold capability cache once the probe settles capable', async () => {
+    h3LoraState.capable = true;
+    h3LoraState.cached = false;   // sync read hasn't caught up yet
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+
+    await expect(h3Render('h3-lora-cold-cache')).resolves.toBeDefined();
+
+    const [, args] = spawnMock.mock.calls.find(([, a]) => (
+      Array.isArray(a) && a.some((arg) => String(arg).endsWith('/generate_minimax_h3.py'))
+    ));
+    expect(args).toContain('--lora');
+  });
 
   it('rejects LoRAs with an H3-specific reason when the runner has no applicator', async () => {
     h3LoraState.capable = false;
