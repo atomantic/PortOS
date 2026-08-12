@@ -1022,29 +1022,40 @@ describe('close-handler skip-finalization — source contract', () => {
     expect(guardBlock).toMatch(/\breturn\b/);
   });
 
-  it('runner handleAgentCompletion guards with pausedAgents.has and returns before completeAgent', () => {
-    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function handleAgentCompletion');
-    expect(fnStart, 'handleAgentCompletion must exist').toBeGreaterThan(-1);
-
-    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 6000);
+  // The behavioral counterpart of this guard lives in
+  // `agentCompletionRouting.test.js` — it calls the real `handleAgentCompletion`
+  // with a paused agent and asserts nothing is completed. That is the durable
+  // form (it survives extraction); this source check only pins the ORDERING
+  // inside the router, which has no behavioral seam of its own.
+  //
+  // The window is the router's own brace-balanced body, and the assertion is
+  // that the guard precedes BOTH ways out of it — the post-restart recovery
+  // hand-off and the live in-memory path — rather than a bare `completeAgent(`,
+  // which moved into `completeUntrackedAgentFromCosState` in #3872 and would
+  // silently make this test vacuous (indexOf → -1) if it were still named here.
+  it('runner handleAgentCompletion guards with pausedAgents.has and returns before either completion path', () => {
+    const fnBody = extractFunctionBody(AGENT_LIFECYCLE_SRC, 'export async function handleAgentCompletion');
+    expect(fnBody, 'handleAgentCompletion must exist and be extractable').toBeTruthy();
 
     // Guard present
     expect(fnBody).toMatch(/pausedAgents\.has\(agentId\)/);
 
-    // Guard appears BEFORE the main completeAgent / finalizeAgent calls
     const guardPos = fnBody.indexOf('pausedAgents.has(agentId)');
-    const completePos = fnBody.indexOf('completeAgent(');
-    expect(guardPos, 'pause guard must precede completeAgent in handleAgentCompletion').toBeLessThan(completePos);
-
-    // There is a return inside the guard block (early exit before finalization)
-    const guardBlock = fnBody.slice(guardPos, completePos);
-    expect(guardBlock).toMatch(/\breturn\b/);
+    for (const [label, dispatch] of [
+      ['post-restart recovery hand-off', 'completeUntrackedAgentFromCosState('],
+      ['live in-memory completion path', 'withMapEntryCleanup('],
+    ]) {
+      const dispatchPos = fnBody.indexOf(dispatch);
+      expect(dispatchPos, `${label} (${dispatch}) must exist in handleAgentCompletion`).toBeGreaterThan(-1);
+      expect(guardPos, `pause guard must precede the ${label}`).toBeLessThan(dispatchPos);
+      // There is a return inside the guard block (early exit before either path)
+      expect(fnBody.slice(guardPos, dispatchPos)).toMatch(/\breturn\b/);
+    }
   });
 
   it('runner pause guard also cleans up runnerAgents entry before returning', () => {
     // After returning early, the runner agent map entry must not be leaked.
-    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function handleAgentCompletion');
-    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 6000);
+    const fnBody = extractFunctionBody(AGENT_LIFECYCLE_SRC, 'export async function handleAgentCompletion');
 
     const guardPos = fnBody.indexOf('pausedAgents.has(agentId)');
     const returnAfterGuard = fnBody.indexOf('return', guardPos);

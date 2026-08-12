@@ -876,7 +876,95 @@ export async function extractPipelineOutputSummary(task, workspacePath, outputBu
 }
 
 /**
+ * Post-restart recovery: retire a completion event for an agent that is NOT in
+ * the in-memory `runnerAgents` map, using the persisted cos state as the only
+ * source of truth.
+ *
+ * A server restart drops every in-memory agent entry, so a completion that
+ * lands afterwards has no live record to finalize. This path deliberately
+ * BYPASSES `finalizeAgent` (and therefore worktree cleanup): the dead run's
+ * worktree is still on disk, and `handleOrphanedTask` needs it to resume rather
+ * than redo the work. Because it bypasses finalize, everything finalize would
+ * normally do that still matters here — notably the LI hand-off verdict stamp
+ * (#2779) — has to be done explicitly below.
+ *
+ * Split out of `handleAgentCompletion` (#3872) so that function reads as
+ * "route, then complete the live agent" instead of two unrelated jobs sharing
+ * one name.
+ */
+async function completeUntrackedAgentFromCosState(agentId, exitCode, success, duration) {
+  // Dynamic import: `cos.js` imports back into this cluster, so a static import
+  // of the transcript-hydrating `getAgent` here would close an import cycle.
+  const { getAgent: getAgentState } = await import('./cos.js');
+  const cosAgent = await getAgentState(agentId).catch(() => null);
+  if (!cosAgent) {
+    console.log(`⚠️ Received completion for unknown agent: ${agentId} (not in cos state)`);
+    return;
+  }
+  if (cosAgent.status === 'completed') {
+    console.log(`✅ Agent ${agentId} already completed (handled by orphan cleanup)`);
+    return;
+  }
+  // Post-restart the in-memory pausedAgents map is empty, but the persisted
+  // status still says paused — don't finalize a paused agent on a stray event.
+  if (cosAgent.status === 'paused') {
+    console.log(`⏸️ Ignoring completion for paused agent ${agentId} (awaiting resume)`);
+    return;
+  }
+  console.log(`🔄 Completing untracked agent ${agentId} from cos state (post-restart)`);
+  const task = cosAgent.taskId ? await getTaskById(cosAgent.taskId).catch(() => null) : null;
+  await dispatchRecoveredTaskOutputHook({
+    agentId,
+    task,
+    success,
+    workspacePath: cosAgent.metadata?.workspacePath || null,
+  });
+  await completeAgent(agentId, {
+    success,
+    exitCode,
+    duration,
+    orphaned: true,
+    error: success ? undefined : 'Agent completed after server restart'
+  });
+  if (cosAgent.taskId) {
+    if (task && task.status !== 'completed') {
+      if (success) {
+        // Stamp the LI hand-off verdict here too (#2779, codex P2) — this post-restart
+        // recovery bypasses finalizeAgent, so without it a hand-off that finished while
+        // the server was down would never federate its outcome. Only `success` is known
+        // on this path (no validationPassed/errorAnalysis), so it records a clean success.
+        const taskUpdate = await stampLiExecutionVerdict({ status: 'completed' }, task, { success });
+        await updateTask(cosAgent.taskId, taskUpdate, task.taskType || 'user');
+      } else {
+        // Hand the dead run's metadata to the retry handler so it can resume what
+        // was left behind. This path bypasses `finalizeAgent` (and its worktree
+        // cleanup), so the worktree is still on disk, branch and all — without it
+        // the retry builds a fresh tree off the default branch and redoes work
+        // that is sitting right there.
+        await handleOrphanedTask(cosAgent.taskId, agentId, getTaskById, { agentMetadata: cosAgent.metadata, agentStartedAt: cosAgent.startedAt });
+        // If orphan recovery settled the task into a terminal `blocked` state (retry budget
+        // exhausted), the local completion already recorded the proposal failure — so stamp
+        // the LI failure verdict here too (#2779, codex P2) or the originating peer would
+        // receive a terminal task with no verdict. A revived (pending) task carries no
+        // settled outcome yet, so it is intentionally left unstamped until it re-completes.
+        const settled = await getTaskById(cosAgent.taskId).catch(() => null);
+        if (settled && settled.status === 'blocked' && settled.metadata?.liProposal) {
+          const stamp = await stampLiExecutionVerdict({}, settled, { success: false });
+          if (stamp.metadata) {
+            await updateTask(cosAgent.taskId, stamp, settled.taskType || 'user').catch(() => {});
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
  * Handle agent completion (from runner events).
+ *
+ * Router, then the live in-memory completion path. The two early exits are the
+ * pause guard and the post-restart recovery hand-off — both return before any
+ * finalization runs against a live agent.
  */
 export async function handleAgentCompletion(agentId, exitCode, success, duration) {
   // Paused agents are finalized by markAgentPaused, not here — skip so a stray
@@ -889,70 +977,8 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
   }
   const agent = runnerAgents.get(agentId);
   if (!agent) {
-    // Agent not in memory map (server restarted). Check cos state for context.
-    const { getAgent: getAgentState } = await import('./cos.js');
-    const cosAgent = await getAgentState(agentId).catch(() => null);
-    if (!cosAgent) {
-      console.log(`⚠️ Received completion for unknown agent: ${agentId} (not in cos state)`);
-      return;
-    }
-    if (cosAgent.status === 'completed') {
-      console.log(`✅ Agent ${agentId} already completed (handled by orphan cleanup)`);
-      return;
-    }
-    // Post-restart the in-memory pausedAgents map is empty, but the persisted
-    // status still says paused — don't finalize a paused agent on a stray event.
-    if (cosAgent.status === 'paused') {
-      console.log(`⏸️ Ignoring completion for paused agent ${agentId} (awaiting resume)`);
-      return;
-    }
-    console.log(`🔄 Completing untracked agent ${agentId} from cos state (post-restart)`);
-    const task = cosAgent.taskId ? await getTaskById(cosAgent.taskId).catch(() => null) : null;
-    await dispatchRecoveredTaskOutputHook({
-      agentId,
-      task,
-      success,
-      workspacePath: cosAgent.metadata?.workspacePath || null,
-    });
-    await completeAgent(agentId, {
-      success,
-      exitCode,
-      duration,
-      orphaned: true,
-      error: success ? undefined : 'Agent completed after server restart'
-    });
-    if (cosAgent.taskId) {
-      if (task && task.status !== 'completed') {
-        if (success) {
-          // Stamp the LI hand-off verdict here too (#2779, codex P2) — this post-restart
-          // recovery bypasses finalizeAgent, so without it a hand-off that finished while
-          // the server was down would never federate its outcome. Only `success` is known
-          // on this path (no validationPassed/errorAnalysis), so it records a clean success.
-          const taskUpdate = await stampLiExecutionVerdict({ status: 'completed' }, task, { success });
-          await updateTask(cosAgent.taskId, taskUpdate, task.taskType || 'user');
-        } else {
-          // Hand the dead run's metadata to the retry handler so it can resume what
-          // was left behind. This path bypasses `finalizeAgent` (and its worktree
-          // cleanup), so the worktree is still on disk, branch and all — without it
-          // the retry builds a fresh tree off the default branch and redoes work
-          // that is sitting right there.
-          await handleOrphanedTask(cosAgent.taskId, agentId, getTaskById, { agentMetadata: cosAgent.metadata, agentStartedAt: cosAgent.startedAt });
-          // If orphan recovery settled the task into a terminal `blocked` state (retry budget
-          // exhausted), the local completion already recorded the proposal failure — so stamp
-          // the LI failure verdict here too (#2779, codex P2) or the originating peer would
-          // receive a terminal task with no verdict. A revived (pending) task carries no
-          // settled outcome yet, so it is intentionally left unstamped until it re-completes.
-          const settled = await getTaskById(cosAgent.taskId).catch(() => null);
-          if (settled && settled.status === 'blocked' && settled.metadata?.liProposal) {
-            const stamp = await stampLiExecutionVerdict({}, settled, { success: false });
-            if (stamp.metadata) {
-              await updateTask(cosAgent.taskId, stamp, settled.taskType || 'user').catch(() => {});
-            }
-          }
-        }
-      }
-    }
-    return;
+    // Agent not in memory map (server restarted). Retire it from cos state.
+    return completeUntrackedAgentFromCosState(agentId, exitCode, success, duration);
   }
 
   const { task, runId, model, executionId, laneName } = agent;

@@ -327,14 +327,17 @@ describe('agentLifecycle — guard wiring', () => {
 });
 
 /**
- * Source of the post-restart recovery branch in handleAgentCompletion, sliced
- * between its opening log line and the first statement after it.
+ * Source of the post-restart recovery path. It was an inline `if (!agent)`
+ * branch of handleAgentCompletion until #3872 split it into its own function;
+ * the slice follows it there rather than re-anchoring on a neighbouring
+ * statement inside the router, so the window is the whole function body and
+ * cannot silently shrink as the path grows.
  */
 function recoveryBranchSource() {
-  const start = AGENT_LIFECYCLE_SRC.indexOf('Completing untracked agent');
-  expect(start, 'post-restart recovery branch must exist').toBeGreaterThan(-1);
-  const end = AGENT_LIFECYCLE_SRC.indexOf('const { task, runId, model', start);
-  expect(end, 'end anchor (the statement after the branch) must exist').toBeGreaterThan(start);
+  const start = AGENT_LIFECYCLE_SRC.indexOf('async function completeUntrackedAgentFromCosState');
+  expect(start, 'post-restart recovery path must exist').toBeGreaterThan(-1);
+  const end = AGENT_LIFECYCLE_SRC.indexOf('export async function handleAgentCompletion', start);
+  expect(end, 'end anchor (the router that dispatches into it) must exist').toBeGreaterThan(start);
   return AGENT_LIFECYCLE_SRC.slice(start, end);
 }
 
