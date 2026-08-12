@@ -123,6 +123,7 @@ import {
   clearPerpetualPark,
   resetPerpetualForManualRun,
   getPerpetualParkInfo,
+  isPerpetualParkActive,
   getPerpetualDrainState,
   recordPerpetualDispatch,
   applyOnDemandRunResets,
@@ -1632,6 +1633,28 @@ describe('taskSchedule', () => {
         expect(info).toMatchObject({ parkedUntil: future, parkReason: 'no-actionable-issues', parkActionableCount: 0, parkCounts: { open: 40, inFlight: 2, filtered: 38 } })
         expect(await getPerpetualParkInfo('claim-issue', 'app-2')).toBeNull()
         expect(await getPerpetualParkInfo('claim-issue', 'unknown-app')).toBeNull()
+      })
+
+      // The elapse-aware question the completion refill asks (#3848). It must differ
+      // from getPerpetualParkInfo's "is there a park record": an ELAPSED park is
+      // deliberately left on disk (it reads as "due right now"), so treating its
+      // presence as a stop signal would wedge the drain until something cleared it.
+      it('isPerpetualParkActive is true only while parkedUntil is in the future', async () => {
+        const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+        const past = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'perpetual', enabled: true } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {
+            'app-parked': { lastRun: null, count: 0, parkedUntil: future },
+            'app-elapsed': { lastRun: null, count: 0, parkedUntil: past },
+            'app-unparked': { lastRun: null, count: 0 }
+          } } }
+        })
+        expect(await isPerpetualParkActive('claim-issue', 'app-parked')).toBe(true)
+        expect(await isPerpetualParkActive('claim-issue', 'app-elapsed')).toBe(false)
+        expect(await isPerpetualParkActive('claim-issue', 'app-unparked')).toBe(false)
+        expect(await isPerpetualParkActive('claim-issue', 'unknown-app')).toBe(false)
+        expect(await isPerpetualParkActive('unknown-type', 'app-parked')).toBe(false)
       })
 
       it('parkPerpetual omits parkCounts when no breakdown is provided', async () => {

@@ -35,8 +35,9 @@ vi.mock('./github.js', async (importActual) => ({
   checkGhHealth: (...a) => ghHealth(...a),
 }));
 
-import { selectDryRunAutoApproved, exceedsMaxSpawns, resolveIssueAuthorFilterBlock, resolveSwarmBlock, isCooldownExemptTask, emitOnDemandEmpty, recordPerpetualTransient, buildJiraTicketTask, buildImprovementDedupSets, normalizeWorkItemRef, buildTargetWorkItemBlock, resolveTaskInputHook, resolveReconcileDrainGate } from './cosTaskGenerator.js';
+import { selectDryRunAutoApproved, exceedsMaxSpawns, resolveIssueAuthorFilterBlock, resolveSwarmBlock, isCooldownExemptTask, emitOnDemandEmpty, recordPerpetualTransient, buildJiraTicketTask, buildImprovementDedupSets, normalizeWorkItemRef, buildTargetWorkItemBlock, resolveTaskInputHook, resolveReconcileDrainGate, applyPerpetualDrainCap } from './cosTaskGenerator.js';
 import { cosEvents } from './cosEvents.js';
+import { DEFAULT_TASK_INTERVALS } from './taskSchedule.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1132,15 +1133,16 @@ describe('ignoreTaskId reaches BOTH completion-continuation generators (#3179)',
 
 /**
  * The perpetual reconcile drains (branch- and issue-reconcile) re-issue themselves
- * after every completed run, so their only brakes are the two this gate applies.
- * On 2026-08-12 both were missing in practice — the refill rode the on-demand lane,
- * which reset the convergence signature on every hop — and ~40 branch-reconcile
- * coordinators ran between 05:19 and 08:47 against the same two branches.
+ * after every completed run, so their brakes are all that stands between them and
+ * a runaway. On 2026-08-12 the signature brake was missing in practice — the refill
+ * rode the on-demand lane, which reset the convergence signature on every hop —
+ * and ~40 branch-reconcile coordinators ran between 05:19 and 08:47 against the
+ * same two branches. The consecutive-dispatch cap is NOT this gate's job any more
+ * (#3848): it moved to applyPerpetualDrainCap so every perpetual drain gets it.
  */
 describe('resolveReconcileDrainGate', () => {
   // Stand-in for the injected taskSchedule module.
-  const fakeSchedule = ({ signature = null, dispatchCount = 0, cap = 5 } = {}) => ({
-    PERPETUAL_DRAIN_DISPATCH_CAP: cap,
+  const fakeSchedule = ({ signature = null, dispatchCount = 0 } = {}) => ({
     getPerpetualDrainState: vi.fn(async () => ({ signature, dispatchCount })),
     parkPerpetual: vi.fn(async () => {}),
     recordPerpetualDispatch: vi.fn(async () => dispatchCount + 1)
@@ -1151,7 +1153,7 @@ describe('resolveReconcileDrainGate', () => {
     label: '🔀 branch-reconcile', unit: 'branch(es)', ...over
   });
 
-  it('dispatches when the set advanced and the budget is unspent', async () => {
+  it('dispatches when the set advanced', async () => {
     const ts = fakeSchedule({ signature: 'a:NEEDS_PR:none|b:IN_REVIEW:5', dispatchCount: 2 });
     expect(await resolveReconcileDrainGate(ts, 'branch-reconcile', app, ctx())).toBe(true);
     expect(ts.parkPerpetual).not.toHaveBeenCalled();
@@ -1168,31 +1170,104 @@ describe('resolveReconcileDrainGate', () => {
     expect(ts.recordPerpetualDispatch).not.toHaveBeenCalled();
   });
 
-  // The brake the no-progress guard cannot supply: every cycle looks like honest
-  // progress, so only a hard budget ends it.
-  it('parks drain-cap once the consecutive-dispatch budget is spent, even on real progress', async () => {
-    const ts = fakeSchedule({ signature: 'stale-sig', dispatchCount: 5 });
-    expect(await resolveReconcileDrainGate(ts, 'branch-reconcile', app, ctx({ actionableCount: 3 }))).toBe(false);
+  // Exactly one implementation of the cap survives, and it is not this one — an
+  // advanced set dispatches here no matter how much budget has been spent, because
+  // applyPerpetualDrainCap already ran (and returned) at the choke point.
+  it('no longer applies a dispatch cap of its own', async () => {
+    const ts = fakeSchedule({ signature: 'stale-sig', dispatchCount: 99 });
+    expect(await resolveReconcileDrainGate(ts, 'branch-reconcile', app, ctx({ actionableCount: 3 }))).toBe(true);
+    expect(ts.parkPerpetual).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The ONE consecutive-dispatch cap, at the choke point every spawn engine funnels
+ * through. Per type so a bound that suits the reconcile scans (a handful of
+ * branches a day) cannot throttle a healthy claim-issue drain to five issues a
+ * window — the claim drains ship with no cap at all and stay unbounded (#3848).
+ */
+describe('applyPerpetualDrainCap', () => {
+  const fakeSchedule = (dispatchCount = 0) => ({
+    INTERVAL_TYPES: { PERPETUAL: 'perpetual' },
+    getPerpetualDrainState: vi.fn(async () => ({ signature: null, dispatchCount })),
+    parkPerpetual: vi.fn(async () => {})
+  });
+  const app = { id: 'app-1', name: 'App One' };
+  const perpetual = (over = {}) => ({ type: 'perpetual', ...over });
+
+  it('parks drain-cap once the budget is spent, zeroing signature + counter in the park write', async () => {
+    const ts = fakeSchedule(5);
+    expect(await applyPerpetualDrainCap(app, 'branch-reconcile', perpetual({ drainDispatchCap: 5 }), ts)).toEqual({ skip: true });
     expect(ts.parkPerpetual).toHaveBeenCalledWith('branch-reconcile', 'app-1', {
-      reason: 'drain-cap', actionableCount: 3, signature: null, dispatchCount: 0
+      reason: 'drain-cap', signature: null, dispatchCount: 0
     });
-    // Nothing recorded as dispatched, so the next recheck re-drives from scratch.
-    expect(ts.recordPerpetualDispatch).not.toHaveBeenCalled();
   });
 
   it('spends exactly CAP dispatches before capping', async () => {
     const outcomes = [];
     for (let dispatchCount = 0; dispatchCount <= 5; dispatchCount += 1) {
-      const ts = fakeSchedule({ signature: `sig-${dispatchCount}`, dispatchCount, cap: 5 });
-      outcomes.push(await resolveReconcileDrainGate(ts, 'branch-reconcile', app, ctx()));
+      outcomes.push((await applyPerpetualDrainCap(app, 'branch-reconcile', perpetual({ drainDispatchCap: 5 }), fakeSchedule(dispatchCount))).skip);
     }
-    expect(outcomes).toEqual([true, true, true, true, true, false]);
+    expect(outcomes).toEqual([false, false, false, false, false, true]);
   });
 
-  it('checks no-progress BEFORE the cap, so a stuck set parks with the accurate reason', async () => {
-    const ts = fakeSchedule({ signature: 'a:NEEDS_PR:none', dispatchCount: 9 });
-    await resolveReconcileDrainGate(ts, 'branch-reconcile', app, ctx());
-    expect(ts.parkPerpetual.mock.calls[0][2].reason).toBe('no-progress');
+  // The whole reason the cap is per-type: an uncapped claim drain must keep going.
+  it('never parks a perpetual type with no cap configured, however many hops it has taken', async () => {
+    for (const drainDispatchCap of [undefined, null, 'nope']) {
+      const ts = fakeSchedule(500);
+      expect(await applyPerpetualDrainCap(app, 'claim-issue', perpetual({ drainDispatchCap }), ts)).toEqual({ skip: false });
+      expect(ts.parkPerpetual).not.toHaveBeenCalled();
+      // Unbounded types must not even pay for the state read.
+      expect(ts.getPerpetualDrainState).not.toHaveBeenCalled();
+    }
+  });
+
+  it('ignores non-perpetual intervals entirely', async () => {
+    const ts = fakeSchedule(500);
+    expect(await applyPerpetualDrainCap(app, 'branch-reconcile', { type: 'daily', drainDispatchCap: 5 }, ts)).toEqual({ skip: false });
+    expect(ts.getPerpetualDrainState).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The cap is checked ONCE, at the single point all four spawn engines funnel
+ * through, and BEFORE the detectors/scans it would only discard the results of.
+ */
+describe('the drain cap has exactly one implementation, at the choke point', () => {
+  it('generateManagedAppImprovementTaskForType applies it ahead of the work gate and the reconcile scans', () => {
+    const start = GEN_SRC.indexOf('export async function generateManagedAppImprovementTaskForType');
+    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('return task;', start));
+    const capIdx = body.indexOf('applyPerpetualDrainCap(app, taskType, interval, taskSchedule)');
+    expect(capIdx, 'the choke point must apply the per-type drain cap').toBeGreaterThan(-1);
+    expect(capIdx).toBeLessThan(body.indexOf('applyPerpetualWorkGate('));
+    expect(capIdx).toBeLessThan(body.indexOf('resolveBranchReconcileBlock('));
+    expect(capIdx).toBeLessThan(body.indexOf('resolveIssueReconcileBlock('));
+  });
+
+  it('no second cap implementation reads PERPETUAL_DRAIN_DISPATCH_CAP or re-parks drain-cap', () => {
+    // The reconcile gate used to carry its own copy; the constant now only names
+    // the DEFAULT_TASK_INTERVALS value for the two reconcile types.
+    expect(GEN_SRC).not.toContain('PERPETUAL_DRAIN_DISPATCH_CAP');
+    expect(GEN_SRC.match(/reason: 'drain-cap'/g) || []).toHaveLength(1);
+  });
+
+  it("the reconcile types ship a cap and the claim drains deliberately do not", () => {
+    for (const taskType of ['branch-reconcile', 'issue-reconcile']) {
+      expect(DEFAULT_TASK_INTERVALS[taskType].drainDispatchCap).toBe(5);
+    }
+    for (const taskType of ['claim-issue', 'claim-work', 'plan-task']) {
+      expect(DEFAULT_TASK_INTERVALS[taskType].drainDispatchCap).toBeUndefined();
+    }
+  });
+
+  it('the work gate spends a dispatch on the actionable path and zeroes the budget when it parks', () => {
+    const start = GEN_SRC.indexOf('async function applyPerpetualWorkGate');
+    const gate = GEN_SRC.slice(start, GEN_SRC.indexOf('\n}', start));
+    // Without this the counter never moves for the non-reconcile drains and their
+    // cap (when one is configured) could never fire.
+    expect(gate).toContain('recordPerpetualDispatch(taskType, app.id, null)');
+    // A terminal park must not leave a stale count for the next drain window.
+    expect(gate).toMatch(/parkPerpetual\(taskType, app\.id, \{[^}]*dispatchCount: 0[^}]*\}\)/);
   });
 });
 

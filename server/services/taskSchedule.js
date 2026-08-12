@@ -256,6 +256,38 @@ const NON_COMMITTING_COORDINATOR_METADATA = { useWorktree: false, openPR: false,
 // Shared config for code-reviewer-a and code-reviewer-b (two instances for independent provider/model configuration)
 const CODE_REVIEWER_INTERVAL = { type: INTERVAL_TYPES.WEEKLY, enabled: false, weekdaysOnly: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true, pipeline: { stages: [{ name: 'Codebase Review', promptKey: 'code-reviewer-review', readOnly: true, providerId: null, model: null, precondition: { fileNotExists: 'REVIEW.md' } }, { name: 'Triage & Implement', promptKey: 'code-reviewer-implement', readOnly: false, providerId: null, model: null, precondition: { fileExists: 'REVIEW.md' } }] } } };
 
+/**
+ * Default `drainDispatchCap` for the reconcile drains: how many times a perpetual
+ * drain may dispatch back-to-back before it is parked regardless of how much
+ * progress it reports.
+ *
+ * The `lastActionableSignature` guard stops the drain only when a full cycle
+ * changes NOTHING. It cannot stop a drain whose set keeps changing without ever
+ * emptying — a branch that oscillates between two states, a coordinator that opens
+ * a PR one run and closes it the next, a repo where new work arrives as fast as it
+ * is finished. Those are indistinguishable from healthy progress one cycle at a
+ * time, and on 2026-08-12 that shape ran ~40 coordinator agents between 05:19 and
+ * 08:47 against the same two branches. So progress buys more cycles, not unlimited
+ * ones: past the cap the drain parks until its recheck cadence, which is a delay,
+ * never a dropped item — the branches are still there and the next recheck sees
+ * them. Five is enough for a legitimately long drain (open PR → CI → merge →
+ * cleanup) to finish a couple of branches per window.
+ *
+ * The count is very nearly "consecutive dispatches": every terminal park and every
+ * manual re-run zero it. The one gap is a FAILED run — it neither refills nor
+ * parks, so its spent dispatches carry into the next scheduled window and that
+ * window caps early. It self-heals within one window (the next park zeroes it), and
+ * erring toward capping early is the safe direction for a runaway guard.
+ *
+ * Why the cap is PER TYPE (`drainDispatchCap`) and not one global number: five is
+ * ample for finishing branches (a handful per day) but would throttle a HEALTHY
+ * claim-issue drain to five issues per recheck window — a real regression for a
+ * drain the user relies on running productively overnight. So the claim drains
+ * ship without the key at all (absent/`null` ⇒ unbounded, their work-detector's
+ * idle park remains the only brake) and only the reconcile scans carry a number.
+ */
+export const PERPETUAL_DRAIN_DISPATCH_CAP = 5;
+
 export const DEFAULT_TASK_INTERVALS = {
   'security':            { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null },
   'code-quality':        { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null },
@@ -283,7 +315,7 @@ export const DEFAULT_TASK_INTERVALS = {
   // SIBLING worktrees, never in its own cwd — hence the shared non-committing
   // -coordinator posture above. Off by default — enabling it is the user's
   // explicit consent to let it drive PRs on a schedule.
-  'branch-reconcile':    { type: INTERVAL_TYPES.PERPETUAL, enabled: false, providerId: null, model: null, prompt: null, recheckCron: '0 3 * * *', taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, cleanupMerged: true, openPr: true, resolveConflicts: true, autoMerge: true, finishAbandoned: true } },
+  'branch-reconcile':    { type: INTERVAL_TYPES.PERPETUAL, enabled: false, providerId: null, model: null, prompt: null, recheckCron: '0 3 * * *', drainDispatchCap: PERPETUAL_DRAIN_DISPATCH_CAP, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, cleanupMerged: true, openPr: true, resolveConflicts: true, autoMerge: true, finishAbandoned: true } },
   // issue-reconcile heals ZOMBIE issues: open + `in-progress` (claimed) yet with
   // their PR already MERGED and no live claim anywhere — a partial ship left the
   // claim marker on, so the queue (which skips `in-progress`) never re-picks the
@@ -299,7 +331,7 @@ export const DEFAULT_TASK_INTERVALS = {
   // issue-state mutation is its whole deliverable — hence the shared
   // non-committing-coordinator posture above. Off by default — enabling it is the
   // user's explicit consent to let it mutate issue state on a schedule.
-  'issue-reconcile':     { type: INTERVAL_TYPES.PERPETUAL, enabled: false, providerId: null, model: null, prompt: null, recheckCron: '0 4 * * *', taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, autoClose: true } },
+  'issue-reconcile':     { type: INTERVAL_TYPES.PERPETUAL, enabled: false, providerId: null, model: null, prompt: null, recheckCron: '0 4 * * *', drainDispatchCap: PERPETUAL_DRAIN_DISPATCH_CAP, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA, autoClose: true } },
   'console-errors':      { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null },
   'dependency-updates':  { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null },
   'documentation':       { type: INTERVAL_TYPES.ONCE, enabled: false, providerId: null, model: null, prompt: null },
@@ -1104,6 +1136,22 @@ export async function getPerpetualParkInfo(taskType, appId = null) {
 }
 
 /**
+ * Is this type+app parked with an UNEXPIRED `parkedUntil`?
+ *
+ * `getPerpetualParkInfo` reports the park record whether or not it has elapsed —
+ * an elapsed park is deliberately left on disk (it reads as "due right now"), so
+ * its mere presence is not a stop signal. This is the elapse-aware question, and
+ * it is what the completion refill asks before re-issuing a drain: a park means
+ * "stop draining until the recheck cadence", and until #3848 the refill lane
+ * never asked, so a park could not stop a refill hop.
+ */
+export async function isPerpetualParkActive(taskType, appId = null) {
+  const schedule = await loadSchedule();
+  const record = resolveExecutionRecord(schedule, taskType, appId);
+  return parkedUntilMs(record) > Date.now();
+}
+
+/**
  * A perpetual drain's convergence state, read in ONE pass: the actionable
  * signature its last dispatch was handed, and how many times it has dispatched
  * since it last went idle. Read together because they are decided together — two
@@ -1148,30 +1196,6 @@ export async function recordPerpetualDispatch(taskType, appId = null, signature)
   await saveSchedule(schedule);
   return count;
 }
-
-/**
- * How many times a perpetual drain may dispatch back-to-back before it is parked
- * regardless of how much progress it reports.
- *
- * The `lastActionableSignature` guard stops the drain only when a full cycle
- * changes NOTHING. It cannot stop a drain whose set keeps changing without ever
- * emptying — a branch that oscillates between two states, a coordinator that opens
- * a PR one run and closes it the next, a repo where new work arrives as fast as it
- * is finished. Those are indistinguishable from healthy progress one cycle at a
- * time, and on 2026-08-12 that shape ran ~40 coordinator agents between 05:19 and
- * 08:47 against the same two branches. So progress buys more cycles, not unlimited
- * ones: past the cap the drain parks until its recheck cadence, which is a delay,
- * never a dropped item — the branches are still there and the next recheck sees
- * them. Five is enough for a legitimately long drain (open PR → CI → merge →
- * cleanup) to finish a couple of branches per window.
- *
- * The count is very nearly "consecutive dispatches": every terminal park and every
- * manual re-run zero it. The one gap is a FAILED run — it neither refills nor
- * parks, so its spent dispatches carry into the next scheduled window and that
- * window caps early. It self-heals within one window (the next park zeroes it), and
- * erring toward capping early is the safe direction for a runaway guard.
- */
-export const PERPETUAL_DRAIN_DISPATCH_CAP = 5;
 
 /**
  * Clear a perpetual task's park so the drain resumes (its work-detector found

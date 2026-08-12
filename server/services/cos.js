@@ -1345,6 +1345,17 @@ async function refillPerpetualForCompletedAgent(agent) {
     // the still-`in_progress` completing task; letting triggerOnDemandTask emit
     // its event would fire a redundant SECOND dequeue of the same request.
     if (!isImprovementEnabled(state)) return;
+    // A PARK STOPS A REFILL (#3848). Park elapse used to be read only by the
+    // SCHEDULED lane, so a drain that parked itself (idle detector, no-progress,
+    // drain cap) could still be re-issued here on the very next completion — the
+    // park meant nothing on the one lane that does the re-dispatching, and the
+    // work-detector re-deciding was the only brake left. A human "Run Now" is
+    // unaffected: applyOnDemandRunResets clears the park first for a USER-origin
+    // request, and only a refill reaches this line with the park intact.
+    if (await taskScheduleMod.isPerpetualParkActive(plan.taskType, plan.appId)) {
+      emitLog('debug', `Perpetual refill for ${plan.taskType} skipped: parked until its recheck cadence`, { appId: plan.appId });
+      return;
+    }
     // `origin: 'refill'` — this re-issue borrows the on-demand LANE but is not a
     // human pressing Run, so the drain engines must leave the park, the
     // convergence signature, and the dispatch counter intact. Without it the

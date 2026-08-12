@@ -2166,7 +2166,13 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
     ignoreTaskId
   });
   if (detection.actionable) {
-    await taskSchedule.clearPerpetualPark(taskType, app.id);
+    // Spend one dispatch from the type's `drainDispatchCap` budget (and clear the
+    // park in the same write — recordPerpetualDispatch does both). These drains
+    // carry no actionable signature (only the reconcile scans produce one), so
+    // pass null: the counter is the ONLY convergence brake they have besides the
+    // detector going idle, and without an increment here the shared cap gate in
+    // applyPerpetualDrainCap would read a budget that never moves.
+    await taskSchedule.recordPerpetualDispatch(taskType, app.id, null);
     recordPerpetualTransient(taskType, app.id, null);
     metadata.perpetual = true;
     return { skip: false };
@@ -2189,8 +2195,44 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
   const counts = detection.total != null
     ? { open: detection.total, inFlight: detection.inFlightCount ?? 0, filtered: detection.filteredCount ?? 0 }
     : null;
-  await taskSchedule.parkPerpetual(taskType, app.id, { reason: detection.reason, actionableCount: detection.count, counts });
+  // Terminal park — zero the dispatch budget in the same write, so the next drain
+  // window starts fresh instead of capping early on a previous window's spend.
+  await taskSchedule.parkPerpetual(taskType, app.id, { reason: detection.reason, actionableCount: detection.count, counts, dispatchCount: 0 });
   emitLog('info', `Perpetual ${taskType} parked for ${app.name}: ${detection.reason}`, { appId: app.id });
+  return { skip: true };
+}
+
+/**
+ * The ONE consecutive-dispatch cap for every perpetual drain, checked at the
+ * choke point all four spawn engines funnel through.
+ *
+ * Every perpetual drain re-issues itself the moment its run completes, so
+ * "keeps finding work" and "is stuck in a loop" look identical one cycle at a
+ * time. The bound is per type (`interval.drainDispatchCap`, from
+ * DEFAULT_TASK_INTERVALS) rather than global because the right number differs by
+ * an order of magnitude: the reconcile scans finish a handful of branches a day
+ * and cap at 5, while a healthy claim-issue drain should keep going all night —
+ * so an absent/null cap means UNBOUNDED and leaves that drain's behavior alone.
+ *
+ * Runs BEFORE the work detector and the reconcile scans, so a capped drain parks
+ * without paying for a `gh`/`git` scan it is going to discard. That also means the
+ * cap now preempts the reconcile gate's `no-progress` brake once the budget is
+ * spent; both are terminal parks on the same recheck cadence, so the only
+ * difference is which reason is recorded.
+ *
+ * @returns {Promise<{skip:boolean}>}
+ */
+export async function applyPerpetualDrainCap(app, taskType, interval, taskSchedule) {
+  if (interval.type !== taskSchedule.INTERVAL_TYPES.PERPETUAL) return { skip: false };
+  const cap = interval.drainDispatchCap;
+  // Absent/null (and any non-numeric hand-edit) ⇒ unbounded.
+  if (!Number.isFinite(cap)) return { skip: false };
+  const { dispatchCount } = await taskSchedule.getPerpetualDrainState(taskType, app.id);
+  if (dispatchCount < cap) return { skip: false };
+  // One write lands the park, the cleared signature, and the zeroed budget — a
+  // terminal park must never leave a stale count for the next window.
+  await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'drain-cap', signature: null, dispatchCount: 0 });
+  emitLog('info', `Perpetual ${taskType} parked for ${app.name}: ${dispatchCount} consecutive dispatches reached the drain cap of ${cap} — will re-drive on next recheck`, { appId: app.id });
   return { skip: true };
 }
 
@@ -2216,16 +2258,19 @@ const countSuffix = (items, noun, describe) => {
  * Shared convergence gate for the reconcile perpetual drains (branch + issue).
  * Both have the same shape — a deterministic scan produced a non-empty actionable
  * set and now has to decide whether driving it AGAIN is progress or a loop — so
- * both get the same two brakes, in order:
+ * both get the same brake:
  *
- *   1. `no-progress` — the set is byte-identical to the one the last dispatch was
- *      handed, so another identical coordinator would do exactly what the last one
- *      already failed to accomplish.
- *   2. `drain-cap` — the set keeps CHANGING but never empties. Brake 1 can't see
- *      this: each cycle looks like honest progress. The cap bounds the drain
- *      anyway, because "made some progress" is not a licence to run forever.
+ *   `no-progress` — the set is byte-identical to the one the last dispatch was
+ *   handed, so another identical coordinator would do exactly what the last one
+ *   already failed to accomplish.
  *
- * Either park clears the signature and the counter, so the next recheck starts a
+ * The second brake — `drain-cap`, for a set that keeps CHANGING but never empties,
+ * which this one cannot see because each cycle looks like honest progress — is NOT
+ * here: it lives in `applyPerpetualDrainCap` at the shared choke point, so every
+ * perpetual drain gets it rather than only these two (#3848). Having it in both
+ * places was two implementations of one rule.
+ *
+ * The park clears the signature and the counter, so the next recheck starts a
  * clean window and nothing is dropped — the work is still there to be found.
  *
  * @param {object} taskSchedule - the taskSchedule module (injected, as the callers do)
@@ -2236,21 +2281,14 @@ const countSuffix = (items, noun, describe) => {
  * @returns {Promise<boolean>} true to dispatch; false when the drain was parked
  */
 export async function resolveReconcileDrainGate(taskSchedule, taskType, app, { signature, actionableCount, label, unit }) {
-  // Both brakes park in ONE write — the park fields, the cleared signature, and the
-  // zeroed dispatch budget land together, so no terminal park can leave a stale
-  // count behind for the next drain window to trip over.
-  const parkAndStop = async (reason, detail) => {
-    await taskSchedule.parkPerpetual(taskType, app.id, { reason, actionableCount, signature: null, dispatchCount: 0 });
-    emitLog('info', `${label} parked for ${app.name}: ${detail}`, { appId: app.id });
-    return false;
-  };
-
-  const { signature: lastSignature, dispatchCount } = await taskSchedule.getPerpetualDrainState(taskType, app.id);
+  const { signature: lastSignature } = await taskSchedule.getPerpetualDrainState(taskType, app.id);
   if (signature === lastSignature) {
-    return parkAndStop('no-progress', `${actionableCount} ${unit} unchanged since last run (no progress — will re-drive on next recheck)`);
-  }
-  if (dispatchCount >= taskSchedule.PERPETUAL_DRAIN_DISPATCH_CAP) {
-    return parkAndStop('drain-cap', `${dispatchCount} consecutive dispatches with ${actionableCount} ${unit} still actionable — drain cap reached, will re-drive on next recheck`);
+    // The park fields, the cleared signature, and the zeroed dispatch budget land
+    // in ONE write, so no terminal park can leave a stale count behind for the
+    // next drain window to trip over.
+    await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'no-progress', actionableCount, signature: null, dispatchCount: 0 });
+    emitLog('info', `${label} parked for ${app.name}: ${actionableCount} ${unit} unchanged since last run (no progress — will re-drive on next recheck)`, { appId: app.id });
+    return false;
   }
 
   // Progress within budget — resume the drain, record the signature, and spend one
@@ -2671,6 +2709,12 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   // interval/cadence/recording; `promptTaskType` drives prompt selection, PLAN
   // gating, and the forge-specific author-filter directive below.
   const promptTaskType = await resolveClaimWorkRouting(app, taskType, metadata, taskSchedule);
+
+  // Consecutive-dispatch cap for EVERY perpetual drain (#3848). First, because a
+  // capped drain must not pay for a work-detector probe or a reconcile git/gh scan
+  // it is only going to discard.
+  const drainCap = await applyPerpetualDrainCap(app, taskType, interval, taskSchedule);
+  if (drainCap.skip) return null;
 
   // Perpetual (drain-until-done) gate — probes for actionable work before
   // building the prompt or burning an agent (branch-/issue-reconcile self-gate

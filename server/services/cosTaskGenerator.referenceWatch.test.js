@@ -51,7 +51,6 @@ vi.mock('./taskSchedule.js', () => ({
   // taskSchedule surface this suite sees — it has to track the real module's drain
   // API or a future test here that reaches the reconcile gate gets
   // "not a function" instead of a stub.
-  PERPETUAL_DRAIN_DISPATCH_CAP: 5,
   getPerpetualDrainState: vi.fn(async () => ({ signature: null, dispatchCount: 0 })),
   recordPerpetualDispatch: vi.fn(async () => 1),
 }));
