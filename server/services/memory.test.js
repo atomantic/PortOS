@@ -1133,6 +1133,27 @@ describe('memory service', () => {
       expect(timeline['2025-01-20']).toBeDefined();
     });
 
+    it('should compare a boundary carrying an offset as an instant, not a string', async () => {
+      const mockIndex = {
+        version: 1, lastUpdated: '', count: 2,
+        memories: [
+          // 03:00Z is BEFORE the 2025-01-15T05:00:00+02:00 boundary (03:00Z)…
+          { id: 'm1', createdAt: '2025-01-15T02:00:00.000Z', status: 'active', sourceAppId: null },
+          // …and 04:00Z is after it, though both sort ahead of it as strings.
+          { id: 'm2', createdAt: '2025-01-15T04:00:00.000Z', status: 'active', sourceAppId: null }
+        ]
+      };
+      readJSONFile.mockImplementation((path, def) => {
+        if (path.includes('index.json')) return Promise.resolve(mockIndex);
+        return Promise.resolve(def);
+      });
+
+      const timeline = await getTimeline({ startDate: '2025-01-15T05:00:00+02:00' });
+
+      expect(timeline['2025-01-15']).toHaveLength(1);
+      expect(timeline['2025-01-15'][0].id).toBe('m2');
+    });
+
     it('should filter by types', async () => {
       const mockIndex = {
         version: 1, lastUpdated: '', count: 2,

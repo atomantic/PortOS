@@ -502,12 +502,16 @@ export async function getTimeline(options = {}) {
   const index = await loadIndex();
   let memories = index.memories.filter(m => m.status === 'active');
 
-  // Filter by date range
-  if (options.startDate) {
-    memories = memories.filter(m => m.createdAt >= options.startDate);
+  // Filter by date range. Compare instants, not strings — `createdAt` is always
+  // UTC (`…Z`) while a boundary may carry an offset (`…+02:00`) or be a bare
+  // `YYYY-MM-DD`, and those sort lexicographically against each other wrong.
+  const startMs = options.startDate ? Date.parse(options.startDate) : NaN;
+  const endMs = options.endDate ? Date.parse(options.endDate) : NaN;
+  if (!Number.isNaN(startMs)) {
+    memories = memories.filter(m => Date.parse(m.createdAt) >= startMs);
   }
-  if (options.endDate) {
-    memories = memories.filter(m => m.createdAt <= options.endDate);
+  if (!Number.isNaN(endMs)) {
+    memories = memories.filter(m => Date.parse(m.createdAt) <= endMs);
   }
 
   // Filter by types

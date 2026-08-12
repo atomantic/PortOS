@@ -111,6 +111,9 @@ const emptyToUndefined = (inner) => z.preprocess(
 const isRealCalendarDate = (v) => {
   const [year, month, day] = v.split('-').map(Number);
   const parsed = new Date(Date.UTC(year, month - 1, day));
+  // Date.UTC maps a 0-99 year onto 1900-1999; re-set it so a year like 0026
+  // compares against itself rather than 1926.
+  parsed.setUTCFullYear(year);
   return parsed.getUTCFullYear() === year
     && parsed.getUTCMonth() === month - 1
     && parsed.getUTCDate() === day;
@@ -119,7 +122,9 @@ const isRealCalendarDate = (v) => {
 // `startDate`/`endDate` reach Postgres as `created_at >= $n` bind params, so a
 // bare calendar date is as usable as a full timestamp — accept either. The
 // datetime branch allows a `+HH:MM` offset, not just a `Z` suffix, since either
-// is a legitimate serialization of the same instant.
+// is a legitimate serialization of the same instant. A bare date means midnight
+// at both ends of the range, matching how these bounds have always been read —
+// pass a full timestamp to include part of a day.
 const dateBoundary = z.union([
   z.string().datetime({ offset: true }),
   z.string()
