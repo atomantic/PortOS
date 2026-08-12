@@ -55,15 +55,22 @@ export function createDiscardedBank(prior) {
   /**
    * Record a discarded set as this key's newest evidence. Called at the moment a
    * candidate is thrown away — a rollback, a rewind, an isolated patch's revert
-   * — so no exit has to remember to do it on that path's behalf. Findings the
-   * bank already holds are not re-banked: the verifier restates the same problem
-   * freely, and a bank of paraphrases would push the real history past the bound.
+   * — so no exit has to remember to do it on that path's behalf.
+   *
+   * A finding the VISIBLE history already holds is not re-banked and does not
+   * move: the verifier restates the same problem freely, and a bank of
+   * paraphrases would push the real history past the bound. But identity is
+   * checked against the bounded view, not the raw list — a candidate whose only
+   * copy has already been trimmed out of the prompt is, on being discarded
+   * again, the newest evidence there is, so it returns to the front and its
+   * stale below-the-bound copy goes with it.
    */
   const record = (findings, key = FLAT) => {
     const current = Array.isArray(findings) ? findings : [];
     const held = banked.get(key) || [];
-    held.unshift(...current.filter((finding) => !containsFinding(held, finding)));
-    banked.set(key, held);
+    const visible = boundDiscarded(held);
+    const fresh = current.filter((finding) => !containsFinding(visible, finding));
+    banked.set(key, [...fresh, ...held.filter((finding) => !containsFinding(fresh, finding))]);
   };
 
   /**

@@ -1008,14 +1008,16 @@ async function runFoundationRounds(seriesId, record, { bank }) {
     // EVERY candidate this dimension has discarded, not just the last one — a
     // dimension that rejected two different repairs used to hand the third
     // evidence of only the second, leaving the repairer free to re-author the
-    // first. Filtered against the gap this call is being asked to close, which
-    // a rejected attempt's residual set routinely restates: telling the editor
-    // both "fix this" and "do not author this" is contradictory.
-    const avoidFindings = bank.avoid(
-      [],
-      residualFindings({ [weak.dimension]: snap.dimensions?.[weak.dimension] }),
-      weak.dimension,
-    );
+    // first.
+    //
+    // A rejected attempt banks the whole judged consequence it produced, not
+    // just its own dimension's gap — damage it did elsewhere is frequently WHY
+    // it was rejected. So the filter is the whole restored state's residual, not
+    // just the target's: every gap standing in the checkpoint is something the
+    // gate still intends to close, and telling an editor both "this is the
+    // state's problem" and "never author this" is contradictory. What survives
+    // is what the rejected candidates INTRODUCED.
+    const avoidFindings = bank.avoid([], residualFindings(snap.dimensions), weak.dimension);
     try {
       fix = await applyFoundationFix(seriesId, weak.dimension, {
         finding: repairFinding,

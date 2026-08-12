@@ -23,6 +23,19 @@ describe('createDiscardedBank (#3835)', () => {
     expect(bank.history()).toHaveLength(1);
   });
 
+  it('promotes a re-discarded candidate to the front instead of leaving it below the bound', () => {
+    const bank = createDiscardedBank();
+    bank.record([FIRST]);
+    for (let i = 0; i < AUTOPILOT_DISCARDED_MAX; i += 1) {
+      bank.record([finding(`alpha${i} beta${i} gamma${i} delta${i}`, `volume ${i}`)]);
+    }
+    // FIRST has been pushed past the cap. Discarding it AGAIN is the newest
+    // evidence there is — it must reach the very next prompt, not stay trimmed.
+    bank.record([FIRST]);
+    expect(bank.history()[0].problem).toBe(FIRST.problem);
+    expect(bank.history().filter((f) => f.problem === FIRST.problem)).toHaveLength(1);
+  });
+
   it('keeps each key\'s history separate', () => {
     const bank = createDiscardedBank();
     bank.record([FIRST], 'character');
