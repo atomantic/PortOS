@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { createProviderService, isOllamaBackedProvider } from './providers.js';
 
-// Temp dir, NOT `join(process.cwd(), …)` — see providerStatus.test.js (#3823).
+// Temp dir, NOT a cwd-rooted one — see providerStatus.test.js (#3823).
 let TEST_DATA_DIR;
 
 describe('Provider Service', () => {

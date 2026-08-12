@@ -133,19 +133,22 @@ const scan = (source) => REAL_DATA_ROOT_RE.test(source);
 // remaining occurrence in the suite.
 //
 // The join/resolve prefix on the first shape is load-bearing: without it, the
-// pattern is just "cwd, then a comma, then a string" and it flags every ordinary
+// pattern is just "cwd, then a comma, then something" and it flags every ordinary
 // two-argument call that happens to take cwd first (`readFileSync(process.cwd(),
-// 'utf8')`). With the call named, the argument list may safely span lines —
-// a prettier-split `join(\n  process.cwd(),\n  'test-data',\n)` is the same bug.
-// The concatenation shapes stay single-line and accept a path-ish first
-// character, so `process.cwd() + 'fixtures'` is caught while a log line like
+// 'utf8')`). With the call named, the rest can stay loose — the second argument
+// need not be a literal (`join(process.cwd(), FIXTURE_DIR)` is the same bug), and
+// the argument list may span lines, so a prettier-split
+// `join(\n  process.cwd(),\n  'test-data',\n)` is caught too.
+// The concatenation shapes have no such anchor, so they stay single-line and
+// require a path-ish or interpolated first character: `process.cwd() + 'fixtures'`
+// and `${process.cwd()}${SEP}x` are caught, while a log line like
 // `'cwd=' + process.cwd() + ', done'` is not.
 const CWD = 'process\\??\\.cwd\\s*(?:\\?\\.)?\\(\\)';
 const H = '[^\\S\\n]*';
 const CWD_FIXTURE_DIR_RE = new RegExp([
-  `(?:join|resolve)\\s*\\(\\s*${CWD}\\s*,\\s*[\`'"]`, // join(process.cwd(), 'fixture-dir')
-  `${CWD}${H}\\+${H}[\`'"][/\\\\\\w.-]`,              // process.cwd() + '/fixture-dir'
-  `\\$\\{${CWD}\\}[/\\\\\\w.-]`,                      // `${process.cwd()}/fixture-dir`
+  `(?:join|resolve)\\s*\\(\\s*${CWD}\\s*,`,      // join(process.cwd(), 'fixture-dir')
+  `${CWD}${H}\\+${H}[\`'"][/\\\\\\w.-]`,         // process.cwd() + '/fixture-dir'
+  `\\$\\{${CWD}\\}[/\\\\\\w.\\-$]`,              // `${process.cwd()}/fixture-dir`
 ].join('|'));
 
 const scanCwdFixture = (source) => CWD_FIXTURE_DIR_RE.test(source);
@@ -194,6 +197,11 @@ describe('test-data isolation guard', () => {
     expect(scanCwdFixture("process.cwd() + '/scratch'")).toBe(true);
     expect(scanCwdFixture("process.cwd() + 'scratch'")).toBe(true);
     expect(scanCwdFixture('`${process.cwd()}/scratch`')).toBe(true);
+    // A non-literal second argument builds the same path.
+    expect(scanCwdFixture('join(process.cwd(), FIXTURE_DIR)')).toBe(true);
+    expect(scanCwdFixture('resolve(process.cwd(), suiteName, `sub`)')).toBe(true);
+    // …as does an interpolated separator right after the cwd expression.
+    expect(scanCwdFixture('`${process.cwd()}${sep}fixtures`')).toBe(true);
     // A formatter-split argument list is the same bug, so the named-call shape
     // deliberately spans lines.
     expect(scanCwdFixture("join(\n      process.cwd(),\n      'test-data',\n    )")).toBe(true);

@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { createProviderStatusService, usableFallbackModel } from './providerStatus.js';
 
-// Temp dir, NOT `join(process.cwd(), …)` — a cwd-rooted fixture dir lands inside
+// Temp dir, NOT a cwd-rooted one — a fixture dir built from `process.cwd()` lands inside
 // the checkout, and the afterEach cleanup only runs when the worker survives the
 // file. A killed/timed-out worker left `server/test-data-status/` behind as
 // untracked cruft, which was once swept into an unrelated commit (#3823).

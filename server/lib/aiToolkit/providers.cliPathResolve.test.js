@@ -17,7 +17,7 @@ vi.mock('child_process', async (importOriginal) => {
 import { execFile } from 'child_process';
 import { createProviderService } from './providers.js';
 
-// Temp dir, NOT `join(process.cwd(), …)` — see providerStatus.test.js (#3823).
+// Temp dir, NOT a cwd-rooted one — see providerStatus.test.js (#3823).
 let TEST_DATA_DIR;
 
 describe('testProvider — cli command resolution (cross-platform PATH)', () => {
@@ -44,7 +44,7 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
   afterEach(async () => {
     Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
     process.env.PATH = originalPath;
-    await rm(fakePathDir, { recursive: true, force: true });
+    if (fakePathDir) await rm(fakePathDir, { recursive: true, force: true });
     vi.mocked(execFile).mockReset();
     if (TEST_DATA_DIR) await rm(TEST_DATA_DIR, { recursive: true, force: true });
   });
