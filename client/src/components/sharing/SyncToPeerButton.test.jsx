@@ -129,4 +129,24 @@ describe('SyncToPeerButton', () => {
     await user.click(screen.getByText('Peer A'));
     expect(api.unsubscribeFromPeer).toHaveBeenCalledWith('peer-universe-u1-peer-a', { silent: true });
   });
+
+  it('flips the peer menu above the trigger when there is no room below', async () => {
+    // Trigger low on a short viewport: the menu no longer fits underneath, so
+    // the shared placement hook must open it upward instead of letting it hang
+    // off the bottom (the hand-rolled coords this replaced always went below).
+    Object.defineProperty(window, 'innerHeight', { writable: true, configurable: true, value: 780 });
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1024 });
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+      top: 600, bottom: 640, left: 400, right: 460, width: 60, height: 240, x: 400, y: 600,
+    });
+    const user = userEvent.setup();
+    render(<SyncToPeerButton recordKind="universe" recordId="u1" />);
+    await user.click(screen.getByRole('button', { name: /Sync/i }));
+    const menu = (await screen.findByText('Peer A')).closest('div[style*="position: fixed"]');
+    expect(menu).toBeTruthy();
+    const top = Number.parseFloat(menu.style.top);
+    expect(top).toBeLessThan(600);
+    expect(top).toBeGreaterThanOrEqual(8);
+    vi.restoreAllMocks();
+  });
 });
