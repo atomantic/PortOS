@@ -196,8 +196,14 @@ async function verifyArcBlocking(seriesId, record, { spineOnly }) {
  * full verification of the state now standing in the store, which the caller
  * hands to its next round instead of re-billing the identical call — plus
  * `outcome` when the run ended mid-pass.
+ *
+ * The pass banks its own rejections (#3829). `evidence` is the gate's
+ * accumulator: read per target rather than once for the whole pass, so a patch
+ * rejected on target 1 is evidence target 3 gets — and evidence the ordinary
+ * resolve after a successful isolation gets too. Computing it once up front
+ * made every attempt repeat the prompt the previous one had just failed with.
  */
-async function isolateArcFindings(seriesId, record, { scope, round, spineOnly, baseline, avoid, attemptsLeft }) {
+async function isolateArcFindings(seriesId, record, { scope, round, spineOnly, baseline, avoidFindings, bankDiscarded, attemptsLeft }) {
   // The last verification that DESCRIBES THE STORE: it advances only on an
   // accepted patch, because a rejected one is rolled straight back to the state
   // its predecessor verified. So later targets are judged against what the
@@ -219,6 +225,12 @@ async function isolateArcFindings(seriesId, record, { scope, round, spineOnly, b
     attempts += 1;
     const before = blocking().length;
     const snapshot = await snapshotArcState(seriesId);
+    // Recomputed per target: earlier attempts in this same pass have banked
+    // their rejections by now. Everything still standing is an active repair
+    // target for this pass, so the whole set — not just `target` — is what the
+    // avoid list is filtered against; the resolver is never told to both fix
+    // and avoid the same finding.
+    const avoid = avoidFindings([], blocking());
     const resolved = await resolveArcFindings(seriesId, record, { findings: [target], avoid, spineOnly });
     const verified = await verifyArcBlocking(seriesId, record, { spineOnly });
     if (verified.outcome) {
@@ -243,6 +255,11 @@ async function isolateArcFindings(seriesId, record, { scope, round, spineOnly, b
       standing = verified;
     } else {
       await restoreArcState(seriesId, snapshot);
+      // The verified consequence of a rewrite the gate just threw away — the
+      // same evidence a whole-set rollback banks, at single-finding grain.
+      // Without this the pass paid a resolve + a verify to learn something no
+      // later attempt (or the round that follows) ever hears about.
+      bankDiscarded(discardedSet(verified.blocking));
     }
     broadcast(seriesId, {
       type: 'resolve:isolate', scope, round, attempt: attempts,
@@ -253,7 +270,27 @@ async function isolateArcFindings(seriesId, record, { scope, round, spineOnly, b
   return { accepted, attempts, verified: standing };
 }
 
-export async function runArcVerify(seriesId, record, { spineOnly = false } = {}) {
+/**
+ * The arc-verify gate. Thin wrapper over the round loop so the accumulator has
+ * exactly ONE exit to be stamped onto (#3829): every pause the loop can produce
+ * — regression, maxRounds, divergence, manual, and the budget/provider ones it
+ * merely forwards — owes the next run the whole gate's history, not just the set
+ * the final rollback threw away. Stamping it at each `return` instead put the
+ * invariant in six places and missed the forwarded ones.
+ *
+ * It rides its own `runDiscarded` rather than widening `discarded`, because the
+ * panel labels that field "what the reverted round produced" and it stops being
+ * true once it carries the run. A run that reverted two different rewrites used
+ * to hand its resume only the second, so the resumed resolver could re-author
+ * the first.
+ */
+export async function runArcVerify(seriesId, record, opts = {}) {
+  const runDiscarded = [];
+  const outcome = await runArcVerifyRounds(seriesId, record, { ...opts, runDiscarded });
+  return outcome?.pause ? { ...outcome, runDiscarded: discardedSet(runDiscarded) } : outcome;
+}
+
+async function runArcVerifyRounds(seriesId, record, { spineOnly = false, runDiscarded }) {
   const maxRounds = Number.isInteger(record.options.maxArcVerifyRounds)
     ? record.options.maxArcVerifyRounds
     : MAX_ARC_VERIFY_ROUNDS;
@@ -276,13 +313,18 @@ export async function runArcVerify(seriesId, record, { spineOnly = false } = {})
   // so once a retry landed on a non-worse but still-blocked state the resolver
   // was free to re-author the exact rewrite the gate had just reverted — the
   // observed 2 → 1 → 5 (revert) → 1 → 2 (revert, out of retries) stall.
-  const runDiscarded = [];
+  // Records a discarded blocker set as this gate's newest evidence. Called at
+  // the moment a rewrite is thrown away — the rollback, the rewind, an isolated
+  // patch's revert — so no exit has to remember to do it on that path's behalf.
+  const bankDiscarded = (current = []) => {
+    runDiscarded.unshift(...current.filter((finding) => !containsFinding(runDiscarded, finding)));
+  };
   // Builds the avoid list for ONE resolve call and banks that call's own newest
-  // evidence into the history above, so this is where a rejected candidate stops
-  // being the retry's private knowledge. Preserves cross-Resume evidence and this
-  // run's earlier rollbacks underneath. `discardedSet` keeps the provider prompt
-  // bounded exactly like the persisted marker — `current` leads so the newest
-  // evidence is never the part that gets cut at that bound.
+  // evidence into the history, so this is where a rejected candidate stops being
+  // the retry's private knowledge. Preserves cross-Resume evidence and this run's
+  // earlier rollbacks underneath. `discardedSet` keeps the provider prompt bounded
+  // exactly like the persisted marker — `current` leads so the newest evidence is
+  // never the part that gets cut at that bound.
   const avoidFindings = (current = [], active = []) => {
     const avoid = discardedSet([
       // The caller's own discarded set stays whole because its restatements
@@ -299,7 +341,7 @@ export async function runArcVerify(seriesId, record, { spineOnly = false } = {})
         !containsFinding(active, candidate) && !containsFinding(current, candidate)
       )),
     ]);
-    runDiscarded.unshift(...current.filter((finding) => !containsFinding(runDiscarded, finding)));
+    bankDiscarded(current);
     return avoid;
   };
   let convergence = { best: null, sinceBest: 0 };
@@ -370,6 +412,7 @@ export async function runArcVerify(seriesId, record, { spineOnly = false } = {})
       const rollbackTarget = bestVerified || lastResolve;
       const rollback = await restoreArcState(seriesId, rollbackTarget.snapshot);
       const discarded = discardedSet(blocking);
+      bankDiscarded(discarded);
       // Neither second chance is worth its LLM call without a round left to
       // VERIFY what it wrote: spending one on the final round would bill a
       // rewrite nothing ever checks, and would fall out of the loop past every
@@ -442,7 +485,8 @@ export async function runArcVerify(seriesId, record, { spineOnly = false } = {})
         const isolated = await isolateArcFindings(seriesId, record, {
           scope, round, spineOnly,
           baseline: rollbackTarget.blocking,
-          avoid: avoidFindings(discarded, rollbackTarget.blocking),
+          avoidFindings,
+          bankDiscarded,
           attemptsLeft: isolationLeft,
         });
         isolationLeft -= isolated.attempts;
@@ -505,7 +549,9 @@ export async function runArcVerify(seriesId, record, { spineOnly = false } = {})
     const rewind = async () => {
       if (isNewBest || !bestVerified) return { residual: blocking, discarded: [] };
       await restoreArcState(seriesId, bestVerified.snapshot);
-      return { residual: bestVerified.blocking, discarded: discardedSet(blocking) };
+      const discarded = discardedSet(blocking);
+      bankDiscarded(discarded);
+      return { residual: bestVerified.blocking, discarded };
     };
     if (round === maxRounds) {
       const { residual, discarded } = await rewind();

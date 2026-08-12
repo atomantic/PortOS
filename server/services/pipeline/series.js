@@ -255,6 +255,21 @@ export const sanitizeAutopilot = (raw) => {
     // was restored so the trade is reviewable. Empty on any pause that threw
     // nothing away. Same transient-marker posture as pauseKind: no schema gate.
     discardedFindings: sanitizeAutopilotFindings(raw.discardedFindings, AUTOPILOT_DISCARDED_MAX),
+    // Every rewrite the paused gate reverted, newest first — a superset of
+    // `discardedFindings`, which stays scoped to the round that was reverted
+    // last so the panel's copy stays true. Not rendered: this is the resume
+    // evidence, so a run that reverted two different rewrites hands the next
+    // one both instead of only the second (#3829).
+    //
+    // A marker persisted before the field existed (or written by an older peer)
+    // falls back to the one set it does have, so the compat lives HERE — where
+    // this shape is owned — instead of every consumer re-deriving "absent" from
+    // an empty array. Safe because the gate banks each discarded set as it
+    // reverts it, so the history can never be empty while the last round isn't.
+    runDiscardedFindings: sanitizeAutopilotFindings(
+      raw.runDiscardedFindings ?? raw.discardedFindings,
+      AUTOPILOT_DISCARDED_MAX,
+    ),
     lastError: trimTo(raw.lastError, AUTOPILOT_ERROR_MAX) || null,
     // No `pipelineSeries` schema-gate bump for this (or any) autopilot field: the
     // marker is transient, regenerated-every-run status, NOT durable creative

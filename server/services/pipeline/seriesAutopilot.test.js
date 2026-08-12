@@ -2598,6 +2598,56 @@ describe('autopilot conductor', () => {
     expect(series.autopilot?.pauseKind).not.toBe('regression');
   });
 
+  it('hands a resumed resolver every rewrite the paused gate reverted, not just the last one', async () => {
+    // Two DIFFERENT rewrites reverted before the pause. The marker's
+    // `discardedFindings` is scoped to the round that was reverted last (the
+    // panel renders it under that copy), so a resume that read only that field
+    // let the resolver re-author the first rejected rewrite for free. The gate's
+    // whole history rides `runDiscardedFindings` instead (#3829).
+    const standing = { severity: 'high', problem: 'the succession vow is never paid off', location: 'V1' };
+    const first = [
+      { severity: 'high', problem: 'the coronation is moved off-page into a letter', location: 'V2' },
+      { severity: 'high', problem: 'the regent loses her veto with no scene to spend it', location: 'V3' },
+    ];
+    const second = [
+      { severity: 'high', problem: 'the siege ends in a timeskip nobody witnesses', location: 'V4' },
+      { severity: 'high', problem: 'the heir swears a second, contradictory oath', location: 'V5' },
+    ];
+    arcSpies.verifyArc.mockReset();
+    [
+      [standing],             // round 1 — the checkpoint; resolve #1
+      [standing, ...first],   // round 2 — regressed, reverted, corrective retry (#2)
+      [standing, ...second],  // round 3 — regressed again, retries spent → pause
+    ].forEach((issues) => arcSpies.verifyArc.mockImplementationOnce(async () => ({ issues })));
+
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 6 });
+    await waitFor(runFinished(seriesId));
+
+    const paused = await seriesSvc.getSeries(seriesId);
+    expect(paused.autopilot?.pauseKind).toBe('regression');
+    // The panel's field keeps meaning "what the reverted round produced"…
+    expect(paused.autopilot?.discardedFindings).toEqual([standing, ...second]);
+    // …while the resume evidence carries both rewrites, newest first.
+    expect(paused.autopilot?.runDiscardedFindings).toEqual([...second, standing, ...first]);
+
+    // Resume: the gate clears, and its first resolve is told to avoid BOTH
+    // rejected rewrites — minus `standing`, which it is being asked to fix.
+    arcSpies.resolveVerifyIssues.mockClear();
+    arcSpies.verifyArc.mockReset();
+    arcSpies.verifyArc
+      .mockImplementationOnce(async () => ({ issues: [standing] }))
+      .mockImplementationOnce(async () => ({ issues: [] }));
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 2 });
+    await waitFor(runFinished(seriesId));
+
+    expect(arcSpies.resolveVerifyIssues.mock.calls[0][1]).toMatchObject({
+      findings: [standing],
+      avoid: [...second, ...first],
+      spineOnly: true,
+    });
+  });
+
   it('honors maxArcResolveRetries: 0 by pausing on the first regression', async () => {
     // The pre-#3781 behavior stays reachable per run: no corrective pass, so the
     // first reverted candidate ends the gate without spending a second resolve.
@@ -2886,10 +2936,14 @@ describe('autopilot conductor', () => {
     autopilot.autopilotEvents.off(seriesId, handler);
 
     // Each isolated attempt resolves exactly one finding, and carries the
-    // rejected whole-set candidate's findings as the failure mode to avoid.
+    // rejected whole-set candidates' findings as the failure mode to avoid —
+    // minus the two the restored checkpoint still has as active repair targets
+    // for this pass (#3829). Telling the resolver to avoid `eclipse` while
+    // handing it `eclipse` to fix is the contradiction the accumulator filters.
     expect(arcSpies.resolveVerifyIssues.mock.calls[2][1]).toMatchObject({
       findings: [eclipse],
-      avoid: [eclipse, mentor, finale, motive],
+      // Newest evidence first, so it is never the part trimmed at the bound.
+      avoid: [motive, finale],
     });
     expect(arcSpies.resolveVerifyIssues.mock.calls[3][1]).toMatchObject({ findings: [mentor] });
     // The rejected attempt is reverted on its own — the kept one is not.
@@ -2920,6 +2974,41 @@ describe('autopilot conductor', () => {
     expect(frames.some((f) => f.type === 'paused' && f.pauseKind === 'regression')).toBe(false);
     const series = await seriesSvc.getSeries(seriesId);
     expect(series.autopilot?.pauseKind).not.toBe('regression');
+  });
+
+  it('banks an isolated patch\'s rejection so the next target in the same pass avoids it (#3829)', async () => {
+    // The isolation pass used to compute `avoid` once for the whole pass and
+    // throw its own rejections away, so a rewrite rejected on target 1 was free
+    // to be re-proposed on target 2 — the gate paid a resolve + a verify to
+    // learn something nothing downstream ever heard.
+    const eclipse = { severity: 'high', problem: 'volume 1 and volume 2 both stage the first eclipse', location: 'V1' };
+    const mentor = { severity: 'high', problem: 'mentor subplot never pays off', location: 'V3' };
+    const finale = { severity: 'high', problem: 'finale hook contradicts prologue promise', location: 'V4' };
+    const motive = { severity: 'high', problem: 'antagonist motive changes without cause', location: 'V5' };
+    const siege = { severity: 'high', problem: 'timeline of the siege runs backwards', location: 'V6' };
+    arcSpies.verifyArc.mockReset();
+    [
+      [eclipse, mentor],                         // round 1 — the checkpoint
+      [eclipse, mentor, finale],                 // round 2 — regressed, reverted + retried
+      [eclipse, mentor, finale, motive],         // round 3 — regressed again, retries spent
+      [eclipse, mentor, siege],                  // isolate #1 (eclipse) — grew the set, reverted
+      [eclipse],                                 // isolate #2 (mentor) — closed it, kept
+      [],                                        // round 5 — clean
+    ].forEach((issues) => arcSpies.verifyArc.mockImplementationOnce(async () => ({ issues })));
+
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 6 });
+    await waitFor(runFinished(seriesId));
+
+    // Isolate #1 carries only what the two whole-set rollbacks discarded.
+    expect(arcSpies.resolveVerifyIssues.mock.calls[2][1]).toMatchObject({
+      findings: [eclipse], avoid: [motive, finale],
+    });
+    // Isolate #2 carries its predecessor's verified failure on top of those, and
+    // still never sees a finding it is being asked to fix.
+    expect(arcSpies.resolveVerifyIssues.mock.calls[3][1]).toMatchObject({
+      findings: [mentor], avoid: [siege, motive, finale],
+    });
   });
 
   it('does not isolate a single-finding residual (that is the corrective pass again)', async () => {

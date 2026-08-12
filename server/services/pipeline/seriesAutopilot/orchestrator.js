@@ -11,7 +11,7 @@ import { mergeSeverityWeights, resolveBlockingSet } from '../../../lib/editorial
 import { loadState } from '../../cosState.js';
 import { getDomainBudgetStatus } from '../../domainUsage.js';
 import { getSettings } from '../../settings.js';
-import { getSeries, updateSeries, AUTOPILOT_DISCARDED_MAX } from '../series.js';
+import { getSeries, updateSeries } from '../series.js';
 import { listIssues } from '../issues.js';
 import { buildEditorialCheckPlan } from '../editorial/checkRunner.js';
 import { runs } from './state.js';
@@ -71,11 +71,17 @@ export async function startSeriesAutopilot(sId, options = {}) {
   // to forget that evidence and could immediately regenerate the same bad trade
   // from the same checkpoint. Carry it into the next arc gate as an internal
   // avoid-list only when the prior pause came from an arc verification step.
-  const priorArcAvoidFindings = seriesRecord?.autopilot?.status === 'paused'
+  //
+  // The gate's WHOLE history, not just the round it reverted last: a run that
+  // reverted more than one rewrite holds the earlier ones only here (#3829), so
+  // resuming off `discardedFindings` let the resolver re-author the first one
+  // for free. `sanitizeAutopilot` owns the shape — bounded, array-typed, and
+  // already falling back for a marker written before the field existed.
+  const arcPause = seriesRecord?.autopilot?.status === 'paused'
     && ['verifyArcSpine', 'verifyArc'].includes(seriesRecord.autopilot.currentStep)
-    && Array.isArray(seriesRecord.autopilot.discardedFindings)
-    ? seriesRecord.autopilot.discardedFindings.slice(0, AUTOPILOT_DISCARDED_MAX)
-    : [];
+    ? seriesRecord.autopilot
+    : null;
+  const priorArcAvoidFindings = arcPause?.runDiscardedFindings || [];
   const autoSelectModels = resolveAutopilotAutoSelectModels(options, settings);
   const modelPerformance = autoSelectModels
     ? await getModelPerformanceReport().catch((err) => {
@@ -430,6 +436,10 @@ export async function startSeriesAutopilot(sId, options = {}) {
             runId,
             residualFindings: result.residual || [],
             discardedFindings: result.discarded || [],
+            // The arc gate's whole rollback history (see `runArcVerify`); only
+            // that gate emits it. `discardedFindings` above stays scoped to the
+            // round that was reverted last, which is what the panel renders.
+            runDiscardedFindings: result.runDiscarded || [],
             pauseKind: result.pauseKind || null,
             healthBreakdown: result.healthBreakdown || null,
             ...pm,

@@ -905,6 +905,30 @@ describe('pipeline series service', () => {
       expect(svc.sanitizeAutopilot({ status: 'paused' }).discardedFindings).toEqual([]);
       expect(svc.sanitizeAutopilot({ status: 'paused', discardedFindings: 'nope' }).discardedFindings).toEqual([]);
     });
+
+    it('bounds runDiscardedFindings — the whole gate\'s history — the same way (#3829)', () => {
+      const many = Array.from({ length: 40 }, (_, i) => ({ severity: 'high', location: `V${i}`, problem: `hole ${i}` }));
+      const a = svc.sanitizeAutopilot({ status: 'paused', runDiscardedFindings: many });
+      expect(a.runDiscardedFindings).toHaveLength(20);
+      // Newest first, so the bound trims the oldest evidence rather than the set
+      // the gate just reverted.
+      expect(a.runDiscardedFindings[0]).toEqual(many[0]);
+      expect(svc.sanitizeAutopilot({ status: 'paused' }).runDiscardedFindings).toEqual([]);
+    });
+
+    it('falls back to discardedFindings for a marker written before the field existed', () => {
+      // The compat lives in the sanitizer so a resume reads one field with no
+      // branch — an older peer's paused marker still carries its evidence.
+      const older = { severity: 'high', location: 'V3', problem: 'mentor subplot never pays off' };
+      const a = svc.sanitizeAutopilot({ status: 'paused', discardedFindings: [older] });
+      expect(a.runDiscardedFindings).toEqual([older]);
+      // A current marker's own history wins, empty included: the gate banks each
+      // set as it reverts it, so an empty history means nothing was reverted.
+      const b = svc.sanitizeAutopilot({
+        status: 'paused', discardedFindings: [older], runDiscardedFindings: [],
+      });
+      expect(b.runDiscardedFindings).toEqual([]);
+    });
   });
 
   describe('sanitizeAutopilot resumeOptions', () => {
