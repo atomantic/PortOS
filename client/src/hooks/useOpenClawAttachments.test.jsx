@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useOpenClawAttachments } from './useOpenClawAttachments';
 
@@ -11,10 +11,19 @@ function fakeFile({ name, size, type = 'image/png' }) {
 }
 
 describe('useOpenClawAttachments oversize rejection', () => {
+  // jsdom does not implement the object-URL APIs the hook uses for image previews.
+  // Save and restore rather than assigning over them, so the patch does not leak
+  // into other test files sharing this worker.
+  const original = { createObjectURL: URL.createObjectURL, revokeObjectURL: URL.revokeObjectURL };
+
   beforeEach(() => {
-    // jsdom does not implement the object-URL APIs the hook uses for image previews.
     URL.createObjectURL = vi.fn(() => 'blob:preview');
     URL.revokeObjectURL = vi.fn();
+  });
+
+  afterEach(() => {
+    URL.createObjectURL = original.createObjectURL;
+    URL.revokeObjectURL = original.revokeObjectURL;
   });
 
   it('reports the size cap using the canonical formatBytes output', async () => {

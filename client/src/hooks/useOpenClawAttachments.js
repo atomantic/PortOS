@@ -128,8 +128,10 @@ export function useOpenClawAttachments({ sending, onError = () => {} } = {}) {
       const existingBase64Chars = liveAttachments.reduce((sum, a) => sum + (typeof a.data === 'string' ? a.data.length : 0), 0);
       if (existingBase64Chars + newBase64Chars > MAX_ATTACHMENTS_TOTAL_BASE64_CHARS) {
         next.forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
-        const totalMB = Math.round((existingBase64Chars + newBase64Chars) * 0.75 / (1024 * 1024));
-        onError(`Combined attachments exceed the 50MB encoded total limit (~${totalMB}MB decoded).`);
+        // The 50 MB ceiling counts base64 CHARS (decimal), so it stays a literal;
+        // the decoded estimate is real bytes and goes through the canonical helper.
+        const decodedBytes = (existingBase64Chars + newBase64Chars) * 0.75;
+        onError(`Combined attachments exceed the 50 MB encoded total limit (~${formatBytes(decodedBytes, 0)} decoded).`);
         return;
       }
 
