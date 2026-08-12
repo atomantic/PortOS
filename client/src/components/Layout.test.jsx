@@ -59,7 +59,7 @@ vi.mock('../services/api', () => ({
   getPaletteManifest: vi.fn(() => Promise.resolve({ nav: [] })),
 }));
 
-import Layout from './Layout';
+import Layout, { isFullWidthRoute } from './Layout';
 
 const renderLayout = async (initialPath = '/brain/inbox') => {
   const utils = render(
@@ -223,5 +223,38 @@ describe('Layout — dynamic third-level navigation', () => {
     expect(screen.getByRole('link', { name: 'Example Series' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Example Universe' })).toBeTruthy();
 
+  });
+});
+
+// `isFullWidthRoute` decides whether a page gets the bare full-width <main>
+// (owns its own scroll) or the default padded+scrolling one. It encodes 41
+// rules across three tables, and the only other coverage is the /game
+// integration case above — so a dropped or retyped entry would silently
+// change a page's layout with nothing failing. Every expectation below was
+// verified against the pre-refactor OR-chain, so this locks behavior rather
+// than merely restating the current tables.
+describe('Layout — isFullWidthRoute classification', () => {
+  it.each([
+    // Exact matches must NOT leak to longer paths that merely share the prefix.
+    ['/shell', true], ['/shell/abc', true], ['/shellx', false],
+    ['/ask', true], ['/ask/1', true], ['/asking', false],
+    ['/timeline', true], ['/timeline/2026-08-12', true],
+    ['/tribe', true], ['/rapid-reader', true], ['/openclaw', true],
+    // Index page stays padded+scrolling; only the DETAIL route is full-width.
+    ['/catalog', false], ['/catalog/book/1', true],
+    ['/universes', false], ['/universes/u1', true],
+    ['/rounds', false], ['/rounds/guide', true],
+    ['/story-builder', false], ['/story-builder/s1/step', true],
+    ['/pipeline', false], ['/pipeline/series/s1', true],
+    ['/local-llm', false], ['/local-llm/m', true],
+    // Game: only a single-segment detail workspace.
+    ['/game', false], ['/game/', false], ['/game/g1', true], ['/game/g1/x', false],
+    // Apps: detail editor is full-width, but the Add App form is explicitly excluded
+    // (it has no internal scroll container and would clip below the fold).
+    ['/apps/create', false], ['/apps/create/', false], ['/apps/a1', true], ['/apps/a1/tab', true],
+    // Whole-section prefixes, and the default for an unlisted route.
+    ['/songbook', true], ['/', false],
+  ])('%s -> %s', (pathname, expected) => {
+    expect(isFullWidthRoute(pathname)).toBe(expected);
   });
 });

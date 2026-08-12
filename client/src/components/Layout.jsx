@@ -566,7 +566,10 @@ const FULL_WIDTH_PATH_REGEXES = [
   /^\/apps\/(?!create(?:\/|$))[^/]+(?:\/|$)/,
 ];
 
-function isFullWidthRoute(pathname) {
+// Exported for the table-driven regression test in Layout.test.jsx — the 41
+// classification rules above have no other coverage, and a dropped or retyped
+// entry silently changes a page's layout.
+export function isFullWidthRoute(pathname) {
   return EXACT_FULL_WIDTH_PATHS.includes(pathname) ||
     FULL_WIDTH_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix)) ||
     FULL_WIDTH_PATH_REGEXES.some((re) => re.test(pathname));
