@@ -133,6 +133,10 @@ vi.mock('../../lib/ffmpeg.js', async () => ({
   // The real builder is pure and covered by ffmpeg.test.js; keep it real here
   // so the chain tests assert on the argv that actually reaches ffmpeg.
   buildTrimConcatArgs: (await vi.importActual('../../lib/ffmpeg.js')).buildTrimConcatArgs,
+  // Report the setparams filter as available so the chain tests assert on the
+  // fully-tagged argv (the degraded, container-flags-only shape is covered in
+  // ffmpeg.test.js).
+  bt709TagFilter: vi.fn(async () => (await vi.importActual('../../lib/ffmpeg.js')).BT709_TAG_FILTER),
 }));
 
 // hfChildEnv() carries the resolved token over the inherited child env; mocking here
@@ -464,7 +468,11 @@ describe('generateChainedVideo — continuation strategy (context window vs last
     for (const i of [1, 2]) {
       expect(graph).toMatch(new RegExp(`\\[${i}:v\\][^;]*trim=start_frame=${EXPECTED_PREFIX_START}`));
     }
-    expect(graph).toContain('concat=n=3:v=1:a=0[outv]');
+    // All three legs join in one concat, whose output is then BT.709-tagged so
+    // the stitched timeline doesn't decode washed-out (#3800).
+    expect(graph).toContain('concat=n=3:v=1:a=0[cv]');
+    expect(graph).toContain('[cv]setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709[outv]');
+    expect(concat).toContain('-color_primaries');
     // And the stitched record reports the timeline that exists, not the sum of
     // what each chunk was rendered at.
     expect(stitched?.numFrames).toBe(STITCHED_FRAMES_3_CHUNKS);

@@ -351,6 +351,66 @@ export const H264_ENCODE_ARGS = Object.freeze([
 ]);
 export const AAC_ENCODE_ARGS = Object.freeze(['-c:a', 'aac', '-b:a', '192k']);
 
+// BT.709 color tagging for every re-encode this module writes.
+//
+// Untagged H.264 makes each player guess a color space, and the common guess
+// for HD content differs from the one for SD — so a stitched clip that carries
+// no tags decodes washed-out (or over-saturated) depending on where it's
+// opened. The renders these helpers re-encode are BT.709 in practice; the fix
+// is to SAY so on the output.
+//
+// It takes both halves to stick. The container flags below write the tags into
+// the MP4's `colr` atom, but from ffmpeg 8 the encoder reads its color
+// properties off the FRAMES coming down the filter graph — and those inherit
+// the (usually unspecified) values of the decoded input, silently overriding
+// the flags. `setparams` stamps the frame properties themselves, so the
+// encoder and the container agree.
+export const BT709_TAG_FILTER = 'setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709';
+export const BT709_CONTAINER_ARGS = Object.freeze([
+  '-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709',
+]);
+
+// `null` = not probed yet; `true`/`false` = the answer this ffmpeg build gave.
+// A probe that couldn't run (no binary, `-filters` failed) is NOT an answer and
+// is deliberately left uncached, so a later call still gets a real result
+// instead of a permanent "unsupported" from one transient failure.
+let setparamsAvailable = null;
+
+// Test seam — resets the capability cache between cases.
+export const __resetSetparamsProbe = () => { setparamsAvailable = null; };
+
+// Does this ffmpeg build carry the `setparams` filter? It landed in ffmpeg 4.3;
+// older builds (still common in distro packages) parse it as an unknown filter
+// and abort the whole run, which would turn a color-tagging nicety into a
+// failed render. Probe once per process — the binary can't change under us.
+export const supportsSetparamsFilter = async () => {
+  if (setparamsAvailable !== null) return setparamsAvailable;
+  const ffmpeg = await findFfmpeg();
+  if (!ffmpeg) return false;
+  const listing = await execFileAsync(ffmpeg, ['-hide_banner', '-filters'], {
+    env: safeChildProcessEnv(),
+    maxBuffer: 4 * 1024 * 1024,
+  }).then((r) => String(r.stdout || ''), () => null);
+  if (listing === null) return false;
+  setparamsAvailable = /(^|\s)setparams(\s|$)/m.test(listing);
+  if (!setparamsAvailable) {
+    console.log('⚠️ ffmpeg has no setparams filter — BT.709 tags will ride the container flags only');
+  }
+  return setparamsAvailable;
+};
+
+// The filter string to append to a re-encode's video chain, or `null` when this
+// ffmpeg build can't take it. Callers still spread `BT709_CONTAINER_ARGS`
+// unconditionally — those flags are accepted by every build worth supporting.
+export const bt709TagFilter = async () => (await supportsSetparamsFilter() ? BT709_TAG_FILTER : null);
+
+// Append a filter to a comma-separated ffmpeg filter chain, tolerating both an
+// empty chain and a `null` filter (the unsupported-build case).
+const appendFilter = (chain, filter) => {
+  if (!filter) return chain;
+  return chain ? `${chain},${filter}` : filter;
+};
+
 // Move a freshly-encoded temp file over the file it replaces.
 //
 // POSIX rename atomically replaces an existing destination in one syscall. On
@@ -424,17 +484,19 @@ export const trimVideoFromFrame = async (videoPath, outPath, { startFrame, fps }
   if (!inPlace) await ensureDir(dirname(outPath));
 
   const audio = await hasAudioStream(videoPath);
+  const colorFilter = await bt709TagFilter();
   const result = await runFfmpegProcess({
     bin: ffmpeg,
     args: [
       '-i', videoPath,
-      '-vf', `trim=start_frame=${start},setpts=PTS-STARTPTS`,
+      '-vf', appendFilter(`trim=start_frame=${start},setpts=PTS-STARTPTS`, colorFilter),
       ...(audio
         // atrim takes seconds; the frame index converts exactly because the
         // clips this runs on are CFR renders straight out of the model.
         ? ['-af', `atrim=start=${(start / rate).toFixed(6)},asetpts=PTS-STARTPTS`, ...AAC_ENCODE_ARGS]
         : ['-an']),
       ...H264_ENCODE_ARGS,
+      ...BT709_CONTAINER_ARGS,
       '-movflags', '+faststart',
       '-y', encodePath,
     ],
@@ -471,7 +533,13 @@ export const trimVideoFromFrame = async (videoPath, outPath, { startFrame, fps }
 // (`hasAudioStream`): `concat=a=1` needs an audio leg from each input, and
 // referencing `[k:a]` on a silent clip aborts the run. A mixed set takes the
 // video-only graph, which is what a chain of silent AI renders wants anyway.
-export const buildTrimConcatArgs = ({ inputs, outPath, width, height, fps, withAudio = false }) => {
+//
+// `colorTagFilter` is the `setparams` string from `bt709TagFilter()` (or `null`
+// on an ffmpeg build without the filter). It stays a PARAMETER rather than
+// being probed in here so this builder remains pure and synchronously testable
+// — the caller is already async and does the probe once. The container flags
+// need no probe and are always emitted.
+export const buildTrimConcatArgs = ({ inputs, outPath, width, height, fps, withAudio = false, colorTagFilter = null }) => {
   const clips = Array.isArray(inputs) ? inputs : [];
   if (clips.length < 2) return null;
   const canonW = Number(width);
@@ -513,7 +581,19 @@ export const buildTrimConcatArgs = ({ inputs, outPath, width, height, fps, withA
     }
     concatStreams.push(audio ? `[v${i}][a${i}]` : `[v${i}]`);
   });
-  filters.push(`${concatStreams.join('')}concat=n=${clips.length}:v=1:a=${audio ? 1 : 0}[outv]${audio ? '[outa]' : ''}`);
+  // Tag on the way OUT of the concat rather than per input: one stamp on the
+  // joined stream is what the encoder reads, and stamping each leg would repeat
+  // the filter N times for the same result. With an audio leg the concat emits
+  // two pads, so the tag can't simply trail the concat — give the video pad its
+  // own label and hang the filter off that in both shapes, so there is one code
+  // path instead of two.
+  // Only a real filter STRING earns the extra link — anything else would splice
+  // `[cv]undefined[outv]` into the graph and fail the whole encode, which is a
+  // far worse outcome than the untagged output it was meant to improve on.
+  const tag = typeof colorTagFilter === 'string' && colorTagFilter ? colorTagFilter : null;
+  const videoPad = tag ? '[cv]' : '[outv]';
+  filters.push(`${concatStreams.join('')}concat=n=${clips.length}:v=1:a=${audio ? 1 : 0}${videoPad}${audio ? '[outa]' : ''}`);
+  if (tag) filters.push(`[cv]${tag}[outv]`);
 
   return [
     ...clips.flatMap((clip) => ['-i', clip.path]),
@@ -521,6 +601,7 @@ export const buildTrimConcatArgs = ({ inputs, outPath, width, height, fps, withA
     '-map', '[outv]',
     ...(audio ? ['-map', '[outa]'] : []),
     ...H264_ENCODE_ARGS,
+    ...BT709_CONTAINER_ARGS,
     ...(audio ? AAC_ENCODE_ARGS : ['-an']),
     '-movflags', '+faststart',
     '-y', outPath,
@@ -564,8 +645,9 @@ export const upscaleVideo2x = async (videoPath) => {
     bin: ffmpeg,
     args: [
       '-i', videoPath,
-      '-vf', 'scale=iw*2:-2:flags=lanczos',
+      '-vf', appendFilter('scale=iw*2:-2:flags=lanczos', await bt709TagFilter()),
       ...H264_ENCODE_ARGS,
+      ...BT709_CONTAINER_ARGS,
       '-c:a', 'copy',
       '-movflags', '+faststart',
       '-y', tmpPath,

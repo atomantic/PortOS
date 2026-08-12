@@ -1,9 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { writeFileSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { verifyVideoPlayable, safeUnder, runFfmpegProcess, hasAudioStream, buildTrimConcatArgs } from './ffmpeg.js';
+import {
+  verifyVideoPlayable, safeUnder, runFfmpegProcess, hasAudioStream, buildTrimConcatArgs,
+  BT709_TAG_FILTER, BT709_CONTAINER_ARGS, bt709TagFilter, supportsSetparamsFilter, __resetSetparamsProbe,
+} from './ffmpeg.js';
 
 describe('verifyVideoPlayable', () => {
   let tmpDir;
@@ -240,5 +243,80 @@ describe('buildTrimConcatArgs', () => {
       outPath: '/v/out.mp4',
     }));
     expect(graph).not.toContain('trim=start_frame');
+  });
+
+  it('always emits the BT.709 container flags, filter or not', () => {
+    const flagsOf = (args) => BT709_CONTAINER_ARGS.every((a, i) => args[args.indexOf('-color_primaries') + i] === a);
+    expect(flagsOf(buildTrimConcatArgs({ inputs: CLIPS, outPath: '/v/out.mp4' }))).toBe(true);
+    expect(flagsOf(buildTrimConcatArgs({ inputs: CLIPS, outPath: '/v/out.mp4', colorTagFilter: BT709_TAG_FILTER }))).toBe(true);
+  });
+
+  it('stamps the color filter once, on the concat output rather than per input', () => {
+    const graph = graphOf(buildTrimConcatArgs({
+      inputs: CLIPS, outPath: '/v/out.mp4', width: 512, height: 288, fps: 24, colorTagFilter: BT709_TAG_FILTER,
+    }));
+    expect(graph).toContain(`[v0][v1]concat=n=2:v=1:a=0[cv];[cv]${BT709_TAG_FILTER}[outv]`);
+    // One stamp for the whole graph — not one per input leg.
+    expect(graph.split('setparams=').length - 1).toBe(1);
+  });
+
+  it('hangs the color filter off the video pad when the concat also emits audio', () => {
+    // `concat=a=1` produces two pads, so the tag can't trail the concat itself
+    // — the audio pad must stay reachable as [outa].
+    const args = buildTrimConcatArgs({
+      inputs: CLIPS, outPath: '/v/out.mp4', width: 512, height: 288, fps: 24, withAudio: true, colorTagFilter: BT709_TAG_FILTER,
+    });
+    const graph = graphOf(args);
+    expect(graph).toContain(`concat=n=2:v=1:a=1[cv][outa];[cv]${BT709_TAG_FILTER}[outv]`);
+    expect(args).toContain('[outa]');
+    expect(args).toContain('[outv]');
+  });
+
+  it('leaves the graph unlabelled by an extra link when there is no filter to apply', () => {
+    // The unsupported-ffmpeg shape: no [cv] hop at all, so an older build sees
+    // exactly the graph it saw before this change.
+    const graph = graphOf(buildTrimConcatArgs({ inputs: CLIPS, outPath: '/v/out.mp4', colorTagFilter: null }));
+    expect(graph).toContain('concat=n=2:v=1:a=0[outv]');
+    expect(graph).not.toContain('[cv]');
+  });
+
+  it('ignores a non-string filter rather than splicing it into the graph', () => {
+    // A bad value must degrade to "untagged", never to an unparseable graph
+    // that fails the whole encode.
+    for (const bad of [undefined, 42, {}, true, '']) {
+      const graph = graphOf(buildTrimConcatArgs({ inputs: CLIPS, outPath: '/v/out.mp4', colorTagFilter: bad }));
+      expect(graph).toContain('concat=n=2:v=1:a=0[outv]');
+      expect(graph).not.toContain('[cv]');
+      expect(graph).not.toMatch(/undefined|NaN|\[object/);
+    }
+  });
+});
+
+describe('bt709TagFilter / supportsSetparamsFilter', () => {
+  beforeEach(() => { __resetSetparamsProbe(); });
+  afterAll(() => { __resetSetparamsProbe(); });
+
+  it('returns the filter string or null, matching the probe', async () => {
+    const supported = await supportsSetparamsFilter();
+    expect(typeof supported).toBe('boolean');
+    expect(await bt709TagFilter()).toBe(supported ? BT709_TAG_FILTER : null);
+  });
+
+  it('caches a real probe result instead of re-shelling out per encode', async () => {
+    const first = await supportsSetparamsFilter();
+    // Only a real answer is cached, so this is only assertable when the host
+    // actually has ffmpeg — a missing binary is "unknown", not "unsupported".
+    if (!first) return;
+    const started = Date.now();
+    expect(await supportsSetparamsFilter()).toBe(true);
+    // A cache hit is a property read; a second `-filters` listing is not.
+    expect(Date.now() - started).toBeLessThan(50);
+  });
+
+  it('pins all three properties in the filter string', () => {
+    expect(BT709_TAG_FILTER).toBe('setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709');
+    expect([...BT709_CONTAINER_ARGS]).toEqual([
+      '-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709',
+    ]);
   });
 });

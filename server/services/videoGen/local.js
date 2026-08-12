@@ -29,7 +29,7 @@ import { getVideoModels, getDefaultVideoModelId, getTextEncoderRepo } from '../.
 import {
   findFfmpeg, safeUnder, generateThumbnail, optimizeForStreaming, upscaleVideo2x,
   extractEvaluationFrames, probeFrameCount, trimVideoFromFrame,
-  hasAudioStream, buildTrimConcatArgs,
+  hasAudioStream, buildTrimConcatArgs, bt709TagFilter,
 } from '../../lib/ffmpeg.js';
 import {
   resolveContextFrames, resolveContinuityStrategy, extendLatentFrames,
@@ -2316,6 +2316,11 @@ export async function stitchVideos(videoIds, opts = {}) {
         // `concat=a=1` needs an audio leg from EVERY input; one silent clip in
         // the set makes the whole graph video-only.
         withAudio: (await Promise.all(videoPaths.map((p) => hasAudioStream(p)))).every(Boolean),
+        // Pin BT.709 on the stitched output — this is the only re-encode a
+        // chained render's timeline gets, so an untagged result here is what a
+        // player would have to guess at. `null` on an ffmpeg without the
+        // filter; the container flags ride along inside the builder regardless.
+        colorTagFilter: await bt709TagFilter(),
       });
       const failure = args
         ? await runFfmpeg(args, { captureStderr: true }).then(() => null, (err) => err)
