@@ -7,7 +7,7 @@
  */
 
 import { join, basename } from 'path';
-import { stat } from 'fs/promises';
+import { readdir, stat } from 'fs/promises';
 import { homedir } from 'os';
 import { getMemorySection } from './memoryRetriever.js';
 import { getDigitalTwinForPrompt } from './digital-twin.js';
@@ -113,9 +113,76 @@ export async function loadSkillTemplate(skillName) {
   return content;
 }
 
+// Nested-CLAUDE.md discovery bounds (#3866). On-demand nested memory files are a
+// Claude Code feature — an API-provider agent reads nothing natively, so PortOS
+// has to splice them in itself or a subtree rule (including a data-loss guard)
+// never reaches that class of agent. The walk is bounded on three axes so a repo
+// that grows nested files can't silently balloon every agent prompt or turn one
+// prompt build into a full-tree crawl.
+const NESTED_CLAUDE_MD_MAX_DEPTH = 5;
+const NESTED_CLAUDE_MD_MAX_FILES = 10;
+const NESTED_CLAUDE_MD_MAX_DIRS = 2000;
+// Dot-directories are skipped wholesale (covers `.git`), so these are the
+// non-dot trees that are either vendored, generated, or runtime state.
+const NESTED_CLAUDE_MD_SKIP_DIRS = new Set([
+  'node_modules', 'data', 'data.reference', 'dist', 'build', 'coverage',
+  'out', 'venv', '__pycache__',
+]);
+// Workspace-relative paths skipped by exact match — `lib/slashdo` is a git
+// submodule carrying its own CLAUDE.md that is not this project's instructions.
+const NESTED_CLAUDE_MD_SKIP_PATHS = new Set(['lib/slashdo']);
+
+/**
+ * Collect workspace-relative paths of nested `CLAUDE.md` files (the root one is
+ * excluded — its caller reads it separately and must keep it first). Depth-first
+ * in lexicographic order, so the result is deterministic and prompt caching stays
+ * stable across builds.
+ * @param {string} workspaceDir
+ * @returns {Promise<string[]>} repo-relative paths, e.g. `['server/CLAUDE.md']`
+ */
+async function findNestedClaudeMdFiles(workspaceDir) {
+  const found = [];
+  let dirsVisited = 0;
+
+  const walk = async (dir, relDir, depth) => {
+    if (found.length >= NESTED_CLAUDE_MD_MAX_FILES) return;
+    if (depth > NESTED_CLAUDE_MD_MAX_DEPTH) return;
+    if (dirsVisited >= NESTED_CLAUDE_MD_MAX_DIRS) return;
+    dirsVisited += 1;
+
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => null);
+    if (!entries) return;
+    const sorted = [...entries].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+
+    const subdirs = [];
+    for (const entry of sorted) {
+      const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (entry.name.startsWith('.')) continue;
+        if (NESTED_CLAUDE_MD_SKIP_DIRS.has(entry.name)) continue;
+        if (NESTED_CLAUDE_MD_SKIP_PATHS.has(rel)) continue;
+        subdirs.push({ path: join(dir, entry.name), rel });
+      } else if (entry.name === 'CLAUDE.md' && relDir && entry.isFile()) {
+        found.push(rel);
+        if (found.length >= NESTED_CLAUDE_MD_MAX_FILES) return;
+      }
+    }
+
+    for (const sub of subdirs) {
+      if (found.length >= NESTED_CLAUDE_MD_MAX_FILES) return;
+      await walk(sub.path, sub.rel, depth + 1);
+    }
+  };
+
+  await walk(workspaceDir, '', 0);
+  return found;
+}
+
 /**
  * Read CLAUDE.md files for agent context.
- * Reads both global (~/.claude/CLAUDE.md) and project-specific (./CLAUDE.md).
+ * Reads the global (`~/.claude/CLAUDE.md`), the workspace-root `CLAUDE.md`, and
+ * every nested `CLAUDE.md` under the workspace (#3866) — nested last, each as its
+ * own labeled section, so precedence still reads root-then-specific.
  */
 export async function getClaudeMdContext(workspaceDir) {
   const contexts = [];
@@ -132,6 +199,15 @@ export async function getClaudeMdContext(workspaceDir) {
   const projectContent = await tryReadFile(projectPath);
   if (projectContent?.trim()) {
     contexts.push({ type: 'Project Instructions', path: projectPath, content: projectContent.trim() });
+  }
+
+  // Nested per-directory instructions, appended after the root file.
+  for (const rel of await findNestedClaudeMdFiles(workspaceDir)) {
+    const nestedPath = join(workspaceDir, rel);
+    const nestedContent = await tryReadFile(nestedPath);
+    if (nestedContent?.trim()) {
+      contexts.push({ type: `Project Instructions (${rel})`, path: nestedPath, content: nestedContent.trim() });
+    }
   }
 
   if (contexts.length === 0) {

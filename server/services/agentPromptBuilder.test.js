@@ -2338,3 +2338,96 @@ describe('getAppWorkspace — tilde expansion (#3180)', () => {
     expect(await getAppWorkspace('abs-app')).toBe('/srv/repos/abs-app');
   });
 });
+
+// #3866 — getClaudeMdContext used to splice only the global + workspace-root
+// CLAUDE.md, so a subtree rule (including a data-loss guard) never reached an
+// API-provider agent. These pin the nested walk and its bounds.
+describe('getClaudeMdContext — nested CLAUDE.md discovery (#3866)', () => {
+  let workspace;
+
+  const writeClaudeMd = (relDir, body) => {
+    const dir = relDir ? join(workspace, relDir) : workspace;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'CLAUDE.md'), body);
+  };
+
+  beforeAll(() => {
+    workspace = mkdtempSync(join(process.env.TMPDIR || '/tmp', 'portos-nested-claudemd-'));
+    writeClaudeMd('', '# Root rules\nAnchor every backup exclude.');
+    writeClaudeMd('server', '# Server rules\nSchema parity when adding fields.');
+    writeClaudeMd('client/src/components/dashboard', '# Dashboard rules\nRegister the widget.');
+    // Ignored trees: each carries a CLAUDE.md that must NOT be spliced.
+    writeClaudeMd('node_modules/some-dep', '# Vendored dep rules');
+    writeClaudeMd('data/cos/worktrees/claim-issue-1', '# Runtime worktree rules');
+    writeClaudeMd('lib/slashdo', '# Submodule rules');
+    writeClaudeMd('.hidden', '# Dot dir rules');
+    // Past the depth cap (depth 6): a/b/c/d/e/f/CLAUDE.md.
+    writeClaudeMd('a/b/c/d/e/f', '# Too deep rules');
+  });
+
+  afterAll(() => {
+    rmSync(workspace, { recursive: true, force: true });
+  });
+
+  it('splices nested files after the root one, each labeled with its repo-relative path', async () => {
+    const section = await getClaudeMdContext(workspace);
+
+    expect(section).toContain('### Project Instructions\n');
+    expect(section).toContain('Anchor every backup exclude.');
+    // The whole point of the issue: subtree content reaches the prompt.
+    expect(section).toContain('### Project Instructions (server/CLAUDE.md)');
+    expect(section).toContain('Schema parity when adding fields.');
+    expect(section).toContain('### Project Instructions (client/src/components/dashboard/CLAUDE.md)');
+    expect(section).toContain('Register the widget.');
+
+    // Root stays first so precedence still reads root-then-specific, and the
+    // nested pair is ordered lexicographically by path (client before server)
+    // so prompt caching stays stable across builds.
+    const rootAt = section.indexOf('Anchor every backup exclude.');
+    const dashboardAt = section.indexOf('Register the widget.');
+    const serverAt = section.indexOf('Schema parity when adding fields.');
+    expect(rootAt).toBeLessThan(dashboardAt);
+    expect(dashboardAt).toBeLessThan(serverAt);
+  });
+
+  it('skips vendored, runtime, submodule, dot, and over-depth trees', async () => {
+    const section = await getClaudeMdContext(workspace);
+
+    expect(section).not.toContain('Vendored dep rules');
+    expect(section).not.toContain('Runtime worktree rules');
+    expect(section).not.toContain('Submodule rules');
+    expect(section).not.toContain('Dot dir rules');
+    expect(section).not.toContain('Too deep rules');
+  });
+
+  it('caps the number of nested files spliced', async () => {
+    const capped = mkdtempSync(join(process.env.TMPDIR || '/tmp', 'portos-nested-claudemd-cap-'));
+    mkdirSync(capped, { recursive: true });
+    writeFileSync(join(capped, 'CLAUDE.md'), '# Root of capped workspace');
+    // 12 nested files > the 10-file cap. Zero-padded so lexicographic order
+    // matches numeric order and the assertions below are unambiguous.
+    for (let i = 1; i <= 12; i++) {
+      const dir = join(capped, `pkg-${String(i).padStart(2, '0')}`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'CLAUDE.md'), `# Nested rule ${String(i).padStart(2, '0')}`);
+    }
+
+    const section = await getClaudeMdContext(capped);
+    const spliced = section.match(/### Project Instructions \(/g) || [];
+    expect(spliced).toHaveLength(10);
+    // Non-vacuous: the survivors are the first 10 by path, and the overflow is
+    // dropped rather than truncated mid-file.
+    expect(section).toContain('# Nested rule 10');
+    expect(section).not.toContain('# Nested rule 11');
+    expect(section).not.toContain('# Nested rule 12');
+
+    rmSync(capped, { recursive: true, force: true });
+  });
+
+  it('returns null for a workspace with no CLAUDE.md at any level', async () => {
+    const empty = mkdtempSync(join(process.env.TMPDIR || '/tmp', 'portos-nested-claudemd-empty-'));
+    mkdirSync(join(empty, 'sub'), { recursive: true });
+    expect(await getClaudeMdContext(empty)).toBeNull();
+    rmSync(empty, { recursive: true, force: true });
+  });
+});
