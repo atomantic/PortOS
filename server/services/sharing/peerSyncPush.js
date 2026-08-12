@@ -10,7 +10,6 @@
  * Split out of the former 4,004-line peerSync.js (#1830).
  */
 import { join } from 'path';
-import { PATHS, readJSONFile } from '../../lib/fileUtils.js';
 import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
@@ -18,12 +17,11 @@ import { peerFetch } from '../../lib/peerHttpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { sanitizeRecordForWire } from '../../lib/syncWire.js';
 import { setSyncBaseHash, contentHashForRecord, flushBaseHashes } from '../../lib/conflictJournal.js';
-import { sanitizeAssetFilename } from './buckets.js';
 import {
   buildPortosMeta,
   formatVersionGap,
 } from '../../lib/schemaVersions.js';
-import { getInstanceId, getPeers, UNKNOWN_INSTANCE_ID } from '../instances.js';
+import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instances.js';
 import { getUniverse } from '../universeBuilder.js';
 import { getSeries } from '../pipeline/series.js';
 import { listIssues } from '../pipeline/issues.js';

@@ -22,12 +22,11 @@ import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/ind
 import { resolveCloudProviderConfig } from '../services/imageGen/cloudProviderConfig.js';
 import setupRouter from './imageGenSetup.js';
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
-import { getImageModels, isFlux2, isEditOnly, repoForModel, requiredReposForModel } from '../lib/mediaModels.js';
-import { usesDiffusersRunner } from '../lib/runners.js';
+import { getImageModels, requiredReposForModel } from '../lib/mediaModels.js';
 import { inspectModelCache, verifyModelCache, repairModelCache, aggregateVerifies } from '../lib/hfCache.js';
 import { startHfDownloadStream } from '../lib/sseDownload.js';
 import { PATHS, ensureDir, resolveGalleryImage } from '../lib/fileUtils.js';
-import { prepareGenerateParams } from '../services/imageGen/prepareParams.js';
+import { prepareGenerateParams, resolveLocalImageModel } from '../services/imageGen/prepareParams.js';
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
 import { join, basename } from 'node:path';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
@@ -39,7 +38,6 @@ import {
 import { getSketchPngPath, isValidKey as isValidSketchKey } from '../services/mediaSketches.js';
 import { itemKey } from '../lib/mediaItemKey.js';
 import { purgeImageRefFromAllUniverses } from '../services/universeCanon.js';
-import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
 import * as characterService from '../services/character.js';
 import { randomUUID } from 'crypto';
 import { buildUniverseRunTag } from '../services/universeRunTag.js';
@@ -426,47 +424,14 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     return res.json(queuedImageResponse({ ...queued, mode, model: cloud.modelId }));
   }
   if (mode === IMAGE_GEN_MODE.LOCAL) {
-    const py = settings.imageGen?.local?.pythonPath || null;
-    // Pre-validate config: mflux models need pythonPath, FLUX.2 doesn't
-    // (it uses its own bundled venv). Without this guard, the queue would
-    // accept the job and only surface the failure async over SSE.
-    const allModels = getImageModels();
-    // Reject a typo'd modelId synchronously rather than enqueueing a doomed
-    // job. When omitted, fall through to the default ('dev'-ish) — the
-    // worker does the same lookup so behavior stays consistent.
-    if (params.modelId && !allModels.some((m) => m.id === params.modelId)) {
-      throw new ServerError(
-        `Unknown modelId: ${params.modelId}`,
-        { status: 400, code: 'IMAGE_GEN_UNKNOWN_MODEL' },
-      );
-    }
-    const selectedModel = allModels.find((m) => m.id === params.modelId)
-      ?? allModels.find((m) => m.id === 'dev')
-      ?? allModels[0];
-    // Edit-only models (Qwen-Image-Edit) load a pipeline that REQUIRES a
-    // source image. Reject a text-only submission up-front rather than
-    // enqueueing a job that crashes deep inside diffusers. `params.initImagePath`
-    // is already populated above from either an uploaded `initImage` or a
-    // gallery `initImageFile`.
-    if (isEditOnly(selectedModel) && !params.initImagePath) {
-      throw new ServerError(
-        `${selectedModel.name || selectedModel.id} is an image-edit model — it requires a source image. Upload an init image to use it.`,
-        { status: 400, code: 'IMAGE_GEN_EDIT_IMAGE_REQUIRED' },
-      );
-    }
-    if (selectedModel && !isFlux2(selectedModel) && !usesDiffusersRunner(selectedModel) && !py) {
-      throw new ServerError(
-        'Local image generation is not configured (settings.imageGen.local.pythonPath is missing).',
-        { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' },
-      );
-    }
+    const { pythonPath: py, selectedModel } = resolveLocalImageModel(settings, params);
     const queued = enqueueJob({
       kind: 'image',
       params: { pythonPath: py, ...params },
     });
-    // Resolve the effective model the same way the validation block above
-    // does so the response reflects the actual fallback chain (caller
-    // modelId → 'dev' → allModels[0]) rather than just the requested id.
+    // selectedModel reflects the actual fallback chain resolveLocalImageModel
+    // applied (caller modelId → 'dev' → allModels[0]) rather than just the
+    // requested id.
     return res.json(queuedImageResponse({
       ...queued,
       mode: IMAGE_GEN_MODE.LOCAL,

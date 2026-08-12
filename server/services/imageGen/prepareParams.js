@@ -36,7 +36,8 @@ import {
 import { RENDER_TARGET, recordRenderPin } from '../../lib/renderTargets.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
 import { getUniverseRenderPin } from '../universeBuilder/crud.js';
-import { getImageModels, isFlux2 } from '../../lib/mediaModels.js';
+import { getImageModels, isFlux2, isEditOnly } from '../../lib/mediaModels.js';
+import { usesDiffusersRunner } from '../../lib/runners.js';
 
 // The job tags that name the record owning a render, each mapped to the record
 // loader and the render target whose `renderDefaults` pin backs it. A generate
@@ -295,4 +296,58 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
   }
 
   return { data, mode, settings, uploadedTempPaths };
+}
+
+/**
+ * resolveLocalImageModel — pre-dispatch validation for the LOCAL backend,
+ * called from the route right before it enqueues a local job.
+ *
+ * Resolves the effective model via the same fallback chain the local worker
+ * uses (`params.modelId` → `'dev'` → the first registered model) and
+ * validates it can actually run: an edit-only model (e.g. Qwen-Image-Edit)
+ * requires a source image, and any model that isn't FLUX.2 or diffusers-run
+ * needs a configured pythonPath. Throws the identical `ServerError`s (same
+ * status/code/message, same order) the route used to throw inline — these
+ * surface directly in the UI.
+ *
+ * @param {object} settings - raw settings object (as returned by getSettings())
+ * @param {object} params   - in-flight generate params (post prepareGenerateParams)
+ * @returns {{ pythonPath: string|null, selectedModel: object|undefined }}
+ */
+export function resolveLocalImageModel(settings, params) {
+  const pythonPath = settings.imageGen?.local?.pythonPath || null;
+  // Pre-validate config: mflux models need pythonPath, FLUX.2 doesn't
+  // (it uses its own bundled venv). Without this guard, the queue would
+  // accept the job and only surface the failure async over SSE.
+  const allModels = getImageModels();
+  // Reject a typo'd modelId synchronously rather than enqueueing a doomed
+  // job. When omitted, fall through to the default ('dev'-ish) — the
+  // worker does the same lookup so behavior stays consistent.
+  if (params.modelId && !allModels.some((m) => m.id === params.modelId)) {
+    throw new ServerError(
+      `Unknown modelId: ${params.modelId}`,
+      { status: 400, code: 'IMAGE_GEN_UNKNOWN_MODEL' },
+    );
+  }
+  const selectedModel = allModels.find((m) => m.id === params.modelId)
+    ?? allModels.find((m) => m.id === 'dev')
+    ?? allModels[0];
+  // Edit-only models (Qwen-Image-Edit) load a pipeline that REQUIRES a
+  // source image. Reject a text-only submission up-front rather than
+  // enqueueing a job that crashes deep inside diffusers. `params.initImagePath`
+  // is already populated above from either an uploaded `initImage` or a
+  // gallery `initImageFile`.
+  if (isEditOnly(selectedModel) && !params.initImagePath) {
+    throw new ServerError(
+      `${selectedModel.name || selectedModel.id} is an image-edit model — it requires a source image. Upload an init image to use it.`,
+      { status: 400, code: 'IMAGE_GEN_EDIT_IMAGE_REQUIRED' },
+    );
+  }
+  if (selectedModel && !isFlux2(selectedModel) && !usesDiffusersRunner(selectedModel) && !pythonPath) {
+    throw new ServerError(
+      'Local image generation is not configured (settings.imageGen.local.pythonPath is missing).',
+      { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' },
+    );
+  }
+  return { pythonPath, selectedModel };
 }
