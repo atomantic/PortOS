@@ -100,11 +100,17 @@ const sortValues = (map) =>
 // { …(28) }", which reads as an unrelated regression on whatever PR happens to
 // inherit it — three PRs were triaged past this break before it was traced to
 // `main`. Name the files and hashes that actually moved, and say what to do.
+// Interpolating an array renders it comma-joined and indistinguishable from the
+// single joined string it is NOT — the same collapse the filter avoids below.
+const render = (value) => (value === undefined ? '(absent)' : JSON.stringify(value));
+
 const describeDrift = (actual, expected) =>
   [...new Set([...Object.keys(actual), ...Object.keys(expected)])]
     .map((file) => ({ file, was: expected[file], now: actual[file] }))
-    .filter(({ was, now }) => String(was) !== String(now))
-    .map(({ file, was, now }) => `  ${file}: baseline ${was ?? '(absent)'} -> migrations ship ${now ?? '(absent)'}`);
+    // Structural, not stringified: String(['a', 'b']) === String('a,b'), so a
+    // hash list that lost its element boundaries would compare equal.
+    .filter(({ was, now }) => JSON.stringify(was) !== JSON.stringify(now))
+    .map(({ file, was, now }) => `  ${file}: baseline ${render(was)} -> migrations ship ${render(now)}`);
 
 const expectMatchesBaseline = (actual, expected, label) => {
   const drifted = describeDrift(actual, expected);
