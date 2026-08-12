@@ -14,11 +14,9 @@ import { updateAgent } from './cosAgentLifecycle.js';
 // cosState.js leaves cos.js's own re-exported bindings uninitialized at import
 // time — `firstLine is not a function` in cos.test.js, verified.
 //
-// Known tradeoff: agentCompletion.test.js stubs getConfig via
-// `vi.mock('./cos.js', ...)`, which this import bypasses, so that suite
-// exercises the real loadState() and passes on DEFAULT_CONFIG's cooldown.
-// Retargeting the mock to cosState.js is the fix; it needs a test change and so
-// is out of scope for this refactor-only pass.
+// agentCompletion.test.js's getConfig stub therefore has to name cosState.js
+// too — pointed at cos.js it intercepts nothing, and the suite silently
+// exercises the real loadState() against the running install's config.
 import { getConfig } from './cosState.js';
 import { startAppCooldown, markAppReviewCompleted } from './appActivity.js';
 import { emitLog } from './cosEvents.js';
