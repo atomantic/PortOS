@@ -18,9 +18,11 @@ if ! command -v node &> /dev/null; then
     exit 1
 fi
 
+# Vite 8 (client build) requires ^20.19 || >=22.12, so a v18 install fails at
+# `npm run build` rather than here. Gate on 22 — what .nvmrc and CI actually use.
 NODE_VERSION=$(node -v | cut -d'v' -f2 | cut -d'.' -f1)
-if [ "$NODE_VERSION" -lt 18 ]; then
-    echo "Node.js 18+ required (found v$NODE_VERSION)"
+if [ "$NODE_VERSION" -lt 22 ]; then
+    echo "Node.js 22+ required (found v$NODE_VERSION) — see .nvmrc"
     exit 1
 fi
 

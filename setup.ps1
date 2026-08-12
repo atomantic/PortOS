@@ -17,11 +17,13 @@ if (-not $nodeCommand) {
     exit 1
 }
 
-# Check Node.js version
+# Check Node.js version. Vite 8 (client build) requires ^20.19 || >=22.12, so a
+# v18 install fails at `npm run build` rather than here. Gate on 22 — what
+# .nvmrc and CI actually use.
 $nodeVersion = (node -v) -replace 'v', ''
 $majorVersion = [int]($nodeVersion.Split('.')[0])
-if ($majorVersion -lt 18) {
-    Write-Host "Node.js 18+ required (found v$nodeVersion)" -ForegroundColor Red
+if ($majorVersion -lt 22) {
+    Write-Host "Node.js 22+ required (found v$nodeVersion) - see .nvmrc" -ForegroundColor Red
     exit 1
 }
 Write-Host "Found Node.js v$nodeVersion" -ForegroundColor Green
