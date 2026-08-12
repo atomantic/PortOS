@@ -6,6 +6,19 @@
  */
 
 import { updateAgent } from './cosAgentLifecycle.js';
+// `getConfig` comes from cosState.js, NOT cos.js, and that asymmetry with the
+// other cos.js getConfig importers is load-bearing — do not "fix" it for
+// consistency. This module sits on a cycle (cos.js → agentState.js →
+// agentOrchestrator.js → agentManagement.js → agentFinalization.js → here), and
+// pointing this import back at cos.js while cos.js re-exports getConfig from
+// cosState.js leaves cos.js's own re-exported bindings uninitialized at import
+// time — `firstLine is not a function` in cos.test.js, verified.
+//
+// Known tradeoff: agentCompletion.test.js stubs getConfig via
+// `vi.mock('./cos.js', ...)`, which this import bypasses, so that suite
+// exercises the real loadState() and passes on DEFAULT_CONFIG's cooldown.
+// Retargeting the mock to cosState.js is the fix; it needs a test change and so
+// is out of scope for this refactor-only pass.
 import { getConfig } from './cosState.js';
 import { startAppCooldown, markAppReviewCompleted } from './appActivity.js';
 import { emitLog } from './cosEvents.js';

@@ -1943,18 +1943,6 @@ function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW
 }
 
 /**
- * TUI completion-workflow block. The TUI owns its own commit → push → PR
- * pipeline via slashdo commands and signals "done" with a sentinel file.
- *
- * When `slashdoFree` is set — any TUI that does NOT load Claude Code slash
- * commands: OpenCode, codex/antigravity/grok/kimi, or a lean `--bare` Claude
- * session — the agent can't run `/do:pr` / `/do:push`, so it delegates to the
- * plain-git/`gh` variant below (same sentinel handshake, no slashdo). The caller
- * resolves that flag once via `canTypeSlashCommands` (#3114); past the early
- * return this IS a Claude session, so `/simplify` and `/do:pr` are both safe to
- * emit without a second provider check.
- */
-/**
  * Resolve the review-loop invocation shared by buildTuiCompletionSection and
  * buildCliCompletionSection: the normalized reviewer usernames, the
  * `--review-with ...` argument text, and the effort-pin note. Both callers
@@ -1997,6 +1985,18 @@ function buildSentinelWriteSteps(stepNumber, sentinelPath, sentinelTail) {
   ];
 }
 
+/**
+ * TUI completion-workflow block. The TUI owns its own commit → push → PR
+ * pipeline via slashdo commands and signals "done" with a sentinel file.
+ *
+ * When `slashdoFree` is set — any TUI that does NOT load Claude Code slash
+ * commands: OpenCode, codex/antigravity/grok/kimi, or a lean `--bare` Claude
+ * session — the agent can't run `/do:pr` / `/do:push`, so it delegates to the
+ * plain-git/`gh` variant below (same sentinel handshake, no slashdo). The caller
+ * resolves that flag once via `canTypeSlashCommands` (#3114); past the early
+ * return this IS a Claude session, so `/simplify` and `/do:pr` are both safe to
+ * emit without a second provider check.
+ */
 function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, simplifyEnabled, sentinelPath, slashdoFree = false, branchName = null, baseBranch = null, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewerEfforts = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
   const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
   const runsReviewLoop = prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE;
