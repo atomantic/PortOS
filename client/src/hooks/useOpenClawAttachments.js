@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { readFileAsBase64 } from '../utils/fileUpload';
+import { formatBytes } from '../utils/formatters';
 
 const MAX_ATTACHMENTS = 8;
 // Matches server-side ATTACHMENT_BASE64_MAX_CHARS (13,333,333 chars). Base64 expands raw bytes
@@ -104,7 +105,7 @@ export function useOpenClawAttachments({ sending, onError = () => {} } = {}) {
 
     if (tooLargeFile) {
       onError(
-        `"${tooLargeFile.name}" is too large. Maximum attachment size is ${Math.round(MAX_ATTACHMENT_FILE_SIZE / (1024 * 1024))}MB.`
+        `"${tooLargeFile.name}" is too large. Maximum attachment size is ${formatBytes(MAX_ATTACHMENT_FILE_SIZE, 0)}.`
       );
       return;
     }

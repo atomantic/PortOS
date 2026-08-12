@@ -2,8 +2,21 @@ import { describe, it, expect } from 'vitest';
 import {
   formatContextLength, formatDurationMin, formatDurationMs, formatEventDateTime, timeAgo,
   formatCooldown, parseSizeGb, recommendedRamGb, parseTimeoutMs, formatDurationSec, middleTruncate,
-  formatWeight, formatPercent, formatUsd,
+  formatWeight, formatPercent, formatUsd, formatBytes,
 } from './formatters.js';
+
+describe('formatBytes', () => {
+  it('renders whole-MB file-size caps with no decimals at decimals=0', () => {
+    // The shape the "file too large" toasts depend on (issue #3869).
+    expect(formatBytes(12 * 1024 * 1024, 0)).toBe('12 MB');
+    expect(formatBytes(35 * 1024 * 1024, 0)).toBe('35 MB');
+    expect(formatBytes(50 * 1024 * 1024, 0)).toBe('50 MB');
+  });
+
+  it('rounds a non-round cap to the nearest whole unit at decimals=0', () => {
+    expect(formatBytes(9_999_999, 0)).toBe('10 MB');
+  });
+});
 
 describe('formatWeight', () => {
   it('rounds unit-conversion float noise to one decimal', () => {

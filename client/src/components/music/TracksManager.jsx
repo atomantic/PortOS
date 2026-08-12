@@ -20,7 +20,7 @@ import toast from '../ui/Toast';
 import FilePickerButton from '../ui/FilePickerButton';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
-import { formatTimecode } from '../../utils/formatters';
+import { formatBytes, formatTimecode } from '../../utils/formatters';
 import ArtistPicker from './ArtistPicker';
 import MusicGenPanel from './MusicGenPanel';
 import ChiptunePanel from './ChiptunePanel';
@@ -231,7 +231,7 @@ export default function TracksManager() {
   const handleAudioFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file || !requireSaved()) return;
-    if (file.size > AUDIO_MAX_BYTES) { toast.error(`Audio exceeds ${Math.round(AUDIO_MAX_BYTES / 1024 / 1024)}MB`); return; }
+    if (file.size > AUDIO_MAX_BYTES) { toast.error(`Audio exceeds ${formatBytes(AUDIO_MAX_BYTES, 0)}`); return; }
     const targetId = persisted.id; // server write targets THIS track
     setUploading(true);
     const fd = new FormData();

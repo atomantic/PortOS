@@ -19,6 +19,7 @@ import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { DEFAULT_NEGATIVE_PROMPT } from '../../lib/imageGenDefaults';
 import { readFileAsBase64 } from '../../utils/fileUpload';
+import { formatBytes } from '../../utils/formatters';
 import {
   listArtists, createArtist, updateArtist, deleteArtist, uploadGalleryImage, generateImage,
   ARTIST_NAME_MAX, ARTIST_GENRE_MAX, ARTIST_BIO_MAX, ARTIST_MUSICAL_STYLE_MAX,
@@ -138,7 +139,7 @@ export default function ArtistsManager() {
     if (!file) return;
     if (!file.type.startsWith('image/')) { toast.error('Please choose an image file'); return; }
     if (file.size > PORTRAIT_MAX_BYTES) {
-      toast.error(`Image exceeds ${Math.round(PORTRAIT_MAX_BYTES / 1024 / 1024)}MB`);
+      toast.error(`Image exceeds ${formatBytes(PORTRAIT_MAX_BYTES, 0)}`);
       return;
     }
     setUploadingPortrait(true);

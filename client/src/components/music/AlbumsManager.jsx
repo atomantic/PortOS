@@ -20,7 +20,7 @@ import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { DEFAULT_NEGATIVE_PROMPT } from '../../lib/imageGenDefaults';
 import { readFileAsBase64 } from '../../utils/fileUpload';
-import { formatTimecode } from '../../utils/formatters';
+import { formatBytes, formatTimecode } from '../../utils/formatters';
 import ArtistPicker from './ArtistPicker';
 import {
   listAlbums, createAlbum, updateAlbum, deleteAlbum,
@@ -168,7 +168,7 @@ export default function AlbumsManager() {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith('image/')) { toast.error('Please choose an image file'); return; }
-    if (file.size > COVER_MAX_BYTES) { toast.error(`Image exceeds ${Math.round(COVER_MAX_BYTES / 1024 / 1024)}MB`); return; }
+    if (file.size > COVER_MAX_BYTES) { toast.error(`Image exceeds ${formatBytes(COVER_MAX_BYTES, 0)}`); return; }
     // Capture the album-switch generation counter (bumped by selectAlbum/
     // startCreate) so a slow read+upload that finishes after the user moved to a
     // different album doesn't write this cover onto the wrong album's form.

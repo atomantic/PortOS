@@ -44,6 +44,7 @@ import { startMemoRecording, arrayBufferToBase64 } from '../../lib/audioRecorder
 import { proposeSegmentScore, proposeStackedSegmentScore, diffScoreBars, PITCH_CLASS_NAMES } from '../../lib/referenceAnalysis';
 import { scoreHasMusic, parseScore } from '../../lib/scoreNotation';
 import { harmonyPartLabel } from '../../lib/songCraft';
+import { formatBytes } from '../../utils/formatters';
 import { MUSCRIPTOR_MODELS, DEFAULT_MUSCRIPTOR_MODEL } from '../../lib/muscriptorModels.js';
 
 // Client-side guard for the base64-JSON upload path: the server body limit is
@@ -142,7 +143,7 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > MAX_AUDIO_BYTES) {
-      toast.error(`Audio file too large (max ${Math.round(MAX_AUDIO_BYTES / 1024 / 1024)} MB)`);
+      toast.error(`Audio file too large (max ${formatBytes(MAX_AUDIO_BYTES, 0)})`);
       return;
     }
     const bytes = await file.arrayBuffer();

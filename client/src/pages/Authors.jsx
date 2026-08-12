@@ -20,6 +20,7 @@ import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import useMediaJobProgress from '../hooks/useMediaJobProgress';
 import { DEFAULT_NEGATIVE_PROMPT } from '../lib/imageGenDefaults';
 import { readFileAsBase64 } from '../utils/fileUpload';
+import { formatBytes } from '../utils/formatters';
 import {
   listAuthors, createAuthor, updateAuthor, deleteAuthor, uploadGalleryImage, generateImage,
   AUTHOR_NAME_MAX, AUTHOR_WRITING_STYLE_MAX, AUTHOR_BIO_MAX,
@@ -155,7 +156,7 @@ export default function Authors() {
     if (!file) return;
     if (!file.type.startsWith('image/')) { toast.error('Please choose an image file'); return; }
     if (file.size > HEADSHOT_MAX_BYTES) {
-      toast.error(`Image exceeds ${Math.round(HEADSHOT_MAX_BYTES / 1024 / 1024)}MB`);
+      toast.error(`Image exceeds ${formatBytes(HEADSHOT_MAX_BYTES, 0)}`);
       return;
     }
     setUploadingHeadshot(true);
