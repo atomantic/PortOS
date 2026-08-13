@@ -578,8 +578,11 @@ K:  o - - - - - o -`;
     it('switches straight to play mode when the draft is clean', async () => {
       renderPage('/songbook/abc?mode=edit');
       fireEvent.click(await screen.findByRole('button', { name: 'View' }));
-      expect(await screen.findByText('Nonsense words here')).toBeTruthy();
+      // The edit-mode PREVIEW renders the sheet text too, so "we left edit
+      // mode" is asserted on the form going away, not on the sheet appearing.
+      await waitFor(() => expect(screen.queryByLabelText('Content')).toBeNull());
       expect(screen.queryByText(/Discard your unsaved changes/)).toBeNull();
+      expect(screen.getByText('Nonsense words here')).toBeTruthy();
     });
 
     it('confirms before the View toggle discards unsaved edits', async () => {
@@ -598,7 +601,7 @@ K:  o - - - - - o -`;
       // Discard → the exit runs and the draft resets to the saved song.
       fireEvent.click(screen.getByRole('button', { name: 'View' }));
       fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
-      expect(await screen.findByText('Nonsense words here')).toBeTruthy();
+      await waitFor(() => expect(screen.queryByLabelText('Content')).toBeNull());
       fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
       expect((await screen.findByLabelText('Content')).value).toBe(SHEET);
       expect(api.updateSong).not.toHaveBeenCalled();
@@ -619,7 +622,38 @@ K:  o - - - - - o -`;
       fireEvent.change(capo, { target: { value: '3' } });
       fireEvent.change(capo, { target: { value: '2' } });
       fireEvent.click(screen.getByRole('button', { name: 'View' }));
-      expect(await screen.findByText('Nonsense words here')).toBeTruthy();
+      await waitFor(() => expect(screen.queryByLabelText('Content')).toBeNull());
+      expect(screen.queryByText(/Discard your unsaved changes/)).toBeNull();
+    });
+
+    it('treats tag whitespace and a trailing comma as clean (parseTags round-trip)', async () => {
+      api.getSong.mockResolvedValue(song({ tags: ['campfire', 'fingerstyle'] }));
+      renderPage('/songbook/abc?mode=edit');
+      const tags = await screen.findByLabelText('Tags (comma-separated)');
+      expect(tags.value).toBe('campfire, fingerstyle');
+      // Same saved value — different raw text.
+      fireEvent.change(tags, { target: { value: 'campfire,fingerstyle,' } });
+      fireEvent.click(screen.getByRole('button', { name: 'View' }));
+      await waitFor(() => expect(screen.queryByLabelText('Content')).toBeNull());
+      expect(screen.queryByText(/Discard your unsaved changes/)).toBeNull();
+    });
+
+    it('hides the discard row while a save is in flight', async () => {
+      let resolveSave;
+      api.updateSong.mockImplementation((_id, patch) => new Promise((resolve) => {
+        resolveSave = () => resolve(song({ ...patch }));
+      }));
+      renderPage('/songbook/abc?mode=edit');
+      await editSheet();
+      fireEvent.click(screen.getByRole('button', { name: 'View' }));
+      expect(await screen.findByText('Discard your unsaved changes to this song?')).toBeTruthy();
+      // Save starts → the row goes away, so Discard can't reset the draft under
+      // the in-flight PATCH.
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Discard' })).toBeNull());
+      expect(screen.getByRole('button', { name: 'Saving…' })).toBeTruthy();
+      resolveSave();
+      await waitFor(() => expect(api.updateSong).toHaveBeenCalled());
     });
 
     it('drops the armed confirm once a save settles the draft', async () => {

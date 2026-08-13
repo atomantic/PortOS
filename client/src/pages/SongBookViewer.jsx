@@ -98,13 +98,25 @@ const toDraft = (song) => ({
 
 const parseTags = (raw) => raw.split(',').map((t) => t.trim()).filter(Boolean);
 
-// Draft-vs-saved comparison for the unsaved-changes guard. Both sides come from
-// toDraft (flat strings), except `capo`: the number input hands back a STRING,
-// so retyping the stored value ('2' vs 2) would otherwise read as an edit. An
-// emptied capo field compares as 0, which is what the save would clamp it to.
-const draftsEqual = (a, b) => Object.keys(a).every((k) => (
-  k === 'capo' ? Number(a.capo || 0) === Number(b.capo || 0) : a[k] === b[k]
-));
+// Draft-vs-saved comparison for the unsaved-changes guard. It compares what a
+// SAVE would send, not the raw form text — otherwise edits the save normalizes
+// away read as unsaved work and prompt for nothing. Each field is normalized
+// exactly as `save` normalizes it: trimmed strings, `parseTags` for the tag
+// input ('a,b' and 'a, b,' both save as ['a','b']), and a numeric capo (the
+// number input hands back a STRING, and an emptied field clamps to 0).
+// `notes`/`text` go to the server verbatim, so they compare verbatim.
+const TRIMMED_DRAFT_FIELDS = ['title', 'artist', 'key', 'tuning', 'sourceUrl'];
+const normalizeDraftField = (draft, k) => {
+  if (k === 'capo') return Number(draft.capo || 0);
+  // Joined on a comma — the one character parseTags strips from every tag, so
+  // two different tag lists can never normalize to the same string.
+  if (k === 'tags') return parseTags(draft.tags).join(',');
+  if (TRIMMED_DRAFT_FIELDS.includes(k)) return (draft[k] || '').trim();
+  return draft[k];
+};
+const draftsEqual = (a, b) => Object.keys(a).every(
+  (k) => normalizeDraftField(a, k) === normalizeDraftField(b, k),
+);
 
 // Instrument-view toggle tabs (chord-diagram rendering — never mutates the record).
 const VIEW_TABS = VOICING_INSTRUMENTS.map((viewId) => ({ id: viewId, label: instrumentLabel(viewId) }));
@@ -531,8 +543,11 @@ export default function SongBookViewer() {
       />
 
       {/* Unsaved-edit guard — a full-width band under the header, so the
-          deferred exit is confirmed where the user just clicked. */}
-      {pendingExit && (
+          deferred exit is confirmed where the user just clicked. It hides
+          while a save is in flight: discarding then would reset the draft
+          under a PATCH that is still persisting those very edits. A failed
+          save leaves the draft dirty, so the band comes back. */}
+      {pendingExit && !saving && (
         <InlineConfirmRow
           className="shrink-0"
           variant="separator"
