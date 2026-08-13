@@ -725,7 +725,7 @@ export default function Ask() {
               {streaming ? 'Streaming…' : 'Send'}
             </button>
           </div>
-          <div className="mt-1.5 text-xs text-gray-500">{modKey} + Enter to send</div>
+          <div className="mt-1.5 text-xs text-gray-500">{modKey}+Enter to send</div>
         </form>
       </main>
     </div>

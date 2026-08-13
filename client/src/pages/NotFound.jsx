@@ -38,7 +38,7 @@ export default function NotFound() {
           </Link>
         </div>
         <p className="mt-4 text-xs text-gray-500">
-          Press <kbd className="px-1 py-0.5 rounded bg-port-bg border border-port-border">{modKey}K</kbd> to search every page by name.
+          Press <kbd className="px-1 py-0.5 rounded bg-port-bg border border-port-border">{modKey}+K</kbd> to search every page by name.
         </p>
       </div>
     </div>

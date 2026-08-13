@@ -789,7 +789,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
           className={`flex items-center gap-1 px-3 py-1 min-h-[44px] sm:min-h-0 text-xs rounded ${
             dirty && !saving ? 'bg-port-accent text-white hover:bg-port-accent/80' : 'bg-port-bg text-gray-500'
           }`}
-          title={dirty ? `Save (${modKey}S)` : 'Up to date'}
+          title={dirty ? `Save (${modKey}+S)` : 'Up to date'}
         >
           <Save size={12} /> {saving ? 'Saving…' : dirty ? 'Save' : 'Saved'}
         </button>
