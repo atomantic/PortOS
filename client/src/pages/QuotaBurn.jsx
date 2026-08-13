@@ -248,9 +248,9 @@ export default function QuotaBurn() {
   // of a 10-20s PTY quota scrape, and then — if the scrape fails — puts the
   // stale numbers back with nothing having said so. The button carries its own
   // spinner and the page keeps rendering what it has.
-  const reload = async (refresh = false) => {
+  const refreshQuota = async (hard = false) => {
     setRefreshing(true);
-    const failure = await load(refresh);
+    const failure = await load(hard);
     setRefreshing(false);
     // With a plan on screen there is no banner, so the toast is the only thing
     // that can report the failure; when there ISN'T one the banner already
@@ -274,7 +274,7 @@ export default function QuotaBurn() {
               type="button"
               className="text-xs px-3 py-1.5 rounded border border-port-error/40 hover:bg-port-error/10 disabled:opacity-40"
               disabled={refreshing}
-              onClick={() => reload()}
+              onClick={() => refreshQuota()}
             >
               {refreshing ? 'Retrying…' : 'Retry'}
             </button>
@@ -307,7 +307,7 @@ export default function QuotaBurn() {
           type="button"
           className="inline-flex items-center gap-1 text-xs text-gray-300 hover:text-white disabled:opacity-40"
           disabled={refreshing}
-          onClick={() => reload(true)}
+          onClick={() => refreshQuota(true)}
         >
           <RefreshCw size={13} className={refreshing ? 'animate-spin' : undefined} aria-hidden="true" />
           {refreshing ? 'Refreshing…' : 'Refresh quota'}
