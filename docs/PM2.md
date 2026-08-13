@@ -136,8 +136,7 @@ See `PORTS.md` for the full port allocation guide.
 ### Vite Dev Server (React/Vue UI)
 
 ```javascript
-const path = require('path');
-
+// requires `const path = require('path');` at the top of the ecosystem file
 {
   name: 'myapp-client',
   script: path.join(__dirname, 'client', 'node_modules', 'vite', 'bin', 'vite.js'),
@@ -151,10 +150,13 @@ const path = require('path');
 ```
 
 Point `script` at `vite/bin/vite.js` rather than the `node_modules/.bin/vite`
-shim. PM2 resolves `script` relative to its own working directory, not `cwd`,
-and the `.bin` entry is a symlink (a `.cmd` shim on Windows) that PM2 cannot
-launch with the Node interpreter. The absolute `path.join` form is what
-PortOS's own `portos-ui` app uses in `ecosystem.config.cjs`.
+shim. PM2 resolves a relative `script` against its own working directory, not
+`cwd`, so the relative `.bin` path only resolves by accident — and the `.bin`
+entry itself varies by platform and package manager (a symlink on Unix, a
+`.cmd`/`.ps1` wrapper on Windows, sometimes a generated shell script), none of
+which the Node interpreter launches uniformly. The real module path sidesteps
+both problems. The absolute `path.join` form is what PortOS's own `portos-ui`
+app uses in `ecosystem.config.cjs`.
 
 ### Background Daemon
 
