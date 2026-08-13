@@ -294,9 +294,14 @@ export default function PromptManager() {
   // Fetch the URL-selected job skill's template + meta. Keyed on selectedJobSkill
   // so a deep link / reload / tab switch restores the open editor; a cleared
   // param resets it. Mirrors the `selectedStage` effect above.
+  // Content/meta/preview are cleared up front rather than on the way out, so an
+  // in-flight fetch (or one that 404s on a stale deep link) can never leave the
+  // PREVIOUS skill's template rendered under the newly selected skill's heading.
   useEffect(() => {
     setJobSkillPreview('');
-    if (!selectedJobSkill) { setJobSkillContent(''); setJobSkillMeta({}); return; }
+    setJobSkillContent('');
+    setJobSkillMeta({});
+    if (!selectedJobSkill) return;
     let cancelled = false;
     getJobSkill(selectedJobSkill, { silent: true })
       .then((res) => {

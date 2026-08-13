@@ -487,6 +487,20 @@ describe('PromptManager job skill selection', () => {
     expect(currentSearch()).toContain('skill=code-fixer');
   });
 
+  it('does not leave the previous skill rendered when the next fetch fails', async () => {
+    renderPage('/prompts?tab=job-skills&skill=code-fixer');
+    await screen.findByText('Job code-fixer');
+
+    getJobSkill.mockRejectedValueOnce(new Error('gone'));
+    fireEvent.click(screen.getByText('doc-writer'));
+
+    // The heading falls back to the raw param, and the editor is empty — never
+    // the previous skill's template under the new skill's name.
+    await screen.findByText('doc-writer', { selector: 'h3' });
+    expect(screen.queryByDisplayValue('# code-fixer template')).toBeNull();
+    expect(screen.queryByText('Job code-fixer')).toBeNull();
+  });
+
   it('shows the placeholder when no skill is named in the URL', async () => {
     renderPage('/prompts?tab=job-skills');
     await screen.findByText('code-fixer');
