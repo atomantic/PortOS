@@ -356,9 +356,11 @@ export default function SongBookViewer() {
     pendingExit?.();
   }, [pendingExit, song]);
   // Tab close / reload — the browser owns this prompt; preventDefault arms it.
+  // `returnValue` is the legacy signal, still what some browsers actually read,
+  // so set both or the tab can close without asking.
   useEffect(() => {
     if (!isDirty) return undefined;
-    const onBeforeUnload = (e) => { e.preventDefault(); };
+    const onBeforeUnload = (e) => { e.preventDefault(); e.returnValue = ''; };
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [isDirty]);
