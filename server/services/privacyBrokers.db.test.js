@@ -86,7 +86,7 @@ describe.skipIf(!dbReady)('privacy brokers DB round-trip', () => {
     // 2. Insert a dummy non-curated broker to verify auto sources are preserved
     await query(
       `INSERT INTO privacy_brokers (id, name, urls, optout, tier, disclosure_fields, source, confidence, enabled, created_at, updated_at)
-       VALUES ('test-auto-upgrade', 'Auto Upgrade', '{}', '{}', 2, '[]', 'badbool', 'auto', true, NOW(), NOW())
+       VALUES ('test-auto-upgrade', 'Auto Upgrade', '{}', '{}', 2, '{}', 'badbool', 'auto', true, NOW(), NOW())
        ON CONFLICT (id) DO NOTHING`,
     );
 
