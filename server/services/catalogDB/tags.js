@@ -22,33 +22,43 @@ import { rowToTag } from './shared.js';
 export async function normalizeTags(labels = [], { client } = {}) {
   if (!Array.isArray(labels) || labels.length === 0) return [];
   const exec = client ? client.query.bind(client) : query;
-  const out = [];
-  const seen = new Set();
+
+  // De-dup by canonical key, order-preserving, first-seen casing wins.
+  const wanted = new Map();
   for (const raw of labels) {
     const key = canonicalTagKey(raw);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    const id = tagIdForKey(key);
-    const label = String(raw).trim().replace(/\s+/g, ' ');
-    // First write wins on the canonical label — ON CONFLICT DO NOTHING keeps
-    // the original casing rather than letting a later `NOIR` overwrite `Noir`.
-    // RETURNING after a no-op conflict is empty, so re-select to read the
-    // stored canonical label for the array column.
+    if (!key || wanted.has(key)) continue;
+    wanted.set(key, { id: tagIdForKey(key), label: String(raw).trim().replace(/\s+/g, ' ') });
+  }
+  if (wanted.size === 0) return [];
+
+  const entries = [...wanted.values()];
+  // Query 1 — read every pre-existing row in one round-trip. A stored label
+  // always wins over the incoming casing (`Noir` beats a later `NOIR`).
+  const existing = await exec(
+    `SELECT id, label FROM catalog_tags WHERE id = ANY($1)`,
+    [entries.map((e) => e.id)],
+  );
+  const canonical = new Map(existing.rows.map((r) => [r.id, r.label]));
+
+  // Query 2 — create every missing canonical row in one multi-row insert.
+  // ON CONFLICT DO NOTHING keeps first-write-wins; a row that conflicts here
+  // was created between the two statements, so fall back to the incoming
+  // label rather than spending another round-trip re-reading it.
+  const missing = entries.filter((e) => !canonical.has(e.id));
+  if (missing.length > 0) {
+    const values = missing.map((_, i) => `($${i * 2 + 1}, $${i * 2 + 2})`).join(', ');
     const ins = await exec(
       `INSERT INTO catalog_tags (id, label)
-       VALUES ($1, $2)
+       VALUES ${values}
        ON CONFLICT (id) DO NOTHING
-       RETURNING label`,
-      [id, label],
+       RETURNING id, label`,
+      missing.flatMap((e) => [e.id, e.label]),
     );
-    if (ins.rows[0]?.label) {
-      out.push(ins.rows[0].label);
-    } else {
-      const existing = await exec(`SELECT label FROM catalog_tags WHERE id = $1`, [id]);
-      out.push(existing.rows[0]?.label ?? label);
-    }
+    for (const row of ins.rows) canonical.set(row.id, row.label);
   }
-  return out;
+
+  return entries.map((e) => canonical.get(e.id) ?? e.label);
 }
 
 export async function getTag(id) {

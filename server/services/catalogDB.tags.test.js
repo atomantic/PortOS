@@ -8,23 +8,29 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // In-memory tag store keyed by id. The mock interprets the three SQL shapes
-// normalizeTags / upsertTagFromPeer issue: INSERT … ON CONFLICT DO NOTHING
-// RETURNING label, SELECT label WHERE id, and the peer LWW upsert.
+// normalizeTags / upsertTagFromPeer issue: the batched multi-row INSERT …
+// ON CONFLICT DO NOTHING RETURNING id, label, the batched SELECT id, label
+// WHERE id = ANY(...), and the peer LWW upsert.
 const tagStore = new Map();
 let failParentFkOnce = false;
 
 vi.mock('../lib/db.js', () => ({
   query: vi.fn(async (sql, params) => {
     if (/INSERT INTO catalog_tags[\s\S]*ON CONFLICT \(id\) DO NOTHING/.test(sql)) {
-      const [id, label] = params;
-      if (tagStore.has(id)) return { rows: [] }; // conflict → DO NOTHING
-      tagStore.set(id, { id, label });
-      return { rows: [{ label }] };
+      const rows = [];
+      for (let i = 0; i < params.length; i += 2) {
+        const [id, label] = [params[i], params[i + 1]];
+        if (tagStore.has(id)) continue; // conflict → DO NOTHING
+        tagStore.set(id, { id, label });
+        rows.push({ id, label });
+      }
+      return { rows };
     }
-    if (/^SELECT label FROM catalog_tags WHERE id/.test(sql.trim())) {
-      const [id] = params;
-      const row = tagStore.get(id);
-      return { rows: row ? [{ label: row.label }] : [] };
+    if (/^SELECT id, label FROM catalog_tags WHERE id = ANY/.test(sql.trim())) {
+      const [ids] = params;
+      return {
+        rows: ids.filter((id) => tagStore.has(id)).map((id) => ({ id, label: tagStore.get(id).label })),
+      };
     }
     if (/INSERT INTO catalog_tags[\s\S]*ON CONFLICT \(id\) DO UPDATE/.test(sql)) {
       const [id, label, description, color, parentId] = params;
@@ -47,6 +53,7 @@ vi.mock('../lib/db.js', () => ({
 
 vi.mock('./instances.js', () => ({ getInstanceId: vi.fn(async () => 'inst-test') }));
 
+import { query } from '../lib/db.js';
 import { normalizeTags, upsertTagFromPeer } from './catalogDB.js';
 
 beforeEach(() => {
@@ -86,6 +93,30 @@ describe('normalizeTags', () => {
   it('preserves order of first appearance', async () => {
     const out = await normalizeTags(['beta', 'alpha', 'beta', 'gamma']);
     expect(out).toEqual(['beta', 'alpha', 'gamma']);
+  });
+
+  it('issues at most two queries regardless of tag count (no per-label N+1)', async () => {
+    const many = Array.from({ length: 40 }, (_, i) => `tag-${i}`);
+    const out = await normalizeTags(many);
+    expect(out).toEqual(many);
+    // 1 batched SELECT + 1 batched INSERT.
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips the insert entirely when every tag already exists', async () => {
+    await normalizeTags(['Noir', 'Pulp']);
+    vi.clearAllMocks();
+    const out = await normalizeTags(['noir', 'PULP']);
+    expect(out).toEqual(['Noir', 'Pulp']);
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs the batch on the caller transaction client when one is passed', async () => {
+    const client = { query: vi.fn(async () => ({ rows: [] })) };
+    const out = await normalizeTags(['Noir', 'Pulp'], { client });
+    expect(out).toEqual(['Noir', 'Pulp']);
+    expect(client.query).toHaveBeenCalledTimes(2);
+    expect(query).not.toHaveBeenCalled();
   });
 });
 
