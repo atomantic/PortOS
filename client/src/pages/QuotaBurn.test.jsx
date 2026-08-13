@@ -480,6 +480,21 @@ describe('QuotaBurn save races', () => {
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
 
+  it('stops blaming the network once the read succeeds with nothing', async () => {
+    // Both a thrown read and an empty one are falsy, so an early return keyed
+    // on falsiness would leave the first attempt's network error on screen
+    // describing what is now a server that simply answered with no plan.
+    const user = userEvent.setup();
+    api.getQuotaBurn.mockRejectedValueOnce(new Error('Network request failed'));
+    api.getQuotaBurn.mockResolvedValueOnce(null);
+    renderPage();
+
+    expect(await screen.findByText('Network request failed')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('The server did not return a plan.')).toBeInTheDocument();
+    expect(screen.queryByText('Network request failed')).not.toBeInTheDocument();
+  });
+
   it('does not commit 0 when a number field is cleared to be retyped', async () => {
     // Number('') === 0, which is below the server minimum for the interval and
     // the dispatch cap — a 400 that also discards every co-pending edit.

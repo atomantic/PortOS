@@ -38,6 +38,10 @@ const PENDING_POLL_MS = 4000;
 
 const EMPTY_CATALOG = { jobTypes: [], apps: [], universes: [], imageModes: [] };
 
+// Distinguishes a read that THREW from one that resolved with nothing — the
+// two need opposite handling of the error state, and both are falsy.
+const READ_FAILED = Symbol('quota-burn-read-failed');
+
 export default function QuotaBurn() {
   // Which family is expanded lives in the URL, not local state, so a specific
   // family's plan is linkable and survives a reload.
@@ -84,11 +88,16 @@ export default function QuotaBurn() {
     // `silent: true` because the failure is rendered by this page's own banner
     // rather than a toast — see client/src/CLAUDE.md's silent-vs-toasting rule.
     const data = await api.getQuotaBurn(refresh, { silent: true })
-      .catch((err) => { setLoadError(err?.message || 'The request failed.'); return null; });
-    if (!data) return;
+      .catch((err) => { setLoadError(err?.message || 'The request failed.'); return READ_FAILED; });
+    // The sentinel — not a falsy check — is what separates the two: a read that
+    // FAILED must keep its message, while a read that merely answered with
+    // nothing has to clear the previous failure, or the banner goes on blaming
+    // a network error for what is now the server returning no plan.
+    if (data === READ_FAILED) return;
     // Cleared on ANY successful read, including the polls: the last error no
     // longer describes the page once the server has answered.
     setLoadError(null);
+    if (!data) return;
     // `status` is derived server-side and never edited here, so it is always
     // safe to adopt; `config` is the form's own state and must not be rewound.
     setStatus(data.status);
