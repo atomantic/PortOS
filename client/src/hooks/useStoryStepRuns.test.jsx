@@ -136,9 +136,12 @@ describe('useStoryStepRuns', () => {
     expect(screen.getByTestId('state-plotArc').textContent).toBe('idle');
   });
 
-  it('settles instead of sticking busy when the kickoff returns no run id', async () => {
+  it.each([
+    ['no run id', {}],
+    ['an empty response', null],
+  ])('settles with an error instead of sticking busy on %s', async (_label, response) => {
     const onError = vi.fn();
-    const kickoff = vi.fn().mockResolvedValue({});
+    const kickoff = vi.fn().mockResolvedValue(response);
     render(<Harness panelProps={{ stepId: 'plotArc', kickoff, onComplete: vi.fn(), onError }} />);
     click('run-plotArc');
 
@@ -191,6 +194,26 @@ describe('useStoryStepRuns', () => {
     );
     // The run belongs to s1; no stream may ever open against s2's URL.
     expect(MockEventSource.instances.filter((es) => es.url.includes('/s2/'))).toHaveLength(0);
+    expect(screen.getByTestId('state-plotArc').textContent).toBe('idle');
+  });
+
+  // Leaving a story and coming back is a NEW visit: the abandoned kickoff must
+  // not adopt the slot just because the session id matches again.
+  it('does not let a kickoff from an earlier visit claim the slot after s1 → s2 → s1', async () => {
+    const onComplete = vi.fn();
+    let resolveFirst;
+    const slowKickoff = vi.fn(() => new Promise((res) => { resolveFirst = res; }));
+    const panel = (kickoff) => (
+      <StepPanel stepId="plotArc" kickoff={kickoff} onComplete={onComplete} onError={vi.fn()} />
+    );
+    const { rerender } = render(<StoryStepRunProvider sessionId="s1">{panel(slowKickoff)}</StoryStepRunProvider>);
+    click('run-plotArc');
+
+    rerender(<StoryStepRunProvider sessionId="s2">{panel(slowKickoff)}</StoryStepRunProvider>);
+    rerender(<StoryStepRunProvider sessionId="s1">{panel(slowKickoff)}</StoryStepRunProvider>);
+    await act(async () => { resolveFirst({ runId: 'stale-run' }); });
+
+    expect(MockEventSource.instances).toHaveLength(0);
     expect(screen.getByTestId('state-plotArc').textContent).toBe('idle');
   });
 

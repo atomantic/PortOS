@@ -48,16 +48,9 @@ function StepRunStream({ sessionId, stepId, runId, onPhase, onEnd }) {
  * anything that unmounts on step navigation.
  */
 export function StoryStepRunProvider({ sessionId, children }) {
-  // { [stepId]: { runId | null, op, phase, meta } } — a slot with runId === null
-  // is still in kickoff (busy, but nothing to subscribe to yet).
-  // Each slot records the session it belongs to. The reset effect below can only
-  // run AFTER the render in which `sessionId` changed, so without this stamp the
-  // old session's slots would render one frame against the NEW id — opening an
-  // EventSource on a URL that pairs another story with this step.
+  // { [stepId]: { epoch, runId | null, op, phase, meta } } — a slot with
+  // runId === null is still in kickoff (busy, but nothing to subscribe to yet).
   const [runs, setRuns] = useState({});
-  const ownRuns = Object.fromEntries(
-    Object.entries(runs).filter(([, run]) => run.sessionId === sessionId),
-  );
   // Handlers are closures over the panel that started the run — they must NOT be
   // state (they'd re-render the whole tree) and they must survive that panel's
   // unmount, which is the entire point of this provider.
@@ -65,19 +58,29 @@ export function StoryStepRunProvider({ sessionId, children }) {
   // Step ids with a kickoff in flight or a live run — the synchronous mirror of
   // `runs`, so the re-entrancy guard in `start` doesn't depend on a re-render.
   const startedRef = useRef(new Set());
-  // The session a kickoff was started under, so a kickoff that resolves AFTER
-  // the user opened a different story can't register its run here — the stream
-  // would build its URL from the NEW session id and subscribe to the wrong run.
-  const sessionRef = useRef(sessionId);
 
-  // A different story session means none of these runs belong to the view
-  // anymore. Drop them rather than fanning their toasts into the new session.
-  useEffect(() => {
-    sessionRef.current = sessionId;
+  // Opening a different story invalidates every run here. The reset must happen
+  // DURING the render that changed `sessionId` (React's "adjusting state on a
+  // prop change" pattern, same as `usePreviousSync`) — an effect only runs after
+  // that render commits, and by then the old session's slots have already
+  // rendered a stream against the NEW id, subscribing to the wrong story.
+  //
+  // The stamp is a monotonic epoch rather than the session id itself: an id
+  // comparison can't tell "still the story I started under" from "left and came
+  // back" (s1 → s2 → s1), so a kickoff settling after the round trip would
+  // adopt, or clear, a slot belonging to the newer visit.
+  const [session, setSession] = useState({ id: sessionId, epoch: 0 });
+  const epochRef = useRef(0);
+  if (session.id !== sessionId) {
+    epochRef.current = session.epoch + 1;
+    setSession({ id: sessionId, epoch: epochRef.current });
     setRuns({});
     handlersRef.current = {};
     startedRef.current = new Set();
-  }, [sessionId]);
+  }
+  const ownRuns = Object.fromEntries(
+    Object.entries(runs).filter(([, run]) => run.epoch === epochRef.current),
+  );
 
   const clear = useCallback((stepId) => {
     setRuns((prev) => {
@@ -121,39 +124,35 @@ export function StoryStepRunProvider({ sessionId, children }) {
     // both read the same (empty) snapshot, and the second would fire a duplicate
     // kickoff the server only rejects after a round trip.
     if (ownRuns[stepId] || startedRef.current.has(stepId)) return;
-    const startedUnder = sessionRef.current;
+    const epoch = epochRef.current;
     startedRef.current.add(stepId);
-    setRuns((prev) => ({ ...prev, [stepId]: { sessionId: startedUnder, runId: null, op, phase: 'Starting…', meta } }));
+    setRuns((prev) => ({ ...prev, [stepId]: { epoch, runId: null, op, phase: 'Starting…', meta } }));
     const res = await kickoff().then((r) => ({ r }), (err) => ({ err }));
-    // The user opened a different story while the POST was in flight. The run
-    // belongs to the story they left — the reset effect already dropped its
-    // slot, and reporting its outcome into the story now on screen would be a
-    // toast about work the user can no longer see.
-    if (sessionRef.current !== startedUnder) return;
-    if (res.err || !res.r) {
-      clear(stepId);
-      if (res.err) handlers.onError?.(res.err);
-      return;
-    }
+    // The user left this story while the POST was in flight. The run belongs to
+    // a visit that is over — its slot is already gone, and reporting its outcome
+    // now would toast about work the user can no longer see.
+    if (epochRef.current !== epoch) return;
+    if (res.err) { clear(stepId); handlers.onError?.(res.err); return; }
     // The kickoff collided with a DIFFERENT in-flight request for this step (a
     // different op, or a refine of another target/note). That run persists to the
     // same records, so binding THIS button's success handler to its terminal
     // frame would misreport. Don't subscribe — report it and leave the run alone.
     // (A same-work re-click returns alreadyRunning without conflict.)
-    if (res.r.conflict) {
+    if (res.r?.conflict) {
       clear(stepId);
       handlers.onError?.(new Error('Another operation is already running for this step — try again once it finishes.'));
       return;
     }
-    // A 2xx with no run id has nothing to subscribe to. Settling here keeps the
-    // slot from sticking "busy" forever with no stream that could ever clear it.
-    if (!res.r.runId) {
+    // A resolved-but-empty response (or a 2xx carrying no run id) has nothing to
+    // subscribe to. Settling here keeps the slot from sticking "busy" forever
+    // with no stream that could ever clear it, and tells the user why.
+    if (!res.r?.runId) {
       clear(stepId);
       handlers.onError?.(new Error('The server did not return a run to track — try again.'));
       return;
     }
     handlersRef.current[stepId] = handlers;
-    setRuns((prev) => ({ ...prev, [stepId]: { sessionId: startedUnder, runId: res.r.runId, op, phase: 'Starting…', meta } }));
+    setRuns((prev) => ({ ...prev, [stepId]: { epoch, runId: res.r.runId, op, phase: 'Starting…', meta } }));
   }, [ownRuns, clear]);
 
   return (
