@@ -685,6 +685,18 @@ describe('PromptManager job skill unsaved-edit guard', () => {
     expect(screen.getByText('doc-writer')).toBeTruthy();
   });
 
+  it('does not re-arm the old prompt when the editor goes dirty a second time', async () => {
+    await openDirtyEditor();
+    fireEvent.click(screen.getByText('doc-writer'));
+    fireEvent.change(editor(), { target: { value: '# code-fixer template' } });
+
+    fireEvent.change(editor(), { target: { value: '# a different edit' } });
+
+    // The question only ever appears in response to a click on another skill.
+    expect(screen.queryByText(/Discard unsaved changes/)).toBeNull();
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+  });
+
   it('drops the armed prompt when the edits are saved instead of discarded', async () => {
     await openDirtyEditor();
     fireEvent.click(screen.getByText('doc-writer'));
@@ -721,6 +733,35 @@ describe('PromptManager job skill unsaved-edit guard', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
     // The old skill's text must not become the new skill's clean baseline.
     expect(screen.queryByText('Unsaved changes')).toBeNull();
+  });
+
+  it('never renders the outgoing skill\'s text or dirty badge under the new skill', async () => {
+    await openDirtyEditor();
+    fireEvent.click(screen.getByText('doc-writer'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+
+    // Synchronously after the switch — before the fetch resolves — the editor is
+    // already empty and clean rather than still showing code-fixer's edit.
+    expect(screen.queryByDisplayValue('# edited by hand')).toBeNull();
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
+
+    // Settle the in-flight load so the fetch's state updates land inside act().
+    await screen.findByText('Job doc-writer');
+  });
+
+  it('drops a preview that resolves after the user switched skills', async () => {
+    let resolvePreview;
+    previewJobSkill.mockReset().mockImplementationOnce(() => new Promise((r) => { resolvePreview = r; }));
+    renderPage('/prompts?tab=job-skills&skill=code-fixer');
+    await screen.findByText('Job code-fixer');
+
+    fireEvent.click(screen.getByRole('button', { name: /preview/i }));
+    fireEvent.click(screen.getByText('doc-writer'));
+    await screen.findByText('Job doc-writer');
+    resolvePreview({ preview: 'code-fixer rendered' });
+
+    await waitFor(() => expect(screen.queryByText('code-fixer rendered')).toBeNull());
   });
 
   it('does not prompt when a clean editor switches skills', async () => {

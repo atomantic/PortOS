@@ -115,6 +115,12 @@ export default function PromptManager() {
   // "still the same editor" from "the user moved on mid-flight".
   const jobSkillLiveRef = useRef({ selected: selectedJobSkill, content: jobSkillContent });
   jobSkillLiveRef.current = { selected: selectedJobSkill, content: jobSkillContent };
+  // A clean editor has nothing to discard, so an armed row disarms itself the
+  // moment the edit is undone or saved — leaving the id parked would re-arm that
+  // row out of nowhere the next time the user typed.
+  useEffect(() => {
+    if (!isJobSkillDirty) setPendingJobSkill(null);
+  }, [isJobSkillDirty]);
 
   const [providers, setProviders] = useState([]);
   const [activeProviderId, setActiveProviderId] = useState(null);
@@ -369,13 +375,27 @@ export default function PromptManager() {
       setPendingJobSkill(name);
       return;
     }
+    switchJobSkill(name);
+  };
+
+  // Content is cleared in the same tick as the selection, not left to the
+  // `selectedJobSkill` effect — otherwise the frame between the two renders the
+  // OUTGOING skill's text and dirty badges under the incoming skill's row.
+  const switchJobSkill = (name) => {
+    setPendingJobSkill(null);
+    setJobSkillContent('');
+    setSavedJobSkillContent('');
     setSelectedJobSkill(name);
   };
 
   const previewJobSkill = async () => {
-    const res = await apiPreviewJobSkill(selectedJobSkill, { silent: true })
+    const previewFor = selectedJobSkill;
+    const res = await apiPreviewJobSkill(previewFor, { silent: true })
       .catch((err) => { toast.error(`Failed to preview: ${err.message || 'Unknown error'}`); return null; });
     if (!res) return;
+    // A preview that lands after the user moved on belongs to the previous
+    // skill — rendering it under the new one's heading would misattribute it.
+    if (previewFor !== jobSkillLiveRef.current.selected) return;
     setJobSkillPreview(res.preview || '');
   };
 
@@ -898,7 +918,7 @@ export default function PromptManager() {
                     cancelText="Keep editing"
                     aria-label={`Confirm discarding unsaved changes to ${jobSkillMeta.jobName || selectedJobSkill}`}
                     autoFocus
-                    onConfirm={() => { setPendingJobSkill(null); setSelectedJobSkill(skill.name); }}
+                    onConfirm={() => switchJobSkill(skill.name)}
                     onCancel={() => setPendingJobSkill(null)}
                   />
                 ) : (
