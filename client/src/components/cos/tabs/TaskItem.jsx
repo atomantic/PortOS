@@ -138,20 +138,32 @@ export default function TaskItem({ task, isSystem, onRefresh, providers, duratio
       updates.blockedReason = blockedReasonText;
     }
     const result = await api.updateCosTask(task.id, updates, { silent: true }).catch(err => { toast.error(err.message); return null; });
-    if (!result) return;
+    if (!result) return false;
     toast.success(`Task marked as ${newStatus}`);
     onRefresh();
+    return true;
   };
 
   const handleMarkBlocked = () => {
-    setBlockedReason(task.metadata?.blocker || '');
+    // Server-side auto-blocks write `blockedReason`; a manual block writes
+    // `blocker` — seed from whichever the task carries, same as the badge below.
+    setBlockedReason(task.metadata?.blocker || task.metadata?.blockedReason || '');
     setShowBlockedModal(true);
   };
 
-  const handleConfirmBlocked = async () => {
-    await handleStatusChange('blocked', blockedReason.trim());
+  // Closing drops the typed reason rather than leaving it in state. handleMarkBlocked
+  // re-seeds from the task on every open, so nothing leaks through the UI today —
+  // this keeps that true for any future opener that doesn't re-seed.
+  const closeBlockedModal = () => {
     setShowBlockedModal(false);
     setBlockedReason('');
+  };
+
+  const handleConfirmBlocked = async () => {
+    // Keep the modal (and the typed reason) open when the update fails, so a
+    // transient API error doesn't discard what the user wrote.
+    if (!(await handleStatusChange('blocked', blockedReason.trim()))) return;
+    closeBlockedModal();
   };
 
   const handleSave = async () => {
@@ -526,7 +538,7 @@ export default function TaskItem({ task, isSystem, onRefresh, providers, duratio
       {/* Blocked Reason Modal */}
       <Modal
         open={showBlockedModal}
-        onClose={() => setShowBlockedModal(false)}
+        onClose={closeBlockedModal}
         size="sm"
         ariaLabelledBy="blocked-modal-title"
         panelClassName="bg-port-card border border-port-border rounded-lg p-4"
@@ -551,7 +563,7 @@ export default function TaskItem({ task, isSystem, onRefresh, providers, duratio
         />
         <div className="flex justify-end gap-2">
           <button
-            onClick={() => setShowBlockedModal(false)}
+            onClick={closeBlockedModal}
             className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors"
           >
             Cancel

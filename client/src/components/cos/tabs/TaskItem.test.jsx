@@ -126,6 +126,68 @@ describe('TaskItem blocked reason', () => {
   });
 });
 
+describe('TaskItem block modal state (#4038)', () => {
+  const openBlockModal = () =>
+    fireEvent.click(screen.getByRole('button', { name: 'Mark task as blocked' }));
+  const reasonField = () =>
+    screen.getByPlaceholderText('e.g., Waiting for API access, Needs design review...');
+
+  // Belt-and-braces: today the sole opener re-seeds the field from the task, so a
+  // retained reason is not reachable through the UI and this passes without the
+  // cancel-side clear. It pins the contract for a future second opener that skips
+  // the seed — which is exactly how the leak would become user-visible.
+  it('drops a typed reason when the modal is canceled', () => {
+    render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
+
+    openBlockModal();
+    fireEvent.change(reasonField(), { target: { value: 'Waiting on design review' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    openBlockModal();
+    expect(reasonField()).toHaveValue('');
+  });
+
+  it('seeds the field from an auto-written blockedReason, not just a user-set blocker', () => {
+    // The badge already falls back to blockedReason; the edit field must match, or
+    // re-blocking a server-auto-blocked task silently clears the recorded reason.
+    const autoBlocked = { ...task, id: 'sys-auto-block', metadata: { blockedReason: 'Max total spawns exceeded' } };
+    render(<TaskItem task={autoBlocked} isSystem onRefresh={vi.fn()} providers={providers} />);
+
+    openBlockModal();
+    expect(reasonField()).toHaveValue('Max total spawns exceeded');
+  });
+
+  it('keeps the modal and the typed reason open when the update fails', async () => {
+    api.updateCosTask.mockRejectedValue(new Error('network down'));
+    render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
+
+    openBlockModal();
+    fireEvent.change(reasonField(), { target: { value: 'Waiting on design review' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Mark Blocked' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('network down'));
+    expect(reasonField()).toHaveValue('Waiting on design review');
+  });
+
+  it('closes and clears once the block succeeds', async () => {
+    render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
+
+    openBlockModal();
+    fireEvent.change(reasonField(), { target: { value: 'Waiting on design review' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Mark Blocked' }));
+
+    await waitFor(() => expect(api.updateCosTask).toHaveBeenCalledWith(
+      'sys-model-edit',
+      { status: 'blocked', type: 'internal', blockedReason: 'Waiting on design review' },
+      { silent: true },
+    ));
+    await waitFor(() => expect(screen.queryByText('Mark Task as Blocked')).not.toBeInTheDocument());
+
+    openBlockModal();
+    expect(reasonField()).toHaveValue('');
+  });
+});
+
 describe('TaskItem long-text clamping', () => {
   // The context often holds a task's entire prompt (orchestrator tasks put the
   // whole thing there). Rendering it unclamped turned the pending list into a
