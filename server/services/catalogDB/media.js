@@ -9,7 +9,7 @@
 
 import { query } from '../../lib/db.js';
 import { resolveImageInputPath } from '../../lib/fileUtils.js';
-import { rowToMedia } from './shared.js';
+import { rowToMedia, groupRowsByIngredient } from './shared.js';
 
 export async function attachMedia(ingredientId, mediaKey, kind, { role = null, caption = null } = {}) {
   const result = await query(
@@ -55,13 +55,25 @@ export async function setPortraitMedia(ingredientId, mediaKey, { role = null, ca
 // Live (non-tombstoned) media rows for an ingredient's detail "Media" panel,
 // newest first. Portrait(s) first so the avatar is easy to pluck off the head.
 export async function listMediaForIngredient(ingredientId) {
+  const byIngredient = await listMediaForIngredients([ingredientId]);
+  return byIngredient.get(ingredientId);
+}
+
+// Batched `listMediaForIngredient` for bulk hydration paths (#3940) — ONE query
+// for N ingredients instead of N. Same live filter and same per-ingredient
+// ordering (portraits first, then newest-first); the outer `ingredient_id` sort
+// key only groups the rows, it doesn't reorder within a group. Returns
+// `Map<ingredientId, media[]>` with an entry (possibly `[]`) for every id.
+export async function listMediaForIngredients(ingredientIds) {
+  const ids = [...new Set(ingredientIds)];
+  if (ids.length === 0) return new Map();
   const result = await query(
     `SELECT * FROM catalog_ingredient_media
-      WHERE ingredient_id = $1 AND deleted = false
-      ORDER BY (kind = 'portrait') DESC, created_at DESC`,
-    [ingredientId],
+      WHERE ingredient_id = ANY($1) AND deleted = false
+      ORDER BY ingredient_id, (kind = 'portrait') DESC, created_at DESC`,
+    [ids],
   );
-  return result.rows.map(rowToMedia);
+  return groupRowsByIngredient(ids, result.rows, rowToMedia);
 }
 
 // The media kinds whose `media_key` resolves against the image library today.

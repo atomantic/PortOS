@@ -8,35 +8,48 @@
  */
 
 import { query } from '../../lib/db.js';
-import { rowToRef, rowToIngredient, liveHomingTargetSql, HOMING_REF_KINDS_SQL } from './shared.js';
-import { listIngredientsForRef, listRefsForIngredient } from './refs.js';
-import { listMediaForIngredient } from './media.js';
+import { rowToRef, rowToIngredient, liveHomingTargetSql, HOMING_REF_KINDS_SQL, groupRowsByIngredient } from './shared.js';
+import { listIngredientsForRef, listRefsForIngredients } from './refs.js';
+import { listMediaForIngredients } from './media.js';
+
+const rowToExportScrap = (row) => ({
+  id: row.id,
+  title: row.title,
+  rawText: row.raw_text,
+  sourceKind: row.source_kind,
+  metadata: row.metadata || {},
+  createdAt: row.created_at.toISOString(),
+  updatedAt: row.updated_at.toISOString(),
+});
 
 /**
- * Hydrate one ingredient with its scraps for the export bundle. Issues two
- * queries: the sources join to look up the scrap ids, then a single batch
- * lookup of those scraps. Returns `[]` when an ingredient has no sources.
+ * Hydrate one ingredient with its live scraps for the export bundle, oldest
+ * first. Returns `[]` when an ingredient has no sources.
  */
 export async function listScrapsForIngredient(ingredientId) {
+  const byIngredient = await listScrapsForIngredients([ingredientId]);
+  return byIngredient.get(ingredientId);
+}
+
+// Batched `listScrapsForIngredient` for bulk hydration paths (#3940) — ONE
+// query for N ingredients instead of N. `src.ingredient_id` comes back on each
+// row purely to group by; the outer sort key doesn't disturb the per-ingredient
+// `created_at ASC` order. Returns `Map<ingredientId, scraps[]>` with an entry
+// (possibly `[]`) for every id.
+export async function listScrapsForIngredients(ingredientIds) {
+  const ids = [...new Set(ingredientIds)];
+  if (ids.length === 0) return new Map();
   const result = await query(
-    `SELECT s.id, s.title, s.raw_text, s.source_kind, s.metadata,
+    `SELECT src.ingredient_id, s.id, s.title, s.raw_text, s.source_kind, s.metadata,
             s.created_at, s.updated_at
        FROM catalog_scraps s
        JOIN catalog_ingredient_sources src ON src.scrap_id = s.id
-      WHERE src.ingredient_id = $1
+      WHERE src.ingredient_id = ANY($1)
         AND s.deleted = false
-      ORDER BY s.created_at ASC`,
-    [ingredientId],
+      ORDER BY src.ingredient_id, s.created_at ASC`,
+    [ids],
   );
-  return result.rows.map((row) => ({
-    id: row.id,
-    title: row.title,
-    rawText: row.raw_text,
-    sourceKind: row.source_kind,
-    metadata: row.metadata || {},
-    createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
-  }));
+  return groupRowsByIngredient(ids, result.rows, rowToExportScrap);
 }
 
 /**
@@ -49,14 +62,16 @@ export async function listScrapsForIngredient(ingredientId) {
  */
 export async function exportSliceForRef(refKind, refId) {
   const rows = await listIngredientsForRef(refKind, refId);
-  // Hydrate scraps + refs + media in parallel per ingredient. Small N (one
-  // slice is typically <100 ingredients); a per-row round-trip is fine.
-  const ingredients = await Promise.all(rows.map(async ({ ingredient, role }) => {
-    const [scraps, refs, media] = await Promise.all([
-      listScrapsForIngredient(ingredient.id),
-      listRefsForIngredient(ingredient.id),
-      listMediaForIngredient(ingredient.id),
-    ]);
+  // Hydrate scraps + refs + media for the WHOLE slice in three batched queries
+  // (#3940) — a per-ingredient round-trip made this 3N queries, which pinned the
+  // connection pool on a large universe. Four queries total, regardless of N.
+  const ingredientIds = rows.map(({ ingredient }) => ingredient.id);
+  const [scrapsById, refsById, mediaById] = await Promise.all([
+    listScrapsForIngredients(ingredientIds),
+    listRefsForIngredients(ingredientIds),
+    listMediaForIngredients(ingredientIds),
+  ]);
+  const ingredients = rows.map(({ ingredient, role }) => {
     const { embedding: _embedding, ...rest } = ingredient;
     return {
       ...rest,
@@ -64,11 +79,11 @@ export async function exportSliceForRef(refKind, refId) {
       // round-trip re-imports that want to preserve roleness without
       // re-deriving it from the full refs list.
       roleForExportedRef: role,
-      refs,
-      scraps,
-      media,
+      refs: refsById.get(ingredient.id) || [],
+      scraps: scrapsById.get(ingredient.id) || [],
+      media: mediaById.get(ingredient.id) || [],
     };
-  }));
+  });
   return {
     version: 1,
     ref: { kind: refKind, id: refId },

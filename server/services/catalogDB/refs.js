@@ -12,7 +12,7 @@
 
 import { query } from '../../lib/db.js';
 import { resolveRefs } from '../catalogRefResolver.js';
-import { rowToRef, rowToSource, rowToIngredient } from './shared.js';
+import { rowToRef, rowToSource, rowToIngredient, groupRowsByIngredient } from './shared.js';
 
 // `{ client }` is optional — see the createIngredient comment. Passing the same
 // client used to insert the ingredient row keeps the source-link row in the
@@ -124,11 +124,23 @@ export async function listRefsForIngredient(ingredientId) {
   // Filter `deleted = false` so the "Appears in" panel doesn't surface
   // tombstoned unlinks. Tombstones are read-only state for sync purposes;
   // user-facing list paths only show live links.
+  const byIngredient = await listRefsForIngredients([ingredientId]);
+  return byIngredient.get(ingredientId);
+}
+
+// Batched `listRefsForIngredient` for bulk hydration paths (#3940) — ONE query
+// for N ingredients instead of N, with the same `deleted = false` live filter.
+// Returns `Map<ingredientId, refs[]>` with an entry (possibly `[]`) for every id.
+export async function listRefsForIngredients(ingredientIds) {
+  const ids = [...new Set(ingredientIds)];
+  if (ids.length === 0) return new Map();
   const result = await query(
-    `SELECT * FROM catalog_ingredient_refs WHERE ingredient_id = $1 AND deleted = false`,
-    [ingredientId],
+    `SELECT * FROM catalog_ingredient_refs
+      WHERE ingredient_id = ANY($1) AND deleted = false
+      ORDER BY ingredient_id`,
+    [ids],
   );
-  return result.rows.map(rowToRef);
+  return groupRowsByIngredient(ids, result.rows, rowToRef);
 }
 
 // Like listRefsForIngredient, but drops refs whose TARGET no longer resolves to

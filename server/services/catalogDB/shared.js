@@ -208,6 +208,24 @@ export function rowToRevision(row) {
   };
 }
 
+// Group the rows of a batched `WHERE ingredient_id = ANY($1)` fetch into a
+// `Map<ingredientId, mapped[]>`, preserving the SQL result order within each
+// group (so a per-ingredient ORDER BY carries through the batching unchanged).
+// `ids` seeds the map so every requested id has an entry — a caller can read
+// `map.get(id)` without a `?? []` fallback and an ingredient with no rows still
+// gets `[]` rather than `undefined`.
+export function groupRowsByIngredient(ids, rows, mapRow) {
+  const grouped = new Map(ids.map((id) => [id, []]));
+  for (const row of rows) {
+    const bucket = grouped.get(row.ingredient_id);
+    // Defensive: a row for an id we didn't ask for can't come back from
+    // `= ANY($1)`, but don't drop it on the floor if the query ever widens.
+    if (bucket) bucket.push(mapRow(row));
+    else grouped.set(row.ingredient_id, [mapRow(row)]);
+  }
+  return grouped;
+}
+
 // Ref kinds that "home" an ingredient — i.e. drive the linked / unlinked (Raw) /
 // orphaned bucket classification + the Orphaned album. universe/series define
 // album membership; creative-director joined this set in #1812 so a CD project's
