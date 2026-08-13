@@ -551,7 +551,9 @@ export default function SongBookViewer() {
           deferred exit is confirmed where the user just clicked. It hides
           while a save is in flight: discarding then would reset the draft
           under a PATCH that is still persisting those very edits. A failed
-          save leaves the draft dirty, so the band comes back. */}
+          save leaves the draft dirty, so the band comes back — and a save that
+          succeeds settles the draft, which releases the parked exit (whether
+          it was an in-page one or a router navigation) on its own. */}
       {(pendingExit || routeGuard.blocked) && !saving && (
         <InlineConfirmRow
           className="shrink-0"
