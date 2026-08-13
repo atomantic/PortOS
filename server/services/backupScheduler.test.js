@@ -14,7 +14,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('./eventScheduler.js', () => ({
-  schedule: vi.fn(),
+  // The real schedule() returns the registered event; the scheduler treats a
+  // null nextRunAt as a failed registration, so the default mock returns a
+  // firing one.
+  schedule: vi.fn(() => ({ id: 'backup-daily', nextRunAt: Date.now() + 60_000 })),
   cancel: vi.fn()
 }));
 
@@ -214,6 +217,18 @@ describe('settings:updated re-sync', () => {
 
     // Same inputs again: the failed attempt must not be remembered as applied.
     await emitSettings({ backup: { enabled: true, destPath: '/dest', cronExpression: 'nonsense' } });
+    expect(schedule).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries when the cron registered but has no next run time', async () => {
+    // An out-of-range five-field expression (`99 1 * * *`) registers without
+    // throwing but never fires — that must not be cached as applied.
+    getSettings.mockResolvedValue({ backup: { enabled: true, destPath: '/dest', cronExpression: '99 1 * * *' } });
+    schedule.mockImplementationOnce(() => ({ id: 'backup-daily', nextRunAt: null }));
+    await startBackupScheduler();
+    expect(cancel).toHaveBeenCalledWith('backup-daily');
+
+    await emitSettings({ backup: { enabled: true, destPath: '/dest', cronExpression: '99 1 * * *' } });
     expect(schedule).toHaveBeenCalledTimes(2);
   });
 

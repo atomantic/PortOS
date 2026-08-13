@@ -73,8 +73,9 @@ export async function syncBackupSchedule(settings) {
   // working timer and throws. Leave `lastSignature` unset in that case so the
   // next save — even one that re-submits the same value — retries instead of
   // short-circuiting on a registration that never happened.
+  let event;
   try {
-    schedule({
+    event = schedule({
       id: EVENT_ID,
       type: 'cron',
       cron: inputs.cron,
@@ -101,6 +102,18 @@ export async function syncBackupSchedule(settings) {
     registered = false;
     lastSignature = null;
     console.error(`❌ Backup scheduler: cron "${inputs.cron}" rejected — no backup scheduled: ${err.message}`);
+    return false;
+  }
+
+  // Not every bad expression throws: a five-field cron with an out-of-range
+  // value (`99 1 * * *`) registers with no next run at all. Treat "registered
+  // but never fires" as a failure too, so the state cache can't suppress a
+  // retry once the user corrects it.
+  if (!event?.nextRunAt) {
+    cancel(EVENT_ID);
+    registered = false;
+    lastSignature = null;
+    console.error(`❌ Backup scheduler: cron "${inputs.cron}" has no next run time — no backup scheduled`);
     return false;
   }
 
