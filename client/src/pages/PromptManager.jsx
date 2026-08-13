@@ -51,8 +51,10 @@ export default function PromptManager() {
   };
   const selectedStage = searchParams.get('stage');
   const selectedVar = searchParams.get('var');
+  const selectedJobSkill = searchParams.get('skill');
   const setSelectedStage = (name) => setParam('stage', name);
   const setSelectedVar = (key) => setParam('var', key);
+  const setSelectedJobSkill = (name) => setParam('skill', name);
   const [stages, setStages] = useState({});
   // The CURATED system-stage keys. Served by GET /api/prompts
   // (`server/lib/promptSystemStages.js`) rather than mirrored client-side, so
@@ -96,9 +98,8 @@ export default function PromptManager() {
     template: ''
   });
 
-  // Job skills
+  // Job skills (selection is URL-driven — see selectedJobSkill above)
   const [jobSkills, setJobSkills] = useState([]);
-  const [selectedJobSkill, setSelectedJobSkill] = useState(null);
   const [jobSkillContent, setJobSkillContent] = useState('');
   const [jobSkillMeta, setJobSkillMeta] = useState({});
   const [jobSkillPreview, setJobSkillPreview] = useState('');
@@ -290,14 +291,22 @@ export default function PromptManager() {
     await loadData();
   };
 
-  // Job skill functions
-  const loadJobSkill = async (name) => {
-    setSelectedJobSkill(name);
+  // Fetch the URL-selected job skill's template + meta. Keyed on selectedJobSkill
+  // so a deep link / reload / tab switch restores the open editor; a cleared
+  // param resets it. Mirrors the `selectedStage` effect above.
+  useEffect(() => {
     setJobSkillPreview('');
-    const res = await getJobSkill(name, { silent: true }).catch(() => ({}));
-    setJobSkillContent(res.content || '');
-    setJobSkillMeta({ jobName: res.jobName, jobId: res.jobId, category: res.category, interval: res.interval });
-  };
+    if (!selectedJobSkill) { setJobSkillContent(''); setJobSkillMeta({}); return; }
+    let cancelled = false;
+    getJobSkill(selectedJobSkill, { silent: true })
+      .then((res) => {
+        if (cancelled || !res) return;
+        setJobSkillContent(res.content || '');
+        setJobSkillMeta({ jobName: res.jobName, jobId: res.jobId, category: res.category, interval: res.interval });
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [selectedJobSkill]);
 
   const saveJobSkill = async () => {
     setSaving(true);
@@ -821,7 +830,7 @@ export default function PromptManager() {
               {jobSkills.map((skill) => (
                 <button
                   key={skill.name}
-                  onClick={() => loadJobSkill(skill.name)}
+                  onClick={() => setSelectedJobSkill(skill.name)}
                   className={`w-full text-left px-3 py-2 rounded-lg text-sm ${
                     selectedJobSkill === skill.name
                       ? 'bg-port-accent/20 text-port-accent'

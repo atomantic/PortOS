@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useLocation } from 'react-router';
 import PromptManager from './PromptManager';
 
 // The Stages pane is the subject: 100+ rows with no way to reach one (#3284).
@@ -12,6 +12,8 @@ const getPromptUsage = vi.fn();
 const deletePrompt = vi.fn();
 const getPromptVariables = vi.fn();
 const deletePromptVariable = vi.fn();
+const getJobSkills = vi.fn(() => Promise.resolve({ skills: [] }));
+const getJobSkill = vi.fn(() => Promise.resolve({}));
 
 vi.mock('../services/apiPrompts', () => ({
   getPrompts: (...a) => getPrompts(...a),
@@ -25,8 +27,8 @@ vi.mock('../services/apiPrompts', () => ({
   createPromptVariable: vi.fn(),
   savePromptVariable: vi.fn(),
   deletePromptVariable: (...a) => deletePromptVariable(...a),
-  getJobSkills: vi.fn(() => Promise.resolve({ skills: [] })),
-  getJobSkill: vi.fn(),
+  getJobSkills: (...a) => getJobSkills(...a),
+  getJobSkill: (...a) => getJobSkill(...a),
   saveJobSkill: vi.fn(),
   previewJobSkill: vi.fn(),
 }));
@@ -50,11 +52,20 @@ const STAGES = {
 // badges and filters exactly what GET /api/prompts names in `systemStages`.
 const SYSTEM_STAGES = ['brain-classifier'];
 
+// Surfaces the live search string so URL-driven selection can be asserted on.
+const LocationProbe = () => {
+  const { search } = useLocation();
+  return <div data-testid="location-search">{search}</div>;
+};
+
 const renderPage = (entry = '/prompts') => render(
   <MemoryRouter initialEntries={[entry]}>
     <PromptManager />
+    <LocationProbe />
   </MemoryRouter>,
 );
+
+const currentSearch = () => screen.getByTestId('location-search').textContent;
 
 // File-level defaults so every describe mounts against the same empty-ish page;
 // individual suites override only what they assert on.
@@ -423,5 +434,64 @@ describe('PromptManager variable deletion', () => {
 
     expect(screen.queryByText('Delete "Tone Guide"?')).toBeNull();
     expect(screen.getByText('Delete "House Style"?')).toBeTruthy();
+  });
+});
+
+// Job skill selection lives in `?skill=` so the open editor is deep-linkable and
+// survives a reload or a tab round-trip (#3936).
+describe('PromptManager job skill selection', () => {
+  const SKILLS = [
+    { name: 'code-fixer', jobId: 'job-code-fixer', hasTemplate: true },
+    { name: 'doc-writer', jobId: 'job-doc-writer', hasTemplate: false },
+  ];
+
+  beforeEach(() => {
+    getPrompts.mockReset().mockResolvedValue({ stages: STAGES, systemStages: SYSTEM_STAGES });
+    getJobSkills.mockReset().mockResolvedValue({ skills: SKILLS });
+    getJobSkill.mockReset().mockImplementation((name) => Promise.resolve({
+      content: `# ${name} template`,
+      jobName: `Job ${name}`,
+      jobId: `job-${name}`,
+      category: 'maintenance',
+      interval: 'daily',
+    }));
+  });
+
+  it('writes the picked skill to the URL instead of local state', async () => {
+    renderPage('/prompts?tab=job-skills');
+    await screen.findByText('code-fixer');
+
+    fireEvent.click(screen.getByText('code-fixer'));
+
+    await waitFor(() => expect(currentSearch()).toContain('skill=code-fixer'));
+    expect(currentSearch()).toContain('tab=job-skills');
+    await screen.findByText('Job code-fixer');
+  });
+
+  it('loads the skill named by a deep link on mount', async () => {
+    renderPage('/prompts?tab=job-skills&skill=doc-writer');
+
+    await screen.findByText('Job doc-writer');
+    expect(getJobSkill).toHaveBeenCalledWith('doc-writer', { silent: true });
+    expect(screen.getByDisplayValue('# doc-writer template')).toBeTruthy();
+  });
+
+  it('keeps the open skill editor across a tab round-trip', async () => {
+    renderPage('/prompts?tab=job-skills&skill=code-fixer');
+    await screen.findByText('Job code-fixer');
+
+    fireEvent.click(screen.getByRole('button', { name: /variables/i }));
+    fireEvent.click(screen.getByRole('button', { name: /job skills/i }));
+
+    await screen.findByText('Job code-fixer');
+    expect(currentSearch()).toContain('skill=code-fixer');
+  });
+
+  it('shows the placeholder when no skill is named in the URL', async () => {
+    renderPage('/prompts?tab=job-skills');
+    await screen.findByText('code-fixer');
+
+    expect(getJobSkill).not.toHaveBeenCalled();
+    expect(screen.getByText('Select a job skill to edit its prompt template')).toBeTruthy();
   });
 });
