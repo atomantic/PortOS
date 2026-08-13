@@ -67,6 +67,7 @@ export { default as useRowDraft } from './useRowDraft.js';
 export { default as useTheme } from './useTheme.js';
 export { default as useThreejsModelFamilies } from './useThreejsModelFamilies.js';
 export { default as useUniverse } from './useUniverse.js';
+export { default as useUnsavedChangesGuard } from './useUnsavedChangesGuard.js';
 export { default as useUniverseAction } from './useUniverseAction.js';
 export { default as useUniverseBucketActions } from './useUniverseBucketActions.js';
 export { default as useUniverseDraft } from './useUniverseDraft.js';

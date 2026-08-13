@@ -22,8 +22,10 @@
  *   `content` object is always sent — the server fills nested content
  *   defaults, so `{ content: { text } }` alone would reset format to 'tab'.
  *   Because the draft only reaches the server on Save, every exit out of edit
- *   mode (View toggle, "All songs", tab close) goes through an unsaved-changes
- *   guard rather than dropping the draft silently (#3902).
+ *   mode goes through an unsaved-changes guard rather than dropping the draft
+ *   silently — the View toggle in-page (#3902), and every route exit (the
+ *   "All songs" link, a sidebar link, ⌘K, voice nav, Back, tab close) via
+ *   useUnsavedChangesGuard (#3958).
  *
  * Keyboard (play mode): space play/pause, +/- speed, [ ] transpose, 0 top.
  * For a drum chart the same keys drive the kit transport instead: space
@@ -61,6 +63,7 @@ import useKeyboardShortcuts from '../hooks/useKeyboardShortcuts';
 import useAutoscroll from '../hooks/useAutoscroll';
 import useDrumPlayer from '../hooks/useDrumPlayer';
 import useWakeLock from '../hooks/useWakeLock';
+import useUnsavedChangesGuard from '../hooks/useUnsavedChangesGuard';
 import { transposeText } from '../lib/tabNotation.js';
 import { VOICING_INSTRUMENTS, toVoicingInstrument } from '../lib/chordShapes.js';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage.js';
@@ -338,11 +341,11 @@ export default function SongBookViewer() {
     return updated;
   }, { errorMessage: 'Failed to save song' });
 
-  // --- Unsaved-edit guard (#3902)
+  // --- Unsaved-edit guard (#3902, #3958)
   // The editor holds everything in `draft` until an explicit Save, so leaving
-  // edit mode (View toggle, "All songs", a tab close) would drop sheet text and
-  // practice notes silently. `pendingExit` holds the deferred navigation while
-  // the inline discard confirm is up.
+  // edit mode would drop sheet text and practice notes silently. `pendingExit`
+  // holds a deferred IN-PAGE exit (the View toggle) while the inline discard
+  // confirm is up; `routeGuard` below parks anything that leaves the route.
   const isDirty = useMemo(
     () => !!song && !!draft && !draftsEqual(draft, toDraft(song)),
     [song, draft],
@@ -363,29 +366,21 @@ export default function SongBookViewer() {
     if (isDirty) setPendingExit(() => run);
     else run();
   }, [isDirty]);
-  // Route-link clicks can't be deferred by returning false — swallow the default
-  // navigation and re-run it from the confirm instead. A modified click
-  // (⌘/Ctrl/Shift/Alt, or a middle button) opens a second tab and LEAVES the
-  // editor standing, so there's nothing to guard: let the browser have it.
-  const onLeaveLink = useCallback((e) => {
-    if (!isDirty || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-    e.preventDefault();
-    setPendingExit(() => () => navigate('/songbook'));
-  }, [isDirty, navigate]);
+  // Everything that leaves this ROUTE — the "All songs" link, a sidebar link, a
+  // ⌘K palette jump, a voice `ui_navigate`, the browser Back button — plus tab
+  // close / reload (#3958). `requestExit` above still covers the one exit that
+  // isn't a navigation: the View toggle, which only flips the `?mode` param.
+  const routeGuard = useUnsavedChangesGuard(isDirty);
   const discardAndExit = useCallback(() => {
     setDraft(song ? toDraft(song) : null);
     setPendingExit(null);
     pendingExit?.();
-  }, [pendingExit, song]);
-  // Tab close / reload — the browser owns this prompt; preventDefault arms it.
-  // `returnValue` is the legacy signal, still what some browsers actually read,
-  // so set both or the tab can close without asking.
-  useEffect(() => {
-    if (!isDirty) return undefined;
-    const onBeforeUnload = (e) => { e.preventDefault(); e.returnValue = ''; };
-    window.addEventListener('beforeunload', onBeforeUnload);
-    return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [isDirty]);
+    routeGuard.proceed();
+  }, [pendingExit, routeGuard, song]);
+  const keepEditing = useCallback(() => {
+    setPendingExit(null);
+    routeGuard.reset();
+  }, [routeGuard]);
 
   const onDeleteSong = useCallback(() => confirmDelete(() =>
     deleteSong(id, { silent: true })
@@ -493,7 +488,7 @@ export default function SongBookViewer() {
         subtitle={song.artist || undefined}
         actions={(
           <>
-            <Link to="/songbook" onClick={onLeaveLink} className={btnClass}>
+            <Link to="/songbook" className={btnClass}>
               <ArrowLeft size={15} />
               <span className="hidden sm:inline">All songs</span>
             </Link>
@@ -557,7 +552,7 @@ export default function SongBookViewer() {
           while a save is in flight: discarding then would reset the draft
           under a PATCH that is still persisting those very edits. A failed
           save leaves the draft dirty, so the band comes back. */}
-      {pendingExit && !saving && (
+      {(pendingExit || routeGuard.blocked) && !saving && (
         <InlineConfirmRow
           className="shrink-0"
           variant="separator"
@@ -566,7 +561,7 @@ export default function SongBookViewer() {
           confirmText="Discard"
           cancelText="Keep editing"
           onConfirm={discardAndExit}
-          onCancel={() => setPendingExit(null)}
+          onCancel={keepEditing}
           autoFocus
           aria-label={`Discard unsaved changes to ${song.title}`}
         />

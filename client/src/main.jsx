@@ -1,7 +1,7 @@
 import './lib/consoleFilters';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter } from 'react-router';
+import { createBrowserRouter, RouterProvider } from 'react-router';
 import { Toaster } from './components/ui/Toast';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ThemeProvider } from './components/ThemeContext';
@@ -51,26 +51,41 @@ window.addEventListener('error', (event) => {
   });
 });
 
+// Data router (not a plain <BrowserRouter>) so `useBlocker` is available —
+// it is the only way an editor can stop a sidebar link, a ⌘K jump, a voice
+// `ui_navigate`, or the browser Back button from dropping an unsaved draft
+// (#3958, see hooks/useUnsavedChangesGuard). The whole existing <Routes> tree
+// stays mounted under one splat route, so no page needed rewriting; new pages
+// keep adding a <Route> in App.jsx exactly as before.
+const router = createBrowserRouter([
+  {
+    path: '*',
+    element: (
+      <>
+        <App />
+        <Toaster
+          position="bottom-right"
+          toastOptions={{
+            style: {
+              background: 'rgb(var(--port-card) / var(--port-card-alpha, 1))',
+              color: 'rgb(var(--port-text))',
+              border: '1px solid rgb(var(--port-border) / var(--port-border-alpha, 1))',
+              borderRadius: 'var(--port-radius-lg)',
+              backdropFilter: 'var(--port-backdrop-filter)',
+              boxShadow: 'var(--port-shadow-elevated)'
+            }
+          }}
+        />
+      </>
+    ),
+  },
+]);
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <ErrorBoundary>
       <ThemeProvider>
-        <BrowserRouter>
-          <App />
-          <Toaster
-            position="bottom-right"
-            toastOptions={{
-              style: {
-                background: 'rgb(var(--port-card) / var(--port-card-alpha, 1))',
-                color: 'rgb(var(--port-text))',
-                border: '1px solid rgb(var(--port-border) / var(--port-border-alpha, 1))',
-                borderRadius: 'var(--port-radius-lg)',
-                backdropFilter: 'var(--port-backdrop-filter)',
-                boxShadow: 'var(--port-shadow-elevated)'
-              }
-            }}
-          />
-        </BrowserRouter>
+        <RouterProvider router={router} />
       </ThemeProvider>
     </ErrorBoundary>
   </React.StrictMode>

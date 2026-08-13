@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Routes, Route } from 'react-router';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
+import { createMemoryRouter, RouterProvider } from 'react-router';
 
 // Mock the api barrel (RoundEditor.test.jsx harness style).
 const api = vi.hoisted(() => ({
@@ -42,11 +42,21 @@ const song = (extra = {}) => ({
   ...extra,
 });
 
-const renderPage = (path = '/songbook/abc') => render(
-  <MemoryRouter initialEntries={[path]}>
-    <Routes><Route path="/songbook/:id" element={<SongBookViewer />} /></Routes>
-  </MemoryRouter>,
-);
+// Data router (not <MemoryRouter>) — SongBookViewer's unsaved-draft guard uses
+// react-router's `useBlocker`, which only exists under one, matching how
+// main.jsx mounts the app (#3958). The index route stands in for anywhere else
+// the user might navigate (sidebar link, ⌘K, Back).
+// router.navigate resolves asynchronously — settle it inside act() or the
+// suite's strict act-warning guard fails the test (src/test/setup.js).
+const navigate = (router, to) => act(async () => { await router.navigate(to); });
+
+const renderPage = (path = '/songbook/abc', { history = [] } = {}) => {
+  const router = createMemoryRouter([
+    { path: '/songbook', element: <div>All songs index</div> },
+    { path: '/songbook/:id', element: <SongBookViewer /> },
+  ], { initialEntries: [...history, path], initialIndex: history.length });
+  return { ...render(<RouterProvider router={router} />), router };
+};
 
 describe('SongBookViewer', () => {
   beforeEach(() => {
@@ -667,6 +677,53 @@ K:  o - - - - - o -`;
       fireEvent.click(screen.getByRole('link', { name: /All songs/ }), { metaKey: true });
       expect(screen.queryByText(/Discard your unsaved changes/)).toBeNull();
       expect(screen.getByLabelText('Content').value).toBe('Edited sheet text');
+    });
+
+    // Exits that never touch a control on this page — a sidebar link, a ⌘K
+    // palette jump, a voice ui_navigate, the browser Back button. They all
+    // reach the router the same way, so driving router.navigate covers them.
+    it('confirms before a sidebar/⌘K navigation leaves with unsaved edits', async () => {
+      const { router } = renderPage('/songbook/abc?mode=edit');
+      await editSheet();
+      await navigate(router, '/songbook');
+      expect(await screen.findByText('Discard your unsaved changes to this song?')).toBeTruthy();
+      // Parked, not run — the editor is still mounted with the draft intact.
+      expect(screen.getByLabelText('Content').value).toBe('Edited sheet text');
+      expect(screen.queryByText('All songs index')).toBeNull();
+
+      // Keep editing → the navigation is dropped and the draft survives.
+      fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+      await waitFor(() => expect(screen.queryByText(/Discard your unsaved changes/)).toBeNull());
+      expect(screen.getByLabelText('Content').value).toBe('Edited sheet text');
+    });
+
+    it('discards and completes the parked navigation on confirm', async () => {
+      const { router } = renderPage('/songbook/abc?mode=edit');
+      await editSheet();
+      await navigate(router, '/songbook');
+      fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
+      expect(await screen.findByText('All songs index')).toBeTruthy();
+      expect(api.updateSong).not.toHaveBeenCalled();
+    });
+
+    it('confirms before the browser Back button leaves with unsaved edits', async () => {
+      const { router } = renderPage('/songbook/abc?mode=edit', { history: ['/songbook'] });
+      await editSheet();
+      await navigate(router, -1);
+      expect(await screen.findByText('Discard your unsaved changes to this song?')).toBeTruthy();
+      expect(screen.getByLabelText('Content').value).toBe('Edited sheet text');
+    });
+
+    it('lets a navigation through once the draft is saved clean', async () => {
+      api.updateSong.mockImplementation((_id, patch) => Promise.resolve(song({ ...patch })));
+      const { router } = renderPage('/songbook/abc?mode=edit');
+      await editSheet();
+      await navigate(router, '/songbook');
+      expect(await screen.findByText('Discard your unsaved changes to this song?')).toBeTruthy();
+      // Saving settles the draft, so the parked navigation RUNS rather than
+      // being swallowed with the confirm row.
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      expect(await screen.findByText('All songs index')).toBeTruthy();
     });
 
     it('drops the armed confirm once a save settles the draft', async () => {
