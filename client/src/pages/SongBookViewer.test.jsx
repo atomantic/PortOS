@@ -652,8 +652,21 @@ K:  o - - - - - o -`;
       fireEvent.click(screen.getByRole('button', { name: 'Save' }));
       await waitFor(() => expect(screen.queryByRole('button', { name: 'Discard' })).toBeNull());
       expect(screen.getByRole('button', { name: 'Saving…' })).toBeTruthy();
+      // The save settles the draft, so the exit the user asked for runs instead
+      // of being swallowed with the confirm row.
       resolveSave();
-      await waitFor(() => expect(api.updateSong).toHaveBeenCalled());
+      await waitFor(() => expect(screen.queryByLabelText('Content')).toBeNull());
+      expect(api.updateSong).toHaveBeenCalled();
+    });
+
+    it('lets a modified click open All songs in a new tab without prompting', async () => {
+      renderPage('/songbook/abc?mode=edit');
+      await editSheet();
+      // ⌘/Ctrl-click opens a second tab and leaves this editor standing — there
+      // is no unsaved work at risk, so the guard must not swallow it.
+      fireEvent.click(screen.getByRole('link', { name: /All songs/ }), { metaKey: true });
+      expect(screen.queryByText(/Discard your unsaved changes/)).toBeNull();
+      expect(screen.getByLabelText('Content').value).toBe('Edited sheet text');
     });
 
     it('drops the armed confirm once a save settles the draft', async () => {

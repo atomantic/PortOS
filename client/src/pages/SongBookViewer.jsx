@@ -348,17 +348,27 @@ export default function SongBookViewer() {
     [song, draft],
   );
   const [pendingExit, setPendingExit] = useState(null);
-  // A save (or a discard) settles the draft — any armed confirm is now moot.
-  useEffect(() => { if (!isDirty) setPendingExit(null); }, [isDirty]);
+  // Once the draft settles — the user hit Save with an exit armed, or typed the
+  // value back to what's stored — the exit they asked for RUNS rather than being
+  // dropped. Dropping it would swallow the click: the confirm hides with the
+  // draft clean and nothing ever navigates. (Discard clears `pendingExit`
+  // itself before resetting the draft, so it can't double-fire here.)
+  useEffect(() => {
+    if (isDirty || !pendingExit) return;
+    setPendingExit(null);
+    pendingExit();
+  }, [isDirty, pendingExit]);
   // Store the exit as a value, not as a state updater (setState(fn) would CALL it).
   const requestExit = useCallback((run) => {
     if (isDirty) setPendingExit(() => run);
     else run();
   }, [isDirty]);
   // Route-link clicks can't be deferred by returning false — swallow the default
-  // navigation and re-run it from the confirm instead.
+  // navigation and re-run it from the confirm instead. A modified click
+  // (⌘/Ctrl/Shift/Alt, or a middle button) opens a second tab and LEAVES the
+  // editor standing, so there's nothing to guard: let the browser have it.
   const onLeaveLink = useCallback((e) => {
-    if (!isDirty) return;
+    if (!isDirty || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
     e.preventDefault();
     setPendingExit(() => () => navigate('/songbook'));
   }, [isDirty, navigate]);
