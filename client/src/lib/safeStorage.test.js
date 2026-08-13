@@ -1,9 +1,13 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { safeReadStorage, safeReadJsonStorage, safeWriteStorage, safeWriteJsonStorage, safeRemoveStorage } from './safeStorage.js';
+import {
+  safeReadStorage, safeReadJsonStorage, safeWriteStorage, safeWriteJsonStorage, safeRemoveStorage,
+  safeReadJsonSession, safeWriteJsonSession, safeRemoveSession,
+} from './safeStorage.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
   window.localStorage.clear();
+  window.sessionStorage.clear();
 });
 
 describe('safeStorage', () => {
@@ -55,5 +59,33 @@ describe('safeStorage', () => {
     });
     expect(() => safeWriteStorage('k', 'v')).not.toThrow();
     expect(() => safeRemoveStorage('k')).not.toThrow();
+  });
+
+  it('round-trips session JSON without touching localStorage', () => {
+    safeWriteJsonSession('draft', { a: 1 });
+    expect(safeReadJsonSession('draft')).toEqual({ a: 1 });
+    // Session scope is the point: the same key must not have been persisted
+    // where it would outlive the tab.
+    expect(safeReadStorage('draft')).toBeNull();
+    safeRemoveSession('draft');
+    expect(safeReadJsonSession('draft', 'fallback')).toBe('fallback');
+  });
+
+  it('falls back on corrupt session JSON', () => {
+    window.sessionStorage.setItem('corrupt', '{not-json');
+    expect(safeReadJsonSession('corrupt', 'fallback')).toBe('fallback');
+    expect(safeReadJsonSession('missing', 'fallback')).toBe('fallback');
+  });
+
+  it('swallows a session storage that throws on every access', () => {
+    // Blocked storage (Safari private mode, a sandboxed iframe) throws from the
+    // accessor itself, so the whole call has to be inside the guard.
+    const boom = () => { throw new DOMException('The operation is insecure.', 'SecurityError'); };
+    vi.stubGlobal('sessionStorage', { getItem: boom, setItem: boom, removeItem: boom });
+
+    expect(() => safeWriteJsonSession('k', { a: 1 })).not.toThrow();
+    expect(safeReadJsonSession('k', 'fallback')).toBe('fallback');
+    expect(() => safeRemoveSession('k')).not.toThrow();
+    vi.unstubAllGlobals();
   });
 });

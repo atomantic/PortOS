@@ -56,3 +56,36 @@ export const safeRemoveStorage = (key) => {
     // Ignore — nothing persisted to remove when storage is unavailable.
   }
 };
+
+// `sessionStorage` variants, same guarantees. Session scope is for state that
+// should survive a navigation or a reload but must NOT outlive the tab —
+// crash-recovery buffers for edits the server has not accepted yet. Persisting
+// those to `localStorage` would resurrect them weeks later, on top of whatever
+// the record holds by then.
+export const safeReadJsonSession = (key, fallback = null) => {
+  try {
+    const raw = globalThis.sessionStorage?.getItem(key) ?? null;
+    if (raw === null) return fallback;
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+};
+
+// Best-effort JSON write. Serialization is inside the guard for the same reason
+// as `safeWriteJsonStorage` — `JSON.stringify` throws on circular/BigInt values.
+export const safeWriteJsonSession = (key, value) => {
+  try {
+    globalThis.sessionStorage?.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignore — the value stays in memory when persistence is unavailable.
+  }
+};
+
+export const safeRemoveSession = (key) => {
+  try {
+    globalThis.sessionStorage?.removeItem(key);
+  } catch {
+    // Ignore — nothing persisted to remove when storage is unavailable.
+  }
+};

@@ -86,8 +86,13 @@ const renderPage = (path = '/devtools/quota-burn') => render(
   </MemoryRouter>,
 );
 
+// Mirrors UNSAVED_PATCH_KEY in the page — the session-scoped stash holding a
+// patch the server never accepted.
+const STASH_KEY = 'quotaBurn:unsavedPatch';
+
 beforeEach(() => {
   vi.clearAllMocks();
+  globalThis.sessionStorage.clear();
   api.getQuotaBurn.mockResolvedValue({ config, status });
   api.getQuotaBurnCatalog.mockResolvedValue(catalog);
   api.saveQuotaBurn.mockResolvedValue({ config });
@@ -533,6 +538,56 @@ describe('QuotaBurn save races', () => {
     unmount();
     await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1));
     expect(api.saveQuotaBurn.mock.calls[0][0].families.grok.jobs[0].label).toContain('Q');
+  });
+
+  it('reports a failed unmount flush and stashes the patch for the next visit', async () => {
+    // The page is gone, so no header indicator is left to say the save failed:
+    // swallowing it turned "Saving changes…" into permanently lost edits.
+    api.saveQuotaBurn.mockRejectedValue(new Error('Network request failed'));
+    const user = userEvent.setup();
+    const { unmount } = renderPage('/devtools/quota-burn/grok');
+    await user.type(await screen.findByLabelText('Name for step 1'), 'Q');
+    unmount();
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/could not be saved/i)));
+    const stashed = JSON.parse(globalThis.sessionStorage.getItem(STASH_KEY));
+    expect(stashed.families.grok.jobs[0].label).toContain('Q');
+  });
+
+  it('restores a stashed patch on the next visit and re-saves it', async () => {
+    globalThis.sessionStorage.setItem(STASH_KEY, JSON.stringify({ checkIntervalMinutes: 45 }));
+    renderPage();
+
+    // Back on screen AND re-armed for a PUT — a restore that only re-rendered
+    // the value would leave the server holding the pre-edit plan until the
+    // user retyped the field.
+    expect(await screen.findByDisplayValue('45')).toBeInTheDocument();
+    await waitFor(() => expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1));
+    expect(api.saveQuotaBurn.mock.calls[0][0].checkIntervalMinutes).toBe(45);
+    expect(globalThis.sessionStorage.getItem(STASH_KEY)).toBeNull();
+  });
+
+  it('keeps a stashed patch when the visit could not read a plan', async () => {
+    // Replaying the patch onto a page with no config would render a plan with
+    // no families; the recovery belongs on the next visit that gets one.
+    api.getQuotaBurn.mockRejectedValue(new Error('Network request failed'));
+    globalThis.sessionStorage.setItem(STASH_KEY, JSON.stringify({ checkIntervalMinutes: 45 }));
+    renderPage();
+
+    expect(await screen.findByText('Quota burn is unavailable')).toBeInTheDocument();
+    expect(globalThis.sessionStorage.getItem(STASH_KEY)).not.toBeNull();
+    expect(api.saveQuotaBurn).not.toHaveBeenCalled();
+  });
+
+  it('ignores a stash that is not a patch object', async () => {
+    // A hand-edited or older-build entry must not be replayed — the PUT body is
+    // an object, and anything else 400s the save the restore should rescue.
+    globalThis.sessionStorage.setItem(STASH_KEY, '"not-a-patch"');
+    renderPage();
+
+    expect(await screen.findByText(/62% left/)).toBeInTheDocument();
+    await sleep(100);
+    expect(api.saveQuotaBurn).not.toHaveBeenCalled();
   });
 
   it('names why the first load failed and recovers from the Retry button', async () => {

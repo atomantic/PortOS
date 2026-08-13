@@ -24,6 +24,7 @@ import { NumberField } from '../components/quotaBurn/fields';
 import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { mergeQuotaBurnPatch } from '../lib/quotaBurnPatch';
+import { safeReadJsonSession, safeRemoveSession, safeWriteJsonSession } from '../lib/safeStorage';
 import { coalesce } from '../utils/coalesce';
 import { timeAgo } from '../utils/formatters';
 
@@ -37,6 +38,20 @@ const SAVE_DEBOUNCE_MS = 500;
 const PENDING_POLL_MS = 4000;
 
 const EMPTY_CATALOG = { jobTypes: [], apps: [], universes: [], imageModes: [] };
+
+// Where a patch the server never accepted waits for the next visit. Session
+// scope, not local: this is a crash buffer for the current tab, and a patch
+// resurrected days later would be applied on top of a config it no longer
+// describes.
+const UNSAVED_PATCH_KEY = 'quotaBurn:unsavedPatch';
+
+// A stash written by an older build (or hand-edited) must not be replayed as a
+// patch — the PUT body is an object, and anything else would 400 the save the
+// restore is supposed to rescue.
+const readStashedPatch = () => {
+  const stored = safeReadJsonSession(UNSAVED_PATCH_KEY);
+  return stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : null;
+};
 
 // Distinguishes a read that THREW from one that resolved with nothing — the
 // two need opposite handling of the error state, and both are falsy.
@@ -109,6 +124,11 @@ export default function QuotaBurn() {
   const retriedRef = useRef(false);
   const persistRef = useRef(null);
   const savingRef = useRef(false);
+  // `save` is re-created every render and the mount effect must not re-run when
+  // it changes, so the restore path reaches it through a ref — same shape as
+  // `persistRef` above.
+  const saveRef = useRef(null);
+  const hasConfigRef = useRef(false);
 
   // Resolves to `null` when the read landed, or to the failure message when it
   // didn't. The banner state alone can't tell a caller whether THIS read failed
@@ -139,6 +159,10 @@ export default function QuotaBurn() {
     // `status` is derived server-side and never edited here, so it is always
     // safe to adopt; `config` is the form's own state and must not be rewound.
     setStatus(data.status);
+    // Whether the page ever got a plan to merge onto. A stashed patch replayed
+    // onto `null` would render a config with no `families` and crash the plan
+    // section, so the restore waits for a read that actually answered.
+    if (data.config) hasConfigRef.current = true;
     // The counter alone only catches an edit that landed WHILE this GET was in
     // flight. An edit made just BEFORE it was issued leaves the counter
     // unmoved, so the response — which predates the still-debounced PUT —
@@ -173,7 +197,20 @@ export default function QuotaBurn() {
   }, []);
 
   useEffect(() => {
-    Promise.all([load(), loadCatalog()]).finally(() => setLoading(false));
+    Promise.all([load(), loadCatalog()]).finally(() => {
+      setLoading(false);
+      // Edits the last visit could not persist. Replaying them through `save`
+      // — rather than only re-rendering them — puts them back on screen AND
+      // re-arms the debounce, so the recovery ends in the server holding them
+      // instead of the user having to retype the field to trigger a PUT.
+      // A failed read leaves the stash alone rather than dropping it — the next
+      // visit that does get a plan is where the recovery belongs.
+      const stashed = hasConfigRef.current ? readStashedPatch() : null;
+      if (!stashed) return;
+      safeRemoveSession(UNSAVED_PATCH_KEY);
+      saveRef.current?.(stashed);
+      toast('Restored Quota Burn edits that could not be saved last time.');
+    });
   }, [load, loadCatalog]);
 
   const retryCatalog = async () => {
@@ -250,7 +287,18 @@ export default function QuotaBurn() {
     // Flush, don't drop. `cancel()` alone discards everything typed in the last
     // debounce window — navigating away 200ms after pasting a work prompt would
     // lose it silently, with nothing on screen having said it was unsaved.
-    if (pendingRef.current) api.saveQuotaBurn(pendingRef.current, { silent: true }).catch(() => {});
+    const patch = pendingRef.current;
+    if (!patch) return;
+    pendingRef.current = null;
+    api.saveQuotaBurn(patch, { silent: true })
+      // The page is gone, so there is no header indicator left to tell the
+      // truth about persistence: swallowing this failure is what turned
+      // "Saving changes…" into permanently-lost edits. Say so, and keep the
+      // patch for the next visit — the toast is transient, the work isn't.
+      .catch(() => {
+        safeWriteJsonSession(UNSAVED_PATCH_KEY, mergeQuotaBurnPatch(readStashedPatch(), patch));
+        toast.error('Quota Burn changes could not be saved — they will be restored next time you open the page.');
+      });
   }, [persist]);
 
   const save = (patch) => {
@@ -263,6 +311,8 @@ export default function QuotaBurn() {
     pendingRef.current = mergeQuotaBurnPatch(pendingRef.current, patch);
     persist();
   };
+
+  saveRef.current = save;
 
   const patchFamily = (familyId, patch) => save({ families: { [familyId]: patch } });
 
