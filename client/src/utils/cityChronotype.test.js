@@ -64,7 +64,19 @@ describe('computeChronotypeEnergy — energy curve', () => {
         windDownStart: '23:00',
       },
     };
-    // The post-midnight small hours should read as low energy (close to the 00:30 sleep anchor).
+    // Land exactly on the after-midnight sleep anchor (00:30 → hour 0.5). An exact
+    // anchor hit returns that anchor's energy verbatim, so 0.12 proves the wrapped
+    // "00:30" was parsed and anchored at 0.5 — a weaker "1 AM is below 0.5" check
+    // would still pass if 00:30 were dropped entirely, since the 23:00 wind-down
+    // anchor alone keeps the small hours low.
+    const atSleepAnchor = computeChronotypeEnergy(evening, 0.5);
+    expect(atSleepAnchor.energy).toBeCloseTo(0.12, 10);
+    // ...and that low energy maps through the bottom of the display ranges:
+    // brightness = 0.7 + 0.12 * (1.15 - 0.7), tempo = 0.8 + 0.12 * (1.15 - 0.8).
+    expect(atSleepAnchor.brightness).toBeCloseTo(0.754, 10);
+    expect(atSleepAnchor.tempo).toBeCloseTo(0.842, 10);
+
+    // The post-midnight small hours read lower than the peak center.
     const at1am = computeChronotypeEnergy(evening, 1);
     const atPeak = computeChronotypeEnergy(evening, 13); // peak center
     expect(at1am.energy).toBeLessThan(atPeak.energy);
@@ -96,13 +108,22 @@ describe('computeChronotypeEnergy — neutral no-op fallbacks', () => {
     expect(computeChronotypeEnergy(PROFILE, undefined)).toEqual(NEUTRAL);
   });
 
-  it('ignores unparseable secondary anchors rather than falling back to neutral', () => {
-    const partial = {
-      recommendations: { peakFocusStart: '09:30', peakFocusEnd: '13:00', sleepTime: 'nope' },
-    };
-    const m = computeChronotypeEnergy(partial, PEAK_HOUR);
-    expect(m).not.toEqual(NEUTRAL);
-    expect(m.brightness).toBeCloseTo(BRIGHTNESS_MAX);
+  it('drops an unparseable secondary anchor rather than falling back to neutral', () => {
+    const peak = { peakFocusStart: '09:30', peakFocusEnd: '13:00' };
+    const withBadSleep = { recommendations: { ...peak, sleepTime: 'nope' } };
+    const withNoSleep = { recommendations: { ...peak } };
+    const withGoodSleep = { recommendations: { ...peak, sleepTime: '23:00' } };
+    // Evaluate away from every anchor: an exact anchor hit short-circuits before the
+    // other anchors are blended, which would hide whether the bad one was dropped.
+    const OFF_ANCHOR = 20;
+
+    const bad = computeChronotypeEnergy(withBadSleep, OFF_ANCHOR);
+    expect(bad).not.toEqual(NEUTRAL);
+    // An unparseable sleep time is dropped, leaving the same curve as omitting it...
+    expect(bad.energy).toBeCloseTo(computeChronotypeEnergy(withNoSleep, OFF_ANCHOR).energy, 10);
+    // ...and a parseable one genuinely changes the curve, so the equality above is
+    // evidence the anchor was dropped rather than evidence anchors do nothing.
+    expect(bad.energy).toBeGreaterThan(computeChronotypeEnergy(withGoodSleep, OFF_ANCHOR).energy);
   });
 });
 
