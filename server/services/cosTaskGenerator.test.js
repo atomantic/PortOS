@@ -483,10 +483,15 @@ describe('resolveSwarmBlock', () => {
   it('instructs the orchestrator to still write the completion sentinel after a swarm run', () => {
     // Swarm work ships via PRs with no working-tree change, so without an
     // explicit instruction the orchestrator skips the completion sentinel and
-    // the CoS task hangs as if it never finished. Phase C must name the sentinel.
+    // the CoS task hangs as if it never finished. Phase C must point at the
+    // sentinel — by reference, since the filename carries the agent id and the
+    // exact path is handed over by the Completion Workflow section.
     const block = resolveSwarmBlock('claim-issue', 3);
-    expect(block).toContain('.agent-done');
+    expect(block).toContain('completion sentinel');
     expect(block).toContain('Completion Workflow');
+    // Naming a literal `.agent-done` here would send the orchestrator to a path
+    // no poller watches.
+    expect(block).not.toMatch(/\.agent-done/);
   });
 
   it('gives every fan-out agent its own scratch subdirectory', () => {

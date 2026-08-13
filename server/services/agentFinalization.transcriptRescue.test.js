@@ -87,7 +87,8 @@ const setupRun = ({ transcript, sentinel = null }) => {
   mkdirSync(agentDir, { recursive: true });
   mkdirSync(workspace, { recursive: true });
   if (transcript !== null) writeFileSync(join(agentDir, 'raw.txt'), transcript);
-  if (sentinel !== null) writeFileSync(join(workspace, '.agent-done'), sentinel);
+  // The sentinel filename is scoped to the agent instance (doneSentinelName).
+  if (sentinel !== null) writeFileSync(join(workspace, `.agent-done-${id}`), sentinel);
   return { agentId: id, workspacePath: workspace };
 };
 

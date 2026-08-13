@@ -19,6 +19,7 @@ import { readJSONFile, PATHS, tryReadFile, expandHome } from '../lib/fileUtils.j
 import { loadSlashdoFile, loadSlashdoLib, writeResolvedSlashdoBody } from '../lib/slashdoLoader.js';
 import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, describeReviewerCli, isCliReviewer, reviewerCliBinary, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, resolveReviewerConfig, reviewerEffortArgs, buildReviewerEffortNote, resolveKeyedReviewers, buildReviewWithArgs, buildReviewersCsv } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
+import { doneSentinelName } from '../lib/agentSentinel.js';
 import { canTypeSlashCommands, resolveSlashdoInvocation, buildSlashdoSection, unreachableReviewerIncludes, SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
 import { shellQuote } from '../lib/shellQuote.js';
 import { detectForgeCli } from '../lib/gitForge.js';
@@ -31,6 +32,16 @@ import { getCodeReviewDefaults } from './codeReview.js';
 const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
 const SKILLS_DIR = join(ROOT_DIR, 'data/prompts/skills');
+
+/**
+ * Absolute path of the completion sentinel this run must write. The spawners'
+ * pollers resolve the same per-instance filename from the same helper (see
+ * `doneSentinelName`), so the path in the prompt and the path PortOS watches
+ * cannot drift apart.
+ */
+function resolveSentinelPath(worktreeInfo, workspaceDir, agentId) {
+  return `${worktreeInfo?.worktreePath || workspaceDir}/${doneSentinelName(agentId)}`;
+}
 
 // Appended to every agent briefing. PortOS shares ONE pm2 daemon across many
 // apps; an agent restarting "the server" once ran `pm2 kill` and took the whole
@@ -1304,6 +1315,10 @@ export function buildActionOutputCompletionSection({ isTui = false, sentinelPath
  * @param {string} [options.providerCommand] - Provider launch command (e.g.
  *   `'claude'`, `'codex'`, `'opencode'`) — the primary signal, so a
  *   path-configured or renamed binary is recognised.
+ * @param {string} [options.agentId] - The spawning agent's id. Scopes the
+ *   completion sentinel filename to this run (`.agent-done-<agentId>`) so two
+ *   worktree-less agents sharing the primary checkout can't overwrite — or
+ *   finalize on — each other's done-signal. Omitted → the legacy shared name.
  * @param {boolean} [options.leanMode] - Ollama-backed Claude session launched with
  *   `--bare` (see `applyLeanClaudeArgs`): the completion workflow drops slashdo
  *   commands (bare mode skips command discovery) in favor of plain `git`/`gh`.
@@ -1322,6 +1337,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   const providerType = options.providerType || PROVIDER_TYPES.API;
   const providerId = options.providerId || null;
   const providerCommand = options.providerCommand || null;
+  const agentId = options.agentId || null;
   const isTui = providerType === PROVIDER_TYPES.TUI;
   const leanMode = options.leanMode === true;
 
@@ -1364,7 +1380,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
     : null;
 
   if (LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType)) {
-    const lightOptions = { isTui, providerId, providerCommand, leanMode, defaultReviewers, codeReviewDefaults, localAgentLoopBody };
+    const lightOptions = { isTui, providerId, providerCommand, leanMode, agentId, defaultReviewers, codeReviewDefaults, localAgentLoopBody };
     return options.split === true
       ? buildLightContextPromptParts(task, workspaceDir, worktreeInfo, isTruthyMetaFn, lightOptions)
       : buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, lightOptions);
@@ -1489,7 +1505,7 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
   // the session, so the prompt does NOT ask the agent to `/quit` (it's a UI
   // command the agent can't invoke). See `buildTuiCompletionSection` below.)
   const tuiCompletionCommand = willOpenPR ? '/do:pr' : '/do:push';
-  const sentinelPath = `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`;
+  const sentinelPath = resolveSentinelPath(worktreeInfo, workspaceDir, agentId);
   // A discard task's completion is the sentinel-only contract (no push/PR/merge),
   // and this applies to every provider type — so it wins over the isTui fork and
   // over the fallback template's commit/push instructions below.
@@ -1562,7 +1578,7 @@ After your task completes, the system will spawn a follow-up agent that runs the
     // rather than re-reading the lib a second time.
     reviewLoopFollowUpSection = buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: true, rprBody, localAgentLoopBody });
     if (isTui) {
-      const sentinelPath = `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`;
+      const sentinelPath = resolveSentinelPath(worktreeInfo, workspaceDir, agentId);
       const branchName = worktreeInfo?.branchName || task.metadata?.reviewLoopPRBranch || null;
       const sentinelTail = branchName ? `   ## Branch\n   ${branchName}` : '   ## Branch\n   <branch name>';
       reviewLoopFollowUpSection += '\n\n' + [
@@ -1786,7 +1802,7 @@ export function buildLightContextPromptParts(task, workspaceDir, worktreeInfo, i
 
 const BEGIN_WORKING_LINE = 'Begin working on the task now.';
 
-function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui = true, providerId = null, providerCommand = null, leanMode = false, defaultReviewers, codeReviewDefaults, localAgentLoopBody = null } = {}) {
+function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui = true, providerId = null, providerCommand = null, leanMode = false, agentId = null, defaultReviewers, codeReviewDefaults, localAgentLoopBody = null } = {}) {
   // Idempotent with the reconcile in buildAgentPrompt; also protects the
   // directly-exported buildLightContextPrompt/Parts entry points.
   task = reconcileSplitContext(task);
@@ -1931,22 +1947,22 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   if (noCodeOutput) {
     sections.push(buildActionOutputCompletionSection({
       isTui,
-      sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
+      sentinelPath: resolveSentinelPath(worktreeInfo, workspaceDir, agentId),
     }));
   } else if (discardWorktree) {
     // Reasoning-only task: the sentinel payload (shape set by the task-type
     // output hook) is the sole output; the worktree is discarded on exit. Wins
     // over the isTui / CLI push-and-PR completion workflows below.
-    sections.push(buildProgrammaticOutputCompletionSection(`${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`));
+    sections.push(buildProgrammaticOutputCompletionSection(resolveSentinelPath(worktreeInfo, workspaceDir, agentId)));
   } else if (isReadOnly) {
     sections.push(buildReadOnlyCompletionSection({
       isTui,
-      sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
+      sentinelPath: resolveSentinelPath(worktreeInfo, workspaceDir, agentId),
     }));
   } else if (isReviewLoopFollowUp) {
     sections.push(buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: false, localAgentLoopBody }));
     if (isTui) {
-      const sentinelPath = `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`;
+      const sentinelPath = resolveSentinelPath(worktreeInfo, workspaceDir, agentId);
       const branchName = worktreeInfo?.branchName || task.metadata?.reviewLoopPRBranch || null;
       const sentinelTail = branchName ? `   ## Branch\n   ${branchName}` : '   ## Branch\n   <branch name>';
       sections.push([
@@ -1959,7 +1975,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   } else if (isTui) {
     sections.push(buildTuiCompletionSection({
       willOpenPR, prCompletion, simplifyEnabled, slashdoFree: tuiSlashdoFree,
-      sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
+      sentinelPath: resolveSentinelPath(worktreeInfo, workspaceDir, agentId),
       branchName: worktreeInfo?.branchName || null,
       baseBranch: worktreeInfo?.baseBranch || null,
       leavePrOpen: leavesPrForHuman(task),

@@ -333,6 +333,21 @@ describe('classifyWorktreeDirt (real exported helper)', () => {
     expect(r.hasRealChanges).toBe(true);
     expect(r.realChangePaths).toEqual(['src/index.js']);
   });
+
+  it('ignores the per-agent sentinel name without hiding real work', () => {
+    // The sentinel filename carries the agent id (see doneSentinelName), so the
+    // caller passes THIS run's name — not a wildcard that would also swallow a
+    // sibling agent's sentinel.
+    const ignoredPaths = ['.agent-done', '.agent-done-agent-1'];
+    expect(classifyWorktreeDirt('?? .agent-done-agent-1', { ignoredPaths }).clean).toBe(true);
+
+    const r = classifyWorktreeDirt('?? .agent-done-agent-1\n M src/index.js', { ignoredPaths });
+    expect(r.hasRealChanges).toBe(true);
+    expect(r.realChangePaths).toEqual(['src/index.js']);
+    // Another agent's sentinel is NOT ignored — an unrelated run's file in a
+    // shared checkout is still dirt this caller must not silently discard.
+    expect(classifyWorktreeDirt('?? .agent-done-agent-2', { ignoredPaths }).clean).toBe(false);
+  });
 });
 
 describe('Broken Worktree Detection', () => {
@@ -689,6 +704,15 @@ describe('removeWorktree branch preservation for resume (#3167)', () => {
     expect(result.removed).toBe(false);
     expect(result.warnings.join(' ')).toContain('server/services/foo.js');
     expect(result.warnings.join(' ')).toContain('notes.md');
+  });
+
+  it('removes a completed worktree whose only dirt is the consumed per-agent sentinel', async () => {
+    scriptGit({ porcelain: '?? .agent-done-agent-x' });
+
+    const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', { merge: false });
+
+    expect(result.removed).toBe(true);
+    expect(result.warnings).toEqual([]);
   });
 
   it('removes a completed worktree whose only dirt is the consumed sentinel', async () => {

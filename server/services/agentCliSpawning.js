@@ -38,7 +38,7 @@ import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { resolvePrCompletion } from '../lib/prDisposition.js';
 import { canTypeSlashCommands } from '../lib/slashdoInvocation.js';
-import { DONE_SENTINEL_NAME } from '../lib/agentSentinel.js';
+import { doneSentinelPath } from '../lib/agentSentinel.js';
 import { isHostShuttingDown, shouldAbandonForHostShutdown, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
@@ -620,7 +620,10 @@ export async function spawnDirectly({
 
     const terminatedByUser = userTerminatedAgents.has(agentId);
     if (terminatedByUser) userTerminatedAgents.delete(agentId);
-    const completionSentinelPresent = !!workspacePath && existsSync(join(workspacePath, DONE_SENTINEL_NAME));
+    // This run's own sentinel (see doneSentinelName) — a worktree-less agent
+    // shares its workspace and must not read a sibling's signal as its own.
+    const sentinelPath = doneSentinelPath(workspacePath, agentId);
+    const completionSentinelPresent = !!sentinelPath && existsSync(sentinelPath);
     const completedBeforeHostShutdown = isHostShuttingDown() && completionSentinelPresent;
 
     // If the user terminated the agent, force success=false even if the

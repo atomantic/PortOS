@@ -930,9 +930,11 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, r
   const cwd = readPayload ? (workspacePath || task?.metadata?.repoPath || null) : null;
   let payload = null;
   if (cwd) {
-    const { DONE_SENTINEL_NAME, parseSentinelPayload, salvageSentinelPayload } = await import('../lib/agentSentinel.js');
+    const { doneSentinelPath, parseSentinelPayload, salvageSentinelPayload } = await import('../lib/agentSentinel.js');
     const { tryReadFile } = await import('../lib/fileUtils.js');
-    const contents = await tryReadFile(join(cwd, DONE_SENTINEL_NAME));
+    // This run's own sentinel (see doneSentinelName) — in a shared workspace a
+    // sibling agent's file must not be consumed as this run's deliverable.
+    const contents = await tryReadFile(doneSentinelPath(cwd, agentId));
     payload = parseSentinelPayload(contents).payload;
     // A less-capable (often local) reasoner can emit an almost-valid
     // `{ summary, payload }` envelope — ```json-fenced, prose-trailed, or with

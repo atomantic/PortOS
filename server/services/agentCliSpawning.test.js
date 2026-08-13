@@ -60,6 +60,9 @@ vi.mock('./agentState.js', () => ({
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
   safeJSONParse: (str, fallback) => { try { return JSON.parse(str); } catch { return fallback; } },
+  // agentSentinel builds the per-agent sentinel filename with this — a mock
+  // missing it makes doneSentinelPath throw inside the close handler.
+  sanitizeFilename: (name) => String(name).replace(/[^a-zA-Z0-9._-]/g, '_'),
   PATHS: { root: '/tmp', cosAgents: '/tmp/agents', data: '/tmp/data' },
 }));
 vi.mock('../lib/codexCliOutput.js', () => ({ createCodexStderrFormatter: vi.fn() }));
@@ -929,7 +932,9 @@ describe('stream error containment', () => {
 
     it('still finalizes when the agent already wrote its completion sentinel', async () => {
       const { finalizeAgent } = await import('./agentFinalization.js');
-      vi.mocked(existsSync).mockImplementation((path) => path === '/tmp/.agent-done');
+      // The sentinel is named per agent instance so two worktree-less runs
+      // sharing one workspace can't be finalized on each other's signal.
+      vi.mocked(existsSync).mockImplementation((path) => path === '/tmp/.agent-done-agent-test');
 
       await runToClose({ ...minimalArgs }, null);
 

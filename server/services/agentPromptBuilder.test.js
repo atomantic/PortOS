@@ -2472,5 +2472,31 @@ describe('TUI reviewLoopFollowUp completion instructions', () => {
     expect(prompt).toContain('cat > "/tmp/wt-1/.agent-done"');
     expect(prompt).toContain('## Summary');
   });
+
+  // Agents that never take a worktree (issue-filing / reasoning task types run
+  // with `useWorktree: false`) all write into the SAME primary checkout. A shared
+  // `.agent-done` there lets two concurrent runs overwrite each other's summary,
+  // and lets whichever poll ticks first finalize the other agent's run on a
+  // sentinel it never wrote — so the filename carries the agent id.
+  it('names the completion sentinel per agent instance so worktree-less runs cannot collide', async () => {
+    const worktreelessTask = (id) => ({
+      id,
+      description: 'File an issue',
+      metadata: { useWorktree: false, openPR: false, discardWorktree: true, providerId: 'claude-code-tui', providerCommand: 'claude' }
+    });
+    const build = (taskId, agentId) => buildLightContextPrompt(
+      worktreelessTask(taskId), '/repo', null, (v) => v === true || v === 'true',
+      { isTui: true, providerId: 'claude-code-tui', providerCommand: 'claude', agentId }
+    );
+
+    const first = await build('task-a', 'agent-aaa111');
+    const second = await build('task-b', 'agent-bbb222');
+
+    expect(first).toContain('/repo/.agent-done-agent-aaa111');
+    expect(second).toContain('/repo/.agent-done-agent-bbb222');
+    expect(first).not.toContain('/repo/.agent-done-agent-bbb222');
+    // No instruction may still point at the shared filename.
+    expect(first).not.toMatch(/\.agent-done(?![-\w])/);
+  });
 });
 

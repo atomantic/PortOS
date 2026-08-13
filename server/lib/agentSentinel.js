@@ -1,8 +1,12 @@
 /**
- * The `.agent-done` completion sentinel — shared name + parser.
+ * The `.agent-done` completion sentinel — shared naming + parser.
  *
  * A finishing agent writes this file into its workspace to signal completion
- * (see agentTuiSpawning's sentinel poll). Historically it held a plain-markdown
+ * (see agentTuiSpawning's sentinel poll). The file is named per agent instance
+ * (`.agent-done-<agentId>`, see `doneSentinelName`) because worktree-less runs
+ * share one workspace and would otherwise clobber each other's signal.
+ *
+ * Historically it held a plain-markdown
  * task summary that gets appended to the agent's output. Programmatic-I/O task
  * types (see docs/plans/2026-07-09-programmatic-io-scheduled-tasks.md) also need
  * a STRUCTURED result back — e.g. Layered Intelligence's reasoner JSON — so the
@@ -16,9 +20,48 @@
  * existing markdown sentinel is never misread as structured.
  */
 
-import { safeJSONParse } from './fileUtils.js';
+import { join } from 'path';
+
+import { safeJSONParse, sanitizeFilename } from './fileUtils.js';
 
 export const DONE_SENTINEL_NAME = '.agent-done';
+
+/**
+ * The sentinel filename for one agent instance: `.agent-done-<agentId>`.
+ *
+ * Agents that run WITHOUT a worktree (`useWorktree: false` — e.g. the
+ * issue-filing and reasoning task types) all share the primary checkout as
+ * their workspace, so a single shared `.agent-done` is a cross-run hazard: two
+ * concurrent agents overwrite each other's summary, and whichever poll fires
+ * first finalizes the *other* agent's run on a sentinel it never wrote. Scoping
+ * the filename to the agent id keeps each run's done-signal its own file.
+ *
+ * The id goes through the shared `sanitizeFilename` (not a private charset
+ * regex) so this filename answers "is this token safe on disk" the same way the
+ * rest of the repo does. Falls back to the bare name when no usable id is
+ * available, so a caller without one still resolves to something readable.
+ */
+export function doneSentinelName(agentId) {
+  const slug = typeof agentId === 'string' ? sanitizeFilename(agentId.trim()).slice(0, 64) : '';
+  return slug ? `${DONE_SENTINEL_NAME}-${slug}` : DONE_SENTINEL_NAME;
+}
+
+/**
+ * The one path this run's sentinel lives at — `null` without a workspace.
+ *
+ * Every producer and consumer resolves it here: the prompt the agent is given
+ * (agentPromptBuilder), the 2s poll and the durable runner's watch
+ * (agentTuiSpawning), the CLI exit check (agentCliSpawning), and the
+ * output-hook payload read (agentFinalization). One path, not a candidate list:
+ * a second accepted name would give those pollers different answers to "did
+ * this run finish", which is the failure the scoped name exists to remove.
+ *
+ * Pure: callers do their own `existsSync` / read.
+ */
+export function doneSentinelPath(workspacePath, agentId) {
+  if (!workspacePath || typeof workspacePath !== 'string') return null;
+  return join(workspacePath, doneSentinelName(agentId));
+}
 
 /**
  * Parse `.agent-done` contents into `{ summary, payload }`.

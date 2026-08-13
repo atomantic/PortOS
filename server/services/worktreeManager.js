@@ -13,6 +13,7 @@ import { existsSync, realpathSync } from 'fs';
 import { readdir, rm, stat } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, PATHS, sleep, tryReadFile } from '../lib/fileUtils.js';
+import { DONE_SENTINEL_NAME, doneSentinelName } from '../lib/agentSentinel.js';
 import { execGit } from '../lib/execGit.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { ensureInstanceId } from './instances.js';
@@ -542,12 +543,15 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
     warnings.push(`Worktree preserved — git status failed: ${err.message}`);
     return { merged: false, removed: false, uncommittedSaved: false, warnings };
   }
-  // `.agent-done` is a completion sentinel, not authored work. It has already
-  // been consumed by finalizeAgent before this cleanup runs. Ignore it for the
-  // preservation decision, while still preserving the tree if any real change
-  // remains; the eventual forced worktree removal discards the sentinel with the
-  // rest of the completed checkout.
-  const dirt = classifyWorktreeDirt(dirtyFiles, { ignoredPaths: ['.agent-done'] });
+  // The completion sentinel is not authored work: it has already been consumed
+  // by finalizeAgent before this cleanup runs. Ignore it for the preservation
+  // decision, while still preserving the tree if any real change remains; the
+  // eventual forced worktree removal discards it with the rest of the completed
+  // checkout. Both names — THIS run's `.agent-done-<agentId>` and the legacy
+  // shared one a pre-upgrade run may have left — and no other agent's.
+  const dirt = classifyWorktreeDirt(dirtyFiles, {
+    ignoredPaths: [DONE_SENTINEL_NAME, doneSentinelName(agentId)]
+  });
   if (!dirt.clean && options.discardDirt) {
     // Throwaway posture: the caller has already established that nothing in this
     // tree is wanted. Log what is being dropped so a surprising loss is at least

@@ -603,7 +603,9 @@ describe('spawnTuiAgent runtime', () => {
       taskId: 'task-1',
       command: 'codex',
       workspacePath: '/tmp/ws',
-      doneSentinelPath: '/tmp/ws/.agent-done',
+      // Per-agent sentinel: `/tmp/ws` is a SHARED workspace (its basename is not
+      // the agent id), so the run watches only its own `.agent-done-agent-1`.
+      doneSentinelPath: '/tmp/ws/.agent-done-agent-1',
     }));
     expect(shellService.createShellSession).not.toHaveBeenCalled();
     expect(shellService.registerExternalSession).toHaveBeenCalledWith(
@@ -2275,8 +2277,9 @@ describe('spawnTuiAgent runtime', () => {
     const { appendFile } = await import('fs/promises');
     const sentinel = '## Summary\nImplemented the fix.\n\n## PR\nhttps://example.com/pr/42';
     vi.mocked(existsSync).mockReturnValue(true);
+    // The agent writes the run-scoped sentinel name the prompt gave it.
     vi.mocked(readFile).mockImplementation(async (p) =>
-      typeof p === 'string' && p.endsWith('.agent-done') ? sentinel : ''
+      typeof p === 'string' && p.endsWith('.agent-done-agent-1') ? sentinel : ''
     );
 
     const spawnPromise = runSpawn({ workspacePath: '/tmp/ws' });

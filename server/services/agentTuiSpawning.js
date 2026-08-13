@@ -18,7 +18,7 @@ import { finalizeAgent, releaseAgentLane } from './agentFinalization.js';
 import { activeAgents, userTerminatedAgents, pausedAgents, isFalsyMeta, registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
 import { isProgrammaticIoTaskType, resolveTaskHookType } from './taskTypeHooks.js';
 import { PATHS } from '../lib/fileUtils.js';
-import { DONE_SENTINEL_NAME, parseSentinelPayload } from '../lib/agentSentinel.js';
+import { doneSentinelName, doneSentinelPath as resolveDoneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js';
 import { shouldAbandonForHostShutdown, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
 import { SENTINEL_COMPLETION_MARKER } from '../lib/agentOutputMarkers.js';
 import { resolvePrCompletion } from '../lib/prDisposition.js';
@@ -113,7 +113,7 @@ const CONNECTIVITY_PROBE_LEAD_MS = 20000;
 // when they've finished /simplify + /do:pr (or /do:push) — we poll for it
 // here so the agent gets cleanly finalized as soon as the work is done,
 // without waiting on the much longer idle timeout fallback.
-// DONE_SENTINEL_NAME is shared from ../lib/agentSentinel.js.
+// The filename is per agent instance — see doneSentinelName in ../lib/agentSentinel.js.
 const DONE_POLL_INTERVAL_MS = 2000;
 
 /**
@@ -414,7 +414,9 @@ function createPasteRetryController({
     if (submitEnterTimer) clearInterval(submitEnterTimer);
     submitEnterTimer = shellService.pasteToSession(
       sessionId,
-      buildWrapUpProdMessage(MAX_RUNTIME_WRAP_UP_GRACE_MS),
+      // The agent's OWN sentinel name — the bare `.agent-done` is a path no
+      // poller is watching.
+      buildWrapUpProdMessage(MAX_RUNTIME_WRAP_UP_GRACE_MS, doneSentinelName(agentId)),
       { label: '[cosAgents] max-runtime wrap-up' },
     );
 
@@ -704,7 +706,9 @@ export async function spawnTuiAgent({
   // finalize path; finish() also ingests the sentinel directly so the summary
   // is captured even if some other path (idle/exit) finalizes first. Computed
   // up front so both the watcher AND finish() can read it (see ingestDoneSentinel).
-  const doneSentinelPath = workspacePath ? join(workspacePath, DONE_SENTINEL_NAME) : null;
+  // Resolved from the shared helper, so this is byte-identical to the path the
+  // prompt told the agent to write (see resolveSentinelPath).
+  const doneSentinelPath = resolveDoneSentinelPath(workspacePath, agentId);
   const promptPreview = prompt.replace(/\s+/g, ' ').slice(0, 100);
   const commandName = tuiConfig.command.split('/').pop();
 
@@ -1058,7 +1062,9 @@ export async function spawnTuiAgent({
       });
       if (finalized && typeof finalized.success === 'boolean') cleanupSuccess = finalized.success;
     } finally {
-      if (workspacePath) await rm(join(workspacePath, DONE_SENTINEL_NAME)).catch(() => {});
+      // This run's sentinel only — a sibling agent sharing this workspace owns
+      // its own file and may still be running.
+      if (doneSentinelPath) await rm(doneSentinelPath).catch(() => {});
 
       const reviewOptions = cleanupSuccess && taskOpenPR && !agentOwnsPR
         ? await resolveReviewLoopOptions(task.metadata, { normalize: normalizeReviewers, isTruthyMeta: isTruthyMetaFn })
@@ -1776,7 +1782,7 @@ export async function spawnTuiAgent({
   const doneSentinelTimer = doneSentinelPath ? setInterval(() => {
     try {
       if (finalized) return;
-      if (!existsSync(doneSentinelPath)) return;
+      if (!sentinelPresent()) return;
       clearInterval(doneSentinelTimer);
       finish({ success: true, exitCode: 0, reason: 'agent-signaled-done' }).catch(err => {
         emitLog('error', `Failed to finalize TUI agent ${agentId} after sentinel: ${err.message}`, { agentId });

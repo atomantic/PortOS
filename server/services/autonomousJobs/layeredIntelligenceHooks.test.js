@@ -287,8 +287,12 @@ describe('buildTaskInput', () => {
     const res = await buildTaskInput({ app: APP });
     expect(res.skip).toBeUndefined();
     expect(res.prompt).toContain('REASONING PROMPT');
-    // The completion contract instructing the agent to write .agent-done is appended.
-    expect(res.prompt).toContain('.agent-done');
+    // The completion contract is appended. It must point at the sentinel path
+    // from the briefing (the filename carries the agent id, which this hook
+    // cannot know) rather than instructing a bare `.agent-done` no poller
+    // watches.
+    expect(res.prompt).toContain('completion sentinel');
+    expect(res.prompt).toContain('NOT a bare `.agent-done`');
     expect(res.providerId).toBe('ollama');
     expect(res.model).toBe('qwen');
   });

@@ -785,21 +785,24 @@ export const MAX_RUNTIME_WRAP_UP_GRACE_MS = 5 * 60 * 1000;
  * read. It names the sentinel path convention rather than an absolute path —
  * the agent already knows its own workspace from its system prompt.
  *
- * `graceMs` is interpolated so the deadline the agent is told matches the one
- * actually enforced (a drift here would tell the agent it has more time than it
- * has, and it would be reaped mid-wrap-up).
+ * Both arguments are REQUIRED, deliberately: `graceMs` is interpolated so the
+ * deadline the agent is told matches the one actually enforced (a drift there
+ * would promise it more time than it has, and it would be reaped mid-wrap-up),
+ * and `sentinelName` is the caller's per-agent filename (`doneSentinelName`).
+ * A default for either would be a silently-wrong instruction on the one message
+ * whose whole job is telling an about-to-be-reaped agent where to write.
  */
-export function buildWrapUpProdMessage(graceMs = MAX_RUNTIME_WRAP_UP_GRACE_MS) {
+export function buildWrapUpProdMessage(graceMs, sentinelName) {
   const minutes = Math.max(1, Math.round(graceMs / 60000));
   return [
     `STOP — you have hit your maximum runtime and will be terminated in ${minutes} minute(s).`,
     '',
     'If your work is already shipped (PR opened/merged, or changes committed and pushed),',
-    'write your `.agent-done` sentinel in your workspace root RIGHT NOW with a short summary',
+    `write your \`${sentinelName}\` sentinel in your workspace root RIGHT NOW with a short summary`,
     'so this run is recorded as a success. Do not start anything new.',
     '',
     'If the work is NOT shipped, commit whatever is worth keeping to your branch, push it,',
-    'and then write `.agent-done` describing exactly what is done and what is left.',
+    `and then write \`${sentinelName}\` describing exactly what is done and what is left.`,
   ].join('\n');
 }
 

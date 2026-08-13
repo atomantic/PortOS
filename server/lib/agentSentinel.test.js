@@ -1,9 +1,47 @@
 import { describe, it, expect } from 'vitest';
-import { DONE_SENTINEL_NAME, extractSentinelPayloadFromTranscript, parseSentinelPayload, salvageSentinelPayload } from './agentSentinel.js';
+import { DONE_SENTINEL_NAME, doneSentinelName, doneSentinelPath, extractSentinelPayloadFromTranscript, parseSentinelPayload, salvageSentinelPayload } from './agentSentinel.js';
 
 describe('agentSentinel', () => {
   it('exposes the sentinel filename', () => {
     expect(DONE_SENTINEL_NAME).toBe('.agent-done');
+  });
+
+  describe('doneSentinelName', () => {
+    it('scopes the filename to the agent instance', () => {
+      expect(doneSentinelName('agent-1a2b3c')).toBe('.agent-done-agent-1a2b3c');
+    });
+
+    it('gives two concurrent agents distinct filenames', () => {
+      expect(doneSentinelName('agent-aaa')).not.toBe(doneSentinelName('agent-bbb'));
+    });
+
+    it('falls back to the shared name when no id is available', () => {
+      expect(doneSentinelName(null)).toBe('.agent-done');
+      expect(doneSentinelName('   ')).toBe('.agent-done');
+      expect(doneSentinelName(42)).toBe('.agent-done');
+    });
+
+    it('sanitizes path separators out of the id so the name stays one file in the workspace', () => {
+      // A traversal-shaped id must not escape the workspace directory.
+      expect(doneSentinelName('../../etc/passwd')).toBe('.agent-done-passwd');
+      expect(doneSentinelName('a b/c')).toBe('.agent-done-c');
+    });
+  });
+
+  describe('doneSentinelPath', () => {
+    it('resolves the run-scoped file inside the workspace', () => {
+      // Worktree-less agents share the primary checkout: a bare `.agent-done`
+      // there may be a sibling run's, and must never finalize this one.
+      expect(doneSentinelPath('/repo', 'agent-1')).toBe('/repo/.agent-done-agent-1');
+    });
+
+    it('degrades to the shared name when no agent id is available', () => {
+      expect(doneSentinelPath('/repo', null)).toBe('/repo/.agent-done');
+    });
+
+    it('returns null without a workspace path', () => {
+      expect(doneSentinelPath(null, 'agent-1')).toBeNull();
+    });
   });
 
   describe('parseSentinelPayload', () => {

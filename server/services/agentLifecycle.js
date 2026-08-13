@@ -390,6 +390,7 @@ async function runAgentSpawn(task) {
       providerType: provider.type,
       providerId: provider.id,
       providerCommand: provider.command,
+      agentId, // scopes the completion sentinel filename — see doneSentinelName
       leanMode,
       split: splitSystemPrompt
     });
