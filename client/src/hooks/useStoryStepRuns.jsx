@@ -50,7 +50,14 @@ function StepRunStream({ sessionId, stepId, runId, onPhase, onEnd }) {
 export function StoryStepRunProvider({ sessionId, children }) {
   // { [stepId]: { runId | null, op, phase, meta } } — a slot with runId === null
   // is still in kickoff (busy, but nothing to subscribe to yet).
+  // Each slot records the session it belongs to. The reset effect below can only
+  // run AFTER the render in which `sessionId` changed, so without this stamp the
+  // old session's slots would render one frame against the NEW id — opening an
+  // EventSource on a URL that pairs another story with this step.
   const [runs, setRuns] = useState({});
+  const ownRuns = Object.fromEntries(
+    Object.entries(runs).filter(([, run]) => run.sessionId === sessionId),
+  );
   // Handlers are closures over the panel that started the run — they must NOT be
   // state (they'd re-render the whole tree) and they must survive that panel's
   // unmount, which is the entire point of this provider.
@@ -113,32 +120,45 @@ export function StoryStepRunProvider({ sessionId, children }) {
     // The ref, not just the `runs` snapshot: two clicks inside one render tick
     // both read the same (empty) snapshot, and the second would fire a duplicate
     // kickoff the server only rejects after a round trip.
-    if (runs[stepId] || startedRef.current.has(stepId)) return;
+    if (ownRuns[stepId] || startedRef.current.has(stepId)) return;
     const startedUnder = sessionRef.current;
     startedRef.current.add(stepId);
-    setRuns((prev) => ({ ...prev, [stepId]: { runId: null, op, phase: 'Starting…', meta } }));
-    const res = await kickoff().catch((err) => { handlers.onError?.(err); return null; });
+    setRuns((prev) => ({ ...prev, [stepId]: { sessionId: startedUnder, runId: null, op, phase: 'Starting…', meta } }));
+    const res = await kickoff().then((r) => ({ r }), (err) => ({ err }));
     // The user opened a different story while the POST was in flight. The run
-    // is the old session's; the effect above already dropped its slot.
+    // belongs to the story they left — the reset effect already dropped its
+    // slot, and reporting its outcome into the story now on screen would be a
+    // toast about work the user can no longer see.
     if (sessionRef.current !== startedUnder) return;
-    if (!res) { clear(stepId); return; }
+    if (res.err || !res.r) {
+      clear(stepId);
+      if (res.err) handlers.onError?.(res.err);
+      return;
+    }
     // The kickoff collided with a DIFFERENT in-flight request for this step (a
     // different op, or a refine of another target/note). That run persists to the
     // same records, so binding THIS button's success handler to its terminal
     // frame would misreport. Don't subscribe — report it and leave the run alone.
     // (A same-work re-click returns alreadyRunning without conflict.)
-    if (res.conflict) {
+    if (res.r.conflict) {
       clear(stepId);
       handlers.onError?.(new Error('Another operation is already running for this step — try again once it finishes.'));
       return;
     }
+    // A 2xx with no run id has nothing to subscribe to. Settling here keeps the
+    // slot from sticking "busy" forever with no stream that could ever clear it.
+    if (!res.r.runId) {
+      clear(stepId);
+      handlers.onError?.(new Error('The server did not return a run to track — try again.'));
+      return;
+    }
     handlersRef.current[stepId] = handlers;
-    setRuns((prev) => ({ ...prev, [stepId]: { runId: res.runId, op, phase: 'Starting…', meta } }));
-  }, [runs, clear]);
+    setRuns((prev) => ({ ...prev, [stepId]: { sessionId: startedUnder, runId: res.r.runId, op, phase: 'Starting…', meta } }));
+  }, [ownRuns, clear]);
 
   return (
-    <StoryStepRunContext.Provider value={{ runs, start }}>
-      {Object.entries(runs).map(([stepId, run]) => (run.runId ? (
+    <StoryStepRunContext.Provider value={{ runs: ownRuns, start }}>
+      {Object.entries(ownRuns).map(([stepId, run]) => (run.runId ? (
         <StepRunStream
           key={`${stepId}:${run.runId}`}
           sessionId={sessionId}

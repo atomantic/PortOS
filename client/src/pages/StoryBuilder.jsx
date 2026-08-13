@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, useLocation, Link } from 'react-router';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import { filterSelectableModels } from '../utils/providers';
@@ -1074,8 +1074,18 @@ function StoryBuilderDetail({ storyId, stepParam }) {
   const [loading, setLoading] = useState(true);
   const [syncBusy, setSyncBusy] = useState(false);
 
+  // Runs on different steps can now finish while the user is elsewhere in the
+  // wizard (#3905), so two `reload()`s can be in flight at once — and this one
+  // awaits three round trips before it writes. Without a generation stamp the
+  // SLOWER reload wins every setter it reaches last, painting the view with
+  // records fetched before the newer completion landed.
+  const reloadGenRef = useRef(0);
+
   const reload = useCallback(async () => {
+    const gen = ++reloadGenRef.current;
+    const isCurrent = () => reloadGenRef.current === gen;
     const s = await getStorySession(storyId, { silent: true }).catch(() => null);
+    if (!isCurrent()) return;
     if (!s) { setSession(null); setLoading(false); return; }
     setSession(s);
     setStaleSteps(s.staleSteps || []);
@@ -1086,10 +1096,12 @@ function StoryBuilderDetail({ storyId, stepParam }) {
       s.universeId ? getUniverse(s.universeId, { silent: true }).catch(() => null) : Promise.resolve(null),
       s.seriesId ? getPipelineSeries(s.seriesId, { silent: true }).catch(() => null) : Promise.resolve(null),
     ]);
+    if (!isCurrent()) return;
     setUniverse(u);
     setSeries(ser);
     if (s.seriesId) {
       const iss = await listPipelineIssues(s.seriesId, { silent: true }).catch(() => []);
+      if (!isCurrent()) return;
       setIssues(Array.isArray(iss) ? iss : (iss?.items || []));
     }
     setLoading(false);

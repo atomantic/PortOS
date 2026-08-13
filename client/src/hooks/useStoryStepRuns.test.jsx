@@ -136,6 +136,64 @@ describe('useStoryStepRuns', () => {
     expect(screen.getByTestId('state-plotArc').textContent).toBe('idle');
   });
 
+  it('settles instead of sticking busy when the kickoff returns no run id', async () => {
+    const onError = vi.fn();
+    const kickoff = vi.fn().mockResolvedValue({});
+    render(<Harness panelProps={{ stepId: 'plotArc', kickoff, onComplete: vi.fn(), onError }} />);
+    click('run-plotArc');
+
+    await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    expect(onError.mock.calls[0][0].message).toMatch(/did not return a run/);
+    expect(MockEventSource.instances).toHaveLength(0);
+    expect(screen.getByTestId('state-plotArc').textContent).toBe('idle');
+  });
+
+  // A slot stamped with the story it was started under: the reset effect only
+  // runs AFTER the render in which sessionId changed, so an unstamped slot would
+  // render one frame against the new id and open a stream on the wrong story.
+  it('never subscribes another story to a run started on the previous one', async () => {
+    const onComplete = vi.fn();
+    let resolveKickoff;
+    const kickoff = vi.fn(() => new Promise((res) => { resolveKickoff = res; }));
+    const { rerender } = render(
+      <StoryStepRunProvider sessionId="s1">
+        <StepPanel stepId="plotArc" kickoff={kickoff} onComplete={onComplete} onError={vi.fn()} />
+      </StoryStepRunProvider>,
+    );
+    click('run-plotArc');
+
+    rerender(
+      <StoryStepRunProvider sessionId="s2">
+        <StepPanel stepId="plotArc" kickoff={kickoff} onComplete={onComplete} onError={vi.fn()} />
+      </StoryStepRunProvider>,
+    );
+    await act(async () => { resolveKickoff({ runId: 'r1' }); });
+
+    expect(MockEventSource.instances).toHaveLength(0);
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(screen.getByTestId('state-plotArc').textContent).toBe('idle');
+  });
+
+  it('never re-points a live run\'s stream at a newly-opened story', async () => {
+    const kickoff = vi.fn().mockResolvedValue({ runId: 'r1' });
+    const { rerender } = render(
+      <StoryStepRunProvider sessionId="s1">
+        <StepPanel stepId="plotArc" kickoff={kickoff} onComplete={vi.fn()} onError={vi.fn()} />
+      </StoryStepRunProvider>,
+    );
+    click('run-plotArc');
+    await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
+
+    rerender(
+      <StoryStepRunProvider sessionId="s2">
+        <StepPanel stepId="plotArc" kickoff={kickoff} onComplete={vi.fn()} onError={vi.fn()} />
+      </StoryStepRunProvider>,
+    );
+    // The run belongs to s1; no stream may ever open against s2's URL.
+    expect(MockEventSource.instances.filter((es) => es.url.includes('/s2/'))).toHaveLength(0);
+    expect(screen.getByTestId('state-plotArc').textContent).toBe('idle');
+  });
+
   it('refuses a second kickoff on the same step while one is in flight', async () => {
     const kickoff = vi.fn().mockResolvedValue({ runId: 'r1' });
     render(<Harness panelProps={{ stepId: 'plotArc', kickoff, onComplete: vi.fn(), onError: vi.fn() }} />);
