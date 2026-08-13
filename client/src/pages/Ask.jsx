@@ -7,6 +7,7 @@ import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import useMounted from '../hooks/useMounted';
+import { modKey } from '../utils/platform';
 
 // Mirrors the server-side ID_RE in askConversations.js (9-char base36 ms +
 // 8-char hex suffix) so this regex stays in lockstep with the production
@@ -724,7 +725,7 @@ export default function Ask() {
               {streaming ? 'Streaming…' : 'Send'}
             </button>
           </div>
-          <div className="mt-1.5 text-xs text-gray-500">⌘/Ctrl + Enter to send</div>
+          <div className="mt-1.5 text-xs text-gray-500">{modKey} + Enter to send</div>
         </form>
       </main>
     </div>

@@ -1,5 +1,6 @@
 import { Link, useLocation, useNavigate } from 'react-router';
 import { Compass, ArrowLeft, LayoutDashboard } from 'lucide-react';
+import { modKey } from '../utils/platform';
 
 // Catch-all for unknown routes. This used to be a bare `<Navigate to="/" />`,
 // which silently deposited the user on the Dashboard after the page-loader
@@ -37,7 +38,7 @@ export default function NotFound() {
           </Link>
         </div>
         <p className="mt-4 text-xs text-gray-500">
-          Press <kbd className="px-1 py-0.5 rounded bg-port-bg border border-port-border">⌘K</kbd> to search every page by name.
+          Press <kbd className="px-1 py-0.5 rounded bg-port-bg border border-port-border">{modKey}K</kbd> to search every page by name.
         </p>
       </div>
     </div>

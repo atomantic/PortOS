@@ -39,6 +39,7 @@ import * as coreApi from '../services/api';
 import { formatDateTime } from '../utils/formatters';
 import { useOpenClawAttachments, OPENCLAW_ATTACHMENT_ACCEPT } from '../hooks/useOpenClawAttachments';
 import { useOpenClawStream } from '../hooks/useOpenClawStream';
+import { modKey } from '../utils/platform';
 
 function getRuntimeState(status) {
   if (!status?.configured) {
@@ -650,7 +651,7 @@ export default function OpenClaw() {
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
                 <span>
-                  {status?.configured && selectedSessionId ? 'Stream via PortOS · ⌘↵ / Ctrl↵ to send' : 'Select a configured session to send.'}
+                  {status?.configured && selectedSessionId ? `Stream via PortOS · ${modKey}↵ to send` : 'Select a configured session to send.'}
                 </span>
                 <FilePickerButton
                   multiple

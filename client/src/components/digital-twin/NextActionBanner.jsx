@@ -16,6 +16,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import { writeClipboardSilently } from '../../lib/clipboard';
 import { ENRICHMENT_CATEGORIES } from './constants';
 import ScaleInput from './ScaleInput';
+import { modKey } from '../../utils/platform';
 
 const DIMENSION_LABELS = {
   openness: 'Openness',
@@ -377,7 +378,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
                 </button>
               </div>
               {question.questionType !== 'scale' && (
-                <div className="text-xs text-gray-600 mt-1">Ctrl+Enter to submit</div>
+                <div className="text-xs text-gray-600 mt-1">{modKey}+Enter to submit</div>
               )}
             </>
           ) : (
