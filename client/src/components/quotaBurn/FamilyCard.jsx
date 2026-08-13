@@ -182,9 +182,13 @@ export default function FamilyCard({
                 </button>
               )}
             >
-              <p className="mt-0.5 break-words">
-                {catalogError} Job types, apps, universes, and presets are unavailable — editing a step now would save an
-                empty job type and be rejected.
+              {/* The cause keeps its own line: it is a server message of
+                  unknown punctuation, so running it into the sentence below
+                  reads as one mangled sentence half the time. */}
+              <p className="mt-0.5 break-words">{catalogError}</p>
+              <p className="mt-1">
+                Job types, apps, universes, and presets are unavailable — editing a step now would save an empty job type
+                and be rejected.
               </p>
             </Banner>
           )}
