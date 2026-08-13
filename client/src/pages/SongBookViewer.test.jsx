@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router';
 
 // Mock the api barrel (RoundEditor.test.jsx harness style).
@@ -111,6 +111,54 @@ describe('SongBookViewer', () => {
     const link = screen.getByRole('link', { name: 'Local copy' });
     expect(link.getAttribute('href')).toBe('/api/brain/songbook/abc/attachments/bbbb2222-local.pdf');
     expect(screen.queryByRole('link', { name: /Sheet music/ })).toBeNull();
+  });
+
+  describe('attachment mutations after a failed presence lookup (#3900)', () => {
+    const SYNCED = [
+      { filename: 'aaaa1111-sheet.pdf', label: 'Sheet music', mime: 'application/pdf', size: 1024, sha256: 'x' },
+      { filename: 'bbbb2222-chart.pdf', label: 'Drum chart', mime: 'application/pdf', size: 2048, sha256: 'y' },
+    ];
+
+    beforeEach(() => {
+      api.getSong.mockResolvedValue(song({ attachments: SYNCED }));
+      api.listSongAttachments.mockRejectedValue(new Error('presence lookup failed'));
+      api.deleteSongAttachment.mockReset();
+      api.uploadSongAttachment.mockReset();
+    });
+
+    it('deletes without throwing on the "failed" sentinel and keeps presence unknown', async () => {
+      api.deleteSongAttachment.mockResolvedValue({ attachments: [SYNCED[1]] });
+      renderPage();
+      // Both synced entries render as links (presence unknown → no absent pill).
+      expect(await screen.findByRole('link', { name: 'Sheet music' })).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Delete attachment Sheet music' }));
+      const confirmGroup = screen.getByRole('group', { name: 'Confirm delete Sheet music' });
+      fireEvent.click(within(confirmGroup).getByRole('button', { name: 'Delete' }));
+
+      await waitFor(() => expect(screen.queryByText('Sheet music')).toBeNull());
+      // Survivor still renders, still as a link — no false "not on this machine".
+      expect(screen.getByRole('link', { name: 'Drum chart' })).toBeTruthy();
+      expect(screen.queryByText('not on this machine')).toBeNull();
+    });
+
+    it('appends an upload to the synced list instead of spreading the sentinel string', async () => {
+      api.uploadSongAttachment.mockResolvedValue({
+        attachment: { filename: 'cccc3333-new.pdf', label: 'New sheet', mime: 'application/pdf', size: 512, sha256: 'z' },
+      });
+      renderPage();
+      expect(await screen.findByRole('link', { name: 'Sheet music' })).toBeTruthy();
+
+      const input = document.querySelector('input[type="file"]');
+      const file = new File(['x'], 'new.pdf', { type: 'application/pdf' });
+      fireEvent.change(input, { target: { files: [file] } });
+
+      expect(await screen.findByRole('link', { name: 'New sheet' })).toBeTruthy();
+      // The pre-existing synced entries survive; no 'f','a','i','l','e','d' rows.
+      expect(screen.getByRole('link', { name: 'Sheet music' })).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Drum chart' })).toBeTruthy();
+      expect(screen.getAllByRole('listitem').length).toBe(3);
+    });
   });
 
   describe('instrument-view toggle (#2656)', () => {

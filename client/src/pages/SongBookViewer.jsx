@@ -131,6 +131,7 @@ export default function SongBookViewer() {
   const [retryKey, setRetryKey] = useState(0);
   const [draft, setDraft] = useState(null);
   // null = not fetched yet, [] = fetched-and-empty (sentinel convention).
+  // 'failed' = presence lookup errored (presence unknown, list still shown).
   const [attachments, setAttachments] = useState(null);
   // Once any attachment mutation has run, the (slow) initial list response is
   // stale — it must not clobber the optimistic upload/delete state.
@@ -330,7 +331,12 @@ export default function SongBookViewer() {
       const res = await uploadSongAttachment(id, { filename: file.name, data }, { silent: true });
       if (res?.attachment) {
         attachmentsMutatedRef.current = true;
-        setAttachments((prev) => [...(prev || []), { ...res.attachment, present: true }]);
+        // `prev` may be the 'failed' sentinel — spreading a string would yield
+        // six single-character entries, so fall back to the synced list (#3900).
+        setAttachments((prev) => [
+          ...(Array.isArray(prev) ? prev : (song?.attachments || [])),
+          { ...res.attachment, present: true },
+        ]);
       }
     }
   }, { errorMessage: 'Upload failed' });
@@ -340,10 +346,15 @@ export default function SongBookViewer() {
       .then((res) => {
         attachmentsMutatedRef.current = true;
         // Server returns the updated meta list; carry over local present flags.
-        setAttachments((prev) => (res?.attachments || []).map((meta) => ({
-          ...meta,
-          present: prev?.find((a) => a.filename === meta.filename)?.present ?? false,
-        })));
+        // `prev` is the 'failed' sentinel when the presence lookup errored —
+        // `.find()` on that string throws, and presence is genuinely unknown,
+        // so leave the flag off rather than stamping a false absent (#3900).
+        setAttachments((prev) => {
+          const known = Array.isArray(prev) ? prev : null;
+          return (res?.attachments || []).map((meta) => (known
+            ? { ...meta, present: known.find((a) => a.filename === meta.filename)?.present ?? false }
+            : { ...meta }));
+        });
       })
       .catch((err) => toast.error(err?.message || 'Failed to delete attachment')),
   ), [confirmDelete, id]);
