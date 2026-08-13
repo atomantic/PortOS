@@ -44,6 +44,7 @@ import {
   upsertRelationFromPeer,
   upsertTagFromPeer,
   upsertMediaFromPeer,
+  normalizeTags,
 } from './catalogDB.js';
 import { compareSchemaVersions, PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { friendlifyUniverseTags, LEGACY_UNIVERSE_MARKER_TAG } from '../lib/catalogUniverseTags.js';
@@ -237,6 +238,25 @@ export async function applyRemoteChanges(envelope = {}) {
     }
     return universeNameMap;
   };
+  // The friendly universe NAME is minted locally — it isn't one of the peer's
+  // `envelope.tags` rows — so nothing else in the apply registers it in the
+  // canonical `catalog_tags` taxonomy, and tag autocomplete would never suggest
+  // it. The old follow-up `updateIngredient` got that for free (it runs every
+  // patched tag through `normalizeTags`); register the minted labels explicitly
+  // instead. Cached per apply and scoped to the labels this rewrite ADDS, so a
+  // 100-row envelope registers one label once rather than re-normalizing every
+  // row's whole tag array. The stored canonical label wins on casing, matching
+  // what `normalizeTags` would have written.
+  const universeTagLabels = new Map(); // canonical key → stored canonical label
+  const registerUniverseTagLabel = async (label) => {
+    const key = canonicalTagKey(label);
+    if (!key) return label;
+    if (universeTagLabels.has(key)) return universeTagLabels.get(key);
+    const [stored] = await normalizeTags([label]);
+    const canonical = stored || label;
+    universeTagLabels.set(key, canonical);
+    return canonical;
+  };
   const friendlifyIngredientTagsBeforeApply = async (ing) => {
     const hasMarker = Array.isArray(ing?.tags) && ing.tags.some(
       (t) => typeof t === 'string' && t.trim().toLowerCase() === LEGACY_UNIVERSE_MARKER_TAG);
@@ -244,7 +264,14 @@ export async function applyRemoteChanges(envelope = {}) {
     const map = await ensureUniverseNameMap();
     const { tags, changed } = friendlifyUniverseTags(ing.tags, (id) => map.get(id) || null, canonicalTagKey);
     if (!changed) return ing; // nothing resolvable yet — keep the machine tags for a later pass
-    return { ...ing, tags };
+    const inboundKeys = new Set(ing.tags.map((t) => canonicalTagKey(t)).filter(Boolean));
+    const registered = [];
+    for (const tag of tags) {
+      // Tags the peer already sent ride through untouched (same as every other
+      // peer-upserted row); only the newly minted universe names are registered.
+      registered.push(inboundKeys.has(canonicalTagKey(tag)) ? tag : await registerUniverseTagLabel(tag));
+    }
+    return { ...ing, tags: registered };
   };
 
   // Tags first — they carry a `parent_id` self-FK (handled by the parent-less

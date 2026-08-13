@@ -29,6 +29,9 @@ vi.mock('./catalogDB.js', () => ({
   upsertTagFromPeer: vi.fn(),
   upsertMediaFromPeer: vi.fn(),
   updateIngredient: vi.fn(),
+  // Registers a label in the canonical tag taxonomy and echoes back the STORED
+  // label (existing casing wins) — the default double mirrors that contract.
+  normalizeTags: vi.fn(async (labels) => labels),
 }));
 
 vi.mock('../lib/schemaVersions.js', async () => {
@@ -491,6 +494,48 @@ describe('applyRemoteChanges — legacy universe tag friendlify on inbound sync'
     expect(catalogDB.upsertIngredientFromPeer).toHaveBeenCalledTimes(2);
     expect(tagsUpserted(0)).toEqual(['My Universe']);
     expect(tagsUpserted(1)).toEqual(['My Universe']);
+  });
+
+  it('registers the minted universe name in the canonical tag taxonomy, once per apply', async () => {
+    catalogDB.upsertIngredientFromPeer.mockResolvedValue({ applied: true, isInsert: true });
+    universeBuilder.listUniverses.mockResolvedValueOnce([{ id: 'u-1', name: 'My Universe' }]);
+
+    await applyRemoteChanges({
+      ingredients: [
+        { ...ingredient(['hero', 'from-universe', 'universe:u-1']), id: 'i-1' },
+        { ...ingredient(['hero', 'from-universe', 'universe:u-1']), id: 'i-2' },
+      ],
+    });
+
+    // The friendly name is minted locally — it is NOT one of the peer's tag rows —
+    // so without this the label would never reach `catalog_tags` / autocomplete.
+    // Only the ADDED label is registered, and only once across the envelope.
+    expect(catalogDB.normalizeTags).toHaveBeenCalledTimes(1);
+    expect(catalogDB.normalizeTags).toHaveBeenCalledWith(['My Universe']);
+  });
+
+  it('writes the STORED canonical casing when the minted tag already exists', async () => {
+    catalogDB.upsertIngredientFromPeer.mockResolvedValueOnce({ applied: true, isInsert: true });
+    universeBuilder.listUniverses.mockResolvedValueOnce([{ id: 'u-1', name: 'my universe' }]);
+    catalogDB.normalizeTags.mockResolvedValueOnce(['My Universe']); // pre-existing row's casing wins
+
+    await applyRemoteChanges({
+      ingredients: [ingredient(['hero', 'from-universe', 'universe:u-1'])],
+    });
+
+    expect(tagsUpserted()).toEqual(['hero', 'My Universe']);
+  });
+
+  it('does not re-register tags the peer already sent', async () => {
+    catalogDB.upsertIngredientFromPeer.mockResolvedValueOnce({ applied: true, isInsert: true });
+    universeBuilder.listUniverses.mockResolvedValueOnce([{ id: 'u-1', name: 'hero' }]);
+
+    // The minted name collides with an inbound tag → nothing new to register.
+    await applyRemoteChanges({
+      ingredients: [ingredient(['hero', 'from-universe', 'universe:u-1'])],
+    });
+
+    expect(catalogDB.normalizeTags).not.toHaveBeenCalled();
   });
 
   it('isolates a friendlify failure as a prepare error and still applies the raw row', async () => {
