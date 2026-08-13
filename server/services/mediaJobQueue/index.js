@@ -176,6 +176,14 @@ async function resolveLiveParams(job, safeParams) {
 }
 
 export const mediaJobEvents = new EventEmitter();
+// Boot already wires 11 permanent `completed` hooks (universe-builder, catalog
+// image-attach, writers-room, music-video scene image/video, music bed, sprite
+// references, scene frames, and the comicPages/storyboards/seasonCover filename
+// hooks), which trips Node's default limit of 10 and prints a bogus
+// MaxListenersExceededWarning on every start. These are long-lived subscribers,
+// not a leak; per-job waiters add more on top. Matches the caps the sibling
+// emitters already set (imageGenEvents 200, videoGenEvents 50).
+mediaJobEvents.setMaxListeners(100);
 
 // GPU lane: serialized — `running` holds at most one job (the MLX runtime can't
 // share VRAM). Codex lane: up to `codexParallelLimit` jobs in `cloudRunning[]`

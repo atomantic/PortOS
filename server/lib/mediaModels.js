@@ -901,25 +901,27 @@ export const loadMediaModels = () => {
         parsed.image.map((m) => m?.id).filter((id) => typeof id === 'string'),
       );
     }
-    if (isPlainObject(sd.video) && isPlainObject(parsed.video)) {
-      if (Array.isArray(sd.video.macos) && Array.isArray(parsed.video.macos)) {
-        warnDrift(
-          'video',
-          'macos',
-          sd.video.macos,
-          DEFAULT_REGISTRY.video.macos.map((m) => m.id),
-          parsed.video.macos.map((m) => m?.id).filter((id) => typeof id === 'string'),
-        );
-      }
-      if (Array.isArray(sd.video.windows) && Array.isArray(parsed.video.windows)) {
-        warnDrift(
-          'video',
-          'windows',
-          sd.video.windows,
-          DEFAULT_REGISTRY.video.windows.map((m) => m.id),
-          parsed.video.windows.map((m) => m?.id).filter((id) => typeof id === 'string'),
-        );
-      }
+    // Only the CURRENT platform's video list is worth warning about. The
+    // pickers, downloads, and every edit path read one platform's array
+    // (`getVideoModels`), so drift in the other one is invisible and
+    // unactionable here — and because the warning has no silence-without-
+    // restore path, a Windows box would print the macOS rows on every single
+    // boot forever with nothing the user can usefully do about them. The
+    // machine that actually runs that platform still gets the warning.
+    const driftPlatform = IS_WIN ? 'windows' : 'macos';
+    if (
+      isPlainObject(sd.video) &&
+      isPlainObject(parsed.video) &&
+      Array.isArray(sd.video[driftPlatform]) &&
+      Array.isArray(parsed.video[driftPlatform])
+    ) {
+      warnDrift(
+        'video',
+        driftPlatform,
+        sd.video[driftPlatform],
+        DEFAULT_REGISTRY.video[driftPlatform].map((m) => m.id),
+        parsed.video[driftPlatform].map((m) => m?.id).filter((id) => typeof id === 'string'),
+      );
     }
   }
   cached = normalizeRegistry(parsed);

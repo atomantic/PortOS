@@ -58,8 +58,17 @@ describe('mediaModels registry', () => {
   });
 
   it('ships MiniMax H3 as a pinned, keyframe-capable 128 GB BYOV profile', async () => {
-    const { getVideoModels } = await import('./mediaModels.js');
-    const h3 = getVideoModels().find((model) => model.id === 'minimax_h3_8bit');
+    // MiniMax H3 is an MLX (macOS-only) profile, so read the macOS list
+    // directly rather than through the platform-locked getVideoModels() — this
+    // asserts a fact about the SHIPPED registry, which is the same on every
+    // host, and on Windows the getter returns the windows list (no h3 → the
+    // assertion failed for the wrong reason). applyVideoSupportedModes is the
+    // read-time decoration getVideoModels applies, replayed here so the
+    // supportedModes assertion below still exercises it.
+    const { loadMediaModels } = await import('./mediaModels.js');
+    const { applyVideoSupportedModes } = await import('./videoModeProfiles.js');
+    const h3 = applyVideoSupportedModes(loadMediaModels().video.macos || [])
+      .find((model) => model.id === 'minimax_h3_8bit');
     expect(h3).toMatchObject({
       runtime: 'minimax_h3',
       repo: 'pipenetwork/MiniMax-H3-MLX-8bit',

@@ -304,7 +304,11 @@ async function runServiceStart(controller) {
 async function startPersistentService() {
   const controller = await getServiceController()
   if (!controller.supported) {
-    return { success: false, running: await checkOllamaAvailable(true), error: 'No supported Ollama background service manager found.' }
+    // `unsupported` marks an expected platform capability gap (Windows ships no
+    // brew/systemd; so does a Linux box without systemd) rather than a failed
+    // start attempt, so `ensureRunning` can fall back to a foreground
+    // `ollama serve` quietly instead of warning on every boot.
+    return { success: false, unsupported: true, running: await checkOllamaAvailable(true), error: 'No supported Ollama background service manager found.' }
   }
 
   resetAvailabilityCache()
@@ -346,7 +350,9 @@ async function startPersistentService() {
 async function stopPersistentService() {
   const controller = await getServiceController()
   if (!controller.supported) {
-    return { success: false, running: await checkOllamaAvailable(true), error: 'No supported Ollama background service manager found.' }
+    // Mirrors startPersistentService — same capability gap, same flag, so a
+    // caller can tell "nothing to stop on this platform" from a real failure.
+    return { success: false, unsupported: true, running: await checkOllamaAvailable(true), error: 'No supported Ollama background service manager found.' }
   }
 
   const [cmd, args] = controller.stop
@@ -385,7 +391,13 @@ async function ensureRunning({ preferPersistent = false } = {}) {
   if (preferPersistent) {
     const serviceResult = await startPersistentService()
     if (serviceResult.success) return serviceResult
-    console.warn(`⚠️ Failed to start Ollama as a background service: ${serviceResult.error}`)
+    // Only a real start FAILURE deserves a warning. `unsupported` just means
+    // this platform has no service manager to try — the normal case on Windows,
+    // where warning made every boot look broken. The `startServer()` fallback
+    // below is the intended path there, not a degraded one.
+    if (!serviceResult.unsupported) {
+      console.warn(`⚠️ Failed to start Ollama as a background service: ${serviceResult.error}`)
+    }
   }
   return startServer()
 }
