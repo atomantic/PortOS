@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import PromptManager from './PromptManager';
+import toast from '../components/ui/Toast';
 
 // The Stages pane is the subject: 100+ rows with no way to reach one (#3284).
 // Only the list-shaping API calls need real fixtures; everything else resolves
@@ -14,6 +15,8 @@ const getPromptVariables = vi.fn();
 const deletePromptVariable = vi.fn();
 const getJobSkills = vi.fn(() => Promise.resolve({ skills: [] }));
 const getJobSkill = vi.fn(() => Promise.resolve({}));
+const saveJobSkill = vi.fn();
+const previewJobSkill = vi.fn();
 
 vi.mock('../services/apiPrompts', () => ({
   getPrompts: (...a) => getPrompts(...a),
@@ -29,8 +32,8 @@ vi.mock('../services/apiPrompts', () => ({
   deletePromptVariable: (...a) => deletePromptVariable(...a),
   getJobSkills: (...a) => getJobSkills(...a),
   getJobSkill: (...a) => getJobSkill(...a),
-  saveJobSkill: vi.fn(),
-  previewJobSkill: vi.fn(),
+  saveJobSkill: (...a) => saveJobSkill(...a),
+  previewJobSkill: (...a) => previewJobSkill(...a),
 }));
 
 vi.mock('../services/apiProviders', () => ({
@@ -507,5 +510,68 @@ describe('PromptManager job skill selection', () => {
 
     expect(getJobSkill).not.toHaveBeenCalled();
     expect(screen.getByText('Select a job skill to edit its prompt template')).toBeTruthy();
+  });
+});
+
+// A failed PUT used to be swallowed entirely: the Save button re-enabled and the
+// user believed the edit had persisted (#3937).
+describe('PromptManager job skill save feedback', () => {
+  const SKILLS = [{ name: 'code-fixer', jobId: 'job-code-fixer', hasTemplate: true }];
+
+  beforeEach(() => {
+    getPrompts.mockReset().mockResolvedValue({ stages: STAGES, systemStages: SYSTEM_STAGES });
+    getJobSkills.mockReset().mockResolvedValue({ skills: SKILLS });
+    getJobSkill.mockReset().mockResolvedValue({
+      content: '# code-fixer template', jobName: 'Job code-fixer', jobId: 'job-code-fixer',
+    });
+    saveJobSkill.mockReset().mockResolvedValue({ success: true });
+    previewJobSkill.mockReset().mockResolvedValue({ preview: 'rendered' });
+    toast.error.mockReset();
+    toast.success.mockReset();
+  });
+
+  const openEditor = async () => {
+    renderPage('/prompts?tab=job-skills&skill=code-fixer');
+    await screen.findByText('Job code-fixer');
+  };
+
+  it('toasts the failure message when the save rejects', async () => {
+    saveJobSkill.mockRejectedValueOnce(new Error('boom'));
+    await openEditor();
+
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to save job skill: boom'));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('re-enables Save after a failure so the user can retry', async () => {
+    saveJobSkill.mockRejectedValueOnce(new Error('boom'));
+    await openEditor();
+
+    const save = screen.getByRole('button', { name: /save/i });
+    fireEvent.click(save);
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    await waitFor(() => expect(save.disabled).toBe(false));
+  });
+
+  it('confirms a successful save', async () => {
+    await openEditor();
+
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Job skill saved'));
+    expect(saveJobSkill).toHaveBeenCalledWith('code-fixer', '# code-fixer template', { silent: true });
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('toasts a failed preview instead of blanking the panel', async () => {
+    previewJobSkill.mockRejectedValueOnce(new Error('nope'));
+    await openEditor();
+
+    fireEvent.click(screen.getByRole('button', { name: /preview/i }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to preview: nope'));
   });
 });

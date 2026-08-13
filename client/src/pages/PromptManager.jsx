@@ -313,16 +313,22 @@ export default function PromptManager() {
     return () => { cancelled = true; };
   }, [selectedJobSkill]);
 
+  // A failed save must say so: the button re-enabling on its own reads as
+  // "saved" and the edit is silently lost. `silent: true` + an explicit toast
+  // keeps the notification to one layer (see client/src/CLAUDE.md).
   const saveJobSkill = async () => {
     setSaving(true);
-    // Swallow errors (matches the prior fire-and-forget PUT) but always clear
-    // the saving flag so a failure can't leave the Save button stuck disabled.
-    await apiSaveJobSkill(selectedJobSkill, jobSkillContent, { silent: true }).catch(() => {});
+    const ok = await apiSaveJobSkill(selectedJobSkill, jobSkillContent, { silent: true })
+      .then(() => true)
+      .catch((err) => { toast.error(`Failed to save job skill: ${err.message || 'Unknown error'}`); return false; });
     setSaving(false);
+    if (ok) toast.success('Job skill saved');
   };
 
   const previewJobSkill = async () => {
-    const res = await apiPreviewJobSkill(selectedJobSkill, { silent: true }).catch(() => ({}));
+    const res = await apiPreviewJobSkill(selectedJobSkill, { silent: true })
+      .catch((err) => { toast.error(`Failed to preview: ${err.message || 'Unknown error'}`); return null; });
+    if (!res) return;
     setJobSkillPreview(res.preview || '');
   };
 
