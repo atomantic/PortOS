@@ -29,7 +29,7 @@ function registrationInputs(settings) {
   const backup = settings?.backup;
   if (backup?.enabled === false) return null;
   if (!backup?.destPath) return null;
-  return { cron: backup.cronExpression || DEFAULT_CRON, destPath: backup.destPath };
+  return { cron: backup.cronExpression || DEFAULT_CRON };
 }
 
 /**
