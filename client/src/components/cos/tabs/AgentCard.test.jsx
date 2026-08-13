@@ -36,6 +36,21 @@ afterEach(() => {
 });
 
 describe('AgentCard feedback', () => {
+  it('hides the rating UI for a completed scheduled/autopilot agent (taskType internal)', () => {
+    const internalAgent = {
+      ...agent,
+      metadata: { ...agent.metadata, taskType: 'internal' },
+    };
+
+    render(
+      <MemoryRouter>
+        <AgentCard agent={internalAgent} completed />
+      </MemoryRouter>
+    );
+
+    expect(screen.queryByText('Was this helpful?')).not.toBeInTheDocument();
+  });
+
   it('uses the archived scheduled type for a running agent ETA', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-13T10:00:00.000Z'));
