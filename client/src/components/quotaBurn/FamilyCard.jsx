@@ -170,6 +170,12 @@ export default function FamilyCard({
             <Banner
               tone="warning"
               icon={AlertTriangle}
+              // Announced, not just drawn: this banner appears AFTER the card is
+              // already on screen (the read resolves late, and a retry can put
+              // it back), so a screen-reader user gets no notification that the
+              // controls below just lost their choices without it.
+              role="status"
+              aria-live="polite"
               title="Job choices could not be loaded"
               actions={(
                 <button

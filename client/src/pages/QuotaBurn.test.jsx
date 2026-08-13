@@ -398,6 +398,27 @@ describe('QuotaBurn catalog failure', () => {
     expect(await screen.findByText(/The server returned no job types\./)).toBeInTheDocument();
   });
 
+  it('survives a partial catalog payload whose lists are null', async () => {
+    // A spread over the empty default lets an explicit `null` through, and every
+    // consumer reads `.length` on these lists — so an older peer or a partial
+    // response would take the whole page down with a TypeError instead of
+    // reporting an unusable catalog.
+    api.getQuotaBurnCatalog.mockResolvedValueOnce({ jobTypes: null, apps: null, universes: null, imageModes: null });
+    renderPage('/devtools/quota-burn/grok');
+    expect(await screen.findByText(/The server returned no job types\./)).toBeInTheDocument();
+    expect(screen.getByText(/62% left/)).toBeInTheDocument();
+  });
+
+  it('announces the banner to assistive tech rather than only drawing it', async () => {
+    // It appears after the card is already on screen — the read resolves late,
+    // and a retry can put it back — so nothing announces it without a live region.
+    api.getQuotaBurnCatalog.mockRejectedValueOnce(new Error('Catalog request failed'));
+    renderPage('/devtools/quota-burn/grok');
+    const banner = await screen.findByRole('status');
+    expect(banner).toHaveAttribute('aria-live', 'polite');
+    expect(banner).toHaveTextContent('Job choices could not be loaded');
+  });
+
   it('says nothing about the catalog when it loaded', async () => {
     renderPage('/devtools/quota-burn/grok');
     await screen.findByLabelText(/Add a preset job/);

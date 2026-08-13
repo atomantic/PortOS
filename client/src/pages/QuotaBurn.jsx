@@ -45,8 +45,17 @@ const READ_FAILED = Symbol('quota-burn-read-failed');
 // A catalog the server answered with, but which is missing the job types the
 // form needs, is indistinguishable from a failed fetch as far as the page is
 // concerned — both leave every dropdown empty — so normalize to the same shape
-// and let the caller decide which message to show.
-const normalizeCatalog = (data) => ({ ...EMPTY_CATALOG, ...(data || {}) });
+// and let the caller decide which message to show. Each list is validated
+// rather than merely defaulted: a spread alone lets an explicit `null` through
+// (a partial payload, an older peer), and every consumer of this object reads
+// `.length` on it.
+const normalizeCatalog = (data) => ({
+  ...EMPTY_CATALOG,
+  ...(data || {}),
+  ...Object.fromEntries(Object.keys(EMPTY_CATALOG).map((key) => [
+    key, Array.isArray(data?.[key]) ? data[key] : [],
+  ])),
+});
 
 export default function QuotaBurn() {
   // Which family is expanded lives in the URL, not local state, so a specific
