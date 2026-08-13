@@ -39,7 +39,13 @@ export default function useUnsavedChangesGuard(isDirty, { beforeUnload = true, s
   const shouldBlock = useCallback(({ currentLocation, nextLocation }) => {
     if (!isDirty) return false;
     if (currentLocation.pathname === nextLocation.pathname) return false;
-    return !(scopePath && nextLocation.pathname.startsWith(scopePath));
+    // Segment-aware, not a bare `startsWith`: a sibling route that merely
+    // shares the prefix (`/…/manuscript-export` against `/…/manuscript`) is a
+    // real exit, and letting it through would discard the draft silently.
+    const inScope = !!scopePath && (
+      nextLocation.pathname === scopePath || nextLocation.pathname.startsWith(`${scopePath}/`)
+    );
+    return !inScope;
   }, [isDirty, scopePath]);
   const blocker = useBlocker(shouldBlock);
   const blocked = blocker.state === 'blocked';

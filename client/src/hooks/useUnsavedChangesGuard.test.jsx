@@ -32,6 +32,9 @@ const renderEditor = ({ options, history = [] } = {}) => {
     { path: '/away', element: <div>away</div> },
     { path: '/edit', element: <Editor options={options} /> },
     { path: '/edit/deeper', element: <Editor options={options} /> },
+    // A sibling that merely SHARES the '/edit' prefix — leaving to it is a real
+    // exit, not an in-scope move.
+    { path: '/edit-other', element: <div>other</div> },
   ], { initialEntries: [...history, '/edit'], initialIndex: history.length });
   render(<RouterProvider router={router} />);
   return router;
@@ -115,6 +118,13 @@ describe('useUnsavedChangesGuard', () => {
     await navigate(router, '/away');
     expect(await screen.findByText('keep')).toBeTruthy();
     expect(screen.queryByText('away')).toBeNull();
+  });
+
+  it('blocks a sibling route that merely shares the scopePath prefix', async () => {
+    const router = renderEditor({ options: { scopePath: '/edit' } });
+    await navigate(router, '/edit-other');
+    expect(await screen.findByText('keep')).toBeTruthy();
+    expect(screen.queryByText('other')).toBeNull();
   });
 
   it('arms beforeunload while dirty and disarms once clean', async () => {
