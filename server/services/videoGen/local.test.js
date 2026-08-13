@@ -10,6 +10,14 @@ import { join } from 'path';
 import { tmpdir, totalmem } from 'os';
 import { randomUUID } from 'crypto';
 
+// LTX2_VENV_PYTHON is built with path.join, so on a Windows host it carries
+// backslash separators — matching a forward-slash literal against it finds
+// nothing there, and every ltx2 render-call lookup below would silently return
+// undefined. Normalize before comparing so these assertions mean the same
+// thing on every runner.
+const isLtx2VenvPython = (bin) =>
+  String(bin).split('\\').join('/').includes('.portos/ltx-2-mlx/.venv/bin/python3');
+
 // ─── dep mocks (must be declared before the module import) ───────────────────
 
 const MOCK_PATHS = {
@@ -864,12 +872,8 @@ describe('generateVideo — ltx2 FFLF image resizing', () => {
       lastImagePath,
     ]);
 
-    // LTX2_VENV_PYTHON is built with path.join, which emits `\` separators on a
-    // Windows host — so matching the forward-slash literal directly finds
-    // nothing there. Normalize before comparing. (This was masked until now:
-    // the resize-count assertion above failed first and aborted the test.)
     const renderCall = spawnMock.mock.calls.find(
-      ([bin, args]) => String(bin).split('\\').join('/').includes('.portos/ltx-2-mlx/.venv/bin/python3')
+      ([bin, args]) => isLtx2VenvPython(bin)
         && Array.isArray(args)
         && args.includes('--mode')
         && args.includes('fflf'),
@@ -939,7 +943,7 @@ describe('generateVideo — LTX audio-reactive conditioning', () => {
     });
 
     const renderCall = spawnMock.mock.calls.find(
-      ([bin, args]) => String(bin).includes('.portos/ltx-2-mlx/.venv/bin/python3')
+      ([bin, args]) => isLtx2VenvPython(bin)
         && Array.isArray(args)
         && args.includes('--mode')
         && args.includes('a2v'),
@@ -976,7 +980,7 @@ describe('generateVideo — PORTOS_T2V_TWO_STAGE arg threading', () => {
       // plain T2V: no mode, no conditioning, no explicit steps/guidance
     });
     const call = spawnMock.mock.calls.find(
-      ([bin, args]) => String(bin).includes('.portos/ltx-2-mlx/.venv/bin/python3')
+      ([bin, args]) => isLtx2VenvPython(bin)
         && Array.isArray(args) && args.includes('--mode') && args.includes('text'),
     );
     expect(call).toBeTruthy();
@@ -1763,7 +1767,7 @@ describe('generateVideo — video LoRA (--user-loras) arg threading', () => {
     });
 
     const call = spawnMock.mock.calls.find(
-      ([bin, args]) => String(bin).includes('.portos/ltx-2-mlx/.venv/bin/python3')
+      ([bin, args]) => isLtx2VenvPython(bin)
         && Array.isArray(args) && args.includes('--user-loras'),
     );
     expect(call).toBeTruthy();
@@ -1811,7 +1815,7 @@ describe('generateVideo — video LoRA (--user-loras) arg threading', () => {
     });
 
     const call = spawnMock.mock.calls.find(
-      ([bin]) => String(bin).includes('.portos/ltx-2-mlx/.venv/bin/python3'),
+      ([bin]) => isLtx2VenvPython(bin),
     );
     expect(call[1]).not.toContain('--user-loras');
   });
@@ -2669,7 +2673,7 @@ describe('generateVideo — IC-LoRA remix arg threading (#3100)', () => {
   };
 
   const findIcCall = (spawnMock) => spawnMock.mock.calls.find(
-    ([bin, args]) => String(bin).includes('.portos/ltx-2-mlx/.venv/bin/python3')
+    ([bin, args]) => isLtx2VenvPython(bin)
       && Array.isArray(args) && args.includes('--ic-mode'),
   );
 
@@ -3160,7 +3164,7 @@ describe('generateVideo — durable re-render inputs (#3696)', () => {
     });
     videoGenEvents.off('started', onStarted);
     const renderCall = spawnMock.mock.calls.find(
-      ([bin, args]) => String(bin).includes('.portos/ltx-2-mlx/.venv/bin/python3') && Array.isArray(args),
+      ([bin, args]) => isLtx2VenvPython(bin) && Array.isArray(args),
     );
     return { started, args: renderCall?.[1] || [] };
   };
