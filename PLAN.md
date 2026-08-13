@@ -26,35 +26,6 @@ embedding budget) was fixed in that PR by debouncing the journal re-embed
 (`queueJournalResync` in `server/services/brainMemoryBridge.js`). These are the
 rest — each is a perf/cleanup item, none is a correctness bug:
 
-- [x] Delete the dead `journals:changed` event. `server/services/brainJournal.js`
-  emits it at lines ~259/298/335/356 as `{ records: await rawRecords() }`, and
-  `rawRecords()` (line ~142) rebuilds the entire date→entry map (two full object
-  copies of every journal day) — awaited inline before the save returns, so it
-  adds latency to every autosave. Verified there is **no** `brainEvents.on('journals:changed')`
-  listener anywhere in the repo; `brainMemoryBridge.js:633` documents that it
-  deliberately stopped listening. `brainEvents` is an in-process EventEmitter
-  (`brainStorage.js`) with no cross-install surface, so removal is compat-safe.
-  `server/services/brainJournal.test.js:141` asserts the emit and must be updated.
-  Skipped in the autosave PR as pre-existing dead-code cleanup outside its scope.
-- [x] Cache the Obsidian sidecar. `loadObsidianLocations()`
-  (`server/services/brainJournal.js:85`) is `ensureDir` + `readJSONFile` with no
-  cache, called from `getEntry`, `putEntry`, and `rawRecords` — ~3 uncached file
-  reads + 3 `mkdir` syscalls per save, now once per autosave. Mirror the
-  write-through cache `brainStorage` already uses (`CACHE_TTL_MS = 2000`). Fixing
-  the item above removes one of the three call sites for free.
-- [x] Serialize `scheduleObsidianSync` per date (`server/services/brainJournal.js:238`).
-  It rewrites the day's full markdown note fire-and-forget on every save, and its
-  own comment notes Obsidian lives on iCloud where "writes can stall for hundreds
-  of ms" — so at autosave cadence, overlapping writes to one file are possible and
-  last-writer-wins isn't guaranteed to be newest-content. Only affects installs
-  with the "Auto-mirror to Obsidian on every save" toggle on. Consider also
-  re-wording that toggle's label, whose "every save" now means something new.
-- [x] Close the dictation/autosave overwrite race properly. The client now
-  merges an incoming voice segment into the textarea (append-at-end, caret
-  restored) even while dirty, and PUTs carry `ifMatchUpdatedAt` so a concurrent
-  append that advances the LWW clock returns 409 `STALE_JOURNAL` with the current
-  entry — the client folds missing voice segments in and retries once. Removes
-  the `voiceConflict` park and the "save or refresh to see it" product decision.
 - [ ] Extract a `useAutosave` hook when a second consumer appears. The daily log
   now has ~60 lines of autosave machinery inline (debounce + max-wait ceiling +
   single-flight + failure-toast dedup + blur/visibility/unmount flush). The only

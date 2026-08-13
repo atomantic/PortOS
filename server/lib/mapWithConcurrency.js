@@ -1,6 +1,13 @@
 /**
  * Map items with a bounded number of in-flight async operations while
  * preserving input order in the returned array.
+ *
+ * @template T, R
+ * @param {T[]} items - Array of items to iterate over
+ * @param {number} concurrency - Maximum number of concurrent operations
+ * @param {(item: T, index: number) => Promise<R>} fn - Async mapping function
+ * @returns {Promise<R[]>} Promise resolving to the mapped results in input order
+ * @throws {TypeError} If items is not an array or fn is not a function
  */
 export async function mapWithConcurrency(items, concurrency, fn) {
   if (!Array.isArray(items)) {

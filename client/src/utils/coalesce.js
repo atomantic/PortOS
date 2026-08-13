@@ -1,12 +1,18 @@
-// Collapse a burst of rapid calls into a single trailing invocation on a short tick.
-// CyberCity subscribes to many socket events (CoS agent spawn/complete, AI status, task
-// changes, …); when several fire at once — e.g. a wave of agents spawning — a handler that
-// triggers a full refetch per event would fan out N identical refreshes. Wrapping that
-// handler in `coalesce` runs it once on the trailing edge instead.
-//
-// Trailing-edge by design: the LAST call's effect always runs, so state still converges to
-// the freshest value — only the redundant intermediate calls are dropped. Call `.cancel()`
-// on teardown so a pending flush can't fire after unmount.
+/**
+ * Collapse a burst of rapid calls into a single trailing invocation on a short tick.
+ * CyberCity subscribes to many socket events (CoS agent spawn/complete, AI status, task
+ * changes, …); when several fire at once — e.g. a wave of agents spawning — a handler that
+ * triggers a full refetch per event would fan out N identical refreshes. Wrapping that
+ * handler in `coalesce` runs it once on the trailing edge instead.
+ *
+ * Trailing-edge by design: the LAST call's effect always runs, so state still converges to
+ * the freshest value — only the redundant intermediate calls are dropped. Call `.cancel()`
+ * on teardown so a pending flush can't fire after unmount.
+ *
+ * @param {Function} fn - Function to coalesce
+ * @param {number} [waitMs=100] - Debounce wait window in milliseconds
+ * @returns {Function & { cancel: () => void, pending: () => boolean }} Coalesced function with control methods
+ */
 export function coalesce(fn, waitMs = 100) {
   let timer = null;
   let lastArgs = [];

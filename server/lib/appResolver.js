@@ -26,6 +26,15 @@ const TIERS = [
 
 const pickLongest = (hits) => hits.reduce((a, b) => (b.name.length >= a.name.length ? b : a)).app;
 
+/**
+ * Resolves a natural language phrase to a matching managed app.
+ * Evaluates candidate apps through ordered matching tiers (exact, prefix, substring)
+ * with length thresholds and longest-name tiebreaking.
+ *
+ * @param {string} phrase - User search or voice command phrase
+ * @param {Array<{ id: string, name: string }>} apps - List of registered managed apps
+ * @returns {object|null} The matched app object, or null if no match meets tier thresholds
+ */
 export function resolveAppByPhrase(phrase, apps) {
   const target = normalizeForMatch(phrase);
   if (target.length < 2) return null;
