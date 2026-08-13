@@ -327,8 +327,16 @@ export default function SongBookViewer() {
         toast.error(`"${file.name}" exceeds the ${formatBytes(JSON_UPLOAD_MAX_FILE_SIZE)} limit`);
         continue;
       }
-      const data = await readFileAsBase64(file);
-      const res = await uploadSongAttachment(id, { filename: file.name, data }, { silent: true });
+      // Per-file failure isolation (#3901): a rejected read/upload must not
+      // abort the rest of a multi-file selection. Catch here (rather than
+      // letting it bubble to useAsyncAction's single generic toast) so the
+      // toast names the file that failed and the loop keeps going.
+      const res = await readFileAsBase64(file)
+        .then((data) => uploadSongAttachment(id, { filename: file.name, data }, { silent: true }))
+        .catch((err) => {
+          toast.error(`Failed to upload "${file.name}": ${err?.message || 'Upload failed'}`);
+          return null;
+        });
       if (res?.attachment) {
         attachmentsMutatedRef.current = true;
         // `prev` may be the 'failed' sentinel — spreading a string would yield

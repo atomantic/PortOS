@@ -15,6 +15,7 @@ const api = vi.hoisted(() => ({
 vi.mock('../services/api', () => api);
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 
+import toast from '../components/ui/Toast';
 import SongBookViewer from './SongBookViewer.jsx';
 
 // Invented fixture data only (privacy convention) — nonsense sheet content.
@@ -183,6 +184,51 @@ describe('SongBookViewer', () => {
       expect(screen.getByRole('link', { name: 'Sheet music' })).toBeTruthy();
       expect(screen.getByRole('link', { name: 'Drum chart' })).toBeTruthy();
       expect(screen.queryByText('not on this machine')).toBeNull();
+    });
+  });
+
+  describe('multi-file upload failure isolation (#3901)', () => {
+    beforeEach(() => {
+      api.uploadSongAttachment.mockReset();
+      toast.error.mockClear();
+    });
+
+    it('keeps uploading the rest of the batch after one file fails', async () => {
+      api.uploadSongAttachment.mockImplementation(async (_id, { filename }) => {
+        if (filename === 'b.pdf') throw new Error('Server exploded');
+        return { attachment: { filename: `x-${filename}`, label: filename, mime: 'application/pdf', size: 10, sha256: 'h' } };
+      });
+      renderPage();
+      expect(await screen.findByText(/No attachments/)).toBeTruthy();
+
+      const input = document.querySelector('input[type="file"]');
+      fireEvent.change(input, {
+        target: {
+          files: [
+            new File(['a'], 'a.pdf', { type: 'application/pdf' }),
+            new File(['b'], 'b.pdf', { type: 'application/pdf' }),
+            new File(['c'], 'c.pdf', { type: 'application/pdf' }),
+          ],
+        },
+      });
+
+      // Every file is attempted — the failure does not break the loop.
+      await waitFor(() => expect(api.uploadSongAttachment).toHaveBeenCalledTimes(3));
+      // The two successes land in local state.
+      expect(await screen.findByRole('link', { name: 'a.pdf' })).toBeTruthy();
+      expect(await screen.findByRole('link', { name: 'c.pdf' })).toBeTruthy();
+      expect(screen.queryByRole('link', { name: 'b.pdf' })).toBeNull();
+    });
+
+    it('toasts an error naming the failed file', async () => {
+      api.uploadSongAttachment.mockRejectedValue(new Error('Server exploded'));
+      renderPage();
+      expect(await screen.findByText(/No attachments/)).toBeTruthy();
+
+      const input = document.querySelector('input[type="file"]');
+      fireEvent.change(input, { target: { files: [new File(['b'], 'b.pdf', { type: 'application/pdf' })] } });
+
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to upload "b.pdf": Server exploded'));
     });
   });
 
