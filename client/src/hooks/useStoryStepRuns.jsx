@@ -58,10 +58,15 @@ export function StoryStepRunProvider({ sessionId, children }) {
   // Step ids with a kickoff in flight or a live run — the synchronous mirror of
   // `runs`, so the re-entrancy guard in `start` doesn't depend on a re-render.
   const startedRef = useRef(new Set());
+  // The session a kickoff was started under, so a kickoff that resolves AFTER
+  // the user opened a different story can't register its run here — the stream
+  // would build its URL from the NEW session id and subscribe to the wrong run.
+  const sessionRef = useRef(sessionId);
 
   // A different story session means none of these runs belong to the view
   // anymore. Drop them rather than fanning their toasts into the new session.
   useEffect(() => {
+    sessionRef.current = sessionId;
     setRuns({});
     handlersRef.current = {};
     startedRef.current = new Set();
@@ -109,9 +114,13 @@ export function StoryStepRunProvider({ sessionId, children }) {
     // both read the same (empty) snapshot, and the second would fire a duplicate
     // kickoff the server only rejects after a round trip.
     if (runs[stepId] || startedRef.current.has(stepId)) return;
+    const startedUnder = sessionRef.current;
     startedRef.current.add(stepId);
     setRuns((prev) => ({ ...prev, [stepId]: { runId: null, op, phase: 'Starting…', meta } }));
     const res = await kickoff().catch((err) => { handlers.onError?.(err); return null; });
+    // The user opened a different story while the POST was in flight. The run
+    // is the old session's; the effect above already dropped its slot.
+    if (sessionRef.current !== startedUnder) return;
     if (!res) { clear(stepId); return; }
     // The kickoff collided with a DIFFERENT in-flight request for this step (a
     // different op, or a refine of another target/note). That run persists to the
