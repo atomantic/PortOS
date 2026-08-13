@@ -44,7 +44,6 @@ import {
   upsertRelationFromPeer,
   upsertTagFromPeer,
   upsertMediaFromPeer,
-  updateIngredient,
 } from './catalogDB.js';
 import { compareSchemaVersions, PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { friendlifyUniverseTags, LEGACY_UNIVERSE_MARKER_TAG } from '../lib/catalogUniverseTags.js';
@@ -171,11 +170,19 @@ export async function applyRemoteChanges(envelope = {}) {
   // malformed row can't abort the batch. Two stats shapes: LWW kinds
   // (tags/scraps/ingredients) read `{ applied, isInsert }` from the upsert into
   // inserted/updated/skipped; tuple-unique kinds (sources/refs/relations/media)
-  // have no result and tally `applied`. `onApplied(item, res)` runs after a
-  // successful upsert in its OWN guard, so a post-apply side effect can't be
-  // miscounted as an upsert failure.
-  const applyKind = async ({ items, upsertFn, tally, lww, errLabel, idFor, onApplied }) => {
-    for (const item of items || []) {
+  // have no result and tally `applied`. `prepare(item)` may return a REPLACEMENT
+  // row to upsert (used to clean legacy tags in-place so the row lands in its
+  // final shape in ONE write); `onApplied(item, res)` runs after a successful
+  // upsert. Both run in their OWN guard, so a hook failure can't be miscounted
+  // as an upsert failure — a failed `prepare` falls back to the raw row rather
+  // than dropping it.
+  const applyKind = async ({ items, upsertFn, tally, lww, errLabel, idFor, prepare, onApplied }) => {
+    for (const raw of items || []) {
+      let item = raw;
+      if (prepare) {
+        try { item = (await prepare(raw)) || raw; }
+        catch (err) { recordFailure(`${errLabel}-prepare`, idFor(raw), err); }
+      }
       let res;
       try {
         res = await upsertFn(item);
@@ -210,6 +217,13 @@ export async function applyRemoteChanges(envelope = {}) {
   // boot repair, whichever fires first. The universe name map is built lazily —
   // and only when a row actually carries the marker — so an envelope with no
   // legacy rows never issues the universe query.
+  //
+  // The rewrite happens BEFORE the upsert (not as a follow-up UPDATE) so the row
+  // is written once, in its cleaned state: an envelope of N legacy rows costs N
+  // queries instead of 2N and leaves no duplicate `catalog_ingredient_revisions`
+  // entry per synced row. An LWW skip needs no special case — the local row is
+  // newer, so the (rewritten) peer row is discarded by the upsert's WHERE guard
+  // exactly as the raw one would have been.
   let universeNameMap = null;
   const ensureUniverseNameMap = async () => {
     if (universeNameMap) return universeNameMap;
@@ -223,17 +237,14 @@ export async function applyRemoteChanges(envelope = {}) {
     }
     return universeNameMap;
   };
-  const friendlifyIngredientTagsOnSync = async (ing, res) => {
-    if (!res?.applied) return; // LWW skip → local row is newer, leave it alone
-    const hasMarker = Array.isArray(ing.tags) && ing.tags.some(
+  const friendlifyIngredientTagsBeforeApply = async (ing) => {
+    const hasMarker = Array.isArray(ing?.tags) && ing.tags.some(
       (t) => typeof t === 'string' && t.trim().toLowerCase() === LEGACY_UNIVERSE_MARKER_TAG);
-    if (!hasMarker) return;
+    if (!hasMarker) return ing;
     const map = await ensureUniverseNameMap();
     const { tags, changed } = friendlifyUniverseTags(ing.tags, (id) => map.get(id) || null, canonicalTagKey);
-    if (!changed) return;
-    // source: 'sync' keeps the rewrite out of user-facing revision-diff noise,
-    // matching the boot repair (repairUniverseTags.js).
-    await updateIngredient(ing.id, { tags }, { source: 'sync', actor: 'universe-tag-repair-on-sync' });
+    if (!changed) return ing; // nothing resolvable yet — keep the machine tags for a later pass
+    return { ...ing, tags };
   };
 
   // Tags first — they carry a `parent_id` self-FK (handled by the parent-less
@@ -266,7 +277,7 @@ export async function applyRemoteChanges(envelope = {}) {
 
   await applyKind({
     items: envelope.ingredients, upsertFn: upsertIngredientFromPeer, tally: stats.ingredients, lww: true,
-    errLabel: 'ingredient', idFor: (i) => i?.id, onApplied: friendlifyIngredientTagsOnSync,
+    errLabel: 'ingredient', idFor: (i) => i?.id, prepare: friendlifyIngredientTagsBeforeApply,
   });
 
   await applyKind({
