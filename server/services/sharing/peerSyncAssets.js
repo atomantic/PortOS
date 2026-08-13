@@ -36,6 +36,7 @@ import { imageUrlToAppAsset } from '../moodBoard/index.js';
 import { WRITERS_ROOM_DRAFT_ASSET_KIND } from '../writersRoom/syncLogic.js';
 import { WORK_ID_RE, DRAFT_ID_RE, wrWorkDir, wrDraftPath } from '../writersRoom/_shared.js';
 import { getWorkForSync } from '../writersRoom/sync.js';
+import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { peerSyncEvents, findPeerById, isNonEmptyStr } from './peerSyncShared.js';
 
 
@@ -636,6 +637,20 @@ export function inflightKey(peerId, kind, filename) {
   return `${peerId}:${kind}:${filename}`;
 }
 
+// Per-DESTINATION serialization (#3929). `inflightPulls` above is deliberately
+// peer-scoped, so two DIFFERENT full-sync peers advertising the same filename —
+// the normal case for a mirrored media library — both pass its guard and would
+// otherwise download and write `data/{images,videos,...}/<name>` concurrently.
+// Key this queue on the destination (kind + filename) ONLY, so those pulls run
+// one-after-another instead of racing on the same target path. Serializing (not
+// dropping) preserves the peer-scoped guard's intent — the later-pushing peer
+// still gets its turn to win — while the re-check at the top of doPullOneAsset
+// means the second turn usually costs a hash instead of a second download.
+export const assetWriteQueue = createKeyCachedQueue();
+export function assetDestinationKey(kind, filename) {
+  return `${kind}:${filename}`;
+}
+
 /**
  * Background-fetch every asset in `missingAssets` from the named peer's
  * static `/data/{kind-dir}/` mount, writing each to the local PATHS dir for
@@ -815,25 +830,40 @@ async function pullOneAsset(peer, base, entry) {
   if (inflightPulls.has(key)) return;
   inflightPulls.add(key);
   try {
-    await doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName);
+    // Serialize on the DESTINATION path so a concurrent sweep from a different
+    // peer for this same filename waits its turn instead of writing alongside us
+    // (#3929). See assetWriteQueue.
+    await assetWriteQueue(
+      assetDestinationKey(entry.kind, safeName),
+      () => doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName),
+    );
   } finally {
     inflightPulls.delete(key);
   }
 }
 
 async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName) {
-  // Sidecar-only divergence: image bytes are already present and hash-match
-  // the sender's manifest (diffAssetManifestAgainstLocal still returned this
-  // entry because the local sidecar is absent or stale). Skip the image
-  // re-pull and go straight to the sidecar fetch — avoids re-downloading a
-  // potentially large PNG for a metadata-only update.
-  if (entry.kind === 'image' && isStr(entry.sha256)) {
+  // Re-check disk against the advertised hash before spending a download. Two
+  // distinct cases land here with the bytes already correct:
+  //   - sidecar-only divergence: the image bytes hash-match and
+  //     diffAssetManifestAgainstLocal returned this entry purely because the
+  //     local gen-params sidecar is absent or stale;
+  //   - a concurrent sweep from ANOTHER peer just committed these same bytes
+  //     while we waited on the destination queue (#3929) — the diff that queued
+  //     this entry ran before the lock, so it can be stale by the time we run.
+  // Checking for EVERY kind (not just images) is the point: a video/music
+  // re-pull is the expensive duplicate, and hashing a local file beats
+  // re-streaming it from the peer.
+  if (isStr(entry.sha256)) {
     const localFullPath = join(localDir, safeName);
     if (existsSync(localFullPath)) {
-      const localHash = (await getOrComputeImageSha256(localFullPath))?.hash ?? null;
+      const localHash = entry.kind === 'image'
+        ? (await getOrComputeImageSha256(localFullPath))?.hash ?? null
+        : await sha256File(localFullPath).catch(() => null);
       if (localHash === entry.sha256) {
-        // Image bytes already up-to-date — pull sidecar only.
-        await pullSidecarForImage(peer, base, safeName).catch(() => {});
+        // Bytes already up-to-date. Images still reconcile their sidecar, since
+        // that may be the only reason this entry was flagged.
+        if (entry.kind === 'image') await pullSidecarForImage(peer, base, safeName).catch(() => {});
         return;
       }
     }

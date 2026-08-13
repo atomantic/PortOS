@@ -13,6 +13,7 @@ import { join } from 'path';
 import { readdir, stat } from 'fs/promises';
 import { createHash } from 'crypto';
 import { PATHS } from '../../lib/fileUtils.js';
+import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
@@ -199,15 +200,30 @@ const librarySweepInFlight = new Set(); // peerInstanceId
 // The manifest JSON itself (not the bytes — those ride the per-asset 100MB cap).
 const MEDIA_LIBRARY_MANIFEST_MAX_BYTES = 32 * 1024 * 1024;
 
-async function reconcileMediaLibraryIndex() {
-  // Dynamic import keeps the DB-backed index module out of peerSync's static
-  // graph (it no-ops under the file/test backend). image+video rows are rebuilt
-  // from disk; audio/music aren't indexed (served from disk directly).
-  const mod = await import('../mediaAssetIndex/index.js').catch(() => null);
-  if (!mod?.reconcileMediaAssets) return;
-  await mod.reconcileMediaAssets().catch((err) => {
-    console.log(`⚠️ peerSync: media_assets reconcile after library sweep failed: ${err.message}`);
+// `reconcileMediaAssets` rebuilds the WHOLE media_assets index from disk, so two
+// sweeps finishing close together would fire overlapping full-table upsert/delete
+// passes against the same rows (#3929). Serialize on one tail AND collapse
+// requests that arrive while a pass is still QUEUED — one pass reading disk after
+// the last pull settles already covers every caller. `reconcilePending` clears the
+// moment the work starts, so a request that arrives mid-pass gets its own pass
+// chained behind (it may have landed bytes the running pass already read past).
+const reconcileQueue = createFileWriteQueue();
+let reconcilePending = null;
+
+function reconcileMediaLibraryIndex() {
+  if (reconcilePending) return reconcilePending;
+  reconcilePending = reconcileQueue(async () => {
+    reconcilePending = null;
+    // Dynamic import keeps the DB-backed index module out of peerSync's static
+    // graph (it no-ops under the file/test backend). image+video rows are rebuilt
+    // from disk; audio/music aren't indexed (served from disk directly).
+    const mod = await import('../mediaAssetIndex/index.js').catch(() => null);
+    if (!mod?.reconcileMediaAssets) return;
+    await mod.reconcileMediaAssets().catch((err) => {
+      console.log(`⚠️ peerSync: media_assets reconcile after library sweep failed: ${err.message}`);
+    });
   });
+  return reconcilePending;
 }
 
 /**
@@ -306,18 +322,36 @@ export async function syncMediaLibraryFromPeer(peer) {
   }
 }
 
+// Global (all-peers) re-entrancy guard — distinct from the per-peer
+// `librarySweepInFlight` above. That set only stops ONE peer's sweep from
+// overlapping itself; a sweep that outlives the 60s tick would still let tick N+1
+// start peer B while tick N is mid-pull on peer A. Two full-sync peers commonly
+// advertise the SAME filenames (that is what full-sync means), so overlapping
+// per-peer sweeps are exactly the cross-peer download + reconcile race in #3929.
+// One library sweep at a time; the next tick picks up wherever this one left off.
+let allPeersSweepInFlight = false;
+
 /**
  * Periodic driver: sweep the standalone media library from every full-sync peer.
- * Called on a timer from initSharing. Each peer's sweep is independent and
+ * Called on a timer from initSharing. Peers are swept one at a time and
  * best-effort; the per-peer re-entrancy guard + manifestHash short-circuit keep
  * an unchanged library cheap.
+ *
+ * @returns {Promise<{ peers:number, skipped?:string }>}
  */
 export async function syncMediaLibraryWithAllPeers() {
-  const peers = await getPeers().catch(() => []);
-  const fullSyncPeers = peers.filter((p) => p?.fullSync === true && p?.enabled !== false && isStr(p.instanceId));
-  for (const peer of fullSyncPeers) {
-    await syncMediaLibraryFromPeer(peer).catch((err) => {
-      console.log(`⚠️ peerSync: media-library sweep for ${peer.name || peer.instanceId} failed: ${err.message}`);
-    });
+  if (allPeersSweepInFlight) return { peers: 0, skipped: 'in-flight' };
+  allPeersSweepInFlight = true;
+  try {
+    const peers = await getPeers().catch(() => []);
+    const fullSyncPeers = peers.filter((p) => p?.fullSync === true && p?.enabled !== false && isStr(p.instanceId));
+    for (const peer of fullSyncPeers) {
+      await syncMediaLibraryFromPeer(peer).catch((err) => {
+        console.log(`⚠️ peerSync: media-library sweep for ${peer.name || peer.instanceId} failed: ${err.message}`);
+      });
+    }
+    return { peers: fullSyncPeers.length };
+  } finally {
+    allPeersSweepInFlight = false;
   }
 }
