@@ -149,6 +149,9 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
 
   // Determine if this is a system agent (health check, etc.)
   const isSystemAgent = agent.taskId?.startsWith('sys-') || agent.id?.startsWith('sys-');
+  // Only agents from a manually-filled task form ask for a rating —
+  // scheduled/autopilot runs are already auto-evaluated by task-learning.
+  const isManualUserAgent = agent.metadata?.taskType === 'user';
   const inactive = completed || paused;
 
   // Handle feedback submission
@@ -846,8 +849,8 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
           </div>
         )}
 
-        {/* Feedback section - shown for completed non-system local agents */}
-        {completed && !isSystemAgent && !remote && (
+        {/* Feedback section - shown for completed, manually-run, non-system local agents */}
+        {completed && !isSystemAgent && isManualUserAgent && !remote && (
           <div className="mt-3 pt-3 border-t border-port-border/50">
             <div className="flex items-center gap-3 flex-wrap">
               <span className="text-xs text-gray-500">Was this helpful?</span>

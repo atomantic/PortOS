@@ -19,6 +19,13 @@ import { ServerError } from '../lib/errorHandler.js';
 const isSystemAgent = (agent) =>
   agent.taskId?.startsWith('sys-') || agent.id?.startsWith('sys-');
 
+// Only agents spawned from a manually-filled task form are worth asking the
+// user to rate. Scheduled-task and autopilot runs carry taskType 'internal'
+// and already get an automatic success/failure verdict from task-learning
+// (buildTaskTelemetryContext's outcomeSuccess) — asking for a manual rating
+// on top of that is redundant nagging, not a useful signal.
+const isManualUserAgent = (agent) => agent.metadata?.taskType === 'user';
+
 // Count completed user-facing agents that are still retained in live CoS state
 // and have not received a rating. Archived history is intentionally excluded:
 // actionable insights refresh every 30s, so this remains a cheap, exact count
@@ -26,7 +33,11 @@ const isSystemAgent = (agent) =>
 export async function getPendingAgentFeedbackCount() {
   const state = await loadState();
   return Object.values(state.agents)
-    .filter(agent => agent.status === 'completed' && !isSystemAgent(agent) && !agent.feedback?.rating)
+    .filter(agent =>
+      agent.status === 'completed' &&
+      !isSystemAgent(agent) &&
+      isManualUserAgent(agent) &&
+      !agent.feedback?.rating)
     .length;
 }
 

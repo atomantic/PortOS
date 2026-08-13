@@ -19,9 +19,13 @@ const RESUME_MESSAGES = {
   superseded: 'A later agent now holds this task paused — that pause was left intact',
 };
 
+// Only agents from a manually-filled task form ask for a rating — scheduled/
+// autopilot runs (taskType 'internal') are already auto-evaluated by
+// task-learning's success/failure tracking. See cosAgentFeedback.js.
 const needsAgentFeedback = (agent) => {
   const isSystemAgent = agent.taskId?.startsWith('sys-') || agent.id?.startsWith('sys-');
-  return !isSystemAgent && !agent.feedback?.rating;
+  const isManualUserAgent = agent.metadata?.taskType === 'user';
+  return !isSystemAgent && isManualUserAgent && !agent.feedback?.rating;
 };
 
 export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, apps }) {

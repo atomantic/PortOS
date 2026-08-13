@@ -23,7 +23,7 @@ const agent = {
   status: 'completed',
   startedAt: '2026-07-13T09:00:00.000Z',
   completedAt: '2026-07-13T10:00:00.000Z',
-  metadata: { taskDescription: 'Example task' },
+  metadata: { taskDescription: 'Example task', taskType: 'user' },
   result: { success: true, duration: 3600000 },
 };
 
