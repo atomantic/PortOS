@@ -82,6 +82,24 @@ describe('computeChronotypeEnergy — energy curve', () => {
     expect(at1am.energy).toBeLessThan(atPeak.energy);
     expect(at1am.energy).toBeLessThan(0.5);
   });
+
+  it('blends anchors across the midnight seam (circular distance, not absolute)', () => {
+    // Only two anchors, and the low one sits exactly on midnight: peak center 12:00,
+    // sleep 00:00. Hours 23:00 and 01:00 are one hour from the sleep anchor and
+    // eleven from the peak in EITHER direction, so on a 24h clock they must produce
+    // the same energy. With plain |a - b| the pre-midnight hour would read as 23
+    // hours from sleep and fall to the peak anchor instead — the symmetry below is
+    // what distinguishes the two.
+    const midnightSleeper = {
+      recommendations: { peakFocusStart: '11:00', peakFocusEnd: '13:00', sleepTime: '00:00' },
+    };
+    const before = computeChronotypeEnergy(midnightSleeper, 23);
+    const after = computeChronotypeEnergy(midnightSleeper, 1);
+    expect(before.energy).toBeCloseTo(after.energy, 10);
+    // Both sit near the sleep anchor's 0.12, nowhere near the peak's 1.0.
+    expect(before.energy).toBeLessThan(0.2);
+    expect(after.energy).toBeLessThan(0.2);
+  });
 });
 
 describe('computeChronotypeEnergy — neutral no-op fallbacks', () => {
