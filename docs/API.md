@@ -175,6 +175,25 @@ PortOS is designed for personal/developer use on trusted networks. It implements
 | POST | `/cos/jobs/:id/trigger` | Run a job immediately |
 | POST | `/cos/jobs/:id/gate-check` | Evaluate a job's gates |
 
+### CoS Task Schedule & Timeline
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/cos/schedule` | Get full task schedule status |
+| GET | `/cos/upcoming` | Get upcoming scheduled tasks preview |
+| GET | `/cos/schedule/interval-types` | Get available interval types and descriptions |
+| GET | `/cos/schedule/due` | List all tasks due to run |
+| GET | `/cos/schedule/due/:appId` | List tasks due for specific app |
+| GET | `/cos/schedule/task/:taskType` | Get interval and schedule settings for a task type |
+| PUT | `/cos/schedule/task/:taskType` | Update schedule settings for a task type |
+| POST | `/cos/schedule/trigger` | Trigger an on-demand task run |
+| GET | `/cos/schedule/on-demand` | List pending on-demand task requests |
+| DELETE | `/cos/schedule/on-demand/:requestId` | Clear a pending on-demand request |
+| POST | `/cos/schedule/reset` | Reset execution history for a task type |
+| GET | `/cos/schedule/templates` | List all template tasks |
+| POST | `/cos/schedule/templates` | Add a template task |
+| DELETE | `/cos/schedule/templates/:templateId` | Delete a template task |
+
 (`GET /cos/scripts` still exists but now lists generated scripts only; scheduling lives in `/cos/jobs` and `/cos/schedule`.)
 
 ### CoS Weekly Digest
