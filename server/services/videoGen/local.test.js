@@ -255,14 +255,33 @@ let generateChainedVideo;
 let generateVideo;
 let videoGenEvents;
 
+// Every runtime this suite exercises — mlx_video, ltx2, wan22, MiniMax H3 — is
+// macOS-only: they appear in media-models' video.macos[] and never in
+// video.windows[], and local.js gates them behind `IS_WIN` (LoRA fusion throws
+// LORAS_REQUIRE_LTX2 on Windows, FFLF skips the last-frame resize, and non-ltx2
+// runtimes route to generate_win.py instead). `IS_WIN` is captured once at
+// module load, so on a Windows runner the whole file was asserting macOS
+// contracts against the Windows build and failing for that reason alone.
+//
+// Pin the platform around the fresh import instead of skipping on the host's
+// own: a `process.platform === 'win32'` skip would silently drop this entire
+// suite on the Windows CI runner. Pinning runs it identically everywhere. The
+// one test that asserts the WINDOWS half of a contract re-pins to 'win32'
+// itself (see "resizes ONLY the start frame on Windows").
+const ORIGINAL_PLATFORM = Object.getOwnPropertyDescriptor(process, 'platform');
+const pinPlatform = (value) =>
+  Object.defineProperty(process, 'platform', { ...ORIGINAL_PLATFORM, value });
+
 beforeEach(async () => {
   vi.resetModules();
+  pinPlatform('darwin');
   // Re-import fresh copies so mock reset above applies cleanly
   ({ generateChainedVideo, generateVideo } = await import('./local.js'));
   ({ videoGenEvents } = await import('./events.js'));
 });
 
 afterEach(() => {
+  Object.defineProperty(process, 'platform', ORIGINAL_PLATFORM);
   vi.clearAllMocks();
 });
 
@@ -820,19 +839,13 @@ describe('generateVideo — ltx2 FFLF image resizing', () => {
   // the Windows CI runner, and asserting the macOS contract un-pinned made the
   // test FAIL there (only one resize happens). Pinning asserts BOTH documented
   // contracts on EVERY runner.
+  // The outer beforeEach already pins 'darwin'; this re-pins for a single test
+  // so the Windows half of the contract can be asserted on any runner too.
+  // afterEach restores the real platform either way.
   const importOnPlatform = async (platform) => {
-    const original = Object.getOwnPropertyDescriptor(process, 'platform');
-    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+    pinPlatform(platform);
     vi.resetModules();
-    try {
-      return { mod: await import('./local.js'), restore: () => {
-        Object.defineProperty(process, 'platform', original);
-        vi.resetModules();
-      } };
-    } catch (err) {
-      Object.defineProperty(process, 'platform', original);
-      throw err;
-    }
+    return { mod: await import('./local.js') };
   };
 
   it('resizes both start and end frames before passing them to the ltx2 helper', async () => {
@@ -847,24 +860,20 @@ describe('generateVideo — ltx2 FFLF image resizing', () => {
     const sourceImagePath = '/mock/uploads/start.png';
     const lastImagePath = '/mock/uploads/end.png';
 
-    const { mod, restore } = await importOnPlatform('darwin');
-    try {
-      await mod.generateVideo({
-        jobId,
-        pythonPath: '/usr/bin/python3',
-        modelId: 'ltx2_unified',
-        prompt: 'interpolate the two anchors',
-        width: 512,
-        height: 512,
-        numFrames: 25,
-        fps: 24,
-        mode: 'fflf',
-        sourceImagePath,
-        lastImagePath,
-      });
-    } finally {
-      restore();
-    }
+    const { mod } = await importOnPlatform('darwin');
+    await mod.generateVideo({
+      jobId,
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'interpolate the two anchors',
+      width: 512,
+      height: 512,
+      numFrames: 25,
+      fps: 24,
+      mode: 'fflf',
+      sourceImagePath,
+      lastImagePath,
+    });
 
     expect(execFileMock).toHaveBeenCalledTimes(2);
     expect(execFileMock.mock.calls.map((call) => call[1][1])).toEqual([
@@ -895,24 +904,20 @@ describe('generateVideo — ltx2 FFLF image resizing', () => {
     execFileMock.mockClear();
 
     const sourceImagePath = '/mock/uploads/start.png';
-    const { mod, restore } = await importOnPlatform('win32');
-    try {
-      await mod.generateVideo({
-        jobId: 'fflf-win-single-resize-test',
-        pythonPath: '/usr/bin/python3',
-        modelId: 'ltx2_unified',
-        prompt: 'interpolate the two anchors',
-        width: 512,
-        height: 512,
-        numFrames: 25,
-        fps: 24,
-        mode: 'fflf',
-        sourceImagePath,
-        lastImagePath: '/mock/uploads/end.png',
-      }).catch(() => {});
-    } finally {
-      restore();
-    }
+    const { mod } = await importOnPlatform('win32');
+    await mod.generateVideo({
+      jobId: 'fflf-win-single-resize-test',
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'interpolate the two anchors',
+      width: 512,
+      height: 512,
+      numFrames: 25,
+      fps: 24,
+      mode: 'fflf',
+      sourceImagePath,
+      lastImagePath: '/mock/uploads/end.png',
+    }).catch(() => {});
 
     // Exactly one ffmpeg resize, and it is the START frame.
     expect(execFileMock).toHaveBeenCalledTimes(1);
