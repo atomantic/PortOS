@@ -47,10 +47,12 @@ const UNSAVED_PATCH_KEY = 'quotaBurn:unsavedPatch';
 
 // A stash written by an older build (or hand-edited) must not be replayed as a
 // patch — the PUT body is an object, and anything else would 400 the save the
-// restore is supposed to rescue.
+// restore is supposed to rescue. An object with no keys is equally not a
+// restore: replaying it would PUT nothing and still announce recovered edits.
 const readStashedPatch = () => {
   const stored = safeReadJsonSession(UNSAVED_PATCH_KEY);
-  return stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : null;
+  const isPatch = stored && typeof stored === 'object' && !Array.isArray(stored) && Object.keys(stored).length > 0;
+  return isPatch ? stored : null;
 };
 
 // Distinguishes a read that THREW from one that resolved with nothing — the
@@ -301,6 +303,10 @@ export default function QuotaBurn() {
       // truth about persistence: swallowing this failure is what turned
       // "Saving changes…" into permanently-lost edits. Say so, and keep the
       // patch for the next visit — the toast is transient, the work isn't.
+      // If the user is already back on the page when this rejects, the stash
+      // waits for the visit AFTER this one rather than being applied live; the
+      // toast still names the failure, and holding the edits is strictly better
+      // than the drop this replaces.
       .catch(() => {
         safeWriteJsonSession(UNSAVED_PATCH_KEY, mergeQuotaBurnPatch(readStashedPatch(), patch));
         toast.error('Quota Burn changes could not be saved — they will be restored next time you open the page.');

@@ -590,6 +590,15 @@ describe('QuotaBurn save races', () => {
     expect(api.saveQuotaBurn).not.toHaveBeenCalled();
   });
 
+  it('ignores an empty stash rather than announcing a restore of nothing', async () => {
+    globalThis.sessionStorage.setItem(STASH_KEY, '{}');
+    renderPage();
+
+    expect(await screen.findByText(/62% left/)).toBeInTheDocument();
+    await sleep(100);
+    expect(api.saveQuotaBurn).not.toHaveBeenCalled();
+  });
+
   it('names why the first load failed and recovers from the Retry button', async () => {
     // A failed first read used to leave a bare "the server did not return a
     // plan" with the header — and its Refresh — unrendered, so the only way
