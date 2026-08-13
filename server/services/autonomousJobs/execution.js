@@ -11,7 +11,7 @@
 
 import { spawn } from 'child_process'
 import { PATHS } from '../../lib/fileUtils.js'
-import { prepareCliSpawn } from '../../lib/bufferedSpawn.js'
+import { prepareCliSpawn, killProcessTree } from '../../lib/bufferedSpawn.js'
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js'
 import { validateCommand, redactOutput, ALLOWED_COMMANDS_SORTED } from '../../lib/commandSecurity.js'
 import { cosEvents } from '../cosEvents.js'
@@ -95,7 +95,12 @@ async function executeShellJob(job) {
     const timer = setTimeout(() => {
       if (child.exitCode !== null) return
       killed = true
-      child.kill('SIGKILL')
+      // Kill the TREE, not just the direct child. On Windows the spawn above
+      // is `cmd.exe /c <cmd> <args>`, so the actual command is a GRANDCHILD —
+      // and Windows has no process groups, so killing cmd.exe would orphan a
+      // hung `pm2`/`npm`/`docker` that then outlives the timeout forever.
+      // killProcessTree is taskkill /T /F there and a plain kill on POSIX.
+      killProcessTree(child, 'SIGKILL')
       console.error(`⏰ Shell job timed out after ${timeoutMs}ms: ${job.name}`)
     }, timeoutMs)
 

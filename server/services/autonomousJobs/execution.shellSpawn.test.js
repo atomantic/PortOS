@@ -91,6 +91,19 @@ describe('executeShellJob — Windows CLI shim resolution', () => {
     expect(src).toMatch(/spawn\(\s*spawnCommand,\s*spawnArgs,/)
   })
 
+  it('kills the process TREE on timeout, not just the direct child', async () => {
+    // The Windows spawn is `cmd.exe /c <cmd> <args>`, so the real command is a
+    // grandchild; Windows has no process groups, so a bare child.kill() would
+    // orphan a hung pm2/npm/docker past the timeout. Pin the tree-kill wiring.
+    const { readFileSync } = await import('fs')
+    const { fileURLToPath } = await import('url')
+    const src = readFileSync(fileURLToPath(new URL('./execution.js', import.meta.url)), 'utf-8')
+    expect(src).toMatch(/import\s*\{[^}]*\bkillProcessTree\b[^}]*\}\s*from\s*'\.\.\/\.\.\/lib\/bufferedSpawn\.js'/)
+    expect(src).toMatch(/killProcessTree\(\s*child,\s*'SIGKILL'\s*\)/)
+    expect(src, 'the timeout path must not bare-kill the direct child')
+      .not.toMatch(/child\.kill\('SIGKILL'\)/)
+  })
+
   it('still rejects a command outside the allowlist', async () => {
     await expect(
       executeShellJob({ id: 'job-1', name: 'bad', command: 'rm -rf /' })
