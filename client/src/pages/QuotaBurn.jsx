@@ -197,8 +197,13 @@ export default function QuotaBurn() {
   }, []);
 
   useEffect(() => {
+    let mounted = true;
     Promise.all([load(), loadCatalog()]).finally(() => {
       setLoading(false);
+      // Navigating away while the first read was still open must not consume
+      // the stash: the unmount flush has already run, so a patch restored now
+      // would be cleared from storage with no page left to persist it from.
+      if (!mounted) return;
       // Edits the last visit could not persist. Replaying them through `save`
       // — rather than only re-rendering them — puts them back on screen AND
       // re-arms the debounce, so the recovery ends in the server holding them
@@ -211,6 +216,7 @@ export default function QuotaBurn() {
       saveRef.current?.(stashed);
       toast('Restored Quota Burn edits that could not be saved last time.');
     });
+    return () => { mounted = false; };
   }, [load, loadCatalog]);
 
   const retryCatalog = async () => {
