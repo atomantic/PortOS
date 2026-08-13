@@ -28,7 +28,7 @@ import {
 import toast from '../ui/Toast';
 import ProseEditor from '../ui/ProseEditor';
 import Drawer from '../Drawer';
-import InlineConfirmRow from '../ui/InlineConfirmRow';
+import UnsavedChangesConfirm from '../ui/UnsavedChangesConfirm';
 import useMounted from '../../hooks/useMounted';
 import useUnsavedChangesGuard from '../../hooks/useUnsavedChangesGuard';
 import useClickOutside from '../../hooks/useClickOutside';
@@ -335,10 +335,11 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // `ui_navigate`, browser Back) — otherwise the body reset in the effect above
   // silently discards them. The confirm renders below the header banners.
   const routeGuard = useUnsavedChangesGuard(dirty);
+  const { proceed: proceedExit } = routeGuard;
   const discardAndExit = useCallback(() => {
     setBody(savedBody);
-    routeGuard.proceed();
-  }, [routeGuard, savedBody]);
+    proceedExit();
+  }, [proceedExit, savedBody]);
 
   useClickOutside(overflowRef, overflowOpen, () => setOverflowOpen(false));
 
@@ -859,20 +860,15 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         </div>
       </div>
 
-      {routeGuard.blocked && (
-        <InlineConfirmRow
-          className="shrink-0"
-          variant="separator"
-          tone="warning"
-          question="Discard your unsaved changes to this work?"
-          confirmText="Discard"
-          cancelText="Keep editing"
-          onConfirm={discardAndExit}
-          onCancel={routeGuard.reset}
-          autoFocus
-          aria-label={`Discard unsaved changes to ${title || 'this work'}`}
-        />
-      )}
+      {/* A save in flight is about to settle the draft clean, and the guard
+          releases the parked navigation on its own — no confirm to flash. */}
+      <UnsavedChangesConfirm
+        guard={routeGuard}
+        when={!saving}
+        question="Discard your unsaved changes to this work?"
+        label={`Discard unsaved changes to ${title || 'this work'}`}
+        onDiscard={discardAndExit}
+      />
 
       {runningKind && (
         <AnalysisRunBanner

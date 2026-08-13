@@ -34,7 +34,7 @@ import {
 } from 'lucide-react';
 import { formatManuscript } from '../lib/manuscriptFormat';
 import toast from '../components/ui/Toast';
-import InlineConfirmRow from '../components/ui/InlineConfirmRow';
+import UnsavedChangesConfirm from '../components/ui/UnsavedChangesConfirm';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { usePipelineProgress } from '../hooks/usePipelineProgress';
 import useUnsavedChangesGuard from '../hooks/useUnsavedChangesGuard';
@@ -157,32 +157,32 @@ export default function PipelineManuscriptEditor() {
   liveSectionsRef.current = sections;
   const liveContentFor = (issueId) => liveSectionsRef.current.find((s) => s.issueId === issueId)?.content ?? '';
 
-  // Sections only persist onBlur, so leaving right after typing (before the
-  // field blurs) would silently drop the edit. Reactive mirror of the ref-based
-  // dirty check above, so the route guard re-evaluates as sections/baselines
-  // change (`baselineRef` is for handlers reading outside the render cycle).
-  const isDirty = useMemo(
-    () => sections.some((s) => isSectionDirty(baselines, s)),
-    [sections, baselines],
-  );
+  // Issue numbers holding an unsaved edit, for the tab dirty dots. Sections save
+  // onBlur, so tabbing away from a pending edit leaves it unsaved with no cue
+  // unless the tab itself carries one (#3399). Also the route guard's reactive
+  // dirty signal (#3995) — `baselineRef` is for handlers that read outside the
+  // render cycle, and can't drive a re-evaluation on its own.
+  const dirtyNumbers = useMemo(() => {
+    const set = new Set();
+    sections.forEach((s) => { if (isSectionDirty(baselines, s)) set.add(s.number); });
+    return set;
+  }, [sections, baselines]);
 
   // Guards BOTH exit doors (#3958/#3995): tab close/reload, and any in-app
   // navigation — a sidebar link, ⌘K, voice `ui_navigate`, the browser Back
   // button. This is a splat route, so switching issue tabs changes the pathname
-  // WITHOUT leaving the editor; `isSameView` lets those through unguarded.
-  const manuscriptPath = `/pipeline/series/${seriesId}/manuscript`;
-  const isSameView = useCallback(
-    (from, to) => from.startsWith(manuscriptPath) && to.startsWith(manuscriptPath),
-    [manuscriptPath],
-  );
-  const routeGuard = useUnsavedChangesGuard(isDirty, { isSameView });
-  const discardAndExit = () => {
+  // WITHOUT leaving the editor; `scopePath` lets those through unguarded.
+  const savingAny = Object.values(saveState).some((s) => s === 'saving');
+  const routeGuard = useUnsavedChangesGuard(dirtyNumbers.size > 0, {
+    scopePath: `/pipeline/series/${seriesId}/manuscript`,
+  });
+  const discardAndExit = useCallback(() => {
     setSections((prev) => prev.map((s) => {
       const key = baselineKey(s);
-      return baselineRef.current.has(key) ? { ...s, content: baselineRef.current.get(key) } : s;
+      return baselines.has(key) ? { ...s, content: baselines.get(key) } : s;
     }));
     routeGuard.proceed();
-  };
+  }, [baselines, routeGuard]);
 
   useEffect(() => {
     safeWriteStorage(VIEW_MODE_KEY, viewMode);
@@ -661,15 +661,6 @@ export default function PipelineManuscriptEditor() {
     return set;
   }, [sectionSpans]);
 
-  // Issue numbers holding an unsaved edit, for the tab dirty dots. Sections save
-  // onBlur, so tabbing away from a pending edit leaves it unsaved with no cue
-  // unless the tab itself carries one (#3399).
-  const dirtyNumbers = useMemo(() => {
-    const set = new Set();
-    sections.forEach((s) => { if (isSectionDirty(baselines, s)) set.add(s.number); });
-    return set;
-  }, [sections, baselines]);
-
   // Open-note count per issue, for the tab badges.
   const openCountByNumber = useMemo(() => {
     const map = new Map();
@@ -746,21 +737,17 @@ export default function PipelineManuscriptEditor() {
     <div className="flex flex-col h-full overflow-y-auto lg:overflow-hidden">
       {/* Parked navigation away from unsaved section edits (#3995). Sections
           persist onBlur, so "unsaved" here means the user typed and left
-          without the field blurring. */}
-      {routeGuard.blocked && (
-        <InlineConfirmRow
-          className="shrink-0"
-          variant="separator"
-          tone="warning"
-          question="Discard your unsaved manuscript edits?"
-          confirmText="Discard"
-          cancelText="Keep editing"
-          onConfirm={discardAndExit}
-          onCancel={routeGuard.reset}
-          autoFocus
-          aria-label={`Discard unsaved manuscript edits to ${series?.name || 'this series'}`}
-        />
-      )}
+          without the field blurring — and clicking a sidebar link blurs the
+          textarea, firing that save. While one is in flight the confirm stays
+          down: the save is about to settle these very edits clean, and the
+          guard then releases the parked navigation on its own. */}
+      <UnsavedChangesConfirm
+        guard={routeGuard}
+        when={!savingAny}
+        question="Discard your unsaved manuscript edits?"
+        label={`Discard unsaved manuscript edits to ${series?.name || 'this series'}`}
+        onDiscard={discardAndExit}
+      />
       <div className="flex-1 flex flex-col lg:grid min-h-0" style={{ gridTemplateColumns: 'minmax(0, 1fr) 380px' }}>
         {/* Manuscript pane */}
         <section className="flex flex-col min-h-0 lg:overflow-y-auto p-4 md:p-6 space-y-5">

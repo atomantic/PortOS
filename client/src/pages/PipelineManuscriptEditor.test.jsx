@@ -664,6 +664,26 @@ describe('PipelineManuscriptEditor — generate-edits streamed review', () => {
       expect(screen.queryByText('dashboard')).not.toBeInTheDocument();
     });
 
+    it('keeps the confirm down while the onBlur save of those edits is in flight', async () => {
+      // Clicking a sidebar link blurs the textarea first, so the PATCH that
+      // persists the edit is already running when the navigation parks.
+      let resolveSave;
+      api.savePipelineManuscriptSection.mockReturnValue(new Promise((res) => { resolveSave = res; }));
+      const { router } = renderEditor('/pipeline/series/ser-1/manuscript/1');
+      const area = await typeUnsaved('The hero walked in. She left.', 'Edited, then blurred.');
+      fireEvent.blur(area);
+
+      await act(async () => { await router.navigate('/dashboard'); });
+      expect(screen.queryByText(CONFIRM)).not.toBeInTheDocument();
+      expect(screen.queryByText('dashboard')).not.toBeInTheDocument();
+
+      // The save lands, the draft settles clean, and the parked navigation runs.
+      await act(async () => {
+        resolveSave({ section: { issueId: 'iss-1', number: 1, title: 'One', stageId: 'prose', content: 'Edited, then blurred.' } });
+      });
+      expect(await screen.findByText('dashboard')).toBeInTheDocument();
+    });
+
     it('does not block an issue switch inside the editor (same splat route)', async () => {
       api.getPipelineManuscript.mockResolvedValue(twoIssues);
       renderEditor('/pipeline/series/ser-1/manuscript/1');

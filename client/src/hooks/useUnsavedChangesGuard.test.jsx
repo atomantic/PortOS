@@ -103,17 +103,15 @@ describe('useUnsavedChangesGuard', () => {
     expect(await screen.findByText('keep')).toBeTruthy();
   });
 
-  it('lets an in-editor move through when isSameView claims it (splat route tab switch)', async () => {
-    const isSameView = (from, to) => from.startsWith('/edit') && to.startsWith('/edit');
-    const router = renderEditor({ options: { isSameView } });
+  it('lets an in-editor move through when it stays under scopePath (splat route tab switch)', async () => {
+    const router = renderEditor({ options: { scopePath: '/edit' } });
     await navigate(router, '/edit/deeper');
     await waitFor(() => expect(router.state.location.pathname).toBe('/edit/deeper'));
     expect(screen.queryByText('keep')).toBeNull();
   });
 
-  it('still blocks a real exit when isSameView is supplied', async () => {
-    const isSameView = (from, to) => from.startsWith('/edit') && to.startsWith('/edit');
-    const router = renderEditor({ options: { isSameView } });
+  it('still blocks a navigation that leaves scopePath', async () => {
+    const router = renderEditor({ options: { scopePath: '/edit' } });
     await navigate(router, '/away');
     expect(await screen.findByText('keep')).toBeTruthy();
     expect(screen.queryByText('away')).toBeNull();

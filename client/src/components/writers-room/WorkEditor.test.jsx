@@ -171,7 +171,6 @@ describe('WorkEditor unsaved-changes route guard (#3995)', () => {
   const typeUnsaved = async (container, next) => {
     const area = container.querySelector('textarea');
     await act(async () => { fireEvent.change(area, { target: { value: next } }); });
-    return area;
   };
 
   it('blocks an in-app navigation while the draft is dirty', async () => {

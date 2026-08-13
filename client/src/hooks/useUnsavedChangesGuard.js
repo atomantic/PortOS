@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useBlocker } from 'react-router';
 
 // Guards an editor's unsaved draft against BOTH exit doors (#3958):
@@ -23,13 +23,15 @@ import { useBlocker } from 'react-router';
 //
 // Discarding is the CALLER's job — only it knows how to reset its draft — so a
 // discard handler resets local state and then calls `proceed()`.
-// `isSameView(currentPathname, nextPathname)` — optional escape hatch for an
-// editor whose OWN in-page moves change the pathname. A splat route like
+// `scopePath` — the path prefix this editor OWNS, for an editor whose own
+// in-page moves change the pathname. A splat route like
 // `/pipeline/series/:id/manuscript/*` swaps the issue segment without leaving
 // (or remounting) the editor, so the default pathname comparison would raise a
-// discard confirm on every issue tab click. Return true for a navigation that
-// stays inside the editor and it passes through unguarded.
-export default function useUnsavedChangesGuard(isDirty, { beforeUnload = true, isSameView } = {}) {
+// discard confirm on every issue tab click. A navigation that stays under the
+// prefix is an in-editor move and passes through unguarded; leaving it is a
+// real exit and still parks. A plain string (not a predicate) so a caller can't
+// re-register the blocker every render with an unmemoized inline function.
+export default function useUnsavedChangesGuard(isDirty, { beforeUnload = true, scopePath } = {}) {
   // Same-location navigations (a re-click on the link you're already on, a
   // search-param tweak on the current page) don't unmount the editor, so
   // there's nothing to guard — let them through rather than raising a confirm
@@ -37,8 +39,8 @@ export default function useUnsavedChangesGuard(isDirty, { beforeUnload = true, i
   const shouldBlock = useCallback(({ currentLocation, nextLocation }) => {
     if (!isDirty) return false;
     if (currentLocation.pathname === nextLocation.pathname) return false;
-    return !isSameView?.(currentLocation.pathname, nextLocation.pathname);
-  }, [isDirty, isSameView]);
+    return !(scopePath && nextLocation.pathname.startsWith(scopePath));
+  }, [isDirty, scopePath]);
   const blocker = useBlocker(shouldBlock);
   const blocked = blocker.state === 'blocked';
 
@@ -65,5 +67,8 @@ export default function useUnsavedChangesGuard(isDirty, { beforeUnload = true, i
   const proceed = useCallback(() => blocker.proceed?.(), [blocker]);
   const reset = useCallback(() => blocker.reset?.(), [blocker]);
 
-  return { blocked, proceed, reset };
+  // Memoized: callers pass this object to `<UnsavedChangesConfirm guard>` and
+  // name its members in dep arrays, so a fresh literal per render would be a
+  // guaranteed miss on every editor's hot typing path.
+  return useMemo(() => ({ blocked, proceed, reset }), [blocked, proceed, reset]);
 }
