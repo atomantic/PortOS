@@ -14,7 +14,6 @@ import {
   isVisionModel,
   visionLocalModelFilter,
   isToolUseModel,
-  toolUseLocalModelFilter,
   localToolUseHint,
   withToolUseOptionLabel,
   localBackendForProvider,
@@ -608,20 +607,6 @@ describe('isToolUseModel (mirror of server localModelHeuristics)', () => {
       expect(isToolUseModel(id), id).toBe(false);
     }
     expect(isToolUseModel(null)).toBe(false);
-  });
-});
-
-describe('toolUseLocalModelFilter', () => {
-  it('restricts local backends to tool-use models', () => {
-    const ollama = { name: 'Ollama', endpoint: 'http://localhost:11434/v1' };
-    expect(toolUseLocalModelFilter('qwen2.5:7b', ollama)).toBe(true);
-    expect(toolUseLocalModelFilter('gemma2:9b', ollama)).toBe(false);
-  });
-
-  it('leaves cloud/CLI providers untouched', () => {
-    const cloud = { name: 'OpenAI', endpoint: 'https://api.openai.com/v1' };
-    expect(toolUseLocalModelFilter('gpt-4o', cloud)).toBe(true);
-    expect(toolUseLocalModelFilter('anything', undefined)).toBe(true);
   });
 });
 

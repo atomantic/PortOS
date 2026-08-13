@@ -468,29 +468,19 @@ export const isToolUseModel = (id) =>
   /qwen|llama-?3\.[1-9]|llama-?4|mistral|mixtral|ministral|codestral|devstral|magistral|command-?r|command-?a|north-mini-code|firefunction|functionary|watt-tool|hermes|functiongemma|glm-?4|granite-?[34]|(?:^|[-_/:])gemma-?4|gpt-oss|nemotron|olmo-?3|lfm2|ornith|muse-glimmer|nex-n2|smollm2|deepseek-v3|deepseek-r1|deepseek-v4/i.test(id);
 
 /**
- * Per-model filter for a CODING / tool-use picker: restrict LOCAL backends
- * (Ollama / LM Studio) to tool-use-capable models by id, but leave cloud/API
- * providers' lists untouched — `isToolUseModel` is a local-name heuristic and
- * would wrongly hide capable cloud models whose ids don't encode their family.
- * Mirrors `visionLocalModelFilter`. Pass as
- * `useProviderModels({ modelFilter: toolUseLocalModelFilter })`.
- * @param {string} id
- * @param {{endpoint?:string,name?:string}} [provider]
- * @returns {boolean}
- */
-export const toolUseLocalModelFilter = (id, provider) =>
-  localBackendForProvider(provider) ? isToolUseModel(id) : true;
-
-/**
  * Agent-picker tool-use annotation for a model id. Agent / CoS tasks (the CD
  * treatment + plan stages, coding agents) only work with a model that can emit
  * native tool calls — a local model that can't (e.g. Gemma) narrates a
  * done-message instead of acting, silently wedging the task. This decides the
  * per-option marker + the "pick a tool-capable model" warning in agent pickers.
  *
+ * Tool-use is surfaced as an ANNOTATION + warning, never as a filter: the
+ * heuristic is a positive allowlist, so a non-match is "not a recognized
+ * tool-caller", not a proven negative, and hiding those options would make a
+ * newer tool-capable family unselectable (see {@link withToolUseOptionLabel}).
+ *
  * Returns `null` for cloud / API providers: their model ids don't encode their
- * family, so the name heuristic would mislabel them (same reason
- * `toolUseLocalModelFilter` leaves cloud lists untouched). LOCAL backends return
+ * family, so the name heuristic would mislabel them. LOCAL backends return
  * `{ toolCapable }` keyed on {@link isToolUseModel} — where "local" is BOTH a
  * direct Ollama / LM Studio backend ({@link localBackendForProvider}) AND an
  * Ollama-BACKED CLI/TUI wrapper ({@link isOllamaBackedProvider}): a renamed
