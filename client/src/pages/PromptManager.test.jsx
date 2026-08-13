@@ -674,6 +674,55 @@ describe('PromptManager job skill unsaved-edit guard', () => {
     await waitFor(() => expect(currentSearch()).toContain('skill=doc-writer'));
   });
 
+  it('drops the armed prompt when the edit is undone back to the saved text', async () => {
+    await openDirtyEditor();
+    fireEvent.click(screen.getByText('doc-writer'));
+    expect(screen.getByText(/Discard unsaved changes/)).toBeTruthy();
+
+    fireEvent.change(editor(), { target: { value: '# code-fixer template' } });
+
+    expect(screen.queryByText(/Discard unsaved changes/)).toBeNull();
+    expect(screen.getByText('doc-writer')).toBeTruthy();
+  });
+
+  it('drops the armed prompt when the edits are saved instead of discarded', async () => {
+    await openDirtyEditor();
+    fireEvent.click(screen.getByText('doc-writer'));
+    expect(screen.getByText(/Discard unsaved changes/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+
+    await waitFor(() => expect(screen.queryByText(/Discard unsaved changes/)).toBeNull());
+    expect(currentSearch()).toContain('skill=code-fixer');
+  });
+
+  it('disarms the prompt when the already-open skill is clicked', async () => {
+    await openDirtyEditor();
+    fireEvent.click(screen.getByText('doc-writer'));
+
+    fireEvent.click(screen.getByText('code-fixer'));
+
+    expect(screen.queryByText(/Discard unsaved changes/)).toBeNull();
+    expect(screen.getByDisplayValue('# edited by hand')).toBeTruthy();
+  });
+
+  it('does not adopt an in-flight save as the next skill\'s baseline', async () => {
+    let resolveSave;
+    saveJobSkill.mockImplementationOnce(() => new Promise((r) => { resolveSave = r; }));
+    await openDirtyEditor();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    // Switch away while the PUT is still open, then let it land.
+    fireEvent.click(screen.getByText('doc-writer'));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    await screen.findByText('Job doc-writer');
+    resolveSave({ success: true });
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    // The old skill's text must not become the new skill's clean baseline.
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
+  });
+
   it('does not prompt when a clean editor switches skills', async () => {
     renderPage('/prompts?tab=job-skills&skill=code-fixer');
     await screen.findByText('Job code-fixer');

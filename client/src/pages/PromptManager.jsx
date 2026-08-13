@@ -110,6 +110,11 @@ export default function PromptManager() {
   const [jobSkillMeta, setJobSkillMeta] = useState({});
   const [jobSkillPreview, setJobSkillPreview] = useState('');
   const isJobSkillDirty = Boolean(selectedJobSkill) && jobSkillContent !== savedJobSkillContent;
+  // `saveJobSkill` resumes after an await holding the values its closure captured
+  // at click time, so it reads the live selection/text through these refs to tell
+  // "still the same editor" from "the user moved on mid-flight".
+  const jobSkillLiveRef = useRef({ selected: selectedJobSkill, content: jobSkillContent });
+  jobSkillLiveRef.current = { selected: selectedJobSkill, content: jobSkillContent };
 
   const [providers, setProviders] = useState([]);
   const [activeProviderId, setActiveProviderId] = useState(null);
@@ -330,13 +335,23 @@ export default function PromptManager() {
     setSaving(true);
     // Snapshot what we actually sent — the textarea may change while the PATCH
     // is in flight, and only the persisted text may become the clean baseline.
+    // The skill is snapshotted too: if the editor has moved on by the time the
+    // PUT resolves, `sent` belongs to the PREVIOUS skill and adopting it as the
+    // baseline would flag the freshly loaded one as dirty.
     const sent = jobSkillContent;
-    const ok = await apiSaveJobSkill(selectedJobSkill, sent, { silent: true })
+    const sentFor = selectedJobSkill;
+    const ok = await apiSaveJobSkill(sentFor, sent, { silent: true })
       .then(() => true)
       .catch((err) => { toast.error(`Failed to save job skill: ${err.message || 'Unknown error'}`); return false; });
     setSaving(false);
     if (!ok) return;
-    setSavedJobSkillContent(sent);
+    const live = jobSkillLiveRef.current;
+    if (sentFor === live.selected) {
+      setSavedJobSkillContent(sent);
+      // Saving answers the pending discard prompt — there is nothing left to
+      // lose, unless the user kept typing while the PUT was open.
+      if (sent === live.content) setPendingJobSkill(null);
+    }
     toast.success('Job skill saved');
   };
 
@@ -344,7 +359,12 @@ export default function PromptManager() {
   // confirmed away first (#3939). The clicked skill parks in `pendingJobSkill`
   // and an inline confirm row takes over its list slot — no window.confirm.
   const requestJobSkill = (name) => {
-    if (name === selectedJobSkill) return;
+    if (name === selectedJobSkill) {
+      // Re-clicking the open skill is how a user backs out of the prompt from
+      // the list side; leaving it armed would strand the row mid-question.
+      setPendingJobSkill(null);
+      return;
+    }
     if (isJobSkillDirty) {
       setPendingJobSkill(name);
       return;
@@ -866,7 +886,10 @@ export default function PromptManager() {
             </div>
             <div className="space-y-1">
               {jobSkills.map((skill) => (
-                pendingJobSkill === skill.name ? (
+                // The dirty check is part of the render condition, not just of
+                // arming: undoing the edit back to the saved text while the row
+                // is armed leaves nothing to discard, so the question must go.
+                (pendingJobSkill === skill.name && isJobSkillDirty) ? (
                   <InlineConfirmRow
                     key={skill.name}
                     className="rounded-lg"
