@@ -13,6 +13,7 @@ vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: v
 const clipboard = vi.hoisted(() => ({ readClipboard: vi.fn() }));
 vi.mock('../lib/clipboard.js', () => clipboard);
 
+import toast from '../components/ui/Toast';
 import SongBookImport from './SongBookImport.jsx';
 
 const renderPage = (path = '/songbook/import') => render(
@@ -27,6 +28,7 @@ describe('SongBookImport', () => {
     api.createSong.mockReset().mockResolvedValue({ id: 'new-song-1' });
     api.importSongFromUrl.mockReset();
     clipboard.readClipboard.mockReset();
+    toast.error.mockReset();
   });
 
   it('paste button stores the RAW clipboard text — normalization runs exactly once', async () => {
@@ -248,6 +250,8 @@ describe('SongBookImport', () => {
     rejectFetch(Object.assign(new Error('Bad gateway'), { code: 'SONG_IMPORT_FETCH_FAILED' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Fetch' }).textContent).toContain('Fetch'));
     expect(screen.queryByRole('alert')).toBeNull();
+    // Nor a toast — it isn't news about the URL now in the input.
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it('sends an in-range pasted capo through unchanged', async () => {

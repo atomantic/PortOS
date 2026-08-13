@@ -134,15 +134,16 @@ export default function SongBookImport() {
     // they've left — must not write itself over what's on screen now.
     const isCurrent = () => urlRef.current === submittedUrl && tabRef.current === 'url';
     const data = await importSongFromUrl(normalizedUrl, { silent: true }).catch((err) => {
+      // The toast is gated too — a failure for a URL the user has already typed
+      // past is not news about the form they're looking at.
+      if (!isCurrent()) return null;
       const message = importErrorMessage(err);
       toast.error(message);
-      if (isCurrent()) {
-        // Drop any earlier draft: leaving the previous song previewed under a
-        // failed URL is exactly the stale-form confusion this guards against.
-        setFetched(null);
-        applyMetaDefaults({});
-        setFetchError(message);
-      }
+      // Drop any earlier draft: leaving the previous song previewed under a
+      // failed URL is exactly the stale-form confusion this guards against.
+      setFetched(null);
+      applyMetaDefaults({});
+      setFetchError(message);
       return null;
     });
     const draft = data?.draft;
