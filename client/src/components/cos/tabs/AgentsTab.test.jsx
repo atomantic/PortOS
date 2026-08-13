@@ -71,7 +71,7 @@ const completedAgent = (id, description, extra = {}) => ({
   status: 'completed',
   completedAt: '2026-07-13T10:00:00.000Z',
   startedAt: '2026-07-13T09:00:00.000Z',
-  metadata: { taskDescription: description },
+  metadata: { taskDescription: description, taskType: 'user' },
   ...extra,
 });
 
@@ -189,6 +189,16 @@ describe('AgentsTab feedback review queue', () => {
     expect(screen.queryByText('Rated task')).not.toBeInTheDocument();
     expect(screen.queryByText('System task')).not.toBeInTheDocument();
     expect(needsFeedback).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('excludes scheduled/autopilot runs (taskType internal) from the feedback queue', async () => {
+    renderTab([
+      completedAgent('unrated', 'Unrated task'),
+      completedAgent('scheduled', 'Scheduled task', { metadata: { taskDescription: 'Scheduled task', taskType: 'internal' } }),
+    ]);
+    await act(async () => {});
+
+    expect(screen.getByRole('button', { name: 'Needs feedback: 1' })).toBeInTheDocument();
   });
 
   it('opens the feedback queue directly from the URL', async () => {
