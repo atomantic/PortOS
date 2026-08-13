@@ -453,6 +453,33 @@ describe('QuotaBurn save races', () => {
     expect(api.saveQuotaBurn.mock.calls[0][0].families.grok.jobs[0].label).toContain('Q');
   });
 
+  it('names why the first load failed and recovers from the Retry button', async () => {
+    // A failed first read used to leave a bare "the server did not return a
+    // plan" with the header — and its Refresh — unrendered, so the only way
+    // out was reloading the browser tab.
+    const user = userEvent.setup();
+    api.getQuotaBurn.mockRejectedValueOnce(new Error('Network request failed'));
+    renderPage();
+
+    expect(await screen.findByText('Quota burn is unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Network request failed')).toBeInTheDocument();
+
+    // Retry re-reads, and the success clears both the banner and the error.
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(/62% left/)).toBeInTheDocument();
+    expect(screen.queryByText('Quota burn is unavailable')).not.toBeInTheDocument();
+    expect(screen.queryByText('Network request failed')).not.toBeInTheDocument();
+  });
+
+  it('still offers a retry when the server answers without a plan', async () => {
+    // No error to name — but the page is just as stuck, so the way out has to
+    // be the same one.
+    api.getQuotaBurn.mockResolvedValueOnce({ config: null, status: null });
+    renderPage();
+    expect(await screen.findByText('The server did not return a plan.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  });
+
   it('does not commit 0 when a number field is cleared to be retyped', async () => {
     // Number('') === 0, which is below the server minimum for the interval and
     // the dispatch cap — a 400 that also discards every co-pending edit.

@@ -15,8 +15,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { Flame, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Flame, RefreshCw } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import Banner from '../components/ui/Banner';
 import BrailleSpinner from '../components/BrailleSpinner';
 import FamilyCard from '../components/quotaBurn/FamilyCard';
 import { NumberField } from '../components/quotaBurn/fields';
@@ -47,6 +48,11 @@ export default function QuotaBurn() {
   const [status, setStatus] = useState(null);
   const [catalog, setCatalog] = useState(EMPTY_CATALOG);
   const [loading, setLoading] = useState(true);
+  // `null` = the read has never failed; a string = the message from the read
+  // that did. Collapsing the two into a boolean (or into `!config`) is what
+  // left a failed first load indistinguishable from "the server answered, and
+  // it has no plan" — one is retryable and names a cause, the other doesn't.
+  const [loadError, setLoadError] = useState(null);
   // `unsaved` covers BOTH the debounce window and the in-flight PUT. Every "run"
   // control reads server-side config, so it must stay disabled until the edit
   // has actually landed — otherwise the user changes a model, clicks Burn, and
@@ -75,8 +81,14 @@ export default function QuotaBurn() {
 
   const load = useCallback(async (refresh = false) => {
     const seq = editSeqRef.current;
-    const data = await api.getQuotaBurn(refresh, { silent: true }).catch(() => null);
+    // `silent: true` because the failure is rendered by this page's own banner
+    // rather than a toast — see client/src/CLAUDE.md's silent-vs-toasting rule.
+    const data = await api.getQuotaBurn(refresh, { silent: true })
+      .catch((err) => { setLoadError(err?.message || 'The request failed.'); return null; });
     if (!data) return;
+    // Cleared on ANY successful read, including the polls: the last error no
+    // longer describes the page once the server has answered.
+    setLoadError(null);
     // `status` is derived server-side and never edited here, so it is always
     // safe to adopt; `config` is the form's own state and must not be rewound.
     setStatus(data.status);
@@ -207,8 +219,37 @@ export default function QuotaBurn() {
     setRunning(false);
   };
 
+  const reload = (refresh = false) => {
+    setLoading(true);
+    load(refresh).finally(() => setLoading(false));
+  };
+
   if (loading) return <div className="p-6 text-gray-400"><BrailleSpinner /> Loading burn plan…</div>;
-  if (!config) return <div className="p-6 text-gray-400">Quota burn is unavailable — the server did not return a plan.</div>;
+  // A failed first read used to land here with no cause and no way out but a
+  // browser reload — the header (and its "Refresh quota") returns above.
+  if (!config) {
+    return (
+      <div className="p-6">
+        <Banner
+          tone="error"
+          icon={AlertTriangle}
+          size="md"
+          title="Quota burn is unavailable"
+          actions={(
+            <button
+              type="button"
+              className="text-xs px-3 py-1.5 rounded border border-port-error/40 hover:bg-port-error/10"
+              onClick={() => reload()}
+            >
+              Retry
+            </button>
+          )}
+        >
+          <p className="mt-0.5 break-words">{loadError || 'The server did not return a plan.'}</p>
+        </Banner>
+      </div>
+    );
+  }
 
   const lastRun = status?.runs?.[0];
 
@@ -230,7 +271,7 @@ export default function QuotaBurn() {
         <button
           type="button"
           className="inline-flex items-center gap-1 text-xs text-gray-300 hover:text-white"
-          onClick={() => { setLoading(true); load(true).finally(() => setLoading(false)); }}
+          onClick={() => reload(true)}
         >
           <RefreshCw size={13} /> Refresh quota
         </button>
