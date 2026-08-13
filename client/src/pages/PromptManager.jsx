@@ -101,8 +101,15 @@ export default function PromptManager() {
   // Job skills (selection is URL-driven — see selectedJobSkill above)
   const [jobSkills, setJobSkills] = useState([]);
   const [jobSkillContent, setJobSkillContent] = useState('');
+  // The last content the server confirmed (loaded or saved). Kept as a full copy
+  // rather than a boolean flag so typing an edit and undoing it back to the
+  // original stops counting as dirty — a stale flag would nag on a no-op edit.
+  const [savedJobSkillContent, setSavedJobSkillContent] = useState('');
+  // The skill the user clicked while holding unsaved edits, awaiting confirmation.
+  const [pendingJobSkill, setPendingJobSkill] = useState(null);
   const [jobSkillMeta, setJobSkillMeta] = useState({});
   const [jobSkillPreview, setJobSkillPreview] = useState('');
+  const isJobSkillDirty = Boolean(selectedJobSkill) && jobSkillContent !== savedJobSkillContent;
 
   const [providers, setProviders] = useState([]);
   const [activeProviderId, setActiveProviderId] = useState(null);
@@ -300,6 +307,8 @@ export default function PromptManager() {
   useEffect(() => {
     setJobSkillPreview('');
     setJobSkillContent('');
+    setSavedJobSkillContent('');
+    setPendingJobSkill(null);
     setJobSkillMeta({});
     if (!selectedJobSkill) return;
     let cancelled = false;
@@ -307,6 +316,7 @@ export default function PromptManager() {
       .then((res) => {
         if (cancelled || !res) return;
         setJobSkillContent(res.content || '');
+        setSavedJobSkillContent(res.content || '');
         setJobSkillMeta({ jobName: res.jobName, jobId: res.jobId, category: res.category, interval: res.interval });
       })
       .catch(() => {});
@@ -318,11 +328,28 @@ export default function PromptManager() {
   // keeps the notification to one layer (see client/src/CLAUDE.md).
   const saveJobSkill = async () => {
     setSaving(true);
-    const ok = await apiSaveJobSkill(selectedJobSkill, jobSkillContent, { silent: true })
+    // Snapshot what we actually sent — the textarea may change while the PATCH
+    // is in flight, and only the persisted text may become the clean baseline.
+    const sent = jobSkillContent;
+    const ok = await apiSaveJobSkill(selectedJobSkill, sent, { silent: true })
       .then(() => true)
       .catch((err) => { toast.error(`Failed to save job skill: ${err.message || 'Unknown error'}`); return false; });
     setSaving(false);
-    if (ok) toast.success('Job skill saved');
+    if (!ok) return;
+    setSavedJobSkillContent(sent);
+    toast.success('Job skill saved');
+  };
+
+  // Switching skills replaces the editor's content, so unsaved edits must be
+  // confirmed away first (#3939). The clicked skill parks in `pendingJobSkill`
+  // and an inline confirm row takes over its list slot — no window.confirm.
+  const requestJobSkill = (name) => {
+    if (name === selectedJobSkill) return;
+    if (isJobSkillDirty) {
+      setPendingJobSkill(name);
+      return;
+    }
+    setSelectedJobSkill(name);
   };
 
   const previewJobSkill = async () => {
@@ -839,25 +866,44 @@ export default function PromptManager() {
             </div>
             <div className="space-y-1">
               {jobSkills.map((skill) => (
-                <button
-                  key={skill.name}
-                  onClick={() => setSelectedJobSkill(skill.name)}
-                  className={`w-full text-left px-3 py-2 rounded-lg text-sm ${
-                    selectedJobSkill === skill.name
-                      ? 'bg-port-accent/20 text-port-accent'
-                      : 'text-gray-300 hover:bg-port-border'
-                  }`}
-                >
-                  <div className="flex items-center gap-1">
-                    <span className="font-medium">{skill.name}</span>
-                    {skill.hasTemplate && (
-                      <span className="shrink-0 text-[10px] px-1.5 py-0.5 bg-port-success/20 text-port-success rounded uppercase font-semibold">
-                        Active
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-xs text-gray-500">{skill.jobId}</div>
-                </button>
+                pendingJobSkill === skill.name ? (
+                  <InlineConfirmRow
+                    key={skill.name}
+                    className="rounded-lg"
+                    question={`Discard unsaved changes to "${jobSkillMeta.jobName || selectedJobSkill}"?`}
+                    confirmText="Discard"
+                    cancelText="Keep editing"
+                    aria-label={`Confirm discarding unsaved changes to ${jobSkillMeta.jobName || selectedJobSkill}`}
+                    autoFocus
+                    onConfirm={() => { setPendingJobSkill(null); setSelectedJobSkill(skill.name); }}
+                    onCancel={() => setPendingJobSkill(null)}
+                  />
+                ) : (
+                  <button
+                    key={skill.name}
+                    onClick={() => requestJobSkill(skill.name)}
+                    className={`w-full text-left px-3 py-2 rounded-lg text-sm ${
+                      selectedJobSkill === skill.name
+                        ? 'bg-port-accent/20 text-port-accent'
+                        : 'text-gray-300 hover:bg-port-border'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1">
+                      <span className="font-medium">{skill.name}</span>
+                      {skill.hasTemplate && (
+                        <span className="shrink-0 text-[10px] px-1.5 py-0.5 bg-port-success/20 text-port-success rounded uppercase font-semibold">
+                          Active
+                        </span>
+                      )}
+                      {selectedJobSkill === skill.name && isJobSkillDirty && (
+                        <span className="shrink-0 text-[10px] px-1.5 py-0.5 bg-port-warning/20 text-port-warning rounded uppercase font-semibold">
+                          Unsaved
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-gray-500">{skill.jobId}</div>
+                  </button>
+                )
               ))}
               {jobSkills.length === 0 && (
                 <div className="text-sm text-gray-500 px-3 py-2">No job skill templates found</div>
@@ -877,6 +923,7 @@ export default function PromptManager() {
                         {jobSkillMeta.category && <span>Category: {jobSkillMeta.category}</span>}
                         {jobSkillMeta.interval && <span>Interval: {jobSkillMeta.interval}</span>}
                         {jobSkillMeta.jobId && <span>ID: {jobSkillMeta.jobId}</span>}
+                        {isJobSkillDirty && <span className="text-port-warning">Unsaved changes</span>}
                       </div>
                     </div>
                     <div className="flex gap-2">

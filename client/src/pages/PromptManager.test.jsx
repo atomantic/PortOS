@@ -575,3 +575,112 @@ describe('PromptManager job skill save feedback', () => {
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to preview: nope'));
   });
 });
+
+// Clicking another skill used to overwrite the editor outright, silently
+// discarding whatever the user had typed (#3939).
+describe('PromptManager job skill unsaved-edit guard', () => {
+  const SKILLS = [
+    { name: 'code-fixer', jobId: 'job-code-fixer', hasTemplate: true },
+    { name: 'doc-writer', jobId: 'job-doc-writer', hasTemplate: false },
+  ];
+
+  beforeEach(() => {
+    getPrompts.mockReset().mockResolvedValue({ stages: STAGES, systemStages: SYSTEM_STAGES });
+    getJobSkills.mockReset().mockResolvedValue({ skills: SKILLS });
+    getJobSkill.mockReset().mockImplementation((name) => Promise.resolve({
+      content: `# ${name} template`,
+      jobName: `Job ${name}`,
+      jobId: `job-${name}`,
+    }));
+    saveJobSkill.mockReset().mockResolvedValue({ success: true });
+    toast.error.mockReset();
+    toast.success.mockReset();
+  });
+
+  const editor = () => screen.getByLabelText('Skill Template (Markdown)');
+
+  const openDirtyEditor = async () => {
+    renderPage('/prompts?tab=job-skills&skill=code-fixer');
+    await screen.findByText('Job code-fixer');
+    fireEvent.change(editor(), { target: { value: '# edited by hand' } });
+    await screen.findByText('Unsaved changes');
+  };
+
+  it('marks the editor dirty once the template is modified', async () => {
+    renderPage('/prompts?tab=job-skills&skill=code-fixer');
+    await screen.findByText('Job code-fixer');
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
+
+    fireEvent.change(editor(), { target: { value: '# edited by hand' } });
+
+    expect(screen.getByText('Unsaved changes')).toBeTruthy();
+  });
+
+  it('treats an edit reverted to the loaded text as clean again', async () => {
+    await openDirtyEditor();
+
+    fireEvent.change(editor(), { target: { value: '# code-fixer template' } });
+
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
+  });
+
+  it('asks before discarding unsaved edits when another skill is clicked', async () => {
+    await openDirtyEditor();
+
+    fireEvent.click(screen.getByText('doc-writer'));
+
+    expect(screen.getByText('Discard unsaved changes to "Job code-fixer"?')).toBeTruthy();
+    // Nothing switched yet: the URL, the fetch, and the typed text all hold.
+    expect(currentSearch()).toContain('skill=code-fixer');
+    expect(getJobSkill).not.toHaveBeenCalledWith('doc-writer', { silent: true });
+    expect(screen.getByDisplayValue('# edited by hand')).toBeTruthy();
+  });
+
+  it('keeps the edits when the discard prompt is cancelled', async () => {
+    await openDirtyEditor();
+    fireEvent.click(screen.getByText('doc-writer'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+
+    expect(screen.queryByText(/Discard unsaved changes/)).toBeNull();
+    expect(screen.getByDisplayValue('# edited by hand')).toBeTruthy();
+    expect(currentSearch()).toContain('skill=code-fixer');
+  });
+
+  it('switches skills after the discard is confirmed', async () => {
+    await openDirtyEditor();
+    fireEvent.click(screen.getByText('doc-writer'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+
+    await waitFor(() => expect(currentSearch()).toContain('skill=doc-writer'));
+    await screen.findByText('Job doc-writer');
+    expect(screen.getByDisplayValue('# doc-writer template')).toBeTruthy();
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
+  });
+
+  it('switches without prompting once the edits are saved', async () => {
+    await openDirtyEditor();
+
+    // Exact match: the dirty list row is labelled "… Unsaved", which /save/i
+    // would also match.
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
+
+    fireEvent.click(screen.getByText('doc-writer'));
+
+    expect(screen.queryByText(/Discard unsaved changes/)).toBeNull();
+    await waitFor(() => expect(currentSearch()).toContain('skill=doc-writer'));
+  });
+
+  it('does not prompt when a clean editor switches skills', async () => {
+    renderPage('/prompts?tab=job-skills&skill=code-fixer');
+    await screen.findByText('Job code-fixer');
+
+    fireEvent.click(screen.getByText('doc-writer'));
+
+    expect(screen.queryByText(/Discard unsaved changes/)).toBeNull();
+    await waitFor(() => expect(currentSearch()).toContain('skill=doc-writer'));
+  });
+});
