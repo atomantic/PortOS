@@ -93,8 +93,16 @@ export default function ConfidenceGauge({ confidence, onRecalculate }) {
 
       {/* Overall Score */}
       <div className="flex items-center gap-6 mb-6">
-        <div className="relative w-24 h-24 shrink-0">
-          <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
+        <div
+          className="relative w-24 h-24 shrink-0"
+          role="meter"
+          aria-label="Digital Twin overall confidence"
+          aria-valuenow={Math.round(overall * 100)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuetext={`${Math.round(overall * 100)}% — ${getConfidenceLabel(overall)}`}
+        >
+          <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100" aria-hidden="true">
             <circle
               cx="50"
               cy="50"
@@ -175,7 +183,14 @@ export default function ConfidenceGauge({ confidence, onRecalculate }) {
                     {Math.round(score * 100)}%
                   </span>
                 </div>
-                <div className="h-1.5 bg-port-border rounded-full overflow-hidden mt-1">
+                <div
+                  className="h-1.5 bg-port-border rounded-full overflow-hidden mt-1"
+                  role="meter"
+                  aria-label={`${label} confidence`}
+                  aria-valuenow={Math.round(score * 100)}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                >
                   <div
                     className={`h-full transition-all ${color.bg}`}
                     style={{ width: `${score * 100}%` }}
