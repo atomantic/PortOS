@@ -29,9 +29,9 @@ git checkout <your-branch>   # or the recorded SHA, if you were on a detached HE
 git stash pop
 ```
 
-The entry is at the top of `git stash list`. Nothing is stashed when the tree is clean, and nothing is checked out when you were already on `main`.
+The entry is at the top of `git stash list`. Nothing is stashed when the tree is clean, and nothing is checked out when you were already on `main`. Note that `git stash pop` restores file contents but not the index — anything you had staged comes back unstaged, so re-`git add` it (or pop with `--index`).
 
-**So: an in-app or CLI update run from a feature branch will leave your checkout on `main` with your work parked in the stash.** Commit or push before updating if you would rather not deal with that.
+**So: an in-app or CLI update run from a feature branch will leave your checkout on `main` with your work parked in the stash.** Commit your work before updating if you would rather not deal with that — pushing alone does not help, since the stash covers uncommitted changes.
 
 To prevent that confusion, `POST /api/update/execute` rejects fork runs with **412 `FORK_SYNC_REQUIRED`** unless either:
 
