@@ -567,4 +567,69 @@ K:  o - - - - - o -`;
     // attachments is server-managed — never sent.
     expect('attachments' in patch).toBe(false);
   });
+
+  describe('unsaved-edit guard (#3902)', () => {
+    const editSheet = async (value = 'Edited sheet text') => {
+      const textarea = await screen.findByLabelText('Content');
+      fireEvent.change(textarea, { target: { value } });
+      return textarea;
+    };
+
+    it('switches straight to play mode when the draft is clean', async () => {
+      renderPage('/songbook/abc?mode=edit');
+      fireEvent.click(await screen.findByRole('button', { name: 'View' }));
+      expect(await screen.findByText('Nonsense words here')).toBeTruthy();
+      expect(screen.queryByText(/Discard your unsaved changes/)).toBeNull();
+    });
+
+    it('confirms before the View toggle discards unsaved edits', async () => {
+      renderPage('/songbook/abc?mode=edit');
+      await editSheet();
+      fireEvent.click(screen.getByRole('button', { name: 'View' }));
+      // Still in edit mode, with the discard confirm armed.
+      expect(await screen.findByText('Discard your unsaved changes to this song?')).toBeTruthy();
+      expect(screen.getByLabelText('Content')).toBeTruthy();
+
+      // Keep editing → stay put, draft intact.
+      fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+      expect(screen.queryByText(/Discard your unsaved changes/)).toBeNull();
+      expect(screen.getByLabelText('Content').value).toBe('Edited sheet text');
+
+      // Discard → the exit runs and the draft resets to the saved song.
+      fireEvent.click(screen.getByRole('button', { name: 'View' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
+      expect(await screen.findByText('Nonsense words here')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+      expect((await screen.findByLabelText('Content')).value).toBe(SHEET);
+      expect(api.updateSong).not.toHaveBeenCalled();
+    });
+
+    it('confirms before the All songs link leaves with unsaved edits', async () => {
+      renderPage('/songbook/abc?mode=edit');
+      await editSheet();
+      fireEvent.click(screen.getByRole('link', { name: /All songs/ }));
+      expect(await screen.findByText('Discard your unsaved changes to this song?')).toBeTruthy();
+      // The navigation was swallowed — the editor is still mounted.
+      expect(screen.getByLabelText('Content').value).toBe('Edited sheet text');
+    });
+
+    it('treats a retyped capo value as clean (number input round-trip)', async () => {
+      renderPage('/songbook/abc?mode=edit');
+      const capo = await screen.findByLabelText('Capo');
+      fireEvent.change(capo, { target: { value: '3' } });
+      fireEvent.change(capo, { target: { value: '2' } });
+      fireEvent.click(screen.getByRole('button', { name: 'View' }));
+      expect(await screen.findByText('Nonsense words here')).toBeTruthy();
+    });
+
+    it('drops the armed confirm once a save settles the draft', async () => {
+      api.updateSong.mockImplementation((_id, patch) => Promise.resolve(song({ ...patch })));
+      renderPage('/songbook/abc?mode=edit');
+      await editSheet();
+      fireEvent.click(screen.getByRole('button', { name: 'View' }));
+      expect(await screen.findByText('Discard your unsaved changes to this song?')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(screen.queryByText(/Discard your unsaved changes/)).toBeNull());
+    });
+  });
 });

@@ -21,6 +21,9 @@
  *   select and live preview. Saves are explicit (single PATCH). The whole
  *   `content` object is always sent — the server fills nested content
  *   defaults, so `{ content: { text } }` alone would reset format to 'tab'.
+ *   Because the draft only reaches the server on Save, every exit out of edit
+ *   mode (View toggle, "All songs", tab close) goes through an unsaved-changes
+ *   guard rather than dropping the draft silently (#3902).
  *
  * Keyboard (play mode): space play/pause, +/- speed, [ ] transpose, 0 top.
  * For a drum chart the same keys drive the kit transport instead: space
@@ -39,6 +42,7 @@ import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
 import PageHeader from '../components/PageHeader';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
+import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import AutoSizeTextarea from '../components/ui/AutoSizeTextarea';
 import TabPills from '../components/ui/TabPills';
 import TabSheetView from '../components/songbook/TabSheetView';
@@ -93,6 +97,14 @@ const toDraft = (song) => ({
 });
 
 const parseTags = (raw) => raw.split(',').map((t) => t.trim()).filter(Boolean);
+
+// Draft-vs-saved comparison for the unsaved-changes guard. Both sides come from
+// toDraft (flat strings), except `capo`: the number input hands back a STRING,
+// so retyping the stored value ('2' vs 2) would otherwise read as an edit. An
+// emptied capo field compares as 0, which is what the save would clamp it to.
+const draftsEqual = (a, b) => Object.keys(a).every((k) => (
+  k === 'capo' ? Number(a.capo || 0) === Number(b.capo || 0) : a[k] === b[k]
+));
 
 // Instrument-view toggle tabs (chord-diagram rendering — never mutates the record).
 const VIEW_TABS = VOICING_INSTRUMENTS.map((viewId) => ({ id: viewId, label: instrumentLabel(viewId) }));
@@ -314,6 +326,43 @@ export default function SongBookViewer() {
     return updated;
   }, { errorMessage: 'Failed to save song' });
 
+  // --- Unsaved-edit guard (#3902)
+  // The editor holds everything in `draft` until an explicit Save, so leaving
+  // edit mode (View toggle, "All songs", a tab close) would drop sheet text and
+  // practice notes silently. `pendingExit` holds the deferred navigation while
+  // the inline discard confirm is up.
+  const isDirty = useMemo(
+    () => !!song && !!draft && !draftsEqual(draft, toDraft(song)),
+    [song, draft],
+  );
+  const [pendingExit, setPendingExit] = useState(null);
+  // A save (or a discard) settles the draft — any armed confirm is now moot.
+  useEffect(() => { if (!isDirty) setPendingExit(null); }, [isDirty]);
+  // Store the exit as a value, not as a state updater (setState(fn) would CALL it).
+  const requestExit = useCallback((run) => {
+    if (isDirty) setPendingExit(() => run);
+    else run();
+  }, [isDirty]);
+  // Route-link clicks can't be deferred by returning false — swallow the default
+  // navigation and re-run it from the confirm instead.
+  const onLeaveLink = useCallback((e) => {
+    if (!isDirty) return;
+    e.preventDefault();
+    setPendingExit(() => () => navigate('/songbook'));
+  }, [isDirty, navigate]);
+  const discardAndExit = useCallback(() => {
+    setDraft(song ? toDraft(song) : null);
+    setPendingExit(null);
+    pendingExit?.();
+  }, [pendingExit, song]);
+  // Tab close / reload — the browser owns this prompt; preventDefault arms it.
+  useEffect(() => {
+    if (!isDirty) return undefined;
+    const onBeforeUnload = (e) => { e.preventDefault(); };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [isDirty]);
+
   const onDeleteSong = useCallback(() => confirmDelete(() =>
     deleteSong(id, { silent: true })
       .then(() => navigate('/songbook'))
@@ -420,7 +469,7 @@ export default function SongBookViewer() {
         subtitle={song.artist || undefined}
         actions={(
           <>
-            <Link to="/songbook" className={btnClass}>
+            <Link to="/songbook" onClick={onLeaveLink} className={btnClass}>
               <ArrowLeft size={15} />
               <span className="hidden sm:inline">All songs</span>
             </Link>
@@ -437,7 +486,7 @@ export default function SongBookViewer() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setMode('play')}
+                  onClick={() => requestExit(() => setMode('play'))}
                   className={btnClass}
                 >
                   <Eye size={15} />
@@ -478,6 +527,23 @@ export default function SongBookViewer() {
           </>
         )}
       />
+
+      {/* Unsaved-edit guard — a full-width band under the header, so the
+          deferred exit is confirmed where the user just clicked. */}
+      {pendingExit && (
+        <InlineConfirmRow
+          className="shrink-0"
+          variant="separator"
+          tone="warning"
+          question="Discard your unsaved changes to this song?"
+          confirmText="Discard"
+          cancelText="Keep editing"
+          onConfirm={discardAndExit}
+          onCancel={() => setPendingExit(null)}
+          autoFocus
+          aria-label={`Discard unsaved changes to ${song.title}`}
+        />
+      )}
 
       {editing ? (
         /* ============================== EDIT MODE ============================== */
