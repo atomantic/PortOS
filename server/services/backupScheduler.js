@@ -49,9 +49,9 @@ export async function syncBackupSchedule(settings) {
   // destPath and the exclude lists are re-read by the handler on every run.
   const signature = JSON.stringify({ active: Boolean(inputs), cron: inputs?.cron ?? null, tz: timezone });
   if (signature === lastSignature) return registered;
-  lastSignature = signature;
 
   if (!inputs) {
+    lastSignature = signature;
     if (registered) {
       cancel(EVENT_ID);
       registered = false;
@@ -66,31 +66,46 @@ export async function syncBackupSchedule(settings) {
   // expression cleanly re-registers. destPath, excludePaths and
   // disabledDefaultExcludes are re-read inside the handler so toggles saved in
   // the Settings UI take effect on the next scheduled run.
-  schedule({
-    id: EVENT_ID,
-    type: 'cron',
-    cron: inputs.cron,
-    timezone,
-    handler: async () => {
-      const fresh = await getSettings();
-      if (fresh.backup?.enabled === false) {
-        console.log('💾 Backup scheduler: disabled since registration — skipping run');
-        return;
-      }
-      const destPath = fresh.backup?.destPath;
-      if (!destPath) {
-        console.log('💾 Backup scheduler: destPath cleared since registration — skipping run');
-        return;
-      }
-      const excludePaths = fresh.backup?.excludePaths || [];
-      const disabledDefaultExcludes = fresh.backup?.disabledDefaultExcludes || [];
-      console.log('💾 Backup scheduler: running scheduled backup');
-      await runBackup(destPath, null, { excludePaths, disabledDefaultExcludes });
-    },
-    metadata: { source: 'backupScheduler' }
-  });
-  registered = true;
+  //
+  // try/catch (allowed here — this runs on the settings event bus / at boot,
+  // outside the request lifecycle): schedule() CANCELS the existing event
+  // before it validates the new cron, so a malformed expression tears down a
+  // working timer and throws. Leave `lastSignature` unset in that case so the
+  // next save — even one that re-submits the same value — retries instead of
+  // short-circuiting on a registration that never happened.
+  try {
+    schedule({
+      id: EVENT_ID,
+      type: 'cron',
+      cron: inputs.cron,
+      timezone,
+      handler: async () => {
+        const fresh = await getSettings();
+        if (fresh.backup?.enabled === false) {
+          console.log('💾 Backup scheduler: disabled since registration — skipping run');
+          return;
+        }
+        const destPath = fresh.backup?.destPath;
+        if (!destPath) {
+          console.log('💾 Backup scheduler: destPath cleared since registration — skipping run');
+          return;
+        }
+        const excludePaths = fresh.backup?.excludePaths || [];
+        const disabledDefaultExcludes = fresh.backup?.disabledDefaultExcludes || [];
+        console.log('💾 Backup scheduler: running scheduled backup');
+        await runBackup(destPath, null, { excludePaths, disabledDefaultExcludes });
+      },
+      metadata: { source: 'backupScheduler' }
+    });
+  } catch (err) {
+    registered = false;
+    lastSignature = null;
+    console.error(`❌ Backup scheduler: cron "${inputs.cron}" rejected — no backup scheduled: ${err.message}`);
+    return false;
+  }
 
+  registered = true;
+  lastSignature = signature;
   console.log(`💾 Backup scheduler: registered daily backup at cron "${inputs.cron}"`);
   return true;
 }

@@ -203,6 +203,20 @@ describe('settings:updated re-sync', () => {
     expect(cancel).toHaveBeenCalledWith('backup-daily');
   });
 
+  it('retries after a rejected cron instead of short-circuiting on it', async () => {
+    // eventScheduler.schedule() cancels the existing event BEFORE validating the
+    // replacement, so a bad cron leaves nothing registered — the next save must
+    // re-attempt even when it submits the identical (now-fixed) settings.
+    getSettings.mockResolvedValue({ backup: { enabled: true, destPath: '/dest', cronExpression: 'nonsense' } });
+    schedule.mockImplementationOnce(() => { throw new Error('Cron type requires cron expression'); });
+    await startBackupScheduler();
+    expect(schedule).toHaveBeenCalledTimes(1);
+
+    // Same inputs again: the failed attempt must not be remembered as applied.
+    await emitSettings({ backup: { enabled: true, destPath: '/dest', cronExpression: 'nonsense' } });
+    expect(schedule).toHaveBeenCalledTimes(2);
+  });
+
   it('is a no-op for a save that does not touch backup registration', async () => {
     getSettings.mockResolvedValue({ backup: { enabled: true, destPath: '/dest' } });
     await startBackupScheduler();
