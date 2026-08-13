@@ -42,6 +42,12 @@ const EMPTY_CATALOG = { jobTypes: [], apps: [], universes: [], imageModes: [] };
 // two need opposite handling of the error state, and both are falsy.
 const READ_FAILED = Symbol('quota-burn-read-failed');
 
+// A catalog the server answered with, but which is missing the job types the
+// form needs, is indistinguishable from a failed fetch as far as the page is
+// concerned — both leave every dropdown empty — so normalize to the same shape
+// and let the caller decide which message to show.
+const normalizeCatalog = (data) => ({ ...EMPTY_CATALOG, ...(data || {}) });
+
 export default function QuotaBurn() {
   // Which family is expanded lives in the URL, not local state, so a specific
   // family's plan is linkable and survives a reload.
@@ -60,6 +66,15 @@ export default function QuotaBurn() {
   // left a failed first load indistinguishable from "the server answered, and
   // it has no plan" — one is retryable and names a cause, the other doesn't.
   const [loadError, setLoadError] = useState(null);
+  // Same `null` = never failed / string = the cause convention as `loadError`,
+  // for the SECOND read this page makes. The catalog fetch used to be swallowed
+  // outright, which is what left the preset picker missing, "Add job" disabled,
+  // and every job row's dropdown empty with nothing on screen saying why — and
+  // editing a step against an empty job-type list submits `jobType: ""`, which
+  // the strict PUT schema 400s into a stalled save.
+  const [catalogError, setCatalogError] = useState(null);
+  // Reported ON the retry button, like `refreshing` — the plan stays rendered.
+  const [catalogRetrying, setCatalogRetrying] = useState(false);
   // `unsaved` covers BOTH the debounce window and the in-flight PUT. Every "run"
   // control reads server-side config, so it must stay disabled until the edit
   // has actually landed — otherwise the user changes a model, clicks Burn, and
@@ -126,12 +141,37 @@ export default function QuotaBurn() {
     return null;
   }, []);
 
+  // The catalog is the page's second read and fails independently of the plan:
+  // the plan can render perfectly while every choice the form offers is empty.
+  // `silent: true` for the same reason as `load` — the failure is rendered by
+  // the family card's own banner, not the request helper's toast.
+  const loadCatalog = useCallback(async () => {
+    let failure = null;
+    const data = await api.getQuotaBurnCatalog({ silent: true })
+      .catch((err) => {
+        failure = err?.message || 'The request failed.';
+        return READ_FAILED;
+      });
+    if (data === READ_FAILED) {
+      setCatalogError(failure);
+      return;
+    }
+    const next = normalizeCatalog(data);
+    setCatalog(next);
+    // A 200 carrying no job types is a different failure with the same symptom
+    // — say so rather than reporting success into an empty form.
+    setCatalogError(next.jobTypes.length ? null : 'The server returned no job types.');
+  }, []);
+
   useEffect(() => {
-    Promise.all([
-      load(),
-      api.getQuotaBurnCatalog({ silent: true }).then(setCatalog).catch(() => {}),
-    ]).finally(() => setLoading(false));
-  }, [load]);
+    Promise.all([load(), loadCatalog()]).finally(() => setLoading(false));
+  }, [load, loadCatalog]);
+
+  const retryCatalog = async () => {
+    setCatalogRetrying(true);
+    await loadCatalog();
+    setCatalogRetrying(false);
+  };
 
   // A cold quota cache comes back as `pending` families rather than holding the
   // response open for a 20s-per-family PTY scrape, so the page renders its plan
@@ -370,6 +410,9 @@ export default function QuotaBurn() {
             config={family}
             status={(status?.families || []).find((row) => row.id === familyId)}
             catalog={catalog}
+            catalogError={catalogError}
+            catalogRetrying={catalogRetrying}
+            onRetryCatalog={retryCatalog}
             expanded={expanded === familyId}
             actionsBusy={unsaved || running}
             onToggleExpand={(id) => navigate(expanded === id ? '/devtools/quota-burn' : `/devtools/quota-burn/${id}`)}

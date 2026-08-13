@@ -7,7 +7,8 @@
  * runner evaluates, so the card can't disagree with what actually happens.
  */
 
-import { Ban, ChevronDown, ChevronRight, Flame, Plus, RotateCcw } from 'lucide-react';
+import { AlertTriangle, Ban, ChevronDown, ChevronRight, Flame, Plus, RotateCcw } from 'lucide-react';
+import Banner from '../ui/Banner';
 import BrailleSpinner from '../BrailleSpinner';
 import JobRow from './JobRow';
 import PresetPicker from './PresetPicker';
@@ -16,8 +17,8 @@ import { formatDateTime } from '../../utils/formatters';
 import { NumberField } from './fields';
 
 export default function FamilyCard({
-  familyId, config, status, catalog, expanded, actionsBusy,
-  onToggleExpand, onPatch, onRunFamily, onRunJob, onRearm,
+  familyId, config, status, catalog, catalogError, catalogRetrying, expanded, actionsBusy,
+  onToggleExpand, onPatch, onRunFamily, onRunJob, onRearm, onRetryCatalog,
 }) {
   const jobs = config.jobs || [];
   // Pending counts and `run once` completions stay on the STATUS side and are
@@ -160,6 +161,33 @@ export default function FamilyCard({
 
       {expanded && (
         <div className="border-t border-port-border/60 p-3 space-y-4">
+          {/* Every choice this section offers — job type, app, universe, image
+              mode, and the preset picker — comes from the catalog, so a failed
+              catalog read empties them all and hides the picker outright. Say
+              so where the empty controls are, and offer the re-read here rather
+              than making a browser reload the only way back. */}
+          {catalogError && (
+            <Banner
+              tone="warning"
+              icon={AlertTriangle}
+              title="Job choices could not be loaded"
+              actions={(
+                <button
+                  type="button"
+                  className="text-xs px-3 py-1.5 rounded border border-port-warning/40 hover:bg-port-warning/10 disabled:opacity-40"
+                  disabled={catalogRetrying}
+                  onClick={onRetryCatalog}
+                >
+                  {catalogRetrying ? 'Retrying…' : 'Retry catalog load'}
+                </button>
+              )}
+            >
+              <p className="mt-0.5 break-words">
+                {catalogError} Job types, apps, universes, and presets are unavailable — editing a step now would save an
+                empty job type and be rejected.
+              </p>
+            </Banner>
+          )}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <NumberField id={`burn-${familyId}-window`} label="Burn within (hours of reset)" value={config.resetWithinHours} onChange={(v) => onPatch({ resetWithinHours: v })} min={0} max={168} hint="Measured against the broadest window (the weekly one) — the allowance that expires unused." />
             <NumberField id={`burn-${familyId}-reserve`} label="Reserve (%)" value={config.reservePercent} onChange={(v) => onPatch({ reservePercent: v })} min={0} max={100} hint="Never spend below this much headroom." />
@@ -191,7 +219,7 @@ export default function FamilyCard({
                   type="button"
                   className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline disabled:opacity-40"
                   disabled={!canAddJob}
-                  title={canAddJob ? 'Add a job to this plan' : 'Job catalog unavailable — reload the page'}
+                  title={canAddJob ? 'Add a job to this plan' : 'Job catalog unavailable — retry the catalog load above'}
                   onClick={addJob}
                 >
                   <Plus size={13} /> Add job

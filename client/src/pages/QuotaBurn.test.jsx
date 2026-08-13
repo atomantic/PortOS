@@ -355,6 +355,56 @@ describe('QuotaBurn run-once steps', () => {
   });
 });
 
+/**
+ * The catalog is the page's second read, and it fails independently of the
+ * plan: the plan renders perfectly while every choice the form offers is empty.
+ * Swallowing that failure left the preset picker gone, "Add job" disabled, and
+ * every dropdown blank with nothing saying why — and editing a step against an
+ * empty job-type list saves `jobType: ""`, which the strict PUT rejects.
+ */
+describe('QuotaBurn catalog failure', () => {
+  it('names a failed catalog read instead of silently emptying the form', async () => {
+    api.getQuotaBurnCatalog.mockRejectedValueOnce(new Error('Catalog request failed'));
+    renderPage('/devtools/quota-burn/grok');
+
+    expect(await screen.findByText('Job choices could not be loaded')).toBeInTheDocument();
+    expect(screen.getByText(/Catalog request failed/)).toBeInTheDocument();
+    // The controls the catalog feeds are gone or inert — the banner is the only
+    // thing on screen that explains either.
+    expect(screen.queryByLabelText(/Add a preset job/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Add job/ })).toBeDisabled();
+    // The plan itself still rendered: a catalog failure is not a page failure.
+    expect(screen.getByText(/62% left/)).toBeInTheDocument();
+  });
+
+  it('re-fetches the catalog from the banner without a page reload', async () => {
+    const user = userEvent.setup();
+    api.getQuotaBurnCatalog.mockRejectedValueOnce(new Error('Catalog request failed'));
+    renderPage('/devtools/quota-burn/grok');
+
+    await user.click(await screen.findByRole('button', { name: 'Retry catalog load' }));
+    await waitFor(() => expect(api.getQuotaBurnCatalog).toHaveBeenCalledTimes(2));
+    // The success clears the banner AND restores the controls it was standing in for.
+    await waitFor(() => expect(screen.queryByText('Job choices could not be loaded')).not.toBeInTheDocument());
+    expect(screen.getByLabelText(/Add a preset job/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Add job/ })).toBeEnabled();
+  });
+
+  it('treats a catalog that answered with no job types as its own failure', async () => {
+    // Same symptom as a thrown read — every dropdown empty — but a different
+    // cause, so it must not be reported as a successful load.
+    api.getQuotaBurnCatalog.mockResolvedValueOnce({ ...catalog, jobTypes: [] });
+    renderPage('/devtools/quota-burn/grok');
+    expect(await screen.findByText(/The server returned no job types\./)).toBeInTheDocument();
+  });
+
+  it('says nothing about the catalog when it loaded', async () => {
+    renderPage('/devtools/quota-burn/grok');
+    await screen.findByLabelText(/Add a preset job/);
+    expect(screen.queryByText('Job choices could not be loaded')).not.toBeInTheDocument();
+  });
+});
+
 describe('QuotaBurn save debounce', () => {
   it('folds a burst of edits into ONE PUT and blocks runs until it lands', async () => {
     // Per-keystroke saving also re-read the status, and a universe-bible-images
