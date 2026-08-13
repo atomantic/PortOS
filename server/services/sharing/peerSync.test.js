@@ -4081,6 +4081,147 @@ describe('peerSync', () => {
         expect(refreshed.lastPushedHash).toBeFalsy();
       });
 
+      // #3928 — the legacy-stripped water-mark. Withholding `lastPushedHash`
+      // (the two tests above) is what keeps the stripped key deliverable, but
+      // on its own it made EVERY subsequent cycle re-run the 400 +
+      // stripped-retry pair forever. `lastPushedLegacyHash` records the full
+      // payload hash we delivered in stripped form so an unchanged record
+      // settles.
+      const legacyRejectsKey = (key) => {
+        const rejection = { ok: false, status: 400, json: async () => ({
+          code: 'VALIDATION_ERROR',
+          message: 'Validation failed',
+          context: { details: [{ path: '', message: `Unrecognized key(s) in object: '${key}'` }] },
+        }) };
+        rejection.clone = () => rejection;
+        return rejection;
+      };
+      const mockLegacyReviewPeer = () => {
+        // A pre-feature peer: rejects `manuscriptReview` on every full push,
+        // accepts the stripped retry.
+        vi.mocked(peerFetch).mockImplementation(async (_url, init) => (
+          JSON.parse(init.body).manuscriptReview
+            ? legacyRejectsKey('manuscriptReview')
+            : { ok: true, status: 200, json: async () => ({}) }
+        ));
+      };
+
+      it('records lastPushedLegacyHash when a stripped retry lands on a legacy peer (#3928)', async () => {
+        vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+        vi.mocked(listIssues).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
+        vi.mocked(getReview).mockResolvedValue({
+          schemaVersion: 1,
+          comments: [{ id: 'mrc-1', problem: 'pacing', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }],
+        });
+        mockLegacyReviewPeer();
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'series', recordId: 's1',
+        }, { adoptedFromReverse: true });
+        const result = await pushRecordToPeer(sub);
+        expect(result.pushed).toBe(true);
+        const refreshed = await findPeerSubscription('peer-a', 'series', 's1');
+        // The review is still owed (hash withheld) but the delivered content
+        // is water-marked so the next cycle can settle.
+        expect(refreshed.lastPushedHash).toBeFalsy();
+        expect(refreshed.lastPushedLegacyHash).toBe(result.hash);
+      });
+
+      it('short-circuits the next cycle as unchanged instead of re-running the 400 + retry pair (#3928)', async () => {
+        vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+        vi.mocked(listIssues).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
+        vi.mocked(getReview).mockResolvedValue({
+          schemaVersion: 1,
+          comments: [{ id: 'mrc-1', problem: 'pacing', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }],
+        });
+        mockLegacyReviewPeer();
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'series', recordId: 's1',
+        }, { adoptedFromReverse: true });
+        await pushRecordToPeer(sub);
+        expect(vi.mocked(peerFetch).mock.calls.length).toBe(2); // 400 + stripped retry
+        // Next sync cycle, same content: zero HTTP.
+        const second = await pushRecordToPeer(await findPeerSubscription('peer-a', 'series', 's1'));
+        expect(second.pushed).toBe(false);
+        expect(second.reason).toBe('unchanged-legacy-stripped');
+        expect(vi.mocked(peerFetch).mock.calls.length).toBe(2);
+      });
+
+      it('re-pushes when the bundled review actually changes after a stripped push (#3928)', async () => {
+        vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+        vi.mocked(listIssues).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
+        vi.mocked(getReview).mockResolvedValue({
+          schemaVersion: 1,
+          comments: [{ id: 'mrc-1', problem: 'pacing', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }],
+        });
+        mockLegacyReviewPeer();
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'series', recordId: 's1',
+        }, { adoptedFromReverse: true });
+        const first = await pushRecordToPeer(sub);
+        const callsAfterFirst = vi.mocked(peerFetch).mock.calls.length;
+        // The user resolves the comment — the review content moved, so the
+        // water-mark must NOT hold the push back.
+        vi.mocked(getReview).mockResolvedValue({
+          schemaVersion: 1,
+          comments: [{ id: 'mrc-1', problem: 'pacing', status: 'resolved', updatedAt: '2026-06-03T00:00:00Z' }],
+        });
+        const second = await pushRecordToPeer(await findPeerSubscription('peer-a', 'series', 's1'));
+        expect(second.pushed).toBe(true);
+        expect(second.hash).not.toBe(first.hash);
+        expect(vi.mocked(peerFetch).mock.calls.length).toBe(callsAfterFirst + 2);
+        const refreshed = await findPeerSubscription('peer-a', 'series', 's1');
+        expect(refreshed.lastPushedLegacyHash).toBe(second.hash);
+      });
+
+      it('re-attempts the full push on a peer:online re-probe even when the legacy hash matches (#3928)', async () => {
+        vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+        vi.mocked(listIssues).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
+        vi.mocked(getReview).mockResolvedValue({
+          schemaVersion: 1,
+          comments: [{ id: 'mrc-1', problem: 'pacing', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }],
+        });
+        mockLegacyReviewPeer();
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'series', recordId: 's1',
+        }, { adoptedFromReverse: true });
+        await pushRecordToPeer(sub);
+        // The peer upgraded and came back online — it now accepts the review.
+        vi.mocked(peerFetch).mockImplementation(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+        const upgraded = await pushRecordToPeer(
+          await findPeerSubscription('peer-a', 'series', 's1'),
+          { bypassSchemaCooldown: true },
+        );
+        expect(upgraded.pushed).toBe(true);
+        const payload = JSON.parse(vi.mocked(peerFetch).mock.calls.at(-1)[1].body);
+        expect(payload.manuscriptReview).toBeDefined();
+        // Fully delivered → the normal hash takes over and the legacy
+        // water-mark clears.
+        const refreshed = await findPeerSubscription('peer-a', 'series', 's1');
+        expect(refreshed.lastPushedHash).toBe(upgraded.hash);
+        expect(refreshed.lastPushedLegacyHash).toBeFalsy();
+      });
+
+      it('does NOT record a legacy hash when the RECEIVER reported the bundled merge failed (#3928)', async () => {
+        // `reviewSyncPending` from the receiver is a transient merge failure,
+        // not a version gap — the next cycle must genuinely re-push.
+        vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+        vi.mocked(listIssues).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
+        vi.mocked(getReview).mockResolvedValue({
+          schemaVersion: 1,
+          comments: [{ id: 'mrc-1', problem: 'pacing', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }],
+        });
+        vi.mocked(peerFetch).mockResolvedValue({ ok: true, status: 200, json: async () => ({ reviewSyncPending: true }) });
+        const sub = await subscribePeer({
+          peerId: 'peer-a', recordKind: 'series', recordId: 's1',
+        }, { adoptedFromReverse: true });
+        await pushRecordToPeer(sub);
+        const refreshed = await findPeerSubscription('peer-a', 'series', 's1');
+        expect(refreshed.lastPushedHash).toBeFalsy();
+        expect(refreshed.lastPushedLegacyHash).toBeFalsy();
+        const second = await pushRecordToPeer(refreshed);
+        expect(second.pushed).toBe(true);
+      });
+
       it('does NOT retry on a 400 whose validation error is unrelated to portosMeta', async () => {
         // The retry is keyed on the `portosMeta` mention in the validation
         // details — any other 400 (oversized field, unknown record key, etc.)

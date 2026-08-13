@@ -230,6 +230,14 @@ export async function subscribePeer({ peerId, recordKind, recordId }, opts = {})
         updatedAt: now,
         lastPushedAt: null,
         lastPushedHash: null,
+        // #3928: full-payload hash of the last push that landed ONLY after we
+        // stripped a top-level key an older peer's strict schema rejects
+        // (`manuscriptReview` / `reverseOutline` / `linkedTrack`).
+        // `lastPushedHash` stays withheld in that case so the stripped key is
+        // re-sent once the peer upgrades; this second water-mark keeps an
+        // unchanged record from re-running the 400 + stripped-retry pair on
+        // every sync cycle. See peerSyncPush.js `pushRecordToPeer`.
+        lastPushedLegacyHash: null,
         // Per-(peer,record) confirmed-delivery water-mark (ms epoch). Set ONLY
         // when a push to this peer for THIS record lands successfully (the
         // receiver returned 2xx). Distinct from the per-peer tombstone ack

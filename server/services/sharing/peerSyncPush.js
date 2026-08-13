@@ -226,6 +226,21 @@ export async function pushRecordToPeer(sub, options = {}) {
   if (sub.lastPushedHash && sub.lastPushedHash === hash) {
     return { pushed: false, reason: 'unchanged', hash };
   }
+  // LEGACY-STRIPPED SHORT-CIRCUIT (#3928): the last push to this peer landed
+  // only after we stripped a top-level key its older `.strict()` schema
+  // rejects (`manuscriptReview` / `reverseOutline` / `linkedTrack`), so
+  // `lastPushedHash` was deliberately withheld. Without a second water-mark
+  // that withheld hash makes EVERY subsequent cycle re-run the same 400 +
+  // stripped-retry pair forever — two HTTP round-trips per 60s sync for a
+  // record whose content never moved. `lastPushedLegacyHash` records the FULL
+  // payload hash we delivered in stripped form, so an unchanged record
+  // short-circuits here. Any real content change moves `hash` and re-attempts
+  // the full push; the `peer:online` re-probe (`bypassSchemaCooldown`) and
+  // `forcePushRecord` still push unconditionally, which is the canonical
+  // "did the peer upgrade?" point that finally delivers the stripped key.
+  if (!options.bypassSchemaCooldown && sub.lastPushedLegacyHash && sub.lastPushedLegacyHash === hash) {
+    return { pushed: false, reason: 'unchanged-legacy-stripped', hash };
+  }
 
   const url = `${peerBaseUrl(peer)}/api/peer-sync/push`;
   // withAbortTimeout aborts after PUSH_TIMEOUT_MS so a hung peer can't keep the
@@ -453,9 +468,24 @@ export async function pushRecordToPeer(sub, options = {}) {
   const trackBundleConfirmed = sub.recordKind === 'musicVideoProject'
     && !trackSyncPending
     && (!trackOwed || Boolean(payload.linkedTrack));
+  // #3928: separate the two reasons a bundled doc is still pending. A
+  // RECEIVER-reported pending (its bundled merge threw) is transient — the
+  // next cycle must genuinely re-push, so it gets no water-mark. A
+  // SENDER-side strip for a legacy peer is stable — the peer will reject the
+  // key again until it upgrades, so record the full-payload hash in
+  // `lastPushedLegacyHash` and let an unchanged record short-circuit above
+  // instead of looping a 400 + retry pair every cycle. Missing assets/bodies
+  // also stay un-water-marked: the receiver is still pulling and needs a
+  // fresh manifest each cycle.
+  const receiverReportedPending = body?.reviewSyncPending === true
+    || body?.outlineSyncPending === true
+    || body?.trackSyncPending === true;
+  const strippedForLegacyPeer = reviewStrippedForLegacyPeer || outlineStrippedForLegacyPeer || trackStrippedForLegacyPeer;
+  const legacyStrippedHash = (strippedForLegacyPeer && missingCount === 0 && !receiverReportedPending) ? hash : null;
   await persistPushSuccess(sub.id, (missingCount > 0 || reviewSyncPending || outlineSyncPending || trackSyncPending) ? null : hash, {
     confirmedAtMs: Date.now(),
     trackBundleConfirmed,
+    legacyStrippedHash,
   });
   if (Number.isFinite(body?.ackedDeletesUpTo) && body.ackedDeletesUpTo > 0) {
     await ackDeletesUpTo(sub.peerId, body.ackedDeletesUpTo).catch(() => {});
@@ -506,7 +536,7 @@ export async function pushRecordToPeer(sub, options = {}) {
   };
 }
 
-async function persistPushSuccess(subId, hash, { confirmedAtMs = Date.now(), trackBundleConfirmed = false } = {}) {
+async function persistPushSuccess(subId, hash, { confirmedAtMs = Date.now(), trackBundleConfirmed = false, legacyStrippedHash = null } = {}) {
   await withStateLock(async () => {
     const state = await readState();
     const sub = state.subscriptions.find((s) => s.id === subId);
@@ -514,6 +544,11 @@ async function persistPushSuccess(subId, hash, { confirmedAtMs = Date.now(), tra
     const now = new Date().toISOString();
     sub.lastPushedAt = now;
     sub.lastPushedHash = hash;
+    // #3928: the legacy-stripped water-mark. Set when this push only landed
+    // with a newer top-level key stripped for an older peer; cleared on every
+    // other successful push so a peer that has since upgraded (or a record
+    // whose content moved) can never be held back by a stale entry.
+    sub.lastPushedLegacyHash = isNonEmptyStr(legacyStrippedHash) ? legacyStrippedHash : null;
     sub.updatedAt = now;
     // Advance the per-record confirmed-delivery water-mark monotonically — an
     // out-of-order retry must not retract it (mirrors ackDeletesUpTo's
