@@ -637,11 +637,55 @@ describe('QuotaBurn save races', () => {
     expect(screen.queryByText(/Loading burn plan/)).not.toBeInTheDocument();
 
     rejectRefresh(new Error('Quota scrape timed out'));
-    await waitFor(() => expect(toastError).toHaveBeenCalledWith('Failed to refresh quota stats: Quota scrape timed out'));
+    // The banner names the cause — and it is the ONLY surface that reports it,
+    // so the same failure is never announced twice.
+    expect(await screen.findByText(/Quota scrape timed out/)).toBeInTheDocument();
+    expect(toastError).not.toHaveBeenCalled();
     // The failure does not tear the page down, and the button is usable again.
     expect(screen.getByText(/62% left/)).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: /Refresh quota/ })).toBeEnabled();
   });
+
+  it('clears the failed-refresh banner on the next successful read', async () => {
+    const user = userEvent.setup();
+    api.getQuotaBurn.mockResolvedValueOnce({ config, status });
+    api.getQuotaBurn.mockRejectedValueOnce(new Error('Quota scrape timed out'));
+    renderPage();
+
+    expect(await screen.findByText(/62% left/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Refresh quota/ }));
+    expect(await screen.findByText(/Quota scrape timed out/)).toBeInTheDocument();
+
+    // The banner's own Retry re-reads; the success takes the banner away and
+    // leaves the plan exactly where it was.
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByText(/Quota scrape timed out/)).not.toBeInTheDocument());
+    expect(screen.getByText(/62% left/)).toBeInTheDocument();
+  });
+
+  it('surfaces a background poll that failed, and clears it on the next poll that lands', async () => {
+    // A poll failure is the one read nobody asked for — with nothing on screen
+    // changing, a stalled scrape looked identical to one that kept answering
+    // with the same numbers.
+    const pendingStatus = {
+      ...status,
+      families: [{ ...status.families[0], pending: true }, status.families[1]],
+    };
+    api.getQuotaBurn.mockResolvedValueOnce({ config, status: pendingStatus });
+    api.getQuotaBurn.mockRejectedValueOnce(new Error('Provider CLI is not responding'));
+    renderPage();
+
+    expect(await screen.findByText(/reading quota…/)).toBeInTheDocument();
+    expect(await screen.findByText(/Provider CLI is not responding/, undefined, { timeout: 8000 })).toBeInTheDocument();
+    // The plan stays on screen: a failed poll must not blank it.
+    expect(screen.getByLabelText(/Run the quota-burn loop automatically/)).toBeInTheDocument();
+
+    // The default mock resolves, so the following poll clears the banner and
+    // fills the reading in.
+    expect(await screen.findByText(/62% left/, undefined, { timeout: 8000 })).toBeInTheDocument();
+    expect(screen.queryByText(/Provider CLI is not responding/)).not.toBeInTheDocument();
+    // Two 4s poll intervals have to elapse, so the default 5s cap is too tight.
+  }, 20000);
 
   it('does not also toast when the failure is already named by the banner', async () => {
     // With no plan on screen the banner owns the error surface — a toast on top

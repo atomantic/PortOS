@@ -132,32 +132,28 @@ export default function QuotaBurn() {
   const saveRef = useRef(null);
   const hasConfigRef = useRef(false);
 
-  // Resolves to `null` when the read landed, or to the failure message when it
-  // didn't. The banner state alone can't tell a caller whether THIS read failed
-  // (a poll may have set it earlier), and the manual refresh — which renders no
-  // banner, because the page still has its plan on screen — needs the cause to
-  // put in its toast.
+  // Every failure — first load, manual refresh, or a background poll — is
+  // reported by `loadError` and rendered as this page's ONE banner, so the
+  // caller doesn't need the cause back.
   const load = useCallback(async (refresh = false) => {
     const seq = editSeqRef.current;
-    let failure = null;
     // `silent: true` because the failure is rendered by this page's own banner
-    // or its refresh toast rather than the request helper's — see
-    // client/src/CLAUDE.md's silent-vs-toasting rule.
+    // rather than the request helper's toast — see client/src/CLAUDE.md's
+    // silent-vs-toasting rule.
     const data = await api.getQuotaBurn(refresh, { silent: true })
       .catch((err) => {
-        failure = err?.message || 'The request failed.';
-        setLoadError(failure);
+        setLoadError(err?.message || 'The request failed.');
         return READ_FAILED;
       });
     // The sentinel — not a falsy check — is what separates the two: a read that
     // FAILED must keep its message, while a read that merely answered with
     // nothing has to clear the previous failure, or the banner goes on blaming
     // a network error for what is now the server returning no plan.
-    if (data === READ_FAILED) return failure;
+    if (data === READ_FAILED) return;
     // Cleared on ANY successful read, including the polls: the last error no
     // longer describes the page once the server has answered.
     setLoadError(null);
-    if (!data) return null;
+    if (!data) return;
     // `status` is derived server-side and never edited here, so it is always
     // safe to adopt; `config` is the form's own state and must not be rewound.
     setStatus(data.status);
@@ -173,7 +169,6 @@ export default function QuotaBurn() {
     // it. Anything unsaved or in flight means the server's copy is stale by
     // definition; don't adopt it.
     if (editSeqRef.current === seq && !pendingRef.current && !savingRef.current) setConfig(data.config);
-    return null;
   }, []);
 
   // The catalog is the page's second read and fails independently of the plan:
@@ -361,12 +356,11 @@ export default function QuotaBurn() {
   // spinner and the page keeps rendering what it has.
   const refreshQuota = async (hard = false) => {
     setRefreshing(true);
-    const failure = await load(hard);
+    await load(hard);
     setRefreshing(false);
-    // With a plan on screen there is no banner, so the toast is the only thing
-    // that can report the failure; when there ISN'T one the banner already
-    // names it, and toasting too would say it twice.
-    if (failure && config) toast.error(`Failed to refresh quota stats: ${failure}`);
+    // No toast: `loadError` is rendered as a banner in BOTH branches below, so
+    // a toast on top of it would report the same failure twice — and a toast
+    // fades while a poll that keeps failing deserves a standing indicator.
   };
 
   if (loading) return <div className="p-6 text-gray-400"><BrailleSpinner /> Loading burn plan…</div>;
@@ -401,6 +395,32 @@ export default function QuotaBurn() {
 
   return (
     <div className="space-y-4">
+      {/* A refresh or a poll that failed with a plan already on screen used to
+          change nothing at all — the numbers stayed put and a read that never
+          landed looked exactly like one that landed unchanged. `warning`, not
+          `error`: the plan below is still rendered and still usable, and this
+          clears itself on the next successful read (including a poll), so a
+          transient blip should not read as a page-blocking failure. */}
+      {loadError && (
+        <Banner
+          tone="warning"
+          icon={AlertTriangle}
+          role="status"
+          aria-live="polite"
+          actions={(
+            <button
+              type="button"
+              className="text-xs px-3 py-1.5 rounded border border-port-warning/40 hover:bg-port-warning/10 disabled:opacity-40"
+              disabled={refreshing}
+              onClick={() => refreshQuota()}
+            >
+              {refreshing ? 'Retrying…' : 'Retry'}
+            </button>
+          )}
+        >
+          <p className="break-words">Quota stats could not be refreshed — showing the last values read. {loadError}</p>
+        </Banner>
+      )}
       <header className="flex flex-wrap items-center gap-3">
         <h1 className="text-xl font-semibold text-white flex items-center gap-2"><Flame size={20} className="text-orange-400" /> Quota Burn</h1>
         {/* There is no Save button on this page, and nothing else said so — the
