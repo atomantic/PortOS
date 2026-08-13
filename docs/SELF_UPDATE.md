@@ -18,6 +18,21 @@ The release-notification poll **always queries the upstream `atomantic/PortOS`**
 
 `update.sh` / `update.ps1` always `git pull --rebase --autostash` from **origin**. A fork user who has not merged upstream into their fork gets a silent no-op pull.
 
+### The update always lands on `main` first
+
+Before pulling, both scripts check the current branch and **switch to `main` if you are anywhere else** — a feature branch or a detached HEAD. This is deliberate: the rest of the script (install, build, restart) has to run on the revision the app will boot from, and pulling on a feature branch would leave the running app on a version the update never advanced.
+
+If the working tree is dirty at that point (unstaged, staged, or untracked files), the scripts **`git stash push -u`** first so the checkout can proceed, tagging the entry `portos-update-<timestamp>`. The stash is intentionally **not** popped afterwards — the remaining steps need `main`'s contents on disk. On completion the scripts print how to get back:
+
+```bash
+git checkout <your-branch>   # or the recorded SHA, if you were on a detached HEAD
+git stash pop
+```
+
+The entry is at the top of `git stash list`. Nothing is stashed when the tree is clean, and nothing is checked out when you were already on `main`.
+
+**So: an in-app or CLI update run from a feature branch will leave your checkout on `main` with your work parked in the stash.** Commit or push before updating if you would rather not deal with that.
+
 To prevent that confusion, `POST /api/update/execute` rejects fork runs with **412 `FORK_SYNC_REQUIRED`** unless either:
 
 - the request body sets `acknowledgeFork: true`, or
