@@ -346,14 +346,17 @@ export default function SongBookViewer() {
       .then((res) => {
         attachmentsMutatedRef.current = true;
         // Server returns the updated meta list; carry over local present flags.
-        // `prev` is the 'failed' sentinel when the presence lookup errored —
-        // `.find()` on that string throws, and presence is genuinely unknown,
-        // so leave the flag off rather than stamping a false absent (#3900).
+        // `prev` is the 'failed' sentinel when the presence lookup errored, and
+        // `.find()` on that string throws (#3900). Presence carries over only
+        // where it is an explicitly-known boolean — an entry we never resolved
+        // (failed lookup, or a synced entry appended after one) stays unknown
+        // so it renders as a link, not a false "not on this machine".
         setAttachments((prev) => {
-          const known = Array.isArray(prev) ? prev : null;
-          return (res?.attachments || []).map((meta) => (known
-            ? { ...meta, present: known.find((a) => a.filename === meta.filename)?.present ?? false }
-            : { ...meta }));
+          const known = Array.isArray(prev) ? prev : [];
+          return (res?.attachments || []).map((meta) => {
+            const prior = known.find((a) => a.filename === meta.filename)?.present;
+            return typeof prior === 'boolean' ? { ...meta, present: prior } : { ...meta };
+          });
         });
       })
       .catch((err) => toast.error(err?.message || 'Failed to delete attachment')),

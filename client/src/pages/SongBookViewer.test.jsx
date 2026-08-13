@@ -159,6 +159,31 @@ describe('SongBookViewer', () => {
       expect(screen.getByRole('link', { name: 'Drum chart' })).toBeTruthy();
       expect(screen.getAllByRole('listitem').length).toBe(3);
     });
+
+    it('keeps presence unknown for synced entries when a delete follows an upload', async () => {
+      api.uploadSongAttachment.mockResolvedValue({
+        attachment: { filename: 'cccc3333-new.pdf', label: 'New sheet', mime: 'application/pdf', size: 512, sha256: 'z' },
+      });
+      api.deleteSongAttachment.mockResolvedValue({ attachments: [SYNCED[0], SYNCED[1]] });
+      renderPage();
+      expect(await screen.findByRole('link', { name: 'Sheet music' })).toBeTruthy();
+
+      // Upload first — that replaces the sentinel with an array whose synced
+      // entries still have no resolved presence.
+      const input = document.querySelector('input[type="file"]');
+      fireEvent.change(input, { target: { files: [new File(['x'], 'new.pdf', { type: 'application/pdf' })] } });
+      expect(await screen.findByRole('link', { name: 'New sheet' })).toBeTruthy();
+
+      // Then delete the uploaded file: the survivors must not be stamped absent.
+      fireEvent.click(screen.getByRole('button', { name: 'Delete attachment New sheet' }));
+      const group = screen.getByRole('group', { name: 'Confirm delete New sheet' });
+      fireEvent.click(within(group).getByRole('button', { name: 'Delete' }));
+
+      await waitFor(() => expect(screen.queryByText('New sheet')).toBeNull());
+      expect(screen.getByRole('link', { name: 'Sheet music' })).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Drum chart' })).toBeTruthy();
+      expect(screen.queryByText('not on this machine')).toBeNull();
+    });
   });
 
   describe('instrument-view toggle (#2656)', () => {
