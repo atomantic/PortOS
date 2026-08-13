@@ -40,13 +40,10 @@
  */
 
 import * as catalogDB from './catalogDB.js';
-import { BIBLE_KIND, BIBLE_FIELD } from '../lib/storyBible.js';
+import { BIBLE_FIELD } from '../lib/storyBible.js';
 
-// Catalog `type` ↔ canon array key, derived from the bible registry so a future
-// kind added there flows through without editing this file.
-const TYPE_FOR_ARRAY = Object.freeze(
-  Object.fromEntries(Object.values(BIBLE_KIND).map((k) => [BIBLE_FIELD[k], k])),
-);
+// Canon array keys, derived from the bible registry so a future kind added
+// there flows through without editing this file.
 const CANON_ARRAY_KEYS = Object.freeze(Object.values(BIBLE_FIELD));
 
 // Fields that live on the embedded canon entry but are NOT part of the catalog
@@ -160,9 +157,13 @@ export async function projectToCatalog(universeId, canonArrays, { guardToken = n
   const stats = { written: 0, skipped: 0 };
   if (!canonArrays || typeof canonArrays !== 'object') return stats;
 
+  // Pass 1 — collect the candidate entries across every canon array and apply
+  // the loop break up front, so the batched lookup below asks only for rows we
+  // could actually write. A universe with N canon entries used to cost N
+  // single-row SELECTs here (#3941); it now costs one.
+  const candidates = [];
   for (const arrayKey of CANON_ARRAY_KEYS) {
     const list = Array.isArray(canonArrays[arrayKey]) ? canonArrays[arrayKey] : [];
-    const type = TYPE_FOR_ARRAY[arrayKey];
     for (const entry of list) {
       const ingredientId = entry?.ingredientId;
       if (!ingredientId) continue;
@@ -172,25 +173,49 @@ export async function projectToCatalog(universeId, canonArrays, { guardToken = n
         stats.skipped++;
         continue;
       }
-      try {
-        const row = await catalogDB.getIngredient(ingredientId);
-        if (!row) { stats.skipped++; continue; }
-        // LWW on updatedAt — only overwrite the catalog row when the embedded
-        // entry is at-least-as-fresh. An older embedded snapshot (e.g. a
-        // concurrent catalog edit won) is left alone.
-        const entryAt = Date.parse(entry.updatedAt || '') || 0;
-        const rowAt = Date.parse(row.updatedAt || '') || 0;
-        if (entryAt < rowAt) { stats.skipped++; continue; }
-        await catalogDB.updateIngredient(
-          ingredientId,
-          { name: entry.name, payload: entryToPayload(entry) },
-          { source: 'sync', actor: 'canon-projection' },
-        );
-        stats.written++;
-      } catch (err) {
-        console.error(`🔁 projectToCatalog: ingredient ${ingredientId} update failed: ${err.message}`);
-        stats.skipped++;
-      }
+      candidates.push({ ingredientId, entry });
+    }
+  }
+  if (candidates.length === 0) return stats;
+
+  // ONE query for every candidate's freshness. A lookup failure is fatal to the
+  // whole projection pass (there is no per-entry state to fall back on), so it
+  // is logged once and every candidate counts as skipped — same best-effort
+  // contract the per-entry catch below keeps.
+  const timestamps = await catalogDB.getIngredientTimestamps(
+    candidates.map((c) => c.ingredientId),
+  ).catch((err) => {
+    console.error(`🔁 projectToCatalog: batched lookup of ${candidates.length} ingredients failed: ${err.message}`);
+    return null;
+  });
+  if (!timestamps) {
+    stats.skipped += candidates.length;
+    return stats;
+  }
+
+  // Pass 2 — write only the rows the LWW comparison says are stale. Sequential
+  // by design: each updateIngredient is a multi-statement write (sanitize +
+  // update + revision), and firing N of them at once would trade the read
+  // stampede this fix removed for a write one.
+  for (const { ingredientId, entry } of candidates) {
+    const rowUpdatedAt = timestamps.get(ingredientId);
+    if (rowUpdatedAt === undefined) { stats.skipped++; continue; }   // no live row
+    // LWW on updatedAt — only overwrite the catalog row when the embedded entry
+    // is at-least-as-fresh. An older embedded snapshot (e.g. a concurrent
+    // catalog edit won) is left alone.
+    const entryAt = Date.parse(entry.updatedAt || '') || 0;
+    const rowAt = Date.parse(rowUpdatedAt || '') || 0;
+    if (entryAt < rowAt) { stats.skipped++; continue; }
+    try {
+      await catalogDB.updateIngredient(
+        ingredientId,
+        { name: entry.name, payload: entryToPayload(entry) },
+        { source: 'sync', actor: 'canon-projection' },
+      );
+      stats.written++;
+    } catch (err) {
+      console.error(`🔁 projectToCatalog: ingredient ${ingredientId} update failed: ${err.message}`);
+      stats.skipped++;
     }
   }
   return stats;

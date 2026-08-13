@@ -95,6 +95,24 @@ export async function getIngredient(id) {
   return rowToIngredient(result.rows[0]);
 }
 
+/**
+ * Batched freshness lookup for LWW comparisons (#3941) — ONE query for N ids
+ * instead of N `getIngredient` round-trips. Returns
+ * `Map<id, updatedAt ISO string>` holding an entry ONLY for live (non-deleted)
+ * rows, so a MISSING key means "no such row" — distinct from a row that exists
+ * and happens to be stale. Selects two columns, not `*`: the canon→catalog
+ * projection needs existence + freshness, never the jsonb payload.
+ */
+export async function getIngredientTimestamps(ingredientIds) {
+  const ids = [...new Set((ingredientIds || []).filter(Boolean))];
+  if (ids.length === 0) return new Map();
+  const result = await query(
+    `SELECT id, updated_at FROM catalog_ingredients WHERE id = ANY($1) AND deleted = false`,
+    [ids],
+  );
+  return new Map(result.rows.map((row) => [row.id, row.updated_at.toISOString()]));
+}
+
 // `{ source, actor }` drive the revision-history row written on a content
 // change. `source` is one of user|extract|refine|sync (default 'user'); `actor`
 // is an optional free label (agent run id, provider). Embedding-only patches
