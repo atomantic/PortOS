@@ -800,6 +800,33 @@ describe('generateChainedVideo — per-chunk prompt beats (#3695)', () => {
 });
 
 describe('generateVideo — ltx2 FFLF image resizing', () => {
+  // `IS_WIN` is captured at module load in local.js, and the last-frame resize
+  // is deliberately skipped on Windows (generate_win.py forwards --last-image
+  // only to log it; the diffusers pipeline reads --image and never opens the
+  // last-frame file). The ltx2 runtime itself is macOS-only — it appears in
+  // media-models' video.macos[] and never in video.windows[] — so this whole
+  // block describes a code path that cannot execute on a Windows host.
+  //
+  // Pin the platform rather than gating the test on the host's own: a bare
+  // `process.platform === 'win32'` skip would silently drop this coverage on
+  // the Windows CI runner, and asserting the macOS contract un-pinned made the
+  // test FAIL there (only one resize happens). Pinning asserts BOTH documented
+  // contracts on EVERY runner.
+  const importOnPlatform = async (platform) => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+    vi.resetModules();
+    try {
+      return { mod: await import('./local.js'), restore: () => {
+        Object.defineProperty(process, 'platform', original);
+        vi.resetModules();
+      } };
+    } catch (err) {
+      Object.defineProperty(process, 'platform', original);
+      throw err;
+    }
+  };
+
   it('resizes both start and end frames before passing them to the ltx2 helper', async () => {
     const { execFile } = await import('child_process');
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
@@ -812,19 +839,24 @@ describe('generateVideo — ltx2 FFLF image resizing', () => {
     const sourceImagePath = '/mock/uploads/start.png';
     const lastImagePath = '/mock/uploads/end.png';
 
-    await generateVideo({
-      jobId,
-      pythonPath: '/usr/bin/python3',
-      modelId: 'ltx2_unified',
-      prompt: 'interpolate the two anchors',
-      width: 512,
-      height: 512,
-      numFrames: 25,
-      fps: 24,
-      mode: 'fflf',
-      sourceImagePath,
-      lastImagePath,
-    });
+    const { mod, restore } = await importOnPlatform('darwin');
+    try {
+      await mod.generateVideo({
+        jobId,
+        pythonPath: '/usr/bin/python3',
+        modelId: 'ltx2_unified',
+        prompt: 'interpolate the two anchors',
+        width: 512,
+        height: 512,
+        numFrames: 25,
+        fps: 24,
+        mode: 'fflf',
+        sourceImagePath,
+        lastImagePath,
+      });
+    } finally {
+      restore();
+    }
 
     expect(execFileMock).toHaveBeenCalledTimes(2);
     expect(execFileMock.mock.calls.map((call) => call[1][1])).toEqual([
@@ -832,8 +864,12 @@ describe('generateVideo — ltx2 FFLF image resizing', () => {
       lastImagePath,
     ]);
 
+    // LTX2_VENV_PYTHON is built with path.join, which emits `\` separators on a
+    // Windows host — so matching the forward-slash literal directly finds
+    // nothing there. Normalize before comparing. (This was masked until now:
+    // the resize-count assertion above failed first and aborted the test.)
     const renderCall = spawnMock.mock.calls.find(
-      ([bin, args]) => String(bin).includes('.portos/ltx-2-mlx/.venv/bin/python3')
+      ([bin, args]) => String(bin).split('\\').join('/').includes('.portos/ltx-2-mlx/.venv/bin/python3')
         && Array.isArray(args)
         && args.includes('--mode')
         && args.includes('fflf'),
@@ -843,6 +879,40 @@ describe('generateVideo — ltx2 FFLF image resizing', () => {
     const args = renderCall[1];
     expect(args[args.indexOf('--image') + 1]).toBe(join(tmpdir(), `resized-src-${jobId}.png`));
     expect(args[args.indexOf('--last-image') + 1]).toBe(join(tmpdir(), `resized-last-${jobId}.png`));
+  });
+
+  it('resizes ONLY the start frame on Windows, where the last frame is never opened', async () => {
+    // The other half of the same contract. generate_win.py takes --last-image
+    // purely to log it — the diffusers pipeline reads --image — so resizing the
+    // last frame there is wasted ffmpeg work. Pinning this stops a well-meaning
+    // "why is this platform-conditional?" cleanup from reintroducing that cost.
+    const { execFile } = await import('child_process');
+    const execFileMock = vi.mocked(execFile);
+    execFileMock.mockClear();
+
+    const sourceImagePath = '/mock/uploads/start.png';
+    const { mod, restore } = await importOnPlatform('win32');
+    try {
+      await mod.generateVideo({
+        jobId: 'fflf-win-single-resize-test',
+        pythonPath: '/usr/bin/python3',
+        modelId: 'ltx2_unified',
+        prompt: 'interpolate the two anchors',
+        width: 512,
+        height: 512,
+        numFrames: 25,
+        fps: 24,
+        mode: 'fflf',
+        sourceImagePath,
+        lastImagePath: '/mock/uploads/end.png',
+      }).catch(() => {});
+    } finally {
+      restore();
+    }
+
+    // Exactly one ffmpeg resize, and it is the START frame.
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(execFileMock.mock.calls[0][1][1]).toBe(sourceImagePath);
   });
 });
 
