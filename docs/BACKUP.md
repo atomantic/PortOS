@@ -30,7 +30,7 @@ A backup run (`runBackup` in `server/services/backup.js`) writes to:
 - **Non-overridable** (`overridable: false`): browser CDP profile, agent worktrees — caches with no irreplaceable user data; never backed up.
 - **Overridable** (`overridable: true`): LoRA weight files, cloned repos, reference repos, browser downloads — re-downloadable; the user can opt back in from the Backup settings UI via `disabledDefaultExcludes`.
 
-The effective exclude list is computed by the pure `computeEffectiveExcludes()` helper (unit-tested in `backup.test.js`). The scheduled cron handler in `backupScheduler.js` re-reads settings on every run, so `destPath`, `excludePaths`, `disabledDefaultExcludes`, and `enabled` all take effect on the next run without a restart.
+The effective exclude list is computed by the pure `computeEffectiveExcludes()` helper (unit-tested in `backup.test.js`). The scheduled cron handler in `backupScheduler.js` re-reads settings on every run, so `destPath`, `excludePaths`, `disabledDefaultExcludes`, and `enabled` all take effect on the next run without a restart. See [Scheduling & status](#scheduling--status) for how the cron registration itself tracks settings.
 
 #### Why every exclude must be anchored with a leading `/`
 
@@ -85,6 +85,7 @@ Separate from snapshot restore: `server/routes/database.js` can copy data **betw
 ## Scheduling & status
 
 - Daily backups are driven by `backupScheduler.js` via the `backup-daily` cron event; `getNextRunTime()` reports the next run.
+- **The registration tracks settings — no restart needed.** `syncBackupSchedule()` runs at boot *and* on every settings save (subscribed to `settingsEvents`' `settings:updated`), so enabling backups or setting `destPath` when scheduling was previously inactive registers the cron immediately, editing `cronExpression` re-registers it, and disabling backups (or clearing `destPath`) cancels it. A save that doesn't change the registration inputs (cron expression, timezone, active/inactive) is a no-op — `destPath` and the exclude lists are re-read by the handler per run, so changing them never churns the registration.
 - `GET /api/backup/status` surfaces the persisted state including the last `pgBackup` outcome, so the Backup settings tab shows whether the last DB dump succeeded, its size, and table count.
 
 ## See also
