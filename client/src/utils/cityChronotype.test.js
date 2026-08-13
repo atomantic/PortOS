@@ -1,13 +1,18 @@
 import { describe, it, expect } from 'vitest';
-import {
-  NEUTRAL_ENERGY,
-  NEUTRAL_MODIFIERS,
-  ENERGY_RANGE,
-  parseHour,
-  computeEnergy,
-  energyModifiers,
-  computeChronotypeEnergy,
-} from './cityChronotype';
+import { computeChronotypeEnergy } from './cityChronotype';
+
+// The module's internals (parseHour / computeEnergy / energyModifiers and the range
+// constants) are deliberately NOT exported — computeChronotypeEnergy is the sole
+// public entry point, so every behavior below is exercised through it. The expected
+// bounds are written as literals here rather than imported, so a change to the
+// tasteful ranges has to be re-affirmed in the test instead of silently agreeing
+// with itself.
+const BRIGHTNESS_MIN = 0.7;
+const BRIGHTNESS_MAX = 1.15;
+const TEMPO_MIN = 0.8;
+const TEMPO_MAX = 1.15;
+// A missing/partial profile is a true no-op: brightness and tempo untouched.
+const NEUTRAL = { energy: 1.0, brightness: 1.0, tempo: 1.0 };
 
 // A representative "intermediate" chronotype profile (mirrors the shape returned by
 // GET /api/digital-twin/identity/chronotype — only the recommendations the overlay
@@ -25,57 +30,28 @@ const PROFILE = {
 // Peak focus center is (9.5 + 13) / 2 = 11.25.
 const PEAK_HOUR = 11.25;
 
-describe('parseHour', () => {
-  it('parses HH:MM to fractional hours', () => {
-    expect(parseHour('09:30')).toBeCloseTo(9.5);
-    expect(parseHour('00:00')).toBe(0);
-    expect(parseHour('23:45')).toBeCloseTo(23.75);
-  });
-
-  it('returns NaN for non-strings or out-of-range values', () => {
-    expect(parseHour(null)).toBeNaN();
-    expect(parseHour(undefined)).toBeNaN();
-    expect(parseHour('not-a-time')).toBeNaN();
-    expect(parseHour('24:00')).toBeNaN();
-  });
-});
-
-describe('computeEnergy', () => {
+describe('computeChronotypeEnergy — energy curve', () => {
   it('is highest at the peak focus center', () => {
-    const atPeak = computeEnergy(PROFILE, PEAK_HOUR);
-    const atWake = computeEnergy(PROFILE, 7);
-    const atSleep = computeEnergy(PROFILE, 23);
-    expect(atPeak).toBeGreaterThan(atWake);
-    expect(atPeak).toBeGreaterThan(atSleep);
-    expect(atPeak).toBeCloseTo(1.0, 5);
+    const atPeak = computeChronotypeEnergy(PROFILE, PEAK_HOUR);
+    const atWake = computeChronotypeEnergy(PROFILE, 7);
+    const atSleep = computeChronotypeEnergy(PROFILE, 23);
+    expect(atPeak.energy).toBeGreaterThan(atWake.energy);
+    expect(atPeak.energy).toBeGreaterThan(atSleep.energy);
+    expect(atPeak.energy).toBeCloseTo(1.0, 5);
   });
 
   it('is lowest during recovery (sleep) hours', () => {
-    const atSleep = computeEnergy(PROFILE, 23);
-    const atPeak = computeEnergy(PROFILE, PEAK_HOUR);
-    expect(atSleep).toBeLessThan(atPeak);
-    expect(atSleep).toBeLessThan(0.5);
+    const atSleep = computeChronotypeEnergy(PROFILE, 23);
+    expect(atSleep.energy).toBeLessThan(computeChronotypeEnergy(PROFILE, PEAK_HOUR).energy);
+    expect(atSleep.energy).toBeLessThan(0.5);
   });
 
-  it('returns null (sentinel) for a missing or partial profile (no crash)', () => {
-    expect(computeEnergy(null, 12)).toBeNull();
-    expect(computeEnergy({}, 12)).toBeNull();
-    expect(computeEnergy({ recommendations: {} }, 12)).toBeNull();
-    // peak window missing → can't anchor → null
-    expect(computeEnergy({ recommendations: { wakeTime: '07:00' } }, 12)).toBeNull();
-  });
-
-  it('returns null when the hour is not finite', () => {
-    expect(computeEnergy(PROFILE, NaN)).toBeNull();
-    expect(computeEnergy(PROFILE, undefined)).toBeNull();
-  });
-
-  it('stays within [0,1] across the whole day', () => {
-    for (let h = 0; h < 24; h += 0.5) {
-      const e = computeEnergy(PROFILE, h);
-      expect(e).toBeGreaterThanOrEqual(0);
-      expect(e).toBeLessThanOrEqual(1);
-    }
+  it('parses HH:MM recommendations into fractional hours (09:30 peak start ⇒ 11.25 center)', () => {
+    // The peak center is the maximum of the curve, so an exact hit at 11.25 proves
+    // the ":30" half-hour was parsed as 9.5 rather than truncated to 9 or 10.
+    expect(computeChronotypeEnergy(PROFILE, 11.25).energy).toBeCloseTo(1.0, 5);
+    expect(computeChronotypeEnergy(PROFILE, 11).energy).toBeLessThan(1.0);
+    expect(computeChronotypeEnergy(PROFILE, 11.5).energy).toBeLessThan(1.0);
   });
 
   it('handles wrap-around midnight for an evening chronotype with after-midnight sleep', () => {
@@ -89,64 +65,77 @@ describe('computeEnergy', () => {
       },
     };
     // The post-midnight small hours should read as low energy (close to the 00:30 sleep anchor).
-    const at1am = computeEnergy(evening, 1);
-    const atPeak = computeEnergy(evening, 13); // peak center
-    expect(at1am).toBeLessThan(atPeak);
-    expect(at1am).toBeLessThan(0.5);
+    const at1am = computeChronotypeEnergy(evening, 1);
+    const atPeak = computeChronotypeEnergy(evening, 13); // peak center
+    expect(at1am.energy).toBeLessThan(atPeak.energy);
+    expect(at1am.energy).toBeLessThan(0.5);
   });
 });
 
-describe('energyModifiers', () => {
-  it('maps energy 1 to the top of each clamped range', () => {
-    const m = energyModifiers(1);
-    expect(m.brightness).toBeCloseTo(ENERGY_RANGE.brightnessMax);
-    expect(m.tempo).toBeCloseTo(ENERGY_RANGE.tempoMax);
-    expect(m.energy).toBe(1);
+describe('computeChronotypeEnergy — neutral no-op fallbacks', () => {
+  it('returns the neutral no-op for a missing or partial profile (no crash)', () => {
+    expect(computeChronotypeEnergy(null, 12)).toEqual(NEUTRAL);
+    expect(computeChronotypeEnergy({}, 12)).toEqual(NEUTRAL);
+    expect(computeChronotypeEnergy({ recommendations: {} }, 12)).toEqual(NEUTRAL);
+    // peak window missing → can't anchor → neutral
+    expect(computeChronotypeEnergy({ recommendations: { wakeTime: '07:00' } }, 12)).toEqual(NEUTRAL);
   });
 
-  it('maps energy 0 to the bottom of each clamped range', () => {
-    const m = energyModifiers(0);
-    expect(m.brightness).toBeCloseTo(ENERGY_RANGE.brightnessMin);
-    expect(m.tempo).toBeCloseTo(ENERGY_RANGE.tempoMin);
+  it('returns the neutral no-op when the peak window is unparseable', () => {
+    const bad = (peakFocusStart, peakFocusEnd) => ({
+      recommendations: { ...PROFILE.recommendations, peakFocusStart, peakFocusEnd },
+    });
+    expect(computeChronotypeEnergy(bad('not-a-time', '13:00'), 12)).toEqual(NEUTRAL);
+    expect(computeChronotypeEnergy(bad('09:30', '24:00'), 12)).toEqual(NEUTRAL);
+    expect(computeChronotypeEnergy(bad(null, '13:00'), 12)).toEqual(NEUTRAL);
+    expect(computeChronotypeEnergy(bad(undefined, undefined), 12)).toEqual(NEUTRAL);
   });
 
-  it('clamps out-of-range energy and treats null/non-finite as a neutral no-op', () => {
-    expect(energyModifiers(5).brightness).toBeCloseTo(ENERGY_RANGE.brightnessMax);
-    expect(energyModifiers(-3).brightness).toBeCloseTo(ENERGY_RANGE.brightnessMin);
-    // null/NaN energy (no usable profile) → neutral no-op, brightness 1.0 (untouched scene).
-    expect(energyModifiers(null)).toEqual(NEUTRAL_MODIFIERS);
-    expect(energyModifiers(NaN)).toEqual(NEUTRAL_MODIFIERS);
+  it('returns the neutral no-op when the hour is not finite', () => {
+    expect(computeChronotypeEnergy(PROFILE, NaN)).toEqual(NEUTRAL);
+    expect(computeChronotypeEnergy(PROFILE, undefined)).toEqual(NEUTRAL);
   });
 
-  it('keeps brightness and tempo strictly inside the tasteful bounds', () => {
-    for (let e = 0; e <= 1; e += 0.1) {
-      const m = energyModifiers(e);
-      expect(m.brightness).toBeGreaterThanOrEqual(ENERGY_RANGE.brightnessMin);
-      expect(m.brightness).toBeLessThanOrEqual(ENERGY_RANGE.brightnessMax);
-      expect(m.tempo).toBeGreaterThanOrEqual(ENERGY_RANGE.tempoMin);
-      expect(m.tempo).toBeLessThanOrEqual(ENERGY_RANGE.tempoMax);
-    }
+  it('ignores unparseable secondary anchors rather than falling back to neutral', () => {
+    const partial = {
+      recommendations: { peakFocusStart: '09:30', peakFocusEnd: '13:00', sleepTime: 'nope' },
+    };
+    const m = computeChronotypeEnergy(partial, PEAK_HOUR);
+    expect(m).not.toEqual(NEUTRAL);
+    expect(m.brightness).toBeCloseTo(BRIGHTNESS_MAX);
   });
 });
 
-describe('computeChronotypeEnergy', () => {
-  it('peak hour → high brightness, recovery hour → low brightness', () => {
+describe('computeChronotypeEnergy — display modifiers', () => {
+  it('maps the peak focus center to the top of each clamped range', () => {
+    const m = computeChronotypeEnergy(PROFILE, PEAK_HOUR);
+    expect(m.brightness).toBeCloseTo(BRIGHTNESS_MAX);
+    expect(m.tempo).toBeCloseTo(TEMPO_MAX);
+    // A real curve value of exactly 1.0 must map to peak brightness, NOT the neutral no-op.
+    expect(m.brightness).not.toBe(1.0);
+  });
+
+  it('peak hour → higher brightness and tempo than a recovery hour', () => {
     const peak = computeChronotypeEnergy(PROFILE, PEAK_HOUR);
     const recovery = computeChronotypeEnergy(PROFILE, 23);
     expect(peak.brightness).toBeGreaterThan(recovery.brightness);
     expect(peak.tempo).toBeGreaterThan(recovery.tempo);
   });
 
-  it('missing profile → neutral no-op modifiers (brightness 1.0), no crash', () => {
-    const m = computeChronotypeEnergy(null, 12);
-    expect(m).toEqual(NEUTRAL_MODIFIERS);
-    expect(m.energy).toBe(NEUTRAL_ENERGY);
-    expect(m.brightness).toBe(1.0);
+  it('keeps energy, brightness and tempo inside the tasteful bounds across the whole day', () => {
+    for (let h = 0; h < 24; h += 0.5) {
+      const m = computeChronotypeEnergy(PROFILE, h);
+      expect(m.energy).toBeGreaterThanOrEqual(0);
+      expect(m.energy).toBeLessThanOrEqual(1);
+      expect(m.brightness).toBeGreaterThanOrEqual(BRIGHTNESS_MIN);
+      expect(m.brightness).toBeLessThanOrEqual(BRIGHTNESS_MAX);
+      expect(m.tempo).toBeGreaterThanOrEqual(TEMPO_MIN);
+      expect(m.tempo).toBeLessThanOrEqual(TEMPO_MAX);
+    }
   });
 
-  it('peak focus center (real energy 1.0) maps to peak brightness, not the neutral no-op', () => {
-    const m = computeChronotypeEnergy(PROFILE, PEAK_HOUR);
-    expect(m.brightness).toBeCloseTo(ENERGY_RANGE.brightnessMax);
-    expect(m.brightness).not.toBe(1.0);
+  it('exposes only computeChronotypeEnergy as the module surface', async () => {
+    const mod = await import('./cityChronotype');
+    expect(Object.keys(mod)).toEqual(['computeChronotypeEnergy']);
   });
 });

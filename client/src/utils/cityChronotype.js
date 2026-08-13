@@ -7,16 +7,21 @@
 // The hour-of-day is ALWAYS injected as a parameter — no `new Date()` here — so the
 // energy curve is deterministic in tests. The component computes the live hour and
 // passes it in.
+//
+// `computeChronotypeEnergy` is the module's ONLY export: everything below it is an
+// internal step of that one calculation, and keeping it unexported keeps the flat
+// `client/src/utils/index.js` barrel free of generic names like `parseHour` that
+// would collide with a future module.
 
 // Sentinel energy for "no usable profile" — distinct from any real curve value so a
 // missing profile is recognizable. It maps to NEUTRAL_MODIFIERS (no visible change),
 // NOT to peak brightness, so an unconfigured city looks untouched rather than washed out.
-export const NEUTRAL_ENERGY = 1.0;
+const NEUTRAL_ENERGY = 1.0;
 
 // Tasteful clamp ranges so the overlay stays atmospheric, never washing out or
 // blacking out the existing scene. Brightness rides slightly above/below 1; tempo
 // (animation-speed multiplier) is gentler still.
-export const ENERGY_RANGE = {
+const ENERGY_RANGE = {
   brightnessMin: 0.7,
   brightnessMax: 1.15,
   tempoMin: 0.8,
@@ -26,14 +31,14 @@ export const ENERGY_RANGE = {
 // What the overlay applies when there's no usable chronotype profile: a true no-op —
 // brightness and tempo at 1.0 so the scene renders exactly as it would without the
 // overlay. Keeps "unconfigured / failed to fetch" visually distinct from "low energy."
-export const NEUTRAL_MODIFIERS = { energy: NEUTRAL_ENERGY, brightness: 1.0, tempo: 1.0 };
+const NEUTRAL_MODIFIERS = { energy: NEUTRAL_ENERGY, brightness: 1.0, tempo: 1.0 };
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 // Parse "HH:MM" → fractional hours in [0,24). Returns NaN for unparseable input.
 // Hours past midnight that belong to "today's" late night (e.g. a 00:30 sleep time)
 // are returned as-is (0.5); callers that need a continuous timeline normalize.
-export function parseHour(str) {
+function parseHour(str) {
   if (typeof str !== 'string') return NaN;
   const [h, m] = str.split(':').map(Number);
   if (!Number.isFinite(h) || !Number.isFinite(m)) return NaN;
@@ -90,7 +95,7 @@ function buildAnchors(profile) {
 // Returns `null` (sentinel) when there's no usable profile or the hour is non-finite,
 // so callers can distinguish "no profile" from a real curve value that happens to be
 // 1.0 (peak focus center). Callers map null → neutral (no visible change).
-export function computeEnergy(profile, hour) {
+function computeEnergy(profile, hour) {
   const anchors = buildAnchors(profile);
   if (!anchors || !Number.isFinite(hour)) return null;
 
@@ -111,7 +116,7 @@ export function computeEnergy(profile, hour) {
 // applies: a brightness multiplier and a tempo (animation-speed) multiplier. Energy
 // 1 → top of each range, energy 0 → bottom; linear in between. A null/non-finite
 // energy (no usable profile) returns NEUTRAL_MODIFIERS — a true no-op.
-export function energyModifiers(energy) {
+function energyModifiers(energy) {
   if (!Number.isFinite(energy)) return { ...NEUTRAL_MODIFIERS };
   const e = clamp(energy, 0, 1);
   const { brightnessMin, brightnessMax, tempoMin, tempoMax } = ENERGY_RANGE;
