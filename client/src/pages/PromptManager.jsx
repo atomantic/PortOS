@@ -16,6 +16,8 @@ import useFieldDraft from '../hooks/useFieldDraft';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 import { FormField } from '../components/ui/FormField';
 import Modal from '../components/ui/Modal';
+import InlineConfirmRow from '../components/ui/InlineConfirmRow';
+import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import {
   getPrompts, getPrompt, createPrompt, savePrompt, deletePrompt, previewPrompt, getPromptUsage,
   getPromptVariables, createPromptVariable, savePromptVariable, deletePromptVariable,
@@ -105,6 +107,14 @@ export default function PromptManager() {
   const [activeProviderId, setActiveProviderId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
+  // Variables delete inline-confirms in the row itself (#3935) — the trash icon
+  // arms the row instead of firing DELETE on the first click.
+  const {
+    isConfirming: isConfirmingVar,
+    requestDelete: requestVarDelete,
+    cancelDelete: cancelVarDelete,
+    confirmDelete: confirmVarDelete,
+  } = useConfirmDelete();
 
   useEffect(() => {
     loadData();
@@ -682,29 +692,42 @@ export default function PromptManager() {
             </div>
             <div className="space-y-1">
               {Object.entries(variables).sort(([a], [b]) => a.localeCompare(b)).map(([key, v]) => (
-                <div
-                  key={key}
-                  className={`flex items-center justify-between px-3 py-2 rounded-lg text-sm ${
-                    selectedVar === key
-                      ? 'bg-port-accent/20 text-port-accent'
-                      : 'text-gray-300 hover:bg-port-border'
-                  }`}
-                >
-                  <button
-                    onClick={() => setSelectedVar(key)}
-                    className="flex-1 text-left"
+                isConfirmingVar(key) ? (
+                  <InlineConfirmRow
+                    key={key}
+                    className="rounded-lg"
+                    question={`Delete "${v.name || key}"?`}
+                    confirmText="Delete"
+                    aria-label={`Confirm delete variable ${v.name || key}`}
+                    autoFocus
+                    onConfirm={() => confirmVarDelete(() => deleteVariable(key))}
+                    onCancel={cancelVarDelete}
+                  />
+                ) : (
+                  <div
+                    key={key}
+                    className={`flex items-center justify-between px-3 py-2 rounded-lg text-sm ${
+                      selectedVar === key
+                        ? 'bg-port-accent/20 text-port-accent'
+                        : 'text-gray-300 hover:bg-port-border'
+                    }`}
                   >
-                    <div className="font-medium">{v.name || key}</div>
-                    <div className="text-xs text-gray-500">{v.category || 'uncategorized'}</div>
-                  </button>
-                  <button
-                    onClick={() => deleteVariable(key)}
-                    aria-label="Delete variable"
-                    className="p-1 text-gray-500 hover:text-port-error"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
+                    <button
+                      onClick={() => setSelectedVar(key)}
+                      className="flex-1 text-left"
+                    >
+                      <div className="font-medium">{v.name || key}</div>
+                      <div className="text-xs text-gray-500">{v.category || 'uncategorized'}</div>
+                    </button>
+                    <button
+                      onClick={() => requestVarDelete(key)}
+                      aria-label={`Delete variable ${v.name || key}`}
+                      className="p-1 text-gray-500 hover:text-port-error"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                )
               ))}
             </div>
           </div>

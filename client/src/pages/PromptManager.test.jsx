@@ -10,6 +10,8 @@ const getPrompts = vi.fn();
 const getPrompt = vi.fn();
 const getPromptUsage = vi.fn();
 const deletePrompt = vi.fn();
+const getPromptVariables = vi.fn();
+const deletePromptVariable = vi.fn();
 
 vi.mock('../services/apiPrompts', () => ({
   getPrompts: (...a) => getPrompts(...a),
@@ -19,10 +21,10 @@ vi.mock('../services/apiPrompts', () => ({
   deletePrompt: (...a) => deletePrompt(...a),
   previewPrompt: vi.fn(),
   getPromptUsage: (...a) => getPromptUsage(...a),
-  getPromptVariables: vi.fn(() => Promise.resolve({ variables: {} })),
+  getPromptVariables: (...a) => getPromptVariables(...a),
   createPromptVariable: vi.fn(),
   savePromptVariable: vi.fn(),
-  deletePromptVariable: vi.fn(),
+  deletePromptVariable: (...a) => deletePromptVariable(...a),
   getJobSkills: vi.fn(() => Promise.resolve({ skills: [] })),
   getJobSkill: vi.fn(),
   saveJobSkill: vi.fn(),
@@ -53,6 +55,13 @@ const renderPage = (entry = '/prompts') => render(
     <PromptManager />
   </MemoryRouter>,
 );
+
+// File-level defaults so every describe mounts against the same empty-ish page;
+// individual suites override only what they assert on.
+beforeEach(() => {
+  getPromptVariables.mockReset().mockResolvedValue({ variables: {} });
+  deletePromptVariable.mockReset().mockResolvedValue({ success: true });
+});
 
 const searchBox = () => screen.getByLabelText('Search prompt stages');
 const groupHeader = (label) => screen.getByRole('button', { name: new RegExp(`^${label}, \\d+ stages?$`, 'i') });
@@ -353,5 +362,66 @@ describe('PromptManager delete demotion', () => {
     await waitFor(() => expect(deletePrompt).toHaveBeenCalledWith(
       'pipeline-comic-script', { force: false }, { silent: true },
     ));
+  });
+});
+
+// #3935: the row trash icon used to fire DELETE on the first click, so a
+// mis-click on a 14px target destroyed the variable with no undo.
+describe('PromptManager variable deletion', () => {
+  const VARIABLES = {
+    'tone-guide': { name: 'Tone Guide', category: 'style', content: 'stay wry' },
+    'house-style': { name: 'House Style', category: 'style', content: 'oxford comma' },
+  };
+
+  beforeEach(() => {
+    getPrompts.mockReset().mockResolvedValue({ stages: STAGES, systemStages: SYSTEM_STAGES });
+    getPromptVariables.mockResolvedValue({ variables: VARIABLES });
+  });
+
+  const openVariables = async () => {
+    renderPage('/prompts?tab=variables');
+    return screen.findByText('Tone Guide');
+  };
+
+  it('arms an inline confirm instead of deleting on the trash click', async () => {
+    await openVariables();
+
+    fireEvent.click(screen.getByLabelText('Delete variable Tone Guide'));
+
+    expect(deletePromptVariable).not.toHaveBeenCalled();
+    expect(screen.getByText('Delete "Tone Guide"?')).toBeTruthy();
+    // Only the armed row confirms; its sibling stays a normal row.
+    expect(screen.getByLabelText('Delete variable House Style')).toBeTruthy();
+  });
+
+  it('deletes only after the inline confirm', async () => {
+    await openVariables();
+
+    fireEvent.click(screen.getByLabelText('Delete variable Tone Guide'));
+    fireEvent.click(within(screen.getByLabelText('Confirm delete variable Tone Guide'))
+      .getByRole('button', { name: /^delete$/i }));
+
+    await waitFor(() => expect(deletePromptVariable).toHaveBeenCalledWith('tone-guide', { silent: true }));
+  });
+
+  it('leaves the variable intact when the confirm is cancelled', async () => {
+    await openVariables();
+
+    fireEvent.click(screen.getByLabelText('Delete variable Tone Guide'));
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+
+    expect(deletePromptVariable).not.toHaveBeenCalled();
+    expect(screen.queryByText('Delete "Tone Guide"?')).toBeNull();
+    expect(screen.getByLabelText('Delete variable Tone Guide')).toBeTruthy();
+  });
+
+  it('arms one row at a time', async () => {
+    await openVariables();
+
+    fireEvent.click(screen.getByLabelText('Delete variable Tone Guide'));
+    fireEvent.click(screen.getByLabelText('Delete variable House Style'));
+
+    expect(screen.queryByText('Delete "Tone Guide"?')).toBeNull();
+    expect(screen.getByText('Delete "House Style"?')).toBeTruthy();
   });
 });
