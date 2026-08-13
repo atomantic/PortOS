@@ -52,6 +52,9 @@ export default function QuotaBurn() {
   const [status, setStatus] = useState(null);
   const [catalog, setCatalog] = useState(EMPTY_CATALOG);
   const [loading, setLoading] = useState(true);
+  // Distinct from `loading`: a manual re-read is reported ON the button that
+  // asked for it, never by replacing the page with a spinner.
+  const [refreshing, setRefreshing] = useState(false);
   // `null` = the read has never failed; a string = the message from the read
   // that did. Collapsing the two into a boolean (or into `!config`) is what
   // left a failed first load indistinguishable from "the server answered, and
@@ -83,21 +86,32 @@ export default function QuotaBurn() {
   const persistRef = useRef(null);
   const savingRef = useRef(false);
 
+  // Resolves to `null` when the read landed, or to the failure message when it
+  // didn't. The banner state alone can't tell a caller whether THIS read failed
+  // (a poll may have set it earlier), and the manual refresh — which renders no
+  // banner, because the page still has its plan on screen — needs the cause to
+  // put in its toast.
   const load = useCallback(async (refresh = false) => {
     const seq = editSeqRef.current;
+    let failure = null;
     // `silent: true` because the failure is rendered by this page's own banner
-    // rather than a toast — see client/src/CLAUDE.md's silent-vs-toasting rule.
+    // or its refresh toast rather than the request helper's — see
+    // client/src/CLAUDE.md's silent-vs-toasting rule.
     const data = await api.getQuotaBurn(refresh, { silent: true })
-      .catch((err) => { setLoadError(err?.message || 'The request failed.'); return READ_FAILED; });
+      .catch((err) => {
+        failure = err?.message || 'The request failed.';
+        setLoadError(failure);
+        return READ_FAILED;
+      });
     // The sentinel — not a falsy check — is what separates the two: a read that
     // FAILED must keep its message, while a read that merely answered with
     // nothing has to clear the previous failure, or the banner goes on blaming
     // a network error for what is now the server returning no plan.
-    if (data === READ_FAILED) return;
+    if (data === READ_FAILED) return failure;
     // Cleared on ANY successful read, including the polls: the last error no
     // longer describes the page once the server has answered.
     setLoadError(null);
-    if (!data) return;
+    if (!data) return null;
     // `status` is derived server-side and never edited here, so it is always
     // safe to adopt; `config` is the form's own state and must not be rewound.
     setStatus(data.status);
@@ -109,6 +123,7 @@ export default function QuotaBurn() {
     // it. Anything unsaved or in flight means the server's copy is stale by
     // definition; don't adopt it.
     if (editSeqRef.current === seq && !pendingRef.current && !savingRef.current) setConfig(data.config);
+    return null;
   }, []);
 
   useEffect(() => {
@@ -228,9 +243,19 @@ export default function QuotaBurn() {
     setRunning(false);
   };
 
-  const reload = (refresh = false) => {
-    setLoading(true);
-    load(refresh).finally(() => setLoading(false));
+  // A re-read must NOT go back through `loading`: that unmounts every family
+  // card, control, and status number behind a full-page spinner for the length
+  // of a 10-20s PTY quota scrape, and then — if the scrape fails — puts the
+  // stale numbers back with nothing having said so. The button carries its own
+  // spinner and the page keeps rendering what it has.
+  const reload = async (refresh = false) => {
+    setRefreshing(true);
+    const failure = await load(refresh);
+    setRefreshing(false);
+    // With a plan on screen there is no banner, so the toast is the only thing
+    // that can report the failure; when there ISN'T one the banner already
+    // names it, and toasting too would say it twice.
+    if (failure && config) toast.error(`Failed to refresh quota stats: ${failure}`);
   };
 
   if (loading) return <div className="p-6 text-gray-400"><BrailleSpinner /> Loading burn plan…</div>;
@@ -247,10 +272,11 @@ export default function QuotaBurn() {
           actions={(
             <button
               type="button"
-              className="text-xs px-3 py-1.5 rounded border border-port-error/40 hover:bg-port-error/10"
+              className="text-xs px-3 py-1.5 rounded border border-port-error/40 hover:bg-port-error/10 disabled:opacity-40"
+              disabled={refreshing}
               onClick={() => reload()}
             >
-              Retry
+              {refreshing ? 'Retrying…' : 'Retry'}
             </button>
           )}
         >
@@ -279,10 +305,12 @@ export default function QuotaBurn() {
         </span>
         <button
           type="button"
-          className="inline-flex items-center gap-1 text-xs text-gray-300 hover:text-white"
+          className="inline-flex items-center gap-1 text-xs text-gray-300 hover:text-white disabled:opacity-40"
+          disabled={refreshing}
           onClick={() => reload(true)}
         >
-          <RefreshCw size={13} /> Refresh quota
+          <RefreshCw size={13} className={refreshing ? 'animate-spin' : undefined} aria-hidden="true" />
+          {refreshing ? 'Refreshing…' : 'Refresh quota'}
         </button>
         <button
           type="button"

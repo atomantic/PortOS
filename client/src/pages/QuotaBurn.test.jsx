@@ -13,6 +13,17 @@ vi.mock('../services/api', () => ({
   rearmQuotaBurn: vi.fn(),
 }));
 
+const toastError = vi.fn();
+vi.mock('../components/ui/Toast', () => {
+  // The page calls the default export BOTH as a function (neutral messages) and
+  // through `.success` / `.error`, so the mock has to be callable too.
+  const toast = (...a) => toast.message(...a);
+  toast.message = vi.fn();
+  toast.success = vi.fn();
+  toast.error = (...a) => toastError(...a);
+  return { default: toast };
+});
+
 import * as api from '../services/api';
 
 const config = {
@@ -469,6 +480,45 @@ describe('QuotaBurn save races', () => {
     expect(await screen.findByText(/62% left/)).toBeInTheDocument();
     expect(screen.queryByText('Quota burn is unavailable')).not.toBeInTheDocument();
     expect(screen.queryByText('Network request failed')).not.toBeInTheDocument();
+  });
+
+  it('keeps the plan on screen while Refresh quota re-reads, and names a refresh that failed', async () => {
+    // The refresh used to run through the same `loading` flag as the first read,
+    // so a 10-20s PTY quota scrape replaced every card and control with a
+    // full-page spinner — and a scrape that then FAILED put the stale numbers
+    // back with nothing saying they were stale.
+    const user = userEvent.setup();
+    let rejectRefresh;
+    api.getQuotaBurn.mockImplementationOnce(() => Promise.resolve({ config, status }));
+    api.getQuotaBurn.mockImplementationOnce(() => new Promise((_, reject) => { rejectRefresh = reject; }));
+    renderPage();
+
+    expect(await screen.findByText(/62% left/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Refresh quota/ }));
+
+    // Mid-refresh: the button reports it, the page still shows the plan.
+    expect(await screen.findByRole('button', { name: /Refreshing…/ })).toBeDisabled();
+    expect(screen.getByText(/62% left/)).toBeInTheDocument();
+    expect(screen.queryByText(/Loading burn plan/)).not.toBeInTheDocument();
+
+    rejectRefresh(new Error('Quota scrape timed out'));
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith('Failed to refresh quota stats: Quota scrape timed out'));
+    // The failure does not tear the page down, and the button is usable again.
+    expect(screen.getByText(/62% left/)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Refresh quota/ })).toBeEnabled();
+  });
+
+  it('does not also toast when the failure is already named by the banner', async () => {
+    // With no plan on screen the banner owns the error surface — a toast on top
+    // of it would report the same failure twice.
+    const user = userEvent.setup();
+    api.getQuotaBurn.mockRejectedValueOnce(new Error('Network request failed'));
+    api.getQuotaBurn.mockRejectedValueOnce(new Error('Network request failed'));
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(api.getQuotaBurn).toHaveBeenCalledTimes(2));
+    expect(toastError).not.toHaveBeenCalled();
   });
 
   it('still offers a retry when the server answers without a plan', async () => {
