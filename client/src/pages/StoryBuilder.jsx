@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useSearchParams, useLocation, Link } from 'react-router';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import { filterSelectableModels } from '../utils/providers';
@@ -20,12 +20,12 @@ import {
 import toast from '../components/ui/Toast';
 import Banner from '../components/ui/Banner';
 import { useLockToggle } from '../hooks/useLockToggle';
-import { usePipelineProgress } from '../hooks/usePipelineProgress';
+import { StoryStepRunProvider, useStoryStepRun } from '../hooks/useStoryStepRuns.jsx';
 import {
   getStoryBuilderSteps, listStorySessions, getStorySession, createStorySession,
   updateStorySession, setStoryCurrentStep, lockStoryStep, unlockStoryStep,
   generateStoryStep, refineStoryStep, setStoryIssueLock, generateStoryIssues,
-  setStorySessionSync, reconcileStorySession, storyStepProgressSseUrl,
+  setStorySessionSync, reconcileStorySession,
   getUniverse, getPipelineSeries, listPipelineIssues,
   analyzeImport, commitImport, retryImporterIssues, IMPORTER_CONTENT_TYPES,
   getProviders, listCatalogIngredientsByIds,
@@ -636,76 +636,6 @@ function ReaderMapView({ readerMap, tickingClock }) {
   );
 }
 
-// Kick off a step generate/refine and drive its SSE progress stream. The POST
-// returns immediately; we enable the stream only after it resolves so the run
-// is registered server-side before the EventSource connects (matches the
-// pipeline auto-run). The result content lives in the universe/series records,
-// so callers refetch via `onComplete` rather than reading a payload off the
-// frame. `op` lets a panel show the live phase on the button that triggered the
-// run while leaving sibling buttons merely disabled.
-function useStepStream(sessionId, stepId) {
-  const [starting, setStarting] = useState(false);
-  const [active, setActive] = useState(false);
-  const [phase, setPhase] = useState('');
-  const [op, setOp] = useState(null);
-  const handlersRef = useRef(null);
-  // The runId we're waiting on. useSseProgress only resets its `latest` a render
-  // AFTER `enabled` flips true, so on the subscribe render `latest` still holds
-  // the PREVIOUS run's terminal frame. Gating the terminal branches on a frame's
-  // runId stops that stale frame from firing the new run's onComplete instantly.
-  const runIdRef = useRef(null);
-  // Enable only after the kickoff POST resolves (so the run is registered
-  // server-side before the EventSource connects) — see the step runner below.
-  const { latest, closed } = usePipelineProgress(storyStepProgressSseUrl, [sessionId, stepId], { enabled: active });
-
-  const settle = useCallback(() => {
-    setActive(false); setPhase(''); setOp(null);
-    runIdRef.current = null;
-    const h = handlersRef.current; handlersRef.current = null;
-    return h;
-  }, []);
-
-  // One effect handles every end-of-run path. A terminal frame and the stream's
-  // `closed` flag arrive together on completion, so the ordered branches (and
-  // settle() flipping `active` false) ensure exactly one of onComplete/onError
-  // fires — a separate `closed` effect would double-fire on the same render. The
-  // bare-`closed` branch covers a stream that died before any terminal frame
-  // (server pruned a fast run, or the connection dropped) so the button unsticks.
-  useEffect(() => {
-    if (!active) return;
-    // Ignore frames belonging to a previous run (stale `latest` not yet reset by
-    // the SSE hook). closed is reset on every (re)subscribe, so it never lingers.
-    const mine = latest && latest.runId === runIdRef.current;
-    if (mine && typeof latest.label === 'string' && latest.label) setPhase(latest.label);
-    if (mine && latest.type === 'complete') settle()?.onComplete?.(latest);
-    else if (mine && latest.type === 'error') settle()?.onError?.(new Error(latest.error || 'Generation failed'));
-    else if (closed) settle()?.onError?.(new Error('Lost connection to the generation stream'));
-  }, [latest, closed, active, settle]);
-
-  const start = useCallback(async (nextOp, kickoff, handlers = {}) => {
-    if (starting || active) return;
-    setStarting(true); setPhase('Starting…'); setOp(nextOp);
-    const res = await kickoff().catch((err) => { handlers.onError?.(err); return null; });
-    setStarting(false);
-    if (!res) { setPhase(''); setOp(null); return; }
-    // The kickoff collided with a DIFFERENT in-flight request for this step (a
-    // different op, or a refine of a different target/note). That run persists to
-    // the same records, so binding THIS button's success handler to its terminal
-    // frame would misreport. Don't subscribe — report it and leave the run alone.
-    // (A same-work re-click returns alreadyRunning without conflict and re-attaches.)
-    if (res.conflict) {
-      setPhase(''); setOp(null);
-      handlers.onError?.(new Error('Another operation is already running for this step — try again once it finishes.'));
-      return;
-    }
-    handlersRef.current = handlers;
-    runIdRef.current = res.runId; // only frames from this run drive our handlers
-    setActive(true); // enable the SSE subscription now that the run is registered
-  }, [starting, active]);
-
-  return { start, busy: starting || active, phase, op };
-}
-
 function RefineBox({ onRefine, disabled, busy, running, phase }) {
   const [feedback, setFeedback] = useState('');
   return (
@@ -732,7 +662,7 @@ function RefineBox({ onRefine, disabled, busy, running, phase }) {
 }
 
 function StepPanel({ session, universe, series, issues, stepId, locked, onChanged, onSeriesUpdate, onIssuesUpdate, onFlushPending, onUniverseCharRef }) {
-  const { start, busy, phase, op } = useStepStream(session.id, stepId);
+  const { start, busy, phase, op } = useStoryStepRun(stepId);
   const arc = series?.arc || {};
   const isRunning = (which) => busy && op === which;
 
@@ -930,8 +860,12 @@ function StepCharacters({ session, universe, locked, onChanged, onUniverseCharRe
   const cast = universe?.characters || [];
   // Universe canon renders, so they resolve the universe's pin ladder (see renderPinLadder).
   const { imageCfg } = useImageRenderSettings({ record: universe, target: RENDER_TARGET.UNIVERSE_BIBLE });
-  const [refiningId, setRefiningId] = useState(null);
-  const { start: startRefine, busy: refineBusy, phase: refinePhase } = useStepStream(session.id, 'characters');
+  // Which character the in-flight refine targets rides on the RUN (`meta`), not
+  // on local state — this panel unmounts when the user clicks another step on
+  // the rail, and the run outlives it (#3905), so local state would come back
+  // empty and the spinner would land on nobody.
+  const { start: startRefine, busy: refineBusy, phase: refinePhase, meta: refineMeta } = useStoryStepRun('characters');
+  const refiningId = refineMeta?.entryId || null;
 
   // Section-local renders now carry a durable `universeRun.entryRef` tag (#1362),
   // so the server-side `appendEntryImageRef` hook persists the filename onto the
@@ -971,15 +905,14 @@ function StepCharacters({ session, universe, locked, onChanged, onUniverseCharRe
 
   const refineChar = (entryId) => {
     if (refineBusy) return;
-    setRefiningId(entryId);
     startRefine('refine',
       () => refineStoryStep(session.id, 'characters', { entryId }, { silent: true }),
       { onComplete: (frame) => {
-          setRefiningId(null);
           toast.success(frame.changes?.length ? `Refined — ${frame.changes.length} change(s)` : 'Refined');
           onChanged();
         },
-        onError: (err) => { setRefiningId(null); toast.error(err?.message || 'Refine failed'); } });
+        onError: (err) => toast.error(err?.message || 'Refine failed') },
+      { entryId });
   };
 
   return (
@@ -1484,5 +1417,12 @@ function StoryBuilderDetail({ storyId, stepParam }) {
 export default function StoryBuilder() {
   const { storyId, step } = useParams();
   if (!storyId) return <StoryBuilderIndex />;
-  return <StoryBuilderDetail storyId={storyId} stepParam={step} />;
+  // The provider sits ABOVE the detail view (which itself swaps out for a
+  // skeleton on reload and for a "not found" notice on a deleted session), so an
+  // in-flight generate/refine survives step navigation AND those swaps (#3905).
+  return (
+    <StoryStepRunProvider sessionId={storyId}>
+      <StoryBuilderDetail storyId={storyId} stepParam={step} />
+    </StoryStepRunProvider>
+  );
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router';
+import { MockEventSource, lastEventSource } from '../test/mockEventSource';
 
 const STEPS = [
   { id: 'idea', label: 'Idea', description: 'Capture a starter idea.' },
@@ -647,5 +648,35 @@ describe('StoryBuilder — detail stepper', () => {
     // The recomputed view's staleSteps merges reactively → stale banner appears
     // without a full refetch.
     await waitFor(() => expect(screen.getByText(/re-review and re-lock/i)).toBeTruthy());
+  });
+
+  // #3905 — the step panel is keyed by the active step, so clicking the rail
+  // mid-run used to unmount it, sever the SSE stream, and drop the completion
+  // toast. The run now lives above the rail.
+  it('a generate started on one step survives rail navigation and still toasts on completion', async () => {
+    const { fireEvent } = await import('@testing-library/react');
+    MockEventSource.reset();
+    global.EventSource = MockEventSource;
+    api.generateStoryStep.mockResolvedValue({ runId: 'run-1' });
+    api.getPipelineSeries.mockResolvedValue({ id: 's1', arc: { logline: 'AL', summary: 'AS', readerMap: null } });
+    api.getStorySession.mockResolvedValue({
+      id: 'stb-1', title: 'X', currentStep: 'readerMap', universeId: 'u1', seriesId: 's1',
+      steps: mkSteps({ idea: { locked: true }, universeAesthetic: { locked: true }, plotArc: { locked: true } }),
+      staleSteps: [], llm: { provider: '', model: '' },
+    });
+    renderAt('/story-builder/stb-1/readerMap');
+    await waitFor(() => expect(screen.getByText('Generate reader map')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('Generate reader map'));
+    await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
+
+    // Navigate the rail to another step — the panel unmounts.
+    fireEvent.click(screen.getByRole('button', { name: /Characters/ }));
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Characters' })).toBeTruthy());
+    expect(lastEventSource().closed).toBe(false);
+
+    await act(async () => { lastEventSource().emit({ runId: 'run-1', type: 'complete' }); });
+    await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('Generated'));
+    delete global.EventSource;
   });
 });

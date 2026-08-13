@@ -52,6 +52,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useMediaJobSse` | Imperative per-job `/{kind}-gen/:id/events` SSE; `attach()` returns a Promise that settles on the terminal frame. | POST-then-attach media render flows that await completion (ImageGen/VideoGen). |
 | `useOpenClawStream` | OpenClaw SSE chat stream. | OpenClaw file-browser chat surface only. |
 | `usePipelineProgress` | Id-derived runner SSE stream: builds the URL from `(urlBuilder, ids)`, connects only when every id is truthy. | Any runner SSE keyed by record ids (pipeline auto-run, editorial, manuscript completeness, volume beats, story steps). |
+| `useStoryStepRuns` | Story Builder step generate/refine runs hoisted above the step rail: `<StoryStepRunProvider sessionId>` owns one run slot per step id (SSE subscription, phase, `onComplete`/`onError` handlers, arbitrary `meta`), `useStoryStepRun(stepId)` reads/drives it. | Any Story Builder surface that starts a step run — the panel unmounts on rail navigation, so run state must not live in it (#3905). |
 | `useSeriesEditorial` | Editorial-roadmap aggregate + batch lifecycle (load, re-attach, SSE, start/cancel, reload). | Any view of the editorial roadmap (panel or Reader Map page). |
 | `useReaderPanel` | Reader-panel snapshot (four personas + mined disagreements) + convene lifecycle (load, re-attach, per-persona SSE, run/cancel, reload). | The Reader Map page's Reader Panel tab (#2170). |
 
