@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render } from '@testing-library/react';
 import { fireEvent } from '@testing-library/dom';
-import { MemoryRouter } from 'react-router';
+import { createMemoryRouter, RouterProvider } from 'react-router';
 
 // Regression guard for #3387: typing in the WorkEditor body must NOT re-render
 // the <StoryboardPanel> sidebar. The panel is a heavy tree (bibles, boards,
@@ -64,12 +64,14 @@ const work = {
   drafts: [{ id: 'wr-draft-1', label: 'v1', wordCount: 3 }],
 };
 
+// A DATA router: WorkEditor's unsaved-changes guard uses `useBlocker`, which
+// throws under a plain <MemoryRouter> (#3995).
+const editorRouter = () => createMemoryRouter([
+  { path: '/writers-room', element: <WorkEditor work={work} onChange={() => {}} /> },
+], { initialEntries: ['/writers-room'] });
+
 async function renderEditor() {
-  const view = render(
-    <MemoryRouter>
-      <WorkEditor work={work} onChange={() => {}} />
-    </MemoryRouter>
-  );
+  const view = render(<RouterProvider router={editorRouter()} />);
   // Settle the mount-effect bible fetches before asserting render counts.
   await act(async () => {});
   return view;

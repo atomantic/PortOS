@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
-import { MemoryRouter, Routes, Route } from 'react-router';
+import { createMemoryRouter, RouterProvider } from 'react-router';
 import { MockEventSource, lastEventSource as lastEs } from '../test/mockEventSource';
 
 const api = vi.hoisted(() => ({
@@ -32,14 +32,16 @@ const comment = {
   status: 'open', fix: null, createdAt: 't', updatedAt: 't',
 };
 
-const renderEditor = (path = '/pipeline/series/ser-1/manuscript') => render(
-  <MemoryRouter initialEntries={[path]}>
-    <Routes>
-      <Route path="/pipeline/series/:seriesId/manuscript/*" element={<PipelineManuscriptEditor />} />
-      <Route path="/pipeline/series/:seriesId" element={<div>series page</div>} />
-    </Routes>
-  </MemoryRouter>,
-);
+// A DATA router: the editor's unsaved-changes guard uses `useBlocker`, which
+// throws under a plain <MemoryRouter> (#3995).
+const renderEditor = (path = '/pipeline/series/ser-1/manuscript') => {
+  const router = createMemoryRouter([
+    { path: '/pipeline/series/:seriesId/manuscript/*', element: <PipelineManuscriptEditor /> },
+    { path: '/pipeline/series/:seriesId', element: <div>series page</div> },
+    { path: '/dashboard', element: <div>dashboard</div> },
+  ], { initialEntries: [path] });
+  return { ...render(<RouterProvider router={router} />), router };
+};
 
 // Reveal a comment in context by clicking its sidebar index row.
 const revealFromIndex = (problem) => fireEvent.click(screen.getByText(problem));
@@ -614,5 +616,62 @@ describe('PipelineManuscriptEditor — generate-edits streamed review', () => {
     // Recovery: button re-enables (no longer stuck) and the review is re-fetched.
     expect(await screen.findByText('Run editorial review')).toBeInTheDocument();
     await waitFor(() => expect(api.getPipelineManuscriptReview).toHaveBeenCalledTimes(2));
+  });
+
+  describe('unsaved-changes route guard (#3995)', () => {
+    const twoIssues = {
+      sections: [
+        { issueId: 'iss-1', number: 1, title: 'One', stageId: 'prose', content: 'Issue one body.' },
+        { issueId: 'iss-2', number: 2, title: 'Two', stageId: 'prose', content: 'Issue two body.' },
+      ],
+      viewType: 'prose', primaryStageId: 'prose', pinnedPrimary: 'prose', availableTypes: ['prose'],
+    };
+    // Sections persist onBlur, so typing WITHOUT blurring is exactly the state
+    // the guard exists to protect.
+    const typeUnsaved = async (current, next) => {
+      const area = await screen.findByDisplayValue(current);
+      fireEvent.change(area, { target: { value: next } });
+      return area;
+    };
+    const CONFIRM = 'Discard your unsaved manuscript edits?';
+
+    it('blocks leaving the editor while a section has unsaved edits', async () => {
+      const { router } = renderEditor('/pipeline/series/ser-1/manuscript/1');
+      await typeUnsaved('The hero walked in. She left.', 'Edited but not blurred.');
+
+      await act(async () => { await router.navigate('/dashboard'); });
+      expect(await screen.findByText(CONFIRM)).toBeInTheDocument();
+      expect(screen.queryByText('dashboard')).not.toBeInTheDocument();
+    });
+
+    it('discards the edits and runs the parked navigation', async () => {
+      const { router } = renderEditor('/pipeline/series/ser-1/manuscript/1');
+      await typeUnsaved('The hero walked in. She left.', 'Edited but not blurred.');
+      await act(async () => { await router.navigate('/dashboard'); });
+
+      fireEvent.click(await screen.findByText('Discard'));
+      expect(await screen.findByText('dashboard')).toBeInTheDocument();
+    });
+
+    it('keeps the editor (and the edits) on cancel', async () => {
+      const { router } = renderEditor('/pipeline/series/ser-1/manuscript/1');
+      await typeUnsaved('The hero walked in. She left.', 'Edited but not blurred.');
+      await act(async () => { await router.navigate('/dashboard'); });
+
+      fireEvent.click(await screen.findByText('Keep editing'));
+      await waitFor(() => expect(screen.queryByText(CONFIRM)).not.toBeInTheDocument());
+      expect(screen.getByDisplayValue('Edited but not blurred.')).toBeInTheDocument();
+      expect(screen.queryByText('dashboard')).not.toBeInTheDocument();
+    });
+
+    it('does not block an issue switch inside the editor (same splat route)', async () => {
+      api.getPipelineManuscript.mockResolvedValue(twoIssues);
+      renderEditor('/pipeline/series/ser-1/manuscript/1');
+      await typeUnsaved('Issue one body.', 'Issue one, edited.');
+
+      fireEvent.click(within(screen.getByRole('navigation', { name: 'Issues' })).getByRole('link', { name: /Issue 2/ }));
+      expect(await screen.findByDisplayValue('Issue two body.')).toBeInTheDocument();
+      expect(screen.queryByText(CONFIRM)).not.toBeInTheDocument();
+    });
   });
 });

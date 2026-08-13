@@ -103,6 +103,22 @@ describe('useUnsavedChangesGuard', () => {
     expect(await screen.findByText('keep')).toBeTruthy();
   });
 
+  it('lets an in-editor move through when isSameView claims it (splat route tab switch)', async () => {
+    const isSameView = (from, to) => from.startsWith('/edit') && to.startsWith('/edit');
+    const router = renderEditor({ options: { isSameView } });
+    await navigate(router, '/edit/deeper');
+    await waitFor(() => expect(router.state.location.pathname).toBe('/edit/deeper'));
+    expect(screen.queryByText('keep')).toBeNull();
+  });
+
+  it('still blocks a real exit when isSameView is supplied', async () => {
+    const isSameView = (from, to) => from.startsWith('/edit') && to.startsWith('/edit');
+    const router = renderEditor({ options: { isSameView } });
+    await navigate(router, '/away');
+    expect(await screen.findByText('keep')).toBeTruthy();
+    expect(screen.queryByText('away')).toBeNull();
+  });
+
   it('arms beforeunload while dirty and disarms once clean', async () => {
     const add = vi.spyOn(window, 'addEventListener');
     const remove = vi.spyOn(window, 'removeEventListener');

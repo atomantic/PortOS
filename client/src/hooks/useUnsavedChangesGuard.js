@@ -23,14 +23,22 @@ import { useBlocker } from 'react-router';
 //
 // Discarding is the CALLER's job — only it knows how to reset its draft — so a
 // discard handler resets local state and then calls `proceed()`.
-export default function useUnsavedChangesGuard(isDirty, { beforeUnload = true } = {}) {
+// `isSameView(currentPathname, nextPathname)` — optional escape hatch for an
+// editor whose OWN in-page moves change the pathname. A splat route like
+// `/pipeline/series/:id/manuscript/*` swaps the issue segment without leaving
+// (or remounting) the editor, so the default pathname comparison would raise a
+// discard confirm on every issue tab click. Return true for a navigation that
+// stays inside the editor and it passes through unguarded.
+export default function useUnsavedChangesGuard(isDirty, { beforeUnload = true, isSameView } = {}) {
   // Same-location navigations (a re-click on the link you're already on, a
   // search-param tweak on the current page) don't unmount the editor, so
   // there's nothing to guard — let them through rather than raising a confirm
   // the user can't explain.
-  const shouldBlock = useCallback(({ currentLocation, nextLocation }) => (
-    !!isDirty && currentLocation.pathname !== nextLocation.pathname
-  ), [isDirty]);
+  const shouldBlock = useCallback(({ currentLocation, nextLocation }) => {
+    if (!isDirty) return false;
+    if (currentLocation.pathname === nextLocation.pathname) return false;
+    return !isSameView?.(currentLocation.pathname, nextLocation.pathname);
+  }, [isDirty, isSameView]);
   const blocker = useBlocker(shouldBlock);
   const blocked = blocker.state === 'blocked';
 

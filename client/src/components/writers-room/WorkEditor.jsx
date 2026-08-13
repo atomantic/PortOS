@@ -28,7 +28,9 @@ import {
 import toast from '../ui/Toast';
 import ProseEditor from '../ui/ProseEditor';
 import Drawer from '../Drawer';
+import InlineConfirmRow from '../ui/InlineConfirmRow';
 import useMounted from '../../hooks/useMounted';
+import useUnsavedChangesGuard from '../../hooks/useUnsavedChangesGuard';
 import useClickOutside from '../../hooks/useClickOutside';
 import {
   saveWritersRoomDraft,
@@ -328,14 +330,15 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Warn on tab close/navigation away while there are unsaved draft edits —
-  // otherwise the body reset in the effect above silently discards them.
-  useEffect(() => {
-    if (!dirty) return undefined;
-    const onBeforeUnload = (e) => { e.preventDefault(); };
-    window.addEventListener('beforeunload', onBeforeUnload);
-    return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [dirty]);
+  // Guard unsaved draft edits at BOTH exit doors (#3958/#3995) — tab
+  // close/reload, and any in-app navigation (sidebar link, ⌘K, voice
+  // `ui_navigate`, browser Back) — otherwise the body reset in the effect above
+  // silently discards them. The confirm renders below the header banners.
+  const routeGuard = useUnsavedChangesGuard(dirty);
+  const discardAndExit = useCallback(() => {
+    setBody(savedBody);
+    routeGuard.proceed();
+  }, [routeGuard, savedBody]);
 
   useClickOutside(overflowRef, overflowOpen, () => setOverflowOpen(false));
 
@@ -855,6 +858,21 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
           )}
         </div>
       </div>
+
+      {routeGuard.blocked && (
+        <InlineConfirmRow
+          className="shrink-0"
+          variant="separator"
+          tone="warning"
+          question="Discard your unsaved changes to this work?"
+          confirmText="Discard"
+          cancelText="Keep editing"
+          onConfirm={discardAndExit}
+          onCancel={routeGuard.reset}
+          autoFocus
+          aria-label={`Discard unsaved changes to ${title || 'this work'}`}
+        />
+      )}
 
       {runningKind && (
         <AnalysisRunBanner

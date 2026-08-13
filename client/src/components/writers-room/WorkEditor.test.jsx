@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, within } from '@testing-library/react';
 import { fireEvent } from '@testing-library/dom';
-import { MemoryRouter } from 'react-router';
+import { createMemoryRouter, RouterProvider } from 'react-router';
 
 // Header layout contract for #3568: on a ~375px phone the WorkEditor header
 // used to wrap into 4-5 rows and push the prose textarea below the fold. The
@@ -44,14 +44,18 @@ const work = {
   drafts: [{ id: 'wr-draft-1', label: 'v1', wordCount: 3 }],
 };
 
+// A DATA router: WorkEditor's unsaved-changes guard uses `useBlocker`, which
+// throws under a plain <MemoryRouter> (#3995).
+const editorRouter = () => createMemoryRouter([
+  { path: '/writers-room', element: <WorkEditor work={work} onChange={() => {}} /> },
+  { path: '/dashboard', element: <div>dashboard</div> },
+], { initialEntries: ['/writers-room'] });
+
 async function renderEditor() {
-  const view = render(
-    <MemoryRouter>
-      <WorkEditor work={work} onChange={() => {}} />
-    </MemoryRouter>
-  );
+  const router = editorRouter();
+  const view = render(<RouterProvider router={router} />);
   await act(async () => {});
-  return view;
+  return { ...view, router };
 }
 
 function headerControls() {
@@ -159,5 +163,49 @@ describe('WorkEditor header layout (#3568)', () => {
     expect(within(viewGroup).getByRole('button', { name: 'Read' })).toHaveAttribute('aria-pressed', 'true');
     expect(within(viewGroup).getByRole('button', { name: 'Edit' })).toHaveAttribute('aria-pressed', 'false');
     expect(container.querySelector('textarea')).toBeNull();
+  });
+});
+
+describe('WorkEditor unsaved-changes route guard (#3995)', () => {
+  const CONFIRM = 'Discard your unsaved changes to this work?';
+  const typeUnsaved = async (container, next) => {
+    const area = container.querySelector('textarea');
+    await act(async () => { fireEvent.change(area, { target: { value: next } }); });
+    return area;
+  };
+
+  it('blocks an in-app navigation while the draft is dirty', async () => {
+    const { container, router } = await renderEditor();
+    await typeUnsaved(container, 'The hero wakes, then hesitates.');
+
+    await act(async () => { await router.navigate('/dashboard'); });
+    expect(screen.getByText(CONFIRM)).toBeInTheDocument();
+    expect(screen.queryByText('dashboard')).not.toBeInTheDocument();
+  });
+
+  it('discards the draft and runs the parked navigation', async () => {
+    const { container, router } = await renderEditor();
+    await typeUnsaved(container, 'The hero wakes, then hesitates.');
+    await act(async () => { await router.navigate('/dashboard'); });
+
+    await act(async () => { fireEvent.click(screen.getByText('Discard')); });
+    expect(screen.getByText('dashboard')).toBeInTheDocument();
+  });
+
+  it('keeps the editor and the draft on cancel', async () => {
+    const { container, router } = await renderEditor();
+    await typeUnsaved(container, 'The hero wakes, then hesitates.');
+    await act(async () => { await router.navigate('/dashboard'); });
+
+    await act(async () => { fireEvent.click(screen.getByText('Keep editing')); });
+    expect(screen.queryByText(CONFIRM)).not.toBeInTheDocument();
+    expect(container.querySelector('textarea').value).toBe('The hero wakes, then hesitates.');
+    expect(screen.queryByText('dashboard')).not.toBeInTheDocument();
+  });
+
+  it('lets a navigation through while the draft is clean', async () => {
+    const { router } = await renderEditor();
+    await act(async () => { await router.navigate('/dashboard'); });
+    expect(screen.getByText('dashboard')).toBeInTheDocument();
   });
 });
