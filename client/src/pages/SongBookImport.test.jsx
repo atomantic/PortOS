@@ -233,6 +233,23 @@ describe('SongBookImport', () => {
     });
   });
 
+  it('ignores a fetch that resolves after the user has edited the URL away', async () => {
+    // The input stays editable during the fetch, so a late result must not
+    // write a draft (or an error) under a URL that never produced it.
+    let rejectFetch;
+    api.importSongFromUrl.mockReturnValue(new Promise((_, reject) => { rejectFetch = reject; }));
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: 'From URL' }));
+    const input = screen.getByLabelText('Tab / chord-sheet URL');
+    fireEvent.change(input, { target: { value: 'https://example.com/slow' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Fetch' }));
+
+    fireEvent.change(input, { target: { value: 'https://example.com/typed-more' } });
+    rejectFetch(Object.assign(new Error('Bad gateway'), { code: 'SONG_IMPORT_FETCH_FAILED' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Fetch' }).textContent).toContain('Fetch'));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('sends an in-range pasted capo through unchanged', async () => {
     renderPage();
     fireEvent.change(screen.getByLabelText('Pasted tab content'), {

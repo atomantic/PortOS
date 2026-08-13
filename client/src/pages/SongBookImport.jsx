@@ -116,23 +116,37 @@ export default function SongBookImport() {
     applyMetaDefaults(parseTabSheet(normalizePastedTab(text)).meta);
   }, [applyMetaDefaults]);
 
+  // The input stays editable while a fetch is in flight, so the request that
+  // resolves may no longer be the one the form is showing. Refs (not the stale
+  // closure values) say what's on screen when the promise settles.
+  const urlRef = useRef(url);
+  urlRef.current = url;
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
+
   // Error mapping lives in the .catch alone — it swallows every rejection, so
   // a useAsyncAction errorMessage layer could never fire (single toast layer).
   const [fetchUrl, fetching] = useAsyncAction(async () => {
-    const normalizedUrl = normalizeUrl(url);
+    const submittedUrl = url;
+    const normalizedUrl = normalizeUrl(submittedUrl);
     if (!normalizedUrl || !isUrl(normalizedUrl)) { toast.error('Enter a valid URL'); return null; }
+    // A result for a URL the user has since edited away from — or for a tab
+    // they've left — must not write itself over what's on screen now.
+    const isCurrent = () => urlRef.current === submittedUrl && tabRef.current === 'url';
     const data = await importSongFromUrl(normalizedUrl, { silent: true }).catch((err) => {
       const message = importErrorMessage(err);
       toast.error(message);
-      // Drop any earlier draft: leaving the previous song previewed under a
-      // failed URL is exactly the stale-form confusion this guards against.
-      setFetched(null);
-      applyMetaDefaults({});
-      setFetchError(message);
+      if (isCurrent()) {
+        // Drop any earlier draft: leaving the previous song previewed under a
+        // failed URL is exactly the stale-form confusion this guards against.
+        setFetched(null);
+        applyMetaDefaults({});
+        setFetchError(message);
+      }
       return null;
     });
     const draft = data?.draft;
-    if (!draft) return null;
+    if (!draft || !isCurrent()) return null;
     setFetchError(null);
     setFetched(draft);
     applyMetaDefaults(draft);
