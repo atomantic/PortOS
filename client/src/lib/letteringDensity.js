@@ -13,6 +13,8 @@
 // newline-joined string, so each non-empty line counts). SFX counts toward the
 // panel/page WORD load but is not a balloon.
 
+import { countWords } from '../utils/formatters.js';
+
 export const DEFAULT_LETTERING_THRESHOLDS = Object.freeze({
   maxWordsPerBalloon: 25,
   maxWordsPerPanel: 50,
@@ -22,13 +24,7 @@ export const DEFAULT_LETTERING_THRESHOLDS = Object.freeze({
 
 const LETTERING_SEVERITIES = ['high', 'medium', 'low'];
 
-// Count words in a free-text lettering string (runs of non-whitespace). 0 for
-// non-strings.
-export function countWords(text) {
-  if (typeof text !== 'string') return 0;
-  const matched = text.trim().match(/\S+/g);
-  return matched ? matched.length : 0;
-}
+export { countWords };
 
 // Severity scaled by how far over the threshold a count runs: ≥2× → high, ≥1.4×
 // → medium, else low.
