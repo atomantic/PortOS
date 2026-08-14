@@ -25,6 +25,27 @@ const MOCK_PATHS = {
 const isLtx2Python = (bin) => String(bin)
   .includes(join('.portos', 'ltx-2-mlx', '.venv', 'bin', 'python3'));
 
+// The two chain helpers below used to sleep a flat 100ms for the timeline
+// stitch and then read the concat spawn / stitched history entry out of the
+// mocks. That is enough on an idle machine and not enough on a contended
+// worker during a full-suite run: the stitch had not landed, those reads came
+// back null, and the tests failed on a TypeError rather than an assertion —
+// while passing in isolation. Poll the real completion condition instead (the
+// stitched history entry is written last, after the concat spawn), and fall
+// through on timeout so a genuine regression still fails on its own assertion.
+const stitchedHistoryEntry = (atomicWriteMock) => atomicWriteMock.mock.calls
+  .flatMap(([, payload]) => (Array.isArray(payload) ? payload : []))
+  .find((entry) => entry?.chainedFrom) || null;
+
+async function waitForStitch() {
+  const { atomicWrite } = await import('../../lib/fileUtils.js');
+  const deadline = Date.now() + 5000;
+  while (!stitchedHistoryEntry(vi.mocked(atomicWrite)) && Date.now() < deadline) {
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
 vi.mock('../../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn(async () => {}),
@@ -457,7 +478,7 @@ describe('generateChainedVideo — continuation strategy (context window vs last
       const id = innerJobIds[i];
       videoGenEvents.emit('completed', { generationId: id, filename: `${id}.mp4`, path: `/data/videos/${id}.mp4` });
     }
-    await new Promise((r) => setTimeout(r, 100));
+    await waitForStitch();
     videoGenEvents.removeAllListeners('started');
 
     const spawns = vi.mocked(spawn).mock.calls;
@@ -782,7 +803,7 @@ describe('generateChainedVideo — per-chunk prompt beats (#3695)', () => {
       const id = innerJobIds[i];
       videoGenEvents.emit('completed', { generationId: id, filename: `${id}.mp4`, path: `/data/videos/${id}.mp4` });
     }
-    await new Promise((r) => setTimeout(r, 100));
+    await waitForStitch();
     videoGenEvents.removeAllListeners('started');
 
     return spawnMock.mock.calls

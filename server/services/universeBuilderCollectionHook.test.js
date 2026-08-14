@@ -47,7 +47,17 @@ async function waitFor(predicate, { timeoutMs = 2000, intervalMs = 5 } = {}) {
     // `await` so async predicates (e.g. getUniverse reads) resolve to a real
     // boolean — a bare Promise is always truthy and would short-circuit. Sync
     // boolean predicates pass through `await` unchanged.
-    if (await predicate()) return;
+    //
+    // A throwing predicate counts as "not true yet", not as a failure: the
+    // sidecar predicates below read a file the hook has not written on the
+    // first poll, and letting that ENOENT escape aborted the wait on the very
+    // condition it exists to wait for. Reproduces only when the hook is slower
+    // than the first poll, i.e. under full-suite load.
+    try {
+      if (await predicate()) return;
+    } catch {
+      // fall through to the next poll
+    }
     await new Promise((r) => setTimeout(r, intervalMs));
   }
   throw new Error('waitFor: predicate never became true');
