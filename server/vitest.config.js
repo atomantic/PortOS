@@ -3,6 +3,15 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     testTimeout: process.platform === 'win32' ? 30000 : 10000,
+    // hookTimeout tracks testTimeout for the same reason: Windows fs + module
+    // resolution is markedly slower, and vitest's 10s DEFAULT applies to hooks
+    // even when testTimeout has been raised. The image-gen route suites
+    // (clean/watermark/multipart) do a heavy dynamic `import('./imageGen.js')`
+    // plus sharp fixture encoding in beforeAll — comfortably under 10s when run
+    // alone, but over it on a contended Windows worker during a full-suite run,
+    // where they failed with "Hook timed out in 10000ms" and ZERO failing
+    // assertions. That is a runner budget, not a product defect.
+    hookTimeout: process.platform === 'win32' ? 30000 : 10000,
     // Print worker console output directly instead of forwarding it to the main
     // thread over RPC. This codebase logs heavily from fire-and-forget callbacks
     // (the documented `.catch(() => console.log(...))` pattern, PTY/timer hooks,
