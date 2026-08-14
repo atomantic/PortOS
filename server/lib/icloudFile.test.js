@@ -381,7 +381,15 @@ describe('background-download safety caps', () => {
   });
 });
 
-describe('cloud-root detection beyond a literal path match', () => {
+// Skipped on Windows — deliberately, and this is the rare case where a platform
+// skip is the honest answer rather than lost coverage. The behavior under test
+// is macOS "Desktop & Documents Folders" sync symlinking ~/Documents into a
+// ubiquity container, and CLOUD_MARKERS are POSIX literals
+// ('/Library/Mobile Documents/') describing a macOS-only filesystem layout.
+// There is no Windows equivalent to assert: fabricating that tree under a
+// Windows path yields backslashes the markers can never match, so the test
+// would only be checking that a macOS-only feature is inert off macOS.
+describe.skipIf(process.platform === 'win32')('cloud-root detection beyond a literal path match', () => {
   // ~/Documents is a SYMLINK into the CloudDocs ubiquity container when macOS
   // "Desktop & Documents Folders" sync is on, so a path string can say nothing
   // about iCloud while the file is very much in it. Real dirs + a real symlink
