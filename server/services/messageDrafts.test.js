@@ -1,12 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { posixPath as toPosix } from '../lib/testHelper.js';
 
 const fileStore = new Map();
-
-// The service composes these paths with path.join, so on Windows the mock
-// receives a backslash-separated path and the POSIX-spelled keys the tests
-// seed into fileStore would never match — the lookup would miss and the
-// assertions would report missing data rather than a path separator.
-const toPosix = (v) => (typeof v === 'string' ? v.split('\\').join('/') : v);
 
 vi.mock('../lib/uuid.js', () => {
   let counter = 0;

@@ -1,13 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { posixPath as toPosix } from '../../lib/testHelper.js';
 
 // Mock store for atomicWrite + readJSONFile so we can inspect record writes.
 const fileStore = new Map();
 
-// The service composes these paths with path.join, so on Windows the mock
-// receives a backslash-separated path and the POSIX-spelled keys the tests
-// seed into fileStore would never match — the lookup would miss and the
-// assertions would report missing data rather than a path separator.
-const toPosix = (v) => (typeof v === 'string' ? v.split('\\').join('/') : v);
 const writeCalls = [];
 
 vi.mock('../../lib/fileUtils.js', () => ({

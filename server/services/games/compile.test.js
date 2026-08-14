@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { posixPath as toPosix } from '../../lib/testHelper.js';
 
 const state = vi.hoisted(() => ({
   game: null,
@@ -16,8 +17,6 @@ vi.mock('./store.js', () => ({
     return record;
   }),
 }));
-
-const toPosix = (v) => (typeof v === 'string' ? v.split('\\').join('/') : v);
 
 vi.mock('../../lib/fileUtils.js', () => ({
   PATHS: { images: '/tmp/images', music: '/tmp/music' },

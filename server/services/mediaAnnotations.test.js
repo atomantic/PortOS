@@ -1,12 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { posixPath as toPosix } from '../lib/testHelper.js';
 
 const fileStore = new Map();
-
-// mediaAnnotations.js builds its state path with path.join, so on Windows the
-// mock receives a backslash-separated path and the POSIX-spelled STATE_PATH the
-// tests seed would never match — reads would fall through to the fallback and
-// the assertions would report lost annotations rather than a path separator.
-const toPosix = (v) => (typeof v === 'string' ? v.split('\\').join('/') : v);
 
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),

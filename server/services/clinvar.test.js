@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { posixPath as toPosix } from '../lib/testHelper.js';
 
 const NOT_SYNCED_ERROR = 'ClinVar database not synced. Click "Sync ClinVar" first.';
 const NO_GENOME_ERROR = 'No genome data uploaded.';
@@ -6,13 +7,6 @@ const NO_GENOME_ERROR = 'No genome data uploaded.';
 // Mock the file-system helpers clinvar.js consumes. The service reads the
 // compact index + meta via tryReadFile and writes/deletes via fs/promises.
 const fileStore = new Map();
-
-// clinvar.js composes these paths with path.join, so on Windows they arrive
-// backslash-separated and the POSIX-spelled keys the tests seed would never
-// match — the mock would report "no such file" and every assertion would blame
-// a missing sync instead of a path separator.
-const toPosix = (v) => (typeof v === 'string' ? v.split('\\').join('/') : v);
-
 
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { meatspace: '/mock/meatspace' },

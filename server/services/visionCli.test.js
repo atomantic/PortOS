@@ -1,10 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
+import { posixPath } from '../lib/testHelper.js';
 
-// Separator-normalizer for path assertions. The code under test composes paths
-// with path.join/resolve, which emit '\\' on Windows, so a '/'-spelled literal
-// could never match there. Normalizing the RECEIVED value keeps the readable
-// POSIX literals below meaningful on both platforms (no-op on POSIX).
-const posixPath = (v) => String(v).split('\\').join('/');
 import { EventEmitter } from 'events';
 
 // Wrap the REAL resolveWindowsExecutable/prepareWindowsSafeSpawn in spies

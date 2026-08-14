@@ -1,10 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-
-// Separator-normalizer for path assertions. The code under test composes paths
-// with path.join/resolve, which emit '\\' on Windows, so a '/'-spelled literal
-// could never match there. Normalizing the RECEIVED value keeps the readable
-// POSIX literals below meaningful on both platforms (no-op on POSIX).
-const posixPath = (v) => String(v).split('\\').join('/');
+import { posixPath } from '../lib/testHelper.js';
 
 // Hoisted mocks so promisify wraps the same fns we control in tests
 const hoisted = vi.hoisted(() => ({

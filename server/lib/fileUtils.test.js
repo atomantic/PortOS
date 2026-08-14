@@ -1,10 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import { posixPath } from './testHelper.js';
 
-// resolveImageInputPath returns a path.join()ed absolute path, so on Windows it
-// is backslash-separated and a toContain('data/images/') check never matches.
-// Normalize the RECEIVED value so the readable POSIX literals below still say
-// what they mean on both platforms.
-const posixPath = (v) => String(v).split('\\').join('/');
 import { readFile, writeFile, rm, mkdir } from 'fs/promises';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';

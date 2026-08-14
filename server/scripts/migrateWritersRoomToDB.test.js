@@ -8,13 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-
-// Normalize the path a mock receives before comparing/indexing it. The code
-// under test composes these with path.join, so on Windows they arrive
-// backslash-separated and the POSIX-spelled keys below would never match —
-// the mock would fall through to its default and the assertions would compare
-// against an empty/absent value rather than the fixture they name.
-const toPosix = (v) => (typeof v === 'string' ? v.split('\\').join('/') : v);
+import { posixPath as toPosix } from '../lib/testHelper.js';
 
 const DATA = '/fake/data';
 const ROOT = `${DATA}/writers-room`;

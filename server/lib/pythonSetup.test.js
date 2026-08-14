@@ -1,10 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-// Separator-normalizer for path assertions. The code under test composes paths
-// with path.join/resolve, which emit '\\' on Windows, so a '/'-spelled literal
-// could never match there. Normalizing the RECEIVED value keeps the readable
-// POSIX literals below meaningful on both platforms (no-op on POSIX).
-const posixPath = (v) => String(v).split('\\').join('/');
+import { posixPath } from './testHelper.js';
 
 // Mutable state read by the hoisted vi.mock factories below. Each test mutates
 // it and then `vi.resetModules() + dynamic import` re-evaluates pythonSetup.js

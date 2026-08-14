@@ -1,10 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { posixPath } from './testHelper.js';
 
-// Separator-normalizer for path assertions. The code under test composes paths
-// with path.join/resolve, which emit '\\' on Windows, so a '/'-spelled literal
-// could never match there. Normalizing the RECEIVED value keeps the readable
-// POSIX literals below meaningful on both platforms (no-op on POSIX).
-const posixPath = (v) => String(v).split('\\').join('/');
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, existsSync, readlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';

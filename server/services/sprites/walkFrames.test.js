@@ -8,16 +8,12 @@
  */
 
 import { describe, it, expect, vi, afterAll } from 'vitest';
+import { posixPath } from '../../lib/testHelper.js';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdir, writeFile } from 'fs/promises';
 import { createHash } from 'crypto';
-
-// Separator-normalizer for path assertions: the code under test composes paths
-// with path.join, which emits '\\' on Windows, so a '/'-spelled probe below
-// would never match there (no-op on POSIX).
-const posixPath = (v) => String(v).split('\\').join('/');
 
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-frames-test-'));
 
