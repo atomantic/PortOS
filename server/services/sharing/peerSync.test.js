@@ -1,4 +1,22 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+// Poll for a fire-and-forget effect to land instead of sleeping a fixed number
+// of milliseconds. A flat sleep is fine for asserting that something did NOT
+// happen (you cannot poll for absence), but for a POSITIVE assertion it is a
+// race: 30ms was enough on an idle machine and not on a contended CI runner,
+// where this suite intermittently failed with "expected null not to be null" on
+// BOTH the Linux and Windows jobs. Falls through on timeout so the real
+// assertion below still reports the failure.
+async function waitFor(predicate, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await predicate()) return true;
+    if (Date.now() >= deadline) return false;
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
 import { mkdir, rm, writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -460,7 +478,7 @@ describe('peerSync', () => {
       vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
       vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
       await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
-      await new Promise((r) => setTimeout(r, 10));
+      await waitFor(() => vi.mocked(peerFetch).mock.calls.length > 0);
       // First subscribe DID push.
       expect(vi.mocked(peerFetch).mock.calls.length).toBeGreaterThan(0);
       vi.mocked(peerFetch).mockClear();
@@ -1115,8 +1133,8 @@ describe('peerSync', () => {
         directions: ['outbound'],
         syncCategories: { universe: true },
       });
-      // Allow the listener's fire-and-forget IIFE to settle.
-      await new Promise((r) => setTimeout(r, 30));
+      // Wait for the listener's fire-and-forget IIFE to actually land.
+      await waitFor(async () => await findPeerSubscription('peer-a', 'universe', 'u1') !== null);
       expect(await findPeerSubscription('peer-a', 'universe', 'u1')).not.toBeNull();
     });
 
