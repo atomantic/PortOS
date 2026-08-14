@@ -17,14 +17,20 @@ vi.mock('./store.js', () => ({
   }),
 }));
 
+const toPosix = (v) => (typeof v === 'string' ? v.split('\\').join('/') : v);
+
 vi.mock('../../lib/fileUtils.js', () => ({
   PATHS: { images: '/tmp/images', music: '/tmp/music' },
   atomicWrite: vi.fn(async () => { state.manifestExists = true; }),
-  pathExists: vi.fn(async (path) =>
-    path.includes('/manifests/') ? state.manifestExists : true),
+  pathExists: vi.fn(async (rawPath) =>
+    toPosix(rawPath).includes('/manifests/') ? state.manifestExists : true),
   readJSONFile: vi.fn(async () => null),
   sha256Text: vi.fn((value) => `text-sha:${String(value).length}`),
-  sha256File: vi.fn(async (path) => {
+  sha256File: vi.fn(async (rawPath) => {
+    // compile.js builds these with path.join, so on Windows the separators are
+    // backslashes and every '/segment/' matcher below silently takes the wrong
+    // branch — routing the manifest through the sprite/audio cases.
+    const path = toPosix(rawPath);
     if (path.includes('/manifests/')) return state.manifestSha256;
     const spriteId = path.match(/\/sprites\/([^/]+)\//)?.[1];
     if (path.endsWith('title.png')) return 'title-art-sha';

@@ -55,9 +55,16 @@ vi.mock('./taskPromptService.js', () => ({
 // individual tests override.
 const existsMock = vi.fn(() => false);
 const statMock = vi.fn(() => ({ isDirectory: () => true }));
+// Normalize separators at the mock boundary. The service composes the paths it
+// probes with path.join, so on Windows it asks about '\Users\me\phosphene\.git'
+// while every mockImplementation below matches the POSIX spelling — the probe
+// then answered "does not exist" and the service threw "not a git working
+// tree". Normalizing here keeps the POSIX literals in the tests meaningful on
+// both platforms instead of duplicating them per-separator.
+const toPosix = (p) => (typeof p === 'string' ? p.split('\\').join('/') : p);
 vi.mock('fs', () => ({
-  existsSync: (p) => existsMock(p),
-  statSync: (p) => statMock(p),
+  existsSync: (p) => existsMock(toPosix(p)),
+  statSync: (p) => statMock(toPosix(p)),
 }));
 
 // ─── module under test (after mocks) ─────────────────────────────────────────

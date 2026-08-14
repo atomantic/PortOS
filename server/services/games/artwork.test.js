@@ -6,8 +6,18 @@ const state = vi.hoisted(() => ({
   destination: null,
 }));
 
+// Normalize separators AND drop the drive letter at every mock boundary. The
+// service composes these with path.join and anchors the repo with
+// resolve(app.repoPath) — on Windows that yields H:\app\game\… — while the
+// fixtures below are spelled POSIX, so every read/write missed and the service
+// reported the artwork as missing.
+const toPosix = (v) => (typeof v === 'string'
+  ? v.split('\\').join('/').replace(/^[A-Za-z]:/, '')
+  : v);
+
 vi.mock('fs/promises', () => ({
-  readFile: vi.fn(async (path) => {
+  readFile: vi.fn(async (rawPath) => {
+    const path = toPosix(rawPath);
     if (path === '/gallery/title.png') return state.source;
     if (path === '/app/game/assets/art/title.png' && state.destination) return state.destination;
     throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
@@ -17,10 +27,11 @@ vi.mock('fs/promises', () => ({
 
 vi.mock('../../lib/fileUtils.js', () => ({
   PATHS: { images: '/gallery' },
-  atomicWrite: vi.fn(async (path, bytes) => {
+  atomicWrite: vi.fn(async (rawPath, bytes) => {
+    const path = toPosix(rawPath);
     if (path === '/app/game/assets/art/title.png') state.destination = Buffer.from(bytes);
   }),
-  isPathInsideDir: vi.fn((dir, candidate) => candidate.startsWith(`${dir}/`)),
+  isPathInsideDir: vi.fn((dir, candidate) => toPosix(candidate).startsWith(`${toPosix(dir)}/`)),
 }));
 
 vi.mock('../apps.js', () => ({

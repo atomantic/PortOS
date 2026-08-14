@@ -7,8 +7,21 @@ const state = vi.hoisted(() => ({
   destination: null,
 }));
 
+// Normalize separators at every mock boundary. The service composes these
+// paths with path.join, so on Windows it asks for '\\app\\game\\assets\\music\\…'
+// while the fixtures below are spelled POSIX — the reads then missed, and the
+// service reported the audio as "missing or unreadable" instead of publishing.
+// The leading drive letter goes too: publishCore anchors the repo with
+// resolve(app.repoPath), and resolve('/app') on Windows yields 'H:\app' — the
+// drive of the current working directory. These fixtures describe a
+// POSIX-rooted repo, so drop the drive to compare the part that is meaningful.
+const toPosix = (v) => (typeof v === 'string'
+  ? v.split('\\').join('/').replace(/^[A-Za-z]:/, '')
+  : v);
+
 vi.mock('fs/promises', () => ({
-  readFile: vi.fn(async (path) => {
+  readFile: vi.fn(async (rawPath) => {
+    const path = toPosix(rawPath);
     if (path === '/library/example-theme.ogg') return state.source;
     if (path === '/app/game/assets/music/example-theme.ogg' && state.destination) return state.destination;
     throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
@@ -18,10 +31,11 @@ vi.mock('fs/promises', () => ({
 
 vi.mock('../../lib/fileUtils.js', () => ({
   PATHS: { music: '/library' },
-  atomicWrite: vi.fn(async (path, bytes) => {
+  atomicWrite: vi.fn(async (rawPath, bytes) => {
+    const path = toPosix(rawPath);
     if (path === '/app/game/assets/music/example-theme.ogg') state.destination = Buffer.from(bytes);
   }),
-  isPathInsideDir: vi.fn((dir, candidate) => candidate.startsWith(`${dir}/`)),
+  isPathInsideDir: vi.fn((dir, candidate) => toPosix(candidate).startsWith(`${toPosix(dir)}/`)),
 }));
 
 vi.mock('../apps.js', () => ({
