@@ -13,7 +13,7 @@
  *      rejection.
  */
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -52,7 +52,9 @@ const { checkSeriesCanonReadiness } = await import('./canonReadiness.js');
 const { runEditorialChecks } = await import('./editorial/checkRunner.js');
 const { getSeriesHealth } = await import('./editorialScore.js');
 const { getReview, seedReviewFromFindings } = await import('./manuscriptReview.js');
-const { runSeriesReview } = await import('./seriesReview.js');
+const { getSeries } = await import('./series.js');
+const { listIssues } = await import('./issues.js');
+const { runSeriesReview, getSeriesReview } = await import('./seriesReview.js');
 
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
 
@@ -228,5 +230,80 @@ describe('runSeriesReview — failure and cancellation paths', () => {
     expect(err).toBeInstanceOf(Error);
     expect(err.message).toBe('broadcast failed');
     expect(unhandled).toEqual([]);
+  });
+});
+
+/**
+ * The reviewed-source fingerprint (#4111) end to end: a run pins what it
+ * reviewed, and the GET recomputes it so a manuscript/canon/foundation edit made
+ * through ANY other path invalidates the stored verdict — not just accepting or
+ * dismissing a finding.
+ */
+describe('getSeriesReview — reviewed-source staleness (#4111)', () => {
+  const issueWith = (prose) => ({ id: 'iss-1', seriesId: 'ser-test', number: 1, seasonId: null, title: 'One', stages: { prose: { output: prose } } });
+  const SERIES = { id: 'ser-test', severityWeights: null };
+  const openFinding = { id: 'c1', status: 'open', severity: 'high', issueNumber: 1, problem: 'the middle sags' };
+
+  beforeEach(() => {
+    getSeries.mockResolvedValue({ ...SERIES });
+    listIssues.mockResolvedValue([issueWith('the original draft')]);
+  });
+
+  // The default mocks the rest of the suite relies on.
+  afterAll(() => {
+    getSeries.mockResolvedValue({ ...SERIES });
+    listIssues.mockResolvedValue([]);
+  });
+
+  it('stamps the fingerprint on the run and reports the unchanged verdict as fresh', async () => {
+    const result = await run();
+    expect(typeof result.sourceInputsHash).toBe('string');
+    const { review } = await getSeriesReview('ser-test');
+    expect(review.sourceInputsHash).toBe(result.sourceInputsHash);
+    expect(review.stale).toBe(false);
+    expect(review.staleReason).toBeNull();
+  });
+
+  it("flips stale with reason 'sources' when the manuscript was edited after the review", async () => {
+    await run();
+    listIssues.mockResolvedValue([issueWith('a completely rewritten draft')]);
+    const { review } = await getSeriesReview('ser-test');
+    expect(review.stale).toBe(true);
+    expect(review.staleReason).toBe('sources');
+  });
+
+  it("keeps the findings-divergence signal working alongside it ('findings')", async () => {
+    await run();
+    getReview.mockResolvedValue({ comments: [openFinding] });
+    const { review } = await getSeriesReview('ser-test');
+    expect(review.stale).toBe(true);
+    expect(review.staleReason).toBe('findings');
+  });
+
+  it("reports 'both' when the findings AND the sources moved", async () => {
+    await run();
+    getReview.mockResolvedValue({ comments: [openFinding] });
+    listIssues.mockResolvedValue([issueWith('a completely rewritten draft')]);
+    const { review } = await getSeriesReview('ser-test');
+    expect(review.stale).toBe(true);
+    expect(review.staleReason).toBe('both');
+  });
+
+  it('never source-flags a pre-#4111 snapshot that carries no pinned hash', async () => {
+    await run();
+    const snapshotFile = join(TEST_DATA_ROOT, 'pipeline-series-review', 'ser-test.json');
+    const stored = JSON.parse(readFileSync(snapshotFile, 'utf8'));
+    delete stored.sourceInputsHash;
+    writeFileSync(snapshotFile, JSON.stringify(stored));
+    listIssues.mockResolvedValue([issueWith('a completely rewritten draft')]);
+    const { review } = await getSeriesReview('ser-test');
+    expect(review.stale).toBe(false);
+    expect(review.staleReason).toBeNull();
+  });
+
+  it('does not pin a fingerprint computed from a failed issues read', async () => {
+    listIssues.mockRejectedValue(new Error('store unavailable'));
+    const result = await run();
+    expect(result.sourceInputsHash).toBeNull();
   });
 });

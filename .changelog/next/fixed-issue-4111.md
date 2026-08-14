@@ -1,0 +1,1 @@
+- Series review now invalidates its stored verdict when the manuscript, canon, or foundation changes — not only when findings are accepted or dismissed

@@ -23,6 +23,14 @@ import {
 import { severityColor } from './constants.js';
 
 const RUN_ENDED = new Set(['complete', 'canceled', 'error']);
+// Why a stored verdict is out of date, keyed by the server's `staleReason`
+// (#4111). `findings` is also the fallback for a pre-#4111 snapshot, whose
+// staleness could only ever come from the findings store.
+const STALE_NOTICE = {
+  findings: 'The findings changed since this review ran — re-review for an up-to-date verdict.',
+  sources: 'The manuscript, canon, or foundation changed since this review ran — re-review for an up-to-date verdict.',
+  both: 'The findings and the reviewed manuscript/canon changed since this review ran — re-review for an up-to-date verdict.',
+};
 // The fix run's terminal frames: `rejected` = the cos gate/budget refused it.
 const FIX_RUN_ENDED = new Set(['complete', 'canceled', 'error', 'rejected']);
 
@@ -357,12 +365,13 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
             )}
           </div>
 
-          {/* Stale banner — the findings changed since this verdict (e.g. a
-              finding was fixed/dismissed via "Fix here"), so it's out of date. */}
+          {/* Stale banner — either the findings changed since this verdict (e.g. a
+              finding was fixed/dismissed via "Fix here") or the reviewed sources
+              themselves did (manuscript/canon/foundation edits), so it's out of date. */}
           {review.stale ? (
             <p className="text-[11px] text-port-warning flex items-center gap-1.5">
               <AlertTriangle size={12} />
-              The findings changed since this review ran — re-review for an up-to-date verdict.
+              {STALE_NOTICE[review.staleReason] || STALE_NOTICE.findings}
             </p>
           ) : null}
 

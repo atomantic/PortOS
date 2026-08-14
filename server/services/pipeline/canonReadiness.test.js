@@ -161,3 +161,34 @@ describe('checkSeriesCanonReadiness (roll-up)', () => {
     expect(report.blockingIssues).toHaveLength(1);
   });
 });
+
+describe('canonDescriptionInputs (fingerprint projection, #4111)', () => {
+  const { canonDescriptionInputs } = readiness;
+
+  it('projects the same description text the grading reads, per kind', () => {
+    const out = canonDescriptionInputs({
+      characters: [{ id: 'c1', name: 'Aria', description: 'a tall figure' }],
+      places: [{ id: 'p1', name: 'The Bay', description: 'grey water', palette: 'slate' }],
+      objects: [{ id: 'o1', name: 'The Key', significance: 'opens the vault' }],
+    });
+    expect(out.character[0]).toMatchObject({ id: 'c1', name: 'Aria', description: 'a tall figure', locked: false });
+    expect(out.place[0].description).toBe('grey water. slate');
+    expect(out.object[0].description).toBe('opens the vault');
+  });
+
+  it('changes when a description is edited', () => {
+    const before = canonDescriptionInputs({ characters: [{ id: 'c1', name: 'Aria', description: 'a tall figure' }] });
+    const after = canonDescriptionInputs({ characters: [{ id: 'c1', name: 'Aria', description: 'a short figure' }] });
+    expect(after).not.toEqual(before);
+  });
+
+  it('is stable across a canon re-order (a re-order is not an edit)', () => {
+    const a = { id: 'c1', name: 'Aria', description: 'x' };
+    const b = { id: 'c2', name: 'Bex', description: 'y' };
+    expect(canonDescriptionInputs({ characters: [a, b] })).toEqual(canonDescriptionInputs({ characters: [b, a] }));
+  });
+
+  it('tolerates a missing/empty canon', () => {
+    expect(canonDescriptionInputs(null)).toEqual({ character: [], place: [], object: [] });
+  });
+});

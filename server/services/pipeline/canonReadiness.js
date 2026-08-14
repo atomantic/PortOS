@@ -57,6 +57,27 @@ const KINDS = [
   },
 ];
 
+/**
+ * PURE: the canon text this check actually grades, as a stable projection for
+ * input hashing (#4111). Reads the SAME `descOf` accessors the grading uses, so
+ * a caller pinning "the canon this verdict was computed from" can never drift
+ * from what readiness reads. Entries are sorted by id/name so an unrelated
+ * re-order (a sync import, a drag-reorder) doesn't look like an edit.
+ */
+export function canonDescriptionInputs(canon) {
+  return Object.fromEntries(KINDS.map(({ kind, listKey, descOf }) => [
+    kind,
+    (Array.isArray(canon?.[listKey]) ? canon[listKey] : [])
+      .map((e) => ({
+        id: e?.id || '',
+        name: e?.name || '',
+        locked: e?.locked === true,
+        description: descOf(e || {}) || '',
+      }))
+      .sort((a, b) => a.id.localeCompare(b.id) || a.name.localeCompare(b.name)),
+  ]));
+}
+
 export function gradeCanonDescription(descOf, entry, thinChars = CANON_THIN_CHARS) {
   const desc = (descOf(entry) || '').trim();
   if (!desc) return 'none';
