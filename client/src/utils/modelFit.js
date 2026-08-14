@@ -21,7 +21,21 @@ import * as THREE from 'three';
 // measure an already-fitted model, compute scale ≈ 1, and blow it back up to
 // source size). GLTFLoader's scene root is a plain identity-transform Group, so
 // resetting it discards nothing the model authored.
-export function fitModelToHeight(object, { targetHeight, feetOnGround = false, yOffset = 0 } = {}) {
+//
+// `Box3.setFromObject` measures in WORLD space while `scale`/`position` are
+// written in the object's own local space, so the fit folds in whatever the
+// parent chain contributes at the moment it runs. That has always been true of
+// the avatars' hand-rolled fits, each of which parents its scene under a group
+// it drives per frame — call this on a scene whose parent is at (or near)
+// identity, or accept that the parent's transform is baked into the result.
+export function fitModelToHeight(object, { targetHeight, feetOnGround = false, yOffset = 0 }) {
+  // A missing or garbage height would silently write NaN through the transform
+  // and drop the object out of the scene with no clue why. Say so and bail.
+  if (!Number.isFinite(targetHeight)) {
+    console.error(`❌ fitModelToHeight needs a finite targetHeight, got ${targetHeight}`);
+    return;
+  }
+
   object.scale.setScalar(1);
   object.position.set(0, 0, 0);
   object.updateMatrixWorld(true);

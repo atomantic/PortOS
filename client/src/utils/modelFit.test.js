@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import * as THREE from 'three';
 import { fitModelToHeight } from './modelFit.js';
 
@@ -96,5 +96,20 @@ describe('fitModelToHeight', () => {
     fitModelToHeight(empty, { targetHeight: 2, feetOnGround: true });
     expect(empty.position.toArray()).toEqual([0, 0, 0]);
     expect(empty.scale.toArray()).toEqual([1, 1, 1]);
+  });
+
+  describe('with no usable targetHeight', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    // A bad height would otherwise divide into NaN and write NaN through scale
+    // and position, dropping the model out of the scene with nothing logged.
+    it.each([undefined, null, Number.NaN, 'tall'])('leaves the model untouched and says so (%s)', (targetHeight) => {
+      const onError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const model = makeModel({ height: 8, offset: [2, 5, 1] });
+      fitModelToHeight(model, { targetHeight, feetOnGround: true });
+      expect(model.position.toArray()).toEqual([0, 0, 0]);
+      expect(model.scale.toArray()).toEqual([1, 1, 1]);
+      expect(onError).toHaveBeenCalledTimes(1);
+    });
   });
 });
