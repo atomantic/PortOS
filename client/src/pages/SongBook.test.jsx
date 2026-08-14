@@ -88,6 +88,40 @@ describe('SongBook index', () => {
     expect(screen.queryByText('Example Song')).toBeNull();
   });
 
+  // Practice scheduling (#4102) — the "what should I practice today?" view.
+  it('filters to due songs from ?due=1 and counts them on the toggle', async () => {
+    const soon = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString();
+    api.listSongs.mockResolvedValue({
+      songs: [
+        song('s1', 'Example Song'), // no practice schedule → due
+        song('s2', 'Other Tune', { practice: { nextReview: soon, sessions: 2 } }),
+      ],
+    });
+    renderPage('/songbook?due=1');
+    expect(await screen.findByText('Example Song')).toBeTruthy();
+    expect(screen.queryByText('Other Tune')).toBeNull();
+    // Count is over ALL songs, not the filtered view.
+    expect(screen.getByRole('button', { name: 'Due (1)' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('labels each card as due or scheduled', async () => {
+    const soon = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString();
+    api.listSongs.mockResolvedValue({
+      songs: [song('s1', 'Example Song'), song('s2', 'Other Tune', { practice: { nextReview: soon } })],
+    });
+    renderPage();
+    expect(await screen.findByText('Due for practice')).toBeTruthy();
+    expect(screen.getByText(/^Review in \d/)).toBeTruthy();
+  });
+
+  it('toggles the due filter into the URL rather than local state', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /^Due/ }));
+    await waitFor(() => expect(
+      screen.getByRole('button', { name: /^Due/ }).getAttribute('aria-pressed'),
+    ).toBe('true'));
+  });
+
   it('shows the teaching empty state when there are no songs', async () => {
     api.listSongs.mockResolvedValue({ songs: [] });
     renderPage();

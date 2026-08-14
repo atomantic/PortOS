@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   listSongAttachments: vi.fn(),
   uploadSongAttachment: vi.fn(),
   deleteSongAttachment: vi.fn(),
+  practiceSong: vi.fn(),
   songAttachmentUrl: (id, filename) => `/api/brain/songbook/${id}/attachments/${filename}`,
 }));
 vi.mock('../services/api', () => api);
@@ -64,6 +65,7 @@ describe('SongBookViewer', () => {
     api.listSongAttachments.mockReset().mockResolvedValue([]);
     api.updateSong.mockReset();
     api.deleteSong.mockReset();
+    api.practiceSong.mockReset();
     globalThis.localStorage?.clear?.();
   });
 
@@ -109,6 +111,21 @@ describe('SongBookViewer', () => {
     fireEvent.change(select, { target: { value: 'learned' } });
     expect(api.updateSong).toHaveBeenCalledWith('abc', { stage: 'learned' });
     await waitFor(() => expect(screen.getByLabelText('Learning stage').value).toBe('learned'));
+  });
+
+  // A logged practice run moves the stage server-side (#4102), so the chip and
+  // the edit draft must both follow the returned record — not just `practice`.
+  it('merges a logged practice run, advancing the stage chip', async () => {
+    api.practiceSong.mockResolvedValue(song({
+      stage: 'learning',
+      practice: { ease: 2.5, intervalDays: 1, nextReview: '2099-01-01T00:00:00.000Z', lastReviewed: '2026-03-01T00:00:00.000Z', sessions: 1 },
+    }));
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Solid' }));
+    expect(api.practiceSong).toHaveBeenCalledWith('abc', 4, { silent: true });
+    await waitFor(() => expect(screen.getByLabelText('Learning stage').value).toBe('learning'));
+    // The stage select stays available as a manual override.
+    expect(screen.getByLabelText('Learning stage').disabled).toBe(false);
   });
 
   it('marks synced-but-absent attachments as not on this machine', async () => {

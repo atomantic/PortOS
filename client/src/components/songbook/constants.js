@@ -1,5 +1,6 @@
 // Shared SongBook constants — learning-stage progression, stage chip colors,
-// and the instrument list (mirrors server/lib/brainValidation.js enums).
+// the practice-grade vocabulary, and the instrument list (mirrors the enums in
+// server/lib/brainValidation.js and the ladder in server/lib/songPractice.js).
 
 export const SONG_STAGES = [
   { id: 'new', label: 'New' },
@@ -15,6 +16,49 @@ export const SONG_STAGE_COLORS = {
   learned: 'bg-port-accent/20 text-port-accent border-port-accent/30',
   memorized: 'bg-port-success/20 text-port-success border-port-success/30',
 };
+
+// =============================================================================
+// PRACTICE (spaced repetition, #4102)
+// =============================================================================
+
+// The grades offered for a practice run, in the order the buttons render.
+// `quality` is the SM-2 self-grade the server schedules on (0..5); the four
+// rungs are the Anki-style shorthand for the ones that mean something here —
+// the intermediate grades (1, 2) all regress, and 5 vs 4 differ only in how far
+// the interval steps. Mirrors SONG_PROMOTE_MIN_QUALITY (4) and
+// SONG_REGRESS_MAX_QUALITY (2) in server/lib/songPractice.js; parity is
+// asserted in constants.test.js.
+export const SONG_PRACTICE_RATINGS = [
+  { quality: 0, label: 'Struggled', hint: 'Fell apart — regress a stage and practice again today' },
+  { quality: 3, label: 'Rough', hint: 'Got through it — hold the stage, review sooner' },
+  { quality: 4, label: 'Solid', hint: 'Played it with hesitation — advance a stage' },
+  { quality: 5, label: 'Clean', hint: 'Played it clean — advance a stage, review later' },
+];
+
+// Read the song's practice schedule the same way the server does: absent (a
+// song predating the feature, or one never practiced) derives an anchor from
+// the record itself rather than collapsing into "due at this instant", so the
+// answer doesn't flap between renders. Mirrors `songPracticeOrDefault` in
+// server/lib/songPractice.js.
+export const songNextReviewAt = (song) => {
+  const nextReview = song?.practice?.nextReview;
+  if (typeof nextReview === 'string') return nextReview;
+  return song?.updatedAt || song?.createdAt || null;
+};
+
+// Is this song due for practice? A never-practiced song IS due — and so is one
+// whose stored date we can't read, because a song we can't schedule is one to
+// surface, never one to hide forever.
+export const isSongDue = (song, now = Date.now()) => {
+  const at = Date.parse(songNextReviewAt(song) ?? '');
+  return !Number.isFinite(at) || at <= now;
+};
+
+// Has this song ever been practiced? `null` (absent schedule) must not read the
+// same as a real session count of 0 — the empty-vs-absent rule.
+export const songPracticeSessions = (song) => (
+  Number.isInteger(song?.practice?.sessions) ? song.practice.sessions : 0
+);
 
 export const INSTRUMENTS = [
   { id: 'guitar', label: 'Guitar' },

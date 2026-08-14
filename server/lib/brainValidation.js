@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { partialWithoutDefaults, optionalBooleanMap } from './zodCompat.js';
 import { REPO_INTAKE_KEYS } from './repoIntakeActions.js';
+import { MAX_QUALITY } from './spacedRepetition.js';
 
 // Destination enum. `links` is reachable only from the bare-URL capture
 // short-circuit (a pasted URL is filed straight to the links collection) — the
@@ -672,6 +673,24 @@ export const songInputSchema = z.object({
 // stored song's content so an omitted inner key preserves the stored value.
 export const songUpdateSchema = partialWithoutDefaults(songInputSchema).extend({
   content: partialWithoutDefaults(songContentSchema).optional()
+});
+
+// POST /api/brain/songbook/:id/practice — log one practice run (#4102).
+//
+// `quality` is the SM-2 self-grade for the run: 0 = couldn't play it, 5 = clean.
+// It is the ONLY input; the resulting schedule and stage are computed
+// server-side from the stored record (see lib/songPractice.js), because an
+// SM-2 advance needs the previous schedule and a client-computed one would both
+// race and put the scheduler in the browser.
+//
+// The `practice` object itself is deliberately absent from songInputSchema /
+// songUpdateSchema: like `attachments`, it is server-managed, so Zod's
+// unknown-key stripping drops a client-supplied value and only this endpoint
+// can move it.
+// The ceiling reads from lib/spacedRepetition.js rather than restating `5`, so
+// the accepted grade range can never drift from the scale the scheduler grades on.
+export const songPracticeInputSchema = z.object({
+  quality: z.number().int().min(0).max(MAX_QUALITY)
 });
 
 // POST /api/brain/songbook/import/url

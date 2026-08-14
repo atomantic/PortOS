@@ -1,0 +1,1 @@
+- SongBook repertoire practice is now scheduled: log a run graded 0-5 and PortOS advances the song's learning stage and books the next review with SM-2 spaced repetition. The index gains a Due filter (?due=1) so you can open exactly what needs practice today.

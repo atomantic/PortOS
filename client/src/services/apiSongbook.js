@@ -35,6 +35,13 @@ export const updateSong = (id, patch, options) =>
 export const deleteSong = (id, options) =>
   request(`/brain/songbook/${enc(id)}`, { method: 'DELETE', ...options });
 
+// Log one practice run, graded 0..5 (`SONG_PRACTICE_RATINGS` in
+// components/songbook/constants.js) → the updated song record. The server owns
+// the SM-2 advance and the resulting `stage`/`practice` — the grade is the only
+// input, and a client-supplied `practice` object is stripped (#4102).
+export const practiceSong = (id, quality, options) =>
+  request(`/brain/songbook/${enc(id)}/practice`, { method: 'POST', body: JSON.stringify({ quality }), ...options });
+
 // Fetch + extract a draft from a tab/chord-sheet URL → { draft: { title,
 // artist, content: { format, text }, sourceUrl } }. Nothing is stored — the
 // user reviews and saves explicitly. Error codes: 400 UNSAFE_URL,

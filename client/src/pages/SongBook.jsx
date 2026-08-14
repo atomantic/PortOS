@@ -6,9 +6,11 @@
  * memorized). A plain padded+scrolling page (NOT full-width, like /rounds);
  * the play/edit viewer lives at /songbook/:id and import at /songbook/import.
  *
- * Filters live in URL search params (?stage=&instrument=&tag=&q=) so a
- * filtered view is linkable (Catalog.jsx pattern). Stage flips PATCH just the
- * stage field and update local state reactively — no refetch.
+ * Filters live in URL search params (?stage=&instrument=&tag=&q=&due=) so a
+ * filtered view is linkable (Catalog.jsx pattern) — `?due=1` is the "what
+ * should I practice today?" view, reading the spaced-repetition schedule the
+ * practice endpoint maintains (#4102). Stage flips PATCH just the stage field
+ * and update local state reactively — no refetch.
  */
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
@@ -19,12 +21,13 @@ import PageHeader from '../components/PageHeader';
 import EmptyState from '../components/EmptyState';
 import Banner from '../components/ui/Banner';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
-import { timeAgo } from '../utils/formatters';
+import { timeAgo, timeUntil } from '../utils/formatters';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import { listSongs, createSong, deleteSong, updateSong } from '../services/api';
 import {
   SONG_STAGES, SONG_STAGE_COLORS, INSTRUMENTS, instrumentLabel, inputClass, labelClass,
+  isSongDue, songNextReviewAt,
 } from '../components/songbook/constants';
 
 export default function SongBook() {
@@ -34,6 +37,9 @@ export default function SongBook() {
   const instrumentFilter = searchParams.get('instrument') || '';
   const tagFilter = searchParams.get('tag') || '';
   const q = searchParams.get('q') || '';
+  // "What should I practice today?" — URL-backed like every other filter, so a
+  // practice session is a bookmarkable view (?due=1).
+  const dueOnly = searchParams.get('due') === '1';
 
   const setParam = useCallback((key, value) => {
     setSearchParams((prev) => {
@@ -101,14 +107,21 @@ export default function SongBook() {
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
+    const now = Date.now();
     return (songs || []).filter((s) => {
       if (stageFilter && s.stage !== stageFilter) return false;
       if (instrumentFilter && s.instrument !== instrumentFilter) return false;
       if (tagFilter && !(Array.isArray(s.tags) && s.tags.includes(tagFilter))) return false;
       if (needle && !(`${s.title} ${s.artist}`.toLowerCase().includes(needle))) return false;
+      if (dueOnly && !isSongDue(s, now)) return false;
       return true;
     });
-  }, [songs, stageFilter, instrumentFilter, tagFilter, q]);
+  }, [songs, stageFilter, instrumentFilter, tagFilter, q, dueOnly]);
+
+  const dueCount = useMemo(() => {
+    const now = Date.now();
+    return (songs || []).filter((s) => isSongDue(s, now)).length;
+  }, [songs]);
 
   const selectClass = 'bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:border-port-accent focus:outline-none';
 
@@ -187,6 +200,16 @@ export default function SongBook() {
           <option value="">All instruments</option>
           {INSTRUMENTS.map((i) => <option key={i.id} value={i.id}>{i.label}</option>)}
         </select>
+        <button
+          type="button"
+          onClick={() => setParam('due', dueOnly ? '' : '1')}
+          aria-pressed={dueOnly}
+          className={`px-3 py-2 rounded-lg text-sm border ${dueOnly
+            ? 'bg-port-warning/20 text-port-warning border-port-warning/30'
+            : 'bg-port-bg text-gray-400 border-port-border hover:text-white'}`}
+        >
+          Due{dueCount > 0 ? ` (${dueCount})` : ''}
+        </button>
         {tagFilter && (
           <button
             type="button"
@@ -251,6 +274,11 @@ export default function SongBook() {
                     {song.artist && <span className="text-gray-400">{song.artist}</span>}
                     {song.instrument && <span>{instrumentLabel(song.instrument)}</span>}
                     {song.updatedAt && <span>Edited {timeAgo(song.updatedAt)}</span>}
+                    {isSongDue(song) ? (
+                      <span className="text-port-warning">Due for practice</span>
+                    ) : (
+                      <span>Review {timeUntil(songNextReviewAt(song), 'today')}</span>
+                    )}
                   </div>
                 </Link>
                 {Array.isArray(song.tags) && song.tags.length > 0 && (

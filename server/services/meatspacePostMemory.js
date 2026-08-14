@@ -11,6 +11,14 @@ import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js
 import { shuffle } from '../lib/arrayUtils.js';
 import { isMemoryItemEnabled } from '../lib/postTopics.js';
 import { userLocalToday } from '../lib/timezone.js';
+import {
+  DEFAULT_EASE,
+  advanceSchedule,
+  defaultSchedule,
+  isScheduleDue,
+  mergeScheduleAdvance,
+  scheduleOrDefault,
+} from '../lib/spacedRepetition.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const MEMORY_ITEMS_FILE = join(MEATSPACE_DIR, 'post-memory-items.json');
@@ -27,8 +35,13 @@ const TRAINING_LOG_FILE = join(MEATSPACE_DIR, 'post-training-log.json');
 // to "due now" so the item resurfaces immediately). The 4-field shape is
 // additive and migration-safe — legacy items with no schedule are treated as
 // due now (see `ensureSchedule`) and get a persisted default by migration 154.
+//
+// The scheduling MATH itself now lives in `lib/spacedRepetition.js`, shared with
+// SongBook repertoire practice (#4102). It is re-exported here so the existing
+// callers and tests of this service keep their import site.
 
-export const DEFAULT_EASE = 2.5;
+export { DEFAULT_EASE, advanceSchedule, defaultSchedule, mergeScheduleAdvance };
+
 // =============================================================================
 // WINDOWED (DECAY-AWARE) MASTERY
 // =============================================================================
@@ -47,6 +60,8 @@ export const MASTERY_MIN_ATTEMPTS = 3;
 export const MASTERY_TARGET_ACCURACY = 0.8;
 export const SPOT_CHECK_MIN_DAYS = 30;
 export const SPOT_CHECK_MAX_DAYS = 90;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Push a per-attempt correctness flag onto a mastery stat's rolling window. */
 function pushRecent(stat, correct) {
@@ -100,94 +115,14 @@ export function scheduleSpotCheckAt(now = new Date(), random = Math.random) {
   return new Date(now.getTime() + days * DAY_MS).toISOString();
 }
 
-const MIN_EASE = 1.3;
-// Ceiling mirrors `memoryScheduleSchema.ease.max(5)` in postValidation.js — the
-// per-session +0.1 bumps are unbounded otherwise, so ~26 perfect reps would push
-// ease past 5 and a later round-trip through POST/PUT (import / out-of-band
-// reschedule) would 400 on the server's own value. Keep the two in sync.
-const MAX_EASE = 5;
-// Cap the interval at a year so a long run of perfect reviews can't grow it
-// without bound — an astronomically large `intervalDays` would overflow
-// `new Date(now + intervalDays*DAY_MS)` into an Invalid Date and throw. A yearly
-// review floor is a conventional SRS ceiling and keeps items resurfacing.
-const MAX_INTERVAL_DAYS = 365;
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** Fresh schedule — due at `nowIso` (i.e. immediately). */
-export function defaultSchedule(nowIso = new Date().toISOString()) {
-  return { ease: DEFAULT_EASE, intervalDays: 0, nextReview: nowIso, lastReviewed: null };
-}
-
 /**
  * Guarantee an item has a valid schedule. Legacy/built-in items with none get a
  * default anchored to their own `updatedAt`/`createdAt` (stable + in the past →
  * due now), so "due" state doesn't flap between reads. Mutates in place.
  */
 function ensureSchedule(item) {
-  const s = item?.schedule;
-  const valid = s && typeof s === 'object' && typeof s.nextReview === 'string';
-  if (!valid) {
-    item.schedule = defaultSchedule(item?.updatedAt || item?.createdAt || new Date().toISOString());
-  }
+  item.schedule = scheduleOrDefault(item);
   return item;
-}
-
-/**
- * Advance a schedule from a practice session's correctness ratio (0..1).
- * Pure — returns a new schedule object, never mutates the input.
- *   - ratio maps to an SM-2 quality (0..5); ease adjusts per the SM-2 formula.
- *   - quality < 3 (a miss-heavy session) → intervalDays 0 → due now again.
- *   - otherwise the interval steps 0→1→6→round(interval*ease).
- */
-export function advanceSchedule(schedule, ratio, now = new Date()) {
-  const prev = schedule && typeof schedule === 'object' ? schedule : {};
-  const clamped = Math.max(0, Math.min(1, Number.isFinite(ratio) ? ratio : 0));
-  const quality = Math.round(clamped * 5); // 0..5
-  const nowIso = now.toISOString();
-
-  const prevEase = typeof prev.ease === 'number' ? prev.ease : DEFAULT_EASE;
-  let ease = prevEase + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
-  ease = Math.min(MAX_EASE, Math.max(MIN_EASE, Math.round(ease * 100) / 100));
-
-  let intervalDays;
-  if (quality < 3) {
-    intervalDays = 0; // relearn — resurface immediately
-  } else {
-    const prevInterval = typeof prev.intervalDays === 'number' ? prev.intervalDays : 0;
-    if (prevInterval <= 0) intervalDays = 1;
-    else if (prevInterval < 6) intervalDays = 6;
-    else intervalDays = Math.max(1, Math.round(prevInterval * ease));
-    intervalDays = Math.min(MAX_INTERVAL_DAYS, intervalDays);
-  }
-
-  const nextReview = new Date(now.getTime() + intervalDays * DAY_MS).toISOString();
-  return { ease, intervalDays, nextReview, lastReviewed: nowIso };
-}
-
-/**
- * Merge a freshly-advanced schedule against the item's prior schedule, gating
- * interval GROWTH to once per review day.
- *
- * Why: a "review" of a memory item is one pass through it, but the existing
- * spaced-practice flow (`MemoryPractice.advanceSpaced`) submits once PER CHUNK.
- * Advancing on every submission would compound a multi-chunk item's interval in
- * a single sitting (0→1→6→16d) and drop it off the due list far longer than one
- * completed review warrants. So a same-day continuation only refreshes ease and
- * `lastReviewed` — it keeps the interval/nextReview already set earlier today.
- * A miss (interval shrinks to 0) always applies, so a fumbled chunk still
- * resurfaces the item immediately regardless of earlier same-day success.
- */
-export function mergeScheduleAdvance(prev, advanced, now = new Date()) {
-  const prevInterval = typeof prev?.intervalDays === 'number' ? prev.intervalDays : 0;
-  const lastReviewedMs = Date.parse(prev?.lastReviewed ?? '');
-  const sameReviewDay = Number.isFinite(lastReviewedMs)
-    && new Date(lastReviewedMs).toISOString().slice(0, 10) === now.toISOString().slice(0, 10);
-  // Suppress compounding only when this is a same-day continuation AND the
-  // interval would grow. Any shrink (a miss reset) always applies.
-  if (sameReviewDay && advanced.intervalDays > prevInterval) {
-    return { ...prev, ease: advanced.ease, lastReviewed: advanced.lastReviewed };
-  }
-  return advanced;
 }
 
 function ensureMastery(item) {
@@ -289,10 +224,7 @@ export function isMemoryItemDue(item, now = new Date()) {
   if (['attested', 'mastered'].includes(retention?.status)) {
     return isMemorySpotCheckDue(item, now);
   }
-  const nr = item?.schedule?.nextReview;
-  if (typeof nr !== 'string') return true;
-  const t = Date.parse(nr);
-  return Number.isNaN(t) || t <= now.getTime();
+  return isScheduleDue(item?.schedule, now);
 }
 
 // =============================================================================

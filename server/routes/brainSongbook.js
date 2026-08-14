@@ -7,6 +7,11 @@
  *
  * Mounted from the brain barrel at /songbook → /api/brain/songbook/...
  *
+ * Practice: `POST /:id/practice` logs a graded run and moves the song's SM-2
+ * schedule (`practice`) plus its learning `stage`. Both `practice` and
+ * `attachments` are server-managed — the write schemas have no key for them, so
+ * Zod's unknown-key stripping drops a client-supplied value.
+ *
  * Attachments: METADATA lives in the synced record (identical on all peers);
  * BYTES are machine-local under data/brain/songbook/ (<uuid8>-<sanitized-name>).
  * The list endpoint reports `present: boolean` per attachment so peers lacking
@@ -23,8 +28,10 @@ import {
   songInputSchema,
   songUpdateSchema,
   songImportUrlSchema,
+  songPracticeInputSchema,
   songAttachmentUploadSchema,
 } from '../lib/brainValidation.js';
+import { applySongPractice } from '../lib/songPractice.js';
 import * as brainStorage from '../services/brainStorage.js';
 import { importSongFromUrl } from '../services/brainSongbookImport.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
@@ -132,6 +139,26 @@ router.delete('/:id', asyncHandler(async (req, res) => {
   // orphaned bytes are harmless machine-local files.
   requireSong(await brainStorage.remove('songs', req.params.id));
   res.json({ id: req.params.id });
+}));
+
+// =============================================================================
+// PRACTICE (spaced repetition)
+// =============================================================================
+
+// POST /:id/practice — log one practice run, graded 0..5. Advances the song's
+// SM-2 schedule and its learning stage (see lib/songPractice.js).
+//
+// This earns its own endpoint rather than riding the generic PATCH because an
+// SM-2 advance is computed FROM the stored schedule: the work happens inside
+// `updateWith`'s locked read-modify-write, against the freshest record, so a
+// concurrent edit or a peer-sync apply can't be clobbered — and the scheduler
+// stays on the server instead of in the browser.
+router.post('/:id/practice', asyncHandler(async (req, res) => {
+  const { quality } = validateRequest(songPracticeInputSchema, req.body);
+  const song = requireSong(await brainStorage.updateWith('songs', req.params.id,
+    (fresh) => applySongPractice(fresh, quality)));
+  console.log(`🎸 Practice logged: "${song.title}" quality=${quality} → ${song.stage}, next review in ${song.practice.intervalDays}d`);
+  res.json(song);
 }));
 
 // =============================================================================

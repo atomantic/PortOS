@@ -275,6 +275,8 @@ export * from './postPowersLadder.js';
 export * from './postProgression.js';
 export * from './postStreak.js';
 export * from './postTopics.js';
+export * from './spacedRepetition.js';
+export * from './songPractice.js';
 export * from './planIds.js';
 export * from './renderSlot.js';
 export * from './renderTargets.js';

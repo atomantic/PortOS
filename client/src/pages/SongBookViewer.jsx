@@ -55,6 +55,7 @@ import TabSheetView from '../components/songbook/TabSheetView';
 import DrumSheetView from '../components/songbook/DrumSheetView';
 import DrumPreview from '../components/songbook/DrumPreview';
 import DrumTransportBar from '../components/songbook/DrumTransportBar';
+import PracticeLogger from '../components/songbook/PracticeLogger';
 import {
   SONG_STAGES, SONG_STAGE_COLORS, INSTRUMENTS, SONG_FORMATS, DRUM_FORMAT,
   DRUM_INSTRUMENT, withStoredOption,
@@ -365,6 +366,15 @@ export default function SongBookViewer() {
       })
       .catch(() => {});
   }, [id]);
+
+  // A logged practice run advances `stage` server-side alongside `practice`, so
+  // the whole updated record replaces local state — and the edit draft's stage
+  // follows, or reopening Edit would save the pre-practice stage back over it.
+  const onPracticeLogged = useCallback((updated) => {
+    if (!updated) return;
+    setSong(updated);
+    setDraft((prev) => (prev ? { ...prev, stage: updated.stage } : prev));
+  }, []);
 
   const [save, saving] = useAsyncAction(async () => {
     const title = draft.title.trim();
@@ -933,6 +943,10 @@ export default function SongBookViewer() {
                 {song.notes}
               </div>
             )}
+
+            {/* Practice sits at the END of the sheet, which is where a run of
+                the song actually finishes (the autoscroll leaves you here). */}
+            <PracticeLogger song={song} onLogged={onPracticeLogged} className="mt-6 max-w-4xl" />
 
             {/* Attachments */}
             <div className="mt-8 max-w-4xl border-t border-port-border pt-4 pb-16">
