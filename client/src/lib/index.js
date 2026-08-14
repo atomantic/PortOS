@@ -117,6 +117,7 @@ export * from './midiNotes.js';
 export * from './midiPlayback.js';
 export * from './pianoKeyboard.js';
 export * from './pitchDetect.js';
+export * from './seriesReviewProgress.js';
 export * from './powersBreakdown.js';
 export * from './promptStageGroups.js';
 export * from './referenceAnalysis.js';

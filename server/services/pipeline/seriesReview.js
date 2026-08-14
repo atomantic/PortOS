@@ -19,6 +19,11 @@
  *   - free-text feedback → routed through runStageScopedInlineLLM to the best
  *                          issue/section and seeded as an anchored finding
  *
+ * The foundation judge and canon readiness are kicked off at entry and awaited
+ * just before the verdict, so they overlap the editorial-checks pass (#4108).
+ * The only hard ordering constraint is the seed→read chain feedback-seed →
+ * checks-seed → health/getReview, which stays strictly sequential.
+ *
  * The review performs NO manuscript writes, so it is safe to run repeatedly. The
  * FIX path is deliberately NOT here: "Fix these issues" drives the existing
  * Series Autopilot revision cycle (cos-domain gate + budget + SSE) and the
@@ -241,32 +246,63 @@ export async function runSeriesReview(seriesId, {
   const weights = mergeSeverityWeights(series?.severityWeights);
 
   const aborted = () => signal?.aborted;
-  // Stages that errored / never ran this pass — any of these makes the verdict
-  // untrustworthy, so it must never read 'ready' (fail closed). Surfaced on the
-  // result so the UI can warn the review is incomplete.
-  const failedStages = [];
 
-  // 1. Foundation judge (holistic pre-draft quality — catches "looks complete
-  //    but no development"). Writes only its own snapshot. A throw is a genuine
-  //    failure (judgeFoundation otherwise always returns a snapshot), not an
-  //    absent-but-fine result — record it so the verdict fails closed.
-  onProgress({ type: 'step:start', kind: 'foundation' });
-  const foundation = await judgeFoundation(seriesId, { providerId: providerOverride, model: modelOverride, force })
-    .catch((err) => { console.error(`⚠️ series-review foundation judge failed — series=${seriesId.slice(0, 12)} ${err.message}`); failedStages.push('foundation'); return null; });
-  onProgress({ type: 'step:complete', kind: 'foundation', weightedScore: foundation?.weightedScore ?? null });
-  if (aborted()) return null;
+  // The ONLY hard ordering constraint in this flow is the seed→read chain:
+  // feedback-seed → checks-seed → health/getReview (both of which read the store
+  // the first two write). The foundation judge writes only its own snapshot and
+  // canon readiness is deterministic + store-independent, so both are kicked off
+  // here at entry and awaited just before the verdict — overlapping the full
+  // foundation LLM round-trip with the editorial-checks pass instead of running
+  // before/after it (#4108).
+  //
+  // Each background pass owns its own `step:start`/`step:complete` frames and
+  // swallows its own failure, so it resolves to `{ value, failed }` and never
+  // rejects on the normal path. `kickOff` still attaches a no-op catch the
+  // instant the promise exists, so an unexpected throw (e.g. from the caller's
+  // `onProgress`) can't surface as an unhandled rejection when an early cancel
+  // returns before the `await`.
+  const kickOff = (fn) => { const p = fn(); p.catch(() => {}); return p; };
 
-  // 2. Optional free-text feedback → anchored finding (before the checks pass so
+  const foundationTask = kickOff(async () => {
+    // Foundation judge (holistic pre-draft quality — catches "looks complete but
+    // no development"). A throw is a genuine failure (judgeFoundation otherwise
+    // always returns a snapshot), not an absent-but-fine result — record it so
+    // the verdict fails closed.
+    onProgress({ type: 'step:start', kind: 'foundation' });
+    let failed = false;
+    const value = await judgeFoundation(seriesId, { providerId: providerOverride, model: modelOverride, force })
+      .catch((err) => { console.error(`⚠️ series-review foundation judge failed — series=${seriesId.slice(0, 12)} ${err.message}`); failed = true; return null; });
+    onProgress({ type: 'step:complete', kind: 'foundation', weightedScore: value?.weightedScore ?? null });
+    return { value, failed };
+  });
+
+  const canonTask = kickOff(async () => {
+    // Canon readiness (deterministic — no LLM). A throw is a genuine failure —
+    // record it so the verdict fails closed rather than treating the missing
+    // result as "canon fine".
+    onProgress({ type: 'step:start', kind: 'canon' });
+    let failed = false;
+    const value = await checkSeriesCanonReadiness(seriesId)
+      .catch((err) => { console.error(`⚠️ series-review canon readiness failed — series=${seriesId.slice(0, 12)} ${err.message}`); failed = true; return null; });
+    onProgress({ type: 'step:complete', kind: 'canon', ready: value?.ready !== false });
+    return { value, failed };
+  });
+
+  // A canceled run still settles the background passes before returning, so their
+  // progress frames can never land after the SSE wrapper's `canceled` frame.
+  const canceledResult = async () => { await Promise.allSettled([foundationTask, canonTask]); return null; };
+
+  // 1. Optional free-text feedback → anchored finding (before the checks pass so
   //    it merges into the same review the verdict reads).
   if (feedback && String(feedback).trim()) {
     onProgress({ type: 'step:start', kind: 'feedback' });
     await routeFeedbackToFinding(seriesId, feedback, { providerOverride, modelOverride, issues })
       .catch((err) => { console.error(`⚠️ series-review feedback seed failed — series=${seriesId.slice(0, 12)} ${err.message}`); });
     onProgress({ type: 'step:complete', kind: 'feedback' });
-    if (aborted()) return null;
+    if (aborted()) return canceledResult();
   }
 
-  // 3. Editorial checks — registry-driven review; seeds the shared review store.
+  // 2. Editorial checks — registry-driven review; seeds the shared review store.
   onProgress({ type: 'step:start', kind: 'editorialChecks' });
   // A runner-level REJECT (e.g. it threw while building shared context, before
   // producing any perCheck entries) is a whole-pass failure — the checks never
@@ -277,7 +313,7 @@ export async function runSeriesReview(seriesId, {
     modelOverride,
     signal,
     onProgress,
-  }).catch((err) => { console.error(`⚠️ series-review editorial checks failed — series=${seriesId.slice(0, 12)} ${err.message}`); checksRunFailed = true; failedStages.push('editorialChecks'); return { findings: [], perCheck: [], canceled: false }; });
+  }).catch((err) => { console.error(`⚠️ series-review editorial checks failed — series=${seriesId.slice(0, 12)} ${err.message}`); checksRunFailed = true; return { findings: [], perCheck: [], canceled: false }; });
   // A single check that threw (e.g. an unavailable LLM provider) is caught
   // internally by the runner and surfaced in perCheck as `{ checkId, error }` —
   // that dimension was never evaluated, so it too must block a 'ready' verdict.
@@ -285,17 +321,9 @@ export async function runSeriesReview(seriesId, {
     .filter((p) => p && p.error).map((p) => p.checkId);
   const checksErrored = erroredCheckIds.length;
   onProgress({ type: 'step:complete', kind: 'editorialChecks', findingCount: checks?.findings?.length ?? 0, errored: checksErrored, failed: checksRunFailed });
-  if (aborted() || checks?.canceled) return null;
+  if (aborted() || checks?.canceled) return canceledResult();
 
-  // 4. Canon readiness (deterministic — no LLM). A throw is a genuine failure —
-  //    record it so the verdict fails closed rather than treating the missing
-  //    result as "canon fine".
-  onProgress({ type: 'step:start', kind: 'canon' });
-  const canon = await checkSeriesCanonReadiness(seriesId)
-    .catch((err) => { console.error(`⚠️ series-review canon readiness failed — series=${seriesId.slice(0, 12)} ${err.message}`); failedStages.push('canon'); return null; });
-  onProgress({ type: 'step:complete', kind: 'canon', ready: canon?.ready !== false });
-
-  // 5. Health + readiness + the seeded findings — both only READ the store the
+  // 3. Health + readiness + the seeded findings — both only READ the store the
   //    checks just seeded, so resolve them concurrently.
   onProgress({ type: 'step:start', kind: 'health' });
   const [health, review] = await Promise.all([
@@ -304,6 +332,20 @@ export async function runSeriesReview(seriesId, {
   ]);
   onProgress({ type: 'step:complete', kind: 'health', ready: health?.ready === true, score: health?.score ?? null });
   const findings = collectReviewFindings(review.comments);
+
+  // 4. Join the background passes. Both resolve (never reject) with their own
+  //    failure flag, so the failed-stage list is assembled here in ONE place and
+  //    keeps a deterministic order regardless of which pass settled first.
+  const [foundationRes, canonRes] = await Promise.all([foundationTask, canonTask]);
+  const foundation = foundationRes.value;
+  const canon = canonRes.value;
+  // Stages that errored / never ran this pass — any of these makes the verdict
+  // untrustworthy, so it must never read 'ready' (fail closed). Surfaced on the
+  // result so the UI can warn the review is incomplete.
+  const failedStages = [];
+  if (foundationRes.failed) failedStages.push('foundation');
+  if (checksRunFailed) failedStages.push('editorialChecks');
+  if (canonRes.failed) failedStages.push('canon');
   if (!health) failedStages.push('health');
   const threshold = Number.isFinite(settings?.pipelineEditorialChecks?.foundationThreshold)
     ? settings.pipelineEditorialChecks.foundationThreshold
