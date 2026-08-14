@@ -47,10 +47,13 @@ import { safeDate } from '../lib/fileUtils.js';
  *     from `capturedText` / `name` / `context` / `title` / `oneLiner` / `notes`
  *     / `nextAction` / `content` / `mood` / `url` / `description`.
  *   - `getBrainGraphSearchIndex` (server/services/brainGraph.js) derives each
- *     node's label from `name || title` and drops archived records, so the five
+ *     node's label from `name || title` and drops archived records, so the
  *     graph entity types also project `name`, `title` and `archived`.
  * `journals` is graph-only (the Daily Log is not a unified-search source), and
- * projects no body — see `journalHasBody` below.
+ * projects no body — see `journalHasBody` below. `songs` (SongBook) is
+ * graph-only too, and projects only its label field: the sheet body lives in
+ * `content.text` (up to 200k chars of tab/ChordPro per song) and nothing here
+ * renders it, so it must never reach the cache.
  */
 const PROJECTED_FIELDS = Object.freeze({
   inbox: Object.freeze(['capturedText']),
@@ -61,6 +64,7 @@ const PROJECTED_FIELDS = Object.freeze({
   memories: Object.freeze(['name', 'title', 'content', 'mood', 'archived']),
   links: Object.freeze(['title', 'url', 'description']),
   journals: Object.freeze(['date']),
+  songs: Object.freeze(['title', 'archived']),
 });
 
 /**

@@ -19,7 +19,7 @@ const EDGE_COLORS = {
   linked: '#ffffff'
 };
 
-const BRAIN_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories', 'goals', 'journals'];
+const BRAIN_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories', 'songs', 'goals', 'journals'];
 
 // Widest the hover tooltip renders. Single source for both its max-width and
 // the clamp that keeps it inside the viewport — as a CSS class plus a mirrored
@@ -34,7 +34,23 @@ const TYPE_GETTERS = {
   admin: api.getBrainAdminItem,
   memories: api.getBrainMemory,
   goals: api.getBrainGoal,
-  journals: api.getBrainJournalEntry
+  journals: api.getBrainJournalEntry,
+  songs: api.getSong
+};
+
+// Prose body for the detail panel, in the order the panel prefers it. Every
+// candidate is type-checked rather than `||`-chained straight through: a
+// SongBook record's `content` is an OBJECT (`{ format, text }`), not a string,
+// and handing that to React throws "Objects are not valid as a React child".
+// Mirrors `entitySummary` in server/services/brainGraph.js — the panel falls
+// back to the node's server-computed summary, so the two must agree on which
+// field a record reads as.
+const BODY_FIELDS = ['description', 'context', 'oneLiner', 'artist', 'notes', 'content'];
+export const recordBody = (record) => {
+  for (const field of BODY_FIELDS) {
+    if (typeof record?.[field] === 'string' && record[field]) return record[field];
+  }
+  return '';
 };
 
 function GraphEdges({ simEdges, selectedId }) {
@@ -344,7 +360,7 @@ export default function BrainGraph() {
   if (!graphData?.nodes?.length) {
     return (
       <div className="text-center py-12 text-gray-500">
-        No brain entities to graph. Add people, projects, ideas, admin items, memories, goals, or journal entries to see relationships.
+        No brain entities to graph. Add people, projects, ideas, admin items, memories, songs, goals, or journal entries to see relationships.
       </div>
     );
   }
@@ -437,7 +453,7 @@ export default function BrainGraph() {
           ))}
         </div>
 
-        {/* Type filter checkboxes — wrap on mobile (seven of them never fit a
+        {/* Type filter checkboxes — wrap on mobile (eight of them never fit a
             phone row) with a taller tap target than the 12px swatch alone. */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 sm:ml-auto">
           {BRAIN_TYPES.map(type => {
@@ -688,9 +704,9 @@ export default function BrainGraph() {
           <div className="mb-3">
             {fullRecord ? (
               <div className="space-y-3">
-                {(fullRecord.description || fullRecord.context || fullRecord.oneLiner || fullRecord.notes || fullRecord.content) && (
+                {recordBody(fullRecord) && (
                   <p className="text-sm text-gray-300 whitespace-pre-wrap">
-                    {fullRecord.description || fullRecord.context || fullRecord.oneLiner || fullRecord.notes || fullRecord.content}
+                    {recordBody(fullRecord)}
                   </p>
                 )}
                 {typeof fullRecord.progress === 'number' && (

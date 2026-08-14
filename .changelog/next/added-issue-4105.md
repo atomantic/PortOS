@@ -1,0 +1,1 @@
+- SongBook songs are enrolled in the brain memory bridge and knowledge graph — they embed for semantic search and appear as graph nodes with shared-tag and similarity edges

@@ -28,7 +28,7 @@ import { loadBridgeMap, bridgeKey } from './brainMemoryBridge.js';
 import { getBrainProjections, journalHasBody } from './brainSearchIndex.js';
 import { getGoals } from './identity.js';
 
-const ENTITY_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories'];
+const ENTITY_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories', 'songs'];
 
 // Edges shown per node are capped so a densely-tagged hub can't reintroduce the
 // combinatorial blow-up inside a bounded view.
@@ -60,6 +60,20 @@ const clampLimit = (limit, fallback) => {
 // projection-backed search index, so the two can never drift on what a node is
 // called or which records are skipped.
 const entityLabel = (record) => record.name || record.title || '(untitled)';
+
+// One-line gist for the node tooltip / detail panel. Every candidate is
+// type-checked rather than `||`-chained straight through, because `content` is
+// a STRING on memories/journals but an OBJECT (`{ format, text }`) on a
+// SongBook record — an untyped chain would put `[object Object]` in the
+// tooltip. `artist` sits ahead of `notes` so a song reads as "who plays it"
+// rather than whatever practice note happens to be attached.
+const SUMMARY_FIELDS = ['context', 'oneLiner', 'artist', 'notes', 'content'];
+const entitySummary = (record) => {
+  for (const field of SUMMARY_FIELDS) {
+    if (typeof record[field] === 'string' && record[field]) return record[field];
+  }
+  return '';
+};
 const goalLabel = (goal) => goal.title || '(untitled goal)';
 const isInactiveGoal = (goal) => goal.status === 'completed' || goal.status === 'abandoned';
 const journalDate = (entry) => entry.id || entry.date;
@@ -75,7 +89,7 @@ async function loadNodes() {
         id: record.id,
         brainType: type,
         label: entityLabel(record),
-        summary: record.context || record.oneLiner || record.notes || record.content || '',
+        summary: entitySummary(record),
         tags: record.tags || [],
         importance: 0.6,
         status: record.status
