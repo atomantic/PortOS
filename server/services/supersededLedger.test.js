@@ -9,6 +9,12 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// Separator-normalizer for path assertions. The code under test composes paths
+// with path.join/resolve, which emit '\\' on Windows, so a '/'-spelled literal
+// could never match there. Normalizing the RECEIVED value keeps the readable
+// POSIX literals below meaningful on both platforms (no-op on POSIX).
+const posixPath = (v) => String(v).split('\\').join('/');
+
 const files = new Map();
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { cos: '/repo/data/cos' },
@@ -50,7 +56,7 @@ beforeEach(() => files.clear());
 describe('ledgerPath', () => {
   it('lands in the install\'s cos data dir', () => {
     expect(ledgerPath()).toBe(PATH);
-    expect(ledgerPath('/other/cos')).toBe('/other/cos/branch-reconcile-verdicts.json');
+    expect(posixPath(ledgerPath('/other/cos'))).toBe('/other/cos/branch-reconcile-verdicts.json');
   });
 });
 

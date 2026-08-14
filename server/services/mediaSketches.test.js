@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
+// Separator-normalizer for path assertions. The code under test composes paths
+// with path.join/resolve, which emit '\\' on Windows, so a '/'-spelled literal
+// could never match there. Normalizing the RECEIVED value keeps the readable
+// POSIX literals below meaningful on both platforms (no-op on POSIX).
+const posixPath = (v) => String(v).split('\\').join('/');
+
 const fileStore = new Map();
 
 vi.mock('../lib/fileUtils.js', () => ({
@@ -58,7 +64,7 @@ describe('mediaSketches service', () => {
     expect(await svc.getSketchPngPath(KEY)).toBeNull();
     await svc.saveSketch(KEY, { width: 10, height: 10, strokes: sampleStrokes, png: PNG_DATA_URL });
     const path = await svc.getSketchPngPath(KEY);
-    expect(path).toBe('/mock/data/media-sketches/aW1hZ2U6Zm9vLnBuZw.png');
+    expect(posixPath(path)).toBe('/mock/data/media-sketches/aW1hZ2U6Zm9vLnBuZw.png');
     // A vectors-only re-save drops the PNG, so the path resolver goes null again.
     await svc.saveSketch(KEY, { width: 10, height: 10, strokes: sampleStrokes });
     expect(await svc.getSketchPngPath(KEY)).toBeNull();

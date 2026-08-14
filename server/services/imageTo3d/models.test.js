@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Separator-normalizer for path assertions. The code under test composes paths
+// with path.join/resolve, which emit '\\' on Windows, so a '/'-spelled literal
+// could never match there. Normalizing the RECEIVED value keeps the readable
+// POSIX literals below meaningful on both platforms (no-op on POSIX).
+const posixPath = (v) => String(v).split('\\').join('/');
+
 vi.mock('node:fs/promises', async (importOriginal) => ({
   ...(await importOriginal()),
   rm: vi.fn(() => Promise.resolve()),
@@ -137,7 +143,7 @@ describe('image-to-3D model orchestration', () => {
       // merged over process.env — without it, gated DINOv3/RMBG-2.0 pulls 401.
       env: expect.objectContaining({ HF_TOKEN: 'hf_from_store', HUGGINGFACE_HUB_TOKEN: 'hf_from_store' }),
     }));
-    expect(current.assetPath).toBe('/data/image-to-3d/image3d-example/model.glb');
+    expect(posixPath(current.assetPath)).toBe('/data/image-to-3d/image3d-example/model.glb');
     expect(current.generationOperationId).toBeNull();
     expect(current.runs.at(-1)).toMatchObject({ status: 'completed', percent: 100 });
   });

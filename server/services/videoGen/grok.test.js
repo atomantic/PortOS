@@ -1,4 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Separator-normalizer for path assertions. The code under test composes paths
+// with path.join/resolve, which emit '\\' on Windows, so a '/'-spelled literal
+// could never match there. Normalizing the RECEIVED value keeps the readable
+// POSIX literals below meaningful on both platforms (no-op on POSIX).
+const posixPath = (v) => String(v).split('\\').join('/');
 import { mkdir, writeFile, rm, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -115,7 +121,7 @@ describe('videoGen/grok — generateVideo', () => {
     const prompt = promptOf();
     expect(prompt).not.toContain('image_gen');
     expect(prompt).toContain('image_to_video');
-    expect(prompt).toContain('/abs/frame.png');
+    expect(posixPath(prompt)).toContain('/abs/frame.png');
     expect(prompt).toContain('10 seconds');
     await closeChild();
   });

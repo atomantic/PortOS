@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// Separator-normalizer for path assertions. The code under test composes paths
+// with path.join/resolve, which emit '\\' on Windows, so a '/'-spelled literal
+// could never match there. Normalizing the RECEIVED value keeps the readable
+// POSIX literals below meaningful on both platforms (no-op on POSIX).
+const posixPath = (v) => String(v).split('\\').join('/');
+
 // Hoisted mocks so promisify wraps the same fns we control in tests
 const hoisted = vi.hoisted(() => ({
   execMock: vi.fn(),
@@ -385,7 +391,7 @@ describe('xcodeScripts', () => {
       // writeFile only called once (deploy.sh) — not for .env.example
       expect(writeFile).toHaveBeenCalledTimes(1);
       const calls = writeFile.mock.calls.map(c => c[0]);
-      expect(calls).not.toContain('/tmp/x/.env.example');
+      expect(posixPath(calls)).not.toContain('/tmp/x/.env.example');
     });
 
     it('derives target name and bundle id from project.yml', async () => {

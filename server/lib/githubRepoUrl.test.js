@@ -1,4 +1,10 @@
 import { describe, it, expect } from 'vitest';
+
+// Separator-normalizer for path assertions. The code under test composes paths
+// with path.join/resolve, which emit '\\' on Windows, so a '/'-spelled literal
+// could never match there. Normalizing the RECEIVED value keeps the readable
+// POSIX literals below meaningful on both platforms (no-op on POSIX).
+const posixPath = (v) => String(v).split('\\').join('/');
 import { join } from 'path';
 import { parseGitHubUrl, isGitHubRepoUrl } from './githubRepoUrl.js';
 
@@ -82,7 +88,7 @@ describe('parseGitHubUrl', () => {
     it('never yields a clone path outside the repos root', () => {
       expect(clonePath('https://github.com/../evil')).toBeNull();
       expect(clonePath('https://github.com/example-owner/..')).toBeNull();
-      expect(clonePath('https://github.com/example-owner/example-repo'))
+      expect(posixPath(clonePath('https://github.com/example-owner/example-repo')))
         .toBe('/data/repos/example-owner/example-repo');
     });
 

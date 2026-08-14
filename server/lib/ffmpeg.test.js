@@ -1,4 +1,10 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+
+// Separator-normalizer for path assertions. The code under test composes paths
+// with path.join/resolve, which emit '\\' on Windows, so a '/'-spelled literal
+// could never match there. Normalizing the RECEIVED value keeps the readable
+// POSIX literals below meaningful on both platforms (no-op on POSIX).
+const posixPath = (v) => String(v).split('\\').join('/');
 import { writeFileSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -157,7 +163,7 @@ describe('runFfmpegProcess', () => {
 describe('safeUnder', () => {
   it('accepts a plain basename under a root', () => {
     const root = '/tmp/portos-root';
-    expect(safeUnder(root, 'foo.mp4')).toBe('/tmp/portos-root/foo.mp4');
+    expect(posixPath(safeUnder(root, 'foo.mp4'))).toBe('/tmp/portos-root/foo.mp4');
   });
 
   it('rejects path-traversal segments', () => {

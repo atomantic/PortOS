@@ -1,5 +1,12 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
+import { join as joinPath } from 'path';
+
+// Separator-normalizer for path assertions. The code under test composes paths
+// with path.join/resolve, which emit '\\' on Windows, so a '/'-spelled literal
+// could never match there. Normalizing the RECEIVED value keeps the readable
+// POSIX literals below meaningful on both platforms (no-op on POSIX).
+const posixPath = (v) => String(v).split('\\').join('/');
 import {
   TRELLIS2_REPO,
   trellis2Root,
@@ -40,9 +47,12 @@ const BASE = '/tmp/portos-test-home';
 
 describe('trellis2 path resolution', () => {
   it('roots the install under the injected base', () => {
-    expect(trellis2Root(BASE)).toBe('/tmp/portos-test-home/trellis2');
-    expect(trellis2VenvPython(BASE)).toMatch(/trellis2\/\.venv\/(bin\/python3|Scripts\/python\.exe)$/);
-    expect(trellis2GenerateScript(BASE)).toBe('/tmp/portos-test-home/trellis2/generate.py');
+    expect(posixPath(trellis2Root(BASE))).toBe('/tmp/portos-test-home/trellis2');
+    // Accept either separator — the path is composed with path.join, so it is
+    // backslash-separated on Windows (which is also where the Scripts/ variant
+    // is the one that applies).
+    expect(trellis2VenvPython(BASE)).toMatch(/trellis2[\\/]\.venv[\\/](bin[\\/]python3|Scripts[\\/]python\.exe)$/);
+    expect(posixPath(trellis2GenerateScript(BASE))).toBe('/tmp/portos-test-home/trellis2/generate.py');
     expect(trellis2GenerateRunnerScript()).toMatch(/trellis2GenerateRunner\.py$/);
   });
 });
@@ -109,7 +119,9 @@ describe('buildInstallSteps', () => {
     // A prior install cloned the top-level repo but failed inside setup.sh (the
     // #2952 case). Re-cloning into the non-empty root would abort, so resume must
     // begin at the idempotent setup.sh.
-    const gitDir = `${trellis2Root(BASE)}/.git`;
+    // join(), not a template: the source probes with path.join, so on Windows
+    // this key must be backslash-separated or the exists() stub never matches.
+    const gitDir = joinPath(trellis2Root(BASE), '.git');
     const steps = buildInstallSteps(BASE, { exists: (p) => p === gitDir });
     expect(steps.map((s) => s.stage)).toEqual(['setup']);
     expect(steps[0]).toMatchObject({ command: 'bash', args: ['setup.sh'], cwd: trellis2Root(BASE) });
@@ -118,16 +130,16 @@ describe('buildInstallSteps', () => {
 
 describe('trellis2OutputStem', () => {
   it('strips a single trailing .glb (the port appends the extension itself)', () => {
-    expect(trellis2OutputStem('/data/image-to-3d/abc/model.glb')).toBe('/data/image-to-3d/abc/model');
+    expect(posixPath(trellis2OutputStem('/data/image-to-3d/abc/model.glb'))).toBe('/data/image-to-3d/abc/model');
   });
 
   it('is case-insensitive on the extension', () => {
-    expect(trellis2OutputStem('/out/Model.GLB')).toBe('/out/Model');
+    expect(posixPath(trellis2OutputStem('/out/Model.GLB'))).toBe('/out/Model');
   });
 
   it('leaves a stem with no .glb extension untouched (and does not eat a mid-path .glb)', () => {
-    expect(trellis2OutputStem('/out/model')).toBe('/out/model');
-    expect(trellis2OutputStem('/out/model.glb.tmp')).toBe('/out/model.glb.tmp');
+    expect(posixPath(trellis2OutputStem('/out/model'))).toBe('/out/model');
+    expect(posixPath(trellis2OutputStem('/out/model.glb.tmp'))).toBe('/out/model.glb.tmp');
   });
 });
 
@@ -865,7 +877,9 @@ describe('installTrellis2', () => {
     // existing root; it must go straight to the idempotent setup.sh.
     const child = makeChild();
     const spawnImpl = vi.fn(() => child);
-    const gitDir = `${trellis2Root(BASE)}/.git`;
+    // join(), not a template: the source probes with path.join, so on Windows
+    // this key must be backslash-separated or the exists() stub never matches.
+    const gitDir = joinPath(trellis2Root(BASE), '.git');
     const { promise } = installTrellis2({
       base: BASE, spawnImpl, exists: (p) => p === gitDir, sleep: () => Promise.resolve(),
     });

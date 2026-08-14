@@ -1,4 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+
+// Separator-normalizer for path assertions. The code under test composes paths
+// with path.join/resolve, which emit '\\' on Windows, so a '/'-spelled literal
+// could never match there. Normalizing the RECEIVED value keeps the readable
+// POSIX literals below meaningful on both platforms (no-op on POSIX).
+const posixPath = (v) => String(v).split('\\').join('/');
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, existsSync, readlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -88,15 +94,15 @@ describe('hfCache', () => {
 
   it('resolves cache root with precedence HF_HUB_CACHE > HF_HOME/hub > XDG_CACHE_HOME/huggingface/hub > ~/.cache', () => {
     process.env.HF_HUB_CACHE = '/explicit/hub';
-    expect(getHfCacheRoot()).toBe('/explicit/hub');
+    expect(posixPath(getHfCacheRoot())).toBe('/explicit/hub');
 
     delete process.env.HF_HUB_CACHE;
     process.env.HF_HOME = '/custom/hf';
-    expect(getHfCacheRoot()).toBe('/custom/hf/hub');
+    expect(posixPath(getHfCacheRoot())).toBe('/custom/hf/hub');
 
     delete process.env.HF_HOME;
     process.env.XDG_CACHE_HOME = '/xdg/cache';
-    expect(getHfCacheRoot()).toBe('/xdg/cache/huggingface/hub');
+    expect(posixPath(getHfCacheRoot())).toBe('/xdg/cache/huggingface/hub');
 
     delete process.env.XDG_CACHE_HOME;
     expect(getHfCacheRoot()).toMatch(/\.cache\/huggingface\/hub$/);

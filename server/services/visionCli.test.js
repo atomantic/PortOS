@@ -1,4 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
+
+// Separator-normalizer for path assertions. The code under test composes paths
+// with path.join/resolve, which emit '\\' on Windows, so a '/'-spelled literal
+// could never match there. Normalizing the RECEIVED value keeps the readable
+// POSIX literals below meaningful on both platforms (no-op on POSIX).
+const posixPath = (v) => String(v).split('\\').join('/');
 import { EventEmitter } from 'events';
 
 // Wrap the REAL resolveWindowsExecutable/prepareWindowsSafeSpawn in spies
@@ -42,7 +48,7 @@ describe('buildCliVisionInvocation', () => {
     );
     expect(inv.command).toBe('codex');
     expect(inv.args).toContain('-i');
-    expect(inv.args).toContain('/tmp/x/vision-input.png');
+    expect(posixPath(inv.args)).toContain('/tmp/x/vision-input.png');
     expect(inv.args).toContain('-m');
     expect(inv.args).toContain('gpt-5');
     expect(inv.args[inv.args.length - 1]).toBe('describe'); // prompt is positional
@@ -50,7 +56,7 @@ describe('buildCliVisionInvocation', () => {
     // under the vision timeout.
     expect(inv.args).toEqual(expect.arrayContaining(['-c', 'check_for_update_on_startup=false']));
     expect(inv.stdin).toBeNull();
-    expect(inv.cwd).toBe('/tmp/x');
+    expect(posixPath(inv.cwd)).toBe('/tmp/x');
   });
 
   it('omits -m for the codex-configured-default sentinel (falls back to config.toml)', () => {
@@ -76,7 +82,7 @@ describe('buildCliVisionInvocation', () => {
     expect(inv.args).toEqual(expect.arrayContaining(['-p', '-', '--model', 'claude-opus-4-8']));
     expect(inv.stdin).toContain('describe');
     expect(inv.stdin).toContain('vision-input.png');
-    expect(inv.cwd).toBe('/tmp/y');
+    expect(posixPath(inv.cwd)).toBe('/tmp/y');
   });
 });
 

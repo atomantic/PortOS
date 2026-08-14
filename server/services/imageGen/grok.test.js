@@ -1,4 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Separator-normalizer for path assertions. The code under test composes paths
+// with path.join/resolve, which emit '\\' on Windows, so a '/'-spelled literal
+// could never match there. Normalizing the RECEIVED value keeps the readable
+// POSIX literals below meaningful on both platforms (no-op on POSIX).
+const posixPath = (v) => String(v).split('\\').join('/');
 import { mkdir, writeFile, rm, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -132,7 +138,7 @@ describe('grok provider — generateImage', () => {
 
   it('honors grokPath override (custom binary)', async () => {
     await grok.generateImage({ prompt: 'a fox', grokPath: '/opt/custom/grok' });
-    expect(spawnCalls[0].bin).toBe('/opt/custom/grok');
+    expect(posixPath(spawnCalls[0].bin)).toBe('/opt/custom/grok');
     await closeChild();
   });
 
@@ -193,7 +199,7 @@ describe('grok provider — generateImage', () => {
   it('drops a reference path that escapes the gallery (defense-in-depth)', async () => {
     await grok.generateImage({ prompt: 'a fox', referenceImagePaths: ['/etc/passwd'] });
     const prompt = promptOf();
-    expect(prompt).not.toContain('/etc/passwd');
+    expect(posixPath(prompt)).not.toContain('/etc/passwd');
     // Nothing survived, so it falls back to plain text-to-image.
     expect(prompt).not.toContain('image_edit');
     await closeChild();
@@ -203,7 +209,7 @@ describe('grok provider — generateImage', () => {
     await grok.generateImage({ prompt: 'cover art', initImagePath: '/etc/passwd', initImageStrength: 0.2 });
     const prompt = promptOf();
     expect(prompt).not.toContain('image_edit');
-    expect(prompt).not.toContain('/etc/passwd');
+    expect(posixPath(prompt)).not.toContain('/etc/passwd');
     await closeChild();
   });
 

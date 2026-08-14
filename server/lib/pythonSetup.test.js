@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// Separator-normalizer for path assertions. The code under test composes paths
+// with path.join/resolve, which emit '\\' on Windows, so a '/'-spelled literal
+// could never match there. Normalizing the RECEIVED value keeps the readable
+// POSIX literals below meaningful on both platforms (no-op on POSIX).
+const posixPath = (v) => String(v).split('\\').join('/');
+
 // Mutable state read by the hoisted vi.mock factories below. Each test mutates
 // it and then `vi.resetModules() + dynamic import` re-evaluates pythonSetup.js
 // with the new platform/arch — `HOST_ARCH`, `IS_DARWIN`, and `PYTHON_CANDIDATES`
@@ -233,7 +239,7 @@ describe('resolveMfluxPython', () => {
     mockState.presentPaths.add('/opt/homebrew/bin/mflux-train');
     mockState.presentPaths.add(VENV_TRAIN); // even when the venv also exists, configured wins
     const { resolveMfluxPython } = await loadModule();
-    expect(resolveMfluxPython('/opt/homebrew/bin/python3')).toBe('/opt/homebrew/bin/python3');
+    expect(posixPath(resolveMfluxPython('/opt/homebrew/bin/python3'))).toBe('/opt/homebrew/bin/python3');
   });
 
   it('falls back to the dedicated venv when the configured python lacks mflux-train', async () => {
@@ -250,7 +256,7 @@ describe('resolveMfluxPython', () => {
 
   it('returns the configured path unchanged when neither ships mflux-train (honest "not installed")', async () => {
     const { resolveMfluxPython } = await loadModule();
-    expect(resolveMfluxPython('/opt/homebrew/bin/python3')).toBe('/opt/homebrew/bin/python3');
+    expect(posixPath(resolveMfluxPython('/opt/homebrew/bin/python3'))).toBe('/opt/homebrew/bin/python3');
   });
 
   it('returns null when nothing is configured and no venv exists', async () => {

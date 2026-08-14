@@ -12,6 +12,12 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+// Separator-normalizer for path assertions. The code under test composes paths
+// with path.join/resolve, which emit '\\' on Windows, so a '/'-spelled literal
+// could never match there. Normalizing the RECEIVED value keeps the readable
+// POSIX literals below meaningful on both platforms (no-op on POSIX).
+const posixPath = (v) => String(v).split('\\').join('/');
+
 // Mock readdir (keg enumeration) and execFileAsync (version probe) so discovery
 // runs against a controlled filesystem/version map instead of the host.
 vi.mock('fs/promises', async (importOriginal) => {
@@ -93,7 +99,7 @@ describe('discoverPgDumpCandidates', () => {
     const candidates = await discoverPgDumpCandidates();
     // PATH binary first, then the kegs; the non-postgresql entry is ignored.
     expect(candidates[0]).toEqual({ binary: 'pg_dump', major: 15 });
-    expect(candidates.map(c => c.binary)).toContain('/opt/homebrew/opt/postgresql@17/bin/pg_dump');
+    expect(posixPath(candidates.map(c => c.binary))).toContain('/opt/homebrew/opt/postgresql@17/bin/pg_dump');
     expect(candidates.find(c => c.binary.includes('postgresql@17')).major).toBe(17);
   });
 });
@@ -116,7 +122,7 @@ describe('resolvePgDump', () => {
       stdout: versions[binary] ? `pg_dump (PostgreSQL) ${versions[binary]}` : '',
     }));
     const { binary, satisfies } = await resolvePgDump(17);
-    expect(binary).toBe('/opt/homebrew/opt/postgresql@17/bin/pg_dump');
+    expect(posixPath(binary)).toBe('/opt/homebrew/opt/postgresql@17/bin/pg_dump');
     expect(satisfies).toBe(true);
   });
 
