@@ -66,6 +66,39 @@ import { fileURLToPath } from 'url';
 
 const __dirname_test = dirname(fileURLToPath(import.meta.url));
 
+// The unmocked fs/promises, used to restore the delegating mock implementations
+// after a test installs a persistent one.
+let realFsPromises;
+beforeAll(async () => {
+  realFsPromises = await vi.importActual('fs/promises');
+});
+
+const restoreFsMocks = () => {
+  for (const name of ['readFile', 'rename', 'readdir', 'mkdir']) {
+    fsPromises[name].mockReset();
+    fsPromises[name].mockImplementation((...args) => realFsPromises[name](...args));
+  }
+};
+
+/**
+ * Run `fn` with EVERY `readFile` attempt rejected by `err`, then restore the
+ * delegating mock.
+ *
+ * A single `mockRejectedValueOnce` is not enough since #4095: on win32
+ * `readJSONFileStrict` retries a transient lock, so the first attempt would
+ * consume the queued rejection and the retry would read the real file. A test
+ * pinning "an unreadable file is not an empty one" has to keep it unreadable —
+ * which is also the contract that actually survives the retries.
+ */
+async function withUnreadableFile(err, fn) {
+  fsPromises.readFile.mockImplementation(() => Promise.reject(err));
+  try {
+    return await fn();
+  } finally {
+    restoreFsMocks();
+  }
+}
+
 describe('fileUtils', () => {
   describe('isValidJSON', () => {
     it('should return true for valid JSON object', () => {
@@ -383,9 +416,8 @@ describe('fileUtils', () => {
     it('reports EACCES as NOT ok — an unreadable file is not an empty one', async () => {
       const filePath = join(testDir, 'locked.json');
       await writeFile(filePath, '{"sessions": [{"id": "s1"}]}');
-      fsPromises.readFile.mockRejectedValueOnce(eacces());
 
-      const result = await readJSONFileStrict(filePath, { sessions: [] });
+      const result = await withUnreadableFile(eacces(), () => readJSONFileStrict(filePath, { sessions: [] }));
       // `value` still carries the default so an ok-indifferent caller behaves as
       // before; `ok: false` is what makes the failure legible.
       expect(result).toEqual({ ok: false, value: { sessions: [] } });
@@ -435,8 +467,8 @@ describe('fileUtils', () => {
       // Both return the same `value`; only `ok` tells them apart — which is why the
       // parse sentinel can't be an in-band marker like null.
       expect(await readJSONFileStrict(filePath, { sessions: [] })).toEqual({ ok: true, value: { sessions: [] } });
-      fsPromises.readFile.mockRejectedValueOnce(eacces());
-      expect(await readJSONFileStrict(filePath, { sessions: [] })).toEqual({ ok: false, value: { sessions: [] } });
+      expect(await withUnreadableFile(eacces(), () => readJSONFileStrict(filePath, { sessions: [] })))
+        .toEqual({ ok: false, value: { sessions: [] } });
     });
 
     it('keeps readJSONFile’s noisy-output extraction for array defaults', async () => {
@@ -509,10 +541,10 @@ describe('fileUtils', () => {
     it('throws for an unreadable file instead of returning a fake empty', async () => {
       const filePath = join(testDir, 'locked.json');
       await writeFile(filePath, '{"sessions": []}');
-      fsPromises.readFile.mockRejectedValueOnce(Object.assign(new Error('permission denied'), { code: 'EACCES' }));
+      const eacces = Object.assign(new Error('permission denied'), { code: 'EACCES' });
 
-      await expect(readJSONFile(filePath, { sessions: [] }, { strict: true }))
-        .rejects.toThrow(/Unreadable JSON file/);
+      await withUnreadableFile(eacces, () => expect(readJSONFile(filePath, { sessions: [] }, { strict: true }))
+        .rejects.toThrow(/Unreadable JSON file/));
     });
 
     it('throws for corrupt JSON', async () => {
@@ -1282,7 +1314,6 @@ describe('Windows swap-window retries (#4095)', () => {
   const lockError = (code) => Object.assign(new Error(`${code}: simulated windows lock`), { code });
 
   let tmpRoot;
-  let realFs;
   let restorePlatform = null;
 
   const fakePlatform = (value) => {
@@ -1290,10 +1321,6 @@ describe('Windows swap-window retries (#4095)', () => {
     Object.defineProperty(process, 'platform', { value, configurable: true });
     restorePlatform = () => Object.defineProperty(process, 'platform', original);
   };
-
-  beforeAll(async () => {
-    realFs = await vi.importActual('fs/promises');
-  });
 
   beforeEach(() => {
     tmpRoot = mkdtempSync(join(tmpdir(), 'fileutils-winswap-'));
@@ -1309,12 +1336,7 @@ describe('Windows swap-window retries (#4095)', () => {
     restorePlatform = null;
     // Drop any unconsumed `*Once` queues AND re-establish the delegating
     // implementations the rest of this file relies on.
-    fsPromises.readFile.mockReset();
-    fsPromises.rename.mockReset();
-    fsPromises.readdir.mockReset();
-    fsPromises.readFile.mockImplementation((...args) => realFs.readFile(...args));
-    fsPromises.rename.mockImplementation((...args) => realFs.rename(...args));
-    fsPromises.readdir.mockImplementation((...args) => realFs.readdir(...args));
+    restoreFsMocks();
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
@@ -1396,11 +1418,24 @@ describe('Windows swap-window retries (#4095)', () => {
       writeFileSync(target, JSON.stringify({ real: true }));
       // The writer may have created the file (and therefore its swap debris)
       // under different casing than the reader's path — legal on Windows.
-      writeFileSync(join(tmpRoot, 'Casing.json.1234.5678.TMP'), 'partial');
+      writeFileSync(join(tmpRoot, 'Casing.json.1234.5678.BAK'), '{"real":true}');
       fakePlatform('win32');
       fsPromises.readFile.mockRejectedValueOnce(lockError('ENOENT'));
 
       expect(await readJSONFileStrict(target, { fallback: true })).toEqual({ ok: true, value: { real: true } });
+    });
+
+    it('does NOT treat a .tmp sibling as a swap — a first-ever write is not a vanished file', async () => {
+      // `atomicWrite` writes a `.tmp` on EVERY write, including the first create
+      // of a file that has no destination yet. Retrying on that would make a
+      // legitimate "not written yet" read block for the in-flight write and
+      // return its brand-new contents. Only the `.bak` marks the swap window.
+      const missing = join(tmpRoot, 'first-write.json');
+      writeFileSync(`${missing}.4321.8765.tmp`, '{"brand":"new"}');
+      fakePlatform('win32');
+
+      expect(await readJSONFileStrict(missing, { fallback: true })).toEqual({ ok: true, value: { fallback: true } });
+      expect(fsPromises.readFile).toHaveBeenCalledTimes(1);
     });
 
     it('does not retry a plain missing file on win32 — no sibling, no second read', async () => {

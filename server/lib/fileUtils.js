@@ -516,13 +516,23 @@ export async function readFileTail(path, maxBytes) {
 const PARSE_FAILED = Symbol('json-parse-failed');
 
 /**
- * True when a `<filePath>.*.tmp` or `<filePath>.*.bak` sibling is on disk — the
- * signature of an `atomicWrite` temp write or backup swap that is still in
- * flight for THIS file. Non-throwing: an unreadable parent directory just means
- * "no evidence of a swap".
+ * True when a `<filePath>.*.bak` sibling is on disk — the signature of an
+ * `atomicWrite` backup swap that is mid-flight for THIS file, i.e. the only
+ * window in which the destination legitimately vanishes.
  *
- * Only consulted on win32, and only after a read already failed with ENOENT, so
- * the directory listing never lands on a POSIX read or on a successful read.
+ * Deliberately does NOT match `.tmp`: `atomicWrite` writes its temp file on
+ * EVERY write, including the first-ever create of a file that has no
+ * destination yet. Treating a `.tmp` sibling as evidence of a swap would turn a
+ * plain "not written yet" read into a retry that waits for the in-flight write
+ * and returns its brand-new contents — a different value than the read was
+ * entitled to, and a behavior change on POSIX-shaped callers. The `.bak` only
+ * exists between the swap's two renames.
+ *
+ * Non-throwing: an unreadable parent directory just means "no evidence of a
+ * swap". Only consulted on win32, and only after a read already failed with
+ * ENOENT, so the directory listing never lands on a POSIX read or a successful
+ * one. A `.bak` orphaned by a crash mid-swap costs the bounded retry budget
+ * (~50ms) on subsequent ENOENT reads of that path, never an incorrect answer.
  *
  * Matching is case-INSENSITIVE: NTFS/FAT are case-insensitive, so the reader's
  * `filePath` casing need not match the casing the writer used to create the
@@ -538,7 +548,7 @@ async function hasSwapSibling(filePath) {
   const prefix = `${basename(filePath).toLowerCase()}.`;
   return entries.some((entry) => {
     const name = entry.toLowerCase();
-    return name.startsWith(prefix) && (name.endsWith('.tmp') || name.endsWith('.bak'));
+    return name.startsWith(prefix) && name.endsWith('.bak');
   });
 }
 
@@ -551,9 +561,10 @@ async function hasSwapSibling(filePath) {
  * On win32 two transient failures are retried with a short backoff:
  *   - EPERM/EACCES/EBUSY — the destination is momentarily locked (AV scan, the
  *     writer's own open handle).
- *   - ENOENT, but ONLY when `hasSwapSibling` shows a swap is in flight. A file
- *     that was simply never written stays a zero-cost, silent "nothing here
- *     yet": one failed read, no retry, no sleep.
+ *   - ENOENT, but ONLY when `hasSwapSibling` shows a backup swap is mid-flight.
+ *     A file that was simply never written — or one whose first-ever write is
+ *     still in its temp stage — stays a silent "nothing here yet": one failed
+ *     read, no retry, no sleep.
  *
  * Rejects with the last error once the attempts are exhausted, so the caller's
  * existing errno handling is unchanged.
