@@ -159,7 +159,14 @@ describe('muxMusicBed', () => {
     expect(args[filterIdx + 1]).toMatch(/volume=0\.300/);
     // Output path is a uniquely-suffixed `.muxing.<uuid>.mp4` — the rename
     // swaps it over the input on success.
-    expect(args[args.length - 1]).toMatch(new RegExp(`^${video.replace(/[.+^${}()|[\\]\\\\]/g, '\\\\$&')}\\.muxing\\.[0-9a-f-]+\\.mp4$`));
+    // Asserted with string ops rather than a RegExp built from `video`: the
+    // escape class there was malformed (`[.+^${}()|[\\]` closed before the
+    // trailing `\\\\]`), so backslashes were never escaped. That went unnoticed
+    // on POSIX — the unescaped `.` still matches any char — but on Windows the
+    // path's `\U`, `\A`, `\T` became regex escapes and nothing matched.
+    const outPath = args[args.length - 1];
+    expect(outPath.startsWith(`${video}.muxing.`)).toBe(true);
+    expect(outPath).toMatch(/\.muxing\.[0-9a-f-]+\.mp4$/);
   });
 
   it('uses DEFAULT_MUSIC_GAIN when caller omits musicGain', async () => {
