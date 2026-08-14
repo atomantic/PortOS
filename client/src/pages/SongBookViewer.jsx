@@ -874,6 +874,8 @@ export default function SongBookViewer() {
               onClickToggle={chord.setClickEnabled}
               chordCount={chord.chordCount}
               pulse={chord.pulse}
+              // Play mode is the only host that binds a key for this transport.
+              keyHint="(p)"
             />
           )}
 

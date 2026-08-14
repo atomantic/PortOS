@@ -33,6 +33,15 @@ describe('ChordTransportBar', () => {
     expect(screen.getByLabelText('Turn the metronome on')).toBeTruthy();
   });
 
+  it('advertises a keyboard shortcut only when the host actually binds one', () => {
+    // The editor and importer previews bind no key, so their tooltip must not
+    // name one; the viewer's play mode passes its own.
+    const { rerender } = renderBar();
+    expect(screen.getByLabelText('Play along').getAttribute('title')).toBe('Play along');
+    rerender(<ChordTransportBar {...base} keyHint="(p)" />);
+    expect(screen.getByLabelText('Play along').getAttribute('title')).toBe('Play along (p)');
+  });
+
   it('disables Play when the sheet has nothing playable, and says why', () => {
     renderBar({ hasChords: false });
     const play = screen.getByLabelText('Play along');

@@ -38,6 +38,10 @@ export default function ChordTransportBar({
   countInBars, onCountInChange,
   clickEnabled, onClickToggle,
   chordCount = 0, pulse = null,
+  // The host's keyboard shortcut for Play, if it binds one. Only the viewer's
+  // play mode does (`p`), so the editor and importer previews must NOT advertise
+  // a key that does nothing there — hence a prop rather than a baked-in hint.
+  keyHint = '',
 }) {
   // Setup controls: collapsed by default on a phone, always shown from `sm` up.
   const [showSetup, setShowSetup] = useState(false);
@@ -53,7 +57,7 @@ export default function ChordTransportBar({
           playing={playing}
           onToggle={onToggle}
           hasMusic={hasChords}
-          hint="(p)"
+          hint={keyHint}
           emptyHint="Nothing to play — this sheet has no playable chords"
         />
 

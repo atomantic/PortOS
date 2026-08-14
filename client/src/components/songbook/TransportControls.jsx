@@ -27,20 +27,25 @@ export const COUNT_IN_OPTIONS = [0, 1, 2];
 
 /**
  * Play/stop. `hasMusic` false disables it: a transport that silently does
- * nothing reads as broken, so the reason lives in the title instead.
+ * nothing reads as broken, so the reason lives in the title instead. `hint` is
+ * the host's keyboard shortcut, e.g. `'(space)'` — omitted where the host binds
+ * none, so a tooltip can't advertise a key that does nothing.
  */
-export const PlayStopButton = ({ playing, onToggle, hasMusic = true, hint, emptyHint }) => (
-  <button
-    type="button"
-    onClick={onToggle}
-    disabled={!hasMusic}
-    className={`${ctrlBtnClass} disabled:opacity-40 disabled:hover:bg-transparent ${playing ? activeCtrlClass : ''}`}
-    aria-label={playing ? 'Stop play-along' : 'Play along'}
-    title={hasMusic ? (playing ? `Stop ${hint}` : `Play along ${hint}`) : emptyHint}
-  >
-    {playing ? <Square size={16} /> : <Play size={18} />}
-  </button>
-);
+export const PlayStopButton = ({ playing, onToggle, hasMusic = true, hint = '', emptyHint }) => {
+  const action = playing ? 'Stop' : 'Play along';
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      disabled={!hasMusic}
+      className={`${ctrlBtnClass} disabled:opacity-40 disabled:hover:bg-transparent ${playing ? activeCtrlClass : ''}`}
+      aria-label={playing ? 'Stop play-along' : 'Play along'}
+      title={hasMusic ? [action, hint].filter(Boolean).join(' ') : emptyHint}
+    >
+      {playing ? <Square size={16} /> : <Play size={18} />}
+    </button>
+  );
+};
 
 /**
  * Practice tempo — steppers everywhere, slider only where there's room. The
