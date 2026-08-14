@@ -13,9 +13,12 @@ import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
 import CoSBackgroundCamera from './CoSBackgroundCamera';
 import CoSCanvasGuard from './CoSCanvasGuard';
 import { withInPlaceClips } from '../../utils/animationClips';
+import { fitModelToHeight } from '../../utils/modelFit';
 import useClonedGltf, { GltfPrimitive } from '../../hooks/useClonedGltf';
 
 const MODEL_URL = '/api/avatar/model.glb';
+const TARGET_HEIGHT = 1.9; // world units — fills the fixed portrait frame
+const VERTICAL_LIFT = 0.05; // small upward nudge off the exact frame center
 const FADE = 0.35; // crossfade seconds between state loops
 const buildMuseAnimations = (animations) => (
   withInPlaceClips(animations, MUSE_ROOT_MOTION_CLIPS, MUSE_IN_PLACE_SUFFIX)
@@ -51,18 +54,11 @@ function GLBAvatar({ state, speaking }) {
       obj.frustumCulled = false;
     });
 
-    // Fit bounding box into a fixed height so different models render consistently.
-    const box = new THREE.Box3().setFromObject(scene);
-    const size = box.getSize(new THREE.Vector3());
-    const center = box.getCenter(new THREE.Vector3());
-    const targetHeight = 1.9;
-    const scale = targetHeight / Math.max(size.y, 1e-3);
-    scene.scale.setScalar(scale);
-    scene.position.set(
-      -center.x * scale,
-      -center.y * scale + 0.05,
-      -center.z * scale
-    );
+    // Fit into a fixed height so different models render consistently. Centered
+    // vertically rather than resting its feet on the ground glow (the way the
+    // mini-character and CyberCity player do): this is a fixed portrait frame,
+    // so the body reads best balanced on the camera's look-at point.
+    fitModelToHeight(scene, { targetHeight: TARGET_HEIGHT, yOffset: VERTICAL_LIFT });
   }, [scene]);
 
   // --- Animation driving -------------------------------------------------

@@ -21,6 +21,7 @@ export * from './animationClips.js';
 export * from './coalesce.js';
 export * from './easing.js';
 export * from './hashString.js';
+export * from './modelFit.js';
 export * from './sleep.js';
 export * from './urlNormalize.js';
 export * from './platform.js';

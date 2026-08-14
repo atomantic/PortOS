@@ -1,0 +1,1 @@
+- Extracted the duplicated rigged-GLB fit-to-height math out of the Cyber Muse, mini-character, and CyberCity player avatars into a shared fitModelToHeight helper

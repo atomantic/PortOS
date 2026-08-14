@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { useCityPalette } from './CityPaletteContext';
 import { dampFactor, EYE_HEIGHT } from '../../utils/cityPlayerRig';
 import { withInPlaceClips, inPlaceClipName } from '../../utils/animationClips';
+import { fitModelToHeight } from '../../utils/modelFit';
 import useClonedGltf, { GltfPrimitive } from '../../hooks/useClonedGltf';
 // The root-motion clip set + treadmill suffix are model-level facts about the bundled
 // RobotExpressive GLB, so import the single source of truth rather than redeclaring it —
@@ -74,18 +75,7 @@ export default function PlayerAvatar({ rigRef }) {
       obj.castShadow = false;
       obj.receiveShadow = false;
     });
-    // Reset to the source transform before measuring so this is idempotent: under
-    // StrictMode the mount effect runs twice on the same scene, and measuring an
-    // already-fitted scene would compute scale≈1 and blow the model back up to source size.
-    scene.scale.setScalar(1);
-    scene.position.set(0, 0, 0);
-    scene.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(scene);
-    const size = box.getSize(new THREE.Vector3());
-    const center = box.getCenter(new THREE.Vector3());
-    const scale = TARGET_HEIGHT / Math.max(size.y, 1e-3);
-    scene.scale.setScalar(scale);
-    scene.position.set(-center.x * scale, -box.min.y * scale, -center.z * scale);
+    fitModelToHeight(scene, { targetHeight: TARGET_HEIGHT, feetOnGround: true });
   }, [scene]);
 
   // Precompute each rig.state → the concrete clip present on the loaded GLB (root-motion →

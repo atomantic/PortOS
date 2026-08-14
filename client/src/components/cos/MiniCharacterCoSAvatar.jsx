@@ -1,11 +1,11 @@
 import { useRef, useMemo, useEffect, useState, Suspense } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import * as THREE from 'three';
 import { AGENT_STATES } from './constants';
 import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
 import CoSBackgroundCamera from './CoSBackgroundCamera';
 import CoSCanvasGuard from './CoSCanvasGuard';
 import useClonedGltf, { GltfPrimitive } from '../../hooks/useClonedGltf';
+import { fitModelToHeight } from '../../utils/modelFit';
 
 // Kenney Mini Characters (CC0) ship 32 named clips. We map the CoS agent
 // states onto the most evocative ones. Each entry has a clip name plus a
@@ -26,6 +26,10 @@ const FALLBACK = { clip: 'idle', rot: 0.2, timeScale: 1.0 };
 // the whole avatar down in frame (~210px per world unit at this camera).
 const GROUND_Y = -1.4;
 
+// Kenney mini-characters are authored ~1.7 units tall already, but we normalize
+// so any dropped-in model fills the frame the same way.
+const TARGET_HEIGHT = 2.6;
+
 // Variants shipped in data.reference/avatar/ and seeded into data/avatar/ by
 // `npm run setup:data`. For these the "missing model" case means the seed
 // hasn't run yet — not that the user must supply their own GLB.
@@ -41,23 +45,11 @@ function MiniCharacter({ state, speaking, variant }) {
   const { scene, actions, names } = useClonedGltf(url);
 
   // Fit the character into a consistent height regardless of source scale.
-  // Kenney mini-characters are authored ~1.7 units tall already, but we
-  // normalize so any dropped-in model fills the frame the same way.
+  // Recenter horizontally; rest the feet on the shared ground plane (GROUND_Y)
+  // rather than centering vertically so the character stands in frame with its
+  // feet on the shadow disc.
   useEffect(() => {
-    const box = new THREE.Box3().setFromObject(scene);
-    const size = box.getSize(new THREE.Vector3());
-    const center = box.getCenter(new THREE.Vector3());
-    const targetHeight = 2.6;
-    const scale = targetHeight / Math.max(size.y, 1e-3);
-    scene.scale.setScalar(scale);
-    // Recenter horizontally; rest the feet on the shared ground plane
-    // (GROUND_Y) rather than centering vertically so the character stands
-    // in frame with its feet on the shadow disc.
-    scene.position.set(
-      -center.x * scale,
-      -box.min.y * scale + GROUND_Y,
-      -center.z * scale,
-    );
+    fitModelToHeight(scene, { targetHeight: TARGET_HEIGHT, feetOnGround: true, yOffset: GROUND_Y });
   }, [scene]);
 
   // Resolve the active clip for this state, falling back gracefully.

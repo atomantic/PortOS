@@ -36,6 +36,7 @@ grep -i "what you want to do" client/src/utils/README.md
 | `coalesce` | Trailing-edge coalescer: wraps a function so rapid calls collapse into one deferred invocation. |
 | `easing` | `smoothstep` interpolation easing curve. |
 | `hashString` | Deterministic string → 32-bit hash (stable colors, keys, seeds). |
+| `modelFit` | `fitModelToHeight(object, { targetHeight, feetOnGround, yOffset })` — normalize a loaded GLB to a fixed on-screen height and anchor it vertically, either by bounding-box center (portrait framing) or by its lowest point (a figure standing on a ground plane). Recenters x/z, guards a zero-height model against an infinite scale, skips a geometry-less object entirely, and resets to identity before measuring so a repeat call (StrictMode's double mount effect) converges instead of blowing the model back up. Call from an effect, never during render — a skinned mesh measures wrong before `useAnimations` binds the skeleton. |
 | `sleep` | `sleep(ms)` — promise-returning `setTimeout` for retry backoffs and race timeouts. Use instead of re-declaring a local `delay`. |
 | `urlNormalize` | `isUrl` detection, `normalizeUrl` (optional git/`requireDot` modes), `isHttpUrl` (explicit http(s) only — safe-href check), and `tiktokVideoId` / `tiktokEmbedSrc` (host-anchored TikTok video-id extraction + its Embed Player URL, so a reference embeds without loading TikTok's embed.js). |
 | `platform` | `isMac` detection and `modKey` (⌘/Ctrl) for keyboard-shortcut display. |
