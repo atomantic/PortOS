@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { join as joinPath } from 'path';
 
 // Separator-normalizer for path assertions. The code under test composes paths
 // with path.join/resolve, which emit '\\' on Windows, so a '/'-spelled literal
@@ -28,7 +29,8 @@ import {
   isVerdictFresh, partitionSuperseded, formatSupersededForPrompt, recordVerdictInstruction
 } from './supersededLedger.js';
 
-const PATH = '/repo/data/cos/branch-reconcile-verdicts.json';
+// join(), not a literal: the service composes this with path.join.
+const PATH = joinPath('/repo/data/cos', 'branch-reconcile-verdicts.json');
 
 const entry = (over = {}) => ({
   branch: 'cos/task-x/agent-dead',

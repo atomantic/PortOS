@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { join as joinPath } from 'path';
 import express from 'express';
 import { Readable } from 'stream';
 import { request } from '../lib/testHelper.js';
@@ -109,7 +110,7 @@ describe('avatar routes', () => {
       expect(res.status).toBe(200);
       expect(res.text).toBe('VARIANT-GLB');
       // The resolved path must stay inside the avatar dir with .glb appended.
-      expect(createReadStream).toHaveBeenCalledWith('/mock/data/avatar/mini-male-c.glb');
+      expect(createReadStream).toHaveBeenCalledWith(joinPath('/mock/data', 'avatar', 'mini-male-c.glb'));
     });
 
     it('rejects path-traversal / illegal variant names with 404', async () => {

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { join as joinPath } from 'path';
 
 // Mock dependencies before importing the module
 vi.mock('../lib/fileUtils.js', () => ({
@@ -91,7 +92,7 @@ describe('getCurrentVersion', () => {
     readJSONFile.mockResolvedValue({ version: '1.26.0' });
     const version = await getCurrentVersion();
     expect(version).toBe('1.26.0');
-    expect(readJSONFile).toHaveBeenCalledWith('/mock/package.json', { version: '0.0.0' });
+    expect(readJSONFile).toHaveBeenCalledWith(joinPath('/mock', 'package.json'), { version: '0.0.0' });
   });
 
   it('should fall back to 0.0.0 when package.json missing', async () => {

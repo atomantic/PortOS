@@ -174,7 +174,14 @@ export function collectServerSources(dir = SERVER_DIR) {
     const abs = join(dir, entry.name);
     if (entry.isDirectory()) return collectServerSources(abs);
     if (!entry.name.endsWith('.js') || entry.name.endsWith('.test.js')) return [];
-    return [relative(SERVER_DIR, abs)];
+    // POSIX separators always. These relative paths are IDENTIFIERS, not paths
+    // to open: guard suites compare them against literals like
+    // 'cos-runner/index.js' and list them in EXEMPT/DELEGATES tables. On
+    // Windows `relative()` yields 'cos-runner\index.js', so every one of those
+    // comparisons missed — the guards reported both "the scan no longer finds
+    // these" for live files AND "these spawn without pinning PWD" for exempt
+    // ones. readServerSource joins them back, and Windows accepts '/' there.
+    return [relative(SERVER_DIR, abs).split('\\').join('/')];
   });
 }
 
