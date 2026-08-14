@@ -19,6 +19,7 @@ vi.mock('../lib/gitCommitProbe.js', () => ({
 
 import { evaluateSuccessCriteria, resolveProgrammaticIoVerdict, withOutputHookTimeout } from './agentFinalization.js';
 import { committedDuringRun } from '../lib/gitCommitProbe.js';
+import { SKIP_LEARNING_VERDICT } from '../lib/learningVerdict.js';
 
 // The run window every commit-criterion assertion below is evaluated against
 // (#3637). A criterion-declaring call MUST pass one — without a window there is
@@ -213,6 +214,8 @@ describe('evaluateSuccessCriteria — programmatic-I/O criterion (#2727)', () =>
  * pinned without routing every case through evaluateSuccessCriteria.
  */
 describe('resolveProgrammaticIoVerdict (#2727)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
   it('rejects a run whose hook threw, and one whose output was unparseable', () => {
     expect(resolveProgrammaticIoVerdict({ success: true, hookResult: { ran: true, threw: true } })).toBe(false);
     expect(resolveProgrammaticIoVerdict({
@@ -258,16 +261,42 @@ describe('resolveProgrammaticIoVerdict (#2727)', () => {
     }
   });
 
-  it('declares no verdict when the hook aborted before it could look at the output', () => {
+  it('asks task-learning to SKIP a run whose hook aborted before it could look at the output (#4107)', () => {
     // `no-app` / `app-not-found` return before the payload is validated (and before
-    // the hook records anything). Nothing evaluated the agent's output, so this is
-    // the undeclared sentinel — NOT a success, which would bank a free win for the
-    // type every time an app is deleted mid-run.
+    // the hook records anything). Nothing evaluated the agent's output, so neither
+    // recordable answer is honest: `false` blames the model for a user deleting an
+    // app mid-run, and the undeclared `null` this used to return still recorded the
+    // run against its EXIT CODE — banking a free win for the type on every exit-0.
     for (const reason of ['no-app', 'app-not-found']) {
-      expect(resolveProgrammaticIoVerdict({
+      const verdict = resolveProgrammaticIoVerdict({
         success: true, hookResult: { ran: true, outcome: { action: 'no-op', reason } }
-      })).toBeNull();
+      });
+      expect(verdict).toBe(SKIP_LEARNING_VERDICT);
+      // Explicitly NOT collapsed into any of the three recordable verdicts.
+      expect(verdict).not.toBeNull();
+      expect(typeof verdict).not.toBe('boolean');
     }
+  });
+
+  it('still skips the run when the exit code says it FAILED', () => {
+    // The skip is about "nothing evaluated this run", not about the exit code —
+    // an aborted hook has no verdict either way, so a non-zero exit must not be
+    // banked as a failure for the type either.
+    expect(resolveProgrammaticIoVerdict({
+      success: false, hookResult: { ran: true, outcome: { action: 'no-op', reason: 'no-app' } }
+    })).toBe(SKIP_LEARNING_VERDICT);
+  });
+
+  it('propagates the skip verdict out through evaluateSuccessCriteria', async () => {
+    // finalizeAgent stamps whatever this returns onto `result.validationPassed`,
+    // which is the only channel the learning writer reads — so the sentinel has to
+    // survive the wrapper, not just the pure criterion.
+    const task = { id: 't10', taskType: 'layered-intelligence' };
+    expect(await evaluateSuccessCriteria({
+      task, workspacePath: '/w', success: true,
+      hookResult: { ran: true, outcome: { action: 'no-op', reason: 'app-not-found' } }
+    })).toBe(SKIP_LEARNING_VERDICT);
+    expect(committedDuringRun).not.toHaveBeenCalled();
   });
 });
 

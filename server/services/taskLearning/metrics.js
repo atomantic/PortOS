@@ -29,6 +29,7 @@ import {
 } from './store.js';
 import { deriveFailureSignalAvoidance, isNonRoutableLearnedTier } from './routing.js';
 import { recordCorrelationSample } from './correlationQuality.js';
+import { isSkipLearningVerdict, toValidationVerdict } from '../../lib/learningVerdict.js';
 
 // Cap on retained per-category signature samples — bounds file growth the same
 // way `recentUnknownErrors` does, while keeping enough recent context to spot
@@ -181,14 +182,25 @@ export function computeLatencySplit({ startedAt, completedAt, createdAt, duratio
  *     Stamped authoritatively at the completion chokepoint (finalizeAgent) onto
  *     `result.validationPassed`; surfaced here with an explicit null default so
  *     "absent" never masquerades as `false`.
+ *   skipRecording      — the "don't record this run" channel (issue #4107): true
+ *     when `result.validationPassed` carries `SKIP_LEARNING_VERDICT`, i.e. the
+ *     run was never evaluated AND banking it either way would lie. Its OWN
+ *     boolean field rather than a fourth state on `validationPassed`, so no
+ *     consumer has to re-derive it and none of the existing true/false/null
+ *     branches change meaning.
  */
 export function buildTaskTelemetryContext(agent, task) {
   const meta = agent?.metadata || {};
   const result = agent?.result || {};
   const success = result.success || false;
-  // Sentinel discipline: only an explicit boolean counts as a validation verdict;
-  // anything else (undefined/null/non-bool) is "no criterion declared" → null.
-  const validationPassed = typeof result.validationPassed === 'boolean' ? result.validationPassed : null;
+  // Sentinel discipline (#4107): the persisted verdict has FOUR values. The skip
+  // sentinel is read FIRST, off the raw field, because `toValidationVerdict`
+  // deliberately flattens it to `null` for every downstream consumer — reading it
+  // afterwards would be reading a value that no longer exists.
+  const skipRecording = isSkipLearningVerdict(result.validationPassed);
+  // Only an explicit boolean counts as a validation verdict; anything else
+  // (undefined/null/non-bool/the skip sentinel) is "no criterion declared" → null.
+  const validationPassed = toValidationVerdict(result.validationPassed);
   // Validation-authoritative outcome (issue #2344): a declared verdict overrides
   // the runner's exit code. Failure telemetry keys off THIS, not raw `success`,
   // so a commit-found run (success:false, validationPassed:true) is NOT harvested
@@ -241,6 +253,10 @@ export function buildTaskTelemetryContext(agent, task) {
     taskType,
     success,
     validationPassed,
+    // "Do not record this run" (#4107) — checked by recordTaskCompletion BEFORE
+    // it opens the learning store. When true, every other field here is
+    // informational only (the log line) and none of it is banked.
+    skipRecording,
     // Validation-authoritative learning outcome (#2344): the single source of
     // truth every aggregate/window/telemetry gate keys off, so they can't drift.
     outcomeSuccess,
@@ -371,9 +387,37 @@ export function buildLiExecutionVerdict({ liProposal, success, validationPassed,
 }
 
 /**
- * Record a completed task for learning
+ * Record a completed task for learning.
+ *
+ * Returns the persisted learning data, or `null` when the run was SKIPPED —
+ * `result.validationPassed` carrying `SKIP_LEARNING_VERDICT` means nothing ever
+ * evaluated it, so there is no honest outcome to bank (#4107). Callers ignore
+ * the return today; the null is the machine-readable form of "no write happened".
  */
 export async function recordTaskCompletion(agent, task) {
+  // Structured telemetry context (failure signature + execution context +
+  // latency breakdown) derived once and reused for the skip gate, the aggregates,
+  // and the log (issue #2329). Pure — no I/O — so it is built BEFORE the lock:
+  // an unrecordable run must not even open the learning store.
+  const telemetry = buildTaskTelemetryContext(agent, task);
+
+  // The "don't record this run" channel (#4107). A programmatic-I/O output hook
+  // that aborted before it ever looked at the agent's output (`no-app` /
+  // `app-not-found` — e.g. the app was deleted mid-run) leaves NO honest verdict:
+  // `false` would blame the model for a user's deletion and poison the #2329
+  // failure-signature window, and the exit-code fallback the undeclared `null`
+  // takes would bank a free success for the task type. Both aggregates and
+  // diagnostics are skipped — the run is not evidence of anything.
+  if (telemetry.skipRecording) {
+    emitLog('debug', `Skipped task completion: ${telemetry.taskType} (run never evaluated — nothing to learn from)`, {
+      taskType: telemetry.taskType,
+      modelTier: telemetry.executionContext.modelTier || 'unknown',
+      provider: telemetry.executionContext.provider,
+      success: telemetry.success
+    }, '[TaskLearning]');
+    return null;
+  }
+
   // Per-proposal-domain execution attribution (#2765) — captured inside the lock (it
   // needs this run's validation-authoritative outcome) but WRITTEN after it, so the LI
   // outcome store's I/O never runs under the learning lock and the generic learning
@@ -382,9 +426,6 @@ export async function recordTaskCompletion(agent, task) {
   const result = await withLock(async () => {
   const data = await loadLearningData();
 
-  // Structured telemetry context (failure signature + execution context +
-  // latency breakdown) derived once and reused for aggregate + log (issue #2329).
-  const telemetry = buildTaskTelemetryContext(agent, task);
   const taskType = telemetry.taskType;
   const modelTier = agent.metadata?.modelTier || 'unknown';
   const success = telemetry.success;

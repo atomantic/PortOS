@@ -34,6 +34,7 @@ import { completeExecution, errorExecution } from './toolStateMachine.js';
 import { resolveFailedTaskUpdate, resolveTypeFailureSignal } from './agentErrorAnalysis.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { committedDuringRun } from '../lib/gitCommitProbe.js';
+import { SKIP_LEARNING_VERDICT } from '../lib/learningVerdict.js';
 import { detectPrimaryCheckoutDrift, PRIMARY_CHECKOUT_MUTATED_ESCALATION, PRIMARY_CHECKOUT_MUTATED_REASON } from '../lib/primaryCheckoutGuard.js';
 import { canRunTaskOutputHookWithoutPayload, getTaskOutputPayloadPredicate, isProgrammaticIoTaskType, resolveTaskHookType, declaresNoCommitCriterion } from './taskTypeHooks.js';
 import { processAgentCompletion } from './agentCompletion.js';
@@ -92,6 +93,13 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
  * those task types can be judged by their real deliverable; `success` is the
  * runner's exit-code verdict that hook result is weighed against. Both are
  * absent/null for every other task shape.
+ *
+ * That branch is also the only one that can return `SKIP_LEARNING_VERDICT` — the
+ * third answer, meaning "nothing evaluated this run, so don't record it at all"
+ * (#4107). It rides `result.validationPassed` like the boolean/null verdicts and
+ * is consumed by `buildTaskTelemetryContext`; see `lib/learningVerdict.js`.
+ *
+ * @returns {Promise<boolean|null|'skip-learning'>}
  */
 export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null }) {
   if (terminatedByUser) return null;
@@ -167,15 +175,20 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
  * verdict and the ledger can never drift apart on what counts as a bad run, and a
  * new benign reason only has to be taught to one function.
  *
- * Sentinel discipline throughout — three distinct answers, never collapsed:
+ * Sentinel discipline throughout — FOUR distinct answers, never collapsed:
  *   - `false` — the hook ran and REJECTED the output (threw, or `unparseable-response`).
  *   - `null`  — NOTHING evaluated the output (no hook ran, it timed out, or it
  *     returned no structured outcome), so no criterion was declared and
  *     task-learning falls back to the exit code exactly as before. "Not evaluated"
  *     must never become "accepted".
  *   - `true`  — the hook ran and accepted the output.
+ *   - `SKIP_LEARNING_VERDICT` — the hook aborted BEFORE it could look at the
+ *     output at all (`no-app` / `app-not-found`), so there is nothing to learn
+ *     from and the run must not be recorded (#4107). Distinct from `null`,
+ *     which still records the run against its exit code.
  *
- * @returns {boolean|null} true = accepted, false = rejected, null = undeclared
+ * @returns {boolean|null|'skip-learning'} true = accepted, false = rejected,
+ *   null = undeclared, SKIP_LEARNING_VERDICT = do not record this run
  */
 export function resolveProgrammaticIoVerdict({ success, hookResult }) {
   if (!hookResult?.ran) return null;
@@ -189,10 +202,14 @@ export function resolveProgrammaticIoVerdict({ success, hookResult }) {
   // output, so declare no verdict rather than defaulting to "accepted".
   if (!hookResult.outcome || typeof hookResult.outcome !== 'object') return null;
   // Ran, but bailed out BEFORE it ever looked at the output (its app was deleted
-  // mid-run, or the task carries no app). Nothing evaluated the agent's work — and
-  // these paths don't even record a run — so this is "undeclared", not a free
-  // success for the type.
-  if (HOOK_ABORTED_BEFORE_EVALUATION.has(hookResult.outcome.reason)) return null;
+  // mid-run, or the task carries no app). Nothing evaluated the agent's work and
+  // the hook itself recorded nothing, so there is no honest verdict to bank:
+  // `false` would blame the model for a user deleting an app mid-run (and poison
+  // the #2329 failure-signature window with a non-failure), and the `null`
+  // sentinel this used to return still recorded the run against its EXIT CODE —
+  // an exit-0 run banked a free success for the task type (#4107). Skip the
+  // learning write entirely instead.
+  if (HOOK_ABORTED_BEFORE_EVALUATION.has(hookResult.outcome.reason)) return SKIP_LEARNING_VERDICT;
   return resolveTypeFailureSignal({ success, hookResult }).record === 'success';
 }
 

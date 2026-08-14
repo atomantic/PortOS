@@ -12,6 +12,7 @@ vi.mock('./store.js', async (importActual) => {
 
 import { buildTaskTelemetryContext, computeLatencySplit, recordFailureSignature, getWindowedStats, recordEnvironmentalFailure, shouldDivertToEnvironmental, ENVIRONMENTAL_ERROR_CATEGORIES } from './metrics.js';
 import { loadLearningData } from './store.js';
+import { SKIP_LEARNING_VERDICT } from '../../lib/learningVerdict.js';
 
 // buildTaskTelemetryContext + recordFailureSignature are the pure telemetry
 // enrichment core added for issue #2329. They take no I/O, so every branch is
@@ -222,6 +223,37 @@ describe('buildTaskTelemetryContext', () => {
     // A non-boolean (e.g. undefined-shaped) validation value never leaks through.
     const bogus = buildTaskTelemetryContext(
       { ...baseAgent, result: { success: false, duration: 1, validationPassed: 'nope' } }, {});
+    expect(bogus.validationPassed).toBeNull();
+  });
+
+  it('raises skipRecording for the skip sentinel WITHOUT letting it leak into validationPassed (#4107)', () => {
+    const skipped = buildTaskTelemetryContext(
+      { ...baseAgent, result: { success: true, duration: 1000, validationPassed: SKIP_LEARNING_VERDICT } }, {});
+    expect(skipped.skipRecording).toBe(true);
+    // The string is narrowed to the null sentinel for every downstream consumer —
+    // it must never reach one as a raw string, nor become a `false` verdict.
+    expect(skipped.validationPassed).toBeNull();
+  });
+
+  it('leaves skipRecording false for all three RECORDABLE verdicts (#4107)', () => {
+    // The regression guard for the skip channel: undeclared (null) and a genuine
+    // criterion miss (false) must keep flowing to the aggregates exactly as before.
+    const undeclared = buildTaskTelemetryContext(baseAgent, { taskType: 'user' });
+    expect(undeclared.skipRecording).toBe(false);
+    expect(undeclared.outcomeSuccess).toBe(true); // exit-code fallback, unchanged
+
+    for (const verdict of [true, false]) {
+      const ctx = buildTaskTelemetryContext(
+        { ...baseAgent, result: { success: true, duration: 1, validationPassed: verdict } }, {});
+      expect(ctx.skipRecording).toBe(false);
+      expect(ctx.validationPassed).toBe(verdict);
+    }
+
+    // An unrecognized non-boolean (a malformed value, or a sentinel from a newer
+    // peer) is undeclared-and-RECORDED, not silently skipped.
+    const bogus = buildTaskTelemetryContext(
+      { ...baseAgent, result: { success: true, duration: 1, validationPassed: 'nope' } }, {});
+    expect(bogus.skipRecording).toBe(false);
     expect(bogus.validationPassed).toBeNull();
   });
 

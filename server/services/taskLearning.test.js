@@ -35,6 +35,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
 
 import { readFile } from 'fs/promises';
 import { atomicWrite } from '../lib/fileUtils.js';
+import { SKIP_LEARNING_VERDICT } from '../lib/learningVerdict.js';
 import { resetTaskTypeLearning, getSkippedTaskTypes, recordTaskCompletion, getRoutingAccuracy, suggestModelTier, recalculateModelTierMetrics, clearLearningCache, getTaskTypeConfidence, getConfidenceLevels, dismissRecommendation, restoreRecommendation, getDismissedRecommendations, clearDismissedRecommendations, getLearningInsights } from './taskLearning.js';
 
 const makeLearningData = (overrides = {}) => ({
@@ -506,6 +507,85 @@ describe('TaskLearning - recordTaskCompletion routing accuracy', () => {
     const routing = savedData.routingAccuracy['internal-task']['medium'];
     expect(routing.succeeded).toBe(1);
     expect(routing.failed).toBe(0);
+  });
+});
+
+/**
+ * The "don't record this run" channel (#4107). A programmatic-I/O output hook
+ * that aborted BEFORE evaluating the agent's output (`no-app` / `app-not-found`,
+ * e.g. the app was deleted mid-run) stamps SKIP_LEARNING_VERDICT rather than the
+ * undeclared `null` — which used to fall back to the exit code and bank a free
+ * success for the task type.
+ */
+describe('TaskLearning - skip-recording verdict (#4107)', () => {
+  let savedData;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearLearningCache();
+    savedData = null;
+    atomicWrite.mockImplementation(async (_path, data) => {
+      savedData = data;
+    });
+    readFile.mockResolvedValue(JSON.stringify(makeLearningData()));
+  });
+
+  const skipAgent = () => ({
+    metadata: { modelTier: 'heavy', taskDescription: 'Study the app' },
+    result: { success: true, validationPassed: SKIP_LEARNING_VERDICT, duration: 60000 }
+  });
+  const task = { description: 'Study the app', taskType: 'internal', metadata: {} };
+
+  it('writes NOTHING at all for a skipped run', async () => {
+    const returned = await recordTaskCompletion(skipAgent(), task);
+
+    // The whole point: no persist, so no aggregate, window, or total moves.
+    expect(atomicWrite).not.toHaveBeenCalled();
+    expect(savedData).toBeNull();
+    expect(returned).toBeNull();
+  });
+
+  it('does not bank the exit code as a success for the task type', async () => {
+    // The exact overcount #4107 fixes: exit 0 + a hook that never looked at the
+    // output used to come out the other side as a recorded success.
+    await recordTaskCompletion(skipAgent(), task);
+    expect(savedData).toBeNull();
+
+    // ...while an otherwise-identical run with the UNDECLARED sentinel still
+    // records, so the skip can't have swallowed the ordinary null path.
+    const undeclared = { ...skipAgent(), result: { success: true, validationPassed: null, duration: 60000 } };
+    await recordTaskCompletion(undeclared, task);
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+    expect(savedData.byTaskType['internal-task'].succeeded).toBe(1);
+    expect(savedData.byTaskType['internal-task'].failed).toBe(0);
+  });
+
+  it('does not blame the model either — a failing exit is skipped the same way', async () => {
+    // `false` would have poisoned the #2329 failure-signature window with a
+    // non-failure, so an aborted hook must not record a failure either.
+    const failed = {
+      ...skipAgent(),
+      result: {
+        success: false,
+        validationPassed: SKIP_LEARNING_VERDICT,
+        duration: 60000,
+        errorAnalysis: { category: 'unknown', message: 'boom', origin: 'output-scan' }
+      }
+    };
+    await recordTaskCompletion(failed, task);
+
+    expect(atomicWrite).not.toHaveBeenCalled();
+    expect(savedData).toBeNull();
+  });
+
+  it('still records a genuine criterion MISS as a failure (#2344 unchanged)', async () => {
+    const missed = { ...skipAgent(), result: { success: true, validationPassed: false, duration: 60000 } };
+    await recordTaskCompletion(missed, task);
+
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+    expect(savedData.byTaskType['internal-task'].succeeded).toBe(0);
+    expect(savedData.byTaskType['internal-task'].failed).toBe(1);
+    expect(savedData.byModelTier['heavy'].failed).toBe(1);
   });
 });
 
