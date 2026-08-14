@@ -82,9 +82,22 @@ vi.mock('./fileUtils.js', async () => {
     // Keys are normalized on both sides so a relative or unnormalized path
     // from the SUT still hits the seeded entry rather than silently falling
     // through to a real (missing-file) read.
+    //
+    // The UNSEEDED reads under the runs dir have to be served from memory too,
+    // for the same reason. Those are the polls that fire before a test seeds
+    // its file; letting them hit the real threadpool means one can still be
+    // in flight when the seed lands, and its late `null` resets the
+    // size-stability baseline that the post-seed poll just established — so
+    // the salvage path sees an unsettled file and finishes as a plain
+    // fallback. That reproduces about one run in three. Everything outside the
+    // runs dir still falls through: the resolveTuiResponseText suite below
+    // drives real files in a temp dir of its own.
     tryReadFile: vi.fn(async (filePath, ...rest) => {
       const key = resolvePath(filePath);
-      return responseFiles.has(key) ? responseFiles.get(key) : actual.tryReadFile(filePath, ...rest);
+      if (responseFiles.has(key)) return responseFiles.get(key);
+      const runsDir = runsTmpDirRef.current;
+      if (runsDir && key.startsWith(resolvePath(runsDir))) return null;
+      return actual.tryReadFile(filePath, ...rest);
     }),
   };
 });
