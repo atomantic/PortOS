@@ -13,7 +13,7 @@ import { notificationEvents, NOTIFICATION_TYPES, getNotifications } from './noti
 import { getDomainAutonomyMode } from './cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 import { approveMemory, rejectMemory, peekMemory } from './memoryBackend.js';
-import { ensureDir, PATHS, readJSONFile, formatDuration, atomicWrite } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, readJSONFileStrict, formatDuration, atomicWrite } from '../lib/fileUtils.js';
 import { getActiveAgents } from './agentManagement.js';
 import { getGoals } from './identity.js';
 
@@ -523,6 +523,10 @@ async function handleCheckinCommand(msg) {
 
   // Pick goal with oldest check-in or no check-ins
   const checkins = await loadCheckins();
+  if (!checkins) {
+    await bot.sendMessage(chatId, "⚠️ Couldn't read your check-in history, so I can't pick the most overdue goal. Try again once it's readable.", { parse_mode: 'HTML' });
+    return;
+  }
   let targetGoal = null;
   let oldestCheckinTime = Infinity;
 
@@ -557,6 +561,13 @@ async function handleCheckinResponse(msg) {
   if (!pending) return;
 
   const checkins = await loadCheckins();
+  // Bail rather than write: pushing onto the empty default would atomicWrite a
+  // one-entry log over the whole history. The pending check-in stays pending so
+  // the answer can be re-sent once the file is readable again.
+  if (!checkins) {
+    await bot.sendMessage(chatId, "⚠️ Couldn't read your check-in history, so I didn't record that. Nothing was overwritten — send it again once it's readable.", { parse_mode: 'HTML' });
+    return;
+  }
   checkins.checkins.push({
     id: uuidv4(),
     question: pending.question,
@@ -591,8 +602,11 @@ export async function sendCheckin(goalId) {
   if (goalId) {
     targetGoal = activeGoals.find(g => g.id === goalId);
   } else {
-    // Pick most stale goal
+    // Pick most stale goal. An unreadable log can't rank staleness, and asking
+    // about an arbitrary goal would then record an answer against it — skip the
+    // send instead (the scheduled job simply retries next window).
     const checkins = await loadCheckins();
+    if (!checkins) return;
     let oldestTime = Infinity;
     for (const goal of activeGoals) {
       const last = checkins.checkins
@@ -617,8 +631,29 @@ export async function sendCheckin(goalId) {
 
 // === Check-in persistence ===
 
+/**
+ * Load the check-in log, or `null` when the file is present but unreadable.
+ *
+ * Strict (#4115) with a null sentinel rather than a throw: every caller runs
+ * inside a `bot.on(...)` handler that node-telegram-bot-api never awaits, so a
+ * rejection would leak as an unhandled rejection instead of reaching a caller.
+ * Callers must bail on `null` — `handleCheckinResponse` is a
+ * `load → push → atomicWrite`, so treating an unreadable file as "no check-ins
+ * yet" would write a one-entry log over the user's entire check-in history.
+ *
+ * A file that reads cleanly but has no `checkins` array is untrustworthy for the
+ * same reason and gets the same `null`: we can't interpret it, so we must not
+ * replace it. Only ENOENT yields the real empty log (the default below).
+ *
+ * @returns {Promise<{checkins: Array}|null>} the log, or null if untrustworthy
+ */
 async function loadCheckins() {
-  return readJSONFile(CHECKINS_FILE, { checkins: [] });
+  const { ok, value } = await readJSONFileStrict(CHECKINS_FILE, { checkins: [] });
+  if (!ok || !Array.isArray(value?.checkins)) {
+    console.error(`📱 Telegram: check-in log at ${CHECKINS_FILE} is unreadable — refusing to overwrite it`);
+    return null;
+  }
+  return value;
 }
 
 async function saveCheckins(data) {

@@ -1074,6 +1074,65 @@ describe('cancelJob running-Codex branch', () => {
   });
 });
 
+/**
+ * Strict-read regression (#4115).
+ *
+ * `initMediaJobQueue` ends with `await persist()`, and persist() writes the
+ * FULL in-memory snapshot. While the boot read swallowed unreadable files, a
+ * corrupt media-jobs.json booted an empty queue and that first persist
+ * atomicWrote `{"jobs":[]}` over the real snapshot — losing the archive and
+ * orphaning every job the reconcile would have reattached or failed.
+ *
+ * Init is an AWAITED step of runPostRouteSequence, where a rejection is fatal
+ * (process.exit), so the fix cannot simply throw: it boots empty, reports, and
+ * latches persistence off so the file survives for recovery.
+ *
+ * Corrupt JSON is the portable way to produce "present but unreadable" — it
+ * fails the parse identically on every platform and needs no privileges.
+ */
+describe('mediaJobQueue unreadable snapshot (#4115)', () => {
+  const CORRUPT = '{"jobs": [{"id": "00000000-0000-4000-8000-0000000000aa",';
+
+  it('boots without throwing, so an unreadable snapshot cannot kill the server', async () => {
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), CORRUPT);
+    await importFresh();
+    await expect(mediaJobQueue.initMediaJobQueue()).resolves.toBeUndefined();
+    expect(mediaJobQueue.listJobs()).toEqual([]);
+  });
+
+  it('does NOT overwrite the unreadable file — at boot or on a later enqueue', async () => {
+    const file = join(tempDataDir, 'media-jobs.json');
+    writeFileSync(file, CORRUPT);
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+
+    // The boot persist is the first chance to clobber it.
+    expect(readFileSync(file, 'utf8'), 'boot persist must be suppressed').toBe(CORRUPT);
+
+    // …and so is every write the running queue would normally make.
+    stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
+    mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'after a bad boot' } });
+    await flush();
+    expect(
+      readFileSync(file, 'utf8'),
+      'persistence stays latched off for the process lifetime'
+    ).toBe(CORRUPT);
+  });
+
+  it('a readable snapshot still persists normally (the latch is not sticky across boots)', async () => {
+    const file = join(tempDataDir, 'media-jobs.json');
+    writeFileSync(file, JSON.stringify({ jobs: [] }));
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+
+    stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
+    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'good boot' } });
+    await flush();
+    const written = JSON.parse(readFileSync(file, 'utf8'));
+    expect(written.jobs.map((j) => j.id)).toContain(job.jobId);
+  });
+});
+
 async function waitFor(predicate, { timeoutMs = 3000, intervalMs = 30 } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {

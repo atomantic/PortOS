@@ -1,4 +1,23 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+
+// Allocate the temp dir lazily on first PATHS read. `vi.mock` is hoisted above
+// this file's static imports, so a `const` initialized here would still be in
+// its TDZ when store.js resolves LEARNING_FILE at module load. `var` + a
+// function declaration both hoist without a TDZ, so the factory can call it.
+var tempRoot; // eslint-disable-line no-var
+function getTempRoot() {
+  if (!tempRoot) tempRoot = mkdtempSync(join(tmpdir(), 'task-learning-test-'));
+  return tempRoot;
+}
+
+// Only the strict-read block at the end of this file touches disk; every other
+// test here is pure. Re-rooting PATHS keeps it off the real data/cos tree.
+vi.mock('../../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => getTempRoot() }));
 import {
   extractTaskType,
   calculateDurationETA,
@@ -17,8 +36,15 @@ import {
   isSkipCandidate,
   EFFECTIVE_RATE_MIN_WINDOW_SAMPLES,
   RECENT_OUTCOMES_CAP,
-  DEFAULT_WINDOW_MAX_COUNT
+  DEFAULT_WINDOW_MAX_COUNT,
+  loadLearningData,
+  saveLearningData,
+  clearLearningCache,
+  loadDismissedRecommendations,
+  saveDismissedRecommendations
 } from './store.js';
+
+afterAll(() => { if (tempRoot) rmSync(tempRoot, { recursive: true, force: true }); });
 
 // These two helpers are the pure foundation every other taskLearning submodule
 // builds on (duration math + task-type classification). They take no I/O, so we
@@ -597,5 +623,77 @@ describe('store.isSkipCandidate (issue #2617)', () => {
     expect(isSkipCandidate({ completed: 4, successRate: 0 })).toBe(false);
     expect(isSkipCandidate(undefined)).toBe(false);
     expect(isSkipCandidate(null)).toBe(false);
+  });
+});
+
+/**
+ * Strict-read regression (#4115).
+ *
+ * Both file-backed loaders here are the base of a read-modify-write:
+ *
+ *   - `loadLearningData → mutate → saveLearningData` is how every routing
+ *     outcome, duration sample and failure signature is recorded. While the
+ *     read swallowed unreadable files, a corrupt learning.json handed the
+ *     caller a fresh DEFAULT_LEARNING_DATA and the next save atomicWrote it
+ *     over the entire learning history.
+ *   - `dismissRecommendation` / `restoreRecommendation` load the dismissed map,
+ *     change one key, and write the whole map back — so an unreadable file
+ *     silently un-dismissed every recommendation on the next dismissal.
+ *
+ * Corrupt JSON is the portable way to produce "present but unreadable": it
+ * fails the parse identically on every platform and needs no privileges.
+ */
+describe('taskLearning store strict reads (#4115)', () => {
+  const CORRUPT = '{"byTaskType": {"docs": {"completed": 12';
+  const cosDir = () => join(getTempRoot(), 'cos');
+  const learningFile = () => join(cosDir(), 'learning.json');
+  const dismissedFile = () => join(cosDir(), 'dismissed-recommendations.json');
+
+  beforeEach(() => {
+    rmSync(getTempRoot(), { recursive: true, force: true });
+    mkdirSync(cosDir(), { recursive: true });
+    clearLearningCache();
+  });
+
+  it('loadLearningData rejects instead of handing back a blank history', async () => {
+    writeFileSync(learningFile(), CORRUPT);
+    await expect(loadLearningData()).rejects.toThrow(/Unreadable JSON file/);
+  });
+
+  it('a failed load cannot be followed by a save that erases the history', async () => {
+    writeFileSync(learningFile(), CORRUPT);
+    await expect(loadLearningData()).rejects.toThrow(/Unreadable JSON file/);
+    expect(
+      readFileSync(learningFile(), 'utf8'),
+      'the caller never got a default to write back, so the file is untouched'
+    ).toBe(CORRUPT);
+  });
+
+  it('does not cache a fabricated default for the next reader in the TTL window', async () => {
+    writeFileSync(learningFile(), CORRUPT);
+    await expect(loadLearningData()).rejects.toThrow();
+    await expect(loadLearningData()).rejects.toThrow(/Unreadable JSON file/);
+  });
+
+  it('loadDismissedRecommendations rejects instead of un-dismissing everything', async () => {
+    writeFileSync(dismissedFile(), CORRUPT);
+    await expect(loadDismissedRecommendations()).rejects.toThrow(/Unreadable JSON file/);
+    expect(readFileSync(dismissedFile(), 'utf8')).toBe(CORRUPT);
+  });
+
+  it('still treats genuinely absent files as real first-run empties', async () => {
+    const data = await loadLearningData();
+    expect(data.byTaskType, 'ENOENT is the one errno that proves absence').toEqual({});
+    clearLearningCache();
+    expect(await loadDismissedRecommendations()).toEqual({});
+  });
+
+  it('round-trips a readable file (the strict flag does not break the happy path)', async () => {
+    await saveLearningData({ byTaskType: { docs: { completed: 3 } } });
+    clearLearningCache();
+    expect((await loadLearningData()).byTaskType.docs.completed).toBe(3);
+
+    await saveDismissedRecommendations({ 'rec-1': { dismissedAt: '2026-08-14T00:00:00.000Z' } });
+    expect(await loadDismissedRecommendations()).toHaveProperty('rec-1');
   });
 });

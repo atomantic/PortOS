@@ -1,1 +1,2 @@
 - An unreadable data file no longer reports as an empty one — usage totals, app/instance registries, notification and review counts, memory stats, decision-log stats, quota-burn dispatch counts, domain budgets and video history now refuse to publish a fake zero or overwrite themselves with it
+- Finished the unreadable-data-file audit: goal scorecard/check-in, brain settings, CoS task learning, app activity, Telegram check-ins and the media job queue no longer read a corrupt file as empty — and no longer overwrite it with that empty default

@@ -206,7 +206,11 @@ export async function loadMeta() {
 
   await ensureBrainDir();
 
-  const loaded = await readJSONFile(FILES.meta, null);
+  // Strict (#4115): `updateMeta` is `loadMeta → spread updates → saveMeta`, so a
+  // swallowed unreadable meta.json writes DEFAULT_META over every brain setting
+  // on the next update — and the result is cached for CACHE_TTL_MS, so the fake
+  // default outlives the read that produced it.
+  const loaded = await readJSONFile(FILES.meta, null, { strict: true });
   cache.data = loaded ? { ...DEFAULT_META, ...loaded } : { ...DEFAULT_META };
   cache.timestamp = Date.now();
   return cache.data;

@@ -320,7 +320,12 @@ export async function loadLearningData() {
 
   await ensureDir(DATA_DIR);
 
-  const data = await readJSONFile(LEARNING_FILE, structuredClone(DEFAULT_LEARNING_DATA));
+  // Strict (#4115): every mutation is `loadLearningData → mutate →
+  // saveLearningData`, so a swallowed unreadable file hands the caller a fresh
+  // DEFAULT_LEARNING_DATA and the next save atomicWrites it over the whole
+  // routing/outcome history. It also feeds the CoS learning counts. Throwing
+  // skips the cycle and leaves the file intact.
+  const data = await readJSONFile(LEARNING_FILE, structuredClone(DEFAULT_LEARNING_DATA), { strict: true });
   _learningCache = structuredClone(data);
   _learningCacheTime = Date.now();
   return data;
@@ -649,7 +654,10 @@ export function extractTaskType(task) {
  */
 export async function loadDismissedRecommendations() {
   await ensureDir(DATA_DIR);
-  return await readJSONFile(DISMISSED_RECS_FILE, {});
+  // Strict (#4115): `dismissRecommendation` / `restoreRecommendation` load this
+  // map, mutate one key, and write the whole thing back — an unreadable file
+  // would silently un-dismiss every recommendation on the next dismissal.
+  return await readJSONFile(DISMISSED_RECS_FILE, {}, { strict: true });
 }
 
 export async function saveDismissedRecommendations(map) {

@@ -13,6 +13,10 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   // the absent-file shape, matching `tryReadFile`'s null above.
   tryReadFileStrict: vi.fn().mockResolvedValue({ ok: true, value: null }),
   readJSONFile: vi.fn(),
+  // Strict twin of readJSONFile (#4115). Same exhaustive-factory constraint as
+  // tryReadFileStrict above. Left un-stubbed by default (undefined value) to
+  // match readJSONFile's bare vi.fn(); tests that need a value set it per case.
+  readJSONFileStrict: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
   ensureDir: vi.fn().mockResolvedValue(),
   atomicWrite: vi.fn().mockResolvedValue(),
   safeJSONParse: (raw, fallback) => { try { return JSON.parse(raw) } catch { return fallback } },

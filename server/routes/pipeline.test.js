@@ -23,6 +23,11 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   safeJSONParse: vi.fn((s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } }),
   atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
   readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
+  // Strict twin of readJSONFile (#4115). Same exhaustive-factory constraint as
+  // tryReadFileStrict above: several services in this route graph now read
+  // through it, so an omitted export is a hard throw. `ok: true` mirrors the
+  // swallowing reader — this fake store never fails a read.
+  readJSONFileStrict: vi.fn(async (path, fallback) => ({ ok: true, value: fileStore.has(path) ? fileStore.get(path) : fallback })),
 }));
 
 // Both mocks needed: vitest.setup.js's global `instances.js` mock uses importOriginal, which leaves the per-file `peerSync.js` mock unable to suppress the createSeries dynamic-import hoist error alone.

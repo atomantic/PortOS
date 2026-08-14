@@ -381,7 +381,10 @@ export function formatScorecardDigestLine(scorecard) {
 
 export async function getSettings() {
   await ensureDir(INSIGHTS_DIR);
-  const loaded = await readJSONFile(SETTINGS_FILE, null);
+  // Strict (#4115): `updateSettings` is `getSettings → merge → atomicWrite`, so a
+  // swallowed unreadable file writes DEFAULT_SETTINGS over the user's configured
+  // provider/model/week-start on the next settings PATCH.
+  const loaded = await readJSONFile(SETTINGS_FILE, null, { strict: true });
   return loaded ? { ...DEFAULT_SETTINGS, ...loaded } : { ...DEFAULT_SETTINGS };
 }
 
@@ -399,7 +402,10 @@ export async function updateSettings(partial = {}) {
 // User-editable per-goal mapping overrides. Shape: { [goalId]: { keywords?,
 // personIds?, subcalendarIds?, enabled? } }. Stored locally, never federated.
 export async function getRuleOverrides() {
-  const loaded = await readJSONFile(RULES_FILE, null);
+  // Strict (#4115): these overrides are hand-authored and never regenerated. An
+  // unreadable file would present the rules editor with an empty override set,
+  // and the very next save from that editor would persist the emptiness.
+  const loaded = await readJSONFile(RULES_FILE, null, { strict: true });
   return loaded && typeof loaded === 'object' ? loaded : {};
 }
 
@@ -411,8 +417,12 @@ export async function saveRuleOverrides(overrides = {}) {
 }
 
 // Load active goals from digital-twin. Returns [] when the file is missing.
+// Strict (#4115): goals are what every event is scored AGAINST. An unreadable
+// goals.json yields zero mapping rules, so every hour buckets as unaligned and
+// `computeWeeklyScorecard` persists — and splices into the Brain daily log — a
+// confident "0% goal-aligned" that is a read failure, not a real week.
 async function loadGoals() {
-  const data = await readJSONFile(GOALS_FILE, null);
+  const data = await readJSONFile(GOALS_FILE, null, { strict: true });
   return Array.isArray(data?.goals) ? data.goals : [];
 }
 
@@ -426,7 +436,10 @@ export async function getEffectiveRules() {
 // ─── Read path (disk-only) ───────────────────────────────────────────────────
 
 export async function getScorecard() {
-  const cached = await readJSONFile(SCORECARD_FILE, null);
+  // Strict (#4115): `not_computed` is the UI's "click Compute" state. Reporting
+  // it for a present-but-corrupt artifact tells the user their scorecard was
+  // never built, when the truth is that we could not read it.
+  const cached = await readJSONFile(SCORECARD_FILE, null, { strict: true });
   if (!cached) return { available: false, reason: 'not_computed' };
   return { ...cached, available: true };
 }
@@ -541,7 +554,11 @@ function buildNarrativePrompt(scorecard) {
  * @param {string} [model]
  */
 export async function refreshScorecardNarrative(providerId, model) {
-  const scorecard = await readJSONFile(SCORECARD_FILE, null);
+  // Strict (#4115): this is the base of a read-modify-write — the narrative is
+  // spliced onto the artifact and the whole thing is written back. A swallowed
+  // read cannot reach the write (the `!scorecard` guard returns first), but it
+  // would report `not_computed` for a corrupt artifact and invite a recompute.
+  const scorecard = await readJSONFile(SCORECARD_FILE, null, { strict: true });
   if (!scorecard) return { available: false, reason: 'not_computed' };
   if (!scorecard.totals || scorecard.totals.totalSeconds === 0) {
     return { available: false, reason: 'no_activity' };

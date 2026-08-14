@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -150,5 +150,81 @@ describe('releaseAppReviewMarker (issue #989)', () => {
   it('is a no-op when appId is falsy', async () => {
     const result = await appActivity.releaseAppReviewMarker(undefined);
     expect(result).toBeNull();
+  });
+});
+
+/**
+ * Strict-read regression (#4115).
+ *
+ * Every writer in appActivity.js is `loadAppActivity → mutate →
+ * saveAppActivity`. While the loader swallowed unreadable files, a corrupt
+ * app-activity.json read as DEFAULT_ACTIVITY, so the very next marker write
+ * atomicWrote a one-app file over the whole fleet's cooldowns, agent bindings
+ * and lifetime review stats — and, because every app then read as off-cooldown,
+ * the CoS immediately re-reviewed all of them.
+ *
+ * Corrupt JSON (rather than a chmod/EACCES setup) is the portable way to
+ * produce the present-but-unreadable state: it fails the parse identically on
+ * every platform and needs no privileges.
+ */
+describe('appActivity strict reads (#4115)', () => {
+  const ACTIVITY_FILE = join(TEST_DATA_ROOT, 'cos', 'app-activity.json');
+  const CORRUPT = '{"apps": {"app-1": {"cooldownUntil"';
+
+  beforeEach(() => {
+    rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
+    mkdirSync(join(TEST_DATA_ROOT, 'cos'), { recursive: true });
+    writeFileSync(ACTIVITY_FILE, CORRUPT);
+  });
+
+  it('loadAppActivity rejects instead of reporting an empty fleet', async () => {
+    await expect(appActivity.loadAppActivity()).rejects.toThrow(/Unreadable JSON file/);
+  });
+
+  it('a marker write leaves the unreadable file byte-for-byte intact', async () => {
+    await expect(appActivity.markAppReviewCooldown('app-1')).rejects.toThrow(/Unreadable JSON file/);
+    expect(
+      readFileSync(ACTIVITY_FILE, 'utf8'),
+      'the corrupt file must survive — overwriting it is the data loss this fixes'
+    ).toBe(CORRUPT);
+  });
+
+  it('isAppOnCooldown rejects rather than reporting every app as free to re-review', async () => {
+    await expect(appActivity.isAppOnCooldown('app-1', 60_000)).rejects.toThrow(/Unreadable JSON file/);
+  });
+
+  it('markIdleReviewStarted does not reset the lifetime totalReviews counter', async () => {
+    await expect(appActivity.markIdleReviewStarted()).rejects.toThrow(/Unreadable JSON file/);
+    expect(readFileSync(ACTIVITY_FILE, 'utf8')).toBe(CORRUPT);
+  });
+
+  it('still treats a genuinely absent file as a real empty fleet', async () => {
+    rmSync(ACTIVITY_FILE, { force: true });
+    const activity = await appActivity.loadAppActivity();
+    expect(activity.apps, 'ENOENT is the one errno that proves absence').toEqual({});
+    expect(activity.global.totalReviews).toBe(0);
+  });
+});
+
+/**
+ * The default value must not become shared mutable state (#4115).
+ *
+ * `loadAppActivity` used to return `{ ...DEFAULT_ACTIVITY }` — a shallow copy
+ * whose `apps` / `global` were the module-level objects themselves, so the
+ * first write against an absent file mutated the default in place and leaked
+ * into every later load.
+ */
+describe('appActivity default isolation (#4115)', () => {
+  beforeEach(() => {
+    rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
+    mkdirSync(TEST_DATA_ROOT, { recursive: true });
+  });
+
+  it('a write against an absent file does not leak into the next load', async () => {
+    await appActivity.markAppReviewCooldown('app-leak');
+    rmSync(join(TEST_DATA_ROOT, 'cos', 'app-activity.json'), { force: true });
+    const fresh = await appActivity.loadAppActivity();
+    expect(fresh.apps, 'the default app map must be a fresh object each load').toEqual({});
+    expect(fresh.global.totalReviews).toBe(0);
   });
 });

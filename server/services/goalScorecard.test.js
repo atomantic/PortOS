@@ -1,4 +1,25 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
+
+// Allocate the temp dir lazily on first PATHS read. `vi.mock` is hoisted above
+// this file's static imports, so a `const` initialized here would still be in
+// its TDZ when goalScorecard.js resolves its file paths at module load. `var` +
+// a function declaration both hoist without a TDZ, so the factory can call it.
+var tempRoot; // eslint-disable-line no-var
+function getTempRoot() {
+  if (!tempRoot) tempRoot = mkdtempSync(join(tmpdir(), 'goal-scorecard-test-'));
+  return tempRoot;
+}
+
+// The pure helpers below touch no disk, but the strict-read block at the end of
+// this file exercises the real file-backed loaders — so re-root every data/-
+// rooted PATHS member (insights/, digital-twin/) into a temp tree.
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => getTempRoot() }));
+
 import {
   shiftIsoDate,
   isoWeekStart,
@@ -13,7 +34,14 @@ import {
   formatScorecardDigestLine,
   NOMINAL_SECONDS,
   TREND_WEEKS,
+  getSettings,
+  updateSettings,
+  getRuleOverrides,
+  getEffectiveRules,
+  getScorecard,
 } from './goalScorecard.js';
+
+afterAll(() => { if (tempRoot) rmSync(tempRoot, { recursive: true, force: true }); });
 
 const UTC = 'UTC';
 
@@ -331,5 +359,80 @@ describe('formatScorecardDigestLine', () => {
 describe('constants', () => {
   it('exposes a sane trend window', () => {
     expect(TREND_WEEKS).toBeGreaterThanOrEqual(2);
+  });
+});
+
+/**
+ * Strict-read regression (#4115).
+ *
+ * Four file-backed loaders here fed either a displayed number or a write back
+ * to the same file while they swallowed unreadable files:
+ *
+ *   - `getSettings` is the base of `updateSettings` (`get → merge → write`), so
+ *     a corrupt settings file wrote DEFAULT_SETTINGS over the user's provider,
+ *     model and week-start on the next PATCH.
+ *   - `getRuleOverrides` holds hand-authored overrides that are never
+ *     regenerated; an empty read presented an empty rules editor whose next
+ *     save persisted the emptiness.
+ *   - `loadGoals` (reached via `getEffectiveRules`) supplies the goals every
+ *     hour is scored AGAINST — zero rules means every hour buckets as
+ *     unaligned, and computeWeeklyScorecard persists (and splices into the
+ *     Brain daily log) a confident "0% goal-aligned".
+ *   - `getScorecard` reported `not_computed` — the UI's "click Compute" state —
+ *     for an artifact that exists but could not be read.
+ *
+ * Corrupt JSON is the portable way to produce "present but unreadable": it
+ * fails the parse identically on every platform and needs no privileges.
+ */
+describe('goalScorecard strict reads (#4115)', () => {
+  const CORRUPT = '{"weekStartsOn": 1,';
+  const INSIGHTS = () => join(getTempRoot(), 'insights');
+  const TWIN = () => join(getTempRoot(), 'digital-twin');
+  const settingsFile = () => join(INSIGHTS(), 'goal-scorecard-settings.json');
+  const rulesFile = () => join(INSIGHTS(), 'goal-scorecard-rules.json');
+  const scorecardFile = () => join(INSIGHTS(), 'goal-scorecard.json');
+  const goalsFile = () => join(TWIN(), 'goals.json');
+
+  beforeEach(() => {
+    rmSync(getTempRoot(), { recursive: true, force: true });
+    mkdirSync(INSIGHTS(), { recursive: true });
+    mkdirSync(TWIN(), { recursive: true });
+  });
+
+  it('getSettings rejects instead of fabricating the shipped defaults', async () => {
+    writeFileSync(settingsFile(), CORRUPT);
+    await expect(getSettings()).rejects.toThrow(/Unreadable JSON file/);
+  });
+
+  it('updateSettings leaves the unreadable settings file byte-for-byte intact', async () => {
+    writeFileSync(settingsFile(), CORRUPT);
+    await expect(updateSettings({ weekStartsOn: 0 })).rejects.toThrow(/Unreadable JSON file/);
+    expect(
+      readFileSync(settingsFile(), 'utf8'),
+      'writing defaults over settings we failed to read is the data loss this fixes'
+    ).toBe(CORRUPT);
+  });
+
+  it('getRuleOverrides rejects instead of reporting "no overrides configured"', async () => {
+    writeFileSync(rulesFile(), CORRUPT);
+    await expect(getRuleOverrides()).rejects.toThrow(/Unreadable JSON file/);
+  });
+
+  it('getEffectiveRules rejects rather than scoring every hour against zero goals', async () => {
+    writeFileSync(goalsFile(), CORRUPT);
+    await expect(getEffectiveRules()).rejects.toThrow(/Unreadable JSON file/);
+  });
+
+  it('getScorecard rejects instead of reporting the artifact was never computed', async () => {
+    writeFileSync(scorecardFile(), CORRUPT);
+    await expect(getScorecard()).rejects.toThrow(/Unreadable JSON file/);
+  });
+
+  it('still treats genuinely absent files as real first-run empties', async () => {
+    const settings = await getSettings();
+    expect(settings, 'ENOENT is the one errno that proves absence').toBeTruthy();
+    expect(await getRuleOverrides()).toEqual({});
+    expect(await getScorecard()).toEqual({ available: false, reason: 'not_computed' });
+    expect((await getEffectiveRules()).rules).toEqual([]);
   });
 });

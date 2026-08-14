@@ -91,6 +91,17 @@ consumers (routes, widgets, schedulers) and to any write back to the same path.
 | `services/dataSync.js#applyVideoHistoryRemote` | The merge base — an empty `local` makes the merged result the remote rows alone, deleting every local-only row. |
 | `services/videoDownload.js` (×2) | Removed `.catch(() => [])` wrappers that re-swallowed `loadHistory`'s new strict signal. |
 | `services/settings.js#readSettingsStrict` | Routed onto `tryReadFileStrict`, replacing a hand-rolled `access()` re-probe. Same three-state verdict, one syscall, no window in which the probe can disagree with the read. |
+| `services/taskLearning/store.js#loadLearningData` | Every routing outcome, duration sample and failure signature is recorded by `load → mutate → saveLearningData`; the next save wrote a fresh `DEFAULT_LEARNING_DATA` over the entire learning history. The 5s cache also re-served the fabricated default. |
+| `services/taskLearning/store.js#loadDismissedRecommendations` | `dismissRecommendation` / `restoreRecommendation` change one key and write the whole map back — an unreadable file silently un-dismissed every recommendation on the next dismissal. |
+| `services/goalScorecard.js#getSettings` | The base of `updateSettings` (`get → merge → write`), so a corrupt file wrote `DEFAULT_SETTINGS` over the user's provider, model and week-start on the next PATCH. |
+| `services/goalScorecard.js#getRuleOverrides` | Hand-authored overrides that are never regenerated. An empty read presented an empty rules editor whose next save persisted the emptiness. |
+| `services/goalScorecard.js#loadGoals` | Goals are what every event is scored *against*. Zero rules means every hour buckets as unaligned, and `computeWeeklyScorecard` persists — and splices into the Brain daily log — a confident "0% goal-aligned". |
+| `services/goalScorecard.js#getScorecard`, `#refreshScorecardNarrative` | Both reported `not_computed` — the UI's "click Compute" state — for an artifact that exists but could not be read. The narrative path is additionally the base of a write back to the same artifact. |
+| `services/goalCheckIn.js#runGoalCheckIn` | Reported `{ checked: 0 }` off a fake empty `goals.json`, indistinguishable from a user with no active goals; the run also writes the whole file back. |
+| `services/brainStorage.js#loadMeta` | `updateMeta` is `load → spread → saveMeta`, so a corrupt `meta.json` wrote the shipped defaults over every brain setting — and the result was cached for `CACHE_TTL_MS`, outliving the read that produced it. |
+| `services/appActivity.js#loadAppActivity` | Every writer is `load → mutate → save`; a swallowed read wrote `DEFAULT_ACTIVITY` over every app's cooldown, agent binding and lifetime review stats, *and* dropped the whole fleet off cooldown so the CoS immediately re-reviewed all of it. The shallow `{ ...DEFAULT_ACTIVITY }` spread was replaced with a `structuredClone` in the same pass — the default's `apps`/`global` were shared objects that the first write against an absent file mutated in place. |
+| `services/telegram.js#loadCheckins` | `handleCheckinResponse` is `load → push → atomicWrite`, so answering one check-in against a fake empty log wrote a one-entry file over the whole history. Uses a **null sentinel rather than a throw**: every caller runs inside a `bot.on(...)` handler that node-telegram-bot-api never awaits, so a rejection would leak as an unhandled rejection instead of reaching a caller. Callers bail and tell the user nothing was overwritten. A readable-but-shapeless file (no `checkins` array) gets the same `null` — we can't interpret it, so we must not replace it either. |
+| `services/mediaJobQueue/index.js#initMediaJobQueue` | Init ends with `await persist()`, which writes the FULL in-memory snapshot — so an unreadable `media-jobs.json` booted an empty queue and immediately wrote `{"jobs":[]}` over the real one, losing the archive and orphaning every job the reconcile would have reattached. Cannot throw: init is an awaited step of `runPostRouteSequence`, where a rejection is fatal (`process.exit`). Instead it boots empty, reports, and **latches persistence off** for the process so the file survives for recovery. |
 
 ### Reviewed and deliberately left swallowing
 
@@ -117,14 +128,43 @@ consumers (routes, widgets, schedulers) and to any write back to the same path.
   the three states via an `existsSync` gate plus a `typeof content !== 'string'`
   check, and its `readFileFn` is an injected test seam. Correct as written.
 
-### Not yet converted (follow-up)
+### Audit status
 
-These are genuine members of the class (count-feeding and/or destructive
-read-modify-write) but were left out to keep this change reviewable:
-`taskLearning/store.js` (`LEARNING_FILE`, `DISMISSED_RECS_FILE`),
-`goalScorecard.js` (`GOALS_FILE`, `SCORECARD_FILE`), `goalCheckIn.js`,
-`brainStorage.js#loadMeta`, `telegram.js#loadCheckins`, `appActivity.js`,
-`mediaJobQueue/index.js#initMediaJobQueue`.
+Complete. The first pass converted the 14 sites in the upper half of the table
+and named seven more as follow-ups; the second pass worked through all seven —
+`taskLearning/store.js` (both files), `goalScorecard.js` (all four files),
+`goalCheckIn.js`, `brainStorage.js#loadMeta`, `telegram.js#loadCheckins`,
+`appActivity.js`, `mediaJobQueue/index.js#initMediaJobQueue` — and every one
+turned out to be a genuine member of the class, so all seven are converted
+above. Nothing from the original triage remains unclassified: every
+`readJSONFile` / `tryReadFile` call site in `server/` is now either in the
+converted table, in a documented-safe category above, or covered by the
+category rule for classifying a new one.
+
+### Failure shapes, and when a throw is the wrong answer
+
+The second pass added two postures the first pass had no instance of, both
+driven by *where the caller runs* rather than by what the value feeds:
+
+- **A caller outside the request lifecycle that nothing awaits** must use a
+  null sentinel, not a throw. `telegram.js`'s readers run inside
+  `bot.on(...)` handlers that node-telegram-bot-api never awaits, so a
+  rejection becomes an unhandled rejection instead of reaching anyone who could
+  act on it.
+- **A boot step whose rejection is fatal** must degrade rather than throw.
+  `initMediaJobQueue` is an awaited step of `runPostRouteSequence`, where any
+  rejection calls `onFatal` (`process.exit(1)`) — so a bad permission bit on one
+  snapshot file would take the whole server down. It reports, boots empty, and
+  latches its writer off so the unreadable file is preserved rather than
+  overwritten. **"Refuse to write" is the fallback whenever "refuse to
+  continue" is too expensive.**
+
+A related trap worth stating once: **the default value must not be shared
+mutable state.** `loadAppActivity` returned `{ ...DEFAULT_ACTIVITY }`, whose
+`apps` and `global` were the module-level objects themselves, so the first
+write against an *absent* file mutated the default in place and leaked into
+every later load. Deep-clone a default that callers mutate (the neighbouring
+`loadLearningData` already did, via `structuredClone`).
 
 ## Consequences
 
@@ -133,7 +173,21 @@ read-modify-write) but were left out to keep this change reviewable:
 - **Exhaustive `vi.mock('../lib/fileUtils.js', () => ({ … }))` factories must
   list every export the module under test transitively imports.** Adding
   `tryReadFileStrict` to `settings.js` broke two such suites with a "not defined
-  on the mock" throw. Prefer the `importActual`-spread form in new tests.
+  on the mock" throw, and the second pass had to add `readJSONFileStrict` to
+  three (`routes/pipeline.test.js`, `services/autonomousJobs.test.js`,
+  `services/telegram.test.js`). Prefer the `importActual`-spread form in new
+  tests.
+- **A `makePathsProxy` temp-root mock in a suite with static imports needs a
+  lazily-allocated root.** `vi.mock` is hoisted above the file's `import`
+  statements, so a `const TEST_DATA_ROOT = mkdtempSync(…)` is still in its TDZ
+  when the module under test resolves its file paths at load. Use the `var` +
+  hoisted-function-declaration form (`dataRoot: () => getTempRoot()`), as
+  `brainStorage.test.js` does. Suites that `await import(...)` the module under
+  test after the top-level `const` are unaffected.
+- **Corrupt JSON — not a `chmod`/EACCES fixture — is how these tests produce
+  "present but unreadable".** It exercises the identical `ok: false` branch,
+  fails the parse the same way on every platform including Windows CI, and needs
+  no privileges.
 - The remaining ~200 swallowing call sites are documented above by category
   rather than individually, so a future reader can classify a *new* call site
   without re-deriving the rule.

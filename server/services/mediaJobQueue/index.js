@@ -32,7 +32,7 @@ import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import { unlink } from 'fs/promises';
 import { join, resolve as pathResolve, sep as PATH_SEP } from 'path';
-import { PATHS, readJSONFile, atomicWrite, ensureDir, sleep } from '../../lib/fileUtils.js';
+import { PATHS, readJSONFileStrict, atomicWrite, ensureDir, sleep } from '../../lib/fileUtils.js';
 import { SSE_HEADERS } from '../../lib/sseHeaders.js';
 import { reapAndCleanDetachedDirs } from '../../lib/detachedSpawn.js';
 import {
@@ -268,7 +268,15 @@ export function listJobs({ status, kind, owner } = {}) {
 // (e.g. completed→running). Chaining ensures every snapshot reflects the
 // state at its enqueue time, in submission order.
 let persistChain = Promise.resolve();
+// Set when the boot read of JOBS_FILE was untrustworthy (#4115). Every persist()
+// writes the FULL in-memory snapshot, so persisting on top of a queue we failed
+// to restore would replace the real jobs file with whatever this process happens
+// to hold — the classic "unreadable read becomes an empty write". Latching the
+// writer off preserves the file for the user to recover or delete; the queue
+// still runs normally in memory for the life of the process.
+let persistBlocked = false;
 function persist() {
+  if (persistBlocked) return persistChain;
   persistChain = persistChain.then(persistImpl, persistImpl);
   return persistChain;
 }
@@ -304,7 +312,18 @@ export async function initMediaJobQueue() {
     // Read the codex parallel limit before the worker starts so the first
     // drain tick honors the user's configured value, not the default.
     await refreshCodexParallelLimit().catch(() => {});
-    const data = await readJSONFile(JOBS_FILE, { jobs: [] });
+    // Strict (#4115). A swallowed unreadable jobs file boots an empty queue and
+    // the `await persist()` at the end of this init writes that emptiness over
+    // the real snapshot — losing the archive and orphaning every job the reload
+    // below would have reconciled. This init is an awaited step of
+    // `runPostRouteSequence`, where a rejection is FATAL (process.exit), so a
+    // bad permission bit on one snapshot file must not take the server down:
+    // report it, boot an empty queue, and latch persistence off instead.
+    const { ok, value: data } = await readJSONFileStrict(JOBS_FILE, { jobs: [] });
+    if (!ok) {
+      persistBlocked = true;
+      console.error(`❌ media-job queue: ${JOBS_FILE} is present but unreadable — starting empty and NOT persisting, so the file is preserved`);
+    }
     const persistedJobs = Array.isArray(data?.jobs) ? data.jobs : [];
     const restartedFailedIds = [];
     // #1332: training jobs whose detached trainer survived the restart, to be
@@ -1117,6 +1136,9 @@ export function __resetForTests() {
   // Reset the persist chain so a leftover rejection from a previous test's
   // ENOENT writes doesn't poison subsequent persist() calls.
   persistChain = Promise.resolve();
+  // Un-latch the persistence block (#4115) — a test that booted on an unreadable
+  // jobs file would otherwise leave every later test's queue unable to persist.
+  persistBlocked = false;
 }
 
 // Test-only deterministic settle hook. EventEmitter terminal handlers and

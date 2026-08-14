@@ -25,8 +25,20 @@ const DEFAULT_ACTIVITY = {
 export async function loadAppActivity() {
   await ensureDir(DATA_DIR);
 
-  const loaded = await readJSONFile(ACTIVITY_FILE, null);
-  return loaded ? { ...DEFAULT_ACTIVITY, ...loaded } : { ...DEFAULT_ACTIVITY };
+  // Strict (#4115): every writer here is `loadAppActivity → mutate →
+  // saveAppActivity`, so a swallowed unreadable file writes DEFAULT_ACTIVITY
+  // over every app's cooldown, active-agent binding and lifetime review stats —
+  // which also drops every app off cooldown at once, so the CoS immediately
+  // re-reviews the whole fleet. Throwing skips the cycle and keeps the file.
+  const loaded = await readJSONFile(ACTIVITY_FILE, null, { strict: true });
+  // structuredClone, not a spread. `{ ...DEFAULT_ACTIVITY }` is shallow, so the
+  // returned `apps` and `global` were the SAME objects on every call: on an
+  // absent file the first `updateAppActivity`/`markIdleReviewStarted` mutated
+  // the module-level default in place, and every later load inherited that
+  // app map and its incremented totalReviews. Same "the default must never
+  // become shared mutable state" family as the strict read above.
+  const base = structuredClone(DEFAULT_ACTIVITY);
+  return loaded ? { ...base, ...loaded } : base;
 }
 
 /**

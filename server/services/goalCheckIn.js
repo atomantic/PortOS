@@ -40,7 +40,11 @@ Respond with JSON only (no markdown fences): { "assessment": "string", "recommen
 
 export async function runGoalCheckIn({ background = false } = {}) {
   const { getActiveProvider } = await import('./providers.js');
-  const goals = await readJSONFile(GOALS_FILE, { goals: [] });
+  // Strict (#4115): a swallowed unreadable goals.json reports "no active goals"
+  // and the check-in reports `{ checked: 0 }` — indistinguishable from a user
+  // who genuinely has none. The run also writes `goals` straight back, so any
+  // future non-empty path off a fake default would persist the emptiness.
+  const goals = await readJSONFile(GOALS_FILE, { goals: [] }, { strict: true });
   const activeGoals = goals.goals.filter(g => g.status === 'active' && g.targetDate);
 
   if (!activeGoals.length) {

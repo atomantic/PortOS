@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -540,3 +540,57 @@ async function rawRecord(type, id) {
   const map = await brainStorage.getRawRecords(type);
   return map[id];
 }
+
+/**
+ * Strict-read regression (#4115).
+ *
+ * `updateMeta` is `loadMeta → spread updates → saveMeta`. While the loader
+ * swallowed unreadable files, a corrupt meta.json read as DEFAULT_META, so the
+ * next settings update atomicWrote the shipped defaults over the user's
+ * configured provider, model, digest times and review schedule. The result was
+ * also cached for CACHE_TTL_MS, so the fabricated default outlived the read
+ * that produced it.
+ *
+ * Corrupt JSON is the portable way to produce "present but unreadable" — it
+ * fails the parse identically on every platform and needs no privileges.
+ */
+describe('brainStorage meta strict reads (#4115)', () => {
+  const CORRUPT = '{"defaultProvider": "ollama",';
+  const metaPath = () => join(getTempRoot(), 'brain', 'meta.json');
+
+  beforeEach(() => {
+    mkdirSync(join(getTempRoot(), 'brain'), { recursive: true });
+    writeFileSync(metaPath(), CORRUPT);
+    brainStorage.invalidateAllCaches();
+  });
+
+  afterEach(() => {
+    rmSync(metaPath(), { force: true });
+    brainStorage.invalidateAllCaches();
+  });
+
+  it('loadMeta rejects instead of fabricating the shipped defaults', async () => {
+    await expect(brainStorage.loadMeta()).rejects.toThrow(/Unreadable JSON file/);
+  });
+
+  it('updateMeta leaves the unreadable file byte-for-byte intact', async () => {
+    await expect(brainStorage.updateMeta({ confidenceThreshold: 0.9 })).rejects.toThrow(/Unreadable JSON file/);
+    expect(
+      readFileSync(metaPath(), 'utf8'),
+      'overwriting the user settings we failed to read is the data loss this fixes'
+    ).toBe(CORRUPT);
+  });
+
+  it('does not cache a fabricated default for later readers', async () => {
+    await expect(brainStorage.loadMeta()).rejects.toThrow();
+    // A cached default would make this second call resolve with DEFAULT_META.
+    await expect(brainStorage.loadMeta()).rejects.toThrow(/Unreadable JSON file/);
+  });
+
+  it('still treats a genuinely absent meta.json as first-run defaults', async () => {
+    rmSync(metaPath(), { force: true });
+    brainStorage.invalidateAllCaches();
+    const meta = await brainStorage.loadMeta();
+    expect(meta.confidenceThreshold, 'ENOENT is the one errno that proves absence').toBe(0.6);
+  });
+});

@@ -96,12 +96,21 @@ vi.mock('./memoryBackend.js', () => ({
   peekMemory: vi.fn(async () => null),
 }));
 
+// Mutable disk stand-in. `strictRead` is what `readJSONFileStrict` returns
+// (null = "behave like a normal absent file"); `writes` records every
+// atomicWrite so a test can assert that NOTHING was written. Held in a hoisted
+// holder because loadTelegram() calls vi.resetModules(), which re-evaluates
+// this factory and would otherwise hand each test fresh, unreachable spies.
+const fu = vi.hoisted(() => ({ strictRead: null, writes: [] }));
+
+// Exhaustive factory (no importActual spread) — every export telegram.js
+// imports must be listed here or the access throws "not defined on the mock".
 vi.mock('../lib/fileUtils.js', () => ({
   ensureDir: vi.fn(async () => {}),
   PATHS: { data: '/mock/data' },
-  readJSONFile: vi.fn(async (_path, def) => def),
+  readJSONFileStrict: vi.fn(async (_path, def) => fu.strictRead ?? { ok: true, value: def }),
   formatDuration: vi.fn(() => '1m'),
-  atomicWrite: vi.fn(async () => {}),
+  atomicWrite: vi.fn(async (path, data) => { fu.writes.push({ path, data }); }),
 }));
 
 vi.mock('./agentManagement.js', () => ({ getActiveAgents: vi.fn(() => []) }));
@@ -124,6 +133,8 @@ describe('telegram service', () => {
 
   beforeEach(() => {
     cfg.settings = defaultSettings();
+    fu.strictRead = null;
+    fu.writes = [];
     active = null;
     h.textHandlers = [];
     h.eventHandlers = {};
@@ -252,6 +263,87 @@ describe('telegram service', () => {
       expect(h.answerCallbackQuery).toHaveBeenCalledWith('cb-1', { text: 'Unauthorized' });
       // The memory action must not run for an unauthorized chat.
       expect(h.editMessageText).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * Strict-read regression (#4115).
+   *
+   * `handleCheckinResponse` is `loadCheckins → push → atomicWrite`. While the
+   * read swallowed unreadable files, a corrupt checkins.json read as
+   * { checkins: [] }, so answering one check-in wrote a ONE-entry log over the
+   * user's whole check-in history.
+   *
+   * The fix uses a null sentinel rather than a throw: every caller runs inside a
+   * `bot.on(...)` handler that node-telegram-bot-api never awaits, so a
+   * rejection would leak as an unhandled rejection instead of reaching a caller.
+   */
+  describe('check-in log strict reads (#4115)', () => {
+    async function armPendingCheckin(telegram) {
+      const { getGoals } = await import('./identity.js');
+      getGoals.mockResolvedValue({ goals: [{ id: 'g1', title: 'Example Goal', status: 'active', progress: 40 }] });
+      await telegram.init(false);
+      await telegram.sendCheckin();
+      h.sendMessage.mockClear();
+    }
+
+    it('does not overwrite an unreadable check-in log when an answer arrives', async () => {
+      const telegram = await loadTelegramActive();
+      await armPendingCheckin(telegram);
+
+      // The log becomes unreadable between asking and answering.
+      fu.strictRead = { ok: false, value: { checkins: [] } };
+      fu.writes = [];
+
+      const msgHandler = h.eventHandlers.message[0];
+      await msgHandler({ chat: { id: 42 }, text: 'Made good progress' });
+
+      expect(fu.writes, 'a one-entry log must never replace the real history').toEqual([]);
+      expect(h.sendMessage).toHaveBeenCalledWith(
+        '42',
+        expect.stringContaining('Nothing was overwritten'),
+        expect.anything(),
+      );
+    });
+
+    it('records the answer normally when the log is readable', async () => {
+      const telegram = await loadTelegramActive();
+      await armPendingCheckin(telegram);
+      fu.writes = [];
+
+      const msgHandler = h.eventHandlers.message[0];
+      await msgHandler({ chat: { id: 42 }, text: 'Made good progress' });
+
+      expect(fu.writes).toHaveLength(1);
+      expect(fu.writes[0].data.checkins[0]).toMatchObject({ goalId: 'g1', response: 'Made good progress' });
+    });
+
+    it('skips the scheduled send rather than asking about an arbitrary goal', async () => {
+      const telegram = await loadTelegramActive();
+      const { getGoals } = await import('./identity.js');
+      getGoals.mockResolvedValue({ goals: [{ id: 'g1', title: 'Example Goal', status: 'active', progress: 40 }] });
+      await telegram.init(false);
+      h.sendMessage.mockClear();
+
+      fu.strictRead = { ok: false, value: { checkins: [] } };
+      await telegram.sendCheckin();
+
+      expect(h.sendMessage, 'staleness is unrankable without the log').not.toHaveBeenCalled();
+    });
+
+    it('treats a readable-but-shapeless log as untrustworthy rather than replacing it', async () => {
+      const telegram = await loadTelegramActive();
+      await armPendingCheckin(telegram);
+
+      // Parses fine, but there is no `checkins` array to append to. We cannot
+      // interpret the file, so we must not write over it either.
+      fu.strictRead = { ok: true, value: { unexpected: 'shape' } };
+      fu.writes = [];
+
+      const msgHandler = h.eventHandlers.message[0];
+      await msgHandler({ chat: { id: 42 }, text: 'Made good progress' });
+
+      expect(fu.writes).toEqual([]);
     });
   });
 });
