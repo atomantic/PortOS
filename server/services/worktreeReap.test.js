@@ -36,8 +36,14 @@ async function initRepo() {
   // realpath-resolve: on macOS mkdtemp returns a /var symlink while
   // `git worktree list` records the canonical /private/var path, which would
   // break the reaper's startsWith() location checks and our path assertions.
-  const dir = realpathSync(await mkdtemp(join(tmpdir(), 'portos-reap-')));
-  await execGit(['init', '-b', 'main'], dir);
+  const created = realpathSync(await mkdtemp(join(tmpdir(), 'portos-reap-')));
+  await execGit(['init', '-b', 'main'], created);
+  // Adopt git's spelling of the root. `git worktree list` reports paths the way
+  // git normalized them, and the reaper's containment check compares those
+  // against a root derived from this value — so any disagreement (8.3 short
+  // names like C:\\Users\\RUNNER~1, drive-letter case) makes every worktree look
+  // like it lives somewhere unmanaged and nothing is reaped.
+  const dir = (await execGit(['rev-parse', '--show-toplevel'], created)).stdout.trim() || created;
   await execGit(['config', 'user.email', 'test@example.com'], dir);
   await execGit(['config', 'user.name', 'Test'], dir);
   await execGit(['config', 'commit.gpgsign', 'false'], dir);
@@ -134,7 +140,10 @@ describe('reapMergedWorktrees', () => {
 
     const result = await reapMergedWorktrees(dir, { includeClaudeTrees: true });
 
-    expect(result.reaped.map(r => r.branch)).toContain('merged-br');
+    expect(
+      result.reaped.map(r => r.branch),
+      `nothing reaped; skipped = ${JSON.stringify(result.skipped)}`,
+    ).toContain('merged-br');
     expect(result.reaped.map(r => r.branch)).not.toContain('pending-br');
     expect(skipReason(result, unmergedPath)).toBe('unmerged');
 
