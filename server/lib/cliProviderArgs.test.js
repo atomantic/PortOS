@@ -278,6 +278,28 @@ describe('cliProviderArgs', () => {
       })).toEqual(['--model', 'gemini-3.6-flash', '--effort', 'medium', '--dangerously-skip-permissions', '--print']);
     });
 
+    // #4110: mirrors runCliProviderPrompt's `[...buildCliArgs(p), ...extraArgs]` — agy's
+    // print flag is a bare trailing marker at build time, so extraArgs land past
+    // it and prepareCliPrompt has to re-anchor `--print <prompt>` at the end.
+    it('keeps --print + prompt final for Antigravity even with trailing extraArgs', () => {
+      const provider = { id: 'antigravity-cli', command: 'agy', defaultModel: 'gemini-3.6-flash', models: AGY_CATALOG };
+      const extraArgs = ['--include-directories', '/srv/example'];
+      const built = [...buildCliArgs(provider), ...extraArgs];
+      const { args, useStdin } = prepareCliPrompt('agy', built, 'write a haiku');
+      expect(args.slice(-2)).toEqual(['--print', 'write a haiku']);
+      expect(args.filter((a) => a === '--print')).toHaveLength(1);
+      for (const extra of extraArgs) expect(args.indexOf(extra)).toBeLessThan(args.indexOf('--print'));
+      expect(useStdin).toBe(false);
+    });
+
+    it('is unchanged for Antigravity with no extraArgs', () => {
+      const provider = { id: 'antigravity-cli', command: 'agy', defaultModel: 'gemini-3.6-flash', models: AGY_CATALOG };
+      const { args } = prepareCliPrompt('agy', buildCliArgs(provider), 'write a haiku');
+      expect(args).toEqual([
+        '--model', 'gemini-3.6-flash', '--dangerously-skip-permissions', '--print', 'write a haiku',
+      ]);
+    });
+
     it('is a no-op for providers with no effort control', () => {
       expect(buildCliArgs({ id: 'opencode', command: 'opencode', defaultModel: 'qwen3', effort: 'high' }))
         .toEqual(['run', '-m', 'qwen3']);

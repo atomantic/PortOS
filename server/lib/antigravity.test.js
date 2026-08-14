@@ -170,6 +170,42 @@ describe('prepareAntigravityPrompt', () => {
     const { cleanup } = prepareAntigravityPrompt(['--print'], 'x');
     expect(() => cleanup()).not.toThrow();
   });
+
+  // #4110: runCliProviderPrompt concatenates a call's extraArgs onto
+  // buildCliArgs' output, which for agy already ends in the bare `--print`
+  // marker (cliProviderRun.js). Splicing
+  // the prompt in after the flag's *current* position would leave the extraArgs
+  // trailing the prompt as stray positionals; the pair must be re-anchored.
+  it('re-anchors --print + prompt at the END when extraArgs trail the marker', () => {
+    const built = ensureAntigravityPrintArgs([]);
+    const extraArgs = ['--include-directories', '/srv/example'];
+    const { args } = prepareAntigravityPrompt([...built, ...extraArgs], 'PROMPT');
+    expect(args).toEqual([
+      '--dangerously-skip-permissions',
+      '--include-directories',
+      '/srv/example',
+      '--print',
+      'PROMPT',
+    ]);
+    // the pair is final, and every extraArg precedes it
+    expect(args.slice(-2)).toEqual(['--print', 'PROMPT']);
+    for (const extra of extraArgs) {
+      expect(args.indexOf(extra)).toBeLessThan(args.indexOf('--print'));
+    }
+    // exactly one print flag survives the move
+    expect(args.filter((a) => a === '--print')).toHaveLength(1);
+  });
+
+  it('leaves the empty-extraArgs shape unchanged (no duplicate or moved flag)', () => {
+    const built = ensureAntigravityPrintArgs([]);
+    const { args } = prepareAntigravityPrompt([...built], 'PROMPT');
+    expect(args).toEqual(['--dangerously-skip-permissions', '--print', 'PROMPT']);
+  });
+
+  it('preserves the print flag spelling when relocating it', () => {
+    const { args } = prepareAntigravityPrompt(['-p', '--verbose'], 'PROMPT');
+    expect(args).toEqual(['--verbose', '-p', 'PROMPT']);
+  });
 });
 
 describe('ensureAntigravityTuiArgs', () => {
