@@ -78,7 +78,7 @@ const H3_MODEL = {
   runtime: 'minimax_h3',
   supportedModes: ['text', 'image', 'fflf'],
   defaultFrames: 124,
-  frameOptions: [124, 141, 158],
+  frameOptions: [107, 124, 141, 158],
   fpsOptions: [24],
   termsGate: { id: H3_TERMS },
 };

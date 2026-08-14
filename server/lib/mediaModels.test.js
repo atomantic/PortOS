@@ -58,29 +58,33 @@ describe('mediaModels registry', () => {
   });
 
   it('ships MiniMax H3 as a pinned, keyframe-capable 128 GB BYOV profile', async () => {
-    // MiniMax H3 is an MLX (macOS-only) profile, so read the macOS list
-    // directly rather than through the platform-locked getVideoModels() — this
-    // asserts a fact about the SHIPPED registry, which is the same on every
-    // host, and on Windows the getter returns the windows list (no h3 → the
-    // assertion failed for the wrong reason). applyVideoSupportedModes is the
-    // read-time decoration getVideoModels applies, replayed here so the
-    // supportedModes assertion below still exercises it.
     const { loadMediaModels } = await import('./mediaModels.js');
-    const { applyVideoSupportedModes } = await import('./videoModeProfiles.js');
-    const h3 = applyVideoSupportedModes(loadMediaModels().video.macos || [])
-      .find((model) => model.id === 'minimax_h3_8bit');
+    // H3 is an Apple-silicon MLX runtime, so inspect the shipped macOS catalog
+    // directly instead of the current platform's filtered model list.
+    const h3 = loadMediaModels().video.macos.find((model) => model.id === 'minimax_h3_8bit');
     expect(h3).toMatchObject({
       runtime: 'minimax_h3',
       repo: 'pipenetwork/MiniMax-H3-MLX-8bit',
       revision: '3ac52081470b0488921c3ec3ba84a39097bf2361',
       supportedModes: ['text', 'image', 'fflf'],
       defaultFrames: 124,
+      defaultWidth: 1344,
+      defaultHeight: 768,
+      resolutionStep: 32,
       fpsOptions: [24],
       memoryGb: 128,
       samplerLocked: true,
       steps: 8,
     });
-    expect(h3.frameOptions).toEqual([124, 141, 158, 175, 192, 209, 226, 243, 260, 277, 294, 311, 328, 345, 362]);
+    expect(h3.frameOptions).toEqual([107, 124, 141, 158, 175, 192, 209, 226, 243, 260, 277, 294, 311, 328, 345, 362]);
+    expect(h3.resolutionOptions).toEqual([
+      { label: '1536x672 (21:9 H3 native)', w: 1536, h: 672 },
+      { label: '1344x768 (16:9 H3 default)', w: 1344, h: 768 },
+      { label: '1024x768 (4:3 H3 native)', w: 1024, h: 768 },
+      { label: '768x768 (1:1 H3 native)', w: 768, h: 768 },
+      { label: '768x1024 (3:4 H3 native)', w: 768, h: 1024 },
+      { label: '768x1344 (9:16 H3 native)', w: 768, h: 1344 },
+    ]);
     expect(h3.requiredWeights[0]).toMatchObject({
       repo: 'MiniMaxAI/MiniMax-H3',
       revision: '6818f6c32d12b210915e44ad56a4228c2608f160',
@@ -504,6 +508,61 @@ describe('mediaModels registry', () => {
       const { loadMediaModels } = await import('./mediaModels.js');
       expect(loadMediaModels().video.macos.some((e) => e.id === RETIRED_ID)).toBe(false);
       logSpy.mockRestore();
+    });
+  });
+
+  // Like retirement, migration 267's H3 upgrade must also happen at LOAD:
+  // routes cache this registry before bootstrap migrations run, and mutators
+  // persist the cached object wholesale later in the same boot.
+  describe('MiniMax H3 output-control upgrade', () => {
+    const OLD_FRAMES = [124, 141, 158, 175, 192, 209, 226, 243, 260, 277, 294, 311, 328, 345, 362];
+    const shippedMacosIds = JSON.parse(readFileSync(SAMPLE_REGISTRY_PATH, 'utf-8'))
+      .video.macos.map((entry) => entry.id);
+    const legacyH3 = (extra = {}) => ({
+      id: 'minimax_h3_8bit',
+      name: 'MiniMax H3',
+      repo: 'pipenetwork/MiniMax-H3-MLX-8bit',
+      runtime: 'minimax_h3',
+      defaultFrames: 124,
+      frameOptions: [...OLD_FRAMES],
+      steps: 8,
+      guidance: 0,
+      ...extra,
+    });
+    const writeRegistry = (entry) => writeFileSync(registryFile, JSON.stringify({
+      video: { macos: [entry], windows: [], defaultMacos: entry.id, defaultWindows: 'ltx_video' },
+      image: [],
+      textEncoders: [{ id: 't', label: 't', repo: 'r' }],
+      selectedTextEncoder: 't',
+      _shippedDefaults: { video: { macos: shippedMacosIds, windows: [] } },
+    }));
+
+    it('upgrades the cached legacy shipped row before migrations run', async () => {
+      writeRegistry(legacyH3());
+      const { loadMediaModels } = await import('./mediaModels.js');
+      const entry = loadMediaModels().video.macos[0];
+      expect(entry).toMatchObject({
+        defaultWidth: 1344,
+        defaultHeight: 768,
+        resolutionStep: 32,
+      });
+      expect(entry.frameOptions[0]).toBe(107);
+      expect(entry.resolutionOptions).toContainEqual({
+        label: '1536x672 (21:9 H3 native)', w: 1536, h: 672,
+      });
+    });
+
+    it('preserves a repointed row and a partial custom geometry contract', async () => {
+      writeRegistry(legacyH3({ repo: 'example-org/h3-fork' }));
+      let module = await import('./mediaModels.js');
+      expect(module.loadMediaModels().video.macos[0]).not.toHaveProperty('defaultWidth');
+
+      vi.resetModules();
+      writeRegistry(legacyH3({ resolutionStep: 64 }));
+      module = await import('./mediaModels.js');
+      const entry = module.loadMediaModels().video.macos[0];
+      expect(entry.resolutionStep).toBe(64);
+      expect(entry).not.toHaveProperty('resolutionOptions');
     });
   });
 

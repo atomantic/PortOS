@@ -1224,6 +1224,143 @@ describe('autopilotEvents in-process bus (#2185)', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Milestone map — the plan an EXECUTE run projects + the progress
+// snapshot the panel measures against it.
+// ---------------------------------------------------------------------------
+describe('noteProgress (pure fold)', () => {
+  const { noteProgress, emptyProgress } = autopilot;
+
+  it('marks the running step and clears its complete flag when the run RE-ENTERS a gate', () => {
+    const run = { progress: emptyProgress() };
+    noteProgress(run, { type: 'step:start', kind: 'foundationGate', ordinal: 3 });
+    noteProgress(run, { type: 'step:complete', kind: 'foundationGate' });
+    expect(run.progress).toMatchObject({
+      currentStep: 'foundationGate', currentStepComplete: true, completed: { foundationGate: 1 },
+    });
+    // The arc repair sends it back through the same gate — the map must show it
+    // working again rather than reading as the step it just finished.
+    noteProgress(run, { type: 'step:start', kind: 'foundationGate', ordinal: 5 });
+    expect(run.progress).toMatchObject({ currentStep: 'foundationGate', currentStepComplete: false });
+  });
+
+  it('files each gate verification under the step it was measured in', () => {
+    const run = { progress: emptyProgress() };
+    noteProgress(run, { type: 'step:start', kind: 'verifyArcSpine' });
+    noteProgress(run, { type: 'verify:round', scope: 'arcSpine', round: 2, findings: 5, blocking: 0 });
+    noteProgress(run, { type: 'step:start', kind: 'foundationGate' });
+    noteProgress(run, { type: 'foundation:round', round: 1, weightedScore: 8.1, threshold: 7.5, weakest: 'craft' });
+    expect(run.progress.verified).toEqual({
+      verifyArcSpine: { round: 2, findings: 5, blocking: 0 },
+      foundationGate: { round: 1, weightedScore: 8.1, threshold: 7.5, weakest: 'craft' },
+    });
+  });
+
+  it('drops gate telemetry that arrives outside a step rather than filing it nowhere', () => {
+    const run = { progress: emptyProgress() };
+    expect(noteProgress(run, { type: 'verify:round', scope: 'arc', findings: 1, blocking: 1 })).toBe(false);
+    expect(run.progress.verified).toEqual({});
+  });
+
+  it('counts sub-step skips without advancing the milestone', () => {
+    const run = { progress: emptyProgress() };
+    noteProgress(run, { type: 'step:skip', kind: 'visualDraft', reason: 'locked' });
+    expect(run.progress).toMatchObject({ skipped: { visualDraft: 1 }, completed: {} });
+  });
+
+  it('ignores frames the map does not track — including every terminal', () => {
+    const run = { progress: emptyProgress() };
+    for (const type of ['note', 'check:complete', 'complete', 'paused', 'canceled', 'error']) {
+      expect(noteProgress(run, { type })).toBe(false);
+    }
+    expect(run.progress).toEqual(emptyProgress());
+  });
+});
+
+describe('milestone map telemetry', () => {
+  const collectFrames = (seriesId) => {
+    const frames = [];
+    autopilot.autopilotEvents.on(seriesId, (p) => frames.push(p));
+    return frames;
+  };
+
+  it('carries the projected plan on an EXECUTE start frame, not only a dry-run', async () => {
+    const { seriesId } = await seedComplete();
+    const frames = collectFrames(seriesId);
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    const start = frames.find((f) => f.type === 'start');
+    expect(start.mode).toBe('execute');
+    // Same projection the dry-run emits — the panel draws it as the milestone map.
+    expect(start.plan.map((p) => p.kind)).toEqual(
+      expect.arrayContaining(['verifyArcSpine', 'verifyArc', 'editorialReview']),
+    );
+    expect(start.planTotals.estActions).toBeGreaterThan(0);
+  });
+
+  it('publishes a progress snapshot as the run advances', async () => {
+    const { seriesId } = await seedComplete();
+    const frames = collectFrames(seriesId);
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    const progressFrames = frames.filter((f) => f.type === 'progress');
+    expect(progressFrames.length).toBeGreaterThan(0);
+    const final = progressFrames.at(-1);
+    expect(final.completed.verifyArcSpine).toBe(1);
+    expect(final.completed.editorialReview).toBe(1);
+    // …and what each gate actually validated, keyed by step kind.
+    expect(final.verified.verifyArcSpine).toMatchObject({ blocking: 0 });
+  });
+
+  it('publishes DETACHED snapshots — a later step cannot rewrite a delivered frame', async () => {
+    const { seriesId } = await seedComplete();
+    const frames = collectFrames(seriesId);
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    const progressFrames = frames.filter((f) => f.type === 'progress');
+    const first = progressFrames[0];
+    const last = progressFrames.at(-1);
+    // The fold mutates the maps it owns; if the frames shared them, the first
+    // frame would report the final run's counts and the map would jump.
+    expect(first.completed).not.toBe(last.completed);
+    expect(Object.keys(first.completed).length).toBeLessThan(Object.keys(last.completed).length);
+  });
+
+  it('never emits a progress frame after the terminal one (SSE replays only the last payload)', async () => {
+    const { seriesId } = await seedComplete();
+    const frames = collectFrames(seriesId);
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    const terminalAt = frames.findIndex((f) => autopilot.AUTOPILOT_TERMINAL_TYPES.has(f.type));
+    expect(terminalAt).toBeGreaterThan(-1);
+    expect(frames.slice(terminalAt + 1).some((f) => f.type === 'progress')).toBe(false);
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+  });
+
+  it('does not let a progress frame take the SSE replay slot from a real frame', async () => {
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    // A client attaching late replays `lastPayload`; a snapshot there would hide
+    // what the run was doing (and, at the end, that it finished at all).
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).not.toBe('progress');
+  });
+
+  it('serves the snapshot to a client attaching mid-run, and nothing once the run is over', async () => {
+    const { seriesId } = await seedComplete();
+    let midRun = null;
+    // Sample the accessor from inside the run — the mid-run attach the status
+    // route serves — rather than after it, when the record is finished.
+    autopilot.autopilotEvents.on(seriesId, (f) => {
+      if (f.type === 'step:complete' && !midRun) midRun = autopilot.activeRunProgress(seriesId);
+    });
+    await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false });
+    await waitFor(runFinished(seriesId));
+    expect(midRun.currentStep).toBeTruthy();
+    expect(autopilot.activeRunProgress(seriesId)).toBe(null);
+  });
+});
+
 describe('dry-run plan ↔ resolveNextStep drift guard (#1577)', () => {
   // buildDryRunPlan is kept in sync with resolveNextStep BY HAND (see the comment
   // above buildDryRunPlan). This guard runs BOTH against the same fixtures and

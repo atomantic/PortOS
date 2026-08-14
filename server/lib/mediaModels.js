@@ -9,6 +9,9 @@
  *
  * Schema (see seed defaults below for the full picture):
  *   - video.macos[], video.windows[]: { id, name, repo?, steps, guidance, broken?, disclosure? }
+ *       Models may also declare `defaultWidth` / `defaultHeight`,
+ *       `resolutionStep`, and `resolutionOptions[]` when their native canvas
+ *       differs from the shared Video Gen presets.
  *       `disclosure` is optional provenance/licensing metadata (issue #3674):
  *       { modelCardUrl?, weightsLicense?: { name, url }, runtimeLicense?: { name, url },
  *         estimatedDownloadGb?, reviewedAt? }. Every key is optional and an
@@ -46,6 +49,60 @@ import { applyVideoSupportedModes } from './videoModeProfiles.js';
 // without monkey-patching PATHS. Defaults to data/media-models.json.
 const REGISTRY_FILE = process.env.PORTOS_MEDIA_MODELS_FILE || join(PATHS.data, 'media-models.json');
 const IS_WIN = process.platform === 'win32';
+
+// Migration 267 and the load-time normalizer share this exact shipped-profile
+// contract. The load-time half is essential because route imports can cache the
+// registry before bootstrap migrations run; a later registry edit would
+// otherwise persist that stale object over the migrated file in the same boot.
+export const MINIMAX_H3_OUTPUT_PROFILE = Object.freeze({
+  id: 'minimax_h3_8bit',
+  shippedRepo: 'pipenetwork/MiniMax-H3-MLX-8bit',
+  oldFrameOptions: Object.freeze([124, 141, 158, 175, 192, 209, 226, 243, 260, 277, 294, 311, 328, 345, 362]),
+  frameOptions: Object.freeze([107, 124, 141, 158, 175, 192, 209, 226, 243, 260, 277, 294, 311, 328, 345, 362]),
+  defaultWidth: 1344,
+  defaultHeight: 768,
+  resolutionStep: 32,
+  resolutionOptions: Object.freeze([
+    Object.freeze({ label: '1536x672 (21:9 H3 native)', w: 1536, h: 672 }),
+    Object.freeze({ label: '1344x768 (16:9 H3 default)', w: 1344, h: 768 }),
+    Object.freeze({ label: '1024x768 (4:3 H3 native)', w: 1024, h: 768 }),
+    Object.freeze({ label: '768x768 (1:1 H3 native)', w: 768, h: 768 }),
+    Object.freeze({ label: '768x1024 (3:4 H3 native)', w: 768, h: 1024 }),
+    Object.freeze({ label: '768x1344 (9:16 H3 native)', w: 768, h: 1344 }),
+  ]),
+});
+
+const sameValues = (left, right) => (
+  Array.isArray(left)
+  && left.length === right.length
+  && left.every((value, index) => value === right[index])
+);
+
+export const upgradeMiniMaxH3OutputControls = (list) => {
+  if (!Array.isArray(list)) return list;
+  const profile = MINIMAX_H3_OUTPUT_PROFILE;
+  return list.map((entry) => {
+    if (!isPlainObject(entry) || entry.id !== profile.id || entry.repo !== profile.shippedRepo) return entry;
+    let next = entry;
+    if (sameValues(next.frameOptions, profile.oldFrameOptions)) {
+      next = { ...next, frameOptions: [...profile.frameOptions] };
+    }
+    if (!Object.hasOwn(next, 'defaultWidth') && !Object.hasOwn(next, 'defaultHeight')) {
+      next = { ...next, defaultWidth: profile.defaultWidth, defaultHeight: profile.defaultHeight };
+    }
+    // The step and presets describe one geometry contract. If either side was
+    // customized, preserve the pair rather than installing presets that may be
+    // off-grid for the user's declared step (or vice versa).
+    if (!Object.hasOwn(next, 'resolutionStep') && !Object.hasOwn(next, 'resolutionOptions')) {
+      next = {
+        ...next,
+        resolutionStep: profile.resolutionStep,
+        resolutionOptions: profile.resolutionOptions.map((preset) => ({ ...preset })),
+      };
+    }
+    return next;
+  });
+};
 
 const DEFAULT_REGISTRY = {
   _doc: 'PortOS media model registry. Edit to add models, tune defaults, or switch the text encoder. Restart the server to apply changes.',
@@ -88,9 +145,21 @@ const DEFAULT_REGISTRY = {
         // at the first / last latent frame. 'image' anchors one at 'first',
         // 'fflf' anchors both.
         supportedModes: ['text', 'image', 'fflf'],
+        // The upstream model supports 4-15 seconds. H3's VAE snaps duration
+        // UP to a 17n+5 frame grid, so 4s becomes 107 frames and the port's
+        // recommended 5s default becomes 124. Keep the shortest recommended
+        // run as the default: dense attention already makes it a multi-hour
+        // render on current Apple Silicon.
         defaultFrames: 124,
-        frameOptions: [124, 141, 158, 175, 192, 209, 226, 243, 260, 277, 294, 311, 328, 345, 362],
+        frameOptions: [...MINIMAX_H3_OUTPUT_PROFILE.frameOptions],
         fpsOptions: [24],
+        // H3-Base was trained on a native 768px short edge. Its canvas resolver
+        // caps area at 768x1344 and rounds each edge to 32px; these are the
+        // exact outputs for the aspect ratios MiniMax documents.
+        defaultWidth: MINIMAX_H3_OUTPUT_PROFILE.defaultWidth,
+        defaultHeight: MINIMAX_H3_OUTPUT_PROFILE.defaultHeight,
+        resolutionStep: MINIMAX_H3_OUTPUT_PROFILE.resolutionStep,
+        resolutionOptions: MINIMAX_H3_OUTPUT_PROFILE.resolutionOptions.map((preset) => ({ ...preset })),
         memoryGb: 128,
         steps: 8,
         guidance: 0,
@@ -800,7 +869,7 @@ const normalizeRegistry = (parsed) => {
   // model this install deleted — or a hand-edited typo — is dropped with a
   // warning instead of surfacing a Finish button targeting nothing.
   const videoEntries = (entries) => sanitizeFinishProfiles(applyVideoFinishProfiles(
-    applyVideoDisclosures(backfillRuntime(dropRetiredEntries(entries))),
+    applyVideoDisclosures(backfillRuntime(upgradeMiniMaxH3OutputControls(dropRetiredEntries(entries)))),
   ));
   const macosEntries = videoEntries(macosResult.entries);
   const windowsEntries = videoEntries(windowsResult.entries);

@@ -64,6 +64,37 @@ function extractRefinementJson(raw) {
 
 export function buildMediaPromptRefinePrompt({ kind, prompt, negativePrompt, feedback, renderConfig = {} }) {
   const kindLabel = kind === 'video' ? 'video' : 'image';
+  if (!feedback || !feedback.trim()) {
+    return `You are a senior prompt engineer for generative ${kindLabel} renders.
+
+Take the ORIGINAL POSITIVE PROMPT below and produce an ENHANCED POSITIVE PROMPT that expands it into a vivid, highly detailed, visually rich prompt optimized for AI ${kindLabel} generation. Output the COMPLETE enhanced prompt — not a placeholder, not a summary, not a description of the changes. The "prompt" field MUST contain the full ready-to-render text, paragraph-style, including any preserved details from the original.
+
+Also produce an updated negative prompt and a short rationale.
+
+Return ONLY valid JSON in this schema (replace every <…> with real content; do NOT output the literal angle-bracket text):
+{
+  "prompt": "<the full enhanced positive prompt, ready to send to the renderer>",
+  "negativePrompt": "<the full updated negative prompt, or an empty string if none>",
+  "rationale": "<one concise sentence explaining the enhancement>",
+  "changes": ["<short bullet of what was enhanced>"]
+}
+
+Rules:
+- Enhance visual descriptions (lighting, camera angle, atmosphere, textures, details, mood).
+- Do not introduce unrelated characters, brands, or conflicting subjects unless requested.
+- Keep useful existing style constraints.
+- The "prompt" field must NEVER equal the schema placeholder text — it must be the actual enhanced prompt.
+
+ORIGINAL POSITIVE PROMPT:
+${prompt || '(empty)'}
+
+ORIGINAL NEGATIVE PROMPT:
+${negativePrompt || '(empty)'}
+
+RENDER CONFIG (kind=${kind}):
+${JSON.stringify(renderConfig, null, 2)}`;
+  }
+
   return `You are a senior prompt editor for generative ${kindLabel} renders.
 
 Take the ORIGINAL POSITIVE PROMPT below and produce a NEW POSITIVE PROMPT that fully incorporates the user's feedback. Output the COMPLETE rewritten prompt — not a placeholder, not a summary, not a description of the changes. The "prompt" field MUST contain the full ready-to-render text, paragraph-style, including any preserved details from the original.
@@ -108,10 +139,11 @@ ${feedback}`;
 // honor it (see providerHonorsModelOverride), so we pass `model` through
 // unconditionally and let the shared layer decide. Wrap runner failures
 // in a typed ServerError so the route returns 502 PROMPT_REFINE_FAILED.
-function runRefinePrompt(provider, model, prompt) {
+function runRefinePrompt(provider, model, prompt, effort) {
   return runPromptThroughProvider({
     provider,
     model,
+    effort,
     prompt,
     source: 'media-prompt-refine',
   }).catch((err) => {
@@ -123,9 +155,10 @@ export async function refineMediaPrompt({
   kind,
   prompt,
   negativePrompt = '',
-  feedback,
+  feedback = '',
   providerId,
   model,
+  effort,
   renderConfig = {},
 }) {
   // Let real failures (providers.json unreadable, toolkit not initialized)
@@ -161,7 +194,7 @@ export async function refineMediaPrompt({
     renderConfig,
   });
 
-  const { text, runId } = await runRefinePrompt(provider, selectedModel, llmPrompt);
+  const { text, runId } = await runRefinePrompt(provider, selectedModel, llmPrompt, effort);
 
   let parsed;
   try {

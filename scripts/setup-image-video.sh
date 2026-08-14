@@ -63,7 +63,7 @@ mkdir -p "${PORTOS_DATA}/video-thumbnails"
 # install ever starts — which on Linux/CPU/CUDA blocks the advertised
 # `INSTALL_ACESTEP=1 bash …` path. A bare `bash setup-image-video.sh` still
 # installs mflux as before.
-ANY_BYOV="${INSTALL_LTX2:-0}${INSTALL_WAN22:-0}${INSTALL_HUNYUAN:-0}${INSTALL_MINIMAX_H3:-0}${INSTALL_MUSICGEN:-0}${INSTALL_AUDIOLDM2:-0}${INSTALL_ACESTEP:-0}${INSTALL_MUSCRIPTOR:-0}"
+ANY_BYOV="${INSTALL_LTX2:-0}${INSTALL_WAN22:-0}${INSTALL_HUNYUAN:-0}${INSTALL_MINIMAX_H3:-0}${INSTALL_MUSICGEN:-0}${INSTALL_AUDIOLDM2:-0}${INSTALL_ACESTEP:-0}${INSTALL_MINIMAX_MUSIC3:-0}${INSTALL_MUSCRIPTOR:-0}"
 if [[ "$ANY_BYOV" == "00000000" ]]; then
   DEFAULT_INSTALL_MFLUX=1
   DEFAULT_INSTALL_VIDEO=$(is_macos && echo 1 || echo 0)
@@ -581,6 +581,19 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
     exit 1
   fi
   echo "✅ ACE-Step venv ready: $ACESTEP_PY"
+fi
+
+INSTALL_MINIMAX_MUSIC3="${INSTALL_MINIMAX_MUSIC3:-0}"
+if [[ "$INSTALL_MINIMAX_MUSIC3" == "1" ]]; then
+  MINIMAX_MUSIC3_VENV="${HOME}/.portos/venv-minimax-music3"
+  MINIMAX_MUSIC3_PY="$MINIMAX_MUSIC3_VENV/bin/python3"
+  [[ -x "$MINIMAX_MUSIC3_PY" || -x "$MINIMAX_MUSIC3_VENV/Scripts/python.exe" ]] || "$PYTHON_BIN" -m venv "$MINIMAX_MUSIC3_VENV"
+  [[ -x "$MINIMAX_MUSIC3_PY" ]] || MINIMAX_MUSIC3_PY="$MINIMAX_MUSIC3_VENV/Scripts/python.exe"
+  "$MINIMAX_MUSIC3_PY" -m pip install --upgrade pip wheel setuptools
+  "$MINIMAX_MUSIC3_PY" -m pip install --upgrade torch transformers accelerate huggingface_hub numpy \
+    'diffusers @ git+https://github.com/huggingface/diffusers.git@7cd51fa'
+  "$MINIMAX_MUSIC3_PY" -c "import torch; from diffusers import ModularPipeline; assert torch.cuda.is_available()"
+  echo "✅ MiniMax Music 3 venv ready: $MINIMAX_MUSIC3_PY"
 fi
 
 INSTALL_MUSCRIPTOR="${INSTALL_MUSCRIPTOR:-0}"

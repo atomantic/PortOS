@@ -710,6 +710,89 @@ describe('AutopilotPanel', () => {
     expect(screen.getByText(/~6 editorial-check LLM call/i)).toBeInTheDocument();
   });
 
+  // The milestone map: the plan the run projected, measured against the progress
+  // snapshot, so "where are we in the story" is answerable at a glance.
+  describe('milestone map', () => {
+    const PLAN = [
+      { kind: 'verifyArcSpine', count: 1, estActions: 4 },
+      { kind: 'foundationGate', count: 1, estActions: 4 },
+      { kind: 'textStages', count: 2, estActions: 2 },
+    ];
+
+    it('draws the map from the status payload when the panel attaches mid-run', async () => {
+      getPipelineAutopilotStatus.mockResolvedValue({
+        autopilot: { status: 'running', runId: 'r1' },
+        active: true,
+        start: { type: 'start', runId: 'r1', mode: 'execute', plan: PLAN },
+        progress: {
+          currentStep: 'foundationGate',
+          completed: { verifyArcSpine: 1 },
+          verified: { verifyArcSpine: { round: 2, findings: 5, blocking: 0 } },
+        },
+      });
+      renderPanel({ id: 's1', targetFormat: 'comic' });
+      expect(await screen.findByText(/Story progress/i)).toBeInTheDocument();
+      // 1 of 3 milestones settled → 1 of 4 counted units.
+      expect(screen.getByText(/1 of 3 milestone\(s\) · 25%/i)).toBeInTheDocument();
+      expect(screen.getByRole('progressbar', { name: /story progress/i })).toHaveAttribute('aria-valuenow', '25');
+      // What the finished gate actually validated, not just that it ran.
+      expect(screen.getByText(/0 blocking of 5 finding\(s\)/i)).toBeInTheDocument();
+    });
+
+    it('advances the map on a live progress frame', async () => {
+      getPipelineAutopilotStatus.mockResolvedValue({
+        autopilot: { status: 'running', runId: 'r1' },
+        active: true,
+        start: { type: 'start', runId: 'r1', mode: 'execute', plan: PLAN },
+        progress: { currentStep: 'verifyArcSpine', completed: {} },
+      });
+      sseFrames = [
+        { type: 'step:complete', kind: 'foundationGate', runId: 'r1' },
+        {
+          type: 'progress',
+          runId: 'r1',
+          currentStep: 'textStages',
+          completed: { verifyArcSpine: 1, foundationGate: 1, textStages: 1 },
+        },
+      ];
+      sseLatest = sseFrames[1];
+      renderPanel({ id: 's1', targetFormat: 'comic' });
+      // The newest progress frame wins over the status seed: 2 settled + 1 of 2
+      // text stages = 3 of 4 units.
+      expect(await screen.findByText(/2 of 3 milestone\(s\) · 75%/i)).toBeInTheDocument();
+      expect(screen.getByText('1/2')).toBeInTheDocument();
+      // A progress frame carries no status text of its own, so the live line
+      // keeps naming the last frame that did.
+      // (the status line and the recent-activity log both render it)
+      expect(screen.getAllByText(/Judging foundation done/i).length).toBeGreaterThan(0);
+    });
+
+    it('leaves a paused run on screen with the step it stopped on', async () => {
+      getPipelineAutopilotStatus.mockResolvedValue({
+        autopilot: { status: 'running', runId: 'r1' },
+        active: true,
+        start: { type: 'start', runId: 'r1', mode: 'execute', plan: PLAN },
+        progress: { currentStep: 'foundationGate', completed: { verifyArcSpine: 1 } },
+      });
+      const view = renderPanel({ id: 's1', targetFormat: 'comic' });
+      await screen.findByText(/Story progress/i);
+      // The run pauses; the map must survive the stream closing rather than
+      // vanishing and leaving only a one-line banner.
+      sseLatest = { type: 'paused', runId: 'r1', reason: 'foundation gate could not converge' };
+      sseFrames = [sseLatest];
+      view.rerender(
+        <MemoryRouter>
+          <AutopilotPanel series={{ id: 's1', targetFormat: 'comic' }} onSeriesUpdate={vi.fn()} onIssuesUpdate={vi.fn()} />
+        </MemoryRouter>,
+      );
+      await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(expect.stringMatching(/paused/i)));
+      expect(screen.getByText(/Story progress/i)).toBeInTheDocument();
+      expect(screen.getByText(/Judging foundation/i)).toBeInTheDocument();
+      // The run is over — no Stop/Pause affordances, but the map is still there.
+      expect(screen.getByRole('button', { name: /run autopilot/i })).toBeInTheDocument();
+    });
+  });
+
   // #1578 — per-check editorial telemetry forwarded up the autopilot SSE stream
   // renders as a live label with the severity breakdown, not the raw frame type.
   it('renders a forwarded per-check editorial frame with its severity breakdown', async () => {

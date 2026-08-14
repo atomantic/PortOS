@@ -112,4 +112,23 @@ describe('MusicGenPanel', () => {
     expect(select).toHaveValue('musicgen');
     expect(screen.queryByText(/Loading generators/i)).not.toBeInTheDocument();
   });
+
+  it('explains CUDA gating and hides install actions on an unsupported host', async () => {
+    api.listMusicEngines.mockResolvedValue({
+      defaultEngine: 'minimax-music3',
+      engines: [engine({
+        id: 'minimax-music3', name: 'MiniMax Music 3 (CUDA only)', ready: false,
+        cudaRequired: true, cudaState: 'absent', fixedModelInstall: true, modelReady: false,
+        customModels: false, lyrics: true, maxDurationSec: 300, defaultDurationSec: 60,
+        models: [{ id: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3', name: 'MiniMax Music 3' }],
+        defaultModelId: 'minimax-music3',
+      })],
+    });
+
+    render(<MusicGenPanel track={{ id: 'track-1' }} prompt="cinematic score" lyrics="Example lyrics" />);
+
+    expect(await screen.findByText(/requires an NVIDIA CUDA GPU/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /install runtime/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /install model/i })).not.toBeInTheDocument();
+  });
 });

@@ -28,7 +28,7 @@ from _runner_common import emit_runtime_fingerprint, heartbeat, register_source_
 
 
 FPS = 24
-MIN_FRAMES = 124  # first 17n+5 grid point at or above 5 seconds
+MIN_FRAMES = 107  # first 17n+5 grid point at or above the upstream 4-second minimum
 MAX_FRAMES = 362  # first 17n+5 grid point at or above 15 seconds
 FRAME_MODULUS = 17
 FRAME_REMAINDER = 5
@@ -196,7 +196,7 @@ def validate_args(args: argparse.Namespace) -> None:
     if args.width <= 0 or args.height <= 0 or args.width % 32 or args.height % 32:
         raise SystemExit(f"MiniMax H3 dimensions must be positive multiples of 32; got {args.width}x{args.height}.")
     if not MIN_FRAMES <= args.num_frames <= MAX_FRAMES:
-        raise SystemExit(f"MiniMax H3 supports approximately 5-15 seconds ({MIN_FRAMES}-{MAX_FRAMES} aligned frames).")
+        raise SystemExit(f"MiniMax H3 supports approximately 4-15 seconds ({MIN_FRAMES}-{MAX_FRAMES} aligned frames).")
     if args.num_frames % FRAME_MODULUS != FRAME_REMAINDER:
         raise SystemExit(f"MiniMax H3 frame count must be 17n+5; got {args.num_frames}.")
     if args.steps < 2:

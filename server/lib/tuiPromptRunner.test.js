@@ -1061,6 +1061,9 @@ describe('executeTuiRun', () => {
       // Poll 1 only seeds the size-stability baseline — the run is NOT finalized
       // yet even though the complete answer is already on disk.
       await vi.advanceTimersByTimeAsync(1100);
+      // Let the async interval callback commit its baseline before racing it
+      // against the fallback signal below on a loaded CI worker.
+      await flushAsync();
       expect(runnerMocks.finalizeRunRecord).not.toHaveBeenCalled();
 
       // A follow-up provider request times out and paints the terminal banner

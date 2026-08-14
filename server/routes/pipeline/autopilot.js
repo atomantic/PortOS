@@ -15,10 +15,12 @@
  *   POST /series/:id/autopilot/pause    → { pauseRequested }
  *                                          Finishes the active step/transaction
  *                                          without stopping its provider run.
- *   GET  /series/:id/autopilot/status   → { autopilot, active, start }
+ *   GET  /series/:id/autopilot/status   → { autopilot, active, start, progress }
  *                                          (resume / paused UI; `start` is the
  *                                          in-flight run's start frame, which
- *                                          names its provider/model)
+ *                                          names its provider/model and carries
+ *                                          the projected plan; `progress` is the
+ *                                          run's position in that plan)
  */
 
 import { Router } from 'express';
@@ -253,10 +255,14 @@ router.get('/series/:id/autopilot/status', asyncHandler(async (req, res) => {
     autopilot: series.autopilot || null,
     active: autopilot.isAutopilotActive(req.params.id),
     pauseRequested: autopilot.isAutopilotPauseRequested(req.params.id),
-    // The in-flight run's `start` frame (mode, target, resolved provider/model),
-    // so a client attaching mid-run can describe a run it never saw begin — SSE
-    // replays only the last frame. null when no run is active.
+    // The in-flight run's `start` frame (mode, target, resolved provider/model,
+    // the projected plan), so a client attaching mid-run can describe a run it
+    // never saw begin — SSE replays only the last frame. null when none active.
     start: autopilot.activeRunStart(req.params.id),
+    // Where that run currently IS against the plan — completed counts per step,
+    // the running step, and each gate's latest verification. Without it a panel
+    // opened mid-run would draw every milestone as still pending.
+    progress: autopilot.activeRunProgress(req.params.id),
   });
 }));
 

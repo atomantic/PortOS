@@ -1,0 +1,1 @@
+- MiniMax Music 3 can now be installed and generated from Music on supported NVIDIA CUDA hosts.

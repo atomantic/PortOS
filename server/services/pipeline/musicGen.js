@@ -39,7 +39,10 @@ import {
   resolveMusicgenPython, MUSICGEN_RUNTIME_DIR, MUSICGEN_VENV_DEFAULT,
   resolveAudioldm2Python, AUDIOLDM2_RUNTIME_DIR, AUDIOLDM2_VENV_DEFAULT,
   resolveAcestepPython, ACESTEP_RUNTIME_DIR, ACESTEP_VENV_DEFAULT,
+  resolveMinimaxMusic3Python, MINIMAX_MUSIC3_RUNTIME_DIR, MINIMAX_MUSIC3_VENV_DEFAULT,
 } from '../../lib/pythonSetup.js';
+import { getCudaCapability } from '../../lib/cudaCapability.js';
+import { inspectModelCache } from '../../lib/hfCache.js';
 import { ServerError } from '../../lib/errorHandler.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -48,6 +51,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const MUSICGEN_SCRIPT = join(__dirname, '../../../scripts/generate_musicgen.py');
 const AUDIOLDM2_SCRIPT = join(__dirname, '../../../scripts/generate_audioldm2.py');
 const ACESTEP_SCRIPT = join(__dirname, '../../../scripts/generate_acestep.py');
+const MINIMAX_MUSIC3_SCRIPT = join(__dirname, '../../../scripts/generate_minimax_music3.py');
 // Back-compat alias for the pre-multi-engine `buildMusicGenArgs` default.
 const SIDECAR_SCRIPT = MUSICGEN_SCRIPT;
 
@@ -87,6 +91,9 @@ export const ACESTEP_MODELS = Object.freeze([
   { id: 'ace-step-v1-3.5b', repo: 'ACE-Step/ACE-Step-v1-3.5B', name: 'ACE-Step v1 3.5B (full song + vocals)' },
 ]);
 export const DEFAULT_ACESTEP_MODEL_ID = 'ace-step-v1-3.5b';
+export const MINIMAX_MUSIC3_MODELS = Object.freeze([
+  { id: 'minimax-music3', repo: 'MiniMaxAI/MiniMax-Music3', name: 'MiniMax Music 3 (CUDA, up to 5 minutes)' },
+]);
 
 /**
  * Backend registry. Each engine is fully described here so the route, UI and
@@ -156,6 +163,24 @@ export const ENGINES = Object.freeze({
     // therefore disabled for it (customModels falsy) — the sidecar ignores
     // --model by design.
     customModels: false,
+  },
+  'minimax-music3': {
+    id: 'minimax-music3',
+    name: 'MiniMax Music 3 (CUDA only)',
+    models: MINIMAX_MUSIC3_MODELS,
+    defaultModelId: 'minimax-music3',
+    minDurationSec: 1,
+    maxDurationSec: 300,
+    defaultDurationSec: 60,
+    scriptPath: MINIMAX_MUSIC3_SCRIPT,
+    runtimeDir: MINIMAX_MUSIC3_RUNTIME_DIR,
+    resolvePython: resolveMinimaxMusic3Python,
+    venvDefault: MINIMAX_MUSIC3_VENV_DEFAULT,
+    installEnv: 'INSTALL_MINIMAX_MUSIC3',
+    lyrics: true,
+    customModels: false,
+    fixedModelInstall: true,
+    cudaRequired: true,
   },
 });
 
@@ -272,6 +297,23 @@ export async function generateMusic({ prompt, lyrics, engine: engineId = DEFAULT
     : shippedModel;
   const resolvedDuration = durationSec ?? engine.defaultDurationSec;
   const pythonPath = engine.resolvePython();
+  if (engine.cudaRequired) {
+    const cuda = await getCudaCapability();
+    if (cuda.state !== 'available') {
+      throw new ServerError(
+        cuda.state === 'unknown' ? 'CUDA availability could not be determined.' : `${engine.name} requires an NVIDIA CUDA GPU.`,
+        { status: 503, code: 'PIPELINE_MUSIC_CUDA_REQUIRED' },
+      );
+    }
+  }
+  if (engine.fixedModelInstall) {
+    const cache = await inspectModelCache(model.repo).catch(() => ({ cached: false }));
+    if (!cache.cached) {
+      throw new ServerError(`${engine.name} model weights are not installed. Install them from Music before generating.`, {
+        status: 503, code: 'PIPELINE_MUSIC_MODEL_MISSING',
+      });
+    }
+  }
   if (!pythonPath) {
     throw new ServerError(
       `${engine.name} runtime not found. Run \`${engine.installEnv}=1 bash scripts/setup-image-video.sh\` to bootstrap it (expected venv at ${engine.venvDefault}).`,

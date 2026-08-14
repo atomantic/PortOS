@@ -12,7 +12,7 @@ import { getSeries, updateSeries } from '../series.js';
 import * as volumeBeatsRunner from '../volumeBeatsRunner.js';
 import * as autoRunner from '../autoRunner.js';
 import { patchRunMetadata, stopRun } from '../../runner.js';
-import { runs, autopilotEvents, noteSignal } from './state.js';
+import { runs, autopilotEvents, noteSignal, noteProgress, snapshotProgress } from './state.js';
 
 // ---------------------------------------------------------------------------
 // Run registry helpers (mirror editorialAnalysisRunner.js).
@@ -38,6 +38,17 @@ export function activeRunStart(seriesId) {
   const run = runs.get(seriesId);
   if (!run || run.finished) return null;
   return run.startPayload || null;
+}
+
+// The live progress snapshot of an IN-FLIGHT run (null when none is active) —
+// the milestone map's cursor: completed counts per step kind, the step running
+// now, and what each gate last verified. Same object the `progress` frame
+// carries, so a client attaching mid-run starts from the run's real position
+// instead of an empty map.
+export function activeRunProgress(seriesId) {
+  const run = runs.get(seriesId);
+  if (!run || run.finished) return null;
+  return snapshotProgress(run);
 }
 
 export function attachClient(seriesId, res) {
@@ -86,10 +97,8 @@ export function pauseSeriesAutopilot(seriesId) {
   return true;
 }
 
-export function broadcast(seriesId, payload) {
-  const run = runs.get(seriesId);
-  if (!run) return;
-  broadcastSse(run, payload);
+function emitFrame(run, seriesId, payload, sseOpts) {
+  broadcastSse(run, payload, sseOpts);
   // Retain the diagnosable frames for the opt-in self-improvement pass. A single
   // tap here (rather than instrumenting each step runner) means any telemetry
   // frame a future step emits is diagnosable evidence for free. No-op unless the
@@ -104,6 +113,23 @@ export function broadcast(seriesId, payload) {
     autopilotEvents.emit(seriesId, payload);
   } catch (err) {
     console.log(`⚠️ autopilot: event emit failed for ${seriesId.slice(0, 12)}: ${err.message}`);
+  }
+}
+
+export function broadcast(seriesId, payload) {
+  const run = runs.get(seriesId);
+  if (!run) return;
+  emitFrame(run, seriesId, payload);
+  // Milestone map: fold the frame into the run's progress snapshot and, when it
+  // moved, follow it with the snapshot itself. Emitted as its own frame (rather
+  // than stamped onto every frame) so the existing frame shapes — and the
+  // diagnosis evidence read off them — are untouched, and NOT retained for SSE
+  // replay: it follows nearly every meaningful frame, so retaining it would take
+  // the single replay slot and leave a late-attaching client with a snapshot
+  // instead of the frame that says what the run is doing. That client reads the
+  // same snapshot off the status route.
+  if (noteProgress(run, payload)) {
+    emitFrame(run, seriesId, { type: 'progress', runId: run.runId, ...snapshotProgress(run) }, { retain: false });
   }
 }
 

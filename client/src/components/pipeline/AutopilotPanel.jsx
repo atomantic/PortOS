@@ -22,8 +22,10 @@ import {
   patchSettingsSlice,
 } from '../../services/api';
 import { providerDisplayName, providerModelLabel, assignmentModelOptions, resolveSeriesRunLlm, resolveCliEffort } from '../../utils/providers';
+import { autopilotStepLabel, describeAutopilotVerification } from '../../lib/autopilotMilestones';
 import Pill from '../ui/Pill';
 import ProviderModelSelector from '../ProviderModelSelector';
+import AutopilotMilestones from './AutopilotMilestones';
 import SeriesAutopilotSchedule from './SeriesAutopilotSchedule';
 
 // Convergence-round bounds — mirror the server (seriesAutopilot.js + the
@@ -270,30 +272,9 @@ const SEVERITY_COLORS = {
   low: 'text-gray-400 border-gray-500/30 bg-gray-700/20',
 };
 
-// Human labels for each conductor step kind (matches seriesAutopilot.js).
-const STEP_LABELS = {
-  unlockLocks: 'Unlocking series records',
-  characterFoundation: 'Establishing character foundation',
-  generateArc: 'Generating arc',
-  repairArcStructure: 'Repairing volume structure',
-  generateEpisodes: 'Generating episodes',
-  verifyArcSpine: 'Checking arc spine',
-  verifyArc: 'Verifying arc',
-  foundationGate: 'Judging foundation',
-  beatSheet: 'Generating beat sheets',
-  textStages: 'Writing prose + scripts',
-  scriptVerify: 'Verifying scripts',
-  editorialReview: 'Editorial review',
-  reverseOutline: 'Refreshing scene segmentation',
-  editorialChecks: 'Editorial checks',
-  editorialHealthGate: 'Editorial health gate',
-  revisionCycle: 'Iterate-to-quality revision',
-  canonVerify: 'Checking canon descriptions',
-  visualDraft: 'Drafting comic art',
-  produceTeaser: 'Producing teaser video',
-};
-
-const stepLabel = (kind) => STEP_LABELS[kind] || kind;
+// Step labels are shared with the milestone map (lib/autopilotMilestones.js) so
+// the live status line and the map can't name the same step differently.
+const stepLabel = autopilotStepLabel;
 
 // The record kinds one auto-resolve round can rewrite, in the order a reader
 // scans them: the arc first, then down to the episodes.
@@ -317,16 +298,23 @@ const NO_CHANGE_LABELS = {
   'no-edits-returned': 'it proposed no edits at all',
 };
 
-// Turn an SSE frame into a one-line status string.
+// Turn an SSE frame into a one-line status string. Null means "nothing to say" —
+// the frame is state for another surface, not activity worth a status line.
 function frameLabel(f) {
   if (!f) return null;
   switch (f.type) {
+    // The milestone map's cursor (server: seriesAutopilot/state.js). It follows
+    // the frame that moved it, so labeling it would just overwrite that frame's
+    // own status line with a duplicate.
+    case 'progress': return null;
     case 'start': return f.mode === 'dry-run' ? 'Planning (dry-run)…' : 'Starting…';
     case 'note': return f.message;
     case 'step:start': return `${stepLabel(f.kind)}…`;
     case 'step:complete': return `${stepLabel(f.kind)} done`;
     case 'step:skip': return `Skipped ${stepLabel(f.kind)}${f.reason ? ` — ${f.reason}` : ''}`;
-    case 'verify:round': return `${f.scope} check — ${f.blocking} blocking of ${f.findings} finding(s)${f.errored > 0 ? ` · ⚠️ ${f.errored} errored` : ''}`;
+    // Same formatter the milestone row uses — the two render the SAME telemetry
+    // in one card, so a second phrasing of it here is drift waiting to happen.
+    case 'verify:round': return `${f.scope} check — ${describeAutopilotVerification(f.scope, f)}`;
     // What the auto-resolve round actually wrote. An episode count alone was
     // meaningless at the arc-spine gate (whose resolver may not touch episodes),
     // so name every record kind that moved — and when nothing moved, say why
@@ -361,7 +349,7 @@ function frameLabel(f) {
         ? `discarded before it was applied: ${f.reason}`
         : `${f.before} → ${f.after} blocking finding(s), ${f.kept ? 'kept' : 'reverted'}`);
     // #2176 — foundation-gate telemetry.
-    case 'foundation:round': return `Foundation round ${f.round} — weighted ${f.weightedScore}/${f.threshold}${f.weakest ? ` · next target: ${f.weakest}` : ''}`;
+    case 'foundation:round': return `Foundation round ${f.round} — ${describeAutopilotVerification('foundationGate', f)}`;
     case 'foundation:fix': return `${f.phase === 'pre-arc' ? 'Pre-arc foundation' : 'Foundation fix'} — ${f.dimension}${f.applied ? ' applied' : ` skipped${f.reason ? ` (${f.reason})` : ''}`}`;
     // A repair whose re-judge showed no gain is rewound. Like resolve:rollback,
     // say whether the gate is retrying from the restored checkpoint — otherwise
@@ -419,6 +407,10 @@ function frameLabel(f) {
 }
 
 const RUN_ENDED = new Set(['complete', 'canceled', 'error', 'paused']);
+
+// How many recent frames the live activity log shows. Also the stopping point
+// for the backward frame walk that builds it.
+const ACTIVITY_LINES = 6;
 
 // Pause kinds worth calling out beside the status line — the ones where "Paused"
 // alone doesn't tell the user what state the draft is in. A kind with no entry
@@ -511,6 +503,12 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const [mode, setMode] = useState(null);
   const [plan, setPlan] = useState(null);
   const [planTotals, setPlanTotals] = useState(null);
+  // Milestone-map state. `seedProgress` is the snapshot the status route hands a
+  // panel that attaches MID-RUN (SSE replays one frame, so the live `progress`
+  // frames alone would start the map at zero); `terminal` is how the tracked run
+  // ended, which turns the step it stopped on from "running" into "blocked".
+  const [seedProgress, setSeedProgress] = useState(null);
+  const [terminal, setTerminal] = useState(null);
   const [showOpts, setShowOpts] = useState(false);
   const [includeVisual, setIncludeVisual] = useState(true);
   const [fileGaps, setFileGaps] = useState(false);
@@ -754,6 +752,32 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
 
   const { latest, frames } = usePipelineProgress(pipelineAutopilotSseUrl, [seriesId], { enabled: active });
 
+  // One backward walk per frame batch yields everything the live section needs:
+  // the newest `progress` frame (the milestone map's cursor) and the last few
+  // labelled frames (the activity log, whose last line is also the status line).
+  // Walking backward and stopping early matters — `frames` is uncapped, so
+  // labelling the whole array on every arriving frame is quadratic over a run.
+  const { snapshot, activityLines } = useMemo(() => {
+    const lines = [];
+    let found = null;
+    for (let i = frames.length - 1; i >= 0; i -= 1) {
+      const f = frames[i];
+      if (!found && f?.type === 'progress') found = f;
+      if (lines.length < ACTIVITY_LINES) {
+        const label = frameLabel(f);
+        if (label) lines.unshift(label);
+      } else if (found) break;
+    }
+    return { snapshot: found, activityLines: lines };
+  }, [frames]);
+  // Fall back to the status route's snapshot until this stream emits one of its
+  // own — a panel attaching mid-run has no frames yet.
+  const progress = snapshot || seedProgress;
+  // A `progress` frame is deliberately label-less, so the status line keeps
+  // naming the last frame that had something to say. `latest` covers a stream
+  // whose frames were never collected.
+  const latestLabel = activityLines.at(-1) || frameLabel(latest);
+
   const onSeriesUpdateRef = useRef(onSeriesUpdate);
   const onIssuesUpdateRef = useRef(onIssuesUpdate);
   onSeriesUpdateRef.current = onSeriesUpdate;
@@ -790,6 +814,10 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
         // SSE replays only the last frame, so the run's `start` frame comes back
         // on the status payload instead — same shape, same reader.
         if (s.start) applyStartFrame(s.start);
+        // …and its position in that plan, so the map opens where the run
+        // actually is instead of claiming nothing has happened yet.
+        if (s.progress) setSeedProgress(s.progress);
+        setTerminal(null);
         setPausePending(s.pauseRequested === true);
         setActive(true);
       })
@@ -804,6 +832,10 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     if (latest?.type === 'start') {
       applyStartFrame(latest);
     } else if (latest?.type === 'complete' && latest.dryRun && Array.isArray(latest.plan)) {
+      // A fast dry-run can finish before the client attaches, so this terminal
+      // frame is the only place the plan (and the fact that it WAS a dry-run,
+      // which is what makes the map a plan rather than a progress meter) lands.
+      setMode('dry-run');
       setPlan(latest.plan);
       if (latest.planTotals) setPlanTotals(latest.planTotals);
     }
@@ -816,6 +848,10 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     if (activeRunIdRef.current && latest.runId && latest.runId !== activeRunIdRef.current) return;
     setActive(false);
     setPausePending(false);
+    // Freeze the map on how this run ended: a paused/errored run keeps its
+    // milestones on screen with the step it stopped on flagged, rather than the
+    // list vanishing the moment the stream closes.
+    setTerminal(latest.type);
     getPipelineSeries(seriesId, { silent: true }).then((s) => { if (s) onSeriesUpdateRef.current?.(s); }).catch(() => null);
     listPipelineIssues(seriesId, { silent: true }).then((is) => onIssuesUpdateRef.current?.(Array.isArray(is) ? is : [])).catch(() => null);
     if (latest.type === 'complete') {
@@ -840,6 +876,10 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     setStarting(true);
     setPlan(null);
     setPlanTotals(null);
+    // The previous run's map must not bleed into this one — the fresh run
+    // rebuilds both halves (plan on its start frame, progress from its frames).
+    setSeedProgress(null);
+    setTerminal(null);
     // ONLY the options the user edited (clamped, real values — never the display
     // defaults of untouched options, which would mask a saved setting). Send them
     // as per-run overrides AND persist them: the override makes the edit effective
@@ -915,7 +955,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   if (!seriesId) return null;
 
   const ap = series.autopilot;
-  const liveLabel = active ? (frameLabel(latest) || 'Working…') : null;
+  const liveLabel = active ? (latestLabel || 'Working…') : null;
   // #1617 — once the server acks the cancel, switch the Stop button to a
   // disabled "Cancelling…" state so the user gets feedback (and can't re-fire
   // cancel) while the active step finishes and the terminal frame arrives.
@@ -1357,44 +1397,31 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
               ) : null}
             </div>
           ) : null}
-          {frames?.length ? (
+          {activityLines.length ? (
             <div className="mt-2 max-h-28 overflow-y-auto text-[11px] text-gray-500 space-y-0.5">
-              {frames.slice(-6).map((f, i) => <div key={i}>{frameLabel(f)}</div>)}
+              {activityLines.map((line, i) => <div key={i}>{line}</div>)}
             </div>
           ) : null}
         </div>
       ) : null}
 
-      {/* Dry-run plan — rendered whenever a plan exists, so it survives after the
-          dry-run stream closes (a dry-run persists no marker and completes
-          immediately). Cleared when the next run starts. */}
-      {plan?.length ? (
-        <div className="px-3 pb-3 border-t border-port-border pt-2 text-[11px] text-gray-400">
-          <div className="uppercase tracking-wider text-gray-500 mb-1">{active ? 'Planned steps' : 'Dry-run plan'}</div>
-          <ul className="space-y-0.5">
-            {plan.map((p, i) => (
-              <li key={i} className="flex items-center gap-1.5">
-                <ChevronRight size={10} /> {stepLabel(p.kind)} ×{p.count}{p.note ? ` — ${p.note}` : ''}
-                {Number.isFinite(p.estActions) && p.estActions > 0 ? (
-                  <span className="text-gray-500 ml-auto whitespace-nowrap">≈{p.estActions} act</span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-          {/* #1576 — estimated budget cost so a large series on a small daily cap
-              can see, before starting, whether it will exhaust the cos action
-              budget on text/verify and never reach editorial. */}
-          {planTotals && (Number.isFinite(planTotals.estActions) || Number.isFinite(planTotals.estLlmCalls)) ? (
-            <div className="mt-1.5 pt-1.5 border-t border-port-border/60 text-gray-400 flex items-center gap-1.5">
-              <span className="uppercase tracking-wider text-gray-500">Est. budget</span>
-              <span className="ml-auto whitespace-nowrap">
-                ≈{planTotals.estActions || 0} cos action(s)
-                {planTotals.estLlmCalls ? ` · ~${planTotals.estLlmCalls} editorial-check LLM call(s)` : ''}
-              </span>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+      {/* Milestone map — the run's whole job (the plan its `start` frame
+          projected) measured against where it actually is. Rendered whenever a
+          plan exists, so it survives after the stream closes: a dry-run persists
+          no marker and completes immediately, and a run that pauses while the
+          panel is open keeps its map beside the banner. Both halves are
+          in-memory on the server, so a reload after the run ended shows the
+          persisted banner alone — see PLAN.md for persisting the map itself.
+          Cleared when the next run starts. `planTotals` carries the #1576
+          estimated cos-action budget so a large series on a small daily cap can
+          see, before starting, whether it will run out before editorial. */}
+      <AutopilotMilestones
+        plan={plan}
+        planTotals={planTotals}
+        progress={progress}
+        terminal={terminal}
+        dryRun={mode === 'dry-run'}
+      />
 
       {/* Persisted status banner (paused / done / error). A `done` run that
           filed blocking script-craft gaps (#1572) is shown as a caution, not

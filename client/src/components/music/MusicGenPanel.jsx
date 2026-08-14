@@ -84,6 +84,24 @@ export default function MusicGenPanel({ track, prompt, lyrics, onGenerated, remi
 
   const canGenerate = !!engine?.ready && !!prompt?.trim() && !generating && !!track?.id;
 
+  const handleFixedModelInstall = async () => {
+    const model = engine?.models?.find((item) => item.id === engine.defaultModelId) || engine?.models?.[0];
+    if (!engine || !model?.repo) return;
+    setInstalling(true);
+    setInstallProgress({ message: `Starting ${model.name}…` });
+    let failed = false;
+    await installAudioModel({ engine: engine.id, repo: model.repo }, (ev) => {
+      if (!mountedRef.current) return;
+      if (ev.type === 'progress') setInstallProgress({ message: `${ev.file || 'downloading'} — ${Math.round((ev.progress || 0) * 100)}%`, progress: ev.progress });
+      else if (ev.type === 'stage') setInstallProgress({ message: ev.stage });
+      else if (ev.type === 'error') { failed = true; toast.error(ev.message || 'Download failed'); }
+    }).catch((err) => { failed = true; if (mountedRef.current) toast.error(err.message || 'Install failed'); });
+    if (!mountedRef.current) return;
+    setInstalling(false);
+    setInstallProgress(null);
+    if (!failed) { await loadEngines(); toast.success(`${model.name} installed`); }
+  };
+
   const handleGenerate = async () => {
     if (!engine) return;
     if (!track?.id) { toast.error('Save the track first, then generate'); return; }
@@ -162,7 +180,7 @@ export default function MusicGenPanel({ track, prompt, lyrics, onGenerated, remi
             className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
           >
             {engines.map((e) => (
-              <option key={e.id} value={e.id}>{e.name}{e.ready ? '' : ' (not installed)'}</option>
+              <option key={e.id} value={e.id}>{e.name}{e.cudaRequired && e.cudaState !== 'available' ? ' (CUDA unavailable)' : e.ready ? '' : ' (setup required)'}</option>
             ))}
           </select>
         </label>
@@ -197,9 +215,15 @@ export default function MusicGenPanel({ track, prompt, lyrics, onGenerated, remi
       {showRuntimeInstallHint ? (
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-lg border border-port-warning/30 bg-port-warning/10 px-3 py-2">
           <p className="text-[11px] text-port-warning">
-            {engine.name} is not installed yet. Install the runtime to enable generation.
+            {engine.cudaRequired && engine.cudaState === 'absent'
+              ? `${engine.name} requires an NVIDIA CUDA GPU and is unavailable on this host.`
+              : engine.cudaRequired && engine.cudaState === 'unknown'
+                ? `${engine.name} is disabled because CUDA availability could not be determined.`
+                : engine.fixedModelInstall && engine.modelReady === false
+                  ? `${engine.name} runtime and model weights must both be installed before generation.`
+                  : `${engine.name} is not installed yet. Install the runtime to enable generation.`}
           </p>
-          <button
+          {!engine.cudaRequired || engine.cudaState === 'available' ? <button
             type="button"
             onClick={() => setRuntimeInstallEngine(engine)}
             className="inline-flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-warning/50 text-port-warning text-xs font-medium hover:border-port-warning disabled:opacity-50"
@@ -207,6 +231,15 @@ export default function MusicGenPanel({ track, prompt, lyrics, onGenerated, remi
             <Download size={13} />
             Install runtime
           </button>
+          : null}
+        </div>
+      ) : null}
+      {engine?.fixedModelInstall && !engine.modelReady && engine.cudaState === 'available' ? (
+        <div className="rounded-lg border border-port-border px-3 py-2">
+          <button type="button" onClick={handleFixedModelInstall} disabled={installing} className="inline-flex items-center gap-2 text-xs text-port-accent disabled:opacity-50">
+            {installing ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Install model
+          </button>
+          {installProgress ? <p className="mt-1 truncate text-[11px] text-gray-500">{installProgress.message}</p> : null}
         </div>
       ) : null}
       {engine?.lyrics ? (

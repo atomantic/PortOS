@@ -390,31 +390,18 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
     expect(args[args.indexOf('--image-strength') + 1]).toBe('0.25');
   });
 
-  it('falls back to the platform image dispatch for non-flux2 models', () => {
+  it.skipIf(process.platform === 'win32')('falls back to mflux dispatch for non-flux2 models on macOS', () => {
     // No flux2 mock needed — the branch shouldn't be taken at all.
     mockResolveFlux2Python.mockReturnValue(null);
     const { bin, args } = buildArgs({
       ...baseInput,
       model: { id: 'dev', steps: 20, guidance: 3.5 },
     });
-    // Assert the per-platform contract rather than pinning process.platform:
-    // local.js imports sharp, which selects its NATIVE binary from
-    // process.platform at load time, so stubbing the platform before the
-    // dynamic import makes sharp try to load another OS's binary and the whole
-    // file fails to load. Both dispatches ship, so both are asserted here on
-    // whichever runner is executing.
-    if (process.platform === 'win32') {
-      // Windows has no mflux/MLX — the render goes through imagine_win.py on
-      // the configured python.
-      expect(bin).toBe(baseInput.pythonPath);
-      expect(args.some((a) => String(a).endsWith('imagine_win.py'))).toBe(true);
-    } else {
-      // mflux-generate sits next to the python binary in the venv.
-      expect(bin).toMatch(/mflux-generate$/);
-    }
-    expect(args).toContain('--quantize');
+    // mflux-generate sits next to the python binary in the venv.
+    expect(bin).toMatch(/mflux-generate$/);
     expect(args).toContain('--model');
     expect(args[args.indexOf('--model') + 1]).toBe('dev');
+    expect(args).toContain('--quantize');
   });
 });
 

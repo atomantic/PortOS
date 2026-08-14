@@ -114,3 +114,98 @@ export function summarizeSignals(run) {
   for (const s of signals) counts[s.type] = (counts[s.type] || 0) + 1;
   return { signals, counts, dropped: run?.signalsDropped || 0 };
 }
+
+// ---------------------------------------------------------------------------
+// Live progress snapshot — the milestone map's "where are we" half (the plan on
+// the `start` frame is the "what's the whole job" half).
+//
+// Everything here is already derivable from frames the run broadcasts, but only
+// by a client that watched the WHOLE stream: SSE replays a single payload, so a
+// panel opened mid-run (the normal case for a long unattended run) would show an
+// empty map. Folding it onto the run record instead means the snapshot has ONE
+// implementation, published two ways — a `progress` frame after every frame that
+// moves it, and the same object on the status route for a mid-run attach.
+// ---------------------------------------------------------------------------
+
+/** A fresh, empty progress snapshot (the shape every consumer can assume). */
+export const emptyProgress = () => ({
+  currentStep: null,
+  currentStepComplete: false,
+  completed: {},
+  skipped: {},
+  verified: {},
+});
+
+/**
+ * A detached copy of the run's live progress. The fold MUTATES the maps it owns,
+ * so handing the live object to an SSE payload / event listener would let a
+ * later step silently rewrite a frame that was already delivered — the reader
+ * would see counts from the future. One shallow clone per published snapshot.
+ */
+export function snapshotProgress(run) {
+  const p = run?.progress;
+  if (!p) return null;
+  return { ...p, completed: { ...p.completed }, skipped: { ...p.skipped }, verified: { ...p.verified } };
+}
+
+/**
+ * Fold one broadcast frame into the run's progress snapshot. Returns true when
+ * the snapshot MOVED (so the caller publishes it) and false otherwise, which is
+ * the common case — most frames are chatter the map doesn't track.
+ *
+ * Deliberately never folds a terminal frame: the caller publishes the snapshot
+ * as a follow-up frame, and SSE replay keeps only the last payload, so a
+ * `progress` frame emitted after `complete`/`paused` would hide the terminal
+ * from a client that attaches late.
+ */
+export function noteProgress(run, payload) {
+  if (!run || !payload) return false;
+  if (!run.progress) run.progress = emptyProgress();
+  const p = run.progress;
+  switch (payload.type) {
+    case 'step:start':
+      p.currentStep = payload.kind || null;
+      p.currentStepComplete = false;
+      return true;
+    case 'step:complete':
+      // `currentStep` is deliberately NOT cleared: the next step:start replaces
+      // it within the same tick, and leaving it set means a run that pauses or
+      // ends right here still names the step it was on. `currentStepComplete` is
+      // what separates the two readings — without it, a gate the run RE-ENTERS
+      // (the foundation gate re-checks after an arc repair) is indistinguishable
+      // from one it just finished, and the map shows the wrong row working.
+      if (payload.kind) p.completed[payload.kind] = (p.completed[payload.kind] || 0) + 1;
+      if (!payload.kind || payload.kind === p.currentStep) p.currentStepComplete = true;
+      return true;
+    case 'step:skip':
+      // Sub-step skips (one issue's render, one script's craft pass) — the step
+      // itself still completes, so these annotate a milestone rather than
+      // advancing it.
+      if (payload.kind) p.skipped[payload.kind] = (p.skipped[payload.kind] || 0) + 1;
+      return true;
+    // Both gate-telemetry frames are broadcast from INSIDE the step they
+    // measure, so the step already being tracked IS the milestone they belong
+    // to. Keying off it (rather than translating the frame's `scope`) means a
+    // new gate needs no naming table kept in sync with its emitter.
+    case 'verify:round':
+      if (!p.currentStep) return false;
+      p.verified[p.currentStep] = {
+        round: payload.round ?? null,
+        findings: payload.findings ?? null,
+        blocking: payload.blocking ?? null,
+        ...(payload.errored ? { errored: payload.errored } : {}),
+      };
+      return true;
+    case 'foundation:round':
+      if (!p.currentStep) return false;
+      p.verified[p.currentStep] = {
+        round: payload.round ?? null,
+        weightedScore: payload.weightedScore ?? null,
+        threshold: payload.threshold ?? null,
+        ...(payload.weakest ? { weakest: payload.weakest } : {}),
+      };
+      return true;
+    default:
+      return false;
+  }
+}

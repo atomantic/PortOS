@@ -63,7 +63,7 @@ describe('AUDIOLDM2_MODELS registry', () => {
 
 describe('ENGINES backend registry', () => {
   it('exposes all backends with the fields the route + UI consume', () => {
-    expect(Object.keys(ENGINES).sort()).toEqual(['acestep', 'audioldm2', 'musicgen']);
+    expect(Object.keys(ENGINES).sort()).toEqual(['acestep', 'audioldm2', 'minimax-music3', 'musicgen']);
     for (const engine of Object.values(ENGINES)) {
       expect(typeof engine.id).toBe('string');
       expect(typeof engine.name).toBe('string');
@@ -136,6 +136,15 @@ describe('clampDuration', () => {
 });
 
 describe('buildSidecarArgs', () => {
+  it('builds MiniMax Music 3 args with lyrics and clamps to five minutes', () => {
+    const { args } = buildSidecarArgs({
+      engineId: 'minimax-music3', pythonPath: '/venv/python', repo: 'MiniMaxAI/MiniMax-Music3',
+      prompt: 'cinematic synthwave', lyrics: 'Example lyrics', durationSec: 999, outputPath: '/tmp/out.wav',
+    });
+    expect(args).toContain('MiniMaxAI/MiniMax-Music3');
+    expect(args.slice(args.indexOf('--duration'), args.indexOf('--duration') + 2)).toEqual(['--duration', '300']);
+    expect(args.slice(args.indexOf('--lyrics'), args.indexOf('--lyrics') + 2)).toEqual(['--lyrics', 'Example lyrics']);
+  });
   const base = {
     pythonPath: '/venv/bin/python3',
     repo: 'facebook/musicgen-medium',

@@ -14,9 +14,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
-import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
 import { PATHS } from '../lib/fileUtils.js';
 
 // #3475 — The builder reads ~/.claude/CLAUDE.md off the real filesystem and splices
@@ -1363,7 +1363,6 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/## Pipeline Context/);
       expect(prompt).toMatch(/Stage 2 of 3: "prose"/);
       expect(prompt).toMatch(/Previous stage: "idea"/);
-      // The prompt embeds a joined path, so accept either separator.
       expect(prompt).toMatch(/agent-prev-1[\\/]output\.txt/);
     });
   });
@@ -1776,10 +1775,10 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
     let priorHomeStub;
 
     beforeAll(() => {
+      priorHomeStub = homeStub.dir;
       fixtureHome = mkdtempSync(join(tmpdir(), 'portos-claudemd-fixture-'));
       mkdirSync(join(fixtureHome, '.claude'), { recursive: true });
       writeFileSync(join(fixtureHome, '.claude', 'CLAUDE.md'), FIXTURE_GLOBAL_CLAUDE_MD);
-      priorHomeStub = homeStub.dir;
       homeStub.dir = fixtureHome;
     });
 
@@ -1787,7 +1786,7 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
     // the global CLAUDE.md section being empty.
     afterAll(() => {
       homeStub.dir = priorHomeStub;
-      rmSync(fixtureHome, { recursive: true, force: true });
+      if (fixtureHome) rmSync(fixtureHome, { recursive: true, force: true });
     });
 
     it('splices the fixture verbatim yet still suppresses commit/push/merge in every builder-generated section', async () => {
@@ -2501,4 +2500,3 @@ describe('TUI reviewLoopFollowUp completion instructions', () => {
     expect(first).not.toMatch(/\.agent-done(?![-\w])/);
   });
 });
-

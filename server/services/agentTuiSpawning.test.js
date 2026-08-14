@@ -619,7 +619,6 @@ describe('spawnTuiAgent runtime', () => {
       workspacePath: '/tmp/ws',
       // Per-agent sentinel: `/tmp/ws` is a SHARED workspace (its basename is not
       // the agent id), so the run watches only its own `.agent-done-agent-1`.
-      // Composed by doneSentinelPath() via path.join.
       doneSentinelPath: join('/tmp/ws', '.agent-done-agent-1'),
     }));
     expect(shellService.createShellSession).not.toHaveBeenCalled();

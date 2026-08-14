@@ -26,12 +26,18 @@ export const PYTHON_NOISE_RE = /xformers|xFormers|triton|Triton|bitsandbytes|Ple
 // `job.lastPayload`) instead of hanging until timeout.
 export const SSE_CLEANUP_DELAY_MS = 5000;
 
-export const broadcastSse = (job, payload) => {
+export const broadcastSse = (job, payload, { retain = true } = {}) => {
   // Cache the most recent payload on the job so attachSseClient can replay
   // it to a client that connects after this fired. Without this, a client
   // that races with `complete` would hang waiting for a frame that already
   // shipped.
-  job.lastPayload = payload;
+  //
+  // `retain: false` is for frames that are a running SNAPSHOT of state a late
+  // client can fetch another way (the autopilot's `progress` frame, whose
+  // content the status route also serves). Retaining those would let them
+  // occupy the single replay slot and hide the last frame that said what the
+  // run is actually doing.
+  if (retain) job.lastPayload = payload;
   const msg = `data: ${JSON.stringify(payload)}\n\n`;
   for (const c of job.clients) c.write(msg);
 };

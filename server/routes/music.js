@@ -31,6 +31,7 @@ import { listEngineModels, addAudioModel, removeAudioModel, isValidRepoId } from
 import { startHfDownloadStream, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import { inspectModelCache } from '../lib/hfCache.js';
+import { getCudaCapability } from '../lib/cudaCapability.js';
 import * as tracks from '../services/tracks/index.js';
 import * as albums from '../services/albums/index.js';
 
@@ -41,7 +42,10 @@ const router = Router();
 // (the opt-in venv is provisioned). The UI gates its Generate affordance + shows
 // the install hint from this.
 router.get('/engines', asyncHandler(async (_req, res) => {
-  const engines = await Promise.all(Object.values(ENGINES).map(async (engine) => ({
+  const cuda = await getCudaCapability();
+  const engines = await Promise.all(Object.values(ENGINES).map(async (engine) => {
+    const modelCache = engine.fixedModelInstall ? await inspectModelCache(engine.models[0].repo).catch(() => ({ cached: false })) : null;
+    return ({
     id: engine.id,
     name: engine.name,
     models: await listEngineModels(engine.id),
@@ -54,10 +58,14 @@ router.get('/engines', asyncHandler(async (_req, res) => {
     // the "install/select model" UI). ACE-Step resolves a single foundation
     // checkpoint via checkpoint_dir, so custom repos don't apply to it.
     customModels: engine.customModels === true,
-    ready: isEngineReady(engine.id),
+    fixedModelInstall: engine.fixedModelInstall === true,
+    modelReady: modelCache ? modelCache.cached === true : true,
+    cudaRequired: engine.cudaRequired === true,
+    cudaState: engine.cudaRequired ? cuda.state : 'available',
+    ready: isEngineReady(engine.id) && (!engine.cudaRequired || cuda.state === 'available') && (!modelCache || modelCache.cached === true),
     installEnv: engine.installEnv,
     venvDefault: engine.venvDefault,
-  })));
+  }); }));
   res.json({ engines, defaultEngine: DEFAULT_ENGINE_ID });
 }));
 
@@ -100,6 +108,15 @@ router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
   if (runtimeInstallInFlight.has(engine.id)) {
     send({ type: 'error', message: `Another ${engine.name} install is already running. Wait for it to finish or restart PortOS.` });
     return safeEnd();
+  }
+  if (engine.cudaRequired) {
+    const cuda = await getCudaCapability();
+    if (cuda.state !== 'available') {
+      send({ type: 'error', message: cuda.state === 'unknown'
+        ? `${engine.name} cannot be installed because CUDA availability could not be determined.`
+        : `${engine.name} requires an NVIDIA CUDA GPU and cannot be installed on this host.` });
+      return safeEnd();
+    }
   }
   runtimeInstallInFlight.set(engine.id, null);
 
@@ -208,12 +225,14 @@ router.post('/models', asyncHandler(async (req, res) => {
   // Reject install for engines that can't render a custom HF checkpoint (e.g.
   // ACE-Step, which uses a fixed checkpoint_dir) — otherwise a downloaded repo
   // would register as selectable but the sidecar would ignore it.
-  if (!ENGINES[body.engine].customModels) {
+  const engine = ENGINES[body.engine];
+  const fixedModel = engine.fixedModelInstall && engine.models.some((model) => model.repo === body.repo);
+  if (!engine.customModels && !fixedModel) {
     throw new ServerError(`${ENGINES[body.engine].name} does not support custom HuggingFace models`, { status: 400, code: 'AUDIO_MODEL_ENGINE_FIXED' });
   }
   if (!isValidRepoId(body.repo)) throw new ServerError('Invalid HuggingFace repo id', { status: 400, code: 'AUDIO_MODEL_INVALID_REPO' });
   // Register first so it's durable before the stream signals completion.
-  await addAudioModel({ engine: body.engine, repo: body.repo, name: body.name });
+  if (!fixedModel) await addAudioModel({ engine: body.engine, repo: body.repo, name: body.name });
   // Hand the response to the shared SSE driver — it owns writeHead/end + the
   // in-flight dedupe + client-disconnect kill. Resolves after the stream ends.
   await startHfDownloadStream({ req, res, repo: body.repo });
@@ -222,7 +241,7 @@ router.post('/models', asyncHandler(async (req, res) => {
   // is logged by the service, not surfaced (the response already closed).
   const cached = await inspectModelCache(body.repo).catch(() => ({ cached: false }));
   if (!cached.cached) {
-    await removeAudioModel({ engine: body.engine, id: body.repo }).catch(() => {});
+    if (!fixedModel) await removeAudioModel({ engine: body.engine, id: body.repo }).catch(() => {});
   }
 }));
 

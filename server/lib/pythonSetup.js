@@ -350,6 +350,32 @@ export function invalidateAcestepPython() {
   cachedAcestepPython = null;
 }
 
+const MINIMAX_MUSIC3_VENV_CANDIDATES = IS_WIN
+  ? [
+      join(HOME, '.portos', 'venv-minimax-music3', 'Scripts', 'python.exe'),
+      join(PATHS.data, 'python', 'venv-minimax-music3', 'Scripts', 'python.exe'),
+    ]
+  : [
+      join(HOME, '.portos', 'venv-minimax-music3', 'bin', 'python3'),
+      join(PATHS.data, 'python', 'venv-minimax-music3', 'bin', 'python3'),
+    ];
+
+export const MINIMAX_MUSIC3_VENV_DEFAULT = MINIMAX_MUSIC3_VENV_CANDIDATES[0];
+export const MINIMAX_MUSIC3_RUNTIME_DIR = '';
+
+let cachedMinimaxMusic3Python = null;
+export function resolveMinimaxMusic3Python() {
+  if (cachedMinimaxMusic3Python && existsSync(cachedMinimaxMusic3Python)) return cachedMinimaxMusic3Python;
+  for (const p of MINIMAX_MUSIC3_VENV_CANDIDATES) {
+    if (existsSync(p)) { cachedMinimaxMusic3Python = p; return p; }
+  }
+  return null;
+}
+
+export function invalidateMinimaxMusic3Python() {
+  cachedMinimaxMusic3Python = null;
+}
+
 // MuScriptor (audio → MIDI transcription for the Rounds workbench + Music Video
 // parsing, #reference-audio-to-midi) runs in its own venv at
 // ~/.portos/venv-muscriptor — the `muscriptor` pip package pulls its own torch

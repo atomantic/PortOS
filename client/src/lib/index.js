@@ -18,6 +18,7 @@ export * from './universeRunTag.js';
 export * from './universeStylePreset.js';
 
 // === Pipeline / image-gen defaults ===
+export * from './autopilotMilestones.js';
 export * from './beatColors.js';
 export * from './beatGrid.js';
 export * from './bibleLimits.js';

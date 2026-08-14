@@ -298,7 +298,13 @@ async function finalizedCharacter() {
 beforeEach(() => {
   rmSync(join(TEST_ROOT, 'sprite-records.json'), { force: true });
 });
-afterAll(() => rmSync(TEST_ROOT, { recursive: true, force: true }));
+afterAll(() => rmSync(TEST_ROOT, {
+  recursive: true,
+  force: true,
+  // Windows can briefly retain Sharp's image handles after toBuffer resolves.
+  maxRetries: 10,
+  retryDelay: 100,
+}));
 
 describe('compileAtlas', () => {
   it('compiles an ambient-only atlas with one occupied row and transparent unused rows', async () => {

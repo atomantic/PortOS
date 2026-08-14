@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { join, resolve as resolvePath } from 'path';
 import express from 'express';
+import { join, resolve } from 'path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { DEFAULT_CONTEXT_FRAMES, MAX_CONTEXT_FRAMES } from '../lib/videoContinuity.js';
@@ -450,8 +450,11 @@ describe('videoGen routes', () => {
       termsGate: { id: 'minimax-h3-community-license-2026-08-02' },
       supportedModes: ['text'],
       defaultFrames: 124,
-      frameOptions: [124, 141, 158],
+      frameOptions: [107, 124, 141, 158],
       fpsOptions: [24],
+      defaultWidth: 1344,
+      defaultHeight: 768,
+      resolutionStep: 32,
       steps: 8,
       guidance: 0,
       samplerLocked: true,
@@ -518,14 +521,26 @@ describe('videoGen routes', () => {
         prompt: 'a fox watches the rain',
         modelId: h3.id,
         mode: 'text',
+        numFrames: 107,
+        fps: 24,
+        width: 1536,
+        height: 672,
       });
       expect(render.status).toBe(200);
       // Nothing about the acceptance rides the job: the render re-resolves it
       // from settings, so a withdrawal reaches work already in the queue.
       expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
         kind: 'video',
-        params: expect.not.objectContaining({ termsAcceptance: expect.anything() }),
+        params: expect.objectContaining({
+          modelId: h3.id,
+          numFrames: 107,
+          fps: 24,
+          width: 1536,
+          height: 672,
+        }),
       }));
+      expect(mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params)
+        .not.toHaveProperty('termsAcceptance');
 
       const asserted = await request(app).post('/api/video-gen/').send({
         prompt: 'a fox watches the rain',
@@ -1539,9 +1554,7 @@ describe('videoGen routes', () => {
         expect(r.status).toBe(200);
         expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
           params: expect.objectContaining({
-            // resolve() stamps a drive letter on Windows — build the expectation the
-            // same way the service does rather than hardcoding a POSIX absolute path.
-            icReferencePaths: [resolvePath(`/mock/videos/${id}.mp4`)],
+            icReferencePaths: [resolve('/mock/videos', `${id}.mp4`)],
           }),
         }));
       });
@@ -1781,7 +1794,7 @@ describe('videoGen routes', () => {
     // Durable copies live under PATHS.uploads (mocked to /mock/uploads); the
     // multipart temp files live under /tmp. Splitting them keeps the
     // "durable survives" assertion below from being satisfied by a temp unlink.
-    const durableUnlinks = () => unlinkedPaths().filter((p) => p.startsWith('/mock/uploads/'));
+    const durableUnlinks = () => unlinkedPaths().filter((p) => /^[\\/]mock[\\/]uploads[\\/]/.test(p));
 
     it('unlinks the half-written destination AND every earlier staged copy when copyFile rejects', async () => {
       // sourceImage stages fine, audioFile's copy blows up — the failure has

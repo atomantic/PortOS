@@ -26,7 +26,13 @@ const WAN_TI2V = { id: 'wan-ti2v', name: 'Wan TI2V', runtime: 'wan22', supported
 const H3 = {
   id: 'minimax-h3', name: 'MiniMax H3', runtime: 'minimax_h3', supportedModes: ['text', 'image', 'fflf'],
   lastFrameAnchored: true,
-  frameOptions: [124, 141, 158], fpsOptions: [24], defaultFrames: 124,
+  frameOptions: [107, 124, 141, 158], fpsOptions: [24], defaultFrames: 124,
+  defaultWidth: 1344, defaultHeight: 768, resolutionStep: 32,
+  resolutionOptions: [
+    { label: '1536x672', w: 1536, h: 672 },
+    { label: '1344x768', w: 1344, h: 768 },
+    { label: '768x1344', w: 768, h: 1344 },
+  ],
   supportsNegativePrompt: false, supportsTiling: false, supportsDisableAudio: false,
 };
 const MODELS = [MLX, LTX2];
@@ -275,8 +281,24 @@ describe('useVideoGenForm', () => {
       fps: 24,
       tiling: 'auto',
       disableAudio: 'false',
+      width: 1344,
+      height: 768,
     });
-    expect(payload.prompt).toBe('a fox watches the rain');
+    expect(payload.prompt).toBe('a fox watches the rain\n\nno music, no soundtrack');
+  });
+
+  it('preserves H3 native 32px-grid geometry in the submitted payload', async () => {
+    const { result } = render({
+      models: [MLX, H3],
+      status: { connected: true, defaultModel: MLX.id },
+    });
+    await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
+    act(() => result.current.handleModelChange(H3.id));
+    await waitFor(() => expect(result.current.modelId).toBe(H3.id));
+    act(() => result.current.handleResolutionChange(1536, 672));
+    expect(result.current.width).toBe(1536);
+    expect(result.current.height).toBe(672);
+    expect(result.current.buildGeneratePayload()).toMatchObject({ width: 1536, height: 672 });
   });
 
   // H3's fl2va path anchors keyframes at the first/last latent frame, so image

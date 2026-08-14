@@ -462,7 +462,7 @@ async function resolvePreparedParams({
     if (!Array.isArray(effectiveModel.frameOptions) || !effectiveModel.frameOptions.includes(frames)) {
       await cleanupStaged();
       throw new ServerError(
-        `MiniMax H3 requires a 17n+5 frame count between 124 and 362; got ${frames}.`,
+        `MiniMax H3 requires a 17n+5 frame count between 107 and 362; got ${frames}.`,
         { status: 400, code: 'MINIMAX_H3_INVALID_FRAME_COUNT' },
       );
     }

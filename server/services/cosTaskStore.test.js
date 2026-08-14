@@ -119,10 +119,6 @@ import {
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, registerPauseReleaseAdapter, __resetPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
 
-// Built with join(), not '/'-joined literals: the store composes these with
-// path.join(ROOT_DIR, …), so on Windows they are '\'-separated. These
-// constants also key the mocked file map, so a literal that doesn't match what
-// the store produces makes every lookup miss (undefined), not just mis-assert.
 const USER_FILE = join('/root', 'TASKS.md');
 const COS_FILE = join('/root', 'COS-TASKS.md');
 

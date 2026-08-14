@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { VIDEO_RESOLUTIONS, snapAspectToImage } from './videoGenResolutions.js';
+import {
+  VIDEO_RESOLUTIONS, DEFAULT_VIDEO_RESOLUTION,
+  resolutionOptionsForModel, defaultResolutionForModel,
+  snapAspectToImage,
+} from './videoGenResolutions.js';
 
 describe('snapAspectToImage', () => {
   it('snaps a 16:9 landscape source to the 16:9 preset', () => {
@@ -45,5 +49,24 @@ describe('snapAspectToImage', () => {
   it('ignores malformed presets without crashing', () => {
     const presets = [{ w: 0, h: 0 }, { label: 'bad' }, { w: 1024, h: 576 }];
     expect(snapAspectToImage(presets, 1920, 1080)).toEqual({ w: 1024, h: 576 });
+  });
+});
+
+describe('model-specific video resolutions', () => {
+  const native = [{ label: '1344x768', w: 1344, h: 768 }];
+
+  it('uses declared native presets and dimensions', () => {
+    const model = {
+      resolutionOptions: native,
+      defaultWidth: 1344,
+      defaultHeight: 768,
+    };
+    expect(resolutionOptionsForModel(model)).toBe(native);
+    expect(defaultResolutionForModel(model)).toEqual({ w: 1344, h: 768 });
+  });
+
+  it('falls back to the shared Video Gen presets and default', () => {
+    expect(resolutionOptionsForModel({})).toBe(VIDEO_RESOLUTIONS);
+    expect(defaultResolutionForModel({})).toEqual(DEFAULT_VIDEO_RESOLUTION);
   });
 });

@@ -1,0 +1,1 @@
+- Autonomous mode now shows a live milestone map — every step the run projected, what each gate validated, where it is now, and what is left

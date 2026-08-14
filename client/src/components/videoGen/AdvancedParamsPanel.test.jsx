@@ -147,7 +147,7 @@ describe('AdvancedParamsPanel', () => {
     expect(screen.getByLabelText(/No music/).disabled).toBe(true);
   });
 
-  it('hides LTX audio controls and Extend advice for a text-only joint-A/V model', () => {
+  it('keeps prompt-audio steering but hides muting and Extend advice for H3', () => {
     renderPanel({
       numFrames: 362,
       currentModel: {
@@ -159,7 +159,7 @@ describe('AdvancedParamsPanel', () => {
     });
     fireEvent.click(toggle());
     expect(screen.queryByText(/Disable audio/)).toBeNull();
-    expect(screen.queryByText(/No music/)).toBeNull();
+    expect(screen.getByLabelText(/No music/)).not.toBeDisabled();
     expect(screen.queryByText(/use Extend/i)).toBeNull();
   });
 

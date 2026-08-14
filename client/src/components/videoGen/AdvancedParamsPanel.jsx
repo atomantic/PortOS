@@ -22,7 +22,7 @@ import { ChevronDown, Dice5 } from 'lucide-react';
 import { FormField } from '../ui/FormField';
 import {
   frameOptionsForModel, fpsOptionsForModel, CHUNK_OPTIONS,
-  isModelAllowedForMode, supportsVideoAudioControls,
+  isModelAllowedForMode, supportsVideoAudioControls, supportsVideoAudioPromptControls,
   CONTEXT_FRAME_OPTIONS, supportsContextWindow,
 } from '../../lib/videoGenParams.js';
 import { VIDEO_TILING_OPTIONS } from '../../lib/videoTilingOptions';
@@ -49,7 +49,9 @@ export default function AdvancedParamsPanel({
   // a2v derives its length + audio track from the uploaded audio, so chunking
   // and the audio flags don't apply there.
   const showAudioFlags = mode !== 'a2v';
-  const showModelAudioControls = showAudioFlags && supportsVideoAudioControls(currentModel);
+  const showDisableAudio = showAudioFlags && supportsVideoAudioControls(currentModel);
+  const showPromptAudioControls = showAudioFlags && supportsVideoAudioPromptControls(currentModel);
+  const audioDisabled = showDisableAudio && disableAudio;
   // Chunk chaining seeds chunk N+1 from chunk N's last frame, so it needs i2v —
   // the same predicate the picker uses, not a second reading of supportedModes.
   const showChunks = mode !== 'a2v' && isModelAllowedForMode(currentModel, 'image');
@@ -84,7 +86,11 @@ export default function AdvancedParamsPanel({
               onChange={(e) => onNumFramesChange(Number(e.target.value))}
               className={inputCls}
             >
-              {frameOptions.map((f) => <option key={f} value={f}>{f} ({(f / fps).toFixed(1)}s @ {fps}fps)</option>)}
+              {frameOptions.map((f) => (
+                <option key={f} value={f}>
+                  {f} ({(f / fps).toFixed(1)}s @ {fps}fps){f === currentModel?.defaultFrames ? ' · default' : ''}
+                </option>
+              ))}
             </select>
             {numFrames > 241 && isModelAllowedForMode(currentModel, 'extend') && (
               <p className="text-[10px] text-gray-500 leading-snug mt-1">
@@ -276,7 +282,7 @@ export default function AdvancedParamsPanel({
             </FormField>
           )}
 
-          {showModelAudioControls && (
+          {showDisableAudio && (
             <label className="col-span-2 sm:col-span-3 flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
               <input
                 type="checkbox"
@@ -287,19 +293,19 @@ export default function AdvancedParamsPanel({
               Disable audio (LTX-2 only — speeds up generation)
             </label>
           )}
-          {showModelAudioControls && (
+          {showPromptAudioControls && (
             <label
-              className={`col-span-2 sm:col-span-3 flex items-center gap-2 text-xs cursor-pointer ${disableAudio ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400'}`}
-              title="LTX-2 conditions audio on the prompt — appending 'no music, no soundtrack' at submit time pushes the model toward ambient/diegetic sound only"
+              className={`col-span-2 sm:col-span-3 flex items-center gap-2 text-xs cursor-pointer ${audioDisabled ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400'}`}
+              title="The model conditions generated audio on the prompt — appending 'no music, no soundtrack' at submit time pushes it toward ambient/diegetic sound only"
             >
               <input
                 type="checkbox"
                 checked={noMusic}
-                disabled={disableAudio}
+                disabled={audioDisabled}
                 onChange={(e) => onNoMusicChange(e.target.checked)}
                 className="rounded"
               />
-              No music — keep ambient/diegetic sound only (LTX-2)
+              No music — keep ambient/diegetic sound only
             </label>
           )}
         </div>

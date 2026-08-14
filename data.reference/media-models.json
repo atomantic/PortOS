@@ -91,6 +91,7 @@
         ],
         "defaultFrames": 124,
         "frameOptions": [
+          107,
           124,
           141,
           158,
@@ -109,6 +110,41 @@
         ],
         "fpsOptions": [
           24
+        ],
+        "defaultWidth": 1344,
+        "defaultHeight": 768,
+        "resolutionStep": 32,
+        "resolutionOptions": [
+          {
+            "label": "1536x672 (21:9 H3 native)",
+            "w": 1536,
+            "h": 672
+          },
+          {
+            "label": "1344x768 (16:9 H3 default)",
+            "w": 1344,
+            "h": 768
+          },
+          {
+            "label": "1024x768 (4:3 H3 native)",
+            "w": 1024,
+            "h": 768
+          },
+          {
+            "label": "768x768 (1:1 H3 native)",
+            "w": 768,
+            "h": 768
+          },
+          {
+            "label": "768x1024 (3:4 H3 native)",
+            "w": 768,
+            "h": 1024
+          },
+          {
+            "label": "768x1344 (9:16 H3 native)",
+            "w": 768,
+            "h": 1344
+          }
         ],
         "memoryGb": 128,
         "steps": 8,

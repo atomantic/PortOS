@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   videoModelMemoryGb, computeFflfSafeFrames, isModelAllowedForMode,
-  VIDEO_EDGE_BOUNDS, FRAME_OPTIONS, FPS_OPTIONS,
+  VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, FRAME_OPTIONS, FPS_OPTIONS,
   WAN_FRAME_OPTIONS, frameOptionsForModel, fpsOptionsForModel,
   normalizeFramesForModel, normalizeFpsForModel,
-  supportsVideoAudioControls,
+  supportsVideoAudioControls, supportsVideoAudioPromptControls,
   IC_LORA_MODES, IC_LORA_MODE_VALUES, isIcLoraMode, icLoraSpecForMode,
   icResolutionIssue,
 } from './videoGenParams.js';
@@ -90,6 +90,8 @@ describe('isModelAllowedForMode', () => {
 describe('constants', () => {
   it('VIDEO_EDGE_BOUNDS mirrors the server 64..2048 grid', () => {
     expect(VIDEO_EDGE_BOUNDS).toEqual({ min: 64, max: 2048, step: 64 });
+    expect(videoEdgeBoundsForModel({ resolutionStep: 32 })).toEqual({ min: 64, max: 2048, step: 32 });
+    expect(videoEdgeBoundsForModel({ resolutionStep: 0 })).toEqual(VIDEO_EDGE_BOUNDS);
   });
   it('frame/fps option lists are on the expected boundaries', () => {
     expect(FRAME_OPTIONS[0]).toBe(25);
@@ -114,9 +116,11 @@ describe('constants', () => {
     expect(normalizeFramesForModel(140, h3)).toBe(141);
     expect(normalizeFpsForModel(30, h3)).toBe(24);
   });
-  it('uses one explicit capability for visible and submitted audio controls', () => {
+  it('keeps muting separate from prompt-audio steering', () => {
     expect(supportsVideoAudioControls({ runtime: 'mlx_video' })).toBe(true);
     expect(supportsVideoAudioControls({ supportsDisableAudio: false })).toBe(false);
+    expect(supportsVideoAudioPromptControls({ supportsDisableAudio: false })).toBe(true);
+    expect(supportsVideoAudioPromptControls({ supportsAudioPrompting: false })).toBe(false);
   });
 });
 
@@ -182,4 +186,3 @@ describe('IC-LoRA remix modes (#3100)', () => {
     expect(icLoraSpecForMode('ic-colorize').uploadLabel).toMatch(/B&W/);
   });
 });
-

@@ -34,12 +34,16 @@ const refinePromptSchema = z.object({
   // surface as a confusing "LLM returned an empty prompt" error.
   prompt: z.string().trim().min(1).max(8000),
   negativePrompt: z.string().trim().max(8000).optional(),
-  feedback: z.string().trim().min(1).max(3000),
+  feedback: z.string().trim().max(3000).optional(),
   providerId: z.string().trim().min(1).max(128),
   // Empty/whitespace model → undefined so the refiner's defaultModel /
   // models[0] fallback chain kicks in, instead of a whitespace string
   // bypassing the MODEL_REQUIRED guard and reaching the provider.
   model: z.string().max(256).optional().transform((s) => {
+    const v = (s ?? '').trim();
+    return v.length > 0 ? v : undefined;
+  }),
+  effort: z.string().max(64).optional().transform((s) => {
     const v = (s ?? '').trim();
     return v.length > 0 ? v : undefined;
   }),

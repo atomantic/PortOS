@@ -5,14 +5,16 @@ import { extractLastFrame } from '../services/api';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import { videoLoraFamily, isVideoLoraFamily, loraFamilyOf, VIDEO_LORA_FAMILIES } from '../lib/runnerFamilies';
 import { randomSeed } from '../lib/genUtils';
-import { VIDEO_RESOLUTIONS, snapAspectToImage } from '../lib/videoGenResolutions';
+import {
+  resolutionOptionsForModel, defaultResolutionForModel, snapAspectToImage,
+} from '../lib/videoGenResolutions';
 import { clampImageEdge } from '../lib/imageGenResolutions';
 import { GROK_VIDEO_DEFAULT_DURATION } from '../lib/grokVideoClip.js';
 import { VIDEO_TILING_ENUM_SET } from '../lib/videoTilingOptions';
 import {
-  VIDEO_EDGE_BOUNDS, MAX_CHUNKS, DEFAULT_CONTEXT_FRAMES,
+  VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, MAX_CHUNKS, DEFAULT_CONTEXT_FRAMES,
   videoModelMemoryGb, computeFflfSafeFrames, isModelAllowedForMode,
-  supportsVideoAudioControls,
+  supportsVideoAudioControls, supportsVideoAudioPromptControls,
   normalizeFramesForModel, normalizeFpsForModel,
   icLoraSpecForMode, icResolutionIssue,
 } from '../lib/videoGenParams.js';
@@ -87,11 +89,10 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
   // LoraPicker owns; `availableLoras` is the full installed library filtered
   // by the picker to the model's video family. See videoLoraFamily().
   const [selectedLoras, setSelectedLoras] = useState([]);
-  // "No music" appends a soundscape constraint at submit time. LTX-2
-  // conditions audio on prompt text — adding "no music, no soundtrack"
-  // pushes the model toward ambient/diegetic sound (footsteps, room tone)
-  // and away from generated background music, which is hard to remove
-  // cleanly in post. Source: phosphene LTX-2 prompting guide.
+  // "No music" appends a soundscape constraint at submit time. LTX-2 and
+  // MiniMax H3 both steer generated audio from prompt text — adding "no music,
+  // no soundtrack" pushes them toward ambient/diegetic sound (footsteps, room
+  // tone) and away from generated background music.
   const [noMusic, setNoMusic] = useState(false);
   const [sourceImageFile, setSourceImageFile] = useState(incomingSourceImage || null);
   const [sourceImageUpload, setSourceImageUpload] = useState(null);
@@ -163,7 +164,8 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
   }, [incomingNegativePrompt]);
   // When "Continue" pipes a video's last frame here, also sync the resolution
   // so the new render matches the source. Width/height get rounded to the
-  // model's 64-pixel grid server-side, so off-grid sources still work.
+  // selected model's declared resolution grid server-side, so off-grid sources
+  // still work.
   useEffect(() => {
     const w = Number(incomingWidth);
     const h = Number(incomingHeight);
@@ -242,7 +244,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
   // local.js#resizeImage) doesn't silently cut the subject out of a mismatched
   // frame. Only fires while the user hasn't taken the size into their own hands
   // (sizeManuallySetRef) — the inputs stay fully editable for power users, and
-  // the server keeps its own 64-grid clamp. Gallery picks resolve to
+  // the server keeps its own model-aware grid clamp. Gallery picks resolve to
   // /data/images/<file>; uploads reuse the object URL built above. The load is
   // async, so guard the apply against a newer pick (cancelled) and a late-
   // arriving manual size change (the ref re-check).
@@ -254,12 +256,17 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
     const img = new Image();
     img.onload = () => {
       if (cancelled || sizeManuallySetRef.current) return;
-      const snapped = snapAspectToImage(VIDEO_RESOLUTIONS, img.naturalWidth, img.naturalHeight);
+      const activeModel = models.find((model) => model.id === modelId);
+      const snapped = snapAspectToImage(
+        resolutionOptionsForModel(activeModel),
+        img.naturalWidth,
+        img.naturalHeight,
+      );
       if (snapped) { setWidth(snapped.w); setHeight(snapped.h); }
     };
     img.src = src;
     return () => { cancelled = true; };
-  }, [sourceImageFile, sourceUploadUrl]);
+  }, [sourceImageFile, sourceUploadUrl, modelId, models]);
 
   // ?lora=<filename> preselects a video LoRA when the user clicks "Test" on a
   // video LoRA card in /media/loras. Mirrors the ImageGen ?lora= handoff:
@@ -381,6 +388,18 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
   }, [modelId, models, status?.defaultModel, status?.systemMemoryGb, mode, visibleModels, applyModelSelection]);
 
   const currentModel = models.find((m) => m.id === modelId);
+
+  // Until the user deliberately chooses a size, model changes carry their own
+  // native default canvas. This is material for H3: the shared 768x512 default
+  // is an off-distribution wiring-test size, while its trained 16:9 canvas is
+  // 1344x768. A source image still wins through the aspect-snap effect above,
+  // and Remix/Continue/user edits set sizeManuallySetRef so they are preserved.
+  useEffect(() => {
+    if (!currentModel || sizeManuallySetRef.current || sourceImageFile || sourceUploadUrl) return;
+    const next = defaultResolutionForModel(currentModel);
+    setWidth(next.w);
+    setHeight(next.h);
+  }, [currentModel, sourceImageFile, sourceUploadUrl]);
 
   // Remix/deep-link/resume paths set model + sampler fields independently.
   // Reconcile them once the model is known so a legacy LTX 8n+1 frame count
@@ -513,8 +532,8 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
   // on image upload stops overriding it (same flag the remix/deep-link paths set).
   // ResolutionField passes a transient 0 mid-edit and blur-snaps each edge to the
   // 64..2048 bound; the preview + FFLF-budget math guard against a transient 0,
-  // and the server floors both dims to a multiple of 64 (generateVideo in
-  // local.js) before enforcing the per-tier pixel budget.
+  // and the server floors both dims to the selected model's declared grid
+  // (generateVideo in local.js) before enforcing the per-tier pixel budget.
   const handleResolutionChange = (w, h) => {
     setWidth(w); setHeight(h); sizeManuallySetRef.current = true;
   };
@@ -1069,6 +1088,10 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
 
   const buildGeneratePayload = () => {
     const composed = composeStyledPrompt(prompt, negativePrompt, stylePreset);
+    // A hidden mute checkbox from a prior model must not suppress H3's visible
+    // prompt-audio steering. Treat mute as effective only on a model that can
+    // actually disable its generated audio track.
+    const effectiveDisableAudio = supportsVideoAudioControls(currentModel) && disableAudio;
     // The style preset and the no-music constraint are ENVELOPE, not content —
     // they have to wrap a per-chunk beat exactly as they wrap the main prompt.
     // Shipping a beat raw would render the chunks the user steered in a
@@ -1078,7 +1101,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
     // Idempotent on "no music": if the text already says it, don't double-append.
     const withEnvelope = (text) => {
       const c = composeStyledPrompt(text, negativePrompt, stylePreset);
-      return (supportsVideoAudioControls(currentModel) && noMusic && !disableAudio && !/no music/i.test(c.prompt))
+      return (supportsVideoAudioPromptControls(currentModel) && noMusic && !effectiveDisableAudio && !/no music/i.test(c.prompt))
         ? `${c.prompt}\n\nno music, no soundtrack`
         : c.prompt;
     };
@@ -1114,6 +1137,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
     // with multi-keyframe mode on the server, so its image fields only ride
     // along when keyframes aren't active.
     const legacyFflf = mode === 'fflf' && !keyframesActive;
+    const localEdgeBounds = videoEdgeBoundsForModel(currentModel);
     return {
       // The page's backend toggle IS an explicit choice — send it so the
       // server's #3231 video pin ladder can't reroute a Local render to a
@@ -1125,15 +1149,15 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
       // Clamp/floor to the runner's edge bounds so a transient 0 (field cleared
       // mid-edit) or off-grid value can't 400 the server — mirrors ImageGen's
       // submit-time clampImageEdge guard.
-      width: clampImageEdge(width, VIDEO_EDGE_BOUNDS),
-      height: clampImageEdge(height, VIDEO_EDGE_BOUNDS),
+      width: clampImageEdge(width, localEdgeBounds),
+      height: clampImageEdge(height, localEdgeBounds),
       numFrames,
       fps,
       steps: steps || '',
       guidanceScale: guidanceScale || '',
       seed: seed || '',
       tiling: currentModel?.supportsTiling === false ? 'auto' : tiling,
-      disableAudio: supportsVideoAudioControls(currentModel) ? (disableAudio ? 'true' : 'false') : 'false',
+      disableAudio: effectiveDisableAudio ? 'true' : 'false',
       mode,
       imageStrength: imageStrength || '',
       // ltx2-extend bypasses the last-frame i2v path: we send the source

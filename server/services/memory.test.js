@@ -1,9 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-// The memory store composes record paths with path.join, so on Windows they are
-// '\m1\memory.json' and an includes('m1/memory.json') probe never matches —
-// the mock then returned the default and the assertions saw empty results.
-const toPosixPath = (v) => String(v).split('\\').join('/');
 import EventEmitter from 'events';
 
 // Mock fs/promises
@@ -1066,7 +1061,7 @@ describe('memory service', () => {
       const mockMemory = { id: 'm1', content: 'test', type: 'fact', tags: ['t1'], sourceAppId: 'app1' };
       readJSONFile.mockImplementation((path, def) => {
         if (path.includes('index.json')) return Promise.resolve(mockIndex);
-        if (toPosixPath(path).includes('m1/memory.json')) return Promise.resolve(mockMemory);
+        if (/[\\/]m1[\\/]memory\.json$/.test(path)) return Promise.resolve(mockMemory);
         return Promise.resolve(def);
       });
       memoryBM25.rebuildIndex.mockResolvedValue({ indexed: 1 });
@@ -1517,8 +1512,8 @@ describe('memory service', () => {
       readJSONFile.mockImplementation((path, def) => {
         if (path.includes('index.json')) return Promise.resolve(mockIndex);
         if (path.includes('embeddings.json')) return Promise.resolve({ model: null, dimension: 0, vectors: {} });
-        if (toPosixPath(path).includes('m1/memory.json')) return Promise.resolve(mockMem1);
-        if (toPosixPath(path).includes('m2/memory.json')) return Promise.resolve(mockMem2);
+        if (/[\\/]m1[\\/]memory\.json$/.test(path)) return Promise.resolve(mockMem1);
+        if (/[\\/]m2[\\/]memory\.json$/.test(path)) return Promise.resolve(mockMem2);
         return Promise.resolve(def);
       });
 
@@ -1540,7 +1535,7 @@ describe('memory service', () => {
       readJSONFile.mockImplementation((path, def) => {
         if (path.includes('index.json')) return Promise.resolve(mockIndex);
         if (path.includes('embeddings.json')) return Promise.resolve({ model: null, dimension: 0, vectors: {} });
-        if (toPosixPath(path).includes('m1/memory.json')) return Promise.resolve({ id: 'm1', relatedMemories: [] });
+        if (/[\\/]m1[\\/]memory\.json$/.test(path)) return Promise.resolve({ id: 'm1', relatedMemories: [] });
         return Promise.resolve(def);
       });
 

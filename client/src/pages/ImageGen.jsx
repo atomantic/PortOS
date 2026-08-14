@@ -16,6 +16,7 @@ import MediaCard from '../components/media/MediaCard';
 import MediaPreview from '../components/media/MediaPreview';
 import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
 import StylePresetPicker from '../components/media/StylePresetPicker';
+import PromptEnhancer from '../components/media/PromptEnhancer';
 import BackendChipStrip from '../components/media/BackendChipStrip';
 import { normalizeImage } from '../components/media/normalize';
 import { RUNNER_FAMILIES, loraCompatKey } from '../lib/runnerFamilies';
@@ -1215,6 +1216,16 @@ export default function ImageGen() {
               />
             </FormField>
           </div>
+
+          <PromptEnhancer
+            kind="image"
+            prompt={prompt}
+            setPrompt={setPrompt}
+            negativePrompt={negativePrompt}
+            setNegativePrompt={setNegativePrompt}
+            renderConfig={{ stylePreset: stylePreset?.id, mode: effectiveMode }}
+            disabled={statusLoading}
+          />
 
           {flux2Issue === 'venv' && (
             <div className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-3 text-xs text-port-warning flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">

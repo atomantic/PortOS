@@ -69,17 +69,30 @@ export const normalizeFramesForModel = (value, model) => isValidFrameCountForMod
   : nearestOption(value, frameOptionsForModel(model));
 export const normalizeFpsForModel = (value, model) => nearestOption(value, fpsOptionsForModel(model));
 
-// One capability predicate for both the Advanced audio controls and prompt
-// shaping. A model that cannot disable its jointly-generated audio (MiniMax
-// H3) also cannot honor LTX's "No music" prompt-envelope control; hidden state
-// must never continue altering the payload after a model switch.
+// Muting and prompt-audio steering are separate capabilities. Hidden mute state
+// from a prior model must never alter a model (such as MiniMax H3) whose joint
+// audio track cannot be disabled.
 export const supportsVideoAudioControls = (model) => model?.supportsDisableAudio !== false;
+// Prompt steering is independent from muting. MiniMax H3 always emits a joint
+// audio track, but its documented prompt format explicitly supports
+// soundscape/music direction, so "No music" remains useful even though the
+// Disable audio checkbox must stay hidden.
+export const supportsVideoAudioPromptControls = (model) => model?.supportsAudioPrompting !== false;
 
-// Per-edge bounds for video: mirrors the videoGen route (64..2048) and the
-// server's floor-to-multiple-of-64 (generateVideo in local.js). Shared by the
-// ResolutionField control and the submit-time clamp so a hand-typed / mid-edit
-// value can never POST an out-of-range or 0 dimension.
+// Per-edge bounds for video: mirrors the videoGen route (64..2048). The base
+// grid is 64px, while a model may declare a finer resolutionStep (H3 uses 32).
+// Shared by the ResolutionField control and the submit-time clamp so a
+// hand-typed / mid-edit value can never POST an out-of-range or 0 dimension.
 export const VIDEO_EDGE_BOUNDS = { min: 64, max: 2048, step: 64 };
+export const videoEdgeBoundsForModel = (model) => {
+  const step = Number(model?.resolutionStep);
+  return {
+    ...VIDEO_EDGE_BOUNDS,
+    step: Number.isInteger(step) && step > 0 && step <= VIDEO_EDGE_BOUNDS.step
+      ? step
+      : VIDEO_EDGE_BOUNDS.step,
+  };
+};
 
 // Resolve a video model's memory footprint in GB. Prefers the explicit
 // `memoryGb` field, falling back to a "~NN GB/GiB" hint in the display name, then

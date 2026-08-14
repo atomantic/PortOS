@@ -87,6 +87,16 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
     expect(output).toMatch(/dimensions must be positive multiples of 32/i);
   });
 
+  it('accepts the upstream 4-second aligned frame count and native 32px canvas grid', () => {
+    const output = runPython(`${importRunner}\n${[
+      'from types import SimpleNamespace',
+      'args = SimpleNamespace(fps=24, width=1536, height=672, num_frames=107, steps=8, lora=[], lora_scale=[], image=[], anchor=[])',
+      'runner.validate_args(args)',
+      'print("ok")',
+    ].join('\n')}`);
+    expect(output.trim()).toBe('ok');
+  });
+
   // An unpaired or repeated anchor would silently mis-place a keyframe in the
   // packed sequence, so both fail at the boundary rather than rendering.
   it.each([

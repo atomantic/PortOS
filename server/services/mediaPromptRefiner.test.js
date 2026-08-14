@@ -355,4 +355,38 @@ ${JSON.stringify({ prompt: 'painted owl portrait', negativePrompt: 'blurry', rat
       providerId: 'openai',
     })).rejects.toMatchObject({ code: 'PROMPT_REFINE_FAILED', status: 502 });
   });
+
+  it('builds an enhancement prompt when feedback is omitted or empty', () => {
+    const prompt = buildMediaPromptRefinePrompt({
+      kind: 'video',
+      prompt: 'a futuristic city at night',
+      negativePrompt: 'blurry',
+      feedback: '',
+    });
+
+    expect(prompt).toContain('ENHANCED POSITIVE PROMPT');
+    expect(prompt).toContain('a futuristic city at night');
+    expect(prompt).not.toContain('USER FEEDBACK:');
+  });
+
+  it('forwards effort level to provider runner', async () => {
+    providers.getProviderById.mockResolvedValue({
+      id: 'openai', type: 'api', enabled: true, defaultModel: 'gpt-test',
+    });
+    mockRunnerSuccess(runner.executeApiRun, JSON.stringify({
+      prompt: 'enhanced prompt description',
+      negativePrompt: 'low quality',
+      rationale: 'Enhanced details.',
+      changes: ['Added lighting'],
+    }));
+
+    const result = await refineMediaPrompt({
+      kind: 'image',
+      prompt: 'a simple dog',
+      providerId: 'openai',
+      effort: 'high',
+    });
+
+    expect(result.prompt).toBe('enhanced prompt description');
+  });
 });
