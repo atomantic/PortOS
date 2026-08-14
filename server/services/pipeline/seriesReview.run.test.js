@@ -46,6 +46,10 @@ vi.mock('./canonReadiness.js', partial({ checkSeriesCanonReadiness: vi.fn() }));
 vi.mock('./editorial/checkRunner.js', partial({ runEditorialChecks: vi.fn() }));
 vi.mock('./editorialScore.js', partial({ getSeriesHealth: vi.fn() }));
 vi.mock('./manuscriptReview.js', partial({ getReview: vi.fn(), seedReviewFromFindings: vi.fn() }));
+// The fix runner's autonomy gate. An empty config leaves the cos domain off, so
+// `runSeriesFix` rejects immediately and writes nothing — the coalescing tests
+// below only care about which starts reach a run at all.
+vi.mock('../cosState.js', partial({ loadState: vi.fn(async () => ({ config: {} })) }));
 
 const { judgeFoundation } = await import('./foundationJudge.js');
 const { checkSeriesCanonReadiness } = await import('./canonReadiness.js');
@@ -54,7 +58,10 @@ const { getSeriesHealth } = await import('./editorialScore.js');
 const { getReview, seedReviewFromFindings } = await import('./manuscriptReview.js');
 const { getSeries } = await import('./series.js');
 const { listIssues } = await import('./issues.js');
-const { runSeriesReview, getSeriesReview } = await import('./seriesReview.js');
+const {
+  runSeriesReview, getSeriesReview,
+  startSeriesReviewRun, startSeriesFixRun, isSeriesReviewActive, isSeriesFixActive,
+} = await import('./seriesReview.js');
 
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
 
@@ -317,5 +324,87 @@ describe('getSeriesReview — reviewed-source staleness (#4111)', () => {
     const { review } = await getSeriesReview('ser-test');
     expect(review.stale).toBe(false);
     expect(review.staleReason).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Signature-based coalescing on the SSE runners (#4113).
+//
+// Before this, ANY second start while a run was in flight was attached to it and
+// its own feedback/provider/force/gate (or, for the fix pass, its finding set)
+// was silently dropped — the caller got the running run's id back and bound its
+// success handler to a verdict computed from someone else's options.
+// ---------------------------------------------------------------------------
+
+// The background run is fire-and-forget, so let the event loop drain until the
+// runner reports the key idle (bounded, so a hang fails the test rather than the
+// suite). A finished run lingers in the map for its replay window but is no
+// longer `active`, which is exactly the state the restart assertions need.
+const settle = async (isActive, key) => {
+  for (let i = 0; i < 500 && isActive(key); i += 1) await new Promise((r) => setTimeout(r, 0));
+  expect(isActive(key)).toBe(false);
+};
+
+describe('startSeriesReviewRun — conflicting start options (#4113)', () => {
+  it('coalesces a second start that would run the SAME review', async () => {
+    const first = startSeriesReviewRun('ser-same', { feedback: 'the middle sags' });
+    const second = startSeriesReviewRun('ser-same', { feedback: 'the middle sags' });
+    expect(second).toEqual({ runId: first.runId, alreadyRunning: true });
+    expect(second.conflict).toBeUndefined();
+    await settle(isSeriesReviewActive, 'ser-same');
+    // One coordinator, not two.
+    expect(runEditorialChecks).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a conflict for a start carrying a DIFFERENT note instead of dropping it', async () => {
+    const first = startSeriesReviewRun('ser-note', { feedback: 'the middle sags' });
+    const second = startSeriesReviewRun('ser-note', { feedback: 'the ending lands flat' });
+    expect(second).toMatchObject({ runId: first.runId, alreadyRunning: true, conflict: true });
+    await settle(isSeriesReviewActive, 'ser-note');
+    // The conflicting start never became a second run — and its note was never
+    // seeded, which is the whole point of refusing it out loud.
+    expect(runEditorialChecks).toHaveBeenCalledTimes(1);
+    expect(seedReviewFromFindings).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['a provider override', { providerOverride: 'example-provider' }],
+    ['force', { force: true }],
+    ['a readiness gate', { readinessGate: 'noOpenHighOrMedium' }],
+  ])('reports a conflict for a start carrying %s', async (label, options) => {
+    const key = `ser-opt-${label.replace(/[^a-z]/gi, '')}`;
+    startSeriesReviewRun(key, {});
+    expect(startSeriesReviewRun(key, options)).toMatchObject({ alreadyRunning: true, conflict: true });
+    await settle(isSeriesReviewActive, key);
+  });
+
+  it('starts a fresh run for divergent options once the first has finished', async () => {
+    const first = startSeriesReviewRun('ser-after', {});
+    await settle(isSeriesReviewActive, 'ser-after');
+    // The finished run is still in its replay window — it must NOT report a
+    // conflict, it must be replaced.
+    const second = startSeriesReviewRun('ser-after', { force: true });
+    expect(second.alreadyRunning).toBe(false);
+    expect(second.conflict).toBeUndefined();
+    expect(second.runId).not.toBe(first.runId);
+    await settle(isSeriesReviewActive, 'ser-after');
+    expect(runEditorialChecks).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('startSeriesFixRun — conflicting start options (#4113)', () => {
+  it('coalesces a second start over the same finding set', async () => {
+    const first = startSeriesFixRun('ser-fix-same', { commentIds: ['mrc-1', 'mrc-2'] });
+    // Same set, different order — the same work.
+    const second = startSeriesFixRun('ser-fix-same', { commentIds: ['mrc-2', 'mrc-1'] });
+    expect(second).toEqual({ runId: first.runId, alreadyRunning: true });
+    await settle(isSeriesFixActive, 'ser-fix-same');
+  });
+
+  it('reports a conflict for a start scoped to a DIFFERENT finding set', async () => {
+    const first = startSeriesFixRun('ser-fix-diff', { commentIds: ['mrc-1'] });
+    const second = startSeriesFixRun('ser-fix-diff', { commentIds: ['mrc-1', 'mrc-2'] });
+    expect(second).toMatchObject({ runId: first.runId, alreadyRunning: true, conflict: true });
+    await settle(isSeriesFixActive, 'ser-fix-diff');
   });
 });

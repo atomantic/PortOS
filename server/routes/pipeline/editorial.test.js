@@ -150,6 +150,24 @@ describe('Holistic "Review this series" (#2664)', () => {
     expect(res.status).toBe(404);
     expect(startSeriesFixRun).not.toHaveBeenCalled();
   });
+
+  // The runner refuses to coalesce a start whose options diverge from the run
+  // already in flight (#4113). The route must PASS THAT THROUGH — picking named
+  // fields off the runner result instead of spreading it would swallow the
+  // conflict and leave the client believing it owns the running run.
+  it('POST /series/:id/review passes a kickoff conflict through to the client', async () => {
+    startSeriesReviewRun.mockReturnValueOnce({ runId: 'rev-live', alreadyRunning: true, conflict: true });
+    const res = await request(app).post('/api/pipeline/series/ser-1/review').send({ force: true });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ runId: 'rev-live', alreadyRunning: true, conflict: true });
+  });
+
+  it('POST /series/:id/review/fix passes a kickoff conflict through to the client', async () => {
+    startSeriesFixRun.mockReturnValueOnce({ runId: 'fix-live', alreadyRunning: true, conflict: true });
+    const res = await request(app).post('/api/pipeline/series/ser-1/review/fix').send({ commentIds: ['mrc-9'] });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ runId: 'fix-live', alreadyRunning: true, conflict: true });
+  });
 });
 
 describe('GET /api/pipeline/series/:id/voice-fingerprint (#2194)', () => {

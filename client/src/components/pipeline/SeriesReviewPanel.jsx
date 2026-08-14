@@ -215,6 +215,15 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
       .catch((err) => { toast.error(err.message || 'Could not start review'); return null; });
     setStarting(false);
     if (!res) return;
+    // A review with DIFFERENT options is already in flight (a second tab, or a
+    // peer-triggered run). The server refused to coalesce this one onto it
+    // (#4113) — binding to that stream would report its verdict as this
+    // request's while silently dropping this note/provider/gate. Surface it and
+    // leave the running review (and the note) alone.
+    if (res.conflict) {
+      toast.error('A different review is already running for this series — wait for it to finish, or cancel it first.');
+      return;
+    }
     // The note has now been consumed by this run — clear it so a later re-review
     // (after fixes clear `review`, re-showing the textarea) can't silently re-seed
     // the same note as a fresh duplicate finding. Don't clear when the server
@@ -241,6 +250,13 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
       .catch((err) => { toast.error(err?.message || 'Could not start fixing'); return null; });
     setFixStarting(false);
     if (!res) return;
+    // A fix pass over a DIFFERENT finding set is already in flight. That run
+    // WRITES the manuscript, so reporting its totals as this request's would be
+    // worse than misleading — refuse to bind and say so (#4113).
+    if (res.conflict) {
+      toast.error('A different fix pass is already running for this series — wait for it to finish, or cancel it first.');
+      return;
+    }
     fixRunIdRef.current = res.runId || null;
     setConfirmDismissed(true);
     setFixing(true);

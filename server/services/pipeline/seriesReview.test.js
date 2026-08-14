@@ -8,6 +8,8 @@ import {
   seriesReviewInputsHash,
   isSeriesReviewSourceStale,
   isSeriesReviewFindingsStale,
+  seriesReviewRequestSig,
+  seriesFixRequestSig,
 } from './seriesReview.js';
 
 describe('computeReviewVerdict', () => {
@@ -288,5 +290,64 @@ describe('isSeriesReviewFindingsStale', () => {
 
   it('accepts an array of live ids (not only a Set)', () => {
     expect(isSeriesReviewFindingsStale({ findingIds: ['a'] }, ['a'])).toBe(false);
+  });
+});
+
+// The signatures the SSE runner coalesces on (#4113). Same signature = same work
+// (safe to attach a second start to the in-flight run); different signature =
+// different work, which must report a conflict instead of silently dropping the
+// second start's options.
+describe('seriesReviewRequestSig', () => {
+  it('matches for two starts that would run the same review', () => {
+    expect(seriesReviewRequestSig({ feedback: 'pacing drags', force: true }))
+      .toBe(seriesReviewRequestSig({ feedback: 'pacing drags', force: true }));
+  });
+
+  it('treats absent, empty, and whitespace-only feedback as the same (no) note', () => {
+    const none = seriesReviewRequestSig({});
+    expect(seriesReviewRequestSig({ feedback: '' })).toBe(none);
+    expect(seriesReviewRequestSig({ feedback: '   \n' })).toBe(none);
+  });
+
+  it('ignores surrounding whitespace on a real note, matching the service trim', () => {
+    expect(seriesReviewRequestSig({ feedback: '  pacing drags  ' }))
+      .toBe(seriesReviewRequestSig({ feedback: 'pacing drags' }));
+  });
+
+  it.each([
+    ['a different note', { feedback: 'pacing drags' }, { feedback: 'the ending lands flat' }],
+    ['a provider override', {}, { providerOverride: 'example-provider' }],
+    ['a model override', {}, { modelOverride: 'example-model' }],
+    ['force', {}, { force: true }],
+    ['a readiness gate', {}, { readinessGate: 'noOpenHighOrMedium' }],
+  ])('diverges on %s', (_label, a, b) => {
+    expect(seriesReviewRequestSig(a)).not.toBe(seriesReviewRequestSig(b));
+  });
+
+  it('does not conflate a note with the same text in another field', () => {
+    expect(seriesReviewRequestSig({ feedback: 'x' })).not.toBe(seriesReviewRequestSig({ modelOverride: 'x' }));
+  });
+});
+
+describe('seriesFixRequestSig', () => {
+  it('matches for the same finding set in a different order', () => {
+    expect(seriesFixRequestSig({ commentIds: ['mrc-2', 'mrc-1'] }))
+      .toBe(seriesFixRequestSig({ commentIds: ['mrc-1', 'mrc-2'] }));
+  });
+
+  it('treats an absent and an empty id list as the same "every open finding" pass', () => {
+    expect(seriesFixRequestSig({ commentIds: [] })).toBe(seriesFixRequestSig({}));
+  });
+
+  it('diverges when the finding set differs — that run WRITES the manuscript', () => {
+    expect(seriesFixRequestSig({ commentIds: ['mrc-1'] }))
+      .not.toBe(seriesFixRequestSig({ commentIds: ['mrc-1', 'mrc-2'] }));
+    // A scoped pass is NOT the same work as the unscoped "fix everything" pass.
+    expect(seriesFixRequestSig({ commentIds: ['mrc-1'] })).not.toBe(seriesFixRequestSig({}));
+  });
+
+  it('diverges on a provider/model override', () => {
+    expect(seriesFixRequestSig({})).not.toBe(seriesFixRequestSig({ providerOverride: 'example-provider' }));
+    expect(seriesFixRequestSig({})).not.toBe(seriesFixRequestSig({ modelOverride: 'example-model' }));
   });
 });

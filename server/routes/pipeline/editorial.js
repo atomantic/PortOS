@@ -243,7 +243,11 @@ router.get('/series/:id/review', asyncHandler(async (req, res) => {
   res.json(await seriesReview.getSeriesReview(req.params.id));
 }));
 
-// Kick off the holistic review (batch — progress via SSE).
+// Kick off the holistic review (batch — progress via SSE). The runner coalesces
+// a re-kick of the SAME review onto the in-flight run (`alreadyRunning`) but
+// refuses one whose options diverge, answering `conflict: true` (#4113) — spread
+// the runner's result verbatim so that reaches the client instead of reading as
+// a normal attach.
 router.post('/series/:id/review', asyncHandler(async (req, res) => {
   const body = validateRequest(seriesReviewRunSchema, req.body ?? {});
   await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });

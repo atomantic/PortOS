@@ -1,0 +1,1 @@
+- Series review: a second Review/Fix start whose options differ from the run already in flight is now refused with an explicit conflict instead of silently attaching to that run and dropping its own note, provider, gate, or finding set

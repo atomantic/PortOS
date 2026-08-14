@@ -682,7 +682,33 @@ export async function runSeriesFix(seriesId, { commentIds, providerOverride, mod
 
 const runner = createSseRunner({ logLabel: 'series review' });
 
+/**
+ * Identity of a review kickoff: what the run would actually do. Two starts with
+ * the same signature produce the same verdict, so the second can safely attach
+ * to the first's in-flight run (a reload/remount re-attaching to its own
+ * request). A DIFFERENT signature would review with a different note, provider,
+ * or gate — attaching to the running one would silently drop those options and
+ * report its verdict as this request's, so the factory reports a `conflict`
+ * instead (#4113). Pure.
+ *
+ * `feedback` is trimmed to match the service's own `feedback && trim()` gate, so
+ * a blank note and an absent one are the same work.
+ */
+export function seriesReviewRequestSig({ feedback, providerOverride, modelOverride, force, readinessGate } = {}) {
+  return JSON.stringify({
+    feedback: String(feedback ?? '').trim() || null,
+    providerOverride: providerOverride ?? null,
+    modelOverride: modelOverride ?? null,
+    force: !!force,
+    readinessGate: readinessGate ?? null,
+  });
+}
+
 export function startSeriesReviewRun(seriesId, options = {}) {
+  // A second start while a review is in flight coalesces ONLY when it would run
+  // the same review; a divergent one gets `{ alreadyRunning: true, conflict:
+  // true }` so the caller can surface it rather than lose its options.
+  const sig = seriesReviewRequestSig(options);
   return runner.start(seriesId, async ({ runId, signal, record, broadcast }) => {
     broadcast({ type: 'start', runId });
     const result = await runSeriesReview(seriesId, {
@@ -705,7 +731,7 @@ export function startSeriesReviewRun(seriesId, options = {}) {
       findingCount: result.findingCount,
       completedAt: nowIso(),
     });
-  });
+  }, { sig });
 }
 
 export const attachClient = (seriesId, res) => runner.attachClient(seriesId, res);
@@ -717,7 +743,25 @@ export const cancelSeriesReview = (seriesId) => runner.cancel(seriesId);
 // runner maps — a review SSE and a fix SSE never collide).
 const fixRunner = createSseRunner({ logLabel: 'series fix' });
 
+/**
+ * Identity of a fix kickoff. Same contract as `seriesReviewRequestSig`, and the
+ * stakes are higher: the fix path WRITES the manuscript, so a start scoped to a
+ * different finding set must never bind onto the in-flight run and report its
+ * `fixed/skipped` totals as its own. `commentIds` is sorted (and deduped) so the
+ * same finding set in a different order is the same work; absent/empty both mean
+ * "every open finding", which is what `runSeriesFix` does with either. Pure.
+ */
+export function seriesFixRequestSig({ commentIds, providerOverride, modelOverride } = {}) {
+  const ids = Array.isArray(commentIds) && commentIds.length ? [...new Set(commentIds)].sort() : null;
+  return JSON.stringify({
+    commentIds: ids,
+    providerOverride: providerOverride ?? null,
+    modelOverride: modelOverride ?? null,
+  });
+}
+
 export function startSeriesFixRun(seriesId, options = {}) {
+  const sig = seriesFixRequestSig(options);
   return fixRunner.start(seriesId, async ({ runId, signal, record, broadcast }) => {
     broadcast({ type: 'start', runId });
     const result = await runSeriesFix(seriesId, {
@@ -744,7 +788,7 @@ export function startSeriesFixRun(seriesId, options = {}) {
       budgetStopped: result.budgetStopped === true,
       completedAt: nowIso(),
     });
-  });
+  }, { sig });
 }
 
 export const attachFixClient = (seriesId, res) => fixRunner.attachClient(seriesId, res);
