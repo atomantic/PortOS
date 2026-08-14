@@ -7,6 +7,7 @@ import {
   DEFAULT_GOALS,
   loadJSON
 } from './store.js';
+import { applyFreshTimeHorizons } from './longevity.js';
 
 const INSIGHT_RULES = [
   {
@@ -196,11 +197,15 @@ const INSIGHT_RULES = [
 ];
 
 export async function getCrossInsights() {
-  const [chronotype, longevity, goalsData] = await Promise.all([
+  const [chronotype, storedLongevity, goalsData] = await Promise.all([
     loadJSON(CHRONOTYPE_FILE, DEFAULT_CHRONOTYPE),
     loadJSON(LONGEVITY_FILE, DEFAULT_LONGEVITY),
     loadJSON(GOALS_FILE, DEFAULT_GOALS)
   ]);
+
+  // The goal-timeline rules read `timeHorizons.yearsRemaining` straight off the
+  // snapshot, so re-derive it against today before evaluating them (#4122).
+  const longevity = applyFreshTimeHorizons(storedLongevity, goalsData?.birthDate);
 
   const context = { chronotype, longevity, goals: goalsData };
 

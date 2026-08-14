@@ -1,0 +1,1 @@
+- Goal urgency and time horizons are recomputed from your birth date on every read, so `yearsRemaining` no longer stays frozen at whatever the last longevity derive stamped

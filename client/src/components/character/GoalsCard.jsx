@@ -89,14 +89,12 @@ export default function GoalsCard() {
     // so the two surfaces can never show contradictory urgency. (Enriching the flat endpoint
     // instead would change a shared API's semantics.)
     //
-    // Two honest limits on how fresh that is, both the goals feature's to fix (see #4122),
-    // and both landing on "sorts last" rather than on a wrong number:
-    //   - The tree only re-derives for goals it considers active (`goals.js` gates on a
-    //     strict status), so the status-less goals `isActive` admits keep whatever urgency
-    //     they carry — for MortalLoom-synced goals, none at all.
-    //   - The horizons it derives against are only as fresh as the last deriveLongevity()
-    //     run. Every urgency consumer shares that, and re-deriving from this read-only card
-    //     would write on a read path AND make the sheet disagree with /goals.
+    // The horizons that urgency is derived against are now recomputed server-side on every
+    // read (#4122), so the number is current no matter how long ago deriveLongevity() ran.
+    // One honest limit remains, and it lands on "sorts last" rather than on a wrong number:
+    // the tree only re-derives for goals it considers active (`goals.js` gates on a strict
+    // status), so the status-less goals `isActive` admits keep whatever urgency they carry —
+    // for MortalLoom-synced goals, none at all.
     //
     // silent: this card owns its own error UI (the message below), so letting request() toast
     // as well would surface the same failure twice.

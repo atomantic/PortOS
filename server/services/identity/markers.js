@@ -145,6 +145,39 @@ export function extractCardiovascularMarkers(savedMarkers) {
   return results;
 }
 
+/**
+ * Time horizons for a birth date measured against an adjusted life expectancy.
+ *
+ * Date-dependent and therefore never trustworthy as a stored snapshot: every read
+ * path re-runs this so `yearsRemaining` is "as of now" rather than "as of the last
+ * derive" (#4122). It is cheap arithmetic with no I/O, so re-deriving on every read
+ * costs nothing.
+ *
+ * Returns `null` — not a zero-filled shape — when the birth date is missing or
+ * unparseable, or when no adjusted life expectancy has been derived yet. "We can't
+ * compute horizons" must stay distinguishable from "you have no time left"; callers
+ * gate on the null.
+ */
+export function computeTimeHorizons(birthDate, adjustedLifeExpectancy) {
+  if (!birthDate || typeof adjustedLifeExpectancy !== 'number') return null;
+
+  const birthMs = new Date(birthDate).getTime();
+  if (Number.isNaN(birthMs)) return null;
+
+  const ageYears = (Date.now() - birthMs) / (365.25 * 24 * 60 * 60 * 1000);
+  const yearsRemaining = Math.max(0, Math.round((adjustedLifeExpectancy - ageYears) * 10) / 10);
+  // Healthy years: estimate ~85% of remaining years are active/healthy
+  const healthyYearsRemaining = Math.round(yearsRemaining * 0.85 * 10) / 10;
+  const percentLifeComplete = Math.round((ageYears / adjustedLifeExpectancy) * 1000) / 10;
+
+  return {
+    ageYears: Math.round(ageYears * 10) / 10,
+    yearsRemaining,
+    healthyYearsRemaining,
+    percentLifeComplete: Math.min(100, percentLifeComplete)
+  };
+}
+
 export function computeLifeExpectancy(longevityMarkers, cardiovascularMarkers, birthDate) {
   // Longevity score: weighted average of signals (+1 beneficial, -1 concern)
   let longevityScore = 0;
@@ -180,24 +213,9 @@ export function computeLifeExpectancy(longevityMarkers, cardiovascularMarkers, b
   const coverage = (longevityCount + cardioCount) / (maxLongevity + maxCardio);
   const confidence = Math.round(Math.min(1, coverage) * 100) / 100;
 
-  // Time horizons if birth date provided
-  let timeHorizons = null;
-  if (birthDate) {
-    const birth = new Date(birthDate);
-    const now = new Date();
-    const ageYears = (now - birth) / (365.25 * 24 * 60 * 60 * 1000);
-    const yearsRemaining = Math.max(0, Math.round((adjusted - ageYears) * 10) / 10);
-    // Healthy years: estimate ~85% of remaining years are active/healthy
-    const healthyYearsRemaining = Math.round(yearsRemaining * 0.85 * 10) / 10;
-    const percentLifeComplete = Math.round((ageYears / adjusted) * 1000) / 10;
-
-    timeHorizons = {
-      ageYears: Math.round(ageYears * 10) / 10,
-      yearsRemaining,
-      healthyYearsRemaining,
-      percentLifeComplete: Math.min(100, percentLifeComplete)
-    };
-  }
+  // Time horizons if birth date provided — same helper the read paths call, so the
+  // persisted snapshot and a freshly re-derived one can never disagree on the math.
+  const timeHorizons = computeTimeHorizons(birthDate, adjusted);
 
   return {
     longevityScore: Math.round(longevityScore * 1000) / 1000,
