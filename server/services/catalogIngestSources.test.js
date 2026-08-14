@@ -258,7 +258,8 @@ describe('ingestFromVoice', () => {
     expect(fsp.writeFile).toHaveBeenCalledTimes(1);
     expect(mediaKey).toMatch(/^voice-memo-.*\.wav$/);
     const writtenPath = fsp.writeFile.mock.calls[0][0];
-    expect(writtenPath).toContain('/tmp/data/audio');
+    // Composed with path.join — accept either separator.
+    expect(writtenPath.split('\\').join('/')).toContain('/tmp/data/audio');
   });
 });
 

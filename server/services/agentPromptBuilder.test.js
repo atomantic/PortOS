@@ -1362,7 +1362,8 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/## Pipeline Context/);
       expect(prompt).toMatch(/Stage 2 of 3: "prose"/);
       expect(prompt).toMatch(/Previous stage: "idea"/);
-      expect(prompt).toMatch(/agent-prev-1\/output\.txt/);
+      // The prompt embeds a joined path, so accept either separator.
+      expect(prompt).toMatch(/agent-prev-1[\\/]output\.txt/);
     });
   });
 });

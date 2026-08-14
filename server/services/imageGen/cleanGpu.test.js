@@ -74,7 +74,10 @@ describe('enqueueGpuClean', () => {
     // No regen lineage — a clean render is not a gallery variant of anything.
     expect(params.regenOf).toBeUndefined();
     // The init image is staged on disk and pointed at by the params.
-    expect(params.initImagePath.startsWith(TMP)).toBe(true);
+    // TMP is spelled POSIX but the service composes the staged path with
+    // path.join, so on Windows it comes back '\tmp\…' — normalize before the
+    // prefix check rather than pinning the separator.
+    expect(params.initImagePath.split('\\').join('/').startsWith(TMP)).toBe(true);
     expect(existsSync(params.initImagePath)).toBe(true);
     // A clean-meta sidecar records that no mask was staged.
     const clean = readdirSync(TMP).find((f) => f.endsWith('-clean.json'));

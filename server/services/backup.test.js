@@ -26,7 +26,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
-import { basename, join as joinPath } from 'path';
+import { basename, join as joinPath, resolve as resolvePath } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 // runBackup persists state to PATHS.data/backup/state.json. Re-root PATHS at
@@ -1062,7 +1062,10 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
     it('builds the exact include/exclude chain for a valid subdirFilter', async () => {
       await runRestore('/dest', 'snap-1', { dryRun: true, subdirFilter: 'brain' });
 
-      const srcDir = join('/dest', 'snapshots', machineHost, 'snap-1', 'data');
+      // resolve(), not join(): restoreSnapshot anchors the snapshot root with
+      // resolve(), which on Windows prefixes the current drive ('H:\dest\…')
+      // while join() would leave a drive-less '\dest\…'.
+      const srcDir = resolvePath('/dest', 'snapshots', machineHost, 'snap-1', 'data');
       // Asserted as an exact array (not arrayContaining): the ORDER matters to
       // rsync — `--exclude=*` must come last, after both includes, or the
       // targeted restore silently degrades into a full-tree restore.
