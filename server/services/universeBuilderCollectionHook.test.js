@@ -387,9 +387,17 @@ describe('universeBuilderCollectionHook', () => {
       },
     });
 
-    // Untracked run, so synchronize on the observable side effect (the sidecar
-    // enrich) rather than activeRuns draining — which is already empty here.
-    await waitFor(() => readSidecar(filename).universeName === 'StyleVerse');
+    // Untracked run, so synchronize on the observable side effects rather than
+    // activeRuns draining — which is already empty here. Wait on BOTH the
+    // collection add and the sidecar enrich: the hook performs them
+    // independently and in no guaranteed order, so gating on the sidecar alone
+    // let the collection assertion below run before the item had landed (green
+    // locally, red on the Windows CI runner).
+    await waitFor(async () => {
+      if (readSidecar(filename).universeName !== 'StyleVerse') return false;
+      const pending = await collections.getCollection(c.id);
+      return pending.items.some((it) => it.kind === 'image' && it.ref === filename);
+    });
     expect(hook.__testing.getActiveRuns().size).toBe(0);
     const col = await collections.getCollection(c.id);
     expect(col.items.some((it) => it.kind === 'image' && it.ref === filename)).toBe(true);

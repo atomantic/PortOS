@@ -76,6 +76,10 @@ vi.mock('../services/api', () => ({
   getSettings: vi.fn(async () => ({ imageGen: { grok: { enabled: false } } })),
   getVideoGenRuntimeStatus: vi.fn(async () => ({ installed: true, ready: true, current: true })),
   listLorasFull: vi.fn(async () => []),
+  // The prompt-enhancer control mounts useProviderModels, which fetches the
+  // provider list on mount. Unmocked, vitest throws on the missing export
+  // rather than the hook falling back — the page never finishes rendering.
+  getProviders: vi.fn(async () => ({ providers: [] })),
 }));
 
 vi.mock('../hooks/useModelDownloadStatus', () => ({
