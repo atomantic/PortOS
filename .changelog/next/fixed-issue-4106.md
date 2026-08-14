@@ -1,0 +1,1 @@
+- CoS claim-issue agents now converge every "verify still valid" release — an already-fixed or superseded issue is closed with a summarizing comment and a stale-reference issue is tagged needs-input, so the perpetual drain stops re-spawning a no-op agent on it every tick (GitHub, GitLab, and JIRA claim prompts)

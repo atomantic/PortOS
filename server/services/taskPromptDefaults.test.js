@@ -219,9 +219,9 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // claim/plan prompt that enumerates the CLI reviewers must name the binary.
   it.each([
     ['plan-task', 13],
-    ['claim-issue', 10],
-    ['claim-issue-gitlab', 9],
-    ['claim-issue-jira', 7],
+    ['claim-issue', 11],
+    ['claim-issue-gitlab', 10],
+    ['claim-issue-jira', 8],
   ])('%s v%d names the antigravity reviewer\'s `agy` binary, preserving the pre-`agy` default', (key, version) => {
     const current = DEFAULT_TASK_PROMPTS[key];
     expect(PROMPT_VERSIONS[key]).toBe(version);
@@ -270,9 +270,87 @@ describe('taskPromptDefaults integrity snapshot', () => {
     // The append is now the documented-convention FALLBACK, never the instruction.
     expect(current).not.toMatch(/append (?:a one-line entry )?to `\.changelog\/NEXT\.md`/);
 
+    // Located by CONTENT rather than a fixed array position: later revisions
+    // (the claim flows' converging Phase 3, below) append their own outgoing
+    // bodies after it. `findLast`, NOT `find` — several older revisions also
+    // predate the fragment convention, and matching the OLDEST of them would
+    // keep passing if the actual pre-fragment body were dropped or edited.
+    const preFragment = PREVIOUS_DEFAULT_PROMPTS[key].findLast(
+      (p) => !p.includes('per-branch fragment') && p.includes('.changelog/NEXT.md'),
+    );
+    expect(preFragment).toBeDefined();
+    expect(preFragment).not.toBe(current);
+  });
+
+  // Phase 3 ("Verify still valid") releases an issue for reasons the work
+  // detector cannot see — `isActionableIssue` (perpetualWork.js) reads only
+  // labels/assignees/epic/in-flight, never the body or comments. So a Phase-3
+  // exit that leaves the issue OPEN and unlabeled reads as actionable forever
+  // and the perpetual drain re-spawns a no-op agent on it every tick. Every
+  // release path must therefore land a converging outcome: closed, or
+  // `needs-input` (both skipped by Phase 1 step 4). Issue #4106.
+  // Assertions are scoped to the Phase 3 SECTION, not the whole body: `gh issue
+  // close` / `glab issue close` already appear in Phase 7's post-merge
+  // reconcile, so a whole-body `toContain` would pass even with Phase 3 left
+  // exactly as broken as it was.
+  const phaseSection = (body, n) => {
+    const start = body.indexOf(`## Phase ${n} —`);
+    const end = body.indexOf(`## Phase ${n + 1} —`, start);
+    expect(start, `Phase ${n} heading`).toBeGreaterThan(-1);
+    expect(end, `Phase ${n + 1} heading`).toBeGreaterThan(start);
+    return body.slice(start, end);
+  };
+
+  it.each([
+    ['claim-issue', 'gh issue close', 'gh issue edit "${NUM}" --add-label needs-input'],
+    ['claim-issue-gitlab', 'glab issue close', 'glab issue update "${NUM}" --label needs-input'],
+  ])('%s converges every Phase-3 release, preserving the outgoing default', (key, closeCommand, parkCommand) => {
+    const current = DEFAULT_TASK_PROMPTS[key];
+    const phase3 = phaseSection(current, 3);
+    // The already-fixed/superseded branch CLOSES rather than releasing open…
+    expect(phase3).toContain('**Already fixed, superseded, or closed-then-reopened-for-tracking**');
+    expect(phase3).toContain(closeCommand);
+    // …and the stale-reference branch tags the label the detector skips.
+    expect(phase3).toContain('**Stale reference**');
+    expect(phase3).toContain(parkCommand);
+    expect(phase3).toContain('CONVERGING outcome');
+    // Closing is destructive, so the close branch is gated on nameable
+    // evidence — an agent that merely suspects the work landed must implement.
+    expect(phase3).toContain('**Evidence gate:');
+    // The old blanket "release the claim and re-pick" instruction is what left
+    // the issue open and unlabeled — it must be gone, not merely qualified.
+    expect(phase3).not.toContain('If ANY of these are true, release the claim and re-pick');
+
+    // The outgoing default is preserved verbatim so installs holding it are
+    // recognized and auto-upgraded rather than read as user customizations.
     const outgoing = PREVIOUS_DEFAULT_PROMPTS[key][PREVIOUS_DEFAULT_PROMPTS[key].length - 1];
-    expect(outgoing).not.toContain('per-branch fragment');
-    expect(outgoing).toContain('.changelog/NEXT.md');
+    const outgoingPhase3 = phaseSection(outgoing, 3);
+    expect(outgoingPhase3).toContain('If ANY of these are true, release the claim and re-pick');
+    expect(outgoingPhase3).not.toContain(closeCommand);
+    expect(outgoing).not.toBe(current);
+  });
+
+  // JIRA has no labels, so its converging vocabulary is status: an already-fixed
+  // ticket goes to Done/Closed, and a stale-reference ticket parks on a held
+  // status behind a Review Hub todo. Transitioning back to a not-started status
+  // is the JIRA shape of the same bug — Phase 1's not-started-only filter
+  // re-picks it immediately.
+  it('claim-issue-jira converges every Phase-3 release, preserving the outgoing default', () => {
+    const current = DEFAULT_TASK_PROMPTS['claim-issue-jira'];
+    const phase3 = phaseSection(current, 3);
+    expect(phase3).toContain('CONVERGING status');
+    expect(phase3).toContain('**Already fixed, superseded, or duplicated by another ticket**');
+    expect(phase3).toContain('Done/Closed');
+    expect(phase3).toContain('**Evidence gate:');
+    expect(phase3).toContain('**Stale reference**');
+    // The stale-reference park uses JIRA's held status + a Review Hub todo —
+    // never a not-started status, which Phase 1 re-picks on the very next pass.
+    expect(phase3).toContain('NOT back to a not-started status');
+    expect(phase3).not.toContain('If ANY of these are true, release the claim and re-pick');
+
+    const previous = PREVIOUS_DEFAULT_PROMPTS['claim-issue-jira'];
+    const outgoing = previous[previous.length - 1];
+    expect(phaseSection(outgoing, 3)).toContain('transition the ticket back to its not-started status');
     expect(outgoing).not.toBe(current);
   });
 
