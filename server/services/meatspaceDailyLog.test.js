@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { join } from 'path';
 
 // The alcohol, nicotine, and body-composition services all read the same
 // daily-log.json. They used to each carry a byte-identical copy of the probe →
@@ -37,6 +38,10 @@ import { getDailyAlcohol } from './meatspaceAlcohol.js';
 import { getDailyNicotine } from './meatspaceNicotine.js';
 import { getBodyHistory } from './meatspaceHealth.js';
 
+// Built with join() rather than a literal: the module builds it the same way, and
+// win32 separators would make a hardcoded POSIX path fail on the Windows runner.
+const EXPECTED_LOG_PATH = join('/mock/data/meatspace', 'daily-log.json');
+
 beforeEach(() => {
   vi.clearAllMocks();
   readDailyLogIfEnabled.mockResolvedValue(null);
@@ -44,7 +49,7 @@ beforeEach(() => {
 
 describe('DAILY_LOG_FILE', () => {
   it('points at daily-log.json under the meatspace data dir', () => {
-    expect(DAILY_LOG_FILE).toBe('/mock/data/meatspace/daily-log.json');
+    expect(DAILY_LOG_FILE).toBe(EXPECTED_LOG_PATH);
   });
 });
 
@@ -60,7 +65,7 @@ describe('readLocalDailyLog', () => {
     readJSONFile.mockResolvedValue({ entries: [] });
     await readLocalDailyLog({ strict: true, label: 'Alcohol' });
     expect(readJSONFile).toHaveBeenCalledWith(
-      '/mock/data/meatspace/daily-log.json',
+      EXPECTED_LOG_PATH,
       { entries: [], lastEntryDate: null },
       { allowArray: false, strict: true }
     );
