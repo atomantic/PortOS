@@ -26,11 +26,24 @@ const makeFakeChild = () => {
 };
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal();
+  const { readFileSync } = await import('fs');
   return {
     ...actual,
     spawn: vi.fn((bin, args) => {
       const child = makeFakeChild();
-      spawnCalls.push({ bin, args, child });
+      // On Windows grok cannot read /dev/stdin, so prepareGrokPromptFile writes
+      // the prompt to a temp file and rewrites --prompt-file to point at it —
+      // then unlinks that file once the run closes. Capture its contents HERE,
+      // between the write and the cleanup, so promptOf() can report the prompt
+      // on both platforms instead of reading an always-empty stdin buffer.
+      // (Same capture as imageGen/grok.test.js.)
+      let promptFromFile = null;
+      const pfIdx = args?.indexOf?.('--prompt-file');
+      const pfPath = pfIdx >= 0 ? args[pfIdx + 1] : null;
+      if (pfPath && pfPath !== '/dev/stdin') {
+        try { promptFromFile = readFileSync(pfPath, 'utf8'); } catch { promptFromFile = null; }
+      }
+      spawnCalls.push({ bin, args, child, promptFromFile });
       return child;
     }),
   };
@@ -70,7 +83,8 @@ const { loadHistory } = await import('./history.js');
 const flush = () => new Promise((r) => setImmediate(r));
 const scratchDirFor = (jobId) => join(tmpdir(), `portos-grok-video-${jobId}`);
 const stagingPathFor = (jobId) => join(scratchDirFor(jobId), 'output.mp4');
-const promptOf = (i = 0) => spawnCalls[i].child.stdin.written;
+// Prefer the --prompt-file temp file (Windows) and fall back to stdin (POSIX).
+const promptOf = (i = 0) => spawnCalls[i].promptFromFile ?? spawnCalls[i].child.stdin.written;
 const closeChild = async (i = 0, code = 1) => {
   spawnCalls[i].child.exitCode = code;
   spawnCalls[i].child.emit('close', code, null);

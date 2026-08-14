@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Separator-normalizer for path assertions. The code under test composes paths
 // with path.join/resolve, which emit '\\' on Windows, so a '/'-spelled literal
@@ -298,7 +298,18 @@ describe('xcodeScripts', () => {
   });
 
   describe('installScripts', () => {
+    // installScripts and deriveProjectInfo both branch on the platform: Windows
+    // has no chmod and short-circuits the project.yml parse entirely. Every case
+    // here except the explicit win32 one below asserts the POSIX path, so pin
+    // the platform rather than let the host decide which half runs. (Safe — the
+    // module's deps are all mocked and none loads a native addon.)
+    const ORIGINAL_PLATFORM = Object.getOwnPropertyDescriptor(process, 'platform');
+    afterEach(() => {
+      Object.defineProperty(process, 'platform', ORIGINAL_PLATFORM);
+    });
+
     beforeEach(() => {
+      Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
       hoisted.execMock.mockReset();
       hoisted.execFileMock.mockReset();
       readFile.mockReset();
@@ -376,8 +387,9 @@ describe('xcodeScripts', () => {
       // writeFile called for each script + .env.example (since deploy.sh installed)
       expect(writeFile).toHaveBeenCalledTimes(3);
       // chmod called once with both installed paths
-      expect(hoisted.execFileMock).toHaveBeenCalledWith(
-        'chmod',
+      const [chmodBin, chmodArgs] = hoisted.execFileMock.mock.calls[0];
+      expect(chmodBin).toBe('chmod');
+      expect(chmodArgs.map(posixPath)).toEqual(
         expect.arrayContaining(['+x', '/tmp/x/deploy.sh', '/tmp/x/take_screenshots.sh'])
       );
     });
