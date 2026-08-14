@@ -35,6 +35,9 @@ import { safeUnder } from '../../lib/ffmpeg.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { isVideoModelTermsAccepted, acceptedVideoModelTerms, videoModelTermsError } from '../../lib/videoDisclosure.js';
 import { videoLoraFamily } from '../../lib/runners.js';
+import {
+  isStockTextEncoder, supportsVideoTextEncoder, videoTextEncoderUnsupportedError,
+} from '../../lib/videoTextEncoders.js';
 import { resolveContextFrames } from '../../lib/videoContinuity.js';
 import {
   IC_LORA_MODE_VALUES, icLoraSpecForMode,
@@ -158,6 +161,16 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
       `Unknown modelId: ${body.modelId}`,
       { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
     );
+  }
+  // Substituted prompt conditioner (#4081). A pure registry lookup with no
+  // dependency on anything staged, so it belongs with the other pre-staging
+  // model gates: the request that named the bad conditioner is the only place
+  // that can report it, and rejecting later would first write durable copies of
+  // every upload for a render that was never going to run.
+  if (effectiveModel && !isStockTextEncoder(body.textEncoderId)
+    && !supportsVideoTextEncoder(effectiveModel, body.textEncoderId)) {
+    await cleanupMultipartTemp(uploads);
+    throw videoTextEncoderUnsupportedError(effectiveModel, body.textEncoderId);
   }
   // Reject a gated model here so the caller gets a synchronous, actionable 403
   // instead of a doomed queue entry. The render itself re-checks (local.js) —

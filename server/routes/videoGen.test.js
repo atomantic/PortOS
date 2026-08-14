@@ -712,6 +712,10 @@ describe('videoGen routes', () => {
         'seed',
         'imageStrength',
         'tiling',
+        // Not in the it.each table above: the route deliberately DROPS the
+        // stock value from persisted params, so the generic round-trip
+        // assertion can't cover it. Its own case is below.
+        'textEncoderId',
       ]);
       const { getSettings } = await import('../services/settings.js');
       getSettings.mockResolvedValueOnce({ imageGen: grokReady, videoGen: { mode: 'grok' } });
@@ -720,6 +724,21 @@ describe('videoGen routes', () => {
       const [call] = mediaJobQueue.enqueueJob.mock.calls;
       expect(call[0].params.mode).not.toBe('grok');
       expect(call[0].params[param]).toBe(value);
+    });
+
+    // grok has no conditioner knob, so naming one must keep the render local —
+    // even for the stock id, which the route then drops from persisted params
+    // (an unswapped render's job params stay byte-identical to a request that
+    // never sent the field). Both halves matter: keeping it local without
+    // dropping it would persist a knob that never applied.
+    it('keeps textEncoderId on the local path under a grok pin, without persisting the stock value', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ imageGen: grokReady, videoGen: { mode: 'grok' } });
+      const r = await request(app).post('/api/video-gen/').send({ prompt: 'a fox', textEncoderId: 'stock' });
+      expect(r.status).toBe(200);
+      const [call] = mediaJobQueue.enqueueJob.mock.calls;
+      expect(call[0].params.mode).not.toBe('grok');
+      expect(call[0].params.textEncoderId).toBeUndefined();
     });
 
     it('a grok pin degrades to local when the request carries local-only machinery', async () => {

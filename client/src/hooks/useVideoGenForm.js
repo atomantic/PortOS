@@ -17,6 +17,8 @@ import {
   supportsVideoAudioControls, supportsVideoAudioPromptControls,
   normalizeFramesForModel, normalizeFpsForModel,
   icLoraSpecForMode, icResolutionIssue,
+  STOCK_TEXT_ENCODER_ID, textEncoderOptionsForModel, normalizeTextEncoderForModel,
+  textEncoderIdFromRecord,
 } from '../lib/videoGenParams.js';
 
 /**
@@ -84,6 +86,11 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
   const [imageStrength, setImageStrength] = useState('');
   const [seed, setSeed] = useState('');
   const [tiling, setTiling] = useState('auto');
+  // Which prompt conditioner reads the prompt. Only MiniMax H3 offers a choice
+  // today (`model.textEncoderOptions`, decorated server-side); everywhere else
+  // the list is empty and this stays on the stock sentinel, which the submit
+  // builder drops from the payload entirely.
+  const [textEncoderId, setTextEncoderId] = useState(STOCK_TEXT_ENCODER_ID);
   const [disableAudio, setDisableAudio] = useState(false);
   // Video LoRAs (ltx2 runtime only) — `{ filename, name, scale }` entries the
   // LoraPicker owns; `availableLoras` is the full installed library filtered
@@ -404,11 +411,22 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
   // Remix/deep-link/resume paths set model + sampler fields independently.
   // Reconcile them once the model is known so a legacy LTX 8n+1 frame count
   // cannot reach a Wan 4n+1 runner (and a model-specific fps stays selectable).
+  // Reconciled here rather than in applyModelSelection so the remix / resume /
+  // deep-link paths are covered too: they set modelId and textEncoderId
+  // independently, and a conditioner the newly-resolved model can't load would
+  // otherwise sit in the <select> with no matching <option> until submit 400'd.
   useEffect(() => {
     if (!currentModel) return;
     setNumFrames((current) => normalizeFramesForModel(current, currentModel));
     setFps((current) => normalizeFpsForModel(current, currentModel));
+    setTextEncoderId((current) => normalizeTextEncoderForModel(current, currentModel));
   }, [currentModel]);
+
+  // Substitutable prompt conditioners the selected model can load, straight off
+  // the server-decorated entry. Empty for every runtime without substitutions,
+  // which is what hides the picker — the page never re-derives that from a
+  // runtime name.
+  const textEncoderOptions = textEncoderOptionsForModel(currentModel);
 
   // Video-LoRA family for the selected model — 'ltx-video' on ltx2, else null.
   // When null the picker is hidden and no LoRAs ride along on submit (the
@@ -866,6 +884,12 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
     // store a boolean here — silently ignore unknown values so the <select>
     // stays valid and the next POST doesn't 400.
     if (typeof item.tiling === 'string' && VIDEO_TILING_ENUM_SET.has(item.tiling)) setTiling(item.tiling);
+    // ALWAYS set explicitly (like steps/guidanceScale above): history records the
+    // conditioner only when it wasn't the stock one, so a missing field means
+    // 'stock' and must clear a leftover override rather than silently reusing it
+    // on a render the user asked to reproduce faithfully. The currentModel effect
+    // snaps an id this model can't load back to stock.
+    setTextEncoderId(textEncoderIdFromRecord(item.textEncoderId));
     // disableAudio: always set explicitly (true/false) so the toggle reliably
     // matches the remixed render. Skipping the false branch would leave the
     // toggle stuck ON when the user remixes a clip that had audio enabled.
@@ -963,6 +987,8 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
     if (p.guidanceScale != null) setGuidanceScale(String(p.guidanceScale));
     if (p.seed != null) setSeed(String(p.seed));
     if (p.tiling) setTiling(p.tiling);
+    // Resume echoes the field only for a non-stock render, so absence is 'stock'.
+    setTextEncoderId(textEncoderIdFromRecord(p.textEncoderId));
     if (typeof p.disableAudio === 'boolean') setDisableAudio(p.disableAudio);
     if (p.mode === 'grok') {
       // Grok job: 'grok' is the queue discriminator, not a semantic video
@@ -1157,6 +1183,12 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
       guidanceScale: guidanceScale || '',
       seed: seed || '',
       tiling: currentModel?.supportsTiling === false ? 'auto' : tiling,
+      // Dropped entirely for the stock conditioner so an unswapped render posts
+      // exactly the body it did before this knob existed — and re-snapped to the
+      // model's own list in case a restore raced the reconciliation effect.
+      textEncoderId: normalizeTextEncoderForModel(textEncoderId, currentModel) === STOCK_TEXT_ENCODER_ID
+        ? undefined
+        : textEncoderId,
       disableAudio: effectiveDisableAudio ? 'true' : 'false',
       mode,
       imageStrength: imageStrength || '',
@@ -1241,6 +1273,7 @@ export function useVideoGenForm({ models, status, availableLoras, grokEnabled })
     imageStrength, setImageStrength,
     seed, setSeed, handleRandomSeed,
     tiling, setTiling,
+    textEncoderId, setTextEncoderId, textEncoderOptions,
     disableAudio, setDisableAudio,
     noMusic, setNoMusic,
     // Frames

@@ -44,6 +44,9 @@ import { videoLoraFamily } from '../../lib/runners.js';
 import {
   isVideoModelTermsAccepted, acceptedVideoModelTerms, videoModelTermsGateId, videoModelTermsError,
 } from '../../lib/videoDisclosure.js';
+import {
+  publicVideoTextEncoderOptions, resolveVideoTextEncoder,
+} from '../../lib/videoTextEncoders.js';
 import { getSettings } from '../settings.js';
 import {
   isIcLoraMode, icLoraSpecForMode, resolveIcLoraWeight,
@@ -57,6 +60,7 @@ import {
   MINIMAX_H3_VENV_PYTHON,
   MINIMAX_H3_HELPER_SCRIPT,
   MINIMAX_H3_REPO_DIR,
+  MINIMAX_H3_ENCODER_SHIM_DIR,
   MINIMAX_H3_EXPECTED_REVISION,
   HUNYUAN_VENV_PYTHON,
   HUNYUAN_HELPER_SCRIPT,
@@ -162,10 +166,16 @@ export const VIDEO_MODELS = Object.fromEntries(getVideoModels().map((m) => [m.id
 // them off the model instead of keeping their own lists. Applied by BOTH model
 // resolvers, so the render path and the API payload can never disagree about
 // what a model supports.
+// Also attached: the substitutable prompt conditioners the model's runtime can
+// load (lib/videoTextEncoders.js). Decorated rather than declared on the
+// registry entry so the picker can never offer an option this build's runner
+// has no key-remap for — and empty for every runtime without substitutions, so
+// the client renders no picker instead of a one-entry select.
 const decorateVideoModel = (m) => (m ? {
   ...m,
   lastFrameAnchored: modelAnchorsLastFrame(m),
   runtimeLoraCapable: byovRuntimeLoraCapable(m.runtime),
+  textEncoderOptions: publicVideoTextEncoderOptions(m),
 } : m);
 
 export const resolveVideoModel = (modelId) =>
@@ -631,7 +641,7 @@ const buildWan22Args = ({ model, wanModelPath, wanRequiredWeights, prompt, negat
 // Build args for PipeNetwork's pinned MiniMax H3 MLX port. The helper resolves
 // only exact, already-cached HF revisions; every network download remains an
 // explicit Video Gen UI action guarded by the model's terms acknowledgement.
-const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, loras }) => {
+const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, loras, textEncoder }) => {
   assertByovRuntimeInstalled('minimax_h3');
   assertRenderModeContract({
     model,
@@ -715,6 +725,22 @@ const buildMiniMaxH3Args = ({ model, prompt, negativePrompt, width, height, numF
   // has already rejected LoRAs unless the probe proved this checkout can apply
   // them to the quantized DiT (see runtimes.js `loraProbeArgs`).
   for (const l of loras ?? []) args.push('--lora', l.path, '--lora-scale', String(l.strength));
+  // Substituted prompt conditioner (lib/videoTextEncoders.js). Absent for the
+  // stock choice, so the argv of an unswapped render is byte-identical to what
+  // it was before this feature existed. `textEncoder.path` was already resolved
+  // against the HF cache by generateVideo — the helper never downloads.
+  if (textEncoder) {
+    args.push('--text-encoder-id', textEncoder.id);
+    args.push('--text-encoder-file', textEncoder.path);
+    args.push('--text-encoder-shim-root', MINIMAX_H3_ENCODER_SHIM_DIR);
+    for (const [from, to] of Object.entries(textEncoder.keyPrefixMap || {})) {
+      args.push('--text-encoder-key-prefix', `${from}=${to}`);
+    }
+    // Only for a conditioner published without the final norm — H3 reads the
+    // hidden state before it, but the pinned loader builds the full module tree
+    // and refuses to load with any parameter missing.
+    if (textEncoder.finalNormKey) args.push('--text-encoder-final-norm-key', textEncoder.finalNormKey);
+  }
   return { bin: MINIMAX_H3_VENV_PYTHON, args };
 };
 
@@ -756,7 +782,7 @@ const buildHunyuanArgs = ({ model, prompt, negativePrompt, width, height, numFra
   return { bin: HUNYUAN_VENV_PYTHON, args };
 };
 
-const buildArgs = ({ pythonPath, modelId, model, wanModelPath, wanRequiredWeights, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, textEncoderRepo, outputPath, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2 }) => {
+const buildArgs = ({ pythonPath, modelId, model, wanModelPath, wanRequiredWeights, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, textEncoderRepo, textEncoder, outputPath, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2 }) => {
   // Route to the dgrauet/ltx-2-mlx helper when the model declares the new
   // runtime. Existing notapalindrome models default to runtime: 'mlx_video'
   // (or undefined in legacy registries — see backfillRuntime in mediaModels.js).
@@ -796,7 +822,7 @@ const buildArgs = ({ pythonPath, modelId, model, wanModelPath, wanRequiredWeight
     return buildWan22Args({ model, wanModelPath, wanRequiredWeights, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, mode, outputPath });
   }
   if (model.runtime === 'minimax_h3') {
-    return buildMiniMaxH3Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, loras });
+    return buildMiniMaxH3Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, icReferencePaths, mode, tiling, disableAudio, outputPath, loras, textEncoder });
   }
   if (model.runtime === 'hunyuan') {
     return buildHunyuanArgs({ model, prompt, negativePrompt, width, height, numFrames, steps, guidance, seed, outputPath });
@@ -903,7 +929,7 @@ const resolveVideoDimensions = (model, width, height) => ({
   height: height ?? configuredVideoDimension(model?.defaultHeight, 512),
 });
 
-export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, mode = null, imageStrength = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, hidden = false, jobId: providedJobId = null }) {
+export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, mode = null, imageStrength = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, hidden = false, jobId: providedJobId = null }) {
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   // Single-flight is now enforced by the mediaJobQueue worker upstream — only
@@ -998,6 +1024,32 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       }
     }
   }
+  // Substituted prompt conditioner (#4081). `resolveVideoTextEncoder` returns
+  // null for the stock choice — the whole override path stays dormant then —
+  // and throws a 400 when the model's runtime has no remap for the requested
+  // id. The weight is resolved against the HF cache HERE rather than in the
+  // helper so a missing download fails as a clean 400 before any GPU work,
+  // matching how wan22's required weights are handled above.
+  const textEncoderOption = resolveVideoTextEncoder(model, textEncoderId);
+  let resolvedTextEncoder = null;
+  if (textEncoderOption) {
+    const encoderPath = await findCachedRepoFile(
+      textEncoderOption.repo, textEncoderOption.file, { revision: textEncoderOption.revision },
+    );
+    if (!encoderPath) {
+      throw new ServerError(
+        `Text encoder "${textEncoderOption.label}" is not downloaded. Download it in Video Gen before rendering.`,
+        { status: 400, code: 'VIDEO_TEXT_ENCODER_NOT_CACHED' },
+      );
+    }
+    resolvedTextEncoder = {
+      id: textEncoderOption.id,
+      path: encoderPath,
+      keyPrefixMap: textEncoderOption.keyPrefixMap,
+      finalNormKey: textEncoderOption.finalNormKey,
+    };
+  }
+
   // Only require the legacy mlx_video pythonPath when the chosen runtime
   // actually uses it. ltx2/wan22/hunyuan resolve their own venv path inside
   // buildArgs — gating them on the unrelated mlx_video setting locks users
@@ -1283,6 +1335,11 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     guidanceScale: actualGuidance,
     tiling,
     disableAudio,
+    // Which prompt conditioner read this prompt. Only recorded when it wasn't
+    // the stock one, so pre-feature history and every unswapped render stay
+    // byte-identical — and so a Remix of a stock render can't resurrect an
+    // override the user has since deselected.
+    ...(resolvedTextEncoder ? { textEncoderId: resolvedTextEncoder.id } : {}),
     filename,
     createdAt: new Date().toISOString(),
     // History mode reflects the EFFECTIVE mode — buildLtx2Args infers fflf
@@ -1345,7 +1402,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // logic of the spawn-error handler so failure modes converge.
   let bin, args;
   try {
-    ({ bin, args } = buildArgs({ pythonPath, modelId, model: loraCapableModel, wanModelPath, wanRequiredWeights, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, stage2Steps: actualStage2Steps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, outputPath, loras: resolvedLoras, icReferencePaths: resolvedIcReferencePaths, icLoraWeightPath, icStrength: actualIcStrength, icAttentionStrength: actualIcAttentionStrength, icSkipStage2 }));
+    ({ bin, args } = buildArgs({ pythonPath, modelId, model: loraCapableModel, wanModelPath, wanRequiredWeights, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, stage2Steps: actualStage2Steps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, textEncoder: resolvedTextEncoder, outputPath, loras: resolvedLoras, icReferencePaths: resolvedIcReferencePaths, icLoraWeightPath, icStrength: actualIcStrength, icAttentionStrength: actualIcAttentionStrength, icSkipStage2 }));
   } catch (err) {
     job.status = 'error';
     const reason = err.message || 'Failed to build video gen args';

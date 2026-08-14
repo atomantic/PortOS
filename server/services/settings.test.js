@@ -13,6 +13,16 @@ vi.mock('../lib/fileUtils.js', async (importActual) => {
   };
 });
 
+// readSettingsStrict probes with a real access() for the absent-vs-unreadable
+// split, so keep the real implementation as the default and let a single test
+// override it to drive the non-ENOENT branch (see below for why it can't use a
+// real filesystem quirk).
+vi.mock('fs/promises', async (importActual) => {
+  const actual = await importActual();
+  return { ...actual, access: vi.fn(actual.access) };
+});
+
+import { access } from 'fs/promises';
 import { writeFileSync, mkdtempSync, rmSync } from 'fs';
 import { join as joinPath } from 'path';
 import { tmpdir } from 'os';
@@ -546,25 +556,21 @@ describe('settings.js', () => {
     });
 
     it('fails closed when access() errors for a non-ENOENT reason (only ENOENT is absent)', async () => {
-      // A path whose parent component is a FILE, not a directory, makes access()
-      // throw ENOTDIR (not ENOENT) — we cannot confirm the file is absent, so it
-      // must classify as corrupt (fail closed), never as an absent fresh install.
-      const notADir = joinPath(dir, 'iamafile');
-      writeFileSync(notADir, 'x');
+      // access() failing does not by itself prove the file is absent — ENOTDIR (a
+      // path component is a file), EACCES (parent lacks search permission) and EIO
+      // all leave absence unconfirmed, so they must classify as corrupt (fail
+      // closed), never as an absent fresh install.
+      //
+      // Driven through a stubbed access() rather than a real filesystem quirk: the
+      // errno for "parent component is a file" is ENOTDIR on POSIX but ENOENT on
+      // Windows, so a real path flipped this assertion by platform and failed CI.
+      const notADirErr = new Error('ENOTDIR: not a directory');
+      notADirErr.code = 'ENOTDIR';
+      access.mockRejectedValueOnce(notADirErr);
       tryReadFile.mockResolvedValue(null);
-      const res = await readSettingsStrict(joinPath(notADir, 'settings.json'));
-
-      if (process.platform === 'win32') {
-        // Windows reports a path under a file as plain ENOENT — there is no
-        // ENOTDIR to observe, so "absent" IS the correct classification and the
-        // fail-closed branch is unreachable by this route. Asserting corrupt
-        // here would be asserting a bug. The contract itself (non-ENOENT fails
-        // closed) is still covered on POSIX below.
-        expect(res.present).toBe(false);
-      } else {
-        expect(res.present).toBe(true);
-        expect(res.corrupt).toBe(true);
-      }
+      const res = await readSettingsStrict(joinPath(dir, 'settings.json'));
+      expect(res.present).toBe(true);
+      expect(res.corrupt).toBe(true);
     });
 
     it('parses a clean settings file', async () => {

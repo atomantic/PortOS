@@ -4,6 +4,12 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 const TEST_HOME = join(tmpdir(), `portos-audiomux-test-${process.pid}-${Date.now()}`);
+
+// Escape every RegExp metacharacter so a filesystem path can be spliced into a
+// pattern literally. `\` and `]` are the two that matter most here: `\` is the
+// Windows path separator, and a class that forgets to escape `]` closes itself
+// early and silently stops escaping anything.
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const FAKE_MUSIC_DIR = join(TEST_HOME, 'music');
 
 vi.mock('../../lib/fileUtils.js', async () => {
@@ -159,14 +165,16 @@ describe('muxMusicBed', () => {
     expect(args[filterIdx + 1]).toMatch(/volume=0\.300/);
     // Output path is a uniquely-suffixed `.muxing.<uuid>.mp4` — the rename
     // swaps it over the input on success.
-    // Asserted with string ops rather than a RegExp built from `video`: the
-    // escape class there was malformed (`[.+^${}()|[\\]` closed before the
-    // trailing `\\\\]`), so backslashes were never escaped. That went unnoticed
-    // on POSIX — the unescaped `.` still matches any char — but on Windows the
-    // path's `\U`, `\A`, `\T` became regex escapes and nothing matched.
-    const outPath = args[args.length - 1];
-    expect(outPath.startsWith(`${video}.muxing.`)).toBe(true);
-    expect(outPath).toMatch(/\.muxing\.[0-9a-f-]+\.mp4$/);
+    //
+    // `video` is an absolute path being spliced into a RegExp, so every regex
+    // metacharacter in it has to be escaped — including the BACKSLASH, which is
+    // a path separator on Windows. The earlier character class closed early on
+    // its own `\\]`, so it matched a metachar followed by two literal
+    // backslashes and escaped nothing at all; that went unnoticed because a
+    // POSIX temp path contains no backslashes and its unescaped `.` still
+    // matches itself, while on Windows `C:\Users\RUNNER~1\…` turned into the
+    // escape sequences \U, \R, \T and the assertion could never match.
+    expect(args[args.length - 1]).toMatch(new RegExp(`^${escapeRegExp(video)}\\.muxing\\.[0-9a-f-]+\\.mp4$`));
   });
 
   it('uses DEFAULT_MUSIC_GAIN when caller omits musicGain', async () => {

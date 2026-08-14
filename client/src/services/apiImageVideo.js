@@ -187,6 +187,14 @@ export const repairTextEncoder = ({ deep = false } = {}) => request('/video-gen/
   body: JSON.stringify({ deep }),
   silent: true,
 });
+// Repair a substitutable prompt conditioner (#4081) — a single pinned file
+// keyed by its registry id ('heretic-bf16', …). Distinct from repairTextEncoder
+// above, which targets the SHARED install-wide LTX encoder repo.
+export const repairTextEncoderOption = (id, { deep = false } = {}) => request(`/video-gen/text-encoders/${encodeURIComponent(id)}/repair`, {
+  method: 'POST',
+  body: JSON.stringify({ deep }),
+  silent: true,
+});
 // Repair an IC-LoRA remix weight (issue #3100). Keyed by the remix mode
 // ('ic-control', …) rather than a model id — the weights aren't registry models,
 // same reason the text encoder has its own scalar endpoint above.

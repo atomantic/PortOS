@@ -109,6 +109,7 @@ import {
   verifyModelCache, repairModelCache, verifyCachedRepoFiles, repairCachedRepoFiles,
 } from '../lib/hfCache.js';
 import { isHfRepoId } from '../lib/mediaModels.js';
+import { downloadableVideoTextEncoders } from '../lib/videoTextEncoders.js';
 
 describe('Video Gen integrity routes', () => {
   let app;
@@ -210,5 +211,83 @@ describe('Video Gen integrity routes', () => {
     const res = await request(app).post('/api/video-gen/text-encoder/repair').send({});
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('NOT_DOWNLOADABLE');
+  });
+
+  // Substitutable prompt conditioners (#4081) — their own lane, keyed by the
+  // registry id rather than a model id (they aren't listVideoModels() entries).
+  // Every operation is scoped to the ONE pinned file: the upstream repo also
+  // publishes INT8 ConvRot / NVFP4 quantizations and 50-63 generation tails this
+  // MLX loader can't read, so a repo-wide pull would cost ~130 GB for ~48 GB of
+  // usable weights — and a repo-wide verify would flag those as corrupt.
+  describe('substitutable text encoders', () => {
+    const encoder = () => downloadableVideoTextEncoders()[0];
+
+    it('GET /models/status reports each substitute with the badge shape', async () => {
+      const res = await request(app).get('/api/video-gen/models/status');
+      expect(res.status).toBe(200);
+      const entry = res.body.textEncoderOptions.find((o) => o.id === encoder().id);
+      expect(entry).toMatchObject({
+        id: encoder().id,
+        repo: encoder().repo,
+        cached: false,
+        label: expect.any(String),
+      });
+      // The mocked verify reports 'bad', but an uncached file gets the Download
+      // badge rather than a Repair banner — same rule as repoCacheStatus.
+      expect(entry.integrity).toBeNull();
+      // Through the shared target verifier, so the badge is checked exactly the
+      // way the integrity scan and the repair route check it.
+      expect(verifyCachedRepoFiles).toHaveBeenCalledWith(
+        encoder().repo, [encoder().file], { deep: false, revision: encoder().revision },
+      );
+    });
+
+    it('GET /text-encoders/:id/download pulls only the pinned file at its pinned revision', async () => {
+      const res = await request(app).get(`/api/video-gen/text-encoders/${encoder().id}/download`);
+      expect(res.status).toBe(200);
+      expect(sseDownload.start).toHaveBeenCalledWith(expect.objectContaining({
+        repos: [{ repo: encoder().repo, revision: encoder().revision, only: [encoder().file] }],
+        force: false,
+      }));
+    });
+
+    it('GET /text-encoders/:id/download threads force=1 for a repair re-fetch', async () => {
+      const res = await request(app).get(`/api/video-gen/text-encoders/${encoder().id}/download?force=1`);
+      expect(res.status).toBe(200);
+      expect(sseDownload.start).toHaveBeenCalledWith(expect.objectContaining({ force: true }));
+    });
+
+    it('POST /text-encoders/:id/repair deletes only the pinned file', async () => {
+      const res = await request(app).post(`/api/video-gen/text-encoders/${encoder().id}/repair`).send({ deep: true });
+      expect(res.status).toBe(200);
+      expect(res.body.deep).toBe(true);
+      expect(res.body.deleted).toEqual([{ repo: encoder().repo, name: encoder().file }]);
+      expect(repairCachedRepoFiles).toHaveBeenCalledWith(
+        encoder().repo, [encoder().file], { deep: true, revision: encoder().revision },
+      );
+    });
+
+    it.each(['download', 'repair'])('404s an unknown encoder id on /%s', async (action) => {
+      const res = action === 'download'
+        ? await request(app).get('/api/video-gen/text-encoders/nope/download')
+        : await request(app).post('/api/video-gen/text-encoders/nope/repair').send({});
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('VIDEO_TEXT_ENCODER_UNKNOWN');
+    });
+
+    // The built-in option ships inside the model's own weights and has no repo,
+    // so it must never reach this lane — otherwise the UI could offer a Download
+    // button for something that isn't separately downloadable.
+    it('404s the built-in stock option', async () => {
+      const res = await request(app).get('/api/video-gen/text-encoders/stock/download');
+      expect(res.status).toBe(404);
+    });
+
+    it('POST /models/verify covers every substitute in an unscoped scan', async () => {
+      await request(app).post('/api/video-gen/models/verify').send({});
+      expect(verifyCachedRepoFiles).toHaveBeenCalledWith(
+        encoder().repo, [encoder().file], { deep: false, revision: encoder().revision },
+      );
+    });
   });
 });

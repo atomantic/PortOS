@@ -1,0 +1,1 @@
+- Video Gen: swappable text encoder for MiniMax H3 — pick the stock Qwen3-VL-32B conditioner or an uncensored Ultra-Heretic substitute per render, with its own download/repair lane

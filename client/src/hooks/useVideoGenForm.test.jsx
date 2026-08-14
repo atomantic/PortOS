@@ -34,6 +34,13 @@ const H3 = {
     { label: '768x1344', w: 768, h: 1344 },
   ],
   supportsNegativePrompt: false, supportsTiling: false, supportsDisableAudio: false,
+  // Server-decorated per model (videoGen/local.js#decorateVideoModel) — the
+  // client never derives this from a runtime name, so the fixture carries it
+  // exactly as the /models payload does.
+  textEncoderOptions: [
+    { id: 'stock', label: 'Stock', description: 'Ships with the model.', builtIn: true },
+    { id: 'heretic-bf16', label: 'Ultra-Heretic', description: 'Uncensored.', builtIn: false, sizeBytes: 51506295440 },
+  ],
 };
 const MODELS = [MLX, LTX2];
 const STATUS = { connected: true, defaultModel: MLX.id };
@@ -285,6 +292,82 @@ describe('useVideoGenForm', () => {
       height: 768,
     });
     expect(payload.prompt).toBe('a fox watches the rain\n\nno music, no soundtrack');
+  });
+
+  // Substitutable prompt conditioner (#4081).
+  describe('text encoder selection', () => {
+    const renderWithH3 = async () => {
+      const rendered = render({ models: [MLX, H3], status: { connected: true, defaultModel: MLX.id } });
+      await waitFor(() => expect(rendered.result.current.modelId).toBe(MLX.id));
+      act(() => rendered.result.current.handleModelChange(H3.id));
+      await waitFor(() => expect(rendered.result.current.modelId).toBe(H3.id));
+      return rendered;
+    };
+
+    // An empty list is what hides the picker; a model with substitutions
+    // exposes them straight off the server-decorated entry.
+    it('exposes only the selected model’s options', async () => {
+      const { result } = render({ models: [MLX, H3], status: { connected: true, defaultModel: MLX.id } });
+      await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
+      expect(result.current.textEncoderOptions).toEqual([]);
+      act(() => result.current.handleModelChange(H3.id));
+      await waitFor(() => expect(result.current.textEncoderOptions).toHaveLength(2));
+    });
+
+    // The stock choice must submit the same body a request that never knew
+    // about this knob would — the server treats absence and 'stock' identically,
+    // so sending the sentinel would only add noise to persisted job params.
+    it('drops the stock choice from the payload', async () => {
+      const { result } = await renderWithH3();
+      expect(result.current.textEncoderId).toBe('stock');
+      act(() => result.current.setPrompt('a fox'));
+      expect(result.current.buildGeneratePayload().textEncoderId).toBeUndefined();
+    });
+
+    it('submits an explicitly chosen substitute', async () => {
+      const { result } = await renderWithH3();
+      act(() => {
+        result.current.setPrompt('a fox');
+        result.current.setTextEncoderId('heretic-bf16');
+      });
+      await waitFor(() => expect(result.current.textEncoderId).toBe('heretic-bf16'));
+      expect(result.current.buildGeneratePayload().textEncoderId).toBe('heretic-bf16');
+    });
+
+    // Switching to a model that can't load the selection has to snap it back,
+    // or the <select> sits on a value with no matching <option> and the submit
+    // 400s with VIDEO_TEXT_ENCODER_UNSUPPORTED.
+    it('resets to stock when the model changes to one without that option', async () => {
+      const { result } = await renderWithH3();
+      act(() => result.current.setTextEncoderId('heretic-bf16'));
+      await waitFor(() => expect(result.current.textEncoderId).toBe('heretic-bf16'));
+
+      act(() => result.current.handleModelChange(MLX.id));
+      await waitFor(() => expect(result.current.textEncoderId).toBe('stock'));
+      act(() => result.current.setPrompt('a fox'));
+      expect(result.current.buildGeneratePayload().textEncoderId).toBeUndefined();
+    });
+
+    // History records the conditioner only for a non-stock render, so a remix
+    // of a stock render must CLEAR a leftover selection rather than carry it
+    // into a render the user asked to reproduce faithfully.
+    it.each([
+      ['restores a recorded substitute', { textEncoderId: 'heretic-bf16' }, 'heretic-bf16'],
+      ['clears the selection when the record has none', {}, 'stock'],
+    ])('%s on remix', async (_label, extra, expected) => {
+      const { result } = await renderWithH3();
+      act(() => result.current.setTextEncoderId('heretic-bf16'));
+      await waitFor(() => expect(result.current.textEncoderId).toBe('heretic-bf16'));
+
+      act(() => result.current.applyRemix({ modelId: H3.id, prompt: 'a fox', ...extra }));
+      await waitFor(() => expect(result.current.textEncoderId).toBe(expected));
+    });
+
+    it('restores a resumed in-flight render’s conditioner', async () => {
+      const { result } = await renderWithH3();
+      act(() => result.current.applyResumedParams({ modelId: H3.id, prompt: 'a fox', textEncoderId: 'heretic-bf16' }));
+      await waitFor(() => expect(result.current.textEncoderId).toBe('heretic-bf16'));
+    });
   });
 
   it('preserves H3 native 32px-grid geometry in the submitted payload', async () => {

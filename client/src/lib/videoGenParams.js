@@ -79,6 +79,34 @@ export const supportsVideoAudioControls = (model) => model?.supportsDisableAudio
 // Disable audio checkbox must stay hidden.
 export const supportsVideoAudioPromptControls = (model) => model?.supportsAudioPrompting !== false;
 
+// Substitutable prompt conditioners (#4081). The OPTIONS themselves are not
+// mirrored here — the server decorates each model entry with its own
+// `textEncoderOptions` (label, description, size, advisory) in
+// `videoGen/local.js#decorateVideoModel`, so the picker renders whatever this
+// build's runner can actually key-map and a stale client can't offer one it
+// can't. Only the "no override" sentinel is duplicated, and it must stay equal
+// to `STOCK_TEXT_ENCODER_ID` in `server/lib/videoTextEncoders.js`: the submit
+// builder drops the field when it holds this value, and the server treats an
+// absent field and this id identically.
+export const STOCK_TEXT_ENCODER_ID = 'stock';
+export const textEncoderOptionsForModel = (model) => (
+  Array.isArray(model?.textEncoderOptions) ? model.textEncoderOptions : []
+);
+// Snap a selection onto what the (possibly just-switched) model offers. A model
+// with no substitutions answers with the stock sentinel rather than '', so the
+// <select> is never left on a value with no matching <option>.
+export const normalizeTextEncoderForModel = (id, model) => (
+  textEncoderOptionsForModel(model).some((option) => option.id === id) ? id : STOCK_TEXT_ENCODER_ID
+);
+// Read a conditioner out of a persisted record (a history entry, a resumed
+// job's params). Both only record a SUBSTITUTE, so a missing field means stock —
+// and must CLEAR a leftover selection rather than carry it into a render the
+// user asked to reproduce. Keeping that rule next to the sentinel stops the two
+// restore paths from drifting on it.
+export const textEncoderIdFromRecord = (value) => (
+  typeof value === 'string' && value ? value : STOCK_TEXT_ENCODER_ID
+);
+
 // Per-edge bounds for video: mirrors the videoGen route (64..2048). The base
 // grid is 64px, while a model may declare a finer resolutionStep (H3 uses 32).
 // Shared by the ResolutionField control and the submit-time clamp so a

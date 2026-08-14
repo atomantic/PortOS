@@ -54,6 +54,10 @@ import {
   icLoraWeightCandidates, findCachedIcLoraWeight,
 } from '../lib/icLoraWeights.js';
 import {
+  downloadableVideoTextEncoders, downloadableVideoTextEncoder, publicTextEncoderOption,
+  isStockTextEncoder,
+} from '../lib/videoTextEncoders.js';
+import {
   inspectModelCache, verifyModelCache, repairModelCache, repairCachedFile,
   verifyCachedRepoFiles, repairCachedRepoFiles, summarizeVerify, aggregateVerifies,
   isSafeHfRepoRelativePath,
@@ -158,6 +162,11 @@ export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
   seed: optionalNum(0, Number.MAX_SAFE_INTEGER, 'seed'),
   imageStrength: optionalNum(0, 1, 'imageStrength'),
   tiling: z.enum(['auto', 'none', 'spatial', 'temporal']).optional(),
+  // Which prompt conditioner reads the prompt (lib/videoTextEncoders.js).
+  // Validated loosely here and resolved against the MODEL's own option list in
+  // the service — the set is per-runtime, so a route-level enum would either
+  // have to enumerate every runtime's options or reject a legitimate one.
+  textEncoderId: z.string().min(1).max(64).optional(),
 });
 
 const generateBodySchema = z.object({
@@ -612,6 +621,20 @@ const modelDownloadTargets = (model) => {
   return targets;
 };
 
+// One download target per substitutable prompt conditioner. Each is a single
+// pinned file inside a repo that also publishes quantizations and generation
+// tails PortOS's MLX loader can't read, so these are ALWAYS scoped to `only:
+// [file]` — a repo-wide snapshot would pull ~130 GB of unusable variants.
+const textEncoderDownloadTarget = (entry) => ({
+  repo: entry.repo,
+  revision: entry.revision || null,
+  only: [entry.file],
+});
+// Paired with its entry so the status lane can project the registry fields
+// (label, advisory, size) alongside the cache verdict without a second lookup.
+const textEncoderDownloadTargets = () => downloadableVideoTextEncoders()
+  .map((entry) => ({ entry, target: textEncoderDownloadTarget(entry) }));
+
 const targetKey = (target) => `${target.repo}@${target.revision || 'latest'}::${target.only.join(',')}`;
 const targetVerifyOptions = (target, deep) => ({
   deep,
@@ -632,6 +655,10 @@ const reposToVerify = (modelId) => {
   const targets = listVideoModels().flatMap(modelDownloadTargets);
   const enc = getTextEncoderRepo();
   if (isHfRepoId(enc)) targets.push({ repo: enc, only: [] });
+  // Substitutable prompt conditioners are single pinned files the render path
+  // depends on, so an unscoped scan must reach them too — a truncated one
+  // otherwise only surfaces as a load failure minutes into a render.
+  targets.push(...textEncoderDownloadTargets().map(({ target }) => target));
   // IC-LoRA remix weights are separate HF pulls that the render path depends
   // on, so an unscoped integrity scan must cover them too — otherwise a
   // corrupt IC weight only surfaces as a garbled render.
@@ -679,7 +706,7 @@ router.get('/models/status', asyncHandler(async (_req, res) => {
   // can distinguish "not downloaded" from "served from LM Studio".
   const encoderRepo = getTextEncoderRepo();
   const verifyCache = new Map();
-  const [models, textEncoder, icLoras] = await Promise.all([
+  const [models, textEncoder, textEncoderOptions, icLoras] = await Promise.all([
     Promise.all(listVideoModels().map(async (m) => {
       return { id: m.id, ...await modelCacheStatus(m, verifyCache) };
     })),
@@ -687,6 +714,27 @@ router.get('/models/status', asyncHandler(async (_req, res) => {
       if (!isHfRepoId(encoderRepo)) return { repo: encoderRepo, cached: true, sizeBytes: 0, integrity: null };
       return { repo: encoderRepo, ...await repoCacheStatus(encoderRepo) };
     })(),
+    // Substitutable prompt conditioners (lib/videoTextEncoders.js) — the same
+    // `{ id, repo, cached, sizeBytes, integrity }` badge shape as the models and
+    // the IC weights, so the video form renders their Download button and
+    // Repair banner with the existing components. Scoped to the ONE pinned file
+    // (never the repo) for the reason in textEncoderDownloadTargets.
+    Promise.all(textEncoderDownloadTargets().map(async ({ entry, target }) => {
+      // Through the shared target verifier, so the badge, the integrity scan
+      // and the repair route can't drift on how a pinned single-file target is
+      // checked.
+      const verify = await verifyDownloadTarget(target);
+      const cached = verify.status === 'ok';
+      return {
+        ...publicTextEncoderOption(entry),
+        estimatedBytes: entry.sizeBytes,
+        cached,
+        sizeBytes: verify.sizeBytes || 0,
+        // Same rule as repoCacheStatus: a not-yet-downloaded file gets the
+        // Download badge, not a Repair banner.
+        integrity: cached ? summarizeVerify(verify) : null,
+      };
+    })),
     // IC-LoRA remix weights (issue #3100). Each is a separate several-hundred-MB
     // pull the IC render path needs, so they get the same cached/size/integrity
     // shape as the models — that's what lets the mode panel render a Download
@@ -720,7 +768,7 @@ router.get('/models/status', asyncHandler(async (_req, res) => {
       };
     })),
   ]);
-  res.json({ models, textEncoder, icLoras });
+  res.json({ models, textEncoder, textEncoderOptions, icLoras });
 }));
 
 // POST /models/verify — force an integrity re-scan on demand. `deep:true` adds
@@ -841,6 +889,54 @@ router.post('/ic-loras/:mode/repair', asyncHandler(async (req, res) => {
   res.json({ deep, deleted: result.deleted.map((name) => ({ repo: result.repoId, name })), repos: [spec.repo] });
 }));
 
+// Substitutable prompt conditioners (lib/videoTextEncoders.js) get their own
+// download/repair pair for the same reason the IC-LoRA weights do: the render
+// path depends on them but they are NOT listVideoModels() entries, so the
+// model-id-keyed routes can't reach them. Keyed by the registry id the client
+// also puts in the render payload.
+//
+// Distinct from the /text-encoder/* pair below, which is the SHARED LTX encoder
+// (one repo, install-wide, selected in the media-models registry). These are
+// per-model alternatives chosen per render.
+const textEncoderFromParam = (id) => {
+  const entry = downloadableVideoTextEncoder(id);
+  if (!entry) {
+    const known = downloadableVideoTextEncoders().map((e) => e.id);
+    throw new ServerError(
+      `Unknown text encoder: ${id}${known.length ? ` (expected one of ${known.join(', ')})` : ''}`,
+      { status: 404, code: 'VIDEO_TEXT_ENCODER_UNKNOWN' },
+    );
+  }
+  return entry;
+};
+
+// Always single-file, never a snapshot: the upstream repo also publishes INT8
+// ConvRot / NVFP4 quantizations and 50-63 generation tails that this MLX loader
+// cannot read, so a repo-wide pull would cost ~130 GB for ~48 GB of usable
+// weights.
+router.get('/text-encoders/:id/download', asyncHandler(async (req, res) => {
+  const entry = textEncoderFromParam(req.params.id);
+  await startHfDownloadStream({
+    req,
+    res,
+    repos: [textEncoderDownloadTarget(entry)],
+    force: req.query.force === '1',
+  });
+}));
+
+router.post('/text-encoders/:id/repair', asyncHandler(async (req, res) => {
+  const entry = textEncoderFromParam(req.params.id);
+  const parsed = z.object({ deep: z.boolean().optional() }).safeParse(req.body || {});
+  if (!parsed.success) failValidation(parsed);
+  const deep = parsed.data.deep || false;
+  const result = await repairDownloadTarget(textEncoderDownloadTarget(entry), { deep });
+  res.json({
+    deep,
+    deleted: result.deleted.map((name) => ({ repo: entry.repo, name })),
+    repos: [entry.repo],
+  });
+}));
+
 // POST /text-encoder/repair — delete the flagged (corrupt/truncated) weight
 // files for the active text encoder repo so the existing /text-encoder/download
 // SSE re-fetches clean copies. The encoder is shared across all video renders
@@ -951,6 +1047,11 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     guidanceScale: body.guidanceScale,
     seed: body.seed,
     tiling: body.tiling || 'auto',
+    // Only a SUBSTITUTE is persisted: an explicit `textEncoderId: 'stock'` is
+    // semantically identical to omitting the field, so storing it would make a
+    // resumed/remixed render carry a knob that never applied — and would differ
+    // from what the service records in history for the same render.
+    ...(isStockTextEncoder(body.textEncoderId) ? {} : { textEncoderId: body.textEncoderId }),
     disableAudio: body.disableAudio === true || body.disableAudio === 'true',
     sourceImagePath,
     audioFilePath,
@@ -1006,6 +1107,9 @@ const ACTIVE_JOB_PARAM_FIELDS = [
   'width', 'height', 'numFrames', 'fps',
   'steps', 'guidanceScale', 'seed',
   'tiling', 'disableAudio', 'mode', 'chunks', 'chunkPrompts', 'contextFrames', 'imageStrength',
+  // A registry id, not a path — safe to echo so a reloading page restores the
+  // conditioner the in-flight render is actually using.
+  'textEncoderId',
   'audioStartSec',
   // Grok jobs (#2859 phase 2): the semantic t2v/i2v mode ('mode' holds the
   // 'grok' discriminator for them) and the clip duration — both plain

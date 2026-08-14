@@ -32,7 +32,10 @@ export const VIDEO_DISCLOSURE_REVIEWED_AT = '2026-08-09';
 // License descriptors reused across entries. `url` points at the primary text
 // of the license, or at the model card when the card declares a custom license
 // without publishing a distinct document.
-const APACHE_2 = { name: 'Apache-2.0', url: 'https://www.apache.org/licenses/LICENSE-2.0' };
+// Exported for lib/videoTextEncoders.js, whose substitutable conditioners carry
+// the same `disclosure` shape — a license-text correction here has to reach
+// both tables, which a second inline literal would prevent.
+export const APACHE_2 = { name: 'Apache-2.0', url: 'https://www.apache.org/licenses/LICENSE-2.0' };
 const TENCENT_HUNYUAN_WEIGHTS = {
   name: 'Tencent Hunyuan Community License',
   url: 'https://huggingface.co/tencent/HunyuanVideo/blob/main/LICENSE',

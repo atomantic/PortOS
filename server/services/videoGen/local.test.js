@@ -2236,6 +2236,88 @@ describe('generateVideo — MiniMax H3 MLX contract', () => {
     expect(hfChildEnv).not.toHaveBeenCalled();
   });
 
+  // Substituted prompt conditioner (#4081). The whole override path has to stay
+  // dormant unless it was asked for — an unswapped render's argv must be
+  // byte-identical to what it was before the feature existed.
+  it.each([undefined, null, 'stock'])('adds no text-encoder argv for %j', async (textEncoderId) => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      jobId: 'h3-stock-encoder',
+      modelId: 'minimax_h3_8bit',
+      prompt: 'a fox watches the rain',
+      mode: 'text',
+      textEncoderId,
+    });
+
+    const [, args] = spawnMock.mock.calls.find(([, a]) => (
+      Array.isArray(a) && a.some((arg) => basename(String(arg)) === 'generate_minimax_h3.py')
+    ));
+    expect(args.filter((arg) => String(arg).startsWith('--text-encoder'))).toEqual([]);
+  });
+
+  it('forwards a substituted text encoder as a resolved path plus its key remap', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+
+    await generateVideo({
+      jobId: 'h3-swapped-encoder',
+      modelId: 'minimax_h3_8bit',
+      prompt: 'a fox watches the rain',
+      mode: 'text',
+      textEncoderId: 'heretic-bf16',
+    });
+
+    const [, args] = spawnMock.mock.calls.find(([, a]) => (
+      Array.isArray(a) && a.some((arg) => basename(String(arg)) === 'generate_minimax_h3.py')
+    ));
+    expect(args[args.indexOf('--text-encoder-id') + 1]).toBe('heretic-bf16');
+    // A resolved cache path, never a repo id — the helper runs fully offline
+    // (HF_HUB_OFFLINE=1) and cannot look one up.
+    expect(args[args.indexOf('--text-encoder-file') + 1])
+      .toBe(join('/mock/hf/snap', 'qwen3vl_32b_h3_ultra_uncensored_heretic_bf16.safetensors'));
+    // Outside the pinned checkout: anything written inside it would read as
+    // untracked in the pin verification the helper itself runs.
+    const shimRoot = args[args.indexOf('--text-encoder-shim-root') + 1];
+    expect(shimRoot).toContain(join('.portos', 'minimax-h3-encoder-shims'));
+    expect(shimRoot).not.toContain(join('.portos', 'minimax-h3-mlx'));
+    expect(args.flatMap((arg, i) => (arg === '--text-encoder-key-prefix' ? [args[i + 1]] : [])))
+      .toEqual(['model.=model.language_model.', 'visual.=model.visual.']);
+    expect(args[args.indexOf('--text-encoder-final-norm-key') + 1]).toBe('model.norm.weight');
+  });
+
+  // A ~48 GB weight that isn't downloaded must fail as a clean 400 on the
+  // request, not minutes into the render when the helper's cache probe misses.
+  it('rejects a substituted text encoder that is not downloaded', async () => {
+    mockFindCachedRepoFile.mockImplementation(async (_repo, filename) => (
+      filename.includes('ultra_uncensored_heretic') ? null : join('/mock/hf/snap', filename)
+    ));
+    try {
+      await expect(generateVideo({
+        jobId: 'h3-encoder-missing',
+        modelId: 'minimax_h3_8bit',
+        prompt: 'a fox watches the rain',
+        mode: 'text',
+        textEncoderId: 'heretic-bf16',
+      })).rejects.toMatchObject({ status: 400, code: 'VIDEO_TEXT_ENCODER_NOT_CACHED' });
+    } finally {
+      mockFindCachedRepoFile.mockImplementation(async (_repo, filename) => join('/mock/hf/snap', filename));
+    }
+  });
+
+  it('rejects a text encoder the model has no remap for', async () => {
+    await expect(generateVideo({
+      jobId: 'h3-encoder-unknown',
+      modelId: 'minimax_h3_8bit',
+      prompt: 'a fox watches the rain',
+      mode: 'text',
+      textEncoderId: 'not-a-real-encoder',
+    })).rejects.toMatchObject({ status: 400, code: 'VIDEO_TEXT_ENCODER_UNSUPPORTED' });
+  });
+
   it('uses H3 native dimensions when an internal caller omits resolution', async () => {
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const spawnMock = vi.mocked(spawnDetached);

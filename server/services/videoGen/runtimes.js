@@ -41,6 +41,13 @@ export const MINIMAX_H3_RUNTIME_PROBE_SCRIPT = join(PATHS.root, 'scripts', 'mini
 export const MINIMAX_H3_LORA_PROBE_SCRIPT = join(PATHS.root, 'scripts', 'minimax_h3_lora_probe.py');
 export const MINIMAX_H3_REPO_DIR = join(homedir(), '.portos', 'minimax-h3-mlx');
 export const MINIMAX_H3_EXPECTED_REVISION = 'fcd9e9b79a1d6018d91ac477c0968de1fa067e49';
+// Composed checkpoint roots for a substituted prompt conditioner
+// (lib/videoTextEncoders.js). Each is a tree of symlinks into the upstream
+// FL2VA snapshot with only `text_encoder/` replaced, so the pinned runtime's
+// own `from_pretrained` loads it unmodified. Deliberately OUTSIDE
+// MINIMAX_H3_REPO_DIR: anything written inside the checkout would show up as
+// untracked in the pin verification that both /status and the render helper run.
+export const MINIMAX_H3_ENCODER_SHIM_DIR = join(homedir(), '.portos', 'minimax-h3-encoder-shims');
 
 // HunyuanVideo MLX runtime — gaurav-nelson/HunyuanVideo_MLX cloned at
 // ~/.portos/hunyuan-video-mlx/. ~60 GB resident at bf16 so practical only

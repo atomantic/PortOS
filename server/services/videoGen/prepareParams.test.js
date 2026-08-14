@@ -303,6 +303,25 @@ describe('prepareVideoGenParams', () => {
         .rejects.toMatchObject({ status: 400, code: 'MUSIC_VIDEO_SOURCE_REQUIRED' });
     });
 
+    // Rejected here rather than in the worker: the request that named the bad
+    // conditioner is the only place that can report it, and a persisted job
+    // would otherwise sit in the queue only to die on dispatch.
+    it('rejects a text encoder the selected model cannot load, before staging', async () => {
+      await expect(prepare(
+        { textEncoderId: 'heretic-bf16' },
+        { sourceImage: upload('sourceImage') },
+      )).rejects.toMatchObject({ status: 400, code: 'VIDEO_TEXT_ENCODER_UNSUPPORTED' });
+      expect(unlink).toHaveBeenCalledWith('/tmp/multipart-sourceImage-frame.png');
+      expect(unlinkedDurablePaths()).toEqual([]);
+    });
+
+    // 'stock' and absence are the same request, so neither may reject — the
+    // route drops the sentinel from persisted params, which means a resumed
+    // render sends absence where the original sent 'stock'.
+    it.each([undefined, 'stock'])('accepts %j on a model with no substitutions', async (textEncoderId) => {
+      await expect(prepare({ textEncoderId })).resolves.toMatchObject({ effectiveModelId: 'ltx2_unified' });
+    });
+
     it('rejects a history id that is not in the render history', async () => {
       await expect(prepare({ extendFromVideoId: '22222222-2222-4222-8222-222222222222' }))
         .rejects.toMatchObject({ status: 404, code: 'EXTEND_SOURCE_NOT_FOUND' });
