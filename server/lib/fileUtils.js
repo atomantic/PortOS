@@ -524,14 +524,22 @@ const PARSE_FAILED = Symbol('json-parse-failed');
  * Only consulted on win32, and only after a read already failed with ENOENT, so
  * the directory listing never lands on a POSIX read or on a successful read.
  *
+ * Matching is case-INSENSITIVE: NTFS/FAT are case-insensitive, so the reader's
+ * `filePath` casing need not match the casing the writer used to create the
+ * file (and therefore the casing `readdir` reports). A case-sensitive compare
+ * would miss the sibling and let the phantom-empty through.
+ *
  * @param {string} filePath
  * @returns {Promise<boolean>}
  */
 async function hasSwapSibling(filePath) {
   const entries = await readdir(dirname(filePath)).catch(() => null);
   if (!entries) return false;
-  const prefix = `${basename(filePath)}.`;
-  return entries.some((name) => name.startsWith(prefix) && (name.endsWith('.tmp') || name.endsWith('.bak')));
+  const prefix = `${basename(filePath).toLowerCase()}.`;
+  return entries.some((entry) => {
+    const name = entry.toLowerCase();
+    return name.startsWith(prefix) && (name.endsWith('.tmp') || name.endsWith('.bak'));
+  });
 }
 
 /**

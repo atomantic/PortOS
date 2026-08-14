@@ -1388,6 +1388,18 @@ describe('Windows swap-window retries (#4095)', () => {
       expect(fsPromises.readdir).toHaveBeenCalled();
     });
 
+    it('matches a swap sibling whose casing differs — NTFS/FAT are case-insensitive', async () => {
+      const target = join(tmpRoot, 'casing.json');
+      writeFileSync(target, JSON.stringify({ real: true }));
+      // The writer may have created the file (and therefore its swap debris)
+      // under different casing than the reader's path — legal on Windows.
+      writeFileSync(join(tmpRoot, 'Casing.json.1234.5678.TMP'), 'partial');
+      fakePlatform('win32');
+      fsPromises.readFile.mockRejectedValueOnce(lockError('ENOENT'));
+
+      expect(await readJSONFileStrict(target, { fallback: true })).toEqual({ ok: true, value: { real: true } });
+    });
+
     it('does not retry a plain missing file on win32 — no sibling, no second read', async () => {
       const missing = join(tmpRoot, 'never-written.json');
       fakePlatform('win32');
