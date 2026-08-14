@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
 import { mkdir, rm, writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 
@@ -7,7 +8,7 @@ import { join } from 'path';
 // AGENTS_DIR at a tmpdir so addAgentArchivesToIndex (#1650 receiver hook) never
 // touches the real data/cos/agents index.
 const mockCosState = vi.hoisted(() => ({
-  agentsDir: `${process.env.TMPDIR || '/tmp'}/portos-cos-indexmerge-${process.pid}`,
+  agentsDir: `${process.env.TMPDIR || process.env.TEMP || process.env.TMP || '/tmp'}/portos-cos-indexmerge-${process.pid}`,
 }));
 
 vi.mock('./cosState.js', () => ({

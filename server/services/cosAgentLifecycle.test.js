@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
 import { mkdir, rm, writeFile, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -9,7 +10,7 @@ const mockCosState = vi.hoisted(() => ({
   // where `mkdir(recursive)` then tries to create `/private` at the root and
   // hits EACCES. process.env is safe to read inside a vi.hoisted factory
   // (imported bindings like `os.tmpdir` are not yet initialized at hoist time).
-  agentsDir: `${process.env.TMPDIR || '/tmp'}/portos-cos-agents-test-${process.pid}`,
+  agentsDir: `${process.env.TMPDIR || process.env.TEMP || process.env.TMP || '/tmp'}/portos-cos-agents-test-${process.pid}`,
   state: null
 }));
 
@@ -32,7 +33,11 @@ const fsFailures = vi.hoisted(() => ({ dateBucketWritesFail: false }));
 
 vi.mock('fs/promises', async (importOriginal) => {
   const actual = await importOriginal();
-  const failsFor = (p) => fsFailures.dateBucketWritesFail && /\/\d{4}-\d{2}-\d{2}\//.test(String(p));
+  // Accept either separator: the archive path is composed with path.join, so on
+  // Windows the date bucket reads '\2026-08-14\' and a '/'-only pattern never
+  // matched — the injected failure never fired and completeAgent RESOLVED,
+  // making this rollback test assert nothing.
+  const failsFor = (p) => fsFailures.dateBucketWritesFail && /[\\/]\d{4}-\d{2}-\d{2}[\\/]/.test(String(p));
   return {
     ...actual,
     rename: async (from, to, ...rest) => {

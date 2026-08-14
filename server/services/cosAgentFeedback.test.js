@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
+
 const mockCosState = vi.hoisted(() => ({
   // Use $TMPDIR (falls back to /tmp) rather than a hardcoded /private/tmp — the
   // latter exists on macOS (where /tmp symlinks to it) but not on Linux CI.
-  agentsDir: `${process.env.TMPDIR || '/tmp'}/portos-cos-feedback-test-${process.pid}`,
+  agentsDir: `${process.env.TMPDIR || process.env.TEMP || process.env.TMP || '/tmp'}/portos-cos-feedback-test-${process.pid}`,
   state: null
 }));
 
