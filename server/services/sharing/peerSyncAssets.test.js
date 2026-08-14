@@ -24,7 +24,7 @@ vi.mock('../tracks/index.js', async () => ({
 }));
 
 const { getTrack } = await import('../tracks/index.js');
-const { buildMusicVideoAssetManifest, buildProjectAssetManifest } = await import('./peerSyncAssets.js');
+const { buildMusicVideoAssetManifest, buildProjectAssetManifest, buildBoardAssetManifest } = await import('./peerSyncAssets.js');
 
 const sha = (buf) => createHash('sha256').update(buf).digest('hex');
 
@@ -36,6 +36,12 @@ function writeMusic(filename, bytes) {
 
 function writeImage(filename, bytes) {
   const dir = join(tempRoot, 'images');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, filename), bytes);
+}
+
+function writeVideo(filename, bytes) {
+  const dir = join(tempRoot, 'videos');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, filename), bytes);
 }
@@ -154,6 +160,63 @@ describe('buildProjectAssetManifest — first-pass music bed (#1928)', () => {
     });
     expect(manifest).toContainEqual({ filename: 'start.png', kind: 'image', sha256: sha(imageBytes) });
     expect(manifest).toContainEqual(expect.objectContaining({ filename: 'music-gen-def.wav', kind: 'music', sha256: sha(musicBytes) }));
+    expect(manifest).toHaveLength(2);
+  });
+});
+
+describe('buildBoardAssetManifest — video items (#4188)', () => {
+  beforeEach(() => {
+    tempRoot = mkdtempSync(join(tmpdir(), 'portos-board-assets-'));
+  });
+  afterEach(() => {
+    if (tempRoot) rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  it('bundles a video item by its filename-as-ref mediaKey', async () => {
+    const bytes = Buffer.from('video-bytes');
+    writeVideo('upload-ab12cd34.mp4', bytes);
+    const manifest = await buildBoardAssetManifest({
+      items: [{ id: 'i1', type: 'video', mediaKey: 'video:upload-ab12cd34.mp4', imageUrl: null }],
+    });
+    expect(manifest).toContainEqual(expect.objectContaining({
+      filename: 'upload-ab12cd34.mp4', kind: 'video', sha256: sha(bytes),
+    }));
+  });
+
+  it('passes a non-mp4 extension through untouched (no `.mp4` guess)', async () => {
+    const bytes = Buffer.from('webm-bytes');
+    writeVideo('upload-ff00aa11.webm', bytes);
+    const manifest = await buildBoardAssetManifest({
+      items: [{ id: 'i1', type: 'video', mediaKey: 'video:upload-ff00aa11.webm', imageUrl: null }],
+    });
+    expect(manifest).toContainEqual(expect.objectContaining({
+      filename: 'upload-ff00aa11.webm', kind: 'video', sha256: sha(bytes),
+    }));
+  });
+
+  it('skips a video item whose bytes are missing, and never bundles the poster thumbnail', async () => {
+    const manifest = await buildBoardAssetManifest({
+      items: [
+        { id: 'i1', type: 'video', mediaKey: 'video:never-written.mp4', imageUrl: '/data/video-thumbnails/never-written.jpg' },
+        { id: 'i2', type: 'text', text: 'note' },
+      ],
+    });
+    expect(manifest).toEqual([]);
+  });
+
+  it('still bundles image items alongside video items', async () => {
+    const imageBytes = Buffer.from('img-bytes');
+    const videoBytes = Buffer.from('vid-bytes');
+    writeImage('render.png', imageBytes);
+    writeVideo('clip.mp4', videoBytes);
+    const manifest = await buildBoardAssetManifest({
+      items: [
+        { id: 'i1', type: 'image', mediaKey: 'image:render.png', imageUrl: null },
+        { id: 'i2', type: 'video', mediaKey: 'video:clip.mp4', imageUrl: null },
+      ],
+    });
+    expect(manifest).toContainEqual(expect.objectContaining({ filename: 'render.png', kind: 'image', sha256: sha(imageBytes) }));
+    expect(manifest).toContainEqual(expect.objectContaining({ filename: 'clip.mp4', kind: 'video', sha256: sha(videoBytes) }));
     expect(manifest).toHaveLength(2);
   });
 });

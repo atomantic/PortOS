@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { isValidKey } from './mediaItemKey.js';
+import { isValidKey, parseKey } from './mediaItemKey.js';
 
 // =============================================================================
 // MOOD BOARD SCHEMAS (issue #911)
@@ -8,7 +8,7 @@ import { isValidKey } from './mediaItemKey.js';
 // Boards are db-primary, local-only records; items live inline in the board's
 // JSONB. validation.js re-exports everything here so deep imports keep working.
 
-export const MOOD_BOARD_ITEM_TYPES = Object.freeze(['image', 'text']);
+export const MOOD_BOARD_ITEM_TYPES = Object.freeze(['image', 'text', 'video']);
 
 // A media-key references an indexed asset as `<kind>:<ref>` (e.g.
 // `image:my-render.png`, `video:job-123`). Reuse the shared key validator from
@@ -43,8 +43,12 @@ export const moodBoardUpdateSchema = z.object({
 }).strict();
 
 // Add-item. An `image` item requires at least one of mediaKey / imageUrl; a
-// `text` item requires non-empty text. The cross-field rule is enforced with a
-// superRefine so the failure is specific.
+// `text` item requires non-empty text; a `video` item (#4188) requires a
+// `video:<filename>` mediaKey — the ref is the on-disk filename (extension
+// included) so playback (`/data/videos/<ref>`) and the peer-sync asset
+// manifest both resolve without guessing, and `imageUrl` optionally carries
+// the poster thumbnail. The cross-field rule is enforced with a superRefine
+// so the failure is specific.
 export const moodBoardItemCreateSchema = z.object({
   type: z.enum(MOOD_BOARD_ITEM_TYPES),
   mediaKey: mediaKeySchema.nullable().optional(),
@@ -67,6 +71,14 @@ export const moodBoardItemCreateSchema = z.object({
         code: z.ZodIssueCode.custom,
         message: 'a text item requires non-empty text',
         path: ['text'],
+      });
+    }
+  } else if (val.type === 'video') {
+    if (parseKey(val.mediaKey || '')?.kind !== 'video') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'a video item requires a `video:<filename>` mediaKey',
+        path: ['mediaKey'],
       });
     }
   }

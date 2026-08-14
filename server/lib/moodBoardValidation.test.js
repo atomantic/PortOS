@@ -59,6 +59,20 @@ describe('moodBoardItemCreateSchema', () => {
   it('rejects a text item with blank text', () => {
     expect(moodBoardItemCreateSchema.safeParse({ type: 'text', text: '   ' }).success).toBe(false);
   });
+  it('accepts a video item with a video mediaKey (#4188)', () => {
+    expect(moodBoardItemCreateSchema.safeParse({ type: 'video', mediaKey: 'video:upload-ab12cd34.mp4' }).success).toBe(true);
+  });
+  it('accepts a video item with a poster imageUrl alongside the mediaKey', () => {
+    expect(moodBoardItemCreateSchema.safeParse({
+      type: 'video', mediaKey: 'video:a.mp4', imageUrl: '/data/video-thumbnails/a.jpg',
+    }).success).toBe(true);
+  });
+  it('rejects a video item without a mediaKey', () => {
+    expect(moodBoardItemCreateSchema.safeParse({ type: 'video', imageUrl: '/data/video-thumbnails/a.jpg' }).success).toBe(false);
+  });
+  it('rejects a video item whose mediaKey is not kind video', () => {
+    expect(moodBoardItemCreateSchema.safeParse({ type: 'video', mediaKey: 'image:a.png' }).success).toBe(false);
+  });
 });
 
 describe('moodBoardItemUpdateSchema', () => {

@@ -3,7 +3,12 @@
 // search (same haystack as MediaHistory) and click a thumbnail. With
 // `allowUpload`, a header Upload button saves the file via POST /api/uploads
 // and selects it as `{ kind: 'upload', filename }` so the reverse-prompt
-// endpoint can sample frames from PATHS.uploads.
+// endpoint can sample frames from PATHS.uploads. With `uploadToGallery`
+// (#4188), the upload instead lands in the shared gallery (POST
+// /api/video-gen/upload → /data/videos/ + a history entry, peer-syncable) and
+// selects the normalized gallery item — required when the selection will be
+// REFERENCED by a synced record (e.g. a mood-board item), because
+// /api/uploads' scratch dir does not federate.
 
 import { useEffect, useMemo, useState } from 'react';
 import { Search, X, RefreshCw, Upload } from 'lucide-react';
@@ -11,7 +16,7 @@ import Modal from '../ui/Modal';
 import FilePickerButton from '../ui/FilePickerButton';
 import MediaCard from '../media/MediaCard';
 import { normalizeVideo } from '../media/normalize';
-import { listVideoHistory } from '../../services/apiImageVideo';
+import { listVideoHistory, uploadGalleryVideo } from '../../services/apiImageVideo';
 import { uploadFile } from '../../services/apiMedia';
 import { readFileAsBase64, JSON_UPLOAD_MAX_FILE_SIZE } from '../../utils/fileUpload';
 import { buildMediaHaystack, tokenizeQuery, matchHaystack } from '../../lib/mediaSearch';
@@ -20,7 +25,7 @@ import toast from '../ui/Toast';
 
 const VIDEO_ACCEPT = 'video/mp4,video/webm,video/quicktime,video/x-m4v,.mp4,.webm,.mov,.m4v';
 
-export default function GalleryVideoPicker({ open, onClose, onSelect, allowUpload = false }) {
+export default function GalleryVideoPicker({ open, onClose, onSelect, allowUpload = false, uploadToGallery = false }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -60,6 +65,17 @@ export default function GalleryVideoPicker({ open, onClose, onSelect, allowUploa
     setUploading(true);
     const base64 = await readFileAsBase64(file).catch(() => null);
     if (!base64) { setUploading(false); toast.error(`Failed to read ${file.name}`); return; }
+    if (uploadToGallery) {
+      const entry = await uploadGalleryVideo(base64, file.name, { silent: true }).catch((err) => {
+        toast.error(err?.message || 'Upload failed');
+        return null;
+      });
+      setUploading(false);
+      if (!entry?.filename) return;
+      onSelect?.(normalizeVideo(entry));
+      onClose?.();
+      return;
+    }
     const saved = await uploadFile(base64, file.name, { silent: true }).catch((err) => {
       toast.error(err?.message || 'Upload failed');
       return null;

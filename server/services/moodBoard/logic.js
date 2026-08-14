@@ -146,15 +146,18 @@ export function applyBoardPatch(board, patch) {
 
 // Normalize a validated item input into the stored item shape. An image item
 // carries a `mediaKey` (an indexed `<kind>:<ref>` asset) OR an `imageUrl`
-// (external/pinned), never required to have both; a text item carries `text`.
-// `caption`/`source` are optional on both. The route schema guarantees the
-// type-appropriate field is present, so this only fills the shared shape.
+// (external/pinned), never required to have both; a video item (#4188)
+// carries a `video:<filename>` mediaKey plus an optional poster-thumbnail
+// `imageUrl`; a text item carries `text`. `caption`/`source` are optional on
+// all. The route schema guarantees the type-appropriate field is present, so
+// this only fills the shared shape.
 function normalizeItem(input, { id, now = nowIso() } = {}) {
+  const hasMedia = input.type === 'image' || input.type === 'video';
   return {
     id,
     type: input.type,
-    mediaKey: input.type === 'image' ? (input.mediaKey ?? null) : null,
-    imageUrl: input.type === 'image' ? (input.imageUrl ?? null) : null,
+    mediaKey: hasMedia ? (input.mediaKey ?? null) : null,
+    imageUrl: hasMedia ? (input.imageUrl ?? null) : null,
     text: input.type === 'text' ? input.text : null,
     caption: input.caption ?? null,
     source: input.source ?? null,
@@ -189,7 +192,7 @@ export function updateItem(board, itemId, patch) {
   }
   const current = items[idx];
   const updated = { ...current };
-  const editableKeys = current.type === 'image'
+  const editableKeys = current.type === 'image' || current.type === 'video'
     ? ['caption', 'source', 'imageUrl', 'mediaKey']
     : ['caption', 'source', 'text'];
   for (const key of editableKeys) {
@@ -201,6 +204,9 @@ export function updateItem(board, itemId, patch) {
   // mediaKey/imageUrl; a text item keeps non-empty text.
   if (updated.type === 'image' && !updated.mediaKey && !updated.imageUrl) {
     throw new ServerError('An image item must keep a mediaKey or imageUrl', { status: 400, code: 'INVALID_ITEM' });
+  }
+  if (updated.type === 'video' && !updated.mediaKey) {
+    throw new ServerError('A video item must keep its mediaKey', { status: 400, code: 'INVALID_ITEM' });
   }
   if (updated.type === 'text' && (typeof updated.text !== 'string' || !updated.text.trim())) {
     throw new ServerError('A text item must keep non-empty text', { status: 400, code: 'INVALID_ITEM' });

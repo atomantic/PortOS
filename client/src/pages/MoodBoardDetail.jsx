@@ -11,10 +11,12 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
-import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw } from 'lucide-react';
+import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
+import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
+import GalleryVideoPicker from '../components/videoGen/GalleryVideoPicker';
 import {
   getMoodBoard,
   updateMoodBoard,
@@ -25,7 +27,7 @@ import {
   unlinkMoodBoardPinterest,
   syncMoodBoardPinterest,
 } from '../services/api';
-import { moodBoardItemSrc } from '../lib/moodBoardItemSrc';
+import { moodBoardItemSrc, moodBoardItemVideoSrc } from '../lib/moodBoardItemSrc';
 import { timeAgo } from '../utils/formatters';
 import useMounted from '../hooks/useMounted';
 
@@ -46,6 +48,11 @@ export default function MoodBoardDetail() {
   const [caption, setCaption] = useState('');
   const [source, setSource] = useState('');
   const [adding, setAdding] = useState(false);
+
+  // Gallery pickers (#4188) + inline video playback.
+  const [imagePickerOpen, setImagePickerOpen] = useState(false);
+  const [videoPickerOpen, setVideoPickerOpen] = useState(false);
+  const [playingItemId, setPlayingItemId] = useState(null);
 
   // Pinterest link/sync.
   const [pinUrl, setPinUrl] = useState('');
@@ -113,6 +120,35 @@ export default function MoodBoardDetail() {
     if (!item) { toast.error('Failed to add item'); return; }
     setBoard((prev) => (prev ? { ...prev, items: [...(prev.items || []), item] } : prev));
     resetAddForm();
+  };
+
+  // Gallery-picker pins (#4188). Both pickers hand back a normalized media
+  // item; the payload mirrors PinToMoodBoardMenu's shape — mediaKey for source
+  // linkage + a directly-renderable preview. A video pin's mediaKey ref is the
+  // FILENAME (`video:<file>.mp4`) so playback and peer-sync asset transfer
+  // both resolve without an id→filename lookup.
+  const addPickedItem = async (payload) => {
+    const item = await addMoodBoardItem(id, payload, { silent: true }).catch(() => null);
+    if (!item) { toast.error('Failed to add item'); return; }
+    setBoard((prev) => (prev ? { ...prev, items: [...(prev.items || []), item] } : prev));
+  };
+
+  const handlePickGalleryImage = (picked) => {
+    if (!picked?.previewUrl && !picked?.key) return;
+    addPickedItem({
+      type: 'image',
+      mediaKey: typeof picked.key === 'string' && picked.key.startsWith('image:') ? picked.key : null,
+      imageUrl: picked.previewUrl || null,
+    });
+  };
+
+  const handlePickGalleryVideo = (picked) => {
+    if (!picked?.filename) return;
+    addPickedItem({
+      type: 'video',
+      mediaKey: `video:${picked.filename}`,
+      imageUrl: picked.previewUrl || null,
+    });
   };
 
   const handleUpdateCaption = async (itemId, nextCaption) => {
@@ -334,25 +370,44 @@ export default function MoodBoardDetail() {
 
       {/* Add item */}
       <div className="bg-port-card border border-port-border rounded-md p-4 mb-6">
-        <div className="flex items-center gap-2 mb-3" role="tablist" aria-label="Item type">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={itemType === 'image'}
-            onClick={() => setItemType('image')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded transition-colors ${itemType === 'image' ? 'bg-port-accent text-white' : 'bg-port-bg text-gray-400 hover:text-white'}`}
-          >
-            <ImageIcon className="w-4 h-4" aria-hidden="true" /> Image
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={itemType === 'text'}
-            onClick={() => setItemType('text')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded transition-colors ${itemType === 'text' ? 'bg-port-accent text-white' : 'bg-port-bg text-gray-400 hover:text-white'}`}
-          >
-            <FileText className="w-4 h-4" aria-hidden="true" /> Note
-          </button>
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <div className="flex items-center gap-2" role="tablist" aria-label="Item type">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={itemType === 'image'}
+              onClick={() => setItemType('image')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded transition-colors ${itemType === 'image' ? 'bg-port-accent text-white' : 'bg-port-bg text-gray-400 hover:text-white'}`}
+            >
+              <ImageIcon className="w-4 h-4" aria-hidden="true" /> Image
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={itemType === 'text'}
+              onClick={() => setItemType('text')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded transition-colors ${itemType === 'text' ? 'bg-port-accent text-white' : 'bg-port-bg text-gray-400 hover:text-white'}`}
+            >
+              <FileText className="w-4 h-4" aria-hidden="true" /> Note
+            </button>
+          </div>
+          {/* Gallery pins (#4188) — pick or upload, added to the board immediately. */}
+          <div className="flex items-center gap-2 sm:ml-auto">
+            <button
+              type="button"
+              onClick={() => setImagePickerOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-bg text-gray-400 hover:text-white transition-colors"
+            >
+              <Images className="w-4 h-4" aria-hidden="true" /> Pick from gallery
+            </button>
+            <button
+              type="button"
+              onClick={() => setVideoPickerOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-bg text-gray-400 hover:text-white transition-colors"
+            >
+              <Film className="w-4 h-4" aria-hidden="true" /> Pick video
+            </button>
+          </div>
         </div>
 
         <div className="space-y-3">
@@ -429,9 +484,40 @@ export default function MoodBoardDetail() {
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
           {items.map((item) => {
             const src = moodBoardItemSrc(item);
+            const videoSrc = moodBoardItemVideoSrc(item);
             return (
               <div key={item.id} className="bg-port-card border border-port-border rounded-md overflow-hidden flex flex-col">
-                {item.type === 'image' ? (
+                {item.type === 'video' && videoSrc ? (
+                  playingItemId === item.id ? (
+                    // eslint-disable-next-line jsx-a11y/media-has-caption -- reference clips have no caption track
+                    <video
+                      src={videoSrc}
+                      poster={src || undefined}
+                      controls
+                      autoPlay
+                      playsInline
+                      className="w-full aspect-square object-cover bg-black"
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setPlayingItemId(item.id)}
+                      aria-label="Play video"
+                      className="relative w-full aspect-square bg-port-bg text-gray-600 group"
+                    >
+                      {src ? (
+                        <img src={src} alt={item.caption || ''} loading="lazy" className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="w-full h-full flex items-center justify-center">
+                          <Film className="w-8 h-8" aria-hidden="true" />
+                        </span>
+                      )}
+                      <span className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-80 group-hover:opacity-100 transition-opacity">
+                        <Play className="w-8 h-8 text-white drop-shadow" aria-hidden="true" />
+                      </span>
+                    </button>
+                  )
+                ) : item.type === 'image' || item.type === 'video' ? (
                   src ? (
                     <img src={src} alt={item.caption || ''} loading="lazy" className="w-full aspect-square object-cover bg-port-bg" />
                   ) : (
@@ -484,6 +570,20 @@ export default function MoodBoardDetail() {
           })}
         </div>
       )}
+
+      <GalleryImagePicker
+        open={imagePickerOpen}
+        onClose={() => setImagePickerOpen(false)}
+        onSelect={handlePickGalleryImage}
+        allowUpload
+      />
+      <GalleryVideoPicker
+        open={videoPickerOpen}
+        onClose={() => setVideoPickerOpen(false)}
+        onSelect={handlePickGalleryVideo}
+        allowUpload
+        uploadToGallery
+      />
     </div>
   );
 }

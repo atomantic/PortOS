@@ -381,10 +381,18 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // record type with its own per-category gate — a v1 sender pushing to a ≤v0
   // (pre-feature) receiver is sender-ahead on `moodBoards` and gets a 412 (only
   // that category pauses); a v1 receiver still accepts a ≤v0 sender (pre-feature
-  // peers never push a `moodBoard`). The FIRST incompatible board-shape change
-  // MUST bump this to 2 then. The board body (name/description/items) is
+  // peers never push a `moodBoard`). The board body (name/description/items) is
   // LWW-overwritten whole; referenced image bytes ride the asset manifest.
-  moodBoards: 1,
+  // v2 = `type: 'video'` board items (#4188). An EXECUTION-semantics break for
+  // v1 receivers, not a sanitizer strip (the whole-record LWW passes unknown
+  // item shapes through verbatim): a v1 renderer treats a non-image item as a
+  // text note (blank card), and its updateItem gates a 'video' item onto the
+  // text editable-keys — so a v1 peer that edits the board can mangle video
+  // items and LWW the damage back. Bumping makes the v1 receiver 412-reject
+  // the ahead-version push until it upgrades. Video bytes ride the existing
+  // asset manifest (`video:<filename>` ref → PATHS.videos, receiver regenerates
+  // the poster thumbnail on pull).
+  moodBoards: 2,
   // v1 = Writers Room works (PostgreSQL `writers_room_works` + decomposed
   // `writers_room_draft_versions`) federated via the per-record peer-sync push
   // pipeline (record kind `writersRoomWork`, sync category `writersRoomWorks`,

@@ -61,6 +61,7 @@ import {
   isSafeHfRepoRelativePath,
 } from '../lib/hfCache.js';
 import { startHfDownloadStream, openSseStream } from '../lib/sseDownload.js';
+import { saveUploadedGalleryVideo } from '../services/videoUpload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 
 const router = Router();
@@ -1214,6 +1215,24 @@ router.post('/cancel', asyncHandler(async (req, res) => {
 
 router.get('/history', asyncHandler(async (_req, res) => {
   res.json(await loadHistory());
+}));
+
+// Upload a video into the shared gallery (#4188) — the video counterpart of
+// POST /api/image-gen/upload. Lands the bytes under PATHS.videos with a
+// `source: 'upload'` history entry so the file federates via the peer-sync
+// asset manifest (unlike POST /api/uploads → data/uploads/, which does not).
+// Base64 max = 56MB ≈ the 41MB binary cap (MAX_GALLERY_VIDEO_UPLOAD_BYTES)
+// after base64 expansion, mirroring the image route's transport bound.
+const uploadVideoSchema = z.object({
+  data: z.string().min(1).max(56 * 1024 * 1024),
+  filename: z.string().max(255).optional(),
+});
+
+router.post('/upload', asyncHandler(async (req, res) => {
+  const parsed = uploadVideoSchema.safeParse(req.body || {});
+  if (!parsed.success) failValidation(parsed);
+  const { data, filename } = parsed.data;
+  res.json(await saveUploadedGalleryVideo(data, filename));
 }));
 
 router.delete('/history/:id', asyncHandler(async (req, res) => {

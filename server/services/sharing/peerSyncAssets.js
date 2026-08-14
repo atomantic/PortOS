@@ -494,7 +494,12 @@ export async function buildMusicVideoAssetManifest(project) {
 export async function buildBoardAssetManifest(board) {
   const dedup = new Map();
   for (const it of board?.items || []) {
-    if (!it || it.type !== 'image') continue;
+    // `video` items (#4188) carry a `video:<filename>` mediaKey (the ref IS
+    // the on-disk filename, so collectionVideoRefToFilename passes it through
+    // untouched) plus an optional poster-thumbnail imageUrl. Thumbnails under
+    // /data/video-thumbnails are NOT shipped — the receiver's video pull
+    // regenerates `<stem>.jpg` locally (see doPullOneAsset's video branch).
+    if (!it || (it.type !== 'image' && it.type !== 'video')) continue;
     const pending = [];
     if (typeof it.mediaKey === 'string') {
       const parsed = parseKey(it.mediaKey);

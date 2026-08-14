@@ -221,6 +221,14 @@ export const getVideoGenRuntimeStatus = (runtime, { signal } = {}) =>
 // poll doesn't double-toast on every navigation.
 export const getActiveVideoJob = () => request('/video-gen/active', { silent: true });
 export const listVideoHistory = (options = {}) => request('/video-gen/history', options);
+// Upload a video into the shared gallery (#4188) — lands under /data/videos/
+// with a video-history entry (peer-syncable), unlike the /api/uploads scratch
+// dir. Returns the history entry; feed it through normalizeVideo to display.
+export const uploadGalleryVideo = (base64Data, filename, options = {}) => request('/video-gen/upload', {
+  method: 'POST',
+  body: JSON.stringify({ data: base64Data, ...(filename ? { filename } : {}) }),
+  ...options,
+});
 export const deleteVideoHistoryItem = (id, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });
 export const setVideoHidden = (id, hidden, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/visibility`, {
   method: 'POST',

@@ -79,6 +79,15 @@ describe('addItem', () => {
     expect(item.mediaKey).toBeNull();
     expect(item.imageUrl).toBeNull();
   });
+  it('normalizes a video item with mediaKey + poster imageUrl (#4188)', () => {
+    const { item } = addItem(base, {
+      type: 'video', mediaKey: 'video:upload-ab12cd34.mp4', imageUrl: '/data/video-thumbnails/upload-ab12cd34.jpg',
+    });
+    expect(item.type).toBe('video');
+    expect(item.mediaKey).toBe('video:upload-ab12cd34.mp4');
+    expect(item.imageUrl).toBe('/data/video-thumbnails/upload-ab12cd34.jpg');
+    expect(item.text).toBeNull();
+  });
   it('throws BOARD_FULL at the item cap', () => {
     const full = { ...base, items: Array.from({ length: MAX_ITEMS_PER_BOARD }, (_, i) => ({ id: `i${i}` })) };
     expect(() => addItem(full, { type: 'text', text: 'x' })).toThrow(/full/i);
@@ -120,6 +129,16 @@ describe('updateItem', () => {
   });
   it('rejects blanking a text item', () => {
     expect(() => updateItem(withItem, itemId, { text: '   ' })).toThrow(/non-empty text/i);
+  });
+  it('edits a video item like a media item and rejects clearing its mediaKey (#4188)', () => {
+    const { board } = addItem(buildBoardRecord({ name: 'A' }, { id: 'mb-4', now: 't0' }), {
+      type: 'video', mediaKey: 'video:a.mp4', imageUrl: '/data/video-thumbnails/a.jpg',
+    });
+    const vidId = board.items[0].id;
+    const { item } = updateItem(board, vidId, { caption: 'clip', text: 'nope' });
+    expect(item.caption).toBe('clip');
+    expect(item.text).toBeNull();
+    expect(() => updateItem(board, vidId, { mediaKey: null })).toThrow(/mediaKey/i);
   });
 });
 

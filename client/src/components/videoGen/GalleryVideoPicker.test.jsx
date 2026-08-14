@@ -3,8 +3,10 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import GalleryVideoPicker from './GalleryVideoPicker';
 
 const listVideoHistory = vi.fn();
+const uploadGalleryVideo = vi.fn();
 vi.mock('../../services/apiImageVideo', () => ({
   listVideoHistory: (...args) => listVideoHistory(...args),
+  uploadGalleryVideo: (...args) => uploadGalleryVideo(...args),
 }));
 
 vi.mock('../../services/apiMedia', () => ({
@@ -27,6 +29,7 @@ describe('GalleryVideoPicker', () => {
   beforeEach(() => {
     listVideoHistory.mockReset();
     listVideoHistory.mockResolvedValue(HISTORY);
+    uploadGalleryVideo.mockReset();
   });
 
   it('does not fetch when closed', () => {
@@ -45,6 +48,28 @@ describe('GalleryVideoPicker', () => {
       kind: 'video',
       id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     }));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('uploads into the gallery and selects the normalized entry with uploadToGallery (#4188)', async () => {
+    uploadGalleryVideo.mockResolvedValue({
+      id: 'upload-ab12cd34', filename: 'upload-ab12cd34.mp4', thumbnail: 'upload-ab12cd34.jpg', source: 'upload',
+    });
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <GalleryVideoPicker open onClose={onClose} onSelect={onSelect} allowUpload uploadToGallery />,
+    );
+    await waitFor(() => expect(screen.getByText('a neon chase')).toBeInTheDocument());
+    // The modal renders through a portal, so query the document, not the container.
+    const fileInput = document.querySelector('input[type="file"]');
+    fireEvent.change(fileInput, { target: { files: [new File(['x'], 'clip.mp4', { type: 'video/mp4' })] } });
+    await waitFor(() => expect(uploadGalleryVideo).toHaveBeenCalledWith('ZmFrZQ==', 'clip.mp4', { silent: true }));
+    await waitFor(() => expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'video',
+      filename: 'upload-ab12cd34.mp4',
+      previewUrl: '/data/video-thumbnails/upload-ab12cd34.jpg',
+    })));
     expect(onClose).toHaveBeenCalled();
   });
 });

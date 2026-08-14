@@ -1,6 +1,6 @@
 import { StrictMode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 // ── Mocks must be declared before any imports that use them ──────────────────
@@ -118,5 +118,33 @@ describe('MoodBoardDetail stale-response guards', () => {
     pending.resolve(null);
     await flush();
     expect(mockToastError).not.toHaveBeenCalled();
+  });
+});
+
+describe('MoodBoardDetail video items (#4188)', () => {
+  it('renders a video item as a poster with a play affordance, then plays inline', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({
+      id: 'a',
+      name: 'Board A',
+      items: [{
+        id: 'mbi-1',
+        type: 'video',
+        mediaKey: 'video:upload-ab12cd34.mp4',
+        imageUrl: '/data/video-thumbnails/upload-ab12cd34.jpg',
+        caption: null,
+        source: null,
+      }],
+    });
+    const { container } = renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+
+    const playButton = screen.getByRole('button', { name: 'Play video' });
+    expect(playButton.querySelector('img').getAttribute('src')).toBe('/data/video-thumbnails/upload-ab12cd34.jpg');
+    fireEvent.click(playButton);
+    await waitFor(() => {
+      const video = container.querySelector('video');
+      expect(video).not.toBeNull();
+      expect(video.getAttribute('src')).toBe('/data/videos/upload-ab12cd34.mp4');
+    });
   });
 });
