@@ -7,6 +7,13 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
+// Normalize the path a mock receives before comparing/indexing it. The code
+// under test composes these with path.join, so on Windows they arrive
+// backslash-separated and the POSIX-spelled keys below would never match —
+// the mock would fall through to its default and the assertions would compare
+// against an empty/absent value rather than the fixture they name.
+const toPosix = (v) => (typeof v === 'string' ? v.split('\\').join('/') : v);
+
 let files = {};
 let dirEntries = null;
 let recordsByDir = {};
@@ -15,7 +22,7 @@ let renamed = [];
 
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { data: '/fake/data' },
-  readJSONFile: vi.fn(async (path) => recordsByDir[path] ?? null),
+  readJSONFile: vi.fn(async (path) => recordsByDir[toPosix(path)] ?? null),
 }));
 
 // Marker I/O is delegated to migrationMarker.js; mock it against the same
@@ -28,11 +35,11 @@ vi.mock('../lib/migrationMarker.js', () => ({
 vi.mock('fs/promises', () => ({
   rename: vi.fn(async (from, to) => {
     if (renameShouldFail) throw new Error('EACCES');
-    renamed.push([from, to]);
+    renamed.push([toPosix(from), toPosix(to)]);
   }),
   readdir: vi.fn(async () => (dirEntries === null ? [] : dirEntries)),
   stat: vi.fn(async (path) => {
-    if (path === '/fake/data/story-builder') {
+    if (toPosix(path) === '/fake/data/story-builder') {
       if (dirEntries === null) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; }
       return { isDirectory: () => true };
     }

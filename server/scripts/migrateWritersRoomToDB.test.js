@@ -9,6 +9,13 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
+// Normalize the path a mock receives before comparing/indexing it. The code
+// under test composes these with path.join, so on Windows they arrive
+// backslash-separated and the POSIX-spelled keys below would never match —
+// the mock would fall through to its default and the assertions would compare
+// against an empty/absent value rather than the fixture they name.
+const toPosix = (v) => (typeof v === 'string' ? v.split('\\').join('/') : v);
+
 const DATA = '/fake/data';
 const ROOT = `${DATA}/writers-room`;
 const WORKS = `${ROOT}/works`;
@@ -22,7 +29,7 @@ let renamed = [];
 
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { data: DATA },
-  readJSONFile: vi.fn(async (path, fallback) => (path in jsonByPath ? jsonByPath[path] : fallback)),
+  readJSONFile: vi.fn(async (path, fallback) => (toPosix(path) in jsonByPath ? jsonByPath[toPosix(path)] : fallback)),
   safeJSONParse: vi.fn((content, fallback) => { try { return JSON.parse(content); } catch { return fallback; } }),
 }));
 
@@ -35,22 +42,22 @@ vi.mock('../lib/migrationMarker.js', () => ({
 
 vi.mock('fs/promises', () => ({
   readFile: vi.fn(async (path) => {
-    if (!(path in files)) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; }
-    return files[path];
+    if (!(toPosix(path) in files)) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; }
+    return files[toPosix(path)];
   }),
-  rename: vi.fn(async (from, to) => { renamed.push([from, to]); files[to] = files[from]; delete files[from]; }),
+  rename: vi.fn(async (from, to) => { renamed.push([toPosix(from), toPosix(to)]); files[toPosix(to)] = files[toPosix(from)]; delete files[toPosix(from)]; }),
   readdir: vi.fn(async (path) => {
-    if (path === WORKS) return workDirs;
+    if (toPosix(path) === WORKS) return workDirs;
     return [];
   }),
   stat: vi.fn(async (path) => {
-    if (path === ROOT || path === WORKS) {
-      if (existingDirs.has(path)) return { isDirectory: () => true };
+    if (toPosix(path) === ROOT || toPosix(path) === WORKS) {
+      if (existingDirs.has(toPosix(path))) return { isDirectory: () => true };
       const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e;
     }
     // For parkFileAside existence checks: the source exists if it's in `files`,
     // the .imported.json aside does not (unless renamed already).
-    if (path in files) return { isFile: () => true };
+    if (toPosix(path) in files) return { isFile: () => true };
     const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e;
   }),
 }));

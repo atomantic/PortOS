@@ -10,6 +10,24 @@ const runPython = (source) => execFileSync(pyBin, ['-c', source, script], {
   encoding: 'utf8',
 });
 
+// This suite drives the real interpreter, so it needs one to exist. Probe once
+// rather than letting all 16 cases fail with an opaque "Command failed".
+//
+// Windows makes the check load-bearing: a machine with no Python still has
+// `python` on PATH as a Microsoft Store ALIAS STUB, which exits non-zero with
+// "Python was not found; run without arguments to install from the Microsoft
+// Store" — so an `is it on PATH` test would pass and the suite would still
+// fail. Actually running it is the only reliable probe. CI's windows-latest
+// image ships Python, so this skips on a contributor's bare machine, not there.
+const pythonAvailable = (() => {
+  try {
+    execFileSync(pyBin, ['-c', 'pass'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
 const importRunner = [
   'import importlib.util, sys',
   'from pathlib import Path',
@@ -19,7 +37,7 @@ const importRunner = [
   'spec.loader.exec_module(runner)',
 ].join('\n');
 
-describe('generate_minimax_h3.py', () => {
+describe.skipIf(!pythonAvailable)('generate_minimax_h3.py', () => {
   it('keeps the lexical HF snapshot root when cache entries are blob symlinks', () => {
     const output = runPython(`${importRunner}\n${[
       'import tempfile',
