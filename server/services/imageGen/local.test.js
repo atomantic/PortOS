@@ -20,10 +20,6 @@ vi.mock('../../lib/pythonSetup.js', () => ({
 // wrong file. Pattern matches server/lib/mediaModels.test.js.
 let tmpRegistryDir;
 let priorRegistryEnv;
-const ORIGINAL_PLATFORM = Object.getOwnPropertyDescriptor(process, 'platform');
-const pinPlatform = (value) =>
-  Object.defineProperty(process, 'platform', { ...ORIGINAL_PLATFORM, value });
-
 let buildArgs;
 let buildSidecarMeta;
 let resolveOutputPlacement;
@@ -33,19 +29,12 @@ beforeAll(async () => {
   tmpRegistryDir = mkdtempSync(join(tmpdir(), 'portos-imagegen-local-test-'));
   priorRegistryEnv = process.env.PORTOS_MEDIA_MODELS_FILE;
   process.env.PORTOS_MEDIA_MODELS_FILE = join(tmpRegistryDir, 'media-models.json');
-  // local.js captures IS_WIN at module load and routes non-flux2 models to
-  // generate_win.py on Windows instead of the macOS-only mflux-generate
-  // binary. Every case here describes the mflux/MLX contract, so pin a POSIX
-  // platform for the import rather than letting the host decide — otherwise
-  // the suite fails on a Windows runner for a reason it is not testing.
-  pinPlatform('darwin');
   vi.resetModules();
   ({ buildArgs, buildSidecarMeta, resolveOutputPlacement } = await import('./local.js'));
   ({ PATHS } = await import('../../lib/fileUtils.js'));
 });
 
 afterAll(() => {
-  Object.defineProperty(process, 'platform', ORIGINAL_PLATFORM);
   if (priorRegistryEnv === undefined) delete process.env.PORTOS_MEDIA_MODELS_FILE;
   else process.env.PORTOS_MEDIA_MODELS_FILE = priorRegistryEnv;
   rmSync(tmpRegistryDir, { recursive: true, force: true });
@@ -401,18 +390,31 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
     expect(args[args.indexOf('--image-strength') + 1]).toBe('0.25');
   });
 
-  it('falls back to mflux dispatch for non-flux2 models on macOS', () => {
+  it('falls back to the platform image dispatch for non-flux2 models', () => {
     // No flux2 mock needed — the branch shouldn't be taken at all.
     mockResolveFlux2Python.mockReturnValue(null);
     const { bin, args } = buildArgs({
       ...baseInput,
       model: { id: 'dev', steps: 20, guidance: 3.5 },
     });
-    // mflux-generate sits next to the python binary in the venv.
-    expect(bin).toMatch(/mflux-generate$/);
+    // Assert the per-platform contract rather than pinning process.platform:
+    // local.js imports sharp, which selects its NATIVE binary from
+    // process.platform at load time, so stubbing the platform before the
+    // dynamic import makes sharp try to load another OS's binary and the whole
+    // file fails to load. Both dispatches ship, so both are asserted here on
+    // whichever runner is executing.
+    if (process.platform === 'win32') {
+      // Windows has no mflux/MLX — the render goes through imagine_win.py on
+      // the configured python.
+      expect(bin).toBe(baseInput.pythonPath);
+      expect(args.some((a) => String(a).endsWith('imagine_win.py'))).toBe(true);
+    } else {
+      // mflux-generate sits next to the python binary in the venv.
+      expect(bin).toMatch(/mflux-generate$/);
+    }
+    expect(args).toContain('--quantize');
     expect(args).toContain('--model');
     expect(args[args.indexOf('--model') + 1]).toBe('dev');
-    expect(args).toContain('--quantize');
   });
 });
 
