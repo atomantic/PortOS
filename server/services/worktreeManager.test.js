@@ -39,6 +39,7 @@ const {
   removeWorktree,
   adoptWorktree,
   createWorktree,
+  createPersistentWorktree,
 } = await import('./worktreeManager.js');
 const { isPathInsideDir } = await import('../lib/fileUtils.js');
 const { win32 } = await import('path');
@@ -970,6 +971,30 @@ describe('createWorktree upstream safety (#4172)', () => {
     expect(argsFor(a => a[0] === 'branch' && a[1] === '--unset-upstream')).toHaveLength(0);
   });
 
+  it('undoes the add when the upstream cannot be made safe, instead of stranding a worktree', async () => {
+    // The guard throws AFTER `worktree add` succeeded, so without an undo the
+    // caller sees a failed create while a registered worktree and an orphan
+    // branch stay on disk — the debris cleanupOrphanBranch prevents on the add.
+    scriptGit({ mergeReadings: ['refs/heads/main', 'refs/heads/main'] });
+
+    await expect(createWorktree('agent-5', '/repo', 'task-5')).rejects.toThrow(/still resolves to/);
+
+    expect(argsFor(a => a[0] === 'worktree' && a[1] === 'remove')).toHaveLength(1);
+    expect(argsFor(a => a[0] === 'branch' && a[1] === '-D')).toHaveLength(1);
+  });
+
+  it('does NOT delete the branch when undoing an existingBranch attach', async () => {
+    // That branch pre-dates this add and may hold real commits — same
+    // distinction cleanupOrphanBranch draws.
+    scriptGit({ mergeReadings: ['refs/heads/main', 'refs/heads/main'] });
+
+    await expect(createWorktree('agent-6', '/repo', 'task-6', { existingBranch: 'cos/task-0/agent-0' }))
+      .rejects.toThrow(/still resolves to/);
+
+    expect(argsFor(a => a[0] === 'worktree' && a[1] === 'remove')).toHaveLength(1);
+    expect(argsFor(a => a[0] === 'branch' && a[1] === '-D')).toHaveLength(0);
+  });
+
   it('checks the re-attached branch of an existingBranch worktree too', async () => {
     // Branches created before this fix keep their bad upstream; a review-loop
     // agent re-attaching to one must not inherit a push aimed at main.
@@ -978,5 +1003,27 @@ describe('createWorktree upstream safety (#4172)', () => {
     await createWorktree('agent-4', '/repo', 'task-4', { existingBranch: 'cos/task-0/agent-0' });
 
     expect(argsFor(a => a[0] === 'branch' && a[1] === '--unset-upstream')).toHaveLength(1);
+  });
+
+  // The persistent feature-agent tree needs its own coverage, not just the CoS
+  // one: it lives OUTSIDE `WORKTREES_DIR`, so neither `cleanupOrphanedWorktrees`
+  // nor `reapMergedWorktrees` reaps it, and its only caller does not catch. A
+  // stranded tree there blocks every retry with "already exists" until a human
+  // prunes it, so the undo has to happen here rather than being left to a sweeper.
+  it('creates the persistent feature-agent branch with --no-track too', async () => {
+    await createPersistentWorktree('fa-1', '/repo', 'feature/x', 'main');
+
+    const [add] = argsFor(a => a[0] === 'worktree' && a[1] === 'add');
+    expect(add).toContain('--no-track');
+  });
+
+  it('undoes the persistent add when the upstream cannot be made safe', async () => {
+    scriptGit({ mergeReadings: ['refs/heads/main', 'refs/heads/main'] });
+
+    await expect(createPersistentWorktree('fa-2', '/repo', 'feature/y', 'main'))
+      .rejects.toThrow(/still resolves to/);
+
+    expect(argsFor(a => a[0] === 'worktree' && a[1] === 'remove')).toHaveLength(1);
+    expect(argsFor(a => a[0] === 'branch' && a[1] === '-D')).toHaveLength(1);
   });
 });

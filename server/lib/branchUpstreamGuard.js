@@ -43,13 +43,22 @@ import { execGit } from './execGit.js';
 const GIT_TIMEOUT_MS = 10_000;
 
 /**
- * Read a branch's configured upstream as raw config values. Both fields are
- * `''` when unset (an untracked branch), never null/undefined, so callers get
- * one shape to reason about. Non-throwing: an unreadable repo reads as unset.
+ * Read a branch's configured upstream as raw config values.
+ *
+ * Three outcomes, deliberately NOT collapsed (see CLAUDE.md, "Sentinel +
+ * validate"): `''` is UNSET (a healthy untracked branch), a string is the
+ * configured ref, and `null` is COULD NOT READ. Folding the third into `''`
+ * would let a wedged git, a timeout, or an unreadable repo report a branch that
+ * really does track `main` as untracked — the guard would then wave through
+ * exactly the branch it exists to catch. Non-throwing; the caller decides what
+ * an unreadable answer means.
+ *
+ * `git config --get` exits 1 for an unset key (the common case, not an error)
+ * and 128 for a bad repo, which is what separates the two.
  *
  * @param {string} repo - repository (or worktree) path to read config from
  * @param {string} branchName
- * @returns {Promise<{remote: string, merge: string}>}
+ * @returns {Promise<{remote: string|null, merge: string|null}>}
  */
 export async function readBranchUpstream(repo, branchName) {
   if (!repo || !branchName) return { remote: '', merge: '' };
@@ -59,8 +68,9 @@ export async function readBranchUpstream(repo, branchName) {
       repo,
       { ignoreExitCode: true, timeout: GIT_TIMEOUT_MS },
     ).catch(() => null);
-    // `--get` exits 1 for an unset key, which is the common case, not an error.
-    return result && result.exitCode === 0 ? (result.stdout || '').trim() : '';
+    if (!result) return null;
+    if (result.exitCode === 0) return (result.stdout || '').trim();
+    return result.exitCode === 1 ? '' : null;
   };
   const [remote, merge] = await Promise.all([read('remote'), read('merge')]);
   return { remote, merge };
@@ -75,11 +85,15 @@ export async function readBranchUpstream(repo, branchName) {
  * qualified `refs/heads/main` that git actually writes, so a hand-edited config
  * is judged the same way.
  *
+ * A `null` merge (could not read, per `readBranchUpstream`) is NOT safe: an
+ * unanswered safety question is not a pass.
+ *
  * @param {string} branchName
- * @param {string} merge - the `branch.<name>.merge` value
+ * @param {string|null} merge - the `branch.<name>.merge` value
  */
 export function isSafeBranchUpstream(branchName, merge) {
-  if (!merge) return true;
+  if (merge === null || merge === undefined) return false;
+  if (merge === '') return true;
   return merge === `refs/heads/${branchName}` || merge === branchName;
 }
 
@@ -107,6 +121,11 @@ export async function enforceSafeBranchUpstream(repo, branchName) {
   if (!repo || !branchName) return { safe: true, repaired: false, upstream: '' };
   const { merge } = await readBranchUpstream(repo, branchName);
   if (isSafeBranchUpstream(branchName, merge)) return { safe: true, repaired: false, upstream: merge };
+  // Unreadable config is not a clean bill of health — the branch may well track
+  // the default branch, and nothing here verified otherwise.
+  if (merge === null) {
+    throw new Error(`Refusing to hand off branch ${branchName}: its upstream config could not be read, so a config-derived push (git push <remote> HEAD:<merge>) cannot be shown to be safe`);
+  }
 
   console.error(`❌ Branch ${branchName} tracks ${merge} instead of its own ref — dropping the upstream so a config-derived push can't land there (#4172)`);
   await execGit(['branch', '--unset-upstream', branchName], repo, {
@@ -116,7 +135,8 @@ export async function enforceSafeBranchUpstream(repo, branchName) {
 
   const after = await readBranchUpstream(repo, branchName);
   if (!isSafeBranchUpstream(branchName, after.merge)) {
-    throw new Error(`Refusing to hand off branch ${branchName}: its upstream still resolves to ${after.merge} — a config-derived push (git push <remote> HEAD:<merge>) would land there instead of opening a PR`);
+    const stillAt = after.merge === null ? 'an unreadable value' : after.merge;
+    throw new Error(`Refusing to hand off branch ${branchName}: its upstream still resolves to ${stillAt} — a config-derived push (git push <remote> HEAD:<merge>) would land there instead of opening a PR`);
   }
   return { safe: true, repaired: true, upstream: merge };
 }

@@ -92,6 +92,14 @@ describe('isSafeBranchUpstream', () => {
     // else's branch is the same class of mistake, one blast radius smaller.
     expect(isSafeBranchUpstream('cos/task/agent', 'refs/heads/release')).toBe(false);
   });
+
+  it('rejects an UNREADABLE upstream — an unanswered safety question is not a pass', () => {
+    // `null` is readBranchUpstream's could-not-read sentinel. Treating it as ''
+    // would wave through a branch that really does track main whenever git is
+    // wedged, which is the one moment the guard most needs to hold.
+    expect(isSafeBranchUpstream('cos/task/agent', null)).toBe(false);
+    expect(isSafeBranchUpstream('cos/task/agent', undefined)).toBe(false);
+  });
 });
 
 describe('readBranchUpstream', () => {
@@ -104,8 +112,11 @@ describe('readBranchUpstream', () => {
     expect(await readBranchUpstream(repo, 'solo')).toEqual({ remote: '', merge: '' });
   });
 
-  it('does not throw on an unreadable repo', async () => {
-    expect(await readBranchUpstream(join(scratch, 'nope'), 'main')).toEqual({ remote: '', merge: '' });
+  it('reports null — NOT empty — when the config cannot be read at all', async () => {
+    // The distinction that matters: `''` means "no upstream configured", `null`
+    // means "we could not find out". Collapsing them lets an unreadable repo
+    // masquerade as a healthy untracked branch.
+    expect(await readBranchUpstream(join(scratch, 'nope'), 'main')).toEqual({ remote: null, merge: null });
   });
 });
 
@@ -170,6 +181,13 @@ describe('enforceSafeBranchUpstream', () => {
   it('tolerates missing arguments rather than throwing', async () => {
     expect(await enforceSafeBranchUpstream(null, 'branch')).toEqual({ safe: true, repaired: false, upstream: '' });
     expect(await enforceSafeBranchUpstream(repo, '')).toEqual({ safe: true, repaired: false, upstream: '' });
+  });
+
+  it('refuses a branch whose upstream config cannot be read', async () => {
+    // Fail CLOSED: nothing here verified the branch is safe, and reporting it as
+    // untracked would hand an agent a branch that may still push to main.
+    await expect(enforceSafeBranchUpstream(join(scratch, 'nope'), 'cos/task/agent'))
+      .rejects.toThrow(/could not be read/);
   });
 
   it('throws when the bad upstream survives the repair', async () => {

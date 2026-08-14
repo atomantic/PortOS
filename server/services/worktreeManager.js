@@ -218,6 +218,32 @@ export async function forceRemoveWorktreeDir(repo, worktreePath, { label, log = 
 }
 
 /**
+ * Run the upstream guard on a branch whose worktree ALREADY exists, undoing the
+ * add if the guard refuses (#4172).
+ *
+ * `enforceSafeBranchUpstream` throws when a branch's upstream still aims at a
+ * foreign ref after repair — correct, because every downstream push helper would
+ * land there. But the throw happens AFTER `git worktree add` succeeded, so
+ * without this the caller gets a failed create while a registered worktree (and,
+ * for a fresh `-b` add, an orphan branch) stays on disk: exactly the debris
+ * `cleanupOrphanBranch` already prevents on the add itself.
+ *
+ * `deleteBranch` is false on the attach paths — that branch pre-dates this add
+ * and may hold real commits, the same distinction `cleanupOrphanBranch` makes.
+ */
+async function enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePath, { deleteBranch }) {
+  return enforceSafeBranchUpstream(sourceWorkspace, branchName).catch(async (err) => {
+    await forceRemoveWorktreeDir(sourceWorkspace, worktreePath, {
+      label: `Undoing worktree add for ${branchName} after an unsafe upstream`,
+      log: 'all',
+      subject: branchName,
+    }).catch(() => {});
+    if (deleteBranch) await cleanupOrphanBranch(sourceWorkspace, branchName, err);
+    throw err;
+  });
+}
+
+/**
  * Classify a `git status --porcelain` blob into real changes vs auto-generated
  * lockfile churn. Pure (testable) — callers decide what to do with the result.
  *
@@ -393,7 +419,7 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
     // have been left tracking `refs/heads/main`. Repair it before the agent (and
     // its `/do:pr`) touches it. Tracking `origin/<branchName>` is the healthy
     // shape here and passes untouched.
-    await enforceSafeBranchUpstream(sourceWorkspace, branchName);
+    await enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePath, { deleteBranch: false });
     console.log(`🌳 Created worktree for ${agentId} at ${worktreePath} on existing branch ${branchName}`);
     return { worktreePath, branchName, baseBranch: null, existingBranch: true, instanceId };
   }
@@ -437,7 +463,7 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
 
   // Backstop the flag above — an older git, or a repo-level `branch.autoSetupMerge`
   // setting, must not be able to hand an agent a branch aimed at the default branch.
-  await enforceSafeBranchUpstream(sourceWorkspace, branchName);
+  await enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePath, { deleteBranch: true });
 
   console.log(`🌳 Created worktree for ${agentId} at ${worktreePath} (branch: ${branchName}, base: ${baseRef})`);
 
@@ -790,7 +816,7 @@ async function createPersistentWorktreeUnlocked(featureAgentId, sourceWorkspace,
   }
 
   // Covers all three arms above, including a branch a prior run left mis-tracked.
-  await enforceSafeBranchUpstream(sourceWorkspace, branchName);
+  await enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, FA_WORKTREES, { deleteBranch: !localBranchExists });
 
   console.log(`🌳 Created persistent worktree for feature agent ${featureAgentId} at ${FA_WORKTREES} (branch: ${branchName})`);
   return { worktreePath: FA_WORKTREES, branchName, baseBranch };
