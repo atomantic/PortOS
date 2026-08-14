@@ -666,3 +666,14 @@ export function clamp(n, min, max) {
   return Math.min(max, Math.max(min, n));
 }
 
+/**
+ * Capitalize the first character of a string, leaving the rest untouched
+ * (e.g. "female" → "Female"). Non-strings and empty strings pass through
+ * unchanged rather than throwing.
+ * @param {string} s
+ * @returns {string}
+ */
+export function capitalize(s) {
+  return typeof s === 'string' && s.length ? s[0].toUpperCase() + s.slice(1) : s;
+}
+

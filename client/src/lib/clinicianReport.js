@@ -8,7 +8,7 @@
  */
 
 import { REFERENCE_RANGES, getBloodValueStatus } from '../components/meatspace/constants.js';
-import { formatDateTime } from '../utils/formatters';
+import { formatDateTime, capitalize } from '../utils/formatters';
 
 // Blood-marker category grouping — canonical source for the marker→category map.
 // BloodTestCard imports getCategoryForKey from here so the on-screen tab grouping
@@ -131,10 +131,6 @@ export function buildLifestyleModel(config) {
     rows.push({ label: 'Chronic conditions', value: conditions.join(', ') });
   }
   return rows;
-}
-
-function capitalize(s) {
-  return typeof s === 'string' && s.length ? s[0].toUpperCase() + s.slice(1) : s;
 }
 
 /**

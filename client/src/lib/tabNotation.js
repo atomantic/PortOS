@@ -30,6 +30,8 @@
 //                  values populate meta, renderers hide the raw line
 //   'text'       — everything else (incl. non-meta {directive} lines)
 
+import { capitalize } from '../utils/formatters.js';
+
 // ---------------------------------------------------------------------------
 // Chord tokens
 // ---------------------------------------------------------------------------
@@ -196,8 +198,6 @@ const BRACKET_SECTION_RE = /^\s*\[([^\]]+)\]\s*$/;
 const WORD_SECTION_RE =
   /^\s*(intro|verse|chorus|pre[- ]?chorus|bridge|outro|solo|interlude|instrumental|refrain|coda)(\s+\d+)?\s*:?\s*$/i;
 const META_ALIASES = { t: 'title', subtitle: 'artist', st: 'artist' };
-
-const capitalize = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 // Short ChordPro section codes → [start|end, kind].
 const CHORDPRO_SHORT = {
