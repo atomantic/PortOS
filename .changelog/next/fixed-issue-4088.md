@@ -1,0 +1,1 @@
+- Windows CI: the HuggingFace download helper test now splits Python output on CRLF, and the peer-sync subscribe tests wait on the real drain instead of a 10ms sleep.

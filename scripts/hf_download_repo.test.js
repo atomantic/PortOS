@@ -54,7 +54,10 @@ print(helper.incomplete_bytes("/tmp/portos-hf-cache-does-not-exist"))
 print(helper.format_bytes_stage(1, 1, 26843545600, 51506295440, "qwen3vl.safetensors"))
 print(helper.format_verify_stage(1, 1, "qwen3vl.safetensors"))
 `);
-    const [bytes, verify] = output.trim().split('\n');
+    // Python's print() emits CRLF on Windows, and `.trim()` only strips the ends
+    // of the whole payload — a bare split('\n') leaves a trailing \r on every
+    // line but the last, so the first assertion compared against 'STAGE:…\r'.
+    const [bytes, verify] = output.trim().split(/\r?\n/);
     expect(bytes).toBe('STAGE:bytes:1/1:26843545600/51506295440:qwen3vl.safetensors');
     expect(verify).toBe('STAGE:verify:1/1:qwen3vl.safetensors');
   });

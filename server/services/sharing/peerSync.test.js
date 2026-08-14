@@ -460,13 +460,17 @@ describe('peerSync', () => {
       vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
       vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
       await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
-      await new Promise((r) => setTimeout(r, 10));
+      // subscribePeer registers the fire-and-forget initial push BEFORE it
+      // resolves, so the drain is a deterministic barrier for it. A fixed 10ms
+      // sleep was not: on a contended Windows CI runner the push chain had not
+      // reached peerFetch yet and this asserted 0 > 0.
+      await __drainForTests();
       // First subscribe DID push.
       expect(vi.mocked(peerFetch).mock.calls.length).toBeGreaterThan(0);
       vi.mocked(peerFetch).mockClear();
       // Second subscribe is idempotent — no push should fire.
       const second = await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
-      await new Promise((r) => setTimeout(r, 10));
+      await __drainForTests();
       expect(second.created).toBe(false);
       expect(vi.mocked(peerFetch)).not.toHaveBeenCalled();
     });
@@ -495,9 +499,11 @@ describe('peerSync', () => {
         { peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' },
         { adoptedFromReverse: true },
       );
-      // peerFetch may have been called for some other reason, but NOT
-      // synchronously from this code path. Allow a small wait to be sure.
-      await new Promise((r) => setTimeout(r, 10));
+      // peerFetch may have been called for some other reason, but NOT from
+      // this code path. Drain rather than sleep: a negative assertion has to
+      // outlast any push that WOULD have been scheduled, and the drain does
+      // that deterministically instead of betting on a 10ms budget.
+      await __drainForTests();
       expect(peerFetch).not.toHaveBeenCalled();
     });
   });
@@ -1199,9 +1205,11 @@ describe('peerSync', () => {
       // Create a sub with the initial push FAILING — leaves lastPushedAt=null.
       vi.mocked(peerFetch).mockResolvedValueOnce(null);
       await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
-      // Wait for the fire-and-forget initial push to settle so the
-      // persisted lastPushedAt is final before we re-check it.
-      await new Promise((r) => setTimeout(r, 10));
+      // Wait for the fire-and-forget initial push to settle so the persisted
+      // lastPushedAt is final before we re-check it. Deterministic drain, not a
+      // fixed sleep — the assertion below is a negative (lastPushedAt stayed
+      // null), which vi.waitFor cannot poll for.
+      await __drainForTests();
       const stale = await findPeerSubscription('peer-a', 'universe', 'u1');
       expect(stale.lastPushedAt).toBeNull();
       // Peer comes back — retry must succeed and stamp lastPushedAt.
