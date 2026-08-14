@@ -21,7 +21,13 @@ vi.mock('./memoryBackend.js', () => ({
   countMemories: vi.fn(async () => { calls.memories += 1; return 42; }),
 }));
 vi.mock('./mediaAssetIndex/db.js', () => ({ countAssets: vi.fn(async () => 7) }));
-vi.mock('../lib/timezone.js', () => ({ userLocalToday: vi.fn(async () => '2026-07-17') }));
+// PARTIAL mock — only the settings-backed reads are stubbed, so the pure `todayInTimezone`
+// that `lib/activeDays.js` derives day keys through stays real.
+vi.mock('../lib/timezone.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  userLocalToday: vi.fn(async () => '2026-07-17'),
+  getUserTimezone: vi.fn(async () => 'America/Los_Angeles'),
+}));
 
 import { createSignalContext, SIGNAL_READERS } from './characterSignals.js';
 import { countUniverses } from './universeBuilder.js';
@@ -45,7 +51,8 @@ describe('the signal registry', () => {
     // → the consumer classifies it `unavailable` → the tile lies about the domain being down).
     expect(Object.keys(SIGNAL_READERS).sort()).toEqual([
       'assetCount', 'catalogStats', 'goals', 'loggingStats', 'memoryCount',
-      'postSessions', 'postToday', 'postTraining', 'universeCount', 'workCount',
+      'postSessions', 'postToday', 'postTraining', 'universeCount', 'userTimezone',
+      'workCount',
     ]);
   });
 

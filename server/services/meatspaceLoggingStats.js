@@ -72,8 +72,20 @@ function calculateLongestStreak(loggedDates) {
 }
 
 /**
- * @param {{ strict?: boolean }} [options] - `strict: true` propagates a domain's read
- *   failure instead of substituting an empty entry list for it (#2726).
+ * @param {{ strict?: boolean, withActiveDayKeys?: boolean }} [options]
+ *
+ * `withActiveDayKeys: true` additionally returns `activeDayKeys` — the sorted union of every
+ * stored day key across the five domains, i.e. the raw `loggedDates` set the aggregates below
+ * are derived from. Opt-in rather than always-on because `GET /api/meatspace/logging-stats`
+ * ships this whole object to a dashboard widget that polls it, and the key list grows without
+ * bound with install age; the only caller that needs the raw days is the Character sheet's
+ * cross-domain `daysActive` tile, which must UNION them with POST's days rather than sum two
+ * per-domain counts (#4120). The keys are returned AS STORED (server-local `getDateString()`
+ * day labels) — see `server/lib/activeDays.js` for the day-boundary reconciliation the union
+ * applies on read.
+ *
+ * `strict: true` propagates a domain's read failure instead of substituting an empty entry
+ * list for it (#2726).
  *
  *   The default per-domain `.catch(() => [])` is right for the dashboard widget: one
  *   unreadable file shouldn't blank the whole streak card. It is wrong for anything
@@ -82,7 +94,7 @@ function calculateLongestStreak(loggedDates) {
  *   rather than "we could not tell". Under strict the first failure rejects, and the
  *   caller renders that as explicitly unavailable.
  */
-export async function getLoggingStats({ strict = false } = {}) {
+export async function getLoggingStats({ strict = false, withActiveDayKeys = false } = {}) {
   const loadEntries = async (d) => {
     if (!strict) return (await d.load().catch(() => [])) || [];
     const entries = await d.load({ strict: true });
@@ -148,5 +160,9 @@ export async function getLoggingStats({ strict = false } = {}) {
     totalLogged,
     domains,
     last7Days,
+    // Sorted so the array is stable and diffable; a Set would not survive the JSON round-trip
+    // this object takes through the route. Absent (not `[]`) when the caller did not ask —
+    // "you did not request the day keys" must stay distinguishable from "there are none".
+    ...(withActiveDayKeys ? { activeDayKeys: [...loggedDates].sort() } : {}),
   };
 }

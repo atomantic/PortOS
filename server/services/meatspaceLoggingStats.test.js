@@ -97,6 +97,33 @@ describe('getLoggingStats', () => {
     expect(stats.currentStreak).toBe(1);
   });
 
+  describe('activeDayKeys (#4120)', () => {
+    it('omits the key list unless the caller asks for it', async () => {
+      // The dashboard widget polls GET /api/meatspace/logging-stats and never reads the raw
+      // days; shipping an ever-growing key list to it would be pure payload bloat.
+      mockWorkouts.mockResolvedValue([{ date: daysAgo(0) }]);
+      expect('activeDayKeys' in (await getLoggingStats())).toBe(false);
+    });
+
+    it('returns the sorted union of stored day keys across domains', async () => {
+      // Same day in two domains contributes ONE key — the union the daysActive tile needs.
+      mockAlcohol.mockResolvedValue([{ date: '2026-03-14' }, { date: '2026-03-12' }]);
+      mockNicotine.mockResolvedValue([{ date: '2026-03-14' }]);
+      mockWorkouts.mockResolvedValue([{ date: '2026-03-13' }]);
+
+      const stats = await getLoggingStats({ withActiveDayKeys: true });
+      expect(stats.activeDayKeys).toEqual(['2026-03-12', '2026-03-13', '2026-03-14']);
+      // ...while totalLogged still counts RECORDS, so the two readings stay distinct.
+      expect(stats.totalLogged).toBe(4);
+    });
+
+    it('returns an empty array — not a missing key — on a fresh install', async () => {
+      // Present-but-empty must stay distinguishable from "you did not ask", so a consumer can
+      // tell "no activity yet" from "this shape predates the flag".
+      expect((await getLoggingStats({ withActiveDayKeys: true })).activeDayKeys).toEqual([]);
+    });
+  });
+
   it('survives a domain getter that rejects', async () => {
     mockBody.mockRejectedValue(new Error('disk gone'));
     mockWorkouts.mockResolvedValue([{ date: daysAgo(0) }]);

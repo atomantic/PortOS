@@ -4,7 +4,7 @@
  * ONE read per domain stat, shared by every surface `getCharacter()` derives on read.
  *
  * The Character sheet now derives two things from the same domain stats: the per-domain
- * `skills` (#2674) and the `metrics` grid (#2676). Six of the nine signals below feed BOTH —
+ * `skills` (#2674) and the `metrics` grid (#2676). Most of the signals below feed BOTH —
  * Wordsmith and `recordsCreated` are the same three reads, Mentalist and `postStreakDays` are
  * the same two, and so on. Letting each registry call the getters itself would have doubled
  * the fan-out of a route the CyberCity HUD polls every 15s, so the reads moved here and both
@@ -42,16 +42,18 @@ import { getLoggingStats } from './meatspaceLoggingStats.js';
 import { getGoals } from './identity/goals.js';
 import { countMemories } from './memoryBackend.js';
 import { countAssets } from './mediaAssetIndex/db.js';
-import { userLocalToday } from '../lib/timezone.js';
+import { getUserTimezone, userLocalToday } from '../lib/timezone.js';
 
 /**
  * Every domain stat the derived Character surfaces are allowed to read, keyed by signal id.
  * Adding a signal here is the ONLY way to add a read — a registry that reaches for a getter
  * directly re-opens the duplicate-read hole this module exists to close.
  *
- * All nine are tallies or already-aggregated summaries, never listings: `countUniverses` /
+ * These are tallies or already-aggregated summaries, never listings: `countUniverses` /
  * `countWorks` / `countMemories` / `countAssets` are `COUNT(*)`s (#2729), so no consumer can
- * accidentally materialize every record just to read a `.length`.
+ * accidentally materialize every record just to read a `.length`. `loggingStats`'
+ * `activeDayKeys` is the one bounded exception — a de-duplicated day key per ACTIVE DAY, not
+ * per record — because a day-set union has no aggregate form (#4120).
  *
  * The file-backed readers pass `{ strict: true }` — see the header. Keep it on any reader
  * added here whose source can swallow a read error, or the signal silently becomes a lie
@@ -68,7 +70,16 @@ export const SIGNAL_READERS = {
   // instead would let the Character sheet's POST streak disagree with the Progress page's by
   // a day for any user whose configured timezone isn't the server's.
   postToday: () => userLocalToday(),
-  loggingStats: () => getLoggingStats({ strict: true }),
+  // The user's IANA timezone itself, for consumers that must re-key a stored INSTANT to the
+  // user's day rather than just compare against today (`daysActive` — see
+  // `server/lib/activeDays.js`). Same settings read `postToday` bottoms out in, so keeping it
+  // as its own signal costs one extra `getSettings()` per request and keeps the day-boundary
+  // decision in ONE place instead of forking a second "which day is this?" implementation.
+  userTimezone: () => getUserTimezone(),
+  // `withActiveDayKeys` (#4120): the raw union of stored health-log day keys, which the
+  // cross-domain `daysActive` metric unions with POST's days. Opt-in at the service so the
+  // polled dashboard endpoint doesn't ship an ever-growing key list it never reads.
+  loggingStats: () => getLoggingStats({ strict: true, withActiveDayKeys: true }),
   goals: () => getGoals({ strict: true }),
   memoryCount: () => countMemories({}),
   assetCount: () => countAssets(),

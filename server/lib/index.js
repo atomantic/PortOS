@@ -276,6 +276,7 @@ export * from './postMultiplicationLadder.js';
 export * from './postPowersLadder.js';
 export * from './postProgression.js';
 export * from './postStreak.js';
+export * from './activeDays.js';
 export * from './postTopics.js';
 export * from './spacedRepetition.js';
 export * from './songPractice.js';

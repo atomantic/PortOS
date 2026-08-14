@@ -11,7 +11,10 @@ const stats = vi.hoisted(() => ({
   sessions: [],
   training: [],
   today: '2026-07-17',
-  logging: { currentStreak: 0, totalLogged: 0 },
+  // Obviously-fake fixed timezone, well behind UTC, so a late-UTC instant lands on the previous
+  // local day and daysActive's day-boundary normalization is observable.
+  timezone: 'America/Los_Angeles',
+  logging: { currentStreak: 0, totalLogged: 0, activeDayKeys: [] },
   goals: { goals: [] },
   memories: 0,
   assets: 0,
@@ -30,7 +33,15 @@ vi.mock('./meatspaceLoggingStats.js', () => ({ getLoggingStats: vi.fn(async () =
 vi.mock('./identity/goals.js', () => ({ getGoals: vi.fn(async () => stats.goals) }));
 vi.mock('./memoryBackend.js', () => ({ countMemories: vi.fn(async () => stats.memories) }));
 vi.mock('./mediaAssetIndex/db.js', () => ({ countAssets: vi.fn(async () => stats.assets) }));
-vi.mock('../lib/timezone.js', () => ({ userLocalToday: vi.fn(async () => stats.today) }));
+// PARTIAL mock: only the two settings-backed reads are stubbed. `todayInTimezone` must stay
+// REAL — `lib/activeDays.js` (behind the daysActive tile) derives its day keys through it, and
+// a factory that dropped it would leave that tile throwing on an undefined import and reading
+// `unavailable` for reasons that have nothing to do with the behavior under test.
+vi.mock('../lib/timezone.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  userLocalToday: vi.fn(async () => stats.today),
+  getUserTimezone: vi.fn(async () => stats.timezone),
+}));
 
 import { getCharacterMetrics, METRICS, METRIC_NOT_APPLICABLE } from './characterMetrics.js';
 import { createSignalContext } from './characterSignals.js';
@@ -43,7 +54,8 @@ import { countMemories } from './memoryBackend.js';
 import { countAssets } from './mediaAssetIndex/db.js';
 import { countWorks } from './writersRoom/local.js';
 import { getPostSessions } from './meatspacePost.js';
-import { userLocalToday } from '../lib/timezone.js';
+import { getAllTrainingEntries } from './meatspacePostTraining.js';
+import { userLocalToday, getUserTimezone } from '../lib/timezone.js';
 
 const goal = (status) => ({ status });
 
@@ -56,7 +68,8 @@ beforeEach(() => {
   stats.sessions = [];
   stats.training = [];
   stats.today = '2026-07-17';
-  stats.logging = { currentStreak: 0, totalLogged: 0 };
+  stats.timezone = 'America/Los_Angeles';
+  stats.logging = { currentStreak: 0, totalLogged: 0, activeDayKeys: [] };
   stats.goals = { goals: [] };
   stats.memories = 0;
   stats.assets = 0;
@@ -68,7 +81,9 @@ beforeEach(() => {
   vi.mocked(getGoals).mockImplementation(async () => stats.goals);
   vi.mocked(countMemories).mockImplementation(async () => stats.memories);
   vi.mocked(countAssets).mockImplementation(async () => stats.assets);
+  vi.mocked(getAllTrainingEntries).mockImplementation(async () => stats.training);
   vi.mocked(userLocalToday).mockImplementation(async () => stats.today);
+  vi.mocked(getUserTimezone).mockImplementation(async () => stats.timezone);
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
@@ -225,6 +240,92 @@ describe('getCharacterMetrics — populated domains', () => {
     // countMemories({}) filters on `status: 'active'` only — agent/CoS/API memories are all in
     // the tally, not just the `sourceAppId: 'brain'` ones.
     expect(byId(await getCharacterMetrics(), 'memoryCount').hint).not.toMatch(/brain/i);
+  });
+});
+
+describe('getCharacterMetrics — daysActive (#4120)', () => {
+  it('UNIONS day sets across domains — a day logged twice counts once', async () => {
+    // The load-bearing property, and the reason this tile was cut from #2676 rather than
+    // approximated: summing per-domain day counts would report 5 for three real days.
+    stats.logging = { currentStreak: 0, totalLogged: 0, activeDayKeys: ['2026-03-12', '2026-03-14'] };
+    stats.sessions = [{ date: '2026-03-14' }];
+    stats.training = [{ date: '2026-03-14' }, { date: '2026-03-13' }];
+
+    expect(byId(await getCharacterMetrics(), 'daysActive')).toMatchObject({
+      value: 3, unit: 'days', unavailable: false, notApplicable: false,
+    });
+  });
+
+  it('reports a real, earned 0 on an install with no activity anywhere', async () => {
+    // 0 is the honest answer here — NOT unavailable, and not not-applicable.
+    expect(byId(await getCharacterMetrics(), 'daysActive')).toMatchObject({
+      value: 0, unavailable: false, notApplicable: false,
+    });
+  });
+
+  it('counts a POST-only install without needing a health log', async () => {
+    stats.sessions = [{ date: '2026-03-14' }, { date: '2026-03-15' }];
+    expect(byId(await getCharacterMetrics(), 'daysActive').value).toBe(2);
+  });
+
+  it('normalizes the day boundary so the two domains agree on where a day starts', async () => {
+    // A health entry stamped with the server-local (UTC) day, and a LEGACY training entry that
+    // still stores a full ISO instant. Splitting that instant on 'T' yields the UTC day
+    // 2026-03-15, so a naive union would report two days; in the user's timezone it is the
+    // evening of 2026-03-14 — the same day the health entry is on. ONE day, not two.
+    stats.logging = { currentStreak: 0, totalLogged: 0, activeDayKeys: ['2026-03-14'] };
+    stats.training = [{ date: '2026-03-15T02:30:00.000Z' }];
+
+    expect(byId(await getCharacterMetrics(), 'daysActive').value).toBe(1);
+  });
+
+  it('re-keys that instant against the USER timezone, not the server clock', async () => {
+    // Same records, a user configured a day ahead of UTC: now the instant really is its own
+    // local day, so the union grows to two. Pins that the timezone is actually consulted.
+    stats.logging = { currentStreak: 0, totalLogged: 0, activeDayKeys: ['2026-03-14'] };
+    stats.training = [{ date: '2026-03-14T18:00:00.000Z' }];
+
+    expect(byId(await getCharacterMetrics(), 'daysActive').value).toBe(1);
+
+    stats.timezone = 'Asia/Tokyo';
+    expect(byId(await getCharacterMetrics(), 'daysActive').value).toBe(2);
+    expect(getUserTimezone).toHaveBeenCalled();
+  });
+
+  it('is unavailable — never 0 — when the health-log day keys could not be read', async () => {
+    // A shape that reports aggregates but no day keys is a FAILED read, not an idle install.
+    // Rendering 0 for someone with years of history is the exact lie the sentinels prevent.
+    stats.logging = { currentStreak: 9, totalLogged: 40 };
+    stats.sessions = [{ date: '2026-03-14' }];
+
+    const tile = byId(await getCharacterMetrics(), 'daysActive');
+    expect(tile).toMatchObject({ value: null, unavailable: true, notApplicable: false });
+    expect(tile.value).not.toBe(0);
+  });
+
+  it('is unavailable when a POST source is unreadable rather than under-counting', async () => {
+    stats.logging = { currentStreak: 0, totalLogged: 0, activeDayKeys: ['2026-03-14'] };
+    vi.mocked(getAllTrainingEntries).mockImplementation(fail('training log'));
+
+    expect(byId(await getCharacterMetrics(), 'daysActive')).toMatchObject({
+      value: null, unavailable: true,
+    });
+  });
+
+  it('ignores entries with no usable date instead of counting them as a day', async () => {
+    stats.logging = { currentStreak: 0, totalLogged: 0, activeDayKeys: ['2026-03-14'] };
+    stats.sessions = [{}, { date: null }, { date: 'someday' }];
+
+    expect(byId(await getCharacterMetrics(), 'daysActive').value).toBe(1);
+  });
+
+  it('reads the health-log day keys through the SHARED signal, adding no extra read', async () => {
+    // The tile reuses the loggingStats signal healthLoggingStreak already reads, so it costs
+    // nothing beyond the one settings read for the timezone.
+    vi.mocked(getLoggingStats).mockClear();
+    await getCharacterMetrics();
+    expect(getLoggingStats).toHaveBeenCalledTimes(1);
+    expect(getLoggingStats).toHaveBeenCalledWith({ strict: true, withActiveDayKeys: true });
   });
 });
 

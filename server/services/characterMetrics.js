@@ -19,10 +19,12 @@
  *     index that deliberately holds downloads and uploads, so it cannot be called "rendered".
  * When picking a new signal, check what the UI actually records before naming the tile.
  *
- * **No new reads.** Every `compute()` composes signals from `characterSignals.js`, the same
- * context the skills fan out over — so the six tiles below add ZERO stat reads to
+ * **No new DOMAIN reads.** Every `compute()` composes signals from `characterSignals.js`, the
+ * same context the skills fan out over — so the tiles below add no stat reads to
  * `GET /api/character`, and a domain the user has never touched still costs nothing extra.
- * There is deliberately no new usage-event tracking behind any of this.
+ * (`daysActive` added the one non-domain signal, `userTimezone` — a `getSettings()` read, not a
+ * stat — because a cross-domain day union has to pick a day boundary; see #4120.) There is
+ * deliberately no new usage-event tracking behind any of this.
  *
  * **Derived on read, never persisted, never federated.** `getCharacter()` attaches these;
  * `saveCharacter()` strips them (`metrics` is in `character.js`'s `DERIVED_FIELDS`) and
@@ -48,6 +50,7 @@
  */
 
 import { computeUnifiedStreak } from '../lib/postStreak.js';
+import { unionActiveDayKeys } from '../lib/activeDays.js';
 import { createSignalContext } from './characterSignals.js';
 
 // Returned by a compute() whose ratio has an empty denominator. A unique Symbol (not null/0)
@@ -95,6 +98,43 @@ export const METRICS = [
     unit: 'days',
     hint: 'Consecutive days with a health log',
     compute: async (read) => (await read('loggingStats')).currentStreak,
+  },
+  {
+    id: 'daysActive',
+    label: 'Days Active',
+    unit: 'days',
+    hint: 'Distinct days with any logged activity',
+    // A UNION of day sets, never a SUM of per-domain day counts. Summing would double-count
+    // every day the user both practiced POST and logged a health entry — the exact reason this
+    // tile was cut from #2676 rather than approximated: a POST-only or a summed reading is
+    // wrong in a way the number itself doesn't advertise.
+    //
+    // The two domains disagreed about where a day starts (POST stamps `userLocalToday()`, the
+    // health logs stamp the server-local `getDateString()`), so the union standardizes on the
+    // USER-local day and normalizes on read. `server/lib/activeDays.js` owns that decision and
+    // documents exactly what it can and cannot fix — notably that a stored bare day LABEL is
+    // taken as authored, because no instant survives to re-derive it from.
+    //
+    // Missing keys are a FAILED read, not an idle install: each source is validated as an
+    // array and a throw here lands in `readMetric`'s `unavailable`, so a shape mismatch can
+    // never render as a confident "0 days active" for someone with years of history.
+    compute: async (read) => {
+      const [logging, sessions, training, timezone] = await Promise.all([
+        read('loggingStats'),
+        read('postSessions'),
+        read('postTraining'),
+        read('userTimezone'),
+      ]);
+      if (!Array.isArray(logging?.activeDayKeys)) throw new Error('logging stats reported no activeDayKeys');
+      if (!Array.isArray(sessions)) throw new Error('POST sessions unreadable');
+      if (!Array.isArray(training)) throw new Error('POST training log unreadable');
+
+      return unionActiveDayKeys([
+        logging.activeDayKeys,
+        sessions.map((s) => s?.date),
+        training.map((e) => e?.date),
+      ], timezone).length;
+    },
   },
   {
     id: 'recordsCreated',
