@@ -230,13 +230,17 @@ export function isSeriesReviewFindingsStale(snapshot, liveFindingIds) {
 /**
  * Resolve the CURRENT reviewed-source hash for a series. Returns null when the
  * inputs can't be fully read — never a hash computed from a partial read, which
- * would silently report a changed foundation as unchanged. Pass the records the
- * caller already holds to skip the re-read.
+ * would silently report a changed foundation as unchanged.
+ *
+ * Pass the records the caller already holds to skip the re-read. Each is read
+ * here ONLY when the caller omitted it (`undefined`): an explicit `null` is the
+ * caller reporting its own read FAILED, and re-reading it here would hash a
+ * source the verdict was never computed from.
  */
 async function resolveSourceInputsHash(seriesId, { series, issues } = {}) {
-  const ser = series || await getSeries(seriesId).catch(() => null);
+  const ser = series === undefined ? await getSeries(seriesId).catch(() => null) : series;
   if (!ser) return null;
-  const list = issues || await listIssues({ seriesId }).catch(() => null);
+  const list = issues === undefined ? await listIssues({ seriesId }).catch(() => null) : issues;
   if (!list) return null;
   // `undefined` = a linked universe we failed to read (distinct from `null` = no
   // linked universe at all). Hashing the failed read as "unlinked" would produce
@@ -573,7 +577,10 @@ export async function getSeriesReview(seriesId) {
     : safeJSONParse(content, null, { allowArray: false, logError: true, context: snapshotPath(seriesId) });
   const [fix, review, currentHash] = await Promise.all([
     getFixAvailability(),
-    verdict ? getReview(seriesId).catch(() => ({ comments: [] })) : Promise.resolve(null),
+    // `null` = the findings store couldn't be read (distinct from a store with no
+    // open findings). Collapsing the two would read as "every pinned finding was
+    // resolved" and falsely flag the verdict stale on a transient read failure.
+    verdict ? getReview(seriesId).catch(() => null) : Promise.resolve(null),
     // Only worth the reads when there IS a snapshot to judge, and only when that
     // snapshot carries a hash (a pre-#4111 snapshot can't be judged this way).
     verdict?.sourceInputsHash ? resolveSourceInputsHash(seriesId) : Promise.resolve(null),

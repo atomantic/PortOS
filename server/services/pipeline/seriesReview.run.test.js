@@ -301,9 +301,21 @@ describe('getSeriesReview — reviewed-source staleness (#4111)', () => {
     expect(review.staleReason).toBeNull();
   });
 
-  it('does not pin a fingerprint computed from a failed issues read', async () => {
-    listIssues.mockRejectedValue(new Error('store unavailable'));
+  // The run's OWN issues read failed, so the verdict was computed against an
+  // empty list. Silently re-reading here would pin a hash for issues this
+  // verdict never saw — and every later GET would then read "fresh".
+  it('does not pin a fingerprint computed from a failed issues read, even if a re-read would succeed', async () => {
+    listIssues.mockRejectedValueOnce(new Error('store unavailable'));
+    listIssues.mockResolvedValue([issueWith('the original draft')]);
     const result = await run();
     expect(result.sourceInputsHash).toBeNull();
+  });
+
+  it('does not report a verdict stale when the findings store itself could not be read', async () => {
+    await run();
+    getReview.mockRejectedValue(new Error('review store unavailable'));
+    const { review } = await getSeriesReview('ser-test');
+    expect(review.stale).toBe(false);
+    expect(review.staleReason).toBeNull();
   });
 });
