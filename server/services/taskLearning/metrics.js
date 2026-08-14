@@ -1046,6 +1046,13 @@ export async function recalculateDurationStats() {
       // purged counts. The residual archives-vs-counts skew of this manual rebuild predates
       // #2696 and is ETA-cosmetic.
       const vp = meta.result?.validationPassed;
+      // The skip sentinel is checked BEFORE the exit-code fallback (#4107). This
+      // rebuild re-derives durations straight off the archive rather than through
+      // recordTaskCompletion, so without this an archived run the live path had
+      // already declined to record — the hook aborted before evaluating it — would
+      // come back in through the same exit-code fallback the sentinel exists to
+      // bypass, banking its duration into the success-only ETAs.
+      if (isSkipLearningVerdict(vp)) continue;
       const outcomeSuccess = typeof vp === 'boolean' ? vp : !!meta.result?.success;
       if (!outcomeSuccess || duration <= 0) continue;
 
