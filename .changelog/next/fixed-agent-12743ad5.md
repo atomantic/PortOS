@@ -1,0 +1,1 @@
+- CoS TUI agents no longer die on startup when Claude Code offers to make auto mode the default permission mode, and a swallowed paste is reported as a startup failure instead of being misfiled as a lint error

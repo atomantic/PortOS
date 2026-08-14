@@ -569,6 +569,19 @@ export const ERROR_PATTERNS = [
 export const FAILURE_WINDOW_MAX_LINES = 200;
 export const FAILURE_WINDOW_MAX_CHARS = 16000;
 
+// Claude Code's EMPTY-composer placeholder — `❯ Try "fix lint errors"`. It is
+// the TUI advertising what you could ask for, not anything that happened, and it
+// is on screen precisely when the agent did nothing. The suggestion rotates
+// ("fix lint errors", "fix typecheck errors", …), so it can trip several
+// ERROR_PATTERNS by pure coincidence; `lint-error` is the one that actually
+// shipped a bogus diagnosis (agent-f71b794e). Dropped from the analysis window
+// so no pattern — present or future — can classify a run off a hint the user
+// never followed.
+//
+// Anchored on the `❯ Try "` chrome rather than the suggestion text: real agent
+// prose can say "fix lint errors", and only the composer prefixes it this way.
+const TUI_PLACEHOLDER_HINT_PATTERN = /^\s*[❯>]\s*Try\s+["'].*$/gm;
+
 /**
  * Reduce raw agent output to the tail worth classifying.
  *
@@ -586,6 +599,7 @@ export const FAILURE_WINDOW_MAX_CHARS = 16000;
 function getFailureAnalysisWindow(output) {
   const windowed = stripAnsi(output)
     .replace(/\r\n?/g, '\n')
+    .replace(TUI_PLACEHOLDER_HINT_PATTERN, '')
     .split('\n')
     .filter(l => l.trim())
     .slice(-FAILURE_WINDOW_MAX_LINES)
@@ -648,6 +662,30 @@ export const COMPLETION_REASON_ANALYSES = {
     actionable: false,
     message: 'Agent idled out before any work started',
     suggestedFix: 'The prompt likely never submitted — no working indicator ever appeared. Check the TUI paste/submit path and provider availability.'
+  },
+  // The two startup verdicts the TUI spawner resolves itself (agentTuiSpawning.js:
+  // `retryOrFailPaste` and the TUI_INPUT_READY_DEADLINE_MS branch). Both were
+  // missing here, and the cost was not merely a vaguer message: with no
+  // structural def, `analyzeAgentFailure` falls through to the regex sweep over a
+  // repaint-mangled TUI screen. Claude Code's idle composer renders a rotating
+  // placeholder hint — `❯ Try "fix lint errors"` — so a run that never submitted
+  // anything at all got filed as `lint-error` / "Linting failed", pointing every
+  // reader (and the auto-fixer tier) at a lint problem that did not exist
+  // (agent-f71b794e, 2026-08-14; the actual blocker was claude's new auto-mode
+  // modal). Registering the reasons restores the documented precedence — the
+  // spawner's own verdict beats a keyword sweep — and the `startup-failure`
+  // category is reused rather than minted so downstream taxonomies are unchanged.
+  'paste-not-rendered': {
+    category: 'startup-failure',
+    actionable: false,
+    message: 'Prompt never rendered in the TUI input box',
+    suggestedFix: 'The provider CLI accepted the bracketed paste but the prompt never appeared, so nothing was ever submitted. Usually the TUI was still initializing, or a startup dialog (folder trust, an opt-in offer, an account banner) was up and swallowed the paste. Check the tail of the raw transcript for a modal — if it is one PortOS does not know about yet, it needs a dismissal branch in agentTuiSpawning.js.'
+  },
+  'tui-not-ready': {
+    category: 'startup-failure',
+    actionable: false,
+    message: 'TUI never presented an input prompt',
+    suggestedFix: 'The provider CLI never signalled that its input box was live, so no prompt was sent. Check the raw transcript for a stalled sign-in, an unresolved startup dialog, or a CLI that exited back to the shell during boot.'
   },
   'review-loop-idle-timeout': {
     category: 'timeout',
@@ -780,14 +818,35 @@ export function endsAwaitingUserInput(analysisOutput) {
 const AWAITING_INPUT_REFINABLE_REASONS = new Set(['idle-no-changes', 'idle-no-activity', 'idle-no-deliverable']);
 
 /**
- * Re-word an idle-out whose transcript ends on an unanswered prompt. The
+ * The startup counterparts: the prompt never landed, and the transcript ends on a
+ * dialog. Same evidence, different story — no reaper was involved and the run
+ * never started, so the idle prose above ("re-running as-is will stall the same
+ * way", "invoke the non-interactive form") is wrong on every clause. Here the
+ * dialog is a STARTUP gate the spawner does not know how to dismiss, and the fix
+ * is a dismissal branch, not a reworded task.
+ */
+const STARTUP_GATE_REFINABLE_REASONS = new Set(['paste-not-rendered', 'tui-not-ready']);
+
+/**
+ * Re-word a run whose transcript ends on an unanswered prompt — an idle-out that
+ * stalled ON one, or a startup verdict where a dialog was up BEFORE the prompt
+ * could land (the two groups get different prose; see the reason sets). The
  * original `category` is preserved — downstream taxonomies (auto-fix tiers,
  * layered-intelligence failure buckets) keep classifying it exactly as they did,
  * and both idle reasons already escalate rather than blind-retry. Only the prose
  * a human reads changes. Pure.
  */
 function refineIdleReasonAnalysis(def, completionReason, analysisOutput) {
-  if (!def || !AWAITING_INPUT_REFINABLE_REASONS.has(completionReason)) return def;
+  if (!def) return def;
+  if (STARTUP_GATE_REFINABLE_REASONS.has(completionReason)) {
+    if (!endsAwaitingUserInput(analysisOutput)) return def;
+    return {
+      ...def,
+      message: 'Agent never started — a startup dialog swallowed the prompt',
+      suggestedFix: 'The transcript ends on an unanswered dialog (a choice selector or opt-in offer) that was up before the prompt could land, so nothing was ever submitted and the run is a no-op rather than a failed attempt. PortOS auto-answers the dialogs it knows (folder trust, claude\'s auto-mode offer); a new one from a CLI update needs its own pattern and dismissal branch in tuiHandshake.js / agentTuiSpawning.js. Read the tail of the raw transcript to see which dialog it was.'
+    };
+  }
+  if (!AWAITING_INPUT_REFINABLE_REASONS.has(completionReason)) return def;
   if (!endsAwaitingUserInput(analysisOutput)) return def;
   return {
     ...def,
