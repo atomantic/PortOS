@@ -14,7 +14,8 @@ vi.mock('../../services/api', () => ({
   getGoalsTree: (...a) => getGoalsTree(...a),
 }));
 
-import GoalsCard, { selectTopGoals, progressPct, GOALS_PATH } from './GoalsCard';
+import GoalsCard, { selectTopGoals, progressPct } from './GoalsCard';
+import { GOALS_LIST_PATH, goalDetailPath } from '../goals/goalConstants';
 
 const goal = (overrides = {}) => ({
   id: 'goal-1',
@@ -121,7 +122,7 @@ describe('progressPct', () => {
 });
 
 describe('GoalsCard — populated', () => {
-  it('renders each active goal with its title, progress and a link to Goals', async () => {
+  it('renders each active goal with its title, progress and a deep link to that goal', async () => {
     const card = await renderCard([
       goal({ id: 'a', title: 'Ship Example Project', progress: 25, urgency: 0.9 }),
       goal({ id: 'b', title: 'Learn Example Skill', progress: 60, urgency: 0.2 }),
@@ -132,9 +133,21 @@ describe('GoalsCard — populated', () => {
     expect(card.getByText('Learn Example Skill')).toBeInTheDocument();
     expect(card.getByText('60%')).toBeInTheDocument();
 
-    for (const link of card.getAllByRole('link')) {
-      expect(link).toHaveAttribute('href', GOALS_PATH);
-    }
+    // #4121: each row addresses its OWN goal, not the generic list — the whole point of
+    // routing goal selection through the URL. Asserted per-goal (not "every link matches
+    // one path") so a regression back to the bare list can't pass.
+    expect(card.getByRole('link', { name: /Ship Example Project/ }))
+      .toHaveAttribute('href', goalDetailPath('a'));
+    expect(card.getByRole('link', { name: /Learn Example Skill/ }))
+      .toHaveAttribute('href', goalDetailPath('b'));
+    // The header's "View all" is the one link that legitimately stays on the index.
+    expect(card.getByRole('link', { name: 'View all' })).toHaveAttribute('href', GOALS_LIST_PATH);
+  });
+
+  it('escapes a goal id that is not URL-safe rather than emitting a broken href', async () => {
+    const card = await renderCard([goal({ id: 'a/b?c', title: 'Example Odd Id Goal' })]);
+    expect(card.getByRole('link', { name: /Example Odd Id Goal/ }))
+      .toHaveAttribute('href', '/goals/list/a%2Fb%3Fc');
   });
 
   it('orders the rendered rows most-urgent first', async () => {
@@ -176,7 +189,7 @@ describe('GoalsCard — empty', () => {
     const card = await renderCard([]);
 
     expect(card.getByText('No active goals yet.')).toBeInTheDocument();
-    expect(card.getByRole('link', { name: /Set your goals/ })).toHaveAttribute('href', GOALS_PATH);
+    expect(card.getByRole('link', { name: /Set your goals/ })).toHaveAttribute('href', GOALS_LIST_PATH);
     // A real empty state, not a broken/blank block.
     expect(card.queryByRole('link', { name: /Open in Goals/ })).not.toBeInTheDocument();
   });
@@ -208,7 +221,7 @@ describe('GoalsCard — error', () => {
     const card = within(await screen.findByRole('region', { name: 'Life Goals' }));
     await waitFor(() => expect(card.getByText(/could not be loaded/)).toBeInTheDocument());
     expect(card.queryByText('No active goals yet.')).not.toBeInTheDocument();
-    expect(card.getByRole('link', { name: 'Open Goals' })).toHaveAttribute('href', GOALS_PATH);
+    expect(card.getByRole('link', { name: 'Open Goals' })).toHaveAttribute('href', GOALS_LIST_PATH);
   });
 
   it('treats a malformed payload as an error, not as an empty goal list', async () => {

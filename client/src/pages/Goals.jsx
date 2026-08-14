@@ -19,7 +19,9 @@ export const TABS = [
 ];
 
 export default function Goals() {
-  const { tab: rawTab } = useParams();
+  // `/goals/list/:goalId` carries no `:tab` segment, so `useValidTab` falls back to
+  // 'list' — the only view with a routed per-goal detail panel today.
+  const { tab: rawTab, goalId } = useParams();
   const tab = useValidTab(TABS, 'list');
   const navigate = useNavigate();
   const [data, setData] = useState(null);
@@ -76,7 +78,7 @@ export default function Goals() {
         {loading ? (
           <PageSkeleton header="none" label="Loading goals" fullHeight cards={4} sidebar={false} />
         ) : tab === 'list' ? (
-          <GoalsListView data={data} onRefresh={loadData} />
+          <GoalsListView data={data} onRefresh={loadData} selectedGoalId={goalId} />
         ) : (
           <Suspense fallback={<div className="flex items-center justify-center h-full"><BrailleSpinner text="Loading" /></div>}>
             <GoalsTreeView data={data} onRefresh={loadData} />

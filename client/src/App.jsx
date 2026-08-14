@@ -283,6 +283,7 @@ export default function App() {
           <Route path="privacy/:tab" element={<Privacy />} />
           <Route path="goals" element={<Navigate to="/goals/tree" replace />} />
           <Route path="goals/:tab" element={<Goals />} />
+          <Route path="goals/list/:goalId" element={<Goals />} />
           <Route path="feature-agents" element={<FeatureAgents />} />
           <Route path="feature-agents/create" element={<FeatureAgentDetail />} />
           <Route path="feature-agents/:id" element={<Navigate to="overview" replace />} />

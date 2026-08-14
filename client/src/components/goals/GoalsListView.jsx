@@ -1,11 +1,13 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useNavigate } from 'react-router';
 import {
-  ChevronRight, ChevronDown, Plus, GripVertical, Search, Tag, Link2, Crown, Star, Wand2
+  ChevronRight, ChevronDown, Plus, GripVertical, Search, Tag, Link2, Crown, Star, Wand2, AlertTriangle
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDraggable, useDroppable } from '@dnd-kit/core';
 import * as api from '../../services/api';
 import GoalDetailPanel, { CATEGORY_CONFIG, HORIZON_OPTIONS, GOAL_TYPE_CONFIG, DEFAULT_NEW_GOAL } from './GoalDetailPanel';
+import { GOALS_LIST_PATH, goalDetailPath } from './goalConstants';
 import { applyOrganizationSuggestion } from './applyOrganization';
 import EmptyState from '../EmptyState';
 import useProviderModels from '../../hooks/useProviderModels';
@@ -189,9 +191,8 @@ function RootDropZone() {
   );
 }
 
-export default function GoalsListView({ data, onRefresh }) {
+export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
   const [expandedIds, setExpandedIds] = useState(new Set());
-  const [selectedGoal, setSelectedGoal] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [showNewGoal, setShowNewGoal] = useState(false);
   const [newGoal, setNewGoal] = useState({ ...DEFAULT_NEW_GOAL });
@@ -203,7 +204,18 @@ export default function GoalsListView({ data, onRefresh }) {
     setSelectedProviderId, setSelectedModel, loading: providersLoading
   } = useProviderModels({ filter: enabledApiProviderFilter });
 
+  const navigate = useNavigate();
+
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
+
+  // Which goal is open comes from the route, so the panel is shareable/bookmarkable and
+  // survives a reload. `goalsLoaded` keeps "the tree failed to load" distinct from "this
+  // id isn't in the tree" — only the latter is a genuine not-found.
+  const goalsLoaded = Array.isArray(data?.flat);
+  const selectedGoal = selectedGoalId ? (data?.flat?.find(g => g.id === selectedGoalId) ?? null) : null;
+  const goalNotFound = Boolean(selectedGoalId) && goalsLoaded && !selectedGoal;
+
+  const closeDetail = useCallback(() => navigate(GOALS_LIST_PATH), [navigate]);
 
   useEffect(() => {
     if (!data?.roots) return;
@@ -238,9 +250,10 @@ export default function GoalsListView({ data, onRefresh }) {
     return data.roots.filter(matchesSearch);
   }, [data, searchQuery]);
 
+  // Clicking the open goal closes the panel (unchanged toggle behavior) — expressed as a
+  // navigation back to the list index rather than as a state reset.
   const handleSelect = (goal) => {
-    const full = data?.flat?.find(g => g.id === goal.id);
-    setSelectedGoal(prev => prev?.id === goal.id ? null : full || goal);
+    navigate(goal.id === selectedGoalId ? GOALS_LIST_PATH : goalDetailPath(goal.id));
   };
 
   const handleAddChild = (parentId) => {
@@ -477,7 +490,7 @@ export default function GoalsListView({ data, onRefresh }) {
                   expandedIds={expandedIds}
                   onToggle={toggleExpand}
                   onSelect={handleSelect}
-                  selectedId={selectedGoal?.id}
+                  selectedId={selectedGoalId}
                   onAddChild={handleAddChild}
                   draggedId={draggedGoal?.id}
                 />
@@ -491,17 +504,29 @@ export default function GoalsListView({ data, onRefresh }) {
       </div>
 
       {/* Detail panel — full overlay on mobile, side panel on desktop */}
-      {selectedGoal && (
+      {(selectedGoal || goalNotFound) && (
         <div className="absolute inset-0 sm:relative sm:inset-auto z-20 sm:z-auto">
-          <GoalDetailPanel
-            goal={selectedGoal}
-            allGoals={data?.flat}
-            onClose={() => setSelectedGoal(null)}
-            onRefresh={() => {
-              setSelectedGoal(null);
-              onRefresh();
-            }}
-          />
+          {selectedGoal ? (
+            <GoalDetailPanel
+              goal={selectedGoal}
+              allGoals={data?.flat}
+              onClose={closeDetail}
+              onRefresh={() => {
+                closeDetail();
+                onRefresh();
+              }}
+            />
+          ) : (
+            <div className="w-full sm:w-80 bg-port-card border-l border-port-border h-full overflow-y-auto p-4">
+              <EmptyState
+                icon={AlertTriangle}
+                title="Goal not found"
+                message="This goal no longer exists — it may have been deleted, or the link is out of date."
+                actionTo={GOALS_LIST_PATH}
+                actionLabel="Back to goals"
+              />
+            </div>
+          )}
         </div>
       )}
     </div>

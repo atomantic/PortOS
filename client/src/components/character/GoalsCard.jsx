@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { Target, ArrowRight } from 'lucide-react';
 import { getGoalsTree } from '../../services/api';
 import BrailleSpinner from '../BrailleSpinner';
+import { GOALS_LIST_PATH, goalDetailPath } from '../goals/goalConstants';
 
 // The human's real life-goals, surfaced read-only on the Character sheet (#2675) so the sheet
 // reflects what the person is actually working toward. Surface, don't duplicate: the goals
@@ -12,11 +13,6 @@ import BrailleSpinner from '../BrailleSpinner';
 // Like SkillsCard/MetricsCard on the same page this is deliberately a plain read-only card —
 // Slice 5 (#2677) owns the page's framing/redesign, so it stays easy to restyle or relocate
 // wholesale.
-
-// Goals has no routed per-goal detail today (GoalsListView selects into a local `selectedGoal`
-// panel), so every row links to the list rather than inventing a deep link the router cannot
-// honor. Routing that selection through the URL is the goals feature's job — see #4121.
-export const GOALS_PATH = '/goals/list';
 
 const TOP_N = 4;
 
@@ -56,7 +52,10 @@ function GoalRow({ goal }) {
 
   return (
     <Link
-      to={GOALS_PATH}
+      // Deep-links straight to this goal's detail panel (#4121) — the sheet is a
+      // signpost, so a row that dumped the user on the generic list made them hunt
+      // for the goal they just clicked.
+      to={goalDetailPath(goal.id)}
       // Named explicitly: the row's own text nodes would otherwise concatenate into a
       // redundant "Example Goal 25%" that never says where the link goes. The bar itself is
       // decorative — the percentage text is its accessible representation, matching how the
@@ -124,7 +123,7 @@ export default function GoalsCard() {
         <h2 id="character-goals-heading" className="text-sm font-medium text-gray-300">Life Goals</h2>
         <span className="text-xs text-gray-500">— what you're actually working toward</span>
         {state.status === 'ready' && top.length > 0 && (
-          <Link to={GOALS_PATH} className="ml-auto text-xs text-port-accent hover:underline shrink-0">
+          <Link to={GOALS_LIST_PATH} className="ml-auto text-xs text-port-accent hover:underline shrink-0">
             View all
           </Link>
         )}
@@ -135,7 +134,7 @@ export default function GoalsCard() {
       {state.status === 'error' && (
         <p className="text-sm text-gray-500">
           Your goals could not be loaded right now.{' '}
-          <Link to={GOALS_PATH} className="text-port-accent hover:underline">Open Goals</Link>
+          <Link to={GOALS_LIST_PATH} className="text-port-accent hover:underline">Open Goals</Link>
         </p>
       )}
 
@@ -146,7 +145,7 @@ export default function GoalsCard() {
             Your sheet reflects what you're working toward — set a goal to fill it in.
           </p>
           <Link
-            to={GOALS_PATH}
+            to={GOALS_LIST_PATH}
             className="inline-flex items-center gap-1.5 mt-3 px-3 py-1.5 rounded-lg text-sm font-medium bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors"
           >
             Set your goals <ArrowRight className="w-3.5 h-3.5" />
