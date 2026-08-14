@@ -1,6 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../../lib/testHelper.js';
+import { tmpdir } from 'os';
+import { join } from 'path';
+
+// The lifecycle route 400s when an app's repoPath does not exist, so these
+// fixtures need a real directory. REAL_DIR is NOT one on Windows — it resolves to
+// <cwd-drive>:\\tmp, present on some machines by accident and absent on the CI
+// runner, which is why this suite passed locally and 400'd there.
+const REAL_DIR = tmpdir();
 import lifecycleRoutes from './lifecycle.js';
 
 // Mock the services this router touches. appBuilder is intentionally NOT mocked
@@ -61,7 +69,7 @@ describe('Apps Lifecycle Routes', () => {
       id: 'app-001',
       name: 'Mixed App',
       type: 'express',
-      repoPath: '/tmp',
+      repoPath: REAL_DIR,
       pm2ProcessNames: ['mixed-web'],
       nativeLaunch: {
         label: 'Godot',
@@ -82,7 +90,7 @@ describe('Apps Lifecycle Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.processName).toBe('mixed-game');
       expect(pm2Service.startWithCommand).toHaveBeenCalledWith(
-        'mixed-game', '/tmp', './scripts/game run', { autorestart: false }
+        'mixed-game', REAL_DIR, './scripts/game run', { autorestart: false }
       );
       expect(pm2Service.deleteApp).toHaveBeenCalledWith('mixed-game', undefined);
       expect(pm2Service.deleteApp.mock.invocationCallOrder[0])
@@ -98,7 +106,7 @@ describe('Apps Lifecycle Routes', () => {
     });
 
     it('starts the native target in the app\'s own PM2 home', async () => {
-      appsService.getAppById.mockResolvedValue({ ...mockApp, pm2Home: '/tmp/example-pm2' });
+      appsService.getAppById.mockResolvedValue({ ...mockApp, pm2Home: join(REAL_DIR, 'example-pm2') });
       pm2Service.getAppStatus.mockResolvedValue({ status: 'stopped' });
       pm2Service.deleteApp.mockResolvedValue({ success: true });
       pm2Service.startWithCommand.mockResolvedValue({ success: true });
@@ -108,7 +116,7 @@ describe('Apps Lifecycle Routes', () => {
 
       expect(response.status).toBe(200);
       expect(pm2Service.startWithCommand).toHaveBeenCalledWith(
-        'mixed-game', '/tmp', './scripts/game run', { autorestart: false, pm2Home: '/tmp/example-pm2' }
+        'mixed-game', REAL_DIR, './scripts/game run', { autorestart: false, pm2Home: join(REAL_DIR, 'example-pm2') }
       );
     });
 
@@ -200,7 +208,7 @@ describe('Apps Lifecycle Routes', () => {
         repoPath: '/path/to/repo',
         pm2ProcessNames: ['test-app'],
         startCommands: ['npm run dev'],
-        pm2Home: '/tmp/example-pm2'
+        pm2Home: join(REAL_DIR, 'example-pm2')
       };
       appsService.getAppById.mockResolvedValue(mockApp);
       pm2Service.startWithCommand.mockResolvedValue({ success: true });
@@ -210,7 +218,7 @@ describe('Apps Lifecycle Routes', () => {
 
       expect(response.status).toBe(200);
       expect(pm2Service.startWithCommand).toHaveBeenCalledWith(
-        'test-app', '/path/to/repo', 'npm run dev', { pm2Home: '/tmp/example-pm2' }
+        'test-app', '/path/to/repo', 'npm run dev', { pm2Home: join(REAL_DIR, 'example-pm2') }
       );
     });
 
@@ -219,7 +227,7 @@ describe('Apps Lifecycle Routes', () => {
         id: 'game-001',
         name: 'The Game',
         type: 'desktop',
-        repoPath: '/tmp', // real dir; no ecosystem config there, and desktop skips it anyway
+        repoPath: REAL_DIR, // real dir; no ecosystem config there, and desktop skips it anyway
         pm2ProcessNames: ['the-game'],
         startCommands: ['./scripts/game run']
       };
@@ -236,7 +244,7 @@ describe('Apps Lifecycle Routes', () => {
       // Command-based launch, never the ecosystem web-server path.
       expect(pm2Service.startFromEcosystem).not.toHaveBeenCalled();
       expect(pm2Service.startWithCommand).toHaveBeenCalledWith(
-        'the-game', '/tmp', './scripts/game run', { autorestart: false }
+        'the-game', REAL_DIR, './scripts/game run', { autorestart: false }
       );
       expect(pm2Service.deleteApp).toHaveBeenCalledWith('the-game', undefined);
     });
@@ -246,7 +254,7 @@ describe('Apps Lifecycle Routes', () => {
         id: 'game-001',
         name: 'The Game',
         type: 'desktop',
-        repoPath: '/tmp',
+        repoPath: REAL_DIR,
         pm2ProcessNames: ['the-game'],
         startCommands: ['./scripts/game run']
       };
@@ -267,7 +275,7 @@ describe('Apps Lifecycle Routes', () => {
         id: 'game-001',
         name: 'The Game',
         type: 'desktop',
-        repoPath: '/tmp',
+        repoPath: REAL_DIR,
         pm2ProcessNames: ['the-game'],
         startCommands: ['./scripts/game run']
       };
@@ -367,7 +375,7 @@ describe('Apps Lifecycle Routes', () => {
       const mockApp = {
         id: 'app-001',
         name: 'Test App',
-        repoPath: '/tmp',
+        repoPath: REAL_DIR,
         buildCommand: 'rm -rf /',
         pm2ProcessNames: ['test-app']
       };
