@@ -6,11 +6,12 @@ import {
   getDomainMode,
   DEFAULT_DOMAIN_MODE,
   AGENT_STATES,
-  MUSE_STATE_ANIMATIONS,
-  MUSE_STATE_SEQUENCES,
+  MUSE_STATE_MOTIONS,
+  MUSE_IN_PLACE_SUFFIX,
   MUSE_ANIMATION_FALLBACK,
   MUSE_SPEAKING_GESTURE,
   MUSE_ROOT_MOTION_CLIPS,
+  resolveMuseMotion,
   MODEL_CAPABLE_CLI_REVIEWERS,
   reviewerLabel
 } from './constants';
@@ -50,53 +51,141 @@ describe('getDomainBudget (client mirror)', () => {
   });
 });
 
-// The Cyber Muse avatar drives RobotExpressive's clips off CoS state. Two
-// invariants must hold or the fixed-frame avatar breaks: every agent state
-// needs a base clip, and no mapped clip may carry root translation (those
-// walk the model out of view — enumerated in MUSE_ROOT_MOTION_CLIPS).
+// The Cyber Muse avatar drives RobotExpressive's clips off CoS state through a
+// single map: state → an ordered step list. Invariants that must hold or the
+// fixed-frame avatar breaks: every agent state needs at least one step, and the
+// FIRST step (the structural fallback, played as named) may not carry root
+// translation — those walk the model out of view (MUSE_ROOT_MOTION_CLIPS).
 
-describe('muse avatar animation triggers', () => {
-  it('maps every agent state to a base clip', () => {
+// The bundled default GLB's clip roster, as MuseCoSAvatar sees it: the 14
+// RobotExpressive clips plus the in-place variants it synthesizes at load time.
+const ROBOT_EXPRESSIVE_CLIPS = [
+  'Idle', 'Walking', 'Running', 'Dance', 'Death', 'Sitting', 'Standing',
+  'Jump', 'Yes', 'No', 'Wave', 'Punch', 'ThumbsUp', 'WalkJump'
+];
+const LOADED_CLIPS = [
+  ...ROBOT_EXPRESSIVE_CLIPS,
+  ...MUSE_ROOT_MOTION_CLIPS.map((n) => `${n}${MUSE_IN_PLACE_SUFFIX}`)
+];
+
+const LOOP_KINDS = ['infinite', 'once'];
+
+describe('muse avatar motion map', () => {
+  it('gives every agent state at least one well-formed step', () => {
     for (const state of Object.keys(AGENT_STATES)) {
-      expect(MUSE_STATE_ANIMATIONS[state], `state "${state}" must map to a clip`).toBeTruthy();
-      expect(typeof MUSE_STATE_ANIMATIONS[state].clip).toBe('string');
-      expect(MUSE_STATE_ANIMATIONS[state].clip.length).toBeGreaterThan(0);
+      const steps = MUSE_STATE_MOTIONS[state];
+      expect(Array.isArray(steps), `state "${state}" must map to a step list`).toBe(true);
+      expect(steps.length, `state "${state}" needs at least one step`).toBeGreaterThan(0);
+      for (const step of steps) {
+        expect(typeof step.clip, `state "${state}" step needs a clip name`).toBe('string');
+        expect(step.clip.length).toBeGreaterThan(0);
+        expect(typeof step.timeScale, `state "${state}" step needs a timeScale`).toBe('number');
+        expect(step.timeScale).toBeGreaterThan(0);
+        if (typeof step.loop === 'string') {
+          expect(LOOP_KINDS, `state "${state}" has an unknown loop kind`).toContain(step.loop);
+        } else {
+          expect(Number.isInteger(step.loop?.reps) && step.loop.reps > 0, `state "${state}" reps must be a positive integer`).toBe(true);
+        }
+      }
     }
   });
 
-  it('never maps a state (or the fallback / speaking gesture) to a root-motion clip', () => {
-    for (const [state, cfg] of Object.entries(MUSE_STATE_ANIMATIONS)) {
-      expect(MUSE_ROOT_MOTION_CLIPS, `state "${state}" uses a root-motion clip`).not.toContain(cfg.clip);
+  it('never uses a root-motion clip as a state fallback (or as the fallback / speaking gesture)', () => {
+    // The first step doubles as the state's fallback loop and is played as
+    // named, so it must be in-place. Later montage steps may name a root-motion
+    // clip — resolveMuseMotion routes those to their in-place variant.
+    for (const [state, steps] of Object.entries(MUSE_STATE_MOTIONS)) {
+      expect(MUSE_ROOT_MOTION_CLIPS, `state "${state}" falls back to a root-motion clip`).not.toContain(steps[0].clip);
     }
     expect(MUSE_ROOT_MOTION_CLIPS).not.toContain(MUSE_ANIMATION_FALLBACK);
     expect(MUSE_ROOT_MOTION_CLIPS).not.toContain(MUSE_SPEAKING_GESTURE);
   });
+
+  it('gives the coding state a montage of at least 2 steps', () => {
+    expect(MUSE_STATE_MOTIONS.coding.length).toBeGreaterThanOrEqual(2);
+  });
 });
 
-// The `coding` montage cycles several clips so the working avatar reads as
-// varied/dynamic (jab, sprint, leap, approve, stride, celebrate). Steps name
-// real GLB clips; root-motion clips are auto-routed to their neutralized
-// in-place variant by the avatar (see animationClips.test.js for that routing),
-// so the data can freely name a walk/run cycle without risking drift. These
-// invariants just keep the montage steps well-formed.
+// Pin the clip sequence each state actually plays on the bundled model. These
+// are the exact clips/timeScales/loops the split base-map + montage-map design
+// produced, so the unified map stays behaviour-preserving.
 
-describe('muse avatar state sequences (montages)', () => {
-  it('gives the coding state a montage of at least 2 steps', () => {
-    expect(Array.isArray(MUSE_STATE_SEQUENCES.coding)).toBe(true);
-    expect(MUSE_STATE_SEQUENCES.coding.length).toBeGreaterThanOrEqual(2);
+describe('resolveMuseMotion (bundled RobotExpressive roster)', () => {
+  const expected = {
+    sleeping:      [{ clip: 'Sitting',  timeScale: 0.8,  loop: 'once' }],
+    thinking:      [{ clip: 'Idle',     timeScale: 0.85, loop: 'infinite' }],
+    coding: [
+      { clip: 'Punch',                             timeScale: 1.2,  loop: { reps: 2 } },
+      { clip: `Running${MUSE_IN_PLACE_SUFFIX}`,    timeScale: 1.1,  loop: { reps: 4 } },
+      { clip: 'Jump',                              timeScale: 1.0,  loop: { reps: 1 } },
+      { clip: 'ThumbsUp',                          timeScale: 0.95, loop: { reps: 1 } },
+      { clip: `Walking${MUSE_IN_PLACE_SUFFIX}`,    timeScale: 1.2,  loop: { reps: 4 } },
+      { clip: 'Dance',                             timeScale: 1.0,  loop: { reps: 1 } },
+    ],
+    investigating: [{ clip: 'No',       timeScale: 0.7,  loop: 'infinite' }],
+    reviewing:     [{ clip: 'Yes',      timeScale: 0.8,  loop: 'infinite' }],
+    planning:      [{ clip: 'ThumbsUp', timeScale: 0.85, loop: 'infinite' }],
+    ideating:      [{ clip: 'Dance',    timeScale: 1.0,  loop: 'infinite' }],
+  };
+
+  it('covers every agent state', () => {
+    expect(Object.keys(expected).sort()).toEqual(Object.keys(AGENT_STATES).sort());
   });
 
-  it('has well-formed steps (string clip + positive integer reps when present)', () => {
-    for (const [state, steps] of Object.entries(MUSE_STATE_SEQUENCES)) {
-      expect(Array.isArray(steps), `sequence "${state}" must be an array`).toBe(true);
-      for (const step of steps) {
-        expect(typeof step.clip, `sequence "${state}" step needs a clip name`).toBe('string');
-        expect(step.clip.length).toBeGreaterThan(0);
-        if (step.reps !== undefined) {
-          expect(Number.isInteger(step.reps) && step.reps > 0, `sequence "${state}" reps must be a positive integer`).toBe(true);
-        }
-      }
-    }
+  for (const [state, steps] of Object.entries(expected)) {
+    it(`resolves "${state}" to its pre-unification clip sequence`, () => {
+      expect(resolveMuseMotion(state, LOADED_CLIPS)).toEqual(steps);
+    });
+  }
+});
+
+describe('resolveMuseMotion (degraded GLBs)', () => {
+  it('returns nothing when the GLB has no clips (procedural-only)', () => {
+    expect(resolveMuseMotion('coding', [])).toEqual([]);
+    expect(resolveMuseMotion('coding', undefined)).toEqual([]);
+  });
+
+  it('drops montage steps the GLB lacks, keeping the rest in order', () => {
+    const names = ['Punch', 'Jump', 'Dance'];
+    expect(resolveMuseMotion('coding', names)).toEqual([
+      { clip: 'Punch', timeScale: 1.2, loop: { reps: 2 } },
+      { clip: 'Jump',  timeScale: 1.0, loop: { reps: 1 } },
+      { clip: 'Dance', timeScale: 1.0, loop: { reps: 1 } },
+    ]);
+  });
+
+  it('collapses a lone resolvable step to an infinite loop (no next step to advance to)', () => {
+    expect(resolveMuseMotion('coding', ['Punch', 'Idle'])).toEqual([
+      { clip: 'Punch', timeScale: 1.2, loop: 'infinite' },
+    ]);
+  });
+
+  it('keeps a clamped one-shot pose clamped', () => {
+    expect(resolveMuseMotion('sleeping', ['Sitting', 'Idle'])).toEqual([
+      { clip: 'Sitting', timeScale: 0.8, loop: 'once' },
+    ]);
+  });
+
+  it('falls back to the canonical fallback clip when none of the state clips exist', () => {
+    expect(resolveMuseMotion('ideating', ['Idle', 'Walking'])).toEqual([
+      { clip: MUSE_ANIMATION_FALLBACK, timeScale: 1.0, loop: 'infinite' },
+    ]);
+  });
+
+  it('prefers an in-place clip over a root-motion one for an unmapped GLB', () => {
+    expect(resolveMuseMotion('coding', ['Walking', 'Standing'])).toEqual([
+      { clip: 'Standing', timeScale: 1.2, loop: 'infinite' },
+    ]);
+    // Every clip carries root motion — nothing safer to pick than the first.
+    expect(resolveMuseMotion('coding', ['Walking', 'Running'])).toEqual([
+      { clip: 'Walking', timeScale: 1.2, loop: 'infinite' },
+    ]);
+  });
+
+  it('still animates an unknown state', () => {
+    expect(resolveMuseMotion('bogus', LOADED_CLIPS)).toEqual([
+      { clip: MUSE_ANIMATION_FALLBACK, loop: 'infinite' },
+    ]);
   });
 });
 

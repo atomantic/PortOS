@@ -16,12 +16,16 @@ It ships 14 animation clips — `Idle`, `Walking`, `Running`, `Dance`, `Death`,
 `Sitting`, `Standing`, `Jump`, `Yes`, `No`, `Wave`, `Punch`, `ThumbsUp`,
 `WalkJump` — plus 3 face morph targets (`Angry`, `Surprised`, `Sad`).
 
-MuseCoSAvatar drives these clips from the CoS runtime via an `AnimationMixer`,
-mapping each agent state to an **in-place** clip (see `MUSE_STATE_ANIMATIONS` in
-`client/src/components/cos/constants.js`). `Walking` / `Running` / `WalkJump`
-carry root translation and are never used as a base loop so the fixed-frame
-avatar can't drift out of view. The `speaking` flag fires a one-shot `Wave`
-overlay that returns to the base loop (or resumes the montage).
+MuseCoSAvatar drives these clips from the CoS runtime via an `AnimationMixer`.
+One map — `MUSE_STATE_MOTIONS` in `client/src/components/cos/constants.js` —
+gives each agent state an ordered list of steps, `{ clip, timeScale, loop }`,
+where `loop` is `'infinite'`, `'once'` (clamped on the final frame), or
+`{ reps: N }` (a finite repeat that advances to the next step). A single-step
+list is a plain base loop; a longer one is a montage. `Walking` / `Running` /
+`WalkJump` carry root translation, so a step naming one is auto-routed to a
+synthesized **in-place** variant and the fixed-frame avatar can't drift out of
+view. The `speaking` flag fires a one-shot `Wave` overlay that returns to the
+step it interrupted.
 
 The model is rendered with its **own textures and full color** — the per-state
 hue lives in the surrounding lights, halo, ground glow, and sparkles, not as a
@@ -36,12 +40,12 @@ tint painted onto the mesh.
 | reviewing | `Yes` | approving nod |
 | planning | `ThumbsUp` | confident "locked in" |
 | ideating | `Dance` | creative celebration |
-| _speaking_ | `Wave` | one-shot gesture, then back to base loop |
+| _speaking_ | `Wave` | one-shot gesture, then back to the interrupted step |
 
 ### `coding` montage
 
-Rather than looping a single clip, the `coding` state cycles an ordered montage
-(`MUSE_STATE_SEQUENCES.coding`) so a working agent reads as dynamic and varied:
+Rather than looping a single clip, the `coding` state's step list cycles an
+ordered montage so a working agent reads as dynamic and varied:
 **Punch → Running → Jump → ThumbsUp → Walking → Dance**, then repeats. Each step
 plays for a set number of repetitions before the mixer's `finished` event
 advances to the next.
@@ -50,8 +54,9 @@ The montage names real GLB clips. `Running` / `Walking` carry root translation,
 so the avatar auto-routes them to synthesized **"in place"** variants — cloned
 clips with their root-translation (`.position`) tracks stripped (the treadmill
 technique, in `client/src/utils/animationClips.js`) — so the gait animates
-without drifting the fixed frame. A GLB missing the montage clips falls back to
-the single-clip base loop (`MUSE_STATE_ANIMATIONS.coding` = `Punch`).
+without drifting the fixed frame. A GLB missing the montage clips degrades to
+the list's **first** step (`Punch`), looped — the fallback is structural, so
+every state (montage or not) resolves the same way.
 
 A GLB with none of these clips (or no clips at all) falls back to the
 procedural float treatment, so static models still render.

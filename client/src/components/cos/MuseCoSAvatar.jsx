@@ -4,17 +4,15 @@ import { useGLTF, Sparkles } from '@react-three/drei';
 import * as THREE from 'three';
 import {
   AGENT_STATES,
-  MUSE_STATE_ANIMATIONS,
-  MUSE_STATE_SEQUENCES,
+  resolveMuseMotion,
   MUSE_IN_PLACE_SUFFIX,
-  MUSE_ANIMATION_FALLBACK,
   MUSE_SPEAKING_GESTURE,
   MUSE_ROOT_MOTION_CLIPS,
 } from './constants';
 import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
 import CoSBackgroundCamera from './CoSBackgroundCamera';
 import CoSCanvasGuard from './CoSCanvasGuard';
-import { withInPlaceClips, inPlaceClipName } from '../../utils/animationClips';
+import { withInPlaceClips } from '../../utils/animationClips';
 import useClonedGltf, { GltfPrimitive } from '../../hooks/useClonedGltf';
 
 const MODEL_URL = '/api/avatar/model.glb';
@@ -68,111 +66,77 @@ function GLBAvatar({ state, speaking }) {
   }, [scene]);
 
   // --- Animation driving -------------------------------------------------
-  // A state resolves to EITHER a single looping base clip (desiredBaseRef) or a
-  // montage that cycles clips (sequenceRef). `gestureActiveRef` defers and
-  // restores around the one-shot speaking gesture so a state change mid-gesture
-  // still lands on the latest state.
-  const activeRef = useRef(null);          // currently-playing action
-  const desiredBaseRef = useRef(null);     // { name, timeScale, once } to rest on
-  const sequenceRef = useRef(null);        // { steps, index } | null when looping
+  // Every state resolves to ONE ordered step list (see `resolveMuseMotion`): a
+  // length-1 list is a plain base loop, a longer one is a montage this
+  // component's `finished` listener advances through. `gestureActiveRef` defers
+  // and restores around the one-shot speaking gesture so a state change
+  // mid-gesture still lands on the latest state.
+  const activeRef = useRef(null);                       // currently-playing action
+  const motionRef = useRef({ steps: [], index: 0 });    // live step list + position
   const gestureActiveRef = useRef(false);
   const speakingRef = useRef(false);
 
-  // Crossfade the currently-active action to `clipName`. `once` → play a single
-  // LoopOnce and clamp; `reps` → a finite LoopRepeat that fires `finished` after
-  // N cycles (used to advance a montage); neither → an infinite base loop.
-  const fadeTo = useCallback((clipName, opts = {}) => {
+  // Crossfade the currently-active action to `clipName`. `loop`: 'once' → a
+  // single LoopOnce; `{ reps: N }` → a finite LoopRepeat that fires `finished`
+  // after N cycles (used to advance a montage); 'infinite' → an endless loop.
+  const fadeTo = useCallback((clipName, { timeScale = 1, loop = 'infinite', duration = FADE } = {}) => {
     const next = actions[clipName];
     if (!next) return;
-    const dur = opts.duration ?? FADE;
     next.reset();
     next.enabled = true;
-    next.setEffectiveTimeScale(opts.timeScale ?? 1);
+    next.setEffectiveTimeScale(timeScale);
     next.setEffectiveWeight(1);
-    if (opts.once || opts.reps) {
+    const reps = loop === 'once' ? 1 : (loop?.reps ?? 0);
+    if (reps > 0) {
       // Finite: one shot (`once`) or N reps of a montage step. Clamp on the last
       // frame so it holds its (near-neutral) end pose through the crossfade to
       // the next action instead of snapping toward the bind pose.
-      next.setLoop(opts.once ? THREE.LoopOnce : THREE.LoopRepeat, opts.once ? 1 : opts.reps);
+      next.setLoop(loop === 'once' ? THREE.LoopOnce : THREE.LoopRepeat, reps);
       next.clampWhenFinished = true;
     } else {
       next.setLoop(THREE.LoopRepeat, Infinity);
       next.clampWhenFinished = false;
     }
-    next.fadeIn(dur).play();
+    next.fadeIn(duration).play();
     const prev = activeRef.current;
-    if (prev && prev !== next) prev.fadeOut(dur);
+    if (prev && prev !== next) prev.fadeOut(duration);
     activeRef.current = next;
   }, [actions]);
 
-  // Play montage step `index` (wraps). `index` is always ≥ 0 at every call site
-  // (0, the current index, or current+1), so a plain modulo is enough. Steps
-  // were pre-filtered to present clips.
-  const playSequenceStep = useCallback((index, duration) => {
-    const seq = sequenceRef.current;
-    if (!seq || !seq.steps.length) return;
-    const i = index % seq.steps.length;
-    seq.index = i;
-    const step = seq.steps[i];
-    fadeTo(step.clip, { timeScale: step.timeScale, reps: step.reps ?? 1, duration });
+  // Play step `index` of the current motion (wraps). `index` is always ≥ 0 at
+  // every call site (0, the current index, or current + 1), so a plain modulo is
+  // enough. Steps were pre-filtered to clips the loaded GLB actually has.
+  const playStep = useCallback((index, duration) => {
+    const motion = motionRef.current;
+    if (!motion.steps.length) return;
+    const i = index % motion.steps.length;
+    motion.index = i;
+    const step = motion.steps[i];
+    fadeTo(step.clip, { timeScale: step.timeScale, loop: step.loop, duration });
   }, [fadeTo]);
 
-  // Resume the current state's motion — the montage from `fromIndex`, or the
-  // single base loop. Both the state effect and the gesture-finish handler need
-  // this exact "sequence vs base loop" decision, so it lives in one place.
-  const resumeMotion = useCallback((fromIndex, duration) => {
-    if (sequenceRef.current) { playSequenceStep(fromIndex, duration); return; }
-    const rest = desiredBaseRef.current;
-    if (rest?.name) fadeTo(rest.name, { timeScale: rest.timeScale, once: rest.once, duration });
-  }, [fadeTo, playSequenceStep]);
+  // The current state's playable steps, resolved against the loaded clips (which
+  // include the synthesized in-place variants, so a montage can name `Running`
+  // without drifting the fixed frame). Memoized so the state effect below has a
+  // stable dependency.
+  const steps = useMemo(() => resolveMuseMotion(state, names), [state, names]);
 
-  // Resolve the base loop clip for the current state (guarded against a GLB
-  // that lacks the mapped clip).
-  const baseCfg = MUSE_STATE_ANIMATIONS[state] || {};
-  const baseClip = useMemo(() => {
-    if (!hasClips) return null;
-    if (baseCfg.clip && names.includes(baseCfg.clip)) return baseCfg.clip;
-    if (names.includes(MUSE_ANIMATION_FALLBACK)) return MUSE_ANIMATION_FALLBACK;
-    // Last resort for a custom GLB with clips but none mapped: prefer the first
-    // in-place clip so a leading walk cycle can't drift the fixed-frame avatar
-    // out of view; fall back to names[0] only if every clip is root-motion.
-    return names.find((n) => !MUSE_ROOT_MOTION_CLIPS.includes(n)) || names[0];
-  }, [hasClips, names, baseCfg.clip]);
-
-  // Resolve the montage steps for the current state against the loaded clips.
-  // The step's clip is auto-routed to its in-place variant if it's a root-motion
-  // clip — so the sequence data names real GLB clips (`Running`) and the
-  // fixed-frame no-drift guarantee is enforced here, not by a naming convention.
-  // A state needs ≥2 resolvable steps to run as a montage; otherwise it falls
-  // back to its single base loop (so a GLB missing the sequence clips — or the
-  // in-place variant — still animates). Kept as a memo so the state effect's
-  // dependency is stable.
-  const sequenceSteps = useMemo(() => {
-    if (!hasClips) return null;
-    const def = MUSE_STATE_SEQUENCES[state];
-    if (!Array.isArray(def)) return null;
-    const steps = def
-      .map((s) => ({ ...s, clip: inPlaceClipName(s.clip, MUSE_ROOT_MOTION_CLIPS, MUSE_IN_PLACE_SUFFIX) }))
-      .filter((s) => names.includes(s.clip));
-    return steps.length >= 2 ? steps : null;
-  }, [hasClips, names, state]);
-
-  // Start / crossfade to the current state's motion (montage or base loop).
+  // Start / crossfade to the current state's motion.
   useEffect(() => {
-    if (!baseClip) return;
-    desiredBaseRef.current = { name: baseClip, timeScale: baseCfg.timeScale, once: baseCfg.once };
-    sequenceRef.current = sequenceSteps ? { steps: sequenceSteps, index: 0 } : null;
+    if (!steps.length) return;
+    motionRef.current = { steps, index: 0 };
     // Mid-gesture: don't crossfade now — the gesture's finish handler restores
-    // to whatever the refs point at, so the latest state still wins.
+    // from the ref, so the latest state still wins.
     if (gestureActiveRef.current) return;
-    resumeMotion(0);
-  }, [resumeMotion, baseClip, baseCfg.timeScale, baseCfg.once, sequenceSteps]);
+    playStep(0);
+  }, [playStep, steps]);
 
   // Persistent `finished` listener with two jobs: (1) when the one-shot speaking
-  // gesture finishes, hand control back to the live base loop / montage (read
-  // from the refs so a state change mid-gesture still lands correctly); (2) when
-  // a finite montage step finishes, advance to the next step. Non-sequence base
-  // loops are infinite (never fire) and the clamped `sleeping` pose is ignored.
+  // gesture finishes, hand control back to the live motion (read from the ref so
+  // a state change mid-gesture still lands correctly); (2) when a finite montage
+  // step finishes, advance to the next step. A single-step motion is either an
+  // infinite loop (never fires) or a clamped pose that must hold (`sleeping`),
+  // so only a multi-step motion advances.
   useEffect(() => {
     if (!hasClips) return;
     const gesture = actions[MUSE_SPEAKING_GESTURE];
@@ -180,20 +144,20 @@ function GLBAvatar({ state, speaking }) {
       if (gestureActiveRef.current) {
         if (gesture && e.action !== gesture) return; // ignore body clips finishing
         gestureActiveRef.current = false;
-        resumeMotion(sequenceRef.current?.index ?? 0, 0.25); // back to montage / base loop
+        playStep(motionRef.current.index, 0.25); // back to the step we were on
         return;
       }
       // Advance the montage when the active step completes its reps.
-      if (sequenceRef.current && e.action === activeRef.current) {
-        playSequenceStep(sequenceRef.current.index + 1);
+      if (motionRef.current.steps.length > 1 && e.action === activeRef.current) {
+        playStep(motionRef.current.index + 1);
       }
     };
     mixer.addEventListener('finished', onFinished);
     return () => mixer.removeEventListener('finished', onFinished);
-  }, [resumeMotion, playSequenceStep, hasClips, actions, mixer]);
+  }, [playStep, hasClips, actions, mixer]);
 
   // Speaking overlay: on the false→true edge, crossfade to the gesture once.
-  // The persistent listener above returns to the base loop / montage when it
+  // The persistent listener above returns to the current motion step when it
   // finishes.
   useEffect(() => {
     if (!hasClips) return;
@@ -203,12 +167,12 @@ function GLBAvatar({ state, speaking }) {
 
     const gesture = actions[MUSE_SPEAKING_GESTURE];
     if (!gesture) return;
-    // Skip if a non-montage state is already resting on the gesture clip.
-    const base = desiredBaseRef.current;
-    if (!sequenceRef.current && base && gesture === actions[base.name]) return;
+    // Skip if a single-step state is already resting on the gesture clip.
+    const current = motionRef.current.steps;
+    if (current.length === 1 && gesture === actions[current[0].clip]) return;
 
     gestureActiveRef.current = true;
-    fadeTo(MUSE_SPEAKING_GESTURE, { once: true, duration: 0.2 });
+    fadeTo(MUSE_SPEAKING_GESTURE, { loop: 'once', duration: 0.2 });
   }, [fadeTo, speaking, hasClips, actions]);
 
   // Subtle container float. The clip drives the body; this only adds the gentle

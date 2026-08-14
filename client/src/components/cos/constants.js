@@ -14,6 +14,7 @@ import {
   ChartGantt
 } from 'lucide-react';
 import { normalizeReviewerSlug } from '../../lib/reviewerPins';
+import { inPlaceClipName } from '../../utils/animationClips';
 
 export const TABS = [
   { id: 'briefing', label: 'Briefing', icon: Newspaper },
@@ -62,91 +63,120 @@ export const AGENT_STATES = {
   ideating: { label: 'Ideating', color: '#f97316', icon: '💡' },
 };
 
-// Cyber Muse (3D) avatar animation triggers. The bundled default model
+// Cyber Muse (3D) avatar motion map. The bundled default model
 // (data.reference/avatar/model.glb) is three.js's RobotExpressive (CC0), which
 // ships 14 clips: Idle, Walking, Running, Dance, Death, Sitting, Standing,
 // Jump, Yes, No, Wave, Punch, ThumbsUp, WalkJump.
 //
-// Each of the 7 AGENT_STATES maps to an IN-PLACE base loop. Walking / Running /
-// WalkJump carry root translation (they move the model forward) and are
-// intentionally excluded so a fixed-frame avatar can't drift out of view. The
-// `speaking` boolean fires a one-shot gesture overlay (MUSE_SPEAKING_GESTURE)
-// that hands control back to the base loop when it finishes.
+// ONE map drives every state: `state → [{ clip, timeScale, loop }]`, an ordered
+// list of steps. `loop` is
+//   'infinite'   — loop the clip forever (never fires the mixer's `finished`)
+//   'once'       — a single LoopOnce clamped on its final frame (a pose or
+//                  transition clip like `Sitting`, held instead of looping)
+//   { reps: N }  — a finite LoopRepeat of N cycles; `finished` then advances to
+//                  the next step, wrapping around
+//
+// A length-1 list is a plain base loop. A longer list is a montage — `coding`
+// cycles jab → sprint → leap → approve → stride → celebrate so a working agent
+// reads as energetic and varied rather than one clip on repeat. THE FIRST STEP
+// IS ALSO THE STATE'S FALLBACK: when the loaded GLB resolves fewer than two
+// steps, `resolveMuseMotion` collapses the list to its first resolvable step and
+// loops that — so "the montage degrades to its base clip" is structural, not a
+// convention two maps had to agree on.
+//
+// Steps name real GLB clips. Walking / Running / WalkJump carry root
+// translation (they move the model forward) and would drift a fixed-frame
+// avatar out of view, so `resolveMuseMotion` auto-routes them to the
+// neutralized in-place variants the avatar synthesizes at load time. A step's
+// FIRST entry must still be an in-place clip (it is the fallback loop, played
+// as named); the constants test asserts that.
 //
 // Consumed by MuseCoSAvatar's AnimationMixer (via drei useAnimations). Clip
-// names are matched case-sensitively against the loaded GLB and guarded: a GLB
-// missing a mapped clip falls back to MUSE_ANIMATION_FALLBACK, and a GLB with
-// NO clips at all falls back to the fully-procedural rotation/glow behavior so
-// static models and other variants keep working. `once: true` clamps a
-// pose/transition clip (Sitting) on its final frame instead of looping it.
+// names are matched case-sensitively against the loaded GLB: unresolvable steps
+// are dropped, a state with none left falls back to MUSE_ANIMATION_FALLBACK,
+// and a GLB with NO clips at all falls back to the fully-procedural
+// rotation/glow behavior so static models and other variants keep working.
+//
 // The emote clips (Yes/No/Wave/Punch/ThumbsUp) start and end near a neutral
 // pose, so looping them reads as a repeated, deliberate gesture (nodding,
-// scanning, jabbing) rather than snapping — that's what lets us give each
-// state its own body language instead of collapsing everything onto Idle. The
-// read for each: sleeping = seated rest; thinking = calm contemplation (Idle);
-// coding = jabbing away at the work (Punch); investigating = slow side-to-side
-// scan (No); reviewing = approving nod (Yes); planning = confident "locked in"
+// scanning, jabbing) rather than snapping — that's what lets us give each state
+// its own body language instead of collapsing everything onto Idle. The read
+// for each: sleeping = seated rest; thinking = calm contemplation (Idle);
+// coding = an energetic work montage; investigating = slow side-to-side scan
+// (No); reviewing = approving nod (Yes); planning = confident "locked in"
 // thumbs-up (ThumbsUp); ideating = creative celebration (Dance).
 //
-// This map is the single-clip base loop for each state — also the graceful
-// fallback for any state that ALSO has a MUSE_STATE_SEQUENCES entry (below) but
-// whose GLB is missing the sequence clips. Keep every entry mapped to an
-// in-place clip; the constants test asserts none is a MUSE_ROOT_MOTION_CLIPS.
-export const MUSE_STATE_ANIMATIONS = {
-  sleeping:      { clip: 'Sitting',  timeScale: 0.8, once: true },
-  thinking:      { clip: 'Idle',     timeScale: 0.85 },
-  coding:        { clip: 'Punch',    timeScale: 1.1 },
-  investigating: { clip: 'No',       timeScale: 0.7 },
-  reviewing:     { clip: 'Yes',      timeScale: 0.8 },
-  planning:      { clip: 'ThumbsUp', timeScale: 0.85 },
-  ideating:      { clip: 'Dance',    timeScale: 1.0 },
+// The `speaking` boolean fires a one-shot gesture overlay
+// (MUSE_SPEAKING_GESTURE) that hands control back to the current step when it
+// finishes.
+export const MUSE_STATE_MOTIONS = {
+  sleeping:      [{ clip: 'Sitting',  timeScale: 0.8,  loop: 'once' }],
+  thinking:      [{ clip: 'Idle',     timeScale: 0.85, loop: 'infinite' }],
+  coding: [
+    { clip: 'Punch',    timeScale: 1.2,  loop: { reps: 2 } },
+    { clip: 'Running',  timeScale: 1.1,  loop: { reps: 4 } },
+    { clip: 'Jump',     timeScale: 1.0,  loop: { reps: 1 } },
+    { clip: 'ThumbsUp', timeScale: 0.95, loop: { reps: 1 } },
+    { clip: 'Walking',  timeScale: 1.2,  loop: { reps: 4 } },
+    { clip: 'Dance',    timeScale: 1.0,  loop: { reps: 1 } },
+  ],
+  investigating: [{ clip: 'No',       timeScale: 0.7,  loop: 'infinite' }],
+  reviewing:     [{ clip: 'Yes',      timeScale: 0.8,  loop: 'infinite' }],
+  planning:      [{ clip: 'ThumbsUp', timeScale: 0.85, loop: 'infinite' }],
+  ideating:      [{ clip: 'Dance',    timeScale: 1.0,  loop: 'infinite' }],
 };
 
 // Naming suffix for the neutralized "run/walk in place" clip variants that
 // MuseCoSAvatar synthesizes at load time (see `withInPlaceClips` in
 // client/src/utils/animationClips.js). This is an INTERNAL implementation
-// detail — sequences below reference real GLB clip names (`Running`) and the
-// avatar auto-routes any root-motion clip to its stripped variant. Exported
-// only so the avatar and the clip util agree on the suffix.
+// detail — the motion map above references real GLB clip names (`Running`) and
+// `resolveMuseMotion` routes any root-motion clip to its stripped variant.
+// Exported only so the avatar and the clip util agree on the suffix.
 export const MUSE_IN_PLACE_SUFFIX = ' (in place)';
 
-// Multi-clip montages: a state can cycle through an ordered list of clips
-// instead of looping one. Each step plays for `reps` repetitions (finite
-// LoopRepeat), then the AnimationMixer's `finished` event advances to the next
-// step, wrapping around — so `coding` reads as an energetic, varied work
-// montage (jab, sprint, leap, approve, stride, celebrate) rather than a single
-// clip on infinite repeat. Steps name real GLB clips; root-motion clips
-// (`Running`/`Walking`) are automatically routed to their neutralized in-place
-// variant by the avatar, so they can't drift the fixed frame. Steps are
-// resolved against the loaded GLB at runtime; unresolvable clips are dropped,
-// and a state whose GLB yields fewer than 2 resolvable steps falls back to its
-// MUSE_STATE_ANIMATIONS base loop.
-export const MUSE_STATE_SEQUENCES = {
-  coding: [
-    { clip: 'Punch',    timeScale: 1.2,  reps: 2 },
-    { clip: 'Running',  timeScale: 1.1,  reps: 4 },
-    { clip: 'Jump',     timeScale: 1.0,  reps: 1 },
-    { clip: 'ThumbsUp', timeScale: 0.95, reps: 1 },
-    { clip: 'Walking',  timeScale: 1.2,  reps: 4 },
-    { clip: 'Dance',    timeScale: 1.0,  reps: 1 },
-  ],
-};
-
-// Clip used when a mapped state clip is absent from the loaded GLB.
+// Clip used when none of a state's mapped clips is in the loaded GLB.
 export const MUSE_ANIMATION_FALLBACK = 'Idle';
 
 // One-shot gesture played on the rising edge of `speaking`, then the avatar
-// returns to its base state loop (or resumes its montage).
+// returns to the motion step it was on.
 export const MUSE_SPEAKING_GESTURE = 'Wave';
 
 // RobotExpressive clips that carry root translation (they walk the model
-// forward). Never used as a base loop for the fixed-frame avatar — the state
-// map above avoids them, the constants test asserts it, and MuseCoSAvatar's
-// "GLB has clips but none are mapped" fallback skips them so a custom GLB
-// whose first clip happens to be a walk cycle can't drift out of view. When a
-// montage step names one of these, the avatar auto-routes it to its neutralized
-// in-place variant (root-translation stripped) so it no longer drifts.
+// forward). Never played as-is by the fixed-frame avatar: `resolveMuseMotion`
+// routes a step naming one of these to its neutralized in-place variant, and
+// the "GLB has clips but none are mapped" fallback skips them so a custom GLB
+// whose first clip happens to be a walk cycle can't drift out of view.
 export const MUSE_ROOT_MOTION_CLIPS = ['Walking', 'Running', 'WalkJump'];
+
+// Last-resort clip for a GLB that has clips but none the state maps: prefer the
+// canonical fallback, else the first in-place clip so a leading walk cycle can't
+// drift the fixed-frame avatar, else whatever the GLB leads with.
+const fallbackClip = (names) => (
+  names.includes(MUSE_ANIMATION_FALLBACK)
+    ? MUSE_ANIMATION_FALLBACK
+    : names.find((n) => !MUSE_ROOT_MOTION_CLIPS.includes(n)) || names[0]
+);
+
+// Resolve a state's motion steps against `names`, the clip roster of the loaded
+// GLB (which already includes the synthesized in-place variants). Root-motion
+// steps are routed to their in-place variant, then any step the GLB can't
+// supply is dropped. Returns the playable step list:
+//   ≥2 steps → the montage, cycled by the avatar's `finished` listener
+//    1 step  → a base loop; a finite `{ reps }` degrades to 'infinite' because
+//              there is no next step to advance to, while an explicit 'once'
+//              pose keeps clamping
+//    0 steps → the state's first step re-pointed at a fallback clip, looped
+// An empty/absent roster yields `[]` (the caller runs procedural-only).
+export function resolveMuseMotion(state, names) {
+  if (!Array.isArray(names) || names.length === 0) return [];
+  const declared = MUSE_STATE_MOTIONS[state] || [];
+  const resolved = declared
+    .map((step) => ({ ...step, clip: inPlaceClipName(step.clip, MUSE_ROOT_MOTION_CLIPS, MUSE_IN_PLACE_SUFFIX) }))
+    .filter((step) => names.includes(step.clip));
+  if (resolved.length >= 2) return resolved;
+  const step = resolved[0] || { ...declared[0], clip: fallbackClip(names) };
+  return [{ ...step, loop: step.loop === 'once' ? 'once' : 'infinite' }];
+}
 
 // Default messages shown when no specific event message is available
 export const STATE_MESSAGES = {

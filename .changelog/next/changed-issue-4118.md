@@ -1,0 +1,1 @@
+- Cyber Muse avatar: one motion map per agent state (clip list with an explicit loop mode) replaces the split base-loop/montage maps — a montage now degrades structurally to its first step
