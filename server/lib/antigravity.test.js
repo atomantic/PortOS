@@ -206,6 +206,15 @@ describe('prepareAntigravityPrompt', () => {
     const { args } = prepareAntigravityPrompt(['-p', '--verbose'], 'PROMPT');
     expect(args).toEqual(['--verbose', '-p', 'PROMPT']);
   });
+
+  // extraArgs are concatenated on AFTER ensureAntigravityPrintArgs has stripped
+  // baked print flags, so they can smuggle a second one in. A leftover flag
+  // would make agy read the token after IT as the prompt.
+  it('lifts EVERY print flag, not just the last, and the last spelling wins', () => {
+    const { args } = prepareAntigravityPrompt(['--print', '--verbose', '-p'], 'PROMPT');
+    expect(args).toEqual(['--verbose', '-p', 'PROMPT']);
+    expect(args.filter((a) => a === '--print')).toHaveLength(0);
+  });
 });
 
 describe('ensureAntigravityTuiArgs', () => {

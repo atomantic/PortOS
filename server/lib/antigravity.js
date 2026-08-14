@@ -201,23 +201,25 @@ const NOOP_CLEANUP = () => {};
  * no-op for the already-trailing case.
  *
  * The flag's original SPELLING is preserved (`-p` / `--prompt` / `--print`) so a
- * user-baked short form still reaches agy as they wrote it.
+ * user-baked short form still reaches agy as they wrote it — the LAST spelling
+ * wins, matching which flag agy itself would have honored.
+ *
+ * EVERY print flag is lifted, not just the last one. `ensureAntigravityPrintArgs`
+ * strips baked print flags from the provider's saved argv, but the `extraArgs`
+ * concatenated on afterwards are never stripped — so leaving an earlier `-p`
+ * behind would have agy consume the token following IT as the prompt.
  *
  * @param {string[]} args - argv as built by ensureAntigravityPrintArgs
  * @param {string} prompt - the full prompt text
  * @returns {{ args: string[], useStdin: false, cleanup: () => void }}
  */
 export function prepareAntigravityPrompt(args = [], prompt = '') {
-  const out = [...args];
-  // Find the LAST print flag so the prompt lands as its value even if the argv
-  // carries stray tokens (it shouldn't, post-ensureAntigravityPrintArgs).
-  let idx = -1;
-  for (let i = out.length - 1; i >= 0; i--) {
-    if (ANTIGRAVITY_PRINT_FLAGS.includes(out[i])) { idx = i; break; }
+  let flag = '--print';
+  const out = [];
+  for (const arg of args) {
+    if (ANTIGRAVITY_PRINT_FLAGS.includes(arg)) flag = arg;
+    else out.push(arg);
   }
-  // No print flag at all → add one. Otherwise lift the existing marker out of
-  // its current position so it can be re-appended as the final pair.
-  const flag = idx === -1 ? '--print' : out.splice(idx, 1)[0];
   out.push(flag, prompt);
   return { args: out, useStdin: false, cleanup: NOOP_CLEANUP };
 }
