@@ -25,7 +25,7 @@ vi.mock('../meatspaceCalendar.js', () => ({ getActivities: vi.fn(async () => [])
 
 const { computeTimeHorizons } = await import('./markers.js');
 const { applyFreshTimeHorizons, readLongevity, getLongevity } = await import('./longevity.js');
-const { getGoals, getGoalsTree, computeGoalUrgency } = await import('./goals.js');
+const { createGoal, getGoals, getGoalsTree, computeGoalUrgency } = await import('./goals.js');
 const { saveJSON } = await import('./store.js');
 
 // A stored snapshot whose horizons were computed a year before "now": at age 44
@@ -94,6 +94,14 @@ describe('computeTimeHorizons', () => {
 
   it('returns null for an unparseable birth date rather than NaN horizons', () => {
     expect(computeTimeHorizons('not-a-date', 80)).toBeNull();
+  });
+
+  it('returns null for a NaN life expectancy (typeof NaN is "number")', () => {
+    // Without a finiteness check this slips through and computes
+    // yearsRemaining 0 / percentLifeComplete 100 — the exact false "no time
+    // left" reading the null contract exists to prevent.
+    expect(computeTimeHorizons(birthDateYearsAgo(45), NaN)).toBeNull();
+    expect(computeTimeHorizons(birthDateYearsAgo(45), Infinity)).toBeNull();
   });
 
   it('clamps a birth date already past the life expectancy', () => {
@@ -216,6 +224,26 @@ describe('goal urgency ranks on the re-derived horizons', () => {
 
     expect(data.goals[0].urgency).toBeCloseTo(0.7, 2);
     expect(saveJSON).not.toHaveBeenCalled();
+  });
+
+  it('getGoals refreshes the record\'s own timeHorizons copy too', async () => {
+    // goals.json carries its own horizons (stamped by setBirthDate, merged across
+    // peers by dataSync) — a fresh urgency next to a stale copy would federate the
+    // stale one onward.
+    h.goalsData.timeHorizons = staleGenerousSnapshot().timeHorizons;
+
+    const data = await getGoals();
+
+    expect(data.timeHorizons.yearsRemaining).toBeCloseTo(10, 1);
+    expect(data.timeHorizons.yearsRemaining).not.toBe(40);
+  });
+
+  it('createGoal scores a new goal on the re-derived horizons', async () => {
+    h.goalsData.goals = [];
+
+    const goal = await createGoal({ title: 'Example Goal', horizon: '10-year' });
+
+    expect(goal.urgency).toBeCloseTo(0.7, 2);
   });
 
   it('falls back to the stored horizons when there is no birth date', async () => {

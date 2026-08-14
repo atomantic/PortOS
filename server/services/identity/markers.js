@@ -156,10 +156,13 @@ export function extractCardiovascularMarkers(savedMarkers) {
  * Returns `null` — not a zero-filled shape — when the birth date is missing or
  * unparseable, or when no adjusted life expectancy has been derived yet. "We can't
  * compute horizons" must stay distinguishable from "you have no time left"; callers
- * gate on the null.
+ * gate on the null. `Number.isFinite` rather than a `typeof` check, because
+ * `typeof NaN === 'number'`: a NaN expectancy would otherwise sail past the guard
+ * and land on exactly the misleading `yearsRemaining: 0` / `percentLifeComplete: 100`
+ * this returns null to avoid.
  */
 export function computeTimeHorizons(birthDate, adjustedLifeExpectancy) {
-  if (!birthDate || typeof adjustedLifeExpectancy !== 'number') return null;
+  if (!birthDate || !Number.isFinite(adjustedLifeExpectancy)) return null;
 
   const birthMs = new Date(birthDate).getTime();
   if (Number.isNaN(birthMs)) return null;

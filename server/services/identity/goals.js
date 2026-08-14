@@ -232,6 +232,10 @@ export async function getGoals(options) {
   // whatever it had rather than having its urgencies silently blanked.
   const longevity = await loadLongevityFor(data);
   if (longevity.timeHorizons) {
+    // The record carries its own copy of the horizons (stamped by setBirthDate, and
+    // merged across peers by dataSync) — refresh it too, or the payload would pair
+    // fresh urgencies with a stale `timeHorizons` and federate the stale one onward.
+    data.timeHorizons = longevity.timeHorizons;
     for (const goal of data.goals) {
       if (goal.status === 'active') goal.urgency = computeGoalUrgency(goal, longevity.timeHorizons);
     }
@@ -269,8 +273,9 @@ export async function setBirthDate(birthDate) {
 }
 
 export async function createGoal({ title, description, horizon, category, goalType, parentId, tags, targetDate, timeBlockConfig, featureAreas }) {
+  // getGoals() already refreshed `goals.timeHorizons` against today, so read it from
+  // there rather than paying for a second longevity load.
   const goals = await getGoals();
-  const longevity = await loadLongevityFor(goals);
 
   // Validate parentId references an existing goal
   if (parentId && !goals.goals.find(g => g.id === parentId)) {
@@ -305,8 +310,8 @@ export async function createGoal({ title, description, horizon, category, goalTy
   };
 
   // Calculate urgency if time horizons available
-  if (longevity.timeHorizons) {
-    goal.urgency = computeGoalUrgency(goal, longevity.timeHorizons);
+  if (goals.timeHorizons) {
+    goal.urgency = computeGoalUrgency(goal, goals.timeHorizons);
   }
 
   goals.goals.push(goal);
@@ -344,10 +349,10 @@ export async function updateGoal(goalId, updates) {
   }
   goal.updatedAt = new Date().toISOString();
 
-  // Recalculate urgency if horizon changed
-  const longevity = await loadLongevityFor(goals);
-  if (longevity.timeHorizons) {
-    goal.urgency = computeGoalUrgency(goal, longevity.timeHorizons);
+  // Recalculate urgency if horizon changed — against the horizons getGoals() already
+  // refreshed, not a second longevity load.
+  if (goals.timeHorizons) {
+    goal.urgency = computeGoalUrgency(goal, goals.timeHorizons);
   }
 
   goals.updatedAt = new Date().toISOString();
