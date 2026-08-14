@@ -1,11 +1,17 @@
 /**
- * Test HTTP request helper
+ * Shared test helpers: HTTP request harness, fetch-Response mocks, the
+ * server-source scanner used by the whole-tree guard suites, and the two
+ * cross-platform helpers (`posixPath`, `resolveTestPython`) that keep
+ * path- and interpreter-sensitive suites running on Windows as well as POSIX.
+ *
  * fetch-based replacement for supertest — creates a real HTTP server on a
  * random port, makes a single request, then shuts the server down.
  */
 
 import { createServer } from 'http';
-import { readdirSync, readFileSync } from 'fs';
+import { execFileSync } from 'child_process';
+import { homedir } from 'os';
+import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join, relative } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -188,4 +194,67 @@ export function collectServerSources(dir = SERVER_DIR) {
 /** Read a source file named by a `collectServerSources()` path. */
 export function readServerSource(rel) {
   return readFileSync(join(SERVER_DIR, rel), 'utf8');
+}
+
+/**
+ * Normalize a path for comparison against a POSIX-spelled literal.
+ *
+ * The overwhelmingly common Windows test failure is an assertion that names a
+ * path as `'/some/path'` while the code under test built it with `path.join`,
+ * which emits `\` there. Normalizing the RECEIVED value keeps the readable
+ * literal meaningful on both platforms; it is a no-op on POSIX.
+ *
+ * Use it on what the code returned, never on the expectation — a normalized
+ * expectation would also hide a genuinely wrong path.
+ */
+export const posixPath = (value) => String(value).split('\\').join('/');
+
+/**
+ * Resolve a Python interpreter that actually RUNS, or `null` when there is
+ * none — for suites that shell out to one of PortOS's `.py` scripts. Pair it
+ * with `describe.skipIf(!resolveTestPython())`.
+ *
+ * Trusting a name on PATH is not enough on Windows: a machine with no
+ * Store-installed Python still has `python` on PATH as a Microsoft Store ALIAS
+ * STUB, which exists, exits non-zero, and prints "Python was not found". A
+ * `where`-style check passes on that stub and every case then fails with an
+ * opaque "Command failed" — so each candidate is probed by executing something
+ * trivial. The `py` launcher gets the same treatment: it is the standard
+ * Windows entry point but is itself a shim that can point at an uninstalled
+ * version.
+ *
+ * PortOS also provisions its OWN interpreters (`setup:image` / `setup:video`
+ * build venvs under `~/.portos`), so a machine can be fully set up for
+ * image/video gen while the bare `python` name is still a stub. Those are
+ * searched before concluding there is no interpreter — otherwise these suites
+ * silently skip on exactly the machines that exercise the scripts they cover.
+ *
+ * `PORTOS_TEST_PYTHON` overrides the whole search.
+ *
+ * @returns {string|null} a runnable interpreter path/name, or null
+ */
+export function resolveTestPython() {
+  const isWin = process.platform === 'win32';
+  const venvBin = isWin ? ['Scripts', 'python.exe'] : ['bin', 'python3'];
+  const portosPythons = ['venv-flux2', 'venv-mflux', 'venv-video', 'voice']
+    .map((venv) => join(homedir(), '.portos', venv, ...venvBin))
+    .concat(isWin ? [join(homedir(), 'miniconda3', 'python.exe')] : [])
+    .filter((candidate) => existsSync(candidate));
+
+  const candidates = [
+    process.env.PORTOS_TEST_PYTHON,
+    isWin ? 'python' : 'python3',
+    isWin ? 'python3' : 'python',
+    ...(isWin ? ['py'] : []),
+    ...portosPythons,
+  ].filter(Boolean);
+
+  return candidates.find((candidate) => {
+    try {
+      execFileSync(candidate, ['-c', 'pass'], { stdio: 'ignore' });
+      return true;
+    } catch {
+      return false;
+    }
+  }) || null;
 }

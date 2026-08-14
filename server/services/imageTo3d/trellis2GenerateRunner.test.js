@@ -4,8 +4,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { trellis2GenerateRunnerScript } from './trellis2.js';
+import { resolveTestPython } from '../../lib/testHelper.js';
 
-describe('trellis2GenerateRunner', () => {
+// Probe for an interpreter that actually runs rather than assuming `python3`:
+// on Windows that name is absent and `python` is a Store alias stub that exists
+// but fails, so a hardcoded name turns "no Python here" into an opaque
+// "Command failed" (see resolveTestPython).
+
+const pyBin = resolveTestPython();
+
+describe.skipIf(!pyBin)('trellis2GenerateRunner', () => {
   it('preserves direct-script imports while exposing the 4K texture size', () => {
     const fixtureDir = mkdtempSync(join(tmpdir(), 'portos-trellis2-runner-'));
     const generateScript = join(fixtureDir, 'generate.py');
@@ -22,7 +30,7 @@ describe('trellis2GenerateRunner', () => {
         '',
       ].join('\n'));
 
-      const output = execFileSync('python3', [
+      const output = execFileSync(pyBin, [
         trellis2GenerateRunnerScript(),
         generateScript,
         '--texture-size',

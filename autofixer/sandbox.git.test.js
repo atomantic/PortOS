@@ -2,6 +2,11 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, writeFile, readFile, mkdir } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
+
+// Newline-normalizer: git checks files out through core.autocrlf, so a Windows
+// working tree holds CRLF whatever the worktree edit wrote. These assertions
+// are about promoted content, not the platform's newline style.
+const lf = (v) => String(v).split('\r\n').join('\n');
 import {
   isGitRepo,
   createDisposableWorktree,
@@ -54,12 +59,14 @@ describe('git worktree isolation (integration)', () => {
     expect(diff).toContain('app.js');
     expect(diff).toContain('+const x = 2');
 
-    // The live checkout is untouched until we explicitly promote.
-    expect(await readFile(join(repo, 'app.js'), 'utf8')).toBe('const x = 1\n');
+    // The live checkout is untouched until we explicitly promote. Compare
+    // newline-normalized: git checks files out through core.autocrlf, so a
+    // Windows working tree holds CRLF no matter what the worktree edit wrote.
+    expect(lf(await readFile(join(repo, 'app.js'), 'utf8'))).toBe('const x = 1\n');
 
     const applied = await applyDiffToLive(repo, diff, scratch);
     expect(applied.ok).toBe(true);
-    expect(await readFile(join(repo, 'app.js'), 'utf8')).toBe('const x = 2\n');
+    expect(lf(await readFile(join(repo, 'app.js'), 'utf8'))).toBe('const x = 2\n');
 
     await removeWorktree(repo, wt.path);
     const list = await execGit(['worktree', 'list'], repo);

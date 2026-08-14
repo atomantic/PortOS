@@ -441,16 +441,25 @@ describe('DB-backed test files are covered by vitest.config.db.js', () => {
     };
 
     const SKIP_DIRS = new Set(['node_modules', 'slashdo', 'coverage', '.git']);
-    const collect = (root) => {
+    // Prune the skipped directories DURING the walk, not after it. A
+    // `readdirSync(root, { recursive: true })` enumerates every entry under
+    // `server/node_modules` — hundreds of thousands of files — before the
+    // filter ever runs, which pushed this single test past a minute on Windows
+    // and timed the suite out under full-suite load.
+    const collect = (root, rel = '') => {
       let entries;
       try {
-        entries = readdirSync(root, { recursive: true });
+        entries = readdirSync(join(root, rel), { withFileTypes: true });
       } catch {
         return [];
       }
-      return entries
-        .map(String)
-        .filter((p) => p.endsWith('.test.js') && !p.split(sep).some((seg) => SKIP_DIRS.has(seg)));
+      return entries.flatMap((entry) => {
+        const next = rel ? join(rel, entry.name) : entry.name;
+        if (entry.isDirectory()) {
+          return SKIP_DIRS.has(entry.name) ? [] : collect(root, next);
+        }
+        return entry.name.endsWith('.test.js') ? [next] : [];
+      });
     };
 
     const offenders = [];

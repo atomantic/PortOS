@@ -19,7 +19,9 @@ vi.mock('../lib/fileUtils.js', () => ({
   atomicWrite: vi.fn().mockResolvedValue(undefined),
   PATHS: { tools: '/fake/tools' },
   readJSONFile: vi.fn(async (path) => {
-    const filename = path.split('/').pop();
+    // tools.js composes this with path.join, so split on either separator —
+    // a '/'-only split returns the whole Windows path and misses every key.
+    const filename = path.split(/[\\/]/).pop();
     return mockToolFiles.get(filename) ?? null;
   }),
 }));

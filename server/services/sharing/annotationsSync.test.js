@@ -2,15 +2,21 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock store for atomicWrite + readJSONFile so we can inspect record writes.
 const fileStore = new Map();
+
+// The service composes these paths with path.join, so on Windows the mock
+// receives a backslash-separated path and the POSIX-spelled keys the tests
+// seed into fileStore would never match — the lookup would miss and the
+// assertions would report missing data rather than a path separator.
+const toPosix = (v) => (typeof v === 'string' ? v.split('\\').join('/') : v);
 const writeCalls = [];
 
 vi.mock('../../lib/fileUtils.js', () => ({
   ensureDir: vi.fn().mockResolvedValue(undefined),
   atomicWrite: vi.fn(async (path, data) => {
-    fileStore.set(path, data);
+    fileStore.set(toPosix(path), data);
     writeCalls.push({ path, data });
   }),
-  readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
+  readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(toPosix(path)) ? fileStore.get(toPosix(path)) : fallback)),
   PATHS: { data: '/mock/data' },
 }));
 

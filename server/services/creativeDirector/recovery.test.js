@@ -5,7 +5,9 @@ const mockListProjects = vi.fn();
 const mockUpdateScene = vi.fn();
 const mockUpdateRun = vi.fn();
 const mockUpdateProject = vi.fn();
+const mockUpdatePlanStep = vi.fn();
 const mockAdvance = vi.fn();
+const mockAdvancePlanStep = vi.fn();
 const mockListJobs = vi.fn();
 const mockCancelJob = vi.fn();
 const mockUpdateTask = vi.fn();
@@ -15,10 +17,19 @@ vi.mock('./local.js', () => ({
   updateScene: (...args) => mockUpdateScene(...args),
   updateRun: (...args) => mockUpdateRun(...args),
   updateProject: (...args) => mockUpdateProject(...args),
+  updatePlanStep: (...args) => mockUpdatePlanStep(...args),
 }));
 
 vi.mock('./completionHook.js', () => ({
   advanceAfterSceneSettled: (...args) => mockAdvance(...args),
+}));
+
+// recovery.js pulls planAdvance in through a dynamic import. Left unmocked it
+// loads that module's whole real dependency graph on the first test that
+// reaches the orphan-cancel path — ~8s here in isolation, and past the 30s
+// timeout once the full suite is competing for CPU.
+vi.mock('./planAdvance.js', () => ({
+  advanceAfterPlanStepSettled: (...args) => mockAdvancePlanStep(...args),
 }));
 
 vi.mock('../mediaJobQueue/index.js', () => ({
@@ -37,10 +48,12 @@ beforeEach(() => {
   mockUpdateScene.mockReset().mockResolvedValue(undefined);
   mockUpdateRun.mockReset().mockResolvedValue(undefined);
   mockAdvance.mockReset().mockResolvedValue(undefined);
+  mockAdvancePlanStep.mockReset().mockResolvedValue(undefined);
   mockListJobs.mockReset().mockReturnValue([]);
   mockCancelJob.mockReset().mockResolvedValue({ ok: true, status: 'canceled' });
   mockUpdateTask.mockReset().mockResolvedValue({ ok: true });
   mockUpdateProject.mockReset().mockResolvedValue({ ok: true });
+  mockUpdatePlanStep.mockReset().mockResolvedValue(undefined);
 });
 
 describe('recoverInFlightProjects', () => {

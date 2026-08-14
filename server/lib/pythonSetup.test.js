@@ -32,7 +32,11 @@ vi.mock('node:os', async () => {
 
 vi.mock('node:fs', async () => {
   const actual = await vi.importActual('node:fs');
-  return { ...actual, existsSync: (p) => mockState.presentPaths.has(p) };
+  // pythonSetup composes its candidate paths with path.join/dirname, so on a
+  // Windows host they arrive backslash-separated while presentPaths is seeded
+  // with the POSIX spellings the tests read. Normalize the probe, not the
+  // fixtures — the module's own platform is pinned via mockState.platform.
+  return { ...actual, existsSync: (p) => mockState.presentPaths.has(String(p).split('\\').join('/')) };
 });
 
 vi.mock('node:child_process', async () => {
@@ -245,13 +249,13 @@ describe('resolveMfluxPython', () => {
   it('falls back to the dedicated venv when the configured python lacks mflux-train', async () => {
     mockState.presentPaths.add(VENV_TRAIN);
     const { resolveMfluxPython } = await loadModule();
-    expect(resolveMfluxPython('/opt/homebrew/bin/python3')).toBe(VENV_PY);
+    expect(posixPath(resolveMfluxPython('/opt/homebrew/bin/python3'))).toBe(VENV_PY);
   });
 
   it('discovers the dedicated venv even when no python is configured', async () => {
     mockState.presentPaths.add(VENV_TRAIN);
     const { resolveMfluxPython } = await loadModule();
-    expect(resolveMfluxPython(null)).toBe(VENV_PY);
+    expect(posixPath(resolveMfluxPython(null))).toBe(VENV_PY);
   });
 
   it('returns the configured path unchanged when neither ships mflux-train (honest "not installed")', async () => {

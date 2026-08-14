@@ -93,9 +93,10 @@ describe('discoverPgDumpCandidates', () => {
       '/opt/homebrew/opt/postgresql@15/bin/pg_dump': '15.10',
       '/opt/homebrew/opt/postgresql@17/bin/pg_dump': '17.2',
     };
-    execFileAsync.mockImplementation(async (binary) => ({
-      stdout: versions[binary] ? `pg_dump (PostgreSQL) ${versions[binary]}` : '',
-    }));
+    execFileAsync.mockImplementation(async (binary) => {
+      const version = versions[posixPath(binary)];
+      return { stdout: version ? `pg_dump (PostgreSQL) ${version}` : '' };
+    });
     const candidates = await discoverPgDumpCandidates();
     // PATH binary first, then the kegs; the non-postgresql entry is ignored.
     expect(candidates[0]).toEqual({ binary: 'pg_dump', major: 15 });
@@ -118,9 +119,10 @@ describe('resolvePgDump', () => {
       'pg_dump': '15.10',
       '/opt/homebrew/opt/postgresql@17/bin/pg_dump': '17.2',
     };
-    execFileAsync.mockImplementation(async (binary) => ({
-      stdout: versions[binary] ? `pg_dump (PostgreSQL) ${versions[binary]}` : '',
-    }));
+    execFileAsync.mockImplementation(async (binary) => {
+      const version = versions[posixPath(binary)];
+      return { stdout: version ? `pg_dump (PostgreSQL) ${version}` : '' };
+    });
     const { binary, satisfies } = await resolvePgDump(17);
     expect(posixPath(binary)).toBe('/opt/homebrew/opt/postgresql@17/bin/pg_dump');
     expect(satisfies).toBe(true);

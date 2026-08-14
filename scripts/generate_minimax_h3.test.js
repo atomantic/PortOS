@@ -1,55 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
-import { existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { resolveTestPython } from '../server/lib/testHelper.js';
 
 const script = join(dirname(fileURLToPath(import.meta.url)), 'generate_minimax_h3.py');
 
-// Resolve an interpreter that actually RUNS, rather than trusting a name on
-// PATH. On Windows a machine with no Store-installed Python still has `python`
-// on PATH as a Microsoft Store ALIAS STUB: it exists, exits non-zero, and
-// prints "Python was not found; run without arguments to install from the
-// Microsoft Store". A which/where-style check passes on that stub and every
-// case then fails with an opaque "Command failed", so the probe has to execute
-// something trivial. The `py` launcher is checked too — it is the standard
-// Windows entry point — but it is itself a shim that can point at an
-// uninstalled version, so it gets the same treatment.
-//
-// PORTOS_TEST_PYTHON overrides the whole search when a machine needs it.
-//
-// PortOS provisions its own interpreters (setup:image / setup:video build venvs
-// under ~/.portos, and imageGen.local.pythonPath names whichever python the
-// install was pointed at), so a machine can be fully set up for image/video gen
-// while the BARE `python` name is still a Store stub. Fall back to those before
-// concluding there is no interpreter — otherwise this suite silently skips on
-// exactly the machines that exercise the script it covers.
-const portosPythons = () => {
-  const home = homedir();
-  const venvBin = process.platform === 'win32' ? ['Scripts', 'python.exe'] : ['bin', 'python3'];
-  const roots = ['venv-flux2', 'venv-mflux', 'venv-video', 'voice'];
-  const found = roots.map((v) => join(home, '.portos', v, ...venvBin));
-  if (process.platform === 'win32') found.push(join(home, 'miniconda3', 'python.exe'));
-  return found.filter((p) => existsSync(p));
-};
-
-const PY_CANDIDATES = [
-  process.env.PORTOS_TEST_PYTHON,
-  process.platform === 'win32' ? 'python' : 'python3',
-  process.platform === 'win32' ? 'python3' : 'python',
-  ...(process.platform === 'win32' ? ['py'] : []),
-  ...portosPythons(),
-].filter(Boolean);
-
-const pyBin = PY_CANDIDATES.find((candidate) => {
-  try {
-    execFileSync(candidate, ['-c', 'pass'], { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-}) || null;
+const pyBin = resolveTestPython();
 
 const runPython = (source) => execFileSync(pyBin, ['-c', source, script], {
   encoding: 'utf8',

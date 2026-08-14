@@ -7,7 +7,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 const posixPath = (v) => String(v).split('\\').join('/');
 import { writeFileSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, resolve } from 'path';
 
 import {
   verifyVideoPlayable, safeUnder, runFfmpegProcess, hasAudioStream, buildTrimConcatArgs,
@@ -163,7 +163,7 @@ describe('runFfmpegProcess', () => {
 describe('safeUnder', () => {
   it('accepts a plain basename under a root', () => {
     const root = '/tmp/portos-root';
-    expect(posixPath(safeUnder(root, 'foo.mp4'))).toBe('/tmp/portos-root/foo.mp4');
+    expect(safeUnder(root, 'foo.mp4')).toBe(resolve(root, 'foo.mp4'));
   });
 
   it('rejects path-traversal segments', () => {
