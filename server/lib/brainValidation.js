@@ -626,6 +626,31 @@ const songForwardCompatSlug = z.string().trim().regex(/^[a-z0-9][a-z0-9_-]{0,31}
 const songInstrumentValue = z.union([songInstrumentEnum, songForwardCompatSlug]);
 const songContentFormatValue = z.union([songContentFormatEnum, songForwardCompatSlug]);
 
+// Cross-links from a song to the OTHER music record kinds in PortOS (#4103):
+// a Round (`/rounds/:id`) or a generated/imported music Track
+// (`/music/tracks/:id`). MIDI is deliberately absent — there is no MIDI record
+// in PortOS; MIDI is a file (already a songbook attachment, see
+// SONGBOOK_ATTACHMENT_EXTENSIONS) or `referenceAudio.midiFilename` on a Round,
+// which the `round` link already reaches.
+export const songLinkTypeEnum = z.enum(['round', 'track']);
+
+// Same enum-OR-slug acceptance boundary as instrument/format above, for the
+// same reason: brain records sync raw (LWW, no Zod on receive), so a song
+// arriving from a NEWER peer can carry a link type this install has never heard
+// of. Rejecting it would make that song uneditable — every save 400ing on a
+// field the user never touched.
+const songLinkTypeValue = z.union([songLinkTypeEnum, songForwardCompatSlug]);
+
+// One cross-link. `label` is the target's title DENORMALIZED at link time:
+// Rounds and Tracks are not brain records and do not necessarily exist on every
+// federated machine, so a link that resolves to nothing locally still renders a
+// name instead of a bare id.
+const songLinkSchema = z.object({
+  type: songLinkTypeValue,
+  id: z.string().trim().min(1).max(200),
+  label: z.string().trim().max(300).optional().default(''),
+});
+
 // Nested content object — named so the update schema below can rebuild it
 // defaults-free (partialWithoutDefaults only strips TOP-LEVEL field defaults).
 const songContentSchema = z.object({
@@ -647,6 +672,10 @@ export const songInputSchema = z.object({
   capo: z.number().int().min(0).max(12).optional().default(0),
   tuning: z.string().trim().max(40).optional().default(''),
   sourceUrl: z.string().trim().max(2000).optional().default(''),
+  // Cross-links to Rounds / music Tracks (#4103). On a PATCH the top-level
+  // default is stripped, so an OMITTED key preserves the stored links while an
+  // explicit `[]` clears them (the absent-vs-empty rule).
+  links: z.array(songLinkSchema).max(20).optional().default([]),
   content: songContentSchema.optional().default({ format: 'tab', text: '' }),
   notes: z.string().max(5000).optional().default(''),
   // "Fit to duration" autoscroll target: how many seconds the play view should

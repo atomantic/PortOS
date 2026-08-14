@@ -18,7 +18,8 @@
  *   persisted per song via safeStorage), font size ±, an instrument-view
  *   toggle (?view=guitar|ukulele|piano — chord diagrams only, render-only,
  *   defaults to the song's instrument), stage select, capo/key/tuning badges,
- *   source link — plus the attachments section (synced meta, machine-local
+ *   source link, cross-link chips to the related Round / music Track (#4103) —
+ *   plus the attachments section (synced meta, machine-local
  *   bytes → "not on this machine" when absent).
  * - EDIT (?mode=edit): metadata form + font-mono content textarea with format
  *   select and live preview. Saves are explicit (single PATCH). The whole
@@ -56,9 +57,10 @@ import DrumSheetView from '../components/songbook/DrumSheetView';
 import DrumPreview from '../components/songbook/DrumPreview';
 import DrumTransportBar from '../components/songbook/DrumTransportBar';
 import PracticeLogger from '../components/songbook/PracticeLogger';
+import { SongLinkChips, SongLinksEditor } from '../components/songbook/SongLinks';
 import {
   SONG_STAGES, SONG_STAGE_COLORS, INSTRUMENTS, SONG_FORMATS, DRUM_FORMAT,
-  DRUM_INSTRUMENT, withStoredOption,
+  DRUM_INSTRUMENT, withStoredOption, songLinks, songLinkKey,
   inputClass, labelClass, btnClass, instrumentLabel,
 } from '../components/songbook/constants';
 import { useAsyncAction } from '../hooks/useAsyncAction';
@@ -115,6 +117,10 @@ const toDraft = (song) => ({
   tuning: song.tuning || '',
   tags: Array.isArray(song.tags) ? song.tags.join(', ') : '',
   sourceUrl: song.sourceUrl || '',
+  // Cross-links to Rounds / music Tracks (#4103). Copied, not aliased — the
+  // editor replaces the array wholesale, so the draft must never share identity
+  // with the stored record or the dirty check compares a value against itself.
+  links: songLinks(song).map((l) => ({ ...l })),
   notes: song.notes || '',
   // '' is the form's "no target" — the record stores null (or has no key at all
   // on a song written before the field existed / synced from an older peer).
@@ -135,6 +141,11 @@ const parseTags = (raw) => raw.split(',').map((t) => t.trim()).filter(Boolean);
 const TRIMMED_DRAFT_FIELDS = ['title', 'artist', 'key', 'tuning', 'sourceUrl'];
 const normalizeDraftField = (draft, k) => {
   if (k === 'capo') return Number(draft.capo || 0);
+  // The one array field: compare by VALUE, not by reference (`===` on two equal
+  // arrays is always false, so every open of Edit would read as dirty). Order
+  // matters (adding a link is an edit), and the label rides along because it is
+  // stored on the record — swapping it is a real change to save.
+  if (k === 'links') return (draft.links || []).map((l) => `${songLinkKey(l)}|${l.label || ''}`).join('\n');
   // Compare the SAVED value, not the raw text: '210' and '0210' (and '' vs a
   // sub-minimum '3', which clamps) both save the same, so retyping one isn't
   // unsaved work. Null (no target) compares equal to itself.
@@ -391,6 +402,9 @@ export default function SongBookViewer() {
       tuning: draft.tuning.trim(),
       tags: parseTags(draft.tags),
       sourceUrl: draft.sourceUrl.trim(),
+      // Always sent, including as an empty array — removing the last link has to
+      // clear the stored list, and an omitted key would preserve it instead.
+      links: draft.links,
       notes: draft.notes,
       // Always sent, including as an explicit null — clearing the input has to
       // clear the stored target, and an omitted key would preserve it instead.
@@ -693,6 +707,14 @@ export default function SongBookViewer() {
               <input id="song-edit-source" type="text" value={draft.sourceUrl} onChange={(e) => setDraft({ ...draft, sourceUrl: e.target.value })} placeholder="https://…" className={inputClass} />
             </div>
             <div className="sm:col-span-2">
+              {/* Cross-links to Rounds / music Tracks (#4103) — edits the draft
+                  array; the save sends it whole (empty = clear). */}
+              <SongLinksEditor
+                links={draft.links}
+                onChange={(links) => setDraft({ ...draft, links })}
+              />
+            </div>
+            <div className="sm:col-span-2">
               <label htmlFor="song-edit-notes" className={labelClass}>Notes</label>
               <AutoSizeTextarea
                 id="song-edit-notes"
@@ -907,6 +929,11 @@ export default function SongBookViewer() {
           </div>
 
           <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-3 sm:px-4 sm:py-4">
+            {/* Cross-links to the Round / music Track this song relates to
+                (#4103). Above the sheet so they're reachable without scrolling;
+                inside the scroller so they don't crowd the controls bar. */}
+            <SongLinkChips links={songLinks(song)} className="mb-3 max-w-4xl" />
+
             {song.content?.text && isDrum ? (
               // Full width, not max-w-4xl: the kit strip IS the horizontal
               // scroller, so capping it just shortens the window you read

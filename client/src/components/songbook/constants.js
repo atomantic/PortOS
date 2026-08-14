@@ -75,6 +75,43 @@ export const instrumentLabel = (id) => INSTRUMENTS.find((i) => i.id === id)?.lab
 
 export const SONG_FORMATS = ['chordpro', 'tab', 'plain', 'drum'];
 
+// =============================================================================
+// CROSS-LINKS to other music records (#4103)
+// =============================================================================
+
+// The record kinds a song can link to. Mirrors `songLinkTypeEnum` in
+// server/lib/brainValidation.js; `path` is the detail route the chip navigates
+// to (`${path}/${id}`), and `listAll` names the api.js helper the edit-mode
+// picker loads its options from. Parity with the server enum is asserted in
+// constants.test.js.
+export const SONG_LINK_TYPES = [
+  { id: 'round', label: 'Round', path: '/rounds', listAll: 'listRounds' },
+  { id: 'track', label: 'Track', path: '/music/tracks', listAll: 'listTracks' },
+];
+
+// Display label for a stored link type. A type this client doesn't know (a song
+// synced from a newer peer — the server accepts any short slug) renders as-is
+// rather than vanishing.
+export const songLinkTypeLabel = (type) => (
+  SONG_LINK_TYPES.find((t) => t.id === type)?.label || type
+);
+
+// In-app route for a link, or null when the type is unknown to this client —
+// there is no route to send the user to, so the caller renders a plain (unlinked)
+// chip instead of a dead <Link>.
+export const songLinkHref = (link) => {
+  const path = SONG_LINK_TYPES.find((t) => t.id === link?.type)?.path;
+  return path && link?.id ? `${path}/${encodeURIComponent(link.id)}` : null;
+};
+
+// A link's identity for dedupe/removal — type+id, since the same id could in
+// principle exist under two record kinds.
+export const songLinkKey = (link) => `${link?.type}:${link?.id}`;
+
+// The song's links as an array. Absent (a song predating the field, or one
+// synced from an older peer) reads the same as none — but never as a crash.
+export const songLinks = (song) => (Array.isArray(song?.links) ? song.links : []);
+
 // The content format whose renderer is <DrumSheetView> (kit grid) rather than
 // <TabSheetView>. Named so the viewer/import branches read intent, not a string.
 export const DRUM_FORMAT = 'drum';

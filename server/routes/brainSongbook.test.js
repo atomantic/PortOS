@@ -233,6 +233,35 @@ describe('Brain SongBook routes', () => {
         .send({ title: 'X' });
       expect(res.status).toBe(404);
     });
+
+    // Cross-links (#4103): absent preserves, explicit [] clears.
+    it('preserves stored links when the key is absent, and clears them on []', async () => {
+      const links = [{ type: 'round', id: 'round-1', label: 'Example Round' }];
+
+      const untouched = mockUpdateWith(baseSong({ links }));
+      const kept = await request(app)
+        .patch(`/api/brain/songbook/${SONG_ID}`)
+        .send({ title: 'New Title' });
+      expect(kept.status).toBe(200);
+      expect('links' in untouched.updates).toBe(false);
+      expect(kept.body.links).toEqual(links);
+
+      const emptied = mockUpdateWith(baseSong({ links }));
+      const cleared = await request(app)
+        .patch(`/api/brain/songbook/${SONG_ID}`)
+        .send({ links: [] });
+      expect(cleared.status).toBe(200);
+      expect(emptied.updates).toEqual({ links: [] });
+      expect(cleared.body.links).toEqual([]);
+    });
+
+    it('400s on a malformed link entry', async () => {
+      const res = await request(app)
+        .patch(`/api/brain/songbook/${SONG_ID}`)
+        .send({ links: [{ type: 'round' }] });
+      expect(res.status).toBe(400);
+      expect(brainStorage.updateWith).not.toHaveBeenCalled();
+    });
   });
 
   describe('DELETE /api/brain/songbook/:id', () => {

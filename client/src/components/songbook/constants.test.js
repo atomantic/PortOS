@@ -3,6 +3,7 @@ import {
   INSTRUMENTS, SONG_FORMATS, DRUM_FORMAT, DRUM_INSTRUMENT, SONG_STAGES,
   SONG_PRACTICE_RATINGS, instrumentLabel, withStoredOption,
   isSongDue, songNextReviewAt, songPracticeSessions,
+  SONG_LINK_TYPES, songLinkTypeLabel, songLinkHref, songLinkKey, songLinks,
 } from './constants.js';
 
 describe('SongBook constants', () => {
@@ -113,5 +114,39 @@ describe('withStoredOption', () => {
     for (const stored of [undefined, null, '']) {
       expect(withStoredOption(INSTRUMENTS, stored)).toHaveLength(INSTRUMENTS.length);
     }
+  });
+});
+
+describe('cross-links to other music records (#4103)', () => {
+  it('mirrors the server songLinkTypeEnum (server/lib/brainValidation.js)', () => {
+    expect(SONG_LINK_TYPES.map((t) => t.id)).toEqual(['round', 'track']);
+  });
+
+  it('builds the in-app detail route for each known type', () => {
+    expect(songLinkHref({ type: 'round', id: 'r1' })).toBe('/rounds/r1');
+    expect(songLinkHref({ type: 'track', id: 't1' })).toBe('/music/tracks/t1');
+    expect(songLinkHref({ type: 'round', id: 'a/b' })).toBe('/rounds/a%2Fb');
+  });
+
+  // A song synced from a NEWER peer can carry a link type this client has no
+  // route for. It must degrade to "no href" (the caller renders a plain chip)
+  // rather than fabricating a dead route — and still show a readable label.
+  it('degrades an unknown or incomplete link to no href, keeping the raw type as its label', () => {
+    expect(songLinkHref({ type: 'stem-pack', id: 'x1' })).toBe(null);
+    expect(songLinkHref({ type: 'round' })).toBe(null);
+    expect(songLinkHref(null)).toBe(null);
+    expect(songLinkTypeLabel('stem-pack')).toBe('stem-pack');
+    expect(songLinkTypeLabel('round')).toBe('Round');
+  });
+
+  it('keys a link on type+id so the same id under two kinds stays distinct', () => {
+    expect(songLinkKey({ type: 'round', id: 'x' })).not.toBe(songLinkKey({ type: 'track', id: 'x' }));
+  });
+
+  it('reads an absent links field as none, never as a crash', () => {
+    expect(songLinks(undefined)).toEqual([]);
+    expect(songLinks({})).toEqual([]);
+    expect(songLinks({ links: 'nope' })).toEqual([]);
+    expect(songLinks({ links: [{ type: 'round', id: 'r1' }] })).toEqual([{ type: 'round', id: 'r1' }]);
   });
 });

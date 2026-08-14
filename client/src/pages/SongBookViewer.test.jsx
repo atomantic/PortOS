@@ -12,6 +12,9 @@ const api = vi.hoisted(() => ({
   deleteSongAttachment: vi.fn(),
   practiceSong: vi.fn(),
   songAttachmentUrl: (id, filename) => `/api/brain/songbook/${id}/attachments/${filename}`,
+  // Cross-link picker options (#4103) — the editor loads both lists on mount.
+  listRounds: vi.fn(),
+  listTracks: vi.fn(),
 }));
 vi.mock('../services/api', () => api);
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
@@ -66,6 +69,8 @@ describe('SongBookViewer', () => {
     api.updateSong.mockReset();
     api.deleteSong.mockReset();
     api.practiceSong.mockReset();
+    api.listRounds.mockReset().mockResolvedValue({ rounds: [{ id: 'r1', title: 'Example Round' }] });
+    api.listTracks.mockReset().mockResolvedValue([{ id: 't1', title: 'Example Track' }]);
     globalThis.localStorage?.clear?.();
   });
 
@@ -593,6 +598,76 @@ K:  o - - - - - o -`;
     expect(patch.content).toEqual({ format: 'tab', text: SHEET });
     // attachments is server-managed — never sent.
     expect('attachments' in patch).toBe(false);
+  });
+
+  // Cross-links to the other music record kinds — Rounds and music Tracks.
+  describe('cross-links to Rounds / Tracks (#4103)', () => {
+    it('renders stored links as chips pointing at the target routes in play mode', async () => {
+      api.getSong.mockResolvedValue(song({
+        links: [
+          { type: 'round', id: 'r1', label: 'Example Round' },
+          { type: 'track', id: 't1', label: 'Example Track' },
+        ],
+      }));
+      renderPage();
+      const round = await screen.findByRole('link', { name: /Example Round/ });
+      expect(round.getAttribute('href')).toBe('/rounds/r1');
+      expect(screen.getByRole('link', { name: /Example Track/ }).getAttribute('href')).toBe('/music/tracks/t1');
+    });
+
+    // A song synced from a NEWER peer can carry a link type this client has no
+    // route for — it must still render its name, not a dead link.
+    it('renders an unknown link type as a plain chip, not a link', async () => {
+      api.getSong.mockResolvedValue(song({ links: [{ type: 'stem-pack', id: 'x1', label: 'Future Record' }] }));
+      renderPage();
+      expect(await screen.findByText('Future Record')).toBeTruthy();
+      expect(screen.queryByRole('link', { name: /Future Record/ })).toBeNull();
+    });
+
+    it('adds a link from the picker and sends it on save with the target title', async () => {
+      api.updateSong.mockImplementation((_id, patch) => Promise.resolve(song({ ...patch })));
+      renderPage('/songbook/abc?mode=edit');
+      const target = await screen.findByLabelText('Record to link');
+      await waitFor(() => expect(within(target).getAllByRole('option').length).toBe(2));
+      fireEvent.change(target, { target: { value: 'r1' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Add link' }));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(api.updateSong).toHaveBeenCalled());
+      const [, patch] = api.updateSong.mock.calls[0];
+      expect(patch.links).toEqual([{ type: 'round', id: 'r1', label: 'Example Round' }]);
+    });
+
+    // Absent vs. intentionally-empty: removing the last link must SEND [] so the
+    // stored list is cleared, not omit the key (which would preserve it).
+    it('sends an explicit empty array when the last link is removed', async () => {
+      api.getSong.mockResolvedValue(song({ links: [{ type: 'round', id: 'r1', label: 'Example Round' }] }));
+      api.updateSong.mockImplementation((_id, patch) => Promise.resolve(song({ ...patch })));
+      renderPage('/songbook/abc?mode=edit');
+      fireEvent.click(await screen.findByRole('button', { name: 'Remove link to Example Round' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(api.updateSong).toHaveBeenCalled());
+      expect(api.updateSong.mock.calls[0][1].links).toEqual([]);
+    });
+
+    it('keeps editing usable when the picker lists fail to load', async () => {
+      api.listRounds.mockRejectedValue(new Error('boom'));
+      api.listTracks.mockRejectedValue(new Error('boom'));
+      renderPage('/songbook/abc?mode=edit');
+      const target = await screen.findByLabelText('Record to link');
+      await waitFor(() => expect(target.disabled).toBe(true));
+      expect(screen.getByLabelText('Title').value).toBe('Example Song');
+    });
+
+    // Opening Edit must not read as dirty just because `links` is an array —
+    // a by-reference compare would flag every open (#3902 guard).
+    it('does not treat an untouched links array as an unsaved edit', async () => {
+      api.getSong.mockResolvedValue(song({ links: [{ type: 'round', id: 'r1', label: 'Example Round' }] }));
+      const { router } = renderPage('/songbook/abc?mode=edit', { history: ['/songbook'] });
+      await screen.findByLabelText('Title');
+      await navigate(router, '/songbook');
+      expect(await screen.findByText('All songs index')).toBeTruthy();
+    });
   });
 
   describe('fit-to-duration autoscroll preset (#4100)', () => {
