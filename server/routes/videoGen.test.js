@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { join, resolve as resolvePath } from 'path';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -418,7 +419,7 @@ describe('videoGen routes', () => {
       expect(r.text).toContain('Wan 2.2 MLX ready');
       expect(installProcess.spawn).toHaveBeenCalledWith(
         'bash',
-        ['/mock/scripts/setup-image-video.sh'],
+        [join('/mock', 'scripts', 'setup-image-video.sh')],
         expect.objectContaining({
           detached: true,
           env: expect.objectContaining({
@@ -1365,12 +1366,12 @@ describe('videoGen routes', () => {
         params: expect.objectContaining({
           mode: 'a2v',
           // audio is staged into PATHS.uploads with the video-audio prefix
-          audioFilePath: expect.stringMatching(/\/mock\/uploads\/video-audio-.*\.wav$/),
+          audioFilePath: expect.stringMatching(/[\\/]mock[\\/]uploads[\\/]video-audio-.*\.wav$/),
           // and threaded into uploadedTempPaths (array) for worker cleanup —
           // uploadedTempPath (singular) stays reserved for the start-frame
           // upload so legacy persisted jobs replay correctly.
           uploadedTempPaths: expect.arrayContaining([
-            expect.stringMatching(/\/mock\/uploads\/video-audio-.*\.wav$/),
+            expect.stringMatching(/[\\/]mock[\\/]uploads[\\/]video-audio-.*\.wav$/),
           ]),
         }),
       }));
@@ -1401,9 +1402,9 @@ describe('videoGen routes', () => {
           sourceImagePath: '/mock/images/reference.png',
           audioStartSec: 42.5,
           disableAudio: true,
-          audioFilePath: expect.stringMatching(/\/mock\/uploads\/video-audio-.*\.wav$/),
+          audioFilePath: expect.stringMatching(/[\\/]mock[\\/]uploads[\\/]video-audio-.*\.wav$/),
           uploadedTempPaths: expect.arrayContaining([
-            expect.stringMatching(/\/mock\/uploads\/video-audio-.*\.wav$/),
+            expect.stringMatching(/[\\/]mock[\\/]uploads[\\/]video-audio-.*\.wav$/),
           ]),
           musicVideo: { projectId: 'mv-example', sceneId: 'scene-example' },
         }),
@@ -1518,10 +1519,10 @@ describe('videoGen routes', () => {
           params: expect.objectContaining({
             mode: 'ic-control',
             icStrength: 0.8,
-            icReferencePaths: [expect.stringMatching(/\/mock\/uploads\/video-ic-ref-.*\.mp4$/)],
+            icReferencePaths: [expect.stringMatching(/[\\/]mock[\\/]uploads[\\/]video-ic-ref-.*\.mp4$/)],
             // Tracked for worker cleanup the same way the audio upload is.
             uploadedTempPaths: expect.arrayContaining([
-              expect.stringMatching(/\/mock\/uploads\/video-ic-ref-.*\.mp4$/),
+              expect.stringMatching(/[\\/]mock[\\/]uploads[\\/]video-ic-ref-.*\.mp4$/),
             ]),
             // Chaining is meaningless for a reference-anchored render.
             chunks: 1,
@@ -1538,7 +1539,9 @@ describe('videoGen routes', () => {
         expect(r.status).toBe(200);
         expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
           params: expect.objectContaining({
-            icReferencePaths: [`/mock/videos/${id}.mp4`],
+            // resolve() stamps a drive letter on Windows — build the expectation the
+            // same way the service does rather than hardcoding a POSIX absolute path.
+            icReferencePaths: [resolvePath(`/mock/videos/${id}.mp4`)],
           }),
         }));
       });
@@ -1799,9 +1802,9 @@ describe('videoGen routes', () => {
       const unlinked = unlinkedPaths();
       expect(unlinked).toEqual(expect.arrayContaining([
         // the destination the failed copy may have partially written
-        expect.stringMatching(/^\/mock\/uploads\/video-audio-[^/]+\.wav$/),
+        expect.stringMatching(/^[\\/]mock[\\/]uploads[\\/]video-audio-[^\\/]+\.wav$/),
         // …and the durable copy staged before it (stagedDurablePaths)
-        expect.stringMatching(/^\/mock\/uploads\/video-source-[^/]+\.png$/),
+        expect.stringMatching(/^[\\/]mock[\\/]uploads[\\/]video-source-[^\\/]+\.png$/),
         // …and both multipart temp files
         sourceUpload.path,
         audioUpload.path,
@@ -1822,7 +1825,7 @@ describe('videoGen routes', () => {
       expect(r.body.code).toBe('NOT_FOUND');
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
       expect(unlinkedPaths()).toEqual(expect.arrayContaining([
-        expect.stringMatching(/^\/mock\/uploads\/video-source-[^/]+\.png$/),
+        expect.stringMatching(/^[\\/]mock[\\/]uploads[\\/]video-source-[^\\/]+\.png$/),
         sourceUpload.path,
       ]));
     });
@@ -1840,8 +1843,8 @@ describe('videoGen routes', () => {
       expect(r.body.code).toBe('KEYFRAMES_MODE_MISMATCH');
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
       expect(unlinkedPaths()).toEqual(expect.arrayContaining([
-        expect.stringMatching(/^\/mock\/uploads\/video-source-[^/]+\.png$/),
-        expect.stringMatching(/^\/mock\/uploads\/video-ic-ref-[^/]+\.mp4$/),
+        expect.stringMatching(/^[\\/]mock[\\/]uploads[\\/]video-source-[^\\/]+\.png$/),
+        expect.stringMatching(/^[\\/]mock[\\/]uploads[\\/]video-ic-ref-[^\\/]+\.mp4$/),
         sourceUpload.path,
         icUpload.path,
       ]));
@@ -1862,8 +1865,8 @@ describe('videoGen routes', () => {
       expect(r.body.code).toBe('KEYFRAMES_LEGACY_INPUTS_CONFLICT');
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
       expect(unlinkedPaths()).toEqual(expect.arrayContaining([
-        expect.stringMatching(/^\/mock\/uploads\/video-source-[^/]+\.png$/),
-        expect.stringMatching(/^\/mock\/uploads\/video-last-[^/]+\.png$/),
+        expect.stringMatching(/^[\\/]mock[\\/]uploads[\\/]video-source-[^\\/]+\.png$/),
+        expect.stringMatching(/^[\\/]mock[\\/]uploads[\\/]video-last-[^\\/]+\.png$/),
         sourceUpload.path,
         lastImageUpload.path,
       ]));
@@ -1882,7 +1885,7 @@ describe('videoGen routes', () => {
       // skipped altogether — there'd be no durable path to unlink.
       expect(copyFile).toHaveBeenCalledWith(
         sourceUpload.path,
-        expect.stringMatching(/^\/mock\/uploads\/video-source-[^/]+\.png$/),
+        expect.stringMatching(/^[\\/]mock[\\/]uploads[\\/]video-source-[^\\/]+\.png$/),
       );
       const [, durableDest] = copyFile.mock.calls[0];
       expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
