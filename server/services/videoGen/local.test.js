@@ -19,6 +19,27 @@ const posix = (v) => String(v).split(String.fromCharCode(92)).join("/");
 // Script paths are built with path.join, so a "/name.py" suffix test never
 // matches on Windows. Compare on the normalized form.
 const endsWithScript = (arg, name) => posix(arg).endsWith(name);
+// The chain helpers used to sleep a flat 100ms for the timeline stitch, then
+// read the concat spawn / stitched history entry out of the mocks. Enough on an
+// idle machine; not on a contended Windows worker during a full-suite run,
+// where the stitch had not landed yet and those reads came back null in tests
+// that pass in isolation. Poll the real completion condition — the stitched
+// history entry, written last, after the concat spawn — and fall through on
+// timeout so a genuine regression still fails on its own assertion here.
+const stitchedHistoryEntry = (atomicWriteMock) => atomicWriteMock.mock.calls
+  .flatMap(([, payload]) => (Array.isArray(payload) ? payload : []))
+  .find((entry) => entry?.chainedFrom) || null;
+
+// Shared by both chain helpers, which live in different describe scopes.
+async function waitForStitch() {
+  const { atomicWrite } = await import('../../lib/fileUtils.js');
+  const deadline = Date.now() + 5000;
+  while (!stitchedHistoryEntry(vi.mocked(atomicWrite)) && Date.now() < deadline) {
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
 const isLtx2VenvPython = (bin) =>
   String(bin).split('\\').join('/').includes('.portos/ltx-2-mlx/.venv/bin/python3');
 
@@ -448,23 +469,7 @@ describe('generateChainedVideo — continuation strategy (context window vs last
       const id = innerJobIds[i];
       videoGenEvents.emit('completed', { generationId: id, filename: `${id}.mp4`, path: `/data/videos/${id}.mp4` });
     }
-    // Wait for the STITCH to actually land, not for a fixed 100ms. Every caller
-    // chains 2+ chunks, so the stitched history entry is always written — and
-    // it is the last step, after the concat spawn. A flat sleep was enough on
-    // an idle machine but not on a contended Windows worker during a full-suite
-    // run, where the concat had not been spawned yet and `concat` came back
-    // null ("Cannot read properties of null (reading 'indexOf')") in a test
-    // that passes in isolation. Poll the real condition instead, and fall
-    // through on timeout so a genuine regression still fails on its own
-    // assertion rather than here.
-    const stitchedEntry = () => vi.mocked(atomicWrite).mock.calls
-      .flatMap(([, payload]) => (Array.isArray(payload) ? payload : []))
-      .find((entry) => entry?.chainedFrom) || null;
-    const deadline = Date.now() + 5000;
-    while (!stitchedEntry() && Date.now() < deadline) {
-      // eslint-disable-next-line no-await-in-loop
-      await new Promise((r) => setTimeout(r, 10));
-    }
+    await waitForStitch();
     videoGenEvents.removeAllListeners('started');
 
     const spawns = vi.mocked(spawn).mock.calls;
@@ -478,7 +483,7 @@ describe('generateChainedVideo — continuation strategy (context window vs last
       concat: (spawns.find(([, args]) => Array.isArray(args)
         && (args.includes('concat') || args.some((a) => typeof a === 'string' && a.includes('concat=n=')))) || [])[1] || null,
       // The stitched history entry, read off the history write it triggers.
-      stitched: stitchedEntry(),
+      stitched: stitchedHistoryEntry(vi.mocked(atomicWrite)),
     };
   }
 
@@ -787,7 +792,7 @@ describe('generateChainedVideo — per-chunk prompt beats (#3695)', () => {
       const id = innerJobIds[i];
       videoGenEvents.emit('completed', { generationId: id, filename: `${id}.mp4`, path: `/data/videos/${id}.mp4` });
     }
-    await new Promise((r) => setTimeout(r, 100));
+    await waitForStitch();
     videoGenEvents.removeAllListeners('started');
 
     return spawnMock.mock.calls
