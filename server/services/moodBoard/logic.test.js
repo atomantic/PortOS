@@ -139,6 +139,10 @@ describe('updateItem', () => {
     expect(item.caption).toBe('clip');
     expect(item.text).toBeNull();
     expect(() => updateItem(board, vidId, { mediaKey: null })).toThrow(/mediaKey/i);
+    // A PATCH can't swap a video item onto a non-video or extension-less key
+    // either — the merged key must stay a playable video:<filename>.
+    expect(() => updateItem(board, vidId, { mediaKey: 'image:foo.png' })).toThrow(/mediaKey/i);
+    expect(() => updateItem(board, vidId, { mediaKey: 'video:job-123' })).toThrow(/mediaKey/i);
   });
 });
 

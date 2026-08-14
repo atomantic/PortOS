@@ -10,6 +10,7 @@ import {
   moodBoardUpdateSchema,
   moodBoardItemCreateSchema,
   moodBoardItemUpdateSchema,
+  isVideoItemMediaKey,
 } from './moodBoardValidation.js';
 
 describe('moodBoardCreateSchema', () => {
@@ -72,6 +73,25 @@ describe('moodBoardItemCreateSchema', () => {
   });
   it('rejects a video item whose mediaKey is not kind video', () => {
     expect(moodBoardItemCreateSchema.safeParse({ type: 'video', mediaKey: 'image:a.png' }).success).toBe(false);
+  });
+  it('rejects a video item whose ref is a bare id (no extension) — it would 404 as a filename', () => {
+    expect(moodBoardItemCreateSchema.safeParse({ type: 'video', mediaKey: 'video:job-123' }).success).toBe(false);
+  });
+});
+
+describe('isVideoItemMediaKey', () => {
+  it('accepts a filename-with-extension video key', () => {
+    expect(isVideoItemMediaKey('video:upload-ab12cd34.mp4')).toBe(true);
+    expect(isVideoItemMediaKey('video:clip.webm')).toBe(true);
+  });
+  it('rejects non-video kinds, extension-less refs, and traversal shapes', () => {
+    expect(isVideoItemMediaKey('image:a.png')).toBe(false);
+    expect(isVideoItemMediaKey('video:job-123')).toBe(false);
+    expect(isVideoItemMediaKey('video:..')).toBe(false);
+    expect(isVideoItemMediaKey('video:a/b.mp4')).toBe(false);
+    expect(isVideoItemMediaKey('video:a\\b.mp4')).toBe(false);
+    expect(isVideoItemMediaKey(null)).toBe(false);
+    expect(isVideoItemMediaKey('')).toBe(false);
   });
 });
 

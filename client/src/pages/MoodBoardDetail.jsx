@@ -506,7 +506,24 @@ export default function MoodBoardDetail() {
                       className="relative w-full aspect-square bg-port-bg text-gray-600 group"
                     >
                       {src ? (
-                        <img src={src} alt={item.caption || ''} loading="lazy" className="w-full h-full object-cover" />
+                        <img
+                          src={src}
+                          alt={item.caption || ''}
+                          loading="lazy"
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            // A synced board can carry a poster URL whose file
+                            // only exists on the sending machine (a downloaded
+                            // video's thumbnail is named `<id>.jpg`, not
+                            // `<filename-stem>.jpg`). The receiver regenerates
+                            // the stem-named poster when it pulls the video, so
+                            // fall back to that derived name on a 404.
+                            const fallback = moodBoardItemSrc({ ...item, imageUrl: null });
+                            if (fallback && e.currentTarget.getAttribute('src') !== fallback) {
+                              e.currentTarget.src = fallback;
+                            }
+                          }}
+                        />
                       ) : (
                         <span className="w-full h-full flex items-center justify-center">
                           <Film className="w-8 h-8" aria-hidden="true" />

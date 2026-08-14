@@ -147,4 +147,28 @@ describe('MoodBoardDetail video items (#4188)', () => {
       expect(video.getAttribute('src')).toBe('/data/videos/upload-ab12cd34.mp4');
     });
   });
+
+  it('falls back to the derived stem poster when the stored thumbnail 404s (synced download pin)', async () => {
+    // A downloaded video's sender-side thumbnail is `<id>.jpg`, but a peer
+    // regenerates `<filename-stem>.jpg` on pull — the stored URL 404s there.
+    mockGetMoodBoard.mockResolvedValueOnce({
+      id: 'a',
+      name: 'Board A',
+      items: [{
+        id: 'mbi-1',
+        type: 'video',
+        mediaKey: 'video:downloaded-abc123.mp4',
+        imageUrl: '/data/video-thumbnails/abc123.jpg',
+        caption: null,
+        source: null,
+      }],
+    });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+
+    const poster = screen.getByRole('button', { name: 'Play video' }).querySelector('img');
+    expect(poster.getAttribute('src')).toBe('/data/video-thumbnails/abc123.jpg');
+    fireEvent.error(poster);
+    expect(poster.getAttribute('src')).toBe('/data/video-thumbnails/downloaded-abc123.jpg');
+  });
 });

@@ -16,6 +16,24 @@ export const MOOD_BOARD_ITEM_TYPES = Object.freeze(['image', 'text', 'video']);
 // so a board can't pin a key the rest of PortOS would reject.
 const mediaKeySchema = z.string().trim().refine(isValidKey, 'mediaKey must be a valid `<kind>:<ref>` media key');
 
+// A `type:'video'` board item's mediaKey ref is the on-disk FILENAME
+// (extension included), not a bare history id: playback resolves it as
+// `/data/videos/<ref>` and the peer-sync asset manifest passes an extensioned
+// ref through untouched, so `video:job-123` would 404 locally and mis-guess
+// `.mp4` on the wire. parseKey already bounds the ref and rejects `:`; this
+// adds the path-traversal guard (mirroring sanitizeAssetFilename) and the
+// extension requirement. Shared with the item-update invariant in
+// moodBoard/logic.js so a PATCH can't swap a video item onto a non-video or
+// extension-less key.
+export function isVideoItemMediaKey(key) {
+  const parsed = parseKey(key || '');
+  if (parsed?.kind !== 'video') return false;
+  const { ref } = parsed;
+  if (ref.includes('/') || ref.includes('\\')) return false;
+  if (ref === '.' || ref === '..') return false;
+  return /\.[a-z0-9]{2,6}$/i.test(ref);
+}
+
 // External/pinned image URL. http(s) or a same-origin app path (e.g. a served
 // `/data/images/...` URL). Bounded; the UI renders it in an <img>, so no exotic
 // schemes. A protocol-relative `//host/...` is rejected: it starts with `/` but
@@ -74,10 +92,10 @@ export const moodBoardItemCreateSchema = z.object({
       });
     }
   } else if (val.type === 'video') {
-    if (parseKey(val.mediaKey || '')?.kind !== 'video') {
+    if (!isVideoItemMediaKey(val.mediaKey)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'a video item requires a `video:<filename>` mediaKey',
+        message: 'a video item requires a `video:<filename>` mediaKey (filename with extension)',
         path: ['mediaKey'],
       });
     }

@@ -62,6 +62,7 @@ import {
 } from '../lib/hfCache.js';
 import { startHfDownloadStream, openSseStream } from '../lib/sseDownload.js';
 import { saveUploadedGalleryVideo } from '../services/videoUpload.js';
+import { JSON_BODY_LIMIT_BYTES } from '../lib/uploadLimits.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 
 const router = Router();
@@ -1221,10 +1222,12 @@ router.get('/history', asyncHandler(async (_req, res) => {
 // POST /api/image-gen/upload. Lands the bytes under PATHS.videos with a
 // `source: 'upload'` history entry so the file federates via the peer-sync
 // asset manifest (unlike POST /api/uploads → data/uploads/, which does not).
-// Base64 max = 56MB ≈ the 41MB binary cap (MAX_GALLERY_VIDEO_UPLOAD_BYTES)
-// after base64 expansion, mirroring the image route's transport bound.
+// The schema's string cap is the JSON body-parser limit itself — anything
+// longer 413s at the parser before this route runs — and the reachable cap
+// is the binary MAX_GALLERY_VIDEO_UPLOAD_BYTES check in the saver, both
+// derived from server/lib/uploadLimits.js so there is one source of truth.
 const uploadVideoSchema = z.object({
-  data: z.string().min(1).max(56 * 1024 * 1024),
+  data: z.string().min(1).max(JSON_BODY_LIMIT_BYTES),
   filename: z.string().max(255).optional(),
 });
 

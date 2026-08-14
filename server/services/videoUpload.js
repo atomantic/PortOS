@@ -24,13 +24,15 @@ import { randomUUID } from 'crypto';
 import { writeFile, unlink } from 'fs/promises';
 import { ServerError } from '../lib/errorHandler.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
+import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
 import { generateThumbnail, probeVideoDuration } from '../lib/ffmpeg.js';
 import { mutateVideoHistory } from './videoGen/history.js';
 import { videoGenEvents } from './videoGen/events.js';
 
-// Matches the client-side JSON transport cap (JSON_UPLOAD_MAX_FILE_SIZE) so
-// the server never accepts what the picker wouldn't send.
-export const MAX_GALLERY_VIDEO_UPLOAD_BYTES = 41 * 1024 * 1024;
+// The largest raw file that fits the JSON body-parser limit once
+// base64-encoded — the single source of truth in uploadLimits.js, mirrored
+// client-side as JSON_UPLOAD_MAX_FILE_SIZE (the cap the picker enforces).
+export const MAX_GALLERY_VIDEO_UPLOAD_BYTES = MAX_BASE64_UPLOAD_BYTES;
 
 // Container sniff — extension comes from the BYTES, not the client filename.
 // ISO-BMFF (`ftyp` box at offset 4) covers mp4/m4v/mov; the `qt` major brand

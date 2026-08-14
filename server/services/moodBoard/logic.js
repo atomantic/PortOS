@@ -16,6 +16,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 import { localImageFilename, assetBasename } from '../../lib/localImageFilename.js';
+import { isVideoItemMediaKey } from '../../lib/moodBoardValidation.js';
 
 const isStr = (v) => typeof v === 'string';
 
@@ -205,8 +206,8 @@ export function updateItem(board, itemId, patch) {
   if (updated.type === 'image' && !updated.mediaKey && !updated.imageUrl) {
     throw new ServerError('An image item must keep a mediaKey or imageUrl', { status: 400, code: 'INVALID_ITEM' });
   }
-  if (updated.type === 'video' && !updated.mediaKey) {
-    throw new ServerError('A video item must keep its mediaKey', { status: 400, code: 'INVALID_ITEM' });
+  if (updated.type === 'video' && !isVideoItemMediaKey(updated.mediaKey)) {
+    throw new ServerError('A video item must keep a video:<filename> mediaKey', { status: 400, code: 'INVALID_ITEM' });
   }
   if (updated.type === 'text' && (typeof updated.text !== 'string' || !updated.text.trim())) {
     throw new ServerError('A text item must keep non-empty text', { status: 400, code: 'INVALID_ITEM' });
