@@ -1591,6 +1591,41 @@ describe('spawnTuiAgent runtime', () => {
     expect(pasteCount()).toBe(1);
   });
 
+  // Claude Code v2.1.233's auto-mode offer. The trust gate above paints BEFORE
+  // the composer; this one paints after, with paste mode already on — so the old
+  // gate said "ready" and the prompt went into a modal that ignored it. All four
+  // claude-code-tui agents on 2026-08-14 died `paste-not-rendered` this way.
+  it('claude auto-mode offer: declines it and pastes only after it is cleared', async () => {
+    runSpawn({ tuiConfig: claudeTuiConfig });
+    await flushMicrotasks();
+
+    // Composer comes up live — under the old gate this alone would paste.
+    await capturedOnData(Buffer.from(`${PASTE_OFF}${PASTE_ON}`));
+    await flushMicrotasks();
+
+    // ...then the modal paints over it, before the prompt delay elapses.
+    await capturedOnData(Buffer.from(
+      'Make auto mode your default permission mode?\n'
+      + '   ❯ 1. Yes, set auto mode as my default permission mode\n'
+      + "     2. No, keep don't ask\n"
+    ));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(700);
+    await flushMicrotasks();
+
+    // Down+Enter selects option 2. A BARE Enter would accept the highlighted
+    // option 1 and rewrite the user's global permission default — assert we did
+    // not do that.
+    const writes = vi.mocked(shellService.writeToSession).mock.calls.map(([, d]) => d);
+    expect(writes).toContain('\x1b[B\r');
+    expect(writes).not.toContain('\r');
+
+    // Only once the dialog is answered does the prompt go out — and exactly once.
+    await vi.advanceTimersByTimeAsync(3000);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(1);
+  });
+
   it('tui-not-ready: claude that never shows an input prompt finalizes failure without pasting', async () => {
     let resolveComplete;
     const completeDone = new Promise((r) => { resolveComplete = r; });
