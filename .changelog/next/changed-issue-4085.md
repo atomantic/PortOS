@@ -1,0 +1,1 @@
+- Server test suites now share a single pinPlatform helper for process.platform overrides instead of ~50 hand-rolled copies, with the native-addon pinning hazard documented in one place
