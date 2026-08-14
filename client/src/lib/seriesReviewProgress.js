@@ -37,7 +37,9 @@ export function reviewFrameLabel(f) {
   switch (f.type) {
     case 'start': return 'Starting review…';
     case 'step:start': return `${stepLabel(f.kind)}…`;
-    case 'step:complete': return `${stepLabel(f.kind)} done`;
+    // `failed: true` marks a pass that errored / never ran — it forces the
+    // verdict to 'issues', so the frame log must not read "done".
+    case 'step:complete': return `${stepLabel(f.kind)} ${f.failed ? 'failed' : 'done'}`;
     case 'check:start': return `Editorial check: ${f.label || f.checkId}…`;
     case 'check:complete': return `Editorial check: ${f.label || f.checkId} — ${f.count ?? 0} finding(s)`;
     case 'complete': return 'Review complete';

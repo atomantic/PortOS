@@ -7,6 +7,11 @@ describe('reviewFrameLabel', () => {
     expect(reviewFrameLabel({ type: 'step:complete', kind: 'canon' })).toBe('Checking canon descriptions done');
   });
 
+  it('marks a failed pass as failed, not done', () => {
+    expect(reviewFrameLabel({ type: 'step:complete', kind: 'canon', failed: true })).toBe('Checking canon descriptions failed');
+    expect(reviewFrameLabel({ type: 'step:complete', kind: 'canon', failed: false })).toBe('Checking canon descriptions done');
+  });
+
   it('falls back to the raw kind for an unknown step', () => {
     expect(reviewFrameLabel({ type: 'step:start', kind: 'mystery' })).toBe('mystery…');
   });

@@ -144,8 +144,20 @@ describe('runSeriesReview — SSE frames under interleaving', () => {
   it('carries the settled values on the background step:complete frames', async () => {
     const frames = [];
     await run({ onProgress: (e) => frames.push(e) });
-    expect(frames.find((f) => f.type === 'step:complete' && f.kind === 'foundation')).toMatchObject({ weightedScore: 9 });
-    expect(frames.find((f) => f.type === 'step:complete' && f.kind === 'canon')).toMatchObject({ ready: true });
+    expect(frames.find((f) => f.type === 'step:complete' && f.kind === 'foundation')).toMatchObject({ weightedScore: 9, failed: false });
+    expect(frames.find((f) => f.type === 'step:complete' && f.kind === 'canon')).toMatchObject({ ready: true, failed: false });
+  });
+
+  // A failed canon pass produced NO result, so its frame must not announce
+  // `ready: true` — `null?.ready !== false` is true, which would tell the UI the
+  // opposite of what the verdict concludes.
+  it('never reports a failed background pass as ready/scored', async () => {
+    judgeFoundation.mockRejectedValue(new Error('provider down'));
+    checkSeriesCanonReadiness.mockRejectedValue(new Error('canon blew up'));
+    const frames = [];
+    await run({ onProgress: (e) => frames.push(e) });
+    expect(frames.find((f) => f.type === 'step:complete' && f.kind === 'canon')).toMatchObject({ ready: false, failed: true });
+    expect(frames.find((f) => f.type === 'step:complete' && f.kind === 'foundation')).toMatchObject({ weightedScore: null, failed: true });
   });
 });
 
@@ -167,6 +179,16 @@ describe('runSeriesReview — failure and cancellation paths', () => {
     expect(result.failedStages).toEqual(['editorialChecks']);
     expect(result.foundation).toMatchObject({ weightedScore: 9 });
     expect(result.canon).toMatchObject({ ready: true });
+  });
+
+  it('spends nothing when the run is already canceled at entry', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const result = await run({ signal: controller.signal });
+    expect(result).toBeNull();
+    expect(judgeFoundation).not.toHaveBeenCalled();
+    expect(checkSeriesCanonReadiness).not.toHaveBeenCalled();
+    expect(runEditorialChecks).not.toHaveBeenCalled();
   });
 
   it('returns null on a canceled run only after the background passes have settled', async () => {

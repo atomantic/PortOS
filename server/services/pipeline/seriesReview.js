@@ -236,6 +236,9 @@ export async function runSeriesReview(seriesId, {
   feedback, providerOverride, modelOverride, force = false, readinessGate, signal, onProgress = () => {},
 } = {}) {
   assertValidSeriesId(seriesId);
+  // Already canceled before we started — bail before spending an LLM round-trip
+  // on a run whose verdict would be discarded anyway.
+  if (signal?.aborted) return null;
   // Three independent reads — resolve concurrently.
   const [series, settings, issues] = await Promise.all([
     getSeries(seriesId),
@@ -272,7 +275,7 @@ export async function runSeriesReview(seriesId, {
     let failed = false;
     const value = await judgeFoundation(seriesId, { providerId: providerOverride, model: modelOverride, force })
       .catch((err) => { console.error(`⚠️ series-review foundation judge failed — series=${seriesId.slice(0, 12)} ${err.message}`); failed = true; return null; });
-    onProgress({ type: 'step:complete', kind: 'foundation', weightedScore: value?.weightedScore ?? null });
+    onProgress({ type: 'step:complete', kind: 'foundation', weightedScore: value?.weightedScore ?? null, failed });
     return { value, failed };
   });
 
@@ -284,7 +287,10 @@ export async function runSeriesReview(seriesId, {
     let failed = false;
     const value = await checkSeriesCanonReadiness(seriesId)
       .catch((err) => { console.error(`⚠️ series-review canon readiness failed — series=${seriesId.slice(0, 12)} ${err.message}`); failed = true; return null; });
-    onProgress({ type: 'step:complete', kind: 'canon', ready: value?.ready !== false });
+    // `failed` must gate `ready`: on a throw `value` is null, and a bare
+    // `value?.ready !== false` would announce `ready: true` for a pass that never
+    // produced a result. Mirrors how the verdict fails closed on the same signal.
+    onProgress({ type: 'step:complete', kind: 'canon', ready: !failed && value?.ready !== false, failed });
     return { value, failed };
   });
 
