@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import { readFile, writeFile, rm, mkdir } from 'fs/promises';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
@@ -11,12 +11,17 @@ import * as fsPromises from 'fs/promises';
 // no-op for root, which is how the container CI runs). Both default to delegating
 // to the real implementation (so every other test in this file is unaffected);
 // individual tests override with `mockRejectedValueOnce`.
+// `rename` and `readdir` are wrapped for the same reason (#4095): the Windows
+// swap-window retries key off transient EPERM/EACCES/EBUSY/ENOENT errnos that
+// cannot be provoked on a POSIX test host.
 vi.mock('fs/promises', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
     mkdir: vi.fn((...args) => actual.mkdir(...args)),
     readFile: vi.fn((...args) => actual.readFile(...args)),
+    rename: vi.fn((...args) => actual.rename(...args)),
+    readdir: vi.fn((...args) => actual.readdir(...args)),
   };
 });
 import {
@@ -1258,6 +1263,156 @@ describe('fileUtils', () => {
         expect(JSON.parse(await readFile(backing, 'utf8'))).toEqual({ orig: true });
       }
     );
+  });
+});
+
+// =============================================================================
+// Windows swap-window retries (#4095)
+//
+// On win32 `atomicWrite`'s fallback backup swap renames the destination away and
+// back, so for an instant the file DOES NOT EXIST. A read landing in that window
+// used to get ENOENT and report it as a trustworthy "nothing here yet", handing
+// the caller its default instead of the real contents. These tests pin both
+// halves of the fix and that POSIX still pays nothing for it.
+// =============================================================================
+
+describe('Windows swap-window retries (#4095)', () => {
+  // Matches WIN_RETRY_ATTEMPTS in fileUtils.js.
+  const RETRY_ATTEMPTS = 5;
+  const lockError = (code) => Object.assign(new Error(`${code}: simulated windows lock`), { code });
+
+  let tmpRoot;
+  let realFs;
+  let restorePlatform = null;
+
+  const fakePlatform = (value) => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value, configurable: true });
+    restorePlatform = () => Object.defineProperty(process, 'platform', original);
+  };
+
+  beforeAll(async () => {
+    realFs = await vi.importActual('fs/promises');
+  });
+
+  beforeEach(() => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'fileutils-winswap-'));
+    // Earlier describes in this file exercise the same fs mocks — start from a
+    // clean call log so the call-count assertions below mean what they say.
+    fsPromises.readFile.mockClear();
+    fsPromises.rename.mockClear();
+    fsPromises.readdir.mockClear();
+  });
+
+  afterEach(() => {
+    if (restorePlatform) restorePlatform();
+    restorePlatform = null;
+    // Drop any unconsumed `*Once` queues AND re-establish the delegating
+    // implementations the rest of this file relies on.
+    fsPromises.readFile.mockReset();
+    fsPromises.rename.mockReset();
+    fsPromises.readdir.mockReset();
+    fsPromises.readFile.mockImplementation((...args) => realFs.readFile(...args));
+    fsPromises.rename.mockImplementation((...args) => realFs.rename(...args));
+    fsPromises.readdir.mockImplementation((...args) => realFs.readdir(...args));
+    rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  describe('atomicWrite', () => {
+    it('retries the atomic rename on a transient lock instead of opening the destination-missing window', async () => {
+      const target = join(tmpRoot, 'state.json');
+      writeFileSync(target, JSON.stringify({ v: 1 }));
+      fakePlatform('win32');
+      fsPromises.rename.mockRejectedValueOnce(lockError('EPERM'));
+
+      await atomicWrite(target, { v: 2 });
+
+      expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ v: 2 });
+      // The backup swap is identified by a rename whose SOURCE is the
+      // destination itself (`rename(filePath, bak)`). The retry path must never
+      // move the destination aside — that is the window this fix closes.
+      const movedDestinationAside = fsPromises.rename.mock.calls.some(([from]) => from === target);
+      expect(movedDestinationAside).toBe(false);
+      expect(fsPromises.rename).toHaveBeenCalledTimes(2);
+    });
+
+    it('still falls back to the backup swap when every retry is refused', async () => {
+      const target = join(tmpRoot, 'stubborn.json');
+      writeFileSync(target, JSON.stringify({ v: 1 }));
+      fakePlatform('win32');
+      for (let i = 0; i < RETRY_ATTEMPTS; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError('EPERM'));
+
+      await atomicWrite(target, { v: 2 });
+
+      expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ v: 2 });
+      const movedDestinationAside = fsPromises.rename.mock.calls.some(([from]) => from === target);
+      expect(movedDestinationAside).toBe(true);
+      // …and the swap cleaned up after itself.
+      expect(readdirSync(tmpRoot).filter((n) => n.endsWith('.bak') || n.endsWith('.tmp'))).toEqual([]);
+    });
+
+    it('does not retry off win32 — a rename failure still surfaces immediately', async () => {
+      const target = join(tmpRoot, 'posix.json');
+      writeFileSync(target, JSON.stringify({ v: 1 }));
+      fsPromises.rename.mockRejectedValueOnce(lockError('EPERM'));
+
+      await expect(atomicWrite(target, { v: 2 })).rejects.toThrow(/EPERM/);
+
+      expect(fsPromises.rename).toHaveBeenCalledTimes(1);
+      // The original file is untouched and no temp debris is left behind.
+      expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ v: 1 });
+      expect(readdirSync(tmpRoot)).toEqual(['posix.json']);
+    });
+  });
+
+  describe('readJSONFileStrict', () => {
+    it('retries a locked read on win32 and returns the real contents as trustworthy', async () => {
+      const target = join(tmpRoot, 'locked.json');
+      writeFileSync(target, JSON.stringify({ real: true }));
+      fakePlatform('win32');
+      fsPromises.readFile.mockRejectedValueOnce(lockError('EBUSY'));
+
+      expect(await readJSONFileStrict(target, { fallback: true })).toEqual({ ok: true, value: { real: true } });
+      expect(fsPromises.readFile).toHaveBeenCalledTimes(2);
+    });
+
+    it('retries an ENOENT on win32 when a swap sibling shows a write is in flight', async () => {
+      const target = join(tmpRoot, 'swapping.json');
+      writeFileSync(target, JSON.stringify({ real: true }));
+      // The debris `atomicWrite` leaves visible while a swap is mid-flight.
+      writeFileSync(`${target}.1234.5678.bak`, '{"real":true}');
+      fakePlatform('win32');
+      fsPromises.readFile.mockRejectedValueOnce(lockError('ENOENT'));
+
+      expect(await readJSONFileStrict(target, { fallback: true })).toEqual({ ok: true, value: { real: true } });
+      expect(fsPromises.readdir).toHaveBeenCalled();
+    });
+
+    it('does not retry a plain missing file on win32 — no sibling, no second read', async () => {
+      const missing = join(tmpRoot, 'never-written.json');
+      fakePlatform('win32');
+
+      expect(await readJSONFileStrict(missing, { fallback: true })).toEqual({ ok: true, value: { fallback: true } });
+      expect(fsPromises.readFile).toHaveBeenCalledTimes(1);
+    });
+
+    it('costs a plain missing file nothing off win32 — one read, no directory scan', async () => {
+      const missing = join(tmpRoot, 'never-written.json');
+
+      expect(await readJSONFileStrict(missing, { fallback: true })).toEqual({ ok: true, value: { fallback: true } });
+      expect(fsPromises.readFile).toHaveBeenCalledTimes(1);
+      expect(fsPromises.readdir).not.toHaveBeenCalled();
+    });
+
+    it('does not retry a locked read off win32 — the read stays untrustworthy', async () => {
+      const target = join(tmpRoot, 'posix-locked.json');
+      writeFileSync(target, JSON.stringify({ real: true }));
+      fsPromises.readFile.mockRejectedValueOnce(lockError('EBUSY'));
+
+      expect(await readJSONFileStrict(target, { fallback: true }, { logError: false }))
+        .toEqual({ ok: false, value: { fallback: true } });
+      expect(fsPromises.readFile).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

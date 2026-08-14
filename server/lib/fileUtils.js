@@ -21,6 +21,24 @@ import { createFileWriteQueue } from './fileWriteQueue.js';
 export const execFileAsync = promisify(execFile);
 const IS_WIN = process.platform === 'win32';
 
+// Call-time platform probe. `IS_WIN` above is a module-load snapshot (fine for
+// the path-shape helper at the bottom of this file); the Windows retry paths
+// below read the platform on every call so a POSIX host never carries a stale
+// decision and so the retry behavior is exercisable in tests.
+const isWindows = () => process.platform === 'win32';
+
+// Windows-only retry knobs (#4095). A destination lock from a concurrent reader
+// or an AV scan clears in milliseconds, so a handful of short retries is enough
+// to avoid both the writer's destination-missing backup swap and the reader's
+// phantom "nothing here yet".
+const WIN_RETRY_ATTEMPTS = 5;
+const WIN_RETRY_DELAY_MS = 10;
+// rename(2) failures that mean "the destination is momentarily locked", not
+// "this rename can never work".
+const WIN_RENAME_LOCK_CODES = ['EPERM', 'EACCES', 'EEXIST'];
+// read failures with the same transient meaning on the reader side.
+const WIN_READ_LOCK_CODES = ['EPERM', 'EACCES', 'EBUSY'];
+
 // Cache __dirname calculation for services importing this module
 const __lib_filename = fileURLToPath(import.meta.url);
 const __lib_dirname = dirname(__lib_filename);
@@ -259,9 +277,23 @@ export async function atomicWrite(filePath, data) {
   // overwrite), but still fails with EPERM/EACCES if the destination is locked (AV scan,
   // concurrent reader). Fall back to a backup-swap so the original file is never lost.
   const replace = async () => {
-    const err = await rename(tmp, filePath).then(() => null, (e) => e);
+    let err = await rename(tmp, filePath).then(() => null, (e) => e);
+    // Retry the ATOMIC rename before resorting to the backup swap (#4095). The
+    // swap below renames the destination away and back, so for that instant the
+    // destination DOES NOT EXIST — a concurrent read lands on ENOENT and reads
+    // it as a trustworthy "nothing here yet", silently handing the caller its
+    // default instead of the file's real contents. A transient lock clears in
+    // milliseconds, so retrying keeps almost every write on the atomic path and
+    // never opens that window.
+    if (isWindows()) {
+      for (let attempt = 1; err && attempt < WIN_RETRY_ATTEMPTS && WIN_RENAME_LOCK_CODES.includes(err.code); attempt += 1) {
+        await sleep(WIN_RETRY_DELAY_MS);
+        err = await rename(tmp, filePath).then(() => null, (e) => e);
+        if (!err) console.log(`⚠️ atomicWrite rename succeeded after ${attempt} retry(s): ${basename(filePath)}`);
+      }
+    }
     if (!err) return;
-    if (process.platform === 'win32' && ['EPERM', 'EACCES', 'EEXIST'].includes(err.code)) {
+    if (isWindows() && WIN_RENAME_LOCK_CODES.includes(err.code)) {
       const bak = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.bak`;
       const hadExisting = await rename(filePath, bak).then(() => true, (e) => {
         if (e.code === 'ENOENT') return false;
@@ -484,6 +516,60 @@ export async function readFileTail(path, maxBytes) {
 const PARSE_FAILED = Symbol('json-parse-failed');
 
 /**
+ * True when a `<filePath>.*.tmp` or `<filePath>.*.bak` sibling is on disk — the
+ * signature of an `atomicWrite` temp write or backup swap that is still in
+ * flight for THIS file. Non-throwing: an unreadable parent directory just means
+ * "no evidence of a swap".
+ *
+ * Only consulted on win32, and only after a read already failed with ENOENT, so
+ * the directory listing never lands on a POSIX read or on a successful read.
+ *
+ * @param {string} filePath
+ * @returns {Promise<boolean>}
+ */
+async function hasSwapSibling(filePath) {
+  const entries = await readdir(dirname(filePath)).catch(() => null);
+  if (!entries) return false;
+  const prefix = `${basename(filePath)}.`;
+  return entries.some((name) => name.startsWith(prefix) && (name.endsWith('.tmp') || name.endsWith('.bak')));
+}
+
+/**
+ * `readFile(filePath, 'utf-8')` with the Windows-only retries that keep a read
+ * racing `atomicWrite` from being mistaken for an empty/absent file (#4095).
+ *
+ * On POSIX this is a straight delegate — zero extra syscalls, zero delay.
+ *
+ * On win32 two transient failures are retried with a short backoff:
+ *   - EPERM/EACCES/EBUSY — the destination is momentarily locked (AV scan, the
+ *     writer's own open handle).
+ *   - ENOENT, but ONLY when `hasSwapSibling` shows a swap is in flight. A file
+ *     that was simply never written stays a zero-cost, silent "nothing here
+ *     yet": one failed read, no retry, no sleep.
+ *
+ * Rejects with the last error once the attempts are exhausted, so the caller's
+ * existing errno handling is unchanged.
+ *
+ * @param {string} filePath
+ * @returns {Promise<string>}
+ */
+async function readTextWithSwapRetry(filePath) {
+  if (!isWindows()) return readFile(filePath, 'utf-8');
+  for (let attempt = 0; ; attempt += 1) {
+    const outcome = await readFile(filePath, 'utf-8').then((content) => ({ content }), (err) => ({ err }));
+    if (!outcome.err) {
+      if (attempt > 0) console.log(`⚠️ read succeeded after ${attempt} retry(s) — write swap in flight: ${basename(filePath)}`);
+      return outcome.content;
+    }
+    const last = attempt >= WIN_RETRY_ATTEMPTS - 1;
+    const retriable = WIN_READ_LOCK_CODES.includes(outcome.err.code)
+      || (outcome.err.code === 'ENOENT' && !last && await hasSwapSibling(filePath));
+    if (last || !retriable) throw outcome.err;
+    await sleep(WIN_RETRY_DELAY_MS);
+  }
+}
+
+/**
  * Read a JSON file, reporting whether the read is TRUSTWORTHY rather than
  * collapsing every failure into the default (the `readJSONFile` behavior below).
  *
@@ -519,9 +605,11 @@ const PARSE_FAILED = Symbol('json-parse-failed');
 export async function readJSONFileStrict(filePath, defaultValue = null, { allowArray = true, logError = true } = {}) {
   let content;
   try {
-    content = await readFile(filePath, 'utf-8');
+    content = await readTextWithSwapRetry(filePath);
   } catch (err) {
     // ENOENT = file doesn't exist → a trustworthy "nothing here yet", silently.
+    // On win32 an ENOENT that was really an `atomicWrite` swap window has
+    // already been retried above, so reaching here means genuinely absent.
     if (err.code === 'ENOENT') {
       return { ok: true, value: defaultValue };
     }
