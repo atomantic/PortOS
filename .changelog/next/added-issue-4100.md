@@ -1,0 +1,1 @@
+- SongBook: a per-song scroll time (Edit form) plus a Fit button and 'f' key in the play view that solves the autoscroll speed to finish the sheet in that time
