@@ -7,6 +7,16 @@ import { promisify } from 'util';
 import { spawnDetached, reapDetached, reapAndCleanDetachedDirs, reattachDetached, isReattachable, isDetachedRunning } from './detachedSpawn.js';
 
 const execFileAsync = promisify(execFile);
+
+// spawnDetached's POSIX `sh` double-fork — and with it the whole control-dir
+// contract (pid/exit sentinels, reap, re-attach, reparent-to-init survival) —
+// does not exist on Windows: that platform takes an explicit plain-spawn
+// fallback (see the win32 branch in detachedSpawn.js), where pm2 is
+// taskkill-based and surviving a restart is not a guarantee PortOS makes.
+// Tests that assert the double-fork mechanism are gated on IS_POSIX rather
+// than rewritten, because there is no Windows behavior for them to assert.
+// The win32 fallback itself is covered by its own test below.
+const IS_POSIX = process.platform !== 'win32';
 const dirs = [];
 const tmpControlDir = async () => {
   const d = await mkdtemp(join(tmpdir(), 'detached-spawn-'));
@@ -76,7 +86,7 @@ describe('spawnDetached', () => {
     return chain;
   };
 
-  it('reparents the job out of the spawner tree (escapes pm2 TreeKill)', async () => {
+  it.runIf(IS_POSIX)('reparents the job out of the spawner tree (escapes pm2 TreeKill)', async () => {
     const controlDir = await tmpControlDir();
     const handle = await spawnDetached('sh', ['-c', 'sleep 30'], { controlDir, pollMs: 25 });
     expect(handle.pid).toBeGreaterThan(0);
@@ -96,7 +106,7 @@ describe('spawnDetached', () => {
     await onClose(handle);
   });
 
-  it('kill() signals the reparented job and surfaces the signal on close', async () => {
+  it.runIf(IS_POSIX)('kill() signals the reparented job and surfaces the signal on close', async () => {
     const controlDir = await tmpControlDir();
     const handle = await spawnDetached('sh', ['-c', 'sleep 30'], { controlDir, pollMs: 25 });
     expect(handle.pid).toBeGreaterThan(0);
@@ -110,7 +120,7 @@ describe('spawnDetached', () => {
     expect(handle.signalCode).toBe('SIGKILL');
   });
 
-  it.skipIf(process.platform === 'win32')('killProcessGroup terminates a wrapper and its runtime child', async () => {
+  it.runIf(IS_POSIX)('killProcessGroup terminates a wrapper and its runtime child', async () => {
     const controlDir = await tmpControlDir();
     const handle = await spawnDetached('python3', ['-c', [
       'import os, subprocess, time',
@@ -153,7 +163,7 @@ describe('spawnDetached', () => {
     expect(getOut()).toBe('second\n');
   });
 
-  it('removes the control dir after the job ends when cleanup is set', async () => {
+  it.runIf(IS_POSIX)('removes the control dir after the job ends when cleanup is set', async () => {
     const controlDir = await tmpControlDir();
     const handle = await spawnDetached('sh', ['-c', 'printf "x\\n"; exit 0'], { controlDir, pollMs: 25, cleanup: true });
     await onClose(handle);
@@ -176,7 +186,7 @@ describe('spawnDetached', () => {
     await expect(spawnDetached('sh', ['-c', 'true'], {})).rejects.toThrow(/controlDir/);
   });
 
-  it('surfaces a setup failure as an error event, not a rejection', async () => {
+  it.runIf(IS_POSIX)('surfaces a setup failure as an error event, not a rejection', async () => {
     // controlDir under a regular FILE → ensureDir fails (ENOTDIR). spawnDetached
     // must still resolve a handle and emit 'error' so the caller's on('error')
     // finalization runs (rejecting would strand the run / leak temps).
@@ -210,7 +220,7 @@ describe('spawnDetached', () => {
   });
 
   describe('reapDetached', () => {
-    it('SIGTERMs a surviving orphan and reports it reaped', async () => {
+    it.runIf(IS_POSIX)('SIGTERMs a surviving orphan and reports it reaped', async () => {
       const controlDir = await tmpControlDir();
       const handle = await spawnDetached('sh', ['-c', 'sleep 30'], { controlDir, pollMs: 25 });
       const pid = handle.pid;
@@ -242,7 +252,7 @@ describe('spawnDetached', () => {
   });
 
   describe('reapAndCleanDetachedDirs', () => {
-    it('reaps every surviving orphan under the parent and removes the dirs', async () => {
+    it.runIf(IS_POSIX)('reaps every surviving orphan under the parent and removes the dirs', async () => {
       const parent = await tmpControlDir();
       const a = join(parent, 'job-a');
       const b = join(parent, 'job-b');
@@ -268,7 +278,7 @@ describe('spawnDetached', () => {
 });
 
 describe('isReattachable', () => {
-  it('is true while the recorded child is still alive', async () => {
+  it.runIf(IS_POSIX)('is true while the recorded child is still alive', async () => {
     const controlDir = await tmpControlDir();
     const handle = await spawnDetached('sh', ['-c', 'sleep 30'], { controlDir, pollMs: 25 });
     expect(await isReattachable(controlDir)).toBe(true);
@@ -276,7 +286,7 @@ describe('isReattachable', () => {
     await onClose(handle);
   });
 
-  it('is true after the child exited (RESULT line still unprocessed on disk)', async () => {
+  it.runIf(IS_POSIX)('is true after the child exited (RESULT line still unprocessed on disk)', async () => {
     const controlDir = await tmpControlDir();
     const handle = await spawnDetached('sh', ['-c', 'printf "x\\n"; exit 0'], { controlDir, pollMs: 25 });
     await onClose(handle);
@@ -298,7 +308,7 @@ describe('isReattachable', () => {
 });
 
 describe('isDetachedRunning', () => {
-  it('is true while the recorded child is still alive with no exit sentinel', async () => {
+  it.runIf(IS_POSIX)('is true while the recorded child is still alive with no exit sentinel', async () => {
     const controlDir = await tmpControlDir();
     const handle = await spawnDetached('sh', ['-c', 'sleep 30'], { controlDir, pollMs: 25 });
     expect(await isDetachedRunning(controlDir)).toBe(true);
@@ -336,7 +346,7 @@ describe('isDetachedRunning', () => {
   });
 });
 
-describe('reattachDetached', () => {
+describe.runIf(IS_POSIX)('reattachDetached', () => {
   it('replays a still-running survivor from the start and closes with its exit code', async () => {
     const controlDir = await tmpControlDir();
     // early output, then a beat, then late output + a non-zero exit.

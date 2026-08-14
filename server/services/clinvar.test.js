@@ -7,10 +7,17 @@ const NO_GENOME_ERROR = 'No genome data uploaded.';
 // compact index + meta via tryReadFile and writes/deletes via fs/promises.
 const fileStore = new Map();
 
+// clinvar.js composes these paths with path.join, so on Windows they arrive
+// backslash-separated and the POSIX-spelled keys the tests seed would never
+// match — the mock would report "no such file" and every assertion would blame
+// a missing sync instead of a path separator.
+const toPosix = (v) => (typeof v === 'string' ? v.split('\\').join('/') : v);
+
+
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { meatspace: '/mock/meatspace' },
   ensureDir: vi.fn().mockResolvedValue(undefined),
-  tryReadFile: vi.fn(async (path) => (fileStore.has(path) ? fileStore.get(path) : null)),
+  tryReadFile: vi.fn(async (path) => (fileStore.has(toPosix(path)) ? fileStore.get(toPosix(path)) : null)),
   safeJSONParse: (raw, fallback) => {
     try {
       return JSON.parse(raw);
@@ -22,15 +29,15 @@ vi.mock('../lib/fileUtils.js', () => ({
 
 vi.mock('fs/promises', () => ({
   writeFile: vi.fn(async (path, data) => {
-    fileStore.set(path, data);
+    fileStore.set(toPosix(path), data);
   }),
   unlink: vi.fn(async (path) => {
-    if (!fileStore.has(path)) {
+    if (!fileStore.has(toPosix(path))) {
       const err = new Error('ENOENT');
       err.code = 'ENOENT';
       throw err;
     }
-    fileStore.delete(path);
+    fileStore.delete(toPosix(path));
   })
 }));
 

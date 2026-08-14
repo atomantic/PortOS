@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 
 vi.mock('child_process', () => ({
@@ -54,7 +54,22 @@ async function startUpdate(...args) {
   return { promise };
 }
 
+// executeUpdate branches on process.platform, and every test below except the
+// first asserts the POSIX (spawnDetached) launch path. Pin the platform so
+// they exercise that path on a Windows host too — otherwise they take the
+// powershell branch, the cleared spawn() mock returns undefined, and each one
+// hangs to the timeout. Safe here: updateExecutor.js and its (mocked) deps
+// load no native addon that picks its binary from process.platform.
+const ORIGINAL_PLATFORM = Object.getOwnPropertyDescriptor(process, 'platform');
+const pinPlatform = (value) =>
+  Object.defineProperty(process, 'platform', { value, configurable: true });
+
+afterEach(() => {
+  Object.defineProperty(process, 'platform', ORIGINAL_PLATFORM);
+});
+
 beforeEach(() => {
+  pinPlatform('linux');
   vi.clearAllMocks();
   // Default: marker file not found (tests that need it override this)
   readFile.mockRejectedValue(new Error('ENOENT'));

@@ -19,6 +19,14 @@ import {
   MACOS_TAILSCALE_APP_BUNDLE
 } from './tailscale.js';
 
+// The candidate list findTailscale walks is platform-dependent, so a test that
+// wants "a Tailscale binary is installed" has to name the candidate for the
+// platform it is running on — a hardcoded POSIX path is simply absent from the
+// Windows list and reads back as not-installed.
+const INSTALLED_CANDIDATE = process.platform === 'win32'
+  ? 'C:\\Program Files\\Tailscale\\tailscale.exe'
+  : '/opt/homebrew/bin/tailscale';
+
 describe('findTailscale', () => {
   let originalPath;
 
@@ -32,12 +40,8 @@ describe('findTailscale', () => {
   });
 
   it('returns the first matching candidate path', () => {
-    const isWin = process.platform === 'win32';
-    const expected = isWin
-      ? 'C:\\Program Files\\Tailscale\\tailscale.exe'
-      : '/opt/homebrew/bin/tailscale';
-    existsSync.mockImplementation((p) => p === expected);
-    expect(findTailscale()).toBe(expected);
+    existsSync.mockImplementation((p) => p === INSTALLED_CANDIDATE);
+    expect(findTailscale()).toBe(INSTALLED_CANDIDATE);
   });
 
   it('falls back to a later candidate when earlier ones are missing', () => {
@@ -152,7 +156,7 @@ describe('getTailscaleStatus / isTailscaleUp', () => {
     originalPath = process.env.PATH;
     vi.clearAllMocks();
     // Default: a Tailscale binary exists at a known candidate path.
-    existsSync.mockImplementation((p) => p === '/opt/homebrew/bin/tailscale');
+    existsSync.mockImplementation((p) => p === INSTALLED_CANDIDATE);
   });
 
   afterEach(() => {

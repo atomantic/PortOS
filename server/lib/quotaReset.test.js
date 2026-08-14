@@ -29,6 +29,17 @@ describe('parseHumanReset', () => {
     expect(parseHumanReset('2026-07-27T12:00:00.000Z', { now })).toBe('2026-07-27T12:00:00.000Z');
   });
 
+  // A zero-offset zone renders its longOffset as a bare "GMT", not "GMT+00:00",
+  // so an offset parser that only accepts the signed form resolves every reset
+  // in such a zone to null — and the Usage page silently loses its reset time
+  // for anyone in the UK in winter, Iceland, or plain UTC.
+  it('resolves a zone whose offset is exactly zero', () => {
+    expect(parseHumanReset('Jan 27 at 2pm', { now: Date.parse('2026-01-26T12:00:00.000Z'), timezone: 'Europe/London' }))
+      .toBe('2026-01-27T14:00:00.000Z');
+    expect(parseHumanReset('Jul 27 at 2pm', { now, timezone: 'Atlantic/Reykjavik' }))
+      .toBe('2026-07-27T14:00:00.000Z');
+  });
+
   it('returns null for a missing or unreadable reset rather than guessing one', () => {
     expect(parseHumanReset(null, { now })).toBeNull();
     expect(parseHumanReset('', { now })).toBeNull();

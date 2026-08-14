@@ -22,7 +22,12 @@ function zoneOffsetMs(epochMs, timeZone) {
     hourCycle: 'h23',
   }).formatToParts(new Date(epochMs));
   const offset = parts.find((part) => part.type === 'timeZoneName')?.value;
-  const match = /^GMT([+-])(\d{2}):(\d{2})$/.exec(offset || '');
+  // A zero-offset zone (UTC, Europe/London in winter, Africa/Abidjan, Iceland)
+  // renders as a bare "GMT" — CLDR omits the "+00:00" — so it has to be matched
+  // separately or every such user's reset string resolves to null and the Usage
+  // page loses its reset time entirely. Some ICU builds spell it "UTC".
+  if (/^(?:GMT|UTC)$/.test(offset || '')) return 0;
+  const match = /^(?:GMT|UTC)([+-])(\d{2}):(\d{2})$/.exec(offset || '');
   if (!match) return null;
   return (Number(match[2]) * 60 + Number(match[3])) * 60 * 1000 * (match[1] === '+' ? 1 : -1);
 }

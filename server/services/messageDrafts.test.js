@@ -2,15 +2,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const fileStore = new Map();
 
+// The service composes these paths with path.join, so on Windows the mock
+// receives a backslash-separated path and the POSIX-spelled keys the tests
+// seed into fileStore would never match — the lookup would miss and the
+// assertions would report missing data rather than a path separator.
+const toPosix = (v) => (typeof v === 'string' ? v.split('\\').join('/') : v);
+
 vi.mock('../lib/uuid.js', () => {
   let counter = 0;
   return { v4: () => `uuid-${++counter}` };
 });
 
 vi.mock('../lib/fileUtils.js', () => ({
-  tryReadFile: vi.fn(async (path) => fileStore.has(path) ? fileStore.get(path) : null),
+  tryReadFile: vi.fn(async (path) => fileStore.has(toPosix(path)) ? fileStore.get(toPosix(path)) : null),
   atomicWrite: vi.fn(async (path, data) => {
-    fileStore.set(path, typeof data === 'string' ? data : JSON.stringify(data, null, 2));
+    fileStore.set(toPosix(path), typeof data === 'string' ? data : JSON.stringify(data, null, 2));
   }),
   ensureDir: vi.fn().mockResolvedValue(undefined),
   PATHS: { messages: '/mock/messages' },

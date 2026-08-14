@@ -6,8 +6,8 @@ import { safeJSONParse } from './fileUtils.js';
 
 const execFileAsync = promisify(execFile);
 
-const IS_WIN = process.platform === 'win32';
-const TAILSCALE_BIN = IS_WIN ? 'tailscale.exe' : 'tailscale';
+const isWin = () => process.platform === 'win32';
+const tailscaleBin = () => (isWin() ? 'tailscale.exe' : 'tailscale');
 
 export const MACOS_TAILSCALE_APP_BUNDLE = '/Applications/Tailscale.app/Contents/MacOS/Tailscale';
 
@@ -22,7 +22,11 @@ export const MACOS_TAILSCALE_APP_BUNDLE = '/Applications/Tailscale.app/Contents/
 // permitted" when targeting paths like data/certs/). The Homebrew binary is
 // the open-source CLI and is not sandboxed, so it can write anywhere the
 // shell user can. App-bundle is kept as a last-resort fallback.
-const TAILSCALE_CANDIDATES = IS_WIN
+// Resolved per call rather than frozen at import: hasOnlySandboxedTailscale is
+// gated on `process.platform === 'darwin'`, so pinning the candidate list to
+// whatever platform happened to import the module would have it scan the wrong
+// paths for the platform it just decided it is on.
+const tailscaleCandidates = () => (isWin()
   ? [
       'C:\\Program Files\\Tailscale\\tailscale.exe',
       'C:\\Program Files (x86)\\Tailscale\\tailscale.exe'
@@ -32,16 +36,16 @@ const TAILSCALE_CANDIDATES = IS_WIN
       '/usr/local/bin/tailscale',
       '/usr/bin/tailscale',
       MACOS_TAILSCALE_APP_BUNDLE
-    ];
+    ]);
 
 export function findTailscale() {
-  for (const p of TAILSCALE_CANDIDATES) {
+  for (const p of tailscaleCandidates()) {
     if (existsSync(p)) return p;
   }
   // Use path.delimiter (';' on Windows, ':' elsewhere) so PATH scanning works cross-platform.
   for (const dir of (process.env.PATH || '').split(delimiter)) {
     if (!dir) continue;
-    const p = join(dir, TAILSCALE_BIN);
+    const p = join(dir, tailscaleBin());
     if (existsSync(p)) return p;
   }
   return null;
@@ -98,18 +102,18 @@ export function hasOnlySandboxedTailscale() {
   if (process.platform !== 'darwin') return false;
   // True iff the MAS app bundle exists AND no unsandboxed binary is
   // reachable anywhere. The previous implementation delegated to
-  // findTailscale which returns the FIRST candidate in TAILSCALE_CANDIDATES
+  // findTailscale which returns the FIRST candidate in tailscaleCandidates()
   // order — so an unsandboxed `tailscale` living in a non-standard $PATH
-  // directory (not in TAILSCALE_CANDIDATES) was missed entirely, and we
+  // directory (not in tailscaleCandidates()) was missed entirely, and we
   // misclassified the machine as sandboxed-only.
   if (!existsSync(MACOS_TAILSCALE_APP_BUNDLE)) return false;
-  for (const p of TAILSCALE_CANDIDATES) {
+  for (const p of tailscaleCandidates()) {
     if (p === MACOS_TAILSCALE_APP_BUNDLE) continue;
     if (existsSync(p)) return false;
   }
   for (const dir of (process.env.PATH || '').split(delimiter)) {
     if (!dir) continue;
-    const p = join(dir, TAILSCALE_BIN);
+    const p = join(dir, tailscaleBin());
     if (existsSync(p) && p !== MACOS_TAILSCALE_APP_BUNDLE) return false;
   }
   return true;
