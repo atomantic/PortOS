@@ -105,7 +105,8 @@ describe('hfCache', () => {
     expect(posixPath(getHfCacheRoot())).toBe('/xdg/cache/huggingface/hub');
 
     delete process.env.XDG_CACHE_HOME;
-    expect(getHfCacheRoot()).toMatch(/\.cache\/huggingface\/hub$/);
+    // Composed with path.join — accept either separator.
+    expect(getHfCacheRoot()).toMatch(/[\\/]\.cache[\\/]huggingface[\\/]hub$/);
   });
 
   it('reports cached=false for missing repo dir', async () => {
@@ -131,7 +132,7 @@ describe('hfCache', () => {
     const result = await inspectModelCache('org/model');
     expect(result.cached).toBe(true);
     expect(result.sizeBytes).toBe(4096); // weight files only, config/tokenizer excluded
-    expect(result.snapshotPath).toContain('snapshots/abc123');
+    expect(result.snapshotPath.split('\\').join('/')).toContain('snapshots/abc123');
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -315,7 +316,9 @@ describe('repairModelCache', () => {
     roots.push(root);
     process.env.HF_HUB_CACHE = root;
 
-    const badBlob = join(blobsDir, readlinkSync(join(snapDir, 'bad.safetensors')).split('/').pop());
+    // Split on BOTH separators — readlink returns a Windows-separated target
+    // there, so a '/'-only split yields the whole path instead of a basename.
+    const badBlob = join(blobsDir, readlinkSync(join(snapDir, 'bad.safetensors')).split(/[\\/]/).pop());
     expect(existsSync(badBlob)).toBe(true);
 
     const result = await repairModelCache('org/mixed');
@@ -377,7 +380,7 @@ describe('findCachedRepoFile', () => {
   it('resolves the requested file out of an aggregate repo', async () => {
     aggregateCache();
     const found = await findCachedRepoFile('org/aggregate', 'wanted.safetensors');
-    expect(found).toMatch(/snapshots\/sha1\/wanted\.safetensors$/);
+    expect(found.split('\\').join('/')).toMatch(/snapshots\/sha1\/wanted\.safetensors$/);
   });
 
   it('returns null for a file the repo has not fetched, even though siblings exist', async () => {
@@ -543,7 +546,8 @@ describe('exact-file aggregate verification', () => {
     cleanup.push(root);
     process.env.HF_HUB_CACHE = root;
 
-    expect(await findCachedRepoSnapshot('org/pinned', wanted)).toMatch(new RegExp(`/snapshots/${wanted}$`));
+    const pinned = (await findCachedRepoSnapshot('org/pinned', wanted)).split('\\').join('/');
+    expect(pinned).toMatch(new RegExp(`/snapshots/${wanted}$`));
     expect(await findCachedRepoFile('org/pinned', 'wanted.safetensors', { revision: wanted })).toBeTruthy();
     expect(await findCachedRepoFile('org/pinned', 'other.safetensors', { revision: wanted })).toBeNull();
     expect((await inspectModelCache('org/pinned', { revision: wanted })).sizeBytes).toBe(1024);

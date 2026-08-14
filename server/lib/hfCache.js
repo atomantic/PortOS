@@ -338,7 +338,13 @@ async function expectedBlobSha256(path) {
   if (!lst || !lst.isSymbolicLink()) return null;
   const target = await fs.readlink(path).catch(() => null);
   if (!target) return null;
-  const base = target.split('/').pop();
+  // Split on BOTH separators. `readlink` returns a Windows-separated target on
+  // win32, so a '/'-only split yielded the ENTIRE path instead of the blob
+  // name, SHA256_RE never matched, and this returned null — silently disabling
+  // the deep sha256 integrity check (verifyWeightFile then stopped at
+  // 'structural-ok' and could never report 'sha256-mismatch') on every Windows
+  // install.
+  const base = target.split(/[\\/]/).pop();
   return SHA256_RE.test(base) ? base : null;
 }
 
