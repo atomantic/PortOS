@@ -1,0 +1,1 @@
+- The generic file-upload API now validates uploads against the shared extension/MIME allowlist and reuses the shared upload/serve pipeline; files with an unrecognized extension are rejected instead of being stored as application/octet-stream
