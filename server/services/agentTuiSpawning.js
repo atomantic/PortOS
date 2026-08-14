@@ -804,6 +804,7 @@ export async function spawnTuiAgent({
     directLaunch: useDurableRunner,
   });
   let trustAccepted = false;
+  let autoModeDeclined = false;
   // True once shell.js actually injects the `claude` command (after its
   // round-trip readiness probe). The probe runs its OWN shell command first,
   // which toggles bracketed-paste mode and would otherwise advance the
@@ -1589,6 +1590,21 @@ export async function spawnTuiAgent({
         trustAccepted = true;
         shellService.writeToSession(sessionId, '\r');
         appendLine(`📟 Auto-confirmed ${tuiConfig.command} folder-trust prompt for session ${sessionId.slice(0, 8)}`);
+        return;
+      }
+      // Decline claude's "make auto mode your default permission mode?" offer
+      // (v2.1.233+). Unlike the trust gate this one paints AFTER the composer is
+      // live, so it swallows the paste and every retry unless it is cleared
+      // first — see TUI_AUTO_MODE_PROMPT_PATTERN. Arrow-down + Enter rather than
+      // the digit `2`: it lands on "No, keep don't ask" under both of Ink's
+      // selection models (digit-immediate-select and navigate-then-confirm),
+      // whereas a bare `\r` would accept the highlighted option 1 and rewrite the
+      // user's global permission default.
+      if (inputReady.needsAutoModeChoice && !autoModeDeclined) {
+        autoModeDeclined = true;
+        shellService.writeToSession(sessionId, '\x1b[B\r');
+        inputReady.ackAutoModeChoice();
+        appendLine(`📟 Declined ${tuiConfig.command} auto-mode default offer for session ${sessionId.slice(0, 8)}`);
         return;
       }
       if (inputReady.ready && elapsed >= tuiConfig.promptDelayMs) {

@@ -275,6 +275,24 @@ export const BRACKETED_PASTE_MODE_PATTERN = /\x1b\[\?2004([hl])/g;
 export const TUI_TRUST_PROMPT_PATTERN =
   /trustthisfolder|isthisaprojectyou(?:created|trust)/i;
 
+// Claude Code's auto-mode opt-in offer ("Make auto mode your default permission
+// mode? → 1. Yes, set auto mode as my default permission mode / 2. No, keep
+// don't ask"), added in v2.1.233. Like the trust gate it is NOT bypassed by
+// `--dangerously-skip-permissions`, but unlike the trust gate it paints AFTER
+// the composer is live — bracketed-paste mode is already ON, so `ready` goes
+// true and the prompt is pasted straight into a modal that ignores it. Every
+// one of the four claude-code-tui agents launched on 2026-08-14 died
+// `paste-not-rendered` this way (agent-f71b794e et al.).
+//
+// The spawner answers "2. No, keep don't ask" rather than accepting the
+// highlighted default: option 1 rewrites the HUMAN's global default permission
+// mode in `~/.claude.json`, and an unattended agent must not mutate the
+// operator's config as a side effect of dismissing a dialog. Option 2 preserves
+// whatever posture the user already chose, and the agent's own session keeps
+// the `--dangerously-skip-permissions` it was launched with either way.
+export const TUI_AUTO_MODE_PROMPT_PATTERN =
+  /automodeyourdefaultpermissionmode|setautomodeasmydefaultpermissionmode/i;
+
 // Antigravity (agy) needs a SECOND, positive readiness signal on top of paste
 // mode. agy enables bracketed paste the moment it enters the alt screen — while
 // it is still "Signing in…", before its folder-trust gate has painted and long
@@ -316,6 +334,13 @@ export function createInputReadyTracker({ readyTextPattern = null, directLaunch 
   let sawCommandRun = directLaunch;
   let needsTrust = false;
   let sawReadyText = false;
+  // Auto-mode offer: latched when seen, cleared once answered. `autoModeAnswered`
+  // makes the ack TERMINAL — `tail` is a rolling 4000-char window, so the modal's
+  // text lingers in it long after the dialog is gone and would otherwise re-arm
+  // the flag on the very next chunk, re-answering forever and pinning `ready`
+  // false until the 45s deadline. Arm-once, same as the gates above it.
+  let needsAutoModeChoice = false;
+  let autoModeAnswered = false;
   let tail = '';
   return {
     // Ready once the TUI has RE-ENABLED bracketed-paste mode after the launch
@@ -324,10 +349,18 @@ export function createInputReadyTracker({ readyTextPattern = null, directLaunch 
     // initial ON does not count: sawCommandRun gates on the intervening OFF.)
     // Providers that enable paste mode before their composer exists supply a
     // readyTextPattern to close the gap.
+    // The auto-mode offer is the one gate that paints with paste mode already ON,
+    // so it must SUPPRESS ready — every other signal here says "go" while the
+    // modal is still swallowing input. Cleared by ackAutoModeChoice() once the
+    // spawner has answered it.
     get ready() {
-      return sawCommandRun && pasteModeOn && (!readyTextPattern || sawReadyText);
+      return sawCommandRun && pasteModeOn && !needsAutoModeChoice
+        && (!readyTextPattern || sawReadyText);
     },
     get needsTrust() { return needsTrust; },
+    get needsAutoModeChoice() { return needsAutoModeChoice; },
+    /** Spawner reports the dismissal keystrokes went out; re-arms `ready`. */
+    ackAutoModeChoice() { needsAutoModeChoice = false; autoModeAnswered = true; },
     // rawText: un-stripped chunk (paste-mode toggles live here);
     // strippedText: ANSI-stripped chunk (the trust-gate / composer text).
     observe(rawText, strippedText) {
@@ -340,6 +373,7 @@ export function createInputReadyTracker({ readyTextPattern = null, directLaunch 
       if (strippedText) {
         tail = (tail + strippedText.replace(/\s+/g, '')).slice(-OBSERVE_TAIL_MAX_LEN);
         if (!needsTrust && TUI_TRUST_PROMPT_PATTERN.test(tail)) needsTrust = true;
+        if (!needsAutoModeChoice && !autoModeAnswered && TUI_AUTO_MODE_PROMPT_PATTERN.test(tail)) needsAutoModeChoice = true;
         if (readyTextPattern && !sawReadyText && readyTextPattern.test(tail)) sawReadyText = true;
       }
     },

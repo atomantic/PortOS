@@ -1288,6 +1288,59 @@ describe('createInputReadyTracker', () => {
     expect(agy.needsTrust).toBe(true);
   });
 
+  // Claude Code v2.1.233's auto-mode offer. Unlike the trust gate it paints with
+  // bracketed paste ALREADY ON, so `ready` was true and the prompt went into a
+  // modal that ignored it — four agents died `paste-not-rendered` on 2026-08-14.
+  describe('claude auto-mode default offer', () => {
+    // Verbatim wording from agent-f71b794e's transcript.
+    const OFFER = 'Make auto mode your default permission mode?\n'
+      + '   ❯ 1. Yes, set auto mode as my default permission mode\n'
+      + '     2. No, keep don\'t ask\n';
+
+    const readyTracker = () => {
+      const tracker = createInputReadyTracker();
+      tracker.observe(`${PASTE_OFF}${PASTE_ON}`, '');
+      return tracker;
+    };
+
+    it('suppresses ready while the offer is up, even with paste mode on', () => {
+      const tracker = readyTracker();
+      expect(tracker.ready).toBe(true); // composer live...
+
+      tracker.observe('', OFFER);
+      expect(tracker.needsAutoModeChoice).toBe(true);
+      expect(tracker.ready).toBe(false); // ...but the modal owns input now
+    });
+
+    it('re-arms ready once the spawner acks the dismissal', () => {
+      const tracker = readyTracker();
+      tracker.observe('', OFFER);
+      tracker.ackAutoModeChoice();
+      expect(tracker.needsAutoModeChoice).toBe(false);
+      expect(tracker.ready).toBe(true);
+    });
+
+    // The rolling tail keeps the modal text for 4000 chars after the dialog is
+    // gone. Without a terminal ack that stale text re-arms the flag on the next
+    // chunk — re-answering forever and pinning `ready` false to the 45s deadline.
+    it('does not re-arm from the stale tail after being answered', () => {
+      const tracker = readyTracker();
+      tracker.observe('', OFFER);
+      tracker.ackAutoModeChoice();
+
+      tracker.observe('', 'bypass permissions on'); // tail still holds the offer
+      expect(tracker.needsAutoModeChoice).toBe(false);
+      expect(tracker.ready).toBe(true);
+    });
+
+    it('leaves the tracker alone when no offer appears', () => {
+      const tracker = readyTracker();
+      tracker.observe('', 'Try "fix lint errors"');
+      expect(tracker.needsAutoModeChoice).toBe(false);
+      expect(tracker.ready).toBe(true);
+    });
+  });
+
   it('matches a marker split across two PTY chunks (rolling tail)', () => {
     const tracker = createInputReadyTracker();
     tracker.observe('', '> Yes, I trust th');
