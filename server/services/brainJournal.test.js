@@ -393,8 +393,16 @@ describe('brainJournal', () => {
       await journal.setJournalContent('2026-04-17', 'content-1');
       await journal.setJournalContent('2026-04-17', 'content-2');
 
-      // Wait for background queue to flush
-      await new Promise((r) => setTimeout(r, 50));
+      // Poll for the background queue to drain rather than sleeping a flat
+      // 50ms: the two syncs sleep 10ms EACH and only run back-to-back because
+      // they are serialized, so a fixed budget that is fine locally leaves the
+      // second one mid-flight on a slower runner — the assertion then reads
+      // three entries and fails on the sequencing it is meant to prove.
+      const deadline = Date.now() + 5000;
+      while (callOrder.length < 4 && Date.now() < deadline) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, 5));
+      }
 
       expect(callOrder).toEqual(['start-1', 'end-1', 'start-2', 'end-2']);
     });
