@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rm, readFile, writeFile, stat } from 'fs/promises'
 import { createHash } from 'crypto'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { pinPlatform } from '../lib/testHelper.js'
 
 // startPersistentService / getServiceStatus shell out via promisify(execFile).
 // Route every exec call through a per-test impl so the homebrew service flow can
@@ -525,14 +526,13 @@ describe('ollamaManager.isBootstrapConflictError', () => {
 })
 
 describe('ollamaManager.startPersistentService bootstrap recovery (homebrew)', () => {
-  let originalPlatform
+  let restorePlatform = () => {}
   beforeEach(() => {
     // Force the homebrew controller branch regardless of CI host OS.
-    originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+    restorePlatform = pinPlatform('darwin')
   })
   afterEach(() => {
-    Object.defineProperty(process, 'platform', originalPlatform)
+    restorePlatform()
     vi.unstubAllGlobals()
     execMock.impl = () => {}
   })

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { pinPlatform } from '../lib/testHelper.js';
 
 vi.mock('child_process', () => ({
   spawn: vi.fn()
@@ -60,16 +61,12 @@ async function startUpdate(...args) {
 // powershell branch, the cleared spawn() mock returns undefined, and each one
 // hangs to the timeout. Safe here: updateExecutor.js and its (mocked) deps
 // load no native addon that picks its binary from process.platform.
-const ORIGINAL_PLATFORM = Object.getOwnPropertyDescriptor(process, 'platform');
-const pinPlatform = (value) =>
-  Object.defineProperty(process, 'platform', { value, configurable: true });
+let restorePlatform = () => {};
 
-afterEach(() => {
-  Object.defineProperty(process, 'platform', ORIGINAL_PLATFORM);
-});
+afterEach(() => restorePlatform());
 
 beforeEach(() => {
-  pinPlatform('linux');
+  restorePlatform = pinPlatform('linux');
   vi.clearAllMocks();
   // Default: marker file not found (tests that need it override this)
   readFile.mockRejectedValue(new Error('ENOENT'));
@@ -79,28 +76,23 @@ beforeEach(() => {
 
 describe('executeUpdate', () => {
   it('spawns powershell on Windows (plain spawn, not spawnDetached)', async () => {
-    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
-    try {
-      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
-      const child = createMockChild();
-      child.unref = vi.fn();
-      spawn.mockReturnValue(child);
+    // Re-pin over the file-level linux default; the file-level afterEach still
+    // restores the pristine descriptor, so a failure here can't leak win32.
+    pinPlatform('win32');
+    const child = createMockChild();
+    child.unref = vi.fn();
+    spawn.mockReturnValue(child);
 
-      const { promise } = await startUpdate('v1.0.0', () => {});
-      child.emit('close', 0);
-      await promise;
+    const { promise } = await startUpdate('v1.0.0', () => {});
+    child.emit('close', 0);
+    await promise;
 
-      expect(spawn).toHaveBeenCalledWith(
-        'powershell',
-        expect.arrayContaining(['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File']),
-        expect.any(Object)
-      );
-      expect(spawnDetached).not.toHaveBeenCalled();
-    } finally {
-      if (originalPlatformDescriptor) {
-        Object.defineProperty(process, 'platform', originalPlatformDescriptor);
-      }
-    }
+    expect(spawn).toHaveBeenCalledWith(
+      'powershell',
+      expect.arrayContaining(['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File']),
+      expect.any(Object)
+    );
+    expect(spawnDetached).not.toHaveBeenCalled();
   });
 
   // Regression for the reconcile "shuts down but never restarts" failure: a

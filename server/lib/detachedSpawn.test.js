@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { pinPlatform } from './testHelper.js';
 import { spawnDetached, reapDetached, reapAndCleanDetachedDirs, reattachDetached, isReattachable, isDetachedRunning } from './detachedSpawn.js';
 
 const execFileAsync = promisify(execFile);
@@ -200,8 +201,7 @@ describe('spawnDetached', () => {
   });
 
   it('falls back to a plain spawn on win32 (no POSIX sh double-fork)', async () => {
-    const original = process.platform;
-    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    const restorePlatform = pinPlatform('win32');
     try {
       const controlDir = await tmpControlDir();
       // Real `sh` exists on the test runner, so the plain-spawn fallback runs;
@@ -215,7 +215,7 @@ describe('spawnDetached', () => {
       expect(code).toBe(0);
       expect(getOut()).toBe('hi\n');
     } finally {
-      Object.defineProperty(process, 'platform', { value: original, configurable: true });
+      restorePlatform();
     }
   });
 

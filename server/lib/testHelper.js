@@ -1,8 +1,9 @@
 /**
  * Shared test helpers: HTTP request harness, fetch-Response mocks, the
- * server-source scanner used by the whole-tree guard suites, and the two
- * cross-platform helpers (`posixPath`, `resolveTestPython`) that keep
- * path- and interpreter-sensitive suites running on Windows as well as POSIX.
+ * server-source scanner used by the whole-tree guard suites, and the three
+ * cross-platform helpers (`posixPath`, `resolveTestPython`, `pinPlatform`) that
+ * keep path-, interpreter- and platform-sensitive suites running on Windows as
+ * well as POSIX.
  *
  * fetch-based replacement for supertest — creates a real HTTP server on a
  * random port, makes a single request, then shuts the server down.
@@ -208,6 +209,41 @@ export function readServerSource(rel) {
  * expectation would also hide a genuinely wrong path.
  */
 export const posixPath = (value) => String(value).split('\\').join('/');
+
+/**
+ * Pin `process.platform` for a test, and return the restore.
+ *
+ *   const restore = pinPlatform('darwin');
+ *   try { … } finally { restore(); }
+ *
+ *   // describe-scope pinning
+ *   let restorePlatform = () => {};
+ *   beforeEach(() => { restorePlatform = pinPlatform('linux'); });
+ *   afterEach(() => restorePlatform());
+ *
+ * **Never pin before importing a module that loads a native addon.** Those pick
+ * their prebuilt binary from `process.platform` at load time, so pinning
+ * `'darwin'` ahead of a `sharp` import sends it looking for a `darwin-x64`
+ * binary and breaks the whole run on Linux (cost a CI round-trip in #4082).
+ * Pin inside the test — or inside a `beforeEach` — never at module scope above
+ * a static import, and never before an `await import(…)` of such a module.
+ *
+ * The restore reinstates the ORIGINAL descriptor, so a suite that pins a value
+ * over Node's own accessor leaves the accessor behind, not a frozen snapshot of
+ * whatever it read. When `process` carried no own `platform` descriptor, the
+ * restore deletes the pinned one rather than fabricating a value.
+ *
+ * @param {string} value - the platform to report, e.g. `'darwin'` / `'win32'`
+ * @returns {() => void} restore — idempotent, safe to call from `afterEach`
+ */
+export function pinPlatform(value) {
+  const original = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { value, configurable: true });
+  return () => {
+    if (original) Object.defineProperty(process, 'platform', original);
+    else delete process.platform;
+  };
+}
 
 /**
  * Resolve a Python interpreter that actually RUNS, or `null` when there is

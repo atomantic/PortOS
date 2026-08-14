@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { pinPlatform } from './testHelper.js';
 
 // Mock the collaborators so the behavior under test is observable without
 // launching bash, probing the filesystem for a Python, or firing a real kill.
@@ -30,7 +31,7 @@ const REAL_PLATFORM = process.platform;
  * load, so each platform needs its own module instance.
  */
 async function loadFor(platform) {
-  Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  pinPlatform(platform); // restored by the afterEach below, however often it runs
   vi.resetModules();
   return import('./setupScriptRunner.js');
 }
@@ -43,7 +44,13 @@ function makeFakeChild({ pid = 4321, killed = false } = {}) {
   return child;
 }
 
+// Capture the pristine descriptor once per test: loadFor() pins as a side
+// effect and can run more than once in a case, so the restore has to come from
+// before any of those pins, not from the last one.
+let restorePlatform = () => {};
+
 beforeEach(() => {
+  restorePlatform = pinPlatform(process.platform);
   spawnMock.mockReset();
   spawnMock.mockImplementation(() => makeFakeChild());
   detectPythonSyncMock.mockReset();
@@ -53,7 +60,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true });
+  restorePlatform();
   delete process.env.PYTHON_BIN;
 });
 

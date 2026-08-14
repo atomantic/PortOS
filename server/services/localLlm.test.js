@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs';
 import { EventEmitter } from 'events';
+import { pinPlatform } from '../lib/testHelper.js';
 
 // vi.mock factories are hoisted above the module body, so the mutable holder
 // and the mock objects must come from vi.hoisted (which runs first). The
@@ -399,14 +400,13 @@ describe('localLlm', () => {
     });
 
     it('returns a download hint on an unsupported platform (no install attempted)', async () => {
-      const orig = Object.getOwnPropertyDescriptor(process, 'platform');
-      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+      const restorePlatform = pinPlatform('win32');
       try {
         const r = await svc.installBackend('lmstudio');
         expect(r.success).toBe(false);
         expect(r.error).toMatch(/lmstudio\.ai/); // surfaces the manual download link
       } finally {
-        Object.defineProperty(process, 'platform', orig);
+        restorePlatform();
       }
     });
 
@@ -414,8 +414,7 @@ describe('localLlm', () => {
       // Repro of the real Ollama install failure: `brew install ollama` poured
       // the formula but exited 1 (mlx dep + cleanup/env-hint noise), so PortOS
       // wrongly reported failure for a successful install.
-      const orig = Object.getOwnPropertyDescriptor(process, 'platform');
-      Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+      const restorePlatform = pinPlatform('darwin');
       cp.spawn = () => fakeChild({ code: 1, lines: ['Pouring ollama…', '🍺 ollama installed', 'brew cleanup hint'] });
       // `brew --version` (gate) and `brew list --versions ollama` (presence) succeed.
       cp.execFile = (_cmd, _args, _opts, cb) => cb(null, { stdout: 'ollama 0.30.10', stderr: '' });
@@ -424,13 +423,12 @@ describe('localLlm', () => {
         expect(r.success).toBe(true);
         expect(r.backend).toBe('ollama');
       } finally {
-        Object.defineProperty(process, 'platform', orig);
+        restorePlatform();
       }
     });
 
     it('still reports failure when `brew install` exits non-zero AND the package is absent', async () => {
-      const orig = Object.getOwnPropertyDescriptor(process, 'platform');
-      Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+      const restorePlatform = pinPlatform('darwin');
       cp.spawn = () => fakeChild({ code: 1, lines: ['Error: download failed'] });
       // brew --version succeeds (gate passes); brew list rejects (not installed).
       cp.execFile = (_cmd, args, _opts, cb) =>
@@ -440,7 +438,7 @@ describe('localLlm', () => {
         expect(r.success).toBe(false);
         expect(r.error).toMatch(/Homebrew install failed/);
       } finally {
-        Object.defineProperty(process, 'platform', orig);
+        restorePlatform();
       }
     });
   });

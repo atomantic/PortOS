@@ -16,18 +16,21 @@ vi.mock('child_process', async (importOriginal) => {
 
 import { execFile } from 'child_process';
 import { createProviderService } from './providers.js';
+import { pinPlatform } from '../testHelper.js';
 
 // Temp dir, NOT a cwd-rooted one — see providerStatus.test.js (#3823).
 let TEST_DATA_DIR;
 
 describe('testProvider — cli command resolution (cross-platform PATH)', () => {
   let providerService;
-  let originalPlatform;
+  // Captured before any pin so the restore is the pristine descriptor, whether
+  // or not a given case pinned.
+  let restorePlatform = () => {};
   let originalPath;
   let fakePathDir;
 
   beforeEach(async () => {
-    originalPlatform = process.platform;
+    restorePlatform = pinPlatform(process.platform);
     TEST_DATA_DIR = await mkdtemp(join(tmpdir(), 'portos-cli-resolve-'));
     providerService = createProviderService({ dataDir: TEST_DATA_DIR, providersFile: 'providers.json' });
     // testProvider's win32 path now ALSO does its own filesystem-based
@@ -42,14 +45,12 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
   });
 
   afterEach(async () => {
-    Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    restorePlatform();
     process.env.PATH = originalPath;
     if (fakePathDir) await rm(fakePathDir, { recursive: true, force: true });
     vi.mocked(execFile).mockReset();
     if (TEST_DATA_DIR) await rm(TEST_DATA_DIR, { recursive: true, force: true });
   });
-
-  const setPlatform = (value) => Object.defineProperty(process, 'platform', { value, configurable: true });
 
   // execFile's callback is always its last argument — the version probe now
   // passes an extra `{ shell }` options object (4 args) while the which/where
@@ -75,7 +76,7 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
     providerService.createProvider({ name: 'Claude CLI', type: 'cli', command });
 
   it('uses `where` (not `which`) on win32 and reports success when the command resolves', async () => {
-    setPlatform('win32');
+    pinPlatform('win32');
     stubExec({ lookup: 'C:\\Users\\Joe\\.local\\bin\\claude.exe\r\n' });
     const p = await makeCliProvider();
 
@@ -91,7 +92,7 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
   });
 
   it('takes the first line when `where` returns multiple matches', async () => {
-    setPlatform('win32');
+    pinPlatform('win32');
     stubExec({ lookup: 'C:\\a\\claude.exe\r\nC:\\b\\claude.exe\r\n' });
     const p = await makeCliProvider();
 
@@ -102,7 +103,7 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
   });
 
   it('re-resolves to the real .cmd shim when `where`s first match is an unspawnable extension-less stub (#1865 root cause)', async () => {
-    setPlatform('win32');
+    pinPlatform('win32');
     // npm ships a bare POSIX shell-script stub (for Git Bash/WSL) alongside
     // the real `.cmd` wrapper — `where` can return the stub first, which is
     // exactly the literal scenario from the issue's reported error text.
@@ -127,7 +128,7 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
   });
 
   it('falls back to the where-resolved path when no extension-bearing match exists on PATH', async () => {
-    setPlatform('win32');
+    pinPlatform('win32');
     // fakePathDir intentionally has no claude.* files — resolveWindowsExecutable
     // finds nothing, so testProvider must fall back to the `where` result.
     stubExec({ lookup: 'C:\\Users\\Joe\\.local\\bin\\claude.exe\r\n' });
@@ -140,7 +141,7 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
   });
 
   it('invokes the resolved path for the version probe (so win32 runs the exact .exe)', async () => {
-    setPlatform('win32');
+    pinPlatform('win32');
     stubExec({ lookup: 'C:\\Users\\Joe\\.local\\bin\\claude.exe\r\n' });
     const p = await makeCliProvider();
 
@@ -152,7 +153,7 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
   });
 
   it('uses `which` on non-win32 platforms', async () => {
-    setPlatform('linux');
+    pinPlatform('linux');
     stubExec({ lookup: '/usr/local/bin/claude\n' });
     const p = await makeCliProvider();
 
@@ -166,7 +167,7 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
   });
 
   it('reports not-found when the lookup resolves nothing', async () => {
-    setPlatform('win32');
+    pinPlatform('win32');
     stubExec({ lookup: null });
     const p = await makeCliProvider('claude');
 
@@ -177,7 +178,7 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
   });
 
   it('falls back to "available" when the binary spawns but supports no version flag', async () => {
-    setPlatform('linux');
+    pinPlatform('linux');
     vi.mocked(execFile).mockImplementation((cmd, ...rest) => {
       const cb = lastCallback(rest);
       if (cmd === 'which' || cmd === 'where') return cb(null, { stdout: '/usr/local/bin/claude\n', stderr: '' });
@@ -195,7 +196,7 @@ describe('testProvider — cli command resolution (cross-platform PATH)', () => 
   });
 
   it('reports failure when the resolved path cannot be spawned (Windows .cmd/.bat shim)', async () => {
-    setPlatform('win32');
+    pinPlatform('win32');
     vi.mocked(execFile).mockImplementation((cmd, ...rest) => {
       const cb = lastCallback(rest);
       if (cmd === 'which' || cmd === 'where') return cb(null, { stdout: 'C:\\Users\\Joe\\AppData\\npm\\claude.cmd\r\n', stderr: '' });

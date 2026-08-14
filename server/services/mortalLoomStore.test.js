@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { pinPlatform } from '../lib/testHelper.js';
 
 let existsResult = true;
 // Queue of return values for sequential existsSync() calls. When empty, falls
@@ -283,14 +284,11 @@ describe('updateStore', () => {
   // pre-existing guard behavior exactly as it was. The darwin materialize
   // behavior gets its own describe block below. (process.platform overrides
   // aren't restored by vi.restoreAllMocks(), so capture+restore explicitly.)
-  let originalPlatformDescriptor;
+  let restorePlatform = () => {};
   beforeEach(() => {
-    originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    restorePlatform = pinPlatform('linux');
   });
-  afterEach(() => {
-    if (originalPlatformDescriptor) Object.defineProperty(process, 'platform', originalPlatformDescriptor);
-  });
+  afterEach(() => restorePlatform());
 
   it('seeds a fresh store when the file does not exist', async () => {
     existsResult = false;
@@ -404,18 +402,17 @@ describe('updateStore — iCloud on-demand materialize (darwin)', () => {
     return child;
   };
 
-  let originalPlatformDescriptor;
+  let restorePlatform = () => {};
   let originalTimeout;
   beforeEach(() => {
-    originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    restorePlatform = pinPlatform('darwin');
     originalTimeout = store.MATERIALIZE_TIMEOUT_MS;
     store._setMaterializeTimeoutForTest(50);
     store._resetMortalLoomInitForTest();
     writeFileMock.mockResolvedValue(undefined);
   });
   afterEach(() => {
-    if (originalPlatformDescriptor) Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+    restorePlatform();
     store._setMaterializeTimeoutForTest(originalTimeout);
   });
 
@@ -687,28 +684,24 @@ describe('initMortalLoomStore — brctl pinning', () => {
     return child;
   };
 
-  // process.platform overrides aren't restored by vi.restoreAllMocks(). Capture
-  // the original property descriptor before each test and restore it in
-  // afterEach so an assertion failure can't leak the mutated platform into
-  // unrelated test files (mirrors the updateExecutor.test.js pattern).
-  let originalPlatformDescriptor;
+  // process.platform overrides aren't restored by vi.restoreAllMocks(). Each
+  // case here pins its own platform and parks the restore, which afterEach runs
+  // so an assertion failure can't leak the mutated platform into unrelated test
+  // files (mirrors the updateExecutor.test.js pattern).
+  let restorePlatform = () => {};
   beforeEach(() => {
     settingsEvents.removeAllListeners('settings:updated');
     store._resetMortalLoomInitForTest();
     // The shared icloudFile state (including the once-per-process "brctl missing"
     // flag folded from the store's old local flag) is reset in the file-level
     // beforeEach above, so every block — this one included — starts clean.
-    originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+    restorePlatform = () => {};
   });
-  afterEach(() => {
-    if (originalPlatformDescriptor) {
-      Object.defineProperty(process, 'platform', originalPlatformDescriptor);
-    }
-  });
+  afterEach(() => restorePlatform());
 
   it('spawns brctl download when sync is enabled (darwin only)', async () => {
     // Force darwin so the platform guard doesn't short-circuit the test.
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    restorePlatform = pinPlatform('darwin');
 
     const child = makeFakeChild();
     spawnMock.mockReturnValue(child);
@@ -728,7 +721,7 @@ describe('initMortalLoomStore — brctl pinning', () => {
   });
 
   it('re-pins when settings:updated flips enabled on with a new path', async () => {
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    restorePlatform = pinPlatform('darwin');
 
     spawnMock.mockReturnValue(makeFakeChild());
     settings = { mortalloom: { enabled: true, path: ubiq('MortalLoom.json') } };
@@ -750,7 +743,7 @@ describe('initMortalLoomStore — brctl pinning', () => {
     // assertion passed for the wrong reason. Fix: call init() so the listener
     // IS attached and the platform guard inside pinAgainstEviction is the
     // thing under test on both the immediate-pin and the event-driven path.
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    restorePlatform = pinPlatform('linux');
 
     settings = { mortalloom: { enabled: true, path: ubiq('MortalLoom.json') } };
     await store.initMortalLoomStore();
@@ -766,7 +759,7 @@ describe('initMortalLoomStore — brctl pinning', () => {
     // settings:updated event can re-pin. Earlier code set initialized=true
     // and ran the await BEFORE attaching the listener, so a throw left the
     // listener gone forever.
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    restorePlatform = pinPlatform('darwin');
 
     spawnMock.mockReturnValue(makeFakeChild());
     const { getSettings } = await import('./settings.js');
@@ -787,7 +780,7 @@ describe('initMortalLoomStore — brctl pinning', () => {
     // twice. A transient failure on the second read could skip the boot
     // pin even though the first read confirmed sync enabled. Reading once
     // and deriving both fields collapses the partial-failure window.
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    restorePlatform = pinPlatform('darwin');
 
     spawnMock.mockReturnValue(makeFakeChild());
     const { getSettings } = await import('./settings.js');
@@ -807,7 +800,7 @@ describe('initMortalLoomStore — brctl pinning', () => {
     // isMortalLoomEnabled() rejects, didInitialPin must stay false so a
     // subsequent initMortalLoomStore() call can retry the pin. The listener
     // must NOT be re-attached (otherwise events fire twice).
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    restorePlatform = pinPlatform('darwin');
 
     spawnMock.mockReturnValue(makeFakeChild());
     const { getSettings } = await import('./settings.js');
@@ -834,7 +827,7 @@ describe('initMortalLoomStore — brctl pinning', () => {
     // back on (without changing the path) silently no-ops. Settings.json
     // listeners must clear `lastPinnedPath` on disable so a subsequent
     // enable with the same path materializes again.
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    restorePlatform = pinPlatform('darwin');
 
     spawnMock.mockReturnValue(makeFakeChild());
     settings = { mortalloom: { enabled: true, path: ubiq('MortalLoom.json') } };
@@ -852,7 +845,7 @@ describe('initMortalLoomStore — brctl pinning', () => {
   });
 
   it('clears lastPinnedPath when brctl is signal-killed so a later event can retry', async () => {
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    restorePlatform = pinPlatform('darwin');
 
     const child = makeFakeChild();
     spawnMock.mockReturnValue(child);
@@ -875,7 +868,7 @@ describe('initMortalLoomStore — brctl pinning', () => {
     // Operators in a sandboxed darwin env had no signal that pinning was a
     // no-op. Now we surface ENOENT once per process, then dedupe via
     // brctlMissingWarned so settings churn doesn't spam the same warning.
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    restorePlatform = pinPlatform('darwin');
 
     const child1 = makeFakeChild();
     const child2 = makeFakeChild();
@@ -905,7 +898,7 @@ describe('initMortalLoomStore — brctl pinning', () => {
     // spurious re-spawn on the next settings:updated for the same current
     // path. Capturing `path` in the closure and comparing before clearing
     // confines each handler's cache invalidation to its own path.
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    restorePlatform = pinPlatform('darwin');
 
     const child1 = makeFakeChild();
     const child2 = makeFakeChild();
@@ -934,7 +927,7 @@ describe('initMortalLoomStore — brctl pinning', () => {
     // failure clear the second A pin's sticky state, so the next settings:updated
     // for A would wrongly spawn a duplicate. The per-attempt generation guard
     // confines each failure's cache-clear to the pin that is still current.
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    restorePlatform = pinPlatform('darwin');
 
     const childA1 = makeFakeChild();
     const childB = makeFakeChild();
@@ -960,7 +953,7 @@ describe('initMortalLoomStore — brctl pinning', () => {
     // mortalloom.path can land as a number / array / object. Calling .trim()
     // on a non-string throws — and an unhandled throw inside the EventEmitter
     // listener can crash the process. Listener must normalize via type-check.
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    restorePlatform = pinPlatform('darwin');
 
     spawnMock.mockReturnValue(makeFakeChild());
     settings = { mortalloom: { enabled: true, path: ubiq('MortalLoom.json') } };
@@ -988,7 +981,7 @@ describe('initMortalLoomStore — brctl pinning', () => {
     // paths. A configured path outside `/Library/Mobile Documents/` (here the
     // suite's ordinary `/icloud/...` fixture, which isHealablePath declines) must
     // not be handed a doomed download.
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    restorePlatform = pinPlatform('darwin');
 
     spawnMock.mockReturnValue(makeFakeChild());
     settings = { mortalloom: { enabled: true, path: '/icloud/MortalLoom.json' } };
@@ -1002,7 +995,7 @@ describe('initMortalLoomStore — brctl pinning', () => {
     // EMFILE — but equally a path that is non-healable at boot and healable once its
     // ubiquity container syncs in), the pin must NOT leave its sticky path set, or the
     // SAME path would be deduped as "already pinned" forever and never retry.
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    restorePlatform = pinPlatform('darwin');
 
     // First spawn throws → the helper catches it and returns false (declined).
     spawnMock.mockImplementationOnce(() => { throw Object.assign(new Error('EMFILE'), { code: 'EMFILE' }); });

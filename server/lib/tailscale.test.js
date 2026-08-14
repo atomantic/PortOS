@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { pinPlatform } from './testHelper.js';
 
 vi.mock('fs', () => ({
   existsSync: vi.fn()
@@ -101,23 +102,22 @@ describe('isSandboxedTailscale', () => {
 
 describe('hasOnlySandboxedTailscale', () => {
   let originalPath;
-  let originalPlatform;
+  let restorePlatform = () => {};
 
   beforeEach(() => {
     originalPath = process.env.PATH;
-    originalPlatform = process.platform;
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    restorePlatform = pinPlatform('darwin');
     process.env.PATH = '';
     vi.clearAllMocks();
   });
 
   afterEach(() => {
     process.env.PATH = originalPath;
-    Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    restorePlatform();
   });
 
   it('returns false on non-darwin platforms', () => {
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    pinPlatform('linux'); // afterEach restores the pristine descriptor
     existsSync.mockReturnValue(true);
     expect(hasOnlySandboxedTailscale()).toBe(false);
   });

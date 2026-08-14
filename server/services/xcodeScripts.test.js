@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { posixPath } from '../lib/testHelper.js';
+import { pinPlatform, posixPath } from '../lib/testHelper.js';
 
 // Hoisted mocks so promisify wraps the same fns we control in tests
 const hoisted = vi.hoisted(() => ({
@@ -298,13 +298,13 @@ describe('xcodeScripts', () => {
     // here except the explicit win32 one below asserts the POSIX path, so pin
     // the platform rather than let the host decide which half runs. (Safe — the
     // module's deps are all mocked and none loads a native addon.)
-    const ORIGINAL_PLATFORM = Object.getOwnPropertyDescriptor(process, 'platform');
-    afterEach(() => {
-      Object.defineProperty(process, 'platform', ORIGINAL_PLATFORM);
-    });
+    // Pinned in beforeEach, so a case that re-pins (the win32 one below) still
+    // restores through this single afterEach.
+    let restorePlatform = () => {};
+    afterEach(() => restorePlatform());
 
     beforeEach(() => {
-      Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+      restorePlatform = pinPlatform('darwin');
       hoisted.execMock.mockReset();
       hoisted.execFileMock.mockReset();
       readFile.mockReset();
@@ -521,32 +521,19 @@ describe('xcodeScripts', () => {
     });
 
     it('emits Windows-specific message when running on win32', async () => {
-      // Capture the original property descriptor so we can restore it exactly,
-      // and ensure our override is configurable so the restore can replace it.
-      const originalDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
-      Object.defineProperty(process, 'platform', {
-        value: 'win32',
-        configurable: true,
-        writable: true,
-        enumerable: true
-      });
-      try {
-        existsSync.mockImplementation(() => false);
-        const result = await installScripts(
-          { type: 'xcode', repoPath: 'C:/tmp/x', name: 'MyApp' },
-          ['deploy.sh']
-        );
-        // deriveProjectInfo short-circuits on win32 — uses appName directly
-        expect(result.installed).toContain('deploy.sh');
-        expect(result.errors.some(e => e.includes('chmod is not supported on Windows'))).toBe(true);
-        // execFile should NOT have been called for chmod on Windows
-        expect(hoisted.execFileMock).not.toHaveBeenCalled();
-      } finally {
-        // Restore the exact original descriptor so no test state leaks
-        if (originalDescriptor) {
-          Object.defineProperty(process, 'platform', originalDescriptor);
-        }
-      }
+      // Re-pin over the block's darwin default; the block's afterEach restores
+      // the pristine descriptor either way, so no state leaks on a failure.
+      pinPlatform('win32');
+      existsSync.mockImplementation(() => false);
+      const result = await installScripts(
+        { type: 'xcode', repoPath: 'C:/tmp/x', name: 'MyApp' },
+        ['deploy.sh']
+      );
+      // deriveProjectInfo short-circuits on win32 — uses appName directly
+      expect(result.installed).toContain('deploy.sh');
+      expect(result.errors.some(e => e.includes('chmod is not supported on Windows'))).toBe(true);
+      // execFile should NOT have been called for chmod on Windows
+      expect(hoisted.execFileMock).not.toHaveBeenCalled();
     });
   });
 });

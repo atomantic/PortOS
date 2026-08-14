@@ -1,5 +1,6 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, readFileSync } from 'fs';
+import { pinPlatform } from './testHelper.js';
 
 import {
   GROK_API_ID,
@@ -104,12 +105,13 @@ describe('grok — ensureGrokTuiArgs', () => {
 });
 
 describe('grok — prepareGrokPromptFile', () => {
-  const realPlatform = process.platform;
-  const setPlatform = (p) => Object.defineProperty(process, 'platform', { value: p, configurable: true });
-  afterEach(() => setPlatform(realPlatform));
+  // Captured before any pin so the restore reinstates the pristine descriptor.
+  let restorePlatform = () => {};
+  beforeEach(() => { restorePlatform = pinPlatform(process.platform); });
+  afterEach(() => restorePlatform());
 
   it('is a stdin no-op on POSIX (prompt delivered via /dev/stdin)', () => {
-    setPlatform('darwin');
+    pinPlatform('darwin');
     const args = ['--prompt-file', '/dev/stdin'];
     const res = prepareGrokPromptFile(args, 'hello');
     expect(res.useStdin).toBe(true);
@@ -117,7 +119,7 @@ describe('grok — prepareGrokPromptFile', () => {
   });
 
   it('is a no-op for a non-grok argv even on Windows', () => {
-    setPlatform('win32');
+    pinPlatform('win32');
     const args = ['-p', '-'];
     const res = prepareGrokPromptFile(args, 'hello');
     expect(res.useStdin).toBe(true);
@@ -125,7 +127,7 @@ describe('grok — prepareGrokPromptFile', () => {
   });
 
   it('writes a temp file and rewrites the separated sentinel on Windows', () => {
-    setPlatform('win32');
+    pinPlatform('win32');
     const args = ['--output-format', 'plain', '--prompt-file', '/dev/stdin'];
     const res = prepareGrokPromptFile(args, 'my prompt body');
     expect(res.useStdin).toBe(false);
@@ -139,7 +141,7 @@ describe('grok — prepareGrokPromptFile', () => {
   });
 
   it('rewrites the joined --prompt-file=/dev/stdin form on Windows too', () => {
-    setPlatform('win32');
+    pinPlatform('win32');
     const args = ['--output-format', 'plain', '--prompt-file=/dev/stdin'];
     const res = prepareGrokPromptFile(args, 'joined body');
     expect(res.useStdin).toBe(false);
@@ -153,7 +155,7 @@ describe('grok — prepareGrokPromptFile', () => {
   });
 
   it('uses a unique temp filename per call (no collision under concurrency)', () => {
-    setPlatform('win32');
+    pinPlatform('win32');
     const mk = () => prepareGrokPromptFile(['--prompt-file', '/dev/stdin'], 'x');
     const a = mk(); const b = mk();
     const fileA = a.args[a.args.indexOf('--prompt-file') + 1];

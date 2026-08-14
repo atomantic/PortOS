@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { pinPlatform } from '../lib/testHelper.js';
 
 vi.mock('../lib/hfToken.js', () => ({ getHfToken: vi.fn(async () => '') }));
 vi.mock('../lib/mediaModels.js', () => ({ addUserModelEntry: vi.fn((entry) => entry) }));
@@ -18,17 +19,15 @@ const mockFetch = (body) => vi.fn(async () => ({
 // so pin the platform rather than letting the host decide — otherwise the
 // suite fails on a Windows runner for a reason it is not testing. The refusal
 // itself gets its own case below.
-const ORIGINAL_PLATFORM = Object.getOwnPropertyDescriptor(process, 'platform');
-const pinPlatform = (value) =>
-  Object.defineProperty(process, 'platform', { ...ORIGINAL_PLATFORM, value });
+let restorePlatform = () => {};
 
 beforeEach(() => {
   vi.clearAllMocks();
-  pinPlatform('darwin');
+  restorePlatform = pinPlatform('darwin');
 });
 
 afterEach(() => {
-  Object.defineProperty(process, 'platform', ORIGINAL_PLATFORM);
+  restorePlatform();
 });
 
 describe('addModelFromHuggingface', () => {

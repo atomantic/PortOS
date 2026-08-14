@@ -33,6 +33,7 @@ vi.mock('./agentOrchestrator.js', () => ({
 }));
 
 import { exec, execFile } from 'child_process';
+import { pinPlatform } from '../lib/testHelper.js';
 import { registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
 import {
   getRunningAgents,
@@ -60,18 +61,16 @@ function mockExecWith(stdoutOrFn) {
 // Windows runner the source took the CIM branch, the `ps` mock was never
 // consulted, and every assertion saw an empty list. The Windows branch has its
 // own test below.
-const ORIGINAL_PLATFORM = Object.getOwnPropertyDescriptor(process, 'platform');
-const pinPlatform = (value) =>
-  Object.defineProperty(process, 'platform', { ...ORIGINAL_PLATFORM, value });
+let restorePlatform = () => {};
 
 describe('agents.js', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    pinPlatform('darwin');
+    restorePlatform = pinPlatform('darwin');
   });
 
   afterEach(() => {
-    Object.defineProperty(process, 'platform', ORIGINAL_PLATFORM);
+    restorePlatform();
   });
 
   // ===========================================================================

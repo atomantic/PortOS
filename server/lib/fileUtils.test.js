@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync } from 'f
 import { join } from 'path';
 import { tmpdir, homedir } from 'os';
 import { createHash } from 'crypto';
+import { pinPlatform } from './testHelper.js';
 import * as fsPromises from 'fs/promises';
 // Mock fs/promises so the `ensureDir` regression test can force `mkdir` to
 // throw a spurious Windows error, and the readJSONFileStrict tests can force a
@@ -1316,11 +1317,8 @@ describe('Windows swap-window retries (#4095)', () => {
   let tmpRoot;
   let restorePlatform = null;
 
-  const fakePlatform = (value) => {
-    const original = Object.getOwnPropertyDescriptor(process, 'platform');
-    Object.defineProperty(process, 'platform', { value, configurable: true });
-    restorePlatform = () => Object.defineProperty(process, 'platform', original);
-  };
+  // Parks the restore for afterEach; each case pins exactly once.
+  const fakePlatform = (value) => { restorePlatform = pinPlatform(value); };
 
   beforeEach(() => {
     tmpRoot = mkdtempSync(join(tmpdir(), 'fileutils-winswap-'));

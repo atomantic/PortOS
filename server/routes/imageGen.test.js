@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
-import { request } from '../lib/testHelper.js';
+import { pinPlatform, request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import imageGenRoutes from './imageGen.js';
 import * as fileUtils from '../lib/fileUtils.js';
@@ -1154,11 +1154,11 @@ describe('Image Gen Routes', () => {
   describe('GET /setup/check (arch fields)', () => {
     // The route's archMismatch logic gates on `process.platform === 'darwin'` —
     // override it so the assertions run identically on Linux CI and a dev Mac.
-    const originalPlatform = process.platform;
+    let restorePlatform = () => {};
     let probePythonHealth, detectArm64Python;
 
     beforeEach(async () => {
-      Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+      restorePlatform = pinPlatform('darwin');
       const mod = await import('../lib/pythonSetup.js');
       probePythonHealth = mod.probePythonHealth;
       detectArm64Python = mod.detectArm64Python;
@@ -1167,7 +1167,7 @@ describe('Image Gen Routes', () => {
     });
 
     afterEach(() => {
-      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+      restorePlatform();
       hostArchHolder.value = 'arm64';
     });
 
@@ -1207,7 +1207,7 @@ describe('Image Gen Routes', () => {
     });
 
     it('does not flag archMismatch on non-darwin even when interpreter arch differs', async () => {
-      Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+      pinPlatform('linux'); // afterEach restores the pristine descriptor
       probePythonHealth.mockResolvedValueOnce({
         installed: [], missing: [], missingPip: [],
         externallyManaged: false, interpreterArch: 'x86_64',
