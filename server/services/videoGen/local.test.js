@@ -448,7 +448,23 @@ describe('generateChainedVideo — continuation strategy (context window vs last
       const id = innerJobIds[i];
       videoGenEvents.emit('completed', { generationId: id, filename: `${id}.mp4`, path: `/data/videos/${id}.mp4` });
     }
-    await new Promise((r) => setTimeout(r, 100));
+    // Wait for the STITCH to actually land, not for a fixed 100ms. Every caller
+    // chains 2+ chunks, so the stitched history entry is always written — and
+    // it is the last step, after the concat spawn. A flat sleep was enough on
+    // an idle machine but not on a contended Windows worker during a full-suite
+    // run, where the concat had not been spawned yet and `concat` came back
+    // null ("Cannot read properties of null (reading 'indexOf')") in a test
+    // that passes in isolation. Poll the real condition instead, and fall
+    // through on timeout so a genuine regression still fails on its own
+    // assertion rather than here.
+    const stitchedEntry = () => vi.mocked(atomicWrite).mock.calls
+      .flatMap(([, payload]) => (Array.isArray(payload) ? payload : []))
+      .find((entry) => entry?.chainedFrom) || null;
+    const deadline = Date.now() + 5000;
+    while (!stitchedEntry() && Date.now() < deadline) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, 10));
+    }
     videoGenEvents.removeAllListeners('started');
 
     const spawns = vi.mocked(spawn).mock.calls;
@@ -462,9 +478,7 @@ describe('generateChainedVideo — continuation strategy (context window vs last
       concat: (spawns.find(([, args]) => Array.isArray(args)
         && (args.includes('concat') || args.some((a) => typeof a === 'string' && a.includes('concat=n=')))) || [])[1] || null,
       // The stitched history entry, read off the history write it triggers.
-      stitched: vi.mocked(atomicWrite).mock.calls
-        .flatMap(([, payload]) => (Array.isArray(payload) ? payload : []))
-        .find((entry) => entry?.chainedFrom) || null,
+      stitched: stitchedEntry(),
     };
   }
 
