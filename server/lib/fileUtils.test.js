@@ -1354,6 +1354,9 @@ describe('Windows swap-window retries (#4095)', () => {
     it('does not retry off win32 — a rename failure still surfaces immediately', async () => {
       const target = join(tmpRoot, 'posix.json');
       writeFileSync(target, JSON.stringify({ v: 1 }));
+      // Pinned explicitly, not inherited from the host — this suite also runs on
+      // a real Windows CI runner, where the un-faked platform IS win32.
+      fakePlatform('linux');
       fsPromises.rename.mockRejectedValueOnce(lockError('EPERM'));
 
       await expect(atomicWrite(target, { v: 2 })).rejects.toThrow(/EPERM/);
@@ -1410,6 +1413,7 @@ describe('Windows swap-window retries (#4095)', () => {
 
     it('costs a plain missing file nothing off win32 — one read, no directory scan', async () => {
       const missing = join(tmpRoot, 'never-written.json');
+      fakePlatform('linux');
 
       expect(await readJSONFileStrict(missing, { fallback: true })).toEqual({ ok: true, value: { fallback: true } });
       expect(fsPromises.readFile).toHaveBeenCalledTimes(1);
@@ -1419,6 +1423,7 @@ describe('Windows swap-window retries (#4095)', () => {
     it('does not retry a locked read off win32 — the read stays untrustworthy', async () => {
       const target = join(tmpRoot, 'posix-locked.json');
       writeFileSync(target, JSON.stringify({ real: true }));
+      fakePlatform('linux');
       fsPromises.readFile.mockRejectedValueOnce(lockError('EBUSY'));
 
       expect(await readJSONFileStrict(target, { fallback: true }, { logError: false }))
