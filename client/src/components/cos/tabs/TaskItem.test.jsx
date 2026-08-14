@@ -294,10 +294,10 @@ describe('TaskItem cancel-edit confirmation (#4037)', () => {
     expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
   });
 
-  it('shows the confirm row when only a non-description field (context) changed', () => {
-    // Pins hasUnsavedEdits' context/model/provider branches, not just description —
-    // a regression narrowing the comparison to description alone would still pass
-    // every other test in this block since they all edit description.
+  it('shows the confirm row when only the context field changed', () => {
+    // Pins hasUnsavedEdits' context branch specifically — a regression narrowing
+    // the comparison to description alone would still pass every other test in
+    // this block since they all edit description.
     render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
@@ -306,6 +306,30 @@ describe('TaskItem cancel-edit confirmation (#4037)', () => {
 
     expect(screen.getByRole('group', { name: 'Confirm discard task edits' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+  });
+
+  it('shows the confirm row when only the model select changed', () => {
+    // Pins hasUnsavedEdits' model branch in isolation (provider left untouched).
+    render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    const [, modelSelect] = screen.getAllByRole('combobox');
+    fireEvent.change(modelSelect, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.getByRole('group', { name: 'Confirm discard task edits' })).toBeInTheDocument();
+  });
+
+  it('shows the confirm row when only the provider select changed', () => {
+    // Pins hasUnsavedEdits' provider branch.
+    render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    const [providerSelect] = screen.getAllByRole('combobox');
+    fireEvent.change(providerSelect, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.getByRole('group', { name: 'Confirm discard task edits' })).toBeInTheDocument();
   });
 
   it('discards the draft on a second click confirming the discard', () => {
