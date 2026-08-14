@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock child_process before importing agents.js
 vi.mock('child_process', () => ({
-  exec: vi.fn()
+  exec: vi.fn(),
+  // agents.js probes Windows via execFile(powershell, …) — see findWindowsProcesses.
+  execFile: vi.fn()
 }));
 
 // Mock util.promisify so execAsync uses our mocked exec
@@ -30,7 +32,7 @@ vi.mock('./agentOrchestrator.js', () => ({
   killAgent: vi.fn().mockResolvedValue({ success: true })
 }));
 
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
 import {
   getRunningAgents,
@@ -52,9 +54,24 @@ function mockExecWith(stdoutOrFn) {
   });
 }
 
+// getRunningAgents branches on process.platform: POSIX shells out to `ps`,
+// Windows to `powershell Get-CimInstance`. Nearly every test here feeds `ps`
+// output, so pin a POSIX platform rather than letting the host decide — on a
+// Windows runner the source took the CIM branch, the `ps` mock was never
+// consulted, and every assertion saw an empty list. The Windows branch has its
+// own test below.
+const ORIGINAL_PLATFORM = Object.getOwnPropertyDescriptor(process, 'platform');
+const pinPlatform = (value) =>
+  Object.defineProperty(process, 'platform', { ...ORIGINAL_PLATFORM, value });
+
 describe('agents.js', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    pinPlatform('darwin');
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', ORIGINAL_PLATFORM);
   });
 
   // ===========================================================================
@@ -357,6 +374,73 @@ describe('agents.js', () => {
 
       const result = await getProcessInfo(9999);
       expect(result).toBeNull();
+    });
+  });
+
+  // ===========================================================================
+  // Windows process probe (Get-CimInstance) — the branch that had no coverage
+  // and was silently dead: it shelled out to wmic.exe, which Microsoft removed
+  // from Windows 11, and the failure was swallowed into an empty list.
+  // ===========================================================================
+  describe('getRunningAgents on Windows', () => {
+    const cimRow = (over = {}) => ({
+      ProcessId: 4242,
+      ParentProcessId: 100,
+      WorkingSetSize: 52428800, // 50 MB
+      CommandLine: 'C:\\Users\\dev\\AppData\\Local\\claude.exe --print hi',
+      CreationDate: '2026-08-13T21:51:42.0985120+00:00',
+      ...over,
+    });
+    const mockCim = (payload) => {
+      execFile.mockImplementation((_bin, _args, _opts, cb) => {
+        const callback = typeof _opts === 'function' ? _opts : cb;
+        callback(null, { stdout: typeof payload === 'string' ? payload : JSON.stringify(payload) });
+      });
+    };
+
+    beforeEach(() => pinPlatform('win32'));
+
+    it('probes with PowerShell, not the removed wmic.exe', async () => {
+      mockCim([cimRow()]);
+      await getRunningAgents();
+      expect(execFile).toHaveBeenCalled();
+      const [bin, args] = execFile.mock.calls[0];
+      expect(bin).toBe('powershell');
+      expect(args.join(' ')).toContain('Get-CimInstance Win32_Process');
+      // wmic is gone on Windows 11 — never reintroduce it here.
+      expect(args.join(' ')).not.toContain('wmic');
+    });
+
+    it('maps a CIM row to the shared process shape', async () => {
+      mockCim([cimRow()]);
+      const agents = await getRunningAgents();
+      const found = agents.find((a) => a.pid === 4242);
+      expect(found).toBeDefined();
+      expect(found.ppid).toBe(100);
+      expect(found.memory).toBeCloseTo(50, 5);       // bytes → MB
+      expect(found.startTime).toBe(Date.parse('2026-08-13T21:51:42.0985120+00:00'));
+      expect(Number.isFinite(found.runtime)).toBe(true);
+    });
+
+    it('accepts a single match, which ConvertTo-Json emits as a bare object', async () => {
+      // Not wrapped in an array — the shape that would otherwise be iterated
+      // as an object and yield nothing.
+      mockCim(cimRow({ ProcessId: 777 }));
+      const agents = await getRunningAgents();
+      expect(agents.map((a) => a.pid)).toContain(777);
+    });
+
+    it('survives a failed probe without throwing', async () => {
+      execFile.mockImplementation((_bin, _args, _opts, cb) => {
+        const callback = typeof _opts === 'function' ? _opts : cb;
+        callback(new Error('powershell missing'));
+      });
+      await expect(getRunningAgents()).resolves.toEqual([]);
+    });
+
+    it('survives unparseable probe output without throwing', async () => {
+      mockCim('not json at all');
+      await expect(getRunningAgents()).resolves.toEqual([]);
     });
   });
 });

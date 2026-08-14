@@ -1,9 +1,12 @@
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { getSpawnedAgent } from './agentState.js';
 import { killAgent } from './agentOrchestrator.js';
 
 const execAsync = promisify(exec);
+// execFile (not exec) for the Windows probe: the PowerShell script rides as a
+// single argv element instead of through a shell command line.
+const execFileAsync = promisify(execFile);
 
 // Agent process patterns to detect
 const AGENT_PATTERNS = [
@@ -175,39 +178,75 @@ async function findWindowsProcesses(pattern) {
     return [];
   }
 
-  // Security: Pattern is validated above to only contain safe characters
-  const cmd = `wmic process where "name like '%${safePattern}%'" get ProcessId,ParentProcessId,PercentProcessorTime,WorkingSetSize,CreationDate,CommandLine /format:csv`;
+  // WMIC, not PowerShell CIM, was the original implementation here — but
+  // Microsoft removed wmic.exe from Windows 11 (it is gone entirely on 24H2+
+  // / build 26xxx), so the command failed with ENOENT, the `.catch()` below
+  // swallowed it into an empty string, and getRunningAgents() reported "no
+  // agents running" forever instead of surfacing an error. Get-CimInstance is
+  // the documented successor, ships in-box on every supported Windows, and
+  // returns ISO-8601 CreationDate (rather than wmic's `YYYYMMDDHHmmss.ffffff`),
+  // which Date.parse handles directly.
+  //
+  // Security: safePattern is validated above to contain only safe characters,
+  // and the script is passed as a single argv element to powershell -Command
+  // rather than through a shell, so there is no interpolation boundary to
+  // escape past.
+  // CreationDate is projected through .ToString('o') rather than emitted raw:
+  // Windows PowerShell 5.1 serializes a DateTime as "\/Date(1786...)\/" while
+  // PowerShell 7 emits ISO-8601, and `powershell` resolves to whichever is
+  // installed. Formatting it in the script pins one shape for both hosts.
+  const script = `Get-CimInstance Win32_Process -Filter "Name LIKE '%${safePattern}%'" `
+    + "| Select-Object ProcessId,ParentProcessId,WorkingSetSize,CommandLine,"
+    + "@{Name='CreationDate';Expression={$_.CreationDate.ToString('o')}} "
+    + '| ConvertTo-Json -Compress';
 
-  const result = await execAsync(cmd, { windowsHide: true }).catch(() => ({ stdout: '' }));
+  const result = await execFileAsync(
+    'powershell',
+    ['-NoProfile', '-NonInteractive', '-Command', script],
+    { windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
+  ).catch((err) => {
+    // Keep the empty-result behavior (the caller treats [] as "none running"),
+    // but never again fail SILENTLY — a broken process probe is why this was
+    // undiagnosable for so long.
+    console.error(`❌ Windows process probe failed for "${safePattern}": ${err.message}`);
+    return { stdout: '' };
+  });
 
-  const lines = result.stdout.trim().split('\n').filter(Boolean);
+  const raw = String(result.stdout || '').trim();
+  if (!raw) return [];
+
+  // ConvertTo-Json emits a bare object (not a 1-element array) for a single
+  // match, so normalize before iterating.
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    console.error(`❌ Windows process probe returned unparseable JSON for "${safePattern}": ${err.message}`);
+    return [];
+  }
+  const rows = Array.isArray(parsed) ? parsed : [parsed];
+
   const processes = [];
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const pid = parseInt(row.ProcessId, 10);
+    if (!Number.isFinite(pid)) continue;
 
-  // Skip header line
-  for (let i = 1; i < lines.length; i++) {
-    const parts = lines[i].split(',');
-    if (parts.length >= 7) {
-      const command = parts[1];
-      const creationDate = parts[2];
-      const ppid = parseInt(parts[3], 10);
-      const cpu = parseFloat(parts[4]) || 0;
-      const memory = parseInt(parts[5], 10) / 1024 / 1024; // Convert to MB
-      const pid = parseInt(parts[6], 10);
+    const startTime = parseWindowsDate(row.CreationDate);
+    const runtime = Date.now() - startTime;
 
-      const startTime = parseWindowsDate(creationDate);
-      const runtime = Date.now() - startTime;
-
-      processes.push({
-        pid,
-        ppid,
-        cpu,
-        memory,
-        runtime,
-        runtimeFormatted: formatRuntime(runtime),
-        command,
-        startTime
-      });
-    }
+    processes.push({
+      pid,
+      ppid: parseInt(row.ParentProcessId, 10) || 0,
+      // Win32_Process carries no CPU% column (the old wmic query asked for a
+      // PercentProcessorTime that class never had, so this was always 0).
+      cpu: 0,
+      memory: (parseInt(row.WorkingSetSize, 10) || 0) / 1024 / 1024, // → MB
+      runtime,
+      runtimeFormatted: formatRuntime(runtime),
+      command: row.CommandLine || '',
+      startTime,
+    });
   }
 
   return processes;
@@ -244,6 +283,19 @@ function parseElapsedTime(etime) {
  */
 function parseWindowsDate(dateStr) {
   if (!dateStr) return Date.now();
+  // Get-CimInstance | ConvertTo-Json emits ISO-8601 with an offset
+  // ("2026-08-13T21:51:42.098512+00:00"); the legacy wmic path emitted
+  // `YYYYMMDDHHmmss.ffffff`. Accept both — the ISO branch must come first,
+  // because the positional parse below would happily read "2026-08-13T2" as a
+  // date and return garbage rather than failing.
+  // Windows PowerShell 5.1's raw DateTime serialization, kept as a fallback for
+  // any caller that doesn't project through .ToString('o').
+  const epoch = /^\/Date\((-?\d+)\)\/$/.exec(dateStr);
+  if (epoch) return Number(epoch[1]);
+  if (dateStr.includes('-') || dateStr.includes('T')) {
+    const iso = Date.parse(dateStr);
+    if (Number.isFinite(iso)) return iso;
+  }
   // Format: YYYYMMDDHHmmss.ffffff
   const year = parseInt(dateStr.substring(0, 4), 10);
   const month = parseInt(dateStr.substring(4, 6), 10) - 1;
