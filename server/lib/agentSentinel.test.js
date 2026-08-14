@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { join } from 'path';
 import { DONE_SENTINEL_NAME, doneSentinelName, doneSentinelPath, extractSentinelPayloadFromTranscript, parseSentinelPayload, salvageSentinelPayload } from './agentSentinel.js';
 
 describe('agentSentinel', () => {
@@ -32,11 +33,14 @@ describe('agentSentinel', () => {
     it('resolves the run-scoped file inside the workspace', () => {
       // Worktree-less agents share the primary checkout: a bare `.agent-done`
       // there may be a sibling run's, and must never finalize this one.
-      expect(doneSentinelPath('/repo', 'agent-1')).toBe('/repo/.agent-done-agent-1');
+      // join(), not a '/'-joined literal: doneSentinelPath composes with path.join,
+      // so the separator is '\' on Windows and the contract under test is the
+      // COMPOSITION, not the separator.
+      expect(doneSentinelPath('/repo', 'agent-1')).toBe(join('/repo', '.agent-done-agent-1'));
     });
 
     it('degrades to the shared name when no agent id is available', () => {
-      expect(doneSentinelPath('/repo', null)).toBe('/repo/.agent-done');
+      expect(doneSentinelPath('/repo', null)).toBe(join('/repo', '.agent-done'));
     });
 
     it('returns null without a workspace path', () => {
