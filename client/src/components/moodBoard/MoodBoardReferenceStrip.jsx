@@ -14,21 +14,39 @@
  * Self-contained: loads the board list lazily on first expand, remembers the
  * last-picked board per `storageKey` in localStorage so it persists across
  * creation sessions. Renders nothing heavy until expanded.
+ *
+ * Controlled mode (#4188): pass `value` (a board id, or '' for none) +
+ * `onChange` and the selection is owned by the caller instead of localStorage —
+ * the Universe Builder persists the pick on the universe record (`moodBoardId`)
+ * so it survives reload, is per-universe, and syncs to peers. Controlled mode
+ * never falls back to the first board (an unset link stays visibly unset) and
+ * offers a "New board" button when `newBoardName` is provided, creating a board
+ * named for the caller's record and selecting it in one step.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { LayoutGrid, ChevronDown, ChevronRight, ExternalLink, ImageIcon } from 'lucide-react';
-import { listMoodBoards, getMoodBoard } from '../../services/api';
+import { LayoutGrid, ChevronDown, ChevronRight, ExternalLink, ImageIcon, Plus, Loader2 } from 'lucide-react';
+import toast from '../ui/Toast';
+import { listMoodBoards, getMoodBoard, createMoodBoard } from '../../services/api';
 import { moodBoardItemSrc } from '../../lib/moodBoardItemSrc';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 
 const MAX_THUMBS = 12;
 
-export default function MoodBoardReferenceStrip({ storageKey = 'create', className = '' }) {
+export default function MoodBoardReferenceStrip({
+  storageKey = 'create',
+  className = '',
+  value = undefined,
+  onChange = null,
+  newBoardName = '',
+}) {
+  const controlled = value !== undefined;
   const lsKey = `portos.moodBoardRef.${storageKey}`;
   const [expanded, setExpanded] = useState(false);
   const [boards, setBoards] = useState(null); // null = not loaded, [] = loaded-empty
-  const [selectedId, setSelectedId] = useState(() => safeReadStorage(lsKey) || '');
+  const [localId, setLocalId] = useState(() => (controlled ? '' : safeReadStorage(lsKey) || ''));
+  const selectedId = controlled ? (value || '') : localId;
+  const [creating, setCreating] = useState(false);
   const [detail, setDetail] = useState(null); // full board (with items) for selectedId
   const [loadingDetail, setLoadingDetail] = useState(false);
 
@@ -43,14 +61,20 @@ export default function MoodBoardReferenceStrip({ storageKey = 'create', classNa
     return () => { cancelled = true; };
   }, [expanded, boards]);
 
-  // The board actually shown: the user's pick when it's still in the list, else
-  // the first board. Derived (not state) so display drives off it immediately —
-  // no render tick where the <select> value matches no option (which would log
-  // a controlled-select warning and flash the empty state before an effect
-  // catches up). The remembered id is persisted only on an explicit pick.
-  const effectiveId = (Array.isArray(boards) && boards.length > 0)
-    ? ((selectedId && boards.some((b) => b.id === selectedId)) ? selectedId : boards[0].id)
-    : '';
+  // The board actually shown. Uncontrolled: the user's pick when it's still in
+  // the list, else the first board. Derived (not state) so display drives off
+  // it immediately — no render tick where the <select> value matches no option
+  // (which would log a controlled-select warning and flash the empty state
+  // before an effect catches up). The remembered id is persisted only on an
+  // explicit pick. Controlled: the caller's value is the truth — a missing or
+  // deleted board shows as unset rather than silently falling back to another
+  // board (the persisted link must never drift from what's displayed).
+  const inList = (id) => Array.isArray(boards) && boards.some((b) => b.id === id);
+  const effectiveId = controlled
+    ? ((selectedId && inList(selectedId)) ? selectedId : '')
+    : ((Array.isArray(boards) && boards.length > 0)
+      ? (inList(selectedId) ? selectedId : boards[0].id)
+      : '');
 
   // Fetch the shown board's full record (the list payload already carries
   // items, but getMoodBoard guarantees the freshest items).
@@ -69,9 +93,31 @@ export default function MoodBoardReferenceStrip({ storageKey = 'create', classNa
   }, [expanded, effectiveId, boards]);
 
   const handleSelect = useCallback((id) => {
-    setSelectedId(id);
+    if (controlled) {
+      onChange?.(id);
+      return;
+    }
+    setLocalId(id);
     if (id) safeWriteStorage(lsKey, id);
-  }, [lsKey]);
+  }, [controlled, onChange, lsKey]);
+
+  // Create-and-link (controlled mode with a suggested name): one click makes a
+  // board named for the caller's record and selects it.
+  const handleCreate = useCallback(async () => {
+    if (creating) return;
+    setCreating(true);
+    try {
+      const created = await createMoodBoard({ name: newBoardName || 'Untitled board' }, { silent: true });
+      if (created?.id) {
+        setBoards((prev) => (Array.isArray(prev) ? [created, ...prev] : [created]));
+        onChange?.(created.id);
+      }
+    } catch {
+      toast.error('Could not create mood board');
+    } finally {
+      setCreating(false);
+    }
+  }, [creating, newBoardName, onChange]);
 
   const thumbs = useMemo(() => {
     const items = Array.isArray(detail?.items) ? detail.items : [];
@@ -101,13 +147,26 @@ export default function MoodBoardReferenceStrip({ storageKey = 'create', classNa
           {boards === null ? (
             <p className="text-[11px] text-gray-500">Loading boards…</p>
           ) : boards.length === 0 ? (
-            <p className="text-[11px] text-gray-500">
-              No mood boards yet.{' '}
-              <a href="/mood-boards" target="_blank" rel="noopener noreferrer" className="text-port-accent hover:underline">
-                Create one
-              </a>{' '}
-              to collect reference images.
-            </p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <p className="text-[11px] text-gray-500">
+                No mood boards yet.{' '}
+                <a href="/mood-boards" target="_blank" rel="noopener noreferrer" className="text-port-accent hover:underline">
+                  Create one
+                </a>{' '}
+                to collect reference images.
+              </p>
+              {controlled && newBoardName && (
+                <button
+                  type="button"
+                  onClick={handleCreate}
+                  disabled={creating}
+                  className="flex items-center gap-1 px-2 py-1 text-[11px] text-port-accent border border-port-accent/40 rounded hover:bg-port-accent/15 disabled:opacity-50"
+                >
+                  {creating ? <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" /> : <Plus className="w-3 h-3" aria-hidden="true" />}
+                  New board “{newBoardName}”
+                </button>
+              )}
+            </div>
           ) : (
             <>
               <div className="flex items-center gap-2">
@@ -118,10 +177,23 @@ export default function MoodBoardReferenceStrip({ storageKey = 'create', classNa
                   onChange={(e) => handleSelect(e.target.value)}
                   className="flex-1 min-w-0 bg-port-card border border-port-border rounded px-2 py-1 text-[12px] text-white focus:outline-none focus:border-port-accent"
                 >
+                  {controlled && <option value="">— no board linked —</option>}
                   {boards.map((b) => (
                     <option key={b.id} value={b.id}>{b.name}</option>
                   ))}
                 </select>
+                {controlled && newBoardName && (
+                  <button
+                    type="button"
+                    onClick={handleCreate}
+                    disabled={creating}
+                    title={`Create a board named “${newBoardName}” and link it`}
+                    className="shrink-0 flex items-center gap-1 px-2 py-1 text-[11px] text-port-accent border border-port-accent/40 rounded hover:bg-port-accent/15 disabled:opacity-50"
+                  >
+                    {creating ? <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" /> : <Plus className="w-3 h-3" aria-hidden="true" />}
+                    New
+                  </button>
+                )}
                 {effectiveId && (
                   <a
                     href={`/mood-boards/${encodeURIComponent(effectiveId)}`}
@@ -138,7 +210,9 @@ export default function MoodBoardReferenceStrip({ storageKey = 'create', classNa
               {thumbs.length === 0 ? (
                 <div className="flex items-center gap-1.5 text-[11px] text-gray-500 py-2">
                   <ImageIcon className="w-3.5 h-3.5" aria-hidden="true" />
-                  {loadingDetail ? 'Loading reference images…' : 'No reference images pinned on this board yet.'}
+                  {!effectiveId
+                    ? 'No board linked — pick one above to surface its references here.'
+                    : loadingDetail ? 'Loading reference images…' : 'No reference images pinned on this board yet.'}
                 </div>
               ) : (
                 <div className="grid grid-cols-4 sm:grid-cols-6 gap-1.5">

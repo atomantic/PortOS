@@ -1,0 +1,1 @@
+- Universes can now link a mood board directly on the record: pick or create a board from the Universe Bible tab and the link survives reload, stays per-universe, and syncs to your other machines (previously the reference strip only remembered one board per browser).

@@ -2647,6 +2647,40 @@ describe("universeBuilder service", () => {
     });
   });
 
+  describe("moodBoardId (linked mood board, #4188)", () => {
+    it("persists through create and is absent when never set", async () => {
+      const linked = await svc.createUniverse({ name: "Linked", moodBoardId: "mb-abc123" });
+      expect(linked.moodBoardId).toBe("mb-abc123");
+      const bare = await svc.createUniverse({ name: "Bare" });
+      expect("moodBoardId" in bare).toBe(false);
+    });
+
+    it("PATCH sets, preserves-on-absent, and clears on ''/null", async () => {
+      const w = await svc.createUniverse({ name: "W" });
+      const set = await svc.updateUniverse(w.id, { moodBoardId: "mb-1" });
+      expect(set.moodBoardId).toBe("mb-1");
+      // A patch that doesn't carry the key preserves the link.
+      const untouched = await svc.updateUniverse(w.id, { logline: "still linked" });
+      expect(untouched.moodBoardId).toBe("mb-1");
+      // Key-present with '' clears — the field drops back to absent.
+      const cleared = await svc.updateUniverse(w.id, { moodBoardId: "" });
+      expect("moodBoardId" in cleared).toBe(false);
+      const setAgain = await svc.updateUniverse(w.id, { moodBoardId: "mb-2" });
+      expect(setAgain.moodBoardId).toBe("mb-2");
+      const nulled = await svc.updateUniverse(w.id, { moodBoardId: null });
+      expect("moodBoardId" in nulled).toBe(false);
+    });
+
+    it("sanitizes a non-string value to absent on read", async () => {
+      await seedState({
+        universes: [{ id: "w-mb", name: "X", moodBoardId: 42, createdAt: "2024-01-01T00:00:00Z" }],
+        runs: [],
+      });
+      const list = await svc.listUniverses();
+      expect("moodBoardId" in list[0]).toBe(false);
+    });
+  });
+
   describe("insertUniverseWithId", () => {
     it("preserves the caller-supplied id", async () => {
       const u = await svc.insertUniverseWithId({

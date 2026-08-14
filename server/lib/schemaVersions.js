@@ -62,7 +62,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // `universes` gate above already protects the canonical (embedded) copy.
   // v8 adds shared styleReferences[]. Older peers must not sanitize the field
   // away and LWW-sync that loss back to a newer install.
-  universes: 8,
+  // v9 = `moodBoardId` added (#4188) — the universe's linked mood board. The
+  // pointer rides the wire (mood boards federate, so the id resolves on peers);
+  // same rationale as v6/v7/v8: additive + gracefully degrading, but an older
+  // peer that re-sanitizes a universe through its moodBoardId-unaware
+  // `sanitizeTemplate` would silently strip the link and LWW the loss back.
+  universes: 9,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode

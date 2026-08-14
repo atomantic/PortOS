@@ -45,6 +45,7 @@ export const createEmptyUniverseDraft = () => ({
   logline: '',
   premise: '',
   styleNotes: '',
+  moodBoardId: null,
   categories: ensureDraftCategories(),
   compositeSheets: [],
   influences: { embrace: [], avoid: [] },
@@ -62,6 +63,7 @@ export const universeDraftSnapshot = (draft = {}) => JSON.stringify({
   logline: draft.logline || '',
   premise: draft.premise || '',
   styleNotes: draft.styleNotes || '',
+  moodBoardId: draft.moodBoardId || null,
   categories: draft.categories || {},
   compositeSheets: draft.compositeSheets || [],
   influences: ensureInfluences(draft.influences),
@@ -250,6 +252,7 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
           logline: universe.logline || '',
           premise: universe.premise || '',
           styleNotes: universe.styleNotes || '',
+          moodBoardId: universe.moodBoardId || null,
           influences: ensureInfluences(universe.influences),
           styleReferences: universe.styleReferences || [],
           locked: universe.locked || {},
@@ -275,6 +278,9 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
       logline: draft.logline || '',
       premise: draft.premise || '',
       styleNotes: draft.styleNotes || '',
+      // Linked mood board (#4188) — null clears server-side; the field always
+      // ships so Save carries the full intended state like other scalars.
+      moodBoardId: draft.moodBoardId || null,
       categories: draft.categories,
       compositeSheets: draft.compositeSheets || [],
       influences: ensureInfluences(draft.influences),

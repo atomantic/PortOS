@@ -70,6 +70,8 @@ export const LOGLINE_MAX = 500;
 // an abbreviation ledger.
 export const PREMISE_MAX = 20000;
 export const STYLE_NOTES_MAX = 4000;
+// Linked mood board pointer (`mb-<uuid>`, #4188) — generous cap for the id.
+export const MOOD_BOARD_ID_MAX = 80;
 export const VARIATIONS_PER_CATEGORY_MAX = 50;
 export const COMPOSITE_SHEETS_MAX = 50;
 export const COMPOSITE_SHEET_KINDS = Object.freeze([
@@ -707,6 +709,7 @@ export const sanitizeTemplate = (raw) => {
   const logline = trimTo(raw.logline, LOGLINE_MAX);
   const premise = trimTo(raw.premise, PREMISE_MAX);
   const styleNotes = trimTo(raw.styleNotes, STYLE_NOTES_MAX);
+  const moodBoardId = trimTo(raw.moodBoardId, MOOD_BOARD_ID_MAX);
   const categories = sanitizeCategories(raw.categories || {});
   const compositeSheets = sanitizeCompositeSheets(raw.compositeSheets || []);
   const influences = resolveInfluences(raw);
@@ -764,6 +767,12 @@ export const sanitizeTemplate = (raw) => {
     // discovered by federation/export asset collection so the image bytes
     // travel with the universe.
     styleReferences: sanitizeStyleReferences(raw.styleReferences),
+    // Linked mood board (#4188) — the board feeding this universe's style
+    // tools. A plain pointer (`mb-<uuid>`): boards are standalone federated
+    // records, so the id resolves on peers. Persisted only when set (so every
+    // existing universe keeps its on-disk shape) and kept ON the wire —
+    // `universes` v9 gates it against strip-then-LWW by older peers.
+    ...(moodBoardId ? { moodBoardId } : {}),
     // Base "style probe" renders — images generated from the raw style preset
     // (influences embrace/avoid + styleNotes) with NO subject, so the user can
     // see the world's base visual emphasis. Additive + regenerable; sanitized

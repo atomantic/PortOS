@@ -38,6 +38,8 @@ const createSchema = z.object({
   logline: z.string().trim().max(svc.LOGLINE_MAX).optional().default(''),
   premise: z.string().trim().max(svc.PREMISE_MAX).optional().default(''),
   styleNotes: z.string().trim().max(svc.STYLE_NOTES_MAX).optional().default(''),
+  // Linked mood board pointer (#4188) — null/'' clears, absent preserves.
+  moodBoardId: z.string().trim().max(svc.MOOD_BOARD_ID_MAX).nullable().optional(),
   categories: categoriesSchema.optional(),
   compositeSheets: z.array(compositeSheetSchema).max(svc.COMPOSITE_SHEETS_MAX).optional(),
   influences: influencesSchema.optional(),
@@ -75,6 +77,8 @@ const patchSchema = z.object({
   logline: z.string().trim().max(svc.LOGLINE_MAX).optional(),
   premise: z.string().trim().max(svc.PREMISE_MAX).optional(),
   styleNotes: z.string().trim().max(svc.STYLE_NOTES_MAX).optional(),
+  // Linked mood board pointer (#4188) — null/'' clears, absent preserves.
+  moodBoardId: z.string().trim().max(svc.MOOD_BOARD_ID_MAX).nullable().optional(),
   categories: categoriesSchema.optional(),
   compositeSheets: z.array(compositeSheetSchema).max(svc.COMPOSITE_SHEETS_MAX).optional(),
   influences: influencesSchema.optional(),

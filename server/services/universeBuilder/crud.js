@@ -236,6 +236,7 @@ export async function createUniverse(input = {}) {
       logline: input.logline || '',
       premise: input.premise || '',
       styleNotes: input.styleNotes || '',
+      moodBoardId: input.moodBoardId || '',
       categories: input.categories || {},
       compositeSheets: input.compositeSheets || [],
       influences: input.influences || {},
@@ -469,6 +470,9 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
     const PATCHABLE_SCALARS = [
       'name', 'starterPrompt',
       'logline', 'premise', 'styleNotes', 'compositeSheets',
+      // Linked mood board pointer (#4188). Key-present with ''/null clears
+      // (sanitizeTemplate drops the field); key-absent preserves.
+      'moodBoardId',
       // Uploaded, analyzed bible references — patched wholesale.
       'styleReferences',
       // Base style-probe render refs — patched wholesale (sanitizer re-caps).

@@ -166,7 +166,15 @@ export default function BibleTab({
           </div>
         </div>
 
-        <MoodBoardReferenceStrip storageKey="universe-builder" />
+        {/* Persisted per-universe link (#4188): the pick lives on the record
+            (`moodBoardId`) and rides the normal draft Save — not localStorage —
+            so it survives reload, is per-universe, and syncs to peers. */}
+        <MoodBoardReferenceStrip
+          storageKey="universe-builder"
+          value={draft.moodBoardId || ''}
+          onChange={(id) => updateDraft({ moodBoardId: id || null })}
+          newBoardName={draft.name?.trim() || ''}
+        />
 
         <div className="flex items-center gap-2 flex-wrap">
           <button
