@@ -267,6 +267,9 @@ export default function BrainGraph() {
       }).filter(Boolean)
     : [];
 
+  // Prose the detail panel renders for the loaded record (see recordBody).
+  const detailBody = recordBody(fullRecord);
+
   // Fetch full brain record when a node is selected
   useEffect(() => {
     if (!selectedNode) { setFullRecord(null); return; }
@@ -704,9 +707,9 @@ export default function BrainGraph() {
           <div className="mb-3">
             {fullRecord ? (
               <div className="space-y-3">
-                {recordBody(fullRecord) && (
+                {detailBody && (
                   <p className="text-sm text-gray-300 whitespace-pre-wrap">
-                    {recordBody(fullRecord)}
+                    {detailBody}
                   </p>
                 )}
                 {typeof fullRecord.progress === 'number' && (
