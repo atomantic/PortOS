@@ -1,0 +1,1 @@
+- Windows: a read racing atomicWrite's backup swap no longer returns the caller's default — both the rename and the read now retry a transient lock
