@@ -934,7 +934,12 @@ describe('stream error containment', () => {
       const { finalizeAgent } = await import('./agentFinalization.js');
       // The sentinel is named per agent instance so two worktree-less runs
       // sharing one workspace can't be finalized on each other's signal.
-      vi.mocked(existsSync).mockImplementation((path) => path === '/tmp/.agent-done-agent-test');
+      // doneSentinelPath() composes this with path.join, so on Windows the probe
+      // asks about '\tmp\.agent-done-agent-test' — compare on a normalized copy
+      // rather than pinning the separator, or the sentinel is never found.
+      vi.mocked(existsSync).mockImplementation(
+        (path) => String(path).split('\\').join('/') === '/tmp/.agent-done-agent-test',
+      );
 
       await runToClose({ ...minimalArgs }, null);
 

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { join } from 'path';
 
 // ─── Mocks for spawnTuiAgent tests ──────────────────────────────────────────
 // All vi.mock calls must be at the top level before any imports.
@@ -618,7 +619,8 @@ describe('spawnTuiAgent runtime', () => {
       workspacePath: '/tmp/ws',
       // Per-agent sentinel: `/tmp/ws` is a SHARED workspace (its basename is not
       // the agent id), so the run watches only its own `.agent-done-agent-1`.
-      doneSentinelPath: '/tmp/ws/.agent-done-agent-1',
+      // Composed by doneSentinelPath() via path.join.
+      doneSentinelPath: join('/tmp/ws', '.agent-done-agent-1'),
     }));
     expect(shellService.createShellSession).not.toHaveBeenCalled();
     expect(shellService.registerExternalSession).toHaveBeenCalledWith(

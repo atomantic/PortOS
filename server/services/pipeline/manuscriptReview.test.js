@@ -15,7 +15,11 @@ vi.mock('./series.js', () => ({
   listSeries: async () => {
     const ids = [];
     for (const key of fileStore.keys()) {
-      const id = /^\/mock\/series\/([^/]+)\//.exec(key)?.[1];
+      // Accept either separator: the store keys are built by joining
+      // recordDir(id) with a filename, so on Windows they are backslashed and a
+      // '/'-only pattern matched nothing — listSeries then reported NO series
+      // and locateComment's cross-series scan had nothing to walk.
+      const id = /^[\\/]mock[\\/]series[\\/]([^\\/]+)[\\/]/.exec(key)?.[1];
       if (id && !ids.includes(id)) ids.push(id);
     }
     return ids.map((id) => ({ id }));
