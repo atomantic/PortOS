@@ -38,6 +38,7 @@ const {
   isPreexistingRefError,
   removeWorktree,
   adoptWorktree,
+  createWorktree,
 } = await import('./worktreeManager.js');
 const { isPathInsideDir } = await import('../lib/fileUtils.js');
 const { win32 } = await import('path');
@@ -915,5 +916,67 @@ describe('adoptWorktree — resuming an interrupted run in its own worktree', ()
     await expect(adoptWorktree(null, '/repo', DEAD_TREE, 'b')).resolves.toBeNull();
     await expect(adoptWorktree('agent-new', '/repo', DEAD_TREE, null)).resolves.toBeNull();
     expect(execGitMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('createWorktree upstream safety (#4172)', () => {
+  // Wiring-level coverage: that the branch invariant itself HOLDS against real
+  // git is proved in lib/branchUpstreamGuard.test.js (real repos, real config).
+  // What can only be checked here is that createWorktree actually reaches for
+  // it — the flag on the add, and the guard on the result.
+  function scriptGit({ mergeReadings = [] } = {}) {
+    const readings = [...mergeReadings];
+    execGitMock.mockReset();
+    execGitMock.mockImplementation((args) => {
+      if (args[0] === 'config' && args[1] === '--get' && /\.merge$/.test(args[2] || '')) {
+        const answer = readings.length ? readings.shift() : '';
+        // exitCode 1 mirrors `git config --get` on an unset key, which the guard
+        // must read as "no upstream" rather than as an error.
+        return Promise.resolve({ stdout: answer, stderr: '', exitCode: answer ? 0 : 1 });
+      }
+      return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
+    });
+  }
+
+  const argsFor = (predicate) => execGitMock.mock.calls.map(([args]) => args).filter(predicate);
+
+  beforeEach(() => {
+    getDefaultBranchMock.mockResolvedValue('main');
+    scriptGit();
+  });
+
+  it('creates the branch with --no-track so git cannot record refs/heads/main as its upstream', async () => {
+    await createWorktree('agent-1', '/repo', 'task-1');
+
+    const [add] = argsFor(a => a[0] === 'worktree' && a[1] === 'add');
+    expect(add).toContain('--no-track');
+    // The flag has to precede -b: it configures the branch being created.
+    expect(add.indexOf('--no-track')).toBeLessThan(add.indexOf('-b'));
+  });
+
+  it('drops an upstream that still points at the default branch', async () => {
+    // An older git, or a repo whose config re-tracks despite the flag: the first
+    // read finds `main`, the guard unsets, the re-read confirms.
+    scriptGit({ mergeReadings: ['refs/heads/main'] });
+
+    await createWorktree('agent-2', '/repo', 'task-2');
+
+    expect(argsFor(a => a[0] === 'branch' && a[1] === '--unset-upstream')).toHaveLength(1);
+  });
+
+  it('leaves a healthy branch untouched', async () => {
+    await createWorktree('agent-3', '/repo', 'task-3');
+
+    expect(argsFor(a => a[0] === 'branch' && a[1] === '--unset-upstream')).toHaveLength(0);
+  });
+
+  it('checks the re-attached branch of an existingBranch worktree too', async () => {
+    // Branches created before this fix keep their bad upstream; a review-loop
+    // agent re-attaching to one must not inherit a push aimed at main.
+    scriptGit({ mergeReadings: ['refs/heads/main'] });
+
+    await createWorktree('agent-4', '/repo', 'task-4', { existingBranch: 'cos/task-0/agent-0' });
+
+    expect(argsFor(a => a[0] === 'branch' && a[1] === '--unset-upstream')).toHaveLength(1);
   });
 });

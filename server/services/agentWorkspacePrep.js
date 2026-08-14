@@ -35,6 +35,7 @@ import * as git from './git.js';
 import { detectConflicts } from './taskConflict.js';
 import { createWorktree, adoptWorktree } from './worktreeManager.js';
 import { resolveSpawnCwd } from '../lib/spawnCwd.js';
+import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { getAppWorkspace, getAppDataForTask, createJiraTicketForTask } from './agentPromptBuilder.js';
 
 const ROOT_DIR = PATHS.root;
@@ -198,10 +199,17 @@ export async function prepareAgentWorkspace({ agentId, task }) {
           }
         }
 
-        await git.createBranch(workspacePath, jiraBranchName).catch(err => {
-          emitLog('warn', `Failed to create JIRA branch ${jiraBranchName}: ${err.message}`, { taskId: task.id });
-          jiraBranchName = null;
-        });
+        await git.createBranch(workspacePath, jiraBranchName)
+          // `checkout -b` off a LOCAL branch doesn't auto-track under git's default
+          // `branch.autoSetupMerge`, but a repo configured `always` records the base
+          // branch as this one's upstream — and a config-derived push
+          // (`git push <remote> HEAD:<merge>`) then lands the agent's work on the base
+          // branch instead of opening a PR (#4172). Verify before handing it over.
+          .then(() => enforceSafeBranchUpstream(workspacePath, jiraBranchName))
+          .catch(err => {
+            emitLog('warn', `Failed to create JIRA branch ${jiraBranchName}: ${err.message}`, { taskId: task.id });
+            jiraBranchName = null;
+          });
 
         if (jiraBranchName) {
           emitLog('success', `Created feature branch ${jiraBranchName}`, { taskId: task.id, ticketId: jiraTicket.ticketId });

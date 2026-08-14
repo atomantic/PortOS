@@ -1,0 +1,1 @@
+- CoS agent worktree branches are no longer created tracking the default branch — `git worktree add` now passes `--no-track`, and a new upstream guard repairs any branch whose `branch.<name>.merge` names a foreign ref, so a config-derived `git push HEAD:<merge>` can't land agent work straight on main instead of opening a PR (#4172)

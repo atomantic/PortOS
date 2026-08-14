@@ -179,6 +179,7 @@ export * from './agentOutputMarkers.js';
 export * from './agentSentinel.js';
 export * from './bareUrl.js';
 export * from './bashResolver.js';
+export * from './branchUpstreamGuard.js';
 export * from './bufferedSpawn.js';
 export * from './commandExists.js';
 export * from './commandSecurity.js';

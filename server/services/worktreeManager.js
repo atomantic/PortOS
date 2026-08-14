@@ -16,6 +16,7 @@ import { ensureDir, isPathInsideDir, PATHS, sleep, tryReadFile } from '../lib/fi
 import { DONE_SENTINEL_NAME, doneSentinelName } from '../lib/agentSentinel.js';
 import { execGit } from '../lib/execGit.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
+import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { ensureInstanceId } from './instances.js';
 
 const WORKTREES_DIR = PATHS.worktrees;
@@ -388,6 +389,11 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
       // Attach path re-uses an existing branch, so no orphan-branch cleanup on failure.
       await addWorktreeWithRetry(['worktree', 'add', '-B', branchName, worktreePath, `origin/${branchName}`], sourceWorkspace);
     }
+    // Re-attaching a branch a PREVIOUS run created — which, before #4172, may
+    // have been left tracking `refs/heads/main`. Repair it before the agent (and
+    // its `/do:pr`) touches it. Tracking `origin/<branchName>` is the healthy
+    // shape here and passes untouched.
+    await enforceSafeBranchUpstream(sourceWorkspace, branchName);
     console.log(`🌳 Created worktree for ${agentId} at ${worktreePath} on existing branch ${branchName}`);
     return { worktreePath, branchName, baseBranch: null, existingBranch: true, instanceId };
   }
@@ -412,15 +418,26 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
     .catch(() => baseBranch);
 
   // Create worktree with a new branch based on the latest default branch.
+  // `--no-track` is load-bearing, not tidiness (#4172): `baseRef` is normally the
+  // remote-tracking `origin/<default>`, and git's default `branch.autoSetupMerge`
+  // would record `branch.<name>.merge = refs/heads/main` on the new branch. Push
+  // helpers derive their destination from that config — `/do:pr` pushes
+  // `HEAD:$(git config branch.<name>.merge)` — so the agent's work lands straight
+  // on main, skipping the PR. Untracked is what makes `git push -u origin <branch>`
+  // the correct path. See lib/branchUpstreamGuard.js.
   // On final failure, delete the partially-created branch so a failed add
   // doesn't leave an orphan branch with no worktree (#2193).
   await addWorktreeWithRetry(
-    ['worktree', 'add', '-b', branchName, worktreePath, baseRef],
+    ['worktree', 'add', '--no-track', '-b', branchName, worktreePath, baseRef],
     sourceWorkspace
   ).catch(async (err) => {
     await cleanupOrphanBranch(sourceWorkspace, branchName, err);
     throw err;
   });
+
+  // Backstop the flag above — an older git, or a repo-level `branch.autoSetupMerge`
+  // setting, must not be able to hand an agent a branch aimed at the default branch.
+  await enforceSafeBranchUpstream(sourceWorkspace, branchName);
 
   console.log(`🌳 Created worktree for ${agentId} at ${worktreePath} (branch: ${branchName}, base: ${baseRef})`);
 
@@ -764,10 +781,16 @@ async function createPersistentWorktreeUnlocked(featureAgentId, sourceWorkspace,
     await addWorktreeWithRetry(['worktree', 'add', '--track', '-b', branchName, FA_WORKTREES, `origin/${branchName}`], sourceWorkspace)
       .catch(async (err) => { await cleanupOrphanBranch(sourceWorkspace, branchName, err); throw err; });
   } else {
-    // New branch - create from base. Clean up the orphan branch on final failure (#2193).
-    await addWorktreeWithRetry(['worktree', 'add', '-b', branchName, FA_WORKTREES, baseRef], sourceWorkspace)
+    // New branch - create from base. `--no-track` for the same reason as createWorktree:
+    // `baseRef` is usually `origin/<default>`, and an auto-configured
+    // `branch.<name>.merge = refs/heads/main` turns a config-derived push into a push
+    // onto the default branch (#4172). Clean up the orphan branch on final failure (#2193).
+    await addWorktreeWithRetry(['worktree', 'add', '--no-track', '-b', branchName, FA_WORKTREES, baseRef], sourceWorkspace)
       .catch(async (err) => { await cleanupOrphanBranch(sourceWorkspace, branchName, err); throw err; });
   }
+
+  // Covers all three arms above, including a branch a prior run left mis-tracked.
+  await enforceSafeBranchUpstream(sourceWorkspace, branchName);
 
   console.log(`🌳 Created persistent worktree for feature agent ${featureAgentId} at ${FA_WORKTREES} (branch: ${branchName})`);
   return { worktreePath: FA_WORKTREES, branchName, baseBranch };
