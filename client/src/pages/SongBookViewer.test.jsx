@@ -578,6 +578,105 @@ K:  o - - - - - o -`;
     expect('attachments' in patch).toBe(false);
   });
 
+  describe('fit-to-duration autoscroll preset (#4100)', () => {
+    // jsdom lays nothing out, so the scroll container reports 0/0 — stub the two
+    // metrics the preset measures. 2000 tall in a 500 viewport = 1500px of travel.
+    const stubScrollMetrics = (scrollHeight, clientHeight) => {
+      const sh = vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(scrollHeight);
+      const ch = vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(clientHeight);
+      return () => { sh.mockRestore(); ch.mockRestore(); };
+    };
+
+    it('hides the Fit button for a song with no scroll-time target', async () => {
+      renderPage();
+      expect(await screen.findByLabelText('Autoscroll speed')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /^Fit autoscroll/ })).toBeNull();
+    });
+
+    it('sets the speed from the sheet travel over the target time', async () => {
+      const restore = stubScrollMetrics(2000, 500);
+      api.getSong.mockResolvedValue(song({ scrollDurationSec: 100 }));
+      renderPage();
+      // The button announces the target in M:SS.
+      const fit = await screen.findByRole('button', { name: 'Fit autoscroll to 1:40' });
+      const speed = screen.getByLabelText('Autoscroll speed');
+      expect(speed.value).toBe('30'); // hook default, untouched until the click
+
+      toast.error.mockClear(); // the shared module mock outlives earlier tests
+      fireEvent.click(fit);
+      // 1500px of travel / 100s = 15px/s. Measuring raw scrollHeight (2000/100 =
+      // 20) would land the sheet at the bottom a full screenful early.
+      expect(speed.value).toBe('15');
+      expect(toast.error).not.toHaveBeenCalled();
+      restore();
+    });
+
+    it('clamps a target the speed slider cannot honour', async () => {
+      const restore = stubScrollMetrics(2000, 500);
+      api.getSong.mockResolvedValue(song({ scrollDurationSec: 3600 }));
+      renderPage();
+      fireEvent.click(await screen.findByRole('button', { name: 'Fit autoscroll to 60:00' }));
+      // 1500px over an hour is 0.4px/s — floored at the slider's own minimum,
+      // never set to an off-scale value the control can't represent.
+      const speed = screen.getByLabelText('Autoscroll speed');
+      expect(speed.value).toBe('5');
+      expect(Number(speed.min)).toBe(5);
+      restore();
+    });
+
+    it('says so instead of silently "fitting" when the sheet fits on screen', async () => {
+      const restore = stubScrollMetrics(400, 400); // zero travel
+      api.getSong.mockResolvedValue(song({ scrollDurationSec: 100 }));
+      renderPage();
+      const fit = await screen.findByRole('button', { name: 'Fit autoscroll to 1:40' });
+      toast.error.mockClear();
+      fireEvent.click(fit);
+      expect(toast.error).toHaveBeenCalledWith('Nothing to autoscroll — this sheet already fits on screen');
+      expect(screen.getByLabelText('Autoscroll speed').value).toBe('30'); // unchanged
+      restore();
+    });
+
+    it('saves a typed scroll time and clears it with an explicit null', async () => {
+      api.updateSong.mockImplementation((_id, patch) => Promise.resolve(song({ ...patch })));
+      renderPage('/songbook/abc?mode=edit');
+      const input = await screen.findByLabelText('Scroll time (seconds)');
+      expect(input.value).toBe(''); // no target on the fixture
+
+      fireEvent.change(input, { target: { value: '210' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(api.updateSong).toHaveBeenCalled());
+      expect(api.updateSong.mock.calls[0][1].scrollDurationSec).toBe(210);
+
+      // Clearing sends null (a real clear), not an omitted key — which the PATCH
+      // merge would read as "leave the stored target alone".
+      fireEvent.change(screen.getByLabelText('Scroll time (seconds)'), { target: { value: '' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(api.updateSong).toHaveBeenCalledTimes(2));
+      const cleared = api.updateSong.mock.calls[1][1];
+      expect('scrollDurationSec' in cleared).toBe(true);
+      expect(cleared.scrollDurationSec).toBe(null);
+    });
+
+    it('treats a retyped scroll time as clean (unsaved-changes guard)', async () => {
+      api.getSong.mockResolvedValue(song({ scrollDurationSec: 210 }));
+      renderPage('/songbook/abc?mode=edit');
+      const input = await screen.findByLabelText('Scroll time (seconds)');
+      expect(input.value).toBe('210');
+      fireEvent.change(input, { target: { value: '120' } });
+      fireEvent.change(input, { target: { value: '210' } });
+      fireEvent.click(screen.getByRole('button', { name: 'View' }));
+      await waitFor(() => expect(screen.queryByLabelText('Content')).toBeNull());
+      expect(screen.queryByText(/Discard your unsaved changes/)).toBeNull();
+    });
+
+    it('prompts before dropping an edited scroll time', async () => {
+      renderPage('/songbook/abc?mode=edit');
+      fireEvent.change(await screen.findByLabelText('Scroll time (seconds)'), { target: { value: '210' } });
+      fireEvent.click(screen.getByRole('button', { name: 'View' }));
+      expect(await screen.findByText('Discard your unsaved changes to this song?')).toBeTruthy();
+    });
+  });
+
   describe('unsaved-edit guard (#3902)', () => {
     const editSheet = async (value = 'Edited sheet text') => {
       const textarea = await screen.findByLabelText('Content');

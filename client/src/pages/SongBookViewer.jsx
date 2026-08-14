@@ -8,9 +8,12 @@
  * Two URL-param-driven modes (linkable-routes convention):
  * - PLAY (default): the rendered sheet (TabSheetView — or DrumSheetView plus a
  *   drum transport bar when the content format is `drum`, #3115) with an
- *   Ultimate-Guitar-style controls bar — autoscroll play/pause + speed
- *   (suppressed for a drum chart, which scrolls itself horizontally under its
- *   own playhead and would otherwise carry two rival "play" buttons),
+ *   Ultimate-Guitar-style controls bar — autoscroll play/pause + speed, plus a
+ *   "fit to duration" button for a song carrying a `scrollDurationSec` target
+ *   (#4100: solves px/s from the sheet's CURRENT rendered travel, so it re-fits
+ *   after a font-size/transpose reflow)
+ *   (all suppressed for a drum chart, which scrolls itself horizontally under
+ *   its own playhead and would otherwise carry two rival "play" buttons),
  *   transpose ± (render-time transposeText, never mutates stored text; offset
  *   persisted per song via safeStorage), font size ±, an instrument-view
  *   toggle (?view=guitar|ukulele|piano — chord diagrams only, render-only,
@@ -27,7 +30,8 @@
  *   "All songs" link, a sidebar link, ⌘K, voice nav, Back, tab close) via
  *   useUnsavedChangesGuard (#3958).
  *
- * Keyboard (play mode): space play/pause, +/- speed, [ ] transpose, 0 top.
+ * Keyboard (play mode): space play/pause, +/- speed, [ ] transpose, 0 top,
+ * f fit-to-duration (bound only when the song has a target).
  * For a drum chart the same keys drive the kit transport instead: space
  * play/stop, +/- BPM ±1, [ ] set the loop ends at the current bar.
  * A screen wake lock holds while autoscroll plays — or while the kit plays
@@ -38,7 +42,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
 import {
   ListMusic, ArrowLeft, Save, Trash2, Pencil, Eye, Play, Pause, Plus, Minus,
-  ExternalLink, Paperclip, Upload, FileX2,
+  ExternalLink, Paperclip, Upload, FileX2, Timer,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
@@ -67,7 +71,7 @@ import useUnsavedChangesGuard from '../hooks/useUnsavedChangesGuard';
 import { transposeText } from '../lib/tabNotation.js';
 import { VOICING_INSTRUMENTS, toVoicingInstrument } from '../lib/chordShapes.js';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage.js';
-import { formatBytes } from '../utils/formatters';
+import { formatBytes, formatDurationSec } from '../utils/formatters';
 import { isHttpUrl } from '../utils/urlNormalize';
 import { readFileAsBase64, JSON_UPLOAD_MAX_FILE_SIZE } from '../utils/fileUpload';
 import {
@@ -82,6 +86,22 @@ const FONT_MAX = 1.75;
 const FONT_STEP = 0.125;
 const SPEED_MIN = 5;
 const SPEED_MAX = 150;
+// "Fit to duration" target bounds — client mirror of `scrollDurationSec` in
+// server/lib/brainValidation.js (songInputSchema). Keep the two in step: a value
+// the input accepts but the schema rejects 400s the whole save.
+const SCROLL_DURATION_MIN = 15;
+const SCROLL_DURATION_MAX = 3600;
+
+// Scroll-duration input (a string, like every number input) → what a save sends:
+// null for "no target" (blank, or anything non-numeric), otherwise a whole
+// second count inside the schema bounds. null is a real value here — it CLEARS a
+// stored target on PATCH — so it must never collapse into "field absent".
+const parseScrollDurationSec = (raw) => {
+  if (raw === '' || raw === null || raw === undefined) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(SCROLL_DURATION_MIN, Math.min(SCROLL_DURATION_MAX, Math.trunc(n)));
+};
 
 // Song record → flat editable draft (tags joined for the text input).
 const toDraft = (song) => ({
@@ -95,6 +115,9 @@ const toDraft = (song) => ({
   tags: Array.isArray(song.tags) ? song.tags.join(', ') : '',
   sourceUrl: song.sourceUrl || '',
   notes: song.notes || '',
+  // '' is the form's "no target" — the record stores null (or has no key at all
+  // on a song written before the field existed / synced from an older peer).
+  scrollDurationSec: song.scrollDurationSec ?? '',
   format: song.content?.format || 'tab',
   text: song.content?.text || '',
 });
@@ -111,6 +134,10 @@ const parseTags = (raw) => raw.split(',').map((t) => t.trim()).filter(Boolean);
 const TRIMMED_DRAFT_FIELDS = ['title', 'artist', 'key', 'tuning', 'sourceUrl'];
 const normalizeDraftField = (draft, k) => {
   if (k === 'capo') return Number(draft.capo || 0);
+  // Compare the SAVED value, not the raw text: '210' and '0210' (and '' vs a
+  // sub-minimum '3', which clamps) both save the same, so retyping one isn't
+  // unsaved work. Null (no target) compares equal to itself.
+  if (k === 'scrollDurationSec') return parseScrollDurationSec(draft.scrollDurationSec);
   // Joined on a comma — the one character parseTags strips from every tag, so
   // two different tag lists can never normalize to the same string.
   if (k === 'tags') return parseTags(draft.tags).join(',');
@@ -227,7 +254,12 @@ export default function SongBookViewer() {
 
   // --- Autoscroll + wake lock
   const scrollRef = useRef(null);
-  const { playing, toggle, stop, pxPerSec, setPxPerSec } = useAutoscroll(scrollRef);
+  // The fit preset may only land on a speed the slider below can also show, so
+  // the hook clamps to the slider's own bounds.
+  const { playing, toggle, stop, pxPerSec, setPxPerSec, fitToDuration } = useAutoscroll(
+    scrollRef,
+    { minPxPerSec: SPEED_MIN, maxPxPerSec: SPEED_MAX },
+  );
 
   // Presence lookup failed → show the record's own synced metadata with
   // presence unknown (rendered as plain links; only an explicit present:false
@@ -281,6 +313,20 @@ export default function SongBookViewer() {
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
   }, [stop]);
 
+  // --- "Fit to duration" preset (#4100). The song carries a target run time
+  // (scrollDurationSec); the SPEED it implies depends on the rendered height, so
+  // it's solved on demand from the live container rather than stored. A target
+  // the bounds can't honour (a very long time on a short sheet) clamps to the
+  // slider's ends — visible in the slider, so no extra warning.
+  const fitDurationSec = Number.isFinite(song?.scrollDurationSec) ? song.scrollDurationSec : null;
+  const fitToSongDuration = useCallback(() => {
+    // null back from the hook = nothing to fit (the sheet fits on screen), which
+    // must not read as "fitted at some default speed".
+    if (fitToDuration(fitDurationSec) == null) {
+      toast.error('Nothing to autoscroll — this sheet already fits on screen');
+    }
+  }, [fitToDuration, fitDurationSec]);
+
   // Play-mode shortcuts. A drum chart rebinds them onto the kit transport (space
   // play/stop, +/- BPM, [ ] loop ends, m mutes the click) since transpose/
   // scroll-speed don't apply.
@@ -302,6 +348,9 @@ export default function SongBookViewer() {
     '[': () => setTranspose(transpose - 1),
     ']': () => setTranspose(transpose + 1),
     '0': scrollToTop,
+    // Only bound when the song HAS a target — otherwise the key would toast
+    // "nothing to fit" at a user who never set one.
+    ...(fitDurationSec != null ? { f: fitToSongDuration } : {}),
   };
   useKeyboardShortcuts(!editing && !!song, isDrum ? drumShortcuts : sheetShortcuts);
 
@@ -333,6 +382,9 @@ export default function SongBookViewer() {
       tags: parseTags(draft.tags),
       sourceUrl: draft.sourceUrl.trim(),
       notes: draft.notes,
+      // Always sent, including as an explicit null — clearing the input has to
+      // clear the stored target, and an omitted key would preserve it instead.
+      scrollDurationSec: parseScrollDurationSec(draft.scrollDurationSec),
       content: { format: draft.format, text: draft.text },
     }, { silent: true });
     setSong(updated);
@@ -609,6 +661,20 @@ export default function SongBookViewer() {
               <input id="song-edit-tuning" type="text" value={draft.tuning} onChange={(e) => setDraft({ ...draft, tuning: e.target.value })} placeholder="e.g. Drop D" className={inputClass} />
             </div>
             <div>
+              <label htmlFor="song-edit-scroll-duration" className={labelClass}>Scroll time (seconds)</label>
+              <input
+                id="song-edit-scroll-duration"
+                type="number"
+                min={SCROLL_DURATION_MIN}
+                max={SCROLL_DURATION_MAX}
+                step="5"
+                value={draft.scrollDurationSec}
+                onChange={(e) => setDraft({ ...draft, scrollDurationSec: e.target.value })}
+                placeholder="e.g. 210"
+                className={inputClass}
+              />
+            </div>
+            <div>
               <label htmlFor="song-edit-tags" className={labelClass}>Tags (comma-separated)</label>
               <input id="song-edit-tags" type="text" value={draft.tags} onChange={(e) => setDraft({ ...draft, tags: e.target.value })} placeholder="e.g. campfire, fingerstyle" className={inputClass} />
             </div>
@@ -737,6 +803,22 @@ export default function SongBookViewer() {
                   className="w-24 sm:w-32 accent-port-accent"
                   title="Autoscroll speed (+/-)"
                 />
+                {/* Fit to duration — only for a song that carries a target run
+                    time (set in Edit). Solves the speed from the sheet as it is
+                    rendered right now, so re-fitting after a font-size or
+                    transpose change is a single click. */}
+                {fitDurationSec != null && (
+                  <button
+                    type="button"
+                    onClick={fitToSongDuration}
+                    className={`${ctrlBtnClass} gap-1.5 px-2 text-xs`}
+                    aria-label={`Fit autoscroll to ${formatDurationSec(fitDurationSec)}`}
+                    title={`Fit autoscroll to ${formatDurationSec(fitDurationSec)} (f)`}
+                  >
+                    <Timer size={16} />
+                    <span className="hidden sm:inline font-mono">{formatDurationSec(fitDurationSec)}</span>
+                  </button>
+                )}
               </div>
             )}
 

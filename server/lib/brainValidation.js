@@ -647,7 +647,20 @@ export const songInputSchema = z.object({
   tuning: z.string().trim().max(40).optional().default(''),
   sourceUrl: z.string().trim().max(2000).optional().default(''),
   content: songContentSchema.optional().default({ format: 'tab', text: '' }),
-  notes: z.string().max(5000).optional().default('')
+  notes: z.string().max(5000).optional().default(''),
+  // "Fit to duration" autoscroll target: how many seconds the play view should
+  // take to scroll the sheet top-to-bottom. Stored per song and federated with
+  // the record; the px/s it implies is derived CLIENT-side at click time from
+  // the rendered scroll height (which depends on font size, transpose, and the
+  // viewport), so nothing server-side reads this — the bounds only keep it sane
+  // (15s … 1h).
+  //
+  // `null` is the explicit "no target set" value, and it must stay reachable on
+  // a PATCH: songUpdateSchema strips the default, so an OMITTED key preserves
+  // the stored target while an explicit `null` clears it (the absent-vs-empty
+  // rule). A create with no target lands as null rather than undefined so the
+  // field exists in the synced record.
+  scrollDurationSec: z.number().int().min(15).max(3600).nullable().optional().default(null)
 });
 
 // PATCH /api/brain/songbook/:id — defaults-free partial. partialWithoutDefaults

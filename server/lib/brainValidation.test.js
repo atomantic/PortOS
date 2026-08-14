@@ -38,6 +38,7 @@ import {
   brainSyncPushSchema,
   memoryInputSchema,
   songInputSchema,
+  songUpdateSchema,
   songInstrumentEnum,
   songContentFormatEnum
 } from './brainValidation.js';
@@ -835,6 +836,56 @@ describe('brainValidation.js', () => {
         const result = songInputSchema.safeParse({ title: 'T', instrument: bad });
         expect(result.success, `instrument "${bad}"`).toBe(false);
       }
+    });
+  });
+
+  // The "fit to duration" autoscroll target (#4100) — the play view derives px/s
+  // from it against the rendered scroll height.
+  describe('songbook scrollDurationSec (#4100)', () => {
+    it('accepts a whole-second target and lands it on the record', () => {
+      const result = songInputSchema.safeParse({ title: 'T', scrollDurationSec: 210 });
+      expect(result.success).toBe(true);
+      expect(result.data.scrollDurationSec).toBe(210);
+    });
+
+    it('defaults to null (no target) when the key is absent on create', () => {
+      const result = songInputSchema.safeParse({ title: 'T' });
+      expect(result.success).toBe(true);
+      expect(result.data).toHaveProperty('scrollDurationSec');
+      expect(result.data.scrollDurationSec).toBe(null);
+    });
+
+    it('rejects out-of-bounds and non-integer targets', () => {
+      for (const bad of [14, 3601, 0, -30, 90.5, '210', true]) {
+        const result = songInputSchema.safeParse({ title: 'T', scrollDurationSec: bad });
+        expect(result.success, `scrollDurationSec ${String(bad)}`).toBe(false);
+      }
+      // The bounds themselves are inclusive.
+      for (const ok of [15, 3600]) {
+        expect(songInputSchema.safeParse({ title: 'T', scrollDurationSec: ok }).success, String(ok)).toBe(true);
+      }
+    });
+
+    // Absent vs. intentionally-empty: an omitted key must stay omitted so the
+    // PATCH merge preserves a stored target, while an explicit null must survive
+    // as null so clearing the input actually clears the record.
+    it('separates "not sent" from an explicit null on update', () => {
+      const untouched = songUpdateSchema.safeParse({ title: 'T' });
+      expect(untouched.success).toBe(true);
+      expect('scrollDurationSec' in untouched.data).toBe(false);
+
+      const cleared = songUpdateSchema.safeParse({ scrollDurationSec: null });
+      expect(cleared.success).toBe(true);
+      expect(cleared.data.scrollDurationSec).toBe(null);
+
+      const set = songUpdateSchema.safeParse({ scrollDurationSec: 90 });
+      expect(set.success).toBe(true);
+      expect(set.data.scrollDurationSec).toBe(90);
+    });
+
+    it('keeps the bounds on the update schema too', () => {
+      expect(songUpdateSchema.safeParse({ scrollDurationSec: 5 }).success).toBe(false);
+      expect(songUpdateSchema.safeParse({ scrollDurationSec: 7200 }).success).toBe(false);
     });
   });
 });
