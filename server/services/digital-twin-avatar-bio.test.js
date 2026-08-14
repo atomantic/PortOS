@@ -71,7 +71,11 @@ const DOCS = {
 
 vi.mock('fs/promises', () => ({
   readFile: vi.fn(async (path) => {
-    const name = String(path).split('/').pop();
+    // Split on BOTH separators: the service joins DIGITAL_TWIN_DIR with
+    // path.join, so on Windows this is '\twin\SOUL.md' and a '/'-only split
+    // returns the whole string — every doc lookup then missed and the bio fell
+    // back to its "no data yet" placeholders.
+    const name = String(path).split(/[\\/]/).pop();
     if (DOCS[name] != null) return DOCS[name];
     throw new Error('ENOENT');
   }),

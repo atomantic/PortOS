@@ -381,14 +381,21 @@ describe('runAsk', () => {
     }
 
     const [, args] = spawn.mock.calls.at(-1);
+    // Windows has no /dev/stdin, so the spawn helper rewrites grok's sentinel
+    // to a real temp file (see lib/grok.js GROK_STDIN_PROMPT_PATH). Assert the
+    // per-platform value rather than pinning the POSIX one — both paths ship,
+    // so both deserve coverage on their own runner.
+    const expectedPromptFile = process.platform === 'win32'
+      ? expect.stringMatching(/grok-prompt-.*\.txt$/)
+      : '/dev/stdin';
     expect(args).toEqual([
       '--output-format', 'plain',
       '--permission-mode', 'bypassPermissions',
-      '--prompt-file', '/dev/stdin',
+      '--prompt-file', expectedPromptFile,
     ]);
     expect(args).not.toContain('--model');
     // POSIX delivery: the prompt is piped in via stdin.
-    expect(child.stdin.end).toHaveBeenCalled();
+    if (process.platform !== 'win32') expect(child.stdin.end).toHaveBeenCalled();
   });
 
   it('runs `agy --model <id> --print <prompt>` with headlessArgs still ahead of the print marker', async () => {

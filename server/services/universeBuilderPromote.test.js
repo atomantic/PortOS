@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { rmSync, mkdirSync } from 'fs';
+import { join } from 'path';
 import { mockNoPeerSync, mockNoPeers, mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
 // `wrapExports: ['atomicWrite']` exposes a delegating vi.fn at
@@ -452,7 +453,11 @@ describe('universeBuilderPromote — atomicity', () => {
     // promote operation triggers. Filter to per-record writes (the universe's
     // index.json) — saveTypeIndex writes that happen elsewhere in the test's
     // setup are excluded.
-    const recordIndexPath = `${tempRoot}/universes/${w.id}/index.json`;
+    // join(), not a '/'-joined template: collectionStore composes this with
+    // path.join, so on Windows the real write path is backslash-separated and
+    // this filter matched nothing — the assertion then compared against an
+    // empty list instead of the write it meant to count.
+    const recordIndexPath = join(tempRoot, 'universes', w.id, 'index.json');
     const beforeCalls = spies.atomicWrite.mock.calls.length;
     await promoteSvc.promoteVariationToCanon(w.id, {
       category: 'landscapes',
