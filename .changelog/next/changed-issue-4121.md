@@ -1,0 +1,1 @@
+- Goals: opening a goal now updates the URL (/goals/list/<id>), so a specific goal is shareable, bookmarkable and reload-safe — and the Character sheet's Life Goals card links straight to the goal you clicked
