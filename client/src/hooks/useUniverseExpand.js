@@ -152,6 +152,9 @@ export default function useUniverseExpand({
         logline: expandedDraft.logline || '',
         premise: expandedDraft.premise || '',
         styleNotes: expandedDraft.styleNotes || '',
+        // Linked mood board (#4188) — without it the create path lands the
+        // new universe unlinked and hydration silently drops the pick.
+        moodBoardId: expandedDraft.moodBoardId || null,
         categories: expandedDraft.categories,
         compositeSheets: expandedDraft.compositeSheets || [],
         ...canonForPayload,
@@ -205,6 +208,7 @@ export default function useUniverseExpand({
         logline: next.logline || '',
         premise: next.premise || '',
         styleNotes: next.styleNotes || '',
+        moodBoardId: next.moodBoardId || null,
         categories: next.categories,
         compositeSheets: next.compositeSheets || [],
         influences: ensureInfluences(next.influences),

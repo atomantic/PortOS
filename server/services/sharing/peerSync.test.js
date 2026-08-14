@@ -2808,7 +2808,7 @@ describe('peerSync', () => {
       });
       expect(mergeUniversesFromSync).toHaveBeenCalledWith(
         [expect.objectContaining({ id: 'u1' })],
-        { source: { via: 'peer-push', peerId: 'peer-a' } },
+        { source: { via: 'peer-push', peerId: 'peer-a' }, senderSchemaVersions: {} },
       );
     });
 
@@ -3627,7 +3627,7 @@ describe('peerSync', () => {
         });
         expect(mergeUniversesFromSync).toHaveBeenCalledWith(
           [expect.objectContaining({ id: 'u1' })],
-          { source: { via: 'peer-push', peerId: 'peer-a' } },
+          { source: { via: 'peer-push', peerId: 'peer-a' }, senderSchemaVersions: { universes: 6 } },
         );
       });
 
@@ -3643,7 +3643,7 @@ describe('peerSync', () => {
         });
         expect(mergeUniversesFromSync).toHaveBeenCalledWith(
           [expect.objectContaining({ id: 'u1' })],
-          { source: { via: 'peer-push', peerId: 'peer-a' } },
+          { source: { via: 'peer-push', peerId: 'peer-a' }, senderSchemaVersions: { universes: 4 } },
         );
       });
 
@@ -3676,7 +3676,7 @@ describe('peerSync', () => {
         });
         expect(mergeUniversesFromSync).toHaveBeenCalledWith(
           [expect.objectContaining({ id: 'u1' })],
-          { source: { via: 'peer-push', peerId: 'peer-a' } },
+          { source: { via: 'peer-push', peerId: 'peer-a' }, senderSchemaVersions: { universes: 5, mediaCollections: 2 } },
         );
       });
 
@@ -3741,7 +3741,7 @@ describe('peerSync', () => {
         });
         expect(mergeUniversesFromSync).toHaveBeenCalledWith(
           [expect.objectContaining({ id: 'u1', deleted: true })],
-          { source: { via: 'peer-push', peerId: 'peer-a' } },
+          { source: { via: 'peer-push', peerId: 'peer-a' }, senderSchemaVersions: { universes: 6 } },
         );
       });
 

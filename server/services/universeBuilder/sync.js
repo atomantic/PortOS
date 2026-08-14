@@ -52,7 +52,11 @@ async function cascadeDeleteSideEffects(id) {
  * number of universes actually changed/added by this merge — NOT the total
  * post-merge count — so callers summing across categories don't over-report.
  */
-export async function mergeUniversesFromSync(remoteUniverses, { source = { via: 'sync', peerId: null } } = {}) {
+export async function mergeUniversesFromSync(remoteUniverses, { source = { via: 'sync', peerId: null }, senderSchemaVersions = null } = {}) {
+  // Whether the sender's sanitizer knows `moodBoardId` (universes v9, #4188).
+  // The version gate only rejects AHEAD senders — a behind/no-meta sender's
+  // record flows through this merge, and its sanitized form omits the field.
+  const senderKnowsMoodBoardId = (Number(senderSchemaVersions?.universes) || 0) >= 9;
   if (!Array.isArray(remoteUniverses)) return { applied: false, count: 0 };
   // Records that transitioned to deleted via this merge get their orphan
   // cascade fired after the write queue releases — matches the side-effect
@@ -136,6 +140,15 @@ export async function mergeUniversesFromSync(remoteUniverses, { source = { via: 
         // set, so absent-locally stays absent).
         if (local.imageMode) sanitized.imageMode = local.imageMode;
         if (local.imageModelId) sanitized.imageModelId = local.imageModelId;
+        // `moodBoardId` (#4188) rides the wire, but absent-on-wire is
+        // ambiguous: a v9-aware sender omits it to mean "cleared", while a
+        // pre-v9 (or no-meta) sender omits it because its sanitizer strips
+        // the field. Only honor the omission as a clear from a v9-aware
+        // sender; otherwise preserve the local link so a behind peer's
+        // unrelated edit can't LWW-strip it.
+        if (!sanitized.moodBoardId && local.moodBoardId && !senderKnowsMoodBoardId) {
+          sanitized.moodBoardId = local.moodBoardId;
+        }
         // Non-blocking conflict journal: archive the about-to-be-lost local
         // version when BOTH sides diverged from the last synced base. Always
         // advances the base hash (clean or conflict) so the next snapshot

@@ -1227,6 +1227,48 @@ describe("universeBuilder service", () => {
         expect(after.imageMode).toBe("agy");
         expect(after.imageModelId).toBe("gemini-3.6-flash-low");
       });
+
+      it("preserves the local moodBoardId when a pre-v9/no-meta sender's edit wins LWW (#4188)", async () => {
+        // A behind sender passes the version gate (only AHEAD rejects), and
+        // its moodBoardId-unaware sanitizer omitted the field — that omission
+        // must not read as a clear.
+        const w = await seedWorld();
+        await svc.updateUniverse(w.id, { moodBoardId: "mb-local" });
+        const editTs = new Date(Date.now() + 60_000).toISOString();
+        const r = await svc.mergeUniversesFromSync([
+          { ...w, name: "Remote Edited Name", updatedAt: editTs },
+        ]); // no senderSchemaVersions — legacy/no-meta sender
+        expect(r.applied).toBe(true);
+        const after = await svc.getUniverse(w.id);
+        expect(after.name).toBe("Remote Edited Name");
+        expect(after.moodBoardId).toBe("mb-local");
+      });
+
+      it("honors a v9-aware sender's omitted moodBoardId as an explicit clear (#4188)", async () => {
+        const w = await seedWorld();
+        await svc.updateUniverse(w.id, { moodBoardId: "mb-local" });
+        const editTs = new Date(Date.now() + 60_000).toISOString();
+        const r = await svc.mergeUniversesFromSync(
+          [{ ...w, name: "Remote Cleared", updatedAt: editTs }],
+          { senderSchemaVersions: { universes: 9 } },
+        );
+        expect(r.applied).toBe(true);
+        const after = await svc.getUniverse(w.id);
+        expect("moodBoardId" in after).toBe(false);
+      });
+
+      it("applies a v9-aware sender's moodBoardId over the local link (#4188)", async () => {
+        const w = await seedWorld();
+        await svc.updateUniverse(w.id, { moodBoardId: "mb-local" });
+        const editTs = new Date(Date.now() + 60_000).toISOString();
+        const r = await svc.mergeUniversesFromSync(
+          [{ ...w, moodBoardId: "mb-remote", updatedAt: editTs }],
+          { senderSchemaVersions: { universes: 9 } },
+        );
+        expect(r.applied).toBe(true);
+        const after = await svc.getUniverse(w.id);
+        expect(after.moodBoardId).toBe("mb-remote");
+      });
     });
 
     describe("pruneTombstonedUniverses", () => {

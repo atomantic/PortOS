@@ -425,7 +425,7 @@ async function getUniverseSnapshot({ exclude } = {}) {
   return { data, checksum: computeChecksum(data) };
 }
 
-async function applyUniverseRemote(remoteData, source) {
+async function applyUniverseRemote(remoteData, source, meta = {}) {
   if (!remoteData) return { applied: false, count: 0 };
   // Routes through `mergeUniversesFromSync` so the read-modify-write runs
   // INSIDE `queueUniverseWrite` (serialized against every other writer:
@@ -433,7 +433,12 @@ async function applyUniverseRemote(remoteData, source) {
   // remote record passes through `sanitizeTemplate` for schema-version
   // backfill — older peers landing pre-v4 records get them migrated on the
   // way in instead of polluting disk with un-backfilled state.
-  const result = await mergeUniversesFromSync(remoteData.universes || [], { source });
+  // `senderSchemaVersions` gates the moodBoardId omitted-vs-cleared
+  // disambiguation (#4188) — see mergeUniversesFromSync.
+  const result = await mergeUniversesFromSync(remoteData.universes || [], {
+    source,
+    senderSchemaVersions: meta.senderSchemaVersions || null,
+  });
   if (result.applied) {
     console.log(`🔄 Universe sync: merged ${result.count} universe(s)`);
   }
@@ -1059,5 +1064,8 @@ export async function applyRemote(category, remoteData, options = {}) {
       },
     };
   }
-  return cat.applyRemote(remoteData, source);
+  // Third arg: sender envelope details for appliers that disambiguate
+  // omitted-vs-cleared fields by sender version (universe moodBoardId, #4188).
+  // Appliers that don't need it ignore the extra argument.
+  return cat.applyRemote(remoteData, source, { senderSchemaVersions });
 }

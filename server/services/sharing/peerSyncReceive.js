@@ -281,7 +281,9 @@ export async function applyIncomingPush(payload) {
   // — gates whether a present-but-different local draft body may be overwritten.
   let workMergeApplied = false;
   if (kind === 'universe') {
-    await mergeUniversesFromSync([record], { source });
+    // senderSchemaVersions gates the merge's moodBoardId omitted-vs-cleared
+    // disambiguation (#4188) — see mergeUniversesFromSync.
+    await mergeUniversesFromSync([record], { source, senderSchemaVersions });
   } else if (kind === 'series') {
     await mergeSeriesFromSync([record], { source });
     // Bundled issues: skip the entire batch if the LOCAL series is

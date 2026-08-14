@@ -191,6 +191,28 @@ describe('dataSync — universe category', () => {
     expect(result.count).toBe(1);
   });
 
+  it('applyRemote threads senderSchemaVersions so a behind sender cannot LWW-strip moodBoardId (#4188)', async () => {
+    writeUniverseState({
+      universes: [{ id: 'u-mb', name: 'Linked', moodBoardId: 'mb-local', createdAt: '2026-05-17T09:00:00Z', updatedAt: '2026-05-17T10:00:00Z' }],
+      runs: [],
+    });
+    // A v8 (pre-moodBoardId) sender edits another field with a newer timestamp.
+    const behind = await dataSync.applyRemote('universe', {
+      universes: [{ id: 'u-mb', name: 'Renamed By Old Peer', createdAt: '2026-05-17T09:00:00Z', updatedAt: '2026-05-17T11:00:00Z' }],
+    }, { portosMeta: { portosVersion: '2.6.0', schemaVersions: { universes: 8 } } });
+    expect(behind.applied).toBe(true);
+    let persisted = readUniverseState();
+    expect(persisted.universes[0].name).toBe('Renamed By Old Peer');
+    expect(persisted.universes[0].moodBoardId).toBe('mb-local');
+    // A v9-aware sender omitting the field IS an explicit clear.
+    const clear = await dataSync.applyRemote('universe', {
+      universes: [{ id: 'u-mb', name: 'Cleared By New Peer', createdAt: '2026-05-17T09:00:00Z', updatedAt: '2026-05-17T12:00:00Z' }],
+    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 9 } } });
+    expect(clear.applied).toBe(true);
+    persisted = readUniverseState();
+    expect('moodBoardId' in persisted.universes[0]).toBe(false);
+  });
+
   it('applyRemote falls through for legacy senders that send NO portosMeta at all', async () => {
     writeUniverseState({ universes: [], runs: [] });
     const result = await dataSync.applyRemote('universe', {
