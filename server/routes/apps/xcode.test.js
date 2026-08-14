@@ -1,7 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
+import { tmpdir } from 'os';
 import { request } from '../../lib/testHelper.js';
 import xcodeRoutes from './xcode.js';
+
+// The route 400s with PATH_NOT_FOUND before it ever reaches the (mocked)
+// service unless repoPath actually exists, so it has to be a real directory on
+// the host. The literal '/tmp' this used to pass doesn't exist on Windows: the
+// two success cases failed there, and the 400 cases passed for the wrong
+// reason. This suite is only ever selected by CI's impact planner, so that sat
+// undetected until a change to lib/testHelper.js pulled it into a Windows run
+// (#4085).
+const REPO_PATH = tmpdir();
 
 vi.mock('../../services/apps.js', () => ({
   getAppById: vi.fn(),
@@ -28,7 +38,7 @@ describe('Apps Xcode Routes', () => {
 
   describe('POST /api/apps/:id/xcode-scripts/install', () => {
     it('should install requested scripts successfully', async () => {
-      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/tmp' });
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: REPO_PATH });
       installScripts.mockResolvedValue({ installed: ['deploy.sh'], skipped: [], errors: [] });
 
       const response = await request(app)
@@ -40,7 +50,7 @@ describe('Apps Xcode Routes', () => {
     });
 
     it('should return 400 when all scripts fail', async () => {
-      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/tmp' });
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: REPO_PATH });
       installScripts.mockResolvedValue({ installed: [], skipped: [], errors: ['some failure'] });
 
       const response = await request(app)
@@ -52,7 +62,7 @@ describe('Apps Xcode Routes', () => {
     });
 
     it('should return 400 when scripts array contains an unknown name', async () => {
-      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/tmp' });
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: REPO_PATH });
 
       const response = await request(app)
         .post('/api/apps/app-001/xcode-scripts/install')
@@ -63,7 +73,7 @@ describe('Apps Xcode Routes', () => {
     });
 
     it('should return 400 when scripts array is empty', async () => {
-      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/tmp' });
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: REPO_PATH });
 
       const response = await request(app)
         .post('/api/apps/app-001/xcode-scripts/install')
@@ -83,7 +93,7 @@ describe('Apps Xcode Routes', () => {
     });
 
     it('should return partial success with errors', async () => {
-      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: '/tmp' });
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', type: 'xcode', repoPath: REPO_PATH });
       installScripts.mockResolvedValue({
         installed: ['deploy.sh'],
         skipped: [],
