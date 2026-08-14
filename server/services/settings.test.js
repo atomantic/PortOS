@@ -553,8 +553,18 @@ describe('settings.js', () => {
       writeFileSync(notADir, 'x');
       tryReadFile.mockResolvedValue(null);
       const res = await readSettingsStrict(joinPath(notADir, 'settings.json'));
-      expect(res.present).toBe(true);
-      expect(res.corrupt).toBe(true);
+
+      if (process.platform === 'win32') {
+        // Windows reports a path under a file as plain ENOENT — there is no
+        // ENOTDIR to observe, so "absent" IS the correct classification and the
+        // fail-closed branch is unreachable by this route. Asserting corrupt
+        // here would be asserting a bug. The contract itself (non-ENOENT fails
+        // closed) is still covered on POSIX below.
+        expect(res.present).toBe(false);
+      } else {
+        expect(res.present).toBe(true);
+        expect(res.corrupt).toBe(true);
+      }
     });
 
     it('parses a clean settings file', async () => {
