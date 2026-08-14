@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import TabSheetView from './TabSheetView.jsx';
+import { parseTabSheet } from '../../lib/tabNotation.js';
+import { sheetChordOccurrences } from '../../lib/chordPlayback.js';
 
 // Invented placeholder content only (privacy convention) — nonsense lyrics.
 const SAMPLE = `[Verse 1]
@@ -205,5 +207,53 @@ describe('TabSheetView', () => {
       // …while the 4-line (plausibly ukulele) staff renders in place.
       expect(screen.getByText('G|--2--|')).toBeTruthy();
     });
+  });
+});
+
+// --- Play-along highlight (#4104) -------------------------------------------
+// The coordinates come from `sheetChordOccurrences` (lib/chordPlayback.js), so
+// these use that function rather than hand-counted indices — a test that
+// mirrored the addressing would keep agreeing with a broken renderer.
+describe('TabSheetView — sounding-chord highlight', () => {
+  // Two chord lines: line 0 is "C  G", line 2 is the ChordPro inline row.
+  const SHEET = 'C        G\nNonsense lyric line\n[Am]Hello [F]world';
+  const occurrences = sheetChordOccurrences(parseTabSheet(SHEET).lines);
+  const lit = (container) => [...container.querySelectorAll('[data-sounding]')]
+    .map((el) => el.textContent.trim());
+
+  it('lights nothing when no chord is sounding', () => {
+    const { container } = render(<TabSheetView text={SHEET} />);
+    expect(lit(container)).toEqual([]);
+  });
+
+  it.each([0, 1, 2, 3])('lights exactly the token occurrence %i addresses', (i) => {
+    const { lineIndex, chordIndex, name } = occurrences[i];
+    const { container } = render(
+      <TabSheetView text={SHEET} soundingChord={{ lineIndex, chordIndex }} />,
+    );
+    expect(lit(container)).toEqual([name]);
+  });
+
+  it('never lights the same-numbered token on a different line', () => {
+    // Chord index 0 exists on both chord lines; only the addressed line lights.
+    const { container } = render(
+      <TabSheetView text={SHEET} soundingChord={{ lineIndex: 2, chordIndex: 0 }} />,
+    );
+    expect(lit(container)).toEqual(['Am']);
+    expect(lit(container)).not.toContain('C');
+  });
+
+  it('ignores a stale coordinate that no longer addresses a chord', () => {
+    const { container } = render(
+      <TabSheetView text={SHEET} soundingChord={{ lineIndex: 99, chordIndex: 0 }} />,
+    );
+    expect(lit(container)).toEqual([]);
+  });
+
+  it('lights nothing in plain format, which opts out of all notation UI', () => {
+    const { container } = render(
+      <TabSheetView text={SHEET} format="plain" soundingChord={{ lineIndex: 0, chordIndex: 0 }} />,
+    );
+    expect(lit(container)).toEqual([]);
   });
 });

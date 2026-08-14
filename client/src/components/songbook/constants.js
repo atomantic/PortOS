@@ -150,3 +150,6 @@ export const btnClass = 'flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg 
 // invent a fourth "this is on" look.
 export const ctrlBtnClass = 'flex items-center justify-center min-w-[44px] min-h-[44px] rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50';
 export const activeCtrlClass = 'text-port-accent border-port-accent/50';
+// A compact `<select>` inside a transport bar (count-in, loop range, kit) —
+// same 44px touch target as the buttons beside it.
+export const smallSelectClass = 'bg-port-bg border border-port-border rounded px-2 py-2 min-h-[44px] text-xs text-white focus:border-port-accent focus:outline-none';

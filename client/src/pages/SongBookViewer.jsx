@@ -18,7 +18,10 @@
  *   persisted per song via safeStorage), font size ±, an instrument-view
  *   toggle (?view=guitar|ukulele|piano — chord diagrams only, render-only,
  *   defaults to the song's instrument), stage select, capo/key/tuning badges,
- *   source link, cross-link chips to the related Round / music Track (#4103) —
+ *   source link, cross-link chips to the related Round / music Track (#4103),
+ *   a chord-sheet play-along transport for a sheet that carries chords (#4104:
+ *   strummed synth backing at a practice tempo, with the sounding chord lit in
+ *   the sheet) —
  *   plus the attachments section (synced meta, machine-local
  *   bytes → "not on this machine" when absent).
  * - EDIT (?mode=edit): metadata form + font-mono content textarea with format
@@ -32,11 +35,12 @@
  *   useUnsavedChangesGuard (#3958).
  *
  * Keyboard (play mode): space play/pause, +/- speed, [ ] transpose, 0 top,
- * f fit-to-duration (bound only when the song has a target).
+ * f fit-to-duration (bound only when the song has a target), p chord play-along
+ * (NOT space — the two are complementary, so autoscroll keeps the space key).
  * For a drum chart the same keys drive the kit transport instead: space
  * play/stop, +/- BPM ±1, [ ] set the loop ends at the current bar.
- * A screen wake lock holds while autoscroll plays — or while the kit plays
- * (useWakeLock).
+ * A screen wake lock holds while autoscroll plays — or while the kit or the
+ * chord play-along does (useWakeLock).
  */
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
@@ -56,6 +60,8 @@ import TabSheetView from '../components/songbook/TabSheetView';
 import DrumSheetView from '../components/songbook/DrumSheetView';
 import DrumPreview from '../components/songbook/DrumPreview';
 import DrumTransportBar from '../components/songbook/DrumTransportBar';
+import ChordPreview from '../components/songbook/ChordPreview';
+import ChordTransportBar from '../components/songbook/ChordTransportBar';
 import PracticeLogger from '../components/songbook/PracticeLogger';
 import { SongLinkChips, SongLinksEditor } from '../components/songbook/SongLinks';
 import {
@@ -69,6 +75,7 @@ import useDrawerTab from '../hooks/useDrawerTab';
 import useKeyboardShortcuts from '../hooks/useKeyboardShortcuts';
 import useAutoscroll from '../hooks/useAutoscroll';
 import useDrumPlayer from '../hooks/useDrumPlayer';
+import useChordPlayer from '../hooks/useChordPlayer';
 import useWakeLock from '../hooks/useWakeLock';
 import useUnsavedChangesGuard from '../hooks/useUnsavedChangesGuard';
 import { transposeText } from '../lib/tabNotation.js';
@@ -288,9 +295,10 @@ export default function SongBookViewer() {
   // Keyed on the content STRING (not the song object) so unrelated record
   // updates (stage flips, attachment meta) don't re-run the transpose pass.
   const contentText = song?.content?.text || '';
+  const contentFormat = song?.content?.format || 'tab';
   // A drum chart renders on the kit grid and plays back through the drum
   // transport; transpose and chord voicings are meaningless for it.
-  const isDrum = (song?.content?.format || 'tab') === DRUM_FORMAT;
+  const isDrum = contentFormat === DRUM_FORMAT;
   const renderedText = useMemo(
     () => (transpose && !isDrum ? transposeText(contentText, transpose) : contentText),
     [contentText, transpose, isDrum],
@@ -319,13 +327,28 @@ export default function SongBookViewer() {
   // a non-drum song, so it stands up no player and touches no audio.
   const drum = useDrumPlayer(isDrum ? contentText : '', { songId: id });
 
-  // The wake lock holds while either play-mode hands-free surface is running.
-  // Edit-preview audio owns its lifecycle inside DrumPreview.
-  useWakeLock(playing || drum.playing);
+  // --- Chord-sheet play-along (#4104): the same shape one format over. Fed the
+  // TRANSPOSED text, so what you hear matches what the sheet shows. Called
+  // unconditionally (hooks rule) — a drum chart, and a `plain` sheet (the
+  // explicit opt-out of all notation UI, chord tokens included), parse to zero
+  // chords and stand up no player.
+  const chord = useChordPlayer(
+    isDrum || contentFormat === 'plain' ? '' : renderedText,
+    { songId: id },
+  );
 
-  // Leaving play mode (Edit) or unmounting must not leave the kit sounding — the
-  // hook tears the player down on unmount, but a mode flip keeps it mounted.
-  useEffect(() => { if (editing) drum.stop(); }, [editing, drum.stop]);
+  // The wake lock holds while any play-mode hands-free surface is running.
+  // Edit-preview audio owns its lifecycle inside DrumPreview / ChordPreview.
+  useWakeLock(playing || drum.playing || chord.playing);
+
+  // Leaving play mode (Edit) or unmounting must not leave a transport sounding —
+  // the hooks tear their players down on unmount, but a mode flip keeps them
+  // mounted, and the edit preview stands up its own player beside them.
+  useEffect(() => {
+    if (!editing) return;
+    drum.stop();
+    chord.stop();
+  }, [editing, drum.stop, chord.stop]);
 
   const scrollToTop = useCallback(() => {
     stop();
@@ -367,6 +390,10 @@ export default function SongBookViewer() {
     '[': () => setTranspose(transpose - 1),
     ']': () => setTranspose(transpose + 1),
     '0': scrollToTop,
+    // The chord play-along gets `p`, not space: space already drives autoscroll
+    // here, and the two are complementary (scroll the sheet while the backing
+    // sounds) rather than rival meanings of "play".
+    p: chord.toggle,
     // Only bound when the song HAS a target — otherwise the key would toast
     // "nothing to fit" at a user who never set one.
     ...(fitDurationSec != null ? { f: fitToSongDuration } : {}),
@@ -768,7 +795,7 @@ export default function SongBookViewer() {
             </div>
             <div>
               <div className="text-xs text-gray-400 mb-1">Preview</div>
-              <div className={`bg-port-card border border-port-border rounded-lg overflow-hidden ${draftIsDrum ? '' : 'p-3 overflow-x-auto'}`}>
+              <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
                 {draftIsDrum ? (
                   <DrumPreview
                     text={draft.text}
@@ -778,11 +805,13 @@ export default function SongBookViewer() {
                     settingsMirror={drum}
                   />
                 ) : (
-                  <TabSheetView
+                  <ChordPreview
                     text={draft.text}
+                    songId={id}
                     format={draft.format}
                     fontSizeRem={fontSize}
                     instrumentView={toVoicingInstrument(draft.instrument)}
+                    sheetClassName="p-3 overflow-x-auto"
                   />
                 )}
               </div>
@@ -821,6 +850,29 @@ export default function SongBookViewer() {
               beatsPerBar={drum.beatsPerBar}
               pulse={drum.pulse}
               currentBar={drum.currentBar}
+            />
+          )}
+
+          {/* Chord-sheet play-along transport (#4104) — the same slot one format
+              over, and only for a sheet that actually carries chords (a lyrics-
+              only or plain sheet has nothing to sound, so no bar appears). */}
+          {!isDrum && chord.chordCount > 0 && (
+            <ChordTransportBar
+              playing={chord.playing}
+              onToggle={chord.toggle}
+              hasChords={chord.hasChords}
+              bpm={chord.bpm}
+              onBpmChange={chord.setBpm}
+              onPercent={chord.setBpmPercent}
+              writtenTempo={chord.writtenTempo}
+              beatsPerBar={chord.beatsPerBar}
+              onBeatsPerBarChange={chord.setBeatsPerBar}
+              countInBars={chord.countInBars}
+              onCountInChange={chord.setCountInBars}
+              clickEnabled={chord.clickEnabled}
+              onClickToggle={chord.setClickEnabled}
+              chordCount={chord.chordCount}
+              pulse={chord.pulse}
             />
           )}
 
@@ -968,11 +1020,12 @@ export default function SongBookViewer() {
             ) : song.content?.text ? (
               <TabSheetView
                 text={renderedText}
-                format={song?.content?.format || 'tab'}
+                format={contentFormat}
                 fontSizeRem={fontSize}
                 className="max-w-4xl"
                 instrumentView={instrumentView}
                 showChordStrip
+                soundingChord={chord.sounding}
               />
             ) : (
               <p className="text-sm text-gray-500">

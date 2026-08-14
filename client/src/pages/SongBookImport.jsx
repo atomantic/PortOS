@@ -4,7 +4,7 @@
  * Two URL-param-driven tabs (?tab=paste|url, TabPills):
  * - PASTE: font-mono textarea (+ clipboard Paste / Sample / Clear buttons).
  *   Content runs through normalizePastedTab; detectFormat + parseTabSheet
- *   drive a live preview (the same TabSheetView the viewer renders) and
+ *   drive a live preview (the same ChordPreview/DrumPreview the viewer renders) and
  *   prefill title/artist/key/capo from ChordPro meta.
  * - URL: input validated with isUrl; Fetch POSTs to the server-side extractor
  *   which returns a draft ({ title, artist, content, sourceUrl }) — nothing is
@@ -21,7 +21,7 @@ import { ListMusic, ArrowLeft, ClipboardPaste, Eraser, Wand2, Globe, FileText, S
 import toast from '../components/ui/Toast';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
-import TabSheetView from '../components/songbook/TabSheetView';
+import ChordPreview from '../components/songbook/ChordPreview';
 import DrumPreview from '../components/songbook/DrumPreview';
 import {
   SONG_STAGES, INSTRUMENTS, DRUM_FORMAT, DRUM_INSTRUMENT,
@@ -334,17 +334,18 @@ export default function SongBookImport() {
       {contentText && (
         <div className="mb-4">
           <div className="text-xs text-gray-400 mb-1">Preview</div>
-          <div className={`bg-port-card border border-port-border rounded-lg max-h-[50vh] overflow-y-auto overflow-x-auto ${previewIsDrum ? '' : 'p-3'}`}>
+          <div className="bg-port-card border border-port-border rounded-lg max-h-[50vh] overflow-y-auto overflow-x-auto">
             {previewIsDrum ? (
               <DrumPreview
                 text={contentText}
                 sheetClassName="p-3"
               />
             ) : (
-              <TabSheetView
+              <ChordPreview
                 text={contentText}
                 format={contentFormat}
                 instrumentView={toVoicingInstrument(instrument)}
+                sheetClassName="p-3"
               />
             )}
           </div>

@@ -146,6 +146,7 @@ export * from './useAutoRefetch.js';
 export * from './useCmdKSearch.js';
 export * from './useCooldownTick.js';
 export { default as useDrawerTab } from './useDrawerTab.js';
+export { default as useChordPlayer } from './useChordPlayer.js';
 export { default as useDrumPlayer } from './useDrumPlayer.js';
 export * from './useHfTokenStatus.js';
 export * from './useKeyboardHelp.js';

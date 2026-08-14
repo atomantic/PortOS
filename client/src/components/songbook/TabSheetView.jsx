@@ -35,19 +35,31 @@ import { activeCtrlClass, ctrlBtnClass } from './constants.js';
  * `showChordStrip` adds a collapsible "chords used" strip (unique chords in
  * order of first appearance, each with a mini diagram) above the sheet — the
  * viewer enables it; editor/import previews keep it off.
+ *
+ * Play-along support (issue #4104): `soundingChord` — `{ lineIndex, chordIndex }`
+ * or null — lights the chord token the synth preview is currently sounding, the
+ * chord-sheet equivalent of `<DrumSheetView>`'s playhead. The coordinates are
+ * the ones `sheetChordOccurrences` (lib/chordPlayback.js) hands out, i.e.
+ * positions in `parseTabSheet(text).lines`, so the schedule and the sheet agree
+ * on which token is which without either knowing how the other is built. Purely
+ * presentational: the audio, the transport and the clock all live in
+ * `useChordPlayer` / `<ChordTransportBar>`.
  */
 
 const POPOVER_WIDTH = 172;
 
 // Split a chords line into plain/chord segments using the parser's col offsets.
+// Chord segments carry their index within the line's `chords` array — the other
+// half of the `{ lineIndex, chordIndex }` coordinate the play-along highlight
+// addresses tokens by.
 const chordLineSegments = (text, chords) => {
   const segments = [];
   let cursor = 0;
-  for (const { name, col } of chords) {
+  chords.forEach(({ name, col }, chordIndex) => {
     if (col > cursor) segments.push({ text: text.slice(cursor, col), chord: false });
-    segments.push({ text: text.slice(col, col + name.length), chord: true });
+    segments.push({ text: text.slice(col, col + name.length), chord: true, chordIndex });
     cursor = col + name.length;
-  }
+  });
   if (cursor < text.length) segments.push({ text: text.slice(cursor), chord: false });
   return segments;
 };
@@ -58,7 +70,7 @@ const chordLineSegments = (text, chords) => {
 const chordRowSegments = (chords) => {
   const segments = [];
   let length = 0;
-  for (const { name, col } of chords) {
+  chords.forEach(({ name, col }, chordIndex) => {
     let pad = '';
     if (length < col) pad = ' '.repeat(col - length);
     else if (length > 0) pad = ' ';
@@ -66,9 +78,9 @@ const chordRowSegments = (chords) => {
       segments.push({ text: pad, chord: false });
       length += pad.length;
     }
-    segments.push({ text: name, chord: true });
+    segments.push({ text: name, chord: true, chordIndex });
     length += name.length;
-  }
+  });
   return segments;
 };
 
@@ -76,22 +88,28 @@ const chordRowSegments = (chords) => {
 // line box (it paints outside instead), so the enlarged touch target doesn't
 // disturb the monospace sheet layout; horizontal padding cancels via negative
 // margins.
-const ChordToken = ({ name, tokenKey, expanded, onTap }) => (
+const ChordToken = ({ name, tokenKey, expanded, sounding, onTap }) => (
   <button
     type="button"
     onClick={(e) => onTap(name, tokenKey, e.currentTarget)}
     aria-expanded={expanded}
     aria-haspopup="dialog"
+    // The sounding token is marked in the DOM as well as painted: the highlight
+    // is a background tint, which a test can't read and a high-contrast theme
+    // may flatten.
+    data-sounding={sounding ? '' : undefined}
     // font-mono is explicit (not inherited): PortOS themes set --port-font-ui
     // directly on every <button>, which would render chord names proportional
     // and break the sheet's column alignment.
-    className="inline align-baseline font-mono text-port-accent font-semibold rounded px-1 -mx-1 py-2 hover:bg-port-accent/10 focus-visible:outline focus-visible:outline-1 focus-visible:outline-port-accent"
+    className={`inline align-baseline font-mono text-port-accent font-semibold rounded px-1 -mx-1 py-2 focus-visible:outline focus-visible:outline-1 focus-visible:outline-port-accent ${
+      sounding ? 'bg-port-accent/25 ring-1 ring-port-accent' : 'hover:bg-port-accent/10'
+    }`}
   >
     {name}
   </button>
 );
 
-const ChordSegments = ({ segments, blockKey, activeKey, onTap }) =>
+const ChordSegments = ({ segments, blockKey, activeKey, soundingChordIndex, onTap }) =>
   segments.map((seg, i) => {
     if (!seg.chord) return <span key={i}>{seg.text}</span>;
     const tokenKey = `${blockKey}:${i}`;
@@ -101,6 +119,10 @@ const ChordSegments = ({ segments, blockKey, activeKey, onTap }) =>
         name={seg.text}
         tokenKey={tokenKey}
         expanded={activeKey === tokenKey}
+        // `soundingChordIndex` is null when nothing on THIS line is sounding,
+        // and a chord index is legitimately 0 — so compare explicitly rather
+        // than leaning on truthiness.
+        sounding={soundingChordIndex != null && soundingChordIndex === seg.chordIndex}
         onTap={onTap}
       />
     );
@@ -130,6 +152,7 @@ function TabSheetView({
   className = '',
   instrumentView = 'guitar',
   showChordStrip = false,
+  soundingChord = null,
 }) {
   const plain = format === 'plain';
   const { lines } = useMemo(
@@ -142,14 +165,16 @@ function TabSheetView({
   );
 
   // Group consecutive tabstaff lines into one horizontally-scrollable block so
-  // the six strings of a staff scroll together.
+  // the six strings of a staff scroll together. Each block keeps the index its
+  // FIRST line had in `lines` — a non-staff block holds exactly one line, so
+  // that index is the `lineIndex` the play-along highlight addresses.
   const blocks = useMemo(() => {
     const out = [];
-    for (const line of lines) {
+    lines.forEach((line, lineIndex) => {
       const prev = out[out.length - 1];
       if (line.type === 'tabstaff' && prev?.type === 'tabstaff') prev.lines.push(line);
-      else out.push({ type: line.type, lines: [line] });
-    }
+      else out.push({ type: line.type, lineIndex, lines: [line] });
+    });
     return out;
   }, [lines]);
   const hasTabstaff = lines.some((line) => line.type === 'tabstaff');
@@ -319,6 +344,11 @@ function TabSheetView({
           );
         }
         const line = block.lines[0];
+        // Null unless the sounding chord belongs to THIS line — so a chord index
+        // can never light the same-numbered token on a different line.
+        const soundingChordIndex = soundingChord?.lineIndex === block.lineIndex
+          ? soundingChord.chordIndex
+          : null;
         switch (line.type) {
           case 'section':
             // {end_of_*} directives carry an empty label — render nothing visible.
@@ -336,6 +366,7 @@ function TabSheetView({
                   segments={chordLineSegments(line.text, line.chords)}
                   blockKey={bi}
                   activeKey={popover?.key ?? null}
+                  soundingChordIndex={soundingChordIndex}
                   onTap={onChordTap}
                 />
               </div>
@@ -348,6 +379,7 @@ function TabSheetView({
                     segments={chordRowSegments(line.chords)}
                     blockKey={bi}
                     activeKey={popover?.key ?? null}
+                    soundingChordIndex={soundingChordIndex}
                     onTap={onChordTap}
                   />
                 </div>
@@ -390,6 +422,8 @@ function TabSheetView({
 }
 
 // Props are all primitives (`format`/`instrumentView`/`showChordStrip`
-// included), so memo makes re-renders of a host page (stage flips, autoscroll
-// ticks) skip the full sheet re-render.
+// included) apart from `soundingChord`, which the host memoizes and which only
+// changes when the sounding chord does (once a bar, not once a frame) — so memo
+// makes re-renders of a host page (stage flips, autoscroll ticks) skip the full
+// sheet re-render.
 export default memo(TabSheetView);

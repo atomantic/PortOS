@@ -101,6 +101,7 @@ export * from './audioContext.js';
 export * from './cityPlaybackFrame.js';
 export * from './canvasRoll.js';
 export * from './chiptunePlayback.js';
+export * from './chordPlayback.js';
 export * from './chordShapes.js';
 export * from './colorMatch.js';
 export * from './drumKits.js';

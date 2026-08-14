@@ -23,47 +23,13 @@
  */
 
 import { useMemo, useState } from 'react';
-import {
-  Play, Square, Repeat, Minus, Plus, SlidersHorizontal, Volume2, VolumeX,
-} from 'lucide-react';
-import { METRONOME_BPM_MIN, METRONOME_BPM_MAX } from '../../lib/metronome.js';
+import { Repeat, SlidersHorizontal, Volume2, VolumeX } from 'lucide-react';
 import { DRUM_KIT_LIST, resolveDrumKit } from '../../lib/drumKits.js';
 import { clampClickVolume, DEFAULT_CLICK_VOLUME } from '../../lib/drumPlayback.js';
-import { ctrlBtnClass, activeCtrlClass } from './constants.js';
-
-// Practice speeds as a percentage of the chart's written tempo.
-const PERCENTS = [50, 75, 90, 100, 110];
-const COUNT_IN_OPTIONS = [0, 1, 2];
-// The tempo steppers move in fives — a phone user nudging 96→76 shouldn't need
-// twenty taps, and the ±1 fine trim is on the keyboard (+/-) and the input.
-const BPM_STEP = 5;
-
-const smallSelectClass = 'bg-port-bg border border-port-border rounded px-2 py-2 min-h-[44px] text-xs text-white focus:border-port-accent focus:outline-none';
-
-// The pulse row: one dot per notated beat of the bar, the current one lit. This
-// is the metronome you can SEE — the audible click is easy to lose under a kit,
-// and on a phone the dots double as "yes, it's actually running".
-const BeatDots = ({ beatsPerBar, beat, countingIn }) => (
-  <div
-    className="flex items-center gap-1"
-    role="status"
-    aria-live="off"
-    aria-label={countingIn ? `Counting in, beat ${beat || 1}` : (beat ? `Beat ${beat}` : 'Stopped')}
-  >
-    {Array.from({ length: beatsPerBar }, (_, i) => {
-      const lit = beat === i + 1;
-      return (
-        <span
-          key={i}
-          aria-hidden="true"
-          className={`rounded-full ${lit ? 'w-2.5 h-2.5' : 'w-1.5 h-1.5'} ${
-            !lit ? 'bg-port-border' : (countingIn ? 'bg-port-warning' : 'bg-port-accent')
-          }`}
-        />
-      );
-    })}
-  </div>
-);
+import { ctrlBtnClass, activeCtrlClass, smallSelectClass } from './constants.js';
+import {
+  BeatDots, CountInSelect, PercentButtons, PlayStopButton, TempoControls,
+} from './TransportControls.jsx';
 
 export default function DrumTransportBar({
   playing, onToggle, hasMusic = true,
@@ -88,28 +54,18 @@ export default function DrumTransportBar({
     () => Array.from({ length: Math.max(1, barCount) }, (_, i) => i + 1),
     [barCount],
   );
-  // Which percent button (if any) the current BPM corresponds to — so the active
-  // practice speed is visible rather than inferred.
-  const activePercent = PERCENTS.find((p) => Math.round((writtenTempo * p) / 100) === bpm);
-
   return (
     <div className="shrink-0 border-b border-port-border bg-port-card/60 px-3 py-2 space-y-2">
       {/* --- Primary: the controls you touch while playing -------------------- */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <button
-          type="button"
-          onClick={onToggle}
-          // An all-rest chart parses into bars but has nothing to sound — a Play
-          // button that silently does nothing reads as broken.
-          disabled={!hasMusic}
-          className={`${ctrlBtnClass} disabled:opacity-40 disabled:hover:bg-transparent ${playing ? activeCtrlClass : ''}`}
-          aria-label={playing ? 'Stop play-along' : 'Play along'}
-          title={hasMusic
-            ? (playing ? 'Stop (space)' : 'Play along (space)')
-            : 'Nothing to play — this chart has no hits yet'}
-        >
-          {playing ? <Square size={16} /> : <Play size={18} />}
-        </button>
+        {/* An all-rest chart parses into bars but has nothing to sound. */}
+        <PlayStopButton
+          playing={playing}
+          onToggle={onToggle}
+          hasMusic={hasMusic}
+          hint="(space)"
+          emptyHint="Nothing to play — this chart has no hits yet"
+        />
 
         {/* Metronome — a primary control: it's the thing you toggle between
             "play me the groove" and "just count me in", and the level you
@@ -148,53 +104,7 @@ export default function DrumTransportBar({
           />
         </div>
 
-        {/* Practice tempo — steppers everywhere, slider only where there's room.
-            The visible "BPM" carries the unit: an unlabelled number between a
-            minus and a plus, trailed by a slider, reads as a level. */}
-        <div className="flex items-center gap-1" role="group" aria-label="Practice tempo">
-          <button
-            type="button"
-            onClick={() => onBpmChange(bpm - BPM_STEP)}
-            className={ctrlBtnClass}
-            aria-label={`Slower by ${BPM_STEP} BPM`}
-            title={`−${BPM_STEP} BPM (− fine-tunes by 1)`}
-          >
-            <Minus size={16} />
-          </button>
-          <label htmlFor="drum-bpm" className="sr-only">Practice tempo (BPM)</label>
-          <input
-            id="drum-bpm"
-            type="number"
-            inputMode="numeric"
-            min={METRONOME_BPM_MIN}
-            max={METRONOME_BPM_MAX}
-            value={bpm}
-            onChange={(e) => onBpmChange(e.target.value)}
-            className="w-14 bg-port-bg border border-port-border rounded px-1 py-2 min-h-[44px] text-sm text-center text-white focus:border-port-accent focus:outline-none"
-            title="Practice tempo (BPM)"
-          />
-          <button
-            type="button"
-            onClick={() => onBpmChange(bpm + BPM_STEP)}
-            className={ctrlBtnClass}
-            aria-label={`Faster by ${BPM_STEP} BPM`}
-            title={`+${BPM_STEP} BPM (+ fine-tunes by 1)`}
-          >
-            <Plus size={16} />
-          </button>
-          <span aria-hidden="true" className="text-xs text-gray-500 ml-0.5">BPM</span>
-          <label htmlFor="drum-bpm-slider" className="sr-only">Practice tempo slider</label>
-          <input
-            id="drum-bpm-slider"
-            type="range"
-            min={METRONOME_BPM_MIN}
-            max={METRONOME_BPM_MAX}
-            value={bpm}
-            onChange={(e) => onBpmChange(e.target.value)}
-            className="hidden md:block w-32 ml-1 accent-port-accent"
-            title="Practice tempo (+/-)"
-          />
-        </div>
+        <TempoControls idPrefix="drum" bpm={bpm} onBpmChange={onBpmChange} />
 
         {/* Where you are: the visual pulse plus the bar counter */}
         <div className="flex items-center gap-2">
@@ -224,24 +134,7 @@ export default function DrumTransportBar({
         id="drum-setup-controls"
         className={`${showSetup ? 'flex' : 'hidden'} sm:flex flex-wrap items-center gap-x-4 gap-y-2`}
       >
-        <div className="flex items-center gap-1" role="group" aria-label="Percent of written tempo">
-          {PERCENTS.map((p) => (
-            <button
-              key={p}
-              type="button"
-              onClick={() => onPercent(p)}
-              aria-pressed={activePercent === p}
-              className={`px-2 min-h-[44px] rounded-lg border text-xs ${
-                activePercent === p
-                  ? activeCtrlClass
-                  : 'border-port-border text-gray-400 hover:text-white hover:bg-port-border/50'
-              }`}
-              title={`${p}% of the written ${writtenTempo} BPM`}
-            >
-              {p}%
-            </button>
-          ))}
-        </div>
+        <PercentButtons bpm={bpm} writtenTempo={writtenTempo} onPercent={onPercent} />
 
         {/* Which synthesized kit sounds the chart. A taste setting rather than a
             practice one, so it sits with the setup controls — but it applies
@@ -261,19 +154,7 @@ export default function DrumTransportBar({
           </select>
         </div>
 
-        <div className="flex items-center gap-2">
-          <label htmlFor="drum-countin" className="text-xs text-gray-400">Count-in</label>
-          <select
-            id="drum-countin"
-            value={countInBars}
-            onChange={(e) => onCountInChange(e.target.value)}
-            className={smallSelectClass}
-          >
-            {COUNT_IN_OPTIONS.map((n) => (
-              <option key={n} value={n}>{n === 0 ? 'none' : `${n} bar${n === 1 ? '' : 's'}`}</option>
-            ))}
-          </select>
-        </div>
+        <CountInSelect idPrefix="drum" countInBars={countInBars} onCountInChange={onCountInChange} />
 
         <div className="flex items-center gap-2">
           <button

@@ -7,6 +7,7 @@
 //
 // API:
 //   parseChordName(name)             → { root, rootPc, quality, bass, bassPc } | null
+//   chordTones(name)                 → { …parsed, semitones: [0, 4, 7] } | null
 //   getChordVoicing(name, instrument)→ instrument-shaped voicing | null
 //     'guitar'  → { instrument, frets: [6 × (-1 muted | 0 open | n)], baseFret, bass }
 //     'ukulele' → { instrument, frets: [4 × …], baseFret, bass }
@@ -102,6 +103,20 @@ export const parseChordName = (name) => {
     bass,
     bassPc: bass ? NOTE_TO_PC[bass] : null,
   };
+};
+
+// The chord's TONES as semitones above the root, alongside everything
+// `parseChordName` resolved. This is the instrument-free half of a voicing —
+// `chordPlayback.js` sounds a chord sheet from it, so the interval tables stay
+// in this one module instead of being re-typed beside the synth.
+//
+// The array is in degree order (root, 3rd, 5th, …), never deduped or folded
+// into an octave: a 9th is 14 semitones up, and collapsing it to 2 would voice
+// the chord as a cluster.
+export const chordTones = (name) => {
+  const parsed = parseChordName(name);
+  if (!parsed) return null;
+  return { ...parsed, semitones: QUALITY_DEGREES[parsed.quality].map(([, semis]) => semis) };
 };
 
 // Dash-joined chord runs ("Am-Am7", a quick change written as one token) are
