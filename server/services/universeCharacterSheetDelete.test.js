@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { join } from 'path';
 
 // `deleteCharacterReferenceSheet` orchestrates: getUniverse → fs.unlink → purge.
 // Stub each collaborator so the orchestration is testable without spinning
@@ -83,7 +84,7 @@ describe('universeCharacterSheet — deleteCharacterReferenceSheet', () => {
 
     const result = await deleteCharacterReferenceSheet('uni-1', 'char-1');
     expect(result).toEqual({ filename: 'sheet-X.png', fileDeleted: true, cleared: 1 });
-    expect(unlinkMock).toHaveBeenCalledWith('/mock/data/image-refs/sheet-X.png');
+    expect(unlinkMock).toHaveBeenCalledWith(join('/mock/data', 'image-refs', 'sheet-X.png'));
     expect(fakeUniverseStore.get('uni-1').characters[0].referenceSheetImageRef).toBeNull();
   });
 

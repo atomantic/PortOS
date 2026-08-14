@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../lib/hfToken.js', () => ({ getHfToken: vi.fn(async () => '') }));
 vi.mock('../lib/mediaModels.js', () => ({ addUserModelEntry: vi.fn((entry) => entry) }));
@@ -12,7 +12,24 @@ const mockFetch = (body) => vi.fn(async () => ({
   text: async () => JSON.stringify(body),
 }));
 
-beforeEach(() => { vi.clearAllMocks(); });
+// addModelFromHuggingface reads process.platform per call and REFUSES a video
+// add on Windows (the Windows render path loads a fixed built-in model and
+// cannot use a custom HF repo). These cases assert the non-Windows contract,
+// so pin the platform rather than letting the host decide — otherwise the
+// suite fails on a Windows runner for a reason it is not testing. The refusal
+// itself gets its own case below.
+const ORIGINAL_PLATFORM = Object.getOwnPropertyDescriptor(process, 'platform');
+const pinPlatform = (value) =>
+  Object.defineProperty(process, 'platform', { ...ORIGINAL_PLATFORM, value });
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  pinPlatform('darwin');
+});
+
+afterEach(() => {
+  Object.defineProperty(process, 'platform', ORIGINAL_PLATFORM);
+});
 
 describe('addModelFromHuggingface', () => {
   it('classifies an LTX safetensors repo, builds a video entry, and registers it', async () => {
@@ -67,5 +84,36 @@ describe('addModelFromHuggingface', () => {
       { fetchImpl },
     );
     expect(result.entry).toMatchObject({ runner: 'qwen', source: 'user' });
+  });
+
+  describe('on Windows', () => {
+    beforeEach(() => pinPlatform('win32'));
+
+    it('refuses a custom VIDEO model, naming image adds as the supported path', async () => {
+      const fetchImpl = mockFetch({
+        id: 'notapalindrome/ltx23-mlx-av-q4',
+        siblings: [{ rfilename: 'model.safetensors' }],
+        tags: ['ltx-video'],
+      });
+      await expect(addModelFromHuggingface(
+        { url: 'notapalindrome/ltx23-mlx-av-q4' },
+        { fetchImpl },
+      )).rejects.toThrow(/can't be added on Windows/);
+      expect(addUserModelEntry).not.toHaveBeenCalled();
+    });
+
+    it('still allows a custom IMAGE model', async () => {
+      const fetchImpl = mockFetch({
+        id: 'someone/custom',
+        siblings: [{ rfilename: 'model.safetensors' }],
+        tags: [],
+      });
+      const result = await addModelFromHuggingface(
+        { url: 'someone/custom', kind: 'image', runner: 'qwen' },
+        { fetchImpl },
+      );
+      expect(result.kind).toBe('image');
+      expect(addUserModelEntry).toHaveBeenCalled();
+    });
   });
 });

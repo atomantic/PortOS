@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { resolve as resolvePath } from 'path';
 
 /**
  * Tests for the server-side (local-vision) scene evaluator.
@@ -199,7 +200,12 @@ describe('evaluateSceneWithVision', () => {
     expect(res.llm).toEqual({ provider: 'ollama', model: 'qwen2.5-vl' });
     // Frames passed as absolute paths under the thumbnails dir.
     const call = mocks.runPromptThroughProvider.mock.calls[0][0];
-    expect(call.screenshots).toEqual(['/data/video-thumbnails/job-1-f1.jpg', '/data/video-thumbnails/job-1-f2.jpg']);
+    // resolve()d by the evaluator, so it carries a drive letter on Windows —
+    // build the expectation the same way rather than pinning a POSIX literal.
+    expect(call.screenshots).toEqual([
+      resolvePath('/data/video-thumbnails/job-1-f1.jpg'),
+      resolvePath('/data/video-thumbnails/job-1-f2.jpg'),
+    ]);
     expect(call.source).toBe('cd-scene-evaluate');
   });
 
@@ -221,7 +227,7 @@ describe('evaluateSceneWithVision', () => {
     mocks.runPromptThroughProvider.mockResolvedValue({ text: '{"accepted": true}', model: 'qwen2.5-vl', provider: OLLAMA });
     await evaluateSceneWithVision(project, { ...scene, evaluationFrames: [] });
     const call = mocks.runPromptThroughProvider.mock.calls[0][0];
-    expect(call.screenshots).toEqual(['/data/video-thumbnails/job-1.jpg']);
+    expect(call.screenshots).toEqual([resolvePath('/data/video-thumbnails/job-1.jpg')]);
   });
 });
 

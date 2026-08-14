@@ -15,7 +15,9 @@ describe('taskPromptService {worktreesRoot} substitution', () => {
   it('resolves {worktreesRoot} to PATHS.worktrees (PortOS shared dir), leaving no literal placeholder', async () => {
     // PATHS.worktrees is PortOS's own shared worktrees dir — an absolute path
     // ending in data/cos/worktrees — NOT a repo-relative one.
-    expect(PATHS.worktrees).toMatch(/\/data\/cos\/worktrees$/);
+    // Accept either separator: PATHS.worktrees is composed with path.join, so
+    // it ends in `data\cos\worktrees` on Windows.
+    expect(PATHS.worktrees).toMatch(/[\\/]data[\\/]cos[\\/]worktrees$/);
 
     const out = await getTaskPrompt('claim-issue');
     expect(out).toBe(`before ${PATHS.worktrees}/claim-x after`);
